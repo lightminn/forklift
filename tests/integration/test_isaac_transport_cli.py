@@ -461,9 +461,10 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
     assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
     assert "rear = slam_rear(t)  # the released estimate" in gate
-    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for)
-    assert ("if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:"
-            in source)
+    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for;
+    # persistent console plan D5 6c: nor in a loaded start wait)
+    assert ("if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_\n"
+            "                        and not loaded_wait_):" in source)
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
@@ -713,11 +714,16 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert source.count("near = None\n") == 1
     # The contract is checked before the first tick; S4a-2 opens the insertion.
     check_ = source.index("            check_near_contract()\n")
-    loop_ = source.index("        for step in range(int(120 * args.max_sim_seconds)):")
+    loop_ = source.index("        for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):")
     assert check_ < loop_
     # Only the M-a0 boundary-record wrapping (recording only) sits between the check and the loop.
     between_ = source[check_ + len("            check_near_contract()\n"): loop_]
-    assert between_.startswith("        if boundary is not None:\n") and "require(" not in between_
+    # (the live closures defined there -- scene_require, live_failed, persistent console plan D6 -- only run in the
+    # loop: no require call at the block's own level)
+    import re as re_
+
+    assert between_.startswith("        if boundary is not None:\n")
+    assert not re_.search(r"^ {8}(if [^\n]*\n {12})?require\(", between_, re_.M)
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
     moved = CORE.read_text()
@@ -742,7 +748,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
         "        if check is None:\n            pocket[\"frames_read\"] += 1")
     # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
     assert "transition(\"near_tracking_stopped\", t)\n                return SimpleNamespace(stop=True, rear=rear)" in core
-    assert "if arrival_.stop:\n                            break" in source
+    assert "if arrival_.stop:\n                                break" in source
     assert "\"repeat_target_not_reached\", \"near_tracking_stopped\"):\n            return" in source
     # Terminal stops end the run only once the stop detector sees the truck stand.
     functions = runner_and_core_functions(tree)

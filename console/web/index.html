@@ -54,6 +54,8 @@
       <span class="legend-mode" data-m="PAUSED"><i></i>대기</span>
       <span class="legend-mode" data-m="STOPPED"><i></i>정지됨</span>
       <span class="monitor-alert" id="monitor-alert" hidden>관찰 전용 연결 · 이 화면으로 차량을 멈출 수 없습니다</span>
+      <span class="scene-banner" id="scene-banner" hidden><b>장면 손상</b> <span id="scene-text"></span> · 자동 작업 거절 — 장면 초기화가 필요합니다 <button class="btn" id="scene-reset" type="button">장면 초기화</button></span>
+      <span class="session-note" id="session-note" hidden></span>
       <span class="draft" id="draft"><strong>가짜 차량</strong> console/1 계약을 흉내 낸 개발용 차량입니다. 수치 상한은 잠정값이고, 물리 비상정지는 이 화면과 독립된 하드웨어 경로입니다.</span>
       <span class="notes" id="notes" hidden></span>
       <span class="gens" id="gens">epoch — · control — · arm —</span>
@@ -111,6 +113,10 @@
           <dt>끊김 시 동작</dt><dd id="l-policy">자동 주행은 계속 · 수동 조종은 만료로 정지</dd>
         </dl>
         <div class="row"><button class="btn" id="l-drop" type="button">끊김 시험 (3초, 가짜 차량)</button></div>
+        <h3>세션</h3>
+        <div class="row session-row"><button class="btn" id="s-end" type="button">세션 종료</button><span class="hint" id="s-end-why"></span></div>
+        <p class="hint">세션을 끝내면 차량 프로그램이 끝나고 다시 열리지 않습니다.</p>
+        <div class="row session-row reset-row"><button class="btn" id="s-reset" type="button" hidden>장면 초기화</button><span class="hint" id="s-reset-why"></span></div>
       </section>
 
       <!-- vehicle detail -->
@@ -191,6 +197,8 @@
               <div class="notice warn" id="forbid-reason"></div>
               <button class="btn" id="recover" type="button">축 따라 똑바로 빼기</button>
             </div>
+            <div class="notice warn" id="recovery-guide" hidden></div>
+            <div class="notice" id="advice-line" hidden></div>
           </div>
 
           <div class="assign">
@@ -205,6 +213,11 @@
               <button class="btn" id="m-cancel" type="button">취소</button>
             </div>
             <button class="btn teleop-ghost wide" id="go-tele" type="button">수동 조종 화면으로</button>
+          </div>
+
+          <div class="results-sect">
+            <div class="sp-head"><b>미션 결과</b><span class="hint" id="results-older"></span></div>
+            <ol class="results" id="results-list"><li class="hint">아직 끝난 미션이 없습니다</li></ol>
           </div>
         </div>
 

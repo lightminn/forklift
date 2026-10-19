@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blockReason, currentDestination, missionProgress, nextAllowed, subtaskOf, templatesFor } from "../js/wizard.js";
+import { blockReason, carriedLabel, currentDestination, missionProgress, nextAllowed, selectable, subtaskOf, templatesFor } from "../js/wizard.js";
 
 test("only templates the vehicle supports are offered", () => {
   assert.deepEqual(templatesFor({ mission: false }), []);
@@ -34,6 +34,8 @@ test("the start is blocked with a reason the operator can act on", () => {
   assert.match(blockReason({ ...base, mode: "STOPPED" }), /재무장/);
   assert.match(blockReason({ ...base, mode: "TELEOP" }), /수동 조종/);
   assert.match(blockReason({ ...base, mission: { status: "held" } }), /진행 중/);
+  // a live submit is prepared before it runs (persistent console plan D2)
+  assert.match(blockReason({ ...base, mission: { status: "preparing" } }), /진행 중/);
   assert.equal(blockReason({ ...base, mission: { status: "done" } }), null);
   assert.match(blockReason({ ...base, state: null }), /연결/);
   // the vehicle refuses a submit until the truck stands (not_stopped): say so first
@@ -73,4 +75,23 @@ test("a connection that takes no tasks says so before anything else about the ve
   assert.match(blockReason({ ...base, canMission: false }), /작업 지시를 받지 않습니다/);
   assert.match(blockReason({ ...base, hasLease: false, canMission: false }), /작업 지시를 받지 않습니다/);
   assert.equal(blockReason({ ...base, canMission: true }), null);
+});
+
+test("the pallet on the forks can be picked to deliver as it is carried", () => {
+  // persistent console plan D5 6c item 7: the state's load names it; another carried pallet stays unpickable
+  const load = { state: "loaded", pallet_id: "P-1" };
+  assert.equal(selectable({ pallet_id: "P-1", state: "carried" }, load), true);
+  assert.equal(selectable({ pallet_id: "P-2", state: "carried" }, load), false);
+  assert.equal(selectable({ pallet_id: "P-1", state: "carried" }, { state: "empty", pallet_id: null }), false);
+  assert.equal(selectable({ pallet_id: "P-1", state: "carried" }, null), false);
+  assert.equal(carriedLabel({ pallet_id: "P-1", state: "carried" }, load), "실린 팔레트 — 바로 운반");
+  assert.equal(carriedLabel({ pallet_id: "P-1", state: "available" }, load), null);
+});
+
+test("a delivered pallet can be picked again, a carried one cannot", () => {
+  // persistent console plan D3: put down, it is available again where it lies
+  assert.equal(selectable({ state: "available" }), true);
+  assert.equal(selectable({ state: "delivered" }), true);
+  assert.equal(selectable({ state: "carried" }), false);
+  assert.equal(selectable(null), false);
 });

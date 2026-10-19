@@ -68,7 +68,10 @@ export function resumeSteps(steps) {
 
 // Rearm, entering TELEOP, a mission submit and a resume are refused (not_stopped) until the
 // vehicle says the truck stands; a vehicle that does not report it judges the request.
-export function standWhy(st) {
+// waivable: rearm and TELEOP entry, which the vehicle takes unconfirmed while it waives the stand
+// (stand_waiver "lower_only": only lowering is allowed and the truck is still, plan D14).
+export function standWhy(st, { waivable = false } = {}) {
+  if (waivable && st?.stand_waiver === "lower_only") return null;
   return st?.stopped_confirmed === false ? "정지 확인을 기다리는 중" : null;
 }
 
@@ -77,7 +80,7 @@ export function rearmState(st, hasLease) {
   const shown = st?.mode === "STOPPED";
   if (!shown) return { shown, enabled: false, why: "" };
   if (!hasLease) return { shown, enabled: false, why: "조종 권한이 필요합니다" };
-  const stand = standWhy(st);
+  const stand = standWhy(st, { waivable: true });
   if (stand) return { shown, enabled: false, why: stand };
   return { shown, enabled: true, why: "" };
 }
@@ -114,10 +117,12 @@ export function palletKindLabel(kind) {
 }
 
 // The drive permit: its limit may be unknown (null) while the reason is known.
-export function permitText(permit) {
+// forbidReason: the state's teleop_forbidden_reason, which says why the arbiter forbade driving
+export function permitText(permit, forbidReason = null) {
   if (!permit) return "판정 없음";
   const lim = Number.isFinite(permit.limit_mps) ? `${permit.limit_mps.toFixed(2)} m/s` : "모름";
-  return `${permit.reason} · 상한 ${lim}`;
+  const why = permit.reason === "drive_forbidden" ? forbidText(forbidReason) || "수동 주행 금지" : permit.reason;
+  return `${why} · 상한 ${lim}`;
 }
 
 // Why manual driving is refused: the fake vehicle's reasons and the live arbiter's policy (teleop_policy.py).
@@ -129,7 +134,32 @@ const FORBID = {
   near_section_unknown: "근접 구간인지 판단할 수 없어 수동 조종을 받지 않습니다",
   state_unknown: "적재·포크 상태를 알 수 없어 수동 조종을 받지 않습니다",
   pacing: "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다",
+  // persistent console plan D14: the recovery rows
+  "recovery:lower_first": "포크가 들려 있습니다. 먼저 내려 주세요(내리기만 됩니다)",
+  "recovery:ground_wait": "팔레트가 바닥에 놓였는지 확인하는 중입니다",
+  "recovery:evidence": "삽입 기록을 믿을 수 없어 손으로 빼기를 열지 않습니다",
+  "recovery:misaligned": "포켓 축에서 벗어났습니다. 이대로 빼면 팔레트가 끌립니다",
+  "recovery:unknown": "팔레트 상태를 알 수 없어 내리기만 됩니다",
+  "recovery:no_lift_measure": "승강 높이를 잴 수 없어 손 복구를 열지 않습니다",
+  "recovery:no_steering": "조향각을 잴 수 없어 손으로 빼기를 열지 않습니다",
+  "recovery:steering": "조향이 아직 0 으로 돌아오지 않아 멈춰 있습니다",
+  "recovery:stage_unknown": "복구 단계를 알 수 없어 수동 조종을 받지 않습니다",
 };
+
+// Plan D14: which lift buttons work (the policy's directions) and the travel shown beside the height.
+export function liftControls(st) {
+  const dirs = Array.isArray(st?.lift_dirs) ? st.lift_dirs : st?.lift_allowed ? [-1, 1] : [];
+  const limit = Number.isFinite(st?.lift_limit_m) ? st.lift_limit_m : 0.28;
+  return { up: dirs.includes(1), down: dirs.includes(-1), limitMm: Math.round(limit * 1000) };
+}
+
+// Plan D14: the straight reverse of a manual recovery is said wherever the drive is shown.
+export function recoveryNote(st) {
+  if (st?.drive_mode !== "reverse_straight") return "";
+  return st.recovery?.stage === "manual_clear"
+    ? "복구 후진(곧게) · 팔레트 구역을 벗어날 때까지"
+    : "복구 후진(곧게, 인증 없음) · 전진·조향 없음";
+}
 export function forbidText(reason) {
   if (!reason) return "";
   if (FORBID[reason]) return FORBID[reason];
@@ -171,4 +201,51 @@ export function cameraHeightM(model, st) {
 // only for a few seconds; a later vehicle disarm after a re-arm is logged.
 export function disarmAsked(asked, prev, nowMs) {
   return Boolean(asked) && prev?.arm_gen === asked.armGen && nowMs - asked.at < 3000;
+}
+
+// A refused request's reason as the operator reads it; an unknown code is shown as it is. Every reason the vehicle can
+// send is here (tests/unit/console/test_reject_reasons.py reads them from the arbiter and the mission commands); a
+// reason ending in ":" is a head (no_feedback:rear_axle_speed).
+export const REJECT = {
+  busy: "차량이 요청을 너무 많이 받고 있습니다 · 잠시 뒤 다시 보내세요",
+  invalid: "요청이 올바르지 않습니다(없는 대상이거나 형식 오류)",
+  lease_reserved: "끊긴 기기가 조종 권한을 되찾을 수 있는 시간입니다",
+  mission_active: "진행 중인 미션이 있습니다",
+  near_tracking_active: "근접 추적 중에는 일시정지할 수 없습니다",
+  "no_feedback:": "차량 피드백(측정 속도)이 없습니다",
+  no_lease: "조종 권한이 없습니다",
+  not_stopped: "차가 멈췄는지 아직 확인되지 않았습니다",
+  session_ending: "세션을 끝내는 중입니다",
+  stale: "오래된 요청입니다(연결이 바뀌었거나 그 기록이 지워졌습니다)",
+  stale_control: "그사이 제어 상태가 바뀌었습니다 · 화면을 보고 다시 보내세요",
+  stale_epoch: "차량 세션이 바뀌었습니다",
+  stale_lease: "조종 권한이 바뀌었습니다",
+  stale_targets: "대상 목록이 바뀌었습니다 · 다시 고르세요",
+  state_forbids_teleop: "지금 상태에서는 수동 조종을 할 수 없습니다",
+  stopped_locked: "정지됨 상태입니다 · 재무장을 먼저 하세요",
+  unknown_mission: "그 미션은 지금 미션이 아닙니다",
+  unsupported: "이 차량이 지원하지 않는 요청입니다",
+  stopping: "차가 멈추는 중입니다",
+  scene_damaged: "장면이 손상되어 자동 작업을 받지 않습니다 · 장면 초기화가 필요합니다",
+  recovery_required: "포크가 팔레트 안에 있거나 위치 고정 중이라 받을 수 없습니다 · 수동 복구를 먼저 하세요",
+  cargo_held: "포크에 팔레트가 실려 있습니다",
+  localization_lost: "위치 추정 준비 중입니다",
+  already_there: "그 팔레트는 이미 그 목적지에 있습니다",
+  destination_occupied: "목적지를 다른 팔레트가 차지하고 있습니다",
+  held: "수동 조종으로 보류 중입니다",
+  not_running: "실행 중인 미션이 없습니다",
+  not_paused: "일시정지된 미션이 없습니다",
+  recovering: "복구 중에는 취소 대신 일시정지하세요",
+  not_held: "보류 중이 아닙니다",
+  "permission_denied:": "주행 허가가 거절했습니다",
+  // the fake vehicle's own (console/mock_vehicle)
+  fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
+  load_present: "포크에 짐이 실려 있습니다",
+  resume_failed: "재개 확인에 실패했습니다",
+};
+export function rejectText(reason) {
+  if (!reason) return reason;
+  if (REJECT[reason]) return REJECT[reason];
+  const head = Object.keys(REJECT).find((k) => k.endsWith(":") && reason.startsWith(k));
+  return head ? `${REJECT[head]} (${reason.slice(head.length)})` : reason;
 }

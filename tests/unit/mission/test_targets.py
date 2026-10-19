@@ -34,7 +34,8 @@ def test_a_carried_pallet_has_no_pose_and_moving_it_does_not_raise_the_revision(
     for x in (6.0, 7.0, 8.0):
         assert b.update_pose("P-1", Pose(x, 0.0, 0.0)) is False
     assert b.revision == 3
-    assert b.message()["pallets"] == [{"pallet_id": "P-1", "kind": "epal6", "pose": None, "state": "carried"}]
+    assert b.message()["pallets"] == [{"pallet_id": "P-1", "kind": "epal6", "pose": None, "state": "carried",
+                                           "basis": "prior", "uncertainty_m": None}]  # plan D10
 
 
 def test_put_down_registers_it_again_where_it_stands_under_the_same_id():
@@ -89,7 +90,30 @@ def core_with(slam=None):
     core.targets.add_destination("D-1", Pose(9.0, 0.5, 0.1))
     core.commands.queue(Submit("P-1", "D-1", 2))
     core.commands.apply(0.0)
+    core.commands.start()  # the batch run's mission runs at once; a live one only once adopted (plan D2)
     return core, pocket
+
+
+def test_the_list_is_not_refreshed_for_a_mission_not_yet_adopted():
+    """Persistent console stage 2 (Codex design P1): preparing P-1 -> D-0 wrote the last scenario's destination over
+    D-0 and raised the revision, so the adoption check saw its own change."""
+    from types import SimpleNamespace
+
+    from forklift_core.mission.commands import MissionCommands, Submit
+
+    core, pocket = core_with()
+    core.commands = MissionCommands(core.targets)
+    core.targets.add_destination("D-0", Pose(5.0, 0.0, 0.0))
+    revision = core.targets.revision
+    core.commands.queue(Submit("P-1", "D-0", revision))
+    core.commands.apply(1.0)
+    pocket["planning_pickup"] = SimpleNamespace(x_m=5.05, y_m=0.01, yaw_rad=0.0)
+    core.commands.begin_prepare()
+    core.refresh_targets()
+    assert core.targets.destinations["D-0"] == Pose(5.0, 0.0, 0.0) and core.targets.revision == revision
+    core.commands.terminate("failed", 2.0, "prepare:timeout")  # the ending tick: FINAL, never adopted
+    core.refresh_targets()
+    assert core.targets.destinations["D-0"] == Pose(5.0, 0.0, 0.0) and core.targets.revision == revision
 
 
 def test_the_core_carries_the_list_through_the_mission():
@@ -174,3 +198,55 @@ def test_a_pallet_registered_with_its_size_carries_it_in_the_message():
     assert "depth_m" not in p2 and "width_m" not in p2
     b.carried("P-1")
     assert b.message()["pallets"][0]["depth_m"] == 0.8  # still known while carried
+
+
+def test_a_delivered_pallet_can_be_submitted_again():
+    """Codex stage 2 impl P1-2 (plan D3): a pallet put down is available again where it lies; delivered is shown."""
+    book = TargetsBook()
+    book.add_pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0))
+    book.add_destination("D-1", Pose(9.0, 0.0, 0.0))
+    book.add_destination("D-0", Pose(1.0, 0.0, 0.0))
+    book.carried("P-1")
+    assert book.check_submit("P-1", "D-0", book.revision) == "invalid"
+    book.put_down("P-1", Pose(9.0, 0.0, 0.0))
+    assert book.pallets["P-1"].state == "delivered" and book.check_submit("P-1", "D-0", book.revision) is None
+
+
+def test_a_missions_end_settles_the_list_and_the_ended_mission_no_longer_moves_it():
+    """Codex stage 2 impl round 2 P2: the end dropped the SLAM scenarios, then the same tick's refresh put the
+    delivered pallet and the destination back at the scenario's prior."""
+    from types import SimpleNamespace
+
+    from forklift_core.mission.baseline import MissionBaseline
+
+    slam = {"tracker": SimpleNamespace(applied=None, mode="tracking"), "holds": []}
+    core, pocket = core_with(slam=slam)
+    core.baseline = MissionBaseline.capture(core)
+    slam["return_scenario"] = SimpleNamespace(destination=SimpleNamespace(x_m=9.2, y_m=0.4, yaw_rad=0.12))
+    core.ms.phase = "lift"
+    core.refresh_targets()
+    core.ms.phase = "complete"
+    core.end_reset(30.0)
+    settled = (core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"], core.targets.revision)
+    assert settled[0] == Pose(9.2, 0.4, 0.12) and settled[1] == Pose(9.2, 0.4, 0.12)
+    core.refresh_targets()
+    assert (core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"], core.targets.revision) == settled
+
+
+def test_a_pallets_basis_follows_what_its_place_rests_on():
+    """Persistent console plan D10: registered = prior; a recognition (an update while on the floor) = recognised;
+    put down = delivered; a frame change keeps the basis; the message carries basis and uncertainty."""
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    tb = TargetsBook()
+    tb.add_pallet("P-1", "epal6", Pose(5.0, 0.0, 0.0))
+    assert tb.pallets["P-1"].basis == "prior"
+    tb.update_pose("P-1", Pose(5.02, 0.01, 0.0), basis="recognised", uncertainty_m=0.21)
+    assert (tb.pallets["P-1"].basis, tb.pallets["P-1"].uncertainty_m) == ("recognised", 0.21)
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(9.0, 0.0, 0.0), uncertainty_m=0.21)
+    assert tb.pallets["P-1"].basis == "delivered"
+    tb.set_correction_version(1, lambda p: Pose(p.x_m + 0.1, p.y_m, p.yaw_rad))
+    assert tb.pallets["P-1"].basis == "delivered"
+    entry = next(e for e in tb.message()["pallets"] if e["pallet_id"] == "P-1")
+    assert entry["basis"] == "delivered" and entry["uncertainty_m"] == 0.21

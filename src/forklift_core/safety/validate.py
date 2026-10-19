@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 
 INT_FIELDS = ("session_epoch", "control_gen", "arm_gen", "seq")
+LEDGER_FIELDS = ("request_token", "request_seq")  # a reliable request's ledger key (console plan D7), when present
 STR_FIELDS = ("lease_id", "pallet_id", "destination_id", "mission_id", "client_id", "source", "to", "action")
 
 
@@ -25,7 +26,7 @@ def problem(msg) -> str | None:
     t = msg["t"]
     if "request_id" in msg and not (isinstance(msg["request_id"], str) and msg["request_id"]):
         return "invalid"
-    for key in INT_FIELDS:
+    for key in INT_FIELDS + LEDGER_FIELDS:
         if key in msg and not is_int(msg[key]):
             return "invalid"
     for key in STR_FIELDS:

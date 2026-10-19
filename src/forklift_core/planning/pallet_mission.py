@@ -637,6 +637,61 @@ def plan_observation_leg(
     )
 
 
+def observation_start_checker(
+    scenario: TransportScenario,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    pickup_bounds: Bounds | None = None,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
+    **_unused,
+):
+    """The start check plan_observation_leg's search makes (hybrid_astar's ``invalid_start``), from the same inputs
+    and the same construction: ``(free, clearance_m)`` with ``free(pose, clearance_m) -> bool`` (persistent console
+    plan D13 item 6). Extra keyword arguments (the leg's ``deadline``) are accepted and ignored."""
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    obstacles, footprint, bounds = leg_obstacles(
+        "observe", scenario, geometry, pickup_obstacle=pickup_obstacle, pickup_bounds=pickup_bounds
+    )
+    checker = make_checker(obstacles, footprint, bounds, occupancy)
+    return checker.free, float(config.clearance_m)
+
+
+def backoff_advice(free, clearance_m: float, start: Pose2D, *, step_m: float = 0.05, limit_m: float = 1.0,
+                   deadline: float | None = None, clock=time.monotonic) -> dict:
+    """How far straight back from ``start`` the start check passes (persistent console plan D13 item 6).
+
+    The poses at ``step_m`` steps up to ``limit_m``: before the first one the start check passes, each must be free
+    at clearance 0 (the body passes there -- a wall behind blocks the way); then ``backoff_m`` is that first
+    distance and ``backoff_max_m`` the last one passing without a break (a distance not checked is never advised).
+    Nothing within the limit: ``backoff_m`` None with ``within_m``; the way blocked first: ``blocked_at_m``. A
+    ``deadline`` (``clock`` time) checked before and at every pose: spent, ``{"skipped": "deadline"}`` -- never a
+    partial search reported as nothing found."""
+    if deadline is not None and clock() >= deadline:
+        return {"skipped": "deadline"}
+    bx, by = -cos(start.yaw_rad), -sin(start.yaw_rad)
+    first = last = None
+    for k in range(1, int(round(limit_m / step_m)) + 1):
+        if deadline is not None and clock() >= deadline:
+            return {"skipped": "deadline"}
+        d = round(k * step_m, 6)
+        pose = (start.x_m + d * bx, start.y_m + d * by, start.yaw_rad)
+        if free(pose, clearance_m):
+            if first is None:
+                first = d
+            last = d
+            continue
+        if first is not None:
+            break
+        if not free(pose, 0.0):
+            return {"backoff_m": None, "blocked_at_m": d, "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
+    if first is None:
+        return {"backoff_m": None, "within_m": float(limit_m), "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
+    return {"backoff_m": first, "backoff_max_m": last, "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
+
+
 def final_straight_prefix(path: PlanResult, keep_m: float) -> PlanResult | None:
     """The approach up to where its final forward straight still has keep_m left.
 
@@ -1326,6 +1381,73 @@ def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, conf
             best_cost, best, best_name = terms["cost"], joined, entry["name"]
     record.update(chosen=best_name, expansions=spent)
     return replace(best, turnaround=record)
+
+
+def plan_loaded_delivery(
+    scenario: TransportScenario,
+    start_rear: Pose2D,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    return_to: Pose2D | None = None,
+    travel_config: PlannerConfig | None = None,
+    trace: list | None = None,
+    occupancy=None,
+    docking_occupancy=None,
+    deadline=None,
+) -> MissionPlan:
+    """The delivery of a pallet already on the forks (persistent console plan D5 6c): from ``start_rear`` the same
+    steps plan_transport takes from its extracted pose on -- the transport search with the loaded footprint (on a
+    grid, once more with no clearance when the start is invalid), the delivery straight, the withdraw straight and,
+    with ``return_to``, the return with the delivered pallet as an obstacle. plan_transport is left as it is; the
+    tests hold the two equal from the extracted pose. approach, insert and extract are None."""
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    travel_config = travel_config if travel_config is not None else config
+
+    def note(stage: str, result: PlanResult) -> PlanResult:
+        if trace is not None:
+            directions = np.asarray(result.directions)
+            trace.append({"stage": stage, "status": result.status, "length_m": float(result.length_m),
+                          "expansions": int(result.expanded_nodes),
+                          "analytic_expansion_interval": result.analytic_expansion_interval,
+                          "search_attempts": [list(entry) for entry in result.search_attempts],
+                          "gear_changes": int(np.count_nonzero(np.diff(directions))) if directions.size else 0})
+        return result
+
+    props = [prop.rectangle for prop in scenario.props]
+    destination = site_poses(scenario.destination, geometry)
+    grid = docking_occupancy if docking_occupancy is not None else occupancy
+    transport = note("transport_search", _search(start_rear, destination["predelivery"], props,
+                                                 geometry.loaded_footprint, scenario.bounds, travel_config,
+                                                 occupancy=grid, deadline=deadline))
+    if transport.status == "invalid_start" and occupancy is not None:
+        transport = note("transport_search_tight", _search(start_rear, destination["predelivery"], props,
+                                                           geometry.loaded_footprint, scenario.bounds,
+                                                           replace(travel_config, clearance_m=0.0), occupancy=grid,
+                                                           deadline=deadline))
+    if not transport.success:
+        return MissionPlan(False, f"transport:{transport.status}")
+    tail = note("transport_straight", _straight_plan(destination["predelivery"], destination["delivery"], 1, props,
+                                                     geometry.loaded_footprint, scenario.bounds, config.clearance_m,
+                                                     grid))
+    if not tail.success:
+        return MissionPlan(False, f"transport:{tail.status}")
+    transport = _append_straight(transport, tail)
+    withdraw = note("withdraw", _straight_plan(destination["delivery"], destination["withdrawn"], -1, props,
+                                               geometry.unloaded_footprint, scenario.bounds, config.clearance_m, grid))
+    if not withdraw.success:
+        return MissionPlan(False, f"withdraw:{withdraw.status}")
+    if return_to is None:
+        return MissionPlan(True, "success", None, None, None, transport, withdraw)
+    delivered = Rectangle(scenario.destination.x_m, scenario.destination.y_m, geometry.pallet_depth_m,
+                          geometry.pallet_width_m, scenario.destination.yaw_rad)
+    return_home = note("return_home", _search(destination["withdrawn"], return_to, props + [delivered],
+                                              geometry.unloaded_footprint, scenario.bounds, travel_config,
+                                              occupancy=grid, deadline=deadline))
+    if not return_home.success:
+        return MissionPlan(False, f"return_home:{return_home.status}")
+    return MissionPlan(True, "success", None, None, None, transport, withdraw, return_home)
 
 
 def plan_transport(

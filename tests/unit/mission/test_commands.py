@@ -29,7 +29,10 @@ def test_submit_issues_a_mission_id_and_one_mission_at_a_time():
 
 @pytest.mark.parametrize("context, reason", [(Context(stop_kind="preempt"), "stopping"),
                                              (Context(stop_kind="controlled"), "stopping"),
-                                             (Context(clear_for_submit=False), "recovery_required")])
+                                             (Context(clear_for_submit=False), "recovery_required"),
+                                             # plan D5a: what the forks are in, from the session's cargo state
+                                             (Context(submit_refusal="recovery_required"), "recovery_required"),
+                                             (Context(submit_refusal="cargo_held"), "cargo_held")])
 def test_submit_is_refused_while_stopping_or_when_a_recovery_is_needed(context, reason):
     m = MissionCommands()
     m.queue(Submit("P1", "D1"))
@@ -249,3 +252,238 @@ def test_waits_stop_the_work_clock_once_even_inside_a_pause():
     assert c.work_elapsed(3.0, 10.0) == pytest.approx(5.0)  # the wait counted from where the interval starts
     c.pauses.append([4.0, 6.0])  # overlaps the wait 4..5
     assert c.work_elapsed(0.0, 10.0) == pytest.approx(6.0)  # stopped 2..6 once
+
+
+# --- the persistent console's mission end (docs/plans/2026-10-18-persistent-live-console.md D1) ---------------------
+def test_close_open_closes_the_open_pause_and_wait_without_changing_the_status():
+    m = running()
+    m.queue(Pause())
+    m.apply(2.0)
+    m.begin_wait(3.0)
+    gen = m.mission_gen
+    m.close_open(5.0)
+    assert m.status == "paused" and m.mission_gen == gen
+    assert m.pauses == [[2.0, 5.0]] and m.waits == [[3.0, 5.0]] and m.paused_since is None
+    m.close_open(6.0)  # nothing open: nothing changes
+    assert m.pauses == [[2.0, 5.0]] and m.waits == [[3.0, 5.0]]
+
+
+@pytest.mark.parametrize("outcome", ["done", "failed", "cancelled"])
+def test_terminate_ends_an_active_mission_with_its_reason_once(outcome):
+    m = running()
+    m.queue(Pause())
+    m.apply(2.0)
+    gen = m.mission_gen
+    assert m.terminate(outcome, 4.0, "why") is True
+    assert m.status == outcome and m.end_reason == "why" and m.mission_gen == gen + 1
+    assert m.pauses == [[2.0, 4.0]] and m.paused_since is None
+    assert m.log[-1] == {"t": 4.0, "command": "end", "accepted": True, "reason": "why", "mission_id": "m1",
+                         "status": outcome}
+    assert m.terminate("failed", 5.0, "again") is False  # already over: nothing changes
+    assert m.status == outcome and m.end_reason == "why" and len(m.log) == 3
+    m.apply(6.0)
+    assert m.status == "idle" and m.mission_id is None
+
+
+def test_terminate_keeps_the_advice_for_this_end_only():
+    """Persistent console plan D13 item 6: the advice goes with the end that made it."""
+    m = running()
+    assert m.terminate("failed", 4.0, "prepare:all_candidates_failed:invalid_start", advice={"backoff_m": 0.1})
+    assert m.end_advice == {"backoff_m": 0.1}
+    m2 = running()
+    m2.terminate("failed", 4.0, "why")
+    assert m2.end_advice is None
+    m2.note_end(5.0, "again")
+    assert m2.end_advice is None
+
+
+def test_terminate_refuses_an_unknown_outcome_and_an_idle_slot():
+    m = MissionCommands()
+    with pytest.raises(ValueError):
+        m.terminate("finished", 1.0, None)
+    assert m.terminate("failed", 1.0, "x") is False and m.status == "idle"
+
+
+def test_take_clock_hands_over_the_finished_missions_stops_and_empties_them():
+    m = running()
+    m.queue(Pause())
+    m.apply(2.0)
+    m.begin_wait(2.5)
+    m.terminate("failed", 4.0, "why")
+    assert m.take_clock() == {"pauses": [[2.0, 4.0]], "waits": [[2.5, 4.0]]}
+    assert m.pauses == [] and m.waits == []
+    assert m.work_elapsed(0.0, 10.0) == 10.0  # the next mission's work clock starts clean
+
+
+def test_take_clock_refuses_while_a_mission_is_active():
+    m = running()
+    with pytest.raises(RuntimeError):
+        m.take_clock()
+
+
+def test_a_submit_in_the_same_apply_as_an_end_waits_for_the_next_tick():
+    """Codex stage 1 P3: a cancel of an accepted mission and a submit in one apply -- the end is collected first."""
+    m = MissionCommands()
+    m.queue(Submit("P1", "D1"))
+    m.apply(1.0)
+    m.queue(Cancel())
+    m.queue(Submit("P2", "D2"))
+    cancel, submit = m.apply(2.0)
+    assert cancel["accepted"] and (submit["accepted"], submit["reason"]) == (False, "mission_active")
+    assert m.status == "cancelled" and m.mission_id == "m1"
+
+
+def test_note_end_logs_an_end_already_reached():
+    """Codex stage 1 P3: a cancel confirmed standing is cancelled by the core; its end is still logged once."""
+    m = running()
+    m.queue(Cancel())
+    m.apply(1.0)
+    m.cancelled(2.0)
+    assert m.terminate("cancelled", 2.0, "operator") is False
+    m.note_end(2.0, "operator")
+    assert m.log[-1] == {"t": 2.0, "command": "end", "accepted": True, "reason": "operator", "mission_id": "m1",
+                         "status": "cancelled"} and m.end_reason == "operator"
+    with pytest.raises(RuntimeError):
+        running().note_end(3.0, "x")
+
+
+# --- persistent console plan D2: preparing (a live mission's first leg planned before it runs) ----------------------
+def preparing(t=0.0):
+    m = MissionCommands()
+    m.queue(Submit("P1", "D1"))
+    m.apply(t)
+    m.begin_prepare()
+    return m
+
+
+def test_a_submit_is_prepared_then_adopted():
+    m = preparing()
+    assert m.status == "preparing" and not m.stopped
+    gen = m.mission_gen
+    m.adopt()
+    assert m.status == "running" and m.mission_gen == gen + 1
+    with pytest.raises(RuntimeError):
+        m.adopt()
+    with pytest.raises(RuntimeError):
+        running().begin_prepare()
+
+
+@pytest.mark.parametrize("kind, reason", [("preempt", "prepare:stopped"), ("controlled", "prepare:paused")])
+def test_a_stop_ends_the_preparation(kind, reason):
+    m = preparing()
+    (rec,) = m.apply(1.0, Context(stop_kind=kind))
+    assert m.status == "failed" and m.end_reason == reason and m.pauses == []
+    assert rec["command"] == "end" and rec["reason"] == reason
+
+
+def test_a_cancel_ends_the_preparation_at_once():
+    m = preparing()
+    m.queue(Cancel())
+    m.apply(1.0)
+    assert m.status == "cancelled" and m.pauses == []
+
+
+def test_teleop_ends_the_preparation():
+    m = preparing()
+    assert m.hold_on(1.0) is True
+    assert m.status == "failed" and m.end_reason == "prepare:teleop"
+
+
+def test_the_adopted_mission_is_named_by_start_and_adopt():
+    m = MissionCommands()
+    assert m.adopted_id is None
+    m.queue(Submit("P1", "D1"))
+    m.apply(0.0)
+    assert m.adopted_id is None
+    m.start()
+    assert m.adopted_id == "m1"
+    p = preparing(1.0)
+    assert p.adopted_id is None
+    p.adopt()
+    assert p.adopted_id == p.mission_id
+
+
+def test_a_submit_is_refused_while_the_scene_is_damaged():
+    """Persistent console plan D6: a latched damage refuses automatic work (teleop stays allowed)."""
+    m = MissionCommands()
+    m.queue(Submit("P1", "D1"))
+    assert m.apply(0.0, Context(scene_damaged=True))[0]["reason"] == "scene_damaged" and m.status == "idle"
+
+
+def recovering(t=10.0):
+    m = running()
+    m.queue(Cancel())
+    m.apply(t)
+    m.begin_recovery(t + 1.0)  # the cancel stood: the forks are in a pocket (plan D4)
+    return m
+
+
+def test_a_recovery_reopens_the_work_clock_and_refuses_a_cancel():
+    m = recovering()
+    assert m.status == "recovering" and m.recovery and m.paused_since is None
+    assert m.work_elapsed(11.0, 15.0) == pytest.approx(4.0)  # the cancel's stop closed at the recovery's start
+    m.queue(Cancel())
+    (rec,) = m.apply(12.0)
+    assert (rec["accepted"], rec["reason"], m.status) == (False, "recovering", "recovering")
+
+
+def test_a_stop_pauses_a_recovery_and_the_resume_returns_to_it():
+    m = recovering()
+    m.apply(12.0, Context(stop_kind="preempt"))
+    assert m.status == "paused" and m.recovery
+    m.queue(Resume())
+    m.apply(13.0)
+    m.resumed(13.5)
+    assert m.status == "recovering"
+    m.queue(Pause())
+    m.apply(14.0)
+    assert m.status == "paused"
+
+
+def test_a_recovery_ends_cancelled_or_recovery_required():
+    m = recovering()
+    m.recovered(20.0)
+    assert m.status == "cancelled" and not m.recovery
+    m2 = recovering()
+    assert m2.terminate("recovery_required", 20.0, "recovery:refused") and m2.status == "recovery_required"
+    m2.queue(Submit("P1", "D1"))
+    (rec,) = m2.apply(21.0)  # the slot frees at the next apply, the submit judged then
+    assert rec["accepted"] and not m2.recovery
+
+
+def test_a_submit_before_localization_tracks_is_refused_localization_lost():
+    """Persistent console plan D3 (3rd ed.): the tracker not yet tracking (warming_up) refuses a submit; the
+    reasons before it keep their order."""
+    from forklift_core.mission.commands import Context, Submit  # noqa: PLC0415
+
+    m = MissionCommands()
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(1.0, Context(localization_ok=False))
+    assert rec[-1]["reason"] == "localization_lost"
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(2.0, Context(localization_ok=False, clear_for_submit=False))
+    assert rec[-1]["reason"] == "recovery_required"  # a hold is said first
+    m.queue(Submit("P-1", "D-1", 0))
+    assert m.apply(3.0, Context())[-1]["accepted"]
+
+
+def test_a_loaded_submit_names_the_carried_pallet_and_marks_the_mission_loaded():
+    """Persistent console plan D5 6c: cargo_held lets through only the submit of the pallet the runner says can be
+    delivered as carried; any other is still cargo_held."""
+    m = MissionCommands()
+    m.queue(Submit("P-2", "D-1", 0))
+    rec = m.apply(1.0, Context(submit_refusal="cargo_held", loaded_pallet="P-1"))
+    assert rec[-1]["reason"] == "cargo_held"
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(2.0, Context(submit_refusal="cargo_held", loaded_pallet=None))
+    assert rec[-1]["reason"] == "cargo_held"
+    m.queue(Submit("P-1", "D-1", 0))
+    rec = m.apply(3.0, Context(submit_refusal="cargo_held", loaded_pallet="P-1"))
+    assert rec[-1]["accepted"] and m.mission_loaded
+    m2 = MissionCommands()
+    m2.queue(Submit("P-1", "D-1", 0))
+    assert m2.apply(1.0, Context())[-1]["accepted"] and not m2.mission_loaded
+    m3 = MissionCommands()
+    m3.queue(Submit("P-1", "D-1", 0))
+    assert m3.apply(1.0, Context(submit_refusal="recovery_required", loaded_pallet="P-1"))[-1]["reason"] == \
+        "recovery_required"

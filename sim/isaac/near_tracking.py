@@ -1071,8 +1071,13 @@ POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_captur
                               "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,
                               "live_test_stop_in_capture": False, "live_test_camera_freeze": None,
                               "live_test_marker": False, "live_camera_latency_bound_s": None,
-                              "live_camera_pixel_lag_s": 0.2, "live_test_permit_compare": False,
+                              "live_camera_pixel_lag_s": 0.2, "live_test_permit_compare": False, "live_test_no_pallet_permit": False,
+                              "live_test_recovery_blocked": None, "live_test_return_correction_drops": 0,
+                              "live_test_push_pallet": None, "live_test_fail_at": None, "live_test_kill_worker": False,
+                              "live_epoch": None,
                               "live_test_scan_silence": None,
+                              # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
+                              "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);
                               # only "off" reproduces the measurement runs -- a far run is refused with near tracking.
                               "recognition": "off", "recognition_frame_every": 24,

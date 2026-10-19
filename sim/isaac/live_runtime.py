@@ -13,9 +13,10 @@ import json
 import math
 import os
 import secrets
+import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -25,7 +26,8 @@ from console.live.server import LiveServer, MediaStore, camera_item, grid_item, 
 from console.vehicle_outline import DLS08_MEASURED_CHASSIS
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
-from forklift_core.mission.commands import Context
+from forklift_core.mission.commands import FINAL, Context
+from forklift_core.mission.results import ResultsBook
 from forklift_core.perf import TIMERS
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
 from forklift_core.safety.state import state_message
@@ -43,6 +45,18 @@ class Hooks:
     scan: Callable[[], dict | None]  # -> scan_item kwargs or None
 
 
+@dataclass
+class EndHooks:
+    """What the runner does at a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1), in this order:
+    stop (step 1), release the wheel lock (step 5), drain the trackers' leg switches into the record (step 5a) and,
+    for a completed mission, judge the delivery on the truth (step 6: ``delivery_verdict``)."""
+
+    stop: Callable[[], None] = lambda: None
+    unlock_wheels: Callable[[], None] = lambda: None
+    drain_trackers: Callable[[], None] = lambda: None
+    judge_delivery: Callable[[], object] | None = None
+
+
 class LiveRuntime:
     def __init__(self, core, hooks: Hooks, *, output: Path, port_file: Path | None, dt: float, factor: float = 1.0,
                  camera_hz: float = 10.0, host: str = "127.0.0.1", web_root: Path | None = None,
@@ -50,17 +64,26 @@ class LiveRuntime:
                  sleep: Callable[[float], None] = time.sleep, session_epoch: int | None = None,
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
-                 camera_model: dict | None = None, catchup_steps: int = 0, trace=None):
+                 camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None,
+                 port: int = 0, supervised: bool = False, log_rotate_bytes: int = 200_000_000, log_keep: int = 3,
+                 trace=None):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.trace = trace  # real-time plan 5.12 D12a: a TickTrace on this clock, or None (nothing recorded)
+        self.end = end or EndHooks()
+        self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
+        self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
+        self._writers: list = []  # the threads writing the missions' records (plan D2), joined at close
+        self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
-        self.arbiter = Arbiter(self.session_epoch, config or ArbiterConfig(tick_s=dt),
+        # Reliable requests are judged by the request ledger here: a session lives long (persistent console plan D7).
+        self.arbiter = Arbiter(self.session_epoch, replace(config or ArbiterConfig(tick_s=dt), request_tokens=True),
                                lambda: secrets.token_hex(16), mission=core.commands)
         self.channels = Channels()
         self.link = Link(self.arbiter, self.channels)
         self.store = MediaStore()
         self.pacer = Pacer(factor, dt, catchup_steps=catchup_steps)  # real-time plan D7
+        self.plan_feed = PlanFeed()  # the followed path, for the page's map (display only)
         # Frames by sim time (plan C4a): the video limit is scaled by the declared factor like the command age, so
         # a sim-rate camera keeps the same freshness in sim terms; frames by wall time made a slower run render more
         # often and run slower still (2026-10-17).
@@ -68,7 +91,9 @@ class LiveRuntime:
         self.welcome = {"t": "welcome", "api": "console/1", "vehicle_id": "isaac-forklift",
                         "session_epoch": self.session_epoch, "backend": "isaac", "capabilities": {
                             "control": True, "mission": True, "teleop_direct": True, "teleop_video": True,
-                            "lift": False, "recovery_actions": [],
+                            "lift": True, "recovery_actions": [],  # plan D14: the manual lift is driven
+                            # a supervisor restarts the runner on a new scene (persistent console plan D9)
+                            "sim_reset": bool(supervised),
                             "feedback": {"rear_axle_speed": True, "steering": True, "lift_height": True,
                                          "load_state": False},
                             "media": {"camera_rgb": {"max_hz": camera_hz}, "scan": {"max_hz": 10},
@@ -77,15 +102,22 @@ class LiveRuntime:
                             "provisional_limits": True}}
         if camera_model is not None:
             self.welcome["capabilities"]["camera_model"] = camera_model  # display only (contract 3)
-        self.server = LiveServer(self.channels, self.store, self.welcome, host=host, web_root=web_root)
+        self.arbiter.sim_reset_allowed = bool(supervised)
+        self.server = LiveServer(self.channels, self.store, self.welcome, host=host, port=port, web_root=web_root)
         self.output, self.port_file = Path(output), port_file
         self._log = open(self.output / "live_log.jsonl", "w")  # noqa: SIM115 -- closed in close()
+        # Persistent console plan D8: the log rolls over at log_rotate_bytes into live_log.jsonl.1 (the newest) ...
+        # live_log.jsonl.<log_keep>; older ones go.
+        self._log_rotate_bytes, self._log_keep, self._log_bytes = int(log_rotate_bytes), int(log_keep), 0
+        self._log_lock = threading.Lock()  # the control thread and the records' writer threads both log
+        self._log_rotations = 0
         self.feedback: Feedback | None = None
         self.step = 0
         self.step_start: deque = deque(maxlen=600)  # (sim time at the step's end, mono at its start)
         self._start_mono = None
         self.stopped_in_tick = False  # the gate stopped the wheels inside this control tick (plan C2)
         self._lift_latch: float | None = None  # the lift held since the first preempted step
+        self.loaded_hold_tolerance_m: float | None = None  # loaded: the loaded sag plus a margin (the runner sets it)
         self.frame_id = 0
         self._last_render_time = None
         self._targets_revision = None
@@ -93,12 +125,11 @@ class LiveRuntime:
         self.camera_freeze = camera_freeze  # (from, to) sim seconds: no new frames (the video-stall test)
         self.capturing = False  # the runner marks a capture in progress
         self._test_stop_in_capture = test_stop_in_capture  # tests only: one STOP at the first capture's steps
-        self.camera_latency: list[float] = []
+        self.camera_latency = LatencyWindow(maxlen=LATENCY_WINDOW)
         self.camera_pixel_lag_s = camera_pixel_lag_s  # sim s the pixels trail the render metadata (plan C5)
-        self.camera_pixel_latency: list[float] = []
+        self.camera_pixel_latency = LatencyWindow(maxlen=LATENCY_WINDOW)
         self.camera_pixel_unknown = 0
         self.trace_saved: dict | None = None
-        self._events_logged = 0
         self._next_status = 0.0
 
     # --- lifecycle -------------------------------------------------------------------------------------------------
@@ -111,6 +142,22 @@ class LiveRuntime:
         self.log({"event": "start", "port": port, "session_epoch": self.session_epoch})
         return port
 
+    def archive(self, mission_id: str, records: dict) -> None:
+        """Write a mission's records (handed over at the next adoption) to missions/<id>/records.json off the
+        control thread; the dict is the mission's own (moved out of the core), so nothing changes it meanwhile."""
+        def write():
+            folder = self.output / "missions" / mission_id
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "records.json").write_text(json.dumps(records, default=_jsonable))
+            except (OSError, TypeError, ValueError) as exc:
+                self.log({"archive_error": f"{type(exc).__name__}: {exc}", "mission_id": mission_id})
+
+        self._writers = [w for w in self._writers if w.is_alive()]
+        writer = threading.Thread(target=write, name=f"archive-{mission_id}", daemon=True)
+        writer.start()
+        self._writers.append(writer)
+
     def close(self) -> None:
         if self.trace is not None:
             # D12a: the table is written once, here, first (a failing server stop below must not lose it).
@@ -118,44 +165,149 @@ class LiveRuntime:
                 self.trace_saved = self.trace.save(self.output / "tick_trace.npz")
             except Exception as exc:  # noqa: BLE001 -- recorded, never raised over the run's own end
                 self.trace_saved = {"error": repr(exc), "rows": self.trace.rows}
+        for writer in self._writers:
+            writer.join(timeout=30.0)
         ended = self.server.stop()
         if self.port_file is not None:
             write_port_file(self.port_file, {"host": self.server.host, "port": self.server.port,
                                              "session_epoch": self.session_epoch, "pid": os.getpid(),
                                              "state": "ended" if ended else "stop_failed"})
         for entry in self.link.log:
-            self._log.write(json.dumps(entry) + "\n")
+            self._write_log(json.dumps(entry) + "\n")
         self.link.log.clear()
         self.log({"event": "end", "server_ended": ended, "pacing": self.pacer.report(),
-                  "camera_latency_s": _quantiles(self.camera_latency),
-                  "camera_pixel_latency_s": _quantiles(self.camera_pixel_latency),
+                  "camera_latency_s": self.camera_latency.report(),
+                  "camera_pixel_latency_s": self.camera_pixel_latency.report(),
                   "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved})
-        self._log.close()
+        with self._log_lock:
+            self._log.close()
 
     def log(self, entry: dict) -> None:
         entry.setdefault("mono", self.clock())
-        self._log.write(json.dumps(entry, default=_jsonable) + "\n")
+        self._write_log(json.dumps(entry, default=_jsonable) + "\n")
+
+    def _write_log(self, line: str) -> None:
+        with self._log_lock:
+            self._write_log_locked(line)
+
+    def _write_log_locked(self, line: str) -> None:
+        self._log.write(line)
+        self._log_bytes += len(line)
+        if self._log_bytes < self._log_rotate_bytes:
+            return
+        self._log.close()
+        base = self.output / "live_log.jsonl"
+        for n in range(self._log_keep, 0, -1):
+            older = base.with_name(f"{base.name}.{n}")
+            if n == self._log_keep:
+                older.unlink(missing_ok=True)
+            elif older.exists():
+                older.rename(base.with_name(f"{base.name}.{n + 1}"))
+        base.rename(base.with_name(f"{base.name}.1"))
+        self._log = open(base, "w")  # noqa: SIM115 -- closed in close()
+        self._log_bytes = 0
+        self._log_rotations += 1
+        # How often it rolled and how many it keeps: a reader knows when the oldest part is gone (read_live_log).
+        (self.output / "live_log.index.json").write_text(
+            json.dumps({"rotations": self._log_rotations, "keep": self._log_keep}))
 
     # --- per control tick ------------------------------------------------------------------------------------------
-    def tick_start(self, t: float, near_active: bool) -> tuple[str, list]:
-        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3)."""
+    def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True,
+                   submit_refusal: str | None = None, localization_ok: bool = True,
+                   loaded_pallet: str | None = None) -> tuple[str, list]:
+        """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``:
+        outside a SLAM hold (else a submit is refused recovery_required); ``submit_refusal``: what the forks are in
+        refuses it (persistent console plan D5a: recovery_required, cargo_held); ``loaded_pallet``: the carried pallet a
+        submit may deliver as it is carried (plan D5 6c), else None."""
         now = self.clock()
         self.stopped_in_tick = False
         self.arbiter.pacing_ok = self.pacer.ok
         stop_kind = self.link.begin(now, self.feedback)
-        records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active))
+        self.collect_end(t)  # ended after the last apply (a preparation's job_hold failure): before this one frees it
+        records = self.core.commands.apply(t, Context(stop_kind=stop_kind, near_tracker=near_active,
+                                                      clear_for_submit=clear_for_submit,
+                                                      submit_refusal=submit_refusal,
+                                                      scene_damaged=self.scene["damaged"] is not None,
+                                                      localization_ok=localization_ok,
+                                                      loaded_pallet=loaded_pallet))
+        self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
+
+    # --- a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1) -------------------------------------
+    def collect_end(self, t: float) -> None:
+        """A mission the commands ended by themselves (FINAL, not yet through end_mission), at its end's time."""
+        cmds = self.core.commands
+        if cmds.status in FINAL and cmds.mission_id is not None and cmds.mission_id != self._ended_id:
+            logged = cmds.end_logged_for == cmds.mission_id
+            ended = next((r["t"] for r in reversed(cmds.log) if r["command"] == "end"
+                          and r["mission_id"] == cmds.mission_id), t) if logged else t
+            self.end_mission(ended, cmds.status, cmds.end_reason if logged else "operator")
+
+    def end_mission(self, t: float, outcome: str, reason: str | None) -> dict | None:
+        """End the session's current mission at sim ``t``: ``outcome`` is ``complete`` (judged on the truth: done or
+        failed), ``failed`` or ``cancelled``. The session goes on; the slot is free at the next tick. Returns the
+        result (None: no mission, or this one already ended)."""
+        cmds = self.core.commands
+        mission_id, mission = cmds.mission_id, cmds.mission
+        if mission_id is None or mission_id == self._ended_id:
+            return None
+        self._ended_id = mission_id
+        self.end.stop()
+        # The lift held where it is, whatever stage of the tick the end came in (Codex D6 design P2-6) -- within the
+        # hold tolerance of the measurement, so a standing lift's sag does not lower its target (main 2026-10-19).
+        lift = self._held_lift()
+        self.hooks.hold_lift(lift)
+        if getattr(self.core, "ms", None) is not None:
+            self.core.ms.lift_command = lift
+        self.core.abandon_jobs(t)  # step 2: the plan, the capture and the observation of this mission
+        self.capturing = False
+        self.end.unlock_wheels()  # step 5
+        cmds.close_open(t)  # step 5a
+        self.end.drain_trackers()
+        extra = {}
+        final = outcome
+        if outcome == "complete":  # step 6
+            verdict = self.end.judge_delivery()
+            final, reason = ("done", None) if verdict.ok else ("failed", verdict.reason)
+            extra["delivery_error_m"] = verdict.delivery_error_m
+        if not cmds.terminate(final, t, reason) and cmds.end_logged_for != mission_id:
+            cmds.note_end(t, reason)  # step 9: a cancel confirmed standing is already cancelled; logged once
+        started = next((r["t"] for r in reversed(cmds.log) if r["command"] == "submit" and r["accepted"]
+                        and r["mission_id"] == mission_id), None)
+        advice = cmds.end_advice if cmds.end_logged_for == mission_id else None  # plan D13 item 6
+        entry = self.results.add(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
+                                 ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
+                                 destination_id=mission.destination_id if mission else None, advice=advice)
+        clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
+        records = self.core.end_reset(t)  # steps 3 and 8: the pocket check closed, the mission's state back to the start
+        if cmds.status == "done" and mission is not None:
+            # plan D3: verified there only now -- the delivery verdict passed, after the end's last targets update
+            self.core.targets.verify_at(mission.pallet_id, mission.destination_id)
+        if any(records.values()):
+            self.archive(mission_id, records)  # under this mission's own id (Codex stage 2 impl P2-5)
+        try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)
+            folder = self.output / "missions" / mission_id
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "result.json").write_text(json.dumps({"result": entry, "clock": clock, **extra},
+                                                           default=_jsonable))
+        except OSError as exc:
+            entry = self.results.note(entry["seq"], record_error=f"{type(exc).__name__}: {exc}")
+        message = self.results.message()
+        self.store.put("missions", self.results.seq, message)  # a client connecting later gets it after the targets
+        self.channels.put(None, message)
+        self.log({"mission_end": entry, "tick_t": t, **extra})
+        return entry
 
     def _flush(self, t: float) -> None:
         """The link's message log and the arbiter's boundary events (mode, lease, disarm, generation reasons), and
         once a second the stop detector and the feedback it judged."""
         for entry in self.link.log:
-            self._log.write(json.dumps(entry) + "\n")
+            self._write_log(json.dumps(entry) + "\n")
         self.link.log.clear()
-        for event in self.arbiter.events[self._events_logged:]:
+        for event in self.arbiter.events:
             self.log(dict(event, arbiter=True, tick_t=t))
-        self._events_logged = len(self.arbiter.events)
+        self.arbiter.events.clear()  # plan D8: logged, then let go (nothing else reads them)
         now = self.clock()
         if now >= self._next_status:
             self._next_status = now + 1.0
@@ -175,13 +327,19 @@ class LiveRuntime:
 
     def publish(self, t: float, out, safety: dict, *, pose: dict | None, freshness: dict | None,
                 applied: dict | None, speed_mps: float | None, steering_rad: list | None = None,
-                lift_m: float | None = None) -> None:
-        """The state (with the command as finally applied), the targets and the log entry due this tick."""
+                lift_m: float | None = None, plan_key=None, plan_poses: Callable | None = None) -> None:
+        """The state (with the command as finally applied), the targets and the log entry due this tick.
+        ``plan_key`` names the path being followed (None: none); ``plan_poses()`` gives its poses and directions."""
         now = self.clock()
         if self.link.state_due(now):
             msg = state_message(self.arbiter, out, safety, now_mono=now, rear_axle_speed_mps=speed_mps,
                                 applied=applied, pose=pose, freshness=freshness, pacing=self.pacer.report(),
                                 steering_rad=steering_rad, lift_m=lift_m)
+            plan = self.plan_feed.update(plan_key, plan_poses, now)
+            if plan is not OMIT:
+                msg["plan"] = plan
+            msg["last_result"] = self.results.last  # the session's last mission outcome, after its slot is free
+            msg["scene"] = self.scene  # a latched damage: automatic work refused until the scene is reset (D6)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
@@ -222,7 +380,7 @@ class LiveRuntime:
             self.stopped_in_tick = True
             self.hooks.zero_wheels()
             if self._lift_latch is None:
-                self._lift_latch = float(self.hooks.lift_position())
+                self._lift_latch = self._held_lift()  # the plan D14 rule (main 2026-10-19), once
             self.hooks.hold_lift(self._lift_latch)
         else:
             self._lift_latch = None
@@ -230,8 +388,30 @@ class LiveRuntime:
             self.log({"gate": zero, "step": self.step, "sim_t": sim_t})
         return zero
 
+    def hold_tolerance(self) -> float:
+        """The event hold tolerance now (plan D14): the loaded one while the forks carry or may carry a pallet."""
+        a = float(self.arbiter.config.teleop_limits.lift_hold_tolerance_m)
+        cargo = getattr(self.core, "cargo", None)
+        loaded = cargo is not None and (cargo.relation in ("carrying", "unknown")
+                                        or cargo.load in ("acquiring", "confirmed", "releasing", "unknown"))
+        if loaded and self.loaded_hold_tolerance_m is not None:
+            a = max(a, float(self.loaded_hold_tolerance_m))
+        return a
+
+    def _held_lift(self) -> float:
+        """Where an event stops the lift (plan D14, main 2026-10-19): the target as it is, within the hold tolerance
+        of the measured lift (the loaded one when loaded) -- a target that ran ahead stops near the lift, a standing
+        lift's gravity sag leaves the target alone. Without a core target: the measurement."""
+        measured = float(self.hooks.lift_position())
+        ms = getattr(self.core, "ms", None)
+        if ms is None or getattr(ms, "lift_command", None) is None:
+            return measured
+        a = self.hold_tolerance()
+        return float(min(measured + a, max(measured - a, float(ms.lift_command))))
+
     def after_step(self, sim_t: float, *, odom_speed: float | None, yaw_rate: float, rendered: bool,
-                   odom_mono: float | None = None, render_sim_time_of=None) -> None:
+                   odom_mono: float | None = None, render_sim_time_of=None, lift_m: float | None = None,
+                   steering_rad: float | None = None, odom_xy=None) -> None:
         """The step ended: its clock, the feedback it made, and the media."""
         if self.test_step_delay_s:
             self.sleep(self.test_step_delay_s)  # the slow-pacing test only
@@ -243,7 +423,10 @@ class LiveRuntime:
             # Stamped when the sample was made (the runner passes it; a SLAM exchange may have waited since --
             # Codex M-c round 5 P1), else at this step's end.
             made = now if odom_mono is None else float(odom_mono)
-            self.feedback = Feedback(made, float(odom_speed), float(yaw_rate))
+            # plan D14: the measured lift and the larger measured steering angle go with it
+            # main 2026-10-19: the odometry position too, for the stand waiver's creep across feedback gaps
+            self.feedback = Feedback(made, float(odom_speed), float(yaw_rate), lift_m=lift_m, steering_rad=steering_rad,
+                                     odom_xy=odom_xy)
         if rendered:
             self._camera(sim_t, render_sim_time_of)
         if self.step % 12 == 0:
@@ -308,6 +491,48 @@ def sent_scale(width: int, max_width: int = 640) -> int:
     return n
 
 
+OMIT = object()  # PlanFeed.update: this state carries no plan field
+
+
+class PlanFeed:
+    """The display plan for the state (contract 6: ``plan: {revision, poses: [[x, y, direction], ...]}``, only when it
+    changes): a new plan key is a new revision; no plan any more is said once as null; whatever is current is said
+    again every ``refresh_s`` so a page that connects later gets it. At most ``max_poses`` poses (plus the cusps)."""
+
+    def __init__(self, refresh_s: float = 2.0, max_poses: int = 200) -> None:
+        self.refresh_s, self.max_poses = refresh_s, max_poses
+        self.key, self.revision, self.current, self.sent_at = None, 0, None, None
+
+    def update(self, key, poses: Callable | None, now: float):
+        if key != self.key:
+            self.key = key
+            if key is None:
+                self.current = None
+            else:
+                self.revision += 1
+                self.current = {"revision": self.revision, "poses": self._thin(*poses())}
+        elif self.sent_at is not None and now - self.sent_at < self.refresh_s:
+            return OMIT
+        self.sent_at = now
+        return self.current
+
+    def _thin(self, poses, directions) -> list:
+        n = len(poses)
+        keep = set(range(0, n, max(1, math.ceil(n / self.max_poses)))) | {n - 1}
+        for i in range(1, n):
+            if (directions[i] >= 0) != (directions[i - 1] >= 0):
+                keep |= {i - 1, i}  # both ends of a cusp: the page draws a node there
+        return [[round(float(poses[i][0]), 3), round(float(poses[i][1]), 3), 1 if directions[i] >= 0 else -1]
+                for i in sorted(keep)]
+
+
+def live_video_size(calibration, max_width: int = 640) -> tuple[int, int]:
+    """The live video camera's resolution: the perception camera's, halved as ``sent_scale`` halves it, so the picture
+    is rendered at the size it is sent and ``live_camera_model`` describes it."""
+    n = sent_scale(int(calibration.width), max_width)
+    return int(calibration.width) // n, int(calibration.height) // n
+
+
 # camera_link (x forward, y left, z up) axes as columns, in optical (x right, y down, z forward) coordinates
 _OPTICAL_FROM_LINK = np.array([[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])
 
@@ -334,6 +559,30 @@ def live_camera_model(calibration, mount, *, rear_axle_offset_m: float, sent_wid
                 "xyz_m": [float(t[0]) + abs(float(rear_axle_offset_m)), float(t[1]), float(t[2])],
                 "quaternion_xyzw": [float(v) for v in q]},
             "rides_lift": bool(rides_lift)}
+
+
+LATENCY_WINDOW = 36_000  # the camera latencies kept (plan D8): measured frames, an hour at 10 Hz and factor 1
+
+
+class LatencyWindow(deque):
+    """The last ``maxlen`` latencies, with the whole session's count and maximum (plan D8: a session left up for
+    hours keeps a window, not every frame's)."""
+
+    def __init__(self, maxlen: int) -> None:
+        super().__init__(maxlen=maxlen)
+        self.n, self.max = 0, None
+
+    def append(self, value: float) -> None:
+        super().append(value)
+        self.n += 1
+        self.max = value if self.max is None else max(self.max, value)
+
+    def report(self) -> dict | None:
+        window = _quantiles(list(self))
+        if window is None:
+            return None
+        return {"n": self.n, "max": self.max, "window_n": window["n"], "window_median": window["median"],
+                "window_p99": window["p99"], "window": f"the last {self.maxlen} measured frames (a count, not a wall time)"}
 
 
 def _quantiles(values: list) -> dict | None:

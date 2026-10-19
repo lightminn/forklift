@@ -138,6 +138,18 @@ def test_stop_then_rearm_then_teleop_again():
     assert loop.a.mode == "TELEOP" and loop.a.armed
 
 
+def test_the_state_says_whether_the_feedback_is_valid():
+    """Persistent console plan D13 item 5 (Codex D13 round 2 P3): the session buttons tell no_feedback from
+    not_stopped as the arbiter does."""
+    loop = Loop()
+    for _ in range(40):
+        loop.cycle()
+    assert loop.state["feedback_ok"] is True
+    loop.a.feedback_ok = False
+    out = loop.a.step(loop.t, SAFE, (0.0, 0.0))
+    assert state_message(loop.a, out, SAFE, now_mono=loop.t)["feedback_ok"] is False
+
+
 def test_the_state_says_whether_the_stop_is_confirmed_and_names_the_mission_targets():
     # the console enables rearm on stopped_confirmed and shows pallet -> destination (C3)
     loop = Loop()
@@ -175,3 +187,28 @@ def test_measured_steering_and_lift_height_are_sent_when_given_and_null_otherwis
     assert st["steering_rad"] is None and st["lift_m"] is None
     st = state_message(loop.a, out, SAFE, now_mono=loop.t, steering_rad=[0.1, 0.08], lift_m=0.05)
     assert st["steering_rad"] == [0.1, 0.08] and st["lift_m"] == 0.05
+
+
+def test_an_ended_mission_shows_its_end_reason_not_an_earlier_refused_resume():
+    """Codex persistent-console stage 1 P3: resume refused -> cancel -> confirmed standing showed the old refusal."""
+    loop = Loop()
+    loop.m.log.append({"t": 1.0, "command": "end", "accepted": True, "reason": "operator", "mission_id": "m1",
+                       "status": "cancelled"})
+    safety = dict(SAFE, mission={"id": "m1", "status": "cancelled", "phase": "observe",
+                                 "resume": {"refused": True, "reason": "path_blocked"}})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    assert state_message(loop.a, out, safety, now_mono=loop.t)["mission"]["reason"] == "operator"
+    running = dict(safety, mission=dict(safety["mission"], status="paused"))
+    assert state_message(loop.a, out, running, now_mono=loop.t)["mission"]["reason"] == "path_blocked"
+
+
+def test_a_live_load_names_its_pallet_after_the_mission_ended():
+    """Plan D5a (Codex round 1 P3): the mission is cleared the tick after its end; the carried pallet stays drawn."""
+    loop = Loop()
+    safety = dict(SAFE, load={"loaded": True, "basis": "phase+cargo", "pallet_id": "P-2", "state": "confirmed"},
+                  mission={"id": None, "status": "idle", "phase": None, "pallet_id": None, "destination_id": None})
+    out = loop.a.step(loop.t, safety, (0.0, 0.0), {"measured_mps": 0.0, "measured_kappa": 0.0,
+                                                   "steering_error_rad": 0.0, "permit": loop.permit})
+    st = state_message(loop.a, out, safety, now_mono=loop.t)
+    assert st["load"] == {"state": "loaded", "basis": "phase+cargo", "pallet_id": "P-2"}

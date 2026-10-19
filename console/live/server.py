@@ -104,12 +104,14 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
             return
         conn_id = uuid.uuid4().hex
         self.attach_control(conn_id, ws, client_id)
-        self.channels.connect(conn_id, client_id, True)
+        token = self.channels.issue_token()  # this connection's (persistent console plan D7)
+        self.channels.connect(conn_id, client_id, True, token)
         try:
-            self._send_control(conn_id, self.welcome)
-            targets = self.store.get("targets")
-            if targets is not None:
-                self._send_control(conn_id, targets[1])  # the current list, as the fake vehicle does after welcome
+            self._send_control(conn_id, dict(self.welcome, request_token=token))  # a copy: the shared one stays
+            for kind in ("targets", "missions"):  # the current list, as the fake vehicle does after welcome, and
+                item = self.store.get(kind)  # the session's mission results (persistent console plan D1)
+                if item is not None:
+                    self._send_control(conn_id, item[1])
             async for raw in ws:
                 msg = wire.parse(raw)
                 if msg is None:
@@ -149,6 +151,12 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
                     await self._broadcast_control(msg)
                 else:
                     self._send_control(conn_id, msg)
+                    if msg.get("t") == "reject" and msg.get("of") == "hello":
+                        # refused by the request ledger (no room, plan D7): closed once the reject is out
+                        ws, _ = self.control.get(conn_id, (None, None))
+                        if ws is not None:
+                            asyncio.get_running_loop().call_later(
+                                0.2, lambda ws_=ws: asyncio.ensure_future(ws_.close(1013, "busy")))
 
     def wake(self) -> None:
         self._wake.set()

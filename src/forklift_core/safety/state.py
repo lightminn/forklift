@@ -3,6 +3,8 @@ never 0 or an estimate; the runner passes what it owns (pose, freshness, pacing)
 
 from __future__ import annotations
 
+from forklift_core.mission.commands import FINAL
+
 
 RESUME_STEPS = ("stop_confirmed", "state_verified", "frame_reexpressed", "path_rechecked")
 
@@ -56,6 +58,9 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "mode": out.mode, "stop_kind": out.stop_kind, "control_gen": out.control_gen, "armed": out.armed,
         "arm_gen": a.arm_gen,
         "stopped_confirmed": bool(a.stop_confirmed),  # what rearm and mode changes wait for (contract 5)
+        "feedback_ok": bool(a.feedback_ok),  # checked before the stand (plan D13 item 5: no_feedback vs not_stopped)
+        # ... unless waived: "lower_only" -- TELEOP entry and rearm taken still but unconfirmed (plan D14, main 10-19)
+        "stand_waiver": a.stand_waiver(),
         "lease": {"holder": None if lease is None else lease.client_id,
                   "observers": sum(1 for c in a.clients if lease is None or c != lease.client_id),
                   "reserved_until_s": reserved},
@@ -63,8 +68,10 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "rear_axle_speed_mps": rear_axle_speed_mps,
         "steering_rad": steering_rad, "lift_m": lift_m,  # measured by the back end, null when it cannot (C3 b)
         "load": {"state": None if loaded is None else ("loaded" if loaded else "empty"), "basis": load.get("basis"),
-                 # loaded is judged by the mission's phase, so the pallet on the forks is the mission's (C3)
-                 "pallet_id": mission.get("pallet_id") if loaded else None},
+                 # a live state names the pallet on the forks itself, kept past the mission's end (plan D5a); a
+                 # batch one judges loaded by the phase, so the pallet is the mission's (C3)
+                 "pallet_id": (load["pallet_id"] if "pallet_id" in load else mission.get("pallet_id")) if loaded
+                 else None},
         "command": command,
         "applied": None if applied is None else dict(applied, stop_kind=out.stop_kind),
         "permit": permit,
@@ -73,13 +80,19 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
                    "loaded_mps": lim.loaded_mps, "curvature_inv_m": lim.curvature_inv_m, "provisional": True},
         "drive_allowed": out.policy.drive_allowed, "lift_allowed": out.policy.lift_allowed,
         "teleop_allowed": out.policy.teleop_allowed, "teleop_forbidden_reason": out.policy.reason,
+        # persistent console plan D14: which lift directions, the drive mode, the lift travel and the
+        # recovery stage the core reports
+        "lift_dirs": sorted(out.policy.lift_dirs), "drive_mode": out.policy.drive_mode,
+        "lift_limit_m": a.config.lift_limit_m, "recovery": safety.get("recovery") if safety else None,
         "mission": None if not mission.get("id") else {
             "mission_id": mission.get("id"), "status": mission.get("status"), "phase": mission.get("phase"),
             "pallet_id": mission.get("pallet_id"), "destination_id": mission.get("destination_id"),
             "reason": ("teleop" if mission.get("status") == "held"
+                       # an ended mission: its end's reason (the log's last entry), not an earlier refused resume
+                       else last.get("reason") if mission.get("status") in FINAL
                        else (mission.get("resume") or {}).get("reason") if (mission.get("resume") or {}).get("refused")
                        else last.get("reason")),
-            "phase_elapsed_s": mission.get("phase_elapsed_s"),
+            "phase_elapsed_s": mission.get("phase_elapsed_s"), "remaining_m": mission.get("remaining_m"),
             "resume_steps": resume_steps(mission.get("resume"))},
         "freshness": freshness, "pacing": pacing,
         "last_teleop_reject": a.last_teleop_reject, "stop_latch": a.preempt_latch,

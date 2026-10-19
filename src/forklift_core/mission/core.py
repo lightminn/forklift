@@ -56,13 +56,15 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
 
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
+from forklift_core.mission.cargo import APPROACH_GAP_M, CargoState
+from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M
 from forklift_core.mission.commands import MissionCommands
 from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
@@ -83,6 +85,31 @@ def rollout_callback_spec(config, start) -> dict:
     settings and the start pose it rolls a straight out with. redraw_docking's closures and
     redraw_docking_traced's dry configs describe themselves the same way."""
     return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
+
+
+CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
+CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
+CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
+RECOVERY_PHASE_LIMIT_S = 20.0
+MANUAL_GROUND_HOLD_S = 1.0  # plan D14: the manual ground verdict holds this long before the reverse opens
+ALIGN_HEADING_RAD = 0.02  # plan D14: the straight reverse's heading tolerance to the pocket axis  # plan D4: each recovery phase's work-clock limit
+RECOVERY_LOWER_MIN_S = 1.0  # the lowered verdict is read after this much of recover_lower (the lift ramps down first)
+
+
+@dataclass
+class RecoveryPath:
+    """A recovery's retrace (plan D4): rear-axle poses, all reversing."""
+
+    poses: np.ndarray
+    directions: np.ndarray
+    curvatures_inv_m: np.ndarray
+    length_m: float
+    status: str = "recovery"
+    success: bool = True
+    expanded_nodes: int = 0  # the fields path_record reads (Codex 6b impl round 1 P2-7)
+
+
+_HELD = object()  # a hold basis entry that no estimate is: every estimate counts as found under the hold
 
 
 def apply_tracker_profile_to(trackers: dict, profile) -> None:
@@ -159,7 +186,31 @@ class MissionCore:
         self.capture_live = None  # D9c: the capture running over control ticks
         self.observation_live = None  # D9c: a finished capture's observation, handled on the next tick
         self.capture_acquired_s: float | None = None  # D9c: its acquisition time, for the plan it asks
+        self.prepare_attempts = 0  # persistent console plan D2: the current submit's preparation requests
+        self.baseline = None  # persistent console plan D2: the mission-owned state before a live session's first mission
+        self.end_release_due: dict | None = None  # plan D1 step 4: an end release waiting for the truck to stand
+        self.hold_basis: dict | None = None  # the estimates a SLAM hold began with (those stay map estimates)
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
+        # Persistent console plan D5a: the fork relation and the load, the session's (a batch run updates it too,
+        # but only a live run reads it -- core.baseline is set there alone).
+        self.cargo = CargoState()
+        self._recovery_install_gen = None  # plan D4: the commands generation the retrace was installed under
+        self.recent_odom: list = []  # plan D4b: the last 3 m of odometry rear poses (live), every 0.02 m
+        self.recent_steps: list = []  # whether the step arriving at each of them went forward
+        self.recent_forward = True  # the direction of the last motion
+        self.clear_out_used_m = 0.0  # the back-out budget spent
+        # Plan D14: the event hold tolerance a live runner gives (a callable: loaded or not, as of now); None in a
+        # batch run, whose first pause keeps the measured latch the replay gate records.
+        self.lift_hold_tolerance = None
+        # Plan D11: the return turnaround's correction drops, per phase -- a mission's (the baseline restores it at each
+        # mission's start; a pause or a resume keeps it, Codex impl round 1 P2), outside the shared live_leg drop
+        # limit; at RETURN_CORRECTION_FALLBACK that return is planned in the tick as before.
+        self.return_correction_drops: dict = {}
+        # Plan D5 6c: a loaded mission's start wait (the mission's: the baseline clears it), and the loaded lift's
+        # (sag, tolerance) a live runner gives -- the measured lift must be at the carry target less the sag, within
+        # the tolerance, before the truck drives.
+        self.loaded_wait: dict | None = None
+        self.loaded_lift_band: tuple | None = None
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -258,6 +309,8 @@ class MissionCore:
     def transition(self, next_phase: str, t: float) -> None:
         ms, state, obstacle, pocket, slam, hooks = self.ms, self.state, self.obstacle, self.pocket, self.slam, self.hooks
         state["transitions"].append({"from": ms.phase, "to": next_phase, "time_s": t})
+        mission_ = self.commands.mission
+        self.cargo.on_transition(ms.phase, next_phase, None if mission_ is None else mission_.pallet_id)
         if obstacle is not None and obstacle["layer"].known_enabled:
             self.known_transition(ms.phase, next_phase, t)
         hooks.echo("TRANSITION " + hooks.record_json(state["transitions"][-1]))
@@ -308,13 +361,18 @@ class MissionCore:
         # seen, and a later SLAM correction cannot slide the truck against the
         # pallet estimate (plan v3.5; S2 seed 0 on v3.4 hit a block that way).
         if ms.phase in ("approach", "insert", "lower") and slam["tracker"].mode == "tracking":
-            slam["tracker"].hold(odom_from_base=hooks.slam_odom_base())
+            self.hold_slam(t, held_frame_pallet=True)  # the capture's estimate was made with this correction
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": hooks.slam_error()}
             )
         elif ms.phase in ("transport", "settle"):
             slam["pending_release"] = ms.phase
             slam["release_wait_from"] = t
+
+    def _remaining_m(self, phase):
+        """The follower's distance left in ``phase`` for the published state; None without a follower there."""
+        remaining = getattr(self.trackers.get(phase) if phase is not None else None, "remaining_to_goal_m", None)
+        return None if remaining is None else float(remaining())
 
     def tracking_limit(self, t: float) -> float:
         """The follower's time limit in the current phase: three times the path time at the tracker's own speed
@@ -334,6 +392,13 @@ class MissionCore:
         ms, state, slam, hooks, geometry, near = self.ms, self.state, self.slam, self.hooks, self.geometry, self.near
         transition = self.transition
         rear = None
+        if ms.phase == "recover_withdraw":
+            # plan D4: backed out; the live mission ends cancelled through the next start's check (D4b)
+            self.finish_cancel(t, self.cargo.last_rear)
+            return SimpleNamespace(stop=False, rear=rear)
+        if ms.phase == "clear_out":
+            self.clear_out_arrived(t, self.cargo.last_rear)  # plan D4b: the final check, or 0.05 m more
+            return SimpleNamespace(stop=False, rear=rear)
         if ms.phase == "approach":
             if near is not None and self.options.near_tracking_stop_at == "insert":
                 # Plan D8 S4a-1: approach only -- end where the insertion would start.
@@ -399,13 +464,16 @@ class MissionCore:
             if ms.phase in ["lift", "extract", "transport"]
             else 0.0
         )
-        ms.lift_command += float(
-            np.clip(
-                desired_lift - ms.lift_command,
-                -settings["lift_rate_mps"] * dt,
-                settings["lift_rate_mps"] * dt,
+        if self.baseline is None or self.commands.adopted_id is not None:
+            # Plan D14: live, with no mission adopted, the core does not own the lift -- the ended mission's phase
+            # ramped a lift lowered by hand back up (the manual lift and the hold own it then).
+            ms.lift_command += float(
+                np.clip(
+                    desired_lift - ms.lift_command,
+                    -settings["lift_rate_mps"] * dt,
+                    settings["lift_rate_mps"] * dt,
+                )
             )
-        )
         if ms.phase == "lift" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
             hooks.require(hooks.pallet_z() > 0.06, "Pallet was not lifted")
             transition("extract", t)
@@ -418,6 +486,8 @@ class MissionCore:
                 "Fork did not lower",
             )
             transition("withdraw", t)
+        if ms.phase in ("recover_lower", "recover_withdraw"):
+            self.recovery_timers(t)
         if ms.phase == "settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
             if "return_home" in self.trackers:
                 transition("return_home", t)
@@ -494,17 +564,17 @@ class MissionCore:
                 obstacle["live_replanned"][ms.phase] = False
                 obstacle["deadline"] = None
                 return True
-            if (self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home")
-                    and slam is not None and not slam["stop_now"]):
+            worker_ = self.jobs is not None and not self._return_in_tick()
+            if worker_ and slam is not None and not slam["stop_now"]:
                 # Real-time plan D8b: a leg asked while the truck still rolls out of the last phase is dropped as
                 # moving when it comes back, and each drop counts (Isaac V8-4 d8c_6: two drops in 0.25 s at the
                 # transport's start). It stands until the stop detector holds, then asks.
                 obstacle["live_replanned"][ms.phase] = False
                 obstacle["deadline"] = None
                 return True
-            if self.jobs is not None and not (options.return_turnaround and ms.phase == "return_home"):
+            if worker_:
                 # Real-time plan D8b: the worker plans (the tight retry with it, under the same deadline); the leg
-                # stands until the plan is taken. A return turnaround's closure arguments keep it here.
+                # stands until the plan is taken. Plan D11: a return turnaround goes too, with its arc check frozen.
                 if ms.phase == "transport":
                     sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
                     payload = self._leg_payload("transport", grid_world(sc_), start, grid_kwargs(None),
@@ -512,10 +582,12 @@ class MissionCore:
                 else:
                     sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
                     payload = self._leg_payload("return", grid_world(sc_), start,
-                                                {**grid_kwargs("return", sc_.destination), **return_turnaround_kwargs()},
+                                                {**grid_kwargs("return", sc_.destination),
+                                                 **return_turnaround_kwargs(frozen=True)},
                                                 retry_on=("invalid_start", "no_path"))
                 obstacle["deadline"] = None
-                self._request("live_leg", "leg", payload, t, rear, self._applied_now(), ctx={})
+                self._request("live_leg", "leg", payload, t, rear, self._applied_now(),
+                              ctx={"turnaround": bool(options.return_turnaround and ms.phase == "return_home")})
                 return True
             if ms.phase == "transport":
                 sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
@@ -577,6 +649,334 @@ class MissionCore:
                 stand = True  # a blocked-path replan failed: stand until one succeeds
         return stand
 
+    # --- persistent console plan D4: the recovery of a cancel that stood with the forks in a pocket ------------------
+    def recovery_failed(self, t: float, why: str) -> None:
+        self.commands.terminate("recovery_required", t, f"recovery:{why}")
+
+    # --- plan D4b: a cancel ends where the next preparation can start ---------------------------------------------
+    def observe_motion(self, odom_rear) -> None:
+        """Each live tick's end: the last 3 m of odometry rear poses (never the control pose: a correction jump is not
+        a move), every 0.02 m, and whether the last of those steps went forward along the heading (plan D4b)."""
+        odom_rear = tuple(float(v) for v in odom_rear)
+        forward = True
+        if self.recent_odom:
+            last = self.recent_odom[-1]
+            dx, dy = odom_rear[0] - last[0], odom_rear[1] - last[1]
+            if math.hypot(dx, dy) < 0.02:
+                return
+            forward = self.recent_forward = dx * math.cos(odom_rear[2]) + dy * math.sin(odom_rear[2]) >= 0.0
+        self.recent_odom.append(odom_rear)
+        self.recent_steps.append(forward)
+        del self.recent_odom[:-150], self.recent_steps[:-150]
+
+    def end_gate(self, t: float, rear, extra_m: float = 0.0) -> bool:
+        """Whether the next preparation's start check passes here with the inputs it would have after the end release
+        (the runner's prepare_start_ok); no check (a batch run): passes."""
+        check = getattr(self.hooks, "prepare_start_ok", None)
+        if check is None or self.baseline is None:
+            return True
+        return bool(check(tuple(float(v) for v in rear), extra_m=extra_m, preview=True, t=t))
+
+    def finish_cancel(self, t: float, rear) -> bool:
+        """A live cancel (or a recovery) ends through the gate: there, cancelled (True, the end goes on); inside the
+        next preparation's clearance, a back-out first (False)."""
+        cmds = self.commands
+        if self.end_gate(t, rear):
+            if cmds.status == "cancelling":
+                cmds.cancelled(t)
+            else:
+                self.recovery_done(t)
+            return True
+        if cmds.status == "cancelling":
+            cmds.begin_recovery(t)
+        self.clear_out_used_m = 0.0
+        self.start_clear_out(t, rear)
+        return False
+
+    def _odom_to_control(self, pose):
+        slam = self.slam
+        if slam is None or slam["tracker"].applied is None:
+            return tuple(pose)
+        return tuple(float(v) for v in compose(tuple(float(v) for v in slam["tracker"].applied[0]), tuple(pose)))
+
+    def start_clear_out(self, t: float, rear, *, extend_only: bool = False) -> None:
+        """The back-out (plan D4b): held; after forward motion the recent odometry trajectory retraced, after reverse
+        motion (or to extend) straight back along the heading; it ends at the first sample the next preparation's
+        start check passes with CLEAR_OUT_MARGIN_M; none within the budget: recovery_required."""
+        slam = self.slam
+        if slam is not None and slam["tracker"].mode != "holding":
+            self.hold_slam(t, held_frame_pallet=False)  # the back-out moves in one frame
+        rear = tuple(float(v) for v in rear)
+        budget = CLEAR_OUT_BUDGET_M - self.clear_out_used_m
+        if budget < 0.02:
+            self.recovery_failed(t, "clear_out:budget")
+            return
+        if extend_only:
+            count = max(2, int(round(CLEAR_OUT_STEP_M / 0.02)) + 1)
+            poses = [(rear[0] - s * math.cos(rear[2]), rear[1] - s * math.sin(rear[2]), rear[2])
+                     for s in np.linspace(0.0, min(CLEAR_OUT_STEP_M, budget), count)]
+        else:
+            poses = [rear]
+            if self.recent_forward and len(self.recent_odom) >= 2:
+                # Only the last forward run (Codex D4b impl round 1 P1-2: a gear change in the trace put forward
+                # segments into a reverse path): back to where that run began.
+                first = len(self.recent_odom) - 1
+                while first > 0 and self.recent_steps[first]:
+                    first -= 1
+                poses += [self._odom_to_control(p) for p in reversed(self.recent_odom[first:-1])]
+            # then straight back along the heading there, for what is left of the budget
+            end = poses[-1]
+            run = float(np.sum(np.hypot(np.diff(np.asarray(poses)[:, 0]), np.diff(np.asarray(poses)[:, 1])))) \
+                if len(poses) > 1 else 0.0
+            poses += [(end[0] - s * math.cos(end[2]), end[1] - s * math.sin(end[2]), end[2])
+                      for s in np.arange(0.02, budget - run + 1e-9, 0.02)]
+            out, length = [poses[0]], 0.0
+            for pose in poses[1:]:
+                step = math.hypot(pose[0] - out[-1][0], pose[1] - out[-1][1])
+                if step < 1e-6:
+                    continue
+                if length + step > budget + 1e-9:
+                    break
+                length += step
+                out.append(pose)
+                if self.end_gate(t, pose, CLEAR_OUT_MARGIN_M):
+                    break
+            else:
+                out = None
+            if out is None or len(out) < 2 or not self.end_gate(t, out[-1], CLEAR_OUT_MARGIN_M):
+                self.recovery_failed(t, "clear_out:no_start_within_budget")
+                return
+            poses = out
+        if self._install_retreat(t, rear, poses, "clear_out"):
+            self.clear_out_used_m += self.paths["clear_out"].length_m
+            if self.ms.phase != "clear_out":
+                self.transition("clear_out", t)
+
+    @staticmethod
+    def _rest_from(poses, cum, done, rear):
+        """The rest of a path from the truck's projection on it, in the path's order (Codex D4b impl round 4): the
+        segments that end beyond the follower's progress; the nearest one's foot point starts the rest, so it never
+        goes back to a sample already passed."""
+        here = np.asarray(rear, dtype=float)[:2]
+        best = None
+        for k in range(len(poses) - 1):
+            if cum[k + 1] < done - 1e-9:
+                continue  # wholly behind the progress
+            a, b = poses[k, :2], poses[k + 1, :2]
+            ab = b - a
+            span = float(ab @ ab)
+            lo = 0.0 if cum[k] >= done else min(1.0, (done - cum[k]) / max(cum[k + 1] - cum[k], 1e-12))
+            u = lo if span < 1e-18 else min(1.0, max(lo, float((here - a) @ ab) / span))
+            foot = a + u * ab
+            dist = float(np.hypot(*(here - foot)))
+            if best is None or dist < best[0] - 1e-12:
+                best = (dist, k, u, foot)
+        if best is None:
+            return poses[-1:]
+        _, k, u, foot = best
+        yaw = float(poses[k, 2] + u * math.atan2(math.sin(poses[k + 1, 2] - poses[k, 2]),
+                                                 math.cos(poses[k + 1, 2] - poses[k, 2])))
+        rest = poses[k + 1:]
+        if u < 1.0 - 1e-9:
+            rest = np.vstack((np.asarray([[foot[0], foot[1], yaw]]), rest))
+        return rest
+
+    def clear_out_arrived(self, t: float, rear) -> None:
+        if self.end_gate(t, rear):
+            self.recovery_done(t)
+        else:
+            self.start_clear_out(t, rear, extend_only=True)
+
+    def restore_pallet_target(self) -> None:
+        """The recovered pallet back in the targets (on the floor where the mission's estimate holds it: the pickup's,
+        or the destination's once placed there) -- at the ground verdict, so the end's start check sees it."""
+        mission = self.commands.mission
+        tb = self.targets
+        ctx = self.cargo.recovery_context
+        if ctx is not None and ctx.get("pose") is not None:
+            # Plan D14 (Codex design round 1 P2-7): the mission is gone; the context kept where the pallet is.
+            pid = ctx["pallet_id"]
+            if pid in tb.pallets and tb.pallets[pid].state == "carried":
+                tb.put_down(pid, TargetPose(*(float(v) for v in ctx["pose"])),
+                            **({} if ctx["placed"] else {"state": "available"}), uncertainty_m=RECOGNISED_MARGIN_M)
+            return
+        if mission is None or mission.pallet_id not in tb.pallets or tb.pallets[mission.pallet_id].state != "carried":
+            return
+        if self.cargo.placed is not None:
+            scenario_ = self.options.scenario
+            if self.slam is not None:
+                scenario_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", scenario_))
+            site_ = scenario_.destination
+            tb.put_down(mission.pallet_id, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
+                        uncertainty_m=RECOGNISED_MARGIN_M)
+        else:
+            est_ = (self.obstacle or {}).get("pickup_estimate") or (self.pocket or {}).get("planning_pickup")
+            if est_ is not None:
+                tb.put_down(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m), float(est_.yaw_rad)),
+                            state="available", uncertainty_m=RECOGNISED_MARGIN_M)
+
+    # --- plan D14: the manual recovery after a live mission ended with the forks in a pocket --------------------
+    def capture_recovery_context(self) -> None:
+        """Before the mission and its state go (end_reset): what a manual recovery needs -- the pallet's ID and
+        estimate, where the destination's pallet stands, the SLAM hold's basis, and whether it is on the floor."""
+        cargo, mission = self.cargo, self.commands.mission
+        if self.baseline is None or cargo.relation not in ("constrained", "unknown") or mission is None:
+            return
+        slam = self.slam
+        holding = slam is not None and slam["tracker"].mode == "holding"
+        pallet_held, destination_held = self._held_estimates() if holding else (False, False)
+        if cargo.placed is not None:
+            site_ = self._destination_estimate()
+        else:
+            site_ = (self.obstacle or {}).get("pickup_estimate") or (self.pocket or {}).get("planning_pickup")
+        pose = None if site_ is None else (float(site_.x_m), float(site_.y_m), float(site_.yaw_rad))
+        cargo.recovery_context = {
+            "pallet_id": mission.pallet_id, "destination_id": mission.destination_id, "pose": pose,
+            "placed": cargo.placed is not None, "pallet_held": bool(pallet_held),
+            "destination_held": bool(destination_held), "stage": "in_pocket",
+            "grounded": cargo.load == "none", "ground_since": None}
+
+    def recovery_report(self) -> dict | None:
+        """The stage the teleop policy reads (plan D14 table): grounded, the evidence, aligned to the pocket axis."""
+        cargo, ctx = self.cargo, self.cargo.recovery_context
+        if ctx is None:
+            return None
+        aligned = False
+        if cargo.last_rear is not None:
+            offset = cargo.alignment(cargo.last_rear)
+            aligned = offset is not None and abs(offset[0]) <= cargo.band(cargo.last_rear) + 1e-9 \
+                and abs(offset[1]) <= ALIGN_HEADING_RAD + 1e-12
+        return {"stage": ctx["stage"], "grounded": bool(ctx["grounded"]), "evidence": bool(cargo.trace_valid),
+                "aligned": bool(aligned), "pallet_id": ctx["pallet_id"]}
+
+    def manual_recovery_tick(self, t: float, rear, *, standing: bool) -> bool:
+        """Each live tick with no mission adopted: the manual ground verdict (the pallet off the forks onto the
+        floor, held 1 s: the evidence moves to the floor and the pallet back into the targets), then the free
+        verdict by the automatic recovery's criteria (the release deferred since the end, the cargo carried with
+        it), then the manual clear (ended by the runner's permit check). True: a release moved the control pose."""
+        cargo, ctx, hooks = self.cargo, self.cargo.recovery_context, self.hooks
+        if ctx is None or ctx["stage"] != "in_pocket" or cargo.relation != "constrained":
+            return False
+        rear = tuple(float(v) for v in rear)
+        lowered = standing and hooks.lift_position() < 0.012 and abs(hooks.pallet_z()) < 0.008
+        log = self.state.setdefault("manual_recovery", [])
+        if not ctx["grounded"]:
+            if not lowered:
+                ctx["ground_since"] = None
+                return False
+            ctx["ground_since"] = t if ctx["ground_since"] is None else ctx["ground_since"]
+            if t - ctx["ground_since"] < MANUAL_GROUND_HOLD_S:
+                return False
+            ctx["grounded"] = True
+            getattr(hooks, "trace_ground", lambda: None)()  # the evidence's reference moves to the floor
+            self.restore_pallet_target()
+            log.append({"time_s": t, "event": "grounded", "depth_m": cargo.depth(rear)})
+            return False
+        out = cargo.depth(rear) < -(APPROACH_GAP_M + cargo.band(rear))
+        if not (lowered and out and cargo.trace_valid):
+            return False
+        cargo.recovered()
+        ctx["stage"] = "manual_clear"
+        self.restore_pallet_target()
+        log.append({"time_s": t, "event": "free", "depth_m": cargo.depth(rear)})
+        slam = self.slam
+        if slam is not None and slam["tracker"].mode == "holding":
+            # The end release deferred since the mission ended constrained (D1 step 4), with the basis kept then.
+            self.end_release_due = {"pallet_id": ctx["pallet_id"], "destination_id": ctx["destination_id"],
+                                    "pallet_held": ctx["pallet_held"], "destination_held": ctx["destination_held"]}
+            self.end_release(t, deferred=True)
+            return True
+        return False
+
+    def manual_clear_done(self, t: float) -> None:
+        """The runner's permit allows the reverse without the recovered pallet's exemption: an ordinary teleop."""
+        ctx = self.cargo.recovery_context
+        if ctx is None or ctx["stage"] != "manual_clear":
+            return
+        self.state.setdefault("manual_recovery", []).append({"time_s": t, "event": "clear"})
+        self.cargo.recovery_context = None
+
+    def recovery_done(self, t: float) -> None:
+        """Backed out: the mission ends cancelled; the pallet is back on the floor in the targets list (Codex 6b impl
+        P1-1; already there since the ground verdict)."""
+        self.commands.recovered(t)
+        self.restore_pallet_target()
+        self.cargo.recovered()
+
+    def recovery_timers(self, t: float) -> None:
+        """recover_lower's verdict (the lift down and the pallet on the floor -- always read, however low the lift
+        started) and both phases' time limit."""
+        ms, hooks = self.ms, self.hooks
+        if self.commands.status != "recovering":
+            return
+        elapsed = self.commands.work_elapsed(ms.phase_started, t)
+        if elapsed > RECOVERY_PHASE_LIMIT_S:
+            self.recovery_failed(t, f"{ms.phase}_timeout")
+            return
+        if ms.phase == "recover_lower" and elapsed >= RECOVERY_LOWER_MIN_S:
+            if hooks.lift_position() < 0.012 and abs(hooks.pallet_z()) < 0.008:
+                if not self.cargo.trace_valid:
+                    self.recovery_failed(t, "trace_invalid")
+                    return
+                self.restore_pallet_target()  # plan D4b: the end's start check sees it (Codex 6b-2 round 2 P2-2)
+                self.transition("recover_withdraw", t)
+                self.install_recover_withdraw(t, self.cargo.last_rear)
+
+    def install_recover_withdraw(self, t: float, rear) -> None:
+        """The retrace from the depth now (plan D4): judged whole by the permission before it moves; none left: the
+        end, through the next preparation's start check (plan D4b)."""
+        if rear is None:
+            self.recovery_failed(t, "no_pose")
+            return
+        poses = self.cargo.recovery_path(rear, 0.02)
+        if len(poses) < 2:
+            self.finish_cancel(t, rear)
+            return
+        if self._install_retreat(t, rear, poses, "recover_withdraw"):
+            self.state.setdefault("recoveries", []).append({"time_s": t, "from_depth_m": self.cargo.depth(rear),
+                                                           "length_m": self.paths["recover_withdraw"].length_m})
+
+    def _install_retreat(self, t: float, rear, poses, phase: str) -> bool:
+        """A reversing path for a recovery phase: judged whole by the permission, then installed with the withdraw's
+        tracker settings. False: refused (recovery_required)."""
+        poses = np.asarray(poses, dtype=float)
+        count = len(poses)
+        steps = np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1]))
+        if "withdraw" in self.trackers:  # the withdraw's own speed and tolerances (Codex 6b impl P1-2)
+            config = self.trackers["withdraw"].config
+        elif self.trackers:  # another phase's, at the withdraw's speed and docking tolerance (the runner's withdraw)
+            config = replace(next(iter(self.trackers.values())).config,
+                             cruise_speed_mps=self.settings["withdraw_speed_mps"], position_tolerance_m=0.008)
+        else:
+            self.recovery_failed(t, "no_tracker_config")
+            return False
+        # The planner's convention (turn = signed distance x curvature; entry i is the segment arriving at i): a
+        # retraced arc keeps its curvature as the follower's feed-forward, within the follower's limit (odometry
+        # jitter over a 0.02 m step is not a sharper turn).
+        curvatures = np.zeros(count)
+        if count > 1:
+            turns = np.arctan2(np.sin(np.diff(poses[:, 2])), np.cos(np.diff(poses[:, 2])))
+            curvatures[1:] = np.clip(np.where(steps > 1e-9, turns / -np.maximum(steps, 1e-9), 0.0),
+                                     -config.max_curvature_inv_m, config.max_curvature_inv_m)
+            curvatures[0] = curvatures[1]
+        path = RecoveryPath(poses, np.full(count, -1, dtype=np.int8), curvatures, float(np.sum(steps)))
+        obstacle = self.obstacle
+        if getattr(self.hooks, "test_recovery_blocked", False) == "withdraw" and phase == "recover_withdraw":
+            # Plan D14 tests only (U20 c): the retrace refused with its evidence valid -- the manual recovery's case.
+            self.recovery_failed(t, "blocked:test")
+            return False
+        if obstacle is not None:
+            check = obstacle["layer"].check_candidate(path.poses, current_pose=tuple(float(v) for v in rear),
+                                                      direction=-1, loaded=False, lookahead_m=path.length_m)
+            if check.blocked is not None or check.verified_m < path.length_m - 1e-6:
+                self.recovery_failed(t, f"blocked:{check.blocked}")
+                return False
+        self.paths[phase] = path
+        self.trackers[phase] = RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m, config)
+        self.state.setdefault("paths", {})[phase] = self.hooks.path_record(path)  # the record and the map
+        self._recovery_install_gen = self.commands.mission_gen
+        return True
+
     def permission_acting(self) -> tuple[bool, bool]:
         """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
         (the permission's own reading, shared by the permission tick and its watch while paused)."""
@@ -594,7 +994,7 @@ class MissionCore:
             # permission, and the safety evaluation, act on all of it.
             docking_straight = False
         acting = (
-            ms.phase in ("observe", "approach", "transport", "return_home")
+            ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw", "clear_out")
             or (ms.phase == "withdraw" and obstacle["layer"].known_enabled
                 and obstacle["layer"].known_config.get("withdraw_mode", "certified") == "certified")  # D5 corridor
         ) and not docking_straight
@@ -808,6 +1208,7 @@ class MissionCore:
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         planner_config, travel_config, scenario = options.planner_config, options.travel_config, options.scenario
         return_to_pose, pickup_bounds, mission_stages = options.return_to_pose, options.pickup_bounds, options.mission_stages
+        observe_bounds_ = self.observe_bounds()
         BACKOFF_M, BACKOFF_SPEED_MPS, BACKOFF_PER_LEG, ESCAPE_PER_LEG = (
             options.backoff_m, options.backoff_speed_mps, options.backoff_per_leg, options.escape_per_leg)
         require, wall, same_path, path_stats, path_record = (hooks.require, hooks.wall, hooks.same_path, hooks.path_stats,
@@ -864,7 +1265,7 @@ class MissionCore:
             target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
             replanned = plan_observation_leg(
                 grid_world(scenario), target, planner_config, geometry=geometry,
-                start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                start_rear=start, pickup_bounds=observe_bounds_, extended=False,
                 **grid_kwargs("observe"),
             )
         elif ms.phase == "transport":
@@ -914,7 +1315,7 @@ class MissionCore:
             if ms.phase == "observe":
                 replanned = plan_observation_leg(
                     grid_world(scenario), target, tight, geometry=geometry,
-                    start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                    start_rear=start, pickup_bounds=observe_bounds_, extended=False,
                     **grid_kwargs("observe"),
                 )
             elif ms.phase == "transport":
@@ -957,7 +1358,7 @@ class MissionCore:
                 candidate_plan = plan_observation_leg(
                     grid_world(scenario), PlanningPose(*(float(v) for v in coordinates)),
                     tight, geometry=geometry, start_rear=start,
-                    pickup_bounds=pickup_bounds, extended=False, **grid_kwargs("observe"),
+                    pickup_bounds=observe_bounds_, extended=False, **grid_kwargs("observe"),
                 )
                 state["observation_candidates"].append(
                     {"candidate_index": candidate_index, "pose": list(coordinates),
@@ -1242,7 +1643,7 @@ class MissionCore:
             # outside the tolerance (S2 seed 1 on v3.4, transport).
             # Freeze it there (plan v3.5; approach already holds from
             # the capture). Released at settle as before.
-            slam["tracker"].hold(odom_from_base=slam_odom_base())
+            self.hold_slam(t, held_frame_pallet=False)
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": slam_error()}
             )
@@ -1685,7 +2086,7 @@ class MissionCore:
                     planner_config,
                     geometry=geometry,
                     start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
-                    pickup_bounds=pickup_bounds,
+                    pickup_bounds=self.observe_bounds(),
                     extended=False,
                     **grid_kwargs("observe"),
                 )
@@ -1917,7 +2318,7 @@ class MissionCore:
                 planner_config,
                 geometry=geometry,
                 start_rear=Pose2D(rear[0], rear[1], rear[2]),
-                pickup_bounds=pickup_bounds,
+                pickup_bounds=self.observe_bounds(),
                 # Re-observation keeps the earlier ladder.
                 extended=False,
                 **grid_kwargs("observe"),
@@ -1967,10 +2368,21 @@ class MissionCore:
             )
         state["planning_status"] = observe_plan.status
         paths["observe"] = observe_plan
-        trackers["observe"] = RearAxlePathTracker(
-            observe_plan.poses,
-            observe_plan.directions,
-            observe_plan.curvatures_inv_m,
+        trackers["observe"] = self.observe_tracker(observe_plan)
+        ms.phase_started = t
+        apply_tracker_profile()
+        realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
+        record_tracker_configs()
+        return False
+
+    def observe_tracker(self, plan):
+        """The observation leg's follower, as the setup makes it (shared by the next candidate and a live
+        mission's adoption, persistent console plan D2)."""
+        speeds, settings, CUSP_HEADING_HOLD_RAD = self.options.speeds, self.settings, self.options.cusp_heading_hold_rad
+        return RearAxlePathTracker(
+            plan.poses,
+            plan.directions,
+            plan.curvatures_inv_m,
             TrackerConfig(
                 cruise_speed_mps=speeds["observe"],
                 max_curvature_inv_m=settings[
@@ -2005,11 +2417,6 @@ class MissionCore:
                 max_cross_track_error_m=0.35,
             ),
         )
-        ms.phase_started = t
-        apply_tracker_profile()
-        realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
-        record_tracker_configs()
-        return False
 
     def observe_succeeded(self, t: float, rear, base, yaw: float, attempt: dict, attempt_number: int, observation,
                           scene_input, capture_diagnostics, step: int) -> SimpleNamespace:
@@ -2160,13 +2567,69 @@ class MissionCore:
         near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
         return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
 
+    def tracker_config(self, name: str) -> TrackerConfig:
+        """The follower configuration of a mission leg (observe excluded: it keeps its own), as the mission plan's
+        adoption builds it (persistent console plan D5 6c: the loaded start builds its legs the same way)."""
+        settings, speeds = self.settings, self.options.speeds
+        CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = (self.options.cusp_heading_hold_rad,
+                                                           self.options.cusp_heading_hold_phases)
+        return TrackerConfig(
+            cruise_speed_mps=speeds[name],
+            max_curvature_inv_m=settings[
+                "tracker_curvature_inv_m"
+            ],
+            max_acceleration_mps2=settings[
+                "drive_acceleration_mps2"
+            ],
+            lookahead_m=0.28,
+            # Same rule as the trackers built
+            # without perception (observe is
+            # excluded below and keeps its own
+            # tracker; the return is 0.03 rad).
+            position_tolerance_m=(
+                0.03 if name == "observe" else 0.008
+            ),
+            yaw_tolerance_rad=(
+                0.05
+                if name == "observe"
+                else 0.03
+                if name == "return_home"
+                else 0.02
+            ),
+            # Gear-change cusps are not goals (2026-09-26): the next leg
+            # starts from the measured pose. Final goals keep the rules above.
+            cusp_position_tolerance_m=0.03,
+            cusp_yaw_tolerance_rad=0.05,
+            # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
+            # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
+            cusp_brake_window_m=0.008,
+            # The return holds a cusp heading miss of 0.05-0.08 rad for
+            # judgement (EPAL 6 fork spacing plan, A').
+            cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD
+            if name in CUSP_HEADING_HOLD_PHASES
+            else None,
+            # Optional path speed caps; absent from the settings = off.
+            max_lateral_acceleration_mps2=settings.get(
+                "max_lateral_acceleration_mps2"
+            ),
+            max_reverse_speed_mps=settings.get(
+                "max_reverse_speed_mps"
+            ),
+            # A stop just past the goal is fine except deeper into
+            # the pallet: insertion keeps the round 8 mm.
+            overshoot_tolerance_m=None
+            if name == "insert"
+            else 0.03,
+            stop_speed_mps=0.012,
+            max_cross_track_error_m=0.35,
+        )
+
     def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
         """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
         and (the first far observation under SLAM) the near leg to the near capture point."""
         state, slam, hooks, options = self.state, self.slam, self.hooks, self.options
-        paths, trackers, geometry, settings = self.paths, self.trackers, self.geometry, self.settings
-        mission_stages, speeds = options.mission_stages, options.speeds
-        CUSP_HEADING_HOLD_RAD, CUSP_HEADING_HOLD_PHASES = options.cusp_heading_hold_rad, options.cusp_heading_hold_phases
+        paths, trackers, geometry = self.paths, self.trackers, self.geometry
+        mission_stages = options.mission_stages
         require, wall, path_record, record_json = hooks.require, hooks.wall, hooks.path_record, hooks.record_json
         final_straight_prefix = hooks.final_straight_prefix
         apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
@@ -2183,65 +2646,8 @@ class MissionCore:
             {name: getattr(plans, name) for name in mission_stages}
         )
         trackers.update(
-            {
-                name: RearAxlePathTracker(
-                    path.poses,
-                    path.directions,
-                    path.curvatures_inv_m,
-                    TrackerConfig(
-                        cruise_speed_mps=speeds[name],
-                        max_curvature_inv_m=settings[
-                            "tracker_curvature_inv_m"
-                        ],
-                        max_acceleration_mps2=settings[
-                            "drive_acceleration_mps2"
-                        ],
-                        lookahead_m=0.28,
-                        # Same rule as the trackers built
-                        # without perception (observe is
-                        # excluded below and keeps its own
-                        # tracker; the return is 0.03 rad).
-                        position_tolerance_m=(
-                            0.03 if name == "observe" else 0.008
-                        ),
-                        yaw_tolerance_rad=(
-                            0.05
-                            if name == "observe"
-                            else 0.03
-                            if name == "return_home"
-                            else 0.02
-                        ),
-                        # Gear-change cusps are not goals (2026-09-26): the next leg
-                        # starts from the measured pose. Final goals keep the rules above.
-                        cusp_position_tolerance_m=0.03,
-                        cusp_yaw_tolerance_rad=0.05,
-                        # Brake and judge the cusp at 8 mm, still accepting 30 mm / 50 mrad
-                        # (docs/plans/2026-10-02-planner-tracker-robustness.md, P2).
-                        cusp_brake_window_m=0.008,
-                        # The return holds a cusp heading miss of 0.05-0.08 rad for
-                        # judgement (EPAL 6 fork spacing plan, A').
-                        cusp_heading_pending_rad=CUSP_HEADING_HOLD_RAD
-                        if name in CUSP_HEADING_HOLD_PHASES
-                        else None,
-                        # Optional path speed caps; absent from the settings = off.
-                        max_lateral_acceleration_mps2=settings.get(
-                            "max_lateral_acceleration_mps2"
-                        ),
-                        max_reverse_speed_mps=settings.get(
-                            "max_reverse_speed_mps"
-                        ),
-                        # A stop just past the goal is fine except deeper into
-                        # the pallet: insertion keeps the round 8 mm.
-                        overshoot_tolerance_m=None
-                        if name == "insert"
-                        else 0.03,
-                        stop_speed_mps=0.012,
-                        max_cross_track_error_m=0.35,
-                    ),
-                )
-                for name, path in paths.items()
-                if name != "observe"
-            }
+            {name: RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m, self.tracker_config(name))
+             for name, path in paths.items() if name != "observe"}
         )
         apply_tracker_profile()
         record_tracker_configs()
@@ -2495,6 +2901,10 @@ class MissionCore:
     def _reproject(self, t: float, applied_now, rear, loaded) -> None:
         """The grid re-projected with a new correction (the permission tick's statements)."""
         ms, obstacle, trackers = self.ms, self.obstacle, self.trackers
+        old = tuple(float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0)))
+        if self.cargo.recovery_context is not None and tuple(float(v) for v in applied_now) != old:
+            # Plan D14 (Codex design round 4 P2): every applied correction change carries the cargo's map poses.
+            self.cargo.reexpress(compose(tuple(float(v) for v in applied_now), invert(old)))
         obstacle["version"] += 1
         obstacle["applied"] = applied_now
         obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
@@ -2834,12 +3244,20 @@ class MissionCore:
             cmds.pause_hold_count = self.hold_count()
             cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
             cmds.pause_release_pending = slam is not None and slam.get("pending_release") is not None
-            if ms.phase in ("lift", "lower"):
+            if ms.phase in ("lift", "lower", "recover_lower"):
                 # E3/R7: a lift on its way stops where it is -- the target is set to the measured lift once, at the
                 # stop's first tick, and held. Synchronising every tick ratcheted a loaded lift down by its sag
                 # (Isaac ma3_p_tr: 2.8 mm a tick, the pallet dropped 0.27 s into a transport pause). A lift that is
                 # not being moved (transport and the rest) keeps its target.
-                ms.lift_command = float(hooks.lift_position())
+                measured_ = float(hooks.lift_position())
+                tolerance_ = self.lift_hold_tolerance() if self.lift_hold_tolerance is not None else None
+                if self.baseline is not None and tolerance_ is not None:
+                    # Live (plan D14, main 2026-10-19; Codex impl round 5 P1): as the gate's latch -- the target
+                    # within the hold tolerance of the measurement, so a loaded sag is not taken for a new target.
+                    ms.lift_command = float(min(measured_ + tolerance_, max(measured_ - tolerance_,
+                                                                              float(ms.lift_command))))
+                else:
+                    ms.lift_command = measured_
         if standing and cmds.stop_seen_s is None:
             cmds.stop_seen_s = t
             cmds.stop_pose = tuple(float(v) for v in rear)  # R11 measures a move from where it stood, not braking
@@ -2853,9 +3271,30 @@ class MissionCore:
         applied_zero = abs(float((self.state.get("applied_command") or (0.0,))[0])) < 1e-12
         if cmds.status == "cancelling" and standing and applied_zero:
             # Cancelled once standing and the wheels already commanded to zero (the slew may still be stepping
-            # down while the stop detector reads standing): this tick's output is zero too.
-            cmds.cancelled(t)
-            stop = True
+            # down while the stop detector reads standing): this tick's output is zero too. Live (plan D4): the forks
+            # still in a pocket back out first; without the evidence to, the mission needs a recovery by hand.
+            decision = (self.cargo.cancel_decision(rear, in_withdraw=ms.phase == "withdraw")
+                        if self.baseline is not None else "cancelled")
+            if decision == "recover" and getattr(self.hooks, "test_recovery_blocked", False) == "lower":
+                # Plan D14 tests only (U20 c, lifted): the recovery refused before its lowering, the pallet left on
+                # the forks for the manual lowering and ground verdict.
+                cmds.begin_recovery(t)
+                self.recovery_failed(t, "blocked:test_lower")
+                stop = True
+            elif decision == "recover":
+                cmds.begin_recovery(t)
+                self.transition("recover_lower", t)
+            elif decision == "recovery_required":
+                cmds.terminate("recovery_required", t, "recovery:" + ("trace_invalid" if not self.cargo.trace_valid
+                                                                    else self.cargo.relation))
+                stop = True
+            elif self.baseline is not None and self.cargo.relation == "free":
+                # plan D4b: empty forks end through the next preparation's start check; a loaded cancel keeps its
+                # cargo where it stands (plan D5a: cargo_held -- Codex D4b impl round 1 P1-1)
+                stop = self.finish_cancel(t, rear)
+            else:
+                cmds.cancelled(t)
+                stop = True
         elif cmds.status == "resuming":
             rear = self.resume_step(t, rear, loaded, standing)
         return SimpleNamespace(requested_speed=0.0, obstacle_hold=obstacle_hold, stop=stop, rear=rear)
@@ -2898,6 +3337,9 @@ class MissionCore:
         if ms.phase in ("lift", "lower") and abs(float(self.hooks.lift_position()) - float(ms.lift_command)) > LIFT_RESUME_TOL_M:
             return refuse("state_verified:lift_mismatch")  # R7: the lift is not where the stop held it
         holding_now = slam is not None and slam["tracker"].mode == "holding"
+        if ms.phase == "clear_out" and slam is not None and not holding_now:
+            self.recovery_failed(t, "clear_out:hold_released")  # plan D4b: the back-out moves in its hold only
+            return rear
         if cmds.pause_holding and not cmds.pause_release_pending:
             if not holding_now:
                 return refuse("state_verified:hold_state_mismatch")
@@ -2926,6 +3368,51 @@ class MissionCore:
                 check["reason"] = "docking_retry"
                 return rear
         retry_stand = near is not None and near.get("retry_stand") and ms.phase == "observe"
+        if ms.phase == "clear_out" and self._recovery_install_gen != cmds.mission_gen:
+            # Plan D4b: the back-out goes on from its path, the progress the follower made along it and the budget
+            # (the hold kept -- checked before the general hold rows).
+            path_ = self.paths.get("clear_out")
+            remaining = None
+            if path_ is not None and "clear_out" in trackers:
+                poses_ = np.asarray(path_.poses, dtype=float)
+                cum_ = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(poses_[:, 0]), np.diff(poses_[:, 1])))))
+                done_ = float(path_.length_m) - float(trackers["clear_out"].remaining_to_goal_m())
+                remaining = self._rest_from(poses_, cum_, done_, rear)
+            if remaining is None or len(remaining) < 2:
+                self.clear_out_arrived(t, rear)
+            else:
+                # The progress made plus the rest is the planned path; the way back onto it from where the truck
+                # stands now is part of the path the permission checks (Codex D4b impl round 2 P2-2), and only what it
+                # adds beyond the rest the follower had left is new travel for the budget (round 3: a stop between
+                # samples is still on the path).
+                here_ = tuple(float(v) for v in rear)
+                join_ = float(math.hypot(remaining[0][0] - here_[0], remaining[0][1] - here_[1]))
+                if join_ > 1e-3:
+                    remaining = np.vstack((np.asarray([here_]), remaining))
+                new_ = float(np.sum(np.hypot(np.diff(remaining[:, 0]), np.diff(remaining[:, 1]))))
+                added_ = max(0.0, new_ - float(trackers["clear_out"].remaining_to_goal_m()))
+                if self.clear_out_used_m + added_ > CLEAR_OUT_BUDGET_M + 1e-9:
+                    self.recovery_failed(t, "clear_out:budget")
+                    return rear
+                if self._install_retreat(t, rear, remaining, "clear_out"):
+                    self.clear_out_used_m += added_
+            if cmds.status != "resuming":
+                return rear
+        if ms.phase in ("recover_lower", "recover_withdraw") and not self.cargo.trace_valid:
+            self.recovery_failed(t, "trace_invalid")  # the evidence went while paused (Codex 6b impl P1-3)
+            return rear
+        if ms.phase == "recover_withdraw" and not (self.hooks.lift_position() < 0.012
+                                                   and abs(self.hooks.pallet_z()) < 0.008):
+            self.transition("recover_lower", t)  # not on the floor any more: lower again first
+            cmds.resumed(t)
+            return rear
+        if ms.phase == "recover_withdraw" and self._recovery_install_gen != cmds.mission_gen:
+            # Plan D4: the retrace made again from the depth now (the trace's placement does not move), once per
+            # resume -- a resume that waits does not install it every tick (Codex 6b impl round 2 P2); it may end
+            # here (already out) or refuse (blocked).
+            self.install_recover_withdraw(t, rear)
+            if cmds.status != "resuming":
+                return rear
         if ms.phase in trackers and not retry_stand:
             check["step"] = "path_rechecked"
             probe = copy.deepcopy(trackers[ms.phase])
@@ -3018,6 +3505,10 @@ class MissionCore:
         mission = self.commands.mission
         if mission is None or mission.pallet_id not in tb.pallets or mission.destination_id not in tb.destinations:
             return
+        if self.commands.adopted_id != self.commands.mission_id:
+            # Not adopted (preparing, or a preparation that ended): what the core holds is the last mission's
+            # (persistent console plan D2; Codex stage 2 design P1 and round 2 P1).
+            return
         pid, did = mission.pallet_id, mission.destination_id
         tb.set_correction_version(self.slam_releases)
         scenario_ = self.options.scenario
@@ -3026,16 +3517,19 @@ class MissionCore:
         site_ = scenario_.destination
         site_pose = TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad))
         tb.update_destination(did, site_pose)
+        if ms.phase in ("recover_lower", "recover_withdraw", "clear_out"):
+            return  # plan D4/D4b: the recovery puts the pallet back itself; no branch below applies
         if ms.phase in ("lift", "extract", "transport", "lower"):
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
-                tb.put_down(pid, site_pose)
+                tb.put_down(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
             elif tb.pallets[pid].state == "delivered":
                 tb.update_pose(pid, site_pose)
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
-            tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)))
+            tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
+                           basis="recognised", uncertainty_m=RECOGNISED_MARGIN_M)  # the observation placed it (D10)
 
     def safety_state(self, t: float | None) -> dict:
         """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds
@@ -3047,7 +3541,7 @@ class MissionCore:
         hold_ = "none"
         if slam is not None and slam["tracker"].mode == "holding":
             hold_ = ("docking" if phase_ == "transport" else phase_ if phase_ in ("approach", "insert") else "held")
-        return {
+        out = {
             "t": t,
             "mission": {"id": cmds.mission_id, "status": cmds.status, "generation": cmds.mission_gen,
                         "pallet_id": None if cmds.mission is None else cmds.mission.pallet_id,
@@ -3055,6 +3549,8 @@ class MissionCore:
                         "phase": phase_,
                         "phase_elapsed_s": (cmds.work_elapsed(ms.phase_started, t)
                                             if phase_ is not None and t is not None else None),
+                        # the follower's distance left in this phase (None without one): U7's cancel at a leg's end
+                        "remaining_m": self._remaining_m(phase_),
                         "resume": dict(cmds.resume_check) if cmds.resume_check else None,
                         "stop_seen_s": cmds.stop_seen_s, "not_stopped": cmds.not_stopped},
             "load": {"loaded": phase_ in ("lift", "extract", "transport", "lower"), "basis": "phase",
@@ -3076,6 +3572,23 @@ class MissionCore:
                         else float(obstacle["permission_cap"][1]),
                         "reason": None if self.last_permission is None else self.last_permission[1]},
         }
+        if self.baseline is not None:
+            # A live session (persistent console plan D5a): what the forks are in is the session's cargo state, kept
+            # across a mission's end; a batch run's record stays as it was (the replay compares it).
+            fields_ = self.cargo.safety_fields()
+            out["load"] = {**fields_["load"], "lift_target_m": float(ms.lift_command)}
+            out["fork_in_pocket"] = fields_["fork_in_pocket"]
+        if cmds.adopted_id is None and self.baseline is not None:
+            # A live mission ended (the batch run's mission is always the adopted one): the forks in a pocket refuse
+            # a submit and teleop until the recovery; the load held refuses a submit until the cargo submit (6c).
+            # The key only when it holds, so a batch run's safety record is as it was.
+            refusal_ = self.cargo.submit_refusal()
+            if refusal_ is not None:
+                out[refusal_] = True
+            report_ = self.recovery_report()
+            if report_ is not None:
+                out["recovery"] = report_  # plan D14: the recovery stage the teleop policy reads
+        return out
 
     def release_gate(self, t: float, rear) -> SimpleNamespace:
         """At each control tick's start: a pending SLAM release waits for the truck to stand (10 s at most), then
@@ -3083,6 +3596,20 @@ class MissionCore:
         ``warming`` and ``rear``."""
         slam, hooks = self.slam, self.hooks
         require, slam_release, slam_rear = hooks.require, self.slam_release, hooks.slam_rear
+        if (self.commands.status == "recovering" and self.ms.phase in ("recover_lower", "recover_withdraw")
+                and not self.cargo.trace_valid):
+            # Plan D4: the evidence went after the retrace was installed -- ended at the tick's start, before the
+            # follower and the command run (Codex 6b impl round 2 P1).
+            self.recovery_failed(t, "trace_invalid")
+        if self.end_release_due is not None and slam is not None:
+            # A live mission's end release, waiting for the truck to stand (plan D1 step 4).
+            if slam["tracker"].mode != "holding" or not self.cargo.release_allowed():
+                # gone already, or the forks' state no longer allows it (a pallet check failed since the reservation:
+                # unknown keeps the hold, plan D5a, Codex impl round 1 P2)
+                self.end_release_due = None
+            elif slam["stop_now"]:
+                self.end_release(t, deferred=True)
+                rear = slam_rear(t)
         releasing = slam is not None and slam.get("pending_release") is not None
         if releasing:
             waited = self.commands.work_elapsed(slam["release_wait_from"], t)
@@ -3269,7 +3796,7 @@ class MissionCore:
                 known_.x_m, known_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, known_.yaw_rad
             )
         rects_, footprint_, bounds_ = leg_obstacles(
-            "observe", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=pickup_bounds
+            "observe", grid_world(scenario), geometry, pickup_obstacle=pickup_, pickup_bounds=self.observe_bounds()
         )
         return GridChecker(rects_, footprint_, bounds_)
 
@@ -4278,6 +4805,7 @@ class MissionCore:
 
     # --- M-a1 slice 6d: closures moved from run(), statement for statement ---
     # --- real-time plan D8: waiting for a plan without stopping the control loop -----------------------------------
+    RETURN_CORRECTION_FALLBACK = 3  # plan D11: correction drops of a return turnaround before the tick plan
     ASYNC_DRIFT_M = 0.02
     ASYNC_DRIFT_RAD = math.radians(1.0)
     ASYNC_MAX_DISCARDS = 3
@@ -4417,13 +4945,25 @@ class MissionCore:
                 "mode": slam["tracker"].mode if slam is not None else None, "hold": self.hold_count()}
 
     def _job_invalid(self, p, t: float, rear) -> str | None:
-        """Why the plan p may not be taken now (None: it may), judged on the current state (D8b)."""
+        """Why the plan p may not be taken now (None: it may), judged on the current state (D8b). A preparation
+        (persistent console plan D2) is judged on its own status and on the targets list it was asked on."""
         cmds, slam = self.commands, self.slam
-        if cmds.status != "running" or cmds.mission_gen != p.gen:
+        if p.site == "prepare":
+            if cmds.status != "preparing" or cmds.mission_gen != p.gen:
+                return "mission"
+            if self.targets.revision != p.ctx["targets_revision"]:
+                return "targets"
+            if p.ctx.get("loaded") and not self.hooks.loaded_cargo_ok():
+                return "cargo"  # plan D5 6c item 4a: the carried pallet is no longer what the submit delivers
+        elif cmds.status != "running" or cmds.mission_gen != p.gen:
             return "mission"
-        if self.ms.phase != p.phase:
+        elif self.ms.phase != p.phase:
             return "phase"
         if self._applied_now() != p.applied:
+            return "correction"
+        if (p.site == "live_leg" and (p.ctx or {}).get("turnaround")
+                and getattr(self.hooks, "test_return_correction_drops", 0) > 0):
+            self.hooks.test_return_correction_drops -= 1  # plan D11 tests only: the fallback forced
             return "correction"
         if slam is not None and (slam["tracker"].mode != p.mode or self.hold_count() != p.hold):
             return "slam_mode"
@@ -4479,11 +5019,17 @@ class MissionCore:
                 p.answer, p.answered_s = out, float(t)
             return SimpleNamespace(hold=True)
         ok, value = out
+        if not ok and getattr(self.jobs, "_dead", None) is not None:
+            # No worker any more (its restart failed): not the plan's failure, the session's (Codex D6 P2-4).
+            hooks.require(False, f"plan_worker_dead: {self.jobs._dead}")
         self.pending = None
         self.commands.end_wait(t)
         record = state["async_plans"][-1]
         record.update(finished_s=float(t), wall_s=hooks.wall() - p.wall, ok=bool(ok), dropped=why,
                       taken=self._plan_context(rear, self._applied_now()))
+        if p.site == "prepare":
+            self._prepare_answer(p, why, ok, value, t)
+            return SimpleNamespace(hold=True)
         if why is not None:
             self._drop(p, t, why, count=True)
             return SimpleNamespace(hold=True)
@@ -4498,6 +5044,14 @@ class MissionCore:
             self.commands.end_wait(t)
             self.jobs.discard(p.job)
             self.state["async_plans"][-1].update(finished_s=float(t), dropped=why)
+        if (count and why == "correction" and p.site == "live_leg" and (p.ctx or {}).get("turnaround")):
+            # Plan D11: a return turnaround's correction drop has its own count (the shared one ended the mission
+            # before the fallback could run -- Codex design round 4 P2); the other reasons count as before.
+            key = p.phase
+            self.return_correction_drops[key] = self.return_correction_drops.get(key, 0) + 1
+            self.state.setdefault("return_correction_drops", []).append(
+                {"time_s": float(t), "phase": p.phase, "count": self.return_correction_drops[key]})
+            count = False
         if count:
             drops = self.state.setdefault("async_plan_drops", {})
             drops[p.site] = drops.get(p.site, 0) + 1
@@ -4507,6 +5061,314 @@ class MissionCore:
         elif p.site == "live_leg":
             self.obstacle.setdefault("live_replanned", {})[p.phase] = False
         # observe: nothing to undo -- the truck stands at the observation pose and captures again
+
+    # --- a live mission's preparation (docs/plans/2026-10-18-persistent-live-console.md D2) ------------------------
+    PREPARE_ATTEMPTS = 2  # a preparation whose inputs changed is asked again once
+
+    def prepare_request(self, t: float, rear, inputs: dict, payload: dict, job: str = "observe_ladder") -> None:
+        """Ask the worker for a submitted mission's first leg (``observe_ladder``) from where the truck stands -- or,
+        a loaded submit (plan D5 6c), its whole delivery (``loaded_delivery``). ``inputs`` (the mission's scenario,
+        waiting pose, candidates, bounds, prior zone) are fixed here and used as they are at the adoption; nothing of
+        the running state changes before it (plan principle P4)."""
+        cmds = self.commands
+        if cmds.status == "accepted":
+            cmds.begin_prepare()
+            self.prepare_attempts = 0
+        self.prepare_attempts += 1
+        self._request("prepare", job, payload, t, rear, self._applied_now(),
+                      {"inputs": inputs, "targets_revision": self.targets.revision,
+                       "loaded": job == "loaded_delivery"})
+
+    def _prepare_answer(self, p, why: str | None, ok: bool, value, t: float) -> None:
+        """A preparation's answer: dropped and asked again once when what it rests on changed (not counted as a
+        plan drop), failed when it planned nothing, else adopted."""
+        cmds = self.commands
+        loaded = bool(p.ctx.get("loaded"))
+        if why == "cargo":
+            cmds.terminate("failed", t, "prepare:loaded:cargo_changed")
+            return
+        if why is not None:
+            if why != "mission" and self.prepare_attempts >= self.PREPARE_ATTEMPTS:
+                cmds.terminate("failed", t, f"prepare:{why}")
+            return  # the runner asks again on the next tick (preparing, nothing pending)
+        if not ok:
+            cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
+        elif loaded and not value["result"].success:
+            cmds.terminate("failed", t, f"prepare:loaded:{value['result'].status}")  # its stage and status (item 3)
+        elif value["result"] is None:
+            cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
+                           "prepare:all_candidates_failed:" + ";".join(c["status"] for c in value["candidates"]),
+                           advice=value.get("advice"))  # plan D13 item 6: the worker's, on this job's inputs
+        else:
+            try:  # what can fail is made before anything changes (Codex stage 2 impl P2-6): the docking reference
+                ready = self.hooks.live_mission_ready(t, p.ctx["inputs"])
+            except Exception as exc:  # noqa: BLE001 -- the preparation fails, the session goes on (P4)
+                cmds.terminate("failed", t, f"prepare:reference:{exc}")
+                return
+            if loaded:
+                self.start_loaded_mission(t, value["result"], p.ctx["inputs"], ready)
+            else:
+                self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
+
+    def end_reset(self, t: float) -> dict:
+        """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
+        the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
+        pocket, obstacle, state, slam = self.pocket, self.obstacle, self.state, self.slam
+        self.capture_recovery_context()  # plan D14: before the mission-owned state goes
+        if slam is not None:
+            # The mission's release reservation goes with it (Codex D6 P2-3: its 10 s limit failed every tick after);
+            # a hold left with the forks free is released for the end (D1 step 4), now or once standing.
+            slam["pending_release"] = slam["release_wait_from"] = None
+            if slam["tracker"].mode == "holding" and self.cargo.release_allowed():  # free or carrying (plan D5a)
+                if slam["stop_now"]:
+                    self.end_release(t, deferred=False)
+                else:
+                    mission = self.commands.mission
+                    pallet_held, destination_held = self._held_estimates()
+                    self.end_release_due = {"pallet_id": None if mission is None else mission.pallet_id,
+                                            "destination_id": None if mission is None else mission.destination_id,
+                                            "pallet_held": pallet_held, "destination_held": destination_held}
+        # The list takes the mission's last estimates (a docking match, a release's re-expression) now, and the
+        # ended mission moves it no more: the scenarios it read from are dropped below (Codex stage 2 round 2 P2).
+        self.refresh_targets()
+        self.commands.adopted_id = None
+        if pocket.get("check") is not None:
+            if obstacle is not None:
+                obstacle["layer"].exempt = None
+                obstacle["layer"].depth_support = None
+            state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
+            pocket["check"] = None
+        return self.baseline.restore(self) if self.baseline is not None else {}
+
+    def hold_slam(self, t: float, *, held_frame_pallet: bool) -> None:
+        """Hold the SLAM correction, keeping which estimates the hold began with: those were made under earlier
+        corrections and stay map estimates at an end release; what the hold finds itself -- the docking match's
+        destination, a capture's pallet -- is in its frame. ``held_frame_pallet``: the pallet estimate in hand was
+        made with this very correction (the approach's hold begins at the accepted capture)."""
+        slam, obstacle, pocket = self.slam, self.obstacle, self.pocket
+        slam["tracker"].hold(odom_from_base=self.hooks.slam_odom_base())
+        self.hold_basis = {
+            "pallet": (_HELD, _HELD) if held_frame_pallet else (
+                pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")),
+            "destination": self._destination_estimate()}
+
+    def _destination_estimate(self):
+        """The destination the core steers to now (a docking match's, a release's re-expression, or the prior)."""
+        slam = self.slam
+        scenario_ = slam.get("return_scenario", slam.get("transport_scenario", getattr(self.options, "scenario", None)))
+        return getattr(scenario_, "destination", None)
+
+    def _held_estimates(self) -> tuple[bool, bool]:
+        """Whether the pallet estimate and the destination in hand were found under the current hold."""
+        obstacle, pocket = self.obstacle, self.pocket
+        destination = self._destination_estimate()
+        # Without a recorded basis: the pallet estimate in hand is the hold's, the destination a map goal.
+        basis = self.hold_basis or {"pallet": (_HELD, _HELD), "destination": destination}
+        planning, estimate = pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")
+        pallet = ((planning is not None and planning is not basis["pallet"][0])
+                  or (estimate is not None and estimate is not basis["pallet"][1]))
+        return pallet, destination is not None and destination is not basis["destination"]
+
+    def end_release(self, t: float, *, deferred: bool) -> None:
+        """The end release of a SLAM hold (plan D1 step 4): the received correction applied, the hold-frame pallet
+        estimate carried by the frame change once -- the destinations are map goals and stay -- the grid
+        re-projected and the release recorded. No plan, no path, no re-observation (U28). Deferred (the truck was
+        moving at the end), the ended mission's pallet target is carried instead, its correction version raised."""
+        slam, hooks, obstacle, pocket = self.slam, self.hooks, self.obstacle, self.pocket
+        before = hooks.slam_rear(t)
+        jump_m, jump_rad = self.release_slam(hooks.slam_odom_base())
+        after = hooks.slam_rear(t)
+        frame_change = compose(tuple(float(v) for v in after), invert(tuple(float(v) for v in before)))
+
+        def carried(site):
+            x_, y_, yaw_ = compose(frame_change, (float(site.x_m), float(site.y_m), float(site.yaw_rad)))
+            return replace(site, x_m=x_, y_m=y_, yaw_rad=yaw_)
+
+        if deferred:  # the ended mission's own targets, in the list (refresh_targets no longer runs for it)
+            due, tb = self.end_release_due or {}, self.targets
+            pid, did = due.get("pallet_id"), due.get("destination_id")
+            if due.get("destination_held") and did in tb.destinations:
+                # the docking hold: the docked destination and the pallet delivered there
+                old = tb.destinations[did]
+                tb.update_destination(did, carried(old))
+                if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
+                    tb.update_pose(pid, carried(old))
+            elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].pose is not None:
+                tb.update_pose(pid, carried(tb.pallets[pid].pose))  # the near capture's hold: its pallet
+            tb.set_correction_version(self.slam_releases)
+        else:
+            # Only what this hold found is in its frame (Codex D6 rounds 4-5): the docked destination, carried as
+            # slam_release carries it (the delivered pallet follows it in the list), or a capture's pallet.
+            pallet_held, destination_held = self._held_estimates()
+            if destination_held:
+                scenario_ = slam.get("return_scenario", slam.get("transport_scenario", self.options.scenario))
+                slam["return_scenario"] = replace(scenario_, destination=carried(scenario_.destination))
+            if pallet_held:
+                if obstacle is not None and obstacle.get("pickup_estimate") is not None:
+                    obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
+                if pocket.get("planning_pickup") is not None:
+                    pocket["planning_pickup"] = carried(pocket["planning_pickup"])
+            mission, tb = self.commands.mission, self.targets
+            if self.ms.phase in ("recover_lower", "recover_withdraw", "clear_out") and mission is not None:
+                # Plan D4b item 4: the recovery put the pallet back from the hold's estimate and the list no longer
+                # follows the core there -- carried with what it was put back from (the truck's gap to it kept).
+                entry = tb.pallets.get(mission.pallet_id)
+                held = destination_held if entry is not None and entry.state == "delivered" else pallet_held
+                if held and entry is not None and entry.pose is not None:
+                    tb.update_pose(mission.pallet_id, carried(entry.pose))
+        if obstacle is not None and slam["tracker"].applied is not None:
+            self._reproject(t, tuple(float(v) for v in slam["tracker"].applied[0]), after, False)
+        slam["holds"].append({"phase": self.ms.phase, "time_s": float(t), "event": "release", "reason": "mission_end",
+                              "deferred": deferred, "jump_m": jump_m, "jump_rad": jump_rad,
+                              "frame_change": [float(v) for v in frame_change]})
+        hooks.set_rear(after)
+        if slam.get("control"):
+            slam["control"][-1][1:4] = [float(v) for v in after]
+        self.end_release_due = None
+
+    def start_mission(self, t: float, plan, inputs: dict, ladder: dict, ready=None) -> None:
+        """The adoption (D2 start processing): the mission-owned state back to the session's baseline (D0), the
+        mission's inputs into the options, the observation leg and its records, the runner's own start
+        (``hooks.live_mission_start``: its locals, trackers, prior zone, docking reference), then running."""
+        ms, state, options = self.ms, self.state, self.options
+        # The last mission's end restored the baseline (end_reset); what came since -- this mission's preparation --
+        # stays with this mission; the rest (the follower's counters, the near and SLAM run keys) starts clean.
+        for owner, kept in self.baseline.restore(self).items():
+            getattr(self, owner).update(kept)
+        options.scenario = inputs["scenario"]
+        options.return_to_pose = options.home_rear = inputs["wait_pose"]
+        options.observation_waypoints[:] = inputs["waypoints"]
+        options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
+        options.pickup_zone = inputs["pickup_zone"]
+        ms.next_candidate_index = ladder["selected"] + 1
+        ms.lift_command = float(self.hooks.lift_position())
+        state["observation_candidates"] = list(ladder["candidates"])
+        state["observation_waypoint_selected"] = list(ladder["candidates"][-1]["pose"])
+        state["planning_status"] = plan.status
+        self.paths.clear()
+        self.paths["observe"] = plan
+        getattr(self.trackers, "close", lambda: None)()  # the last mission's leg switches into the record first
+        self.trackers.clear()
+        self.trackers["observe"] = self.observe_tracker(plan)
+        self.apply_tracker_profile()
+        self.record_tracker_configs()
+        self.hooks.live_mission_start(t, inputs, plan, ready)
+        state["transitions"].append({"from": ms.phase, "to": "observe", "time_s": t,
+                                     "mission_id": self.commands.mission_id})
+        ms.phase, ms.phase_started = "observe", t
+        state["phase"] = ms.phase
+        self.commands.adopt()
+
+    def start_loaded_mission(self, t: float, plan, inputs: dict, ready=None) -> None:
+        """A loaded submit's adoption (plan D5 6c item 4): the baseline back, the mission's inputs into the options,
+        the delivery's legs (transport, withdraw, return) and their followers built as the mission plan's are, the
+        runner's own start, then transport entered directly -- not through ``transition()``: a transport entry books
+        a SLAM release, and the cancel that left the pallet on the forks already released (Codex 6c P2-1). The cargo
+        stays as it is (the session's). The docking is armed on the planned leg, and the truck stands in its start
+        wait (``loaded_start_wait``) until the lift, the first live leg and the docking are ready."""
+        ms, state, options, paths, trackers = self.ms, self.state, self.options, self.paths, self.trackers
+        for owner, kept in self.baseline.restore(self).items():
+            getattr(self, owner).update(kept)
+        options.scenario = inputs["scenario"]
+        options.return_to_pose = options.home_rear = inputs["wait_pose"]
+        options.observation_waypoints[:] = inputs["waypoints"]
+        options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
+        options.pickup_zone = inputs["pickup_zone"]
+        ms.lift_command = float(self.hooks.lift_position())  # the ramp starts from the measured lift (item 5)
+        state["planning_status"] = plan.status
+        paths.clear()
+        paths.update({name: getattr(plan, name) for name in ("transport", "withdraw", "return_home")
+                      if getattr(plan, name) is not None})
+        getattr(trackers, "close", lambda: None)()  # the last mission's leg switches into the record first
+        trackers.clear()
+        trackers.update({name: RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m,
+                                                   self.tracker_config(name)) for name, path in paths.items()})
+        self.apply_tracker_profile()
+        self.record_tracker_configs()
+        state["paths"] = {name: self.hooks.path_record(path) for name, path in paths.items()}
+        self.hooks.write_paths()
+        self.hooks.live_mission_start(t, inputs, plan, ready)
+        state["transitions"].append({"from": ms.phase, "to": "transport", "time_s": t,
+                                     "mission_id": self.commands.mission_id, "loaded": True})
+        ms.phase, ms.phase_started = "transport", t
+        state["phase"] = ms.phase
+        if self.slam is not None:
+            self.arm_docking()
+        self.loaded_wait = {"since": float(t)}
+        state.setdefault("loaded_lift_wait", []).append({"start_s": float(t)})
+        self.commands.adopt()
+
+    LOADED_START_WAIT_S = 60.0
+
+    def lift_ramps_in_plan_wait(self) -> bool:
+        """Whether the lift ramp runs on a tick standing for a plan (plan D5 6c item 5): in a loaded start wait, so the
+        lift reaches the carry height while the first live leg is planned (Codex 6c impl round 1 P2)."""
+        return self.loaded_wait is not None
+
+    def loaded_start_wait(self, t: float) -> bool:
+        """A loaded mission's start wait (plan D5 6c item 5), each control tick: True while the truck stands for
+        it -- the runner then skips the follower, the arrival and the cusp and stall counts, and commands no wheel
+        speed; the lift ramp, the live leg and the permission watch run. It ends when the measured lift is at the
+        carry target less the loaded sag (within the loaded tolerance), the first live leg is taken and the docking
+        armed on it; the cargo is checked again then (item 4a), and the tracking clock starts there. A live leg with
+        no delivery straight, or 60 s of waiting outside the operator's pauses (a plan's wait counts), fails the
+        mission. Outside a running mission it only stands."""
+        wait, cmds = self.loaded_wait, self.commands
+        if wait is None:
+            return False
+        if cmds.status != "running":
+            return True
+        slam, obstacle = self.slam, self.obstacle
+        docking = (slam or {}).get("docking") or {}
+        if docking.get("status") == "no_final_straight":
+            cmds.terminate("failed", t, "prepare:loaded:no_final_straight")
+            return True
+        sag, tolerance = self.loaded_lift_band if self.loaded_lift_band is not None else (0.0, 0.01)
+        left = []
+        if abs(float(self.hooks.lift_position()) - (self.settings["lift_target_m"] - sag)) > tolerance:
+            left.append("lift")
+        taken = (bool((obstacle or {}).get("live_replanned", {}).get("transport"))
+                 and (self.pending is None or self.pending.site != "live_leg"))
+        if not taken:
+            left.append("leg")
+        if slam is not None and docking.get("status") != "armed":
+            left.append("docking")
+        if not left:
+            if not self.hooks.loaded_cargo_ok():
+                cmds.terminate("failed", t, "prepare:loaded:cargo_changed")
+                return True
+            self.loaded_wait = None
+            self.ms.phase_started = t
+            self.state["loaded_lift_wait"][-1]["end_s"] = float(t)
+            return False
+        paused = sum(max(0.0, min(t, end if end is not None else t) - max(wait["since"], start))
+                     for start, end in cmds.pauses)
+        if t - wait["since"] - paused > self.LOADED_START_WAIT_S:
+            cmds.terminate("failed", t, "prepare:loaded:start_wait:" + ",".join(left))
+        return True
+
+    def observe_bounds(self):
+        """The bounds of the observation travel (persistent console plan D2): a live run plans it in the hall
+        (``options.observe_bounds`` None) wherever the operator left the truck; a batch run's options have none, so
+        its observation keeps the pickup bounds."""
+        options = self.options
+        return options.observe_bounds if hasattr(options, "observe_bounds") else options.pickup_bounds
+
+    def abandon_jobs(self, t: float) -> None:
+        """A live mission's end (docs/plans/2026-10-18-persistent-live-console.md D1 step 2): the plan waited for,
+        the capture and the observation belong to the mission that ended. Each is dropped without ``_drop``'s
+        undo for a resume (a release replan asked again, a live leg planned again) and without counting it."""
+        p = self.pending
+        if p is not None:
+            self.jobs.discard(p.job)
+            self.commands.end_wait(t)
+            self.state["async_plans"][-1].update(finished_s=float(t), dropped="abandoned")
+            self.pending = None
+        self.release_replan_needed = None
+        self.fresh_depth_wait = None
+        self.capture_abandon()
+        self.observation_live = None
+        self.capture_acquired_s = None
 
     def hold_count(self) -> int:
         """SLAM hold episodes so far: the near-field tracker's frame_version."""
@@ -5045,7 +5907,15 @@ class MissionCore:
         state.setdefault("known_pallets", []).append(
             {"event": event, "time_s": stamp_, "rect": [float(v) for v in rect_xyyaw], "r_fix_m": float(r_fix_m)})
 
-    def return_turnaround_kwargs(self) -> dict:
+    def _return_in_tick(self) -> bool:
+        """Plan D11: this return turnaround is planned in the tick -- its worker answers were dropped for a changed
+        correction RETURN_CORRECTION_FALLBACK times in this mission's return (the way it ran before D11)."""
+        options, ms = self.options, self.ms
+        if not (options.return_turnaround and ms.phase == "return_home"):
+            return False
+        return self.return_correction_drops.get(ms.phase, 0) >= self.RETURN_CORRECTION_FALLBACK
+
+    def return_turnaround_kwargs(self, frozen: bool = False) -> dict:
         """--return-turnaround: the plan_return_leg options for the return path the truck sets off
         with -- the first live plan on the grid, which runs after the SLAM release and the obstacle
         block's re-projection, so the arc check's snapshot and the plan's grid share one correction
@@ -5080,6 +5950,12 @@ class MissionCore:
         # the obstacle snapshot's version the arcs are checked on.
         arc_check.callback_spec = {"kind": "turnaround_arc", "grid_planning": bool(grid_planning),
                                    "obstacle_version": obstacle.get("version") if obstacle is not None else None}
+        if frozen:
+            # Plan D11: for the worker -- the permission and its snapshot copied now (the plan's grid is fixed now
+            # too); no grid planning: no check, as the closure's None.
+            checker = (obstacle["layer"].turnaround_arc_check(dict(arc_check.callback_spec)) if grid_planning
+                       else None)
+            return {"forward_turnaround": True, "turnaround_check": checker}
 
         return {"forward_turnaround": True, "turnaround_check": arc_check}
 

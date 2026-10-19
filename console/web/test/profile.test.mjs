@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cameraHeightM, controlProfile, disarmAsked, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
+import { cameraHeightM, controlProfile, rejectText, disarmAsked, forbidText, sessionChanges, videoStaleAfterS, frameAgreement, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, scanDrawable, staleness, standWhy, stopInstruction, stopIsRefused, stopKind } from "../js/profile.js";
 
 test("a vehicle without the control field is a full console (console/1 as before)", () => {
   const p = controlProfile({ mission: true, teleop_direct: true, teleop_video: true, lift: true });
@@ -108,6 +108,15 @@ test("a pallet kind named after its geometry file reads as the pallet's name", (
   assert.equal(palletKindLabel(undefined), "종류 모름");
 });
 
+test("TELEOP entry and rearm take a lower-only stand waiver; a resume does not", () => {
+  const st = { mode: "STOPPED", stopped_confirmed: false, stand_waiver: "lower_only" };
+  assert.equal(standWhy(st, { waivable: true }), null);
+  assert.match(standWhy(st), /정지 확인/);
+  assert.equal(rearmState(st, true).enabled, true);
+  const mi = { status: "paused" };
+  assert.equal(resumeState({ state: { ...st, mode: "PAUSED" }, mission: mi, hasLease: true }).enabled, false);
+});
+
 test("requests that need the truck standing wait for stopped_confirmed", () => {
   assert.match(standWhy({ stopped_confirmed: false }), /정지 확인/);
   assert.equal(standWhy({ stopped_confirmed: true }), null);
@@ -187,4 +196,37 @@ test("a disarm the page asked for is excused once, and only in the arm period it
   assert.equal(disarmAsked(asked, { arm_gen: 5 }, 2000), false); // re-armed since
   assert.equal(disarmAsked(asked, { arm_gen: 4 }, 4500), false); // too long ago
   assert.equal(disarmAsked(null, { arm_gen: 4 }, 2000), false);
+});
+
+test("a forbidden drive names the policy's reason, not the permit's code (2026-10-18 demo: pacing read as drive_forbidden)", () => {
+  assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, "pacing"), "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다 · 상한 0.00 m/s");
+  assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, null), "수동 주행 금지 · 상한 0.00 m/s");
+  assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }, "pacing"), "clear · 상한 0.30 m/s");
+});
+
+test("a reject reads in Korean; a head reason keeps its tail; an unknown code shows as it is", () => {
+  assert.match(rejectText("mission_active"), /진행 중인 미션/);
+  assert.match(rejectText("destination_occupied"), /다른 팔레트/);
+  assert.match(rejectText("no_feedback:rear_axle_speed"), /피드백.*\(rear_axle_speed\)/);
+  assert.equal(rejectText("brand_new_code"), "brand_new_code");
+});
+
+test("plan D14: each lift button follows the allowed directions, and the travel is the state's", async () => {
+  const { liftControls } = await import("../js/profile.js");
+  assert.deepEqual(liftControls({ lift_dirs: [-1, 1], lift_limit_m: 0.28 }), { up: true, down: true, limitMm: 280 });
+  assert.deepEqual(liftControls({ lift_dirs: [-1], lift_limit_m: 0.28 }), { up: false, down: true, limitMm: 280 });
+  assert.deepEqual(liftControls({ lift_dirs: [], lift_limit_m: 0.2 }), { up: false, down: false, limitMm: 200 });
+  // an older back end without lift_dirs: lift_allowed for both, the old 280 mm
+  assert.deepEqual(liftControls({ lift_allowed: true }), { up: true, down: true, limitMm: 280 });
+});
+
+test("plan D14: the recovery reasons and the straight reverse are said in Korean", async () => {
+  const { recoveryNote } = await import("../js/profile.js");
+  for (const r of ["recovery:lower_first", "recovery:ground_wait", "recovery:evidence", "recovery:misaligned",
+    "recovery:unknown", "recovery:no_lift_measure", "recovery:no_steering", "recovery:steering"]) {
+    assert.notEqual(forbidText(r), r, r);
+  }
+  assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "in_pocket" } }), /곧게.*인증 없음/);
+  assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "manual_clear" } }), /구역/);
+  assert.equal(recoveryNote({ drive_mode: "normal", recovery: null }), "");
 });

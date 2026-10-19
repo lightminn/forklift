@@ -5,6 +5,7 @@ asked again with the tight arguments exactly when its first status is a retry st
 transport plan and its objects both ways, a job's failure as text, the control thread's calls never wait (a slow
 job, a discard that restarts the worker), a dead worker fails the job it had, and close ends it."""
 
+import os
 import time
 from types import SimpleNamespace
 
@@ -185,3 +186,107 @@ def test_close_ends_the_process():
     proc = w.proc
     w.close()
     assert proc.poll() is not None
+
+
+# --- observe_ladder: a live mission's first leg (persistent console plan D2, agreed with the main session) ---------
+def ladder_payload(waypoints, deadline=None):
+    return {"world": SimpleNamespace(start_rear=SimpleNamespace(x_m=1.0, y_m=2.0, yaw_rad=0.5)),
+            "waypoints": waypoints, "config": "CFG", "geometry": "GEO", "pickup_bounds": None,
+            "grid_kwargs": {"occupancy": "GRID"}, "deadline": deadline}
+
+
+def fake_leg(monkeypatch, succeed_on=(), sleep_s=0.0):
+    calls = []
+
+    def fake(world, waypoint, config, **kwargs):
+        calls.append(((waypoint.x_m, waypoint.y_m, waypoint.yaw_rad), kwargs["extended"], kwargs))
+        if sleep_s:
+            time.sleep(sleep_s)
+        ok = (len(calls) - 1) in succeed_on
+        return SimpleNamespace(success=ok, status="success" if ok else "no_path", analytic_expansion_interval=4,
+                               search_attempts=[("base", 10)])
+
+    monkeypatch.setattr("forklift_core.planning.pallet_mission.plan_observation_leg", fake)
+    return calls
+
+
+def test_the_ladder_runs_every_waypoint_plain_then_every_one_extended_as_the_setup_does(monkeypatch):
+    calls = fake_leg(monkeypatch)
+    out = pw._run("observe_ladder", ladder_payload([(1, 0, 0), (2, 0, 0), (3, 0, 0)]))
+    assert [(c[0][0], c[1]) for c in calls] == [(1, False), (2, False), (3, False), (1, True), (2, True), (3, True)]
+    assert calls[0][2]["geometry"] == "GEO" and calls[0][2]["pickup_bounds"] is None
+    assert calls[0][2]["occupancy"] == "GRID" and calls[0][2]["deadline"] is None
+    # the setup's own order (run_transport, "initial_candidates"): every candidate plain first, then extended
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    assert ("for extended in (False, True)\n            for index, coordinates in enumerate(args.observation_waypoints)"
+            in source)
+    assert out["result"] is None and out["selected"] is None and not out["timed_out"]
+    assert len(out["candidates"]) == 6 and "wall_s" in out
+
+
+def test_the_ladder_stops_at_the_first_success_with_the_setups_candidate_records(monkeypatch):
+    calls = fake_leg(monkeypatch, succeed_on=(4,))  # the second waypoint, extended
+    out = pw._run("observe_ladder", ladder_payload([(1, 0, 0), (2, 0, 0.3), (3, 0, 0)]))
+    assert len(calls) == 5 and out["result"].success and out["selected"] == 1
+    assert out["candidates"][-1] == {"candidate_index": 1, "pose": [2.0, 0.0, 0.3], "success": True,
+                                     "status": "success", "analytic_expansion_interval": 4,
+                                     "search_attempts": [["base", 10]], "start_rear": [1.0, 2.0, 0.5],
+                                     "extended_ladder": True}
+    assert [c["status"] for c in out["candidates"][:4]] == ["no_path"] * 4
+
+
+def test_the_ladder_stops_between_candidates_at_its_deadline(monkeypatch):
+    calls = fake_leg(monkeypatch, sleep_s=0.05)
+    out = pw._run("observe_ladder", ladder_payload([(1, 0, 0), (2, 0, 0), (3, 0, 0)],
+                                                   deadline=time.monotonic() + 0.08))
+    assert out["timed_out"] and out["result"] is None and 1 <= len(calls) < 6
+    assert len(out["candidates"]) == len(calls)
+    assert all(c[2]["deadline"] == calls[0][2]["deadline"] for c in calls)  # the one deadline, to every call
+
+
+@pytest.mark.parametrize("own, grid, sent", [(5.0, 9.0, 5.0), (None, 9.0, 9.0), (5.0, None, 5.0)])
+def test_the_ladders_deadline_is_passed_once_even_when_the_grid_arguments_carry_one(monkeypatch, own, grid, sent):
+    """Codex stage 2 review P2: grid_kwargs("observe") returns a deadline while obstacle["deadline"] is set."""
+    calls = fake_leg(monkeypatch)
+    payload = ladder_payload([(1, 0, 0)], deadline=None)
+    payload["deadline"] = own
+    payload["grid_kwargs"] = {"occupancy": "GRID", **({} if grid is None else {"deadline": grid})}
+    monkeypatch.setattr(pw.time, "monotonic", lambda: 0.0)
+    pw._run("observe_ladder", payload)
+    assert calls and all(c[2]["deadline"] == sent for c in calls)
+
+
+def test_a_worker_takes_the_kernels_it_is_given_and_says_so():
+    """Persistent console plan D11 (Codex design round 1 P2-2): a new interpreter starts on the reference kernels;
+    the live runner passes its own mode in the environment, and the worker reports what it runs."""
+    import os
+
+    from forklift_core import kernels
+
+    w = pw.PlanWorker(env={**os.environ, "FORKLIFT_KERNELS": "numpy"})
+    try:
+        assert w.kernels == "numpy"
+    finally:
+        w.close()
+    plain = pw.PlanWorker(env={k: v for k, v in os.environ.items() if k != "FORKLIFT_KERNELS"})
+    try:
+        assert plain.kernels == "reference"
+    finally:
+        plain.close()
+    assert pw.worker_env("numba")["FORKLIFT_KERNELS"] == "numba" and kernels.mode() in kernels.MODES
+
+
+def test_the_test_death_kills_the_worker_once_as_it_starts_that_job(tmp_path):
+    """Persistent console plan section 4 (U23): the worker dies inside the job, so the job fails without racing its
+    answer (Codex injection review round 2 P2); the marker keeps the restarted worker alive."""
+    marker = tmp_path / "died"
+    w = pw.PlanWorker(env={**os.environ, "FORKLIFT_TEST_WORKER_DIE_ONCE": f"echo:{marker}"})
+    try:
+        ok, value = wait_for(w, w.submit("echo", {"value": 1}))
+        assert not ok and marker.exists()
+        ok, value = wait_for(w, w.submit("echo", {"value": 2}))  # on the restarted worker, which stays up
+        assert ok and value["result"] == 2 and w.restarts == 1
+    finally:
+        w.close()

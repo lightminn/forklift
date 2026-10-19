@@ -8,6 +8,7 @@ output is 60fps by default, and the floor destination is marked by a green ring.
 import argparse
 import hashlib
 import importlib.util
+import itertools
 import json
 import collections
 import math
@@ -517,12 +518,18 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--return-turnaround",
         action="store_true",
+        default=None,
         help="Return-leg forward preference (docs/plans/2026-10-12-return-forward-turnaround.md): "
         "the first live return plan on the grid (after the SLAM release, which it waits for, and "
         "the grid's re-projection) also weighs full-lock reverse arcs, each followed by a search "
         "home, against the direct plan, reverse length weighted 3.0; each arc's start must be "
         "verified on the drive permission's snapshot and no known occupied cell may lie on it. "
         "Later return replans are unchanged.",
+    )
+    parser.add_argument(
+        "--no-return-turnaround", dest="return_turnaround", action="store_false",
+        help="Persistent console plan D11: a live run weighs the return turnaround by default (planned by the "
+        "worker); this turns it off. A batch run's default stays off.",
     )
     parser.add_argument(
         "--destination-prior-error-m",
@@ -697,6 +704,10 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--live-port-file", type=Path, default=None, help="M-c: where to write host, port and epoch")
     parser.add_argument("--live-host", default="127.0.0.1", help="M-c: the console server's address")
+    parser.add_argument("--live-port", type=int, default=0,
+                        help="persistent console plan D7: the console server's port, the same across epochs (0: any)")
+    parser.add_argument("--live-supervised", action="store_true",
+                        help="persistent console plan D9: a supervisor restarts the runner (exit 3: a new scene)")
     parser.add_argument("--live-factor", type=float, default=1.0, help="M-c: the declared real-time factor")
     parser.add_argument("--live-lease-timeout-s", type=float, default=5.0,
                         help="M-c: the control lease's timeout -- a tick cannot go out while a synchronous call holds "
@@ -718,6 +729,30 @@ def arguments() -> argparse.Namespace:
                         help="M-c tests only (plan C5): the lift follows a non-periodic wave so the carriage camera's "
                         "horizon tells the sim time a frame's pixels were drawn at; the lift height is logged every "
                         "physics step -- for a run without a mission")
+    parser.add_argument("--live-test-return-correction-drops", type=int, default=0,
+                        help="Persistent console plan D11 tests only: the first N worker answers of a return "
+                        "turnaround are dropped as if the correction had changed (the synchronous fallback after 3)")
+    parser.add_argument("--live-test-recovery-blocked", nargs="?", const="withdraw", choices=("withdraw", "lower"),
+                        default=None,
+                        help="Persistent console plan D14 tests only (U20 c): the automatic recovery is refused with its "
+                        "evidence valid -- at its retrace (withdraw, the default) or before its lowering (lower, the "
+                        "pallet left on the forks) -- so the mission ends recovery_required for a manual recovery")
+    parser.add_argument("--live-epoch", type=int, default=None,
+                        help="the supervisor's session number (its {epoch}); recorded, and the --live-test injections act "
+                        "in the first session only (a scene reset restarts the runner with the same arguments)")
+    # Persistent console plan section 4 (U10b, U12, U23): controlled injections for the use cases
+    parser.add_argument("--live-test-push-pallet", default=None, metavar="PHASE",
+                        help="U12 tests only: when a mission first enters PHASE, the pallet is moved 0.05 m sideways -- the "
+                        "truth checks see a displaced pallet (scene damage, latched)")
+    parser.add_argument("--live-test-fail-at", default=None, metavar="PHASE",
+                        help="U10b tests only: when a mission first enters PHASE it fails as a tracking failure (the "
+                        "mission's own failure; the session goes on)")
+    parser.add_argument("--live-test-kill-worker", action="store_true",
+                        help="U23 tests only: the planning worker is killed right after the first preparation is asked "
+                        "(its job fails, the worker is replaced)")
+    parser.add_argument("--live-test-no-pallet-permit", action="store_true",
+                        help="Persistent console plan D10 tests only (U11's control): the teleop permit does not see "
+                        "the target pallets, as before D10")
     parser.add_argument("--live-test-permit-compare", action="store_true",
                         help="M-c tests only (completion 5): every 12th teleoperation permission is also asked of a "
                         "fresh full check on the same grid, pose and arcs, and both are logged with the true rear-axle "
@@ -951,7 +986,11 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
-    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence):
+    if args.return_turnaround is None:
+        args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
+    if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
+                          or args.live_test_recovery_blocked or args.live_test_return_correction_drops
+                          or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
         parser.error("--live-test-permit-compare and --live-test-scan-silence are for --live runs only")
     if args.live and not 0 < args.live_factor <= 1:
         # The limits are divided by it (plan C4a); above 1 the 0.05 s tick would exceed a quarter of the command age.
@@ -1454,8 +1493,9 @@ def record_robot_camera_frame(
     frames.append({"time_s": stamp, "phase": phase, "camera_ready": bool(ready)})
 
 
-def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None:
-    """slam_log.npz + meta.json in the run_slam_drive.py format, plus the mission."""
+def write_slam_record(args, state, scenario, factory, log, lidar_config, spool: dict | None = None) -> None:
+    """slam_log.npz + meta.json in the run_slam_drive.py format, plus the mission. A live run's log is in its record
+    spool (persistent console plan D8): ``spool`` names the groups and meta.json points at them, no npz."""
     from forklift_core.sensors.lidar import PlanarScanPattern
 
     pattern = PlanarScanPattern(
@@ -1463,9 +1503,10 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
         float(lidar_config["range_min_m"]),
         float(lidar_config["range_max_m"]),
     )
-    np.savez_compressed(
-        args.output / "slam_log.npz", **{k: np.asarray(v) for k, v in log.items()}
-    )
+    if spool is None:
+        np.savez_compressed(
+            args.output / "slam_log.npz", **{k: np.asarray(v) for k, v in log.items()}
+        )
     obstacles = [
         {**asdict(prop.rectangle), "height_m": prop.asset.height_m, "base_m": 0.0}
         for prop in scenario.props
@@ -1526,6 +1567,7 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config) -> None
                 "perception_pickup_estimate_m"
             ),
         },
+        **({"spool": spool} if spool is not None else {}),
     }
     (args.output / "meta.json").write_text(record_json(meta, indent=2) + "\n")
 
@@ -1678,6 +1720,89 @@ def path_stats(path) -> dict:
         "gear_changes": int(np.count_nonzero(np.diff(directions))) if len(directions) > 1 else 0,
         "search_attempts": [list(entry) for entry in getattr(path, "search_attempts", ())],
     }
+
+
+def urdf_lift_limit(urdf_path) -> tuple[float, str]:
+    """Persistent console plan D14 (main condition 2): the manual lift's travel, the model's fork_lift joint upper
+    limit; without one, the autonomous lift target 0.20 m (and that it was the default)."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        for joint in ET.parse(str(urdf_path)).getroot().iter("joint"):
+            if joint.get("name") == "fork_lift" and joint.find("limit") is not None:
+                upper = float(joint.find("limit").get("upper"))
+                if math.isfinite(upper) and upper > 0:
+                    return upper, "urdf"
+    except (OSError, ET.ParseError, TypeError, ValueError):
+        pass
+    return 0.20, "default"
+
+
+def model_lift_sag_m(urdf_path, extra_mass_kg: float = 0.0) -> float | None:
+    """Plan D14 (main 2026-10-19): the lift position drive's gravity sag the model implies -- its carriage weight (plus
+    ``extra_mass_kg``, a load) over the lift position gain (parameters.yaml beside the URDF) -- without the blades, so
+    a lower bound. None unknown."""
+    import yaml
+
+    try:
+        params = yaml.safe_load((Path(urdf_path).parent / "parameters.yaml").read_text())
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+    def find(d, key):
+        if isinstance(d, dict):
+            if key in d:
+                return d[key]
+            for v in d.values():
+                got = find(v, key)
+                if got is not None:
+                    return got
+        return None
+
+    mass, gain = find(params, "carriage_mass_kg"), find(params, "lift_position_gain")
+    try:
+        mass, gain = float(mass), float(gain)
+    except (TypeError, ValueError):
+        return None
+    return (mass + float(extra_mass_kg)) * 9.81 / gain if math.isfinite(mass) and math.isfinite(gain) and gain > 0 \
+        else None
+
+
+LOADED_HOLD_MARGIN_M = 0.01  # plan D14 (main 2026-10-19): the loaded hold tolerance's margin over the loaded sag
+
+
+def loaded_lift_mass_kg(site_path, shape: str, *, setting_kg: float, engine_kg: float | None) -> tuple[float, dict]:
+    """Plan D14 (main 2026-10-19): the mass a loaded lift carries beyond its own -- the heaviest of the pallet masses
+    known (the run's setting, the site table's for the shape, the engine's pallet body) plus the load on it (the site
+    table's load_mass_kg; 0 without a table). Returns the mass and where each part came from."""
+    import yaml
+
+    site_pallet, load = None, 0.0
+    try:
+        entry = (yaml.safe_load(Path(site_path).read_text()) or {}).get("shapes", {}).get(shape) or {}
+        site_pallet = None if entry.get("pallet_mass_kg") is None else float(entry["pallet_mass_kg"])
+        load = float(entry.get("load_mass_kg") or 0.0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    known = [float(v) for v in (setting_kg, site_pallet, engine_kg) if v is not None and math.isfinite(float(v))]
+    pallet_kg = max(known) if known else 0.0
+    return pallet_kg + load, {"pallet_kg": pallet_kg, "load_kg": load, "setting_kg": setting_kg,
+                              "site_pallet_kg": site_pallet, "engine_pallet_kg": engine_kg}
+
+
+def plant_lift_sag_m(plant_backend: dict, extra_mass_kg: float = 0.0) -> float | None:
+    """Plan D14 (Codex impl round 4 P2-3): the lift drive's gravity sag in the engine as built -- the bodies the lift
+    carries (the carriage and the blades: their names hold "fork") plus ``extra_mass_kg`` over the fork_lift drive's
+    stiffness, from the run's plant_backend record (the scene sets 4000 N/m, not the model YAML's 1800). None when the
+    record has no such body or drive."""
+    try:
+        mass = sum(float(m) for n, m in zip(plant_backend["body_names"], plant_backend["masses_kg"]) if "fork" in n)
+        stiffness = float(dict(zip(plant_backend["dof_names"], plant_backend["drive_stiffness"]))["fork_lift"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (mass > 0 and math.isfinite(stiffness) and stiffness > 0):
+        return None
+    return (mass + float(extra_mass_kg)) * 9.81 / stiffness
 
 
 class TrackerBook(dict):
@@ -2640,6 +2765,49 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 "clipping_range_m": list(map(float, pocket_camera.get_clipping_range())),
                 "intrinsics": asdict(k_pocket),
             }
+        if getattr(args, "live", False):
+            # The live video's own camera (console/1 video; display only, never a sensor): the perception mount and
+            # field of view, rendered at the size the page is sent, with a 0.05 m near plane so the forks and the
+            # floor before them show -- the perception camera's 1.0 m left the lower third of the picture black
+            # (2026-10-18 demo). RGB only.
+            repo_root_ = str(Path(__file__).resolve().parents[2])  # live_runtime imports console/ (the repository's root)
+            if repo_root_ not in sys.path:
+                sys.path.insert(0, repo_root_)
+            from live_runtime import live_video_size  # a sibling, as the live block's import
+
+            video_w_, video_h_ = live_video_size(perception_calibration, 640)
+            live_video_camera = Camera(
+                prim_path=mount_parent + "/LiveVideoCamera",
+                frequency=-1,
+                resolution=(video_w_, video_h_),
+            )
+            live_video_camera.set_local_pose(
+                translation=np.asarray(perception_mount.translation_m),
+                orientation=np.asarray(adapter.xyzw_to_wxyz(mount_xyzw)),
+                camera_axes=args.perception_camera_axes,
+            )
+            live_video_camera.set_projection_mode("perspective")
+            live_video_camera.set_lens_distortion_model("pinhole")
+            live_video_camera.set_focal_length(1.0)
+            live_video_camera.set_horizontal_aperture(
+                perception_calibration.width / perception_calibration.fx,
+                maintain_square_pixels=True,
+            )
+            live_video_camera.initialize()
+            _, video_far_m = live_video_camera.get_clipping_range()
+            live_video_camera.set_clipping_range(near_distance=0.05, far_distance=video_far_m)
+            k_video = adapter.read_isaac_intrinsics(live_video_camera).raw_sdk
+            scale_ = perception_calibration.width / video_w_
+            require(
+                (k_video.width, k_video.height) == (video_w_, video_h_)
+                and all(abs(getattr(k_video, n) - getattr(perception_calibration, n) / scale_) <= 1e-3
+                        for n in ("fx", "fy", "cx", "cy")),
+                "live video camera intrinsics differ from the scaled perception camera's (the page's camera_model)",
+            )
+            state["live_video_camera"] = {
+                "clipping_range_m": list(map(float, live_video_camera.get_clipping_range())),
+                "intrinsics": asdict(k_video),
+            }
         perception_display = None
         if "perception" in args.extra_views or args.robot_camera:
             # The display camera: the same mount and intrinsics with a 0.05 m
@@ -3540,6 +3708,7 @@ def drive(S, isaac) -> None:
         D5), without a time, from the future, not newer than the last one, or not
         covered by the history is recorded and left out."""
         from forklift_core.perception.scene_dataset import SceneInput
+        from live_records import NEAR_FRAMES_KEPT, keep_near_frame  # a sibling; plan D8: a live mission's bound
 
         tracker_ = near["tracker"]
         now_s = world.current_time - initial_time
@@ -3548,7 +3717,7 @@ def drive(S, isaac) -> None:
             # Plan D8 S4c-1: an injected loss -- the frame is recorded (the recorder kept the raw
             # read) but never reaches the tracker, and tau's reference stays the last received.
             row.update(skipped="dropped", latch_s=near["drop_latch"]["time_s"])
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return "dropped"
         k_ = pocket["capture"].intrinsics
         try:
@@ -3558,7 +3727,7 @@ def drive(S, isaac) -> None:
             # loss stops the truck; checked first, whatever its time, so the caller
             # never hands it to D5 (Codex S4a-1 reviews P2).
             row.update(skipped="bad_depth", error=repr(exc))
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return "bad_depth"
         frame = pocket_camera.get_current_frame()
         rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
@@ -3573,14 +3742,14 @@ def drive(S, isaac) -> None:
         elif near["last_fed_stamp"] is not None and stamp <= near["last_fed_stamp"]:
             row["skipped"] = "not_new"
         if "skipped" in row:
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return
         aligned = stamp - near["bounds"].align_latency_s
         pose = near["history"].base_at(aligned, near["episode"])
         row.update(stamp_s=stamp, aligned_s=aligned)
         if pose is None:
             row["skipped"] = "uncovered"
-            near["frames"].append(row)
+            keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return None
         lift_ = float(robot.get_joint_positions()[lift_index[0]])
         scene_ = SceneInput(
@@ -3606,7 +3775,7 @@ def drive(S, isaac) -> None:
             latest_widths_m=[latest_.observation.left.width_m, latest_.observation.right.width_m],
             latest_bound=dict(latest_.bound), latest_frame_version=latest_.frame_version,
         )
-        near["frames"].append(row)
+        keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
         if result_.mismatch and not near.get("mismatch"):
             near["mismatch"] = True  # terminal in S4a (no retry before S4c)
             near["events"].append({"time_s": now_s, "event": "mismatch", "stamp_s": stamp})
@@ -3700,12 +3869,35 @@ def drive(S, isaac) -> None:
             np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
         )
 
-    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None) -> dict:
+    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None, scratch=None,
+                    loaded_as=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan. band_pose (default
         the truck's rear) is where the return's delivered-pallet band is cleared around; label
-        names the call in the plans record (obstacle recovery v4: the escape's grids)."""
+        names the call in the plans record (obstacle recovery v4: the escape's grids).
+        scratch (persistent console plan D4b): {"use_slam": bool, "release_at": (t, pose) or None} -- the
+        grid a plan would get, built the same way on a copy of the obstacle layer (its memory's scans,
+        clears and SLAM map taken there), neither cached nor recorded; with release_at, after the end
+        release's own re-projection on that copy first (the core's _reproject: refresh at t with this
+        correction and the next version -- Codex D4b impl round 2 P2-1). The shared layer is left as it was."""
         if not grid_planning:
             return {}
+        if scratch is not None and not scratch.get("_inner"):
+            import copy as _copy
+
+            layer_shared_, version_ = obstacle["layer"], obstacle["version"]
+            obstacle["layer"] = _copy.deepcopy(layer_shared_)
+            try:
+                if scratch.get("release_at") is not None:
+                    at_t_, at_pose_ = scratch["release_at"]
+                    obstacle["version"] = version_ + 1
+                    at_pose_ = tuple(float(v) for v in at_pose_)
+                    obstacle["layer"].refresh(float(at_t_), tuple(float(v) for v in applied), obstacle["version"],
+                                              current_pose=at_pose_, path_ahead=np.array([at_pose_]), loaded=False,
+                                              direction=0)
+                return grid_kwargs(kind, target, own, applied, band_pose, label, scratch={**scratch, "_inner": True},
+                                   loaded_as=loaded_as)
+            finally:
+                obstacle["layer"], obstacle["version"] = layer_shared_, version_
         try:  # the first plans run before the SLAM link exists
             slam_ref = slam
         except NameError:
@@ -3725,13 +3917,15 @@ def drive(S, isaac) -> None:
             # Several poses (obstacle recovery v4: an escape's end region) keep only the cells under all.
             own_now_ = (tuple(tuple(float(v) for v in p_) for p_ in own_) if np.ndim(own_) == 2
                         else tuple(float(v) for v in own_))
-            loaded_now_ = bool(loaded)
+            # loaded_as (plan D5 6c): a loaded submit's preparation runs between missions; the carried pallet is the
+            # truck's own whatever phase the last mission left
+            loaded_now_ = bool(loaded) if loaded_as is None else bool(loaded_as)
         except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
             own_now_, loaded_now_ = None, False
         mode_ = slam_ref["tracker"].mode if slam_ref is not None else None
         key_ = (stamp, obstacle["version"], applied_, mode_, loaded_now_,
                 None if own_now_ is None else tuple(round(v, 4) for v in np.ravel(own_now_)))
-        cache_ = obstacle.get("plan_cache")
+        cache_ = obstacle.get("plan_cache") if scratch is None else None
         if cache_ is not None and cache_[0] == key_:
             # One bundle per planning instant and state: retries and fallbacks
             # see the same map and memory (Codex design review P1).
@@ -3775,7 +3969,7 @@ def drive(S, isaac) -> None:
                             )
                 # The map is in SLAM's frame: only while control applies SLAM's
                 # correction (not holding) do the two frames agree.
-                use_slam = mode_ != "holding"
+                use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
             occupancy = layer_.planner_grid(stamp, applied_, obstacle["version"], use_slam=use_slam,
                                             own_pose=own_now_, loaded=loaded_now_)
             bundle = {
@@ -3789,9 +3983,11 @@ def drive(S, isaac) -> None:
                 "applied": list(applied_),
                 "mode": mode_,
             }
-            obstacle["plan_cache"] = (key_, occupancy, bundle)
-        obstacle["plans"].append({"kind": label or kind, "stamp_s": stamp,
-                                  "occupied_cells": int(occupancy.occupied.sum()), **bundle})
+            if scratch is None:
+                obstacle["plan_cache"] = (key_, occupancy, bundle)
+        if scratch is None:
+            obstacle["plans"].append({"kind": label or kind, "stamp_s": stamp,
+                                      "occupied_cells": int(occupancy.occupied.sum()), **bundle})
         out = {"occupancy": occupancy}
         if obstacle.get("deadline") is not None and kind in ("observe", None, "mission", "return"):
             out["deadline"] = obstacle["deadline"]
@@ -4030,6 +4226,11 @@ def drive(S, isaac) -> None:
             for extended in (False, True)
             for index, coordinates in enumerate(args.observation_waypoints)
         ]
+        if getattr(args, "live", False):
+            # Persistent console plan D2 (Codex P2-7): a live session starts without a mission -- each submit
+            # prepares its own first leg from where the truck stands (and a ladder that failed here ended the
+            # session before the console was up).
+            initial_candidates = []
         for candidate_index, coordinates, extended in initial_candidates:
             ms.next_candidate_index = candidate_index + 1
             waypoint = Pose2D(*coordinates)
@@ -4083,14 +4284,14 @@ def drive(S, isaac) -> None:
             }
             state["phase"] = "repeat_target_not_reached"
             return
-        if observe_plan is None:
+        if observe_plan is None and not getattr(args, "live", False):
             state["planning_status"] = "all_candidates_failed"
             reasons = ";".join(
                 candidate["status"] for candidate in state["observation_candidates"]
             )
             require(False, f"observe:all_candidates_failed:{reasons}")
-        state["planning_status"] = observe_plan.status
-        paths = {"observe": observe_plan}
+        state["planning_status"] = "live_idle" if observe_plan is None else observe_plan.status
+        paths = {} if observe_plan is None else {"observe": observe_plan}
     else:
         planning_start = time.monotonic()
         # The per-stage trace survives a later stage's failure; the result does not.
@@ -4146,6 +4347,8 @@ def drive(S, isaac) -> None:
     fps_divisor = 120 // args.fps
     dt = 1 / 120
     encoder = None
+    live_spool = None  # persistent console plan D8: a live run's record spool (made before the first control tick)
+    trace_evidence = None  # plan D4: the simulation's truth check on a recovery's retrace premise (live only)
     extra_encoders = {}
     frame_log = None
     chase_yaw = None
@@ -4480,6 +4683,11 @@ def drive(S, isaac) -> None:
     from types import SimpleNamespace
 
     from forklift_core.mission.commands import Cancel as MissionCancel
+    from forklift_core.mission.delivery import delivery_verdict
+
+    def base_pose():  # base_link (x, y) and yaw, read by the delivery check after its first two checks pass
+        final_base_, final_q_ = robot.get_world_pose()
+        return final_base_, yaw_and_tilt(final_q_)[0]
     from forklift_core.mission.commands import Context as MissionContext
     from forklift_core.mission.commands import Pause as MissionPause
     from forklift_core.mission.commands import Resume as MissionResume
@@ -4766,12 +4974,29 @@ def drive(S, isaac) -> None:
         return "none"
 
     # M-a4 (plan D7): the scenario's pallet and destination are the targets list; the submit names them.
+    # Persistent console plan D3: the allowed pallet shapes (an unknown size is bounded by the largest) -- the two the
+    # assignment requires and the run's own.
+    from forklift_core.perception.pallet_geometry import load_pallet_geometry as load_shape_
+
+    repo_ = Path(__file__).resolve().parents[2]
+    for shape_path_ in {repo_ / "config/pallet_geometry_epal6.yaml", repo_ / "config/pallet_geometry_t11_06.yaml",
+                        Path(args.pallet_geometry).resolve()}:
+        if shape_path_.exists():
+            shape_ = load_shape_(shape_path_)
+            core.targets.add_shape(shape_path_.stem, float(shape_.overall_depth_m), float(shape_.overall_width_m))
     core.targets.add_pallet("P-1", Path(args.pallet_geometry).stem, MissionTargetPose(
         float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
         depth_m=float(args.pallet_geometry_loaded.overall_depth_m),  # the console draws it (C3)
-        width_m=float(args.pallet_geometry_loaded.overall_width_m))
+        width_m=float(args.pallet_geometry_loaded.overall_width_m),
+        # plan D3: live, D-0 is this place by definition (registered from the same pickup, the spawn checked 5 mm)
+        at="D-0" if getattr(args, "live", False) else None)
     core.targets.add_destination("D-1", MissionTargetPose(
         float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
+    if getattr(args, "live", False):
+        # Persistent console plan D2/D3: the first pallet's own place is a destination too (live only: a batch run's
+        # targets revision stays as it was).
+        core.targets.add_destination("D-0", MissionTargetPose(
+            float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)))
     if not getattr(args, "live", False):  # M-c: live, the operator submits (a record from before M-c has no flag)
         core.commands.queue(MissionSubmit("P-1", "D-1", core.targets.revision))
         core.commands.apply(0.0)
@@ -5406,13 +5631,14 @@ def drive(S, isaac) -> None:
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
             from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
+            from forklift_core.safety.teleop_drive import TeleopLimits as LiveTeleopLimits
             from forklift_core.safety.teleop_drive import BundlePermit as LiveBundlePermit
             from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
             from forklift_core.control.drive_permission import DrivePermission as LiveDrivePermission
             repo_root_ = str(Path(__file__).resolve().parents[2])  # console/ lives at the repository's root
             if repo_root_ not in sys.path:
                 sys.path.insert(0, repo_root_)
-            from live_runtime import Hooks as LiveHooks, LiveRuntime, live_camera_model  # siblings, as the rest
+            from live_runtime import EndHooks as LiveEndHooks, Hooks as LiveHooks, LiveRuntime, live_camera_model  # siblings, as the rest
 
             def live_zero_wheels() -> None:
                 # As a scheduled preempt (M-a3 E7): the wheels stop at this step, the steering stays; the applied
@@ -5426,7 +5652,9 @@ def drive(S, isaac) -> None:
             def live_hold_lift(position: float) -> None:
                 robot.apply_action(isaac.action(joint_positions=np.array([position]), joint_indices=lift_index))
 
-            live_cam_ = _bound.get("perception_camera")  # unbound without --use-perception: no video
+            # The live video camera (unbound without --use-perception: no video); the perception camera only if a run
+            # bound none.
+            live_cam_ = _bound.get("live_video_camera") or _bound.get("perception_camera")
 
             def live_camera():
                 if live_cam_ is None:
@@ -5485,6 +5713,108 @@ def drive(S, isaac) -> None:
                     raise ValueError("FORKLIFT_LIVE_CAMERA_PHASE must be 0..11")
             state["live_camera_phase"] = live_camera_phase_
             live_perm = LiveBundlePermit(obstacle["layer"].permission.config) if obstacle is not None else None
+            # Persistent console plan D10: the pallets the LiDAR plane does not see are keep-out zones for teleop.
+            from forklift_core.safety.pallet_permit import PalletPermit as LivePalletPermit, zones_from as live_zones_from
+
+            # Plan D14: the manual lift's travel and rate (within the autonomous ramp's, main condition 2).
+            live_lift_limit_, live_lift_source_ = urdf_lift_limit(args.forklift_urdf)
+            state["teleop_lift"] = {"limit_m": live_lift_limit_, "limit_source": live_lift_source_,
+                                    "rate_mps": LiveTeleopLimits().lift_rate_mps}
+            if LiveTeleopLimits().lift_rate_mps > float(settings["lift_rate_mps"]) + 1e-12:
+                raise ValueError("teleop lift rate above the autonomous lift_rate_mps (plan D14, main condition 2)")
+            live_sag_ = plant_lift_sag_m(state.get("plant_backend") or {})
+            if live_sag_ is None:
+                live_sag_ = model_lift_sag_m(args.forklift_urdf)  # no engine record: the model's (a lower bound)
+            state["teleop_lift"].update(hold_tolerance_m=LiveTeleopLimits().lift_hold_tolerance_m, model_sag_m=live_sag_)
+            if live_sag_ is not None and LiveTeleopLimits().lift_hold_tolerance_m < live_sag_:
+                # Main 2026-10-19: a tolerance below the sag lowers a moving empty lift's target at every event.
+                raise ValueError(f"lift_hold_tolerance_m below the model's lift sag {live_sag_:.4f} m (plan D14)")
+            live_loaded_tolerance_ = None
+            if live_sag_ is not None:
+                # Main 2026-10-19: loaded, the tolerance is the loaded sag (the configured pallet on the carriage) plus
+                # a margin -- a STOP while a loaded ramp moves keeps the target, the pallet is not set down again.
+                try:  # the engine's pallet body, where the API gives it
+                    engine_pallet_kg_ = float(pallet.get_mass())
+                except Exception:  # noqa: BLE001 -- not every prim wrapper has it
+                    engine_pallet_kg_ = None
+                loaded_kg_, loaded_why_ = loaded_lift_mass_kg(
+                    Path(__file__).resolve().parents[2] / "config" / "site_load_defaults.yaml",
+                    Path(args.pallet_geometry).stem.replace("pallet_geometry_", ""),
+                    setting_kg=float(settings["pallet_mass_kg"]), engine_kg=engine_pallet_kg_)
+                state["teleop_lift"]["loaded_mass"] = loaded_why_
+                loaded_sag_m = (plant_lift_sag_m(state.get("plant_backend") or {}, loaded_kg_)
+                                or model_lift_sag_m(args.forklift_urdf, loaded_kg_))
+                live_loaded_tolerance_ = max(LiveTeleopLimits().lift_hold_tolerance_m, loaded_sag_m + LOADED_HOLD_MARGIN_M)
+                state["teleop_lift"].update(loaded_sag_m=loaded_sag_m, loaded_hold_tolerance_m=live_loaded_tolerance_)
+            live_pallet_perm = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
+                                                 step_m=obstacle["layer"].permission.config.step_m)
+                                if obstacle is not None and not args.live_test_no_pallet_permit else None)
+            # Plan D14: the same permit without the recovered pallet's exemption, asked in the manual clear only --
+            # the clear ends when it allows the drive's own reverse bundle (Codex D14 design rounds 2-3 P2-1).
+            live_pallet_full = (LivePalletPermit(obstacle["layer"].permission.config.stopping,
+                                                 step_m=obstacle["layer"].permission.config.step_m)
+                                if live_pallet_perm is not None else None)
+            core.hooks.test_recovery_blocked = args.live_test_recovery_blocked or False
+            core.hooks.test_return_correction_drops = int(args.live_test_return_correction_drops)  # plan D11 tests
+
+            live_withdraw = {"open": None, "watch": False}  # plan D14: the uncertified teleop withdraw's episode
+            live_injected_ = {}  # plan section 4: the --live-test injections done this session (each once)
+
+            def live_teleop_withdraw(t_, out_, rear_):
+                """Plan D14 (main condition 4): every stretch the recovery's straight reverse moves is recorded as an
+                uncertified teleop withdraw; the contact watch runs through it and until the truck stands."""
+                moving_ = (out_.source == "teleop" and out_.policy.drive_mode == "reverse_straight"
+                           and abs(float(out_.speed_mps)) > 1e-9)
+                depth_ = core.cargo.depth(rear_) if core.cargo.anchor is not None else None
+                odom_ = [float(v) for v in (slam["odom_rear"] if slam is not None else rear_)][:3]
+                ep_ = live_withdraw["open"]
+                if moving_ and ep_ is not None and ep_.get("stop_reason") is not None:
+                    ep_.pop("stop_reason")  # moving again before it stood: the same stretch
+                if moving_ and ep_ is None:
+                    ep_ = live_withdraw["open"] = {"start_s": float(t_), "start_depth_m": depth_,
+                                                   "start_rear": [float(v) for v in rear_], "start_odom": odom_,
+                                                   "pallet_id": (core.cargo.recovery_context or {}).get("pallet_id")}
+                if ep_ is not None:
+                    # Kept up to date until the truck stands, the braking included (Codex D14 impl round 1 P3).
+                    ep_.update(end_s=float(t_), end_depth_m=depth_, end_rear=[float(v) for v in rear_], end_odom=odom_)
+                    if not moving_ and ep_.get("stop_reason") is None:
+                        ep_["stop_reason"] = ("stop" if out_.mode == "STOPPED" or out_.stop_kind == "preempt"
+                                              else "mode_change" if out_.mode != "TELEOP"
+                                              else "misaligned" if out_.policy.reason == "recovery:misaligned"
+                                              else "evidence" if out_.policy.reason == "recovery:evidence"
+                                              else "unknown" if out_.policy.reason == "recovery:unknown"
+                                              else "stopped")
+                live_withdraw["watch"] = moving_ or (live_withdraw["watch"] and not live.arbiter.stop_confirmed)
+                if ep_ is not None and not live_withdraw["watch"]:
+                    live_teleop_withdraw_close(t_, ep_.pop("stop_reason", None) or "stopped")
+
+            def live_teleop_withdraw_close(t_, why_):
+                ep_ = live_withdraw["open"]
+                if ep_ is None:
+                    return
+                ep_.update(end_s=float(t_), end_reason=why_)
+                if ep_.get("end_odom") is not None:
+                    # In odometry: a SLAM release inside the stretch (the free verdict's) moves the map poses
+                    # without the truck moving (Codex D14 impl round 2 P3).
+                    ep_["distance_m"] = float(math.hypot(ep_["end_odom"][0] - ep_["start_odom"][0],
+                                                         ep_["end_odom"][1] - ep_["start_odom"][1]))
+                state.setdefault("uncertified_teleop_withdraw", []).append(ep_)
+                live_withdraw["open"] = None
+
+            def live_unlock_wheels():  # persistent console plan D1 step 5: the dwell's lock, released as the loop does
+                if wheel_lock["q"] is not None:
+                    robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
+                    wheel_lock["events"][-1]["release_s"] = float(book_clock["t"])
+                    wheel_lock["q"] = None
+
+            def live_judge_delivery():  # D1 step 6: the batch run's delivery check, on this mission's truth
+                final_pallet_, _ = pallet.get_world_pose()
+                return delivery_verdict(final_pallet_, base_pose,
+                                        (truth_destination.x_m, truth_destination.y_m, truth_destination.yaw_rad),
+                                        pallet_depth_m=geometry.pallet_depth_m,
+                                        axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+                                        rear_axle_offset_m=args.rear_axle_offset_m, exit_clearance_m=EXIT_CLEARANCE_M)
+
             live = LiveRuntime(
                 core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
                                 lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
@@ -5495,7 +5825,7 @@ def drive(S, isaac) -> None:
                 # distance as L does on a real truck. The lease is administrative and only kept above the command age.
                 # Real-time plan D7: a catch-up burst runs at most catchup_steps / 120 sim s ahead of f x wall, so
                 # the wall limits give that much up to bound the same sim distance as before.
-                config=LiveArbiterConfig(tick_s=1 / 120,
+                config=LiveArbiterConfig(tick_s=1 / 120, lift_limit_m=live_lift_limit_,
                                          command_max_age_s=(0.30 - live_catchup_ / 120) / args.live_factor,
                                          video_max_age_s=(0.50 - live_catchup_ / 120) / args.live_factor,
                                          frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
@@ -5515,6 +5845,9 @@ def drive(S, isaac) -> None:
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
                 test_stop_in_capture=args.live_test_stop_in_capture,
                 catchup_steps=live_catchup_,
+                port=args.live_port, supervised=args.live_supervised,
+                end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels,
+                                 drain_trackers=trackers.close, judge_delivery=live_judge_delivery),
                 # The page's teleop overlay (display only, contract 3); none without the perception camera.
                 camera_model=None if live_cam_ is None else live_camera_model(
                     _bound["perception_calibration"], _bound["perception_mount"],
@@ -5528,11 +5861,25 @@ def drive(S, isaac) -> None:
             state["kernels"] = {"mode": live_kernels.mode(), "warm_up_s": live_kernels.warm_up()}
             if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") != "0":
                 # Real-time plan D8: the long plans go to a worker process; the control loop stands and goes on.
-                from forklift_core.planning.plan_worker import PlanWorker
+                from forklift_core.planning.plan_worker import PlanWorker, worker_env
 
-                core.jobs = PlanWorker()
-                state["async_plan_worker"] = {"pid": core.jobs.proc.pid}
+                # plan D11: the worker runs the live kernels, warmed up before it says ready (restarts too)
+                env_ = worker_env(live_kernels.mode())
+                if args.live_test_kill_worker and args.live_epoch in (None, 1):
+                    # Plan section 4 (U23): the worker exits as it starts the first preparation, inside the job -- no
+                    # answer to race (Codex injection review round 2); the marker keeps the restarted one up
+                    env_["FORKLIFT_TEST_WORKER_DIE_ONCE"] = f"observe_ladder:{Path(args.output) / 'worker_died'}"
+                    state.setdefault("live_test_injections", []).append({"worker_dies_at": "observe_ladder"})
+                core.jobs = PlanWorker(env=env_)
+                state["async_plan_worker"] = {"pid": core.jobs.proc.pid, "kernels": core.jobs.kernels}
+            else:  # persistent console plan D2: each mission is prepared by the worker
+                raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
+            # plan D14 (main 2026-10-19): the loaded hold tolerance for the gate, a mission end and the manual lift
+            live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m = live_loaded_tolerance_
+            core.lift_hold_tolerance = live.hold_tolerance  # the core's first pause holds the same way (Codex r5 P1)
+            if live_loaded_tolerance_ is not None:  # plan D5 6c item 5: the loaded start waits for this lift
+                core.loaded_lift_band = (float(loaded_sag_m), float(live_loaded_tolerance_))
 
             live_marker_ = None
             if args.live_test_marker and live_cam_ is not None:
@@ -5572,15 +5919,20 @@ def drive(S, isaac) -> None:
                 live_timers.add(f"step.{kind_}", time.perf_counter() - started_, time.thread_time() - cpu_)
                 if live.trace is not None:
                     live.trace.set("step_end", live.trace.now())
+                odom_xy_ = None  # without SLAM no odometry position: the waiver integrates the speeds
                 if slam is not None:
                     speed_, yaw_rate_ = slam.get("odom_speed"), float(slam.get("odom_yaw_rate", 0.0))
                     made_ = slam.get("odom_mono")
+                    odom_xy_ = tuple(float(v) for v in slam["odom_rear"][:2])  # with the speed, same update
                 else:
                     made_ = live.clock()
                     rates_ = robot.get_joint_velocities()[wheels]
                     speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * args.drive_geometry.wheel_radius_m, 0.0
+                joints_ = robot.get_joint_positions()
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
-                                odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time)
+                                odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time,
+                                lift_m=float(joints_[lift_index[0]]),  # plan D14: measured, for the manual lift
+                                steering_rad=float(np.max(np.abs(joints_[steers]))), odom_xy=odom_xy_)
                 if live_marker_ is not None:
                     live.log({"lift_sim_t": float(world.current_time - initial_time),
                               "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
@@ -5600,7 +5952,8 @@ def drive(S, isaac) -> None:
                 if snap_ is None:
                     return 0.0, "no_snapshot"
                 key_ = (id(snap_), float(snap_.stamp_s), obstacle["version"])
-                loaded_ = ms.phase in ("lift", "extract", "transport", "lower")
+                loaded_ = core.cargo.loaded_outline()  # what the forks are in (plan D5a), not the phase name
+                key_ = key_ + (loaded_,)  # a changed outline is not the cached check
                 fp_, own_ = layer_.footprints(loaded_, direction)
                 pose_ = tuple(float(v) for v in live_state["rear"])
                 result_ = live_perm.limit(snap_, key_, now_, layer_.last_scan_s, pose=pose_, curvatures=curvatures,
@@ -5623,6 +5976,29 @@ def drive(S, isaac) -> None:
                         live.log({"permit_cmp": now_, "pose": pose_, "curvatures": list(curvatures),
                                   "direction": direction, "check_mps": check, "bundle": list(result_),
                                   "full": list(full_), "truth_rear": truth_, "silenced": scan_silenced(now_)})
+                if live_pallet_perm is not None:
+                    # Plan D10: the target pallets (grown by their margins) on the same arcs and outline; installed
+                    # again on a new grid snapshot, a targets change or a correction (the pose moves without driving).
+                    applied_ = obstacle.get("applied")
+                    zones_ = live_zones_from(core.targets, pickup_zone)
+                    ctx_ = core.cargo.recovery_context
+                    pkey_ = (key_, None if applied_ is None else tuple(float(v) for v in applied_))
+                    if ctx_ is not None:
+                        # Plan D14: the recovered pallet's own zone is exempted (inside it every arc is 0); the
+                        # others stay, and so does the LiDAR permission above.
+                        kept_ = [z for z in zones_ if z.zone_id != ctx_["pallet_id"]]
+                        pallet_ = live_pallet_perm.limit(kept_, (core.targets.revision, "exempt", ctx_["pallet_id"]),
+                                                         pose_, curvatures, direction, check, fp_, key=pkey_)
+                        if ctx_["stage"] == "manual_clear" and direction < 0 and live_pallet_full is not None:
+                            full_ = live_pallet_full.limit(zones_, core.targets.revision, pose_, curvatures,
+                                                           direction, check, fp_, key=pkey_)
+                            if min(full_[0], result_[0]) > 0.0:
+                                core.manual_clear_done(now_)  # the drive's own reverse bundle is allowed without it
+                    else:
+                        pallet_ = live_pallet_perm.limit(zones_, core.targets.revision, pose_, curvatures, direction,
+                                                         check, fp_, key=pkey_)
+                    if pallet_[0] < result_[0]:
+                        result_ = pallet_
                 return result_
 
             # Real-time plan S0 (docs/plans/2026-10-17-realtime-sim.md): each region's wall and CPU time, in the
@@ -5700,23 +6076,27 @@ def drive(S, isaac) -> None:
                     return live_permit_untimed_(curvatures, direction, check)
 
         stepper["fn"] = step_world if live is None else live_step_world
-        if slam is not None:
+        def teach_docking_reference(prior_site, taught_site, *, base_z=None, always_reference=False, install=True):
+            """The docking reference scan at a destination (setup; each live mission at its own, plan D2). Returns
+            what it would install; ``install=False`` (a live preparation) casts without changing the state."""
             # The taught station, fixed before the mission moves (Codex v3.8
             # impl P2): the planned delivery rear pose, the start's base height,
             # one ray cast with the truck left out. Truth enters here only.
-            prior = site_poses(scenario.destination, geometry)["delivery"]
+            prior = site_poses(prior_site, geometry)["delivery"]
             prior_d = (prior.x_m, prior.y_m, prior.yaw_rad)
             # The station is taught at the true destination; the prior differs only
             # with --destination-prior-error-m (plan D7c δ runs).
-            taught = site_poses(truth_destination, geometry)["delivery"]
+            taught = site_poses(taught_site, geometry)["delivery"]
             delivery_d = (taught.x_m, taught.y_m, taught.yaw_rad)
             offset_d = abs(args.rear_axle_offset_m)
-            start_base, _ = robot.get_world_pose()
+            if base_z is None:
+                start_base, _ = robot.get_world_pose()
+                base_z = float(start_base[2])
             base_d = np.array(
                 [
                     delivery_d[0] + offset_d * math.cos(delivery_d[2]),
                     delivery_d[1] + offset_d * math.sin(delivery_d[2]),
-                    float(start_base[2]),
+                    base_z,
                 ]
             )
             quat_d = np.array([math.cos(delivery_d[2] / 2), 0.0, 0.0, math.sin(delivery_d[2] / 2)])
@@ -5729,15 +6109,26 @@ def drive(S, isaac) -> None:
                 ray_origin, ray_directions, scan_pattern.range_max_m, ignore_self=True
             )
             reference_ranges = scan_pattern.ranges_from_hits(ray_distances, ray_hits)
-            slam["reference_points"] = laser_points(reference_ranges, beam_angles)
-            if args.d7_docking or args.destination_prior_error_m:
-                slam["docking"]["delivery_rear_reference"] = list(delivery_d)
-            slam["docking"].update(
-                delivery_rear_prior=list(prior_d),
-                reference_beams=int(np.isfinite(reference_ranges).sum()),
-                reference_self_hits_dropped=int(ray_own),
-                reference_base_z_m=float(start_base[2]),
-            )
+            taught_ = {"reference_points": laser_points(reference_ranges, beam_angles),
+                       # Live (persistent console plan D2, Codex P2-8): the cast pose always goes with its scan -- a
+                       # later mission's prior drifts from the truth the scan was cast at.
+                       "reference": list(delivery_d) if (args.d7_docking or args.destination_prior_error_m
+                                                         or always_reference) else None,
+                       "fields": dict(delivery_rear_prior=list(prior_d),
+                                      reference_beams=int(np.isfinite(reference_ranges).sum()),
+                                      reference_self_hits_dropped=int(ray_own), reference_base_z_m=base_z)}
+            if install:
+                install_docking_reference(taught_)
+            return taught_
+
+        def install_docking_reference(taught_):
+            slam["reference_points"] = taught_["reference_points"]
+            if taught_["reference"] is not None:
+                slam["docking"]["delivery_rear_reference"] = taught_["reference"]
+            slam["docking"].update(taught_["fields"])
+
+        if slam is not None:
+            teach_docking_reference(scenario.destination, truth_destination)
         if near is not None:
             check_near_contract()
         if boundary is not None:
@@ -5859,921 +6250,1339 @@ def drive(S, isaac) -> None:
             live_gc_freeze_.collect()
             live_gc_freeze_.freeze()
             state["gc_frozen_objects"] = live_gc_freeze_.get_freeze_count()
+            # Persistent console plan D2: what every mission of this session starts from. The candidates and the
+            # pickup's prior are copied now (options.observation_waypoints is changed in place at each adoption).
+            from forklift_core.mission.baseline import MissionBaseline
+            from forklift_core.planning import Pose2D as LivePose
+            from forklift_core.planning.observation_viewpoints import relocate_waypoints
+            from forklift_core.planning.pallet_mission import PalletSite as LiveSite
+
+            live_session_ = {
+                "scenario": scenario, "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
+                "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
+                "zone": pickup_zone, "bounds": pickup_bounds, "wait": scenario.start_rear,
+                # the destinations' truth (simulation only): D-1 the scenario's, D-0 the first pallet's own place
+                "truth": {"D-1": truth_destination, "D-0": scenario.pickup},
+                "base_z": float(slam["docking"].get("reference_base_z_m")) if slam is not None
+                and slam["docking"].get("reference_base_z_m") is not None else None,
+            }
+
+            from forklift_core.safety.pallet_permit import preparation_obstacle as live_preparation_obstacle
+
+            def prep_obstacle_of(entry_, at_first_, pose_=None):
+                """The pallet obstacle the next preparation's observation plan holds (plan D4b item 1)."""
+                return live_preparation_obstacle(entry_, live_session_["zone"] if at_first_ else None, pose=pose_,
+                                                 size=(geometry.pallet_depth_m, geometry.pallet_width_m))
+
+            prep_check_cache_ = {}
+
+            def prepare_start_ok(rear_, *, extra_m=0.0, preview=True, t=None):
+                """Plan D4b: whether the next preparation's observation plan would accept this start -- the planner's
+                own check (hybrid_astar: the unloaded outline against the leg's obstacles and grid at the planning
+                clearance, here plus ``extra_m``) with the inputs it would have after the end release (``preview``):
+                the received correction applied to the pose and the grid, the SLAM map in the grid, the mission's
+                pallet carried with the frame change iff the hold found it (the release's own decision)."""
+                from forklift_core.planning.grid_collision import make_checker as prep_make_checker
+                from forklift_core.planning.pallet_mission import leg_obstacles as prep_leg_obstacles
+
+                tracker_ = slam["tracker"] if slam is not None else None
+                frame_ = None
+                if (preview and tracker_ is not None and tracker_.mode == "holding" and tracker_.received is not None
+                        and tracker_.applied is not None):
+                    frame_ = compose(tuple(float(v) for v in tracker_.received[0]),
+                                     invert(tuple(float(v) for v in tracker_.applied[0])))
+                moved = (lambda p_: tuple(float(v) for v in p_)) if frame_ is None else (
+                    lambda p_: tuple(float(v) for v in compose(frame_, tuple(float(v) for v in p_))))
+                pose_ = moved(rear_)
+                mission_ = core.commands.mission
+                entry_ = None if mission_ is None else core.targets.pallets.get(mission_.pallet_id)
+                pallet_obs_ = None
+                if entry_ is not None and entry_.pose is not None:
+                    at_first_ = (float(entry_.pose.x_m), float(entry_.pose.y_m),
+                                 float(entry_.pose.yaw_rad)) == live_session_["reference"]
+                    carried_pose_ = None
+                    if frame_ is not None:
+                        pallet_held_, destination_held_ = core._held_estimates()
+                        if destination_held_ if entry_.state == "delivered" else pallet_held_:
+                            x_, y_, yaw_ = moved((entry_.pose.x_m, entry_.pose.y_m, entry_.pose.yaw_rad))
+                            carried_pose_ = replace(entry_.pose, x_m=x_, y_m=y_, yaw_rad=yaw_)
+                    pallet_obs_ = prep_obstacle_of(entry_, at_first_ and carried_pose_ is None, carried_pose_)
+                occupancy_ = None
+                if grid_planning:
+                    try:
+                        own_ = moved(rear)  # where the truck stands now, in the frame checked
+                    except NameError:
+                        own_ = pose_
+                    correction_ = (tuple(float(v) for v in tracker_.received[0]) if frame_ is not None
+                                   else tuple(float(v) for v in (obstacle["applied"] or (0.0, 0.0, 0.0))))
+                    use_slam_ = tracker_ is None or tracker_.mode != "holding" or frame_ is not None
+                    # Every input the grid is built from (Codex D4b impl round 1 P2-3: the own pose too).
+                    release_at_ = (t, own_) if frame_ is not None and t is not None else None
+                    key_ = (obstacle.get("last_stamp"), obstacle["version"], correction_, use_slam_,
+                            tuple(round(float(v), 4) for v in own_), None if release_at_ is None else float(t))
+                    if prep_check_cache_.get("key") != key_:
+                        # The preparation's own grid call, as it would run after the release (its re-projection
+                        # at t, the received correction, the SLAM map in), on a copy of the layer (Codex D4b impl
+                        # round 1 P2-4, round 2 P2-1).
+                        prep_check_cache_.update(key=key_, occupancy=grid_kwargs(
+                            "observe", own=own_, applied=correction_,
+                            scratch={"use_slam": use_slam_, "release_at": release_at_})["occupancy"])
+                    occupancy_ = prep_check_cache_["occupancy"]
+                obstacles_, footprint_, bounds_ = prep_leg_obstacles(
+                    "observe", grid_world(live_session_["scenario"]), geometry, pickup_obstacle=pallet_obs_,
+                    pickup_bounds=None)
+                return bool(prep_make_checker(obstacles_, footprint_, bounds_, occupancy_).free(
+                    pose_, planner_config.clearance_m + float(extra_m)))
+
+            core.hooks.prepare_start_ok = prepare_start_ok
+
+            def live_prepare(t_, rear_):
+                """The submitted mission's inputs, fixed now, and its first leg asked of the worker (D2)."""
+                mission_ = core.commands.mission
+                pallet_ = core.targets.pallets[mission_.pallet_id].pose
+                dest_ = core.targets.destinations[mission_.destination_id]
+                target_ = (float(pallet_.x_m), float(pallet_.y_m), float(pallet_.yaw_rad))
+                at_first_ = target_ == live_session_["reference"]
+                waypoints_ = relocate_waypoints(live_session_["template"], live_session_["reference"], target_)
+                # Plan D4b item 1: by the pallet's basis -- prior: the bay's zone (at its first place); recognised or
+                # delivered: the outline grown by its uncertainty (the start check below uses the same function).
+                zone_ = prep_obstacle_of(core.targets.pallets[mission_.pallet_id], at_first_)
+                if zone_ is None:
+                    zone_ = Rectangle(target_[0], target_[1], geometry.pallet_depth_m + 0.6,
+                                      geometry.pallet_width_m + 0.6, target_[2])
+                scenario_ = replace(live_session_["scenario"],
+                                    start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
+                                    pickup=LiveSite(*target_),
+                                    destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
+                grid_ = grid_kwargs("observe")  # this tick's grid (D9: its scan id), fixed by the submit's pickle
+                grid_["pickup_obstacle"] = zone_  # the new pallet's prior, not the last mission's (Codex P2-4)
+                grid_.pop("deadline", None)
+                payload_ = {"world": grid_world(scenario_), "waypoints": waypoints_, "config": planner_config,
+                            "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
+                            "deadline": time.monotonic() + 2 * len(waypoints_) * 20.0}
+                inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
+                           "pickup_bounds": live_session_["bounds"] if at_first_ else None, "pickup_zone": zone_,
+                           "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
+                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
+                core.prepare_request(t_, rear_, inputs_, payload_)
+
+            def live_prepare_loaded(t_, rear_):
+                """A loaded submit's inputs (plan D5 6c item 2): no pickup prior, zone or bounds -- the scene's pickup is
+                the carried pallet's nominal seat ahead of the control pose (not the truth) -- the destination from the
+                targets list, the return to the session's waiting pose; its whole delivery asked of the worker."""
+                mission_ = core.commands.mission
+                dest_ = core.targets.destinations[mission_.destination_id]
+                x_, y_, yaw_ = (float(v) for v in rear_)
+                seat_ = LiveSite(x_ + geometry.inserted_offset_m * math.cos(yaw_),
+                                 y_ + geometry.inserted_offset_m * math.sin(yaw_), yaw_)
+                start_ = LivePose(x_, y_, yaw_)
+                scenario_ = replace(live_session_["scenario"], start_rear=start_, pickup=seat_,
+                                    destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
+                grid_ = grid_kwargs(None, loaded_as=True)  # the transport leg's grid, the carried pallet the truck's
+                payload_ = {"args": (grid_world(scenario_), start_),
+                            "kwargs": {"config": planner_config, "geometry": geometry,
+                                       "return_to": live_session_["wait"], "travel_config": travel_config,
+                                       "occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0},
+                            "keep_m": geometry.delivery_straight_m}
+                inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
+                           "pickup_bounds": None, "pickup_zone": None,
+                           "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
+                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id, "loaded": True}
+                core.prepare_request(t_, rear_, inputs_, payload_, job="loaded_delivery")
+
+            def live_loaded_pallet():
+                """Plan D5 6c items 1, 2a: the carried pallet a submit may deliver as it is carried, from the cargo, the
+                trace evidence and the pallet's seat on the forks at the last tick's end (the truth, as the evidence)."""
+                from forklift_core.mission.cargo import deliverable_as_carried
+
+                supported_ = (grid_planning and slam is not None and obstacle is not None
+                              and not obstacle["layer"].known_enabled)
+                return deliverable_as_carried(core.cargo, live_state.get("cargo_rel"), geometry.inserted_offset_m,
+                                              supported=supported_)
+
+            core.hooks.loaded_cargo_ok = lambda: (core.commands.mission is not None
+                                                  and live_loaded_pallet() == core.commands.mission.pallet_id)
+
+            def live_mission_ready(t_, inputs_):
+                """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
+                docking reference scan cast at the new destination's truth."""
+                if slam is None:
+                    return None
+                return teach_docking_reference(inputs_["scenario"].destination, inputs_["truth_destination"],
+                                               base_z=live_session_["base_z"], always_reference=True, install=False)
+
+            def live_mission_start(t_, inputs_, plan_, ready_):
+                """The runner's part of the adoption (D2): its locals, the cusp watches, the prior zone, the
+                permission's path caches, the docking reference made by live_mission_ready."""
+                nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds
+                nonlocal return_to_pose, cusp_monitor, cusp_holds
+                # Fresh watches on the mission's own records (the baseline refilled those lists in place).
+                cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])
+                cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)
+                scenario, truth_destination = inputs_["scenario"], inputs_["truth_destination"]
+                pickup_zone, pickup_bounds, return_to_pose = (inputs_["pickup_zone"], inputs_["pickup_bounds"],
+                                                              inputs_["wait_pose"])
+                initial_pallet, pallet_q_ = pallet.get_world_pose()  # the truth checks: displaced from here
+                pickup_obstacle = Rectangle(float(initial_pallet[0]), float(initial_pallet[1]), geometry.pallet_depth_m,
+                                            geometry.pallet_width_m, yaw_and_tilt(pallet_q_)[0])
+                if obstacle is not None:
+                    if obstacle["layer"].known_enabled and pickup_zone is not None:  # 6c: a loaded start has no zone
+                        from forklift_core.perception.known_obstacles import KnownRect
+
+                        # The zone is in map coordinates now: the correction it is expressed under goes with it
+                        # (Codex stage 2 impl P2-3: (0, 0, 0) applied the current correction once more).
+                        applied_ = (slam["tracker"].applied[0] if slam is not None
+                                    and slam["tracker"].applied is not None else (0.0, 0.0, 0.0))
+                        obstacle["layer"].known = [KnownRect(
+                            (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m,
+                             pickup_zone.yaw_rad), fix_stamp_s=float(t_), r_fix_m=0.0, rho_m=0.0,
+                            frame_correction=tuple(float(v) for v in applied_), kind="zone")]
+                    permission_ = obstacle["layer"].permission
+                    permission_.path_check, permission_._driven_since_m = None, 0.0
+                if live_perm is not None:
+                    live_perm._cache.clear()
+                if ready_ is not None:
+                    install_docking_reference(ready_)
+
+            core.options.observe_bounds = None  # the whole observation travel in the hall (D2, Codex P2-6)
+            core.hooks.live_mission_ready, core.hooks.live_mission_start = live_mission_ready, live_mission_start
+            core.baseline = MissionBaseline.capture(core)
+            # Persistent console plan D8: what grows every step or scan goes to disk in chunks, the last item kept
+            # (the only one the running code reads); cut at each tick's start, before anything is appended.
+            from forklift_core.live.spool import RecordSpool
+            import live_records  # a sibling, as live_runtime
+
+            if args.tyre_contact_log:
+                state.setdefault("tyre_contact_rows", [])
+            live_spool = RecordSpool(args.output / "spool", interval_s=10.0)
+            trace_evidence = live_records.TraceEvidence()
+            # plan D14: the manual ground verdict moves the evidence's reference to the floor pose the tick read
+            core.hooks.trace_ground = lambda: trace_evidence.ground(live_state["pallet_now"])
+            state["spool_registered"] = live_records.register(
+                live_spool, slam_log=slam_log, slam=slam, obstacle=obstacle, state=state,
+                video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
+                       "overlay": overlay}
+                if encoder is not None else None)
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
-        for step in range(int(120 * args.max_sim_seconds)):
-            if early_ports:
-                # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
-                # are set from that read (a replay checks them against the recorded head).
-                # (M-a3: the commands applied and the stop kind follow the clock read, so they are set with the times.)
-                boundary.recorder.tick_begin(step, tick_t=None, work_t=None, commands=None, stop_kind=None)
-                t = world.current_time - initial_time
-            else:
-                t = world.current_time - initial_time
-                if boundary is not None:
-                    boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
-            book_clock["t"] = t
-            perf_context["phase"] = ms.phase  # real-time plan S0: the dumps' strata (read only by the dumps)
-            applied_commands_, stop_kind_ = [], "none"
-            live_abort_ = False  # M-c: the stop gate stopped the wheels inside this tick (plan C2)
-            while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
-                live_timers.add(*gc_seen_.pop())
-            if live is not None:
-                if live.trace is not None:
-                    live.trace.control("ctrl_start", live.trace.now())
-                stop_kind_, applied_commands_ = live.tick_start(t, core.near_active())
-                if core.commands.status == "accepted":
-                    core.commands.start()  # the operator's submit: the mission runs from this tick
-            elif mission_schedule is not None:
-                # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
-                # control tick's start.
-                while mission_schedule and mission_schedule[0][0] <= t:
-                    core.commands.queue(MISSION_COMMANDS[mission_schedule.pop(0)[1]]())
-                stop_kind_ = stop_kind_at(t)
-                if (state.pop("preempt_seen_s", None) is not None and stop_kind_ == "none"
-                        and core.commands.status in ("running", "resuming")):
-                    stop_kind_ = "preempt"  # a preempt that began and ended inside a capture still stops the mission
-                applied_commands_ = core.commands.apply(t, MissionContext(
-                    stop_kind=stop_kind_, near_tracker=core.near_active()))  # M-b B7: the contract applies now
-            if early_ports:
-                boundary.recorder.tick_time(tick_t=t, work_t=core.commands.work_elapsed(0.0, t),
-                                            commands=applied_commands_, stop_kind=stop_kind_)
-            rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
-            dwell_hold = dwell_standing = False
-            cusp_hold = False  # plan cusp position stall v7 K3: zero command, steering held
-            safety_hold = False  # plan D8 S4: a safety stop -- the final wheel command steps to zero
-            base, q = robot.get_world_pose()
-            ppos, pq = pallet.get_world_pose()
-            yaw, tilt = yaw_and_tilt(q)
-            pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
-            forward = np.array([math.cos(yaw), math.sin(yaw)])
-            rear = np.array(
-                [
-                    base[0] - abs(args.rear_axle_offset_m) * forward[0],
-                    base[1] - abs(args.rear_axle_offset_m) * forward[1],
-                    yaw,
-                ]
-            )
-            velocity = robot.get_linear_velocity()
-            signed_speed = float(np.dot(velocity[:2], forward))
-            # Ground truth checks, evaluates and renders; control below uses
-            # `rear`/`signed_speed`, which --slam-feedback replaces.
-            truth_rear = rear
-            if slam is not None and slam.get("async_link") is not None:
-                # Real-time plan D9a: the SLAM replies in since the last tick, applied before this tick's control
-                # pose is read and before any mission work (the grid re-projected with them there).
-                try:
-                    replies_ = slam["async_link"].poll()
-                except slam["module"].SlamLinkFailure as exc:
-                    if slam["async_link"].long_poll_gaps:  # the gap that ended it stays in the record
+        def scene_require(t_, ok_, reason_, cargo=False):
+            """A truth check on the scene (simulation only). A batch run aborts as require does; a live one latches
+            the first damage and raises once -- that ends the mission running -- then only counts (persistent
+            console plan D6): the same condition stays false every tick, and the session stays usable. ``cargo``: the
+            failure involves the pallet -- in a live run what the forks are in is no longer known, wherever and
+            whenever it is seen (plan D5a, Codex round 3: with or without a mission, before or after the latch)."""
+            if ok_:
+                return
+            if live is None:
+                require(False, reason_)
+            if cargo:
+                core.cargo.invalidate(reason_)
+            if live.scene["damaged"] is None:
+                # plan D13 item 1: the wall time too, stamped once (agy: the sim time does not say when it was)
+                live.scene["damaged"] = {"reason": reason_, "t": float(t_), "unix": time.time()}
+                state["scene_damaged"] = dict(live.scene["damaged"])
+                require(False, reason_)
+            state["scene_after_damage"] = state.get("scene_after_damage", 0) + 1
+
+        from forklift_core.mission.failures import classify as classify_failure
+
+        def live_failed(t_, reason_, ticked_, stepped__, applied_):
+            """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
+            (the wheels zeroed, the lift held), then what the tick had not done yet -- its output and publish with a
+            zero candidate, its physics step -- exactly once."""
+            failure_ = {"time_s": float(t_), "phase": ms.phase, "reason": reason_, "class": classify_failure(reason_),
+                        "where": traceback.format_exc().strip().splitlines()[-3:]}
+            state.setdefault("live_failures", []).append(failure_)
+            print("LIVE_FAILURE", record_json(failure_), flush=True)
+            # Plan D4: a recovery that fails needs one by hand (the forks may still be in the pocket).
+            live.end_mission(t_, "recovery_required" if core.commands.recovery else "failed", reason_)
+            if not ticked_:
+                safety_ = core.safety_state(t_)
+                out_failed_ = live.tick_end(t_, applied_, safety_, (0.0, 0.0), None)
+                live_zero_wheels()
+                live.publish(t_, out_failed_, safety_, pose=None, freshness=None, applied=None, speed_mps=None)
+            if not stepped__:
+                stepper["fn"](False)
+
+        # Persistent console plan D7: a live session runs until it is ended (or its job's limit), not to a sim time.
+        for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):
+            # Persistent console plan D6: a live mission's own failure (or the scene's damage) anywhere in the
+            # tick ends that mission and the session goes on; the tick's output, publish and physics step run
+            # once (the flags say which already did). Any other failure goes on up, as in a batch run.
+            live_tick_out_ = live_stepped_ = False
+            if live is not None and live.arbiter.session_request is not None:
+                # The lease holder ended the session or asked for a new scene; the tick that took it is complete.
+                state["live_session_request"] = live.arbiter.session_request
+                break
+            try:
+                if early_ports:
+                    # Format 2: the tick opens first, the clock is read inside it (recorded), then the head's times
+                    # are set from that read (a replay checks them against the recorded head).
+                    # (M-a3: the commands applied and the stop kind follow the clock read, so they are set with the times.)
+                    boundary.recorder.tick_begin(step, tick_t=None, work_t=None, commands=None, stop_kind=None)
+                    t = world.current_time - initial_time
+                else:
+                    t = world.current_time - initial_time
+                    if boundary is not None:
+                        boundary.recorder.tick_begin(step, tick_t=t, work_t=t, commands=[], stop_kind="none")
+                book_clock["t"] = t
+                perf_context["phase"] = ms.phase  # real-time plan S0: the dumps' strata (read only by the dumps)
+                applied_commands_, stop_kind_ = [], "none"
+                live_abort_ = False  # M-c: the stop gate stopped the wheels inside this tick (plan C2)
+                while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
+                    live_timers.add(*gc_seen_.pop())
+                if live is not None:
+                    if live.trace is not None:  # the spool's cut is control-tick work (main review of #61, P3)
+                        live.trace.control("ctrl_start", live.trace.now())
+                    live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
+                    # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
+                    # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
+                    # refuses the next submit (recovery_required).
+                    stop_kind_, applied_commands_ = live.tick_start(
+                        t, core.near_active(), clear_for_submit=slam is None or slam["tracker"].mode != "holding",
+                        submit_refusal=core.cargo.submit_refusal(),  # the forks' state at the last tick's end (D5a)
+                        # plan D3: a submit before the tracker tracks is localization_lost
+                        localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"),
+                        loaded_pallet=live_loaded_pallet())  # plan D5 6c: the carried pallet a submit may deliver
+                elif mission_schedule is not None:
+                    # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
+                    # control tick's start.
+                    while mission_schedule and mission_schedule[0][0] <= t:
+                        core.commands.queue(MISSION_COMMANDS[mission_schedule.pop(0)[1]]())
+                    stop_kind_ = stop_kind_at(t)
+                    if (state.pop("preempt_seen_s", None) is not None and stop_kind_ == "none"
+                            and core.commands.status in ("running", "resuming")):
+                        stop_kind_ = "preempt"  # a preempt that began and ended inside a capture still stops the mission
+                    applied_commands_ = core.commands.apply(t, MissionContext(
+                        stop_kind=stop_kind_, near_tracker=core.near_active()))  # M-b B7: the contract applies now
+                if early_ports:
+                    boundary.recorder.tick_time(tick_t=t, work_t=core.commands.work_elapsed(0.0, t),
+                                                commands=applied_commands_, stop_kind=stop_kind_)
+                rear_stamp = t  # the time of the control pose `rear` (a capture moves it on)
+                dwell_hold = dwell_standing = False
+                cusp_hold = False  # plan cusp position stall v7 K3: zero command, steering held
+                safety_hold = False  # plan D8 S4: a safety stop -- the final wheel command steps to zero
+                base, q = robot.get_world_pose()
+                ppos, pq = pallet.get_world_pose()
+                # Before anything reads them (Codex D6 review P2: a NaN reached the withdraw check first, a mission
+                # failure; and a NaN quaternion read as tilt, scene damage): the session's own failure.
+                require(np.isfinite([base, ppos]).all() and np.isfinite(q).all() and np.isfinite(pq).all(),
+                        "Nonfinite body state")
+                if (live is not None and core.commands.adopted_id is not None and args.live_epoch in (None, 1)
+                        and ms.phase in (args.live_test_push_pallet, args.live_test_fail_at)):
+                    # Plan section 4 (U12, U10b): the use cases' controlled injections, once a session
+                    if ms.phase == args.live_test_push_pallet and not live_injected_.get("push"):
+                        live_injected_["push"] = True
+                        pallet.set_world_pose(np.asarray(ppos, dtype=float) + np.array([0.0, 0.05, 0.0]), pq)
+                        state.setdefault("live_test_injections", []).append(
+                            {"push_pallet_m": 0.05, "phase": ms.phase, "t": float(t)})
+                        ppos, pq = pallet.get_world_pose()
+                    if ms.phase == args.live_test_fail_at and not live_injected_.get("fail"):
+                        live_injected_["fail"] = True
+                        state.setdefault("live_test_injections", []).append({"fail": ms.phase, "t": float(t)})
+                        require(False, f"Tracking failed in {ms.phase} (test injection)")
+                yaw, tilt = yaw_and_tilt(q)
+                pallet_yaw, pallet_tilt = yaw_and_tilt(pq)
+                if trace_evidence is not None and not trace_evidence.update(
+                        ms.phase if core.commands.adopted_id is not None else "idle",  # plan D14 (Codex impl r1 P2-5)
+                        (float(base[0]), float(base[1]), float(yaw)),
+                        (float(ppos[0]), float(ppos[1]), float(pallet_yaw))):
+                    core.cargo.trace_valid = False  # plan D4: the retrace is no evidence (a recovery refuses)
+                forward = np.array([math.cos(yaw), math.sin(yaw)])
+                rear = np.array(
+                    [
+                        base[0] - abs(args.rear_axle_offset_m) * forward[0],
+                        base[1] - abs(args.rear_axle_offset_m) * forward[1],
+                        yaw,
+                    ]
+                )
+                velocity = robot.get_linear_velocity()
+                signed_speed = float(np.dot(velocity[:2], forward))
+                # Ground truth checks, evaluates and renders; control below uses
+                # `rear`/`signed_speed`, which --slam-feedback replaces.
+                truth_rear = rear
+                if slam is not None and slam.get("async_link") is not None:
+                    # Real-time plan D9a: the SLAM replies in since the last tick, applied before this tick's control
+                    # pose is read and before any mission work (the grid re-projected with them there).
+                    try:
+                        replies_ = slam["async_link"].poll()
+                    except slam["module"].SlamLinkFailure as exc:
+                        if slam["async_link"].long_poll_gaps:  # the gap that ended it stays in the record
+                            state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
+                        raise SessionFailure(f"slam_link_failed: {exc}") from exc
+                    if replies_:
+                        traced_ = live is not None and live.trace is not None
+                        replies_started_ = time.perf_counter() if traced_ else 0.0
+                        core.slam_replies(t, replies_, ms.phase in ["lift", "extract", "transport", "lower"])
+                        if traced_:
+                            live.trace.control("replies_s", time.perf_counter() - replies_started_)
+                        state["slam_async"]["max_depth"] = slam["async_link"].max_depth
+                    if slam["async_link"].long_poll_gaps:  # polls further apart than the deadline (a stop, a stall)
                         state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
-                    raise SessionFailure(f"slam_link_failed: {exc}") from exc
-                if replies_:
-                    traced_ = live is not None and live.trace is not None
-                    replies_started_ = time.perf_counter() if traced_ else 0.0
-                    core.slam_replies(t, replies_, ms.phase in ["lift", "extract", "transport", "lower"])
-                    if traced_:
-                        live.trace.control("replies_s", time.perf_counter() - replies_started_)
-                    state["slam_async"]["max_depth"] = slam["async_link"].max_depth
-                if slam["async_link"].long_poll_gaps:  # polls further apart than the deadline (a stop, a stall)
-                    state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
-            if slam is not None:
-                rear = slam_rear(t)
-                signed_speed = slam["tracker_speed"]
-                slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
-            if obstacle is not None:
-                obstacle["control_rear"] = tuple(float(v) for v in rear)  # known pallets fix against it
-                if ms.phase == "withdraw" and obstacle["layer"].corridor is not None and obstacle.get("withdraw_line"):
-                    # Plan v10 D5 (4) (Codex stage-1 P1-2, 2nd P2-3): every tick, standing or
-                    # arriving included, the certificate holds only while the truck stays on its
-                    # straight -- lateral offset plus the yaw swing at the fork tips within the
-                    # tracking bound; past it the truck stops.
-                    (wx_, wy_, wyaw_), _ = obstacle["withdraw_line"]
-                    lat_ = -(rear[0] - wx_) * math.sin(wyaw_) + (rear[1] - wy_) * math.cos(wyaw_)
-                    dyaw_ = math.atan2(math.sin(rear[2] - wyaw_), math.cos(rear[2] - wyaw_))
-                    dev_ = abs(lat_) + geometry.axle_to_fork_tip_m * abs(math.sin(dyaw_))
-                    wt_ = state.setdefault("withdraw_tracking", {"max_deviation_m": 0.0})
-                    wt_["max_deviation_m"] = max(wt_["max_deviation_m"], float(dev_))
-                    require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
-                            f"withdraw_tracking_exceeded:{dev_:.4f}")
-            require(np.isfinite([base, ppos]).all(), "Nonfinite body state")
-            if ms.phase == "lift":
-                # Every physics step, so the peak and the aborting state are
-                # kept; the 0.1 s samples miss both.
-                peak = state.setdefault("lift_tilt_peak", {"pallet_tilt_rad": -1.0})
-                if pallet_tilt > peak["pallet_tilt_rad"]:
-                    peak.update(
-                        time_s=t,
-                        pallet_tilt_rad=pallet_tilt,
-                        pallet_position_m=ppos,
-                        pallet_quaternion_wxyz=pq,
-                        lift_m=float(robot.get_joint_positions()[lift_index[0]]),
-                        lift_command_m=ms.lift_command,
-                    )
-            if not (tilt < 0.1 and pallet_tilt < 0.15):
-                state["tilt_abort_state"] = {
-                    "phase": ms.phase,
-                    "time_s": t,
-                    "base_tilt_rad": tilt,
-                    "pallet_tilt_rad": pallet_tilt,
-                    "base_position_m": base,
-                    "base_quaternion_wxyz": q,
-                    "pallet_position_m": ppos,
-                    "pallet_quaternion_wxyz": pq,
-                    "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
-                    "lift_command_m": ms.lift_command,
-                }
-            require(
-                tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {ms.phase}"
-            )
-            loaded = ms.phase in ["lift", "extract", "transport", "lower"]
-            footprint = (
-                geometry.loaded_footprint if loaded else geometry.unloaded_footprint
-            )
-            checked_obstacles = obstacles + (
-                [pickup_obstacle] if ms.phase in ("approach", "observe") else []
-            )
-            if ms.phase in ("return_home", "home_settle"):
-                # The pallet is on the floor behind the forks now, so drive
-                # around its measured pose rather than its planned one.
-                checked_obstacles = checked_obstacles + [
-                    Rectangle(
+                if slam is not None:
+                    rear = slam_rear(t)
+                    signed_speed = slam["tracker_speed"]
+                    slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
+                if obstacle is not None:
+                    obstacle["control_rear"] = tuple(float(v) for v in rear)  # known pallets fix against it
+                    if ms.phase == "withdraw" and obstacle["layer"].corridor is not None and obstacle.get("withdraw_line"):
+                        # Plan v10 D5 (4) (Codex stage-1 P1-2, 2nd P2-3): every tick, standing or
+                        # arriving included, the certificate holds only while the truck stays on its
+                        # straight -- lateral offset plus the yaw swing at the fork tips within the
+                        # tracking bound; past it the truck stops.
+                        (wx_, wy_, wyaw_), _ = obstacle["withdraw_line"]
+                        lat_ = -(rear[0] - wx_) * math.sin(wyaw_) + (rear[1] - wy_) * math.cos(wyaw_)
+                        dyaw_ = math.atan2(math.sin(rear[2] - wyaw_), math.cos(rear[2] - wyaw_))
+                        dev_ = abs(lat_) + geometry.axle_to_fork_tip_m * abs(math.sin(dyaw_))
+                        wt_ = state.setdefault("withdraw_tracking", {"max_deviation_m": 0.0})
+                        wt_["max_deviation_m"] = max(wt_["max_deviation_m"], float(dev_))
+                        require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
+                                f"withdraw_tracking_exceeded:{dev_:.4f}")
+                if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():
+                    # persistent console plan D2: the submitted mission's first leg, from here (D5 6c: a loaded one's
+                    # whole delivery)
+                    (live_prepare_loaded if core.commands.mission_loaded else live_prepare)(t, rear)
+                # Persistent console plan D6: no live mission running (none yet, or it ended); a free one ended outside
+                # the pocket and loaded phases, so the truck may be driven by hand.
+                live_idle_ = live is not None and core.commands.adopted_id is None
+                live_free_ = live_idle_ and core.cargo.relation == "free"  # plan D5a: the forks, not the phase
+                if ms.phase == "lift":
+                    # Every physics step, so the peak and the aborting state are
+                    # kept; the 0.1 s samples miss both.
+                    peak = state.setdefault("lift_tilt_peak", {"pallet_tilt_rad": -1.0})
+                    if pallet_tilt > peak["pallet_tilt_rad"]:
+                        peak.update(
+                            time_s=t,
+                            pallet_tilt_rad=pallet_tilt,
+                            pallet_position_m=ppos,
+                            pallet_quaternion_wxyz=pq,
+                            lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+                            lift_command_m=ms.lift_command,
+                        )
+                if not (tilt < 0.1 and pallet_tilt < 0.15):
+                    state["tilt_abort_state"] = {
+                        "phase": ms.phase,
+                        "time_s": t,
+                        "base_tilt_rad": tilt,
+                        "pallet_tilt_rad": pallet_tilt,
+                        "base_position_m": base,
+                        "base_quaternion_wxyz": q,
+                        "pallet_position_m": ppos,
+                        "pallet_quaternion_wxyz": pq,
+                        "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                        "lift_command_m": ms.lift_command,
+                    }
+                scene_require(
+                    t, tilt < 0.1 and pallet_tilt < 0.15, f"Excessive body tilt in {ms.phase}",
+                    cargo=not pallet_tilt < 0.15,  # the pallet's tilt, not only the body's (plan D5a)
+                )
+                loaded = ms.phase in ["lift", "extract", "transport", "lower"]
+                footprint = (
+                    geometry.loaded_footprint if loaded else geometry.unloaded_footprint
+                )
+                checked_obstacles = obstacles + (
+                    # Without a live mission the forks may be put into the pockets by hand: the outline is no contact
+                    # there; the fork/pallet contact check below judges it (Codex D6 design P2-7).
+                    [pickup_obstacle] if ms.phase in ("approach", "observe") and not live_idle_ else []
+                )
+                measured_pallet_ = None
+                if ms.phase in ("return_home", "home_settle") and not live_idle_:  # (D6: as above, Codex P2)
+                    # The pallet is on the floor behind the forks now, so drive
+                    # around its measured pose rather than its planned one.
+                    measured_pallet_ = Rectangle(
                         float(ppos[0]),
                         float(ppos[1]),
                         geometry.pallet_depth_m,
                         geometry.pallet_width_m,
                         pallet_yaw,
                     )
-                ]
-            # Runtime pose checks below use zero margin intentionally --
-            # clearance_m is a planning-time buffer against the intended path,
-            # not a re-check of the executed pose; spawn_clearance_m already
-            # keeps obstacles far enough that a nominal run clears this at
-            # margin 0 (docs/plans/2026-09-17-hybrid-astar-transport.md,
-            # "계획 여유가 시험으로 고정돼 있지 않다").
-            # The real shape: unloaded, the body and the blades -- an object
-            # between the blades is not a contact (plan D4, Codex L3c P2).
-            truth_shape = footprint if loaded else unloaded_shape
-            truth_bounds = scenario.bounds
-            if getattr(args, "live", False) and getattr(args, "live_test_permit_compare", False):
-                # M-c completion 5 only (a recorded run's args predate these): the hall bounds lie 0.76 m inside the
-                # wall the scan sees (x 4.7 against 5.46, 2026-10-17), so the planning-area check is widened; the
-                # stop before the wall is judged from the end pose and the scanned wall, not by this check.
-                b_ = scenario.bounds
-                truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
-            require(
-                collision_free_pose(truth_rear, [], footprint, truth_bounds)
-                and not any(SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear)) for o in checked_obstacles),
-                f"Actual truck/load footprint overlap in {ms.phase}",
-            )
-            # A bar placed in the pallet frame inside the pallet's outline (N11,
-            # N14) sits in a pocket by design: it is judged against the block
-            # columns, not the outline that holds the pockets (Codex checkpoint
-            # 9 P1: the outline check aborted those runs before the depth check
-            # could answer).
-            in_outline = []
-            if new_obstacles is not None and new_obstacles.get("pallet_frame"):
-                cp, sp = math.cos(pallet_yaw), math.sin(pallet_yaw)
-                for r_ in new_obstacles["pallet_frame"]:
-                    if r_ not in obstacles:
-                        continue
-                    u_ = (r_.x_m - ppos[0]) * cp + (r_.y_m - ppos[1]) * sp
-                    v_ = -(r_.x_m - ppos[0]) * sp + (r_.y_m - ppos[1]) * cp
-                    if abs(u_) < geometry.pallet_depth_m / 2 and abs(v_) < geometry.pallet_width_m / 2:
-                        in_outline.append(r_)
-            require(
-                collision_free_pose(
-                    [ppos[0], ppos[1], pallet_yaw],
-                    [o for o in obstacles if not any(o is r_ for r_ in in_outline)],
-                    Footprint(
-                        geometry.pallet_depth_m / 2,
-                        geometry.pallet_depth_m / 2,
-                        geometry.pallet_width_m / 2,
+                    checked_obstacles = checked_obstacles + [measured_pallet_]
+                # Runtime pose checks below use zero margin intentionally --
+                # clearance_m is a planning-time buffer against the intended path,
+                # not a re-check of the executed pose; spawn_clearance_m already
+                # keeps obstacles far enough that a nominal run clears this at
+                # margin 0 (docs/plans/2026-09-17-hybrid-astar-transport.md,
+                # "계획 여유가 시험으로 고정돼 있지 않다").
+                # The real shape: unloaded, the body and the blades -- an object
+                # between the blades is not a contact (plan D4, Codex L3c P2).
+                truth_shape = footprint if loaded else unloaded_shape
+                truth_bounds = scenario.bounds
+                if getattr(args, "live", False) and getattr(args, "live_test_permit_compare", False):
+                    # M-c completion 5 only (a recorded run's args predate these): the hall bounds lie 0.76 m inside the
+                    # wall the scan sees (x 4.7 against 5.46, 2026-10-17), so the planning-area check is widened; the
+                    # stop before the wall is judged from the end pose and the scanned wall, not by this check.
+                    b_ = scenario.bounds
+                    truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
+                truth_hits_ = [o for o in checked_obstacles
+                               if SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear))]
+                scene_require(
+                    t, collision_free_pose(truth_rear, [], footprint, truth_bounds) and not truth_hits_,
+                    f"Actual truck/load footprint overlap in {ms.phase}",
+                    # the target pallet among them (plan D5a): the forks met it, not only the body an obstacle
+                    cargo=any(o is pickup_obstacle or o is measured_pallet_ for o in truth_hits_),
+                )
+                # A bar placed in the pallet frame inside the pallet's outline (N11,
+                # N14) sits in a pocket by design: it is judged against the block
+                # columns, not the outline that holds the pockets (Codex checkpoint
+                # 9 P1: the outline check aborted those runs before the depth check
+                # could answer).
+                in_outline = []
+                if new_obstacles is not None and new_obstacles.get("pallet_frame"):
+                    cp, sp = math.cos(pallet_yaw), math.sin(pallet_yaw)
+                    for r_ in new_obstacles["pallet_frame"]:
+                        if r_ not in obstacles:
+                            continue
+                        u_ = (r_.x_m - ppos[0]) * cp + (r_.y_m - ppos[1]) * sp
+                        v_ = -(r_.x_m - ppos[0]) * sp + (r_.y_m - ppos[1]) * cp
+                        if abs(u_) < geometry.pallet_depth_m / 2 and abs(v_) < geometry.pallet_width_m / 2:
+                            in_outline.append(r_)
+                scene_require(
+                    t, collision_free_pose(
+                        [ppos[0], ppos[1], pallet_yaw],
+                        [o for o in obstacles if not any(o is r_ for r_ in in_outline)],
+                        Footprint(
+                            geometry.pallet_depth_m / 2,
+                            geometry.pallet_depth_m / 2,
+                            geometry.pallet_width_m / 2,
+                        ),
+                        scenario.bounds,
                     ),
-                    scenario.bounds,
-                ),
-                f"Measured pallet footprint overlap in {ms.phase}",
-            )
-            if in_outline:
-                # Each bar's eight corners in the pallet's frame from its full
-                # pose (tilt included), boxed there and met against the canonical
-                # solids as closed intervals -- touching counts (Codex checkpoint 11).
-                qw_, qx_, qy_, qz_ = (float(v) for v in pq)
-                rot_ = np.array([
-                    [1 - 2 * (qy_ * qy_ + qz_ * qz_), 2 * (qx_ * qy_ - qz_ * qw_), 2 * (qx_ * qz_ + qy_ * qw_)],
-                    [2 * (qx_ * qy_ + qz_ * qw_), 1 - 2 * (qx_ * qx_ + qz_ * qz_), 2 * (qy_ * qz_ - qx_ * qw_)],
-                    [2 * (qx_ * qz_ - qy_ * qw_), 2 * (qy_ * qz_ + qx_ * qw_), 1 - 2 * (qx_ * qx_ + qy_ * qy_)],
-                ])
-                for r_ in in_outline:
-                    h_ = new_obstacles["heights"].get(id(r_), 0.0)
-                    # The bar as an oriented box in the pallet's frame; an AABB of
-                    # its corners there reported a 2.9 mm gap as contact (Codex
-                    # checkpoint 12), so the exact SAT decides.
-                    centre_w = np.array([r_.x_m, r_.y_m, h_ / 2])
-                    axes_w = np.array([[math.cos(r_.yaw_rad), -math.sin(r_.yaw_rad), 0.0],
-                                       [math.sin(r_.yaw_rad), math.cos(r_.yaw_rad), 0.0],
-                                       [0.0, 0.0, 1.0]])
-                    centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_
-                    axes_p = rot_.T @ axes_w
-                    for box_ in PALLET_BOXES:
-                        require(
-                            not box_meets_obb(box_.centre_m, np.asarray(box_.size_m) / 2, centre_p, axes_p,
-                                              (r_.length_m / 2, r_.width_m / 2, h_ / 2)),
-                            f"Measured pallet solid overlap in {ms.phase}: {box_.name}",
+                    f"Measured pallet footprint overlap in {ms.phase}",
+                    cargo=True,
+                )
+                if in_outline:
+                    # Each bar's eight corners in the pallet's frame from its full
+                    # pose (tilt included), boxed there and met against the canonical
+                    # solids as closed intervals -- touching counts (Codex checkpoint 11).
+                    qw_, qx_, qy_, qz_ = (float(v) for v in pq)
+                    rot_ = np.array([
+                        [1 - 2 * (qy_ * qy_ + qz_ * qz_), 2 * (qx_ * qy_ - qz_ * qw_), 2 * (qx_ * qz_ + qy_ * qw_)],
+                        [2 * (qx_ * qy_ + qz_ * qw_), 1 - 2 * (qx_ * qx_ + qz_ * qz_), 2 * (qy_ * qz_ - qx_ * qw_)],
+                        [2 * (qx_ * qz_ - qy_ * qw_), 2 * (qy_ * qz_ + qx_ * qw_), 1 - 2 * (qx_ * qx_ + qy_ * qy_)],
+                    ])
+                    for r_ in in_outline:
+                        h_ = new_obstacles["heights"].get(id(r_), 0.0)
+                        # The bar as an oriented box in the pallet's frame; an AABB of
+                        # its corners there reported a 2.9 mm gap as contact (Codex
+                        # checkpoint 12), so the exact SAT decides.
+                        centre_w = np.array([r_.x_m, r_.y_m, h_ / 2])
+                        axes_w = np.array([[math.cos(r_.yaw_rad), -math.sin(r_.yaw_rad), 0.0],
+                                           [math.sin(r_.yaw_rad), math.cos(r_.yaw_rad), 0.0],
+                                           [0.0, 0.0, 1.0]])
+                        centre_p = (centre_w - np.asarray(ppos, dtype=float)) @ rot_
+                        axes_p = rot_.T @ axes_w
+                        for box_ in PALLET_BOXES:
+                            scene_require(
+                                t, not box_meets_obb(box_.centre_m, np.asarray(box_.size_m) / 2, centre_p, axes_p,
+                                                  (r_.length_m / 2, r_.width_m / 2, h_ / 2)),
+                                f"Measured pallet solid overlap in {ms.phase}: {box_.name}",
+                                cargo=True,
+                            )
+                relative = ppos[:2] - base[:2]
+                # Live (plan D5a): a mission ended while carrying leaves the load on the forks under teleop -- the
+                # drop and slip are watched there too.
+                if ms.phase in ["extract", "transport"] or (
+                        live is not None and core.commands.adopted_id is None and core.cargo.relation == "carrying"):
+                    scene_require(t, ppos[2] > 0.04, "Pallet dropped during transport", cargo=True)
+                    scene_require(
+                        t, abs(
+                            float(np.dot(relative, forward))
+                            - (geometry.inserted_offset_m - abs(args.rear_axle_offset_m))
                         )
-            relative = ppos[:2] - base[:2]
-            if ms.phase in ["extract", "transport"]:
-                require(ppos[2] > 0.04, "Pallet dropped during transport")
-                require(
-                    abs(
-                        float(np.dot(relative, forward))
-                        - (geometry.inserted_offset_m - abs(args.rear_axle_offset_m))
+                        < 0.08
+                        and abs(float(np.dot(relative, [-forward[1], forward[0]]))) < 0.04,
+                        "Pallet slipped off forks",
+                        cargo=True,
                     )
-                    < 0.08
-                    and abs(float(np.dot(relative, [-forward[1], forward[0]]))) < 0.04,
-                    "Pallet slipped off forks",
-                )
-            if ms.phase in ["approach", "insert"]:
-                require(
-                    np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
-                    "Pallet displaced before pickup",
-                )
-            if ms.phase in ["insert", "withdraw"]:
-                contacts = insertion_geometry.forbidden_contacts(
-                    base,
-                    q,
-                    float(robot.get_joint_positions()[lift_index[0]]),
-                    ppos,
-                    pq,
-                    clearance_m=state["pocket_clearance_margin_m"],
-                )
-                state["pocket_geometry_checks"] += 1
-                if contacts:
-                    state["forbidden_pocket_contacts"] = contacts
-                require(
-                    not contacts,
-                    f"Forbidden fork/pallet contact in {ms.phase}: {contacts}",
-                )
-            if ms.phase in ["insert", "extract", "withdraw"]:
-                # Smallest sideways gap per blade over every check (SLAM plan
-                # S2 insertion criterion), kept per phase.
-                lateral = insertion_geometry.lateral_clearances(
-                    base,
-                    q,
-                    float(robot.get_joint_positions()[lift_index[0]]),
-                    ppos,
-                    pq,
-                )
-                minima = state.setdefault("lateral_clearance_min_m", {}).setdefault(
-                    ms.phase, {"left": None, "right": None}
-                )
-                for side, gap in lateral.items():
-                    if gap is not None and (minima[side] is None or gap < minima[side]):
-                        minima[side] = gap
-            requested_speed, curvature = 0.0, 0.0
-            tracking = None
-            # M-a1 slice 5: the release gate at the tick's start is the core's.
-            gate_ = core.release_gate(t, rear)
-            releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
-            paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
-            if live is not None and core.commands.status in ("idle", "accepted", "done", "failed", "cancelled"):
-                paused_ = True  # M-c: no mission yet (or over): its work does not run
-            cancel_stop_ = False
-            # Real-time plan D8b: a tick waiting for a plan (asked, still computing, or just taken) stands: none of the
-            # mission's own work below runs, the permission watches, the links, commands and sensors go on.
-            plan_wait_ = core.jobs is not None and core.job_hold(
-                t, rear, float(np.dot(velocity[:2], forward)), paused_).hold
-            # Real-time plan D9c: the observe capture runs over control ticks (one render step each, at this tick's
-            # step) and its observation is handled on the tick after the one that detected it; those ticks stand
-            # as a plan wait does.
-            if live is not None and core.jobs is not None:
-                if paused_:
-                    if core.capture_live is not None:
-                        core.capture_abandon()
-                        live.capturing = False
-                    core.observation_live = None  # a pause or a cancel: the arrival captures again when running
-                elif core.capture_live is not None:
-                    plan_wait_ = True
-                    if core.capture_live.raw is not None:
-                        c_ = core.capture_live
-                        core.capture_live = None
-                        captured_ = core.capture_and_detect(t, rear, step, raw=(c_.attempt, c_.attempt_number, c_.raw))
-                        if getattr(captured_, "aborted", False):
-                            live_abort_ = True
-                        else:
-                            core.observation_freeze(t, captured_)
-                            rear = captured_.rear  # the estimate now, after the capture's own release
-                            if captured_.rear_stamp is not None:
-                                rear_stamp = captured_.rear_stamp
-                            if slam is not None:
-                                slam["control"][-1][1:4] = rear.tolist()
-                elif core.observation_live is not None and not plan_wait_:
-                    plan_wait_ = True
-                    captured_ = core.observation_take(t)
-                    if captured_ is not None:
-                        attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
-                        frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
-                        forward, rear = captured_.forward, captured_.rear
-                        if captured_.rear_stamp is not None:
-                            rear_stamp = captured_.rear_stamp
-                        prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
-                        if observation.status != "valid":
-                            if core.observe_failed(t, rear, attempt, attempt_number, observation):
-                                break
-                        else:
-                            succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation,
-                                                                scene_input, capture_diagnostics, step)
-                            if succeeded_.stop:
-                                break
-                            observation, near_leg = succeeded_.observation, succeeded_.near_leg
-                            if not getattr(succeeded_, "pending", False):
-                                core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
-                        core.capture_acquired_s = None
-            if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:
-                # Three times the path time at the tracker's own speed caps
-                # (length / cruise when there are none), plus 10 s.
-                # M-a1 slice 4a-i: the follower's tick and the rules that rewrite its result are the core's.
-                follow_ = core.follow(t, rear, signed_speed, dt)
-                tracking, cusp_hold = follow_.tracking, follow_.cusp_hold
-                # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
-                stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
-                tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
-                # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
-                recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
-                tracking, rear = recover_.tracking, recover_.rear
-                # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
-                command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
-                                        safety_hold)
-                requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
-                                                              command_.tracking, command_.rear)
-                dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
-                if tracking.status == "arrived":
-                    if args.use_perception and ms.phase == "observe":
-                        if live is not None and core.jobs is not None:
-                            # Real-time plan D9c: the capture opens here and runs over the next ticks.
-                            begun_ = core.capture_begin(t, rear, step)
-                            live.capturing = core.capture_live is not None
-                            live_abort_ = bool(getattr(begun_, "aborted", False))
-                            plan_wait_ = True
-                        else:
-                            # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
-                            if live is not None:
-                                live.capturing = True
-                            try:
-                                captured_ = core.capture_and_detect(t, rear, step)
-                            finally:
-                                if live is not None:
-                                    live.capturing = False
-                            # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
-                            # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
-                            # no observation handling, no transitions; the next tick pauses the mission.
-                            live_abort_ = bool(getattr(captured_, "aborted", False))
-                            if not live_abort_:
-                                attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
-                                frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                                capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
-                                forward, rear = captured_.forward, captured_.rear
+                if ms.phase in ["approach", "insert"]:
+                    scene_require(
+                        t, np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
+                        "Pallet displaced before pickup",
+                        cargo=True,
+                    )
+                # Live and free (no mission, ended outside the pocket phases): the forks' contact is checked wherever the
+                # truck is driven; ended inside them it is not -- supporting a pallet touches it, and teleop is refused
+                # there (Codex D6 design round 2-3 P2).
+                # plan D4: the retrace too; D4b: the back-out, with the whole truck as when free; D14: the uncertified
+                # teleop withdraw, through it and until standing (counted apart, main condition 4)
+                clear_out_ = ms.phase == "clear_out"
+                withdraw_watch_ = live is not None and live_withdraw["watch"]
+                # Live with no mission adopted, the phase is the ended mission's, not the truck's (plan D14): the
+                # phase-named checks are a running mission's; idle, the free and withdraw watches decide.
+                checks_phase_ = ms.phase if live is None or core.commands.adopted_id is not None else None
+                if checks_phase_ in ["insert", "withdraw", "recover_withdraw"] or live_free_ or clear_out_ or withdraw_watch_:
+                    contacts = insertion_geometry.forbidden_contacts(
+                        base,
+                        q,
+                        float(robot.get_joint_positions()[lift_index[0]]),
+                        ppos,
+                        pq,
+                        clearance_m=state["pocket_clearance_margin_m"],
+                    )
+                    if live_free_ or clear_out_ or withdraw_watch_:
+                        # The rest of the truck too -- body and carriage -- since the outline left the 2D check
+                        # (Codex D6 review P2: driven onto the pallet, the underbody met its top boards).
+                        joints_ = robot.get_joint_positions()
+                        contacts = contacts + insertion_geometry.body_contacts(
+                            base, q, float(joints_[lift_index[0]]), ppos, pq,
+                            # the steered tyres at their measured angles (Codex D6 review round 3 P2)
+                            steering={"left_steer": float(joints_[steers[0]]), "right_steer": float(joints_[steers[1]])},
+                            clearance_m=state["pocket_clearance_margin_m"])
+                    state["pocket_geometry_checks"] += 1
+                    if withdraw_watch_ and not (checks_phase_ in ["insert", "withdraw", "recover_withdraw"] or live_free_
+                                                or clear_out_):
+                        # Plan D14 (main condition 4): counted apart; the forks' relation is no longer known (lower
+                        # only from here) -- a manual withdraw's contact is the operator's, not a scene failure.
+                        if contacts:
+                            state.setdefault("teleop_withdraw_contacts", []).append(
+                                {"time_s": float(t), "contacts": contacts})
+                            core.cargo.invalidate("teleop_withdraw_contact")
+                    else:
+                        if contacts:
+                            state["forbidden_pocket_contacts"] = contacts
+                        scene_require(
+                            t, not contacts,
+                            f"Forbidden fork/pallet contact in {ms.phase}: {contacts}",
+                            cargo=True,
+                        )
+                if checks_phase_ in ["insert", "extract", "withdraw", "recover_withdraw"]:
+                    # Smallest sideways gap per blade over every check (SLAM plan
+                    # S2 insertion criterion), kept per phase.
+                    lateral = insertion_geometry.lateral_clearances(
+                        base,
+                        q,
+                        float(robot.get_joint_positions()[lift_index[0]]),
+                        ppos,
+                        pq,
+                    )
+                    minima = state.setdefault("lateral_clearance_min_m", {}).setdefault(
+                        ms.phase, {"left": None, "right": None}
+                    )
+                    for side, gap in lateral.items():
+                        if gap is not None and (minima[side] is None or gap < minima[side]):
+                            minima[side] = gap
+                if live is not None and live_withdraw["watch"] and live_withdraw["open"] is not None:
+                    # Plan D14: the uncertified teleop withdraw's smallest sideways gap (the forks still in the pocket)
+                    gaps_ = [g for g in insertion_geometry.lateral_clearances(
+                        base, q, float(robot.get_joint_positions()[lift_index[0]]), ppos, pq).values() if g is not None]
+                    if gaps_:
+                        ep_ = live_withdraw["open"]
+                        ep_["min_lateral_m"] = min(min(gaps_), ep_.get("min_lateral_m", math.inf))
+                requested_speed, curvature = 0.0, 0.0
+                tracking = None
+                # M-a1 slice 5: the release gate at the tick's start is the core's.
+                gate_ = core.release_gate(t, rear)
+                releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
+                paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
+                if live is not None and core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):
+                    paused_ = True  # M-c: no mission yet (or over): its work does not run
+                cancel_stop_ = False
+                # Real-time plan D8b: a tick waiting for a plan (asked, still computing, or just taken) stands: none of the
+                # mission's own work below runs, the permission watches, the links, commands and sensors go on.
+                plan_wait_ = core.jobs is not None and core.job_hold(
+                    t, rear, float(np.dot(velocity[:2], forward)), paused_).hold
+                if live is not None and core.commands.status in ("accepted", "preparing"):
+                    plan_wait_ = True  # persistent console plan D2: a mission being prepared stands, whatever is pending
+                # Real-time plan D9c: the observe capture runs over control ticks (one render step each, at this tick's
+                # step) and its observation is handled on the tick after the one that detected it; those ticks stand
+                # as a plan wait does.
+                if live is not None and core.jobs is not None:
+                    if paused_:
+                        if core.capture_live is not None:
+                            core.capture_abandon()
+                            live.capturing = False
+                        core.observation_live = None  # a pause or a cancel: the arrival captures again when running
+                    elif core.capture_live is not None:
+                        plan_wait_ = True
+                        if core.capture_live.raw is not None:
+                            c_ = core.capture_live
+                            core.capture_live = None
+                            captured_ = core.capture_and_detect(t, rear, step, raw=(c_.attempt, c_.attempt_number, c_.raw))
+                            if getattr(captured_, "aborted", False):
+                                live_abort_ = True
+                            else:
+                                core.observation_freeze(t, captured_)
+                                rear = captured_.rear  # the estimate now, after the capture's own release
                                 if captured_.rear_stamp is not None:
                                     rear_stamp = captured_.rear_stamp
-                                prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
-                            if live_abort_:
-                                pass
-                            elif (
-                                args.repeat_captures
-                                and (
-                                    attempt_number == args.repeat_at_attempt
-                                    if args.repeat_at_attempt is not None
-                                    else state.get("near_capture", {}).get("status") == "pending"
-                                )
-                            ):
-                                # G2r: the original capture above is G2's; hold the
-                                # wheels, capture again, then stop whatever is seen.
-                                robot.apply_action(
-                                    isaac.action(
-                                        joint_velocities=np.zeros(len(wheels)),
-                                        joint_indices=wheels,
-                                    )
-                                )
-                                first_pose = [
-                                    np.asarray(v, dtype=float).tolist()
-                                    for v in capture_diagnostics.accepted_pose
-                                ]
-
-                                def observed(result) -> dict:
-                                    obs, diag = result.observation, result.diagnostics
-                                    valid = obs.status == "valid"
-                                    return {
-                                        "status": obs.status,
-                                        "reason": obs.reason,
-                                        "left_center_m": list(obs.left.center_m)
-                                        if valid
-                                        else None,
-                                        "right_center_m": list(obs.right.center_m)
-                                        if valid
-                                        else None,
-                                        "insertion_yaw_rad": obs.insertion_yaw_rad,
-                                        # Fork spacing plan (B): the lower-deck evidence per
-                                        # capture, to see how much it moves in place.
-                                        "selected_lower": diag.selected_lower,
-                                        "rejected_lower": [
-                                            p.lower for p in diag.rejected_patterns
-                                        ],
-                                    }
-
-                                def valid_fraction(depth) -> float:
-                                    depth = np.asarray(depth, dtype=float)
-                                    return float((np.isfinite(depth) & (depth > 0)).mean())
-
-                                captures = [
-                                    {
-                                        "index": 0,
-                                        "accepted_pose": first_pose,
-                                        "drift": G2.drift(first_pose, first_pose),
-                                        "depth_sha256": attempt["depth_sha256"],
-                                        "valid_fraction": valid_fraction(
-                                            scene_input.depth_m
-                                        ),
-                                        **observed(detection),
-                                    }
-                                ]
-                                for index in range(1, args.repeat_captures + 1):
-                                    record = {"index": index}
-                                    try:
-                                        repeat_input, _, repeat_attempts = (
-                                            perception_capture.capture(
-                                                max_attempts=args.perception_max_attempts,
-                                            )
-                                        )
-                                    except adapter.CaptureFailure as exc:
-                                        record["capture_failure"] = exc.reason
-                                        record["capture_diagnostics"] = asdict(
-                                            exc.diagnostics
-                                        )
-                                        captures.append(record)
-                                        break
-                                    repeat_diagnostics = asdict(
-                                        perception_capture.state.diagnostics
-                                    )
-                                    pose = [
-                                        np.asarray(v, dtype=float).tolist()
-                                        for v in perception_capture.state.diagnostics.accepted_pose
-                                    ]
-                                    record.update(
-                                        {
-                                            "capture_diagnostics": repeat_diagnostics,
-                                            "capture_attempts": repeat_attempts,
-                                            "accepted_pose": pose,
-                                            "drift": G2.drift(first_pose, pose),
-                                            "depth_sha256": G2.depth_sha256(
-                                                repeat_input.depth_m
-                                            ),
-                                            "depth_change": G2.depth_change(
-                                                scene_input.depth_m, repeat_input.depth_m
-                                            ),
-                                            "valid_fraction": valid_fraction(
-                                                repeat_input.depth_m
-                                            ),
-                                            **observed(
-                                                detect_pockets(
-                                                    adapter.detector_input(
-                                                        repeat_input, args.depth_quantize_mm
-                                                    ),
-                                                    prior,
-                                                    params,
-                                                )
-                                            ),
-                                        }
-                                    )
-                                    captures.append(record)
-                                state["repeat_capture"] = {
-                                    "status": "repeat_capture_done",
-                                    "attempt_number": attempt_number,
-                                    "candidate_index": attempt["candidate_index"],
-                                    "wheels_held": True,
-                                    "captures": captures,
-                                    "summary": G2.repeat_summary(captures),
-                                }
-                                transition("repeat_capture_done", t)
-                                break
-                            if live_abort_:
-                                pass
-                            elif observation.status != "valid":
-                                # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
+                                if slam is not None:
+                                    slam["control"][-1][1:4] = rear.tolist()
+                    elif core.observation_live is not None and not plan_wait_:
+                        plan_wait_ = True
+                        captured_ = core.observation_take(t)
+                        if captured_ is not None:
+                            attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                            frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                            capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                            forward, rear = captured_.forward, captured_.rear
+                            if captured_.rear_stamp is not None:
+                                rear_stamp = captured_.rear_stamp
+                            prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
+                            if observation.status != "valid":
                                 if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                     break
                             else:
-                                # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
-                                succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
-                                                                    capture_diagnostics, step)
+                                succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation,
+                                                                    scene_input, capture_diagnostics, step)
                                 if succeeded_.stop:
                                     break
                                 observation, near_leg = succeeded_.observation, succeeded_.near_leg
-                                if getattr(succeeded_, "pending", False):
-                                    plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
-                                else:
-                                    # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
+                                if not getattr(succeeded_, "pending", False):
                                     core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                            core.capture_acquired_s = None
+                # Persistent console plan D5 6c item 5: a loaded mission stands in its start wait (the lift to the carry
+                # height, the first live leg taken, the docking armed): no follower, arrival, cusp or stall counts, no
+                # wheel command; the lift ramp, the live leg and the permission watch run.
+                loaded_wait_ = live is not None and not paused_ and core.loaded_start_wait(t)
+                if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_
+                        and not loaded_wait_):
+                    # Three times the path time at the tracker's own speed caps
+                    # (length / cruise when there are none), plus 10 s.
+                    # M-a1 slice 4a-i: the follower's tick and the rules that rewrite its result are the core's.
+                    follow_ = core.follow(t, rear, signed_speed, dt)
+                    tracking, cusp_hold = follow_.tracking, follow_.cusp_hold
+                    # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
+                    stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
+                    tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
+                    # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
+                    recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
+                    tracking, rear = recover_.tracking, recover_.rear
+                    # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
+                    command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
+                                            safety_hold)
+                    requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
+                                                                  command_.tracking, command_.rear)
+                    dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
+                    if tracking.status == "arrived":
+                        if args.use_perception and ms.phase == "observe":
+                            if live is not None and core.jobs is not None:
+                                # Real-time plan D9c: the capture opens here and runs over the next ticks.
+                                begun_ = core.capture_begin(t, rear, step)
+                                live.capturing = core.capture_live is not None
+                                live_abort_ = bool(getattr(begun_, "aborted", False))
+                                plan_wait_ = True
+                            else:
+                                # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
+                                if live is not None:
+                                    live.capturing = True
+                                try:
+                                    captured_ = core.capture_and_detect(t, rear, step)
+                                finally:
+                                    if live is not None:
+                                        live.capturing = False
+                                # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
+                                # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
+                                # no observation handling, no transitions; the next tick pauses the mission.
+                                live_abort_ = bool(getattr(captured_, "aborted", False))
+                                if not live_abort_:
+                                    attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                                    frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                                    capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                                    forward, rear = captured_.forward, captured_.rear
+                                    if captured_.rear_stamp is not None:
+                                        rear_stamp = captured_.rear_stamp
+                                    prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
+                                if live_abort_:
+                                    pass
+                                elif (
+                                    args.repeat_captures
+                                    and (
+                                        attempt_number == args.repeat_at_attempt
+                                        if args.repeat_at_attempt is not None
+                                        else state.get("near_capture", {}).get("status") == "pending"
+                                    )
+                                ):
+                                    # G2r: the original capture above is G2's; hold the
+                                    # wheels, capture again, then stop whatever is seen.
+                                    robot.apply_action(
+                                        isaac.action(
+                                            joint_velocities=np.zeros(len(wheels)),
+                                            joint_indices=wheels,
+                                        )
+                                    )
+                                    first_pose = [
+                                        np.asarray(v, dtype=float).tolist()
+                                        for v in capture_diagnostics.accepted_pose
+                                    ]
+
+                                    def observed(result) -> dict:
+                                        obs, diag = result.observation, result.diagnostics
+                                        valid = obs.status == "valid"
+                                        return {
+                                            "status": obs.status,
+                                            "reason": obs.reason,
+                                            "left_center_m": list(obs.left.center_m)
+                                            if valid
+                                            else None,
+                                            "right_center_m": list(obs.right.center_m)
+                                            if valid
+                                            else None,
+                                            "insertion_yaw_rad": obs.insertion_yaw_rad,
+                                            # Fork spacing plan (B): the lower-deck evidence per
+                                            # capture, to see how much it moves in place.
+                                            "selected_lower": diag.selected_lower,
+                                            "rejected_lower": [
+                                                p.lower for p in diag.rejected_patterns
+                                            ],
+                                        }
+
+                                    def valid_fraction(depth) -> float:
+                                        depth = np.asarray(depth, dtype=float)
+                                        return float((np.isfinite(depth) & (depth > 0)).mean())
+
+                                    captures = [
+                                        {
+                                            "index": 0,
+                                            "accepted_pose": first_pose,
+                                            "drift": G2.drift(first_pose, first_pose),
+                                            "depth_sha256": attempt["depth_sha256"],
+                                            "valid_fraction": valid_fraction(
+                                                scene_input.depth_m
+                                            ),
+                                            **observed(detection),
+                                        }
+                                    ]
+                                    for index in range(1, args.repeat_captures + 1):
+                                        record = {"index": index}
+                                        try:
+                                            repeat_input, _, repeat_attempts = (
+                                                perception_capture.capture(
+                                                    max_attempts=args.perception_max_attempts,
+                                                )
+                                            )
+                                        except adapter.CaptureFailure as exc:
+                                            record["capture_failure"] = exc.reason
+                                            record["capture_diagnostics"] = asdict(
+                                                exc.diagnostics
+                                            )
+                                            captures.append(record)
+                                            break
+                                        repeat_diagnostics = asdict(
+                                            perception_capture.state.diagnostics
+                                        )
+                                        pose = [
+                                            np.asarray(v, dtype=float).tolist()
+                                            for v in perception_capture.state.diagnostics.accepted_pose
+                                        ]
+                                        record.update(
+                                            {
+                                                "capture_diagnostics": repeat_diagnostics,
+                                                "capture_attempts": repeat_attempts,
+                                                "accepted_pose": pose,
+                                                "drift": G2.drift(first_pose, pose),
+                                                "depth_sha256": G2.depth_sha256(
+                                                    repeat_input.depth_m
+                                                ),
+                                                "depth_change": G2.depth_change(
+                                                    scene_input.depth_m, repeat_input.depth_m
+                                                ),
+                                                "valid_fraction": valid_fraction(
+                                                    repeat_input.depth_m
+                                                ),
+                                                **observed(
+                                                    detect_pockets(
+                                                        adapter.detector_input(
+                                                            repeat_input, args.depth_quantize_mm
+                                                        ),
+                                                        prior,
+                                                        params,
+                                                    )
+                                                ),
+                                            }
+                                        )
+                                        captures.append(record)
+                                    state["repeat_capture"] = {
+                                        "status": "repeat_capture_done",
+                                        "attempt_number": attempt_number,
+                                        "candidate_index": attempt["candidate_index"],
+                                        "wheels_held": True,
+                                        "captures": captures,
+                                        "summary": G2.repeat_summary(captures),
+                                    }
+                                    transition("repeat_capture_done", t)
+                                    break
+                                if live_abort_:
+                                    pass
+                                elif observation.status != "valid":
+                                    # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
+                                    if core.observe_failed(t, rear, attempt, attempt_number, observation):
+                                        break
+                                else:
+                                    # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
+                                    succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
+                                                                        capture_diagnostics, step)
+                                    if succeeded_.stop:
+                                        break
+                                    observation, near_leg = succeeded_.observation, succeeded_.near_leg
+                                    if getattr(succeeded_, "pending", False):
+                                        plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
+                                    else:
+                                        # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
+                                        core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                        else:
+                            # M-a1 slice 2: every other arrival is the core's.
+                            arrival_ = core.arrive(t, tracking)
+                            if arrival_.rear is not None:
+                                rear = arrival_.rear
+                            if arrival_.stop:
+                                break
+                if core.jobs is not None and not plan_wait_ and core.job_pending():
+                    plan_wait_ = True  # real-time plan D9b: the delivery docking match was just asked; this tick stands
+                if live_abort_:
+                    requested_speed, curvature = 0.0, 0.0
+                # M-a1 slice 2: the lift ramp, timers (plan D5 6c: a loaded start wait ramps while a plan is waited for)
+                if (not paused_ and not live_abort_ and (not plan_wait_ or core.lift_ramps_in_plan_wait())
+                        and core.lift_and_timers(t, dt)):
+                    if live is None:
+                        break
+                    # Persistent console plan D1: the mission ends, judged on the truth; the session goes on standing.
+                    live.end_mission(t, "complete", None)
+                    paused_, requested_speed, curvature = True, 0.0, 0.0
+                # The curvature the wheels actually hold: an emergency stop keeps it, so
+                # the permission, the stop itself and the probe all use this one.
+                kappa = held_kappa()
+                truth_speed = float(np.dot(velocity[:2], forward))
+                obstacle_hold = False
+                pocket_phase = False
+                # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
+                # while it stands on a zero command.
+                cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
+                permission_tick_ = not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
+                    requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
+                    or cusp_handed_ is not None
+                ) and not plan_wait_ and not loaded_wait_
+                # Real-time plan D8b: a tick standing for a plan has the paused tick's watch instead (no work counters,
+                # no replan), and the truth evaluation below with what it allows; so does a loaded start wait (6c).
+                plan_watch_ = (plan_wait_ or loaded_wait_) and not paused_ and obstacle is not None
+                if permission_tick_ or plan_watch_:
+                    if plan_watch_:
+                        watch_ = core.permission_watch(t, rear, kappa, loaded)
+                        allowed, why, acting, pocket_phase = watch_.allowed, watch_.why, watch_.acting, False
+                        obstacle_hold = watch_.obstacle_hold
                     else:
-                        # M-a1 slice 2: every other arrival is the core's.
-                        arrival_ = core.arrive(t, tracking)
-                        if arrival_.rear is not None:
-                            rear = arrival_.rear
-                        if arrival_.stop:
-                            break
-            if core.jobs is not None and not plan_wait_ and core.job_pending():
-                plan_wait_ = True  # real-time plan D9b: the delivery docking match was just asked; this tick stands
-            if live_abort_:
-                requested_speed, curvature = 0.0, 0.0
-            if not paused_ and not live_abort_ and not plan_wait_ and core.lift_and_timers(t, dt):  # M-a1 slice 2: the lift ramp, timers
-                break
-            # The curvature the wheels actually hold: an emergency stop keeps it, so
-            # the permission, the stop itself and the probe all use this one.
-            kappa = held_kappa()
-            truth_speed = float(np.dot(velocity[:2], forward))
-            obstacle_hold = False
-            pocket_phase = False
-            # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
-            # while it stands on a zero command.
-            cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
-            permission_tick_ = not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
-                requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
-                or cusp_handed_ is not None
-            ) and not plan_wait_
-            # Real-time plan D8b: a tick standing for a plan has the paused tick's watch instead (no work counters,
-            # no replan), and the truth evaluation below with what it allows.
-            plan_watch_ = plan_wait_ and not paused_ and obstacle is not None
-            if permission_tick_ or plan_watch_:
-                if plan_watch_:
-                    watch_ = core.permission_watch(t, rear, kappa, loaded)
-                    allowed, why, acting, pocket_phase = watch_.allowed, watch_.why, watch_.acting, False
-                    obstacle_hold = watch_.obstacle_hold
-                else:
-                    # M-a1 slice 3b: the permission tick (re-projection, limit, pocket check, path-blocked and
-                    # silence stops, speed cap, stall watch) is the core's; the replan below reads its answer.
-                    perm_tick_ = core.permission(t, rear, kappa, requested_speed, loaded, cusp_handed_)
-                    allowed, why, acting, pocket_phase = perm_tick_.allowed, perm_tick_.why, perm_tick_.acting, perm_tick_.pocket_phase
-                    requested_speed, obstacle_hold = perm_tick_.requested_speed, perm_tick_.obstacle_hold
-                    # M-a1 slice 3c: stop, replan, resume (plan D4) is the core's.
-                    if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == ms.phase:
-                        replan_tick_ = core.blocked_replan(t, rear, kappa, requested_speed)
-                        rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
-                # Evaluation only (truth): every moving tick, each ground-truth
-                # obstacle in the steering-held stopping volume (with the envelope)
-                # while the permission allowed this speed (Codex L0b P2).
-                if acting and abs(truth_speed) > 0.05:
-                    pconf = obstacle["layer"].permission.config
-                    stop_len = pconf.stopping.distance_m(truth_speed)
-                    arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
-                    shape_now, _ = obstacle["layer"].footprints(loaded)
-                    # A bounding-circle prefilter (exact: a rectangle farther than
-                    # the shape's reach plus its own half diagonal from every
-                    # pose cannot meet it) -- this evaluator was a sixth of the
-                    # wall time (L3c v50 profile).
-                    arc_xy = np.asarray(arc, dtype=float)[1:, :2]
-                    # The margin inflates length and width both: it goes inside the hypot.
-                    reach_now = max(
-                        math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m) + pconf.envelope_offset_m,
-                                   abs(lat_) + fp_.half_width_m + pconf.envelope_offset_m)
-                        for fp_, lat_, lon_ in PARTS_OF(shape_now)
-                    )
-                    for oid, rect in enumerate(checked_obstacles):
-                        if len(arc_xy) and float(np.min(np.hypot(arc_xy[:, 0] - rect.x_m, arc_xy[:, 1] - rect.y_m))) > (
-                            reach_now + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6
-                        ):
-                            continue
-                        if pocket_phase and rect is pickup_obstacle:
-                            # Blades in the pockets meet the pallet's 2D outline by
-                            # design; fork/pallet contact is the 3D insertion guard's.
-                            continue
-                        # The shape the permission checks (body + blades unloaded).
-                        if any(SHAPE_MEETS(rect, shape_now, tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
-                            obstacle["events"] += 1
-                            per = obstacle.setdefault("event_objects", {})
-                            per[oid] = per.get(oid, 0) + 1
-                            if allowed >= abs(truth_speed) - 1e-9:
-                                obstacle["unpermitted"].append(
-                                    {"time_s": t, "phase": ms.phase, "speed_mps": truth_speed, "allowed_mps": allowed,
-                                     "reason": why, "object": oid}
-                                )
-            if paused_:
-                # M-a3 (plan E3, E5, E6): the paused tick -- the permission watches every tick, the lift target
-                # follows the lift, the stop is watched; a cancel ends standing, a resume steps through its checks.
-                paused_tick_ = core.paused_tick(t, rear, kappa, loaded)
-                rear, obstacle_hold = paused_tick_.rear, paused_tick_.obstacle_hold
-                requested_speed, curvature = 0.0, 0.0
-                dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
-                cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
-            elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
-                requested_speed, curvature = 0.0, 0.0
-                dwell_hold = True
-            elif core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
-                requested_speed = 0.0
-                if core.jobs is not None and core.job_pending():
-                    plan_wait_ = True  # real-time plan D8b: the leg's plan was just asked
-                    curvature = 0.0
+                        # M-a1 slice 3b: the permission tick (re-projection, limit, pocket check, path-blocked and
+                        # silence stops, speed cap, stall watch) is the core's; the replan below reads its answer.
+                        perm_tick_ = core.permission(t, rear, kappa, requested_speed, loaded, cusp_handed_)
+                        allowed, why, acting, pocket_phase = perm_tick_.allowed, perm_tick_.why, perm_tick_.acting, perm_tick_.pocket_phase
+                        requested_speed, obstacle_hold = perm_tick_.requested_speed, perm_tick_.obstacle_hold
+                        # M-a1 slice 3c: stop, replan, resume (plan D4) is the core's.
+                        if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == ms.phase:
+                            replan_tick_ = core.blocked_replan(t, rear, kappa, requested_speed)
+                            rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
+                    # Evaluation only (truth): every moving tick, each ground-truth
+                    # obstacle in the steering-held stopping volume (with the envelope)
+                    # while the permission allowed this speed (Codex L0b P2).
+                    if acting and abs(truth_speed) > 0.05:
+                        pconf = obstacle["layer"].permission.config
+                        stop_len = pconf.stopping.distance_m(truth_speed)
+                        arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
+                        shape_now, _ = obstacle["layer"].footprints(loaded)
+                        # A bounding-circle prefilter (exact: a rectangle farther than
+                        # the shape's reach plus its own half diagonal from every
+                        # pose cannot meet it) -- this evaluator was a sixth of the
+                        # wall time (L3c v50 profile).
+                        arc_xy = np.asarray(arc, dtype=float)[1:, :2]
+                        # The margin inflates length and width both: it goes inside the hypot.
+                        reach_now = max(
+                            math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m) + pconf.envelope_offset_m,
+                                       abs(lat_) + fp_.half_width_m + pconf.envelope_offset_m)
+                            for fp_, lat_, lon_ in PARTS_OF(shape_now)
+                        )
+                        for oid, rect in enumerate(checked_obstacles):
+                            if len(arc_xy) and float(np.min(np.hypot(arc_xy[:, 0] - rect.x_m, arc_xy[:, 1] - rect.y_m))) > (
+                                reach_now + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6
+                            ):
+                                continue
+                            if pocket_phase and rect is pickup_obstacle:
+                                # Blades in the pockets meet the pallet's 2D outline by
+                                # design; fork/pallet contact is the 3D insertion guard's.
+                                continue
+                            # The shape the permission checks (body + blades unloaded).
+                            if any(SHAPE_MEETS(rect, shape_now, tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
+                                obstacle["events"] += 1
+                                per = obstacle.setdefault("event_objects", {})
+                                per[oid] = per.get(oid, 0) + 1
+                                if allowed >= abs(truth_speed) - 1e-9:
+                                    obstacle["unpermitted"].append(
+                                        {"time_s": t, "phase": ms.phase, "speed_mps": truth_speed, "allowed_mps": allowed,
+                                         "reason": why, "object": oid}
+                                    )
+                if paused_:
+                    # M-a3 (plan E3, E5, E6): the paused tick -- the permission watches every tick, the lift target
+                    # follows the lift, the stop is watched; a cancel ends standing, a resume steps through its checks.
+                    paused_tick_ = core.paused_tick(t, rear, kappa, loaded)
+                    rear, obstacle_hold = paused_tick_.rear, paused_tick_.obstacle_hold
+                    requested_speed, curvature = 0.0, 0.0
+                    dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
+                    cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
+                    if cancel_stop_ and live is not None:
+                        # persistent console plan D1: recorded, run goes on; D4: a recovery the cancel could not make
+                        # (no evidence, the forks' state unknown) keeps its own reason (Codex 6b impl P3)
+                        if core.commands.status == "recovery_required":
+                            live.end_mission(t, "recovery_required", core.commands.end_reason)
+                        else:
+                            live.end_mission(t, "cancelled", "operator")
+                elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
+                    requested_speed, curvature = 0.0, 0.0
                     dwell_hold = True
-            if new_obstacles is not None and ms.phase in trackers:
-                leg, leg_direction = trackers[ms.phase].leg_ahead()
-                driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()
-                pallet_face = None
-                if "approach" in paths and ms.phase in ("approach", "insert"):
-                    # N11/N12/N14 place bars in the pallet frame: the approach
-                    # face centre of the real pallet, the insertion heading of
-                    # the approach's end (a scenario placement, never a planner
-                    # input -- plan D6).
-                    hy = float(paths["approach"].poses[-1][2])
-                    half = geometry.pallet_depth_m / 2
-                    pallet_face = (float(ppos[0]) - half * math.cos(hy), float(ppos[1]) - half * math.sin(hy), hy)
-                if obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase:
-                    leg_direction = 0  # a backoff is not a leg of the phase (Codex checkpoint 9 P1)
-                def n_sweep_test(box, path_, loaded_=loaded):
-                    # N3: does the truck's own sweep along the path ahead (first
-                    # 4 m) meet the box, and would a straight run of that length
-                    # from here meet it? (Codex checkpoint 14)
-                    from forklift_core.planning.geometry import Bounds as SBounds
-
-                    bx_, by_, byaw_, bsize_ = box
-                    rect_ = Rectangle(float(bx_), float(by_), float(bsize_[0]), float(bsize_[1]), float(byaw_))
-                    fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
-                    chk_ = FootprintCollisionChecker([rect_], fp_, SBounds(-1e6, 1e6, -1e6, 1e6))
-                    pts_ = np.asarray(path_, dtype=float)
-                    seg_ = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts_[:, :2], axis=0).T))))
-                    pts_ = pts_[seg_ <= 4.0]
-                    meets_path_ = any(not chk_.free(tuple(p_)) for p_ in pts_)
-                    x0_, y0_, h0_ = (float(v) for v in pts_[0])
-                    # The straight runs the way the leg drives: backwards on a
-                    # reverse leg (Codex checkpoint 15).
-                    sgn_ = -1.0 if leg_direction < 0 else 1.0
-                    line_ = [(x0_ + sgn_ * d_ * math.cos(h0_), y0_ + sgn_ * d_ * math.sin(h0_), h0_)
-                             for d_ in np.arange(0.0, min(4.0, seg_[-1]) + 1e-9, 0.025)]
-                    meets_line_ = any(not chk_.free(p_) for p_ in line_)
-                    return meets_path_, meets_line_
-
-                due_ = new_obstacles["schedule"].update(
-                    t, ms.phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
-                    sweep_test=n_sweep_test,
-                )
-                if boundary is not None and boundary.recorder.value_format == 2:
-                    # The schedule has no port: its inputs (by digest -- the leg ahead is an array every tick) and
-                    # what it did with them, so a replay rerunning it from the same rules is checked (plan 6).
-                    from forklift_core.mission.boundary_record import payload_digest, trace_entry
-
-                    trace_entry(boundary, "schedule", {
-                        "inputs_sha256": payload_digest({
-                            "t": float(t), "phase": ms.phase, "driven": float(driven),
-                            "leg": None if leg is None else np.asarray(leg, dtype=float),
-                            "leg_direction": int(leg_direction), "pallet_face": pallet_face}),
-                        "actions": [list(a_) for a_ in due_]})
-                for action in due_:
-                    if action[0] == "spawn":
-                        _, oid, ox, oy, oyaw, osize = action
-                        path_ = f"/World/NewObstacle_{oid}"
-                        isaac.spawn_box(path_, ox, oy, oyaw, osize)
-                        rect = Rectangle(float(ox), float(oy), float(osize[0]), float(osize[1]), float(oyaw))
-                        new_obstacles["rects"][oid] = rect
-                        obstacles.append(rect)  # ground truth for the evaluator only
-                        if any(e_.id == oid and e_.frame == "pallet" for e_ in new_obstacles["schedule"].events):
-                            # Judged against the pallet's solids, not its outline
-                            # (Codex checkpoint 9 P1).
-                            new_obstacles.setdefault("pallet_frame", []).append(rect)
-                            new_obstacles.setdefault("heights", {})[id(rect)] = float(osize[2])
-                        if obstacle is not None and obstacle["layer"].shadow is not None:
-                            _, own_ = obstacle["layer"].footprints(loaded)
-                            reach = obstacle["layer"].shadow.band_m + 0.05 * math.sqrt(2)
-                            grown = Footprint(own_.front_m + reach, own_.rear_m + reach, own_.half_width_m + reach)
-                            # Geometry only: unbounded hall, so a grown outline past
-                            # the hall edge is not taken for an overlap (Codex P2).
-                            from forklift_core.planning.geometry import Bounds as NBounds
-
-                            open_hall = NBounds(-1e6, 1e6, -1e6, 1e6)
-                            if not FootprintCollisionChecker([rect], grown, open_hall).free(tuple(float(v) for v in truth_rear)):
-                                new_obstacles["band_overlaps"].append({"time_s": t, "event": oid})
-                    elif action[0] == "remove":
-                        oid = action[1]
-                        isaac.remove_prim(f"/World/NewObstacle_{oid}")
-                        rect = new_obstacles["rects"].pop(oid, None)
-                        if rect in obstacles:
-                            obstacles.remove(rect)
-            estop_holding = estop is not None and estop.update(
-                t=t,
-                phase=ms.phase,
-                phase_elapsed_s=t - ms.phase_started,
-                rear=truth_rear,
-                speed_mps=float(np.dot(velocity[:2], forward)),
-                loaded=loaded,
-                curvature_inv_m=kappa,
-                extra=[
-                    *robot.get_joint_positions()[steers],
-                    float(robot.get_joint_positions()[lift_index[0]]),
-                    *ppos,
-                    pallet_yaw,
-                ],
-            )
-            # M-a1 slice 5: the command assembly is the core's (the e-stop probe above stays the runner's, truth).
-            steer_before_ = steering_command.copy() if live is not None else None
-            command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
-                                             obstacle_hold, dwell_hold, cusp_hold, safety_hold)
-            drive, steering_command, actual_steering = command_.drive, command_.steering_command, command_.actual_steering
-            requested_speed = command_.requested_speed
-            if live is not None:
-                # M-c (plan C2): the arbiter decides what drives. AUTO and PAUSED: the core's command as assembled.
-                # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
-                # a preempt: zero wheels, steering held. The applied command is written back for the core.
-                live_state["rear"] = tuple(float(v) for v in rear)
-                speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
-                # The sim distance driven since the last tick, for the installed arcs: the odometry's own motion
-                # (Codex M-c round 10 P2: the end speed times dt missed a braking interval's travel).
-                odom_now_ = tuple(float(v) for v in slam["odom_rear"][:2]) if slam is not None else None
-                if live_perm is not None:
-                    prev_ = live_state.get("odom_prev")
-                    if odom_now_ is not None and prev_ is not None:
-                        live_perm.advance(math.hypot(odom_now_[0] - prev_[0], odom_now_[1] - prev_[1]))
-                    elif odom_now_ is None:
-                        live_perm.advance(abs(float(speed_now_)) * dt)
-                live_state["odom_prev"] = odom_now_
-                target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
-                live_safety_ = core.safety_state(t)
-                out_ = live.tick_end(
-                    t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
-                    {"measured_mps": float(speed_now_), "measured_kappa": float(kappa),
-                     "steering_error_rad": float(np.max(np.abs(target_steer_ - actual_steering))),
-                     "permit": live_permit})
-                if out_.source == "teleop":
-                    if args.live_test_permit_compare:
-                        # The bundle's inputs each teleop cycle, for the offline coverage check (teleop bundle margin
-                        # plan V3): the grid bundle's last curvature is its margined edge, not the output.
-                        live.log({"teleop_k": float(t), "measured_kappa": float(kappa),
-                                  "output_kappa": float(live.arbiter.drive.kappa), "speed_mps": float(out_.speed_mps),
-                                  "permit_asked": bool(out_.policy.drive_allowed)})  # forbidden: no arcs asked
-                    drive = live_ackermann(out_.speed_mps, out_.curvature_inv_m, args.drive_geometry)
-                    rate_ = settings["steering_command_rate_rad_s"] * dt
-                    steering_command[:] = steer_before_ + np.clip(np.asarray(drive.steering_rad) - steer_before_,
-                                                                  -rate_, rate_)
-                    requested_speed = float(drive.speed_mps)
-                    state["command_speed"] = float(out_.speed_mps)
-                    state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
-                elif out_.stop_kind == "preempt":
-                    drive = live_ackermann(0.0, kappa, args.drive_geometry)
-                    steering_command[:] = steer_before_
+                elif core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
                     requested_speed = 0.0
-                    state["command_speed"] = 0.0
-                    state["applied_command"] = (0.0, [float(v) for v in steering_command])
-                # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
-                live.publish(
-                    t, out_, live_safety_,
-                    pose={"frame": "map", "x_m": float(rear[0]), "y_m": float(rear[1]), "yaw_rad": float(rear[2]),
-                          "correction_version": None if obstacle is None else int(obstacle["version"]),
-                          "source": "slam" if slam is not None else "odom"},
-                    freshness=None,
-                    applied={"speed_mps": float(drive.speed_mps), "curvature_inv_m": float(drive.curvature_inv_m),
-                             "steering_rad": [float(v) for v in steering_command]},
-                    speed_mps=float(speed_now_),
-                    # measured, not commanded: the joints as they stand (contract 6)
-                    steering_rad=[float(v) for v in robot.get_joint_positions()[steers]],
-                    lift_m=float(robot.get_joint_positions()[lift_index[0]]))
-            if dwell_standing and wheel_lock["q"] is None:
-                # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
-                controller_ = robot.get_articulation_controller()
-                kps_, kds_ = (np.asarray(g, dtype=float).copy() for g in controller_.get_gains())
-                wheel_lock.update(q=np.asarray(robot.get_joint_positions()[wheels], dtype=float).copy(), gains=(kps_, kds_))
-                locked_kps = kps_.copy()
-                locked_kps[wheels] = DWELL_WHEEL_KP
-                controller_.set_gains(kps=locked_kps, kds=kds_)
-                wheel_lock["events"].append({"lock_s": float(t), "q": wheel_lock["q"].tolist()})
-            elif not dwell_standing and wheel_lock["q"] is not None:
-                robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
-                wheel_lock["events"][-1]["release_s"] = float(t)
-                wheel_lock["q"] = None
-            robot.apply_action(
-                isaac.action(
-                    joint_velocities=np.asarray(drive.wheel_rates_rad_s),
-                    joint_positions=wheel_lock["q"],
-                    joint_indices=wheels,
+                    if core.jobs is not None and core.job_pending():
+                        plan_wait_ = True  # real-time plan D8b: the leg's plan was just asked
+                        curvature = 0.0
+                        dwell_hold = True
+                if loaded_wait_ and not paused_:  # plan D5 6c: standing for the loaded start, the steering held
+                    requested_speed, curvature = 0.0, 0.0
+                    dwell_hold = True
+                if new_obstacles is not None and ms.phase in trackers:
+                    leg, leg_direction = trackers[ms.phase].leg_ahead()
+                    driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()
+                    pallet_face = None
+                    if "approach" in paths and ms.phase in ("approach", "insert"):
+                        # N11/N12/N14 place bars in the pallet frame: the approach
+                        # face centre of the real pallet, the insertion heading of
+                        # the approach's end (a scenario placement, never a planner
+                        # input -- plan D6).
+                        hy = float(paths["approach"].poses[-1][2])
+                        half = geometry.pallet_depth_m / 2
+                        pallet_face = (float(ppos[0]) - half * math.cos(hy), float(ppos[1]) - half * math.sin(hy), hy)
+                    if obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase:
+                        leg_direction = 0  # a backoff is not a leg of the phase (Codex checkpoint 9 P1)
+                    def n_sweep_test(box, path_, loaded_=loaded):
+                        # N3: does the truck's own sweep along the path ahead (first
+                        # 4 m) meet the box, and would a straight run of that length
+                        # from here meet it? (Codex checkpoint 14)
+                        from forklift_core.planning.geometry import Bounds as SBounds
+
+                        bx_, by_, byaw_, bsize_ = box
+                        rect_ = Rectangle(float(bx_), float(by_), float(bsize_[0]), float(bsize_[1]), float(byaw_))
+                        fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
+                        chk_ = FootprintCollisionChecker([rect_], fp_, SBounds(-1e6, 1e6, -1e6, 1e6))
+                        pts_ = np.asarray(path_, dtype=float)
+                        seg_ = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts_[:, :2], axis=0).T))))
+                        pts_ = pts_[seg_ <= 4.0]
+                        meets_path_ = any(not chk_.free(tuple(p_)) for p_ in pts_)
+                        x0_, y0_, h0_ = (float(v) for v in pts_[0])
+                        # The straight runs the way the leg drives: backwards on a
+                        # reverse leg (Codex checkpoint 15).
+                        sgn_ = -1.0 if leg_direction < 0 else 1.0
+                        line_ = [(x0_ + sgn_ * d_ * math.cos(h0_), y0_ + sgn_ * d_ * math.sin(h0_), h0_)
+                                 for d_ in np.arange(0.0, min(4.0, seg_[-1]) + 1e-9, 0.025)]
+                        meets_line_ = any(not chk_.free(p_) for p_ in line_)
+                        return meets_path_, meets_line_
+
+                    due_ = new_obstacles["schedule"].update(
+                        t, ms.phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
+                        sweep_test=n_sweep_test,
+                    )
+                    if boundary is not None and boundary.recorder.value_format == 2:
+                        # The schedule has no port: its inputs (by digest -- the leg ahead is an array every tick) and
+                        # what it did with them, so a replay rerunning it from the same rules is checked (plan 6).
+                        from forklift_core.mission.boundary_record import payload_digest, trace_entry
+
+                        trace_entry(boundary, "schedule", {
+                            "inputs_sha256": payload_digest({
+                                "t": float(t), "phase": ms.phase, "driven": float(driven),
+                                "leg": None if leg is None else np.asarray(leg, dtype=float),
+                                "leg_direction": int(leg_direction), "pallet_face": pallet_face}),
+                            "actions": [list(a_) for a_ in due_]})
+                    for action in due_:
+                        if action[0] == "spawn":
+                            _, oid, ox, oy, oyaw, osize = action
+                            path_ = f"/World/NewObstacle_{oid}"
+                            isaac.spawn_box(path_, ox, oy, oyaw, osize)
+                            rect = Rectangle(float(ox), float(oy), float(osize[0]), float(osize[1]), float(oyaw))
+                            new_obstacles["rects"][oid] = rect
+                            obstacles.append(rect)  # ground truth for the evaluator only
+                            if any(e_.id == oid and e_.frame == "pallet" for e_ in new_obstacles["schedule"].events):
+                                # Judged against the pallet's solids, not its outline
+                                # (Codex checkpoint 9 P1).
+                                new_obstacles.setdefault("pallet_frame", []).append(rect)
+                                new_obstacles.setdefault("heights", {})[id(rect)] = float(osize[2])
+                            if obstacle is not None and obstacle["layer"].shadow is not None:
+                                _, own_ = obstacle["layer"].footprints(loaded)
+                                reach = obstacle["layer"].shadow.band_m + 0.05 * math.sqrt(2)
+                                grown = Footprint(own_.front_m + reach, own_.rear_m + reach, own_.half_width_m + reach)
+                                # Geometry only: unbounded hall, so a grown outline past
+                                # the hall edge is not taken for an overlap (Codex P2).
+                                from forklift_core.planning.geometry import Bounds as NBounds
+
+                                open_hall = NBounds(-1e6, 1e6, -1e6, 1e6)
+                                if not FootprintCollisionChecker([rect], grown, open_hall).free(tuple(float(v) for v in truth_rear)):
+                                    new_obstacles["band_overlaps"].append({"time_s": t, "event": oid})
+                        elif action[0] == "remove":
+                            oid = action[1]
+                            isaac.remove_prim(f"/World/NewObstacle_{oid}")
+                            rect = new_obstacles["rects"].pop(oid, None)
+                            if rect in obstacles:
+                                obstacles.remove(rect)
+                estop_holding = estop is not None and estop.update(
+                    t=t,
+                    phase=ms.phase,
+                    phase_elapsed_s=t - ms.phase_started,
+                    rear=truth_rear,
+                    speed_mps=float(np.dot(velocity[:2], forward)),
+                    loaded=loaded,
+                    curvature_inv_m=kappa,
+                    extra=[
+                        *robot.get_joint_positions()[steers],
+                        float(robot.get_joint_positions()[lift_index[0]]),
+                        *ppos,
+                        pallet_yaw,
+                    ],
                 )
-            )
-            robot.apply_action(
-                isaac.action(
-                    joint_positions=steering_command, joint_indices=steers
+                # M-a1 slice 5: the command assembly is the core's (the e-stop probe above stays the runner's, truth).
+                steer_before_ = steering_command.copy() if live is not None else None
+                command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
+                                                 obstacle_hold, dwell_hold, cusp_hold, safety_hold)
+                drive, steering_command, actual_steering = command_.drive, command_.steering_command, command_.actual_steering
+                requested_speed = command_.requested_speed
+                if live is not None:
+                    # M-c (plan C2): the arbiter decides what drives. AUTO and PAUSED: the core's command as assembled.
+                    # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
+                    # a preempt: zero wheels, steering held. The applied command is written back for the core.
+                    live_state["rear"] = tuple(float(v) for v in rear)
+                    speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
+                    # The sim distance driven since the last tick, for the installed arcs: the odometry's own motion
+                    # (Codex M-c round 10 P2: the end speed times dt missed a braking interval's travel).
+                    odom_now_ = tuple(float(v) for v in slam["odom_rear"][:2]) if slam is not None else None
+                    if live_perm is not None:
+                        prev_ = live_state.get("odom_prev")
+                        driven_ = (math.hypot(odom_now_[0] - prev_[0], odom_now_[1] - prev_[1])
+                                   if odom_now_ is not None and prev_ is not None
+                                   else abs(float(speed_now_)) * dt if odom_now_ is None else None)
+                        if driven_ is not None:
+                            live_perm.advance(driven_)
+                            if live_pallet_perm is not None:
+                                live_pallet_perm.advance(driven_)
+                                live_pallet_full.advance(driven_)  # plan D14: the manual clear's end check too
+                    live_state["odom_prev"] = odom_now_
+                    target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
+                    core.cargo.observe(ms.phase, rear)  # plan D4: the insert's anchors and trace, at the tick's end
+                    # plan D4b: the recent odometry trajectory a back-out retraces (odometry, never the control pose)
+                    core.observe_motion(slam["odom_rear"] if slam is not None else rear)
+                    if trace_evidence is not None:
+                        # The truth read this tick, again with the phase this tick ended in: a reference is taken at
+                        # its transition's instant, not a physics step later (Codex 6b impl round 1 P2-5).
+                        trace_evidence.update(ms.phase if core.commands.adopted_id is not None else "idle",
+                                              (float(base[0]), float(base[1]), float(yaw)),
+                                              (float(ppos[0]), float(ppos[1]), float(pallet_yaw)))
+                    # plan D5 6c item 2a: the pallet's seat on the forks (relative to the true rear axle), for a submit
+                    rx_, ry_, ryaw_ = (float(v) for v in truth_rear)
+                    cdx_, cdy_ = float(ppos[0]) - rx_, float(ppos[1]) - ry_
+                    live_state["cargo_rel"] = (math.cos(ryaw_) * cdx_ + math.sin(ryaw_) * cdy_,
+                                               -math.sin(ryaw_) * cdx_ + math.cos(ryaw_) * cdy_,
+                                               math.atan2(math.sin(float(pallet_yaw) - ryaw_),
+                                                          math.cos(float(pallet_yaw) - ryaw_)))
+                    if core.commands.adopted_id is None:
+                        # Plan D14: the manual recovery's verdicts (ground, free) with no mission adopted.
+                        live_state["pallet_now"] = (float(ppos[0]), float(ppos[1]), float(pallet_yaw))
+                        if core.manual_recovery_tick(t, rear, standing=bool(live.arbiter.stop_confirmed)):
+                            # The deferred release moved the control pose: the permit reads the released one (Codex
+                            # D14 impl round 1 P2-3).
+                            rear = np.asarray(slam_rear(t), dtype=float)
+                            live_state["rear"] = tuple(float(v) for v in rear)
+                    live_safety_ = core.safety_state(t)
+                    out_ = live.tick_end(
+                        t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
+                        {"measured_mps": float(speed_now_), "measured_kappa": float(kappa),
+                         "steering_error_rad": float(np.max(np.abs(target_steer_ - actual_steering))),
+                         "permit": live_permit, "lift_command_m": float(ms.lift_command)})
+                    if out_.lift_target_m is not None:
+                        ms.lift_command = float(out_.lift_target_m)  # plan D14: the manual lift owns the target
+                    if live._lift_latch is not None:
+                        # The gate latched the lift where it stood: both targets agree with it once the gate lifts
+                        # (Codex D14 design round 1 P2-4, impl round 1 P1-1).
+                        ms.lift_command = float(live._lift_latch)
+                        live.arbiter.lift.sync(float(live._lift_latch))
+                    live_teleop_withdraw(t, out_, rear)
+                    live_tick_out_ = True  # persistent console plan D6: this tick's output is given
+                    if out_.source == "teleop":
+                        if args.live_test_permit_compare:
+                            # The bundle's inputs each teleop cycle, for the offline coverage check (teleop bundle margin
+                            # plan V3): the grid bundle's last curvature is its margined edge, not the output.
+                            live.log({"teleop_k": float(t), "measured_kappa": float(kappa),
+                                      "output_kappa": float(live.arbiter.drive.kappa), "speed_mps": float(out_.speed_mps),
+                                      "permit_asked": bool(out_.policy.drive_allowed)})  # forbidden: no arcs asked
+                        drive = live_ackermann(out_.speed_mps, out_.curvature_inv_m, args.drive_geometry)
+                        rate_ = settings["steering_command_rate_rad_s"] * dt
+                        steering_command[:] = steer_before_ + np.clip(np.asarray(drive.steering_rad) - steer_before_,
+                                                                      -rate_, rate_)
+                        requested_speed = float(drive.speed_mps)
+                        state["command_speed"] = float(out_.speed_mps)
+                        state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
+                    elif out_.stop_kind == "preempt":
+                        drive = live_ackermann(0.0, kappa, args.drive_geometry)
+                        steering_command[:] = steer_before_
+                        requested_speed = 0.0
+                        state["command_speed"] = 0.0
+                        state["applied_command"] = (0.0, [float(v) for v in steering_command])
+                    # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
+                    live_tracker_ = trackers.get(ms.phase) if core.commands.status in (
+                        "running", "paused", "held", "resuming", "recovering") else None  # (D4: the retrace drawn)
+                    live_plan_key_ = None if live_tracker_ is None else (
+                        ms.phase, (getattr(live_tracker_, "_book", None) or {}).get("serial", id(live_tracker_)))
+                    live_plan_poses_ = None if live_tracker_ is None else (
+                        lambda tr=live_tracker_: (tr._poses, tr._directions))
+                    live.publish(
+                        t, out_, live_safety_,
+                        pose={"frame": "map", "x_m": float(rear[0]), "y_m": float(rear[1]), "yaw_rad": float(rear[2]),
+                              "correction_version": None if obstacle is None else int(obstacle["version"]),
+                              "source": "slam" if slam is not None else "odom"},
+                        freshness=None,
+                        applied={"speed_mps": float(drive.speed_mps), "curvature_inv_m": float(drive.curvature_inv_m),
+                                 "steering_rad": [float(v) for v in steering_command]},
+                        speed_mps=float(speed_now_),
+                        # measured, not commanded: the joints as they stand (contract 6)
+                        steering_rad=[float(v) for v in robot.get_joint_positions()[steers]],
+                        lift_m=float(robot.get_joint_positions()[lift_index[0]]),
+                        # the path being followed, for the page's map (display only): none without a running mission
+                        plan_key=live_plan_key_, plan_poses=live_plan_poses_)
+                if dwell_standing and wheel_lock["q"] is None:
+                    # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
+                    controller_ = robot.get_articulation_controller()
+                    kps_, kds_ = (np.asarray(g, dtype=float).copy() for g in controller_.get_gains())
+                    wheel_lock.update(q=np.asarray(robot.get_joint_positions()[wheels], dtype=float).copy(), gains=(kps_, kds_))
+                    locked_kps = kps_.copy()
+                    locked_kps[wheels] = DWELL_WHEEL_KP
+                    controller_.set_gains(kps=locked_kps, kds=kds_)
+                    wheel_lock["events"].append({"lock_s": float(t), "q": wheel_lock["q"].tolist()})
+                elif not dwell_standing and wheel_lock["q"] is not None:
+                    robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
+                    wheel_lock["events"][-1]["release_s"] = float(t)
+                    wheel_lock["q"] = None
+                robot.apply_action(
+                    isaac.action(
+                        joint_velocities=np.asarray(drive.wheel_rates_rad_s),
+                        joint_positions=wheel_lock["q"],
+                        joint_indices=wheels,
+                    )
                 )
-            )
-            robot.apply_action(
-                isaac.action(
-                    joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
+                robot.apply_action(
+                    isaac.action(
+                        joint_positions=steering_command, joint_indices=steers
+                    )
                 )
-            )
-            core.refresh_targets()  # M-a4: the targets list follows the mission (no port call)
-            if safety_file is not None:
-                safety_file.write(json.dumps(core.safety_state(t)) + "\n")  # M-a3 (plan E8): every control tick
-            if cancel_stop_:
-                break  # M-a3 (plan E6): cancelled standing, its last stop output applied
-            if "chase" in extra_cameras and step % fps_divisor == 0:
-                chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
-                    base, yaw, chase_yaw, fps_divisor / 120
+                robot.apply_action(
+                    isaac.action(
+                        joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
+                    )
                 )
-                isaac.place_chase_camera(extra_cameras["chase"], chase_eye, chase_target)
-            if slam is not None:
-                slam["last_command"] = requested_speed
-            near_done = state.get("near_capture", {}).get("status") == "done"
-            if recorder is not None:
-                recorder.phase = ms.phase if ms.phase in pocket_recorder.PHASES else "other"
-            pocket_frames = (
-                pocket["check"] is not None
-                or (recorder is not None and near_done)
-                or (near is not None and near["tracker"] is not None)
-            ) and ms.phase in ("approach", "insert")
-            if pocket_frames:
-                pocket["history"].append((t, tuple(float(v) for v in rear)))
-                del pocket["history"][:-120]
-                # Plan D8b: the pose with its own time (D5 keeps its history as it was).
-                pocket["control_stamped"] = (rear_stamp, tuple(float(v) for v in rear))
-            # Leg switches the trackers made this tick, stamped with this tick's time (V5 cusp
-            # arrivals: the error at the switch); a replaced tracker is drained on replacement and the
-            # rest at the end (TrackerBook).
-            trackers.collect()
-            capturing_ = core.capture_live is not None and core.capture_live.raw is None
-            if live is not None and live.trace is not None:
+                core.refresh_targets()  # M-a4: the targets list follows the mission (no port call)
+                if safety_file is not None:
+                    safety_file.write(json.dumps(core.safety_state(t)) + "\n")  # M-a3 (plan E8): every control tick
+                if cancel_stop_ and live is None:
+                    break  # M-a3 (plan E6): cancelled standing, its last stop output applied
+                # live: the cancel ends the mission, not the run -- the slot is free for the operator's next submit
+                if "chase" in extra_cameras and step % fps_divisor == 0:
+                    chase_eye, chase_target, chase_yaw = MISSION_VIEWS.chase_pose(
+                        base, yaw, chase_yaw, fps_divisor / 120
+                    )
+                    isaac.place_chase_camera(extra_cameras["chase"], chase_eye, chase_target)
+                if slam is not None:
+                    slam["last_command"] = requested_speed
+                near_done = state.get("near_capture", {}).get("status") == "done"
+                if recorder is not None:
+                    recorder.phase = ms.phase if ms.phase in pocket_recorder.PHASES else "other"
+                pocket_frames = (
+                    pocket["check"] is not None
+                    or (recorder is not None and near_done)
+                    or (near is not None and near["tracker"] is not None)
+                ) and ms.phase in ("approach", "insert")
+                if pocket_frames:
+                    pocket["history"].append((t, tuple(float(v) for v in rear)))
+                    del pocket["history"][:-120]
+                    # Plan D8b: the pose with its own time (D5 keeps its history as it was).
+                    pocket["control_stamped"] = (rear_stamp, tuple(float(v) for v in rear))
+                # Leg switches the trackers made this tick, stamped with this tick's time (V5 cusp
+                # arrivals: the error at the switch); a replaced tracker is drained on replacement and the
+                # rest at the end (TrackerBook).
+                trackers.collect()
+                capturing_ = core.capture_live is not None and core.capture_live.raw is None
+                if live is not None and live.trace is not None:
+                    if capturing_:
+                        live.trace.control_flag("capture")
+                    if pocket_frames and step % 12 == 0:
+                        live.trace.control_flag("pocket")
+                    live.trace.control("ctrl_end", live.trace.now())
+                stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)
+                live_stepped_ = True  # persistent console plan D6: this tick's physics step is done
                 if capturing_:
-                    live.trace.control_flag("capture")
+                    # Real-time plan D9c: right after its render step, before the next tick clears the step's STOP.
+                    stepped_ = core.capture_stepped(bool(live.stopped_in_tick))
+                    if getattr(stepped_, "aborted", False) or core.capture_live is None or core.capture_live.raw is not None:
+                        live.capturing = False
                 if pocket_frames and step % 12 == 0:
-                    live.trace.control_flag("pocket")
-                live.trace.control("ctrl_end", live.trace.now())
-            stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)
-            if capturing_:
-                # Real-time plan D9c: right after its render step, before the next tick clears the step's STOP.
-                stepped_ = core.capture_stepped(bool(live.stopped_in_tick))
-                if getattr(stepped_, "aborted", False) or core.capture_live is None or core.capture_live.raw is not None:
-                    live.capturing = False
-            if pocket_frames and step % 12 == 0:
-                read_pocket_frame()
-            if step % 12 == 0:
-                sample = {
-                    "time_s": t,
-                    "phase": ms.phase,
-                    "base_position_m": base.tolist(),
-                    "rear_pose": rear.tolist(),
-                    "base_tilt_rad": tilt,
-                    "signed_speed_mps": signed_speed,
-                    "pallet_position_m": ppos.tolist(),
-                    "pallet_yaw_rad": pallet_yaw,
-                    "pallet_tilt_rad": pallet_tilt,
-                    "speed_command_mps": drive.speed_mps,
-                    "curvature_inv_m": drive.curvature_inv_m,
-                    "steering_command_rad": steering_command.tolist(),
-                    "steering_actual_rad": actual_steering.tolist(),
-                    "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
-                }
-                if tracking is not None:
-                    sample["tracking"] = asdict(tracking)
-                state["samples"].append(sample)
-                if step % 240 == 0:
-                    print("SAMPLE", record_json(sample), flush=True)
-            if boundary is not None:
-                boundary.recorder.tick_end(
-                    outputs={
-                        "candidate": {"speed_mps": requested_speed, "curvature_inv_m": curvature},
-                        "holds": {"dwell": dwell_hold, "cusp": cusp_hold, "safety": safety_hold},
+                    read_pocket_frame()
+                if step % 12 == 0:
+                    sample = {
+                        "time_s": t,
                         "phase": ms.phase,
-                        "speed_mps": drive.speed_mps,
+                        "base_position_m": base.tolist(),
+                        "rear_pose": rear.tolist(),
+                        "base_tilt_rad": tilt,
+                        "signed_speed_mps": signed_speed,
+                        "pallet_position_m": ppos.tolist(),
+                        "pallet_yaw_rad": pallet_yaw,
+                        "pallet_tilt_rad": pallet_tilt,
+                        "speed_command_mps": drive.speed_mps,
                         "curvature_inv_m": drive.curvature_inv_m,
-                        "wheel_rates_rad_s": np.asarray(drive.wheel_rates_rad_s),
-                        "steering_command": np.asarray(steering_command),
-                        "lift_command": ms.lift_command,
-                    },
-                    branches=branch_probe(),
-                )
+                        "steering_command_rad": steering_command.tolist(),
+                        "steering_actual_rad": actual_steering.tolist(),
+                        "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                    }
+                    if tracking is not None:
+                        sample["tracking"] = asdict(tracking)
+                    state["samples"].append(sample)
+                    if step % 240 == 0:
+                        print("SAMPLE", record_json(sample), flush=True)
+                if boundary is not None:
+                    boundary.recorder.tick_end(
+                        outputs={
+                            "candidate": {"speed_mps": requested_speed, "curvature_inv_m": curvature},
+                            "holds": {"dwell": dwell_hold, "cusp": cusp_hold, "safety": safety_hold},
+                            "phase": ms.phase,
+                            "speed_mps": drive.speed_mps,
+                            "curvature_inv_m": drive.curvature_inv_m,
+                            "wheel_rates_rad_s": np.asarray(drive.wheel_rates_rad_s),
+                            "steering_command": np.asarray(steering_command),
+                            "lift_command": ms.lift_command,
+                        },
+                        branches=branch_probe(),
+                    )
+            except RuntimeError as exc_:
+                if live is None or isinstance(exc_, SessionFailure) or classify_failure(str(exc_)) == "session":
+                    raise
+                live_failed(t, str(exc_), live_tick_out_, live_stepped_, locals().get("applied_commands_", []))
         if early_ports and not boundary.recorder.in_tick:
             # Format 2: the loop ran out of time between ticks -- the end's own reads go in a closing tick.
             boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
             return
+        if live is not None:
+            # Persistent console plan D1: each mission was judged at its own end (the results book); the session
+            # ends here (at the loop's limit until D7), a mission still on as session_end.
+            live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
+            # The session's end decides the exit (plan D9): 0 ended, 3 a new scene; the supervisor reads it.
+            state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
+            live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
+            live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
+            state.update({"success": True, "mission_results": live.results.message()["results"],
+                          "simulated_time_s": world.current_time - initial_time,
+                          "simulation_wall_s": time.monotonic() - simulation_started_wall})
+            return
         if core.commands.status == "cancelled":
             state["mission_result"] = "cancelled"  # M-a3 (plan E6): an outcome of its own, not a time-out
             require(False, "mission_cancelled")
         require(ms.phase == "complete", "Mission exceeded simulation time budget")
+        # Persistent console plan D1 step 6: the delivery check is a function a live run calls at each mission's end.
         final_pallet, _ = pallet.get_world_pose()
-        destination = np.array([truth_destination.x_m, truth_destination.y_m])
-        delivery_error = float(np.linalg.norm(final_pallet[:2] - destination))
-        require(delivery_error < 0.08, "Pallet missed the green destination center")
-        require(abs(final_pallet[2]) < 0.008, "Delivered pallet is not grounded")
-        final_base, final_q = robot.get_world_pose()
-        final_yaw = yaw_and_tilt(final_q)[0]
-        # final_base is base_link, not the rear axle -- axle_to_fork_tip_m is
-        # measured from the axle, so subtract the axle-to-base_link offset first.
-        tip = final_base[:2] + (
-            args.axle_to_fork_tip_m - abs(args.rear_axle_offset_m)
-        ) * np.array([math.cos(final_yaw), math.sin(final_yaw)])
-        destination_axis = np.array(
-            [
-                math.cos(truth_destination.yaw_rad),
-                math.sin(truth_destination.yaw_rad),
-            ]
-        )
-        require(
-            float(np.dot(final_pallet[:2] - tip, destination_axis))
-            > geometry.pallet_depth_m / 2 + EXIT_CLEARANCE_M,
-            "Fork still inside delivered pallet",
-        )
+        verdict_ = delivery_verdict(final_pallet, base_pose,
+                                    (truth_destination.x_m, truth_destination.y_m, truth_destination.yaw_rad),
+                                    pallet_depth_m=geometry.pallet_depth_m, axle_to_fork_tip_m=args.axle_to_fork_tip_m,
+                                    rear_axle_offset_m=args.rear_axle_offset_m, exit_clearance_m=EXIT_CLEARANCE_M)
+        require(verdict_.ok, verdict_.reason or "")
+        delivery_error = verdict_.delivery_error_m
         snapshot("delivered")
         state.update(
             {
@@ -6874,13 +7683,32 @@ def drive(S, isaac) -> None:
                     # a failure already raised (Codex S4a-1 review P2).
                     state["success"] = False
                     state.setdefault("failure_reason", f"near_tracking_record_failed: {exc!r}")
+            spooled_ = ()
+            if live_spool is not None:
+                # Persistent console plan D8: the tails cut too, so the spool holds the whole session; the spooled
+                # lists are empty from here, and their end files and summaries come from the spool.
+                from forklift_core.live.spool import iter_chunks as spool_chunks
+                import live_records  # a sibling, as live_runtime
+
+                spool_root_ = args.output / "spool"
+                spooled_ = tuple(state.get("spool_registered") or ())
+                try:
+                    state["spool"] = {"root": "spool", **live_spool.close()}
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                    state.setdefault("record_errors", []).append(f"spool: {exc_!r}")
+                    state["spool"] = {"root": "spool", "complete": False, "close_error": repr(exc_)}
             if state.get("obstacle_layer") is not None and obstacle is not None:
                 scans_rec = obstacle["scans"]
-                walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
+                if "obstacle.scans" in spooled_:
+                    scan_stats_ = live_records.scan_wall_stats(spool_chunks(spool_root_, "obstacle.scans"))
+                else:
+                    walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
+                    scan_stats_ = {"scans": len(scans_rec),
+                                   "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))}}
                 state["obstacle_layer"].update(
                     {
-                        "scans": len(scans_rec),
-                        "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))},
+                        **scan_stats_,
+                        **({"incomplete": True} if spooled_ and not state["spool"].get("complete") else {}),
                         "control_ticks": obstacle["ticks"],
                         "slowed_ticks": obstacle["slowed"],
                         "slowed_reasons": obstacle["reasons"],
@@ -6904,7 +7732,8 @@ def drive(S, isaac) -> None:
                         },
                     }
                 )
-                (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
+                if "obstacle.scans" not in spooled_:
+                    (args.output / "obstacle_scans.json").write_text(record_json(scans_rec) + "\n")
                 if overlay["plan_history"] or overlay["grids"]:
                     (args.output / "plan_history.json").write_text(
                         record_json({"plans": overlay["plan_history"], "replans": obstacle.get("replans", []),
@@ -6922,6 +7751,17 @@ def drive(S, isaac) -> None:
             if slam is not None:
                 # First, so a video shutdown failure cannot lose the SLAM record.
                 slam["link"].close()
+            if slam is not None and "slam.control" in spooled_:
+                # Plan D8: the live run's SLAM summary from its spooled chunks, one at a time.
+                state["slam_summary"] = {
+                    **live_records.slam_summary(spool_chunks(spool_root_, "slam.control"),
+                                                spool_chunks(spool_root_, "slam.records")),
+                    "holds": slam["holds"],
+                    "pending_release_at_end": slam["pending_release"],
+                    "final_mode": slam["tracker"].mode,
+                    **({"incomplete": True} if not state["spool"].get("complete") else {}),
+                }
+            elif slam is not None:
                 (args.output / "slam_records.json").write_text(
                     record_json(slam["records"]) + "\n"
                 )
@@ -6950,10 +7790,11 @@ def drive(S, isaac) -> None:
                 }
             if frame_log is not None:
                 frame_log.close()
-            (args.output / "frame_audit.json").write_text(
-                record_json(frame_audit, indent=2) + "\n"
-            )
-            if video_frames:
+            if "video.frame_audit" not in spooled_:
+                (args.output / "frame_audit.json").write_text(
+                    record_json(frame_audit, indent=2) + "\n"
+                )
+            if video_frames or "video.frames" in spooled_:
                 (args.output / "video_frames.json").write_text(
                     record_json(
                         {
@@ -6974,13 +7815,17 @@ def drive(S, isaac) -> None:
                                 "depth_video_range_m": list(DEPTH_VIDEO_RANGE_M),
                                 "timing": "video only, not a freshness-checked capture",
                             },
-                            "frames": video_frames,
+                            "frames": {"spool": "video.frames"} if "video.frames" in spooled_ else video_frames,
                         },
                         indent=1,
                     )
                     + "\n"
                 )
-            if slam_log is not None and slam_log["scan_stamps_s"]:
+            if slam_log is not None and "slam_log.joint" in spooled_:
+                write_slam_record(args, state, replace(scenario, destination=truth_destination), factory, slam_log,
+                                  lidar_config, spool={"joint": "slam_log.joint", "scan": "slam_log.scan",
+                                                       "silenced": "slam_log.silenced", "root": "spool"})
+            elif slam_log is not None and slam_log["scan_stamps_s"]:
                 write_slam_record(args, state, replace(scenario, destination=truth_destination), factory, slam_log, lidar_config)
             # Records first, encoders last: a slow ffmpeg shutdown must neither
             # lose the records above nor replace the run's own failure reason.
@@ -7168,7 +8013,9 @@ def main() -> None:
         # is that exception (Codex R3/R4 review P2).
         close_boundary_record(state, failure_exc)
         state["wall_time_s"] = time.monotonic() - started
-        if state.get("tyre_contact_rows") is not None:
+        if "state.tyre_contact_rows" in (state.get("spool_registered") or ()):
+            state.pop("tyre_contact_rows", None)  # plan D8: a live run's rows are in spool/state.tyre_contact_rows
+        elif state.get("tyre_contact_rows") is not None:
             # (t, then per tyre FL FR RL RR: impulse x y z, contact count, mean contact x y)
             np.save(args.output / "tyre_contacts.npy", np.asarray(state.pop("tyre_contact_rows"), dtype=float))
         if app is not None and "render_mode" in state:
@@ -7188,9 +8035,16 @@ def main() -> None:
             ),
             flush=True,
         )
+        # The exit code as a file too, before app.close(): Isaac ends the process with 0 there whatever the run did
+        # (ws1 2026-10-18), so a supervisor reads this (persistent console plan D9).
+        (args.output / "exit_code").write_text(json.dumps({
+            "code": state.get("live_exit_code", 0) if state["success"] else 1,
+            "reason": None if state["success"] else state.get("failure_reason")}))
         if app is not None:
             app.close()
-    raise SystemExit(0 if state["success"] else 1)
+    # A live session's own end code (0 ended, 3 a new scene) only when the run ended cleanly: a failure in its closing
+    # is a failure for the supervisor too (Codex stage 4a P2).
+    raise SystemExit(state.get("live_exit_code", 0) if state["success"] else 1)
 
 
 if __name__ == "__main__":

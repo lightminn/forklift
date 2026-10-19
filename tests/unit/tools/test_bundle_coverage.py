@@ -183,3 +183,30 @@ def test_a_forbidden_drive_cycle_is_neither_installed_nor_checked(tmp_path):
     assert out["forbidden_cycles"] > 0
     assert out["modes"]["teleop"]["checks"] > 0 and out["modes"]["teleop"]["worst"]["t"] < 3.0
     assert out["modes"]["auto"]["checks"] == 0
+
+
+def test_a_live_run_with_its_records_spooled_reads_as_the_same_run(tmp_path):
+    """Persistent console plan D8 (Codex D8 design round 2 P2-3): a live run's SLAM log and samples are in its record
+    spool; the tool reads them from there -- the command curvature, not the joints' fallback."""
+    from forklift_core.live.spool import RecordSpool
+
+    batch, live = tmp_path / "batch", tmp_path / "live"
+    batch.mkdir(), live.mkdir()
+    write_run(batch, k_joint=-0.1, k_true=-0.06, speed=0.5, seconds=6.0, k_out=-0.12)
+    result = json.loads((batch / "result.json").read_text())
+    with np.load(batch / "slam_log.npz") as data:
+        log = {k: list(data[k]) for k in data.files}
+    log["silenced_scan_stamps_s"] = []
+    samples = list(result.pop("samples"))
+    spool = RecordSpool(live / "spool", interval_s=0.0, queue_cuts=100)
+    spool.register_group("slam_log.joint", {k: log[k] for k in ("joint_stamps_s", "base_pose_world", "steering_rad")})
+    spool.register_group("slam_log.scan", {"scan_stamps_s": log["scan_stamps_s"]})
+    spool.register("slam_log.silenced", log["silenced_scan_stamps_s"])
+    spool.register("state.samples", samples)
+    result["spool"] = {"root": "spool", **spool.close()}
+    result["spool_registered"] = ["slam_log.joint", "slam_log.scan", "slam_log.silenced", "state.samples"]
+    (live / "result.json").write_text(json.dumps(result))
+    (live / "meta.json").write_text(json.dumps({"spool": {"joint": "slam_log.joint", "scan": "slam_log.scan",
+                                                          "silenced": "slam_log.silenced", "root": "spool"}}))
+    got, want = bc.run_coverage(live, coverage_args()), bc.run_coverage(batch, coverage_args())
+    assert {**got, "run": None} == {**want, "run": None}
