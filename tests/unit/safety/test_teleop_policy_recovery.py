@@ -365,3 +365,30 @@ def test_a_slow_creep_is_not_waived_for_ever():
     for _ in range(int(12 * 120)):
         r.cycle(0.019)
     assert r.a.stand_waiver() is None and r.a.mode == "STOPPED"
+
+
+def test_a_gap_between_observations_is_not_counted_as_creep():
+    """Codex round 3 P2: 3 s without an observe, then 3 cm/s fresh, counted 9 cm of unmeasured travel."""
+    r = shaken()
+    for _ in range(4):  # four half-second stalls (the lease survives each): 6 cm unmeasured if counted
+        r.cycle(0.03, dt=0.5)
+        for _ in range(30):
+            r.cycle(jitter(r.k))
+    for _ in range(240):
+        r.cycle(jitter(r.k))
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["t"] == "ack"
+
+
+def test_a_latch_released_by_the_waiver_in_teleop_is_recorded_as_stand_unconfirmed():
+    """Codex round 3 P3: the contract names the event for this case too."""
+    r = Shaky(in_pocket())
+    for _ in range(60):
+        r.cycle(0.0)  # a confirmed stand: an ordinary entry
+    assert r.cycle(0.0, r.msg("mode_request", to="TELEOP"))[0]["t"] == "ack"
+    for _ in range(240):
+        r.cycle(jitter(r.k), teleop=LOWER)
+    for _ in range(60):  # the operator lets go in the rocking: expired, then released under the waiver
+        r.cycle(jitter(r.k))
+    events = [e for e in r.a.events if e.get("event") in ("latch_released", "stand_unconfirmed")]
+    assert any(e.get("stand_waiver") for e in events)
+    assert any(e.get("event") == "stand_unconfirmed" and e.get("reason") == "latch_lower_only" for e in events)

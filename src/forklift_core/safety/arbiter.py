@@ -542,6 +542,8 @@ class Arbiter:
                                                        yaw_rate=float(feedback.yaw_rate_radps))
             samples = self._recent_speeds
             dt = samples[-1][0] - samples[-2][0] if len(samples) >= 2 else 0.0
+            if dt > self.config.feedback_max_age_s:
+                dt = 0.0  # nothing measured across the gap: not counted (Codex round 3), as after observe(None)
             self._creep_m = 0.0 if self.stop_confirmed else self._creep_m + dt * samples[-1][1]
         else:
             # A gap breaks the detector's history: standing must be seen again from fresh measurements (Codex
@@ -561,6 +563,7 @@ class Arbiter:
             self.preempt_latch = None
             if not self.stop_confirmed and self.mode == "TELEOP":
                 self._stand_unconfirmed = True
+                self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "latch_lower_only"})
         must_stand = self.mode in ("PAUSED", "STOPPED") or self.preempt_latch is not None
         # A still truck in a lower-only state is not a stop that failed (Codex review of 8f4a799 P2): faulting it
         # would lock out the lowering that ends the rocking.
