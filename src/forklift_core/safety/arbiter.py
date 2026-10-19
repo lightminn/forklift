@@ -527,8 +527,11 @@ class Arbiter:
         self.feedback_ok = fresh
         self.lift_m = _finite(getattr(feedback, "lift_m", None)) if fresh else None
         if fresh:
-            self._recent_speeds = [(s, v) for s, v in self._recent_speeds if now_mono - s <= STILL_WINDOW_S] + [
-                (now_mono, float(feedback.rear_axle_speed_mps))]
+            samples = self._recent_speeds + [(now_mono, float(feedback.rear_axle_speed_mps))]
+            # keep the newest sample at or before the window's start (its speed covers the start) and every later one
+            cut = now_mono - STILL_WINDOW_S
+            first = max((k for k, (s, _) in enumerate(samples) if s <= cut), default=0)
+            self._recent_speeds = samples[first:]
         else:
             self._recent_speeds = []
         self.steering_rad = _finite(getattr(feedback, "steering_rad", None)) if fresh else None
@@ -549,7 +552,9 @@ class Arbiter:
             self.events.append({"t": now_mono, "event": "latch_released", "reason": self.preempt_latch})
             self.preempt_latch = None
         must_stand = self.mode in ("PAUSED", "STOPPED") or self.preempt_latch is not None
-        if must_stand and not self.stop_confirmed:
+        # A still truck in a lower-only state is not a stop that failed (Codex review of 8f4a799 P2): faulting it
+        # would lock out the lowering that ends the rocking.
+        if must_stand and not self.stop_confirmed and self.stand_waiver() is None:
             if self.stopping_since is None:
                 self.stopping_since = now_mono
             elif now_mono - self.stopping_since >= self.config.not_stopped_s and self.mode != "STOPPED":
@@ -686,13 +691,13 @@ class Arbiter:
     def _policy(self, safety) -> Policy:
         policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
                                lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough())
-        if self._stand_unconfirmed:
-            if self.stop_confirmed:
-                self._stand_unconfirmed = False
-            elif policy.drive_allowed:
-                # Entered unconfirmed: no speed before the detector confirms the stand (main 2026-10-19).
+        if self._stand_unconfirmed and policy.drive_allowed:
+            if not self.stop_confirmed:
+                # Entered unconfirmed: the drive opens only on a tick the detector confirms the stand (main
+                # 2026-10-19) -- a stand confirmed earlier, while only lowering, does not count (Codex review).
                 return Policy(False, reason="stand_unconfirmed", loaded=policy.loaded, lift_dirs=policy.lift_dirs,
                               lift_allowed=policy.lift_allowed, drive_mode=policy.drive_mode)
+            self._stand_unconfirmed = False
         if policy.teleop_allowed and not self.pacing_ok:
             # M-c: no real time, no hands on -- the lift too (plan D14).
             return Policy(False, False, "pacing", loaded=policy.loaded)
@@ -701,14 +706,28 @@ class Arbiter:
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
     def _still_enough(self) -> bool:
         """Main 2026-10-19: the truck is not rolling -- its speed now at most STILL_SPEED_MPS and its net travel over
-        the last second (the integrated measured speed) at most STILL_TRAVEL_M, with a second of fresh feedback."""
+        the last second (each measured speed held back to the sample before it) at most STILL_TRAVEL_M, measured
+        over the whole second without a gap longer than the feedback age limit (Codex review of 8f4a799 P2)."""
         samples = self._recent_speeds
-        if len(samples) < 2 or samples[-1][0] - samples[0][0] < 0.9 * STILL_WINDOW_S:
+        if len(samples) < 2:
             return False
-        if abs(samples[-1][1]) > STILL_SPEED_MPS:
+        start = samples[-1][0] - STILL_WINDOW_S
+        if samples[0][0] > start or abs(samples[-1][1]) > STILL_SPEED_MPS:
             return False
-        travel = sum((t1 - t0) * v1 for (t0, _), (t1, v1) in zip(samples, samples[1:]))
+        pairs = list(zip(samples, samples[1:]))
+        if any(t1 - t0 > self.config.feedback_max_age_s for (t0, _), (t1, _) in pairs):
+            return False
+        travel = sum(v1 * (t1 - max(t0, start)) for (t0, _), (t1, v1) in pairs if t1 > start)
         return abs(travel) <= STILL_TRAVEL_M
+
+    def stand_waiver(self) -> str | None:
+        """``lower_only`` when a request that waits for a confirmed stand (TELEOP entry, rearm) is taken without one:
+        the policy only lowers (no wheel speed), the truck is still and the stop detector has not confirmed (main
+        session 2026-10-19). The state carries it so the console can offer the entry."""
+        if not self.feedback_ok or self.stop_confirmed or not self._still_enough():
+            return None
+        policy = self._policy(self.last_safety)
+        return "lower_only" if not policy.drive_allowed and policy.lift_dirs == frozenset({-1}) else None
 
     def _needs_stand(self, kind: str, request_id) -> dict | None:
         if not self.feedback_ok:
@@ -723,10 +742,13 @@ class Arbiter:
     def _on_rearm(self, client_id, request_id, msg, now_mono):
         if self.mode != "STOPPED":
             return self._reply("rearm", request_id, "invalid")
-        refused = self._needs_stand("rearm", request_id)
+        waived = self.stand_waiver()
+        refused = None if waived else self._needs_stand("rearm", request_id)
         if refused is not None:
             return refused
         self._set_mode("PAUSED", now_mono, "rearm")
+        if waived:
+            self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "rearm_lower_only"})
         return self._reply("rearm", request_id, control_gen=self.control_gen)
 
     def _to_paused(self, kind, request_id, now_mono):
@@ -748,8 +770,7 @@ class Arbiter:
         if self.mode != "PAUSED":
             return self._reply("mode_request", request_id, "invalid")  # no AUTO -> TELEOP: PAUSED first
         policy = self._policy(self.last_safety)
-        unconfirmed = (self.feedback_ok and not self.stop_confirmed and not policy.drive_allowed
-                       and policy.lift_dirs == frozenset({-1}) and self._still_enough())
+        unconfirmed = self.stand_waiver() is not None
         refused = None if unconfirmed else self._needs_stand("mode_request", request_id)
         if refused is not None:
             return refused

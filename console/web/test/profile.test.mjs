@@ -108,6 +108,15 @@ test("a pallet kind named after its geometry file reads as the pallet's name", (
   assert.equal(palletKindLabel(undefined), "종류 모름");
 });
 
+test("TELEOP entry and rearm take a lower-only stand waiver; a resume does not", () => {
+  const st = { mode: "STOPPED", stopped_confirmed: false, stand_waiver: "lower_only" };
+  assert.equal(standWhy(st, { waivable: true }), null);
+  assert.match(standWhy(st), /정지 확인/);
+  assert.equal(rearmState(st, true).enabled, true);
+  const mi = { status: "paused" };
+  assert.equal(resumeState({ state: { ...st, mode: "PAUSED" }, mission: mi, hasLease: true }).enabled, false);
+});
+
 test("requests that need the truck standing wait for stopped_confirmed", () => {
   assert.match(standWhy({ stopped_confirmed: false }), /정지 확인/);
   assert.equal(standWhy({ stopped_confirmed: true }), null);

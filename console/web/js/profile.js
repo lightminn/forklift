@@ -68,7 +68,10 @@ export function resumeSteps(steps) {
 
 // Rearm, entering TELEOP, a mission submit and a resume are refused (not_stopped) until the
 // vehicle says the truck stands; a vehicle that does not report it judges the request.
-export function standWhy(st) {
+// waivable: rearm and TELEOP entry, which the vehicle takes unconfirmed while it waives the stand
+// (stand_waiver "lower_only": only lowering is allowed and the truck is still, plan D14).
+export function standWhy(st, { waivable = false } = {}) {
+  if (waivable && st?.stand_waiver === "lower_only") return null;
   return st?.stopped_confirmed === false ? "정지 확인을 기다리는 중" : null;
 }
 
@@ -77,7 +80,7 @@ export function rearmState(st, hasLease) {
   const shown = st?.mode === "STOPPED";
   if (!shown) return { shown, enabled: false, why: "" };
   if (!hasLease) return { shown, enabled: false, why: "조종 권한이 필요합니다" };
-  const stand = standWhy(st);
+  const stand = standWhy(st, { waivable: true });
   if (stand) return { shown, enabled: false, why: stand };
   return { shown, enabled: true, why: "" };
 }

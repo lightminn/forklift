@@ -300,7 +300,7 @@ export function render(m) {
 
   // teleop
   const inTele = mode === "TELEOP";
-  const enterStand = inTele ? null : standWhy(st); // entering TELEOP is refused until the truck stands
+  const enterStand = inTele ? null : standWhy(st, { waivable: true }); // refused until the truck stands (or waived)
   // plan D14: a state that only lowers may be entered (teleop_allowed), though driving is forbidden there
   const teleopOk = st.teleop_allowed === undefined ? !forbidden : st.teleop_allowed !== false;
   $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || !teleopOk || Boolean(enterStand);

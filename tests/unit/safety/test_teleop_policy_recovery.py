@@ -120,9 +120,11 @@ class Shaky:
         self.lease = self.a.handle("op", {"t": "lease_request", "request_id": "L", "session_epoch": EPOCH},
                                    0.0)["lease_id"]
         self.n = itertools.count()
+        self.seq = 0
 
-    def cycle(self, speed, *msgs):
-        self.t += DT
+    def cycle(self, speed, *msgs, teleop=None, dt=DT):
+        """One control cycle; ``teleop``: the fields of a teleop command sent this cycle (armed first)."""
+        self.t += dt
         self.k += 1
         a = self.a
         tick = a.tick(self.t)
@@ -130,8 +132,19 @@ class Shaky:
                         "echo": {"state_seq": tick["state_seq"], "token": tick["token"]}}, self.t)
         a.observe(self.t, Feedback(self.t, speed, lift_m=self.lift_m, steering_rad=0.0))
         out = [a.handle("op", m, self.t) for m in msgs]
+        if teleop is not None:
+            if not a.armed:
+                assert a.handle("op", self.msg("arm"), self.t)["t"] == "ack"
+            self.seq += 1
+            a.handle("op", {"t": "teleop", "session_epoch": EPOCH, "lease_id": self.lease,
+                            "control_gen": a.control_gen, "arm_gen": a.arm_gen, "seq": self.seq,
+                            "echo": {"state_seq": tick["state_seq"], "token": tick["token"]}, "mode": "direct",
+                            "deadman": True, "speed_ratio": 0.0, "curvature_ratio": 0.0, "lift_dir": 0, **teleop},
+                     self.t)
         a.mission_context(self.t)
-        self.out = a.step(self.t, self.safety, (0.0, 0.0))
+        drive = {"measured_mps": speed, "measured_kappa": 0.0, "steering_error_rad": 0.0,
+                 "permit": lambda *k: (1.0, "ok")}
+        self.out = a.step(self.t, self.safety, (0.0, 0.0), drive)
         return out
 
     def msg(self, kind, **fields):
@@ -184,3 +197,111 @@ def test_a_state_that_also_drives_still_needs_the_confirmed_stand():
         r.cycle(jitter(r.k))
     reply = r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]
     assert reply["t"] == "reject" and reply["reason"] == "not_stopped"
+
+
+REVERSE = {"speed_ratio": -0.5}  # a straight reverse asked for (the reverse_straight row's direction)
+LOWER = {"lift_dir": -1}
+
+
+def shaken(safety=None, seconds=2.0):
+    r = Shaky(safety or in_pocket())
+    for _ in range(int(seconds * 120)):
+        r.cycle(jitter(r.k))
+    return r
+
+
+def test_the_operator_lowers_after_the_unconfirmed_entry_and_no_wheel_speed_comes_out():
+    """Codex review of 8f4a799 P3: the real outputs, not the policy alone."""
+    r = shaken()
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["t"] == "ack"
+    start = r.lift_m
+    for _ in range(60):
+        r.cycle(jitter(r.k), teleop={**LOWER, **REVERSE})
+        assert r.out.speed_mps == 0.0
+    assert r.out.lift_target_m < start - 0.005  # the lowering went through
+
+
+def test_after_the_lowering_the_reverse_still_gives_no_speed_until_a_confirmed_stand():
+    r = shaken()
+    r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))
+    r.lift_m = 0.005
+    for _ in range(120):
+        r.cycle(jitter(r.k), teleop=REVERSE)
+        assert r.out.speed_mps == 0.0 and r.out.policy.reason == "stand_unconfirmed"
+    first = None
+    for _ in range(60):  # the shaking stops: the detector confirms, and the reverse starts on that confirmed tick
+        r.cycle(0.0, teleop=REVERSE)
+        if first is None and r.out.speed_mps != 0.0:
+            first = r.a.stop_confirmed  # this cycle's observe judged the stand before the step
+    assert r.out.speed_mps < 0.0 and first
+
+
+def test_a_stand_confirmed_while_still_lifted_does_not_open_a_later_reverse_in_the_shaking():
+    """Codex review of 8f4a799: the drive opens only on a confirmed tick, not after any confirmed tick."""
+    r = shaken()
+    r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))
+    for _ in range(60):
+        r.cycle(0.0)  # a brief confirmed stand while the forks are still up (lower only)
+    assert r.a.stop_confirmed
+    for _ in range(120):
+        r.cycle(jitter(r.k))  # the rocking again
+    assert not r.a.stop_confirmed
+    r.lift_m = 0.005
+    for _ in range(30):
+        r.cycle(jitter(r.k), teleop=REVERSE)
+        assert r.out.speed_mps == 0.0
+
+
+def test_the_stillness_is_judged_over_a_whole_second():
+    """Codex review of 8f4a799 P2: 2.01 cm/s held is 2.01 cm in a second -- over the bound."""
+    r = Shaky(in_pocket())
+    for _ in range(600):
+        r.cycle(0.0201)
+    reply = r.cycle(0.0201, r.msg("mode_request", to="TELEOP"))[0]
+    assert reply["t"] == "reject" and reply["reason"] == "not_stopped"
+
+
+def test_less_than_a_second_of_history_is_not_still():
+    r = Shaky(in_pocket())
+    for _ in range(100):  # 0.83 s
+        r.cycle(jitter(r.k))
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["reason"] == "not_stopped"
+
+
+def test_a_feedback_gap_inside_the_second_is_not_still():
+    r = shaken()
+    r.cycle(0.0, dt=0.15)  # fresh, but nothing measured in between for 150 ms (the age limit is 100 ms)
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["reason"] == "not_stopped"
+
+
+def test_a_still_lower_only_pause_is_not_a_stop_fault_and_can_still_be_entered():
+    """Codex review of 8f4a799 P2: 10 s of rocking in PAUSED made a not_stopped fault (STOPPED), and STOPPED
+    could not be left without a confirmed stand -- the lowering that would end the rocking was out of reach."""
+    r = shaken(seconds=12.0)
+    assert r.a.mode == "PAUSED"
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["t"] == "ack"
+
+
+def test_a_stopped_lower_only_state_can_be_rearmed_while_still():
+    r = shaken()
+    r.a.stop(r.t, "operator")
+    assert r.a.mode == "STOPPED"
+    assert r.cycle(jitter(r.k), r.msg("rearm"))[0]["t"] == "ack" and r.a.mode == "PAUSED"
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["t"] == "ack"
+
+
+def test_a_rolling_stopped_truck_is_not_rearmed():
+    r = Shaky(in_pocket())
+    for _ in range(240):
+        r.cycle(0.03)
+    r.a.stop(r.t, "operator")
+    assert r.cycle(0.03, r.msg("rearm"))[0]["reason"] == "not_stopped"
+
+
+def test_the_state_says_when_the_stand_is_waived():
+    r = shaken()
+    assert r.a.stand_waiver() == "lower_only"
+    rolling = Shaky(in_pocket())
+    for _ in range(240):
+        rolling.cycle(0.03)
+    assert rolling.a.stand_waiver() is None
