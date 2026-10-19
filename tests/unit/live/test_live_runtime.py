@@ -176,6 +176,21 @@ def test_feedback_keeps_the_time_its_sample_was_made(tmp_path):
         rt.close()
 
 
+def test_feedback_carries_the_odometry_position_for_the_stand_waiver(tmp_path):
+    """Main 2026-10-19: the waiver's creep is measured between odometry positions, feedback gaps included."""
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        rt.before_step(0.0)
+        rt.after_step(DT, odom_speed=0.0, yaw_rate=0.0, rendered=False, odom_xy=(1.5, -0.25))
+        assert rt.feedback.odom_xy == (1.5, -0.25)
+        rt.before_step(DT)
+        rt.after_step(2 * DT, odom_speed=0.0, yaw_rate=0.0, rendered=False)
+        assert rt.feedback.odom_xy is None
+    finally:
+        rt.close()
+
+
 def test_the_welcome_carries_the_chassis_outline_the_console_draws(tmp_path):
     # without it the page cannot draw the truck or its teleop sweep (C3)
     rt, *_ = runtime(tmp_path)

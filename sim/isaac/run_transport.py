@@ -5802,9 +5802,11 @@ def drive(S, isaac) -> None:
                 started_, cpu_ = time.perf_counter(), time.thread_time()
                 step_world(render or camera_)
                 live_timers.add(f"step.{kind_}", time.perf_counter() - started_, time.thread_time() - cpu_)
+                odom_xy_ = None  # without SLAM no odometry position: the waiver integrates the speeds
                 if slam is not None:
                     speed_, yaw_rate_ = slam.get("odom_speed"), float(slam.get("odom_yaw_rate", 0.0))
                     made_ = slam.get("odom_mono")
+                    odom_xy_ = tuple(float(v) for v in slam["odom_rear"][:2])  # with the speed, same update
                 else:
                     made_ = live.clock()
                     rates_ = robot.get_joint_velocities()[wheels]
@@ -5813,7 +5815,7 @@ def drive(S, isaac) -> None:
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
                                 odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time,
                                 lift_m=float(joints_[lift_index[0]]),  # plan D14: measured, for the manual lift
-                                steering_rad=float(np.max(np.abs(joints_[steers]))))
+                                steering_rad=float(np.max(np.abs(joints_[steers]))), odom_xy=odom_xy_)
                 if live_marker_ is not None:
                     live.log({"lift_sim_t": float(world.current_time - initial_time),
                               "lift_m": float(robot.get_joint_positions()[lift_index[0]]),

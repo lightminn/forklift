@@ -74,6 +74,10 @@ class Feedback:
     yaw_rate_radps: float = 0.0
     lift_m: float | None = None  # plan D14: the measured lift
     steering_rad: float | None = None  # plan D14: the larger measured steering angle (absolute)
+    # The odometry position (x, y) in its own frame, m (main 2026-10-19): the stand waiver's creep is the distance
+    # from where the last stand was confirmed, gaps in the feedback included. None: the speeds are integrated, and a
+    # gap leaves the travel unknown until a confirmed stand.
+    odom_xy: tuple[float, float] | None = None
 
 
 @dataclass
@@ -146,7 +150,8 @@ class Arbiter:
         # speeds, to judge that; the drive then waits for a confirmed stand.
         self._recent_speeds: list = []  # (stamp, speed) of the last second's fresh feedback
         self._stand_unconfirmed = False
-        self._creep_m = 0.0  # the net measured travel since the stop detector last confirmed a stand
+        self._creep_m = 0.0  # the net measured travel since the stop detector last confirmed a stand (inf: unknown)
+        self._stand_xy = None  # the odometry position at that stand
         self.steering_rad: float | None = None
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
@@ -540,12 +545,9 @@ class Arbiter:
             self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
                                                        speed=float(feedback.rear_axle_speed_mps),
                                                        yaw_rate=float(feedback.yaw_rate_radps))
-            samples = self._recent_speeds
-            dt = samples[-1][0] - samples[-2][0] if len(samples) >= 2 else 0.0
-            if dt > self.config.feedback_max_age_s:
-                dt = 0.0  # nothing measured across the gap: not counted (Codex round 3), as after observe(None)
-            self._creep_m = 0.0 if self.stop_confirmed else self._creep_m + dt * samples[-1][1]
+            self._update_creep(_odom_xy(feedback))
         else:
+            self._creep_m = math.inf  # what moved now is not measured (an odometry position may still tell later)
             # A gap breaks the detector's history: standing must be seen again from fresh measurements (Codex
             # M-b2 P1 -- the zero-command count ran on across the gap and released the latch 8 ms after it).
             self.detector = StopDetector(tick_s=self.config.tick_s)
@@ -718,6 +720,20 @@ class Arbiter:
         return policy
 
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
+    def _update_creep(self, xy) -> None:
+        """The net travel since the last confirmed stand (main 2026-10-19): the odometry positions' distance when
+        both ends have one -- a feedback gap's travel included -- else the integrated speeds, unknown (inf) across a
+        gap longer than the feedback age limit (rocking and creep cannot be told apart there)."""
+        if self.stop_confirmed:
+            self._creep_m, self._stand_xy = 0.0, xy
+            return
+        if xy is not None and self._stand_xy is not None:
+            self._creep_m = math.hypot(xy[0] - self._stand_xy[0], xy[1] - self._stand_xy[1])
+            return
+        samples = self._recent_speeds
+        dt = samples[-1][0] - samples[-2][0] if len(samples) >= 2 else 0.0
+        self._creep_m = math.inf if dt > self.config.feedback_max_age_s else self._creep_m + dt * samples[-1][1]
+
     def _still_enough(self) -> bool:
         """Main 2026-10-19: the truck is not rolling -- its speed now at most STILL_SPEED_MPS and its net travel over
         the last second (each measured speed held back to the sample before it) at most STILL_TRAVEL_M, measured
@@ -854,6 +870,17 @@ STILL_WINDOW_S = 1.0  # main 2026-10-19: the lower-only entry's stillness is jud
 STILL_SPEED_MPS = 0.10  # ... no faster than this now
 STILL_TRAVEL_M = 0.02  # ... and no further than this over the window (the net, integrated speed)
 STILL_CREEP_M = 0.05  # ... nor this far, net, since the last confirmed stand (Codex re-review: a creep is no rocking)
+
+
+def _odom_xy(feedback) -> tuple[float, float] | None:
+    xy = getattr(feedback, "odom_xy", None)
+    if xy is None:
+        return None
+    try:
+        x, y = float(xy[0]), float(xy[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return (x, y) if math.isfinite(x) and math.isfinite(y) else None
 
 
 def _finite(value) -> float | None:

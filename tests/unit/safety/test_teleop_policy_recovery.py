@@ -112,7 +112,7 @@ class Shaky:
     """An arbiter fed a truck whose forks press a pallet: the speed jitters around zero (the stop detector never
     confirms), or rolls steadily."""
 
-    def __init__(self, safety, lift_m=0.0436):
+    def __init__(self, safety, lift_m=0.0436, odom=False):
         n = itertools.count(1)
         self.a = Arbiter(EPOCH, ArbiterConfig(), lambda: f"tok{next(n)}", mission=MissionCommands())
         self.t, self.safety, self.lift_m, self.k = 0.0, safety, lift_m, 0
@@ -121,8 +121,9 @@ class Shaky:
                                    0.0)["lease_id"]
         self.n = itertools.count()
         self.seq = 0
+        self.odom, self.x = odom, 0.0  # odom: report the odometry position (Feedback.odom_xy), x along the pocket
 
-    def cycle(self, speed, *msgs, teleop=None, dt=DT):
+    def cycle(self, speed, *msgs, teleop=None, dt=DT, jump=0.0):
         """One control cycle; ``teleop``: the fields of a teleop command sent this cycle (armed first)."""
         self.t += dt
         self.k += 1
@@ -130,7 +131,9 @@ class Shaky:
         tick = a.tick(self.t)
         a.handle("op", {"t": "echo", "session_epoch": EPOCH, "lease_id": self.lease,
                         "echo": {"state_seq": tick["state_seq"], "token": tick["token"]}}, self.t)
-        a.observe(self.t, Feedback(self.t, speed, lift_m=self.lift_m, steering_rad=0.0))
+        self.x += speed * dt + jump  # jump: travel the speeds do not show (made during a feedback gap)
+        a.observe(self.t, Feedback(self.t, speed, lift_m=self.lift_m, steering_rad=0.0,
+                                   odom_xy=(self.x, 0.0) if self.odom else None))
         out = [a.handle("op", m, self.t) for m in msgs]
         if teleop is not None and not a.armed and a.preempt_latch is None:
             assert a.handle("op", self.msg("arm"), self.t)["t"] == "ack"
@@ -367,16 +370,51 @@ def test_a_slow_creep_is_not_waived_for_ever():
     assert r.a.stand_waiver() is None and r.a.mode == "STOPPED"
 
 
-def test_a_gap_between_observations_is_not_counted_as_creep():
-    """Codex round 3 P2: 3 s without an observe, then 3 cm/s fresh, counted 9 cm of unmeasured travel."""
-    r = shaken()
-    for _ in range(4):  # four half-second stalls (the lease survives each): 6 cm unmeasured if counted
-        r.cycle(0.03, dt=0.5)
+def shaken_odom(seconds=2.0):
+    r = Shaky(in_pocket(), odom=True)
+    for _ in range(60):
+        r.cycle(0.0)  # a confirmed stand: the creep's origin is the odometry position here
+    for _ in range(int(seconds * 120)):
+        r.cycle(jitter(r.k))
+    assert r.a.stand_waiver() == "lower_only"
+    return r
+
+
+def test_the_travel_across_feedback_gaps_counts_toward_the_creep():
+    """Main 2026-10-19: the odometry positions before and after a gap show the real travel; 3 cm twice ends it."""
+    r = shaken_odom()
+    for _ in range(2):
+        r.cycle(jitter(r.k), dt=0.5, jump=0.03)
+        for _ in range(150):
+            r.cycle(jitter(r.k))
+    assert r.a.stand_waiver() is None
+    assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["reason"] == "not_stopped"
+
+
+def test_a_gap_with_no_net_travel_leaves_the_waiver_after_a_clean_second():
+    """Codex round 3: the gap's span at the next sample's speed is not travel; the positions decide."""
+    r = shaken_odom()
+    for _ in range(4):
+        r.cycle(0.03, dt=0.5, jump=-0.015)  # the speed says 1.5 cm, the positions say none
+        assert r.a.stand_waiver() is None  # main: in a gap, rocking or creep cannot be told apart
         for _ in range(30):
             r.cycle(jitter(r.k))
-    for _ in range(240):
+    for _ in range(150):
         r.cycle(jitter(r.k))
     assert r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))[0]["t"] == "ack"
+
+
+def test_without_odometry_positions_a_gap_ends_the_waiver_until_a_confirmed_stand():
+    r = shaken()
+    r.cycle(jitter(r.k), dt=0.5)
+    for _ in range(240):
+        r.cycle(jitter(r.k))
+    assert r.a.stand_waiver() is None  # the travel in the gap is unknown
+    for _ in range(60):
+        r.cycle(0.0)
+    for _ in range(240):
+        r.cycle(jitter(r.k))
+    assert r.a.stand_waiver() == "lower_only"
 
 
 def test_a_latch_released_by_the_waiver_in_teleop_is_recorded_as_stand_unconfirmed():
