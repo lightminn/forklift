@@ -146,6 +146,7 @@ class Arbiter:
         # speeds, to judge that; the drive then waits for a confirmed stand.
         self._recent_speeds: list = []  # (stamp, speed) of the last second's fresh feedback
         self._stand_unconfirmed = False
+        self._creep_m = 0.0  # the net measured travel since the stop detector last confirmed a stand
         self.steering_rad: float | None = None
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
@@ -539,6 +540,9 @@ class Arbiter:
             self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
                                                        speed=float(feedback.rear_axle_speed_mps),
                                                        yaw_rate=float(feedback.yaw_rate_radps))
+            samples = self._recent_speeds
+            dt = samples[-1][0] - samples[-2][0] if len(samples) >= 2 else 0.0
+            self._creep_m = 0.0 if self.stop_confirmed else self._creep_m + dt * samples[-1][1]
         else:
             # A gap breaks the detector's history: standing must be seen again from fresh measurements (Codex
             # M-b2 P1 -- the zero-command count ran on across the gap and released the latch 8 ms after it).
@@ -548,16 +552,23 @@ class Arbiter:
                 self._disarm(now_mono, "no_feedback")
                 self.preempt_latch = "no_feedback"
                 self._boundary(now_mono, "no_feedback")  # a safety preempt is a control boundary (B2)
-        if self.preempt_latch is not None and self.stop_confirmed:
-            self.events.append({"t": now_mono, "event": "latch_released", "reason": self.preempt_latch})
+        waived = self.stand_waiver()
+        if self.preempt_latch is not None and (self.stop_confirmed or waived is not None):
+            # Still in a lower-only state the latch goes too (Codex re-review P2): the lowering must stay in reach;
+            # the drive then waits for a confirmed stand as after an unconfirmed entry.
+            self.events.append({"t": now_mono, "event": "latch_released", "reason": self.preempt_latch,
+                                **({} if self.stop_confirmed else {"stand_waiver": waived})})
             self.preempt_latch = None
+            if not self.stop_confirmed and self.mode == "TELEOP":
+                self._stand_unconfirmed = True
         must_stand = self.mode in ("PAUSED", "STOPPED") or self.preempt_latch is not None
         # A still truck in a lower-only state is not a stop that failed (Codex review of 8f4a799 P2): faulting it
         # would lock out the lowering that ends the rocking.
-        if must_stand and not self.stop_confirmed and self.stand_waiver() is None:
+        if must_stand and not self.stop_confirmed:
             if self.stopping_since is None:
                 self.stopping_since = now_mono
-            elif now_mono - self.stopping_since >= self.config.not_stopped_s and self.mode != "STOPPED":
+            elif (now_mono - self.stopping_since >= self.config.not_stopped_s and self.mode != "STOPPED"
+                  and waived is None):  # the time counts on while waived; the fault waits for the waiver to end
                 self.stop(now_mono, "not_stopped")  # a fault: the stop did not happen (B5)
         else:
             self.stopping_since = None
@@ -684,6 +695,8 @@ class Arbiter:
             dirs=policy.lift_dirs, measured=self.lift_m,
             start_from=None if drive is None else drive.get("lift_command_m"),
             loaded=bool(((safety or {}).get("load") or {}).get("loaded")))
+        if self._stand_unconfirmed and speed != 0.0:
+            self._stand_unconfirmed = False  # the first wheel speed, given on a confirmed tick (_policy)
         self.last_applied = speed
         return Output(self.mode, stop_kind, source, speed, curvature, policy, self.control_gen, self.armed,
                       self.preempt_latch, permit, lift_target)
@@ -691,13 +704,11 @@ class Arbiter:
     def _policy(self, safety) -> Policy:
         policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
                                lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough())
-        if self._stand_unconfirmed and policy.drive_allowed:
-            if not self.stop_confirmed:
-                # Entered unconfirmed: the drive opens only on a tick the detector confirms the stand (main
-                # 2026-10-19) -- a stand confirmed earlier, while only lowering, does not count (Codex review).
-                return Policy(False, reason="stand_unconfirmed", loaded=policy.loaded, lift_dirs=policy.lift_dirs,
-                              lift_allowed=policy.lift_allowed, drive_mode=policy.drive_mode)
-            self._stand_unconfirmed = False
+        if self._stand_unconfirmed and policy.drive_allowed and not self.stop_confirmed:
+            # Entered unconfirmed: the drive opens only on a tick the detector confirms the stand (main 2026-10-19);
+            # the waiver ends at the first wheel speed (step), not at a confirmed tick that gave none (Codex).
+            return Policy(False, reason="stand_unconfirmed", loaded=policy.loaded, lift_dirs=policy.lift_dirs,
+                          lift_allowed=policy.lift_allowed, drive_mode=policy.drive_mode)
         if policy.teleop_allowed and not self.pacing_ok:
             # M-c: no real time, no hands on -- the lift too (plan D14).
             return Policy(False, False, "pacing", loaded=policy.loaded)
@@ -726,6 +737,8 @@ class Arbiter:
         session 2026-10-19). The state carries it so the console can offer the entry."""
         if not self.feedback_ok or self.stop_confirmed or not self._still_enough():
             return None
+        if abs(self._creep_m) > STILL_CREEP_M:
+            return None  # a slow creep passes every second's bound (Codex re-review P2)
         policy = self._policy(self.last_safety)
         return "lower_only" if not policy.drive_allowed and policy.lift_dirs == frozenset({-1}) else None
 
@@ -837,6 +850,7 @@ def _ratio(value) -> float:
 STILL_WINDOW_S = 1.0  # main 2026-10-19: the lower-only entry's stillness is judged over the last second
 STILL_SPEED_MPS = 0.10  # ... no faster than this now
 STILL_TRAVEL_M = 0.02  # ... and no further than this over the window (the net, integrated speed)
+STILL_CREEP_M = 0.05  # ... nor this far, net, since the last confirmed stand (Codex re-review: a creep is no rocking)
 
 
 def _finite(value) -> float | None:

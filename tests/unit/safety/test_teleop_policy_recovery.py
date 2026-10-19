@@ -132,9 +132,9 @@ class Shaky:
                         "echo": {"state_seq": tick["state_seq"], "token": tick["token"]}}, self.t)
         a.observe(self.t, Feedback(self.t, speed, lift_m=self.lift_m, steering_rad=0.0))
         out = [a.handle("op", m, self.t) for m in msgs]
-        if teleop is not None:
-            if not a.armed:
-                assert a.handle("op", self.msg("arm"), self.t)["t"] == "ack"
+        if teleop is not None and not a.armed and a.preempt_latch is None:
+            assert a.handle("op", self.msg("arm"), self.t)["t"] == "ack"
+        if teleop is not None and a.armed:
             self.seq += 1
             a.handle("op", {"t": "teleop", "session_epoch": EPOCH, "lease_id": self.lease,
                             "control_gen": a.control_gen, "arm_gen": a.arm_gen, "seq": self.seq,
@@ -305,3 +305,63 @@ def test_the_state_says_when_the_stand_is_waived():
     for _ in range(240):
         rolling.cycle(0.03)
     assert rolling.a.stand_waiver() is None
+
+
+def lowered_and_rocking(r):
+    r.lift_m = 0.005
+    for _ in range(120):
+        r.cycle(jitter(r.k))
+    assert not r.a.stop_confirmed
+
+
+def test_a_stand_confirmed_while_the_pacing_blocks_does_not_open_a_later_reverse():
+    """Codex re-review P2: the waiver ends at the first non-zero speed, not at a confirmed tick that gave none."""
+    r = shaken()
+    r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))
+    r.lift_m = 0.005
+    r.a.pacing_ok = False
+    for _ in range(60):  # the reverse row open but the pacing blocks it: a confirmed stand, no speed
+        r.cycle(0.0)
+        assert r.out.speed_mps == 0.0
+    assert r.a.stop_confirmed and r.out.policy.reason == "pacing"
+    r.a.pacing_ok = True
+    lowered_and_rocking(r)
+    for _ in range(30):
+        r.cycle(jitter(r.k), teleop=REVERSE)
+        assert r.out.speed_mps == 0.0
+
+
+def test_a_stand_confirmed_while_disarmed_does_not_open_a_later_reverse():
+    r = shaken()
+    r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))
+    r.lift_m = 0.005
+    for _ in range(60):
+        r.cycle(0.0)  # in TELEOP, not armed: no command, a confirmed stand
+    assert r.a.stop_confirmed and not r.a.armed
+    lowered_and_rocking(r)
+    for _ in range(30):
+        r.cycle(jitter(r.k), teleop=REVERSE)
+        assert r.out.speed_mps == 0.0
+
+
+def test_an_expired_command_latch_is_released_by_the_waiver_and_the_lowering_goes_on():
+    """Codex re-review P2: a preempt latch was released only by a confirmed stand -- the lowering stayed locked."""
+    r = shaken()
+    r.cycle(jitter(r.k), r.msg("mode_request", to="TELEOP"))
+    for _ in range(10):
+        r.cycle(jitter(r.k), teleop=LOWER)
+    for _ in range(60):  # the operator lets go: the command expires, the latch is set
+        r.cycle(jitter(r.k))
+    before = r.out.lift_target_m
+    for _ in range(60):
+        r.cycle(jitter(r.k), teleop={**LOWER, **REVERSE})
+        assert r.out.speed_mps == 0.0
+    assert r.a.preempt_latch is None and r.out.lift_target_m < before - 0.002
+
+
+def test_a_slow_creep_is_not_waived_for_ever():
+    """Codex re-review P2: 1.9 cm/s held passes every one-second window but travels 1.14 m in a minute."""
+    r = Shaky(in_pocket())
+    for _ in range(int(12 * 120)):
+        r.cycle(0.019)
+    assert r.a.stand_waiver() is None and r.a.mode == "STOPPED"
