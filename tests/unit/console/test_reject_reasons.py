@@ -81,6 +81,10 @@ def assigned_from(fn, name, method):
             sources.append(None)
         elif isinstance(node, ast.withitem) and node.optional_vars is not None and names_in(node.optional_vars):
             sources.append(None)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            sources.append(None)  # a pattern capture (Codex D3 impl round 3 P2)
+        elif isinstance(node, ast.MatchMapping) and node.rest == name:
+            sources.append(None)
     return bool(sources) and all(v is not None and called(v) == method for v in sources)
 
 
@@ -117,6 +121,9 @@ def replies(rel, tree, unknown, pending):
     found, owner = set(), enclosing(tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "_reply"):
+            continue
+        if any(isinstance(a, ast.Starred) for a in node.args) or any(k.arg is None for k in node.keywords):
+            unknown.append((rel, ast.unparse(node)))  # unpacked arguments are not read (Codex D3 impl round 3 P2)
             continue
         arg = next((k.value for k in node.keywords if k.arg == "reason"), None)
         index = REASON_ARG[rel]  # the live arbiter: _reply(kind, request_id, reason); the fake: _reply(msg, reason)
@@ -199,3 +206,21 @@ def test_a_positional_fake_reason_and_an_annotated_rewrite_are_caught():
     unknown, pending = [], []
     replies(ARBITER, live, unknown, pending)
     assert unknown == [(ARBITER, "problem")] and not pending
+
+
+def test_unpacked_arguments_and_a_pattern_capture_are_caught():
+    """Codex D3 impl round 3 P2: **{"reason": ...} and *(...) passed; so did a match capture of the name."""
+    tree = ast.parse("class A:\n"
+                     "    def f(self, kind, rid):\n"
+                     "        return self._reply(kind, rid, **{'reason': 'novel_expanded'})\n"
+                     "    def g(self, kind, rid):\n"
+                     "        return self._reply(*(kind, rid, 'novel_starred'))\n"
+                     "    def h(self, kind, rid, msg):\n"
+                     "        problem = self._generation_problem(msg)\n"
+                     "        match 'novel_match':\n"
+                     "            case problem:\n"
+                     "                pass\n"
+                     "        return self._reply(kind, rid, problem)\n")
+    unknown, pending = [], []
+    replies(ARBITER, tree, unknown, pending)
+    assert len(unknown) == 3 and (ARBITER, "problem") in unknown and not pending
