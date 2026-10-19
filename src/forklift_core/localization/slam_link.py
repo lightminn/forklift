@@ -242,8 +242,17 @@ class AsyncSlamLink:
     bridge sees exactly the lockstep stream (its keyframe gate, its /clock) and no scan is ever unanswered there.
     ``poll`` collects the replies that have arrived (each with the scan's own record and the send/receive
     clocks) and sends the next scan. A reply not in within ``deadline_s`` (wall), a queue over ``queue_max`` or a
-    ``failed`` reply raises ``SlamLinkFailure``, as a lockstep exchange would. A real-time run only; batch runs
-    keep ``SlamLinkClient.exchange``."""
+    ``failed`` reply raises ``SlamLinkFailure``, as a lockstep exchange would. What the deadline guarantees: a poll
+    whose read finds no reply, read after the deadline, ends the link. A reply found is taken however long ago
+    its scan was sent -- its arrival between two polls is unknown, so the grace is the real poll gap: one tick
+    while the runner runs, the whole stop on the first poll after the runner itself stood still (a SIGSTOP, a
+    long stall), when the simulation stood still too (console U20, 2026-10-19: refusing such a reply after an
+    8 s SIGSTOP ended the session; this replaces the read-time check of Codex D9 impl P2). The clock is read
+    before the socket, so a stop between the two never charges the stop to the bridge (Codex stall-fix round 1),
+    and the deadline runs from when the scan's last byte left, not from when it was queued to go (round 2: a stop
+    just before ``send`` was charged to the bridge); a scan not yet out is held to ``queue_max`` instead.
+    Poll gaps over the deadline are kept in ``long_poll_gaps`` (previous poll, this poll) -- a gap, not a measured
+    bridge latency or runner stall. A real-time run only; batch runs keep ``SlamLinkClient.exchange``."""
 
     def __init__(self, client: SlamLinkClient, *, deadline_s: float = 1.0, queue_max: int = 20, clock=time.monotonic):
         self.client, self.deadline_s, self.queue_max, self.clock = client, float(deadline_s), int(queue_max), clock
@@ -252,10 +261,12 @@ class AsyncSlamLink:
         client.sock.setblocking(False)
         self._out = b""
         self.queue: deque = deque()
-        self.in_flight = None  # (scan, meta, sent_mono)
+        self.in_flight = None  # (scan, meta, sent_mono): sent_mono None until the last byte is out
         self._buffer = b""
         self.max_depth = 0
         self.last_reply_id: int | None = None
+        self._looked: float | None = None  # the clock just before the last poll's read
+        self.long_poll_gaps: list[tuple[float, float]] = []
 
     def enqueue(self, scan: Scan, meta: dict) -> None:
         if len(self.queue) >= self.queue_max:
@@ -271,7 +282,7 @@ class AsyncSlamLink:
         if self.in_flight is None and self.queue:
             scan, meta = self.queue.popleft()
             self._out += encode_scan(scan)
-            self.in_flight = (scan, meta, self.clock())
+            self.in_flight = (scan, meta, None)
         self._flush()
 
     def _flush(self) -> None:
@@ -283,6 +294,8 @@ class AsyncSlamLink:
             except OSError as exc:
                 raise SlamLinkFailure(f"sending a scan: {exc}") from exc
             self._out = self._out[sent:]
+        if self.in_flight is not None and self.in_flight[2] is None:
+            self.in_flight = (*self.in_flight[:2], self.clock())  # out whole: the deadline starts now
 
     def _read(self) -> list[bytes]:
         try:
@@ -308,13 +321,18 @@ class AsyncSlamLink:
         """The replies in since the last call: (reply, meta, sent_mono, received_mono), in order."""
         out = []
         self._flush()
-        for body in self._read():
-            now = self.clock()
+        now = self.clock()  # before the read: the read happened at or after it
+        if self._looked is not None and now - self._looked > self.deadline_s:
+            self.long_poll_gaps.append((self._looked, now))
+        self._looked = now
+        bodies = self._read()
+        received = self.clock() if bodies else now  # the record's receive clock: after the read
+        for body in bodies:
             if self.in_flight is None:
                 raise SlamLinkFailure("a reply with no scan in flight")
             scan, meta, sent = self.in_flight
-            if now - sent > self.deadline_s:  # a late reply is no reply (Codex D9 impl P2)
-                raise SlamLinkFailure(f"scan {scan.scan_id}: no reply within {self.deadline_s:.2f} s")
+            if sent is None:
+                raise SlamLinkFailure(f"a reply before scan {scan.scan_id} was sent whole")
             try:
                 reply = decode_reply(body)
             except (ValueError, KeyError) as exc:
@@ -326,9 +344,10 @@ class AsyncSlamLink:
                 raise SlamLinkFailure(f"bridge reported failure for scan {scan.scan_id}")
             self.in_flight = None
             self.last_reply_id = int(reply.scan_id)
-            out.append((reply, meta, sent, now))
+            out.append((reply, meta, sent, received))
             self._pump()
-        if self.in_flight is not None and self.clock() - self.in_flight[2] > self.deadline_s:
+        if (self.in_flight is not None and self.in_flight[2] is not None
+                and now - self.in_flight[2] > self.deadline_s):  # not there at a read after it
             raise SlamLinkFailure(
                 f"scan {self.in_flight[0].scan_id}: no reply within {self.deadline_s:.2f} s")
         return out

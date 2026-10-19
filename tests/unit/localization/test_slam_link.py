@@ -243,11 +243,110 @@ def test_an_empty_poll_never_waits_even_on_the_lockstep_client_s_timeout_socket(
     assert _time.perf_counter() - started < 0.05
 
 
-def test_a_reply_that_comes_after_the_deadline_is_no_reply():
-    """Codex D9 impl P2: the deadline is checked before a reply is taken."""
+def test_a_reply_missing_at_a_poll_after_the_deadline_fails_the_link_before_it_comes():
+    """Codex D9 impl P2: a late reply is no reply -- the poll that finds none after the deadline ends the link."""
     link, bridge, now = async_pair(deadline_s=1.0)
     link.enqueue(scan_of(0), {})
-    answer(bridge)
-    now[0] = 1.01
+    now[0] = 0.99
+    assert link.poll() == []
+    now[0] = 1.005
     with pytest.raises(_sl.SlamLinkFailure, match="no reply within"):
+        link.poll()
+
+
+def test_a_reply_found_on_the_first_poll_after_the_runner_stood_still_is_taken():
+    """Console U20 (2026-10-19): the runner SIGSTOPped 8 s with a scan in flight and the bridge had answered;
+    the first poll after it takes the reply (the simulation stood still too) and the link goes on."""
+    link, bridge, now = async_pair(deadline_s=1.0)
+    link.enqueue(scan_of(0), {})
+    now[0] = 0.02
+    assert link.poll() == []
+    answer(bridge)
+    now[0] = 8.02  # the runner was stopped
+    (got,) = link.poll()
+    assert got[0].scan_id == 0 and got[2:] == (0.0, 8.02)
+    link.enqueue(scan_of(1), {})
+    answer(bridge, "processed")
+    now[0] = 8.05
+    (got,) = link.poll()
+    assert got[0].scan_id == 1 and got[0].status == "processed"
+
+
+def test_a_bridge_that_did_not_answer_while_the_runner_stood_still_fails_the_link():
+    """The bridge ran on while the runner stood still: no reply after that is a missed deadline."""
+    link, bridge, now = async_pair(deadline_s=1.0)
+    link.enqueue(scan_of(0), {})
+    now[0] = 0.02
+    assert link.poll() == []
+    now[0] = 8.02
+    with pytest.raises(_sl.SlamLinkFailure, match="no reply within"):
+        link.poll()
+
+
+def test_a_stop_between_an_empty_read_and_the_deadline_check_is_not_charged_to_the_bridge():
+    """Codex stall-fix round 1: empty read at 0.02 s, SIGSTOP, the reply arrives, resume at 8.02 s -- the poll
+    judges the deadline at its read, so it does not fail; the next poll takes the reply and records the gap."""
+    a, b = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    _OPEN.extend((a, b))
+    ticks = iter([0.0, 0.02, 8.02, 8.03, 8.03, 8.03])  # pump; poll 1 before its read; poll 2 before/after, pump
+    link = _sl.AsyncSlamLink(SimpleNamespace(sock=a), clock=lambda: next(ticks))
+    link.enqueue(scan_of(0), {})
+    assert link.poll() == []  # read empty at 0.02; the stop comes after it
+    answer(b)
+    (got,) = link.poll()
+    assert got[0].scan_id == 0 and got[2:] == (0.0, 8.03)
+    assert link.long_poll_gaps == [(0.02, 8.02)]
+
+
+class _StoppingSocket:
+    """A socket whose next send first lets the clock jump (the runner stopped just before it)."""
+
+    def __init__(self, sock, now, jump_s):
+        self.sock, self.now, self.jump_s = sock, now, jump_s
+
+    def setblocking(self, flag):
+        self.sock.setblocking(flag)
+
+    def recv(self, n):
+        return self.sock.recv(n)
+
+    def send(self, data):
+        if self.jump_s:
+            self.now[0] += self.jump_s
+            self.jump_s = 0.0
+        return self.sock.send(data)
+
+
+def test_the_deadline_runs_from_the_last_byte_out_not_from_the_queueing():
+    """Codex stall-fix round 2 P2: queued at 0.20 s, stopped before send, sent at 8.20 s -- a poll 10 ms later
+    is not past the deadline; the reply's send clock is the real one."""
+    a, b = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    _OPEN.extend((a, b))
+    now = [0.2]
+    link = _sl.AsyncSlamLink(SimpleNamespace(sock=_StoppingSocket(a, now, 8.0)), clock=lambda: now[0])
+    link.enqueue(scan_of(0), {})
+    assert link.in_flight[2] == 8.2
+    now[0] = 8.21
+    assert link.poll() == []
+    answer(b)
+    now[0] = 8.25
+    (got,) = link.poll()
+    assert got[2:] == (8.2, 8.25)
+
+
+def test_a_scan_not_yet_out_has_no_deadline_and_a_reply_before_it_is_out_fails():
+    a, b = _socket.socketpair(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    _OPEN.extend((a, b))
+    now = [0.0]
+
+    class Full(_StoppingSocket):
+        def send(self, data):
+            raise BlockingIOError
+
+    link = _sl.AsyncSlamLink(SimpleNamespace(sock=Full(a, now, 0.0)), clock=lambda: now[0])
+    link.enqueue(scan_of(0), {})
+    now[0] = 5.0
+    assert link.poll() == [] and link.in_flight[2] is None  # held by queue_max, not the deadline
+    b.sendall(_sl.encode_reply(_sl.Reply(0, 0.0, "skipped", (0.0, 0.0, 0.0), 1, 0.0)))
+    with pytest.raises(_sl.SlamLinkFailure, match="sent whole"):
         link.poll()
