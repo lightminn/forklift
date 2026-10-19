@@ -138,3 +138,38 @@ def test_the_replay_recorder_takes_every_argument_the_runner_and_the_recorder_do
     wrapper = set(inspect.signature(H.SessionRecorder.tick_time).parameters) - {"self"}
     for other in (BoundaryRecorder.tick_time, ReplaySession.tick_time):
         assert wrapper == set(inspect.signature(other).parameters) - {"self"}
+
+
+def test_a_snapshot_from_before_a_setup_name_binds_it_as_the_setup_does_with_its_feature_off():
+    """PR #53 far recognition: the 29 gate records predate far_runtime / far_intrinsics / frr (UnboundLocalError in
+    drive on every replay); today's setup binds all three None when --recognition is off."""
+    from types import SimpleNamespace
+
+    values = {"args": SimpleNamespace(output="x")}  # a record from before the flag
+    assert sorted(H.bind_added_names(values, {"args": {}})) == ["far_intrinsics", "far_runtime", "frr"]
+    assert values["far_runtime"] is None and values["far_intrinsics"] is None and values["frr"] is None
+    values = {"args": SimpleNamespace(recognition="off"), "far_runtime": "kept"}
+    assert H.bind_added_names(values, {"far_runtime": {}, "far_intrinsics": {}, "frr": {}}) == []
+    assert values["far_runtime"] == "kept"
+    with pytest.raises(ReplayMismatch, match="no far_runtime although recognition='far'"):
+        H.bind_added_names({"args": SimpleNamespace(recognition="far")}, {"args": {}})
+
+
+def test_every_added_setup_name_is_one_drive_binds_and_the_setup_always_binds():
+    import ast
+
+    tree = ast.parse((ROOT / "sim/isaac/run_transport.py").read_text())
+    fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    prologue = {ast.literal_eval(st.test.left) for st in fns["drive"].body
+                if isinstance(st, ast.If) and ast.unparse(st.test).endswith("in _bound")}
+    unconditional = {}  # the constant run() assigns each name at its own top level (not under an if)
+    for st in fns["run"].body:
+        if isinstance(st, ast.Assign):
+            try:
+                value = ast.literal_eval(st.value)
+            except ValueError:
+                continue
+            unconditional.update({t.id: value for t in st.targets if isinstance(t, ast.Name)})
+    for name, (_flag, _off, value) in H.SETUP_NAMES_ADDED.items():
+        assert name in prologue and name in unconditional, name
+        assert unconditional[name] == value and type(unconditional[name]) is type(value), name  # Codex P3
