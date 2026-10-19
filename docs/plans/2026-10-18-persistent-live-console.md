@@ -1218,7 +1218,7 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 |---|---|---|
 | U3 연속 세 미션 | 2/3 — P-1→D-1 `done`, P-1→D-0 `done`, P-1→D-1 `failed: cusp_position_stall` | 세 번째는 배달 뒤 복귀(`return_home`, 복귀 원호 켬) 중 방향 전환점에서 멈춤(시뮬 678 s). 세션은 유지. 주행 제어 쪽이라 메인 세션에 넘김 |
 | U4 수동 이동 뒤 지시 | 통과 | 20 s 수동 조종 뒤 P-1→D-1 `done` |
-| U8 운반 중 취소 → 다른 목적지 | 미충족(설계대로) | 취소 `cancelled(operator)`, 다음 적재 제출은 `cargo_held` — 적재 제출(6c)이 아직 없다 |
+| U8 운반 중 취소 → 다른 목적지 | 미충족(설계대로, 6c 뒤 아래 묶음에서 통과) | 취소 `cancelled(operator)`, 다음 적재 제출은 `cargo_held` — 적재 제출(6c)이 아직 없다 |
 | U10b 실행 중 실패 | 통과 | `failed: Tracking failed in approach (test injection)`, 다음 미션 `done` |
 | U12 장면 손상 → 초기화 | 통과 | `failed: Pallet displaced before pickup`, 재제출 `scene_damaged`, 수동 `recovery:unknown`(수정한 기대), `sim_reset` → 같은 포트 새 epoch, 미션 `done` |
 | U20c 수동 복구 | 통과 | `recovery_required` → 내리기·곧은 후진 → 다음 미션 `done`(이번엔 출발 막힘 없음, 안내 미발생) |
@@ -1227,6 +1227,16 @@ D2 의 `mission_start` 는 작업자 작업 `observe_ladder` 로 한다. 이름 
 | U13 재접속(C3 main) | 통과 | 수동 조종 진입·첫 움직임 0.15 s, 끊김 뒤 재접속에 새 lease, 옛 lease 요청은 `stale_lease` |
 
 ws1 전체 pytest(26f9a18): 5161 통과, 실패 10(알려진 ws1 전용), 건너뜀 19.
+
+**6c 적재 제출·연속 운용 묶음(2026-10-19, pc11_14a7db6·pc12_8b19166, ws1 두 줄, 배속 0.3, 직접 실행).**
+
+| U | 결과 | 비고 |
+|---|---|---|
+| U8 운반 중 취소 → 다른 목적지(적재 제출) | 통과 | 운반 3 s 에서 취소 → `cancelled(operator)`, 같은 팔레트를 D-0 으로 적재 제출 → 운반부터 시작(전이 `transport → transport, loaded`), 출발 대기 0.03 s, `done`. 첫 시도(pc11 u8a)는 첫 관찰의 근접 캡처 실패(`perception_no_pallet:no_opening_pattern`, 알려진 간헐 실패)로 무효 |
+| U8 목적지 도킹 hold 뒤 취소 | 통과 | 도킹 hold(시뮬 152.9 s) 중 취소 → 종료 해제(156.4 s, `mission_end`) → 적재 제출 157.3 s 채택, 출발 대기 0.2 s, 새 목적지에서 다시 도킹·내리기·철수·복귀 `done`. 작업 시간으로 취소 시점을 잡은 첫 시도(pc11 u8b)는 hold 전에 내리기로 넘어가 무효 → 탐침 `transport@docked` |
+| U16 2시간 연속 | 미충족 | 미션 7개 `done` 뒤 1.5 h(벽시계 5405 s), 8번째 운반 중 세션 실패 `slam_link_failed: scan 15090: no reply within 1.00 s`. SLAM 브리지의 처리 스캔당 시간이 세션 시간에 따라 커짐(평균/최대 0.04/0.19 s → 0.47/1.27 s, 처리 879건 p99 0.82 s). 페이싱 0.289/0.3(96 %), 정지 7. 메인 세션(SLAM 링크 D9a)에 넘김 — 그래프·지도 크기 상한 또는 기한·지도 초기화 방식은 합의 대상 |
+
+ws1 전체 pytest(dc56e24): 5196 통과, 실패 10(알려진 ws1 전용), 건너뜀 19.
 
 
 | U | 유즈케이스 | 통과 조건 | 시험 |
