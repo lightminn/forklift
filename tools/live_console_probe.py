@@ -612,9 +612,10 @@ async def back_off_by(p: Probe, low_m: float, high_m: float, max_s: float) -> di
             await p.teleop(-ratio, 0.0, True)
             await asyncio.sleep(0.05)
             moved += take()
+        out_of_time = time.monotonic() >= stop_by or p.closed_code is not None
         await stop_and_count()
-        if moved >= low_m or attempt == 3:
-            break
+        if moved >= low_m or attempt == 3 or out_of_time:
+            break  # the budget spent: no new crawl, and one stop wait only (Codex D13 impl round 3 P3)
         goal = low_m + 0.25 * (high_m - low_m)  # short: crawl again into the interval's first quarter
     return {"moved_m": moved, "target_m": target, "within": low_m <= moved <= high_m}
 
