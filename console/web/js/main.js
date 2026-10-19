@@ -77,7 +77,7 @@ const m = {
       videoUsed: storedFlag("console.video_used"),
     }), lastSentAt: 0, lastRead: null },
   padStopHeld: false,
-  cache: { phaseKey: "", targetsRev: null },
+  cache: { phaseKey: "", targetsRev: null, loadKey: "" },
   dropUntil: 0,
   view: createMapView(),
   layers: { grid: true, lidar: true, plan: true, sweep: true },
@@ -167,7 +167,7 @@ m.session.subscribe((msg) => {
   } else if (msg.t === "targets") {
     if (msg.targets_revision !== m.cache.targetsRev) {
       m.cache.targetsRev = msg.targets_revision;
-      renderPallets(msg, () => {});
+      renderPallets(msg, () => {}, m.session.state?.load);
       if (m.wz.open) refreshWizard();
     }
   } else if (msg.t === "missions") {
@@ -186,6 +186,16 @@ m.session.subscribe((msg) => {
     for (const c of sessionChanges(m.prevState, msg, { clientId, askedDisarm: asked })) log(c.text, c.level);
     if (m.prevState?.armed && !msg.armed) m.askedDisarm = null; // the excuse is used up by that disarm
     m.prevState = msg;
+    // plan D5 6c item 7: the pallet on the forks becomes pickable when the load names it -- the targets revision does
+    // not change with it, so the list is drawn again here
+    const loadKey = `${msg.load?.state ?? ""}|${msg.load?.pallet_id ?? ""}`;
+    if (loadKey !== m.cache.loadKey) {
+      m.cache.loadKey = loadKey;
+      if (m.session.targets) {
+        renderPallets(m.session.targets, () => {}, msg.load);
+        if (m.wz.open) refreshWizard();
+      }
+    }
     if (msg.mode === "TELEOP" && m.lastMode !== "TELEOP") showTab("tele"); // controls on screen when teleop starts
     m.lastMode = msg.mode;
     m.teleop.gate.onArmed(Boolean(msg.armed) && m.session.hasLease);
@@ -554,7 +564,7 @@ function endPointer(e) {
   if (e.type === "pointerup" && press && !press.moved && pointers.size === 0) {
     const { rc, w, h } = mapSize();
     const p = palletAt(m.view, w, h, m.session.targets, e.clientX - rc.left, e.clientY - rc.top);
-    if (selectable(p)) openWizard({ pallet: p.pallet_id });
+    if (selectable(p, m.session.state?.load)) openWizard({ pallet: p.pallet_id });
   }
   if (pointers.size === 0) press = null;
 }

@@ -2,7 +2,7 @@
 // request could be accepted; the vehicle still decides and may reject.
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
-import { blockReason, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
+import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -48,7 +48,7 @@ function badge(el, cls, text) {
 // "P-1 → D-1 · " when the vehicle names the mission's targets, else nothing
 const route = (mi) => (mi.pallet_id ? `${mi.pallet_id} → ${mi.destination_id ?? "?"} · ` : "");
 
-export function renderPallets(targets, onPick) {
+export function renderPallets(targets, onPick, load = null) {
   const box = $("pallet-list");
   const checked = document.querySelector('input[name="pal"]:checked')?.value;
   const firstList = box.children.length === 0;
@@ -56,8 +56,9 @@ export function renderPallets(targets, onPick) {
   for (const p of targets.pallets) {
     const lab = document.createElement("label");
     lab.className = "pal";
-    const avail = selectable(p);
-    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(palletKindLabel(p.kind))}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
+    const avail = selectable(p, load);
+    const carried = carriedLabel(p, load); // plan D5 6c: the pallet on the forks, delivered as it is carried
+    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(palletKindLabel(p.kind))}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(carried ?? PALLET_STATE[p.state] ?? p.state)}</span>`;
     const input = lab.querySelector("input");
     input.disabled = !avail;
     input.checked = avail && p.pallet_id === checked;

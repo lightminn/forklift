@@ -34,9 +34,16 @@ const TEMPLATES = [
 
 const ACTIVE = ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"];
 
-// A pallet the operator may name in a submit (the vehicle checks again): on the floor, delivered or not.
-export function selectable(pallet) {
-  return Boolean(pallet) && (pallet.state === "available" || pallet.state === "delivered");
+// A pallet the operator may name in a submit (the vehicle checks again): on the floor, delivered or not -- or the one
+// the state's load names on the forks, delivered as it is carried (persistent console plan D5 6c item 7).
+export function selectable(pallet, load = null) {
+  if (!pallet) return false;
+  return pallet.state === "available" || pallet.state === "delivered" || carriedLabel(pallet, load) !== null;
+}
+
+export function carriedLabel(pallet, load) {
+  const onForks = pallet?.state === "carried" && load?.state === "loaded" && load.pallet_id === pallet.pallet_id;
+  return onForks ? "실린 팔레트 — 바로 운반" : null;
 }
 
 export function templatesFor(capabilities, query = "") {

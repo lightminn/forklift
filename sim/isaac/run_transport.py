@@ -3861,7 +3861,8 @@ def drive(S, isaac) -> None:
             np.abs(-dx * st_ + dy * ct) <= geometry.pallet_width_m / 2 + band_across
         )
 
-    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None, scratch=None) -> dict:
+    def grid_kwargs(kind=None, target=None, own=None, applied=None, band_pose=None, label=None, scratch=None,
+                    loaded_as=None) -> dict:
         """occupancy (and the pallet obstacle the plan may know) for a grid plan. band_pose (default
         the truck's rear) is where the return's delivered-pallet band is cleared around; label
         names the call in the plans record (obstacle recovery v4: the escape's grids).
@@ -3885,7 +3886,8 @@ def drive(S, isaac) -> None:
                     obstacle["layer"].refresh(float(at_t_), tuple(float(v) for v in applied), obstacle["version"],
                                               current_pose=at_pose_, path_ahead=np.array([at_pose_]), loaded=False,
                                               direction=0)
-                return grid_kwargs(kind, target, own, applied, band_pose, label, scratch={**scratch, "_inner": True})
+                return grid_kwargs(kind, target, own, applied, band_pose, label, scratch={**scratch, "_inner": True},
+                                   loaded_as=loaded_as)
             finally:
                 obstacle["layer"], obstacle["version"] = layer_shared_, version_
         try:  # the first plans run before the SLAM link exists
@@ -3907,7 +3909,9 @@ def drive(S, isaac) -> None:
             # Several poses (obstacle recovery v4: an escape's end region) keep only the cells under all.
             own_now_ = (tuple(tuple(float(v) for v in p_) for p_ in own_) if np.ndim(own_) == 2
                         else tuple(float(v) for v in own_))
-            loaded_now_ = bool(loaded)
+            # loaded_as (plan D5 6c): a loaded submit's preparation runs between missions; the carried pallet is the
+            # truck's own whatever phase the last mission left
+            loaded_now_ = bool(loaded) if loaded_as is None else bool(loaded_as)
         except NameError:  # the first plans, before the drive loop: nothing remembered under the truck
             own_now_, loaded_now_ = None, False
         mode_ = slam_ref["tracker"].mode if slam_ref is not None else None
@@ -5858,6 +5862,8 @@ def drive(S, isaac) -> None:
             # plan D14 (main 2026-10-19): the loaded hold tolerance for the gate, a mission end and the manual lift
             live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m = live_loaded_tolerance_
             core.lift_hold_tolerance = live.hold_tolerance  # the core's first pause holds the same way (Codex r5 P1)
+            if live_loaded_tolerance_ is not None:  # plan D5 6c item 5: the loaded start waits for this lift
+                core.loaded_lift_band = (float(loaded_sag_m), float(live_loaded_tolerance_))
 
             live_marker_ = None
             if args.live_test_marker and live_cam_ is not None:
@@ -6311,6 +6317,43 @@ def drive(S, isaac) -> None:
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 core.prepare_request(t_, rear_, inputs_, payload_)
 
+            def live_prepare_loaded(t_, rear_):
+                """A loaded submit's inputs (plan D5 6c item 2): no pickup prior, zone or bounds -- the scene's pickup is
+                the carried pallet's nominal seat ahead of the control pose (not the truth) -- the destination from the
+                targets list, the return to the session's waiting pose; its whole delivery asked of the worker."""
+                mission_ = core.commands.mission
+                dest_ = core.targets.destinations[mission_.destination_id]
+                x_, y_, yaw_ = (float(v) for v in rear_)
+                seat_ = LiveSite(x_ + geometry.inserted_offset_m * math.cos(yaw_),
+                                 y_ + geometry.inserted_offset_m * math.sin(yaw_), yaw_)
+                start_ = LivePose(x_, y_, yaw_)
+                scenario_ = replace(live_session_["scenario"], start_rear=start_, pickup=seat_,
+                                    destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
+                grid_ = grid_kwargs(None, loaded_as=True)  # the transport leg's grid, the carried pallet the truck's
+                payload_ = {"args": (grid_world(scenario_), start_),
+                            "kwargs": {"config": planner_config, "geometry": geometry,
+                                       "return_to": live_session_["wait"], "travel_config": travel_config,
+                                       "occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0},
+                            "keep_m": geometry.delivery_straight_m}
+                inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
+                           "pickup_bounds": None, "pickup_zone": None,
+                           "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
+                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id, "loaded": True}
+                core.prepare_request(t_, rear_, inputs_, payload_, job="loaded_delivery")
+
+            def live_loaded_pallet():
+                """Plan D5 6c items 1, 2a: the carried pallet a submit may deliver as it is carried, from the cargo, the
+                trace evidence and the pallet's seat on the forks at the last tick's end (the truth, as the evidence)."""
+                from forklift_core.mission.cargo import deliverable_as_carried
+
+                supported_ = (grid_planning and slam is not None and obstacle is not None
+                              and not obstacle["layer"].known_enabled)
+                return deliverable_as_carried(core.cargo, live_state.get("cargo_rel"), geometry.inserted_offset_m,
+                                              supported=supported_)
+
+            core.hooks.loaded_cargo_ok = lambda: (core.commands.mission is not None
+                                                  and live_loaded_pallet() == core.commands.mission.pallet_id)
+
             def live_mission_ready(t_, inputs_):
                 """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
                 docking reference scan cast at the new destination's truth."""
@@ -6334,7 +6377,7 @@ def drive(S, isaac) -> None:
                 pickup_obstacle = Rectangle(float(initial_pallet[0]), float(initial_pallet[1]), geometry.pallet_depth_m,
                                             geometry.pallet_width_m, yaw_and_tilt(pallet_q_)[0])
                 if obstacle is not None:
-                    if obstacle["layer"].known_enabled:
+                    if obstacle["layer"].known_enabled and pickup_zone is not None:  # 6c: a loaded start has no zone
                         from forklift_core.perception.known_obstacles import KnownRect
 
                         # The zone is in map coordinates now: the correction it is expressed under goes with it
@@ -6448,7 +6491,8 @@ def drive(S, isaac) -> None:
                         t, core.near_active(), clear_for_submit=slam is None or slam["tracker"].mode != "holding",
                         submit_refusal=core.cargo.submit_refusal(),  # the forks' state at the last tick's end (D5a)
                         # plan D3: a submit before the tracker tracks is localization_lost
-                        localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"))
+                        localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"),
+                        loaded_pallet=live_loaded_pallet())  # plan D5 6c: the carried pallet a submit may deliver
                 elif mission_schedule is not None:
                     # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                     # control tick's start.
@@ -6540,7 +6584,9 @@ def drive(S, isaac) -> None:
                         require(dev_ <= float(obstacle["layer"].known_config.get("tracking_m", 0.006)),
                                 f"withdraw_tracking_exceeded:{dev_:.4f}")
                 if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending():
-                    live_prepare(t, rear)  # persistent console plan D2: the submitted mission's first leg, from here
+                    # persistent console plan D2: the submitted mission's first leg, from here (D5 6c: a loaded one's
+                    # whole delivery)
+                    (live_prepare_loaded if core.commands.mission_loaded else live_prepare)(t, rear)
                 # Persistent console plan D6: no live mission running (none yet, or it ended); a free one ended outside
                 # the pocket and loaded phases, so the truck may be driven by hand.
                 live_idle_ = live is not None and core.commands.adopted_id is None
@@ -6829,7 +6875,12 @@ def drive(S, isaac) -> None:
                                 if not getattr(succeeded_, "pending", False):
                                     core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
                             core.capture_acquired_s = None
-                if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:
+                # Persistent console plan D5 6c item 5: a loaded mission stands in its start wait (the lift to the carry
+                # height, the first live leg taken, the docking armed): no follower, arrival, cusp or stall counts, no
+                # wheel command; the lift ramp, the live leg and the permission watch run.
+                loaded_wait_ = live is not None and not paused_ and core.loaded_start_wait(t)
+                if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_
+                        and not loaded_wait_):
                     # Three times the path time at the tracker's own speed caps
                     # (length / cruise when there are none), plus 10 s.
                     # M-a1 slice 4a-i: the follower's tick and the rules that rewrite its result are the core's.
@@ -7042,10 +7093,10 @@ def drive(S, isaac) -> None:
                 permission_tick_ = not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
                     requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
                     or cusp_handed_ is not None
-                ) and not plan_wait_
+                ) and not plan_wait_ and not loaded_wait_
                 # Real-time plan D8b: a tick standing for a plan has the paused tick's watch instead (no work counters,
-                # no replan), and the truth evaluation below with what it allows.
-                plan_watch_ = plan_wait_ and not paused_ and obstacle is not None
+                # no replan), and the truth evaluation below with what it allows; so does a loaded start wait (6c).
+                plan_watch_ = (plan_wait_ or loaded_wait_) and not paused_ and obstacle is not None
                 if permission_tick_ or plan_watch_:
                     if plan_watch_:
                         watch_ = core.permission_watch(t, rear, kappa, loaded)
@@ -7123,6 +7174,9 @@ def drive(S, isaac) -> None:
                         plan_wait_ = True  # real-time plan D8b: the leg's plan was just asked
                         curvature = 0.0
                         dwell_hold = True
+                if loaded_wait_ and not paused_:  # plan D5 6c: standing for the loaded start, the steering held
+                    requested_speed, curvature = 0.0, 0.0
+                    dwell_hold = True
                 if new_obstacles is not None and ms.phase in trackers:
                     leg, leg_direction = trackers[ms.phase].leg_ahead()
                     driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()
@@ -7256,6 +7310,13 @@ def drive(S, isaac) -> None:
                         trace_evidence.update(ms.phase if core.commands.adopted_id is not None else "idle",
                                               (float(base[0]), float(base[1]), float(yaw)),
                                               (float(ppos[0]), float(ppos[1]), float(pallet_yaw)))
+                    # plan D5 6c item 2a: the pallet's seat on the forks (relative to the true rear axle), for a submit
+                    rx_, ry_, ryaw_ = (float(v) for v in truth_rear)
+                    cdx_, cdy_ = float(ppos[0]) - rx_, float(ppos[1]) - ry_
+                    live_state["cargo_rel"] = (math.cos(ryaw_) * cdx_ + math.sin(ryaw_) * cdy_,
+                                               -math.sin(ryaw_) * cdx_ + math.cos(ryaw_) * cdy_,
+                                               math.atan2(math.sin(float(pallet_yaw) - ryaw_),
+                                                          math.cos(float(pallet_yaw) - ryaw_)))
                     if core.commands.adopted_id is None:
                         # Plan D14: the manual recovery's verdicts (ground, free) with no mission adopted.
                         live_state["pallet_now"] = (float(ppos[0]), float(ppos[1]), float(pallet_yaw))
