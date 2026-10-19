@@ -185,6 +185,7 @@ class SlamPoseTracker:
         self.version = 0
         self._hold_start = None
         self._hold_last = None
+        self._stand = None  # (odom at the stand's start, travel before it) -- plan D15
         self.hold_travel_m = 0.0
         self.skipped_replies = 0
 
@@ -222,6 +223,7 @@ class SlamPoseTracker:
         self.mode = "holding"
         self._hold_start = tuple(float(v) for v in odom_from_base)
         self._hold_last = self._hold_start
+        self._stand = None
         self.hold_travel_m = 0.0
 
     def release(self, *, odom_from_base) -> tuple[float, float]:
@@ -231,13 +233,18 @@ class SlamPoseTracker:
         before = compose(self.applied[0], odom_from_base)
         self.applied = self.received
         after = compose(self.applied[0], odom_from_base)
-        self.mode, self._hold_start, self._hold_last = "tracking", None, None
+        self.mode, self._hold_start, self._hold_last, self._stand = "tracking", None, None, None
         return (
             float(np.hypot(after[0] - before[0], after[1] - before[1])),
             abs(wrap(after[2] - before[2])),
         )
 
-    def map_from_base(self, now_s, odom_from_base) -> tuple[float, float, float]:
+    def map_from_base(self, now_s, odom_from_base, *, standing: bool = False) -> tuple[float, float, float]:
+        """``standing``: the applied wheel speed has been zero for a while (the live runner's choice). While
+        holding, a stand counts its net displacement, not the sum of its steps: at rest the sum grows with the
+        odometry noise linearly (U30: the 15 m limit filled after 1,228 s STOPPED), the net only as a random walk,
+        and a creep still counts. Motion that comes back on itself within a stand is not counted (persistent
+        console plan D15)."""
         now = _finite_scalar(now_s, "now_s")
         if self.applied is None:
             raise LocalizationStale("no SLAM correction yet")
@@ -248,12 +255,21 @@ class SlamPoseTracker:
         if self.mode == "holding":
             # Distance travelled (sum of steps), not displacement: insert and
             # back out again is dead reckoning both ways.
-            self.hold_travel_m += float(
-                np.hypot(
-                    odom_from_base[0] - self._hold_last[0],
-                    odom_from_base[1] - self._hold_last[1],
+            if not standing:
+                self._stand = None
+                self.hold_travel_m += float(
+                    np.hypot(
+                        odom_from_base[0] - self._hold_last[0],
+                        odom_from_base[1] - self._hold_last[1],
+                    )
                 )
-            )
+            else:
+                if self._stand is None:
+                    self._stand = (self._hold_last, self.hold_travel_m)
+                anchor, before = self._stand
+                self.hold_travel_m = before + float(
+                    np.hypot(odom_from_base[0] - anchor[0], odom_from_base[1] - anchor[1])
+                )
             self._hold_last = (float(odom_from_base[0]), float(odom_from_base[1]))
             if self.hold_travel_m > self.hold_limit_m:
                 raise LocalizationStale(

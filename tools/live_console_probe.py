@@ -809,6 +809,81 @@ async def cycle_scenario(p: Probe, args):
         if not submit or submit.get("t") != "ack":
             leg_index += 1  # refused: the next leg (Codex D14 impl round 4 P2-4 -- it asked the same one forever)
             continue
+        if args.stop_wait_at and not p.report.get("stop_wait_done"):
+            # Persistent console plan U30: STOP the first mission that reaches PHASE[:SECONDS in it] (the near field
+            # tracks there), stand STOPPED for --stop-wait-sim-s of sim time (read from the video frames' stamps: the
+            # pacing is not the factor), then rearm and cancel it; the cycle goes on with the next leg.
+            phase_, _, after_ = args.stop_wait_at.partition(":")
+            after_s_ = float(after_ or 0.0)
+            mid_ = submit.get("mission_id")
+
+            def at_phase_(s):
+                # this submission, running in the phase (a preparing mission shows the core's retained phase; Codex
+                # probe review P2-1)
+                m_ = s.get("mission") or {}
+                return (m_.get("mission_id") == mid_ and m_.get("status") == "running" and m_.get("phase") == phase_
+                        and (m_.get("phase_elapsed_s") or 0.0) >= after_s_)
+
+            def ended_(s):
+                r_ = s.get("last_result") or {}
+                return r_.get("seq", 0) > seen and r_.get("mission_id") == mid_
+
+            reached_ = await p.until(lambda s: at_phase_(s) or ended_(s), args.mission_timeout_s,
+                                     label=f"stop_wait:{phase_}")
+            # the mission ended before the phase: no STOP, no wait (recorded; the next mission takes it)
+            reached_ = bool(reached_) and p.state is not None and at_phase_(p.state)
+            p.report["stop_wait_done"] = reached_
+
+            def fresh_sim_(after_mono):
+                # the newest frame *acquired* after ``after_mono``: a capture made before the STOP and sent late does not
+                # start it (Codex probe review round 2 P2-2). acquired_mono_ns is the runner's time.monotonic(), the
+                # probe's clock on the same host (live.sbatch runs both on one node).
+                for f_ in reversed(p.frames):
+                    if f_["acquired_mono_ns"] / 1e9 <= after_mono:
+                        return None
+                    if f_.get("stamp_ns"):
+                        return f_["stamp_ns"] / 1e9
+                return None
+
+            wait_ = entry["stop_wait"] = {"phase_reached": reached_, "mission_id": mid_}
+        if args.stop_wait_at and entry.get("stop_wait", {}).get("phase_reached"):
+            wait_["stop_reply"] = await p.request("stop", source="key")
+            await p.until(lambda s: s.get("mode") == "STOPPED", 5, label="stopped_for_wait")
+            stopped_mono_ = time.monotonic()
+            wait_["start_mono"], wait_["start_wall"], wait_["start_sim_s"] = stopped_mono_, time.time(), None
+            wall_end_ = time.monotonic() + args.stop_wait_wall_s
+            wait_["end_reason"] = "wall_limit"
+            while time.monotonic() < wall_end_:
+                if p.closed_code is not None:
+                    wait_["end_reason"] = "closed"
+                    break
+                if wait_["start_sim_s"] is None:
+                    # the sim time starts at the first capture after the STOP (Codex probe review P2-2)
+                    wait_["start_sim_s"] = fresh_sim_(stopped_mono_)
+                now_ = fresh_sim_(stopped_mono_)
+                if now_ is not None and wait_["start_sim_s"] is not None and now_ - wait_["start_sim_s"] >= args.stop_wait_sim_s:
+                    wait_["end_reason"] = "sim_time"
+                    break
+                await p.echo()
+                await asyncio.sleep(0.5)
+            wait_["end_mono"], wait_["end_wall"] = time.monotonic(), time.time()  # the RSS samples are wall-stamped
+            wait_["end_sim_s"] = fresh_sim_(stopped_mono_)
+            wait_["mode_at_end"] = (p.state or {}).get("mode")
+            wait_["mission_at_end"] = (p.state or {}).get("mission")
+            await p.until(p.standing, 20, label="standing_after_wait")
+            wait_["rearm"] = await p.request_until_standing("rearm")
+            await p.until(lambda s: s.get("mode") == "PAUSED", 5, label="paused_after_rearm")
+            wait_["cancel_reply"] = await p.request("mission_cancel", mission_id=submit.get("mission_id"))
+            statuses_ = []
+            stop_by_ = time.monotonic() + args.mission_timeout_s
+            while time.monotonic() < stop_by_ and p.closed_code is None:
+                status_ = ((p.state or {}).get("mission") or {}).get("status")
+                if status_ and (not statuses_ or statuses_[-1] != status_):
+                    statuses_.append(status_)
+                if p.state is not None and ended_(p.state):
+                    break
+                await asyncio.sleep(0.1)
+            wait_["after_cancel_statuses"] = statuses_
         if args.cancel_at and len(p.report["missions_run"]) == 1:
             # Persistent console plan U7/U26/U27: the first mission cancelled in a phase (after some seconds in it);
             # the statuses it goes through to its end are kept (recovering, then cancelled or recovery_required).
@@ -860,14 +935,18 @@ async def cycle_scenario(p: Probe, args):
             entry["after_cancel"] = {"statuses": statuses_, "phases": phases_}
         end_by = time.monotonic() + args.mission_timeout_s
         while time.monotonic() < end_by and p.closed_code is None:
-            await p.until(lambda s: ((s.get("last_result") or {}).get("seq", 0) > seen) or s.get("mode") == "STOPPED",
-                          end_by - time.monotonic(), label=f"end:{leg}")
+            await p.until(lambda s: (((s.get("last_result") or {}).get("seq", 0) > seen
+                                      and (s.get("last_result") or {}).get("mission_id") == submit.get("mission_id")))
+                          or s.get("mode") == "STOPPED", end_by - time.monotonic(), label=f"end:{leg}")
             if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
                 break
             await p.until(p.standing, 20, label="standing_again")
             await p.request_until_standing("rearm")
             await p.request_until_standing("mission_resume", mission_id=submit.get("mission_id"))
         entry["result"] = (p.state or {}).get("last_result")
+        if (entry["result"] or {}).get("mission_id") != submit.get("mission_id"):
+            # not this submission's end (it never came, or a later one is shown): kept, and said (Codex probe P2-1)
+            entry["result_not_this_mission"] = True
         entry["ended_mono"] = time.monotonic()
         reason_ = (entry["result"] or {}).get("reason") or ""
         if (args.manual_recovery and "manual_recovery" in p.report and reason_.startswith("prepare:")
@@ -915,6 +994,66 @@ async def cycle_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def restart_scenario(p: Probe, args):
+    """Persistent console plan U15/U24: the runner killed (SIGKILL) while the console holds the lease and stands;
+    main() then follows the supervisor's next session, resends the old session's request there (its epoch, token
+    and lease: refused stale_epoch) and runs the cycle."""
+    import os
+
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 30, label="standing_before_kill")
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id, "control_gen": p.control_gen,
+                           "request_token": p.request_token, "request_seq": p.request_seq}
+    # The port file read again at the kill: the connected session's, running, its pid a runner (Codex probe review
+    # P1: the snapshot from before the connection could name an earlier epoch's pid, reused since).
+    try:
+        info_ = json.loads(args.port_file.read_text())
+    except (OSError, ValueError) as exc:
+        p.event("kill_refused", why=f"port_file: {exc!r}")
+        return
+    pid = info_.get("pid")
+    if not pid or info_.get("state") != "running" or info_.get("session_epoch") != p.epoch:
+        p.event("kill_refused", why="port file not this session", port_file=info_, session_epoch=p.epoch)
+        return
+    try:
+        cmdline_ = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+    except OSError as exc:
+        p.event("kill_refused", why=f"no process {pid}: {exc!r}")
+        return
+    if b"run_transport.py" not in cmdline_:
+        p.event("kill_refused", why="not a runner", pid=pid)
+        return
+    p.report["killed"] = {"pid": pid, "mono": time.monotonic()}
+    os.kill(int(pid), signal.SIGKILL)
+    await p.until(lambda s: p.closed_code is not None, 30, label="closed_after_kill")
+    p.report["killed"]["close_code"] = p.closed_code
+
+
+async def old_session_requests(p: Probe, old: dict) -> dict:
+    """Plan U24: the old session's next request as its console would resend it (its epoch, token, seq and lease) on
+    the new session's connection -- a mode change and a submit; both must be refused stale_epoch."""
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state_new_session")
+    # The epoch, lease and generation go as the request's own fields (the reader keeps updating the shared
+    # control_gen); the token and seq are the probe's, swapped and restored whatever happens (Codex probe review P3).
+    old_fields = {"session_epoch": old["session_epoch"], "lease_id": old["lease_id"], "control_gen": old["control_gen"]}
+    saved = (p.request_token, p.request_seq)
+    out = {"new_epoch": p.epoch}
+    try:
+        p.request_token, p.request_seq = old["request_token"], old["request_seq"]
+        out["mode_request"] = await p._request("mode_request", to="PAUSED", **old_fields)
+        out["mission_submit"] = await p._request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                                 targets_revision=(p.targets or {}).get("targets_revision"),
+                                                 **old_fields)
+    finally:
+        p.request_token, p.request_seq = saved
+    return out
+
+
 async def reset_scenario(p: Probe, args):
     """Persistent console plan U12: a scene damaged under a mission (the runner's --live-test-push-pallet moves the
     pallet at a phase) is latched; automatic work is refused, manual control is not; a scene reset ends the session --
@@ -954,7 +1093,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset"),
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset",
+                                           "restart"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -975,6 +1115,11 @@ def main():
     ap.add_argument("--cancel-at", default="", help="cycle scenario: cancel the first mission in PHASE[:SECONDS in it] "
                     "or PHASE@METRES (at most METRES left of its leg) or transport@docked (on the docked straight) "
                     "(plan U7/U26/U27)")
+    ap.add_argument("--stop-wait-at", default="", help="cycle scenario: STOP the first mission in PHASE[:SECONDS in "
+                    "it], stand --stop-wait-sim-s, rearm and cancel it (plan U30)")
+    ap.add_argument("--stop-wait-sim-s", type=float, default=1500.0, help="cycle scenario: the STOP's stand (sim s)")
+    ap.add_argument("--stop-wait-wall-s", type=float, default=7200.0,
+                    help="cycle scenario: the STOP's stand at most (wall s), when the frames' time does not get there")
     ap.add_argument("--idle-s", type=float, default=0.0, help="cycle scenario: stay connected this long first (wall s)")
     ap.add_argument("--pre-teleop-speed", type=float, default=0.5)
     ap.add_argument("--pre-teleop-curvature", type=float, default=0.3)
@@ -1018,11 +1163,16 @@ def main():
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
-                    "lift": lift_scenario, "reset": reset_scenario}[args.scenario]
+                    "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
-        if args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack":
-            # U12: the supervisor's next session (a new epoch on the same port), the cycle there
-            old, info2, ready = info.get("session_epoch"), {}, False
+        if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
+                or (args.scenario == "restart" and "killed" in report)):
+            # U12, U15: the supervisor's next session (a new epoch on the same port), the cycle there
+            # the successor is newer than the session left behind -- for a restart the one killed, which may be later
+            # than the snapshot taken at start (Codex probe review round 2 P2-1)
+            old = ((report.get("session") or {}).get("session_epoch") if args.scenario == "restart"
+                   else info.get("session_epoch"))
+            info2, ready = {}, False
             end = time.monotonic() + args.wait_port_s
             while time.monotonic() < end:
                 info2 = json.loads(args.port_file.read_text()) if args.port_file.exists() else {}
@@ -1036,9 +1186,18 @@ def main():
             if ready:
                 p2 = Probe(info2["port"], report["after_reset"])
                 try:
-                    asyncio.run(cycle_scenario(p2, args))
+                    if args.scenario == "restart":
+                        async def resend_then_cycle():
+                            report["after_reset"]["old_requests"] = await old_session_requests(p2, report["session"])
+                            await cycle_scenario(p2, args)
+
+                        asyncio.run(resend_then_cycle())
+                    else:
+                        asyncio.run(cycle_scenario(p2, args))
                 finally:
                     report["after_reset"]["states_n"] = len(p2.states)
+                    report["after_reset"]["states"] = p2.states  # Codex probe review P3: the next session's own
+                    report["after_reset"]["frames"] = p2.frames
     finally:
         report["frames"] = p.frames
         report["states"] = p.states
