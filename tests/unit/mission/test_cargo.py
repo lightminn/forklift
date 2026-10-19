@@ -167,3 +167,43 @@ def test_a_cancel_before_the_first_record_backs_out_along_the_anchor_heading():
     cargo.observe("insert", (0.005, 0.0005, 0.1))
     poses = cargo.recovery_path((0.005, 0.0005, 0.1), step_m=0.02)
     assert len(poses) >= 2 and all(p[2] == pytest.approx(0.1) for p in poses)
+
+
+# --- plan D5 6c: the carried pallet a submit may deliver as it is carried ---------------------------------------
+
+def carrying(pallet_id="P-1"):
+    from forklift_core.mission.cargo import CargoState
+
+    c = CargoState()
+    c.on_transition("insert", "lift", pallet_id)
+    c.on_transition("lift", "extract", pallet_id)
+    assert c.relation == "carrying"
+    return c
+
+
+def test_the_carried_pallet_on_its_nominal_seat_may_be_delivered_as_it_is_carried():
+    from forklift_core.mission.cargo import deliverable_as_carried
+
+    c = carrying()
+    assert deliverable_as_carried(c, (0.62, 0.0, 0.0), 0.62, supported=True) == "P-1"
+    assert deliverable_as_carried(c, (0.639, -0.019, 0.019), 0.62, supported=True) == "P-1"
+    assert deliverable_as_carried(c, (0.61, 0.01, math.pi - 0.01), 0.62, supported=True) == "P-1"  # turned round
+
+
+@pytest.mark.parametrize("rel", [(0.645, 0.0, 0.0), (0.62, 0.025, 0.0), (0.62, 0.0, 0.03), (0.62, 0.0, math.pi / 2)])
+def test_a_pallet_off_its_seat_is_not(rel):
+    from forklift_core.mission.cargo import deliverable_as_carried
+
+    assert deliverable_as_carried(carrying(), rel, 0.62, supported=True) is None
+
+
+def test_no_cargo_lost_evidence_an_unsupported_run_or_no_pose_is_not():
+    from forklift_core.mission.cargo import CargoState, deliverable_as_carried
+
+    assert deliverable_as_carried(CargoState(), (0.62, 0.0, 0.0), 0.62, supported=True) is None  # free forks
+    lost = carrying()
+    lost.trace_valid = False
+    assert deliverable_as_carried(lost, (0.62, 0.0, 0.0), 0.62, supported=True) is None
+    assert deliverable_as_carried(carrying(), (0.62, 0.0, 0.0), 0.62, supported=False) is None  # no grid + SLAM
+    assert deliverable_as_carried(carrying(), None, 0.62, supported=True) is None
+    assert deliverable_as_carried(carrying(None), (0.62, 0.0, 0.0), 0.62, supported=True) is None

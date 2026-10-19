@@ -223,3 +223,27 @@ class CargoState:
                          "state": self.load},
                 "fork_in_pocket": {"value": self.relation != "free", "basis": "phase+cargo",
                                    "relation": self.relation}}
+
+
+# Plan D5 6c item 2a: how far the carried pallet may sit from its nominal seat on the forks for a loaded submit (the
+# normal transport's guarantee: the nominal loaded outline the plans and permits use covers it as it covers a
+# transport that was never cancelled).
+LOADED_SEAT_M = 0.02
+LOADED_SEAT_RAD = 0.02
+
+
+def deliverable_as_carried(cargo: CargoState, rel, inserted_offset_m: float, *, supported: bool) -> str | None:
+    """The pallet a submit may deliver as it is carried (plan D5 6c items 1 and 2a), else None: the forks carry it,
+    its trace evidence holds, the run is one the loaded start supports (``supported``: grid planning with SLAM, the
+    known-pallet layer off), and ``rel`` -- the pallet centre relative to the rear axle, from the same source as the
+    trace evidence -- is within LOADED_SEAT_M along and across and LOADED_SEAT_RAD in heading (either way round) of
+    the nominal seat (``inserted_offset_m`` ahead, centred, aligned)."""
+    if cargo.relation != "carrying" or not cargo.trace_valid or cargo.pallet_id is None or not supported:
+        return None
+    if rel is None:
+        return None
+    dx, dy, dyaw = float(rel[0]) - inserted_offset_m, float(rel[1]), float(rel[2])
+    turned = math.atan2(math.sin(2.0 * dyaw), math.cos(2.0 * dyaw)) / 2.0  # 0 and pi are the same seat
+    if abs(dx) > LOADED_SEAT_M or abs(dy) > LOADED_SEAT_M or abs(turned) > LOADED_SEAT_RAD:
+        return None
+    return cargo.pallet_id

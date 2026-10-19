@@ -505,6 +505,18 @@ def test_a_submit_is_refused_while_the_forks_may_be_in_a_pocket(tmp_path):
     assert captured[-1].clear_for_submit is True
 
 
+def test_the_pallet_deliverable_as_carried_reaches_the_submit(tmp_path):
+    """Persistent console plan D5 6c item 1: the runner names the carried pallet a submit may deliver as it is."""
+    rt, core, did, clock = runtime(tmp_path)
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+    rt.tick_start(1.0, False, submit_refusal="cargo_held", loaded_pallet="P-1")
+    assert captured[-1].loaded_pallet == "P-1" and captured[-1].submit_refusal == "cargo_held"
+    rt.tick_start(2.0, False)
+    assert captured[-1].loaded_pallet is None
+
+
 def test_a_preparation_ended_after_the_apply_is_collected_before_the_next_one(tmp_path):
     """Codex stage 2 design round 2 P2: a job_hold failure (timeout, no candidate) comes after the tick's apply; the
     next apply frees the slot first, so it is collected before it -- exactly once, at the end log's time."""

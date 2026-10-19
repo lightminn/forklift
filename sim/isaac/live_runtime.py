@@ -204,10 +204,12 @@ class LiveRuntime:
 
     # --- per control tick ------------------------------------------------------------------------------------------
     def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True,
-                   submit_refusal: str | None = None, localization_ok: bool = True) -> tuple[str, list]:
+                   submit_refusal: str | None = None, localization_ok: bool = True,
+                   loaded_pallet: str | None = None) -> tuple[str, list]:
         """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``:
         outside a SLAM hold (else a submit is refused recovery_required); ``submit_refusal``: what the forks are in
-        refuses it (persistent console plan D5a: recovery_required, cargo_held)."""
+        refuses it (persistent console plan D5a: recovery_required, cargo_held); ``loaded_pallet``: the carried pallet a
+        submit may deliver as it is carried (plan D5 6c), else None."""
         now = self.clock()
         self.stopped_in_tick = False
         self.arbiter.pacing_ok = self.pacer.ok
@@ -217,7 +219,8 @@ class LiveRuntime:
                                                       clear_for_submit=clear_for_submit,
                                                       submit_refusal=submit_refusal,
                                                       scene_damaged=self.scene["damaged"] is not None,
-                                                      localization_ok=localization_ok))
+                                                      localization_ok=localization_ok,
+                                                      loaded_pallet=loaded_pallet))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._flush(t)
         return stop_kind, records
