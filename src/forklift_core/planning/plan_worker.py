@@ -112,8 +112,15 @@ def _observe_ladder(pm, payload: dict) -> dict:
                 break
         if result is not None or timed_out:
             break
-    return {"result": result, "selected": selected, "candidates": candidates, "timed_out": timed_out,
-            "wall_s": time.monotonic() - started}
+    out = {"result": result, "selected": selected, "candidates": candidates, "timed_out": timed_out}
+    if result is None and not timed_out and candidates and all(c["status"] == "invalid_start" for c in candidates):
+        # Persistent console plan D13 item 6: how far straight back the start check passes -- the planner's own
+        # check, built from this job's own frozen inputs, within the same deadline (Codex D13 rounds 1-2).
+        free, clearance = pm.observation_start_checker(world, payload["config"], geometry=payload["geometry"],
+                                                       pickup_bounds=payload["pickup_bounds"], **kwargs)
+        out["advice"] = pm.backoff_advice(free, clearance, start, deadline=deadline)
+    out["wall_s"] = time.monotonic() - started
+    return out
 
 
 def main(argv: list[str]) -> int:

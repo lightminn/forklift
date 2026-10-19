@@ -6303,7 +6303,8 @@ def drive(S, isaac) -> None:
             if cargo:
                 core.cargo.invalidate(reason_)
             if live.scene["damaged"] is None:
-                live.scene["damaged"] = {"reason": reason_, "t": float(t_)}
+                # plan D13 item 1: the wall time too, stamped once (agy: the sim time does not say when it was)
+                live.scene["damaged"] = {"reason": reason_, "t": float(t_), "unix": time.time()}
                 state["scene_damaged"] = dict(live.scene["damaged"])
                 require(False, reason_)
             state["scene_after_damage"] = state.get("scene_after_damage", 0) + 1

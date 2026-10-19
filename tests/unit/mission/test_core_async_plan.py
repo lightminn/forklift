@@ -529,6 +529,22 @@ def test_a_preparation_that_plans_nothing_fails_the_mission_and_changes_nothing(
     assert ms.phase == "complete" and not started and core.options.scenario.destination == "DEST"
 
 
+def test_a_blocked_start_carries_the_workers_advice_to_the_missions_end():
+    """Persistent console plan D13 item 6: the worker's advice reaches the result, nothing else gets one."""
+    core, ms, state, started, inputs = preparing_core()
+    core.prepare_request(11.0, REAR, inputs, {})
+    answer = ladder(statuses=("invalid_start", "invalid_start"))
+    answer["advice"] = {"backoff_m": 0.1, "backoff_max_m": 0.4, "from_rear": [1.0, 2.0, 0.0]}
+    core.jobs.answers[core.pending.job] = (True, answer)
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert core.commands.status == "failed" and core.commands.end_advice == answer["advice"]
+    core2, *_ = preparing_core()
+    core2.prepare_request(11.0, REAR, inputs, {})
+    core2.jobs.answers[core2.pending.job] = (True, ladder(timed_out=True))
+    core2.job_hold(12.0, REAR, 0.0, False)
+    assert core2.commands.end_advice is None
+
+
 @pytest.mark.parametrize("change, why", [("drift", "drift"), ("targets", "targets")])
 def test_a_preparation_whose_inputs_changed_is_asked_again_once_then_fails(change, why):
     from forklift_core.mission.targets import Pose

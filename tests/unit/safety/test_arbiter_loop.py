@@ -138,6 +138,18 @@ def test_stop_then_rearm_then_teleop_again():
     assert loop.a.mode == "TELEOP" and loop.a.armed
 
 
+def test_the_state_says_whether_the_feedback_is_valid():
+    """Persistent console plan D13 item 5 (Codex D13 round 2 P3): the session buttons tell no_feedback from
+    not_stopped as the arbiter does."""
+    loop = Loop()
+    for _ in range(40):
+        loop.cycle()
+    assert loop.state["feedback_ok"] is True
+    loop.a.feedback_ok = False
+    out = loop.a.step(loop.t, SAFE, (0.0, 0.0))
+    assert state_message(loop.a, out, SAFE, now_mono=loop.t)["feedback_ok"] is False
+
+
 def test_the_state_says_whether_the_stop_is_confirmed_and_names_the_mission_targets():
     # the console enables rearm on stopped_confirmed and shows pallet -> destination (C3)
     loop = Loop()

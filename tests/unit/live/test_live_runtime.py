@@ -373,8 +373,10 @@ def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_p
     core.commands.begin_wait(11.0)
     entry = rt.end_mission(20.0, "complete", None)
     assert order == ["stop", ("abandon", 20.0), "unlock", "drain", "judge", ("reset", 20.0)]
+    assert isinstance(entry.pop("ended_unix"), float)  # plan D13 item 1: the wall time, stamped once
     assert entry == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 10.0,
                      "ended_s": 20.0, "pallet_id": "P-1", "destination_id": "D-1"}
+    entry = rt.results.last
     assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
     seq, message = rt.store.get("missions")
     assert seq == 1 and message == {"t": "missions", "missions_seq": 1, "results": [entry]}
@@ -830,3 +832,12 @@ def test_a_stop_during_a_loaded_lift_ramp_holds_within_the_loaded_tolerance(tmp_
         assert did2["lift"][-1] == pytest.approx(0.06)  # empty forks: the plain tolerance (0.02 m)
     finally:
         rt2.close()
+
+
+def test_a_preparation_ended_with_advice_puts_it_in_the_result(tmp_path):
+    """Persistent console plan D13 item 6: the advice the commands' end kept reaches the published result."""
+    rt, core, order = ending(tmp_path)
+    advice = {"backoff_m": 0.1, "backoff_max_m": 0.3, "from_rear": [0.0, 0.0, 0.0]}
+    assert core.commands.terminate("failed", 15.0, "prepare:all_candidates_failed:invalid_start", advice=advice)
+    rt.collect_end(16.0)
+    assert rt.results.last["advice"] == advice and rt.results.last["ended_s"] == 15.0

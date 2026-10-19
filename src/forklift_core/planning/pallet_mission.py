@@ -637,6 +637,61 @@ def plan_observation_leg(
     )
 
 
+def observation_start_checker(
+    scenario: TransportScenario,
+    config: PlannerConfig | None = None,
+    *,
+    geometry: SyntheticMissionGeometry | None = None,
+    pickup_bounds: Bounds | None = None,
+    occupancy=None,
+    pickup_obstacle: Rectangle | None = None,
+    **_unused,
+):
+    """The start check plan_observation_leg's search makes (hybrid_astar's ``invalid_start``), from the same inputs
+    and the same construction: ``(free, clearance_m)`` with ``free(pose, clearance_m) -> bool`` (persistent console
+    plan D13 item 6). Extra keyword arguments (the leg's ``deadline``) are accepted and ignored."""
+    geometry = geometry if geometry is not None else SyntheticMissionGeometry()
+    config = config if config is not None else make_transport_planner_config()
+    obstacles, footprint, bounds = leg_obstacles(
+        "observe", scenario, geometry, pickup_obstacle=pickup_obstacle, pickup_bounds=pickup_bounds
+    )
+    checker = make_checker(obstacles, footprint, bounds, occupancy)
+    return checker.free, float(config.clearance_m)
+
+
+def backoff_advice(free, clearance_m: float, start: Pose2D, *, step_m: float = 0.05, limit_m: float = 1.0,
+                   deadline: float | None = None, clock=time.monotonic) -> dict:
+    """How far straight back from ``start`` the start check passes (persistent console plan D13 item 6).
+
+    The poses at ``step_m`` steps up to ``limit_m``: before the first one the start check passes, each must be free
+    at clearance 0 (the body passes there -- a wall behind blocks the way); then ``backoff_m`` is that first
+    distance and ``backoff_max_m`` the last one passing without a break (a distance not checked is never advised).
+    Nothing within the limit: ``backoff_m`` None with ``within_m``; the way blocked first: ``blocked_at_m``. A
+    ``deadline`` (``clock`` time) checked before and at every pose: spent, ``{"skipped": "deadline"}`` -- never a
+    partial search reported as nothing found."""
+    if deadline is not None and clock() >= deadline:
+        return {"skipped": "deadline"}
+    bx, by = -cos(start.yaw_rad), -sin(start.yaw_rad)
+    first = last = None
+    for k in range(1, int(round(limit_m / step_m)) + 1):
+        if deadline is not None and clock() >= deadline:
+            return {"skipped": "deadline"}
+        d = round(k * step_m, 6)
+        pose = (start.x_m + d * bx, start.y_m + d * by, start.yaw_rad)
+        if free(pose, clearance_m):
+            if first is None:
+                first = d
+            last = d
+            continue
+        if first is not None:
+            break
+        if not free(pose, 0.0):
+            return {"backoff_m": None, "blocked_at_m": d, "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
+    if first is None:
+        return {"backoff_m": None, "within_m": float(limit_m), "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
+    return {"backoff_m": first, "backoff_max_m": last, "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
+
+
 def final_straight_prefix(path: PlanResult, keep_m: float) -> PlanResult | None:
     """The approach up to where its final forward straight still has keep_m left.
 

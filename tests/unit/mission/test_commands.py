@@ -285,6 +285,18 @@ def test_terminate_ends_an_active_mission_with_its_reason_once(outcome):
     assert m.status == "idle" and m.mission_id is None
 
 
+def test_terminate_keeps_the_advice_for_this_end_only():
+    """Persistent console plan D13 item 6: the advice goes with the end that made it."""
+    m = running()
+    assert m.terminate("failed", 4.0, "prepare:all_candidates_failed:invalid_start", advice={"backoff_m": 0.1})
+    assert m.end_advice == {"backoff_m": 0.1}
+    m2 = running()
+    m2.terminate("failed", 4.0, "why")
+    assert m2.end_advice is None
+    m2.note_end(5.0, "again")
+    assert m2.end_advice is None
+
+
 def test_terminate_refuses_an_unknown_outcome_and_an_idle_slot():
     m = MissionCommands()
     with pytest.raises(ValueError):

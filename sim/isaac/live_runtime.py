@@ -262,9 +262,10 @@ class LiveRuntime:
             cmds.note_end(t, reason)  # step 9: a cancel confirmed standing is already cancelled; logged once
         started = next((r["t"] for r in reversed(cmds.log) if r["command"] == "submit" and r["accepted"]
                         and r["mission_id"] == mission_id), None)
+        advice = cmds.end_advice if cmds.end_logged_for == mission_id else None  # plan D13 item 6
         entry = self.results.add(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
                                  ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
-                                 destination_id=mission.destination_id if mission else None)
+                                 destination_id=mission.destination_id if mission else None, advice=advice)
         clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
         records = self.core.end_reset(t)  # steps 3 and 8: the pocket check closed, the mission's state back to the start
         if any(records.values()):

@@ -12,12 +12,12 @@ def entry(book, mission_id="m1", outcome="done", reason=None, **k):
 
 
 def test_results_are_numbered_in_order_and_the_last_one_is_kept():
-    book = ResultsBook()
+    book = ResultsBook(wall=lambda: 1792400000.5)
     assert book.last is None and book.message() == {"t": "missions", "missions_seq": 0, "results": []}
     first = entry(book)
     second = entry(book, "m2", "failed", "Pallet was not lifted")
     assert first == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 1.0,
-                     "ended_s": 9.0, "pallet_id": "P-1", "destination_id": "D-1"}
+                     "ended_s": 9.0, "ended_unix": 1792400000.5, "pallet_id": "P-1", "destination_id": "D-1"}
     assert second["seq"] == 2 and book.last == second
     assert book.message() == {"t": "missions", "missions_seq": 2, "results": [first, second]}
 
@@ -51,3 +51,21 @@ def test_a_note_adds_fields_to_a_kept_result():
     assert book.last["record_error"] == "OSError: full"
     with pytest.raises(KeyError):
         book.note(9, x=1)
+
+
+def test_a_result_keeps_the_wall_time_it_was_made_at():
+    """Persistent console plan D13 item 1 (agy): the sim time alone does not say when it happened; stamped once."""
+    times = iter([100.0, 200.0])
+    book = ResultsBook(wall=lambda: next(times))
+    first = entry(book)
+    entry(book, "m2")
+    assert first["ended_unix"] == 100.0 and book.message()["results"][0]["ended_unix"] == 100.0
+
+
+def test_a_result_carries_the_advice_only_when_there_is_one():
+    book = ResultsBook(wall=lambda: 1.0)
+    plain = entry(book)
+    advised = book.add(mission_id="m2", outcome="failed", reason="prepare:all_candidates_failed:invalid_start",
+                       started_s=1.0, ended_s=2.0, pallet_id="P-1", destination_id="D-1",
+                       advice={"backoff_m": 0.1, "backoff_max_m": 0.3, "from_rear": [0.0, 0.0, 0.0]})
+    assert "advice" not in plain and advised["advice"]["backoff_m"] == 0.1

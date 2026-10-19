@@ -7,6 +7,7 @@ results stay in memory; each mission's full record is on disk (D1 step 7).
 
 from __future__ import annotations
 
+import time
 from collections import deque
 
 OUTCOMES = ("done", "failed", "cancelled", "recovery_required")
@@ -15,17 +16,21 @@ OUTCOMES = ("done", "failed", "cancelled", "recovery_required")
 class ResultsBook:
     KEEP = 100
 
-    def __init__(self, keep: int = KEEP) -> None:
+    def __init__(self, keep: int = KEEP, wall=time.time) -> None:
         self.seq = 0
+        self._wall = wall  # D13 item 1: the wall time a result is made at, stamped once (not the monotonic clock)
         self._entries: deque = deque(maxlen=keep)
 
     def add(self, *, mission_id: str, outcome: str, reason: str | None, started_s: float | None, ended_s: float,
-            pallet_id: str | None, destination_id: str | None) -> dict:
+            pallet_id: str | None, destination_id: str | None, advice: dict | None = None) -> dict:
         if outcome not in OUTCOMES:
             raise ValueError(f"unknown outcome {outcome!r}")
         self.seq += 1
         entry = {"seq": self.seq, "mission_id": mission_id, "outcome": outcome, "reason": reason,
-                 "started_s": started_s, "ended_s": ended_s, "pallet_id": pallet_id, "destination_id": destination_id}
+                 "started_s": started_s, "ended_s": ended_s, "ended_unix": float(self._wall()),
+                 "pallet_id": pallet_id, "destination_id": destination_id}
+        if advice is not None:
+            entry["advice"] = dict(advice)  # D13 item 6: how far back before the next preparation's start passes
         self._entries.append(entry)
         return dict(entry)
 

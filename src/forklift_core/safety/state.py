@@ -58,6 +58,7 @@ def state_message(arbiter, out, safety: dict | None, *, now_mono: float, rear_ax
         "mode": out.mode, "stop_kind": out.stop_kind, "control_gen": out.control_gen, "armed": out.armed,
         "arm_gen": a.arm_gen,
         "stopped_confirmed": bool(a.stop_confirmed),  # what rearm and mode changes wait for (contract 5)
+        "feedback_ok": bool(a.feedback_ok),  # checked before the stand (plan D13 item 5: no_feedback vs not_stopped)
         # ... unless waived: "lower_only" -- TELEOP entry and rearm taken still but unconfirmed (plan D14, main 10-19)
         "stand_waiver": a.stand_waiver(),
         "lease": {"holder": None if lease is None else lease.client_id,

@@ -571,6 +571,25 @@ async def teleop_drive(p: Probe, seconds: float, speed: float, curvature: float)
     return teleop
 
 
+async def back_off_by(p: Probe, distance_m: float, max_s: float) -> float:
+    """Reverse until the reported rear-axle speed, integrated, says ``distance_m`` (or ``max_s`` passed); the
+    distance it says (plan D13 item 6)."""
+    moved, last = 0.0, time.monotonic()
+    stop_by = last + max_s
+    while moved < distance_m and time.monotonic() < stop_by and p.closed_code is None:
+        await p.teleop(-0.5, 0.0, True)
+        await asyncio.sleep(0.05)
+        now = time.monotonic()
+        st = p.state or {}
+        v = st.get("rear_axle_speed_mps")
+        pacing = st.get("pacing") or {}
+        factor = pacing.get("realtime_factor") or pacing.get("target_factor") or 1.0  # sim s per wall s
+        if v is not None and v < 0:
+            moved += -float(v) * (now - last) * float(factor)
+        last = now
+    return moved
+
+
 async def enter_teleop(p: Probe) -> dict | None:
     """PAUSED, standing, then TELEOP (retried while the vehicle has not confirmed standing) and armed."""
     await p.request("mode_request", to="PAUSED")
@@ -811,17 +830,33 @@ async def cycle_scenario(p: Probe, args):
             # Plan D14 U20 c: as an operator would -- the preparation could not start from here (D4b's check at the
             # submit); back off a little more by hand and ask the same mission again.
             backoffs += 1
+            advice_ = (entry["result"] or {}).get("advice") or {}
+            if advice_ and advice_.get("backoff_m") is None:
+                # Plan D13 item 6: the vehicle found no start straight back (blocked, or not within its limit).
+                p.report.setdefault("manual_backoffs", []).append({"after": reason_[:80], "advice": advice_,
+                                                                   "mono": time.monotonic(), "gave_up": True})
+                leg_index += 1
+                continue
             await enter_teleop(p)
-            stop_by = time.monotonic() + args.manual_extra_s
-            while time.monotonic() < stop_by:
-                await p.teleop(-0.5, 0.0, True)
-                await asyncio.sleep(0.05)
+            if advice_:
+                # the middle of the passing interval, measured by the reported rear-axle speed (the map pose moves
+                # with SLAM corrections; plan D13 item 6)
+                target_ = 0.5 * (float(advice_["backoff_m"]) + float(advice_["backoff_max_m"]))
+                moved_ = await back_off_by(p, target_, max_s=60.0)
+            else:
+                stop_by = time.monotonic() + args.manual_extra_s
+                while time.monotonic() < stop_by:
+                    await p.teleop(-0.5, 0.0, True)
+                    await asyncio.sleep(0.05)
+                target_ = moved_ = None
             stand_by = time.monotonic() + 15.0
             while time.monotonic() < stand_by and not (p.state and p.standing(p.state)):
                 await p.teleop(0.0, 0.0, True)
                 await asyncio.sleep(0.05)
             await p.request("mode_request", to="PAUSED")
-            p.report.setdefault("manual_backoffs", []).append({"after": reason_[:80], "mono": time.monotonic()})
+            p.report.setdefault("manual_backoffs", []).append({"after": reason_[:80], "mono": time.monotonic(),
+                                                               "advice": advice_ or None, "target_m": target_,
+                                                               "moved_m": moved_})
             continue
         leg_index += 1
     p.report["missions_message"] = p.missions

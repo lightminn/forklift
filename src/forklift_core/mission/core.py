@@ -5083,7 +5083,8 @@ class MissionCore:
             cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
         elif value["result"] is None:
             cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
-                           "prepare:all_candidates_failed:" + ";".join(c["status"] for c in value["candidates"]))
+                           "prepare:all_candidates_failed:" + ";".join(c["status"] for c in value["candidates"]),
+                           advice=value.get("advice"))  # plan D13 item 6: the worker's, on this job's inputs
         else:
             try:  # what can fail is made before anything changes (Codex stage 2 impl P2-6): the docking reference
                 ready = self.hooks.live_mission_ready(t, p.ctx["inputs"])

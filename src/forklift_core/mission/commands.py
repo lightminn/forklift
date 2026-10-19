@@ -104,6 +104,7 @@ class MissionCommands:
         self.pause_holding = False  # SLAM was holding then
         self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
         self.end_reason: str | None = None  # why the last mission ended (live: terminate), for its result
+        self.end_advice: dict | None = None  # what that end advises the operator (plan D13 item 6), for its result
         self.end_logged_for: str | None = None  # the mission whose end is in the log (terminate, note_end)
         self.adopted_id: str | None = None  # the mission that ran (start, adopt): only it moves the targets list
 
@@ -337,7 +338,7 @@ class MissionCommands:
         self._close_pause(t)
         self.end_wait(t)
 
-    def terminate(self, outcome: str, t: float, reason: str | None) -> bool:
+    def terminate(self, outcome: str, t: float, reason: str | None, advice: dict | None = None) -> bool:
         """End the active mission at ``t`` with ``outcome`` and ``reason`` (D1 step 9): the open stops close, a new
         generation (a plan asked before cannot be taken), one log entry. False, nothing changed: no active mission."""
         if outcome not in FINAL:
@@ -346,6 +347,7 @@ class MissionCommands:
             return False
         self.close_open(t)
         self.status, self.end_reason, self.end_logged_for = outcome, reason, self.mission_id
+        self.end_advice = advice
         self.recovery = False
         self.mission_gen += 1
         self._record(t, "end")
@@ -357,6 +359,7 @@ class MissionCommands:
         if self.status not in FINAL:
             raise RuntimeError(f"note_end while {self.status}")
         self.end_reason, self.end_logged_for = reason, self.mission_id
+        self.end_advice = None
         self._record(t, "end")
         self.log[-1]["reason"] = reason
 
