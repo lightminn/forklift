@@ -1060,4 +1060,6 @@ def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
     block = source[source.index('far_learned["worker"] = WorkerProposer('):]
     block = block[: block.index("far_runtime = frr.FarRuntime(")]
     assert "timeout_s=args.recognition_timeout_s" in block and "threads=args.recognition_threads" in block
+    assert "device_id=args.recognition_device_id" in block
+    assert 'far_learned["active_providers"] = far_learned["worker"].providers()' in block
     assert 'atexit.register(far_learned["worker"].close)' in block

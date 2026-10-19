@@ -774,7 +774,9 @@ def test_the_live_log_rolls_over_and_keeps_the_newest_files(tmp_path):
             for line in (tmp_path / name).read_text().splitlines()]
     xs = [e["i"] for e in kept if e.get("event") == "x"]
     assert xs == list(range(xs[0], 40)) and xs[0] > 0  # the newest entries, in order, the oldest gone
-    assert all(p.stat().st_size < 200 + 200 for p in tmp_path.glob("live_log.jsonl.*"))
+    # a file rolls once it reaches the limit: at most the limit plus its last line (the end record is the longest)
+    assert all(p.stat().st_size < 200 + max(len(line) + 1 for line in p.read_text().splitlines())
+               for p in tmp_path.glob("live_log.jsonl.*"))
 
 
 def test_the_log_rolls_over_safely_while_a_record_writer_also_logs(tmp_path):
@@ -872,3 +874,93 @@ def test_a_failed_delivery_leaves_no_verified_place(tmp_path):
                                                   delivery_error_m=0.081))
     rt.end_mission(20.0, "complete", None)
     assert core.targets.pallets["P-1"].at is None and rt.results.last["outcome"] == "failed"
+
+
+def test_a_tick_trace_records_the_pacing_and_the_step_on_the_runtimes_clock(tmp_path):
+    # Real-time plan 5.12 D12a: q, d, S from the pacer, the end of after_step, the control marks of the tick
+    # before the step; W_i = q[i+1] - S[i] holds the step and the next control tick.
+    from sim.isaac.tick_trace import COLUMNS, TickTrace, work
+
+    rt, core, did, clock_ = runtime(tmp_path)
+    trace = rt.trace = TickTrace(10, clock_)  # the runtime's own clock
+    rt.start()
+    try:
+        for k in range(3):
+            trace.control("ctrl_start", clock_())
+            clock_.t += 0.002  # the control tick
+            trace.control("replies_s", 0.0005)
+            trace.control("ctrl_end", clock_())
+            step(rt, clock_, k * DT, cost=0.020 if k == 1 else 0.001)
+    finally:
+        rt.close()
+    with np.load(tmp_path / "tick_trace.npz") as saved:
+        assert list(saved["columns"]) == list(COLUMNS)
+        data = saved["data"]
+    col = {n: i for i, n in enumerate(COLUMNS)}
+    assert data.shape == (3, len(COLUMNS))
+    assert data[0, col["d"]] == 0.0  # the first step waits for nothing
+    assert data[1, col["S"]] - data[0, col["S"]] == pytest.approx(DT)  # 1 ms step + 2 ms control < spacing
+    assert data[2, col["d"]] == 0.0  # after the 20 ms step the next is late already
+    assert list(data[:, col["live_step"]]) == [0, 1, 2]
+    assert data[1, col["replies_s"]] == pytest.approx(0.0005)
+    assert data[1, col["ctrl_end"]] - data[1, col["ctrl_start"]] == pytest.approx(0.002)
+    assert data[1, col["after_end"]] - data[1, col["S"]] == pytest.approx(0.020)
+    w = work(data)
+    assert w[1] == pytest.approx(0.020 + 0.002)  # the step, then the next control tick, before its wait
+    assert np.isnan(w[2])
+    with open(tmp_path / "live_log.jsonl") as log:
+        end = [json.loads(line) for line in log if '"event": "end"' in line][0]
+    assert end["tick_trace"]["rows"] == 3 and end["tick_trace"]["dropped"] == 0
+
+
+def test_a_full_tick_trace_counts_the_steps_it_dropped():
+    from sim.isaac.tick_trace import TickTrace
+
+    clock_ = Clock()
+    trace = TickTrace(2, clock_)
+    for k in range(4):
+        trace.begin()
+        trace.set("q", float(k))
+        trace.flag("scan")
+    assert trace.rows == 4 and trace.dropped == 2
+    assert list(trace.data[:, 0]) == [0.0, 1.0]
+    assert list(trace.data[:, -1]) == [8.0, 8.0]  # the scan bit, set once per row
+
+
+def test_without_a_trace_the_runtime_writes_none(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        step(rt, clock, 0.0)
+    finally:
+        rt.close()
+    assert not (tmp_path / "tick_trace.npz").exists()
+
+
+def test_the_camera_phase_puts_the_render_on_the_physics_counter(tmp_path):
+    # Real-time plan 5.12 D12b: without a phase, by the runtime's own steps; with one, k ticks after a scan tick
+    # whatever the runtime's count (a warm-up before the first control tick moves the physics counter only).
+    rt, core, did, clock = runtime(tmp_path)
+    try:
+        due = []
+        for k in range(24):
+            if rt.camera_due():
+                due.append(k)
+            step(rt, clock, k * DT)
+        assert due == [11, 23]
+        assert [t for t in range(100, 124) if rt.camera_due(t, 6)] == [102, 114]
+        assert [t for t in range(100, 124) if rt.camera_due(t, 0)] == [108, 120]
+    finally:
+        rt.close()
+
+
+def test_a_control_flag_lands_on_the_step_it_was_asked_for():
+    from sim.isaac.tick_trace import FLAGS, TickTrace
+
+    trace = TickTrace(4, Clock())
+    trace.control_flag("capture")
+    trace.begin()
+    trace.flag("rendered")
+    trace.begin()
+    assert int(trace.data[0, -1]) == (1 << FLAGS.index("capture")) | (1 << FLAGS.index("rendered"))
+    assert np.isnan(trace.data[1, -1])  # the next step carries none

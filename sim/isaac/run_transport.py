@@ -463,7 +463,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--recognition-learned-python", type=Path, default=None,
                         help="The interpreter with onnxruntime (the learned venv) that runs the model worker.")
     parser.add_argument("--recognition-providers", default="CPUExecutionProvider",
-                        help="onnxruntime providers for the worker, comma-separated (CPU keeps Isaac's VRAM).")
+                        help="onnxruntime providers for the worker, comma-separated (CPU keeps Isaac's VRAM; "
+                        "CUDAExecutionProvider must come up or the run stops).")
+    parser.add_argument("--recognition-device-id", type=int, default=0,
+                        help="CUDA device ordinal for the worker (of the GPUs the Slurm job was given).")
     parser.add_argument("--recognition-threads", type=int, default=4,
                         help="onnxruntime threads for the worker (pinned: unpinned it sizes itself to the machine).")
     parser.add_argument("--recognition-timeout-s", type=float, default=10.0,
@@ -2906,16 +2909,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                                        conf=args.recognition_conf,
                                                        providers=args.recognition_providers,
                                                        timeout_s=args.recognition_timeout_s,
-                                                       threads=args.recognition_threads)
+                                                       threads=args.recognition_threads,
+                                                       device_id=args.recognition_device_id)
                 # Its stdin closing also ends it when the runner dies; a deadline miss kills it (fallback after).
                 atexit.register(far_learned["worker"].close)
+                # What really runs: a CUDA request that does not come up stops the run here, before any driving
+                # (it once fell back to the CPU silently).
+                far_learned["active_providers"] = far_learned["worker"].providers()
                 far_learned["source"] = frr.LearnedSource(far_learned["worker"])
                 far_learned["record"] = {
                     "kind": "learned", "onnx": str(args.recognition_onnx),
                     "onnx_sha256": hashlib.sha256(args.recognition_onnx.read_bytes()).hexdigest(),
                     "tau": args.recognition_tau, "conf": args.recognition_conf,
                     "providers": args.recognition_providers, "timeout_s": args.recognition_timeout_s,
-                    "threads": args.recognition_threads}
+                    "threads": args.recognition_threads, "device_id": args.recognition_device_id,
+                    "active_providers": far_learned["active_providers"]}
             far_runtime = frr.FarRuntime(
                 fork_spacing=frr.fork_spacing_m(read_fork_blades_m(args.forklift_urdf)),
                 pallet_depth_m=geometry.pallet_depth_m, pallet_shape=args.pallet_geometry_loaded.geometry_version,
@@ -5696,6 +5704,14 @@ def drive(S, isaac) -> None:
             live_catchup_ = int(os.environ.get("FORKLIFT_LIVE_CATCHUP_STEPS", "0"))
             if not 0 <= live_catchup_ <= 12:
                 raise ValueError("FORKLIFT_LIVE_CATCHUP_STEPS must be 0..12")
+            # Real-time plan 5.12 D12b: the live camera's render tick on the physics counter (k ticks after a scan
+            # tick); unset keeps the runtime's own step count, whose offset to the scans the warm-up path sets.
+            live_camera_phase_ = os.environ.get("FORKLIFT_LIVE_CAMERA_PHASE")
+            if live_camera_phase_ is not None:
+                live_camera_phase_ = int(live_camera_phase_)
+                if not 0 <= live_camera_phase_ <= 11:
+                    raise ValueError("FORKLIFT_LIVE_CAMERA_PHASE must be 0..11")
+            state["live_camera_phase"] = live_camera_phase_
             live_perm = LiveBundlePermit(obstacle["layer"].permission.config) if obstacle is not None else None
             # Persistent console plan D10: the pallets the LiDAR plane does not see are keep-out zones for teleop.
             from forklift_core.safety.pallet_permit import PalletPermit as LivePalletPermit, zones_from as live_zones_from
@@ -5882,15 +5898,27 @@ def drive(S, isaac) -> None:
                 live.before_step(sim_)
                 if live_marker_ is not None:
                     live_marker_(sim_ + 1 / 120)  # after the gate: the wave also runs past a stopped step's lift latch
-                camera_ = live.camera_due() and live_cam_ is not None
+                camera_ = live.camera_due(stepper["tick"], live_camera_phase_) and live_cam_ is not None  # D12b
                 # Real-time plan S0: the step's own wall time by kind (render, scan, plain), the pacing sleep apart.
                 # (step_world renders a video frame on its own when one is due: that step is a render step too.)
                 scan_ = args.record_slam and stepper["tick"] % scan_every == 0
                 frame_ = args.video and stepper["tick"] % fps_divisor == 0
                 kind_ = "render" if (render or camera_ or frame_) else ("scan" if scan_ else "plain")
+                if live.trace is not None:
+                    live.trace.set("tick", stepper["tick"])
+                    # The far frame's request is made inside step_world; the same expression here, for the record
+                    # only (far_runtime.due is pure; Codex 5.12 implementation round 2 P2).
+                    far_ = far_runtime is not None and far_runtime.due(stepper["tick"], observing=(
+                        ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"))
+                    for flag_, on_ in (("live_camera", camera_), ("video", frame_), ("render_arg", render),
+                                       ("scan", scan_), ("far", far_)):
+                        if on_:
+                            live.trace.flag(flag_)
                 started_, cpu_ = time.perf_counter(), time.thread_time()
                 step_world(render or camera_)
                 live_timers.add(f"step.{kind_}", time.perf_counter() - started_, time.thread_time() - cpu_)
+                if live.trace is not None:
+                    live.trace.set("step_end", live.trace.now())
                 odom_xy_ = None  # without SLAM no odometry position: the waiver integrates the speeds
                 if slam is not None:
                     speed_, yaw_rate_ = slam.get("odom_speed"), float(slam.get("odom_yaw_rate", 0.0))
@@ -5985,6 +6013,27 @@ def drive(S, isaac) -> None:
 
             live_timers.enabled = True
             live_timers.wrap(world, "step", "isaac.step")
+            if os.environ.get("FORKLIFT_LIVE_TICK_TRACE", "0") == "1":
+                # Real-time plan 5.12 D12a: every live physics step's times, in memory, written at the live close.
+                if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") == "0":
+                    # A synchronous capture steps inside a control tick: its start and end would land in different
+                    # rows (Codex 5.12 implementation P2-5).
+                    raise ValueError("FORKLIFT_LIVE_TICK_TRACE needs the asynchronous planning (FORKLIFT_LIVE_ASYNC_PLAN)")
+                from tick_trace import TickTrace
+
+                live.trace = TickTrace(int(120 * args.max_sim_seconds) + 16, live.clock)
+                world_step_untraced_ = world.step
+
+                def world_step_traced_(*a_, **k_):
+                    live.trace.set("world_start", live.trace.now())
+                    try:
+                        return world_step_untraced_(*a_, **k_)
+                    finally:
+                        live.trace.set("world_end", live.trace.now())
+                        if k_.get("render", a_[0] if a_ else False):
+                            live.trace.flag("rendered")
+
+                world.step = world_step_traced_
             if args.record_slam:  # the module and the scan cadence exist only with the recorded scans
                 live_timers.wrap(planar_lidar, "cast_scan_flags", "lidar.cast")
             if slam is not None:
@@ -6484,6 +6533,8 @@ def drive(S, isaac) -> None:
                     live_timers.add(*gc_seen_.pop())
                 if live is not None:
                     live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
+                    if live.trace is not None:
+                        live.trace.control("ctrl_start", live.trace.now())
                     # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
                     # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
                     # refuses the next submit (recovery_required).
@@ -6560,7 +6611,11 @@ def drive(S, isaac) -> None:
                             state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
                         raise SessionFailure(f"slam_link_failed: {exc}") from exc
                     if replies_:
+                        traced_ = live is not None and live.trace is not None
+                        replies_started_ = time.perf_counter() if traced_ else 0.0
                         core.slam_replies(t, replies_, ms.phase in ["lift", "extract", "transport", "lower"])
+                        if traced_:
+                            live.trace.control("replies_s", time.perf_counter() - replies_started_)
                         state["slam_async"]["max_depth"] = slam["async_link"].max_depth
                     if slam["async_link"].long_poll_gaps:  # polls further apart than the deadline (a stop, a stall)
                         state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
@@ -7444,6 +7499,12 @@ def drive(S, isaac) -> None:
                 # rest at the end (TrackerBook).
                 trackers.collect()
                 capturing_ = core.capture_live is not None and core.capture_live.raw is None
+                if live is not None and live.trace is not None:
+                    if capturing_:
+                        live.trace.control_flag("capture")
+                    if pocket_frames and step % 12 == 0:
+                        live.trace.control_flag("pocket")
+                    live.trace.control("ctrl_end", live.trace.now())
                 stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)
                 live_stepped_ = True  # persistent console plan D6: this tick's physics step is done
                 if capturing_:
@@ -7797,6 +7858,8 @@ def drive(S, isaac) -> None:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["live_close_error"] = repr(exc_)
+                if live.trace is not None:  # D12a: the rows kept, the steps dropped, or why the write failed
+                    state["tick_trace"] = live.trace_saved
             # M-a3: the lifecycle ends with the run, once every clean-up has run -- done only when the run
             # succeeded and nothing is propagating, failed otherwise; the loop's own time (no new clock read: the
             # replay compares every port call).

@@ -65,8 +65,10 @@ class LiveRuntime:
                  test_step_delay_s: float = 0.0, camera_freeze: tuple | None = None,
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
                  camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None,
-                 port: int = 0, supervised: bool = False, log_rotate_bytes: int = 200_000_000, log_keep: int = 3):
+                 port: int = 0, supervised: bool = False, log_rotate_bytes: int = 200_000_000, log_keep: int = 3,
+                 trace=None):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
+        self.trace = trace  # real-time plan 5.12 D12a: a TickTrace on this clock, or None (nothing recorded)
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
         self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
@@ -127,6 +129,7 @@ class LiveRuntime:
         self.camera_pixel_lag_s = camera_pixel_lag_s  # sim s the pixels trail the render metadata (plan C5)
         self.camera_pixel_latency = LatencyWindow(maxlen=LATENCY_WINDOW)
         self.camera_pixel_unknown = 0
+        self.trace_saved: dict | None = None
         self._next_status = 0.0
 
     # --- lifecycle -------------------------------------------------------------------------------------------------
@@ -156,6 +159,12 @@ class LiveRuntime:
         self._writers.append(writer)
 
     def close(self) -> None:
+        if self.trace is not None:
+            # D12a: the table is written once, here, first (a failing server stop below must not lose it).
+            try:
+                self.trace_saved = self.trace.save(self.output / "tick_trace.npz")
+            except Exception as exc:  # noqa: BLE001 -- recorded, never raised over the run's own end
+                self.trace_saved = {"error": repr(exc), "rows": self.trace.rows}
         for writer in self._writers:
             writer.join(timeout=30.0)
         ended = self.server.stop()
@@ -169,7 +178,7 @@ class LiveRuntime:
         self.log({"event": "end", "server_ended": ended, "pacing": self.pacer.report(),
                   "camera_latency_s": self.camera_latency.report(),
                   "camera_pixel_latency_s": self.camera_pixel_latency.report(),
-                  "camera_pixel_unknown": self.camera_pixel_unknown})
+                  "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved})
         with self._log_lock:
             self._log.close()
 
@@ -347,9 +356,20 @@ class LiveRuntime:
     def before_step(self, sim_t: float) -> bool:
         """Pace, then the gate: True when this step's wheels must be zero (they are zeroed here, the lift
         latched at the first preempted step)."""
-        self.sleep(self.pacer.wait_s(self.clock()))
+        if self.trace is None:
+            self.sleep(self.pacer.wait_s(self.clock()))
+        else:
+            self.trace.begin()
+            asked = self.clock()
+            wait = self.pacer.wait_s(asked)
+            self.trace.set("q", asked)
+            self.trace.set("d", wait)
+            self.trace.set("live_step", self.step)
+            self.sleep(wait)
         now = self.clock()
         self.pacer.started(now)
+        if self.trace is not None:
+            self.trace.set("S", now)
         self._start_mono = now
         if self._test_stop_in_capture and self.capturing:
             self._test_stop_in_capture = False
@@ -417,9 +437,16 @@ class LiveRuntime:
             grid = self.hooks.grid()
             if grid is not None:
                 self.store.put("grid", self.step, grid_item(session_epoch=self.session_epoch, **grid))
+        if self.trace is not None:
+            self.trace.set("after_end", self.clock())
 
-    def camera_due(self) -> bool:
-        return (self.step + 1) % self.camera_every == 0
+    def camera_due(self, physics_tick: int | None = None, phase: int | None = None) -> bool:
+        """Whether the step about to run renders the live camera. Without a phase, by this runtime's own step count
+        (whose offset to the physics counter the runner's warm-up path sets); with one (real-time plan 5.12 D12b),
+        on the physics counter about to be stepped: ``physics_tick % camera_every == phase``."""
+        if phase is None:
+            return (self.step + 1) % self.camera_every == 0
+        return physics_tick % self.camera_every == phase
 
     def _camera(self, sim_t: float, render_sim_time_of) -> None:
         if self.camera_freeze is not None and self.camera_freeze[0] <= sim_t < self.camera_freeze[1]:
