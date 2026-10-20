@@ -397,6 +397,10 @@
 - **grounded:** 공장 배치의 팔레트 자리에 grounded 구조를 둔다(EPAL 6 URDF 에서 밑판을 빼고 블록을 바닥까지 늘린 URDF 를 생성).
   - 판정: 옆면 `absent` 또는 `unobserved` 로 **삽입을 시작하지 않음**. seed 0–2.
 - **대조:** 같은 seed 의 `--bottom-deck-check off`(grounded 에 삽입을 시작하는 것을 기록).
+- **seed 0 첫 실행(2026-10-20, fd16759)에서 고친 것:**
+  - 진짜 EPAL 6 on 이 `stand_unreachable` 로 끝났다. 관측 다리는 `pickup_bounds`(y ≤ 3.05 m) 안에서만 계획되는데, 팔레트(y 1.03 m) 의 +y 지점 footprint 모서리가 y ≈ 3.25 m 였다. 이 경계는 벽이 아니라 탐색 효율 때문에 둔 것이다(2026-09-26 공장 홀 계획: 홀 전체로 넓히면 접근 계획이 확장 한도에 걸림). → **옆면 단계 전용 경계**(Codex A′): 구역에 두 지점·두 후퇴점의 footprint(계획 여유 min(clearance, approach_gap/2))와 이동 여유 0.3 m 를 외접 사각형으로 더하고 홀로 자른다. 옆면 계획·후퇴·복구·cusp 검사가 같이 쓴다. 구역 밖 지점을 먼저 가고 마지막 지점은 구역 안(footprint 기준)이어야 시작한다. 시작 전에 현재 → 첫 지점, 첫 지점 → 둘째 지점 경로를 계획해 본다. 결론 뒤 실제 자세가 구역 밖이면 미션 계획 없이 거부(`side_stage_outside_zone`).
+  - grounded 두 실행은 러너의 팔레트 URDF 검사(형상의 이름 붙은 상자와 대조)에서 거부됐다. → `--pallet-article grounded`(평가 전용, POST_MEASUREMENT `nominal`): 그 URDF 를 grounded 상자(밑판 없음·블록 바닥까지)와 대조한다. 검사를 끄지 않는다. 미션은 그대로 `--pallet-geometry`(EPAL 6)를 읽는다.
+  - Codex: A′ 설계 1차 P2 3(경계 일관성·복귀 조건·고정 반경) → 2차 **새 P1/P2 없음**.
 - 3 seed 는 통합이 도는지 보는 수다. 집기 오허가율의 근거는 작업 2 의 CPU eval 이다(agy 1판).
 - 기록: `docs/validation/2026-10-2x-bottom-deck-side-evidence.md`.
 

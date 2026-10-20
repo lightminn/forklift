@@ -16,7 +16,7 @@ from forklift_core.mission import core as core_mod
 from forklift_core.mission.core import MissionCore
 from forklift_core.mission.state import MissionState
 from forklift_core.perception.bottom_deck_evidence import BottomDeckParams
-from forklift_core.planning import PlanResult, Pose2D
+from forklift_core.planning import Bounds, Footprint, PlanResult, Pose2D
 
 REAR = np.array([0.0, 0.0, 0.0])
 
@@ -47,7 +47,7 @@ class World:
     scripts, every port call logged."""
 
     def __init__(self, *, verdicts=(), arrivals=None, slam=False, holding=False, obstacle=True, unreachable=(),
-                 mission_ok=True, same_path=False, retreat_ok=True):
+                 mission_ok=True, same_path=False, retreat_ok=True, zone=None, pickup=None):
         self.calls, self.verdicts, self.arrivals = [], list(verdicts), list(arrivals or [])
         self.unreachable, self.same, self.retreat_ok = set(unreachable), same_path, retreat_ok
         self.runner_rear = REAR
@@ -57,7 +57,7 @@ class World:
             goal = (target.x_m, target.y_m, target.yaw_rad)
             start = (kw["start_rear"].x_m, kw["start_rear"].y_m, kw["start_rear"].yaw_rad)
             log("plan_observation_leg", goal=goal, start=start, clearance=config.clearance_m,
-                grid_rear=tuple(self.runner_rear))
+                grid_rear=tuple(self.runner_rear), bounds=kw["pickup_bounds"])
             face = self.face_of(goal)
             if face is None and not self.retreat_ok:
                 return failed("invalid_goal")  # the retreat point collides
@@ -110,16 +110,18 @@ class World:
         options = SimpleNamespace(
             bottom_deck_check="on", bottom_deck_params=BottomDeckParams(), bottom_deck_spec="SPEC",
             camera_mount_x_m=0.619, rear_axle_offset_m=0.37, planner_config=Config(),
-            travel_config=None, scenario="SC", pickup_bounds="B", return_to_pose="HOME", mission_stages=stages,
+            travel_config=None, scenario=SimpleNamespace(bounds=Bounds(-25.6, 4.7, -22.9, 8.3)), pickup_bounds=zone,
+            return_to_pose="HOME", mission_stages=stages,
             speeds={n: 0.3 for n in stages + ["observe", "return_home"]}, cusp_heading_hold_rad=0.08,
             cusp_heading_hold_phases=("observe",), perception_max_attempts=3,
             adapter=SimpleNamespace(CaptureFailure=CaptureFailure), near_tracking=None, backoff_m=0.3,
             backoff_speed_mps=0.1, backoff_per_leg=1, escape_per_leg=1, observation_waypoints=())
         settings = {"tracker_curvature_inv_m": 0.45, "drive_acceleration_mps2": 0.5}
         self.core = MissionCore(self.ms, state=self.state, obstacle=self.obstacle, slam=slam_,
-                                pocket={"check": None, "planning_pickup": PICKUP}, paths={"observe": None},
-                                trackers=trackers, geometry=SimpleNamespace(pallet_depth_m=0.8,
-                                                                            alignment_straight_m=0.8),
+                                pocket={"check": None, "planning_pickup": pickup or PICKUP}, paths={"observe": None},
+                                trackers=trackers, geometry=SimpleNamespace(
+                                    pallet_depth_m=0.8, alignment_straight_m=0.8, approach_gap_m=0.1,
+                                    unloaded_footprint=Footprint(1.29, 0.17, 0.36)),
                                 settings=settings, pallet_geometry=SimpleNamespace(geometry_version="epal6"),
                                 hooks=self.hooks, near=None, options=options)
         for name_ in ("apply_tracker_profile", "record_tracker_configs", "realign_install"):
@@ -160,7 +162,7 @@ class World:
     # -- driving ------------------------------------------------------------------------------------------------
     def begin(self, attempt=None):
         return self.core._bottom_deck_begin(10.0, REAR, np.array([0.37, 0.0, 0.0]), 0.0, attempt or {}, 2,
-                                            "OBS", PICKUP)
+                                            "OBS", self.core.pocket["planning_pickup"])
 
     def arrive(self, t=20.0):
         return self.core.bottom_deck_capture(t, np.asarray(self.core.paths["observe"].poses[-1]), 600)
@@ -457,3 +459,52 @@ def test_the_record_holds_the_centre_the_planned_pickup_is_carried_to():
     assert w.deck["releases"][-1]["event"] == "release_at_bottom_deck_capture"
     assert rec["centre_xy"] == pytest.approx([pickup.x_m, pickup.y_m]) and rec["model_yaw_rad"] == pytest.approx(
         pickup.yaw_rad)
+
+
+
+# --- the side stage's bounds (Isaac seed 0, Codex A') ---------------------------------------------------------------
+
+ZONE = Bounds(-3.0, 4.7, -1.75, 3.05)  # the factory hall's pickup zone
+SEED0 = Pose2D(3.222, 1.033, 0.020)    # the far estimate of the seed-0 run: its +y stand's corner leaves the zone
+
+
+def test_a_stand_outside_the_zone_goes_first_and_every_side_plan_uses_the_side_bounds():
+    w = World(zone=ZONE, pickup=SEED0)
+    out = w.begin()
+    assert out.stop is False
+    assert w.deck["order"] == [1, -1] and [w.deck["stands"][k]["in_zone"] for k in ("1", "-1")] == [False, True]
+    b = w.deck["bounds"]
+    assert b["y_max_m"] > 3.05 + 0.2 and (b["x_min_m"], b["x_max_m"]) == (-3.0, 4.7)  # the zone, grown where needed
+    assert b["y_min_m"] <= -1.75 and b["y_max_m"] <= 8.3  # never shrunk below the zone, clipped to the hall
+    plans = [c[2] for c in w.calls if c[0] == "plan_observation_leg"]
+    assert all(p["bounds"] == Bounds(**b) for p in plans)
+    # the second leg is checked from the first stand, not from here
+    assert plans[1]["start"] == pytest.approx(tuple(w.deck["stands"]["1"]["rear"]))
+    for f in ("1", "-1"):  # every stand and retreat footprint (with the start margin) fits the side bounds
+        st = w.deck["stands"][f]["rear"]
+        for pose in (st, L.retreat_pose(st)):
+            assert L.inside(Bounds(**b), pose, Footprint(1.29, 0.17, 0.36), 0.05)
+
+
+def test_the_last_stand_must_lie_in_the_zone():
+    w = World(zone=Bounds(-3.0, 4.7, 0.0, 3.05), pickup=SEED0)  # neither side fits the zone
+    out = w.begin()
+    assert out.stop is True and w.deck["refused"]["detail"] == "last_stand_outside_zone"
+    assert "plan_observation_leg" not in w.names()
+
+
+def test_a_truck_left_outside_the_zone_after_the_side_legs_is_refused_not_planned():
+    w = World(verdicts=["present", "present"], zone=ZONE, pickup=SEED0)
+    w.begin()
+    w.arrive()
+    rear_out = np.array([1.9, 2.95, -0.94])  # the second stand reached outside the zone (an arrival error)
+    w.core.bottom_deck_capture(30.0, rear_out, 601)
+    assert w.deck["refused"]["reason"] == "side_stage_outside_zone" and "plan_transport" not in w.names()
+
+
+def test_the_cusp_check_on_a_side_leg_uses_the_side_bounds():
+    import inspect
+
+    source = inspect.getsource(MissionCore.cusp_leg_checker)
+    assert 'pickup_bounds = getattr(self, "bottom_deck_bounds", pickup_bounds)' in source
+    assert source.index("if self.bottom_deck_leg_active():") < source.index("leg_obstacles(")

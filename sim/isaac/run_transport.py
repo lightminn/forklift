@@ -444,6 +444,14 @@ def arguments() -> argparse.Namespace:
         "(docs/plans/2026-10-18-isaac-recognition-far-capture.md).",
     )
     parser.add_argument(
+        "--pallet-article",
+        choices=("nominal", "grounded"),
+        default="nominal",
+        help="Evaluation only: grounded declares --pallet-urdf the grounded lookalike of --pallet-geometry (no bottom "
+        "boards, blocks to the floor; tools/build_grounded_pallet.py) and checks it against those boxes. The mission "
+        "still reads --pallet-geometry: the article is what it must not pick (plan 2026-10-19 task 5).",
+    )
+    parser.add_argument(
         "--bottom-deck-check",
         choices=("off", "on"),
         default="off",
@@ -1033,7 +1041,7 @@ def arguments() -> argparse.Namespace:
             pallet_geometry.overall_depth_m,
             pallet_geometry.overall_width_m,
         )
-        assert_pallet_urdf_matches_named_boxes(args.pallet_urdf, pallet_geometry)
+        assert_pallet_urdf_matches_named_boxes(args.pallet_urdf, pallet_geometry, article=args.pallet_article)
         axle_to_fork_tip_m, rear_axle_offset_m = read_chassis_reference_m(
             args.forklift_urdf
         )

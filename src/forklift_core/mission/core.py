@@ -2396,7 +2396,8 @@ class MissionCore:
         or a retreat end that collides is refused (invalid_goal), so is a path through an obstacle."""
         options, hooks, geometry = self.options, self.hooks, self.geometry
         grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
-        planner_config, scenario, pickup_bounds = options.planner_config, options.scenario, options.pickup_bounds
+        planner_config, scenario = options.planner_config, options.scenario
+        pickup_bounds = getattr(self, "bottom_deck_bounds", options.pickup_bounds)  # the side stage's bounds
         target = PlanningPose(*(self._bottom_deck_stand(face).rear if goal is None else goal))
         start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
         plan_ = plan_observation_leg(grid_world(scenario), target, planner_config, geometry=geometry,
@@ -2482,11 +2483,32 @@ class MissionCore:
                                                 rear_xy=(float(rear[0]), float(rear[1])),
                                                 mount_x_m=self.options.camera_mount_x_m,
                                                 rear_axle_offset_m=self.options.rear_axle_offset_m)
+        stands_ = {f: self._bottom_deck_stand(f) for f in order_}
+        # The side stage's own bounds (Codex A'): the pickup zone confines the pickup legs for the search's sake, not
+        # as a wall, and a side stand of a pallet near its edge lies outside it. Every side plan, retreat, recovery
+        # and cusp check uses these; the last stand must lie in the zone (with the next planner's start margin) so
+        # the mission planned after the side legs starts inside it.
+        zone_, fp_ = self.options.pickup_bounds, self.geometry.unloaded_footprint
+        margin_ = min(float(self.options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
+        in_zone_ = {f: zone_ is None or bottom_deck_legs.inside(zone_, stands_[f].rear, fp_, margin_) for f in order_}
+        if target_["axis"] == "x":
+            order_ = tuple(sorted(order_, key=lambda f: in_zone_[f]))  # outside the zone first (stable: nearer first)
+        self.bottom_deck_bounds = zone_ if zone_ is None else bottom_deck_legs.side_bounds(
+            zone_, self.options.scenario.bounds,
+            [stands_[f].rear for f in order_] + [bottom_deck_legs.retreat_pose(stands_[f].rear) for f in order_],
+            fp_, margin_)
         deck_["order"] = list(order_)
-        deck_["stands"] = {str(f): {"rear": list(self._bottom_deck_stand(f).rear),
-                                    "camera_xy": list(self._bottom_deck_stand(f).camera_xy)} for f in order_}
-        # Both stands reachable before the first side leg starts (task 4: else no side leg at all).
-        plans_ = {f: self._bottom_deck_plan(rear, f) for f in order_}
+        deck_["stands"] = {str(f): {"rear": list(stands_[f].rear), "camera_xy": list(stands_[f].camera_xy),
+                                    "in_zone": bool(in_zone_[f])} for f in order_}
+        deck_["bounds"] = None if self.bottom_deck_bounds is None else asdict(self.bottom_deck_bounds)
+        if not in_zone_[order_[-1]]:
+            out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
+            deck_["refused"]["detail"] = "last_stand_outside_zone"
+            return SimpleNamespace(stop=True, observation=observation, near_leg=None, handled=True)
+        # The legs in their order reachable before the first side leg starts (task 4: else no side leg at all):
+        # from here to the first stand, and from the first stand to the second.
+        plans_ = {order_[0]: self._bottom_deck_plan(rear, order_[0]),
+                  order_[1]: self._bottom_deck_plan(stands_[order_[0]].rear, order_[1])}
         deck_["reachable"] = {str(f): p.status for f, p in plans_.items()}
         if not all(p.success for p in plans_.values()):
             out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
@@ -2624,6 +2646,14 @@ class MissionCore:
         if verdict != "present":
             return self._bottom_deck_refuse(t, "no_bottom_deck" if verdict == "absent" else "bottom_deck_unobserved",
                                             rear)
+        zone_ = options.pickup_bounds
+        margin_ = min(float(options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
+        if zone_ is not None and not bottom_deck_legs.inside(zone_, rear, self.geometry.unloaded_footprint, margin_):
+            # Where the truck actually stands after the last capture and its release (Codex A'): the mission is
+            # planned in the zone, so a start outside it ends here rather than in an invalid_start failure.
+            out_ = self._bottom_deck_refuse(t, "side_stage_outside_zone", rear)
+            deck_["refused"]["rear"] = [float(v) for v in rear]
+            return out_
         far_ = self.bottom_deck_far
         planning_pickup = pocket["planning_pickup"]
         planning_start, planning_trace = hooks.wall(), []
@@ -3625,6 +3655,8 @@ class MissionCore:
         ms = self.ms
         obstacle = self.obstacle
         pickup_bounds = self.options.pickup_bounds
+        if self.bottom_deck_leg_active():
+            pickup_bounds = getattr(self, "bottom_deck_bounds", pickup_bounds)  # as the side legs were planned
         pickup_zone = self.options.pickup_zone
         scenario = self.options.scenario
         from forklift_core.planning.grid_collision import FootprintCollisionChecker as GridChecker

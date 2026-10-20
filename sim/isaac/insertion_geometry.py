@@ -7,7 +7,7 @@ continuous swept clearance between updates.
 """
 
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -362,11 +362,27 @@ def assert_pallet_urdf_matches_geometry(
         )
 
 
+def grounded_boxes(boxes) -> list:
+    """The grounded lookalike's boxes (tools/build_grounded_pallet.py, plan 2026-10-19 task 5): the bottom boards
+    gone, every block column down to the floor keeping its top; stringers and top boards unchanged."""
+    out = []
+    for box in boxes:
+        if box.name.startswith("bottom_board"):
+            continue
+        if box.name.startswith("block"):
+            top = box.centre_m[2] + box.size_m[2] / 2
+            box = replace(box, size_m=(box.size_m[0], box.size_m[1], top),
+                          centre_m=(box.centre_m[0], box.centre_m[1], top / 2))
+        out.append(box)
+    return out
+
+
 def assert_pallet_urdf_matches_named_boxes(
     pallet_urdf: Path,
     geometry: PalletGeometry,
     *,
     tolerance_m: float = 0.001,
+    article: str = "nominal",
 ) -> None:
     """Compare every named collision box's centre and size against the YAML.
 
@@ -377,7 +393,12 @@ def assert_pallet_urdf_matches_named_boxes(
     verified counts (21/22 boxes differ under a 90-degree name-preserving
     swap, 18/22 under 180 degrees).
     """
-    expected_boxes = {box.name: box for box in pallet_boxes(geometry)}
+    boxes = pallet_boxes(geometry)
+    if article == "grounded":  # a declared negative article: checked against its own boxes, not waived
+        boxes = grounded_boxes(boxes)
+    elif article != "nominal":
+        raise ValueError(f"unknown pallet article {article!r}")
+    expected_boxes = {box.name: box for box in boxes}
     actual_boxes = {}
     for name, actual_centre_m, actual_half_m in pallet_boxes_from_urdf(pallet_urdf):
         if name in actual_boxes:

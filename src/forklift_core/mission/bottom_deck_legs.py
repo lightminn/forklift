@@ -23,6 +23,7 @@ FACES = {"x": (1, -1), "y": (1, -1)}
 RETREAT_M = 0.3
 RETREAT_MAX_M = 1.0  # a longer planned retreat is a detour: the face ends (no detour on held odometry)
 RECOVERIES_PER_FACE = 3  # path-replacing recoveries on one face before it is given up
+TRAVEL_M = 0.3  # room around the stands and retreats for the side legs to manoeuvre
 CAPTURES = 3  # per face; the first present or absent stops (task 4 capture policy)
 
 
@@ -67,3 +68,33 @@ def retreat_pose(stand_rear, length_m: float = RETREAT_M) -> tuple:
     planner checks the footprint) and arrives at the stand afresh (task 4 capture policy)."""
     x, y, yaw = (float(v) for v in stand_rear)
     return (x - length_m * math.cos(yaw), y - length_m * math.sin(yaw), yaw)
+
+
+def footprint_corners(rear, footprint, margin_m: float = 0.0) -> np.ndarray:
+    """The four corners of the truck footprint at a rear-axle pose, grown by ``margin_m``."""
+    x, y, yaw = (float(v) for v in rear)
+    h = np.array([math.cos(yaw), math.sin(yaw)])
+    n = np.array([-h[1], h[0]])
+    fwd, back, half = footprint.front_m + margin_m, footprint.rear_m + margin_m, footprint.half_width_m + margin_m
+    c = np.array([x, y])
+    return np.array([c + fwd * h + half * n, c + fwd * h - half * n, c - back * h + half * n, c - back * h - half * n])
+
+
+def side_bounds(zone, hall, poses, footprint, margin_m: float, travel_m: float = TRAVEL_M):
+    """The side stage's planning bounds (plan 2026-10-19 task 5, Codex A'): the pickup zone and the footprints of
+    every stand and retreat point (grown by the planning margin and a travel allowance), one rectangle, clipped to
+    the hall. The zone confines the pickup legs for the search's sake, not as a wall; the side legs need room
+    around the pallet."""
+    from forklift_core.planning import Bounds  # noqa: PLC0415
+
+    pts = np.vstack([footprint_corners(p, footprint, margin_m) for p in poses])
+    lo, hi = pts.min(axis=0) - travel_m, pts.max(axis=0) + travel_m
+    return Bounds(max(hall.x_min_m, min(zone.x_min_m, float(lo[0]))), min(hall.x_max_m, max(zone.x_max_m, float(hi[0]))),
+                  max(hall.y_min_m, min(zone.y_min_m, float(lo[1]))), min(hall.y_max_m, max(zone.y_max_m, float(hi[1]))))
+
+
+def inside(bounds, rear, footprint, margin_m: float) -> bool:
+    """The footprint grown by ``margin_m`` lies inside ``bounds`` (the next planner's start check)."""
+    pts = footprint_corners(rear, footprint, margin_m)
+    return bool((pts[:, 0] >= bounds.x_min_m).all() and (pts[:, 0] <= bounds.x_max_m).all()
+                and (pts[:, 1] >= bounds.y_min_m).all() and (pts[:, 1] <= bounds.y_max_m).all())

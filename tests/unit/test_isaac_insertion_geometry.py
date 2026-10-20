@@ -466,3 +466,20 @@ def test_the_carriage_front_corners_cover_every_non_blade_carriage_box():
             assert carriage[1] + center[1] + half[1] <= y_plus + 1e-12
     corners = MODULE.read_carriage_front_corners_m(ROOT / "sim/models/dls08_measured/forklift.urdf")
     assert [v for c in corners for v in c] == pytest.approx([0.604, 0.235, 0.604, -0.235])
+
+
+def test_the_grounded_article_is_checked_against_the_grounded_boxes_not_waived():
+    # Plan 2026-10-19 task 5: the grounded lookalike (tools/build_grounded_pallet.py) is a declared article; its
+    # URDF must be exactly the geometry without bottom boards and with the blocks down to the floor.
+    geometry = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
+    nominal = ROOT / "sim/models/epal6_pallet/pallet.urdf"
+    grounded = ROOT / "sim/models/epal6_grounded/pallet.urdf"
+    MODULE.assert_pallet_urdf_matches_named_boxes(nominal, geometry)
+    MODULE.assert_pallet_urdf_matches_named_boxes(grounded, geometry, article="grounded")
+    with pytest.raises(ValueError, match="names mismatch"):
+        MODULE.assert_pallet_urdf_matches_named_boxes(grounded, geometry)
+    with pytest.raises(ValueError, match="names mismatch"):
+        MODULE.assert_pallet_urdf_matches_named_boxes(nominal, geometry, article="grounded")
+    boxes = {b.name: b for b in MODULE.grounded_boxes(MODULE.pallet_boxes(geometry))}
+    assert not any(n.startswith("bottom_board") for n in boxes)
+    assert all(b.centre_m[2] - b.size_m[2] / 2 == pytest.approx(0.0) for n, b in boxes.items() if n.startswith("block"))

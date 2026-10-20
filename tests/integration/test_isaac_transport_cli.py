@@ -1076,6 +1076,7 @@ def test_the_bottom_deck_check_is_off_unless_given_and_part_of_the_near_contract
     import near_tracking
 
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["bottom_deck_check"] == "off"
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pallet_article"] == "nominal"
     source = SCRIPT.read_text()
     block = source[source.index('"--bottom-deck-check",'): source.index('"--bottom-deck-check",') + 200]
     assert 'choices=("off", "on")' in block and 'default="off"' in block
@@ -1097,6 +1098,12 @@ def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     replan = source.index("replan_tick_ = core.blocked_replan(")
     assert source.index('if ms.phase == "bottom_deck_refused":\n                            break', replan) < replan + 300
     assert source.count('getattr(succeeded_, "handled", False)') == 2  # the batch and the live observation paths
+
+
+def test_a_grounded_urdf_needs_the_grounded_article_declared(tmp_path):
+    # Plan 2026-10-19 task 5: the runner checks the grounded lookalike against its own boxes, never waives the check
+    result = run_geometry_cli(tmp_path, ROOT / "sim/models/epal6_grounded/pallet.urdf", "epal6")
+    assert result.returncode == 2 and "Pallet collision box names mismatch" in result.stderr
 
 
 def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
