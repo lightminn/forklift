@@ -326,3 +326,18 @@ def test_spec_range_noise_read_as_three_sigma_is_a_third():
     noise = OdometryNoise(seed=4, range_model="a2m12", range_spec_scale=1 / 3)
     far = noise.ranges(np.full(20000, 8.0), range_min_m=0.2, range_max_m=12.0)
     assert np.std(far - 8.0) == pytest.approx(0.20 / 3, rel=0.05)
+
+
+def test_a_localization_tracker_warms_up_until_the_seventh_start_up_scan():
+    """SLAM localization plan L4: tracking only once the bridge's map checks (answered on scan id 6) passed."""
+    from forklift_core.localization.slam_pose import SlamPoseTracker
+
+    tracker = SlamPoseTracker(max_age_s=0.5, hold_limit_m=15.0, bootstrap_scan_id=6)
+    for scan_id in (0, 4, 5):
+        tracker.receive(scan_id, 0.1 * scan_id, "processed", (0.0, 0.0, 0.0))
+        assert tracker.mode == "warming_up"
+    tracker.receive(6, 0.6, "processed", (0.0, 0.0, 0.0))
+    assert tracker.mode == "tracking"
+    default = SlamPoseTracker(max_age_s=0.5, hold_limit_m=15.0)
+    default.receive(4, 0.4, "processed", (0.0, 0.0, 0.0))
+    assert default.mode == "tracking"  # mapping keeps today's rule

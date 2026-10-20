@@ -167,14 +167,18 @@ class SlamPoseTracker:
     bridge did not send to slam_toolbox, or one slam_toolbox dropped at start-up;
     the bridge is alive and the correction stands); ``applied`` is the one
     control uses. warming_up: drive held until a ``processed`` reply for scan id
-    >= 4 (the bridge sends the first five scans; slam_toolbox answers the 1st
-    and 5th). tracking: every processed correction is
+    >= ``bootstrap_scan_id`` (4: the bridge sends the first five scans; slam_toolbox answers the 1st
+    and 5th; 6 in localization, plan L4). tracking: every processed correction is
     applied; stale when the received stamp is older than ``max_age_s``. holding (docking): new corrections are received but not
     applied; freshness is checked on the received stamp, and dead reckoning
     since the hold must stay within ``hold_limit_m``.
     """
 
-    def __init__(self, *, max_age_s: float, hold_limit_m: float):
+    def __init__(self, *, max_age_s: float, hold_limit_m: float, bootstrap_scan_id: int = 4):
+        """``bootstrap_scan_id``: the processed scan id that ends warming up -- 4 for mapping (the 5th scan), 6 for
+        localization, whose bridge sends seven start-up scans and checks the map before answering the 7th (SLAM
+        localization plan L4)."""
+        self.bootstrap_scan_id = int(bootstrap_scan_id)
         self.max_age_s = _finite_scalar(max_age_s, "max_age_s")
         self.hold_limit_m = _finite_scalar(hold_limit_m, "hold_limit_m")
         if self.max_age_s <= 0 or self.hold_limit_m <= 0:
@@ -209,7 +213,7 @@ class SlamPoseTracker:
         self.version += 1
         if self.mode == "warming_up":
             self.applied = self.received
-            if scan_id >= 4:
+            if scan_id >= getattr(self, "bootstrap_scan_id", 4):  # a tracker restored from an older record has none
                 self.mode = "tracking"
         elif self.mode == "tracking":
             self.applied = self.received

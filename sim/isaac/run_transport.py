@@ -603,6 +603,20 @@ def arguments() -> argparse.Namespace:
         "joins the planning grid as a static layer (planning only, never the permission).",
     )
     parser.add_argument(
+        "--slam-map-bundle",
+        type=Path,
+        default=None,
+        help="SLAM localization plan L7: a survey map bundle (tools/slam_survey_bundle.py); the bridge localizes on it "
+        "from the start (its container must be given the same bundle), its grid is the planner's static SLAM layer "
+        "and latest_map.npz is not read. Unset: online mapping, as before.",
+    )
+    parser.add_argument(
+        "--expected-map-id",
+        default=None,
+        help="With --slam-map-bundle: the session's map id (the supervisor hashes the bundle once per session); the "
+        "bundle's files and the bridge's reply must both be this map.",
+    )
+    parser.add_argument(
         "--new-obstacles",
         type=Path,
         default=None,
@@ -898,6 +912,10 @@ def arguments() -> argparse.Namespace:
             parser.error("--slam-feedback forbids --planning-target oracle_nominal")
     if args.slam_noise_seed is not None and args.slam_feedback is None:
         parser.error("--slam-noise-seed requires --slam-feedback")
+    if args.slam_map_bundle is not None and (args.slam_feedback is None or not args.expected_map_id):
+        parser.error("--slam-map-bundle requires --slam-feedback and --expected-map-id")
+    if args.expected_map_id is not None and args.slam_map_bundle is None:
+        parser.error("--expected-map-id requires --slam-map-bundle")
     if args.perception_mount in ("carriage_low", "carriage_low_measured"):
         if not args.use_perception:
             parser.error("--perception-mount carriage_low needs --use-perception")
@@ -3045,6 +3063,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["phase"] = "steering_probe_done"
         state["success"] = True
         return
+    # SLAM localization plan L4: the survey bundle this run localizes on -- its files hashed again against the
+    # session's map id, the run's seed, scene, input files and scene arguments against the survey's
+    # (slam_map_mismatch otherwise). Before the obstacle layer: its grid is the planner's static SLAM layer from the
+    # first plan on (Codex S3 review P2).
+    slam_bundle_ = None
+    if getattr(args, "slam_map_bundle", None) is not None:
+        from forklift_core.localization import slam_map as slam_map_module
+
+        try:
+            slam_bundle_ = slam_map_module.load_bundle(args.slam_map_bundle, args.expected_map_id)
+        except slam_map_module.MapBundleError as exc:
+            raise SessionFailure(str(exc)) from exc
+        mismatches_ = slam_map_module.run_mismatches(
+            slam_bundle_.manifest, seed=args.seed, scene_sha256=state.get("scene_sha256"),
+            arguments=state.get("arguments"),
+            input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
+                                  if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
+                                  else None)
+                          for name_ in slam_map_module.SHARED_INPUTS})
+        if mismatches_:
+            raise SessionFailure(f"{slam_map_module.MISMATCH}: " + "; ".join(mismatches_))
+        state["slam_map"] = {"mode": "localization", "map_id": slam_bundle_.map_id,
+                             "bundle": str(args.slam_map_bundle), "confirmed_by_bridge": False}
     obstacle = None  # the priority-5 obstacle layer
     if args.obstacle_layer is not None:
         import obstacle_layer as obstacle_module
@@ -3085,6 +3126,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "unpermitted": [],
             "min_allowed": {},
         }
+        if slam_bundle_ is not None and obstacle["layer"].memory is not None:
+            # SLAM localization plan L3: occupancy dated 1 s before the run's first stamp (0), so every live clear
+            # may remove it; set into the layer's own memory before any plan (a scratch copy inherits it)
+            grid_ = slam_bundle_.grid
+            obstacle["layer"].memory.set_slam(grid_.data, tuple(grid_.origin[:2]), grid_.resolution_m, grid_.origin[2],
+                                              stamp_s=-1.0, index=-1, after_scan_id=-1, stamp_ns=-1_000_000_000,
+                                              map_id=slam_bundle_.map_id)
+            obstacle["survey_map_id"] = slam_bundle_.map_id
         state["obstacle_layer"] = {
             "config": str(args.obstacle_layer),
             "act": bool(args.obstacle_act),
@@ -3489,6 +3538,8 @@ def drive(S, isaac) -> None:
         settings = _bound["settings"]
     if "site_poses" in _bound:
         site_poses = _bound["site_poses"]
+    if "slam_bundle_" in _bound:
+        slam_bundle_ = _bound["slam_bundle_"]
     if "stage" in _bound:
         stage = _bound["stage"]
     if "state" in _bound:
@@ -3678,6 +3729,7 @@ def drive(S, isaac) -> None:
             run_ = json.loads(record_json({
                 "arguments": state["arguments"],
                 **{name_: state.get(name_) for name_ in near_tracking.CONDITION_FIELDS},
+                "slam_map": state.get("slam_map"),  # slam_mode / map_id, not the bundle's path (plan L7)
             }))
             run_["detector_params"] = json.loads(record_json(asdict(DetectorParams.derived_for(args.pallet_prior_loaded))))
             observed_condition = near_tracking.run_condition(run_, Path.cwd())
@@ -3972,7 +4024,11 @@ def drive(S, isaac) -> None:
         else:
             use_slam = False
             map_note = None
-            if layer_.memory is not None and args.slam_map_dir is not None:
+            if layer_.memory is not None and obstacle.get("survey_map_id") is not None:
+                # SLAM localization plan L3: the survey grid, set into the layer's memory when it was made, is the
+                # only static SLAM layer; the bridge's latest_map.npz is not read.
+                use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
+            elif layer_.memory is not None and args.slam_map_dir is not None:
                 latest = args.slam_map_dir / "latest_map.npz"
                 if latest.exists():
                     # One open file: its fstat and its contents go together (the
@@ -4511,7 +4567,9 @@ def drive(S, isaac) -> None:
             ),
             # Holding now spans approach + insert + extract (up to ~11 m in
             # the recorded runs): the bound is on odometry since the capture.
-            "tracker": SlamPoseTracker(max_age_s=0.25, hold_limit_m=15.0),
+            "tracker": (SlamPoseTracker(max_age_s=0.25, hold_limit_m=15.0) if slam_bundle_ is None
+                        # localization: tracking once the bridge's map checks answered the 7th start-up scan (L4)
+                        else SlamPoseTracker(max_age_s=0.25, hold_limit_m=15.0, bootstrap_scan_id=6)),
             "stale": LocalizationStale,
             "stop": StopDetector(tick_s=1 / 120),
             "odom_rear": slam_start,
@@ -4529,6 +4587,8 @@ def drive(S, isaac) -> None:
             "tracker_speed": 0.0,
             "last_command": 0.0,
         }
+        if slam_bundle_ is not None:
+            slam["bundle"] = slam_bundle_  # localization only: a mapping run's slam dict is as before
         state["slam_feedback"] = {
             "socket": str(args.slam_feedback),
             "noise_seed": args.slam_noise_seed,
@@ -5669,12 +5729,35 @@ def drive(S, isaac) -> None:
                         "error": str(exc),
                     }
                 )
+                slam_reason_ = getattr(exc, "reason", None)
+                if not (slam_reason_ and slam_reason_.split(":", 1)[0] in ("slam_map_mismatch", "slam_map_not_loaded",
+                                                                           "slam_not_localized")):
+                    slam_reason_ = f"slam_link_failed: {exc}"  # anything else the bridge did is a link failure
                 if getattr(args, "live", False):
-                    raise SessionFailure(f"slam_link_failed: {exc}") from exc  # the live warm-up's lockstep exchange
-                require(False, f"slam_link_failed: {exc}")
+                    raise SessionFailure(slam_reason_) from exc  # the live warm-up's lockstep exchange
+                require(False, slam_reason_)
+            warming_ = slam["tracker"].mode == "warming_up"
             slam["tracker"].receive(
                 reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
             )
+            if slam.get("bundle") is not None and warming_ and slam["tracker"].mode != "warming_up":
+                # L4: the bridge checked the map it runs on and says which; it must be the one this run hashed
+                if getattr(reply, "map_id", None) != slam["bundle"].map_id:
+                    raise SessionFailure(f"slam_map_mismatch: the bridge runs on map {getattr(reply, 'map_id', None)}, "
+                                         f"not {slam['bundle'].map_id}")
+                # The odometry starts at the world start and map = world: the first correction is the identity
+                # within the start tolerance -- a bridge told another start pose would pass its own check there.
+                offset_ = abs(args.rear_axle_offset_m)
+                start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
+                               slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
+                at_ = compose(tuple(reply.map_from_odom), slam_odom_base())  # the map pose this reply gives now
+                start_dyaw_ = math.atan2(math.sin(at_[2] - start_base_[2]), math.cos(at_[2] - start_base_[2]))
+                start_off_ = math.hypot(at_[0] - start_base_[0], at_[1] - start_base_[1])
+                if start_off_ > 0.10 or abs(start_dyaw_) > 0.05:  # Codex S3 review P2: the pose, not map<-odom
+                    raise SessionFailure(f"slam_not_localized: the map pose at the start is {start_off_:.3f} m / "
+                                         f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
+                state["slam_map"]["confirmed_by_bridge"] = True
+                state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
             truth_yaw, _ = yaw_and_tilt(now_q)
             slam["records"].append(
                 {
@@ -6295,7 +6378,8 @@ def drive(S, isaac) -> None:
             boundary.recorder.tick_end(outputs={"bootstrap": True}, branches=[])
         from forklift_core.perf import CONTEXT as perf_context
 
-        if live is not None and slam is not None and os.environ.get("FORKLIFT_LIVE_ASYNC_SLAM", "1") != "0":
+        if live is not None and slam is not None and (os.environ.get("FORKLIFT_LIVE_ASYNC_SLAM", "1") != "0"
+                                                      or slam.get("bundle") is not None):
             # Real-time plan D9a: SLAM warms up before the first control tick, in lockstep (the bridge waits a second
             # for each start-up scan slam_toolbox drops), the truck standing; then the link stops waiting and the
             # tracker's age limit only backs up the reply deadline (Codex D9 1st P2-2, P2-3).
@@ -6306,9 +6390,14 @@ def drive(S, isaac) -> None:
                 prewarm_steps_ += 1
                 if prewarm_steps_ > 120 * 60:
                     raise SessionFailure("slam_prewarm_timeout")
-            slam["async_link"] = slam["module"].AsyncSlamLink(
-                slam["link"], deadline_s=SLAM_LIVE_REPLY_DEADLINE_S, queue_max=SLAM_LIVE_QUEUE_MAX)
-            slam["tracker"].max_age_s = 0.25 + SLAM_LIVE_REPLY_DEADLINE_S * args.live_factor
+            if os.environ.get("FORKLIFT_LIVE_ASYNC_SLAM", "1") != "0":
+                # (a localization run warms up -- its map checks -- before the server opens either way, plan L4)
+                slam["async_link"] = slam["module"].AsyncSlamLink(
+                    slam["link"], deadline_s=SLAM_LIVE_REPLY_DEADLINE_S, queue_max=SLAM_LIVE_QUEUE_MAX)
+                slam["tracker"].max_age_s = 0.25 + SLAM_LIVE_REPLY_DEADLINE_S * args.live_factor
+            if slam.get("bundle") is not None:
+                # L4 passed (the tracker leaves warming up only on the bridge's checked 7th reply, its map confirmed)
+                live.slam_info = {"mode": "localization", "map_id": slam["bundle"].map_id, "map_loaded": True}
             state["slam_async"] = {"prewarm_steps": prewarm_steps_,
                                    "prewarm_sim_s": float(world.current_time - initial_time),
                                    "prewarm_wall_s": time.monotonic() - prewarm_wall_,
@@ -8054,6 +8143,8 @@ def main() -> None:
             if (k != "extra_views" or v)
             # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
             and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
+            # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
+            and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
             and (
                 k not in {"quarter_eye", "quarter_target", "quarter_focal"}
                 or (v is not None and (k != "quarter_focal" or v != 2.5))

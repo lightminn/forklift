@@ -40,6 +40,8 @@ SETUP_NAMES_ADDED = {
     "far_runtime": ("recognition", "off", None),  # (args flag, its off value, the name's value then)
     "far_intrinsics": ("recognition", "off", None),
     "frr": ("recognition", "off", None),
+    # SLAM localization plan L7 (2026-10-21): every earlier record mapped online, with no survey bundle
+    "slam_bundle_": ("slam_map_bundle", None, None),
 }
 
 

@@ -376,7 +376,7 @@ def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_p
     assert order == ["stop", ("abandon", 20.0), "unlock", "drain", "judge", ("reset", 20.0)]
     assert isinstance(entry.pop("ended_unix"), float)  # plan D13 item 1: the wall time, stamped once
     assert entry == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 10.0,
-                     "ended_s": 20.0, "pallet_id": "P-1", "destination_id": "D-1"}
+                     "ended_s": 20.0, "pallet_id": "P-1", "destination_id": "D-1", "map_id": None}
     entry = rt.results.last
     assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
     seq, message = rt.store.get("missions")
@@ -967,6 +967,7 @@ def test_a_result_over_its_bound_is_written_cut_down(tmp_path):
     record = json.loads(path.read_text())
     assert path.stat().st_size <= 64 * 1024 and record["cut_from_bytes"] > 64 * 1024
     assert record["result"]["mission_id"] == "m1" and record["result"]["outcome"] == "failed"
+    assert "map_id" in record["result"]  # kept when cut (SLAM localization plan L6: result.json carries it too)
 
 
 def test_a_noted_result_pushed_out_of_the_book_is_counted_once(tmp_path):

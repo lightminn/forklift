@@ -350,3 +350,35 @@ def test_a_scan_not_yet_out_has_no_deadline_and_a_reply_before_it_is_out_fails()
     b.sendall(_sl.encode_reply(_sl.Reply(0, 0.0, "skipped", (0.0, 0.0, 0.0), 1, 0.0)))
     with pytest.raises(_sl.SlamLinkFailure, match="sent whole"):
         link.poll()
+
+
+def test_a_localization_bridge_sends_seven_start_up_scans_and_expects_the_first_and_fifth_to_seventh():
+    """SLAM localization plan L4: slam_toolbox still drops the 2nd-4th; the 5th-7th are the checks' scans."""
+    gate = _sl.KeyframeGate(startup_scans=7, startup_expect=(1, 5, 6, 7))
+    kinds = [gate.classify(0.1 * i, (0.0, 0.0, 0.0)) for i in range(7)]
+    assert kinds == ["expect_pose", "startup_drop", "startup_drop", "startup_drop", "expect_pose", "expect_pose",
+                     "expect_pose"]
+    gate.processed(0.6, (0.0, 0.0, 0.0))
+    assert gate.classify(0.7, (0.0, 0.0, 0.0)) == "local"  # then the keyframe rule, as mapping
+
+
+def test_a_reply_carries_a_reason_and_a_map_id_only_when_set_and_old_replies_still_decode():
+    plain = _sl.Reply(3, 0.3, "processed", (0.0, 0.0, 0.0), 1, 0.01)
+    assert b"reason" not in _sl.encode_reply(plain) and b"map_id" not in _sl.encode_reply(plain)
+    full = _sl.Reply(6, 0.6, "failed", (0.0, 0.0, 0.0), 1, 0.01, reason="slam_not_localized", map_id="ab" * 32)
+    body = _sl.encode_reply(full)[4:]
+    assert _sl.decode_reply(body) == full
+    assert _sl.decode_reply(_sl.encode_reply(plain)[4:]) == plain
+
+
+def test_a_failed_reply_keeps_its_reason_even_when_the_bridge_closes_right_after():
+    """Codex S3 design P2: the async client read EOF before the reply in its buffer."""
+    link, bridge, now = async_pair()
+    link.enqueue(scan_of(0), {})
+    scan = _sl.recv_scan(bridge)
+    bridge.sendall(_sl.encode_reply(_sl.Reply(scan.scan_id, scan.stamp_s, "failed", (0.0, 0.0, 0.0), 1, 0.01,
+                                              reason="slam_map_not_loaded")))
+    bridge.close()
+    with pytest.raises(_sl.SlamLinkFailure, match="slam_map_not_loaded") as info:
+        link.poll()
+    assert info.value.reason == "slam_map_not_loaded"
