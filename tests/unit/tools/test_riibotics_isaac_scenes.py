@@ -17,7 +17,7 @@ from scene_file import load_scene  # noqa: E402
 
 from tools import riibotics_isaac_scenes as tool  # noqa: E402
 
-SCENES = ("aisle", "trailer", "line_1", "line_2", "line_3", "random_1", "random_2", "random_3")
+SCENES = ("aisle", "aisle_out", "trailer", "line_1", "line_2", "line_3", "random_1", "random_2", "random_3")
 # The planner's unloaded footprint (run_transport: axle to fork tip, rear 0.17, half-width 0.36)
 TRUCK = Footprint(1.29, 0.17, 0.36)
 
@@ -26,7 +26,7 @@ TRUCK = Footprint(1.29, 0.17, 0.36)
 def written(tmp_path_factory):
     out = tmp_path_factory.mktemp("scenes")
     built = tool.scenes()
-    assert tuple(built) == ("aisle", "trailer") + tuple(
+    assert tuple(built) == ("aisle", "aisle_out", "trailer") + tuple(
         name for k in range(3) for name in (f"line_{k + 1}", f"random_{k + 1}"))
     paths = {}
     for name, scene in built.items():

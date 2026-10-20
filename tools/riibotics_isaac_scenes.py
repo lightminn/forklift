@@ -266,7 +266,9 @@ def to_hall(scenario: TransportScenario, visuals: list[dict]) -> tuple[Transport
 # Where the pickup pallet really stands against its nominal slot (hall frame: dx, dy, dyaw deg). The zone and
 # the observation candidates come from the nominal slot (heading +x), never from the pallet itself (Codex
 # 2026-10-20 P2); the random scene's pallets carry the drawing's tilt as well.
-PICKUP_ERRORS = {"aisle": (0.03, -0.05, 2.0), "trailer": (-0.04, 0.05, -2.0),
+# aisle_out: the same slot with the pallet 3 cm out of the rack instead of 3 cm in -- 3 cm in leaves the
+# extraction 2.8 mm inside the rack-back bound (back gap 0.15 m, an assumption; Isaac r4 and Codex 2026-10-20).
+PICKUP_ERRORS = {"aisle": (0.03, -0.05, 2.0), "aisle_out": (-0.03, -0.05, 2.0), "trailer": (-0.04, 0.05, -2.0),
                  "line_1": (0.05, -0.06, 3.0), "line_2": (-0.04, 0.05, -2.0), "line_3": (0.03, 0.04, 2.0),
                  "random_1": (0.06, -0.08, 0.0), "random_2": (-0.07, 0.05, 0.0), "random_3": (0.05, 0.07, 0.0)}
 
@@ -298,7 +300,7 @@ def views(s: TransportScenario) -> dict:
 
 
 def scenes() -> dict:
-    out = {"aisle": aisle_scene(), "trailer": trailer_scene()}
+    out = {"aisle": aisle_scene(), "aisle_out": aisle_scene(), "trailer": trailer_scene()}
     for k in range(3):
         out[f"line_{k + 1}"] = line_scene(k)
         out[f"random_{k + 1}"] = random_scene(k)
