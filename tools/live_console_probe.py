@@ -323,11 +323,20 @@ async def main_scenario(p: Probe, args):
     p.lease_id = saved
     await p.until(p.standing, 10, label="standing_before_final_resume")
     await asyncio.sleep(0.5)
+    seen_ = ((p.state or {}).get("last_result") or {}).get("seq", 0)
     await p.request_until_standing("mission_resume", mission_id=mission_id)
     end_by = time.monotonic() + args.mission_timeout_s
+
+    def ended_(s):
+        # an ended mission leaves the state's mission slot (persistent console plan D1): its result is the end
+        # (U13b pc14: the failure at sim 240 s was missed and the wait ran to its limit)
+        r_ = s.get("last_result") or {}
+        return (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled") or (
+            r_.get("seq", 0) > seen_ and r_.get("mission_id") == mission_id)
+
     while time.monotonic() < end_by and p.closed_code is None:
-        await p.until(lambda s: (s.get("mission") or {}).get("status") in ("done", "failed", "cancelled")
-                      or s.get("mode") == "STOPPED", end_by - time.monotonic(), label="mission_end_or_stop")
+        await p.until(lambda s: ended_(s) or s.get("mode") == "STOPPED", end_by - time.monotonic(),
+                      label="mission_end_or_stop")
         if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
             break
         # Stopped on the way (a STOP inside a later capture, a fault): stand, rearm and resume, as an operator would.
@@ -877,11 +886,21 @@ async def cycle_scenario(p: Probe, args):
             statuses_ = []
             stop_by_ = time.monotonic() + args.mission_timeout_s
             while time.monotonic() < stop_by_ and p.closed_code is None:
-                status_ = ((p.state or {}).get("mission") or {}).get("status")
+                mission_ = (p.state or {}).get("mission") or {}
+                status_ = mission_.get("status")
                 if status_ and (not statuses_ or statuses_[-1] != status_):
                     statuses_.append(status_)
                 if p.state is not None and ended_(p.state):
                     break
+                phase_now_ = str(mission_.get("phase") or "")
+                if (status_ == "paused" and mission_.get("mission_id") == mid_
+                        and (phase_now_.startswith("recover_") or phase_now_ == "clear_out")
+                        and (wait_["cancel_reply"] or {}).get("t") == "ack" and "recovery_resume" not in wait_):
+                    # Plan D4: the cancel stood with the forks in the pocket (or, at the approach's end, short of the
+                    # start check's clearance: clear_out -- Codex U30 review P2), so it became a recovery, and the
+                    # PAUSED mode pauses that at once; nothing moves until the operator resumes it (U30 pc15).
+                    wait_["recovery_resume"] = await p.request_until_standing("mission_resume",
+                                                                              mission_id=submit.get("mission_id"))
                 await asyncio.sleep(0.1)
             wait_["after_cancel_statuses"] = statuses_
         if args.cancel_at and len(p.report["missions_run"]) == 1:

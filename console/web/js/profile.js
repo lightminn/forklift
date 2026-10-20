@@ -86,13 +86,17 @@ export function rearmState(st, hasLease) {
 }
 
 // Resume: a paused or held mission, outside STOPPED and TELEOP, once the truck stands.
+// hint: a cancel that became a recovery (forks in a pocket, plan D4) is paused by the PAUSED
+// mode at once and moves only on a resume, which then finishes the cancel (U30 pc15).
 export function resumeState({ state, mission, hasLease }) {
   const mode = state?.mode;
   if (!hasLease || !mission || !["paused", "held"].includes(mission.status) || mode === "STOPPED" || mode === "TELEOP") {
-    return { enabled: false, why: "" };
+    return { enabled: false, why: "", hint: "" };
   }
+  const phase = String(mission.phase || "");
+  const hint = phase.startsWith("recover_") || phase === "clear_out" ? "재개하면 복구를 이어 가 취소를 마칩니다" : "";
   const stand = standWhy(state);
-  return stand ? { enabled: false, why: stand } : { enabled: true, why: "" };
+  return stand ? { enabled: false, why: stand, hint } : { enabled: true, why: "", hint };
 }
 
 // The fake vehicle names stops controlled_decel / safety_preempt, the live arbiter controlled / preempt.
