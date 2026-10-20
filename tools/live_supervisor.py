@@ -21,6 +21,12 @@ A TERM or INT ends the running runner (TERM, then KILL after a grace), removes i
 
 A command is a JSON list of strings; ``{epoch}``, ``{epoch_dir}``, ``{port_file}`` and ``{out}`` are filled in.
 Every start and exit goes to ``<out>/supervisor.jsonl``.
+
+With ``--slam-map-bundle`` (SLAM localization plan L4) the bundle is checked and hashed once, at the session's start:
+its map id fills ``{expected_map_id}`` and its folder ``{map_bundle}`` in every epoch's commands, so each epoch's
+runner and bridge are held to the same map. A bundle that does not load ends the session before the first epoch;
+an epoch that ends with ``slam_map_mismatch`` stops the supervisor at once (the bundle cannot change between epochs).
+The port file of a failed epoch carries the runner's ``reason`` next to ``state=crashed``.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ import time
 from pathlib import Path
 
 ENDED, NEW_SCENE = 0, 3
+STOP_AT_ONCE = ("slam_map_mismatch",)  # causes no retry can change (plan L4)
 
 
 def _fill(command: list[str], **values) -> list[str]:
@@ -52,13 +59,16 @@ def _log(out: Path, entry: dict) -> None:
         log.write(json.dumps({"wall": time.time(), **entry}) + "\n")
 
 
-def _mark_crashed(port_file: Path, epoch: int, code: int) -> None:
-    """The runner ended without closing its port file (or failed): readers must not take it as running."""
+def _mark_crashed(port_file: Path, epoch: int, code: int, reason: str | None = None) -> None:
+    """The runner ended without closing its port file (or failed): readers must not take it as running. ``reason``
+    (the runner's, when it wrote one) tells the console why (SLAM localization plan L4: a session start check)."""
     try:
         info = json.loads(port_file.read_text()) if port_file.exists() else {}
     except (OSError, ValueError):
         info = {}
     info.update(state="crashed", epoch=epoch, exit_code=code)
+    if reason is not None:
+        info["reason"] = reason
     tmp = port_file.with_name(port_file.name + ".tmp")
     tmp.write_text(json.dumps(info))
     os.replace(tmp, port_file)
@@ -112,9 +122,22 @@ def _end_child(child, grace_s: float = 60.0) -> int:
 def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float = 10.0, max_failures: int = 3,
               max_epochs: int | None = None, bridge: list[str] | None = None, bridge_stop: list[str] | None = None,
               bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None,
-              grace_s: float = 60.0) -> dict:
+              grace_s: float = 60.0, map_bundle: Path | None = None) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    session_values = {}
+    if map_bundle is not None:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from forklift_core.localization.slam_map import MapBundleError, load_bundle
+
+        try:
+            bundle = load_bundle(Path(map_bundle))
+        except MapBundleError as exc:
+            _log(out, {"event": "map_bundle_refused", "reason": str(exc)})
+            _mark_crashed(port_file, 0, 1, str(exc))
+            return {"epochs": 0, "end": "map_mismatch", "codes": [], "reason": str(exc)}
+        session_values = {"expected_map_id": bundle.map_id, "map_bundle": str(Path(map_bundle).resolve())}
+        _log(out, {"event": "map_bundle", **session_values})
     stop = _Stop()
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
     codes, epoch, last_cause, repeats = [], 0, None, 0
@@ -123,7 +146,8 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             epoch += 1
             epoch_dir = out / f"epoch_{epoch}"
             epoch_dir.mkdir()
-            values = {"epoch": epoch, "epoch_dir": str(epoch_dir), "port_file": str(port_file), "out": str(out)}
+            values = {"epoch": epoch, "epoch_dir": str(epoch_dir), "port_file": str(port_file), "out": str(out),
+                      **session_values}
             code, reason = 1, None
             try:
                 ready = True
@@ -159,6 +183,8 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                         written = _read_exit(Path(_fill([exit_file], **values)[0]))
                         if process == 0 and written is not None:
                             code, reason = written
+                        elif written is not None:
+                            reason = written[1]  # a process that failed keeps its code; its own reason is kept too
                         elif process == 0:
                             _log(out, {"event": "no_exit_file", "epoch": epoch})
                             code, reason = 1, "no_exit_file"
@@ -179,15 +205,17 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             codes.append(code)
             _log(out, {"event": "exit", "epoch": epoch, "code": code, "reason": reason})
             if stop.asked:
-                _mark_crashed(port_file, epoch, code) if code not in (ENDED, NEW_SCENE) else None
+                _mark_crashed(port_file, epoch, code, reason) if code not in (ENDED, NEW_SCENE) else None
                 return {"epochs": epoch, "end": "terminated", "codes": codes}
             if code == ENDED:
                 return {"epochs": epoch, "end": "ended", "codes": codes}
             if code == NEW_SCENE:
                 last_cause, repeats = None, 0
                 continue
-            _mark_crashed(port_file, epoch, code)
+            _mark_crashed(port_file, epoch, code, reason)
             cause = _cause(code, reason)
+            if cause[1] in STOP_AT_ONCE:
+                return {"epochs": epoch, "end": "map_mismatch", "codes": codes, "reason": reason}
             repeats = repeats + 1 if cause == last_cause else 1
             last_cause = cause
             if repeats >= max_failures:  # the same cause, max_failures times in a row (plan D9)
@@ -213,11 +241,14 @@ def main(argv=None) -> int:
     ap.add_argument("--backoff-s", type=float, default=10.0)
     ap.add_argument("--max-failures", type=int, default=3)
     ap.add_argument("--max-epochs", type=int, default=None)
+    ap.add_argument("--slam-map-bundle", type=Path, default=None,
+                    help="a survey map bundle: checked and hashed once; fills {expected_map_id} and {map_bundle}")
     args = ap.parse_args(argv)
     load = (lambda text: None if text is None else json.loads(text))
     result = supervise(out=args.out, runner=load(args.runner), port_file=args.port_file, backoff_s=args.backoff_s,
                        max_failures=args.max_failures, max_epochs=args.max_epochs, bridge=load(args.bridge),
-                       bridge_stop=load(args.bridge_stop), bridge_ready=args.bridge_ready, exit_file=args.exit_file)
+                       bridge_stop=load(args.bridge_stop), bridge_ready=args.bridge_ready, exit_file=args.exit_file,
+                       map_bundle=args.slam_map_bundle)
     print(json.dumps(result), flush=True)
     return 0 if result["end"] == "ended" else 1
 

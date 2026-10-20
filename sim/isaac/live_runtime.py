@@ -398,7 +398,8 @@ class LiveRuntime:
         advice = cmds.end_advice if cmds.end_logged_for == mission_id else None  # plan D13 item 6
         entry = self._add_result(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
                                  ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
-                                 destination_id=mission.destination_id if mission else None, advice=advice)
+                                 destination_id=mission.destination_id if mission else None, advice=advice,
+                                 map_id=(getattr(self, "slam_info", None) or {}).get("map_id"))
         clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
         records = self.core.end_reset(t)  # steps 3 and 8: the pocket check closed, the mission's state back to the start
         if cmds.status == "done" and mission is not None:
@@ -468,6 +469,9 @@ class LiveRuntime:
                 msg["plan"] = plan
             msg["last_result"] = self.results.last  # the session's last mission outcome, after its slot is free
             msg["scene"] = self.scene  # a latched damage: automatic work refused until the scene is reset (D6)
+            slam_info = getattr(self, "slam_info", None)
+            if slam_info is not None:  # SLAM localization plan L6: absent = online mapping (or not known)
+                msg["slam"] = dict(slam_info)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:

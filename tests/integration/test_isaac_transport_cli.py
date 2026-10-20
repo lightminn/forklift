@@ -389,6 +389,9 @@ def test_slam_feedback_options_validate_before_startup(tmp_path) -> None:
     for flags, expected in (
         (["--slam-feedback", socket_path], "--record-slam and --use-perception"),
         (["--slam-noise-seed", "3"], "--slam-noise-seed requires --slam-feedback"),
+        # SLAM localization plan L7: the bundle needs the SLAM link and the session's map id, and the id the bundle
+        (["--slam-map-bundle", str(tmp_path)], "--slam-map-bundle requires --slam-feedback and --expected-map-id"),
+        (["--expected-map-id", "a" * 64], "--expected-map-id requires --slam-map-bundle"),
     ):
         result = subprocess.run(
             [

@@ -213,7 +213,7 @@ class SlamPoseTracker:
         self.version += 1
         if self.mode == "warming_up":
             self.applied = self.received
-            if scan_id >= self.bootstrap_scan_id:
+            if scan_id >= getattr(self, "bootstrap_scan_id", 4):  # a tracker restored from an older record has none
                 self.mode = "tracking"
         elif self.mode == "tracking":
             self.applied = self.received

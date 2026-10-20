@@ -79,7 +79,8 @@ KNOWN = {
         "Camera did not produce RGB", "Nonfinite body state", "Excessive body tilt in ",
         "Actual truck/load footprint overlap in ", "Measured pallet footprint overlap in ", "mission_cancelled",
         "Pallet dropped during transport", "Pallet slipped off forks", "Pallet displaced before pickup",
-        "Forbidden fork/pallet contact in ", "localization_stale: ", "slam_link_failed: ",
+        # "slam_link_failed: " goes through slam_reason_ now (a DYNAMIC_SITE: an L4 reason or the link's own)
+        "Forbidden fork/pallet contact in ", "localization_stale: ",
         "withdraw_tracking_exceeded:", "Perception camera did not produce depth", "Measured pallet solid overlap in ",
         "",
     },

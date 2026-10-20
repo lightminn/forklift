@@ -150,3 +150,56 @@ def test_a_failing_cleanup_is_logged(tmp_path):
     assert result["end"] == "ended"
     log = [json.loads(line) for line in (tmp_path / "supervisor.jsonl").read_text().splitlines()]
     assert any(e["event"] == "bridge_stop_failed" and e.get("code") == 9 for e in log)
+
+
+# --- SLAM localization plan L4 -------------------------------------------------------------------------------------
+def _bundle(tmp_path):
+    import numpy as np
+
+    from forklift_core.localization import slam_map as sm
+
+    folder = tmp_path / "bundle"
+    folder.mkdir()
+    (folder / "map.posegraph").write_bytes(b"g")
+    (folder / "map.data").write_bytes(b"d")
+    np.savez(folder / "grid.npz", data=np.zeros((2, 2), np.int8), origin=np.zeros(3), resolution_m=0.05)
+    hashes = {n: sm.file_sha256(folder / n) for n in sm.BUNDLE_FILES}
+    (folder / "manifest.json").write_text(json.dumps({"format": sm.FORMAT, "map_id": sm.map_id_of(hashes),
+                                                      "files": hashes}))
+    return folder, sm.map_id_of(hashes)
+
+
+def test_the_session_s_map_id_fills_every_epoch_s_commands(tmp_path):
+    folder, map_id = _bundle(tmp_path)
+    seen = tmp_path / "seen.txt"
+    runner = [PY, "-c", "import sys,pathlib; pathlib.Path(sys.argv[1]).open('a').write(sys.argv[2] + ' ' + sys.argv[3]"
+              " + '\\n'); sys.exit(3 if int(sys.argv[4]) == 1 else 0)", str(seen), "{expected_map_id}", "{map_bundle}",
+              "{epoch}"]
+    result = run(tmp_path / "out", runner, max_epochs=2, map_bundle=folder)
+    assert result["codes"] == [3, 0]
+    assert seen.read_text().split("\n")[:2] == [f"{map_id} {folder.resolve()}"] * 2
+
+
+def test_a_map_mismatch_stops_at_once_and_its_reason_reaches_the_port_file(tmp_path):
+    folder, _ = _bundle(tmp_path)
+    reason = "slam_map_mismatch: seed 1 is not the survey's 0"
+    result = run(tmp_path / "out", writes_exit([1, 0], [reason, None]), exit_file="{epoch_dir}/run/exit_code",
+                 map_bundle=folder)
+    assert result["epochs"] == 1 and result["end"] == "map_mismatch"
+    port = json.loads((tmp_path / "out" / "live_port.json").read_text())
+    assert port["state"] == "crashed" and port["reason"] == reason
+
+
+def test_a_bundle_that_does_not_load_starts_no_epoch(tmp_path):
+    folder, _ = _bundle(tmp_path)
+    (folder / "map.data").write_bytes(b"changed")
+    result = run(tmp_path / "out", runner_exiting(0), map_bundle=folder)
+    assert result["epochs"] == 0 and result["end"] == "map_mismatch" and result["reason"].startswith("slam_map_mismatch")
+    assert not (tmp_path / "out" / "epoch_1").exists()
+
+
+def test_a_failed_process_keeps_its_own_code_and_its_written_reason(tmp_path):
+    result = run(tmp_path, writes_exit([1], ["slam_not_localized: fractions"], process_code=1),
+                 exit_file="{epoch_dir}/run/exit_code", max_epochs=1)
+    assert result["codes"] == [1]
+    assert json.loads((tmp_path / "live_port.json").read_text())["reason"] == "slam_not_localized: fractions"

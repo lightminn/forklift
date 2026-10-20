@@ -1132,3 +1132,35 @@ def test_the_prediction_disposition_is_exclusive_in_its_order():
     )
     assert d(-0.001, lost_injection=False, retry_allowed=False) == "accepted_short"
     assert d(-0.001, lost_injection=False, retry_allowed=True) == "refused"
+
+
+def test_the_slam_mode_and_map_are_compared_by_meaning_not_by_the_bundle_path(tmp_path):
+    """SLAM localization plan L7 (Codex S3 design P2): an old condition reads as online mapping; a localization run
+    matches only a condition measured on the same map, whatever path the bundle was given at."""
+
+    def problems(expected_result, observed_result):
+        return [p for p in NT.condition_problems(NT.run_condition(expected_result, tmp_path),
+                                                  NT.run_condition(observed_result, tmp_path))
+                if p.startswith("arguments")]
+
+    old = {"arguments": {"fps": 60}}
+    mapping = {"arguments": {"fps": 60}}
+    on_a = {"arguments": {"fps": 60, "slam_map_bundle": "/b/one", "expected_map_id": "a" * 64},
+            "slam_map": {"mode": "localization", "map_id": "a" * 64}}
+    on_a_elsewhere = {"arguments": {"fps": 60, "slam_map_bundle": "/c/two", "expected_map_id": "a" * 64},
+                      "slam_map": {"mode": "localization", "map_id": "a" * 64}}
+    on_b = {"arguments": {"fps": 60, "slam_map_bundle": "/b/one", "expected_map_id": "b" * 64},
+            "slam_map": {"mode": "localization", "map_id": "b" * 64}}
+    stored_old = {"arguments": {"fps": 60}}  # a condition exported before the fields existed
+    assert NT.run_condition(old, tmp_path)["arguments"]["slam_mode"] == "mapping"
+    assert problems(mapping, mapping) == []
+    old_condition = NT.run_condition(stored_old, tmp_path)
+    for key in ("slam_mode", "map_id"):
+        old_condition["arguments"].pop(key)
+    assert [p for p in NT.condition_problems(old_condition, NT.run_condition(mapping, tmp_path))
+            if p.startswith("arguments")] == []
+    assert problems(on_a, on_a_elsewhere) == []
+    assert problems(on_a, on_b) == ["arguments map_id differs from the measurement runs"]
+    assert sorted(problems(mapping, on_a)) == ["arguments map_id differs from the measurement runs",
+                                               "arguments slam_mode differs from the measurement runs"]
+    assert "input_files" not in str(problems(on_a, on_a))  # the bundle folder is not an input file
