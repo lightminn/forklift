@@ -827,8 +827,10 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
              "transition('observe', now_s)"]
     positions = [retry_fn.index(o) for o in order]
     assert positions == sorted(positions), order
-    # The release and the stand, shared with the S4c-3 realignment.
-    shared = functions["release_and_stand"]
+    # The release and the stand, shared with the S4c-3 realignment (the release half is _release_reproject since
+    # plan 2026-10-19 task 4 shares it with the bottom-deck side legs).
+    assert "self._release_reproject(now_s, hold_event)" in functions["release_and_stand"]
+    shared = functions["_release_reproject"] + functions["release_and_stand"]
     order = ["self.release_slam(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
              "near['retry_stand'] = True"]
     positions = [shared.index(o) for o in order]
@@ -968,7 +970,7 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     source = SCRIPT.read_text()
     tree = ast.parse(source)
     functions = runner_and_core_functions(tree)
-    shared = functions["release_and_stand"]
+    shared = functions["_release_reproject"] + functions["release_and_stand"]  # the release half shared (task 4)
     for needed in ("self.release_slam(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):
         assert needed in shared, needed
@@ -1049,6 +1051,52 @@ def test_learned_far_proposals_are_refused_without_their_model_inputs(tmp_path, 
     result = run_geometry_cli(tmp_path, full_t11_pallet_urdf(), "t11_06", *extra)
     assert result.returncode == 2 and message in result.stderr
     assert not (tmp_path / "run").exists()
+
+
+@pytest.mark.parametrize("extra, message", [
+    ((), "--bottom-deck-check on needs --use-perception and --planning-target perception"),
+    (("--use-perception", "--planning-target", "oracle_nominal"),
+     "--bottom-deck-check on needs --use-perception and --planning-target perception"),
+    (("--use-perception", "--near-tracking"), "--bottom-deck-check on is not defined with --near-tracking or --pocket-check"),
+    (("--use-perception", "--pocket-check"), "--bottom-deck-check on is not defined with --near-tracking or --pocket-check"),
+    (("--use-perception", "--live"), "--bottom-deck-check on is a batch run"),
+    (("--use-perception", "--repeat-captures", "1"), "--bottom-deck-check on is not defined with --repeat-captures"),
+])
+def test_the_bottom_deck_check_is_refused_outside_its_contract(tmp_path, full_t11_pallet_urdf, extra, message):
+    # Plan 2026-10-19 task 4: a batch run on the perception target, without the near-field checks or repeats
+    result = run_geometry_cli(tmp_path, full_t11_pallet_urdf(), "t11_06", "--bottom-deck-check", "on", *extra)
+    assert result.returncode == 2 and message in result.stderr, result.stderr[-400:]
+    assert not (tmp_path / "run").exists()
+
+
+def test_the_bottom_deck_check_is_off_unless_given_and_part_of_the_near_contract():
+    import sys
+
+    sys.path.insert(0, str(SCRIPT.parent))
+    import near_tracking
+
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["bottom_deck_check"] == "off"
+    source = SCRIPT.read_text()
+    block = source[source.index('"--bottom-deck-check",'): source.index('"--bottom-deck-check",') + 200]
+    assert 'choices=("off", "on")' in block and 'default="off"' in block
+
+
+def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
+    """Plan 2026-10-19 task 4: a side leg's arrival is the side capture; the far recognition takes no driving
+    frames on it; a refusal from the capture, a recovery or a blocked replan ends the loop before any command."""
+    source = SCRIPT.read_text()
+    assert 'state.get("near_capture", {}).get("status") != "pending"\n                and not core.bottom_deck_leg_active())' in source
+    assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_leg_active():' in source
+    arrival = source.index('if args.use_perception and ms.phase == "observe":\n                        if core.bottom_deck_leg_active():')
+    block = source[arrival: arrival + 800]
+    assert block.index("core.bottom_deck_capture(t, rear, step)") < block.index("elif live is not None and core.jobs")
+    assert 'if deck_tick_.stop or ms.phase == "bottom_deck_refused":\n                                break' in block
+    recover = source.index("recover_ = core.cusp_and_observe_recovery(")
+    assert source.index('if ms.phase == "bottom_deck_refused":\n                    break', recover) < source.index(
+        "command_ = core.command(", recover)
+    replan = source.index("replan_tick_ = core.blocked_replan(")
+    assert source.index('if ms.phase == "bottom_deck_refused":\n                            break', replan) < replan + 300
+    assert source.count('getattr(succeeded_, "handled", False)') == 2  # the batch and the live observation paths
 
 
 def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():

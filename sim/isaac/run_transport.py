@@ -443,6 +443,15 @@ def arguments() -> argparse.Namespace:
         "and is kept as the reference. The near capture and the re-observation stands keep the detector "
         "(docs/plans/2026-10-18-isaac-recognition-far-capture.md).",
     )
+    parser.add_argument(
+        "--bottom-deck-check",
+        choices=("off", "on"),
+        default="off",
+        help="on: before a known-shape pallet is picked, see both evidence faces from side legs (x hypothesis: "
+        "the two sides at 35 deg; T11 y: the back face then the entry face head on) and insert only when both "
+        "read a bottom deck and the near target is the pallet judged (docs/plans/2026-10-19-bottom-deck-side-"
+        "evidence.md tasks 3-4). A batch run on the perception target.",
+    )
     parser.add_argument("--recognition-frame-every", type=int, default=24,
                         help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
     parser.add_argument("--recognition-pixel-lag-steps", type=int, default=0,
@@ -780,6 +789,18 @@ def arguments() -> argparse.Namespace:
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
     args, unknown = parser.parse_known_args()
+    if args.bottom_deck_check == "on":
+        # Plan 2026-10-19 task 4: the side legs and the insert permission are defined for a batch run on the
+        # perception target only (an oracle target would be permitted 0.3 m off the pallet judged -- Codex task 3).
+        if not args.use_perception or args.planning_target != "perception":
+            parser.error("--bottom-deck-check on needs --use-perception and --planning-target perception")
+        if args.near_tracking or args.pocket_check:
+            parser.error("--bottom-deck-check on is not defined with --near-tracking or --pocket-check")
+        if getattr(args, "live", False):
+            parser.error("--bottom-deck-check on is a batch run (the live capture and plan worker paths are out of "
+                         "its scope)")
+        if args.repeat_captures:
+            parser.error("--bottom-deck-check on is not defined with --repeat-captures")
     # Stage 3's learned far proposals stand on their own inputs (checked before anything else reads them).
     if args.recognition_proposals == "learned":
         if args.recognition != "far":
@@ -4629,6 +4650,24 @@ def drive(S, isaac) -> None:
         state.setdefault("recognition", {}).update(far_runtime.summary())
         return observation_, record_
 
+    def save_npz_at_output(name, **arrays):
+        """A diagnostic dump under the run's output (a subfolder such as bottom_deck/ is made on first use)."""
+        (args.output / name).parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(args.output / name, **arrays)
+
+    def bottom_deck_options() -> dict:
+        """Plan 2026-10-19 task 4: what the side legs read (the judge's parameters and the run shape's spec; the
+        camera mount the stands are worked back from)."""
+        if getattr(args, "bottom_deck_check", "off") != "on":  # a replayed record from before the flag: off
+            return {"bottom_deck_check": "off"}
+        from forklift_core.perception.bottom_deck_evidence import BottomDeckParams
+        from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_geometry
+
+        shape_ = args.pallet_geometry_loaded.geometry_version
+        return {"bottom_deck_check": "on", "bottom_deck_params": BottomDeckParams(),
+                "bottom_deck_spec": spec_from_geometry(args.pallet_geometry_loaded, entry_axes=KNOWN_ENTRY_AXES[shape_]),
+                "camera_mount_x_m": float(perception_mount.translation_m[0])}
+
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
@@ -4654,7 +4693,7 @@ def drive(S, isaac) -> None:
             write_paths=lambda: (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n"),
             # M-a1 slice 3b: truth (SimTruth list) and the permission's diagnostics dump.
             truth_speed=lambda: truth_speed, truth_velocity=lambda: velocity,
-            save_npz=lambda name, **arrays: np.savez_compressed(args.output / name, **arrays),
+            save_npz=save_npz_at_output,
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
             plan_transport=lambda *a, **k: plan_transport(*a, **k),
@@ -4739,7 +4778,7 @@ def drive(S, isaac) -> None:
                                 depth_quantize_mm=args.depth_quantize_mm, drive_geometry=drive_geometry,
                                 command_accel_mps2=COMMAND_ACCEL_MPS2, dt=dt, pickup_zone=pickup_zone,
                                 tracker_profile=args.tracker_profile, DOCKING_RETRY=DOCKING_RETRY,
-                                ROUND2_KEEP_M=ROUND2_KEEP_M),
+                                ROUND2_KEEP_M=ROUND2_KEEP_M, **bottom_deck_options()),
     )
     # M-a3 (docs/plans/2026-10-16-m-a3-mission-commands.md E1): the batch run submits its scenario's mission itself,
     # outside the loop -- the default path is a run with this one submit and no command in any tick.
@@ -5187,7 +5226,8 @@ def drive(S, isaac) -> None:
             # The far recognition's driving frames: every frame_every steps of a far observe leg (not the near
             # capture's leg, not inside a stationary capture), rendered here and read after the odometry below.
             far_due = far_runtime is not None and far_runtime.due(
-                tick, observing=ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending")
+                tick, observing=ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
+                and not core.bottom_deck_leg_active())  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
@@ -5239,7 +5279,7 @@ def drive(S, isaac) -> None:
                 # Every tracker in this runner stops at 0.012 m/s; its arrival
                 # and gear-change checks wait for the noise-aware detector.
                 slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
-            if far_runtime is not None and ms.phase == "observe":
+            if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_leg_active():
                 # Each step's odom and truth (the driving frames' poses and the pixel-lag fit's input).
                 pallet_now_, pallet_q_now_ = pallet.get_world_pose()
                 far_runtime.record_step(tick, stamp_now, slam_odom_base(),
@@ -6132,7 +6172,7 @@ def drive(S, isaac) -> None:
                             if succeeded_.stop:
                                 break
                             observation, near_leg = succeeded_.observation, succeeded_.near_leg
-                            if not getattr(succeeded_, "pending", False):
+                            if not getattr(succeeded_, "pending", False) and not getattr(succeeded_, "handled", False):
                                 core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
                         core.capture_acquired_s = None
             if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:
@@ -6147,6 +6187,8 @@ def drive(S, isaac) -> None:
                 # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
                 recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
                 tracking, rear = recover_.tracking, recover_.rear
+                if ms.phase == "bottom_deck_refused":
+                    break  # plan 2026-10-19 task 4: a side recovery ended the mission (no command after it)
                 # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
                 command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
                                         safety_hold)
@@ -6155,7 +6197,14 @@ def drive(S, isaac) -> None:
                 dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
                 if tracking.status == "arrived":
                     if args.use_perception and ms.phase == "observe":
-                        if live is not None and core.jobs is not None:
+                        if core.bottom_deck_leg_active():
+                            # Plan 2026-10-19 task 4: a side leg's arrival is the side capture (or a retake's
+                            # retreat end), not the far recognition or the detector.
+                            deck_tick_ = core.bottom_deck_capture(t, rear, step)
+                            rear = deck_tick_.rear
+                            if deck_tick_.stop or ms.phase == "bottom_deck_refused":
+                                break
+                        elif live is not None and core.jobs is not None:
                             # Real-time plan D9c: the capture opens here and runs over the next ticks.
                             begun_ = core.capture_begin(t, rear, step)
                             live.capturing = core.capture_live is not None
@@ -6316,6 +6365,8 @@ def drive(S, isaac) -> None:
                                 observation, near_leg = succeeded_.observation, succeeded_.near_leg
                                 if getattr(succeeded_, "pending", False):
                                     plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
+                                elif getattr(succeeded_, "handled", False):
+                                    pass  # plan 2026-10-19 task 4: the first side leg is installed instead
                                 else:
                                     # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
                                     core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
@@ -6363,6 +6414,8 @@ def drive(S, isaac) -> None:
                     if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == ms.phase:
                         replan_tick_ = core.blocked_replan(t, rear, kappa, requested_speed)
                         rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
+                        if ms.phase == "bottom_deck_refused":
+                            break  # plan 2026-10-19 task 4: a blocked side leg ended the mission
                 # Evaluation only (truth): every moving tick, each ground-truth
                 # obstacle in the steering-held stopping volume (with the envelope)
                 # while the permission allowed this speed (Codex L0b P2).
