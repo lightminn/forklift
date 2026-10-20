@@ -214,10 +214,21 @@ def permit_pickup_zone(result: dict) -> Rectangle:
 PLAN_KEYS = ("scenario", "geometry", "travel_planner_config")  # what a replan needs of the result, kept in the tour file
 
 
-def plan_tour(result: dict, tour: list, start=None) -> SimpleNamespace:
+SURVEY_CLEARANCE_M = 0.30  # the tour's driving clearance, initial plan and every replan (plan L2 v2.5, r6 below)
+
+
+def plan_tour(result: dict, tour: list, start=None, clearance_m: float = SURVEY_CLEARANCE_M) -> SimpleNamespace:
     """The tour from ``start`` (home when None) through ``tour`` back home, around the props and the permit's pickup
     zone (in place of the pallet's own outline: ``plan_survey_route`` adds a pickup pallet of the geometry's size, here
-    the zone's)."""
+    the zone's), with ``clearance_m`` (never below the run's planner clearance).
+
+    The tour drives on the SLAM map pose while it is planned in world, so the map's error comes off the clearance: ws1
+    job 6837 (r6) stood with the true rear axle 0.22 m from a prop where the estimate read 0.36, the teleop permit
+    holding it (``occupied``), and every replan at 0.10 m gave the same blocked leg. A replan from a pose that does not
+    keep ``clearance_m`` itself (stopped off the path) is tried once more at the run's planner clearance -- never at 0
+    (r6's fallback to 0 would plan the very leg the permit holds). The
+    judged region keeps the run's planner clearance (``judged_region``): only the driving clearance grows. Returns the
+    planner's result fields and ``clearance_m``, the clearance the plan was made with."""
     s, g = result["scenario"], result["geometry"]
     zone = permit_pickup_zone(result)
     transport = SimpleNamespace(props=[SimpleNamespace(rectangle=_rect(p["rectangle"])) for p in s["props"]],
@@ -227,16 +238,18 @@ def plan_tour(result: dict, tour: list, start=None) -> SimpleNamespace:
                                pallet_depth_m=zone.length_m, pallet_width_m=zone.width_m)
     home = Pose2D(**s["start_rear"])
     route = [home if start is None else Pose2D(*start)] + [Pose2D(*p) for p in tour] + [home]
-    config = PlannerConfig(**result["travel_planner_config"])
-    plan = plan_survey_route(SimpleNamespace(transport=transport), route, config, geometry=geometry)
-    if not plan.success and start is not None and config.clearance_m > 0:
-        # a replan from where the truck stopped off its path: the planner's clearance may not hold at the start pose;
-        # once more with none, as the runner retries a blocked replan (mission core, clearance 0)
-        from dataclasses import replace
+    from dataclasses import fields, replace
 
-        plan = plan_survey_route(SimpleNamespace(transport=transport), route, replace(config, clearance_m=0.0),
+    config = PlannerConfig(**result["travel_planner_config"])
+    ladder = [max(clearance_m, config.clearance_m)]
+    if start is not None and ladder[0] > config.clearance_m:
+        ladder.append(config.clearance_m)
+    for clearance in ladder:
+        plan = plan_survey_route(SimpleNamespace(transport=transport), route, replace(config, clearance_m=clearance),
                                  geometry=geometry)
-    return plan
+        if plan.success:
+            break
+    return SimpleNamespace(**{f.name: getattr(plan, f.name) for f in fields(plan)}, clearance_m=clearance)
 
 
 def uncovered_clusters(cells: np.ndarray, cell_m: float = CELL_M) -> list[np.ndarray]:
@@ -397,6 +410,7 @@ class TourDriver:
         self.stop_wait_s, self._stop_since = float(stop_wait_s), None
         self.replan_stall_s = float(replan_stall_s)
         self._failed = None
+        self._blocked = False
         self._set_path(poses, directions, curvatures)
         self.stall_s, self.pacing_wait_s, self.stale_s = stall_s, pacing_wait_s, stale_s
         self.enter_s, self.release_s, self.goal_slack_m = enter_s, release_s, goal_slack_m
@@ -448,7 +462,7 @@ class TourDriver:
         self.drivable_idle = self.pacing_idle = 0.0
         self.stand_since = None
         self._event(now, "replanned", replans=self.replans, waypoints_left=len(self.waypoints),
-                    length_m=float(plan.length_m))
+                    length_m=float(plan.length_m), clearance_m=getattr(plan, "clearance_m", None))
         return True
 
     def start(self, now: float) -> None:
@@ -485,6 +499,14 @@ class TourDriver:
                 return (0.0, 0.0), "feedback_missing"
             return None, None
         self.last_feedback_wall = now
+        permit = s.get("permit") or {}
+        blocked = permit.get("limit_mps") == 0.0 and permit.get("reason") in ("occupied", "unknown")
+        if blocked and not self._blocked:
+            # the console exposes no blocked arc or cells: the pose, command and steering the permit held it at
+            # (Codex r6 diagnosis: what the next run needs to tell a real approach from arc margins)
+            self._event(now, "permit_blocked", pose=pose, permit=permit, applied=s.get("applied"),
+                        steering_rad=s.get("steering_rad"), leg=self._leg)
+        self._blocked = blocked
         factor = float((s.get("pacing") or {}).get("target_factor") or 1.0)
         dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
         if self.replan_request is not None or getattr(self, "_replan_wait", None) is not None:

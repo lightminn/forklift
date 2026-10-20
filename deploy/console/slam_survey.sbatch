@@ -20,7 +20,8 @@
 #   (config/slam_survey_tour.yaml: the judged region's aisles), CYCLE (P-1:D-1,P-1:D-0, without TOUR: the missions,
 #   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded),
 #   RIGID_RUN (a run of this scene whose scene.usda the moving check lists when the epoch exported none -- a tour
-#   plans no mission, and the runner exports its stage when a mission plans; its stage provenance must match)
+#   plans no mission, and the runner exports its stage when a mission plans; its stage provenance must match),
+#   MAP_PARAMS (repository path of the mapping params; ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml)
 #
 # Run from the repository root.
 set -u
@@ -29,6 +30,9 @@ ROOT=$(pwd)
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
 JOB=${SLURM_JOB_ID:-local$$}
+# the survey's mapping params, relative to the repository (the bridge container sees it under /workspace)
+MAP_PARAMS=${MAP_PARAMS:-ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml}
+[ -f "$ROOT/$MAP_PARAMS" ] || { echo "no mapping params $MAP_PARAMS"; exit 2; }
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
 CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
@@ -36,6 +40,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'ROOT=%q\nBASE_SCENE=%q\nFORKLIFT_URDF=%q\nVENV_PY=%q\nJOB=%q\nCPU0=%q\n' \
     "$ROOT" "$BASE_SCENE" "$FORKLIFT_URDF" "$VENV_PY" "$JOB" "$CPU0"
   printf 'PORT=%q\nFACTOR=%q\nSEED=%q\nEXTRA_ARGS=%q\n' "${PORT:-8799}" "${FACTOR:-0.4}" "${SEED:-0}" "${EXTRA_ARGS:-}"
+  printf 'MAP_PARAMS=%q\n' "$MAP_PARAMS"
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -44,7 +49,7 @@ cat > "$OUT/bridge.sh" <<'EOT'
 . "$(dirname "$0")/env.sh"
 mkdir -p "$2/bridge" "$2/sock"
 docker run -d --name "slam_survey_${JOB}_e$1" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
-  -u "$(id -u):$(id -g)" -e HOME=/tmp -e SLAM_SERIALIZE=/out/bundle/map \
+  -u "$(id -u):$(id -g)" -e HOME=/tmp -e SLAM_SERIALIZE=/out/bundle/map -e SLAM_PARAMS="/workspace/$MAP_PARAMS" \
   -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" \
   forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
 EOT
@@ -110,7 +115,7 @@ echo "supervisor exit $rc $(date -Is)"
 EP=$OUT/epoch_1
 mkdir -p "$OUT/readback"
 LOC=$OUT/readback/localization.yaml
-cp "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" "$LOC"
+cp "$ROOT/$MAP_PARAMS" "$LOC"
 sed -i "s/^    mode: .*/    mode: localization\n    map_file_name: \/bundle\/map\n    map_start_pose: [0.0, 0.0, 0.0]/" "$LOC"
 if [ -f "$EP/bridge/bundle/map.posegraph" ]; then
   docker run --rm --name "slam_readback_${JOB}" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
@@ -128,7 +133,7 @@ fi
   "$OUT/rigid_bodies.json" > "$OUT/rigid_bodies.log" 2>&1
 "$VENV_PY" "$ROOT/tools/slam_survey_bundle.py" --epoch "$EP" --readback "$OUT/readback" \
   --rigid-bodies "$OUT/rigid_bodies.json" "${RIGID_REF[@]}" --tour-config "${TOUR_CONFIG:-$ROOT/config/slam_survey_tour.yaml}" \
-  ${TOUR:+--tour-path "$TOUR" --probe "$OUT/probe.json"} --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \
+  ${TOUR:+--tour-path "$TOUR" --probe "$OUT/probe.json"} --slam-params "$ROOT/$MAP_PARAMS" \
   --image "$(docker image inspect -f '{{.Id}}' forklift/ros2-dev:jazzy)" \
   ${REFERENCE_RUN:+--reference-run "$REFERENCE_RUN"} --out "$OUT/bundle" --report "$OUT/survey_report.json"
 brc=$?

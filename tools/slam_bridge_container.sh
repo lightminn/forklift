@@ -6,6 +6,7 @@
 # SLAM_SERIALIZE=<prefix> (environment): once the bridge has ended -- the runner closed its socket, so no scan is
 # sent or being processed -- slam_toolbox writes its pose graph to <prefix>.posegraph/.data before it is stopped
 # (a survey epoch, docs/plans/2026-10-20-slam-localization-session.md L2)
+# SLAM_PARAMS=<yaml> (environment): the mapping params, the online config when unset (a survey epoch passes its own)
 # (docs/plans/2026-10-04-online-slam-closed-loop.md)
 set +u
 source /opt/ros/jazzy/setup.bash
@@ -15,7 +16,7 @@ SOCKET=$1; OUT=$2; LASER=$3
 PERSIST=false
 [ "$4" = persistent ] && PERSIST=true
 # Thresholds 0: slam_toolbox answers every scan; the bridge sends keyframes only (plan v3.4).
-PARAMS=/workspace/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml
+PARAMS=${SLAM_PARAMS:-/workspace/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml}
 mkdir -p "$OUT"
 ros2 launch slam_toolbox online_sync_launch.py \
   slam_params_file:="$PARAMS" \

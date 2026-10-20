@@ -523,3 +523,27 @@ def test_a_stand_the_pacing_forces_spends_no_replan():
         _, end = driver.step(t, {**_state(seq, x=1.6, speed=0.0, pacing_ok=False, forbidden="pacing")})
         assert end is None
     assert driver.replans == 0 and driver.replan_request is None
+
+
+def test_the_tour_keeps_its_clearance_and_a_replan_never_drops_below_the_planners():
+    """r6 (ws1 job 6837): at 0.10 m, then 0, every replan planned the leg the permit held; now 0.30 m, the run's 0.10 m
+    once for a start that cannot keep 0.30, and nothing below."""
+    scene = {**SCENE, "scenario": {**SCENE["scenario"], "props": [
+        {"rectangle": {"x_m": 0.0, "y_m": 1.5, "length_m": 1.0, "width_m": 1.0, "yaw_rad": 0.0}}]}}
+    tour = [[-1.0, -1.5, 0.0]]
+    assert st.plan_tour(scene, tour).clearance_m == st.SURVEY_CLEARANCE_M
+    near = st.plan_tour(scene, tour, start=(0.0, 0.45, 0.0))  # the truck's side 0.19 m from the prop
+    assert near.success and near.clearance_m == 0.1
+    assert not st.plan_tour(scene, tour, start=(0.0, 0.6, 0.0)).success  # 0.04 m: no clearance-0 retry
+
+
+def test_each_permit_block_is_recorded_once_with_the_pose_it_held():
+    poses = np.column_stack((np.linspace(0, 2, 41), np.zeros(41), np.zeros(41)))
+    driver = st.TourDriver(poses, np.ones(41, dtype=np.int8), np.zeros(41), waypoints=[])
+    driver.start(0.0)
+    t, seq = _drive_to(driver, [(x, 0.0) for x in np.linspace(0.0, 0.5, 10)])
+    for limit in (0.0, 0.0, 0.0, 0.5, 0.0):
+        seq, t = seq + 1, t + 0.1
+        driver.step(t, {**_state(seq, x=0.5, speed=0.0), "permit": {"limit_mps": limit, "reason": "occupied"}})
+    blocks = [e for e in driver.events if e["event"] == "permit_blocked"]
+    assert len(blocks) == 2 and blocks[0]["pose"]["x_m"] == 0.5 and blocks[0]["permit"]["reason"] == "occupied"
