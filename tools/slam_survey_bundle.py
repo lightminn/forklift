@@ -236,6 +236,37 @@ def moving_check(rigid: dict | None, arguments: dict) -> dict:
                                    if r["root"] == "/World/Pallet" and r["z_max_m"] is not None), default=None)}
 
 
+STAGE_KEYS = ("scene_sha256", "forklift_urdf_sha256", "pallet_urdf_sha256", "script_sha256", "prism_colliders",
+              "low_obstacles_removed")
+
+
+def stage_provenance(result: dict) -> dict:
+    """What the runner's stage is built from: the base scene's files, the URDFs, the runner script, the scene builder
+    (sim/isaac/scene.py), the factory layout, the prism colliders, the dropped low props and the scenario itself."""
+    src = result.get("source_sha256") or {}
+    return {**{k: result.get(k) for k in STAGE_KEYS},
+            "scene_builder_sha256": src.get("sim/isaac/scene.py") if isinstance(src, dict) else None,
+            "layout_sha256": (result.get("factory") or {}).get("layout_sha256"),
+            "scenario_sha256": survey_tour.scenario_sha256(result) if "scenario" in result else None}
+
+
+def rigid_provenance(rigid: dict | None, run: Path, result: dict, reference_run: Path | None) -> dict:
+    """The rigid body list is evidence for this epoch's stage only when it was taken from this epoch's scene.usda, or
+    from a reference run's whose stage provenance equals this epoch's (Codex v2.5 round 3 P2-4)."""
+    if rigid is None:
+        return {"ok": False, "reason": "no list"}
+    listed = Path(rigid.get("scene", "")).resolve()
+    if listed == (run / "scene.usda").resolve():
+        return {"ok": True, "source": "this epoch"}
+    if reference_run is None or listed != (reference_run / "scene.usda").resolve():
+        return {"ok": False, "reason": f"listed {listed}, not this epoch's nor the given reference run's"}
+    ref = json.loads((reference_run / "result.json").read_text())
+    mine, theirs = stage_provenance(result), stage_provenance(ref)
+    differ = sorted(k for k in mine if mine[k] != theirs[k])
+    return {"ok": not differ and all(v is not None for v in mine.values()), "source": str(reference_run),
+            "differ": differ, "missing": sorted(k for k, v in mine.items() if v is None)}
+
+
 def received_check(records: list, runner_records: list) -> dict:
     """Every scan the bridge answered processed reached the runner (L2's finalize order: the replies all received,
     nothing in flight when the graph is written). A reply lost to the runner's closing socket is still in the graph,
@@ -322,6 +353,8 @@ def main(argv=None) -> int:
     ap.add_argument("--rigid-bodies", type=Path, default=None, help="tools/list_rigid_bodies.py's output")
     ap.add_argument("--tour-config", type=Path, default=None, help="config/slam_survey_tour.yaml (its aisles)")
     ap.add_argument("--tour-path", type=Path, default=None, help="the tour the survey drove (tools/survey_tour.py)")
+    ap.add_argument("--rigid-reference-run", type=Path, default=None,
+                    help="the run whose scene.usda was listed when this epoch exported none (its stage must match)")
     ap.add_argument("--probe", type=Path, default=None,
                     help="the console probe's report: with --tour-path the tour must have arrived")
     ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
@@ -376,6 +409,8 @@ def main(argv=None) -> int:
                           "events": [e for e in tour.get("events") or [] if e.get("event") != "departed"][-20:]}
     rigid = json.loads(args.rigid_bodies.read_text()) if args.rigid_bodies and args.rigid_bodies.exists() else None
     report["moving"] = moving_check(rigid, arguments)
+    report["moving"]["provenance"] = rigid_provenance(rigid, run, result, args.rigid_reference_run)
+    report["moving"]["ok"] = bool(report["moving"]["ok"] and report["moving"]["provenance"]["ok"])
 
     written = False
     if finalize["ok"] and report["received"]["ok"] and nodes is not None and report["nodes"]["ok"]:

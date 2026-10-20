@@ -194,6 +194,7 @@ def region_coverage(region: np.ndarray, sites: np.ndarray, radius_m: float = CEL
 
 
 TOUR_ZONE_EXTRA_M = 0.05
+STUCK_NEAR_END_M = 0.5  # standing this close to a leg's end, short of its tolerance, is the tracker's braking stall
 
 
 def permit_pickup_zone(result: dict) -> Rectangle:
@@ -381,8 +382,8 @@ class TourDriver:
 
     def __init__(self, poses, directions, curvatures, *, forward_mps=0.5, reverse_mps=0.25, kappa=0.36,
                  cruise_mps=0.30, stall_s=60.0, pacing_wait_s=900.0, stale_s=10.0, enter_s=20.0, release_s=3.0,
-                 goal_slack_m=0.3, waypoints=None, max_replans=12, max_cross_track_m=0.5, steer_tolerance=0.05,
-                 steer_wait_s=20.0, steer_settle_rad=0.01):
+                 goal_slack_m=0.3, waypoints=None, max_replans=24, max_cross_track_m=0.5, steer_tolerance=0.05,
+                 steer_wait_s=20.0, steer_settle_rad=0.01, stop_wait_s=30.0):
         self.forward, self.reverse, self.kappa = float(forward_mps), float(reverse_mps), float(kappa)
         self.cruise, self.max_cross_track_m = min(cruise_mps, self.forward), float(max_cross_track_m)
         self.can_replan = waypoints is not None
@@ -392,6 +393,7 @@ class TourDriver:
         self.steer_tolerance, self.steer_wait_s = float(steer_tolerance), float(steer_wait_s)
         self._leg, self._steer_since = None, None
         self.steer_settle_rad, self._last_steer = float(steer_settle_rad), None
+        self.stop_wait_s, self._stop_since = float(stop_wait_s), None
         self._failed = None
         self._set_path(poses, directions, curvatures)
         self.stall_s, self.pacing_wait_s, self.stale_s = stall_s, pacing_wait_s, stale_s
@@ -420,8 +422,13 @@ class TourDriver:
         self.marks = [int(np.argmin(np.hypot(poses[:, 0] - w[0], poses[:, 1] - w[1]))) for w in self.waypoints]
         self.base_progress = getattr(self, "best", 0.0)
 
-    def waypoints_left(self, segment_index: int) -> list:
-        return [w for w, m in zip(self.waypoints, self.marks) if m > segment_index]
+    def waypoints_left(self, segment_index: int, pose=None, passed_m: float = 0.5) -> list:
+        """The waypoints the path has not passed yet; with ``pose``, one within ``passed_m`` of it counts as passed
+        (a replan from beside a cusp waypoint must not lead back to it)."""
+        left = [w for w, m in zip(self.waypoints, self.marks) if m > segment_index]
+        if pose is not None:
+            left = [w for w in left if math.hypot(w[0] - pose[0], w[1] - pose[1]) > passed_m]
+        return left
 
     def adopt(self, now: float, plan, waypoints_left: list) -> bool:
         """A replanned path from the stopped pose (``replan_request``) through ``waypoints_left``; False fails the
@@ -434,6 +441,8 @@ class TourDriver:
         self.waypoints = [tuple(map(float, w)) for w in waypoints_left]
         self._set_path(plan.poses, plan.directions, plan.curvatures_inv_m)
         self._leg = None  # the new path's first leg steers standing too
+        # the planning took wall time with no step: it is neither idle nor a stale state (Codex v2.5 round 3 P2-2)
+        self.last_state_wall = self.last_feedback_wall = now
         self.drivable_idle = self.pacing_idle = 0.0
         self.stand_since = None
         self._event(now, "replanned", replans=self.replans, waypoints_left=len(self.waypoints),
@@ -477,10 +486,16 @@ class TourDriver:
         factor = float((s.get("pacing") or {}).get("target_factor") or 1.0)
         dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
         if self.replan_request is not None or getattr(self, "_replan_wait", None) is not None:
-            # stopping after a tracker failure; the request goes out once the truck stands (planned from where it is)
-            if self.replan_request is None and abs(float(speed)) < 0.01:
+            # stopping after a tracker failure; the request goes out once the truck stands (planned from where it is),
+            # within stop_wait_s (Codex v2.5 round 3 P2-3: a truck that never stands fails the tour)
+            self._stop_since = self._stop_since if self._stop_since is not None else now
+            if self.replan_request is None and abs(float(speed)) < 0.03:
                 self.replan_request = ((pose["x_m"], pose["y_m"], pose["yaw_rad"]), self._replan_wait)
-                self._replan_wait = None
+                self._replan_wait, self._stop_since = None, None
+            elif self.replan_request is None and now - self._stop_since > self.stop_wait_s:
+                self._event(now, "stop_timeout", speed=float(speed))
+                self._failed = "stop_timeout"
+                return (0.0, 0.0), "stop_timeout"
             return (0.0, 0.0), None
         tracker = self.tracker
         cmd = tracker.update((pose["x_m"], pose["y_m"], pose["yaw_rad"]), float(speed), dt)
@@ -490,13 +505,13 @@ class TourDriver:
             self._event(now, "tracker_failed", failure=cmd.failure, pose=pose, position_error_m=cmd.position_error_m)
             if self.can_replan and self.replans < self.max_replans:
                 self.replans += 1
-                self._replan_wait = self.waypoints_left(cmd.segment_index)
+                self._replan_wait = self.waypoints_left(cmd.segment_index, (pose["x_m"], pose["y_m"]))
                 return (0.0, 0.0), None
             return (0.0, 0.0), f"tracker_failed:{cmd.failure}"
         if cmd.status == "arrived":
             self._event(now, "arrived", position_error_m=cmd.position_error_m)
             return (0.0, 0.0), "arrived"
-        standing = abs(float(speed)) < 0.01 and abs(cmd.speed_mps) < 1e-9
+        standing = abs(float(speed)) < 0.03 and abs(cmd.speed_mps) < 0.02
         self.stand_since = (self.stand_since or now) if standing else None
         at_leg_end = tracker.leg_remaining_m() <= tracker.leg_end_window_m()  # release_cusp's own condition
         if standing and at_leg_end and now - self.stand_since >= self.release_s:
@@ -507,19 +522,44 @@ class TourDriver:
             elif tracker.release_cusp(True):
                 self._event(now, "cusp_released", position_error_m=cmd.position_error_m, yaw_error_rad=cmd.yaw_error_rad)
                 self.stand_since = None
-        # steer standing at a leg's start (see the class doc)
-        if tracker.leg_index != self._leg:
-            self._leg, self._steer_since = tracker.leg_index, now
+        elif (standing and self.stand_since is not None and now - self.stand_since >= self.release_s
+              and self._steer_since is None and tracker.leg_remaining_m() <= STUCK_NEAR_END_M
+              and self.can_replan and self.replans < self.max_replans):
+            # stood short of a leg end outside its tolerance, the tracker asking ~nothing (ws1 job 6828: 0.24 m beside
+            # a cusp waypoint, the braking profile at zero): a new path from here, the waypoint beside counted passed
+            self._event(now, "stuck", leg_remaining_m=tracker.leg_remaining_m(), position_error_m=cmd.position_error_m)
+            self.replans += 1
+            self._replan_wait = self.waypoints_left(cmd.segment_index, (pose["x_m"], pose["y_m"]))
+            self.stand_since = None
+            return (0.0, 0.0), None
         steer = s.get("steering_rad")
         steer_now = None if not steer else float(np.mean(steer))
         settling = (steer_now is not None and self._last_steer is not None
                     and abs(steer_now - self._last_steer) > self.steer_settle_rad)
         self._last_steer = steer_now
+        # steer standing at a leg's start (see the class doc); the tick the leg changes on carries the old leg's last
+        # command, so the new leg's is judged from the next state on (Codex v2.5 round 3 P2-1)
+        if tracker.leg_index != self._leg:
+            self._leg, self._steer_since = tracker.leg_index, now
+            tracker.restart_speed_slew(0.0)
+            self.command = (0.0, self.command[1] if self.command else 0.0)
+            return self.command, None
         if self._steer_since is not None:
             applied = (s.get("applied") or {}).get("curvature_inv_m")
             off = applied is not None and abs(float(applied) - cmd.curvature_inv_m) > self.steer_tolerance
-            if (off or settling) and now - self._steer_since < self.steer_wait_s:
+            if off or settling:
+                if now - self._steer_since > self.steer_wait_s:
+                    # the steering never settled where the leg starts: not driven anyway -- a new path from here
+                    self._event(now, "steer_timeout", applied=applied, target=cmd.curvature_inv_m, steering=steer_now)
+                    self._steer_since = None
+                    if self.can_replan and self.replans < self.max_replans:
+                        self.replans += 1
+                        self._replan_wait = self.waypoints_left(cmd.segment_index, (pose["x_m"], pose["y_m"]))
+                        return (0.0, 0.0), None
+                    self._failed = "steer_timeout"
+                    return (0.0, 0.0), "steer_timeout"
                 tracker.restart_speed_slew(0.0)
+                self.stand_since = None  # standing to steer is not standing stuck
                 self.command = (0.0, max(-1.0, min(1.0, cmd.curvature_inv_m / self.kappa)))
                 return self.command, None
             self._steer_since = None

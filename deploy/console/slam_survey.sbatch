@@ -19,8 +19,8 @@
 #   optional: PORT (8799), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), TOUR (a tour .npz), TOUR_CONFIG
 #   (config/slam_survey_tour.yaml: the judged region's aisles), CYCLE (P-1:D-1,P-1:D-0, without TOUR: the missions,
 #   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded),
-#   RIGID_SCENE (a scene.usda of this scene for the moving check when the epoch exported none -- a tour plans no
-#   mission, and the runner exports its stage when a mission plans)
+#   RIGID_RUN (a run of this scene whose scene.usda the moving check lists when the epoch exported none -- a tour
+#   plans no mission, and the runner exports its stage when a mission plans; its stage provenance must match)
 #
 # Run from the repository root.
 set -u
@@ -120,12 +120,14 @@ if [ -f "$EP/bridge/bundle/map.posegraph" ]; then
   echo "readback exit $? $(date -Is)"
 fi
 # what can move in the survey's stage (the truck and the carried pallet only, or recorded)
-RIGID_FROM=$EP/run/scene.usda
-[ -f "$RIGID_FROM" ] || RIGID_FROM=${RIGID_SCENE:-}
+RIGID_FROM=$EP/run/scene.usda RIGID_REF=()
+if [ ! -f "$RIGID_FROM" ] && [ -n "${RIGID_RUN:-}" ]; then
+  RIGID_FROM=$RIGID_RUN/scene.usda RIGID_REF=(--rigid-reference-run "$RIGID_RUN")
+fi
 [ -n "$RIGID_FROM" ] && [ -f "$RIGID_FROM" ] && "$VENV_PY" "$ROOT/tools/list_rigid_bodies.py" "$RIGID_FROM" \
   "$OUT/rigid_bodies.json" > "$OUT/rigid_bodies.log" 2>&1
 "$VENV_PY" "$ROOT/tools/slam_survey_bundle.py" --epoch "$EP" --readback "$OUT/readback" \
-  --rigid-bodies "$OUT/rigid_bodies.json" --tour-config "${TOUR_CONFIG:-$ROOT/config/slam_survey_tour.yaml}" \
+  --rigid-bodies "$OUT/rigid_bodies.json" "${RIGID_REF[@]}" --tour-config "${TOUR_CONFIG:-$ROOT/config/slam_survey_tour.yaml}" \
   ${TOUR:+--tour-path "$TOUR" --probe "$OUT/probe.json"} --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \
   --image "$(docker image inspect -f '{{.Id}}' forklift/ros2-dev:jazzy)" \
   ${REFERENCE_RUN:+--reference-run "$REFERENCE_RUN"} --out "$OUT/bundle" --report "$OUT/survey_report.json"

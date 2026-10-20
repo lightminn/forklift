@@ -200,7 +200,8 @@ def _epoch(tmp_path, *, serialized=True, grid_matches=True, grid_resolution=0.05
     (readback / "slam_toolbox_version.txt").write_text("2.8.5-1noble\n")
     params = tmp_path / "slam.yaml"
     params.write_text("slam_toolbox: {}\n")
-    (tmp_path / "rigid.json").write_text(json.dumps({"rigid_bodies": [], "time_varying": []}))
+    (tmp_path / "rigid.json").write_text(json.dumps({"scene": str(run / "scene.usda"), "rigid_bodies": [],
+                                                     "time_varying": []}))
     (tmp_path / "tour.yaml").write_text("aisles:\n  - [[0.0, 0.0], [0.5, 0.0]]\ntour: []\n")
     return epoch, readback, params
 
@@ -336,7 +337,9 @@ def test_the_state_from_before_teleop_is_not_a_departure():
     driver.start(0.0)
     assert driver.step(0.05, _state(1, mode="PAUSED")) == (None, None)  # Codex v2.5 P2-4: not left_teleop
     command, end = driver.step(0.15, _state(2))
-    assert end is None and command[0] > 0 and driver.departed
+    assert end is None and driver.departed and command[0] == 0.0  # the first leg's start: its command judged next
+    command, end = driver.step(0.25, _state(3))
+    assert end is None and command[0] > 0
     driver2 = st.TourDriver(*_straight_with_cusp(), enter_s=1.0)
     driver2.start(0.0)
     assert driver2.step(1.5, _state(1, mode="PAUSED"))[1] == "teleop_not_entered"
@@ -398,6 +401,7 @@ def test_a_leg_starts_by_steering_standing():
     driver = st.TourDriver(poses, np.ones(41, dtype=np.int8), np.zeros(41))
     driver.start(0.0)
     # the steering left hard over from the last leg: the straight leg's ~0 curvature is asked standing
+    driver.step(0.05, {**_state(0), "applied": {"curvature_inv_m": -0.3}, "steering_rad": [-0.2, -0.2]})  # leg starts
     command, end = driver.step(0.1, {**_state(1), "applied": {"curvature_inv_m": -0.3}, "steering_rad": [-0.2, -0.2]})
     assert end is None and command[0] == 0.0 and abs(command[1]) < 0.1
     state = {**_state(2), "applied": {"curvature_inv_m": 0.0}, "steering_rad": [-0.05, -0.05]}
@@ -409,3 +413,53 @@ def test_a_leg_starts_by_steering_standing():
 def test_a_slow_steering_plant_still_arrives():
     out = st.simulate_tour(*_straight_with_cusp(), max_sim_s=300.0, plant_curvature_rate=0.25)
     assert out["end"] == "arrived"
+
+
+def test_standing_short_of_a_leg_end_outside_its_tolerance_replans():
+    """ws1 job 6828: 0.24 m beside a cusp waypoint the braking profile reached zero and the tour stood 60 s."""
+    poses, directions, curv = _straight_with_cusp()
+    driver = st.TourDriver(poses, directions, curv, waypoints=[[2.0, 0.0, 0.0]], release_s=3.0)
+    driver.start(0.0)
+    seq, t = 1, 0.1
+    driver.step(t, {**_state(seq, x=1.99), "pose": {"x_m": 1.99, "y_m": 0.24, "yaw_rad": 0.0}})
+    request = None
+    while request is None and t < 10.0:
+        seq, t = seq + 1, t + 0.1
+        driver.step(t, {**_state(seq), "pose": {"x_m": 1.99, "y_m": 0.24, "yaw_rad": 0.0}, "rear_axle_speed_mps": 0.0})
+        request = driver.replan_request
+    assert request is not None and [e["event"] for e in driver.events][-1] in ("stuck", "tracker_failed")
+    assert request[1] == []  # the cusp waypoint beside (0.24 m) counts as passed
+
+
+def test_planning_time_is_neither_idle_nor_stale_and_a_truck_that_never_stands_fails():
+    poses, directions, curv = _straight_with_cusp()
+    driver = st.TourDriver(poses, directions, curv, waypoints=[], stall_s=5.0, stale_s=3.0, stop_wait_s=2.0)
+    driver.start(0.0)
+    driver.step(0.1, _state(1))
+    plan = st.SimpleNamespace(success=True, poses=poses, directions=directions, curvatures_inv_m=curv, length_m=3.0)
+    driver.adopt(70.0, plan, [])  # 70 s of planning (Codex v2.5 round 3 P2-2)
+    assert driver.step(70.1, _state(2))[1] is None and driver.drivable_idle < 1.0
+    driver._replan_wait = []  # a stop asked for, the truck still creeping (P2-3)
+    t = 70.1
+    for seq in range(3, 40):
+        t += 0.1
+        _, end = driver.step(t, _state(seq, speed=0.05))
+        if end:
+            break
+    assert end == "stop_timeout"
+
+
+def test_a_listed_scene_from_another_run_must_share_this_stage(tmp_path):
+    result = {**SCENE, "scene_sha256": {"scene.usda": "a"}, "forklift_urdf_sha256": "u", "pallet_urdf_sha256": "p",
+              "script_sha256": "s", "prism_colliders": {"columns": 37}, "low_obstacles_removed": {"props_kept": 37},
+              "source_sha256": {"sim/isaac/scene.py": "b"}, "factory": {"layout_sha256": "l"}}
+    run, ref = tmp_path / "run", tmp_path / "ref"
+    run.mkdir(); ref.mkdir()
+    (ref / "result.json").write_text(json.dumps(result))
+    rigid = {"scene": str(ref / "scene.usda"), "rigid_bodies": []}
+    assert sb.rigid_provenance(rigid, run, result, ref)["ok"]
+    other = {**result, "source_sha256": {"sim/isaac/scene.py": "c"}}
+    (ref / "result.json").write_text(json.dumps(other))
+    out = sb.rigid_provenance(rigid, run, result, ref)
+    assert not out["ok"] and out["differ"] == ["scene_builder_sha256"]
+    assert not sb.rigid_provenance({**rigid, "scene": "/elsewhere/scene.usda"}, run, result, ref)["ok"]
