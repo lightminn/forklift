@@ -65,9 +65,11 @@ fi
 EOT
 cat > "$OUT/runner.sh" <<'EOT'
 #!/bin/bash
-# epoch $1, its directory $2, the port file $3
+# epoch $1, its directory $2, the port file $3, the session's map id $4 and survey bundle $5 (with MAP_BUNDLE)
 . "$(dirname "$0")/env.sh"
 cd "$ROOT"
+LOC=()  # SLAM localization plan L7: localize on the survey bundle from the start (unset: online mapping)
+[ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --base-scene "$BASE_SCENE" \
@@ -80,7 +82,7 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --grid-planning --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
-  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS \
+  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \
   --output "$2/run" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
