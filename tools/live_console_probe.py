@@ -1136,12 +1136,96 @@ async def reset_scenario(p: Probe, args):
     await asyncio.sleep(3.0)
 
 
+async def tour_scenario(p: Probe, args):
+    """SLAM localization plan L2 v2.5: the survey epoch's tour. The path tools/survey_tour.py planned is driven by
+    teleop with tools/survey_tour.py's TourDriver (the runner's path tracker on the state's map pose and measured
+    speed, a bounded cusp release, the stall, staleness and TELEOP checks -- it fails the tour, never skips ahead).
+    With --end-session the session ends either way, so the job does not hold the GPU to its time limit (ws1 job 6807
+    did); the bundle tool reads the tour's end from this report and fails a survey whose tour did not arrive."""
+    import numpy as np
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from survey_tour import TourDriver, plan_tour
+
+    data = np.load(args.tour_path)
+    plan_input = json.loads(str(data["plan_input"])) if "plan_input" in data.files else None
+    tour = p.report["tour"] = {"path": str(args.tour_path), "samples": int(len(data["poses"]))}
+    await p.open()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
+    await p.until(p.standing, 30, label="standing_at_start")
+    limits = (p.state or {}).get("limits") or {}
+    driver = TourDriver(data["poses"], data["directions"], data["curvatures_inv_m"],
+                        forward_mps=float(limits.get("forward_mps", 0.5)),
+                        reverse_mps=float(limits.get("reverse_mps", 0.25)),
+                        kappa=float(limits.get("curvature_inv_m", 0.36)), cruise_mps=args.tour_cruise_mps,
+                        stall_s=args.tour_stall_s, pacing_wait_s=args.tour_pacing_wait_s,
+                        waypoints=data["tour"].tolist() if plan_input is not None else None)
+    tour["events"] = driver.events
+    await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 20, label="standing_before_teleop")
+    entered = None
+    for _ in range(120):
+        entered = await p.request("mode_request", to="TELEOP")
+        if entered is None or (entered.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                               and entered.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
+    tour["teleop"] = entered
+    end = None
+    if not entered or entered.get("t") != "ack":
+        end = "teleop_refused"
+    else:
+        arm = await p.request("arm")
+        p.arm_gen = (arm or {}).get("arm_gen", 0)
+        driver.start(time.monotonic())  # a state from before this instant is not a departure (Codex v2.5 P2-4)
+        command = None
+        while end is None:
+            await asyncio.sleep(0.05)
+            if p.closed_code is not None:
+                end = "closed"
+                break
+            new, end = driver.step(time.monotonic(), p.state)
+            command = new if new is not None else command
+            if command is not None:
+                await p.teleop(*command, True)
+            if end is None and driver.replan_request is not None:
+                # plan off the event loop (the echo task keeps answering ticks), holding zero meanwhile
+                start, left = driver.replan_request
+                job = asyncio.get_running_loop().run_in_executor(
+                    None, lambda: plan_tour(plan_input, [list(w) for w in left], start=start))
+                while not job.done():
+                    await p.teleop(0.0, 0.0, True)
+                    await asyncio.sleep(0.05)
+                try:
+                    plan = job.result()
+                except Exception as exc:  # noqa: BLE001 -- a planner error is a failed replan, recorded
+                    driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": repr(exc)})
+                    plan = None
+                driver.adopt(time.monotonic(), plan, left)
+    tour["end"], tour["progress_m"] = end, float(driver.best)
+    stop_by = time.monotonic() + 15.0
+    while time.monotonic() < stop_by and not (p.state and p.standing(p.state)) and p.closed_code is None:
+        await p.teleop(0.0, 0.0, True)
+        await asyncio.sleep(0.05)
+    await p.request("mode_request", to="PAUSED")
+    if args.end_session and p.closed_code is None:
+        await p.until(p.standing, 30, label="standing_before_end")
+        p.report["session_end"] = await p.request_until_standing("session_end")
+        stop = time.monotonic() + 120
+        while p.closed_code is None and time.monotonic() < stop:
+            await asyncio.sleep(0.1)
+    p.report["close_code"] = p.closed_code
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset",
-                                           "restart"),
+                                           "restart", "tour"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -1198,6 +1282,11 @@ def main():
     ap.add_argument("--auto-s", type=float, default=15.0)
     ap.add_argument("--mission-timeout-s", type=float, default=900.0)
     ap.add_argument("--wait-port-s", type=float, default=900.0)
+    ap.add_argument("--tour-path", type=Path, default=None, help="tour scenario: tools/survey_tour.py's path (.npz)")
+    ap.add_argument("--tour-cruise-mps", type=float, default=0.30)
+    ap.add_argument("--tour-stall-s", type=float, default=60.0, help="tour scenario: no progress this long (wall s)")
+    ap.add_argument("--tour-pacing-wait-s", type=float, default=900.0,
+                    help="tour scenario: no progress this long while teleop is forbidden for pacing (wall s)")
     args = ap.parse_args()
     # The job's timeout ends a stuck probe with SIGTERM: leave through the finally below, so the report is written.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
@@ -1214,7 +1303,8 @@ def main():
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
-                    "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario}[args.scenario]
+                    "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
+                    "tour": tour_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
         if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
                 or (args.scenario == "restart" and "killed" in report)):
