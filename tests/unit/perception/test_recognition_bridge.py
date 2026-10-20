@@ -109,6 +109,15 @@ def test_the_observation_keeps_the_pockets_and_the_pallet_centre():
     assert estimate_pallet_center_m(obs, EPAL.overall_depth_m) == pytest.approx(cand.pallet_centre_m[:2], abs=0.02)
 
 
+def test_the_candidate_record_keeps_what_the_side_evidence_targets():
+    # Plan 2026-10-19 task 4 (Codex design round 1 P2): the axis and the support height go with the hypothesis.
+    scene, ids = _render([(EPAL, rt.Placement(2.8, 0.1, 0.05, 0.0))])
+    cand = _fit(scene, ids).candidates[0]
+    rec = B._candidate_record(cand)
+    assert (rec["hypothesis"], rec["axis"], rec["support_z_m"]) == (cand.hypothesis, cand.axis, cand.support_z_m)
+    assert rec["candidate_id"] == cand.candidate_id
+
+
 def test_a_reading_of_another_depth_is_refused():
     scene, ids = _render([(T11, rt.Placement(2.8, 0.0, 0.0, 0.0))])
     cand = _fit(scene, ids).candidates[0]

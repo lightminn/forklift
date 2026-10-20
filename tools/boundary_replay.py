@@ -143,6 +143,20 @@ def _unrunnable(name, session=None):
     return run
 
 
+# Features whose on-records are not replayable yet: the replay refuses them by name rather than replaying a run
+# whose new ports it does not supply (plan 2026-10-19 task 4, Codex design round 1 P2 -- the far recognition the
+# side evidence runs with is not replayable either).
+UNREPLAYABLE_ON = {"bottom_deck_check": "off"}
+
+
+def refuse_unreplayable(values: dict) -> None:
+    args_ = values.get("args")
+    for flag, off in UNREPLAYABLE_ON.items():
+        recorded = getattr(args_, flag, off)  # a record from before the flag ran without it
+        if recorded != off:
+            raise ReplayMismatch(f"a {flag}={recorded!r} record is not replayable (only {off!r} records are)")
+
+
 def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None):
     snap = json.loads((run_dir / "boundary/setup_snapshot.json").read_text())
     if snap.get("opaque"):  # a value the snapshot could not keep: the replay would hand back a marker
@@ -237,6 +251,7 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
     if output is not None and "args" in values:  # the replay writes its own outputs, never the evidence's
         values["args"].output = Path(output)
         Path(output).mkdir(parents=True, exist_ok=True)
+    refuse_unreplayable(values)
     bind_added_names(values, snap["names"])
     values["RecordingProxy"] = proxy_factory
     values["recorded_function"] = BR.recorded_function

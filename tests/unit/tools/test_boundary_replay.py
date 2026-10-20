@@ -155,6 +155,16 @@ def test_a_snapshot_from_before_a_setup_name_binds_it_as_the_setup_does_with_its
         H.bind_added_names({"args": SimpleNamespace(recognition="far")}, {"args": {}})
 
 
+def test_a_bottom_deck_check_on_record_is_refused_by_name_and_an_off_or_older_one_is_not():
+    """Plan 2026-10-19 task 4: the side legs' records are not replayable yet; earlier records ran without them."""
+    from types import SimpleNamespace
+
+    H.refuse_unreplayable({"args": SimpleNamespace(output="x")})  # before the flag
+    H.refuse_unreplayable({"args": SimpleNamespace(bottom_deck_check="off")})
+    with pytest.raises(ReplayMismatch, match="a bottom_deck_check='on' record is not replayable"):
+        H.refuse_unreplayable({"args": SimpleNamespace(bottom_deck_check="on")})
+
+
 def test_every_added_setup_name_is_one_drive_binds_and_the_setup_always_binds():
     import ast
 

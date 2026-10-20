@@ -36,6 +36,9 @@ FAR_PENDING = ("depth", "lane_bounds", "top_layout")
 # A non-standard pallet with openings on two sides shows no far-range evidence of which face is the
 # entry face (Codex review A round 3): the near range checks it on the top-board direction.
 PARAMETRIC_PENDING = FAR_PENDING + ("entry_axis",)
+# A known shape's entry face does not tell a pallet from its grounded lookalike (no bottom boards): the side
+# evidence (plan 2026-10-19 task 1) does, and the insert permission checks it (task 3).
+KNOWN_FAR_PENDING = FAR_PENDING + ("bottom_deck",)
 
 
 @dataclass(frozen=True)
@@ -959,7 +962,7 @@ def fit_instance(scene: SceneInput, proposal: InstanceProposal, *, specs: dict, 
         (float(centre[0]), float(centre[1]), float(zs)), (float(pallet_centre[0]), float(pallet_centre[1]), float(zs)),
         left, right, zs, state, state == "visible" and abs(zs) <= params.support_window_m, reach,
         hyp.placement.score, geometry, _identity(proposal, identity_threshold), tuple(reasons), pickable,
-        fit_reasons, shape, tuple(competing), (float(seen[0]), float(seen[1])), extent, FAR_PENDING)
+        fit_reasons, shape, tuple(competing), (float(seen[0]), float(seen[1])), extent, KNOWN_FAR_PENDING)
 
 
 @dataclass(frozen=True)

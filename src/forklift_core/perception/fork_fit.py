@@ -23,7 +23,9 @@ SUPPORT_LATERAL_MARGIN_M = 0.020
 VERTICAL_MARGIN_M = 0.005
 PAYLOAD_LIMIT_KG = 10.0
 REASON_CODES = ("fork_spacing_adjust", "lift_alignment_needed", "support_unverified",
-                "payload_limit", "near_tracking_unavailable")
+                "payload_limit", "near_tracking_unavailable",
+                # the bottom-deck insert permission (plan 2026-10-19 task 3, bottom_deck_permit.REFUSALS)
+                "no_bottom_deck", "bottom_deck_unobserved", "bottom_deck_target_mismatch")
 TEST_FORK_SPACING_M = {"epal6": 0.3725, "t11_06": 0.290}
 MIN_ROOF_GAP_M = 0.005  # roof tracking needs board edges: a visible gap between top boards
 
