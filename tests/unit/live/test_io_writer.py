@@ -200,3 +200,30 @@ def test_a_disposal_freed_at_the_close_still_gets_its_report_line_written():
     w = OrderedWriter(dispose_after_s=30.0)
     w.dispose([1], on_freed=lambda began, ended: w.put_line(lambda: lines.append("freed"), 5))
     assert w.close(5.0) and lines == ["freed"]
+
+
+def test_a_close_that_timed_out_still_refuses_new_jobs_and_both_threads_end_once_unblocked():
+    """Codex U29 implementation review round 4: the timeout stopped the closing itself -- new jobs were taken and the
+    threads stayed -- at either point (a job, or a disposal's report, still blocked)."""
+    def ended(w):
+        deadline = time.monotonic() + 5.0
+        while (w._thread.is_alive() or w._freer.is_alive()) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return not w._thread.is_alive() and not w._freer.is_alive()
+
+    w = OrderedWriter()
+    gate = threading.Event()
+    w.put_keyed(1, lambda: gate.wait(5.0) and [])
+    assert not w.close(0.03)
+    assert not w.put_keyed(2, lambda: []) and not w.put_line(lambda: None, 1)
+    gate.set()
+    assert ended(w)
+
+    w = OrderedWriter(dispose_after_s=0.0)
+    gate = threading.Event()
+    w.dispose([1], on_freed=lambda began, finished: gate.wait(5.0))
+    time.sleep(0.05)  # the disposer is in its report
+    assert not w.close(0.03)
+    assert not w.put_keyed(3, lambda: [])
+    gate.set()
+    assert ended(w)

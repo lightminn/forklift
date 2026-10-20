@@ -38,35 +38,29 @@ class OrderedWriter:
     def __init__(self, *, max_keyed: int = 4, max_line_bytes: int = 16 << 20, dispose_after_s: float = 1.0,
                  name: str = "live-io") -> None:
         self.max_keyed, self.max_line_bytes = int(max_keyed), int(max_line_bytes)
+        self.dispose_after_s = float(dispose_after_s)
+        # One lock for both threads: each one's end depends on the other's work (a written job hands its records to
+        # the disposer, a disposal's report is a line for the writer).
         self._cond = threading.Condition()
         self._queue: deque = deque()  # (key or None, job, nbytes)
         self._pending_keys: list = []  # keyed jobs queued or being written, in order
         self._line_bytes = 0  # the line jobs' bytes queued
         self._outcomes: list = []
-        self._busy = False
-        self._closed = False
+        self._busy = False  # the writer is on a job
+        self._disposals: deque = deque()  # (due monotonic, value, on_freed)
+        self._freeing = False  # the disposer is on a value
+        self._closing = False  # no new jobs from outside; both threads end once nothing is left
         self._abandoned = False  # a close passed its deadline: later outcomes are not reported
         self.dropped_lines = self.dropped_keyed = self.line_errors = 0
-        self.dispose_after_s = float(dispose_after_s)
-        self._disposals: deque = deque()  # (due monotonic, value, on_freed)
-        self._free_cond = threading.Condition()
-        self._free_stop = False
         self._thread = threading.Thread(target=self._loop, name=name, daemon=True)
-        self._thread.start()
         self._freer = threading.Thread(target=self._free_loop, name=f"{name}-free", daemon=True)
+        self._thread.start()
         self._freer.start()
 
-    def dispose(self, value, on_freed: Callable[[float, float], None] | None = None) -> None:
-        """``on_freed(began, ended)`` (monotonic) is called on the disposer thread once it is freed."""
-        with self._free_cond:
-            self._disposals.append((time.monotonic() + self.dispose_after_s, value, on_freed))
-            self._free_cond.notify_all()
-        del value
-
-    # --- the control thread -----------------------------------------------------------------------------------------
+    # --- the control thread (and other callers) ---------------------------------------------------------------------
     def put_line(self, job: Callable[[], None], nbytes: int) -> bool:
         with self._cond:
-            if self._closed:
+            if self._closing and threading.current_thread() is not self._freer:  # a disposal's report still goes
                 return False
             if self._line_bytes + nbytes > self.max_line_bytes:
                 self.dropped_lines += 1
@@ -78,7 +72,7 @@ class OrderedWriter:
 
     def put_keyed(self, key, job: Callable[[], list]) -> bool:
         with self._cond:
-            if self._closed:
+            if self._closing:
                 return False
             if len(self._pending_keys) >= self.max_keyed:
                 self.dropped_keyed += 1
@@ -87,6 +81,14 @@ class OrderedWriter:
             self._queue.append((key, job, 0))
             self._cond.notify_all()
             return True
+
+    def dispose(self, value, on_freed: Callable[[float, float], None] | None = None) -> None:
+        """``on_freed(began, ended)`` (monotonic) is called on the disposer thread once it is freed. Taken while
+        closing too: a job finishing then hands its records over."""
+        with self._cond:
+            self._disposals.append((time.monotonic() + self.dispose_after_s, value, on_freed))
+            self._cond.notify_all()
+        del value
 
     def outcomes(self) -> list:
         with self._cond:
@@ -104,50 +106,42 @@ class OrderedWriter:
             return list(self._pending_keys)
 
     def close(self, timeout_s: float) -> bool:
-        """The jobs drained (still taking new ones: a disposal's report is a line), then the disposer frees what it
-        holds and stops (Codex U29 implementation review round 3 P2-2: it had no end), then no new jobs, the rest
-        drained and the writer stopped -- all within one deadline."""
+        """New jobs refused from now on (a disposal's report still goes); the writer and the disposer finish what is
+        left -- the disposer without its delay -- and end by themselves, whether or not this call waits for them
+        (Codex U29 implementation review round 4: a close that timed out had stopped the closing). Waits up to
+        ``timeout_s``; ``False`` if they had not ended by then (their later outcomes are not reported)."""
         deadline = time.monotonic() + timeout_s
-        if not self._drain(deadline):
-            return False
-        with self._free_cond:
-            self._free_stop = True
-            self._free_cond.notify_all()
-        self._freer.join(max(0.0, deadline - time.monotonic()))
-        if self._freer.is_alive():
-            return False
         with self._cond:
-            self._closed = True
+            self._closing = True
             self._cond.notify_all()
-        if not self._drain(deadline):
+        for thread in (self._thread, self._freer):
+            thread.join(max(0.0, deadline - time.monotonic()))
+        if self._thread.is_alive() or self._freer.is_alive():
+            with self._cond:
+                self._abandoned = True
             return False
-        self._thread.join(max(0.0, deadline - time.monotonic()))
-        return not self._thread.is_alive()
-
-    def _drain(self, deadline: float) -> bool:
-        with self._cond:
-            while self._queue or self._busy:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    self._abandoned = True
-                    return False
-                self._cond.wait(left)
         return True
+
+    def _nothing_left(self) -> bool:  # under the lock
+        return not (self._queue or self._busy or self._disposals or self._freeing)
 
     # --- the disposer thread ----------------------------------------------------------------------------------------
     def _free_loop(self) -> None:
         while True:
-            with self._free_cond:
-                while not self._disposals and not self._free_stop:
-                    self._free_cond.wait()
-                if not self._disposals:
-                    return  # stopped and empty
-                due = self._disposals[0][0]
-                left = due - time.monotonic()
-                if left > 0 and not self._free_stop:  # at the close, what is left goes now
-                    self._free_cond.wait(left)
-                    continue
+            with self._cond:
+                while True:
+                    if self._disposals:
+                        left = self._disposals[0][0] - time.monotonic()
+                        if left <= 0 or self._closing:  # closing: what is left goes now
+                            break
+                        self._cond.wait(left)
+                    elif self._closing and self._nothing_left():
+                        self._cond.notify_all()
+                        return
+                    else:
+                        self._cond.wait()
                 _, value, on_freed = self._disposals.popleft()
+                self._freeing = True
             holder = [value]
             del value
             began = time.monotonic()
@@ -157,15 +151,19 @@ class OrderedWriter:
                     on_freed(began, time.monotonic())
                 except Exception:  # noqa: BLE001 -- a report, never the disposer's end
                     pass
+            with self._cond:
+                self._freeing = False
+                self._cond.notify_all()
 
     # --- the writer thread ------------------------------------------------------------------------------------------
     def _loop(self) -> None:
         while True:
             with self._cond:
-                while not self._queue and not self._closed:
+                while not self._queue:
+                    if self._closing and self._nothing_left():
+                        self._cond.notify_all()
+                        return
                     self._cond.wait()
-                if not self._queue:
-                    return  # closed and drained
                 key, job, nbytes = self._queue.popleft()
                 self._line_bytes -= nbytes
                 self._busy = True
@@ -180,6 +178,7 @@ class OrderedWriter:
                 else:
                     with self._cond:
                         self.line_errors += 1
+            del job
             with self._cond:
                 self._busy = False
                 if key is not None:
