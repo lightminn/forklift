@@ -286,7 +286,9 @@ __all__ = [
 ]
 
 
-def odometry_table_problem(table: dict, *, encoder_model: str, wheel_radius_m: float, geometric_radius: bool) -> str | None:
+def odometry_table_problem(table: dict, *, encoder_model: str, wheel_radius_m: float, geometric_radius: bool,
+                           odometry_heading: str = "steering", gyro_model_sha256: str | None = None,
+                           gyro_mount: str | None = None) -> str | None:
     """Why an odometry error table (tools/p0a_measure.py output) does not cover odometry integrated
     with this encoder model and wheel radius, or None. A table without an encoder model read the
     reported rates; a table without a radius (made before the odometry-only radius) is accepted only
@@ -294,6 +296,15 @@ def odometry_table_problem(table: dict, *, encoder_model: str, wheel_radius_m: f
     model = (table.get("noise") or {}).get("encoder_model", "reported")
     if model != encoder_model:
         return f"odometry age table from encoder model {model}, this run reads {encoder_model}"
+    heading = (table.get("noise") or {}).get("odometry_heading", "steering")  # every earlier table: steering
+    if heading != odometry_heading:
+        return f"odometry age table from a {heading} heading, this run's heading is {odometry_heading}"
+    if heading == "gyro":  # gyro-heading plan G2 (A): the table drew this gyro model, in this camera's mount
+        noise = table.get("noise") or {}
+        if noise.get("gyro_model_sha256") != gyro_model_sha256:
+            return f"odometry age table from gyro model {noise.get('gyro_model_sha256')}, this run's is {gyro_model_sha256}"
+        if noise.get("gyro_mount") != gyro_mount:
+            return f"odometry age table for the gyro in mount {noise.get('gyro_mount')}, this run's is {gyro_mount}"
     radius = table.get("odometry_wheel_radius_m")
     if radius is None:
         if not geometric_radius:

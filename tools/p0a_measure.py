@@ -2,6 +2,7 @@
 
     python tools/p0a_measure.py odometry --run <run dir> [--run ...] [--draws 10]
     python tools/p0a_measure.py age --run <run dir> [--run ...] [--draws 5]
+        [--odometry-heading gyro --gyro-model config/gyro_model_spec_typical.yaml [--gyro-mount NAME]]
     python tools/p0a_measure.py lift --run <run dir> [--run ...]
     python tools/p0a_measure.py standoff [--depth-m 0.36] [--band-m 0.10]
 
@@ -12,6 +13,16 @@ noise model (OdometryNoise: 0.2 rad/s per wheel sample, 0.005 rad steering) is
 drawn again here several times; truth is the recorded base_link pose moved to
 the rear axle. Reports per-distance-bin maxima and the cheapest line
 e0 + k d above all of them.
+
+age --odometry-heading gyro (gyro-heading plan G2 (A), docs/plans/2026-10-21-gyro-g2-runtime-safety.md): the
+table for runs whose SLAM odometry takes its heading from the simulated gyro. From a team_spec_quantized run, each
+draw regenerates the counts as another sensor unit (as the steering table does) and draws another simulated gyro
+(forklift_core.localization.gyro, seed 20000 + draw) on the recorded body attitude, the yaw rate from the logged
+orientations' yaw differences (the log has no body angular velocity; plan V-G0's planar approximation); the heading
+then runs the runner's own algorithm tick for tick (heading_step, the steering increments until the first standstill
+bias) on the log's own per-tick command condition (drive_command_zero: a run recorded before it is refused). A run
+whose truck moves before the first bias, or that never gets one, is refused (the runner does not drive before it), as
+is a sample fault; the run is named.
 
 lift: pallet origin height and lift joint per phase from result.json samples,
 which explains the gap between the commanded lift_target_m and the carried
@@ -259,11 +270,79 @@ def cumulative_table(maxima):
     return np.maximum.accumulate(np.nan_to_num(maxima, nan=0.0), axis=0)
 
 
+def gyro_mount_rotation(name: str) -> np.ndarray:
+    """base_link <- optical (the D435i IMU axes are the depth axes) for a named mount, as the runner builds it."""
+    import sys
+
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from sim.isaac import perception_adapter
+
+    return np.asarray(perception_adapter.mount_base_from_optical(name).rotation, float)
+
+
+def gyro_mount_of(runs, mount: str) -> str:
+    """The mount every run with a result.json recorded must be the one asked for (the gyro sits in the camera)."""
+    for run in runs:
+        path = run / "result.json"
+        if path.exists():
+            recorded = json.loads(path.read_text()).get("arguments", {}).get("perception_mount")
+            if recorded is not None and recorded != mount:
+                raise SystemExit(f"{run}: recorded with --perception-mount {recorded}, the table is for {mount}")
+    return mount
+
+
+def gyro_rear_odometry(stamps, increments, steering, base_pose, command_zero, geometry, initial_pose, model, mount,
+                       seed: int):
+    """Rear-axle odometry (N, 3) on the gyro heading, through the runner's sampler and heading_step, tick for tick."""
+    from forklift_core.localization import gyro as G
+    from forklift_core.localization.slam_pose import IncrementalWheelOdometry
+
+    qw, qx, qy, qz = np.asarray(base_pose, float)[:, 3:7].T
+    yaw = np.unwrap(np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)))
+    rates = np.concatenate(([0.0], np.diff(yaw) / np.diff(stamps)))
+    sampler = G.GyroSampler(model, mount, seed)
+    state = G.new_heading_state()
+    odometry = IncrementalWheelOdometry(geometry, initial_pose=tuple(initial_pose))
+    out = np.empty((len(stamps), 3))
+    for i in range(len(stamps)):
+        g_stamp, w_imu, g_seq = sampler.sample(stamps[i], (0.0, 0.0, rates[i]), base_pose[i, 3:7])
+        still = increments[i][0] == 0 and increments[i][1] == 0
+        dyaw = G.heading_step(state, model, stamp_s=g_stamp, seq=g_seq, raw_rate=G.vertical_rate(sampler.known, w_imu),
+                              wheels_still=still, command_zero=bool(command_zero[i]), dt=1 / 120, w_imu=w_imu)
+        if state["bias"] is None and i > 0 and not still:
+            raise RuntimeError(f"the truck moved at {stamps[i]:.3f} s before the first standstill bias (the runner holds it)")
+        if state["bias"] is None and g_stamp > G.FIRST_BIAS_LIMIT_S:
+            raise RuntimeError(f"no standstill bias by {G.FIRST_BIAS_LIMIT_S:.0f} s (the runner ends the session there)")
+        if dyaw is not None:
+            out[i] = odometry.update_increments_heading(stamps[i], increments[i], dyaw)
+        else:
+            out[i] = odometry.update_increments(stamps[i], increments[i], steering[i])
+    if state["updates"] == 0:
+        raise RuntimeError("no standstill bias update in the whole record")
+    return out, state["updates"]
+
+
 def age_command(args) -> dict:
     """Odometry error by observation age, from every recorded scan stamp (Codex P0a)."""
     refuse_recorded(args.run)
     model = encoder_model_of(args.run)
     radius = odometry_radius_of(args.run)
+    heading = getattr(args, "odometry_heading", "steering")
+    gyro = None
+    if heading == "gyro":
+        from forklift_core.localization.gyro import GyroModel
+
+        if model != "team_spec_quantized":
+            raise SystemExit(f"--odometry-heading gyro reads team_spec_quantized runs, these are {model}")
+        if args.gyro_model is None:
+            raise SystemExit("--odometry-heading gyro requires --gyro-model")
+        gyro_model, gyro_sha = GyroModel.load(args.gyro_model)
+        mount_name = gyro_mount_of(args.run, args.gyro_mount)
+        gyro = (gyro_model, gyro_mount_rotation(mount_name))
+    elif getattr(args, "gyro_model", None) is not None:
+        raise SystemExit("--gyro-model requires --odometry-heading gyro")
     maxima = np.zeros((len(AGES_S), 2))
     per_run = []
     for run in args.run:
@@ -279,8 +358,21 @@ def age_command(args) -> dict:
         steering = log["steering_rad"].astype(float)
         run_max = np.zeros_like(maxima)
         encoders = encoder_odometry_inputs(log, meta)["kind"]
+        bias_updates = []
+        if gyro is not None and "drive_command_zero" not in log.files:
+            raise SystemExit(f"{run}: no drive_command_zero in slam_log.npz (recorded before the gyro build): the bias "
+                             "block's command condition cannot be replayed")
         for draw in range(args.draws):
-            if encoders == "increments":
+            if gyro is not None:
+                drawn = encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw)
+                try:
+                    odom, updates = gyro_rear_odometry(stamps, drawn["increments"], drawn["steering"],
+                                                       log["base_pose_world"].astype(float), log["drive_command_zero"],
+                                                       geometry, truth[0], gyro[0], gyro[1], 20_000 + draw)
+                except Exception as exc:  # a gyro fault (a log gap) or an odometry refusal: the run named
+                    raise SystemExit(f"{run}: {exc}") from exc
+                bias_updates.append(updates)
+            elif encoders == "increments":
                 drawn = encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw)
                 odom = integrate_wheel_odometry_increments(
                     stamps, drawn["increments"], drawn["steering"], geometry, initial_pose=tuple(truth[0])
@@ -297,12 +389,18 @@ def age_command(args) -> dict:
             for i in starts:
                 run_max = np.fmax(run_max, relative_error_at(i, AGES_S, stamps, truth, odom))
         maxima = np.fmax(maxima, run_max)
-        per_run.append({"run": str(run), "scan_starts": int(len(starts)), "max": run_max.tolist()})
+        per_run.append({"run": str(run), "scan_starts": int(len(starts)), "max": run_max.tolist(),
+                        **({"gyro_bias_updates": bias_updates} if gyro is not None else {})})
     table = cumulative_table(maxima)
+    noise = odometry_noise_record(model)
+    if gyro is not None:
+        noise.update(odometry_heading="gyro", gyro_model_sha256=gyro_sha, gyro_mount=mount_name,
+                     gyro_draws="each draw also draws another simulated gyro (seed 20000 + draw)")
     return {
         "source": ("wheel odometry (rear wheel rates + steering), OdometryNoise model redrawn" if model == "reported"
-                   else "wheel odometry from the team-spec encoders (rear wheel counts + steering)"),
-        "noise": odometry_noise_record(model),
+                   else "wheel odometry from the team-spec encoders (rear wheel counts) on the simulated gyro's heading"
+                   if gyro is not None else "wheel odometry from the team-spec encoders (rear wheel counts + steering)"),
+        "noise": noise,
         "odometry_wheel_radius_m": radius,
         "reference": "rear axle centre",
         "draws": args.draws,
@@ -392,6 +490,10 @@ def main() -> None:
     age = sub.add_parser("age")
     age.add_argument("--run", type=Path, action="append", required=True)
     age.add_argument("--draws", type=int, default=5)
+    age.add_argument("--odometry-heading", choices=("steering", "gyro"), default="steering")
+    age.add_argument("--gyro-model", type=Path, default=None)
+    age.add_argument("--gyro-mount", default="carriage_low_measured",
+                     help="the runs' --perception-mount (the gyro is the camera's IMU)")
     lift = sub.add_parser("lift")
     lift.add_argument("--run", type=Path, action="append", required=True)
     s = sub.add_parser("standoff")

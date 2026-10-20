@@ -25,6 +25,7 @@ PREFIXES = {
     "localization_stale": SESSION, "slam_link_failed": SESSION, "slam_prewarm_timeout": SESSION,
     # SLAM localization plan L4: the survey map bundle at session start (slam_map_mismatch stops the supervisor at once)
     "slam_map_mismatch": SESSION, "slam_map_not_loaded": SESSION, "slam_not_localized": SESSION,
+    "slam_gyro_fault": SESSION,  # gyro-heading plan G2 (A) D5: the gyro cannot be read; the session ends
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
     "Mission exceeded simulation time budget": SESSION, "mission_cancelled": SESSION,

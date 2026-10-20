@@ -9,7 +9,9 @@ import math
 import numpy as np
 
 JOINT = ("joint_stamps_s", "wheel_rates_rad_s", "steering_rad", "base_pose_world", "wheel_angles_rad",
-         "wheel_counts", "wheel_increments_rad", "steering_measured_rad")  # one entry each per physics step
+         "wheel_counts", "wheel_increments_rad", "steering_measured_rad",
+         "drive_command_zero", "gyro_samples")  # one entry each per physics step (drive_command_zero: team-spec
+# runs; gyro_samples: gyro-heading runs only, [t, wx, wy, wz])
 SCAN = ("scan_stamps_s", "scan_ranges_m", "laser_pose_world")  # one entry each per scan sent
 NEAR_FRAMES_KEPT = 12_000  # a live mission's near-field frame records: 20 minutes at 10 Hz (plan D8)
 

@@ -1059,6 +1059,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # verified record (run_condition), never from the bundle's path; every earlier record
                               # mapped online with no map
                               "slam_mode": "mapping", "map_id": None,
+                              # 2026-10-21 gyro-heading plan G2 (A): every earlier record had the steering heading
+                              "odometry_heading": "steering", "gyro_model": None, "gyro_fault_at": None,
                               "return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
                               "tyre_contact_log": False, "steering_probe_set": "standard",
                               # 2026-10-15: the odometry's encoders; a record without the argument read

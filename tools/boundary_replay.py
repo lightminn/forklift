@@ -148,7 +148,9 @@ def _unrunnable(name, session=None):
 # Features whose on-records are not replayable yet: the replay refuses them by name rather than replaying a run
 # whose new ports it does not supply (plan 2026-10-19 task 4, Codex design round 1 P2 -- the far recognition the
 # side evidence runs with is not replayable either).
-UNREPLAYABLE_ON = {"bottom_deck_check": "off"}
+UNREPLAYABLE_ON = {"bottom_deck_check": "off",
+                   # gyro-heading plan G2 (A): the simulated gyro (a setup service holding its RNG) is not replayable yet
+                   "odometry_heading": "steering"}
 
 
 def refuse_unreplayable(values: dict) -> None:

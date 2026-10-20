@@ -1,0 +1,18 @@
+# The simulated D435i gyro for the gyro-heading verification (docs/plans/2026-10-21-gyro-heading-odometry.md, V-G0
+# bundle A+; G2 design (A) docs/plans/2026-10-21-gyro-g2-runtime-safety.md D1). Datasheet typical values of the BMG160-
+# family gyro (BMX055 datasheet BST-BMX055-DS000-02 rev 1.1: 0.014 deg/s/sqrt(Hz), zero-rate offset +-1 deg/s, TCO
+# +-0.015 deg/s/K) on the D435i's +-1000 deg/s range (D400 datasheet 337029-017 4.11); the random walk, the 10 K warm-up
+# and the mount error are assumptions, not measurements (G4 measures the team's unit).
+format: gyro_model/1
+scale: 0.01
+initial_bias_dps: 1.0
+temperature_dps: 0.15
+temperature_s: 1000.0
+random_walk_dps_rts: 0.0005
+noise_dps_rthz: 0.014
+lsb_dps: 0.03048780487804878
+range_dps: 1000.0
+mount_error_deg: 1.0
+zupt_s: 0.5
+zupt_k: 4.0
+gap_s: 0.05

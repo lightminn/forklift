@@ -29,6 +29,7 @@ export const REASONS = {
   "slam_map_mismatch": "지도 묶음이 세션의 지도와 다릅니다",
   "slam_map_not_loaded": "조사 지도를 불러오지 못했습니다",
   "slam_not_localized": "지도에서 위치를 잡지 못했습니다",
+  "slam_gyro_fault": "자이로 값을 읽지 못했습니다",
   "sensor_silence_stopped": "센서가 멈춰 정지했습니다",
   "Camera did not produce RGB": "카메라 영상이 오지 않았습니다",
   "Perception camera did not produce depth": "깊이 영상이 오지 않았습니다",
