@@ -296,6 +296,13 @@ class IsaacSlamBridge(Node):
         self.declare_parameter("localization_bundle", "")
         self.declare_parameter("expected_map_id", "")
         self.declare_parameter("map_start_pose", [0.0, 0.0, 0.0])
+        # 'live' (every session): the KeyframeGate picks the keyframes. 'every' (a replay only, tools/
+        # slam_loc_replay_drive.py): after the start-up scans every scan received is a keyframe -- the driver sends the
+        # recorded session's keyframes alone, so its odometry can change without changing which scans are matched.
+        self.declare_parameter("keyframe_gate", "live")
+        self.keyframe_gate = self.get_parameter("keyframe_gate").value
+        if self.keyframe_gate not in ("live", "every"):
+            raise ValueError(f"keyframe_gate must be live or every, not {self.keyframe_gate!r}")
         self.socket_path = self.get_parameter("socket_path").value
         self.output_dir = Path(self.get_parameter("output_dir").value)
         self.laser = [float(v) for v in self.get_parameter("laser_xyz_yaw").value]
@@ -455,8 +462,10 @@ class IsaacSlamBridge(Node):
         (self.output_dir / "bridge_ready").write_text("ready\n")
         conn, _ = server.accept()
         loc = self.localization
-        gate = (slam_link.KeyframeGate(startup_scans=7, startup_expect=(1, 5, 6, 7)) if loc is not None
-                else slam_link.KeyframeGate())
+        every = {"min_distance_m": 0.0, "min_heading_rad": 0.0, "min_interval_s": 0.0} if self.keyframe_gate == "every" \
+            else {}
+        gate = (slam_link.KeyframeGate(startup_scans=7, startup_expect=(1, 5, 6, 7), **every) if loc is not None
+                else slam_link.KeyframeGate(**every))
         map_from_odom = (0.0, 0.0, 0.0)
         version = 0
         with conn:
