@@ -510,3 +510,16 @@ def test_no_progress_replans_before_it_fails_the_tour():
                                  "permit": {"limit_mps": 0.0, "reason": "pallet:P-1"}})
         assert end is None
     assert driver.replan_request is not None and "stall_replan" in [e["event"] for e in driver.events]
+
+
+def test_a_stand_the_pacing_forces_spends_no_replan():
+    """Codex v2.5 round 5 P2: 0.4 m before a leg end, teleop forbidden for pacing, the truck standing."""
+    poses = np.column_stack((np.linspace(0, 2, 41), np.zeros(41), np.zeros(41)))
+    driver = st.TourDriver(poses, np.ones(41, dtype=np.int8), np.zeros(41), waypoints=[], pacing_wait_s=900.0)
+    driver.start(0.0)
+    t, seq = _drive_to(driver, [(x, 0.0) for x in np.linspace(0.0, 1.6, 30)])
+    for _ in range(700):  # 70 s
+        seq, t = seq + 1, t + 0.1
+        _, end = driver.step(t, {**_state(seq, x=1.6, speed=0.0, pacing_ok=False, forbidden="pacing")})
+        assert end is None
+    assert driver.replans == 0 and driver.replan_request is None

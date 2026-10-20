@@ -513,7 +513,10 @@ class TourDriver:
         if cmd.status == "arrived":
             self._event(now, "arrived", position_error_m=cmd.position_error_m)
             return (0.0, 0.0), "arrived"
-        standing = abs(float(speed)) < 0.03  # not moving, whatever the tracker asks (a stall either way)
+        pacing = ((s.get("teleop_forbidden_reason") or "").startswith("pacing")
+                  or not (s.get("pacing") or {}).get("ok", True))
+        # not moving, whatever the tracker asks -- but a stand the pacing forces is no stall (Codex v2.5 round 5 P2)
+        standing = abs(float(speed)) < 0.03 and not pacing
         self.stand_since = (self.stand_since or now) if standing else None
         at_leg_end = tracker.leg_remaining_m() <= tracker.leg_end_window_m()  # release_cusp's own condition
         handled = False
@@ -573,8 +576,6 @@ class TourDriver:
         if progress > self.best + 0.05:
             self.best, self.drivable_idle, self.pacing_idle = progress, 0.0, 0.0
         else:
-            pacing = ((s.get("teleop_forbidden_reason") or "").startswith("pacing")
-                      or not (s.get("pacing") or {}).get("ok", True))
             if pacing:
                 self.pacing_idle += dt_wall
             else:
