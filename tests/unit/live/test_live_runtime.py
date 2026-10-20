@@ -781,6 +781,28 @@ def test_records_a_full_writer_refuses_are_freed_off_the_control_thread(tmp_path
     rt.close()
 
 
+def test_records_whose_folder_cannot_be_made_still_go_to_the_disposer(tmp_path):
+    """Codex U29 implementation review round 3 P2-1: the early return on a failed mkdir skipped the hand-over, so
+    the writer freed the records in one go (holding its queue lock)."""
+    import threading
+
+    freed = []
+
+    class Tracked:
+        def __del__(self):
+            freed.append(threading.current_thread().name)
+
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions").write_text("not a folder")
+    holder = [{"near": {"ticks": [Tracked()]}}]
+    core.end_reset = lambda t: holder.pop()
+    rt.io.dispose_after_s = 0.0
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    assert freed == ["live-io-free"]
+    assert "disposed" in (tmp_path / "live_log.jsonl").read_text()  # its freeing logged on the trace clock
+
+
 def test_a_rolled_log_without_its_index_or_with_a_lost_line_at_its_end_is_refused(tmp_path):
     """Codex U29 implementation review round 2 P2-2: the index write failing at the first rollover put the header in
     .1 and left no index, so the reader took the current part alone as an old log."""
@@ -836,13 +858,16 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
 
     # Background work in progress: every Yielder.maybe on a thread other than this one (the writers' encoding and
     # streaming, the disposer's and the spool's freeing) counts.
-    progress = {"marks": 0}
+    progress = {"marks": 0, "freeing": 0}
     main = threading.current_thread()
     maybe = io_writer.Yielder.maybe
 
     def counting(self):
-        if threading.current_thread() is not main:
+        here = threading.current_thread()
+        if here is not main:
             progress["marks"] += 1
+            if here.name.endswith("-free"):
+                progress["freeing"] += 1
         return maybe(self)
 
     monkeypatch.setattr(io_writer.Yielder, "maybe", counting)
@@ -856,7 +881,7 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
     gc.callbacks.append(watch)
     reps = int(os.environ.get("FORKLIFT_U29_GATE_REPS", "200"))
     SLEEP_S = 0.002
-    walls, lateness, encoded, full = [], [], [], []
+    walls, lateness, encoded, freeing, full = [], [], [], [], []
     for batch in range(0, reps, 10):  # ten made first, then ended back to back
         made = []
         last = min(batch + 10, reps) - 1
@@ -867,6 +892,7 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
             holder = [{"near": {"ticks": rows}}]
             del rows
             core.end_reset = lambda t, holder=holder: holder.pop()  # handed over: the gate keeps no reference
+            rt.io.dispose_after_s = 0.0  # freed right after it is written, so later samples meet the freeing too
             spool = RecordSpool(tmp_path / f"r{i}" / "spool", interval_s=0.0, queue_cuts=6)
             scans: list = []
             spool.register("slam_log.scan", scans, keep=1)
@@ -880,11 +906,13 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
         # collection of the gate's own setup does not land in a timed end; collections that do are counted.
         gc.collect()
         gc.freeze()
-        for rt, spool, gate in made:
+        for j, (rt, spool, gate) in enumerate(made):
+            if j >= 2:  # the one before last has written: its freeing runs while this sample meets the last's encoding
+                made[j - 2][0].io.settle(30.0)
             # The control thread waits between ticks (the pacer, the physics step) and the writer takes the lock;
             # what the writer costs it is the wait to get the lock back on waking, then the end's own work -- so
             # each sample is the wake-up's lateness past a 2 ms sleep plus the end tick's record work.
-            before = progress["marks"]
+            before, freeing_before = progress["marks"], progress["freeing"]
             timing["on"] = True
             began = time.perf_counter()
             time.sleep(SLEEP_S)
@@ -896,6 +924,7 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
             walls.append(ended - began - SLEEP_S)
             lateness.append(woke - began - SLEEP_S)
             encoded.append(progress["marks"] - before)  # background work steps inside this sample
+            freeing.append(progress["freeing"] - freeing_before)  # of them, the disposer's
             full.append(gate is made[-1][2])
         for rt, spool, gate in made:
             gate.set()
@@ -906,11 +935,13 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
     out = os.environ.get("FORKLIFT_U29_GATE_OUT")
     if out:
         Path(out).write_text(json.dumps({"reps": reps, "walls_s": walls, "wake_lateness_s": lateness,
-                                         "marks_encoded_in_timed_end": encoded,
+                                         "marks_encoded_in_timed_end": encoded, "freeing_steps": freeing,
                                          "full": full, "collections_in_timed_ends": collections,
                                          "max_s": max(walls), "p50_s": sorted(walls)[len(walls) // 2]}))
     firsts = set(range(0, reps, 10))
     assert all(encoded[i] > 0 for i in range(reps) if i not in firsts), "void: a sample saw no background work"
+    # Codex U29 implementation review round 3: the freeing stage needs samples of its own
+    assert sum(1 for x in freeing if x > 0) >= (reps - len(firsts)) // 4, "void: too few samples met the freeing"
     assert max(walls) <= 0.020, f"max {max(walls) * 1e3:.2f} ms over {reps}"
 
 

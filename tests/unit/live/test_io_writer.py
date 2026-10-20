@@ -170,3 +170,33 @@ def test_the_yielder_sleeps_only_after_its_work_time():
     for _ in range(1000):
         y.maybe()
     assert time.perf_counter() - began < 0.1
+
+
+def test_close_stops_the_disposer_and_lets_go_what_it_still_holds():
+    """Codex U29 implementation review round 3 P2-2: the disposer thread had no end (one left per closed writer)."""
+    freed = []
+
+    class Tracked:
+        def __del__(self):
+            freed.append(threading.current_thread().name)
+
+    w = OrderedWriter(dispose_after_s=30.0)
+    w.dispose([Tracked()])
+    assert w.close(5.0)
+    assert not w._freer.is_alive() and not w._thread.is_alive()
+    assert freed == ["live-io-free"]  # let go at the close, not 30 s later
+
+
+def test_a_disposal_reports_when_it_freed():
+    w = OrderedWriter(dispose_after_s=0.0)
+    seen = []
+    w.dispose([[1, 2]] * 10, on_freed=lambda began, ended: seen.append((threading.current_thread().name, ended >= began)))
+    w.close(5.0)
+    assert seen == [("live-io-free", True)]
+
+
+def test_a_disposal_freed_at_the_close_still_gets_its_report_line_written():
+    lines = []
+    w = OrderedWriter(dispose_after_s=30.0)
+    w.dispose([1], on_freed=lambda began, ended: w.put_line(lambda: lines.append("freed"), 5))
+    assert w.close(5.0) and lines == ["freed"]

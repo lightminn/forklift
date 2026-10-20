@@ -163,6 +163,16 @@ class LiveRuntime:
         del records
 
         def write() -> list:
+            try:
+                return write_files()
+            finally:  # whatever happened, the records are freed by the disposer (Codex U29 impl round 3 P2-1)
+                self.io.dispose(box.pop(), on_freed=freed)
+
+        def freed(began: float, ended: float) -> None:  # the disposer's thread: the line goes through the writer
+            self._write_log(json.dumps({"disposed": {"mission_id": mission_id, "start_mono": began,
+                                                     "end_mono": ended}, "mono": self.clock()}) + "\n")
+
+        def write_files() -> list:
             errors = []
             try:
                 folder.mkdir(parents=True, exist_ok=True)
@@ -183,14 +193,13 @@ class LiveRuntime:
                     # U29: when it ran on the tick trace's clock and its size; the writer owns the log file
                     self._append_quietly({"archive": {"mission_id": mission_id, "bytes": size,
                                                       "start_mono": start, "end_mono": self.clock()}})
-            self.io.dispose(box.pop())
             if errors:
                 self._append_quietly({"archive_error": errors, "mission_id": mission_id})
             return errors
 
         if self.io.put_keyed(seq if seq is not None else ("archive", mission_id), write):
             return True
-        self.io.dispose(box.pop())  # refused: freed on the disposer, not on this thread
+        self.io.dispose(box.pop(), on_freed=freed)  # refused: freed on the disposer, not on this thread
         return False
 
     def _append_quietly(self, entry: dict) -> None:

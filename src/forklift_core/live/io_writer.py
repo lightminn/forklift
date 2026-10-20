@@ -18,8 +18,8 @@ and each mission's files -- in the order they were handed over; the control thre
 - ``dispose(value)``: lets ``value`` go on a second thread (``live-io-free``, no disk), ``dispose_after_s`` after the
   hand-over -- by then the caller's own references are gone, so the last one, and the freeing of a large record,
   is that thread's (records a full writer refused were freed on the control thread: 120,000 rows, 31 ms).
-- ``close(timeout_s)``: refuses new jobs, waits for every job within the deadline and stops the thread; ``False``
-  if it did not drain. A Python thread cannot be stopped from outside, so a job still on after a close keeps running
+- ``close(timeout_s)``: refuses new jobs, waits for every job within the deadline and stops the thread, then frees
+  what the disposer still holds and stops it, within the same deadline; ``False`` if either did not finish. A Python thread cannot be stopped from outside, so a job still on after a close keeps running
   in its daemon thread, and its outcome is not reported.
 """
 
@@ -48,16 +48,18 @@ class OrderedWriter:
         self._abandoned = False  # a close passed its deadline: later outcomes are not reported
         self.dropped_lines = self.dropped_keyed = self.line_errors = 0
         self.dispose_after_s = float(dispose_after_s)
-        self._disposals: deque = deque()  # (due monotonic, value)
+        self._disposals: deque = deque()  # (due monotonic, value, on_freed)
         self._free_cond = threading.Condition()
+        self._free_stop = False
         self._thread = threading.Thread(target=self._loop, name=name, daemon=True)
         self._thread.start()
         self._freer = threading.Thread(target=self._free_loop, name=f"{name}-free", daemon=True)
         self._freer.start()
 
-    def dispose(self, value) -> None:
+    def dispose(self, value, on_freed: Callable[[float, float], None] | None = None) -> None:
+        """``on_freed(began, ended)`` (monotonic) is called on the disposer thread once it is freed."""
         with self._free_cond:
-            self._disposals.append((time.monotonic() + self.dispose_after_s, value))
+            self._disposals.append((time.monotonic() + self.dispose_after_s, value, on_freed))
             self._free_cond.notify_all()
         del value
 
@@ -102,34 +104,59 @@ class OrderedWriter:
             return list(self._pending_keys)
 
     def close(self, timeout_s: float) -> bool:
+        """The jobs drained (still taking new ones: a disposal's report is a line), then the disposer frees what it
+        holds and stops (Codex U29 implementation review round 3 P2-2: it had no end), then no new jobs, the rest
+        drained and the writer stopped -- all within one deadline."""
         deadline = time.monotonic() + timeout_s
+        if not self._drain(deadline):
+            return False
+        with self._free_cond:
+            self._free_stop = True
+            self._free_cond.notify_all()
+        self._freer.join(max(0.0, deadline - time.monotonic()))
+        if self._freer.is_alive():
+            return False
         with self._cond:
             self._closed = True
             self._cond.notify_all()
+        if not self._drain(deadline):
+            return False
+        self._thread.join(max(0.0, deadline - time.monotonic()))
+        return not self._thread.is_alive()
+
+    def _drain(self, deadline: float) -> bool:
+        with self._cond:
             while self._queue or self._busy:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     self._abandoned = True
                     return False
                 self._cond.wait(left)
-        self._thread.join(max(0.0, deadline - time.monotonic()))
         return True
 
     # --- the disposer thread ----------------------------------------------------------------------------------------
     def _free_loop(self) -> None:
         while True:
             with self._free_cond:
-                while not self._disposals:
+                while not self._disposals and not self._free_stop:
                     self._free_cond.wait()
+                if not self._disposals:
+                    return  # stopped and empty
                 due = self._disposals[0][0]
                 left = due - time.monotonic()
-                if left > 0:
+                if left > 0 and not self._free_stop:  # at the close, what is left goes now
                     self._free_cond.wait(left)
                     continue
-                _, value = self._disposals.popleft()
+                _, value, on_freed = self._disposals.popleft()
             holder = [value]
             del value
+            began = time.monotonic()
             free_gradually(holder)  # the last reference: freed here, a bit at a time
+            if on_freed is not None:
+                try:
+                    on_freed(began, time.monotonic())
+                except Exception:  # noqa: BLE001 -- a report, never the disposer's end
+                    pass
 
     # --- the writer thread ------------------------------------------------------------------------------------------
     def _loop(self) -> None:
