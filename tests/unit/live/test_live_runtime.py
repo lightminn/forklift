@@ -582,6 +582,20 @@ def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
     assert written == {"state": {"async_plans": [{"site": "leg"}]}}
 
 
+def test_the_end_logs_its_record_cost_and_the_archive_its_own(tmp_path):
+    """Persistent console plan D1 step 7, U29: the end tick's record cost (bound 20 ms) is measured apart from the
+    rest of the end, and the records written off the control thread log their size and wall time."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    logged = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()]
+    end = next(e for e in logged if "mission_end" in e)
+    assert 0.0 <= end["record_wall_s"] <= end["end_wall_s"]
+    archive = next(e["archive"] for e in logged if "archive" in e)
+    assert archive["mission_id"] == "m1" and archive["wall_s"] >= 0.0
+    assert archive["bytes"] == (tmp_path / "missions" / "m1" / "records.json").stat().st_size
+
+
 def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
     """Codex D6 design P2-6: the end (also after the physics step) fixes the lift target at the measured height."""
     rt, core, order = ending(tmp_path)

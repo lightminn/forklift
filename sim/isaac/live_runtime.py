@@ -147,11 +147,17 @@ class LiveRuntime:
         control thread; the dict is the mission's own (moved out of the core), so nothing changes it meanwhile."""
         def write():
             folder = self.output / "missions" / mission_id
+            start = time.perf_counter()
             try:
                 folder.mkdir(parents=True, exist_ok=True)
-                (folder / "records.json").write_text(json.dumps(records, default=_jsonable))
+                text = json.dumps(records, default=_jsonable)
+                (folder / "records.json").write_text(text)
             except (OSError, TypeError, ValueError) as exc:
                 self.log({"archive_error": f"{type(exc).__name__}: {exc}", "mission_id": mission_id})
+                return
+            # U29: its size and wall time (it holds the interpreter lock against the control thread while it encodes)
+            self.log({"archive": {"mission_id": mission_id, "bytes": len(text.encode()),
+                                  "wall_s": time.perf_counter() - start}})
 
         self._writers = [w for w in self._writers if w.is_alive()]
         writer = threading.Thread(target=write, name=f"archive-{mission_id}", daemon=True)
@@ -253,6 +259,7 @@ class LiveRuntime:
         if mission_id is None or mission_id == self._ended_id:
             return None
         self._ended_id = mission_id
+        began = time.perf_counter()
         self.end.stop()
         # The lift held where it is, whatever stage of the tick the end came in (Codex D6 design P2-6) -- within the
         # hold tolerance of the measurement, so a standing lift's sag does not lower its target (main 2026-10-19).
@@ -284,6 +291,7 @@ class LiveRuntime:
         if cmds.status == "done" and mission is not None:
             # plan D3: verified there only now -- the delivery verdict passed, after the end's last targets update
             self.core.targets.verify_at(mission.pallet_id, mission.destination_id)
+        recording = time.perf_counter()  # plan D1 step 7 (U29): the record cost from here, bound 20 ms
         if any(records.values()):
             self.archive(mission_id, records)  # under this mission's own id (Codex stage 2 impl P2-5)
         try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)
@@ -296,7 +304,9 @@ class LiveRuntime:
         message = self.results.message()
         self.store.put("missions", self.results.seq, message)  # a client connecting later gets it after the targets
         self.channels.put(None, message)
-        self.log({"mission_end": entry, "tick_t": t, **extra})
+        done = time.perf_counter()
+        self.log({"mission_end": entry, "tick_t": t, **extra, "record_wall_s": done - recording,
+                  "end_wall_s": done - began})
         return entry
 
     def _flush(self, t: float) -> None:
