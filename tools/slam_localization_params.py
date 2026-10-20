@@ -4,8 +4,12 @@
 
 Exits 1 (and writes nothing) when the bundle cannot be used -- slam_map.load_bundle's reason on stderr. Otherwise the
 mapping params with ``mode: localization``, ``map_file_name`` (the bundle's graph), ``map_start_pose`` (map <-
-base_link) and the variant S1 adopted: buffer and chain 3, no loop closure. Run inside the bridge container (python3
-with yaml, forklift_core on the path).
+base_link) and the localization variant: buffer and chain 3 with loop closure, links up to 3.0 m and a loop search of
+2.0 m over a 3.0 m window (variant J, 2026-10-21 V5 diagnosis: S1's adopted 3/3 without loop closure drifted off the
+r7 survey graph in the Isaac V5 run -- 1.30 m in 28 min -- and the same-keyframe replay with J held 0.072 m over noise
+seeds 0-2, processing max 0.19 s; a diagnostic candidate, not a deployment pass: docs/plans/
+2026-10-20-slam-localization-session.md). Run inside the bridge container (python3 with yaml, forklift_core on the
+path).
 """
 
 from __future__ import annotations
@@ -17,7 +21,9 @@ import yaml
 
 from forklift_core.localization.slam_map import MapBundleError, load_bundle
 
-LOCALIZATION_KEYS = {"scan_buffer_size": 3, "loop_match_minimum_chain_size": 3, "do_loop_closing": False}
+LOCALIZATION_KEYS = {"scan_buffer_size": 3, "loop_match_minimum_chain_size": 3, "do_loop_closing": True,
+                     "link_scan_maximum_distance": 3.0, "loop_search_space_dimension": 3.0,
+                     "loop_search_maximum_distance": 2.0}
 
 
 def localization_params(mapping: dict, prefix: str, start: list[float]) -> dict:

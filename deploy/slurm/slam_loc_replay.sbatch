@@ -43,9 +43,13 @@ taskset -c "$DRV_CPU" "$PY" "$ROOT/tools/slam_loc_replay_drive.py" "$EP/run" "$E
 DRV=$?
 CON=$(timeout 300 docker wait "$NAME")
 docker logs "$NAME" > "$OUT/container.log" 2>&1
-"$PY" "$ROOT/tools/slam_loc_replay_eval.py" "$EP/run" "$OUT/replies.jsonl" "$BUNDLE" > "$OUT/eval.json"
+"$PY" "$ROOT/tools/slam_loc_replay_eval.py" "$EP/run" "$OUT/replies.jsonl" "$BUNDLE" "$EP/bridge/records.jsonl" \
+  --until-s "$UNTIL" > "$OUT/eval.json"
 EV=$?
 SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)
-printf '{"state": "done", "driver_exit": %s, "container_exit": %s, "eval_exit": %s, "sent": %s}\n' \
-  "$DRV" "${CON:-null}" "$EV" "${SENT:-null}" > "$OUT/status.json"
+# ok only when the driver and the container ended cleanly and the replay is complete (Codex P2)
+OK=$([ "$DRV" = 0 ] && [ "${CON:-1}" = 0 ] && [ "$EV" = 0 ] && echo true || echo false)
+printf '{"state": "done", "ok": %s, "driver_exit": %s, "container_exit": %s, "eval_exit": %s, "sent": %s}\n' \
+  "$OK" "$DRV" "${CON:-null}" "$EV" "${SENT:-null}" > "$OUT/status.json"
 cat "$OUT/status.json"
+[ "$OK" = true ]
