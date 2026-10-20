@@ -381,6 +381,7 @@ def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_p
     assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
     seq, message = rt.store.get("missions")
     assert seq == 1 and message == {"t": "missions", "missions_seq": 1, "results": [entry]}
+    rt.settle_records()  # plan U29: the writer writes the mission's files
     record = json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())
     assert record["result"] == entry and record["delivery_error_m"] == 0.02
     assert record["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
@@ -449,10 +450,11 @@ def test_the_state_carries_the_last_result_from_the_runtime():
 def test_a_record_that_cannot_be_written_is_marked_in_the_result(tmp_path):
     rt, core, _ = ending(tmp_path)
     (tmp_path / "missions").write_text("not a folder")
-    entry = rt.end_mission(20.0, "failed", "x")
-    assert entry["record_error"].startswith(("FileExistsError", "NotADirectoryError"))
-    assert rt.results.last["record_error"] == entry["record_error"]
-    assert rt.store.get("missions")[1]["results"][0]["record_error"] == entry["record_error"]
+    rt.end_mission(20.0, "failed", "x")
+    rt.settle_records()  # plan U29: the writer writes the files; their failure is noted once it is known
+    error = rt.results.last["record_error"]
+    assert error.startswith("missions/m1: ") and ("FileExistsError" in error or "NotADirectoryError" in error)
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == error
 
 
 def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
@@ -564,7 +566,7 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
     start = source.index("            live.start()  # after the SLAM warm-up")
-    before = source[start - 1600:start]  # (the D8 record spool is made between them)
+    before = source[start - 1900:start]  # (the D8 record spool and the U21 start digest switch are between them)
     assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
     # D-0 live only; the session's end ends a mission still on and skips the batch judgement
     assert source.index('core.targets.add_destination("D-0"') > source.index('    if getattr(args, "live", False):\n        # Persistent console plan D2/D3')
@@ -607,8 +609,7 @@ def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(t
     rt, core, order = ending(tmp_path)
     (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
     rt.end_mission(15.0, "failed", "x")
-    for writer, _ in rt._writers:
-        writer.join(timeout=5.0)
+    assert rt.io.settle(5.0) == []  # written (failed), not yet noted
     assert "record_error" not in rt.results.last
     rt.tick_start(16.0, False)
     assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
@@ -648,10 +649,161 @@ def test_a_records_writer_past_the_settle_limit_is_marked_unsettled_once(tmp_pat
     rt.end_mission(15.0, "failed", "x")  # the stand-in records hold no object; write one that waits
     rt.archive("m1", {"state": {"slow": object()}}, rt.results.last["seq"])
     rt.settle_records(timeout_s=0.05)
-    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    assert rt.results.last["record_error"] == "files unsettled after 0.05 s"
     gate.set()
     rt.settle_records(timeout_s=5.0)
-    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    assert rt.results.last["record_error"] == "files unsettled after 0.05 s"
+
+
+def test_the_end_archives_the_missions_start_digest_once(tmp_path):
+    """Use case U21 on Isaac: the core's digest of the mission's start goes with the mission's records and is not
+    carried to the next mission."""
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    core.start_digest = {"state.paths": "abc:2"}
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert written["start_digest"] == {"state.paths": "abc:2"} and core.start_digest is None
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    assert 'core.record_start_digest = os.environ.get("FORKLIFT_LIVE_START_DIGEST", "0") == "1"' in source
+
+
+def test_the_end_ticks_record_cost_stays_in_bound_with_a_full_spool_queue_and_a_full_chunk(tmp_path):
+    """Plan U29 (user 2026-10-20: measured on the CPU): the end tick's spool cut -- a cut ten times the largest
+    measured chunk (slam_log.scan 194 KB per 10 s), dropped whole on a full queue -- and the end's record cost
+    together stay within the 20 ms bound."""
+    from forklift_core.live.spool import RecordSpool
+
+    rt, core, order = ending(tmp_path)
+    spool = RecordSpool(tmp_path / "spool", interval_s=0.0, queue_cuts=2)
+    scans: list = []
+    spool.register("slam_log.scan", scans, keep=1)
+    spool.pause_writer()
+    try:
+        for cut in range(3):
+            scans.extend([[0.5] * 360 for _ in range(1000)])  # 1000 scans x 360 ranges: ~2 MB as JSON
+            began = time.perf_counter()
+            spool.tick(float(cut + 1))
+            if cut == 2:
+                rt.end_mission(15.0, "failed", "x")
+                spent = time.perf_counter() - began
+    finally:
+        spool.resume_writer()
+        manifest = spool.close()
+    assert manifest["slam_log.scan"]["dropped_items"] == 1000  # the third cut found the queue full
+    assert spent <= 0.020
+
+
+def test_the_end_does_no_file_io_and_starts_no_thread_on_the_control_thread_while_the_writer_is_stuck(
+        tmp_path, monkeypatch):
+    """Codex U29 design review: the control thread hands the mission's files and its log lines over and never waits
+    on the disk or on a thread start -- checked with the writer stuck on a slow disk."""
+    import builtins
+    import os
+    import threading
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    rt.io.put_line(lambda: gate.wait(5.0), 1)  # the writer is stuck on this
+    main, seen = threading.current_thread(), []
+    real_open, real_replace, real_mkdir, real_start = builtins.open, os.replace, Path.mkdir, threading.Thread.start
+
+    def watched(name, real):
+        def call(*a, **k):
+            if threading.current_thread() is main:
+                seen.append(name)
+            return real(*a, **k)
+        return call
+
+    monkeypatch.setattr(builtins, "open", watched("open", real_open))
+    monkeypatch.setattr(os, "replace", watched("replace", real_replace))
+    monkeypatch.setattr(Path, "mkdir", watched("mkdir", real_mkdir))
+    monkeypatch.setattr(threading.Thread, "start", watched("thread_start", real_start))
+    began = time.perf_counter()
+    rt.end_mission(15.0, "failed", "x")
+    rt.tick_start(16.0, False)
+    spent = time.perf_counter() - began
+    monkeypatch.undo()
+    assert seen == [] and spent < 1.0  # it did not wait for the stuck writer (5 s)
+    gate.set()
+    rt.close()
+    assert json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())["result"]["mission_id"] == "m1"
+
+
+def test_a_full_writer_drops_the_missions_files_and_says_so_on_its_result(tmp_path):
+    import threading
+
+    from sim.isaac.live_runtime import MISSION_FILES_PENDING
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    for k in range(MISSION_FILES_PENDING):
+        assert rt.io.put_keyed(("stuck", k), lambda: gate.wait(5.0) and [])
+    entry = rt.end_mission(15.0, "failed", "x")
+    assert entry["record_error"] == f"result.json, records.json: dropped (writer full, {MISSION_FILES_PENDING} pending)"
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == entry["record_error"]
+    gate.set()
+    rt.close()
+    assert not (tmp_path / "missions" / "m1" / "result.json").exists()
+
+
+def test_a_record_error_of_a_result_out_of_the_book_is_counted_in_the_missions_message(tmp_path):
+    """Codex U29 design review: the book keeps the newest 100; an error for an older result was lost."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x")
+    rt._note_record_error(999, "records.json: OSError: full")
+    message = rt.store.get("missions")[1]
+    assert message["record_errors_older"] == 1 and "record_error" not in message["results"][0]
+    rt.close()
+    end = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()
+           if '"event": "end"' in line][0]
+    assert end["io"] == {"dropped_lines": 0, "line_errors": 0, "dropped_mission_files": 0,
+                         "record_errors_older": 1}
+
+
+@pytest.mark.skipif(__import__("os").environ.get("FORKLIFT_U29_GATE") != "1",
+                    reason="plan U29 performance gate: run on purpose on ws1 (FORKLIFT_U29_GATE=1)")
+def test_u29_end_tick_record_cost_gate(tmp_path):
+    """Plan U29 performance gate (user 2026-10-20: measured on the CPU; Codex U29 design review: fixed conditions,
+    every sample kept). Each repetition times the end tick's record work -- the spool cut (ten times the largest
+    measured chunk, with the spool's writer running) and the whole end_mission (its records ten times the largest
+    measured, 195 KB) -- while the previous repetition's writer encodes its records. FORKLIFT_U29_GATE_REPS
+    repetitions (200), the walls to FORKLIFT_U29_GATE_OUT; the gate fails if any is over 20 ms."""
+    import os
+    from pathlib import Path
+
+    from forklift_core.live.spool import RecordSpool
+
+    reps = int(os.environ.get("FORKLIFT_U29_GATE_REPS", "200"))
+    walls = []
+    for batch in range(0, reps, 10):  # ten made first, then ended back to back: the earlier writers still encode
+        made = []
+        for i in range(batch, min(batch + 10, reps)):
+            (tmp_path / f"r{i}").mkdir()
+            rt, core, order = ending(tmp_path / f"r{i}")
+            records = {"state": {"scans": [[0.5 + k * 1e-6] * 360 for k in range(300)]}}  # ~2 MB as JSON
+            core.end_reset = lambda t, records=records: records
+            spool = RecordSpool(tmp_path / f"r{i}" / "spool", interval_s=0.0, queue_cuts=6)
+            scans: list = []
+            spool.register("slam_log.scan", scans, keep=1)
+            scans.extend([[0.25] * 360 for _ in range(1000)])  # ~2 MB as JSON: ten 10 s chunks
+            made.append((rt, spool))
+        for rt, spool in made:
+            began = time.perf_counter()
+            spool.tick(1.0)
+            rt.end_mission(15.0, "failed", "x")
+            walls.append(time.perf_counter() - began)
+        for rt, spool in made:
+            rt.close()
+            spool.close()
+    out = os.environ.get("FORKLIFT_U29_GATE_OUT")
+    if out:
+        Path(out).write_text(json.dumps({"reps": reps, "walls_s": walls, "max_s": max(walls),
+                                         "p50_s": sorted(walls)[len(walls) // 2]}))
+    assert max(walls) <= 0.020, f"max {max(walls) * 1e3:.2f} ms over {reps}"
 
 
 def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):

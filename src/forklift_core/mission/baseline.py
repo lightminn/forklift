@@ -12,6 +12,9 @@ hold, the wheel lock) are closed by their owners at the mission's end, and its N
 from __future__ import annotations
 
 import copy
+import dataclasses
+import hashlib
+import json
 
 _ABSENT = object()
 
@@ -169,3 +172,54 @@ class MissionBaseline:
                 if isinstance(inner, dict):
                     _put(inner, slot[2], value)
         return records
+
+
+def _digest_default(value):
+    """A value inside a digest: an object by its type (an address would differ between equal starts); a dataclass by
+    its fields (a pose); an array by its numbers."""
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return repr(value)
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    return f"<{type(value).__name__}>"
+
+
+def _digest_plain(value):
+    """Dict keys as text (a tuple key is not JSON), lists and tuples alike."""
+    if isinstance(value, dict):
+        return {str(k): _digest_plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_digest_plain(v) for v in value]
+    return value
+
+
+def start_digest(core) -> dict:
+    """Use case U21 on Isaac: every mission-owned slot (the slots the baseline restores) at a mission's start as
+    ``<sha1 12>:<length>`` of its JSON, or ``absent``, so the second mission's start can be compared with the first's."""
+    slots = {}
+    for owner, keys in MISSION_KEYS.items():
+        d = getattr(core, owner)
+        if d is not None:
+            for key in keys:
+                slots[f"{owner}.{key}"] = d.get(key, _ABSENT)
+    for (owner, key), fields in NESTED_KEYS.items():
+        d = getattr(core, owner)
+        inner = None if d is None else d.get(key)
+        if isinstance(inner, dict):
+            for field in fields:
+                name = ".".join(field) if isinstance(field, tuple) else field
+                slots[f"{owner}.{key}.{name}"] = _get(inner, field)
+    for name in MS_FIELDS:
+        slots[f"ms.{name}"] = getattr(core.ms, name)
+    for name in CORE_FIELDS:
+        if hasattr(core, name):
+            slots[f"core.{name}"] = getattr(core, name)
+    out = {}
+    for name, value in slots.items():
+        if value is _ABSENT:
+            out[name] = "absent"
+            continue
+        text = json.dumps(_digest_plain(value), sort_keys=True, default=_digest_default)
+        out[name] = f"{hashlib.sha1(text.encode()).hexdigest()[:12]}:{len(text)}"
+    return out
