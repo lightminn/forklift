@@ -2343,6 +2343,8 @@ class MissionCore:
         CUSP_HEADING_HOLD_RAD, Pose2D = options.cusp_heading_hold_rad, PlanningPose
         require, wall, grid_world, grid_kwargs, plan_observation_leg = (
             hooks.require, hooks.wall, hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg)
+        if self.bottom_deck_returning():
+            return self._bottom_deck_reobserve_failed(t, rear, attempt, attempt_number, observation)
         apply_tracker_profile, realign_install, record_tracker_configs = (
             self.apply_tracker_profile, self.realign_install, self.record_tracker_configs)
         attempt["retry_reason"] = (
@@ -2566,6 +2568,13 @@ class MissionCore:
                 "attempt": attempt_number,
             }
         start_rear_pose = Pose2D(rear[0], rear[1], rear[2])
+        if self.bottom_deck_returning():
+            # The re-observation after the side legs (plan 2026-10-19, cycle fix): the same pallet as the one judged
+            # -- checked before its estimate becomes the planned pickup, the known pallet or a mission plan. The
+            # record is not rebound to it (Codex: a shape and 0.15 m do not prove the same pallet by themselves).
+            out_ = self._bottom_deck_reobserved(t, rear, attempt, target_pickup)
+            if out_ is not None:
+                return SimpleNamespace(stop=True, observation=observation, near_leg=None)
         hooks.set_inset_estimate(observation, (float(base[0]), float(base[1]), yaw), target_pickup, scene_input, attempt_number)
         state["perception"]["perception_pickup_estimate_m"] = {
             "x_m": target_pickup.x_m,
@@ -2766,9 +2775,19 @@ class MissionCore:
         return getattr(self.options, "bottom_deck_check", "off") == "on"
 
     def bottom_deck_leg_active(self) -> bool:
-        """A side leg (a stand or a retake's retreat) is the observe leg now: its arrival is the side capture's."""
+        """A bottom-deck leg (a stand, a retake's retreat, or the return to the far observation point) is the observe
+        leg now: its replans, recoveries and checks use the side stage's bounds."""
         deck_ = self.state.get("bottom_deck")
         return bool(deck_ and deck_.get("leg") is not None and self.ms.phase == "observe")
+
+    def bottom_deck_side_leg(self) -> bool:
+        """A stand or a retreat: its arrival is the side capture's and the far recognition takes no driving frames
+        on it. The return leg is a far observation leg (Codex return design round 1 P2 3)."""
+        return self.bottom_deck_leg_active() and self.state["bottom_deck"]["leg"]["kind"] in ("stand", "retreat")
+
+    def bottom_deck_returning(self) -> bool:
+        deck_ = self.state.get("bottom_deck")
+        return bool(deck_ and deck_.get("status") == "returning")
 
     def _bottom_deck_target(self, attempt: dict, pickup):
         """The judged target from the far observation: the pickup estimate's centre and insertion yaw, and -- when
@@ -2837,35 +2856,35 @@ class MissionCore:
             obstacle.setdefault("progress", {}).clear()
         state["observation_waypoint_selected"] = np.asarray(path.poses[-1]).tolist()
         ms.phase_started = t
-        state["bottom_deck"]["leg"] = {"kind": kind, "face": int(face), "captures": int(captures), "time_s": t}
+        state["bottom_deck"]["leg"] = {"kind": kind, "face": None if face is None else int(face),
+                                       "captures": int(captures), "time_s": t}
 
     def _bottom_deck_release_if_held(self, t: float, event: str):
-        """Release a SLAM hold before a side plan or a side capture's next step reads the pose (Codex design
-        rounds 1-4): the grid re-projected, the estimates and the judged target carried into the released
-        frame, the runner's rear set. Returns the released rear, or None when nothing was held."""
+        """Release a SLAM hold before a side plan or a side capture's judgement reads the pose (Codex design
+        rounds 1-4): the grid re-projected, the runner's rear set. The targets are not moved: the judged target, the
+        pickup estimate and the planned pickup came from the far observation, made after its own release -- map
+        targets the held odometry never carried (Codex return design rounds 1-2; release_and_stand's targets were
+        made inside the hold and do move). Returns the released rear, or None when nothing was held."""
         slam = self.slam
         if slam is None or slam["tracker"].mode != "holding":
             return None
-        released_ = self._release_reproject(t, event)
-        fc_ = released_["frame_change"]
-        tg_ = self.state["bottom_deck"]["target"]
-        x_, y_, yaw_ = compose(fc_, (tg_["centre_xy"][0], tg_["centre_xy"][1], tg_["insertion_yaw_rad"]))
-        tg_.update(centre_xy=[float(x_), float(y_)], insertion_yaw_rad=float(yaw_),
-                   model_yaw_rad=bottom_deck_legs.model_yaw(float(yaw_), tg_["axis"]))
+        released_ = self._release_reproject(t, event, carry=False)
         self.state["bottom_deck"].setdefault("releases", []).append(
-            {"time_s": t, "event": event, "frame_change": [float(v) for v in fc_], "jump_m": released_["jump_m"],
-             "after_attempts": len(self.state["bottom_deck"]["attempts"])})  # the recompute carries the target
+            {"time_s": t, "event": event, "frame_change": [float(v) for v in released_["frame_change"]],
+             "jump_m": released_["jump_m"], "after_attempts": len(self.state["bottom_deck"]["attempts"]),
+             "carried": False})
         rear_ = np.asarray(released_["after"], dtype=float)
         self.hooks.set_rear(rear_)
         return rear_
 
-    def _bottom_deck_refuse(self, t: float, reason: str, rear) -> SimpleNamespace:
-        """End the mission at the side stage (Codex design round 1: no reason to drive to the insert gate)."""
+    def _bottom_deck_refuse(self, t: float, reason: str, rear, stage: str = "side") -> SimpleNamespace:
+        """End the mission at the side stage, the return or the re-observation (Codex design round 1: no reason to
+        drive to the insert gate)."""
         state = self.state
         deck_ = state["bottom_deck"]
-        deck_["status"] = "failed" if deck_.get("status") == "pending" else deck_.get("status")
+        deck_["status"] = "failed" if deck_.get("status") in ("pending", "returning") else deck_.get("status")
         deck_["leg"] = None
-        deck_["refused"] = {"reason": reason, "time_s": t, "stage": "side"}
+        deck_["refused"] = {"reason": reason, "time_s": t, "stage": stage}
         state["mission_result"] = "bottom_deck_refused"
         self.transition("bottom_deck_refused", t)
         return SimpleNamespace(stop=True, rear=rear, installed=False)
@@ -2876,8 +2895,13 @@ class MissionCore:
         them before any near capture)."""
         state, obstacle = self.state, self.obstacle
         deck_ = state["bottom_deck"] = {"status": "pending", "leg": None, "faces": [], "attempts": [], "record": None}
+        # The first valid far observation's stand: the side legs return to it and observe again from there, so the
+        # near leg starts where it always did (the near capture's held yaw drifted after a turn from a side stand).
+        waypoint_ = attempt.get("waypoint") or state.get("observation_waypoint_selected")
         self.bottom_deck_far = SimpleNamespace(observation=observation, attempt_number=attempt_number,
-                                               base=np.asarray(base, dtype=float), yaw=float(yaw))
+                                               base=np.asarray(base, dtype=float), yaw=float(yaw),
+                                               waypoint=None if waypoint_ is None else
+                                               tuple(float(v) for v in waypoint_))
         target_ = self._bottom_deck_target(attempt, pickup)
         if isinstance(target_, str):
             deck_["target"] = None
@@ -2895,31 +2919,35 @@ class MissionCore:
                                                 mount_x_m=self.options.camera_mount_x_m,
                                                 rear_axle_offset_m=self.options.rear_axle_offset_m)
         stands_ = {f: self._bottom_deck_stand(f) for f in order_}
+        far_wp_ = self.bottom_deck_far.waypoint
+        if far_wp_ is None:
+            out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
+            deck_["refused"]["detail"] = "no_far_waypoint"
+            return SimpleNamespace(stop=True, observation=observation, near_leg=None, handled=True)
         # The side stage's own bounds (Codex A'): the pickup zone confines the pickup legs for the search's sake, not
-        # as a wall, and a side stand of a pallet near its edge lies outside it. Every side plan, retreat, recovery
-        # and cusp check uses these; the last stand must lie in the zone (with the next planner's start margin) so
-        # the mission planned after the side legs starts inside it.
+        # as a wall, and a side stand of a pallet near its edge lies outside it. Every side plan, retreat, recovery,
+        # the return and the cusp check use these. The mission is planned after the return, from the far
+        # observation point in the zone, so no stand need lie in it (Codex return design round 2 P2 2).
         zone_, fp_ = self.observe_bounds(), self.geometry.unloaded_footprint  # the batch zone; live: the hall
         margin_ = min(float(self.options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
-        in_zone_ = {f: zone_ is None or bottom_deck_legs.inside(zone_, stands_[f].rear, fp_, margin_) for f in order_}
-        if target_["axis"] == "x":
-            order_ = tuple(sorted(order_, key=lambda f: in_zone_[f]))  # outside the zone first (stable: nearer first)
+        # Where the mission after the re-observation starts from: its near_bounds, the pickup bounds or else the
+        # scenario's (Codex retry review round 6 P2), with the approach's own clearance.
+        mission_zone_ = self.options.pickup_bounds
+        self.bottom_deck_zone = (self.options.scenario.bounds if mission_zone_ is None else mission_zone_, fp_, margin_)
         self.bottom_deck_bounds = zone_ if zone_ is None else bottom_deck_legs.side_bounds(
             zone_, self.options.scenario.bounds,
-            [stands_[f].rear for f in order_] + [bottom_deck_legs.retreat_pose(stands_[f].rear) for f in order_],
-            fp_, margin_)
+            [stands_[f].rear for f in order_] + [bottom_deck_legs.retreat_pose(stands_[f].rear) for f in order_]
+            + [far_wp_], fp_, margin_)
         deck_["order"] = list(order_)
-        deck_["stands"] = {str(f): {"rear": list(stands_[f].rear), "camera_xy": list(stands_[f].camera_xy),
-                                    "in_zone": bool(in_zone_[f])} for f in order_}
+        deck_["stands"] = {str(f): {"rear": list(stands_[f].rear), "camera_xy": list(stands_[f].camera_xy)}
+                           for f in order_}
+        deck_["return_waypoint"] = list(far_wp_)
         deck_["bounds"] = None if self.bottom_deck_bounds is None else asdict(self.bottom_deck_bounds)
-        if not in_zone_[order_[-1]]:
-            out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
-            deck_["refused"]["detail"] = "last_stand_outside_zone"
-            return SimpleNamespace(stop=True, observation=observation, near_leg=None, handled=True)
         # The legs in their order reachable before the first side leg starts (task 4: else no side leg at all):
-        # from here to the first stand, and from the first stand to the second.
+        # from here to the first stand, from the first stand to the second, and from it back to the far stand.
         plans_ = {order_[0]: self._bottom_deck_plan(rear, order_[0]),
-                  order_[1]: self._bottom_deck_plan(stands_[order_[0]].rear, order_[1])}
+                  order_[1]: self._bottom_deck_plan(stands_[order_[0]].rear, order_[1]),
+                  "return": self._bottom_deck_plan(stands_[order_[1]].rear, None, goal=far_wp_)}
         deck_["reachable"] = {str(f): p.status for f, p in plans_.items()}
         if not all(p.success for p in plans_.values()):
             out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
@@ -2963,7 +2991,12 @@ class MissionCore:
                 max_attempts=options.perception_max_attempts)
         except options.adapter.CaptureFailure as exc:
             rec_.update(verdict="unobserved", reason=f"capture_failed:{exc.reason}")
-        else:
+            scene_ = None
+        # Released before the judgement (Codex return design round 2): the map target goes into the capture's base
+        # frame by the released map pose, not by the held odometry.
+        rear_ = self._bottom_deck_release_if_held(t, "release_at_bottom_deck_capture")
+        rear = rear if rear_ is None else rear_
+        if scene_ is not None:
             rear_est_ = hooks.slam_rear(hooks.now_s()) if self.slam is not None else rear
             target_b_, base_est_ = self._bottom_deck_scene_target(rear_est_)
             axis_ = deck_["target"]["axis"]
@@ -2998,8 +3031,6 @@ class MissionCore:
                            reason=rec_["reason"], stamp_ns=int(scene_.stamp_ns))
         deck_["attempts"].append(rec_)
         leg_["captures"] += 1
-        rear_ = self._bottom_deck_release_if_held(t, "release_at_bottom_deck_capture")
-        rear = rear if rear_ is None else rear_
         if rec_["verdict"] in ("present", "absent") or leg_["captures"] >= bottom_deck_legs.CAPTURES:
             return self._bottom_deck_face_end(t, rear, rec_["verdict"], rec_["reason"])
         # A retake arrives afresh: back off to a point behind the stand, planned (Codex implementation round 1 P1:
@@ -3053,34 +3084,107 @@ class MissionCore:
             captured_s=tuple(a["time_s"] for a in deck_["attempts"]),
             correction_s=None if applied_ is None else float(applied_[1]),
             params_sha256=bottom_deck_permit.params_digest(options.bottom_deck_params)).to_record()
-        deck_["status"] = "done"
+        deck_["status"] = "judged"
         if verdict != "present":
             return self._bottom_deck_refuse(t, "no_bottom_deck" if verdict == "absent" else "bottom_deck_unobserved",
                                             rear)
-        zone_ = self.observe_bounds()
-        margin_ = min(float(options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
-        if zone_ is not None and not bottom_deck_legs.inside(zone_, rear, self.geometry.unloaded_footprint, margin_):
-            # Where the truck actually stands after the last capture and its release (Codex A'): the mission is
-            # planned in the zone, so a start outside it ends here rather than in an invalid_start failure.
-            out_ = self._bottom_deck_refuse(t, "side_stage_outside_zone", rear)
-            deck_["refused"]["rear"] = [float(v) for v in rear]
+        # Two faces present: back to the far observation point, observe again there and go on as without the side
+        # legs (the near leg then starts where it always did). The record stays the map target judged.
+        self.bottom_deck_return_goal = self.bottom_deck_far.waypoint  # a look-again retry moves it on
+        plan_ = self._bottom_deck_plan(rear, None, goal=self.bottom_deck_return_goal)
+        if not plan_.success:
+            out_ = self._bottom_deck_refuse(t, "bottom_deck_return_failed", rear, stage="return")
+            deck_["refused"]["detail"] = plan_.status
             return out_
-        far_ = self.bottom_deck_far
-        planning_pickup = pocket["planning_pickup"]
-        planning_start, planning_trace = hooks.wall(), []
-        grid_world, grid_kwargs, plan_transport = hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport
-        planner_config, scenario, geometry = options.planner_config, options.scenario, self.geometry
-        return_to_pose, pickup_bounds, travel_config = options.return_to_pose, options.pickup_bounds, options.travel_config
-        start_rear_pose = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
-        plans = plan_transport(  # the same call as observe_succeeded's, from where the side legs ended
-            grid_world(scenario), planner_config, geometry=geometry, target_pickup=planning_pickup,
-            start_rear=start_rear_pose, return_to=return_to_pose, pickup_bounds=pickup_bounds,
-            travel_config=travel_config, trace=planning_trace, **grid_kwargs("mission", planning_pickup))
-        near_leg = self._observe_install(plans, planning_trace, planning_start, far_.attempt_number)
-        if self.obstacle is not None:
-            self.obstacle.setdefault("progress", {}).clear()
-        self.near_leg_or_recapture(t, rear, far_.base, far_.yaw, far_.observation, far_.attempt_number, near_leg)
+        deck_["status"] = "returning"
+        zone_hook_ = getattr(self.hooks, "far_recognition_zone", None)
+        if zone_hook_ is not None:
+            # The re-observation looks for the pallet judged, not for any pallet in the pickup zone: another object
+            # metres away must not leave it undecided (Isaac dc44a32: a 0.07-score proposal 2.6 m off read as an
+            # uncertain candidate in the zone's 1 m radius). The gate's 0.15 m still binds what is adopted.
+            zone_hook_(tuple(deck_["record"]["centre_xy"]), bottom_deck_legs.REOBSERVE_RADIUS_M)
+            deck_["reobservation_zone"] = {"centre_xy": list(deck_["record"]["centre_xy"]),
+                                           "radius_m": bottom_deck_legs.REOBSERVE_RADIUS_M}
+        self._bottom_deck_install(t, plan_, "return", None, 0)
+        self.hooks.set_inset_status("원거리 관측 위치로 복귀")
         return SimpleNamespace(stop=False, rear=rear, installed=True)
+
+    def _bottom_deck_reobserve_failed(self, t: float, rear, attempt: dict, attempt_number: int, observation) -> bool:
+        """A re-observation that did not see the pallet judged. A decision that asks to look again (an uncertain or an
+        unresolved object in reach of the record's zone -- Isaac ecf4be5 s1) takes the next fixed observation point,
+        as the far observation's own failure does (observe_failed's ladder), as a return leg: planned in the side
+        stage's bounds, its recoveries aimed at that point, the record and the zone kept. Any other failure, the
+        bound or no plannable point refuses. True ends the mission loop (Codex retry design round 1)."""
+        deck_ = self.state["bottom_deck"]
+        far_ = attempt.get("recognition") or {}
+        reason_ = getattr(observation, "reason", None)
+        tries_ = deck_.setdefault("reobservation_attempts", [])
+        retries_ = sum(1 for a in tries_ if a["outcome"] == "retry")
+        tries_.append({"time_s": t, "attempt": attempt_number, "far_leg": far_.get("leg"), "status": far_.get("status"),
+                       "reason": far_.get("reason", reason_), "outcome": "refused"})
+
+        def refuse(detail):
+            self._bottom_deck_refuse(t, "bottom_deck_reobservation_failed", rear, stage="reobserve")
+            deck_["refused"]["detail"] = detail
+            return True
+
+        if (far_.get("status") != "reobserve" or far_.get("reason") not in bottom_deck_legs.REOBSERVE_RETRY_REASONS
+                or self.state.get("near_capture", {}).get("status") == "pending"
+                or retries_ >= bottom_deck_legs.REOBSERVE_RETRIES):
+            return refuse(reason_)
+        waypoints_ = self.options.observation_waypoints
+        while self.ms.next_candidate_index < len(waypoints_):
+            index_ = self.ms.next_candidate_index
+            self.ms.next_candidate_index += 1  # the far observation's ladder: a point tried is not tried again
+            goal_ = tuple(float(v) for v in waypoints_[index_])
+            zone_, fp_, margin_ = self.bottom_deck_zone
+            if not bottom_deck_legs.inside(zone_, goal_, fp_, margin_):
+                # Reachable in the side bounds, but the mission planned there after the re-observation starts in the
+                # pickup bounds (approach:invalid_start; Codex retry review round 5 P2): not a re-observation point.
+                plan_ = SimpleNamespace(success=False, status="outside_mission_zone", search_attempts=())
+            else:
+                plan_ = self._bottom_deck_plan(rear, None, goal=goal_)
+            self.state.setdefault("observation_candidates", []).append(
+                {"candidate_index": index_, "pose": list(goal_), "start_rear": np.asarray(rear).tolist(),
+                 "success": plan_.success, "status": plan_.status, "bottom_deck_reobservation": True,
+                 "search_attempts": [list(entry) for entry in plan_.search_attempts]})
+            if plan_.success:
+                tries_[-1].update(outcome="retry", candidate_index=index_, goal=list(goal_))
+                self.bottom_deck_return_goal = goal_
+                self._bottom_deck_install(t, plan_, "return", None, 0)  # a fresh replan budget and progress watch
+                self.hooks.set_inset_status("다음 관측 위치에서 재관측")
+                return False
+        tries_[-1]["outcome"] = "exhausted"
+        return refuse("candidates_exhausted")
+
+    def _bottom_deck_reobserved(self, t: float, rear, attempt: dict, target_pickup):
+        """The re-observation's estimate against the record: the same shape (the far recognition's hypothesis when it
+        read one, else the run's), the centre within 0.15 m and the entry axis within 15 deg -- the insert gate's own
+        test. Refused (None otherwise) before the estimate is adopted; the record is never moved."""
+        deck_ = self.state["bottom_deck"]
+        far_ = attempt.get("recognition")
+        used_ = (far_ or {}).get("used") or {}
+        shape_ = (str(used_["hypothesis"]).split(":")[0] if used_.get("hypothesis")
+                  else self.pallet_geometry.geometry_version)
+        refusal_ = bottom_deck_permit.insert_refusal(
+            bottom_deck_permit.BottomDeckRecord.from_record(deck_["record"]),
+            (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_)
+        deck_["reobservation"] = {"time_s": t, "target": [float(target_pickup.x_m), float(target_pickup.y_m),
+                                                          float(target_pickup.yaw_rad)],
+                                  "shape": shape_, "refusal": refusal_,
+                                  "used_error": (far_ or {}).get("used_error"),
+                                  "single_error": (far_ or {}).get("single_error")}
+        deck_.setdefault("reobservation_attempts", []).append(
+            {"time_s": t, "far_leg": (far_ or {}).get("leg"), "status": (far_ or {}).get("status"),
+             "outcome": "mismatch" if refusal_ is not None else "accepted"})
+        if refusal_ is not None:
+            return self._bottom_deck_refuse(t, "bottom_deck_target_mismatch", rear, stage="reobserve")
+        deck_["status"] = "done"
+        if self.obstacle is not None:
+            # The near leg planned next is a new observe leg: the return's no-progress watch must not carry over
+            # (Codex cycle implementation round 1 P2 -- the return's small best_m tripped a normal near leg at 60 s).
+            self.obstacle.setdefault("progress", {}).clear()
+        return None
 
     def bottom_deck_recover(self, t: float, rear, why: str) -> SimpleNamespace:
         """A recovery that would replace a side leg's path (blocked, a heading miss or a stall): released first
@@ -3092,8 +3196,25 @@ class MissionCore:
         rear = rear if rear_ is None else rear_
         deck_.setdefault("recoveries", []).append({"time_s": t, "why": why, "kind": leg_["kind"],
                                                    "face": leg_["face"]})
+        if leg_["kind"] == "return":
+            deck_["recoveries"][-1]["goal"] = list(self.bottom_deck_return_goal)
         if leg_["kind"] == "retreat":
             return self._bottom_deck_face_end(t, rear, "unobserved", f"retreat_{why}")
+        if leg_["kind"] == "return":
+            # Back to the far observation point (or a retry's next point): a detour is allowed (it is a far observation
+            # leg), bounded apart for each point.
+            goal_ = list(self.bottom_deck_return_goal)
+            if (sum(1 for r in deck_["recoveries"] if r["kind"] == "return" and r.get("goal") == goal_)
+                    > bottom_deck_legs.RETURN_RECOVERIES):
+                return self._bottom_deck_refuse(t, "bottom_deck_return_failed", rear, stage="return")
+            plan_ = self._bottom_deck_plan(rear, None, goal=self.bottom_deck_return_goal)
+            if not plan_.success:
+                return self._bottom_deck_refuse(t, "bottom_deck_return_failed", rear, stage="return")
+            if self.hooks.same_path(plan_, self.paths["observe"], self.trackers["observe"].remaining_to_goal_m()):
+                deck_["recoveries"][-1]["same_path"] = True
+                return SimpleNamespace(stop=False, rear=rear, installed=False)
+            self._bottom_deck_install(t, plan_, "return", None, 0)
+            return SimpleNamespace(stop=False, rear=rear, installed=True)
         if sum(1 for r in deck_["recoveries"] if r["face"] == leg_["face"]) > bottom_deck_legs.RECOVERIES_PER_FACE:
             # Every install restarts the leg's replan budget, so the face carries its own bound.
             return self._bottom_deck_face_end(t, rear, "unobserved", f"{why}:recovery_limit")
@@ -3374,6 +3495,15 @@ class MissionCore:
             # A STOP inside a failing capture (the truck stopped mid-capture) pauses, it does not end the run.
             attempt["aborted"] = "live_stop"
             return SimpleNamespace(aborted=True)
+        if self.bottom_deck_returning():
+            # The re-observation could not be captured: refused by name, and the runner ends the loop (Codex return
+            # design round 1 P2 4 -- not a bare require).
+            self._bottom_deck_refuse(float(hooks.now_s()), "bottom_deck_reobservation_failed",
+                                     None, stage="reobserve")
+            self.state["bottom_deck"]["refused"]["detail"] = f"capture_failed:{exc.reason}"
+            self.state["bottom_deck"].setdefault("reobservation_attempts", []).append(
+                {"time_s": float(hooks.now_s()), "outcome": "capture_failed", "reason": exc.reason})
+            return SimpleNamespace(aborted=False, refused=True)
         hooks.require(False, f"perception_capture_failed:{exc.reason}")
 
     # --- real-time plan D9c: the capture over control ticks (live runs with the planning worker only) ----------------
@@ -3451,6 +3581,8 @@ class MissionCore:
         require, slam_odom_base, slam_rear, slam_error, detect_pockets = (
             hooks.require, hooks.slam_odom_base, hooks.slam_rear, hooks.slam_error, hooks.detect_pockets)
         rear_stamp = None  # set only under SLAM, as the runner's was
+        if self.bottom_deck_returning() and (state["bottom_deck"].get("leg") or {}).get("kind") == "return":
+            state["bottom_deck"]["leg"] = None  # arrived back: this is the re-observation (still "returning")
         if raw is None:
             attempt, attempt_number = self._new_attempt(t, rear, step)
             try:
@@ -3511,6 +3643,12 @@ class MissionCore:
                         "jump_rad": jump_rad,
                     }
                 )
+                if self.bottom_deck_on():
+                    # Plan 2026-10-19 (Codex return design round 2 P2 1): the plan made right after this capture --
+                    # the side legs from the first far one, the mission from the re-observation -- reads the grid at
+                    # the released correction, not the held one. Off runs keep what they always did.
+                    slam["holds"][-1]["reprojected"] = self._reproject_after_release(
+                        now_s, slam_rear(now_s), hooks.loaded())
             # The accepted ground-truth pose only validated the
             # capture; control takes the estimate at this instant.
             truth_rear_capture = [float(v) for v in rear]
@@ -4903,7 +5041,21 @@ class MissionCore:
                 "rear_before": [float(v) for v in before_], "rear_after": [float(v) for v in after_],
                 "applied_before": applied_before_, "reprojected": reprojected_}
 
-    def _release_reproject(self, now_s: float, hold_event: str) -> dict:
+    def _reproject_after_release(self, now_s: float, after_, loaded) -> dict | None:
+        """The grid re-projected with the tracker's released correction (None without a grid or a correction)."""
+        obstacle, slam = self.obstacle, self.slam
+        if obstacle is None or slam["tracker"].applied is None:
+            return None
+        obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+        obstacle["version"] += 1
+        obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+        obstacle["layer"].refresh(now_s, obstacle["applied"], obstacle["version"],
+                                  current_pose=tuple(float(v) for v in after_), path_ahead=np.array([after_]),
+                                  loaded=loaded)
+        return {"version": obstacle["version"], "applied": list(obstacle["applied"]),
+                "reprojections": obstacle["reprojections"]}
+
+    def _release_reproject(self, now_s: float, hold_event: str, carry: bool = True) -> dict:
         """Release the SLAM hold, re-project the grid with the released correction before any plan reads it, and
         carry the pickup estimate and the planning target into the released frame (release_and_stand's first
         half; the bottom-deck side legs release the same way, plan 2026-10-19 task 4). Returns what it did."""
@@ -4920,26 +5072,18 @@ class MissionCore:
         frame_change = pose_compose(tuple(float(v) for v in after_), pose_invert(tuple(float(v) for v in before_)))
         slam["holds"].append({"phase": ms.phase, "time_s": now_s, "event": hold_event, "jump_m": jump_m,
                               "jump_rad": jump_rad})
-        reprojected_ = None
-        if obstacle is not None and slam["tracker"].applied is not None:
-            # As a D7c release: the grid re-projected with the released correction before any
-            # plan reads it.
-            obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
-            obstacle["version"] += 1
-            obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
-            obstacle["layer"].refresh(now_s, obstacle["applied"], obstacle["version"],
-                                      current_pose=tuple(float(v) for v in after_),
-                                      path_ahead=np.array([after_]), loaded=loaded)
-            reprojected_ = {"version": obstacle["version"], "applied": list(obstacle["applied"]),
-                            "reprojections": obstacle["reprojections"]}
+        # As a D7c release: the grid re-projected with the released correction before any plan reads it.
+        reprojected_ = self._reproject_after_release(now_s, after_, loaded)
 
         def carried(site_):
             x_, y_, yaw_ = pose_compose(frame_change, (site_.x_m, site_.y_m, site_.yaw_rad))
             return replace(site_, x_m=x_, y_m=y_, yaw_rad=yaw_)
 
-        if obstacle is not None and obstacle.get("pickup_estimate") is not None:
+        # The estimates made inside the hold move with it (release_and_stand's); map targets made before it do not
+        # (carry False -- the bottom-deck side stage's).
+        if carry and obstacle is not None and obstacle.get("pickup_estimate") is not None:
             obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
-        if pocket.get("planning_pickup") is not None:
+        if carry and pocket.get("planning_pickup") is not None:
             pocket["planning_pickup"] = carried(pocket["planning_pickup"])
         return {"jump_m": jump_m, "jump_rad": jump_rad, "frame_change": frame_change, "before": before_,
                 "after": after_, "applied_before": applied_before_, "reprojected": reprojected_}

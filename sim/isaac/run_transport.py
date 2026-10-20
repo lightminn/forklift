@@ -4947,6 +4947,12 @@ def drive(S, isaac) -> None:
         state.setdefault("recognition", {}).update(far_runtime.summary())
         return observation_, record_
 
+    def far_recognition_zone_hook(centre_, radius_):
+        """The bottom-deck re-observation's zone (the pallet judged). The run state is refreshed here too, so a run
+        that ends before the next stop still records the change (Codex ecf4be5 P2)."""
+        far_runtime.set_zone(centre_, radius_)
+        state.setdefault("recognition", {}).update(far_runtime.summary())
+
     def save_npz_at_output(name, **arrays):
         """A diagnostic dump under the run's output (a subfolder such as bottom_deck/ is made on first use)."""
         (args.output / name).parent.mkdir(parents=True, exist_ok=True)
@@ -5035,6 +5041,7 @@ def drive(S, isaac) -> None:
             save_capture=save_capture,
             # The far recognition's decision (--recognition far), None otherwise.
             far_recognition=far_recognition_hook if far_runtime is not None else None,
+            far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None,
             # M-a1 slice 5: the release at a stop, the measured steering.
             steering_position=lambda: robot.get_joint_positions()[steers],
             # M-a1 slice 6d: the near field's mission side (near_tick, the correction redraws, installs, retry).
@@ -5541,7 +5548,7 @@ def drive(S, isaac) -> None:
             # capture's leg, not inside a stationary capture), rendered here and read after the odometry below.
             far_due = far_runtime is not None and far_runtime.due(
                 tick, observing=ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
-                and not core.bottom_deck_leg_active())  # plan 2026-10-19 task 4: no far frames on a side leg
+                and not core.bottom_deck_side_leg())  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
@@ -5598,7 +5605,7 @@ def drive(S, isaac) -> None:
                 # Every tracker in this runner stops at 0.012 m/s; its arrival
                 # and gear-change checks wait for the noise-aware detector.
                 slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
-            if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_leg_active():
+            if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_side_leg():
                 # Each step's odom and truth (the driving frames' poses and the pixel-lag fit's input).
                 pallet_now_, pallet_q_now_ = pallet.get_world_pose()
                 far_runtime.record_step(tick, stamp_now, slam_odom_base(),
@@ -7114,7 +7121,7 @@ def drive(S, isaac) -> None:
                     dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
                     if tracking.status == "arrived":
                         if args.use_perception and ms.phase == "observe":
-                            if core.bottom_deck_leg_active():
+                            if core.bottom_deck_side_leg():
                                 # Plan 2026-10-19 task 4: a side leg\'s arrival is the side capture (or a retake\'s
                                 # retreat end), not the far recognition or the detector.
                                 deck_tick_ = core.bottom_deck_capture(t, rear, step)
@@ -7140,6 +7147,8 @@ def drive(S, isaac) -> None:
                                 # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
                                 # no observation handling, no transitions; the next tick pauses the mission.
                                 live_abort_ = bool(getattr(captured_, "aborted", False))
+                                if getattr(captured_, "refused", False):
+                                    break  # plan 2026-10-19: the re-observation after the side legs could not be captured (refused by name)
                                 if not live_abort_:
                                     attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
                                     frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
