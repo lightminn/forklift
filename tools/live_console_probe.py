@@ -939,7 +939,17 @@ async def cycle_scenario(p: Probe, args):
                     return m_.get("phase") == phase_ and (m_.get("phase_elapsed_s") or 0.0) >= after_s_
             reached_ = await p.until(due_, args.mission_timeout_s, label=f"phase:{phase_}")
             entry["cancel_phase_reached"] = bool(reached_)
-            entry["cancel_reply"] = await p.request("mission_cancel", mission_id=submit.get("mission_id"))
+            mid_ = submit.get("mission_id")
+            if args.cancel_pause_s > 0 and reached_:
+                # Plan U27: paused in the phase for a while first (the forks stay where they are), then cancelled
+                entry["pause_reply"] = await p.request("mission_pause", mission_id=mid_)
+                await p.until(lambda s: (((s.get("mission") or {}).get("mission_id") == mid_
+                                          and (s.get("mission") or {}).get("status") == "paused")), 15,
+                              label="paused_before_cancel")
+                entry["pause_mono"] = time.monotonic()
+                await asyncio.sleep(args.cancel_pause_s)
+                await p.until(p.standing, 20, label="standing_before_cancel")
+            entry["cancel_reply"] = await p.request("mission_cancel", mission_id=mid_)
             entry["cancel_mono"] = time.monotonic()
             statuses_, phases_ = [], []
             stop_by_ = time.monotonic() + args.mission_timeout_s
@@ -950,6 +960,12 @@ async def cycle_scenario(p: Probe, args):
                         seen_.append(mission_[key_])
                 if ((p.state or {}).get("last_result") or {}).get("seq", 0) > seen:
                     break
+                phase_now_ = str(mission_.get("phase") or "")
+                if (mission_.get("status") == "paused" and mission_.get("mission_id") == mid_
+                        and (phase_now_.startswith("recover_") or phase_now_ == "clear_out")
+                        and (entry["cancel_reply"] or {}).get("t") == "ack" and "recovery_resume" not in entry):
+                    # as in the U30 stop-wait: a cancel from a pause becomes a recovery the PAUSED mode pauses at once
+                    entry["recovery_resume"] = await p.request_until_standing("mission_resume", mission_id=mid_)
                 await asyncio.sleep(0.1)
             entry["after_cancel"] = {"statuses": statuses_, "phases": phases_}
         end_by = time.monotonic() + args.mission_timeout_s
@@ -1003,6 +1019,18 @@ async def cycle_scenario(p: Probe, args):
             continue
         leg_index += 1
     p.report["missions_message"] = p.missions
+    if args.reconnect_at_end and p.closed_code is None:
+        # Plan U2: a page that connects after the missions gets the results book and the last result
+        await p.ws.close()
+        await asyncio.sleep(0.5)
+        p.missions, p.state = None, None
+        await p.open()
+        await p.until(lambda s: True, 10, label="first_state_after_reconnect")
+        await p.until(lambda s: p.missions is not None, 10, label="missions_after_reconnect")
+        lease_ = await p.request("lease_request")
+        p.lease_id = (lease_ or {}).get("lease_id")
+        p.report["after_reconnect"] = {"session_epoch": p.epoch, "missions_message": p.missions,
+                                       "last_result": (p.state or {}).get("last_result")}
     if args.end_session and p.closed_code is None:
         # Persistent console plan D7: the session ends on request (the runner exits 0), not at a sim time limit.
         await p.until(p.standing, 30, label="standing_before_end")
@@ -1131,6 +1159,10 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
+    ap.add_argument("--reconnect-at-end", action="store_true",
+                    help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
+    ap.add_argument("--cancel-pause-s", type=float, default=0.0,
+                    help="cycle scenario: with --cancel-at, pause the mission this long (wall s) before cancelling (U27)")
     ap.add_argument("--cancel-at", default="", help="cycle scenario: cancel the first mission in PHASE[:SECONDS in it] "
                     "or PHASE@METRES (at most METRES left of its leg) or transport@docked (on the docked straight) "
                     "(plan U7/U26/U27)")
