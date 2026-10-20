@@ -313,6 +313,8 @@ def gyro_rear_odometry(stamps, increments, steering, base_pose, command_zero, ge
                               wheels_still=still, command_zero=bool(command_zero[i]), dt=1 / 120, w_imu=w_imu)
         if state["bias"] is None and i > 0 and not still:
             raise RuntimeError(f"the truck moved at {stamps[i]:.3f} s before the first standstill bias (the runner holds it)")
+        if state["bias"] is None and g_stamp > G.FIRST_BIAS_LIMIT_S:
+            raise RuntimeError(f"no standstill bias by {G.FIRST_BIAS_LIMIT_S:.0f} s (the runner ends the session there)")
         if dyaw is not None:
             out[i] = odometry.update_increments_heading(stamps[i], increments[i], dyaw)
         else:

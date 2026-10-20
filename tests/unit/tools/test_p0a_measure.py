@@ -281,12 +281,17 @@ def test_a_gyro_age_table_follows_the_logged_command_and_refuses_what_the_runner
 
     args = dict(draws=1, odometry_heading="gyro", gyro_model=ROOT / "config/gyro_model_spec_typical.yaml",
                 gyro_mount="carriage_low_measured")
-    cases = {"moving": dict(still_s=0.0), "commanded": dict(still_s=1.0, command_zero=np.zeros(1200, bool))}
-    for name, kw in cases.items():
+    late = np.ones(8000, bool)
+    late[:61 * 120] = False  # standing, the command on until 61 s: the runner ends the session at 60 s
+    cases = {"moving": (dict(still_s=0.0), "moved at"),
+             "commanded": (dict(still_s=1.0, command_zero=np.zeros(1200, bool)), "moved at"),
+             "never": (dict(still_s=20.0, command_zero=np.zeros(1200, bool)), "no standstill bias update"),
+             "late": (dict(still_s=63.0, steps=8000, command_zero=late), "no standstill bias by 60 s")}
+    for name, (kw, match) in cases.items():
         run = tmp_path / name
         run.mkdir()
         _team_spec_run(run, model_name="team_spec_quantized", **kw)
-        with pytest.raises(SystemExit, match="moved at|no standstill bias"):
+        with pytest.raises(SystemExit, match=match):
             MODULE.age_command(SimpleNamespace(run=[run], **args))
     run = tmp_path / "old"
     run.mkdir()

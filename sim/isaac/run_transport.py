@@ -4543,9 +4543,13 @@ def drive(S, isaac) -> None:
         encoder_model = None
         if encoder_spec is not None:
             encoder_model = TeamEncoderModel(encoder_spec, sensor_phases(args.slam_noise_seed))
-            # drive_command_zero: the gyro bias block's command condition per tick (gyro-heading plan G2 (A) D2), kept
-            # on every team-spec log so a gyro age table can be built from steering runs (Codex G2 (A) P2)
-            slam_log.update(wheel_counts=[], wheel_increments_rad=[], steering_measured_rad=[], drive_command_zero=[])
+            slam_log.update(wheel_counts=[], wheel_increments_rad=[], steering_measured_rad=[])
+            if getattr(args, "odometry_heading", None) is not None:
+                # drive_command_zero: the gyro bias block's command condition per tick (gyro-heading plan G2 (A) D2),
+                # kept on every team-spec log from this build on so a gyro age table can be built from steering runs
+                # (Codex G2 (A) P2). Keyed on the build's own argument: drive() replays an earlier record's setup
+                # snapshot, whose args have no odometry_heading, and its log must stay as recorded (Codex round 2 P2).
+                slam_log["drive_command_zero"] = []
         state["encoder_model"] = {"name": "reported"} if encoder_model is None else encoder_model.record()
         state["lidar_synthetic"] = lidar_config
     if args.slam_feedback is not None:
@@ -5614,7 +5618,8 @@ def drive(S, isaac) -> None:
                 # The applied wheel speed and the last requested speed both zero (the bias block's condition)
                 command_zero_ = ((state.get("applied_command") or (0.0, []))[0] == 0.0
                                  and (slam is None or slam.get("last_command", 0.0) == 0.0))
-                slam_log["drive_command_zero"].append(command_zero_)
+                if "drive_command_zero" in slam_log:
+                    slam_log["drive_command_zero"].append(command_zero_)
             if slam is not None and encoder_model is not None:
                 previous_yaw = slam["odom_rear"][2]
                 dyaw_ = None
