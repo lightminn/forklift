@@ -714,3 +714,15 @@ def test_a_retry_point_the_mission_could_not_start_from_is_skipped():
     skipped = [c for c in w.state["observation_candidates"] if c["pose"] == list(outside)]
     assert skipped and skipped[0]["status"] == "outside_mission_zone" and skipped[0]["success"] is False
     assert w.deck["reobservation_attempts"][-1]["candidate_index"] == 2
+
+
+def test_without_a_pickup_zone_the_retry_point_is_checked_against_the_scenario_bounds():
+    # Codex retry review round 6 P2: with no pickup bounds the mission plans in the scenario bounds (near_bounds);
+    # a point whose footprint leaves them would fail approach:invalid_start just the same.
+    edge = (4.0, 0.0, 0.0)  # the front of the footprint passes the scenario's x_max 4.7
+    w = returned(waypoints=(tuple(REAR), edge, NEXT))
+    assert w.core.options.pickup_bounds is None
+    assert w.core.observe_failed(36.0, REAR, reobserve_attempt(), 3,
+                                 SimpleNamespace(status="no_pallet", reason="r")) is False
+    assert tuple(w.core.paths["observe"].poses[-1]) == pytest.approx(NEXT)
+    assert [c["status"] for c in w.state["observation_candidates"] if c["pose"] == list(edge)] == ["outside_mission_zone"]
