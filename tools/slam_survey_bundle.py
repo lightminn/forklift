@@ -9,14 +9,16 @@ sent). This writes, from those:
 - ``<out>/``: ``map.posegraph``, ``map.data`` (copied), ``grid.npz`` (the read-back /map: ``data`` int8 -1/0/100,
   ``origin`` [x, y, yaw], ``resolution_m``) and ``manifest.json`` (``map_id`` = SHA-256 over the three files' names
   and SHA-256, the run's scene/URDF/source hashes and arguments, seeds, slam_toolbox version, node and edge counts,
-  the last processed scan, the survey's stamps). No bundle is written unless every finalize check passes.
+  the last processed scan, the survey's stamps, every input file the run's arguments name, hashed). No bundle is
+  written unless the finalize, received and nodes checks pass.
 - ``--report``: the checks, each with its numbers and ``ok``:
-  ``finalize`` (the session ended, the bridge's verdict clean, the graph written, the read-back /map settled and the
-  same as the karto grid of the dumped graph), ``nodes`` (the graph's scans are the epoch's processed scans, by
+  ``finalize`` (the session ended, the bridge container and its verdict clean, the graph written, the read-back /map
+  settled and the same as the karto grid of the dumped graph, resolution and origin too), ``received`` (every scan the
+  bridge answered processed reached the runner), ``nodes`` (the graph's scans are the epoch's processed scans, by
   stamp), ``world`` (V2': every node's corrected base pose against the Isaac truth at its stamp, unaligned),
   ``start`` (map <- world is the identity: the first node's odometric pose is the truth), ``coverage`` (every path
   point of the reference run within the radius of a node), ``cost`` (the survey's keyframe processing seconds),
-  ``moving`` (the rigid bodies of the stage other than the truck and the carried pallet that reach the LiDAR plane).
+  ``moving`` (what can move and reach the LiDAR plane besides the truck and the carried pallet; not run is a fail).
 
     python tools/slam_survey_bundle.py --epoch OUT/epoch_1 --readback OUT/readback --slam-params YAML \\
         --image IMAGE_ID [--reference-run RUN] [--rigid-bodies RIGID.json] --out OUT/bundle --report REPORT.json
@@ -36,7 +38,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from forklift_core.live.spool import load_group  # noqa: E402
+from forklift_core.live.spool import load_list, load_slam_log  # noqa: E402
 
 # Provisional (plan section 5: Claude's proposals, to be changed only in the plan's table with a reason).
 WORLD_POSITION_MAX_M = 0.10
@@ -48,6 +50,8 @@ START_YAW_MAX_RAD = 0.005
 LIDAR_PLANE_M = 1.05  # the laser's height above base_link (laser_xyz_yaw), the base on the floor
 STAMP_TOLERANCE_S = 1e-6
 BUNDLE_FILES = ("map.posegraph", "map.data", "grid.npz")
+# run arguments that name a file but are this run's own output or socket, not an input to hash
+NOT_INPUTS = ("output", "live_port_file", "slam_feedback", "slam_map_dir", "live_web_root")
 
 
 def sha256(path: Path) -> str:
@@ -154,16 +158,9 @@ def coverage_check(path_xy: np.ndarray, node_xy: np.ndarray, radius_m: float, ch
             "outside": int((nearest > radius_m).sum()), "radius_m": radius_m}
 
 
-def path_points(run: Path, spacing_m: float = 0.1) -> np.ndarray:
-    """The truck's base path of a run (Isaac truth from its spool), a point every ``spacing_m``."""
-    joint = load_group(run / "spool", "slam_log.joint")
-    xy = np.asarray(joint["base_pose_world"], float)[:, :2]
-    keep, last = [0], xy[0]
-    for i in range(1, len(xy)):
-        if math.hypot(*(xy[i] - last)) >= spacing_m:
-            keep.append(i)
-            last = xy[i]
-    return xy[keep]
+def path_points(run: Path) -> np.ndarray:
+    """Every physics step's base position of a run (Isaac truth; a spooled log is refused when incomplete)."""
+    return np.asarray(load_slam_log(run)["base_pose_world"], float)[:, :2]
 
 
 def cost_check(records: list) -> dict:
@@ -176,17 +173,45 @@ def cost_check(records: list) -> dict:
             "last10_mean_s": float(tail.mean()), "limit_max_s": SURVEY_KEYFRAME_MAX_S}
 
 
-def moving_check(rigid: dict | None) -> dict:
-    """The stage's free rigid bodies other than the truck and the carried pallet; any reaching the LiDAR plane would
-    move out of the map once carried in operation."""
+def moving_check(rigid: dict | None, arguments: dict) -> dict:
+    """What can move in the survey's stage and reach the LiDAR plane, other than the truck and the carried pallet:
+    rigid bodies (kinematic ones too: a script can drive them) and prims whose transform has time samples
+    (tools/list_rigid_bodies.py), and obstacles the runner spawns (--new-obstacles). The runner's own scripted moves
+    are the truck, the pallet, the cameras and the path and destination markers, none a collider. Not run (no list)
+    is no pass."""
     if rigid is None:
-        return {"ok": None, "reason": "no rigid body list (tools/list_rigid_bodies.py)"}
-    others = [r for r in rigid["rigid_bodies"] if r["root"] not in ("/World/Forklift", "/World/Pallet")]
-    reaching = [r for r in others if r["z_max_m"] is not None and r["z_max_m"] >= LIDAR_PLANE_M]
-    roots = sorted({r["root"] for r in rigid["rigid_bodies"]})
-    return {"ok": not reaching, "roots": roots, "others": len(others), "reaching_lidar_plane": reaching,
+        return {"ok": False, "reason": "no rigid body list (tools/list_rigid_bodies.py did not run or failed)"}
+    allowed = ("/World/Forklift", "/World/Pallet")
+    movers = [r for r in rigid["rigid_bodies"] + rigid.get("time_varying", []) if r["root"] not in allowed]
+    reaching = [r for r in movers if r["z_max_m"] is not None and r["z_max_m"] >= LIDAR_PLANE_M]  # no bound: no geometry
+    spawned = arguments.get("new_obstacles")
+    return {"ok": not reaching and not spawned, "roots": sorted({r["root"] for r in rigid["rigid_bodies"]}),
+            "others": len(movers), "reaching_lidar_plane": reaching, "new_obstacles": spawned,
             "pallet_z_max_m": max((r["z_max_m"] for r in rigid["rigid_bodies"]
                                    if r["root"] == "/World/Pallet" and r["z_max_m"] is not None), default=None)}
+
+
+def received_check(records: list, runner_records: list) -> dict:
+    """Every scan the bridge answered processed reached the runner (L2's finalize order: the replies all received,
+    nothing in flight when the graph is written). A reply lost to the runner's closing socket is still in the graph,
+    but then the order was not kept."""
+    bridge = {r["scan_id"] for r in records if r.get("status") == "processed"}
+    runner = {r["scan_id"] for r in runner_records if r.get("status") == "processed"}
+    missing = sorted(bridge - runner)
+    return {"ok": not missing, "bridge_processed": len(bridge), "runner_processed": len(runner),
+            "not_received": missing[:20], "not_received_count": len(missing)}
+
+
+def input_hashes(arguments: dict, root: Path) -> dict:
+    """SHA-256 of every input file the run's arguments name (relative paths from the snapshot root)."""
+    out = {}
+    for key, value in sorted(arguments.items()):
+        if key in NOT_INPUTS or not isinstance(value, str) or "://" in value:
+            continue
+        path = Path(value) if Path(value).is_absolute() else root / value
+        if path.is_file():
+            out[key] = {"path": value, "sha256": sha256(path)}
+    return out
 
 
 def finalize_check(epoch: Path, readback: Path) -> tuple[dict, np.ndarray | None]:
@@ -194,6 +219,8 @@ def finalize_check(epoch: Path, readback: Path) -> tuple[dict, np.ndarray | None
     out: dict = {}
     exit_file = epoch / "run" / "exit_code"
     out["runner_exit"] = json.loads(exit_file.read_text()) if exit_file.exists() else None
+    container = epoch / "bridge_container_exit"
+    out["bridge_container_exit"] = container.read_text().strip() if container.exists() else None
     status = json.loads((bridge / "bridge_status.json").read_text()) if (bridge / "bridge_status.json").exists() else None
     out["bridge_status"] = status
     serialize = (bridge / "serialize.log").read_text() if (bridge / "serialize.log").exists() else ""
@@ -211,10 +238,13 @@ def finalize_check(epoch: Path, readback: Path) -> tuple[dict, np.ndarray | None
             grid = {"data": m["data"].copy(), "origin": m["origin"].copy(), "resolution_m": float(m["resolution_m"])}
         cells = np.fromfile(readback / "dump" / "grid.u8", dtype=np.uint8).reshape(graph["height"], graph["width"])
         same = bool(cells.shape == grid["data"].shape and np.array_equal(karto_to_map(cells), grid["data"])
-                    and np.allclose(graph["origin"], grid["origin"][:2], atol=1e-9))
+                    and np.allclose(graph["origin"], grid["origin"][:2], rtol=0.0, atol=1e-9)
+                    and abs(float(grid["origin"][2])) <= 1e-12
+                    and abs(float(graph["resolution_m"]) - grid["resolution_m"]) <= 1e-9)
     out["readback_grid_is_the_graphs"] = same
     out["ok"] = bool(
         out["runner_exit"] is not None and out["runner_exit"].get("code") == 0
+        and out["bridge_container_exit"] == "0"
         and status is not None and status.get("ok") and not status.get("pending")
         and not status.get("records_dropped") and not status.get("records_unsettled")
         and out["serialized"] and all(out["graph_files"].values()) and same)
@@ -245,6 +275,8 @@ def main(argv=None) -> int:
                     help="a run directory of operational missions (its path is checked for coverage); the survey's "
                          "own path otherwise")
     ap.add_argument("--rigid-bodies", type=Path, default=None, help="tools/list_rigid_bodies.py's output")
+    ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
+                    help="the snapshot the run ran from (its relative argument paths)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
     args = ap.parse_args(argv)
@@ -255,31 +287,43 @@ def main(argv=None) -> int:
     run = args.epoch / "run"
     records = read_records(args.epoch / "bridge")
     report["cost"] = cost_check(records)
+    result = json.loads((run / "result.json").read_text()) if (run / "result.json").exists() else {}
+    arguments = result.get("arguments") or {}
+    try:
+        report["received"] = received_check(records, load_list(run / "spool", "slam.records"))
+    except (OSError, ValueError) as exc:
+        report["received"] = {"ok": False, "reason": str(exc)}
     nodes_csv = args.readback / "dump" / "nodes.csv"
     nodes = read_nodes(nodes_csv) if nodes_csv.exists() else None
     if nodes is not None:
         report["nodes"] = nodes_check(nodes, records)
-        joint = load_group(run / "spool", "slam_log.joint")
-        joint_stamps = np.asarray(joint["joint_stamps_s"], float)
-        base = np.asarray(joint["base_pose_world"], float)
-        tolerance = 0.5 * float(np.median(np.diff(joint_stamps)))  # half a physics step
-        report["world"] = world_check(nodes, joint_stamps, base, tolerance)
-        report["start"] = start_check(nodes, joint_stamps, base, tolerance)
+        try:
+            log = load_slam_log(run)
+        except (OSError, ValueError) as exc:  # the truth itself incomplete: neither check can pass
+            report["world"] = report["start"] = {"ok": False, "reason": str(exc)}
+        else:
+            joint_stamps = np.asarray(log["joint_stamps_s"], float)
+            base = np.asarray(log["base_pose_world"], float)
+            tolerance = 0.5 * float(np.median(np.diff(joint_stamps)))  # half a physics step
+            report["world"] = world_check(nodes, joint_stamps, base, tolerance)
+            report["start"] = start_check(nodes, joint_stamps, base, tolerance)
         reference = args.reference_run or run
-        report["coverage"] = {"reference": str(reference),
-                              **coverage_check(path_points(reference), np.column_stack((nodes["x"], nodes["y"])),
-                                               COVERAGE_RADIUS_M)}
+        try:
+            report["coverage"] = {"reference": str(reference),
+                                  **coverage_check(path_points(reference), np.column_stack((nodes["x"], nodes["y"])),
+                                                   COVERAGE_RADIUS_M)}
+        except (OSError, ValueError) as exc:
+            report["coverage"] = {"reference": str(reference), "ok": False, "reason": str(exc)}
     rigid = json.loads(args.rigid_bodies.read_text()) if args.rigid_bodies and args.rigid_bodies.exists() else None
-    report["moving"] = moving_check(rigid)
+    report["moving"] = moving_check(rigid, arguments)
 
     written = False
-    if finalize["ok"] and nodes is not None and report["nodes"]["ok"]:
+    if finalize["ok"] and report["received"]["ok"] and nodes is not None and report["nodes"]["ok"]:
         args.out.mkdir(parents=True, exist_ok=True)
         for name in ("map.posegraph", "map.data"):
             shutil.copyfile(args.epoch / "bridge" / "bundle" / name, args.out / name)
         np.savez_compressed(args.out / "grid.npz", **grid)
         hashes = {name: sha256(args.out / name) for name in BUNDLE_FILES}
-        result = json.loads((run / "result.json").read_text()) if (run / "result.json").exists() else {}
         version = args.readback / "slam_toolbox_version.txt"
         manifest = {
             "format": "slam_map_bundle/1",
@@ -297,6 +341,11 @@ def main(argv=None) -> int:
             "run": {key: result.get(key) for key in ("scene_sha256", "forklift_urdf_sha256", "pallet_urdf_sha256",
                                                      "pallet_geometry_sha256", "script_sha256", "source_sha256",
                                                      "scene_built_from_urdf_sha256", "arguments")},
+            "inputs": input_hashes(arguments, args.root),
+            "factory": {key: (result.get("factory") or {}).get(key) for key in ("layout_version", "layout_sha256")},
+            "settings_synthetic": result.get("settings_synthetic"),
+            "lidar_synthetic": result.get("lidar_synthetic"),
+            "noise": {key: arguments.get(key) for key in sorted(arguments) if "noise" in key},
             "slam_params_sha256": sha256(args.slam_params),
             "slam_toolbox_version": version.read_text().strip() if version.exists() else None,
             "image": args.image,
@@ -306,8 +355,7 @@ def main(argv=None) -> int:
         report["map_id"] = manifest["map_id"]
         written = True
     report["bundle_written"] = written
-    report["ok"] = bool(written and all(report[k]["ok"] for k in ("world", "start", "coverage", "cost"))
-                        and report["moving"]["ok"] is not False)
+    report["ok"] = bool(written and all(report[k]["ok"] for k in ("world", "start", "coverage", "cost", "moving")))
     args.report.write_text(json.dumps(report, indent=1))
     print(json.dumps({k: (v.get("ok") if isinstance(v, dict) else v) for k, v in report.items()}))
     return 0 if report["ok"] else 1

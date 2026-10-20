@@ -49,7 +49,8 @@ cat > "$OUT/stop.sh" <<'EOT'
 . "$(dirname "$0")/env.sh"
 if [ -n "$(docker ps -aq --filter "name=^slam_survey_${JOB}_e$1\$")" ]; then
   # the bridge ends by itself once the runner closed its socket; then the graph is written (serialize_map up to 300 s)
-  timeout 360 docker wait "slam_survey_${JOB}_e$1" >/dev/null 2>&1
+  # its exit code (the bridge's: 0 only for a clean end) is part of the bundle's finalize check
+  timeout 360 docker wait "slam_survey_${JOB}_e$1" > "$(dirname "$0")/epoch_$1/bridge_container_exit" 2>/dev/null
   docker rm -f "slam_survey_${JOB}_e$1" >/dev/null
 fi
 EOT

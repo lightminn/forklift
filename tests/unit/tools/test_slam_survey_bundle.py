@@ -81,15 +81,42 @@ def test_the_cost_check_counts_processed_keyframes_only():
     assert abs(out["last10_mean_s"] - 0.31) < 1e-12
 
 
-def test_only_free_bodies_other_than_truck_and_pallet_reaching_the_lidar_plane_fail_the_moving_check():
+def test_what_moves_besides_truck_and_pallet_and_reaches_the_lidar_plane_fails_the_moving_check():
     rigid = {"rigid_bodies": [{"path": "/World/Forklift/body", "root": "/World/Forklift", "z_min_m": 0, "z_max_m": 2.0},
                               {"path": "/World/Pallet/p", "root": "/World/Pallet", "z_min_m": 0, "z_max_m": 0.15},
-                              {"path": "/World/Factory/box", "root": "/World/Factory", "z_min_m": 0, "z_max_m": 0.9}]}
-    out = sb.moving_check(rigid)
+                              {"path": "/World/Factory/box", "root": "/World/Factory", "z_min_m": 0, "z_max_m": 0.9}],
+             "time_varying": []}
+    out = sb.moving_check(rigid, {})
     assert out["ok"] and out["others"] == 1 and out["pallet_z_max_m"] == 0.15
-    rigid["rigid_bodies"][2]["z_max_m"] = 1.2
-    assert not sb.moving_check(rigid)["ok"]
-    assert sb.moving_check(None)["ok"] is None
+    rigid["rigid_bodies"][2]["z_max_m"] = 1.2  # a box as tall as the plane (a kinematic one counts the same)
+    assert not sb.moving_check(rigid, {})["ok"]
+    rigid["rigid_bodies"][2]["z_max_m"] = 0.9
+    rigid["time_varying"] = [{"path": "/World/Door", "root": "/World/Door", "z_min_m": 0, "z_max_m": 2.0}]
+    assert not sb.moving_check(rigid, {})["ok"]  # an animated prim
+    rigid["time_varying"] = []
+    assert not sb.moving_check(rigid, {"new_obstacles": "events.yaml"})["ok"]  # obstacles the runner spawns
+    assert sb.moving_check(None, {})["ok"] is False  # not run is no pass
+
+
+def test_every_processed_reply_must_have_reached_the_runner():
+    bridge = [{"scan_id": 1, "status": "processed"}, {"scan_id": 2, "status": "skipped"},
+              {"scan_id": 3, "status": "processed"}]
+    runner = [{"scan_id": 1, "status": "processed"}, {"scan_id": 2, "status": "skipped"}]
+    out = sb.received_check(bridge, runner)
+    assert not out["ok"] and out["not_received"] == [3]  # the last reply lost to the closing socket
+    assert sb.received_check(bridge[:2], runner)["ok"]
+
+
+def test_every_input_file_the_arguments_name_is_hashed_but_not_the_runs_own_output(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "settings.yaml").write_text("a: 1\n")
+    (tmp_path / "scene.usda").write_text("#usda 1.0\n")
+    (tmp_path / "port.json").write_text("{}")
+    out = sb.input_hashes({"settings": "config/settings.yaml", "base_scene": str(tmp_path / "scene.usda"),
+                           "live_port_file": str(tmp_path / "port.json"), "seed": 0, "missing": "config/none.yaml",
+                           "asset_root": "https://example.org/props"}, tmp_path)
+    assert sorted(out) == ["base_scene", "settings"]
+    assert out["settings"]["sha256"] == sb.sha256(tmp_path / "config" / "settings.yaml")
 
 
 def test_the_graphs_scans_must_be_the_epochs_processed_scans():
@@ -102,11 +129,12 @@ def test_the_graphs_scans_must_be_the_epochs_processed_scans():
     assert not sb.nodes_check(nodes, records)["ok"]
 
 
-def _epoch(tmp_path, *, serialized=True, grid_matches=True):
+def _epoch(tmp_path, *, serialized=True, grid_matches=True, grid_resolution=0.05, lost_reply=False):
     epoch, readback = tmp_path / "epoch_1", tmp_path / "readback"
     bridge, run = epoch / "bridge", epoch / "run"
     (bridge / "bundle").mkdir(parents=True)
-    (run / "spool" / "slam_log.joint").mkdir(parents=True)
+    for name in ("slam_log.joint", "slam_log.scan", "slam.records"):
+        (run / "spool" / name).mkdir(parents=True)
     (readback / "dump").mkdir(parents=True)
     (bridge / "bundle" / "map.posegraph").write_bytes(b"graph")
     (bridge / "bundle" / "map.data").write_bytes(b"data")
@@ -116,13 +144,24 @@ def _epoch(tmp_path, *, serialized=True, grid_matches=True):
     stamps = np.arange(0.0, 2.0, 1 / 60)
     base = np.array([[0.5 * t, 0.0, 0.1, *quat(0.0)] for t in stamps])
     np.savez(run / "spool" / "slam_log.joint" / "000000.npz", joint_stamps_s=stamps, base_pose_world=base)
-    (run / "spool" / "manifest.json").write_text(json.dumps({"complete": True}))
-    (run / "exit_code").write_text(json.dumps({"code": 0, "reason": None}))
-    (run / "result.json").write_text(json.dumps({"seed": 0, "scene_sha256": "s", "arguments": {"seed": 0}}))
+    np.savez(run / "spool" / "slam_log.scan" / "000000.npz", scan_stamps_s=stamps[::6])
     scans = [0, 12, 30, 60, 90]  # every 0.2-0.5 s: the processed keyframes
     lines = [json.dumps({"scan_id": i, "stamp_s": float(stamps[i]), "status": "processed", "wall_s": 0.04})
              for i in scans]
     (bridge / "records.jsonl").write_text("\n".join(lines) + "\n")
+    received = scans[:-1] if lost_reply else scans
+    (run / "spool" / "slam.records" / "000000.jsonl").write_text(
+        "".join(json.dumps({"scan_id": i, "status": "processed"}) + "\n" for i in received))
+    (run / "spool" / "manifest.json").write_text(json.dumps({
+        "complete": True, "slam_log.joint": {"items": len(stamps)}, "slam_log.scan": {"items": len(stamps[::6])},
+        "slam.records": {"items": len(received)}}))
+    (run / "meta.json").write_text(json.dumps({"spool": {"joint": "slam_log.joint", "scan": "slam_log.scan",
+                                                         "silenced": "slam_log.silenced", "root": "spool"}}))
+    (run / "exit_code").write_text(json.dumps({"code": 0, "reason": None}))
+    (run / "result.json").write_text(json.dumps({"seed": 0, "scene_sha256": "s", "arguments": {
+        "seed": 0, "slam_noise_seed": 0, "settings": str(tmp_path / "slam.yaml")},
+        "factory": {"layout_version": "v2", "layout_sha256": "f"}}))
+    (epoch / "bridge_container_exit").write_text("0\n")
     with open(readback / "dump" / "nodes.csv", "w") as handle:
         handle.write("unique_id,state_id,stamp_s,x,y,yaw,odom_x,odom_y,odom_yaw\n")
         for k, i in enumerate(scans):
@@ -132,7 +171,7 @@ def _epoch(tmp_path, *, serialized=True, grid_matches=True):
     cells.tofile(readback / "dump" / "grid.u8")
     (readback / "dump" / "graph.json").write_text(json.dumps({"scans": 5, "vertices": 5, "edges": 4, "width": 2,
                                                               "height": 2, "origin": [-1.0, -2.0],
-                                                              "resolution_m": 0.05}))
+                                                              "resolution_m": grid_resolution}))
     data = sb.karto_to_map(cells)
     if not grid_matches:
         data[0, 0] = 0
@@ -141,13 +180,15 @@ def _epoch(tmp_path, *, serialized=True, grid_matches=True):
     (readback / "slam_toolbox_version.txt").write_text("2.8.5-1noble\n")
     params = tmp_path / "slam.yaml"
     params.write_text("slam_toolbox: {}\n")
+    (tmp_path / "rigid.json").write_text(json.dumps({"rigid_bodies": [], "time_varying": []}))
     return epoch, readback, params
 
 
 def _main(tmp_path, epoch, readback, params):
     report = tmp_path / "report.json"
     code = sb.main(["--epoch", str(epoch), "--readback", str(readback), "--slam-params", str(params),
-                    "--image", "sha256:x", "--out", str(tmp_path / "bundle"), "--report", str(report)])
+                    "--image", "sha256:x", "--rigid-bodies", str(tmp_path / "rigid.json"), "--root", str(tmp_path),
+                    "--out", str(tmp_path / "bundle"), "--report", str(report)])
     return code, json.loads(report.read_text())
 
 
@@ -163,6 +204,8 @@ def test_a_clean_survey_writes_a_bundle_whose_manifest_rehashes(tmp_path):
     with np.load(bundle / "grid.npz") as grid:
         assert grid["data"].tolist() == [[-1, 100], [0, 0]]
     assert abs(report["world"]["position_max_m"] - 0.01) < 1e-9 and report["coverage"]["ok"]
+    assert manifest["inputs"]["settings"]["sha256"] == sb.sha256(tmp_path / "slam.yaml")
+    assert manifest["noise"] == {"slam_noise_seed": 0} and manifest["factory"]["layout_sha256"] == "f"
 
 
 def test_no_bundle_without_the_graph_written_or_when_the_readback_grid_is_not_the_graphs(tmp_path):
@@ -170,6 +213,25 @@ def test_no_bundle_without_the_graph_written_or_when_the_readback_grid_is_not_th
     assert code == 1 and not report["bundle_written"] and not (tmp_path / "a" / "bundle").exists()
     code, report = _main(tmp_path / "b", *_epoch(tmp_path / "b", grid_matches=False))
     assert code == 1 and report["finalize"]["readback_grid_is_the_graphs"] is False and not report["bundle_written"]
+    code, report = _main(tmp_path / "c", *_epoch(tmp_path / "c", grid_resolution=0.5))  # same cells, other scale
+    assert code == 1 and report["finalize"]["readback_grid_is_the_graphs"] is False
+    code, report = _main(tmp_path / "d", *_epoch(tmp_path / "d", lost_reply=True))
+    assert code == 1 and not report["received"]["ok"] and not report["bundle_written"]
+
+
+def test_a_bridge_container_that_did_not_end_cleanly_writes_no_bundle(tmp_path):
+    epoch, readback, params = _epoch(tmp_path)
+    (epoch / "bridge_container_exit").write_text("1\n")
+    code, report = _main(tmp_path, epoch, readback, params)
+    assert code == 1 and not report["finalize"]["ok"] and not report["bundle_written"]
+
+
+def test_an_incomplete_spool_fails_the_truth_checks_and_coverage(tmp_path):
+    epoch, readback, params = _epoch(tmp_path)
+    manifest = epoch / "run" / "spool" / "manifest.json"
+    manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "complete": False}))
+    code, report = _main(tmp_path, epoch, readback, params)
+    assert code == 1 and not report["coverage"]["ok"] and not report["world"]["ok"] and not report["received"]["ok"]
 
 
 def _heredoc(text, name):

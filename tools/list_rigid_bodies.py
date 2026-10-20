@@ -1,10 +1,11 @@
-"""The rigid bodies of a run's exported stage, with their world height range (SLAM localization plan
+"""What can move in a run's exported stage, with its world height range (SLAM localization plan
 docs/plans/2026-10-20-slam-localization-session.md L2: what can move in a survey's scene and reach the LiDAR plane).
 
 Opens ``<run>/scene.usda`` (the runner's root layer, its own edits included -- the layout's props have their rigid
-bodies removed, ``sim/isaac/scene.py``) in a headless Isaac app, composes it and writes every prim with an enabled,
-non-kinematic rigid body to a JSON list: path, the top-level prim under /World it belongs to, z range of its world
-bound. Run with the Isaac Python:
+bodies removed, ``sim/isaac/scene.py``) in a headless Isaac app, composes it and writes to JSON ``rigid_bodies``:
+every prim with an enabled rigid body, kinematic ones too (a script can drive them), and ``time_varying``: every prim
+whose transform has time samples (an animation); each with its path, the top-level prim under /World it belongs to and
+the z range of its world bound. This is the stage at the export, not a history of moves. Run with the Isaac Python:
 
     VENV_PY tools/list_rigid_bodies.py RUN/scene.usda OUT.json
 """
@@ -26,22 +27,25 @@ def main(argv=None) -> int:
 
         stage = Usd.Stage.Open(scene)
         cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
-        rows = []
-        for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
-            if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
-                continue
-            body = UsdPhysics.RigidBodyAPI(prim)
-            enabled, kinematic = body.GetRigidBodyEnabledAttr().Get(), body.GetKinematicEnabledAttr().Get()
-            if enabled is False or kinematic:
-                continue
+
+        def row(prim, **extra):
             box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
             path = str(prim.GetPath())
             parts = path.split("/")
-            rows.append({"path": path, "root": "/".join(parts[:3]) if len(parts) > 2 else path,
-                         "z_min_m": None if box.IsEmpty() else float(box.GetMin()[2]),
-                         "z_max_m": None if box.IsEmpty() else float(box.GetMax()[2])})
+            return {"path": path, "root": "/".join(parts[:3]) if len(parts) > 2 else path,
+                    "z_min_m": None if box.IsEmpty() else float(box.GetMin()[2]),
+                    "z_max_m": None if box.IsEmpty() else float(box.GetMax()[2]), **extra}
+
+        rigid, varying = [], []
+        for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
+            if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                body = UsdPhysics.RigidBodyAPI(prim)
+                if body.GetRigidBodyEnabledAttr().Get() is not False:
+                    rigid.append(row(prim, kinematic=bool(body.GetKinematicEnabledAttr().Get())))
+            if prim.IsA(UsdGeom.Xformable) and UsdGeom.Xformable(prim).TransformMightBeTimeVarying():
+                varying.append(row(prim))
         with open(out, "w") as handle:
-            json.dump({"scene": scene, "rigid_bodies": rows}, handle, indent=1)
+            json.dump({"scene": scene, "rigid_bodies": rigid, "time_varying": varying}, handle, indent=1)
     finally:
         app.close()
     return 0
