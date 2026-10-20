@@ -607,7 +607,7 @@ def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(t
     rt, core, order = ending(tmp_path)
     (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
     rt.end_mission(15.0, "failed", "x")
-    for writer in rt._writers:
+    for writer, _ in rt._writers:
         writer.join(timeout=5.0)
     assert "record_error" not in rt.results.last
     rt.tick_start(16.0, False)
@@ -632,6 +632,26 @@ def test_a_records_write_failure_after_the_last_tick_is_noted_before_the_runs_re
     rt2.end_mission(15.0, "failed", "x")
     rt2.close()
     assert rt2.results.last["record_error"].startswith("records.json: IsADirectoryError")
+
+
+def test_a_records_writer_past_the_settle_limit_is_marked_unsettled_once(tmp_path, monkeypatch):
+    """Codex U29 review round 3 P2: a writer still writing at the limit left the run's results without a mark; the
+    limit is one deadline for all writers and the mark is made once (plan D1: what is left at the limit is counted
+    unsettled and not changed after)."""
+    import threading
+
+    import sim.isaac.live_runtime as live_runtime
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    monkeypatch.setattr(live_runtime, "_jsonable", lambda value: gate.wait(5.0) and str(value))
+    rt.end_mission(15.0, "failed", "x")  # the stand-in records hold no object; write one that waits
+    rt.archive("m1", {"state": {"slow": object()}}, rt.results.last["seq"])
+    rt.settle_records(timeout_s=0.05)
+    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    gate.set()
+    rt.settle_records(timeout_s=5.0)
+    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
 
 
 def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):

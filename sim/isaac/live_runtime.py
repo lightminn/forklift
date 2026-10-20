@@ -72,8 +72,9 @@ class LiveRuntime:
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
         self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
-        self._writers: list = []  # the threads writing the missions' records (plan D2), joined at close
+        self._writers: list = []  # (thread, seq) writing the missions' records (plan D2), joined at close
         self._archive_errors: deque = deque()  # (seq, error) from the writers, noted at the next tick start
+        self._unsettled: set = set()  # the results marked unsettled at a settle deadline (their marks stay)
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -156,7 +157,7 @@ class LiveRuntime:
                 (folder / "records.json").write_text(text)
             except (OSError, TypeError, ValueError) as exc:
                 error = f"{type(exc).__name__}: {exc}"
-                if seq is not None:  # first: a failing log write below must not lose it (Codex U29 round 2 P2-2)
+                if seq is not None and seq not in self._unsettled:  # first: a failing log write below must not lose it (Codex U29 round 2 P2-2)
                     self._archive_errors.append((seq, f"records.json: {error}"))
                 try:
                     self.log({"archive_error": error, "mission_id": mission_id})
@@ -168,16 +169,22 @@ class LiveRuntime:
             self.log({"archive": {"mission_id": mission_id, "bytes": len(text.encode()), "start_mono": start,
                                   "end_mono": self.clock()}})
 
-        self._writers = [w for w in self._writers if w.is_alive()]
+        self._writers = [(w, s) for w, s in self._writers if w.is_alive()]
         writer = threading.Thread(target=write, name=f"archive-{mission_id}", daemon=True)
         writer.start()
-        self._writers.append(writer)
+        self._writers.append((writer, seq))
 
     def settle_records(self, timeout_s: float = 30.0) -> None:
-        """The records writers joined and their failures noted on the results (the run's results are taken after it;
-        Codex U29 review round 2 P2-1)."""
-        for writer in self._writers:
-            writer.join(timeout=timeout_s)
+        """The records writers joined within one deadline and their failures noted on the results (the run's results
+        are taken after it; Codex U29 review round 2 P2-1). A writer still on at the deadline is marked unsettled on
+        its result, once; what it does after does not change the mark (plan D1, as the spool's close)."""
+        deadline = time.monotonic() + timeout_s
+        for writer, _ in self._writers:
+            writer.join(timeout=max(0.0, deadline - time.monotonic()))
+        for writer, seq in self._writers:
+            if writer.is_alive() and seq is not None and seq not in self._unsettled:
+                self._unsettled.add(seq)
+                self._archive_errors.append((seq, f"records.json: unsettled after {timeout_s:g} s"))
         self._note_archive_errors()
 
     def close(self) -> None:
