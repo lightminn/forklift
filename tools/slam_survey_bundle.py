@@ -175,15 +175,19 @@ def cost_check(records: list) -> dict:
 
 def moving_check(rigid: dict | None, arguments: dict) -> dict:
     """What can move in the survey's stage and reach the LiDAR plane, other than the truck and the carried pallet:
-    rigid bodies (kinematic ones too: a script can drive them) and prims whose transform has time samples
-    (tools/list_rigid_bodies.py), and obstacles the runner spawns (--new-obstacles). The runner's own scripted moves
+    rigid bodies (kinematic ones too: a script can drive them) as tall as the plane or of unknown height, any prim
+    with a time-sampled attribute (tools/list_rigid_bodies.py), and obstacles the runner spawns (--new-obstacles). The runner's own scripted moves
     are the truck, the pallet, the cameras and the path and destination markers, none a collider. Not run (no list)
     is no pass."""
     if rigid is None:
         return {"ok": False, "reason": "no rigid body list (tools/list_rigid_bodies.py did not run or failed)"}
     allowed = ("/World/Forklift", "/World/Pallet")
-    movers = [r for r in rigid["rigid_bodies"] + rigid.get("time_varying", []) if r["root"] not in allowed]
-    reaching = [r for r in movers if r["z_max_m"] is not None and r["z_max_m"] >= LIDAR_PLANE_M]  # no bound: no geometry
+    bodies = [r for r in rigid["rigid_bodies"] if r["root"] not in allowed]
+    animated = [r for r in rigid.get("time_varying", []) if r["root"] not in allowed]
+    # An animated prim fails whatever its default-time bound says (it is no height over time, Codex S2 round 2); a
+    # body whose height cannot be told fails too.
+    reaching = animated + [r for r in bodies if r["z_max_m"] is None or r["z_max_m"] >= LIDAR_PLANE_M]
+    movers = bodies + animated
     spawned = arguments.get("new_obstacles")
     return {"ok": not reaching and not spawned, "roots": sorted({r["root"] for r in rigid["rigid_bodies"]}),
             "others": len(movers), "reaching_lidar_plane": reaching, "new_obstacles": spawned,

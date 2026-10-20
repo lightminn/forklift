@@ -4,8 +4,9 @@ docs/plans/2026-10-20-slam-localization-session.md L2: what can move in a survey
 Opens ``<run>/scene.usda`` (the runner's root layer, its own edits included -- the layout's props have their rigid
 bodies removed, ``sim/isaac/scene.py``) in a headless Isaac app, composes it and writes to JSON ``rigid_bodies``:
 every prim with an enabled rigid body, kinematic ones too (a script can drive them), and ``time_varying``: every prim
-whose transform has time samples (an animation); each with its path, the top-level prim under /World it belongs to and
-the z range of its world bound. This is the stage at the export, not a history of moves. Run with the Isaac Python:
+with a time-sampled attribute (an animation; its names under ``sampled``); each with its path, the top-level prim under
+/World it belongs to and the z range of its world bound at the default time (for an animated prim that says nothing
+about its height over time). This is the stage at the export, not a history of moves. Run with the Isaac Python:
 
     VENV_PY tools/list_rigid_bodies.py RUN/scene.usda OUT.json
 """
@@ -42,8 +43,11 @@ def main(argv=None) -> int:
                 body = UsdPhysics.RigidBodyAPI(prim)
                 if body.GetRigidBodyEnabledAttr().Get() is not False:
                     rigid.append(row(prim, kinematic=bool(body.GetKinematicEnabledAttr().Get())))
-            if prim.IsA(UsdGeom.Xformable) and UsdGeom.Xformable(prim).TransformMightBeTimeVarying():
-                varying.append(row(prim))
+            # any time-sampled attribute (transform, points, extent, visibility...): an animation, whatever its bound
+            # at the default time says (Codex S2 review round 2)
+            sampled = [a.GetName() for a in prim.GetAttributes() if a.GetNumTimeSamples() > 0]
+            if sampled:
+                varying.append(row(prim, sampled=sampled))
         with open(out, "w") as handle:
             json.dump({"scene": scene, "rigid_bodies": rigid, "time_varying": varying}, handle, indent=1)
     finally:

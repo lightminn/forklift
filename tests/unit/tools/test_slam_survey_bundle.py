@@ -91,8 +91,15 @@ def test_what_moves_besides_truck_and_pallet_and_reaches_the_lidar_plane_fails_t
     rigid["rigid_bodies"][2]["z_max_m"] = 1.2  # a box as tall as the plane (a kinematic one counts the same)
     assert not sb.moving_check(rigid, {})["ok"]
     rigid["rigid_bodies"][2]["z_max_m"] = 0.9
-    rigid["time_varying"] = [{"path": "/World/Door", "root": "/World/Door", "z_min_m": 0, "z_max_m": 2.0}]
-    assert not sb.moving_check(rigid, {})["ok"]  # an animated prim
+    rigid["time_varying"] = [{"path": "/World/Lift", "root": "/World/Lift", "z_min_m": 0, "z_max_m": 0.1}]
+    assert not sb.moving_check(rigid, {})["ok"]  # an animated prim, low at the default time
+    rigid["time_varying"] = [{"path": "/World/Mesh", "root": "/World/Mesh", "z_min_m": None, "z_max_m": None}]
+    assert not sb.moving_check(rigid, {})["ok"]  # geometry only in time samples: an empty default bound
+    rigid["time_varying"] = [{"path": "/World/Forklift/mast", "root": "/World/Forklift", "z_min_m": 0, "z_max_m": 2}]
+    assert sb.moving_check(rigid, {})["ok"]  # the truck's own
+    rigid["rigid_bodies"][2]["z_max_m"] = None
+    assert not sb.moving_check(rigid, {})["ok"]  # a body of unknown height
+    rigid["rigid_bodies"][2]["z_max_m"] = 0.9
     rigid["time_varying"] = []
     assert not sb.moving_check(rigid, {"new_obstacles": "events.yaml"})["ok"]  # obstacles the runner spawns
     assert sb.moving_check(None, {})["ok"] is False  # not run is no pass
