@@ -471,7 +471,8 @@ def test_runtime_viewpoints_only_follow_the_default_bay_list():
     ]
     rule = ast.unparse(assign.value)
     assert "args.observation_waypoints is None" in rule
-    assert "args.layout != 'factory'" in rule
+    # the bay's placement zone only: the factory layout and a scene file have their own candidates
+    assert "args.layout == 'bay'" in rule
 
 
 def test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle():

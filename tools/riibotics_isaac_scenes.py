@@ -330,15 +330,26 @@ def scene_record(name: str, built) -> dict:
 
 # ---- CPU planning check with the Isaac mission settings ----
 
-def plan_scene(path: Path, out: Path) -> None:
+def grown_pallets(scenario: TransportScenario, grow_m: float) -> TransportScenario:
+    """Every pallet prop (a neighbour) grown by grow_m on each side: the keep-out a planner puts around
+    a pallet it does not handle (the fleet planner's PALLET_KEEP_M is 0.3 m)."""
+    def grow(p):
+        if "pallet" not in p.asset.uri:
+            return p
+        r = p.rectangle
+        return PlacedProp(p.asset, Rectangle(r.x_m, r.y_m, r.length_m + 2 * grow_m, r.width_m + 2 * grow_m, r.yaw_rad))
+    return replace(scenario, props=tuple(grow(p) for p in scenario.props))
+
+
+def plan_scene(path: Path, out: Path, grow_m: float = 0.0) -> None:
     record = json.loads(path.read_text())
-    scenario = scenario_from_record(record["scenario"])
+    scenario = grown_pallets(scenario_from_record(record["scenario"]), grow_m)
     pallet = load_pallet_geometry(PALLETS[record["pallet"]])
     geometry = mission_geometry(URDF, pallet, RESERVE_M, **STRAIGHTS)
     config = make_transport_planner_config(curvature_limit_inv_m=KAPPA, clearance_m=CLEARANCE_M,
                                            max_expansions=30000, **D7_PLANNER_OPTIONS)
     result = {"scene": record["name"], "scene_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-              "candidates": []}
+              "grow_pallets_m": grow_m, "candidates": []}
     started = time.monotonic()
     # As the runner plans a scene: the zone grown by the pallet's half diagonal before recognition, the
     # (here: true) pallet as the estimate after it -- never scenario.pickup by default.
@@ -372,27 +383,31 @@ def plan_scene(path: Path, out: Path) -> None:
                       wall_s=round(time.monotonic() - started, 1),
                       lengths_m={n: round(float(getattr(plan, n).length_m), 2)
                                  for n in STAGES if getattr(plan, n, None) is not None})
-    (out / f"{record['name']}.plan.json").write_text(json.dumps(result, indent=1, default=str))
+    (out / _result_name(record["name"], grow_m)).write_text(json.dumps(result, indent=1, default=str))
+
+
+def _result_name(name: str, grow_m: float) -> str:
+    return f"{name}.plan.json" if grow_m == 0 else f"{name}.grow{grow_m:.2f}.plan.json"
 
 
 def _plan_worker(args):
     """A result counts only when this run's child wrote it for this scene file (Codex 2026-10-20 P2)."""
-    path, out, timeout = args
-    result = out / f"{path.stem}.plan.json"
+    path, out, timeout, grow_m = args
+    result = out / _result_name(path.stem, grow_m)
     result.unlink(missing_ok=True)
-    proc = multiprocessing.get_context("spawn").Process(target=plan_scene, args=(path, out))
+    proc = multiprocessing.get_context("spawn").Process(target=plan_scene, args=(path, out, grow_m))
     proc.start()
     proc.join(timeout)
     if proc.is_alive():
         proc.kill()
         proc.join()
-        return path.stem, "case_timeout"
+        return result.name, "case_timeout"
     if proc.exitcode != 0 or not result.exists():
-        return path.stem, f"crash {proc.exitcode}"
+        return result.name, f"crash {proc.exitcode}"
     record = json.loads(result.read_text())
     if record.get("scene_sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
-        return path.stem, "stale_result"
-    return path.stem, record["outcome"]
+        return result.name, "stale_result"
+    return result.name, record["outcome"]
 
 
 def main() -> None:
@@ -402,6 +417,7 @@ def main() -> None:
     parser.add_argument("--only", help="comma-separated scene names")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--timeout-s", type=float, default=1200)
+    parser.add_argument("--grow-pallets", default="0", help="comma-separated keep-outs (m) around neighbour pallets")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     only = set(args.only.split(",")) if args.only else None
@@ -415,7 +431,9 @@ def main() -> None:
         print("scene", path)
     if args.plan:
         with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-            for name, outcome in pool.map(_plan_worker, [(p, args.output, args.timeout_s) for p in paths]):
+            grows = [float(g) for g in args.grow_pallets.split(",")]
+            jobs = [(p, args.output, args.timeout_s, g) for p in paths for g in grows]
+            for name, outcome in pool.map(_plan_worker, jobs):
                 print("plan", name, outcome, flush=True)
 
 
