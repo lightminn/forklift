@@ -3,6 +3,9 @@
 # plus forklift_ros isaac_slam_bridge, both on a localhost-only DDS.
 # Usage: slam_bridge_container.sh <socket_path> <output_dir> <laser x,y,z,yaw> [persistent]
 # persistent: a live session left up for hours keeps no map or reply record in memory (persistent console plan D8b)
+# SLAM_SERIALIZE=<prefix> (environment): once the bridge has ended -- the runner closed its socket, so no scan is
+# sent or being processed -- slam_toolbox writes its pose graph to <prefix>.posegraph/.data before it is stopped
+# (a survey epoch, docs/plans/2026-10-20-slam-localization-session.md L2)
 # (docs/plans/2026-10-04-online-slam-closed-loop.md)
 set +u
 source /opt/ros/jazzy/setup.bash
@@ -22,6 +25,12 @@ python3 -m forklift_ros.isaac_slam_bridge --ros-args \
   -p socket_path:="$SOCKET" -p output_dir:="$OUT" -p "laser_xyz_yaw:=[$LASER]" -p persistent:=$PERSIST \
   > "$OUT/bridge.log" 2>&1
 STATUS=$?
+if [ -n "${SLAM_SERIALIZE:-}" ]; then
+  mkdir -p "$(dirname "$SLAM_SERIALIZE")"
+  timeout 300 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
+    "{filename: '$SLAM_SERIALIZE'}" > "$OUT/serialize.log" 2>&1
+  echo "serialize exit $?" >> "$OUT/serialize.log"
+fi
 kill $SLAM 2>/dev/null
 wait $SLAM 2>/dev/null
 exit $STATUS
