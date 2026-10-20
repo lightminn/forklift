@@ -68,6 +68,7 @@ from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
 from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
+from forklift_core.perception import bottom_deck_permit
 from forklift_core.perception.pocket_detector import DetectorParams
 from forklift_core.localization.scan_docking import laser_points
 from forklift_core.localization.slam_pose import compose, invert
@@ -345,6 +346,23 @@ class MissionCore:
                 }
                 transition("near_tracking_stopped", t)
                 return SimpleNamespace(stop=True, rear=rear)
+            if getattr(self.options, "bottom_deck_check", "off") == "on":
+                # Plan 2026-10-19 task 3: the side evidence permits this insertion only when it read present and
+                # was taken of the pallet the near capture now targets (the planned pickup: where the forks go).
+                pickup_ = self.pocket["planning_pickup"]
+                deck_ = state.setdefault("bottom_deck", {})
+                shape_ = self.pallet_geometry.geometry_version
+                at_ = {"target": [pickup_.x_m, pickup_.y_m, pickup_.yaw_rad], "shape": shape_}
+                record_ = deck_.get("record")  # kept as JSON (BottomDeckRecord.to_record)
+                refusal_ = bottom_deck_permit.insert_refusal(
+                    None if record_ is None else bottom_deck_permit.BottomDeckRecord.from_record(record_),
+                    (pickup_.x_m, pickup_.y_m), pickup_.yaw_rad, shape_)
+                if refusal_ is not None:
+                    deck_["refused"] = {"reason": refusal_, "time_s": t, **at_}
+                    state["mission_result"] = "bottom_deck_refused"
+                    transition("bottom_deck_refused", t)
+                    return SimpleNamespace(stop=True, rear=rear)
+                deck_["permitted"] = {"time_s": t, **at_}
             transition("insert", t)
         elif ms.phase == "insert":
             state["insertion_error"] = {

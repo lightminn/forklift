@@ -303,6 +303,8 @@
   - dev 4(④ 뒤): 도착 실패는 사라졌으나 참 시점이 흔들려 면마다 `present` 약 95 %, 장면 84–92 % 였다. 남은 사유는 `board_band_unseen`·`ambiguous_rows`·`rows_not_located`·`gaps_disagree`·`board_height_mismatch` 로 흩어져 각각 1–2 % 다. ⑤ → 사유마다 문턱을 고치지 않고, 미션이 `unobserved` 면을 다시 촬영한다(작업 4, 처음 판정이 나오면 멈춤). 음성의 오허가 상한도 이 재촬영을 포함해 잰다.
   - dev 5(⑤ 뒤): 진짜 `present` 97–100 %, 음성 `present` 0. 그러나 가림판 + 진짜 한 장면(T11 y, 평활화 켬·D435i K)이 `absent` 였다 — 정면에서 면 앞 80 mm 가림판이 후보 법선 오차 뒤 ±50 mm 창 안에 들어와 평면이 가림판에 맞춰졌고, 면 전체가 막힌 고체 구간으로 보여 `no_block_rows` 가 됐다. 재촬영이 이런 순간을 만날 기회를 늘렸다. ⑥ → (첫 안) 다시 맞춘 면이 후보 면에서 35 mm 안이고 고체 구간 아래 바닥 띠가 같은 면일 때만 `absent` — Codex 4차가 깼다: 면 4 mm 앞, 바닥 위 30 mm 부터 선 판이면 그 뒤 실제 밑판이 같은 면 허용 ±15 mm 안이라 `absent` 가 남았다. 한 시점에서 '막힌 면(shelf)'과 '진짜 면 앞에 선 판'은 원리적으로 구별되지 않는다. (확정) **막힌 면은 `absent` 가 아니라 `unobserved`(`closed_face`)** 다. 어느 쪽이든 집지 않으므로 음성 안전에는 영향이 없고, 진짜를 `absent` 로 내는 경로는 '모든 틈이 열림'(`open_gaps`) 하나만 남는다. shelf 는 이제 `unobserved` 로 집계된다.
   - 같은 평면 이웃이 50 mm 옆에 있고 후보 오차가 면을 따라 ±0.1 m 끝에 있으면 `ambiguous_rows` 가 남는다. 판별할 수 없는 경우라 `unobserved` 가 맞다.
+  - dev 6(⑥ 첫 안, 그룹마다 64·기록 8): 음성 `present` 0/64, 진짜 `present` 62–64/64, 진짜 `absent` 0/104, 가림판 96/96·쌓임 `unobserved`. ⑥ 확정안은 `absent` 를 `unobserved` 로만 바꾸므로 집는 판정은 같다.
+  - **dev 8(규칙 고정 ce0f714, eval 과 같은 크기 — 그룹마다 음성 299·진짜 299·기록 32, 12 조합):** 모든 조합 합격(`complete`·`opposite_faces_ok` 참). 음성 `present` 0/299(상한 1.00 %), 진짜 `present` EPAL 6 x 295–296/299(하한 96.96–97.43 %), T11 x 294–296/299(96.52–97.43 %), T11 y 298–299/299(98.42–99.00 %), 진짜 `absent` 0/459(상한 0.65 %). 기록: 가림판·쌓임 32/32 `unobserved`, 판 한 장(slab) 32/32 `present`, 낮은 판 + 진짜 0–1/32 `present`(나머지 `floor_ambiguous`), 네 틈 턱 + 진짜 4–21/32 `present`, 손상 + 턱 5–17/32 `present`(§5 한계 — 양면을 속인다), 판별 불가 턱 grounded 2–4 장면 `present` 0. shelf 38/38 은 `closed_face` 로 `unobserved`.
 - **치수 공차 민감도(dev, 기록):** 판 두께·블록 높이·가로대 두께를 형상 값 ±2 mm 로 바꾼 구조에서 진짜 `present`·grounded `present` 를 따로 잰다. 판정은 명목 값을 쓰므로 표지(±4 mm)·판 윗면(−3 ~ +8 mm) 창이 공차를 얼마나 먹는지 본다. 합격 기준이 아니라 기록이다(agy 7판).
 - **T11 y 가설이 하한 90 % 를 못 넘으면** y 진입 T11 은 `bottom_deck_unobserved` 로 집지 않는다. 결과를 보고 규칙을 고치지 않도록 미리 적어 둔다.
 - **도달 가능성은 따로 잰다**(agy 2판: eval 이 고립된 팔레트만 봄). 공장 배치의 적재 구역 안 팔레트 위치·방향 표본마다 옆면 지점(양쪽)의 충돌 없음·경로 있음 비율을 CPU 계획기로 잰다. 이것은 합격 기준이 아니라 운용 비용 기록이다.
@@ -323,7 +325,8 @@
   - ① 기록의 판정이 `present`
   - ② 근거리 촬영으로 갱신된 대상(현재 목표 포켓 쌍)의 지도 중심이 기록 중심과 0.15 m 안
   - ③ 같은 형상
-  - ④ 모델 yaw 가 같은 축(180° 대칭 허용, T11 은 축까지 같음)
+  - ④ 모델 yaw 가 같은 축(180° 대칭 허용, T11 은 축까지 같음) — 근거리 삽입 yaw 와 기록의 진입축(x: 모델 yaw, y: 모델 yaw + 90°)의 차이가 15° 안. 구현 판정(2026-10-20): 축을 헷갈리는 45° 와 멀고, 평가기의 후보 yaw 오차 ±5° 보다 넓다.
+  - 비교 대상은 계획에 쓰는 픽업(`pocket["planning_pickup"]`, 포크가 실제로 가는 곳)이고, 형상은 실행 형상(`geometry_version`)이다. 거부하면 phase `bottom_deck_refused`·`mission_result` 로 끝난다. 러너의 주행 루프는 `near_tracking_stopped` 처럼 시간 초과 검사 없이 빠져나오지만 실행은 성공이 아니다(최종 lifecycle `failed`, 종료 코드 1, Codex 작업 3 1차). 기록은 state 에 JSON(`BottomDeckRecord.to_record`)으로 두고 게이트가 읽을 때 복원한다 — 러너가 state 를 JSON 으로 쓰기 때문이다(Codex 작업 3 1차 P2). `--bottom-deck-check on` 은 `planning_target=perception` 일 때만 받는다(작업 4; oracle 이면 인식 목표가 0.3 m 어긋나도 허가됨, Codex 재현). 판정은 사유를 먼저 본다 — `absent` 기록은 대상이 달라도 `no_bottom_deck` 다.
 - **`present` 는 `bottom_deck` 하나만 푼다.** 다른 보류 항목·끼움 거부 사유를 덮지 않는다(Codex 1판 P1 ②).
 - 사유 코드는 `fork_fit.REASON_CODES` 에 더한다.
 
@@ -520,3 +523,5 @@
 - **Codex(평가기 3차, dev 조정 포함):** **새 P1/P2 없음**(수렴) · P3 1. 기록 0 개·음성 0 개 계획에서 요약이 예외로 끝남 → 필수 종류·분모가 없으면 `complete=False`. 확인된 것: 임시 바닥면은 낮은 판 + 외부 보정 오차 48 장면 모두 `unobserved`(새 오허가·오거부 없음), 끝 행 자르기는 이웃 6 면에서 진짜 `present`·grounded/deckless/shelf `absent`·한 틈 턱 `unobserved`, 재시도는 첫 도착에서 판정과 상관없이 멈춤. dev 조정 뒤 규칙을 고정하고 eval 을 한 번 여는 절차는 유효하다. 재시도 결과는 새 도착 오차를 독립으로 뽑는 CPU 모형에 대한 것이고 실제 재시도 성능은 작업 5 에서 본다.
 - **Codex(평가기 4차, ④–⑥):** 새 P1 없음 · P2 1. ④ 추정값 기준 지점·⑤ 재촬영(장면 하나 = 표본 하나라 재촬영 사이 상관이 분모를 부풀리지 않음, 첫 확정 판정에서 멈춤 확인)에는 지적 없음. ⑥ 첫 안은 면 4 mm 앞·바닥 위 30 mm 부터의 판에서 그 뒤 밑판이 같은 면 허용 안이라 `absent` 가 남음 → 막힌 면을 `unobserved`(`closed_face`)로 바꿈.
 - **Codex(평가기 5차):** **새 P1/P2 없음**(수렴) · P3 1(모듈 설명의 옛 shelf `absent` 문구 → 고침). 근접판·부분 가림판·낮은 판과 자세·보정 오차 60 조건에서 진짜 `absent` 없음, `absent` 반환은 `open_gaps` 한 곳. 규칙을 고정하고 eval 을 한 번 여는 데 차단 사항 없음.
+- **Codex(작업 3 1차):** P2 1 — `BottomDeckRecord` 객체를 state 에 그대로 두면 러너의 `record_json` 이 직렬화하지 못해 `result.json` 저장이 실패한다(재현) → state 에는 JSON(`to_record`)으로 두고 게이트가 `from_record` 로 복원, 허가·거부 모두 state JSON 왕복 시험. 확인된 것: 비교 대상은 계획에 쓰는 픽업이 맞다(oracle 은 작업 4 에서 거부), 15° 로 직교축을 혼동하는 반례 없음(대상 연결 허용이지 삽입 정렬 안전각은 아님), 재시도·realign 뒤 낡은 목표를 읽는 순서 없음, 거부는 성공으로 집계되지 않음(lifecycle `failed`, 종료 코드 1), `PARAMETRIC_PENDING` 유지·새 보류 항목으로 깨지는 소비자 없음.
+- **Codex(작업 3 2차):** **새 P1/P2 없음**(수렴). 실제 러너 `record_json()` 으로 허가·거부 6 사례의 state 왕복과 판정 유지 확인.

@@ -24,8 +24,8 @@ SUPPORT_STATES = ("visible", "coplanar", "physical_edge", "uncertain")
 # lane bounds (lateral and vertical, checked again against M_REQ and the blade margins), the
 # top-board layout (near tracking) and, for a non-standard pallet, the entry axis (which face is
 # the entry face -- the top boards run along it), all filled from a template or left unknown at
-# far range (Codex 2026-10-16).
-PENDING_ITEMS = ("depth", "lane_bounds", "top_layout", "entry_axis")
+# far range (Codex 2026-10-16), and for a known shape the bottom deck (side evidence, plan 2026-10-19).
+PENDING_ITEMS = ("depth", "lane_bounds", "top_layout", "entry_axis", "bottom_deck")
 
 
 def _vector(value, n, name):

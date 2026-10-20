@@ -743,7 +743,9 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
     assert "transition(\"near_tracking_stopped\", t)\n                return SimpleNamespace(stop=True, rear=rear)" in core
     assert "if arrival_.stop:\n                            break" in source
-    assert "\"repeat_target_not_reached\", \"near_tracking_stopped\"):\n            return" in source
+    assert "\"repeat_target_not_reached\", \"near_tracking_stopped\", \"bottom_deck_refused\"):\n            return" in source
+    # The bottom-deck refusal (plan 2026-10-19 task 3) also ends at the approach's arrival.
+    assert "transition(\"bottom_deck_refused\", t)\n                    return SimpleNamespace(stop=True, rear=rear)" in core
     # Terminal stops end the run only once the stop detector sees the truck stand.
     functions = runner_and_core_functions(tree)
     feed_fn = functions["feed_near_frame"]

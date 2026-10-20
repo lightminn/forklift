@@ -6684,8 +6684,8 @@ def drive(S, isaac) -> None:
         if early_ports and not boundary.recorder.in_tick:
             # Format 2: the loop ran out of time between ticks -- the end's own reads go in a closing tick.
             boundary.recorder.tick_begin(-3, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
-        if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped"):
-            return
+        if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped", "bottom_deck_refused"):
+            return  # bottom_deck_refused: plan 2026-10-19 task 3, a refusal the mission records (mission_result)
         if core.commands.status == "cancelled":
             state["mission_result"] = "cancelled"  # M-a3 (plan E6): an outcome of its own, not a time-out
             require(False, "mission_cancelled")
