@@ -137,11 +137,11 @@ export function reasonText(code) {
 // the vehicle's whole kept list (its newest 100) and how many are older; the page shows that list as it is -- a long
 // session does not grow it (Codex D13 impl round 2) -- and never goes back to an older message arriving late.
 export class ResultsBook {
-  constructor() { this.epoch = null; this.list = []; this.older = 0; this.seq = 0; this.version = 0; }
+  constructor() { this.epoch = null; this.list = []; this.older = 0; this.recordErrorsOlder = 0; this.seq = 0; this.version = 0; }
 
   welcome(epoch) {
     if (epoch !== this.epoch) {
-      this.epoch = epoch; this.list = []; this.older = 0; this.seq = 0; this.version += 1;
+      this.epoch = epoch; this.list = []; this.older = 0; this.recordErrorsOlder = 0; this.seq = 0; this.version += 1;
     }
   }
 
@@ -151,6 +151,7 @@ export class ResultsBook {
     this.seq = seq;
     this.list = [...(msg.results ?? [])].sort((a, b) => b.seq - a.seq);
     this.older = msg.older ?? 0;
+    this.recordErrorsOlder = msg.record_errors_older ?? 0; // U29: record errors of results out of the list
     this.version += 1; // the page redraws the list when this changes
   }
 

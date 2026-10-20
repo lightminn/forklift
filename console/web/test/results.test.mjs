@@ -148,3 +148,12 @@ test("the reasons table is plain text keyed by reason heads", () => {
     assert.ok(v.length > 0);
   }
 });
+
+test("record errors of results already out of the list are counted (record_errors_older, U29)", () => {
+  const book = new ResultsBook();
+  book.welcome(1);
+  book.update({ missions_seq: 3, older: 1, record_errors_older: 2, results: [{ seq: 3, mission_id: "c" }] });
+  assert.equal(book.recordErrorsOlder, 2);
+  book.welcome(2);
+  assert.equal(book.recordErrorsOlder, 0);
+});

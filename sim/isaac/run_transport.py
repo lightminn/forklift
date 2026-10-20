@@ -6458,6 +6458,8 @@ def drive(S, isaac) -> None:
             core.options.observe_bounds = None  # the whole observation travel in the hall (D2, Codex P2-6)
             core.hooks.live_mission_ready, core.hooks.live_mission_start = live_mission_ready, live_mission_start
             core.baseline = MissionBaseline.capture(core)
+            # Use case U21 on Isaac: each mission's start digest goes with its records (compared offline).
+            core.record_start_digest = os.environ.get("FORKLIFT_LIVE_START_DIGEST", "0") == "1"
             # Persistent console plan D8: what grows every step or scan goes to disk in chunks, the last item kept
             # (the only one the running code reads); cut at each tick's start, before anything is appended.
             from forklift_core.live.spool import RecordSpool

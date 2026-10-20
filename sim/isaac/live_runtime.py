@@ -13,7 +13,6 @@ import json
 import math
 import os
 import secrets
-import threading
 import time
 from collections import deque
 from dataclasses import dataclass, replace
@@ -24,6 +23,7 @@ import numpy as np
 
 from console.live.server import LiveServer, MediaStore, camera_item, grid_item, scan_item, write_port_file
 from console.vehicle_outline import DLS08_MEASURED_CHASSIS
+from forklift_core.live.io_writer import OrderedWriter, encode_in_pieces, write_pieces_atomic
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
 from forklift_core.mission.commands import FINAL, Context
@@ -72,9 +72,13 @@ class LiveRuntime:
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
         self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
-        self._writers: list = []  # (thread, seq) writing the missions' records (plan D2), joined at close
-        self._archive_errors: deque = deque()  # (seq, error) from the writers, noted at the next tick start
+        # Plan D1 step 7 (U29): one writer does the session's file writes -- the log's lines, each mission's files --
+        # in order; the control thread only hands them over (it never waits on the disk).
+        self.io = OrderedWriter(max_keyed=MISSION_FILES_PENDING)
         self._unsettled: set = set()  # the results marked unsettled at a settle deadline (their marks stay)
+        self._unlisted_errors: set = set()  # results with a record error that are out of the book (the log has them)
+        self.io_budget_s = 30.0  # the session end's whole wait on the writer (settles and close share it)
+        self._io_deadline: float | None = None
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -111,8 +115,9 @@ class LiveRuntime:
         # Persistent console plan D8: the log rolls over at log_rotate_bytes into live_log.jsonl.1 (the newest) ...
         # live_log.jsonl.<log_keep>; older ones go.
         self._log_rotate_bytes, self._log_keep, self._log_bytes = int(log_rotate_bytes), int(log_keep), 0
-        self._log_lock = threading.Lock()  # the control thread and the records' writer threads both log
         self._log_rotations = 0
+        # Plan U29: a reader of this log expects its end summary (log_end) and refuses it without (read_live_log).
+        self._write_log(json.dumps({"log_writer": "ordered"}) + "\n")
         self.feedback: Feedback | None = None
         self.step = 0
         self.step_start: deque = deque(maxlen=600)  # (sim time at the step's end, mono at its start)
@@ -144,47 +149,83 @@ class LiveRuntime:
         self.log({"event": "start", "port": port, "session_epoch": self.session_epoch})
         return port
 
-    def archive(self, mission_id: str, records: dict, seq: int | None = None) -> None:
-        """Write a mission's records (handed over at the next adoption) to missions/<id>/records.json off the
-        control thread; the dict is the mission's own (moved out of the core), so nothing changes it meanwhile. A
-        failure is noted on result ``seq`` at the next tick start (plan U29)."""
-        def write():
-            folder = self.output / "missions" / mission_id
-            start = self.clock()
+    def archive(self, mission_id: str, records: dict, seq: int | None = None, result: str | None = None) -> bool:
+        """Hand a mission's files to the writer: ``missions/<id>/result.json`` (``result``, its text -- encoded by
+        the caller, so a dict the caller keeps cannot change it in the queue) and
+        ``records.json`` (the mission's records, handed over at its end -- its own, moved out of the core, so nothing
+        changes them meanwhile). Each is written to a temporary file and renamed; the records are streamed in pieces
+        and then go to the writer's disposer, freed there a bit at a time (U29: the control thread neither encodes
+        nor frees them, and neither holds the interpreter lock long against it). A failure comes back as an outcome,
+        noted on result ``seq`` at the next tick start; ``False``: the writer is full, nothing was written (the
+        records go to the disposer; the caller marks the result)."""
+        folder = self.output / "missions" / mission_id
+        box = [records]
+        del records
+
+        def write() -> list:
+            try:
+                return write_files()
+            finally:  # whatever happened, the records are freed by the disposer (Codex U29 impl round 3 P2-1)
+                self.io.dispose(box.pop(), on_freed=freed)
+
+        def freed(began: float, ended: float) -> None:  # the disposer's thread: the line goes through the writer
+            self._write_log(json.dumps({"disposed": {"mission_id": mission_id, "start_mono": began,
+                                                     "end_mono": ended}, "mono": self.clock()}) + "\n")
+
+        def write_files() -> list:
+            errors = []
             try:
                 folder.mkdir(parents=True, exist_ok=True)
-                text = json.dumps(records, default=_jsonable)
-                (folder / "records.json").write_text(text)
-            except (OSError, TypeError, ValueError) as exc:
-                error = f"{type(exc).__name__}: {exc}"
-                if seq is not None and seq not in self._unsettled:  # first: a failing log write below must not lose it (Codex U29 round 2 P2-2)
-                    self._archive_errors.append((seq, f"records.json: {error}"))
+            except OSError as exc:
+                return [f"missions/{mission_id}: {type(exc).__name__}: {exc}"]
+            if result is not None:
                 try:
-                    self.log({"archive_error": error, "mission_id": mission_id})
-                except OSError:
-                    pass  # the result carries it
-                return
-            # U29: when it ran on the tick trace's clock (it holds the interpreter lock against the control thread
-            # while it encodes) and its size
-            self.log({"archive": {"mission_id": mission_id, "bytes": len(text.encode()), "start_mono": start,
-                                  "end_mono": self.clock()}})
+                    _write_atomic(folder / "result.json", result)
+                except OSError as exc:
+                    errors.append(f"result.json: {type(exc).__name__}: {exc}")
+            if box[0]:
+                start = self.clock()
+                try:
+                    size = write_pieces_atomic(folder / "records.json", encode_in_pieces(box[0], _jsonable))
+                except (OSError, TypeError, ValueError) as exc:
+                    errors.append(f"records.json: {type(exc).__name__}: {exc}")
+                else:
+                    # U29: when it ran on the tick trace's clock and its size; the writer owns the log file
+                    self._append_quietly({"archive": {"mission_id": mission_id, "bytes": size,
+                                                      "start_mono": start, "end_mono": self.clock()}})
+            if errors:
+                self._append_quietly({"archive_error": errors, "mission_id": mission_id})
+            return errors
 
-        self._writers = [(w, s) for w, s in self._writers if w.is_alive()]
-        writer = threading.Thread(target=write, name=f"archive-{mission_id}", daemon=True)
-        writer.start()
-        self._writers.append((writer, seq))
+        if self.io.put_keyed(seq if seq is not None else ("archive", mission_id), write):
+            return True
+        self.io.dispose(box.pop(), on_freed=freed)  # refused: freed on the disposer, not on this thread
+        return False
 
-    def settle_records(self, timeout_s: float = 30.0) -> None:
-        """The records writers joined within one deadline and their failures noted on the results (the run's results
-        are taken after it; Codex U29 review round 2 P2-1). A writer still on at the deadline is marked unsettled on
-        its result, once; what it does after does not change the mark (plan D1, as the spool's close)."""
-        deadline = time.monotonic() + timeout_s
-        for writer, _ in self._writers:
-            writer.join(timeout=max(0.0, deadline - time.monotonic()))
-        for writer, seq in self._writers:
-            if writer.is_alive() and seq is not None and seq not in self._unsettled:
-                self._unsettled.add(seq)
-                self._archive_errors.append((seq, f"records.json: unsettled after {timeout_s:g} s"))
+    def _append_quietly(self, entry: dict) -> None:
+        """The writer thread's own log line: its failure is counted, never put in place of the job's outcome."""
+        try:
+            self._append_log(json.dumps(dict(entry, mono=self.clock()), default=_jsonable) + "\n")
+        except Exception:  # noqa: BLE001 -- counted; the mission's errors are its own
+            self.io.line_errors += 1
+
+    def _io_left(self) -> float:
+        """What is left of the session end's one wait on the writer (Codex U29 implementation review P2-5)."""
+        if self._io_deadline is None:
+            self._io_deadline = time.monotonic() + self.io_budget_s
+        return max(0.0, self._io_deadline - time.monotonic())
+
+    def settle_records(self, timeout_s: float | None = None) -> None:
+        """The mission files handed to the writer settled within one deadline -- queued or being written -- and
+        their failures noted on the results (the run's results are taken after it; Codex U29 review round 2 P2-1). A
+        result still pending at the deadline is marked unsettled, once; what its write does after does not change the
+        mark (plan D1, as the spool's close)."""
+        mark = (f"files unsettled at the session end ({self.io_budget_s:g} s for the writer)" if timeout_s is None
+                else f"files unsettled after {timeout_s:g} s")
+        for key in self.io.settle(self._io_left() if timeout_s is None else timeout_s):
+            if isinstance(key, int) and key not in self._unsettled:
+                self._unsettled.add(key)
+                self._note_record_error(key, mark)
         self._note_archive_errors()
 
     def close(self) -> None:
@@ -207,18 +248,25 @@ class LiveRuntime:
                   "camera_latency_s": self.camera_latency.report(),
                   "camera_pixel_latency_s": self.camera_pixel_latency.report(),
                   "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved})
-        with self._log_lock:
-            self._log.close()
+        if not self.io.close(self._io_left()):
+            return  # stuck on the disk: its file stays open in its thread, and the log has no end summary
+        # The writer drained and stopped: the summary goes last, from here, with the counts as they ended (Codex U29
+        # implementation review P2-2) -- a reader refuses a log whose summary is missing or counts a loss.
+        self._append_quietly({"log_end": {"dropped_lines": self.io.dropped_lines, "line_errors": self.io.line_errors,
+                                          "dropped_mission_files": self.io.dropped_keyed,
+                                          "record_errors_older": self.record_errors_unlisted}})
+        self._log.close()
 
     def log(self, entry: dict) -> None:
         entry.setdefault("mono", self.clock())
         self._write_log(json.dumps(entry, default=_jsonable) + "\n")
 
     def _write_log(self, line: str) -> None:
-        with self._log_lock:
-            self._write_log_locked(line)
+        """The line to the writer (plan U29: the control thread does not wait on the disk)."""
+        self.io.put_line(lambda: self._append_log(line), len(line))
 
-    def _write_log_locked(self, line: str) -> None:
+    def _append_log(self, line: str) -> None:
+        """The writer thread only: the line into the log, rolling the file over at its limit."""
         self._log.write(line)
         self._log_bytes += len(line)
         if self._log_bytes < self._log_rotate_bytes:
@@ -264,18 +312,45 @@ class LiveRuntime:
         return stop_kind, records
 
     def _note_archive_errors(self) -> None:
-        """The records writes that failed since the last tick, on their results, published (plan U29)."""
-        if not self._archive_errors:
-            return
-        while self._archive_errors:
-            seq, error = self._archive_errors.popleft()
-            kept = next((e for e in self.results.message()["results"] if e["seq"] == seq), None)
-            if kept is None:
-                continue  # pushed out of the book; the log has it
+        """The mission files whose writes failed since the last tick, on their results, published (plan U29); a
+        result marked unsettled keeps its mark."""
+        noted = False
+        for key, errors in self.io.outcomes():
+            if errors and isinstance(key, int) and key not in self._unsettled:
+                noted = self._note_record_error(key, "; ".join(errors), publish=False) or noted
+        if noted:
+            self._publish_missions()
+
+    @property
+    def record_errors_unlisted(self) -> int:
+        return len(self._unlisted_errors)
+
+    def _add_result(self, **result) -> dict:
+        """The result into the book; the oldest pushed out with a record error is counted (Codex U29 implementation
+        review P2-3: it left no trace in the message)."""
+        kept = self.results.message()["results"]
+        if len(kept) >= self.results.keep and kept[0].get("record_error"):
+            self._unlisted_errors.add(kept[0]["seq"])
+        return self.results.add(**result)
+
+    def _note_record_error(self, seq: int, error: str, publish: bool = True) -> bool:
+        """``error`` on result ``seq`` (joined to one it has); a result already out of the book is counted once in
+        the missions message (``record_errors_older``) and its error is in the log."""
+        kept = next((e for e in self.results.message()["results"] if e["seq"] == seq), None)
+        if kept is None:
+            self._unlisted_errors.add(seq)
+        else:
             before = kept.get("record_error")
             self.results.note(seq, record_error=error if before is None else f"{before}; {error}")
+        if publish:
+            self._publish_missions()
+        return True
+
+    def _publish_missions(self) -> None:
         message = self.results.message()
-        self.store.put("missions", self.results.seq, message)
+        if self.record_errors_unlisted:
+            message["record_errors_older"] = self.record_errors_unlisted
+        self.store.put("missions", self.results.seq, message)  # a client connecting later gets it after the targets
         self.channels.put(None, message)
 
     # --- a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1) -------------------------------------
@@ -321,7 +396,7 @@ class LiveRuntime:
         started = next((r["t"] for r in reversed(cmds.log) if r["command"] == "submit" and r["accepted"]
                         and r["mission_id"] == mission_id), None)
         advice = cmds.end_advice if cmds.end_logged_for == mission_id else None  # plan D13 item 6
-        entry = self.results.add(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
+        entry = self._add_result(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
                                  ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
                                  destination_id=mission.destination_id if mission else None, advice=advice)
         clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
@@ -330,18 +405,19 @@ class LiveRuntime:
             # plan D3: verified there only now -- the delivery verdict passed, after the end's last targets update
             self.core.targets.verify_at(mission.pallet_id, mission.destination_id)
         recording = time.perf_counter()  # plan D1 step 7 (U29): the record cost from here, bound 20 ms
-        if any(records.values()):
-            self.archive(mission_id, records, entry["seq"])  # under this mission's own id (Codex stage 2 impl P2-5)
-        try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)
-            folder = self.output / "missions" / mission_id
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / "result.json").write_text(json.dumps({"result": entry, "clock": clock, **extra},
-                                                           default=_jsonable))
-        except OSError as exc:
-            entry = self.results.note(entry["seq"], record_error=f"{type(exc).__name__}: {exc}")
-        message = self.results.message()
-        self.store.put("missions", self.results.seq, message)  # a client connecting later gets it after the targets
-        self.channels.put(None, message)
+        digest = getattr(self.core, "start_digest", None)
+        if digest:  # use case U21 on Isaac: the mission-owned state at this mission's start goes with its records
+            records = {**records, "start_digest": digest}
+            self.core.start_digest = None
+        # Step 7: the result (bounded: it and its clock) and the records (under this mission's own id, Codex stage 2
+        # impl P2-5) to the writer; the mission's paths and logs went by chunks (plan D8).
+        result = _result_text(entry, clock, extra)  # bounded (RESULT_BYTES): encoded here, not queued
+        records = {**records, "clock": clock} if any(records.values()) or any(clock.values()) else {}
+        if not self.archive(mission_id, records, entry["seq"], result):
+            entry = self.results.note(entry["seq"], record_error=f"result.json, records.json: dropped (writer full, "
+                                                                 f"{MISSION_FILES_PENDING} pending)")
+        del records  # the writer or its disposer frees them (Codex U29 implementation review round 2 P2-3)
+        self._publish_missions()
         self.log({"mission_end": entry, "tick_t": t, **extra})
         done = time.perf_counter()
         # U29: the record cost (the handover to the writer, the result, the publish and the end's log line) and the
@@ -643,6 +719,37 @@ def _quantiles(values: list) -> dict | None:
     v = np.sort(np.asarray(values, dtype=float))
     return {"n": len(v), "median": float(np.median(v)), "p99": float(v[min(len(v) - 1, int(0.99 * len(v)))]),
             "max": float(v[-1])}
+
+
+# Plan U29: the missions' files the writer holds at most (queued or being written). A mission's records are bounded
+# (113-195 KB measured, 2026-10-20; the near-field record by its frame bound, plan D8), and missions end seconds apart
+# at the fastest (a refused preparation) while a write takes milliseconds, so four is a backlog of a stuck disk, not
+# of a busy session; past it a mission's files are dropped and its result says so.
+MISSION_FILES_PENDING = 4
+
+
+RESULT_BYTES = 64 * 1024  # plan D1 step 7: the result file's bound (it is encoded on the control thread)
+
+
+def _result_text(entry: dict, clock: dict, extra: dict) -> str:
+    """The mission's result file: the result, its clock's summary (the whole clock goes with the records -- 6,000
+    waits made 106 KB, Codex U29 implementation review P2-4) and the end's extras; past RESULT_BYTES, the result's
+    identity and outcome only, with the size it was cut from."""
+    summary = {"pauses": len(clock["pauses"]), "pause_s": float(sum(b - a for a, b in clock["pauses"] if b is not None)),
+               "waits": len(clock["waits"]), "wait_s": float(sum(b - a for a, b in clock["waits"] if b is not None))}
+    text = json.dumps({"result": entry, "clock_summary": summary, **extra}, default=_jsonable)
+    if len(text) <= RESULT_BYTES:
+        return text
+    keep = {k: entry.get(k) for k in ("seq", "mission_id", "outcome", "started_s", "ended_s", "ended_unix",
+                                      "pallet_id", "destination_id")}
+    return json.dumps({"result": keep, "clock_summary": summary, "cut_from_bytes": len(text)}, default=_jsonable)
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """``text`` to a temporary file beside ``path``, renamed over it: a reader never sees half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
 
 
 def _jsonable(value):

@@ -381,9 +381,12 @@ def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_p
     assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
     seq, message = rt.store.get("missions")
     assert seq == 1 and message == {"t": "missions", "missions_seq": 1, "results": [entry]}
+    rt.settle_records()  # plan U29: the writer writes the mission's files
     record = json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())
     assert record["result"] == entry and record["delivery_error_m"] == 0.02
-    assert record["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
+    assert record["clock_summary"] == {"pauses": 0, "pause_s": 0.0, "waits": 1, "wait_s": 9.0}
+    records = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert records["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
     assert rt.end_mission(21.0, "failed", "late") is None  # ended once
     rt.tick_start(21.0, False)
     assert core.commands.status == "idle" and rt.results.last == entry
@@ -449,10 +452,11 @@ def test_the_state_carries_the_last_result_from_the_runtime():
 def test_a_record_that_cannot_be_written_is_marked_in_the_result(tmp_path):
     rt, core, _ = ending(tmp_path)
     (tmp_path / "missions").write_text("not a folder")
-    entry = rt.end_mission(20.0, "failed", "x")
-    assert entry["record_error"].startswith(("FileExistsError", "NotADirectoryError"))
-    assert rt.results.last["record_error"] == entry["record_error"]
-    assert rt.store.get("missions")[1]["results"][0]["record_error"] == entry["record_error"]
+    rt.end_mission(20.0, "failed", "x")
+    rt.settle_records()  # plan U29: the writer writes the files; their failure is noted once it is known
+    error = rt.results.last["record_error"]
+    assert error.startswith("missions/m1: ") and ("FileExistsError" in error or "NotADirectoryError" in error)
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == error
 
 
 def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
@@ -564,7 +568,7 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
     start = source.index("            live.start()  # after the SLAM warm-up")
-    before = source[start - 1600:start]  # (the D8 record spool is made between them)
+    before = source[start - 1900:start]  # (the D8 record spool and the U21 start digest switch are between them)
     assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
     # D-0 live only; the session's end ends a mission still on and skips the batch judgement
     assert source.index('core.targets.add_destination("D-0"') > source.index('    if getattr(args, "live", False):\n        # Persistent console plan D2/D3')
@@ -580,7 +584,7 @@ def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
     rt.end_mission(15.0, "failed", "x")
     rt.close()
     written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
-    assert written == {"state": {"async_plans": [{"site": "leg"}]}}
+    assert written == {"state": {"async_plans": [{"site": "leg"}]}, "clock": {"pauses": [], "waits": []}}
 
 
 def test_the_end_logs_its_record_cost_and_the_archive_its_own(tmp_path):
@@ -607,8 +611,7 @@ def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(t
     rt, core, order = ending(tmp_path)
     (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
     rt.end_mission(15.0, "failed", "x")
-    for writer, _ in rt._writers:
-        writer.join(timeout=5.0)
+    assert rt.io.settle(5.0) == []  # written (failed), not yet noted
     assert "record_error" not in rt.results.last
     rt.tick_start(16.0, False)
     assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
@@ -648,24 +651,399 @@ def test_a_records_writer_past_the_settle_limit_is_marked_unsettled_once(tmp_pat
     rt.end_mission(15.0, "failed", "x")  # the stand-in records hold no object; write one that waits
     rt.archive("m1", {"state": {"slow": object()}}, rt.results.last["seq"])
     rt.settle_records(timeout_s=0.05)
-    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    assert rt.results.last["record_error"] == "files unsettled after 0.05 s"
     gate.set()
     rt.settle_records(timeout_s=5.0)
-    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    assert rt.results.last["record_error"] == "files unsettled after 0.05 s"
+
+
+def test_the_end_archives_the_missions_start_digest_once(tmp_path):
+    """Use case U21 on Isaac: the core's digest of the mission's start goes with the mission's records and is not
+    carried to the next mission."""
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    core.start_digest = {"state.paths": "abc:2"}
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert written["start_digest"] == {"state.paths": "abc:2"} and core.start_digest is None
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    assert 'core.record_start_digest = os.environ.get("FORKLIFT_LIVE_START_DIGEST", "0") == "1"' in source
+
+
+def test_the_end_ticks_record_cost_stays_in_bound_with_a_full_spool_queue_and_a_full_chunk(tmp_path):
+    """Plan U29 (user 2026-10-20: measured on the CPU): the end tick's spool cut -- a cut ten times the largest
+    measured chunk (slam_log.scan 194 KB per 10 s), dropped whole on a full queue -- and the end's record cost
+    together stay within the 20 ms bound."""
+    from forklift_core.live.spool import RecordSpool
+
+    rt, core, order = ending(tmp_path)
+    spool = RecordSpool(tmp_path / "spool", interval_s=0.0, queue_cuts=2)
+    scans: list = []
+    spool.register("slam_log.scan", scans, keep=1)
+    spool.pause_writer()
+    try:
+        for cut in range(3):
+            scans.extend([[0.5] * 360 for _ in range(1000)])  # 1000 scans x 360 ranges: ~2 MB as JSON
+            began = time.perf_counter()
+            spool.tick(float(cut + 1))
+            if cut == 2:
+                rt.end_mission(15.0, "failed", "x")
+                spent = time.perf_counter() - began
+    finally:
+        spool.resume_writer()
+        manifest = spool.close()
+    assert manifest["slam_log.scan"]["dropped_items"] == 1000  # the third cut found the queue full
+    assert spent <= 0.020
+
+
+def test_the_end_does_no_file_io_and_starts_no_thread_on_the_control_thread_while_the_writer_is_stuck(
+        tmp_path, monkeypatch):
+    """Codex U29 design review: the control thread hands the mission's files and its log lines over and never waits
+    on the disk or on a thread start -- checked with the writer stuck on a slow disk."""
+    import builtins
+    import os
+    import threading
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    rt.io.put_line(lambda: gate.wait(5.0), 1)  # the writer is stuck on this
+    main, seen = threading.current_thread(), []
+    real_open, real_replace, real_mkdir, real_start = builtins.open, os.replace, Path.mkdir, threading.Thread.start
+
+    def watched(name, real):
+        def call(*a, **k):
+            if threading.current_thread() is main:
+                seen.append(name)
+            return real(*a, **k)
+        return call
+
+    monkeypatch.setattr(builtins, "open", watched("open", real_open))
+    monkeypatch.setattr(os, "replace", watched("replace", real_replace))
+    monkeypatch.setattr(Path, "mkdir", watched("mkdir", real_mkdir))
+    monkeypatch.setattr(threading.Thread, "start", watched("thread_start", real_start))
+    began = time.perf_counter()
+    rt.end_mission(15.0, "failed", "x")
+    rt.tick_start(16.0, False)
+    spent = time.perf_counter() - began
+    monkeypatch.undo()
+    assert seen == [] and spent < 1.0  # it did not wait for the stuck writer (5 s)
+    gate.set()
+    rt.close()
+    assert json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())["result"]["mission_id"] == "m1"
+
+
+def test_a_full_writer_drops_the_missions_files_and_says_so_on_its_result(tmp_path):
+    import threading
+
+    from sim.isaac.live_runtime import MISSION_FILES_PENDING
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    for k in range(MISSION_FILES_PENDING):
+        assert rt.io.put_keyed(("stuck", k), lambda: gate.wait(5.0) and [])
+    entry = rt.end_mission(15.0, "failed", "x")
+    assert entry["record_error"] == f"result.json, records.json: dropped (writer full, {MISSION_FILES_PENDING} pending)"
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == entry["record_error"]
+    gate.set()
+    rt.close()
+    assert not (tmp_path / "missions" / "m1" / "result.json").exists()
+
+
+def test_records_a_full_writer_refuses_are_freed_off_the_control_thread(tmp_path):
+    """Codex U29 implementation review round 2 P2-3: the refused records' last reference went at end_mission's return,
+    so the control thread freed them."""
+    import threading
+
+    from sim.isaac.live_runtime import MISSION_FILES_PENDING
+
+    freed = []
+
+    class Tracked:
+        def __del__(self):
+            freed.append(threading.current_thread().name)
+
+    rt, core, order = ending(tmp_path)
+    holder = [{"near": {"ticks": [Tracked()]}}]
+    core.end_reset = lambda t: holder.pop()  # handed over, not kept
+    gate = threading.Event()
+    for k in range(MISSION_FILES_PENDING):
+        rt.io.put_keyed(("stuck", k), lambda: gate.wait(5.0) and [])
+    rt.io.dispose_after_s = 0.05
+    rt.end_mission(15.0, "failed", "x")
+    deadline = time.monotonic() + 5.0
+    while not freed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert freed == ["live-io-free"]
+    gate.set()
+    rt.close()
+
+
+def test_records_whose_folder_cannot_be_made_still_go_to_the_disposer(tmp_path):
+    """Codex U29 implementation review round 3 P2-1: the early return on a failed mkdir skipped the hand-over, so
+    the writer freed the records in one go (holding its queue lock)."""
+    import threading
+
+    freed = []
+
+    class Tracked:
+        def __del__(self):
+            freed.append(threading.current_thread().name)
+
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions").write_text("not a folder")
+    holder = [{"near": {"ticks": [Tracked()]}}]
+    core.end_reset = lambda t: holder.pop()
+    rt.io.dispose_after_s = 0.0
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    assert freed == ["live-io-free"]
+    assert "disposed" in (tmp_path / "live_log.jsonl").read_text()  # its freeing logged on the trace clock
+
+
+def test_a_rolled_log_without_its_index_or_with_a_lost_line_at_its_end_is_refused(tmp_path):
+    """Codex U29 implementation review round 2 P2-2: the index write failing at the first rollover put the header in
+    .1 and left no index, so the reader took the current part alone as an old log."""
+    from forklift_core.live.spool import read_live_log
+
+    (tmp_path / "live_log.jsonl.1").write_text('{"log_writer": "ordered"}\n')
+    (tmp_path / "live_log.jsonl").write_text('{"log_end": {"dropped_lines": 0, "line_errors": 0}}\n')
+    with pytest.raises(ValueError, match="index"):
+        read_live_log(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "live_log.jsonl").write_text('{"event": "x"}\n{"log_end": {"dropped_lines": 0, "line_errors": 1}}\n')
+    with pytest.raises(ValueError, match="lost"):
+        read_live_log(other)
+
+
+def test_a_record_error_of_a_result_out_of_the_book_is_counted_in_the_missions_message(tmp_path):
+    """Codex U29 design review: the book keeps the newest 100; an error for an older result was lost."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x")
+    rt._note_record_error(999, "records.json: OSError: full")
+    message = rt.store.get("missions")[1]
+    assert message["record_errors_older"] == 1 and "record_error" not in message["results"][0]
+    rt.close()
+    end = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()
+           if '"log_end"' in line][0]
+    assert end["log_end"] == {"dropped_lines": 0, "line_errors": 0, "dropped_mission_files": 0,
+                              "record_errors_older": 1}
+
+
+@pytest.mark.skipif(__import__("os").environ.get("FORKLIFT_U29_GATE") != "1",
+                    reason="plan U29 performance gate: run on purpose on ws1 (FORKLIFT_U29_GATE=1)")
+def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
+    """Plan U29 performance gate (user 2026-10-20: measured on the CPU; Codex U29 design review: fixed conditions,
+    every sample kept). Each repetition times the end tick's record work -- the spool cut (ten times the largest
+    measured chunk, its writer running) and the whole end_mission, its records handed over (not kept by the gate)
+    and costly to free (120,000 rows of distinct numbers, ~5 MB as JSON) -- while the previous repetition's writer
+    encodes: each sample sleeps 2 ms first, as the control thread waits between ticks, so the writer takes the lock
+    and the sample is the wake-up's lateness plus the end's work; the background threads' yield points passed inside
+    the sample are counted (Codex U29 implementation review rounds 1-2: neither an unsynchronised start nor a
+    released wait shows the work). The last repetition of
+    each ten ends with its writer full (its records go to the disposer). FORKLIFT_U29_GATE_REPS repetitions (200),
+    the samples to FORKLIFT_U29_GATE_OUT; the gate fails if a wall is over 20 ms, and is void if a timed end, other
+    than the first of ten, saw no encoding progress."""
+    import gc
+    import os
+    import threading
+    from pathlib import Path
+
+    import forklift_core.live.io_writer as io_writer
+    import sim.isaac.live_runtime as live_runtime
+    from forklift_core.live.spool import RecordSpool
+
+    # Background work in progress: every Yielder.maybe on a thread other than this one (the writers' encoding and
+    # streaming, the disposer's and the spool's freeing) counts.
+    progress = {"marks": 0, "freeing": 0}
+    main = threading.current_thread()
+    maybe = io_writer.Yielder.maybe
+
+    def counting(self):
+        here = threading.current_thread()
+        if here is not main:
+            progress["marks"] += 1
+            if here.name.endswith("-free"):
+                progress["freeing"] += 1
+        return maybe(self)
+
+    monkeypatch.setattr(io_writer.Yielder, "maybe", counting)
+    collections = []  # garbage collections that began inside a timed end (kept in the samples, counted)
+    timing = {"on": False}
+
+    def watch(phase, info):
+        if phase == "start" and timing["on"]:
+            collections.append((len(walls), info.get("generation")))
+
+    gc.callbacks.append(watch)
+    reps = int(os.environ.get("FORKLIFT_U29_GATE_REPS", "200"))
+    SLEEP_S = 0.002
+    walls, lateness, encoded, freeing, full = [], [], [], [], []
+    for batch in range(0, reps, 10):  # ten made first, then ended back to back
+        made = []
+        last = min(batch + 10, reps) - 1
+        for i in range(batch, last + 1):
+            (tmp_path / f"r{i}").mkdir()
+            rt, core, order = ending(tmp_path / f"r{i}")
+            rows = [[k * 0.01, k * 0.1 + 1.0, k * 0.2 + 2.0] for k in range(120_000)]
+            holder = [{"near": {"ticks": rows}}]
+            del rows
+            core.end_reset = lambda t, holder=holder: holder.pop()  # handed over: the gate keeps no reference
+            rt.io.dispose_after_s = 0.0  # freed right after it is written, so later samples meet the freeing too
+            spool = RecordSpool(tmp_path / f"r{i}" / "spool", interval_s=0.0, queue_cuts=6)
+            scans: list = []
+            spool.register("slam_log.scan", scans, keep=1)
+            scans.extend([[0.25] * 360 for _ in range(1000)])  # ~2 MB as JSON: ten 10 s chunks
+            gate = threading.Event()
+            if i == last:  # the last of the ten: its writer full
+                for k in range(live_runtime.MISSION_FILES_PENDING):
+                    rt.io.put_keyed(("stuck", k), lambda gate=gate: gate.wait(60.0) and [])
+            made.append((rt, spool, gate))
+        # As the runner does before its first control tick (main 1e53cbe): what the setup made is frozen, so a
+        # collection of the gate's own setup does not land in a timed end; collections that do are counted.
+        gc.collect()
+        gc.freeze()
+        for j, (rt, spool, gate) in enumerate(made):
+            if j >= 2:  # the one before last has written: its freeing runs while this sample meets the last's encoding
+                made[j - 2][0].io.settle(30.0)
+            # The control thread waits between ticks (the pacer, the physics step) and the writer takes the lock;
+            # what the writer costs it is the wait to get the lock back on waking, then the end's own work -- so
+            # each sample is the wake-up's lateness past a 2 ms sleep plus the end tick's record work.
+            before, freeing_before = progress["marks"], progress["freeing"]
+            timing["on"] = True
+            began = time.perf_counter()
+            time.sleep(SLEEP_S)
+            woke = time.perf_counter()
+            spool.tick(1.0)
+            rt.end_mission(15.0, "failed", "x")
+            ended = time.perf_counter()
+            timing["on"] = False
+            walls.append(ended - began - SLEEP_S)
+            lateness.append(woke - began - SLEEP_S)
+            encoded.append(progress["marks"] - before)  # background work steps inside this sample
+            freeing.append(progress["freeing"] - freeing_before)  # of them, the disposer's
+            full.append(gate is made[-1][2])
+        for rt, spool, gate in made:
+            gate.set()
+            rt.close()
+            spool.close()
+        gc.unfreeze()
+    gc.callbacks.remove(watch)
+    out = os.environ.get("FORKLIFT_U29_GATE_OUT")
+    if out:
+        Path(out).write_text(json.dumps({"reps": reps, "walls_s": walls, "wake_lateness_s": lateness,
+                                         "marks_encoded_in_timed_end": encoded, "freeing_steps": freeing,
+                                         "full": full, "collections_in_timed_ends": collections,
+                                         "max_s": max(walls), "p50_s": sorted(walls)[len(walls) // 2]}))
+    firsts = set(range(0, reps, 10))
+    assert all(encoded[i] > 0 for i in range(reps) if i not in firsts), "void: a sample saw no background work"
+    # Codex U29 implementation review round 3: the freeing stage needs samples of its own
+    assert sum(1 for x in freeing if x > 0) >= (reps - len(firsts)) // 4, "void: too few samples met the freeing"
+    assert max(walls) <= 0.020, f"max {max(walls) * 1e3:.2f} ms over {reps}"
+
+
+def test_the_result_file_is_bounded_and_the_whole_clock_goes_with_the_records(tmp_path):
+    """Codex U29 implementation review P2-4: the result's clock had no bound (6,000 waits made 106 KB against D1's
+    64 KB, encoded on the control thread). The result file keeps the clock's summary; the records keep the clock."""
+    rt, core, order = ending(tmp_path)
+    core.commands.waits[:] = [[float(i), i + 0.5] for i in range(6000)]
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    folder = tmp_path / "missions" / "m1"
+    record = json.loads((folder / "result.json").read_text())
+    assert (folder / "result.json").stat().st_size <= 64 * 1024
+    assert record["clock_summary"] == {"pauses": 0, "pause_s": 0.0, "waits": 6000, "wait_s": 3000.0}
+    assert len(json.loads((folder / "records.json").read_text())["clock"]["waits"]) == 6000
+
+
+def test_a_result_over_its_bound_is_written_cut_down(tmp_path):
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x" * 100_000)
+    rt.close()
+    path = tmp_path / "missions" / "m1" / "result.json"
+    record = json.loads(path.read_text())
+    assert path.stat().st_size <= 64 * 1024 and record["cut_from_bytes"] > 64 * 1024
+    assert record["result"]["mission_id"] == "m1" and record["result"]["outcome"] == "failed"
+
+
+def test_a_noted_result_pushed_out_of_the_book_is_counted_once(tmp_path):
+    """Codex U29 implementation review P2-3: a result whose error was shown, then pushed out of the newest 100,
+    left no trace in the message."""
+    from forklift_core.mission.results import ResultsBook
+
+    rt, core, order = ending(tmp_path)
+    rt.results = ResultsBook(keep=1)
+    rt.end_mission(15.0, "failed", "x")
+    rt._note_record_error(1, "records.json: OSError: full")
+    rt._add_result(mission_id="m2", outcome="failed", reason="y", started_s=None, ended_s=20.0, pallet_id=None,
+                   destination_id=None)
+    rt._note_record_error(1, "files unsettled after 30 s")  # a later error for the same result
+    rt._publish_missions()
+    assert rt.store.get("missions")[1]["record_errors_older"] == 1
+    rt.close()
+
+
+def test_the_session_end_waits_on_one_io_budget(tmp_path):
+    """Codex U29 implementation review P2-5: the runner's settle, the close's settle and the writer's close each
+    waited their own 30 s."""
+    import threading
+
+    rt, core, order = ending(tmp_path)
+    rt.io_budget_s = 0.3
+    gate = threading.Event()
+    rt.io.put_keyed(("stuck", 0), lambda: gate.wait(5.0) and [])
+    began = time.monotonic()
+    rt.settle_records()
+    rt.close()
+    assert time.monotonic() - began < 0.6
+    gate.set()
+
+
+def test_a_log_with_lost_lines_says_so_and_its_reader_refuses_it(tmp_path):
+    """Codex U29 implementation review P2-2: the counts were fixed before the queue drained, and a reader took a log
+    with lost lines as whole (bundle_coverage reads a missing TELEOP span as auto)."""
+    from forklift_core.live.spool import read_live_log
+
+    rt, core, order = ending(tmp_path)
+
+    def boom():
+        raise OSError("disk")
+
+    rt.io.put_line(boom, 1)
+    rt.close()
+    entries = read_live_log(tmp_path, allow_incomplete=True)
+    assert entries[0].get("log_writer") == "ordered"
+    assert entries[-1]["log_end"] == {"dropped_lines": 0, "line_errors": 1, "dropped_mission_files": 0,
+                                      "record_errors_older": 0}
+    with pytest.raises(ValueError, match="lost"):
+        read_live_log(tmp_path)
+
+
+def test_a_log_whose_end_summary_is_missing_is_refused(tmp_path):
+    from forklift_core.live.spool import read_live_log
+
+    (tmp_path / "live_log.jsonl").write_text('{"log_writer": "ordered"}\n{"event": "x"}\n')
+    with pytest.raises(ValueError, match="end"):
+        read_live_log(tmp_path)
+    assert len(read_live_log(tmp_path, allow_incomplete=True)) == 2
 
 
 def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):
-    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it."""
+    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it; and
+    (implementation review P3) the writer's own log line failing must not replace the file's error."""
     rt, core, order = ending(tmp_path)
     (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
-    write = rt._write_log
+    append = rt._append_log
 
     def failing(line):
         if '"archive_error"' in line:
             raise OSError("log full")
-        write(line)
+        append(line)
 
-    rt._write_log = failing
+    rt._append_log = failing
     rt.end_mission(15.0, "failed", "x")
     rt.settle_records()
     assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")

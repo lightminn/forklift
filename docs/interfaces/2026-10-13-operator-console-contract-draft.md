@@ -207,8 +207,8 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 ```
 
 - `missions_seq` 와 `seq` 는 **세션(`session_epoch`) 안에서만** 단조 증가한다. 새 실행(장면 초기화 포함)은 1부터 센다. 화면은 epoch 가 바뀌면 표를 비운다.
-- `results` 는 최근 100건이고, 넘친 건수는 `older` 다. 각 미션의 전체 기록은 실행기 출력의 `missions/<mission_id>/result.json` 에 있다.
-- `outcome`: `done`, `failed`, `cancelled`, `recovery_required`. `reason` 은 사유 코드(설명은 화면 쪽 표). `started_s`·`ended_s` 는 시뮬 시각, `ended_unix` 는 결과를 만든 순간의 벽시계(Unix) 시각이다(한 번 찍고 재전송·재생에서 바꾸지 않는다). `record_error` 는 기록 파일을 못 쓴 경우에만 있다.
+- `results` 는 최근 100건이고, 넘친 건수는 `older` 다. 각 미션의 전체 기록은 실행기 출력의 `missions/<mission_id>/result.json`·`records.json` 에 있다. 이 파일들은 실행기의 기록 쓰기 스레드가 미션 종료 뒤에 쓴다(2026-10-20, U29: 제어 틱은 디스크를 기다리지 않는다). 그래서 결과가 발행된 순간에는 아직 없을 수 있고, `record_error` 가 없다는 것이 저장 완료를 뜻하지는 않는다.
+- `outcome`: `done`, `failed`, `cancelled`, `recovery_required`. `reason` 은 사유 코드(설명은 화면 쪽 표). `started_s`·`ended_s` 는 시뮬 시각, `ended_unix` 는 결과를 만든 순간의 벽시계(Unix) 시각이다(한 번 찍고 재전송·재생에서 바꾸지 않는다). `record_error` 는 기록 파일을 못 쓴 경우에만 있다. 실패를 안 다음 틱에 같은 `missions_seq` 로 다시 발행되며, 형식은 `result.json: …`·`records.json: …`(쓰기 실패), `result.json, records.json: dropped (…)`(쓰기 스레드가 가득 참), `files unsettled after N s`(세션 끝 대기 한도에 못 씀)다. `record_errors_older`(있을 때만)는 이미 목록 밖으로 밀려난 결과의 기록 실패 건수다(내용은 실행 로그에 있다).
 - `advice`(준비의 모든 후보가 출발 자세에서 막힌 실패에만): 실패를 낸 준비 작업이 **같은 입력**(제출 때 고정한 격자·팔레트 대상·설정)과 계획기 자신의 출발 검사로, 그때 자세(`from_rear`)에서 곧게 뒤로 0.05 m 씩 1.0 m 까지 본 결과다. `backoff_m`–`backoff_max_m` 은 출발 검사가 이어서 통과하는 거리(그 사이 자세는 몸체가 지나가는 자리로 여유 0 에서 비어 있음). 찾지 못하면 `{"backoff_m": null, "within_m": 1.0, …}`, 가는 길이 막히면 `{"backoff_m": null, "blocked_at_m": d, …}`, 준비 시간을 다 쓰면 `{"skipped": "deadline"}`. **안내일 뿐 허가가 아니다** — 조종은 텔레옵 허가를 그대로 받는다. 상태의 자세는 지도 좌표라 이후 SLAM 보정이 움직이지 않은 차를 옮겨 보일 수 있으므로, 안내는 "실패 때 자세 기준" 으로만 쓴다.
 
 ## 6. 상태 메시지

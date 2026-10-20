@@ -125,3 +125,32 @@ def test_a_run_without_near_tracking_hands_over_no_near_record():
     core.near = None
     records = MissionBaseline.capture(core).restore(core)
     assert "near" not in records  # start_mission puts each owner's records back: there is no near to put them in
+
+
+def test_the_start_digest_names_every_mission_slot_and_follows_only_mission_values():
+    """Use case U21 on Isaac: each mission-owned slot at a mission's start as a short hash, so the second mission's
+    start can be compared with the first's; session keys are not in it, and an object's hash does not carry its
+    address (two equal starts in two processes hash alike)."""
+    from forklift_core.mission.baseline import start_digest
+
+    core = fake_core()
+    first = start_digest(core)
+    assert first["obstacle.replans"] != "absent" and first["obstacle.live_replanned"] == "absent"
+    assert first["ms.next_candidate_index"] != "absent" and first["state.near_tracking.realigns"] != "absent"
+    assert not any(k.startswith(("state.samples", "slam.holds", "obstacle.version")) for k in first)
+    core.state["samples"].append(2)  # a session key
+    core.near["tracker"] = object()  # an object: hashed by its type, not its address
+    again = start_digest(core)
+    assert {k for k in first if first[k] != again[k]} == {"near.tracker"}
+    core.near["tracker"] = object()
+    assert start_digest(core) == again
+    core.obstacle["replans"]["transport"] = 1
+    assert {k for k, v in start_digest(core).items() if v != again[k]} == {"obstacle.replans"}
+
+
+def test_the_start_digest_takes_dicts_with_keys_json_cannot():
+    from forklift_core.mission.baseline import start_digest
+
+    core = fake_core()
+    core.obstacle["replans"] = {("transport", 1): 2, "leg": 1}
+    assert start_digest(core)["obstacle.replans"] != "absent"
