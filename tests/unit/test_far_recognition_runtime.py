@@ -332,6 +332,7 @@ def test_a_model_failure_falls_back_to_the_geometric_proposals_and_is_counted():
     assert run.summary()["proposer"]["fallbacks"] == len(source.fallbacks)
     timing = run.summary()["proposer"]["model_ms"]  # plan task 6: the model's time per call (design §6: 200 ms)
     assert timing["n"] == model.calls and 0 <= timing["p50"] <= timing["max"]
+    assert timing["first"] <= timing["max"] and timing["max_after_first"] <= timing["max"]
 
 
 def test_a_learned_run_saves_rgb_and_proposals_and_recomputes_exactly(tmp_path):

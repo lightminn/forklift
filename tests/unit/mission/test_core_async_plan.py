@@ -429,3 +429,455 @@ def test_replies_are_applied_in_order_and_a_new_correction_re_projects_the_grid_
     core.slam_replies(5.2, [(Reply(8, 0.8, "processed", (0.05, 0.0, 0.0), 3, 0.2), meta(8), 1.2, 1.4)], True)
     assert len(refreshes) == 1 and slam["records"][-1]["received_after"] == [0.05, 0.0, 0.0]
     assert slam["records"][-1]["applied_after"] == [0.03, 0.0, 0.0]
+
+
+# --- the persistent console's mission end (docs/plans/2026-10-18-persistent-live-console.md D1 step 2) -------------
+@pytest.mark.parametrize("phase", ["transport", "lower"])
+def test_abandon_jobs_drops_the_waited_plan_without_the_drops_side_effects(phase):
+    core, ms, state, obstacle, slam, calls, _ = make(phase)
+    if phase == "transport":
+        assert core.live_leg(20.0, REAR, True) is True  # a live leg plan is waited for
+    else:
+        core._request("release", "leg", {}, 20.0, REAR, None, {"need": {"leg": "x"}})
+    job = core.pending.job
+    closed = []
+    core.capture_live = SimpleNamespace(session=SimpleNamespace(close=lambda: closed.append(True)), attempt={})
+    core.observation_live, core.capture_acquired_s, core.fresh_depth_wait = "OBS", 19.0, (18.0, 17.5)
+    core.release_replan_needed = {"leg": "older"}
+    core.abandon_jobs(22.0)
+    assert core.pending is None and core.jobs.discarded == [job]
+    assert core.commands.waits[-1] == [20.0, 22.0]
+    assert state["async_plans"][-1]["finished_s"] == 22.0 and state["async_plans"][-1]["dropped"] == "abandoned"
+    assert core.release_replan_needed is None and "async_plan_drops" not in state
+    assert obstacle.get("live_replanned", {}).get(phase) is not False  # _drop's live-leg undo is not made
+    assert closed == [True] and core.capture_live is None
+    assert core.observation_live is None and core.capture_acquired_s is None and core.fresh_depth_wait is None
+    core.abandon_jobs(23.0)  # nothing left: nothing happens
+    assert core.jobs.discarded == [job] and len(state["async_plans"]) == 1
+
+
+# --- persistent console plan D2: a live mission prepared from where the truck stands ------------------------------
+def preparing_core():
+    from forklift_core.mission.baseline import MissionBaseline
+    from forklift_core.mission.commands import Submit
+    from forklift_core.mission.targets import Pose
+
+    core, ms, state, obstacle, slam, calls, _ = make("complete")
+    core.commands.status = "idle"
+    core.targets.add_pallet("P-1", "epal6", Pose(3.1, 0.65, 0.0))
+    core.targets.add_destination("D-1", Pose(-5.0, -21.4, -1.57))
+    core.options.observation_waypoints = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    core.options.pickup_bounds, core.options.home_rear = "BAY", "HOME"
+    core.options.speeds, core.options.cusp_heading_hold_rad, core.options.tracker_profile = {"observe": 0.3}, 0.05, None
+    core.settings.update(tracker_curvature_inv_m=0.4, drive_acceleration_mps2=0.3)
+    core.hooks.lift_position = lambda: 0.004
+    started = []
+    core.hooks.live_mission_start = lambda t, inputs, plan, records: started.append((t, inputs, plan, records))
+    core.hooks.live_mission_ready = lambda t, inputs: None
+    state["observation_attempts"] = []
+    core.baseline = MissionBaseline.capture(core)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    core.commands.apply(10.0)
+    inputs = {"scenario": "SC_NEW", "wait_pose": "WAIT", "waypoints": [[5.0, 5.0, 1.0], [6.0, 5.0, 1.0]],
+              "pickup_bounds": None, "pickup_zone": "ZONE"}
+    return core, ms, state, started, inputs
+
+
+def ladder(result=None, selected=None, timed_out=False, statuses=("no_path",)):
+    return {"result": result, "selected": selected, "timed_out": timed_out, "wall_s": 0.1,
+            "candidates": [{"candidate_index": i, "pose": [5.0 + i, 5.0, 1.0], "status": st, "success": st == "success"}
+                           for i, st in enumerate(statuses)]}
+
+
+def test_a_prepared_mission_is_adopted_with_its_start_processing():
+    core, ms, state, started, inputs = preparing_core()
+    ms.observe_stall_ticks, core.last_permission = 9, (0.2, "slow")
+    core.prepare_request(11.0, REAR, inputs, {"waypoints": inputs["waypoints"]})
+    assert core.commands.status == "preparing" and core.pending.site == "prepare"
+    assert core.jobs.submitted[-1][0] == "observe_ladder" and core.prepare_attempts == 1
+    assert core.job_hold(11.5, REAR, 0.0, False).hold and core.commands.status == "preparing"  # still planning
+    plan = Plan("success")
+    core.jobs.answers[core.pending.job] = (True, ladder(plan, 1, statuses=("no_path", "success")))
+    assert core.job_hold(12.0, REAR, 0.0, False).hold
+    assert core.commands.status == "running" and core.commands.adopted_id == core.commands.mission_id
+    assert ms.phase == "observe" and ms.phase_started == 12.0 and ms.next_candidate_index == 2
+    assert ms.observe_stall_ticks == 0 and core.last_permission is None and ms.lift_command == 0.004
+    assert core.paths == {"observe": plan} and state["planning_status"] == "success"
+    assert list(core.trackers) == ["observe"] and core.trackers["observe"].config.cruise_speed_mps == 0.3
+    assert state["observation_waypoint_selected"] == [6.0, 5.0, 1.0]
+    assert [c["status"] for c in state["observation_candidates"]] == ["no_path", "success"]
+    o = core.options
+    assert (o.scenario, o.return_to_pose, o.home_rear, o.pickup_bounds, o.observe_bounds, o.pickup_zone) == (
+        "SC_NEW", "WAIT", "WAIT", None, None, "ZONE")
+    assert o.observation_waypoints == inputs["waypoints"]
+    assert started and started[0][0] == 12.0 and started[0][2] is plan
+    assert state["transitions"][-1] == {"from": "complete", "to": "observe", "time_s": 12.0,
+                                        "mission_id": core.commands.mission_id}
+
+
+@pytest.mark.parametrize("answer, reason", [
+    ((True, ladder(timed_out=True)), "prepare:timeout"),
+    ((True, ladder(statuses=("no_path", "invalid_start"))), "prepare:all_candidates_failed:no_path;invalid_start"),
+    ((False, "Traceback ...\nValueError: x"), "prepare:error:Traceback ..."),
+])
+def test_a_preparation_that_plans_nothing_fails_the_mission_and_changes_nothing(answer, reason):
+    core, ms, state, started, inputs = preparing_core()
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = answer
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert core.commands.status == "failed" and core.commands.end_reason == reason
+    assert ms.phase == "complete" and not started and core.options.scenario.destination == "DEST"
+
+
+def test_a_blocked_start_carries_the_workers_advice_to_the_missions_end():
+    """Persistent console plan D13 item 6: the worker's advice reaches the result, nothing else gets one."""
+    core, ms, state, started, inputs = preparing_core()
+    core.prepare_request(11.0, REAR, inputs, {})
+    answer = ladder(statuses=("invalid_start", "invalid_start"))
+    answer["advice"] = {"backoff_m": 0.1, "backoff_max_m": 0.4, "from_rear": [1.0, 2.0, 0.0]}
+    core.jobs.answers[core.pending.job] = (True, answer)
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert core.commands.status == "failed" and core.commands.end_advice == answer["advice"]
+    core2, *_ = preparing_core()
+    core2.prepare_request(11.0, REAR, inputs, {})
+    core2.jobs.answers[core2.pending.job] = (True, ladder(timed_out=True))
+    core2.job_hold(12.0, REAR, 0.0, False)
+    assert core2.commands.end_advice is None
+
+
+@pytest.mark.parametrize("change, why", [("drift", "drift"), ("targets", "targets")])
+def test_a_preparation_whose_inputs_changed_is_asked_again_once_then_fails(change, why):
+    from forklift_core.mission.targets import Pose
+
+    core, ms, state, started, inputs = preparing_core()
+    for attempt in (1, 2):
+        core.prepare_request(11.0 + attempt, REAR, inputs, {})
+        core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+        if change == "drift":
+            rear = REAR + [0.05, 0.0, 0.0]
+        else:
+            rear = REAR
+            core.targets.add_destination(f"D-{attempt + 5}", Pose(0.0, 0.0, 0.0))
+        assert core.job_hold(11.5 + attempt, rear, 0.0, False).hold
+        assert core.pending is None and "async_plan_drops" not in state
+        assert core.commands.status == ("preparing" if attempt == 1 else "failed")
+    assert core.commands.end_reason == f"prepare:{why}" and not started
+
+
+def test_the_destinations_reference_is_made_before_anything_changes_and_its_failure_fails_only_the_preparation():
+    """Codex stage 2 impl P2-6: the cast ran after the start processing had changed the options, paths and trackers."""
+    core, ms, state, started, inputs = preparing_core()
+    order = []
+    core.hooks.live_mission_ready = lambda t, inputs: order.append(("ready", core.options.scenario)) or "REF"
+    core.hooks.live_mission_start = lambda t, inputs, plan, ready: order.append(("start", ready))
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert order[0][0] == "ready" and order[0][1].destination == "DEST"  # before the options changed
+    assert order[1] == ("start", "REF") and core.commands.status == "running"
+
+    core, ms, state, started, inputs = preparing_core()
+
+    def broken(t, inputs):
+        raise RuntimeError("cast failed")
+
+    core.hooks.live_mission_ready = broken
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert core.commands.status == "failed" and core.commands.end_reason == "prepare:reference:cast failed"
+    assert ms.phase == "complete" and core.options.scenario.destination == "DEST" and not started
+
+
+def test_the_adoption_keeps_this_missions_own_preparation_records():
+    """Codex stage 2 impl P2-5: the baseline is restored at the mission's end (D1 step 8); at the adoption what was
+    recorded since -- this mission's preparation -- stays with it."""
+    core, ms, state, started, inputs = preparing_core()
+    core.hooks.live_mission_ready = lambda t, inputs: None
+    core.prepare_request(11.0, REAR, inputs, {})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert [r["site"] for r in state["async_plans"]] == ["prepare"]
+
+
+def test_the_end_closes_the_pocket_check_and_hands_the_mission_records_back():
+    """Codex stage 2 impl P1-1: a cancel in the approach left the pocket check, its exemption and support."""
+    core, ms, state, started, inputs = preparing_core()
+    layer = core.obstacle["layer"]
+    layer.exempt, layer.depth_support = "EXEMPT", "SUPPORT"
+    core.pocket["check"] = SimpleNamespace(summary=lambda: {"frames": 3})
+    core.pocket["frames_read"] = 3
+    state["async_plans"] = [{"site": "leg"}]
+    records = core.end_reset(20.0)
+    assert core.pocket["check"] is None and layer.exempt is None and layer.depth_support is None
+    assert records["state"]["pocket_check"] == {"frames": 3, "frames_read": 3} and "pocket_check" not in state
+    assert records["state"]["async_plans"] == [{"site": "leg"}] and "async_plans" not in state
+
+
+@pytest.mark.parametrize("site", ["leg", "prepare"])
+def test_a_dead_worker_ends_the_session_not_the_mission(site):
+    """Codex D6 P2-4: a worker that could not be started again fails every job at once; that is not 'no path'."""
+    if site == "prepare":
+        core, ms, state, started, inputs = preparing_core()
+        core.prepare_request(11.0, REAR, inputs, {})
+    else:
+        core, ms, state, obstacle, slam, calls, _ = make("transport")
+        core.live_leg(20.0, REAR, True)
+    core.jobs._dead = "plan worker restart failed: boom"
+    core.jobs.answers[core.pending.job] = (False, core.jobs._dead)
+    with pytest.raises(RuntimeError, match="^plan_worker_dead: plan worker restart failed: boom"):
+        core.job_hold(30.0, REAR, 0.0, False)
+
+
+# --- the end SLAM release (plan D1 step 4; stage 3 design, 4th edition) --------------------------------------------
+class HeldTracker:
+    """A SLAM tracker holding a correction: a release moves the estimate by +0.20 m in x."""
+
+    def __init__(self):
+        self.mode, self.applied, self.released = "holding", ((0.0, 0.0, 0.0), 0), 0
+
+    def release(self, odom_from_base=None):
+        self.mode, self.applied, self.released = "tracking", ((0.2, 0.0, 0.0), 0), self.released + 1
+        return 0.2, 0.0
+
+    def hold(self, odom_from_base=None):
+        self.mode = "holding"
+
+    def may_drive(self):
+        return True
+
+
+def held_core(phase="approach"):
+    from forklift_core.mission.targets import Pose
+
+    core, ms, state, started, inputs = preparing_core()
+    ms.phase = phase
+    slam = core.slam
+    slam["tracker"] = HeldTracker()
+    slam.update(stop_now=True, pending_release="transport", release_wait_from=5.0, control=[[0.0, 1.0, 2.0, 0.5]])
+    pose = {"rear": np.array([1.0, 2.0, 0.5])}
+    core.hooks.slam_rear = lambda t: pose["rear"] + ([0.2, 0.0, 0.0] if slam["tracker"].mode == "tracking" else 0.0)
+    core.hooks.slam_odom_base = lambda: None
+    core.hooks.set_rear = lambda rear: None
+    core.commands.adopted_id = core.commands.mission_id  # the mission ran
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    core.pocket["planning_pickup"] = PalletSite(3.0, 0.5, 0.0)  # seen in the hold
+    core.obstacle["pickup_estimate"] = PalletSite(3.0, 0.5, 0.0)
+    slam["transport_scenario"] = Scenario(PalletSite(-5.0, -21.4, -1.57))
+    return core, slam, Pose
+
+
+@dataclass(frozen=True)
+class Scenario:
+    destination: object
+
+
+def test_an_end_standing_releases_the_hold_and_carries_only_the_held_pallet_estimate():
+    core, slam, Pose = held_core("approach")
+    dest = core.targets.destinations["D-1"]
+    version = core.targets.correction_version
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 1 and slam["pending_release"] is None and slam["release_wait_from"] is None
+    pose = core.targets.pallets["P-1"].pose  # carried by the release, then settled
+    assert (pose.x_m, pose.y_m, pose.yaw_rad) == pytest.approx((3.2, 0.5, 0.0))
+    assert core.targets.destinations["D-1"] == dest  # a map goal: not moved
+    assert core.targets.correction_version == version + 1
+    assert slam["holds"][-1]["reason"] == "mission_end" and core.obstacle["applied"] == (0.2, 0.0, 0.0)
+    assert core.pending is None and not core.jobs.submitted  # no plan, no path (U28)
+
+
+def test_an_end_while_moving_releases_once_standing_and_carries_the_pallet_target():
+    core, slam, Pose = held_core("observe")
+    slam["stop_now"] = False
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 0 and slam["pending_release"] is None
+    before = core.targets.pallets["P-1"].pose
+    core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))  # still moving: waits, no 10 s limit
+    assert slam["tracker"].released == 0
+    slam["stop_now"] = True
+    core.release_gate(22.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1
+    after = core.targets.pallets["P-1"].pose
+    assert (after.x_m - before.x_m) == pytest.approx(0.2) and core.targets.destinations["D-1"].x_m == -5.0
+    core.release_gate(23.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1  # once
+
+
+def cargo_to(core, phase):
+    """The session's fork relation as a mission that reached ``phase`` left it (plan D5a: driven by transitions)."""
+    order = ["observe", "approach", "insert", "lift", "extract", "transport", "lower", "withdraw", "settle"]
+    for a, b in zip(order, order[1:order.index(phase) + 1]):
+        core.cargo.on_transition(a, b, "P-1")
+
+
+@pytest.mark.parametrize("phase", ["insert", "lift", "lower", "withdraw"])
+def test_an_end_with_the_forks_in_a_pocket_keeps_the_hold(phase):
+    core, slam, Pose = held_core(phase)
+    cargo_to(core, phase)
+    core.end_reset(20.0)
+    assert slam["tracker"].mode == "holding" and slam["tracker"].released == 0
+    assert slam["pending_release"] is None  # the mission's own reservation is gone either way
+
+
+def test_an_end_while_carrying_releases_the_hold_for_the_teleop_with_the_load():
+    """Plan D5a (Codex round 1 P2-6): a hold left while carrying freezes the correction under the loaded teleop the
+    user allowed, until LocalizationStale at 15 m."""
+    core, slam, Pose = held_core("transport")
+    cargo_to(core, "transport")
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 1
+
+
+@pytest.mark.parametrize("standing", [True, False])
+def test_an_end_after_docking_carries_the_docked_destination_and_the_pallet_delivered_there(standing):
+    """Codex D6 design round 4 P2: ended in settle with the docking hold still on; both the immediate and the deferred
+    release move the docked destination and its delivered pallet together, by the frame change, once."""
+    from forklift_core.mission.targets import Pose
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    core, slam, _ = held_core("settle")
+    core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["transport_scenario"] = Scenario(PalletSite(5.1, 1.0, 0.0))  # the prior
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=False)  # the transport's arrival hold
+    slam["tracker"].mode = "holding"
+    slam["docking"] = {"accepted_any": True}
+    slam["transport_scenario"] = Scenario(PalletSite(5.0, 1.0, 0.0))  # the docking match, in the held frame
+    core.targets.carried("P-1")
+    core.targets.put_down("P-1", Pose(5.0, 1.0, 0.0))
+    slam["stop_now"] = standing
+    core.end_reset(20.0)
+    if not standing:
+        slam["stop_now"] = True
+        core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1
+    pallet, dest = core.targets.pallets["P-1"].pose, core.targets.destinations["D-1"]
+    assert (pallet.x_m, pallet.y_m) == pytest.approx((5.2, 1.0)) and (dest.x_m, dest.y_m) == pytest.approx((5.2, 1.0))
+
+
+@pytest.mark.parametrize("phase, adopted, key", [
+    ("withdraw", False, "recovery_required"), ("insert", False, "recovery_required"),
+    ("transport", False, "cargo_held"), ("settle", False, None), ("observe", False, None),
+    ("transport", True, None),  # a mission running (a batch run's is always adopted)
+])
+def test_the_safety_state_says_what_an_ended_missions_forks_refuse(phase, adopted, key):
+    """Plan D5a: from the session's fork relation, not the phase name (which a batch run's state still uses)."""
+    core, ms, state, obstacle, slam, calls, _ = make(phase)
+    cargo_to(core, phase)
+    core.commands.adopted_id = "m1" if adopted else None
+    core.commands.mission_id = "m1"
+    assert not {"recovery_required", "cargo_held"} & set(core.safety_state(10.0))  # not live: as before (P3)
+    core.baseline = object()  # a live session
+    s = core.safety_state(10.0)
+    for k in ("recovery_required", "cargo_held"):
+        assert (k in s) is (k == key) and s.get(k, True) is True
+
+
+def test_a_live_safety_state_publishes_the_fork_relation_and_a_batch_one_the_phase():
+    core, ms, state, obstacle, slam, calls, _ = make("transport")
+    cargo_to(core, "transport")
+    batch = core.safety_state(10.0)
+    assert batch["load"] == {"loaded": True, "basis": "phase", "lift_target_m": 0.0}
+    assert batch["fork_in_pocket"] == {"value": False, "basis": "phase"}
+    core.baseline = object()  # a live session (the runner captures the baseline only there)
+    live = core.safety_state(10.0)
+    assert live["load"] == {"loaded": True, "basis": "phase+cargo", "pallet_id": "P-1", "state": "confirmed",
+                            "lift_target_m": 0.0}
+    assert live["fork_in_pocket"] == {"value": True, "basis": "phase+cargo", "relation": "carrying"}
+
+
+def test_the_cores_transitions_drive_the_session_cargo():
+    core, ms, state, obstacle, slam, calls, _ = make("lift")
+    core.commands.mission = SimpleNamespace(pallet_id="P-7", destination_id="D-1")
+    core.hooks.echo, core.hooks.snapshot = (lambda *a: None), (lambda *a: None)
+    obstacle["layer"].known_enabled, obstacle["layer"].memory = False, None
+    core.transition("extract", 5.0)
+    assert (core.cargo.relation, core.cargo.load, core.cargo.pallet_id) == ("carrying", "confirmed", "P-7")
+
+
+def test_an_arrival_hold_carries_only_what_it_found_itself():
+    """Codex D6 round 5: a hold at the return's arrival must not move the destination the settle release already
+    carried; a hold at the observation's arrival, before any capture, must not move the pallet's map prior."""
+    from forklift_core.mission.targets import Pose
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    # the return's arrival hold, after the delivery: the destination is a map goal already
+    core, slam, _ = held_core("home_settle")
+    core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["docking"] = {"accepted_any": True}
+    slam["return_scenario"] = Scenario(PalletSite(5.0, 1.0, 0.0))
+    core.targets.carried("P-1")
+    core.targets.put_down("P-1", Pose(5.0, 1.0, 0.0))
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(30.0, held_frame_pallet=False)  # the arrival hold (follow's end of leg)
+    slam["tracker"].mode = "holding"
+    core.end_reset(40.0)
+    assert core.targets.destinations["D-1"].x_m == pytest.approx(5.0)
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(5.0)
+
+    # the observation's arrival hold, before the capture; ended while moving, released once standing
+    core, slam, _ = held_core("observe")
+    core.pocket["planning_pickup"] = core.obstacle["pickup_estimate"] = None
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=False)
+    slam["tracker"].mode = "holding"
+    slam["stop_now"] = False
+    before = core.targets.pallets["P-1"].pose
+    core.end_reset(12.0)
+    slam["stop_now"] = True
+    core.release_gate(13.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 1 and core.targets.pallets["P-1"].pose == before
+
+
+def test_a_capture_made_under_the_held_correction_is_carried():
+    """The approach hold begins at the accepted capture, whose estimate was made with the correction it holds."""
+    core, slam, _ = held_core("approach")
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=True)
+    slam["tracker"].mode = "holding"
+    core.end_reset(12.0)
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)
+
+
+def test_a_deferred_end_release_is_dropped_when_the_cargo_turns_unknown_before_standing():
+    """Codex D5a impl round 1 P2: the release was reserved while carrying; the pallet dropped before the truck stood
+    -- unknown keeps the hold."""
+    core, slam, Pose = held_core("transport")
+    cargo_to(core, "transport")
+    slam["stop_now"] = False
+    core.end_reset(20.0)
+    assert core.end_release_due is not None and slam["tracker"].released == 0
+    core.cargo.invalidate("Pallet dropped during transport")
+    slam["stop_now"] = True
+    core.release_gate(21.0, np.array([1.0, 2.0, 0.5]))
+    assert slam["tracker"].released == 0 and slam["tracker"].mode == "holding" and core.end_release_due is None
+
+
+@pytest.mark.parametrize("phase", ["recover_withdraw", "clear_out"])
+def test_an_end_release_after_a_recovery_carries_the_put_back_pallet(phase):
+    """Plan D4b item 4 (Codex 6b-2 round 1 P2-1): the recovery put the pallet back at the hold's estimate; the
+    targets list no longer follows the core there, so the end release carries the list's pallet itself -- the
+    truck and the pallet keep their gap across the frame change."""
+    core, slam, Pose = held_core(phase)
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=True)  # the approach hold: the capture's estimate is in its frame
+    slam["tracker"].mode = "holding"
+    core.targets.carried("P-1")
+    core.restore_pallet_target()  # the ground verdict
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.0)
+    core.end_reset(20.0)
+    assert slam["tracker"].released == 1
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)
+
+
+def test_an_end_release_after_a_new_hold_keeps_the_put_back_pallet():
+    """A hold the back-out began itself found nothing: the pallet's estimate is a map estimate and stays."""
+    core, slam, Pose = held_core("clear_out")
+    slam["tracker"].mode = "tracking"
+    core.hold_slam(10.0, held_frame_pallet=False)
+    slam["tracker"].mode = "holding"
+    core.targets.carried("P-1")
+    core.restore_pallet_target()
+    core.end_reset(20.0)
+    assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.0)

@@ -14,6 +14,7 @@ import secrets
 import struct
 import time
 import uuid
+from http import HTTPStatus
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from websockets.http11 import Request, Response
 
 from console import wire
 from console.mock_vehicle import camera
-from console.mock_vehicle.core import API, MockVehicle
+from console.mock_vehicle.core import API, Config, MockVehicle
 from console.mock_vehicle.world import raycast
 from console.wire import CONTROL_PATH, MEDIA_PATH
 
@@ -68,6 +69,7 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
             max_workers=1, thread_name_prefix="mock-camera"
         )
         self._targets_revision = None
+        self.done = asyncio.Event()  # set when a session_end ends the fake vehicle (D13: it does not come back)
 
     # ------------------------------------------------------------- lifecycle
     def close(self) -> None:
@@ -99,6 +101,14 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
     def process_request(
         self, connection: ServerConnection, request: Request
     ) -> Response | None:
+        path = request.path.split("?", 1)[0]
+        if path.startswith("/mock/inject/"):
+            # persistent console plan D13: the screen's cases for the page's tests (fake vehicle only)
+            try:
+                self.vehicle.inject(path.rsplit("/", 1)[1])
+            except ValueError as exc:
+                return connection.respond(HTTPStatus.BAD_REQUEST, f"{exc}\n")
+            return connection.respond(HTTPStatus.OK, "ok\n")
         return wire.static_response(connection, request, self.web_root)
 
     # ------------------------------------------------------------ connection
@@ -130,6 +140,8 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         try:
             self._send_control(conn_id, welcome)
             self._send_control(conn_id, self.vehicle.make_targets())
+            if self.vehicle.results.seq:
+                self._send_control(conn_id, self.vehicle.make_missions())  # after the targets (contract 5.2)
             async for raw in ws:
                 msg = _parse(raw)
                 if msg is None:
@@ -137,11 +149,30 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
                 reply = self.vehicle.handle(client_id, msg, conn_id=conn_id)
                 if reply is not None:
                     self._send_control(conn_id, reply)
+                if self.vehicle.session_request is not None:
+                    asyncio.create_task(self._end_session(self.vehicle.session_request))
         except ConnectionClosed:
             pass
         finally:
             self.detach_control(conn_id)
             self.vehicle.disconnect(client_id, conn_id)
+
+    async def _end_session(self, kind: str) -> None:
+        """D13, as the live runner: a session end closes everything and the fake vehicle ends (the page must not
+        reconnect); a scene reset closes the connections and starts again under a new session epoch."""
+        if kind == "end" and self.done.is_set():
+            return
+        self.vehicle.session_request = None
+        await asyncio.sleep(0.3)  # the ack and a last state go out first
+        for ws, _ in list(self.control.values()):
+            await ws.close(1000 if kind == "end" else 1012, "session ended" if kind == "end" else "scene reset")
+        for sub in list(self.media.values()):
+            await sub["ws"].close(1000 if kind == "end" else 1012)
+        if kind == "end":
+            self.done.set()
+        else:
+            self.vehicle.reset_session()
+            self._targets_revision = None
 
     async def _media(self, ws: ServerConnection) -> None:
         conn_id = uuid.uuid4().hex
@@ -306,7 +337,8 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
 async def start(
     host: str, port: int, web_root: Path, *, test_frame_pad_bytes: int = 0
 ) -> Handle:
-    vehicle = MockVehicle(time.monotonic, lambda: secrets.token_hex(8))
+    # as the live runner: the request ledger and its tokens (persistent console plan D7/D13)
+    vehicle = MockVehicle(time.monotonic, lambda: secrets.token_hex(8), Config(request_tokens=True))
     h = Handle(vehicle, Path(web_root), test_frame_pad_bytes)
     h.server = await serve(
         h.handler,
@@ -336,7 +368,7 @@ async def main(host: str, port: int, web_root: Path) -> None:
         flush=True,
     )
     try:
-        await asyncio.Future()
+        await h.done.wait()  # a session_end ends it (D13)
     finally:
         h.close()
         await h.wait_closed()

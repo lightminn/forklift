@@ -155,3 +155,41 @@ def test_a_client_connecting_later_gets_the_targets_after_the_welcome():
     with StandIn() as s:
         s.store.put("targets", 3, {"t": "targets", "targets_revision": 3, "pallets": [], "destinations": []})
         assert asyncio.run(client(s.port))["targets_revision"] == 3
+
+
+def test_a_client_connecting_later_gets_the_mission_results_after_the_targets():
+    """Persistent console plan D1 step 9: a page connecting later still sees how the missions ended."""
+    async def client(port):
+        async with connect(f"ws://127.0.0.1:{port}/api/v1/control") as ws:
+            await ws.send(json.dumps({"t": "hello", "api": "console/1", "client_id": "late"}))
+            return [json.loads(await ws.recv())["t"] for _ in range(3)]
+
+    with StandIn() as s:
+        s.store.put("targets", 3, {"t": "targets", "targets_revision": 3, "pallets": [], "destinations": []})
+        s.store.put("missions", 1, {"t": "missions", "missions_seq": 1, "results": []})
+        assert asyncio.run(client(s.port)) == ["welcome", "targets", "missions"]
+
+
+def test_each_connection_gets_its_own_token_and_a_request_right_after_the_welcome_is_taken():
+    """Persistent console plan D7 (stage 4c): the token is the connection's (issued by the server, registered in the
+    arbiter's ledger through the connect event, which the ordered channel delivers first)."""
+    async def client(port, name):
+        async with connect(f"ws://127.0.0.1:{port}/api/v1/control") as ws:
+            await ws.send(json.dumps({"t": "hello", "api": "console/1", "client_id": name}))
+            welcome = json.loads(await ws.recv())
+            token = welcome["request_token"]
+            await ws.send(json.dumps({"t": "lease_request", "request_id": "L1", "session_epoch": EPOCH,
+                                      "request_token": token, "request_seq": 1}))
+            while True:
+                reply = json.loads(await ws.recv())
+                if reply.get("request_id") == "L1":
+                    return token, reply
+
+    with StandIn() as s:
+        s.a.config = __import__("dataclasses").replace(s.a.config, request_tokens=True)
+        first = asyncio.run(client(s.port, "one"))
+        second = asyncio.run(client(s.port, "two"))
+    assert first[0] != second[0]
+    assert first[1]["t"] == "ack"  # the first client got the lease with its own token
+    assert second[1]["t"] == "reject" and second[1]["reason"] in ("no_lease", "lease_reserved")
+    assert s.welcome.get("request_token") is None  # the shared welcome is not changed

@@ -296,3 +296,107 @@ def test_a_stop_inside_the_missions_tick_is_not_undone_by_the_submit_it_overtook
     submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
     r.cycle(submit, after_tick=lambda: r.a.stop(r.t, "stop:gate"))
     assert r.a.mode == "STOPPED" and r.out.speed_mps == 0.0 and r.out.stop_kind == "preempt"
+
+
+def test_a_preparing_mission_keeps_auto_and_a_pause_request_ends_the_preparation():
+    """Persistent console plan D2 (Codex stage 2 design P2): AUTO_STATUSES is the arbiter's own list."""
+    r = Rig()
+    r.m.start = r.m.begin_prepare  # a live submit is prepared before it runs
+    r.stand()
+    msg = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    r.cycle(msg)
+    assert r.reply(msg["request_id"])["t"] == "ack" and r.a.mode == "AUTO" and r.m.status == "preparing"
+    r.stand(3)
+    assert r.a.mode == "AUTO" and r.m.status == "preparing"
+    r.cycle(r.msg("mode_request", to="PAUSED"))
+    r.cycle()
+    assert r.m.status in ("failed", "idle") and r.a.mode == "PAUSED"
+    assert any(e["command"] == "end" and e["reason"] == "prepare:paused" for e in r.m.log)
+
+
+def test_teleop_is_refused_after_a_mission_ended_with_the_forks_maybe_in_a_pocket():
+    """Persistent console plan D6 (Codex design P1-1): until D5 judges the pockets, the phase the mission ended in
+    is all there is; a dropped pallet would otherwise read as the truck's own load."""
+    from forklift_core.safety.teleop_policy import teleop_policy
+
+    safety = dict(SAFE, recovery_required=True)
+    policy = teleop_policy(safety, feedback_ok=True, standing=True)
+    assert not policy.drive_allowed and policy.reason == "recovery_required"
+    assert teleop_policy(dict(SAFE), feedback_ok=True, standing=True).drive_allowed
+
+
+# --- persistent console plan D7/D9: ending the session, resetting the scene -----------------------------------------
+@pytest.mark.parametrize("kind, flag", [("session_end", "end"), ("sim_reset", "reset")])
+def test_the_lease_holder_ends_the_session_or_resets_the_scene_standing_with_no_mission(kind, flag):
+    r = Rig()
+    r.a.sim_reset_allowed = True
+    r.stand()
+    out = r.cycle(r.msg(kind))[0]
+    assert out["t"] == "ack" and r.a.session_request == flag
+    assert any(e["event"] == "session_request" and e["request"] == flag for e in r.a.events)
+
+
+def test_ending_the_session_is_refused_while_a_mission_is_on_while_moving_and_without_the_lease():
+    r = Rig()
+    r.a.sim_reset_allowed = True
+    auto(r)
+    r.cycle(r.msg("mode_request", to="PAUSED"))
+    r.speed = 0.0
+    r.stand()  # paused and standing: the mission is still on
+    out = r.cycle(r.msg("session_end"))[0]
+    assert out["t"] == "reject" and out["reason"] == "mission_active" and r.a.session_request is None
+    r2 = Rig()
+    r2.speed = 0.3  # moving
+    r2.stand(3)
+    out = r2.cycle(r2.msg("session_end"))[0]
+    assert out["reason"] in ("not_stopped", "no_feedback:rear_axle_speed") and r2.a.session_request is None
+    r3 = Rig()
+    r3.stand()
+    out = r3.cycle({**r3.msg("session_end"), "lease_id": "nope"})[0]
+    assert out["reason"] == "stale_lease"
+
+
+def test_a_scene_reset_is_refused_where_the_back_end_cannot_do_it():
+    r = Rig()
+    r.stand()
+    out = r.cycle(r.msg("sim_reset"))[0]
+    assert out["reason"] == "unsupported" and r.a.session_request is None
+
+
+def test_an_accepted_session_end_closes_the_controls_at_once():
+    """Codex stage 4a P2: after the ack the same batch still drove and submitted; the end is a boundary -- out of
+    TELEOP, disarmed, a new control generation -- and every later request is refused session_ending."""
+    r = Rig()
+    r.a.sim_reset_allowed = True
+    r.stand()
+    gen = r.a.control_gen
+    submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    out = r.cycle(r.msg("session_end"), submit, r.msg("sim_reset"))
+    assert out[0]["t"] == "ack" and r.a.session_request == "end"
+    assert r.a.control_gen > gen and not r.a.armed and r.a.mode in ("PAUSED", "STOPPED")
+    later = [x for x in out[1:] if x is not None] + [x for x in r.replies if x.get("of") == "mission_submit"]
+    assert later and all(x["t"] == "reject" for x in later) and r.m.status == "idle"
+    assert r.a.session_request == "end"  # a later reset does not replace it
+
+
+def test_a_submit_queued_before_the_end_in_the_same_cycle_is_refused():
+    r = Rig()
+    r.stand()
+    submit = r.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    r.cycle(submit, r.msg("session_end"))
+    assert r.m.status == "idle" and r.reply(submit["request_id"])["reason"] == "session_ending"
+
+
+@pytest.mark.parametrize("relation, allowed, reason, loaded", [
+    ("carrying", True, None, True),  # a mission cancelled while transporting: driven with the load (user decision)
+    ("constrained", False, "fork_in_pocket", False),
+    ("unknown", False, "fork_in_pocket", False),
+])
+def test_a_live_fork_relation_decides_teleop_in_a_pocket(relation, allowed, reason, loaded):
+    """Persistent console plan D5a: the live state says what the forks are in; only carrying may drive."""
+    from forklift_core.safety.teleop_policy import teleop_policy
+
+    safety = dict(SAFE, load={"loaded": relation != "free", "basis": "phase+cargo"},
+                  fork_in_pocket={"value": True, "basis": "phase+cargo", "relation": relation})
+    policy = teleop_policy(safety, feedback_ok=True, standing=True)
+    assert (policy.drive_allowed, policy.reason, policy.loaded) == (allowed, reason, loaded)

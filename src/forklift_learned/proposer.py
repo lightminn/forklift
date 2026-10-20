@@ -51,16 +51,47 @@ def _linear_weights(n_out: int, n_in: int) -> np.ndarray:
 
 class LearnedProposer:
     def __init__(self, onnx_path=None, *, providers=None, conf: float = 0.05, iou: float = 0.6, max_det: int = 8,
-                 session=None, threads: int | None = None):
+                 session=None, threads: int | None = None, device_id: int = 0):
+        """``providers``: onnxruntime providers, CPU when omitted (never TensorRT by default). Asking for CUDA preloads
+        the pip CUDA / cuDNN libraries (ws1: without torch imported first, onnxruntime-gpu could not find them and ran
+        on the CPU silently), pins ``device_id`` (a CUDA ordinal -- inside a Slurm job, of the GPUs it was given), and
+        is an error if the session does not come up on CUDA."""
         if session is None:
             import onnxruntime as ort  # noqa: PLC0415 -- the [learned] extra
 
+            providers = list(providers or ["CPUExecutionProvider"])
+            wants_cuda = "CUDAExecutionProvider" in providers
+            if wants_cuda and hasattr(ort, "preload_dlls"):
+                ort.preload_dlls(cuda=True, cudnn=True, msvc=False)
+            asked = [("CUDAExecutionProvider", {"device_id": int(device_id)}) if p == "CUDAExecutionProvider" else p
+                     for p in providers]
             options = ort.SessionOptions()
             if threads:  # onnxruntime sizes its pool to the machine, not the Slurm allocation
                 options.intra_op_num_threads, options.inter_op_num_threads = int(threads), 1
-            session = ort.InferenceSession(str(onnx_path), sess_options=options,
-                                           providers=providers or ort.get_available_providers())
+            session = ort.InferenceSession(str(onnx_path), sess_options=options, providers=asked)
+            if wants_cuda and hasattr(session, "disable_fallback"):
+                # onnxruntime otherwise rebuilds the session on the CPU after an EP failure in run() and retries
+                # silently (Codex review, stage 3b) -- a failure must raise, so the caller falls back on the record
+                session.disable_fallback()
+        else:
+            wants_cuda = False
         self.session, self.conf, self.iou, self.max_det = session, float(conf), float(iou), int(max_det)
+        self.wants_cuda = wants_cuda
+        self._check_providers()
+
+    def _check_providers(self) -> None:
+        self.active_providers = list(self.session.get_providers()) if hasattr(self.session, "get_providers") else []
+        if self.wants_cuda and "CUDAExecutionProvider" not in self.active_providers:
+            raise RuntimeError(f"CUDAExecutionProvider was asked for but the session runs on {self.active_providers}")
+
+    def warm_up(self, n: int = 3) -> None:
+        """Run the session on zeros of its input shape (CUDA builds its kernels and picks cuDNN algorithms on the
+        first runs: 391-444 ms on ws1 against p95 76-80 ms after)."""
+        inp = self.session.get_inputs()[0]
+        zeros = np.zeros([int(d) for d in inp.shape], np.float32)
+        for _ in range(n):
+            self.session.run(None, {inp.name: zeros})
+        self._check_providers()  # what the warmed-up session really runs on
 
     def propose(self, scene) -> list:
         inp = self.session.get_inputs()[0]

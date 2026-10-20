@@ -30,6 +30,14 @@ class Pallet:
     state: str = "available"
     depth_m: float | None = None  # overall size for the console's drawing (C3); None when not known
     width_m: float | None = None
+    # What the pose rests on (persistent console plan D10): "prior" as registered (a simulation registers the scene's
+    # placement -- the teleop permit then keeps out of the whole pickup zone), "recognised" once the observation
+    # placed it, "delivered" where it was put down; and the error margin the permit grows it by (None: prior).
+    basis: str = "prior"
+    uncertainty_m: float | None = None
+    # Persistent console plan D3 (3rd ed.): the destination the pallet is verified to stand at -- the first place
+    # (D-0) at the start, a destination only after its delivery verdict passed, None once lifted
+    at: str | None = None
 
 
 @dataclass
@@ -39,14 +47,25 @@ class TargetsBook:
     revision: int = 0
     correction_version: int = 0
     _issued: set = field(default_factory=set)
+    # Plan D3: the allowed pallet shapes, kind -> (depth, width); a pallet registered without its size must be of one
+    # of them, and the largest bounds an unknown size in the occupancy check
+    shapes: dict = field(default_factory=dict)
 
     # --- registration ---------------------------------------------------------------------------------------
+    def add_shape(self, kind: str, depth_m: float, width_m: float) -> None:
+        """An allowed pallet shape (plan D3); configuration, not a list change (the revision stays)."""
+        if not (depth_m > 0 and width_m > 0):
+            raise ValueError("a shape needs a positive depth and width")
+        self.shapes[kind] = (float(depth_m), float(width_m))
+
     def add_pallet(self, pallet_id: str, kind: str, pose: Pose, *, depth_m: float | None = None,
-                   width_m: float | None = None) -> None:
+                   width_m: float | None = None, at: str | None = None) -> None:
         if pallet_id in self._issued:
             raise ValueError(f"pallet id {pallet_id!r} was already used in this session")
+        if (depth_m is None or width_m is None) and self.shapes and kind not in self.shapes:
+            raise ValueError(f"pallet {pallet_id!r} of kind {kind!r} has no size and no allowed shape (plan D3)")
         self._issued.add(pallet_id)
-        self.pallets[pallet_id] = Pallet(pallet_id, kind, pose, depth_m=depth_m, width_m=width_m)
+        self.pallets[pallet_id] = Pallet(pallet_id, kind, pose, depth_m=depth_m, width_m=width_m, at=at)
         self.revision += 1
 
     def add_destination(self, destination_id: str, pose: Pose) -> None:
@@ -66,11 +85,16 @@ class TargetsBook:
         self.revision += 1
         return True
 
-    def update_pose(self, pallet_id: str, pose: Pose) -> bool:
-        """A new estimate of a pallet on the floor; a carried pallet keeps no pose."""
+    def update_pose(self, pallet_id: str, pose: Pose, *, basis: str | None = None,
+                    uncertainty_m: float | None = None) -> bool:
+        """A new estimate of a pallet on the floor; a carried pallet keeps no pose. ``basis``/``uncertainty_m``:
+        what the estimate rests on, when it says (plan D10); else they stay."""
         if self.pallets[pallet_id].state == "carried":
             return False
-        return self._set(pallet_id, pose=pose)
+        changes = {"pose": pose}
+        if basis is not None:
+            changes.update(basis=basis, uncertainty_m=uncertainty_m)
+        return self._set(pallet_id, **changes)
 
     def update_destination(self, destination_id: str, pose: Pose) -> bool:
         """A new estimate of a destination (a docking match, a frame change); the same pose changes nothing."""
@@ -81,13 +105,19 @@ class TargetsBook:
         return True
 
     def carried(self, pallet_id: str) -> bool:
-        return self._set(pallet_id, pose=None, state="carried")
+        return self._set(pallet_id, pose=None, state="carried", at=None)  # lifted: its verified place is gone
 
-    def put_down(self, pallet_id: str, pose: Pose, *, state: str = "delivered") -> bool:
-        """Registered again where it was put down, under the same ID."""
+    def verify_at(self, pallet_id: str, destination_id: str | None) -> bool:
+        """The pallet's verified place (plan D3): a destination after its delivery verdict passed, None when it is
+        moved by other means (a manual recovery's ground verdict)."""
+        return self._set(pallet_id, at=destination_id)
+
+    def put_down(self, pallet_id: str, pose: Pose, *, state: str = "delivered",
+                 uncertainty_m: float | None = None) -> bool:
+        """Registered again where it was put down, under the same ID (basis "delivered", plan D10)."""
         if state not in STATES or state == "carried":
             raise ValueError(state)
-        return self._set(pallet_id, pose=pose, state=state)
+        return self._set(pallet_id, pose=pose, state=state, basis="delivered", uncertainty_m=uncertainty_m)
 
     def set_correction_version(self, version: int, reexpress=None) -> bool:
         """The poses are re-expressed in a new correction (``reexpress(pose) -> pose``, the change of frame) and
@@ -104,23 +134,63 @@ class TargetsBook:
         return True
 
     # --- the submit check and the message ---------------------------------------------------------------------
-    def check_submit(self, pallet_id: str, destination_id: str, targets_revision: int) -> str | None:
+    def check_submit(self, pallet_id: str, destination_id: str, targets_revision: int, *,
+                     loaded: bool = False) -> str | None:
         """None when a submit may name these; otherwise the refusal reason."""
         if targets_revision != self.revision:
             return "stale_targets"
         pallet = self.pallets.get(pallet_id)
         if pallet is None or destination_id not in self.destinations:
             return "invalid"
-        if pallet.state != "available":
+        # delivered: put down, available again where it lies; carried: only a loaded submit (plan D5 6c)
+        if pallet.state not in (("carried",) if loaded else ("available", "delivered")):
             return "invalid"
-        return None
+        if pallet.at == destination_id:
+            return "already_there"  # plan D3: its verified place, not a distance (the list copies the target's pose)
+        occupied = self._occupied(pallet, destination_id)
+        if occupied is None:
+            return "invalid"  # no size and no shape to bound it: no occupancy verdict can be made
+        return "destination_occupied" if occupied else None
+
+    def _size(self, pallet: Pallet):
+        if pallet.depth_m is not None and pallet.width_m is not None:
+            return (float(pallet.depth_m), float(pallet.width_m))
+        if not self.shapes or pallet.kind not in self.shapes:
+            return None  # a kind outside the allowed set cannot be bounded (Codex D3 impl round 1 P2)
+        # an unknown size takes the largest allowed shape (Codex D3 round 1 P2-2: the submitted one's understates)
+        return (max(d for d, _ in self.shapes.values()), max(w for _, w in self.shapes.values()))
+
+    def _occupied(self, pallet: Pallet, destination_id: str) -> bool | None:
+        """Whether another pallet on the floor overlaps the submitted one placed at the destination: D10's outline
+        of the other (prior 0.30 m, else its uncertainty, none 0.21 m -- estimate plus placement error) against the
+        submitted pallet's own outline, by the separating axes. None: a size that cannot be bounded."""
+        from forklift_core.safety.pallet_permit import obb_overlap, preparation_obstacle
+
+        others = [o for o in self.pallets.values()
+                  if o.pallet_id != pallet.pallet_id and o.state != "carried" and o.pose is not None]
+        if not others:
+            return False  # nothing else on the floor: no size is needed
+        size = self._size(pallet)
+        if size is None:
+            return None
+        dest = self.destinations[destination_id]
+        for other in others:
+            other_size = self._size(other)
+            if other_size is None:
+                return None
+            rect = preparation_obstacle(other, None, size=other_size)
+            if obb_overlap([[rect.x_m, rect.y_m]], (rect.length_m / 2, rect.width_m / 2), [rect.yaw_rad],
+                           (dest.x_m, dest.y_m), (size[0] / 2, size[1] / 2), dest.yaw_rad)[0]:
+                return True
+        return False
 
     def message(self, map_frame: str = "map") -> dict:
         def pose_(p):
             return None if p is None else {"x_m": p.x_m, "y_m": p.y_m, "yaw_rad": p.yaw_rad}
 
         def pallet_(p):
-            item = {"pallet_id": p.pallet_id, "kind": p.kind, "pose": pose_(p.pose), "state": p.state}
+            item = {"pallet_id": p.pallet_id, "kind": p.kind, "pose": pose_(p.pose), "state": p.state,
+                    "basis": p.basis, "uncertainty_m": p.uncertainty_m}  # plan D10 (contract 3)
             if p.depth_m is not None and p.width_m is not None:  # the size, when registered with one
                 item.update(depth_m=p.depth_m, width_m=p.width_m)
             return item

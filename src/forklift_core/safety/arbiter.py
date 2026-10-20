@@ -16,19 +16,20 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from forklift_core.localization.slam_pose import StopDetector
-from forklift_core.mission.commands import FINAL, Cancel, HoldOff, HoldOn, Resume, Submit
+from forklift_core.mission.commands import ACTIVE, FINAL, Cancel, HoldOff, HoldOn, Resume, Submit
 
-from .generations import PENDING, RequestBook
+from .generations import PENDING, RequestBook, RequestLedger
 from .ledger import FrameLedger, TickLedger
-from .teleop_drive import TeleopDrive, TeleopLimits
+from .teleop_drive import TeleopDrive, TeleopLift, TeleopLimits
 from .teleop_policy import Policy, teleop_policy
 from .validate import problem
 
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
-          "mission_cancel", "recovery")
+          "mission_cancel", "recovery", "session_end", "sim_reset")
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request")
-AUTO_STATUSES = ("accepted", "running", "resuming", "cancelling")  # the mission states AUTO stays in (B5)
+# the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
+AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
 
 @dataclass(frozen=True)
@@ -41,16 +42,22 @@ class ArbiterConfig:
     video_max_age_s: float = 0.5
     camera_latency_bound_s: float = 0.15
     request_capacity: int = 4096
+    # Persistent console plan D7 (stage 4c): reliable requests carry the connection's token and a seq, judged by the
+    # request ledger (a live runtime); without it the request-id store of M-b (the unit tests, the fake vehicle).
+    request_tokens: bool = False
     frame_window_s: float = 5.0
     feedback_max_age_s: float = 0.1
     not_stopped_s: float = 10.0  # the mission's E3 limit: not standing by then is a fault (B5)
     tick_s: float = 1 / 120  # the control cycle the stop detector counts in
     teleop_limits: TeleopLimits = field(default_factory=TeleopLimits)
+    # Persistent console plan D14 (main condition 2): the lift's travel the manual target is clipped to -- the
+    # runner reads the model's (dls08_measured fork_lift: 0.28 m); without one, the autonomous lift target 0.20 m.
+    lift_limit_m: float = 0.20
     decel_mps2: float = 1.5  # the stopping model's (config/obstacle_layer.yaml), the slew's braking
 
     def __post_init__(self):
         for name in ("command_max_age_s", "lease_timeout_s", "grace_s", "video_max_age_s", "camera_latency_bound_s",
-                     "feedback_max_age_s", "not_stopped_s", "tick_s", "decel_mps2", "frame_window_s"):
+                     "feedback_max_age_s", "not_stopped_s", "tick_s", "decel_mps2", "frame_window_s", "lift_limit_m"):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number (a NaN or inf would disable its expiry)")
@@ -65,6 +72,12 @@ class Feedback:
     stamp_mono: float
     rear_axle_speed_mps: float | None
     yaw_rate_radps: float = 0.0
+    lift_m: float | None = None  # plan D14: the measured lift
+    steering_rad: float | None = None  # plan D14: the larger measured steering angle (absolute)
+    # The odometry position (x, y) in its own frame, m (main 2026-10-19): the stand waiver's creep is the distance
+    # from where the last stand was confirmed, gaps in the feedback included. None: the speeds are integrated, and a
+    # gap leaves the travel unknown until a confirmed stand.
+    odom_xy: tuple[float, float] | None = None
 
 
 @dataclass
@@ -79,6 +92,7 @@ class Output:
     armed: bool
     reason: str | None = None
     permit: tuple | None = None  # (limit, reason) of the teleoperated drive's arc bundle
+    lift_target_m: float | None = None  # plan D14: the lift target the arbiter sets (None: not the arbiter's)
 
 
 @dataclass
@@ -97,6 +111,9 @@ class Arbiter:
         self.ticks = TickLedger(max(config.command_max_age_s, config.lease_timeout_s), token_source)
         self.frames = FrameLedger(config.frame_window_s)
         self.requests = RequestBook(config.request_capacity)
+        self.ledger = RequestLedger()  # persistent console plan D7: used when config.request_tokens
+        self._ledger_key: tuple | None = None  # the request being run's (token, seq), kept by a pending one
+        self._cycle_mono = 0.0  # the cycle's time, for a pending request confirmed in it
         self.clients: dict[str, bool] = {}  # connected client -> its connection may control (contract 10)
         self.conns: dict[str, str | None] = {}  # connected client -> its current connection
         self.pacing_ok = True  # the live runner's pacing (M-c plan C2): TELEOP drives only while it holds
@@ -116,6 +133,8 @@ class Arbiter:
         self.last_applied = 0.0  # the speed applied last cycle (the stop detector's command input)
         self.last_safety: dict | None = None  # the mission's safety state from the last step
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
+        self.session_request: str | None = None  # "end" / "reset": the runner leaves its loop (console plan D7/D9)
+        self.sim_reset_allowed = False  # a simulation back end resets its scene on request (welcome sim_reset)
         self.provisional_auto = False
         self._context_gen = 0
         self._handling_conn: str | None = None
@@ -124,11 +143,23 @@ class Arbiter:
         self.teleop_seq = -1  # the last accepted seq within this arm generation
         self.last_teleop_reject: str | None = None
         self.drive = TeleopDrive(config.teleop_limits, config.decel_mps2, config.tick_s)
+        self.lift = TeleopLift(config.teleop_limits, limit_m=config.lift_limit_m, dt=config.tick_s)  # plan D14
+        self.lift_m: float | None = None  # this cycle's measured lift and steering (None: not measured)
+        # Main session 2026-10-19 (D14): a lower-only TELEOP may be entered without a confirmed stand (forks pressing a
+        # pallet shake the truck past the stop detector) while the truck is still enough -- the last second's
+        # speeds, to judge that; the drive then waits for a confirmed stand.
+        self._recent_speeds: list = []  # (stamp, speed) of the last second's fresh feedback
+        self._stand_unconfirmed = False
+        self._creep_m = 0.0  # the net measured travel since the stop detector last confirmed a stand (inf: unknown)
+        self._stand_xy = None  # the odometry position at that stand
+        self.steering_rad: float | None = None
         self._drive_fresh = False  # TELEOP just entered: the output curvature starts from the measured one
 
     # --- connections and the lease ------------------------------------------------------------------------------
-    def connect(self, client_id: str, now_mono: float, *, control: bool = True, conn_id: str | None = None) -> dict:
-        """A client's connection; with ``conn_id`` it becomes that client's current connection (M-c plan C2)."""
+    def connect(self, client_id: str, now_mono: float, *, control: bool = True, conn_id: str | None = None,
+                token: int | None = None) -> dict:
+        """A client's connection; with ``conn_id`` it becomes that client's current connection (M-c plan C2); with
+        ``token`` (issued for it, persistent console plan D7) its requests are judged by the ledger."""
         self._expire(now_mono)
         previous = self.conns.get(client_id)
         if (conn_id is not None and client_id in self.clients and previous != conn_id and self.lease is not None
@@ -138,7 +169,13 @@ class Arbiter:
             self._lose_lease(now_mono, "reconnected", reserve=True)
         self.clients[client_id] = bool(control)
         self.conns[client_id] = conn_id
-        return {"t": "welcome", "api": "console/1", "session_epoch": self.session_epoch}
+        welcome = {"t": "welcome", "api": "console/1", "session_epoch": self.session_epoch}
+        if token is not None:
+            if self.ledger.register(token, client_id, conn_id, now_mono):
+                welcome["request_token"] = token
+            else:  # no room for another connection's results: its requests are refused stale
+                self.events.append({"t": now_mono, "event": "token_refused", "client_id": client_id})
+        return welcome
 
     def disconnect(self, client_id: str, now_mono: float, conn_id: str | None = None) -> None:
         """A connection closed. An earlier connection of the same client closing late changes nothing (Codex M-c
@@ -146,6 +183,9 @@ class Arbiter:
         self._expire(now_mono)
         if conn_id is not None and self.conns.get(client_id) != conn_id:
             return
+        token = self.ledger.token_of(client_id, conn_id)
+        if token is not None:
+            self.ledger.retire(token)  # its results stay out their window; then it goes (Codex 4c review P2-1)
         self.clients.pop(client_id, None)
         self.conns.pop(client_id, None)
         if self.lease is not None and self.lease.client_id == client_id:
@@ -188,6 +228,8 @@ class Arbiter:
             raise ValueError(mode)
         if mode == self.mode:
             return
+        if mode != "TELEOP":
+            self._stand_unconfirmed = False
         self.events.append({"t": now_mono, "event": "mode", "from": self.mode, "to": mode, "reason": reason})
         self.mode = mode
         self._drive_fresh = mode == "TELEOP"
@@ -226,6 +268,8 @@ class Arbiter:
                 return self._reply(kind, request_id, "unsupported")
             self.stop(now_mono, f"stop:{msg.get('source', 'console')}")
             return self._reply(kind, request_id)
+        if self.config.request_tokens or "request_token" in msg:
+            return self._handle_ledger(client_id, kind, msg, now_mono, conn_id)
         # 1. Handled before: its original answer, without running it again or checking generations.
         stored = self.requests.get(client_id, request_id)
         if stored is not None:
@@ -235,6 +279,30 @@ class Arbiter:
             return self._reply(kind, request_id, "busy")
         result = self._run(client_id, kind, msg, now_mono)
         self.requests.put(client_id, request_id, result if result is not None else PENDING)
+        return result
+
+    def _handle_ledger(self, client_id, kind, msg, now_mono, conn_id):
+        """Persistent console plan D7: admitted by the connection's token and seq before it runs; a forgotten request
+        (its result purged) is stale, never run again."""
+        request_id, token, seq = msg["request_id"], msg.get("request_token"), msg.get("request_seq")
+        if not (isinstance(token, int) and isinstance(seq, int)) or isinstance(token, bool) or isinstance(seq, bool):
+            return self._reply(kind, request_id, "invalid")
+        if msg.get("session_epoch") != self.session_epoch:
+            # Before the ledger, unstored: an older run's request (its tokens may be numbered like these) must not take
+            # a key a request of this run will use (Codex 4c review P2-2).
+            return self._reply(kind, request_id, "stale_epoch")
+        conn = conn_id if conn_id is not None else self.conns.get(client_id)
+        verdict, stored = self.ledger.admit(token, client_id, conn, seq)
+        if verdict == "stored":
+            return None if stored == PENDING else stored
+        if verdict in ("stale", "busy"):
+            return self._reply(kind, request_id, verdict)  # not stored: a stale or busy request did not run
+        self._ledger_key = (token, seq)
+        try:
+            result = self._run(client_id, kind, msg, now_mono)
+        finally:
+            self._ledger_key = None
+        self.ledger.put(token, seq, result if result is not None else PENDING, now_mono)
         return result
 
     def _reply(self, kind: str, request_id, reason: str | None = None, **fields) -> dict:
@@ -264,6 +332,8 @@ class Arbiter:
         problem = self._generation_problem(client_id, msg, lease=kind in LEASED)
         if problem is not None:
             return self._reply(kind, request_id, problem)
+        if kind in LEASED and self.session_request is not None:
+            return self._reply(kind, request_id, "session_ending")  # the session closes (console plan D7)
         handler = getattr(self, f"_on_{kind}")
         return handler(client_id, request_id, msg, now_mono)
 
@@ -288,6 +358,33 @@ class Arbiter:
 
     def _on_targets_request(self, client_id, request_id, msg, now_mono):
         return self._reply("targets_request", request_id)  # the runner sends the list itself
+
+    def _on_session_end(self, client_id, request_id, msg, now_mono):
+        return self._session_request("session_end", request_id, now_mono)
+
+    def _on_sim_reset(self, client_id, request_id, msg, now_mono):
+        if not self.sim_reset_allowed:  # a simulation's own (welcome capabilities.sim_reset)
+            return self._reply("sim_reset", request_id, "unsupported")
+        return self._session_request("sim_reset", request_id, now_mono)
+
+    def _session_request(self, kind, request_id, now_mono):
+        """End the session or reset the scene (persistent console plan D7/D9): the lease holder's, standing, with no
+        mission on; the runner leaves its loop at the end of the tick."""
+        refused = self._needs_stand(kind, request_id)
+        if refused is not None:
+            return refused
+        if self.mission is not None and self.mission.status in ACTIVE:
+            return self._reply(kind, request_id, "mission_active")
+        self.session_request = "end" if kind == "session_end" else "reset"
+        self.events.append({"t": now_mono, "event": "session_request", "request": self.session_request})
+        # The controls close now, not at the runner's next tick (Codex stage 4a P2): out of AUTO/TELEOP, disarmed,
+        # a new control generation (a command or request made before it is stale).
+        if self.mode in ("AUTO", "TELEOP"):
+            self._set_mode("PAUSED", now_mono, "session_request")
+        else:
+            self._disarm(now_mono, "session_request")
+            self._boundary(now_mono, "session_request")
+        return self._reply(kind, request_id, control_gen=self.control_gen)
 
     def _on_recovery(self, client_id, request_id, msg, now_mono):
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice
@@ -434,11 +531,23 @@ class Arbiter:
         self._check_deadline(now_mono)
         fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
         self.feedback_ok = fresh
+        self.lift_m = _finite(getattr(feedback, "lift_m", None)) if fresh else None
+        if fresh:
+            samples = self._recent_speeds + [(now_mono, float(feedback.rear_axle_speed_mps))]
+            # keep the newest sample at or before the window's start (its speed covers the start) and every later one
+            cut = now_mono - STILL_WINDOW_S
+            first = max((k for k, (s, _) in enumerate(samples) if s <= cut), default=0)
+            self._recent_speeds = samples[first:]
+        else:
+            self._recent_speeds = []
+        self.steering_rad = _finite(getattr(feedback, "steering_rad", None)) if fresh else None
         if fresh:
             self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
                                                        speed=float(feedback.rear_axle_speed_mps),
                                                        yaw_rate=float(feedback.yaw_rate_radps))
+            self._update_creep(_odom_xy(feedback))
         else:
+            self._creep_m = math.inf  # what moved now is not measured (an odometry position may still tell later)
             # A gap breaks the detector's history: standing must be seen again from fresh measurements (Codex
             # M-b2 P1 -- the zero-command count ran on across the gap and released the latch 8 ms after it).
             self.detector = StopDetector(tick_s=self.config.tick_s)
@@ -447,14 +556,24 @@ class Arbiter:
                 self._disarm(now_mono, "no_feedback")
                 self.preempt_latch = "no_feedback"
                 self._boundary(now_mono, "no_feedback")  # a safety preempt is a control boundary (B2)
-        if self.preempt_latch is not None and self.stop_confirmed:
-            self.events.append({"t": now_mono, "event": "latch_released", "reason": self.preempt_latch})
+        waived = self.stand_waiver()
+        if self.preempt_latch is not None and (self.stop_confirmed or waived is not None):
+            # Still in a lower-only state the latch goes too (Codex re-review P2): the lowering must stay in reach;
+            # the drive then waits for a confirmed stand as after an unconfirmed entry.
+            self.events.append({"t": now_mono, "event": "latch_released", "reason": self.preempt_latch,
+                                **({} if self.stop_confirmed else {"stand_waiver": waived})})
             self.preempt_latch = None
+            if not self.stop_confirmed and self.mode == "TELEOP":
+                self._stand_unconfirmed = True
+                self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "latch_lower_only"})
         must_stand = self.mode in ("PAUSED", "STOPPED") or self.preempt_latch is not None
+        # A still truck in a lower-only state is not a stop that failed (Codex review of 8f4a799 P2): faulting it
+        # would lock out the lowering that ends the rocking.
         if must_stand and not self.stop_confirmed:
             if self.stopping_since is None:
                 self.stopping_since = now_mono
-            elif now_mono - self.stopping_since >= self.config.not_stopped_s and self.mode != "STOPPED":
+            elif (now_mono - self.stopping_since >= self.config.not_stopped_s and self.mode != "STOPPED"
+                  and waived is None):  # the time counts on while waived; the fault waits for the waiver to end
                 self.stop(now_mono, "not_stopped")  # a fault: the stop did not happen (B5)
         else:
             self.stopping_since = None
@@ -474,16 +593,22 @@ class Arbiter:
         status = self.mission.status if self.mission is not None else "idle"
         self.provisional_auto = False
         self._context_gen = self.control_gen
+        self._cycle_mono = now_mono
+        if self.config.request_tokens:
+            self.ledger.purge(now_mono)  # once a cycle; bounded by the ledger's own limits (D7)
         if self.mission is not None:
             # The hold follows the cycle's final mode, once, in the mission's own time (Codex M-b review P2/P2:
             # queuing at each transition replayed TELEOP-then-STOP in the wrong order and the vehicle clock).
-            if self.mode == "TELEOP" and status in ("accepted", "running", "paused", "resuming"):
+            if self.mode == "TELEOP" and status in ("accepted", "preparing", "running", "paused", "resuming"):
                 self.mission.queue(HoldOn())
             elif self.mode != "TELEOP" and status == "held":
                 self.mission.queue(HoldOff())
                 status = "paused"  # what the lifecycle will be when the same tick's resume is judged (P2)
         for p in self.pending:
             if p["queued"]:
+                continue
+            if self.session_request is not None:  # the session closes: nothing more is started
+                self._settle(p, self._reply(p["kind"], p["request_id"], "session_ending"))
                 continue
             if p["control_gen"] != self.control_gen:
                 self._settle(p, self._reply(p["kind"], p["request_id"], "stale_control"))
@@ -503,6 +628,7 @@ class Arbiter:
         """After the mission's tick: answer the queued requests from the lifecycle's records, then keep AUTO only
         while the mission is in a state AUTO stays in (its state after the tick -- a resume accepted at the tick's
         start can be refused by the same tick's checks). Returns the replies made."""
+        self._cycle_mono = now_mono
         by_id = {r.get("request_id"): r for r in records if r.get("request_id") is not None}
         took_auto = False
         for p in self.pending:
@@ -531,7 +657,10 @@ class Arbiter:
 
     def _settle(self, p: dict, reply: dict) -> None:
         p["settled"] = True
-        self.requests.put(p["client_id"], p["request_id"], reply)
+        if p.get("ledger_key") is not None:  # confirmed where it was admitted, whatever connection is current now
+            self.ledger.put(*p["ledger_key"], reply, self._cycle_mono)
+        else:
+            self.requests.put(p["client_id"], p["request_id"], reply)
         self.outbox.append(dict(reply, client_id=p["client_id"], conn_id=p.get("conn_id")))
 
     def step(self, now_mono: float, safety: dict | None, candidate: tuple[float, float],
@@ -564,18 +693,78 @@ class Arbiter:
                     self.teleop, armed=self.armed, drive_allowed=policy.drive_allowed, loaded=policy.loaded,
                     preempt=False, last_applied_mps=self.last_applied, measured_mps=drive["measured_mps"],
                     measured_kappa=drive["measured_kappa"], steering_error_rad=drive["steering_error_rad"],
-                    permit=drive["permit"])
+                    permit=drive["permit"], mode=policy.drive_mode, steering_rad=self.steering_rad)
+        # Plan D14: the manual lift -- TELEOP owns the target; leaving it hands the last one over once.
+        lift_target = self.lift.step(
+            self.mode == "TELEOP" and self.preempt_latch is None, self.teleop, armed=self.armed,
+            dirs=policy.lift_dirs, measured=self.lift_m,
+            start_from=None if drive is None else drive.get("lift_command_m"),
+            loaded=bool(((safety or {}).get("load") or {}).get("loaded")))
+        if self._stand_unconfirmed and speed != 0.0:
+            self._stand_unconfirmed = False  # the first wheel speed, given on a confirmed tick (_policy)
         self.last_applied = speed
         return Output(self.mode, stop_kind, source, speed, curvature, policy, self.control_gen, self.armed,
-                      self.preempt_latch, permit)
+                      self.preempt_latch, permit, lift_target)
 
     def _policy(self, safety) -> Policy:
-        policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed)
-        if policy.drive_allowed and not self.pacing_ok:
-            return Policy(False, False, "pacing", loaded=policy.loaded)  # M-c: no real time, no hands on
+        policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
+                               lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough())
+        if self._stand_unconfirmed and policy.drive_allowed and not self.stop_confirmed:
+            # Entered unconfirmed: the drive opens only on a tick the detector confirms the stand (main 2026-10-19);
+            # the waiver ends at the first wheel speed (step), not at a confirmed tick that gave none (Codex).
+            return Policy(False, reason="stand_unconfirmed", loaded=policy.loaded, lift_dirs=policy.lift_dirs,
+                          lift_allowed=policy.lift_allowed, drive_mode=policy.drive_mode)
+        if policy.teleop_allowed and not self.pacing_ok:
+            # M-c: no real time, no hands on -- the lift too (plan D14).
+            return Policy(False, False, "pacing", loaded=policy.loaded)
         return policy
 
     # --- mode and mission requests (B5) --------------------------------------------------------------------------
+    def _update_creep(self, xy) -> None:
+        """The net travel since the last confirmed stand (main 2026-10-19): the odometry positions' distance when
+        both ends have one -- a feedback gap's travel included -- else the integrated speeds, unknown (inf) across a
+        gap longer than the feedback age limit (rocking and creep cannot be told apart there)."""
+        if self.stop_confirmed:
+            self._creep_m, self._stand_xy = 0.0, xy
+            return
+        if self._stand_xy is not None:
+            # Measured from positions: a distance, no sign -- a speed integral cannot go on from it (Codex round 5:
+            # a reverse after the positions stopped shrank the creep), so without a position now it is unknown. An
+            # odometry frame re-initialised under the same arbiter would need its stand position reset with it.
+            self._creep_m = (math.inf if xy is None
+                             else math.hypot(xy[0] - self._stand_xy[0], xy[1] - self._stand_xy[1]))
+            return
+        samples = self._recent_speeds
+        dt = samples[-1][0] - samples[-2][0] if len(samples) >= 2 else 0.0
+        self._creep_m = math.inf if dt > self.config.feedback_max_age_s else self._creep_m + dt * samples[-1][1]
+
+    def _still_enough(self) -> bool:
+        """Main 2026-10-19: the truck is not rolling -- its speed now at most STILL_SPEED_MPS and its net travel over
+        the last second (each measured speed held back to the sample before it) at most STILL_TRAVEL_M, measured
+        over the whole second without a gap longer than the feedback age limit (Codex review of 8f4a799 P2)."""
+        samples = self._recent_speeds
+        if len(samples) < 2:
+            return False
+        start = samples[-1][0] - STILL_WINDOW_S
+        if samples[0][0] > start or abs(samples[-1][1]) > STILL_SPEED_MPS:
+            return False
+        pairs = list(zip(samples, samples[1:]))
+        if any(t1 - t0 > self.config.feedback_max_age_s for (t0, _), (t1, _) in pairs):
+            return False
+        travel = sum(v1 * (t1 - max(t0, start)) for (t0, _), (t1, v1) in pairs if t1 > start)
+        return abs(travel) <= STILL_TRAVEL_M
+
+    def stand_waiver(self) -> str | None:
+        """``lower_only`` when a request that waits for a confirmed stand (TELEOP entry, rearm) is taken without one:
+        the policy only lowers (no wheel speed), the truck is still and the stop detector has not confirmed (main
+        session 2026-10-19). The state carries it so the console can offer the entry."""
+        if not self.feedback_ok or self.stop_confirmed or not self._still_enough():
+            return None
+        if abs(self._creep_m) > STILL_CREEP_M:
+            return None  # a slow creep passes every second's bound (Codex re-review P2)
+        policy = self._policy(self.last_safety)
+        return "lower_only" if not policy.drive_allowed and policy.lift_dirs == frozenset({-1}) else None
+
     def _needs_stand(self, kind: str, request_id) -> dict | None:
         if not self.feedback_ok:
             return self._reply(kind, request_id, "no_feedback:rear_axle_speed")
@@ -589,10 +778,13 @@ class Arbiter:
     def _on_rearm(self, client_id, request_id, msg, now_mono):
         if self.mode != "STOPPED":
             return self._reply("rearm", request_id, "invalid")
-        refused = self._needs_stand("rearm", request_id)
+        waived = self.stand_waiver()
+        refused = None if waived else self._needs_stand("rearm", request_id)
         if refused is not None:
             return refused
         self._set_mode("PAUSED", now_mono, "rearm")
+        if waived:
+            self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "rearm_lower_only"})
         return self._reply("rearm", request_id, control_gen=self.control_gen)
 
     def _to_paused(self, kind, request_id, now_mono):
@@ -613,20 +805,27 @@ class Arbiter:
             return self._reply("mode_request", request_id, "stopped_locked")
         if self.mode != "PAUSED":
             return self._reply("mode_request", request_id, "invalid")  # no AUTO -> TELEOP: PAUSED first
-        refused = self._needs_stand("mode_request", request_id)
+        policy = self._policy(self.last_safety)
+        unconfirmed = self.stand_waiver() is not None
+        refused = None if unconfirmed else self._needs_stand("mode_request", request_id)
         if refused is not None:
             return refused
-        policy = self._policy(self.last_safety)
         if not policy.teleop_allowed:
             return self._reply("mode_request", request_id, "state_forbids_teleop", detail=policy.reason)
         self._set_mode("TELEOP", now_mono, "mode_request")  # the hold follows in mission_context
+        if unconfirmed:
+            # Main 2026-10-19: lower only (the drive refused, its command held at 0), the truck still enough but not
+            # confirmed standing; the drive waits for the stop detector's confirmation (in _policy).
+            self._stand_unconfirmed = True
+            self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "lower_only"})
         return self._reply("mode_request", request_id, control_gen=self.control_gen)
 
     def _mission_request(self, client_id, request_id, kind, command):
         if self.mission is None:
             return self._reply(kind, request_id, "unsupported")
         self.pending.append({"client_id": client_id, "conn_id": self._handling_conn, "request_id": request_id,
-                             "kind": kind, "command": command, "control_gen": self.control_gen, "queued": False})
+                             "kind": kind, "command": command, "control_gen": self.control_gen, "queued": False,
+                             "ledger_key": self._ledger_key})  # its result goes where it was admitted (D7)
         return None  # answered by resolve, this cycle
 
     def _on_mission_submit(self, client_id, request_id, msg, now_mono):
@@ -669,6 +868,28 @@ def _ratio(value) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(-1.0, min(1.0, v)) if v == v else 0.0
+
+
+STILL_WINDOW_S = 1.0  # main 2026-10-19: the lower-only entry's stillness is judged over the last second
+STILL_SPEED_MPS = 0.10  # ... no faster than this now
+STILL_TRAVEL_M = 0.02  # ... and no further than this over the window (the net, integrated speed)
+STILL_CREEP_M = 0.05  # ... nor this far, net, since the last confirmed stand (Codex re-review: a creep is no rocking)
+
+
+def _odom_xy(feedback) -> tuple[float, float] | None:
+    xy = getattr(feedback, "odom_xy", None)
+    if xy is None:
+        return None
+    try:
+        x, y = float(xy[0]), float(xy[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return (x, y) if math.isfinite(x) and math.isfinite(y) else None
+
+
+def _finite(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) \
+        else None
 
 
 def _valid_feedback(feedback, now_mono: float, max_age_s: float) -> bool:

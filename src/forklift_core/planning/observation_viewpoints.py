@@ -225,3 +225,21 @@ def runtime_viewpoints(
             if len(chosen) == config.limit:
                 break
     return chosen
+
+
+def relocate_waypoints(waypoints, reference, target) -> list[list[float]]:
+    """The fixed observation candidates (rear axle x, y, yaw) moved with the pallet (persistent console plan D2):
+    each keeps its place and heading relative to the pallet, from the ``reference`` pallet pose (the session's first
+    pickup prior) to ``target`` (the pallet to pick now), both (x, y, yaw). At the reference itself they come back
+    unchanged, bit for bit, so a mission at the first pallet's place tries the same candidates as the setup."""
+    rx, ry, ryaw = (float(v) for v in reference)
+    tx, ty, tyaw = (float(v) for v in target)
+    if (rx, ry, ryaw) == (tx, ty, tyaw):
+        return [[float(v) for v in w] for w in waypoints]
+    turn = tyaw - ryaw
+    c, s = math.cos(turn), math.sin(turn)
+    moved = []
+    for x, y, yaw in waypoints:
+        dx, dy = float(x) - rx, float(y) - ry
+        moved.append([tx + c * dx - s * dy, ty + s * dx + c * dy, math.remainder(float(yaw) + turn, math.tau)])
+    return moved

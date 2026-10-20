@@ -43,7 +43,7 @@ class Layer:
         return SimpleNamespace(blocked=self.blocked, verified_m=self.verified_m)
 
 
-def make(phase="transport", *, speed=0.0, lift=0.07, layer=None, tracker=None, obstacle=True, monitor=None):
+def make(phase="transport", *, speed=0.0, lift=0.07, layer=None, tracker=None, obstacle=True, monitor=None, start=True):
     calls = []
 
     def require(ok, reason):
@@ -69,7 +69,8 @@ def make(phase="transport", *, speed=0.0, lift=0.07, layer=None, tracker=None, o
     core.targets.add_destination("D", Pose(9.0, 0.0, 0.0))
     core.commands.queue(Submit("P", "D", core.targets.revision))
     core.commands.apply(0.0)
-    core.commands.start()
+    if start:
+        core.commands.start()
     return core, obs, calls
 
 
@@ -469,6 +470,10 @@ def test_the_safety_state_reports_the_lifecycle_the_load_and_the_command_without
     out = core.safety_state(10.0)
     assert out["mission"]["status"] == "running" and out["mission"]["id"] == "m1"
     assert out["mission"]["phase"] == "transport" and out["mission"]["phase_elapsed_s"] == 10.0
+    # the follower's distance left in the phase (persistent console U7: a cancel at a leg's end), None without one
+    assert out["mission"]["remaining_m"] == pytest.approx(core.trackers["transport"].remaining_to_goal_m())
+    del core.trackers["transport"]
+    assert core.safety_state(10.0)["mission"]["remaining_m"] is None
     assert out["load"] == {"loaded": True, "basis": "phase", "lift_target_m": 0.0}
     assert out["fork_in_pocket"] == {"value": False, "basis": "phase"}
     assert out["command"] == {"applied_speed_mps": 0.25, "steering_rad": [0.1, 0.12]}
@@ -579,3 +584,5 @@ def test_unknown_far_ahead_resumes_like_a_running_leg_and_close_ahead_waits(veri
     resume(core, 11.0)
     core.paused_tick(11.0, REAR, 0.0, True)
     assert core.commands.status == outcome
+
+

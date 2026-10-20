@@ -79,3 +79,66 @@ test("a new session_epoch drops lease and tick", () => {
   assert.equal(s.hasLease, false);
   assert.equal(s.echoMessage(), null);
 });
+
+test("a state without a plan keeps the last plan; plan null clears it", () => {
+  const { s } = setup();
+  const plan = { revision: 1, poses: [[0, 0, 1], [1, 0, 1]] };
+  s.onMessage({ t: "state", state_seq: 2, session_epoch: 3, control_gen: 7, arm_gen: 0, armed: false, mode: "AUTO", plan });
+  s.onMessage({ t: "state", state_seq: 3, session_epoch: 3, control_gen: 7, arm_gen: 0, armed: false, mode: "AUTO" });
+  assert.deepEqual(s.state.plan, plan);
+  s.onMessage({ t: "state", state_seq: 4, session_epoch: 3, control_gen: 7, arm_gen: 0, armed: false, mode: "AUTO", plan: null });
+  assert.equal(s.state.plan, null);
+});
+
+// persistent console plan D7 (stage 4c): the request ledger's token and seq
+function tokened() {
+  const sent = [];
+  let t = 0, n = 0, reconnects = 0;
+  const s = createSession({ clientId: "a", send: (m) => sent.push(m), now: () => t, newId: () => `id${++n}`,
+    onStaleToken: () => { reconnects += 1; } });
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {}, request_token: 41 });
+  return { s, sent, tick: (dt) => { t += dt; }, reconnects: () => reconnects };
+}
+
+test("reliable requests carry the connection's token and a growing seq; a resend is the same message", () => {
+  const { s, sent, tick } = tokened();
+  s.request("lease_request", {});
+  s.request("rearm", {});
+  assert.deepEqual(sent.map((m) => [m.request_token, m.request_seq]), [[41, 1], [41, 2]]);
+  tick(600);
+  s.pump();
+  assert.deepEqual(sent.slice(2).map((m) => [m.request_token, m.request_seq]), [[41, 1], [41, 2]]);
+  s.stop("key");
+  assert.equal(sent.at(-1).request_token, undefined); // STOP runs without one
+});
+
+test("a new connection's token starts its own seq", () => {
+  const { s, sent } = tokened();
+  s.request("rearm", {});
+  s.onDisconnect();
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {}, request_token: 42 });
+  s.request("rearm", {});
+  assert.deepEqual([sent.at(-1).request_token, sent.at(-1).request_seq], [42, 1]);
+});
+
+test("stale on an old token ends that request only; stale on the current one asks for a new connection", async () => {
+  const { s, sent, reconnects } = tokened();
+  const old = s.request("rearm", {});
+  const oldId = sent.at(-1).request_id;
+  s.onDisconnect();
+  s.onMessage({ t: "welcome", api: "console/1", session_epoch: 3, capabilities: {}, request_token: 42 });
+  s.onMessage({ t: "reject", request_id: oldId, reason: "stale" });
+  assert.equal((await old).reason, "stale");
+  assert.equal(reconnects(), 0);
+  const cur = s.request("rearm", {});
+  s.onMessage({ t: "reject", request_id: sent.at(-1).request_id, reason: "stale" });
+  assert.equal((await cur).reason, "stale");
+  assert.equal(reconnects(), 1);
+});
+
+test("without a token (the fake vehicle) requests are as before", () => {
+  const { s, sent } = setup();
+  s.request("rearm", {});
+  assert.equal(sent.at(-1).request_token, undefined);
+  assert.equal(sent.at(-1).request_seq, undefined);
+});

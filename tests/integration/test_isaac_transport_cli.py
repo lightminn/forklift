@@ -461,9 +461,10 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     gate = CORE.read_text()  # the release gate moved to the mission core (M-a1 slice 5)
     assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
     assert "rear = slam_rear(t)  # the released estimate" in gate
-    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for)
-    assert ("if ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_:"
-            in source)
+    # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for;
+    # persistent console plan D5 6c: nor in a loaded start wait)
+    assert ("if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_\n"
+            "                        and not loaded_wait_):" in source)
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
@@ -713,11 +714,16 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
     assert source.count("near = None\n") == 1
     # The contract is checked before the first tick; S4a-2 opens the insertion.
     check_ = source.index("            check_near_contract()\n")
-    loop_ = source.index("        for step in range(int(120 * args.max_sim_seconds)):")
+    loop_ = source.index("        for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):")
     assert check_ < loop_
     # Only the M-a0 boundary-record wrapping (recording only) sits between the check and the loop.
     between_ = source[check_ + len("            check_near_contract()\n"): loop_]
-    assert between_.startswith("        if boundary is not None:\n") and "require(" not in between_
+    # (the live closures defined there -- scene_require, live_failed, persistent console plan D6 -- only run in the
+    # loop: no require call at the block's own level)
+    import re as re_
+
+    assert between_.startswith("        if boundary is not None:\n")
+    assert not re_.search(r"^ {8}(if [^\n]*\n {12})?require\(", between_, re_.M)
     assert "until S4a-2" not in source
     # Decided after the scheduled safety stops and before the arrival transitions.
     moved = CORE.read_text()
@@ -742,7 +748,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
         "        if check is None:\n            pocket[\"frames_read\"] += 1")
     # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
     assert "transition(\"near_tracking_stopped\", t)\n                return SimpleNamespace(stop=True, rear=rear)" in core
-    assert "if arrival_.stop:\n                            break" in source
+    assert "if arrival_.stop:\n                                break" in source
     assert "\"repeat_target_not_reached\", \"near_tracking_stopped\", \"bottom_deck_refused\"):\n            return" in source
     # The bottom-deck refusal (plan 2026-10-19 task 3) also ends at the approach's arrival.
     assert "transition(\"bottom_deck_refused\", t)\n                    return SimpleNamespace(stop=True, rear=rear)" in core
@@ -1084,19 +1090,24 @@ def test_the_bottom_deck_check_is_off_unless_given_and_part_of_the_near_contract
 
 def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     """Plan 2026-10-19 task 4: a side leg's arrival is the side capture; the far recognition takes no driving
-    frames on it; a refusal from the capture, a recovery or a blocked replan ends the loop before any command."""
+    frames on it; a refusal from the capture, a recovery or a blocked replan ends the loop before any command.
+    (Indentation-free: the tick loop's nesting changes with the runner.)"""
+    import re
+
     source = SCRIPT.read_text()
-    assert 'state.get("near_capture", {}).get("status") != "pending"\n                and not core.bottom_deck_leg_active())' in source
+    assert re.search(r'state\.get\("near_capture", \{\}\)\.get\("status"\) != "pending"\s+and not core\.bottom_deck_leg_active\(\)\)',
+                     source)
     assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_leg_active():' in source
-    arrival = source.index('if args.use_perception and ms.phase == "observe":\n                        if core.bottom_deck_leg_active():')
-    block = source[arrival: arrival + 800]
+    arrival = re.search(r'if args\.use_perception and ms\.phase == "observe":\s+if core\.bottom_deck_leg_active\(\):', source)
+    assert arrival
+    block = source[arrival.start(): arrival.start() + 1000]
     assert block.index("core.bottom_deck_capture(t, rear, step)") < block.index("elif live is not None and core.jobs")
-    assert 'if deck_tick_.stop or ms.phase == "bottom_deck_refused":\n                                break' in block
+    assert re.search(r'if deck_tick_\.stop or ms\.phase == "bottom_deck_refused":\s+break', block)
     recover = source.index("recover_ = core.cusp_and_observe_recovery(")
-    assert source.index('if ms.phase == "bottom_deck_refused":\n                    break', recover) < source.index(
-        "command_ = core.command(", recover)
+    stop = re.compile(r'if ms\.phase == "bottom_deck_refused":\s+break')
+    assert stop.search(source, recover).start() < source.index("command_ = core.command(", recover)
     replan = source.index("replan_tick_ = core.blocked_replan(")
-    assert source.index('if ms.phase == "bottom_deck_refused":\n                            break', replan) < replan + 300
+    assert stop.search(source, replan).start() < replan + 300
     assert source.count('getattr(succeeded_, "handled", False)') == 2  # the batch and the live observation paths
 
 
@@ -1120,4 +1131,6 @@ def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
     block = source[source.index('far_learned["worker"] = WorkerProposer('):]
     block = block[: block.index("far_runtime = frr.FarRuntime(")]
     assert "timeout_s=args.recognition_timeout_s" in block and "threads=args.recognition_threads" in block
+    assert "device_id=args.recognition_device_id" in block
+    assert 'far_learned["active_providers"] = far_learned["worker"].providers()' in block
     assert 'atexit.register(far_learned["worker"].close)' in block

@@ -458,3 +458,231 @@ def test_a_turnaround_arc_needs_its_start_verified_and_no_known_obstacle_further
     assert lay.check_turnaround_arc(samples, current_pose=pose) == "occupied_ahead"
     lay.snapshot = snap(extra=tuple(samples[20][:2]))  # within the start's walk
     assert lay.check_turnaround_arc(samples, current_pose=pose) == "occupied"
+
+
+def _start_check_harness(lay, tracker, pallet_pose, held=(False, False)):
+    """The runner's prepare_start_ok and prep_obstacle_of (AST) with its grid_kwargs, against a real layer."""
+    import ast
+    import math as _math
+    import time as _time
+    from dataclasses import replace as _replace
+    from types import SimpleNamespace
+
+    from forklift_core.localization.slam_pose import compose, invert
+    from forklift_core.mission.targets import Pose, TargetsBook
+    from forklift_core.planning.geometry import Rectangle
+    from forklift_core.safety.pallet_permit import preparation_obstacle
+
+    script = ROOT / "sim/isaac/run_transport.py"
+    tree = ast.parse(script.read_text())
+    fns = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+           and n.name in ("grid_kwargs", "prep_obstacle_of", "prepare_start_ok")]
+    assert len(fns) == 3
+    obstacle = {"layer": lay, "applied": tuple(tracker.applied[0]), "version": 0, "plans": [], "last_stamp": 0.2,
+                "run_wall_start": _time.time() - 5}
+    tb = TargetsBook()
+    tb.add_pallet("P-1", "epal6", Pose(*pallet_pose), depth_m=1.2, width_m=0.8)
+    tb.update_pose("P-1", Pose(*pallet_pose), basis="recognised", uncertainty_m=0.21)
+    core = SimpleNamespace(commands=SimpleNamespace(mission=SimpleNamespace(pallet_id="P-1")), targets=tb,
+                           _held_estimates=lambda: held)
+    scenario = SimpleNamespace(props=(), bounds=Bounds(-5, 10, -5, 5), pickup=SimpleNamespace(x_m=0, y_m=0, yaw_rad=0))
+    geometry = SimpleNamespace(pallet_depth_m=1.2, pallet_width_m=0.8, loaded_footprint=Footprint(1.53, 0.17, 0.40),
+                               unloaded_footprint=Footprint(1.29, 0.17, 0.36))
+    scope = {
+        "np": np, "math": _math, "os": __import__("os"), "Rectangle": Rectangle, "grid_planning": True,
+        "obstacle": obstacle, "args": SimpleNamespace(slam_map_dir=None), "geometry": geometry,
+        "planner_config": SimpleNamespace(clearance_m=0.1), "pickup_zone": None,
+        "slam": {"tracker": tracker, "scan_id": 4},
+        "compose": compose, "invert": invert, "replace": _replace, "core": core, "grid_world": lambda sc: sc,
+        "live_session_": {"zone": None, "reference": (99.0, 99.0, 0.0), "scenario": scenario},
+        "live_preparation_obstacle": preparation_obstacle, "prep_check_cache_": {}, "rear": np.zeros(3),
+        "loaded": False,  # grid_kwargs masks the truck's own cells only inside the drive loop (Codex round 2)
+    }
+    exec(compile(ast.Module(fns, []), str(script), "exec"), scope)
+    return scope, obstacle
+
+
+def _scanned_wall_layer():
+    """Wall hits up to 0.71 s, then open scans to 1.00 s (Codex D4b impl round 2 P2-1's timing: the release at
+    1.02 s re-projects after the last scan)."""
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for stamp in (0.69, 0.70, 0.71):
+        lay.add_scans(stamp, _wall_raw(lay, 1.62), odom_rear=pose, loaded=False)
+    lay.refresh(0.71, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    for stamp in (0.8, 0.9, 1.0):
+        lay.add_scans(stamp, _wall_raw(lay, 2.4), odom_rear=pose, loaded=False)
+    lay.refresh(1.0, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    return lay
+
+
+@pytest.mark.parametrize("received", [(0.05, 0.6, 0.02), (0.0, 0.7, 0.0)])
+def test_the_start_check_previews_the_release_exactly_and_leaves_the_layer_alone(received):
+    """Persistent console plan D4b (Codex impl round 1 P2-3, P2-4; round 2 P2-1): held, the next preparation's start
+    check is judged as it will be after the end release -- the release's re-projection at its time t under the
+    received correction (the core's _reproject: version + 1, refresh at t), then the preparation's own grid under it
+    -- with the own pose in the cache key, and without changing the shared layer."""
+    import copy
+    import pickle
+    from types import SimpleNamespace
+
+    from forklift_core.localization.slam_pose import compose, invert
+
+    t_release = 1.02
+    held_tracker = SimpleNamespace(mode="holding", applied=((0.0, 0.0, 0.0), 0.0, 0), received=(received, 1.0, 9))
+    base = _scanned_wall_layer()
+    lay = copy.deepcopy(base)
+    scope, obstacle = _start_check_harness(lay, held_tracker, (8.0, 0.0, 0.0))
+    obstacle["last_stamp"] = 1.0
+    before = pickle.dumps(lay.__dict__)
+    frame = compose(received, invert((0.0, 0.0, 0.0)))
+    seen = set()
+    for x in np.arange(-1.0, 1.31, 0.1):
+        pose = np.array([x, 0.0, 0.0])
+        scope["rear"] = pose  # the truck stands where it is checked (the own pose varies within one stamp)
+        preview = scope["prepare_start_ok"](pose, extra_m=0.0, preview=True, t=t_release)
+        # The release made for real on another copy: tracking under the received correction, the core's
+        # _reproject (version + 1, refresh at t from the released pose), then the preparation's own check.
+        real_tracker = SimpleNamespace(mode="tracking", applied=(received, 1.0, 9), received=(received, 1.0, 9))
+        real_layer = copy.deepcopy(base)
+        real_scope, real_obstacle = _start_check_harness(real_layer, real_tracker, (8.0, 0.0, 0.0))
+        released = tuple(float(v) for v in compose(frame, tuple(pose)))
+        real_obstacle.update(applied=tuple(received), version=1, last_stamp=1.0)
+        real_layer.refresh(t_release, tuple(received), 1, current_pose=released, path_ahead=np.array([released]),
+                           loaded=False, direction=0)
+        real_scope["rear"] = np.array(released)
+        occupancy = real_scope["grid_kwargs"]("observe")["occupancy"]  # the preparation's call, as it runs
+        from forklift_core.planning.grid_collision import make_checker
+        from forklift_core.planning.pallet_mission import leg_obstacles
+
+        geometry = real_scope["geometry"]
+        obstacles, footprint, bounds = leg_obstacles(
+            "observe", real_scope["live_session_"]["scenario"], geometry,
+            pickup_obstacle=real_scope["prep_obstacle_of"](real_scope["core"].targets.pallets["P-1"], False),
+            pickup_bounds=None)
+        real = bool(make_checker(obstacles, footprint, bounds, occupancy).free(released, 0.1))
+        assert preview == real, x
+        seen.add(preview)
+    assert seen == {True, False}  # the sweep crosses the wall's clearance
+    assert pickle.dumps(lay.__dict__) == before  # the shared layer untouched
+
+
+def test_the_start_check_carries_the_pallet_only_when_the_hold_found_it():
+    from types import SimpleNamespace
+
+    received = (0.0, 0.5, 0.0)
+    tracker = SimpleNamespace(mode="holding", applied=((0.0, 0.0, 0.0), 0.0, 0), received=(received, 0.2, 3))
+    # a pallet beside the truck, its grown outline 0.45 m clear of the hull's clearance band: carried with the pose
+    # (+0.5 m in y) the gap stays; left where it is, the moved pose's band reaches 0.05 m into it
+    pallet = (0.4, 1.52, 0.0)
+    pose = np.array([-0.4, 0.0, 0.0])
+    held_scope, _ = _start_check_harness(layer(), tracker, pallet, held=(True, False))
+    held_scope["rear"] = pose
+    map_scope, _ = _start_check_harness(layer(), tracker, pallet, held=(False, False))
+    map_scope["rear"] = pose
+    assert held_scope["prepare_start_ok"](pose) is True  # the gap kept
+    assert map_scope["prepare_start_ok"](pose) is False  # a map estimate stays: the pose moved 0.5 m across it
+
+
+def test_the_start_check_preview_takes_the_release_reprojection_at_its_time():
+    """Codex D4b impl round 3 (its round 2 P2-1 counterexample): a hit at 0.71 s already in the memory, a no-return
+    scan at 1.00 s, both on a plane that may not clear; the release at 1.02 s re-projects first. Without that step
+    the preview saw 58 occupied cells and refused; the real preparation after the release sees 13 and starts."""
+    import copy
+    from types import SimpleNamespace
+
+    from forklift_core.perception.obstacle_grid import ObstacleScan
+    from forklift_core.planning.grid_collision import make_checker
+    from forklift_core.planning.pallet_mission import leg_obstacles
+
+    zero = (0.0, 0.0, 0.0)
+
+    def scan(stamp, distance):
+        return ObstacleScan(stamp_s=stamp, sensor="high", odom_rear=zero, laser_in_rear=zero,
+                            angles_rad=np.array([0.0]), ranges_m=np.array([distance]),
+                            self_hit=np.array([False]), may_clear=False)
+
+    base = layer()
+    base.grid.add_scan(scan(0.71, 1.30))
+    base.planner_grid(0.71, zero, 0)  # in the memory under the applied (old) frame
+    base.grid.add_scan(scan(1.00, np.nan))
+    base.refresh(1.00, zero, 0, current_pose=zero, path_ahead=np.array([zero]), loaded=False)
+    received = (0.0, 0.7, 0.0)
+
+    held = SimpleNamespace(mode="holding", applied=(zero, 0.0, 0), received=(received, 1.0, 9))
+    scope, obstacle = _start_check_harness(copy.deepcopy(base), held, (8.0, 0.0, 0.0))
+    obstacle["last_stamp"] = 1.0
+    scope["rear"] = np.zeros(3)
+    preview = scope["prepare_start_ok"](np.zeros(3), preview=True, t=1.02)
+    stale = _start_check_harness(copy.deepcopy(base), held, (8.0, 0.0, 0.0))[0]
+    stale["obstacle"]["last_stamp"] = 1.0
+    stale["rear"] = np.zeros(3)
+    without_release = stale["prepare_start_ok"](np.zeros(3), preview=True, t=None)  # no release step
+
+    real_layer = copy.deepcopy(base)
+    tracking = SimpleNamespace(mode="tracking", applied=(received, 1.0, 9), received=(received, 1.0, 9))
+    real_scope, real_obstacle = _start_check_harness(real_layer, tracking, (8.0, 0.0, 0.0))
+    real_obstacle.update(applied=received, version=1, last_stamp=1.0)
+    released = (0.0, 0.7, 0.0)
+    real_layer.refresh(1.02, received, 1, current_pose=released, path_ahead=np.array([released]), loaded=False,
+                       direction=0)
+    real_scope["rear"] = np.array(released)
+    occupancy = real_scope["grid_kwargs"]("observe")["occupancy"]
+    obstacles, footprint, bounds = leg_obstacles(
+        "observe", real_scope["live_session_"]["scenario"], real_scope["geometry"],
+        pickup_obstacle=real_scope["prep_obstacle_of"](real_scope["core"].targets.pallets["P-1"], False),
+        pickup_bounds=None)
+    real = bool(make_checker(obstacles, footprint, bounds, occupancy).free(released, 0.1))
+    assert (preview, real, without_release) == (True, True, False)
+
+
+def _arcs():
+    """Reverse arcs from the origin: free, and long enough to reach the wall behind (x = -3.5)."""
+    out = {}
+    for name, kappa, length in (("straight", 0.0, 1.0), ("left", 0.4, 1.2), ("long", 0.0, 3.5)):
+        s = np.linspace(0.0, length, 41)
+        yaw = -kappa * s
+        x = -np.where(kappa == 0, s, np.sin(kappa * s) / max(kappa, 1e-9))
+        y = np.where(kappa == 0, 0.0, -(1 - np.cos(kappa * s)) / max(kappa, 1e-9))
+        out[name] = np.column_stack((x, y, yaw))
+    return out
+
+
+def _wall_behind_layer():
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    raw = {}
+    for s in CONFIG["sensors"]:
+        ox = s.xyz_m[0] + 0.34
+        ang = lay.beam_angles + s.yaw_rad
+        d = np.where(np.cos(ang) < -0.05, (-3.5 - ox) / np.cos(ang), np.nan)
+        ok = np.isfinite(d) & (np.abs(s.xyz_m[1] + d * np.sin(ang)) < 3.0) & (d > 0)
+        raw[s.name] = (np.where(ok, d, 4.0), np.ones(len(ang), bool), np.zeros(len(ang), bool))
+    for k in range(3):
+        lay.add_scans(0.1 * k, raw, odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=np.array([pose]), loaded=False,
+                direction=-1)
+    return lay
+
+
+def test_the_turnaround_arc_check_is_one_function_frozen_and_picklable():
+    """Persistent console plan D11: the layer's check and the frozen checker give the same verdicts; the checker
+    pickles (the worker gets it) and keeps the snapshot it was made with when the layer changes."""
+    import pickle
+
+    from forklift_core.control.turnaround_check import TurnaroundArcCheck
+
+    lay = _wall_behind_layer()
+    checker = lay.turnaround_arc_check()
+    assert isinstance(checker, TurnaroundArcCheck)
+    arcs = _arcs()
+    expected = {name: lay.check_turnaround_arc(poses, current_pose=tuple(poses[0])) for name, poses in arcs.items()}
+    assert len(set(map(str, expected.values()))) >= 2  # the cases differ (a verdict passes, another does not)
+    assert {name: checker(poses) for name, poses in arcs.items()} == expected
+    again = pickle.loads(pickle.dumps(checker))
+    assert {name: again(poses) for name, poses in arcs.items()} == expected
+    assert again.callback_spec["kind"] == "turnaround_arc"
+    lay.snapshot = None  # the layer moves on; the frozen checker does not
+    assert {name: checker(poses) for name, poses in arcs.items()} == expected
+    assert layer().turnaround_arc_check()(arcs["straight"]) == "no_snapshot"

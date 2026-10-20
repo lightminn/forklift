@@ -340,16 +340,20 @@ class ObstacleLayer:
         of the sensor and its last rho band (4 m from the rear axle by default), so an arc whose body
         sweeps farther cannot be verified whole from its start (the
         cusp position-stall prefix check of plan design v7 has the same two parts)."""
-        poses = np.asarray(poses, dtype=float)
-        arc_m = float(np.hypot(*np.diff(poses[:, :2], axis=0).T).sum())
-        near = self.check_candidate(poses, current_pose=current_pose, direction=-1, loaded=False)
-        if near.blocked is not None:
-            return near.blocked
-        if not near.reached_end and near.verified_m < min(arc_m, self.permission.config.lookahead_m) - 1e-6:
-            return "short"
-        whole = self.check_candidate(poses, current_pose=current_pose, direction=-1, loaded=False,
-                                     unknown_passes=True, lookahead_m=arc_m + 0.05)
-        return "occupied_ahead" if whole.blocked == "occupied" else None
+        from forklift_core.control.turnaround_check import turnaround_arc_reason
+
+        footprint, own = self.footprints(False, -1)
+        return turnaround_arc_reason(self.permission, self.snapshot, footprint, own, poses,
+                                     current_pose=current_pose)  # one function with the frozen checker (plan D11)
+
+    def turnaround_arc_check(self, callback_spec: dict | None = None):
+        """Persistent console plan D11: the arc check frozen now (permission and snapshot copied) for the planning
+        worker -- the same verdicts the layer gives at this instant."""
+        from forklift_core.control.turnaround_check import TurnaroundArcCheck
+
+        footprint, own = self.footprints(False, -1)
+        return TurnaroundArcCheck(self.permission, self.snapshot, footprint, own,
+                                  callback_spec or {"kind": "turnaround_arc"})
 
     def check_arc_candidate(self, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
                             cap_mps: float):

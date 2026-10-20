@@ -12,6 +12,11 @@ Jobs (each a module-level planner and a copy of its arguments):
 - ``leg``: ``plan_transport_leg`` or ``plan_return_leg``, then once more with the tight arguments when the first
   status is one of ``retry_on`` -- the caller's own fallback, run here so both share one deadline.
 - ``dock``: ``scan_docking.dock(*args, **kwargs)`` and its wall time (real-time plan D9b).
+- ``observe_ladder``: a live mission's first leg (persistent console plan D2, agreed with the main session
+  2026-10-18): the setup's candidate ladder -- every waypoint with ``extended=False``, then, only if none plans,
+  every one with ``extended=True`` -- stopping at the first success or, between candidates, at the payload's
+  absolute ``deadline`` (this host's monotonic clock), which every call also gets. The batch setup keeps its own
+  loop: the replay gate records each ``plan_observation_leg`` call, so this is an intended duplicate.
 
 ``PlanWorker`` is the runner's side. The control thread never waits on the worker (Codex real-time D8 round 4
 P1): ``submit`` pickles the request at once (its inputs are fixed from that moment) and queues the bytes;
@@ -33,12 +38,33 @@ import traceback
 from multiprocessing.connection import Connection, wait
 
 
+def worker_env(mode: str) -> dict:
+    """The environment for a worker that runs the kernels ``mode`` (persistent console plan D11)."""
+    return {**os.environ, "FORKLIFT_KERNELS": str(mode)}
+
+
 class WorkerFailure(RuntimeError):
     """The worker could not be started."""
 
 
+def _test_death(name: str) -> None:
+    """Tests only (persistent console plan section 4, U23): ``FORKLIFT_TEST_WORKER_DIE_ONCE=<job>:<marker path>``
+    -- the worker exits as it starts that job, once (the marker it leaves keeps the next worker alive), so the job
+    fails with no answer to race."""
+    spec = os.environ.get("FORKLIFT_TEST_WORKER_DIE_ONCE")
+    if not spec:
+        return
+    job, _, marker = spec.partition(":")
+    if job == name and marker and not os.path.exists(marker):
+        with open(marker, "w") as f:
+            f.write(str(os.getpid()))
+        os._exit(9)
+
+
 def _run(name: str, payload: dict):
     from forklift_core.planning import pallet_mission as pm
+
+    _test_death(name)
 
     if name == "plan_transport":
         kwargs = dict(payload["kwargs"])
@@ -59,6 +85,15 @@ def _run(name: str, payload: dict):
         started = time.monotonic()
         result = dock(*payload["args"], **payload["kwargs"])
         return {"result": result, "wall_s": time.monotonic() - started}
+    if name == "observe_ladder":
+        return _observe_ladder(pm, payload)
+    if name == "loaded_delivery":  # persistent console plan D5 6c: a pallet already on the forks, to its destination
+        started = time.monotonic()
+        result = pm.plan_loaded_delivery(*payload["args"], **payload["kwargs"])
+        if result.success and pm.final_straight_prefix(result.transport, payload["keep_m"]) is None:
+            # no delivery straight left to arm the docking on (arm_docking's own rule, Codex 6c round 2 P2-1)
+            result = pm.MissionPlan(False, "transport:no_final_straight")
+        return {"result": result, "wall_s": time.monotonic() - started}
     if name == "echo":  # the tests' job
         if payload.get("sleep_s"):
             time.sleep(payload["sleep_s"])
@@ -66,6 +101,49 @@ def _run(name: str, payload: dict):
             raise ValueError(payload["raise"])
         return {"result": payload.get("value")}
     raise ValueError(f"unknown job {name!r}")
+
+
+def _observe_ladder(pm, payload: dict) -> dict:
+    """The setup's ladder (run_transport, ``initial_candidates``), each candidate recorded with the keys of
+    ``state["observation_candidates"]``; every candidate tried comes back, failed or not."""
+    from forklift_core.planning.geometry import Pose2D
+
+    started = time.monotonic()
+    world = payload["world"]
+    kwargs = dict(payload["grid_kwargs"])
+    # One deadline for every call: the payload's whole-ladder one, else what the grid arguments carried (Codex P2:
+    # grid_kwargs("observe") returns obstacle["deadline"] when one is set, so passing both raised a TypeError).
+    deadline = payload.get("deadline") if payload.get("deadline") is not None else kwargs.get("deadline")
+    kwargs["deadline"] = deadline
+    start = world.start_rear
+    candidates, result, selected, timed_out = [], None, None, False
+    for extended in (False, True):
+        for index, coordinates in enumerate(payload["waypoints"]):
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+            waypoint = Pose2D(*coordinates)
+            plan = pm.plan_observation_leg(world, waypoint, payload["config"], geometry=payload["geometry"],
+                                           pickup_bounds=payload["pickup_bounds"], extended=extended, **kwargs)
+            candidates.append({"candidate_index": index, "pose": [waypoint.x_m, waypoint.y_m, waypoint.yaw_rad],
+                               "success": plan.success, "status": plan.status,
+                               "analytic_expansion_interval": plan.analytic_expansion_interval,
+                               "search_attempts": [list(entry) for entry in plan.search_attempts],
+                               "start_rear": [start.x_m, start.y_m, start.yaw_rad], "extended_ladder": extended})
+            if plan.success:
+                result, selected = plan, index
+                break
+        if result is not None or timed_out:
+            break
+    out = {"result": result, "selected": selected, "candidates": candidates, "timed_out": timed_out}
+    if result is None and not timed_out and candidates and all(c["status"] == "invalid_start" for c in candidates):
+        # Persistent console plan D13 item 6: how far straight back the start check passes -- the planner's own
+        # check, built from this job's own frozen inputs, within the same deadline (Codex D13 rounds 1-2).
+        free, clearance = pm.observation_start_checker(world, payload["config"], geometry=payload["geometry"],
+                                                       pickup_bounds=payload["pickup_bounds"], **kwargs)
+        out["advice"] = pm.backoff_advice(free, clearance, start, deadline=deadline)
+    out["wall_s"] = time.monotonic() - started
+    return out
 
 
 def main(argv: list[str]) -> int:
@@ -83,7 +161,14 @@ def main(argv: list[str]) -> int:
                 return
 
     threading.Thread(target=read, name="plan-worker-read", daemon=True).start()
-    conn_out.send_bytes(pickle.dumps(("ready", os.getpid())))
+    # Persistent console plan D11: the kernels the environment names (the live runner passes its own), compiled
+    # before the first job -- a new interpreter would otherwise plan on the reference kernels, slower than the live
+    # one and so judged differently against the candidates' wall-clock deadline.
+    from forklift_core import kernels
+
+    if kernels.mode() != "reference":
+        kernels.warm_up()
+    conn_out.send_bytes(pickle.dumps(("ready", os.getpid(), kernels.mode())))
     while True:
         message = inbox.get()
         if message is None:
@@ -109,6 +194,7 @@ class PlanWorker:
     def __init__(self, *, ready_timeout_s: float = 120.0, env: dict | None = None):
         self.ready_timeout_s = ready_timeout_s
         self.env = env
+        self.kernels: str | None = None  # what the process said it runs (plan D11)
         self.restarts = 0
         self._lock = threading.Lock()  # guards the bookkeeping below, never held across pipe or process work
         self._outbox: queue.Queue = queue.Queue()  # (job_id, bytes)
@@ -185,7 +271,8 @@ class PlanWorker:
                 self._stop_process()
                 raise WorkerFailure("plan worker not ready")
         try:
-            tag, _pid = pickle.loads(self._recv.recv_bytes())
+            tag, _pid, *rest = pickle.loads(self._recv.recv_bytes())
+            self.kernels = rest[0] if rest else None
         except (OSError, EOFError) as exc:
             self._stop_process()
             raise WorkerFailure(f"plan worker gone before ready: {exc}") from exc

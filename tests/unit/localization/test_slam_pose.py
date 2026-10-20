@@ -213,6 +213,82 @@ def test_holding_counts_distance_travelled_not_displacement():
     assert tracker.hold_travel_m == pytest.approx(1.6)
 
 
+def _holding_at_limit(limit_m=15.0):
+    # Persistent console plan D15: freshness is not what these tests judge.
+    tracker = SlamPoseTracker(max_age_s=1e9, hold_limit_m=limit_m)
+    tracker.receive(0, 0.0, "processed", (0, 0, 0))
+    tracker.receive(4, 0.0, "processed", (0, 0, 0))
+    tracker.hold(odom_from_base=(0, 0, 0))
+    return tracker
+
+
+def _stand(tracker, seconds, *, creep_mps=0.0, seed=0):
+    """The wheels applied zero for ``seconds`` at 120 Hz through the runner's odometry noise (OdometryNoise ->
+    IncrementalWheelOdometry), the rear wheels turning at ``creep_mps``; standing from the 24th step as the live
+    runner says (LIVE_STAND_STEPS)."""
+    noise = OdometryNoise(seed=seed)
+    odometry = IncrementalWheelOdometry(GEOMETRY)
+    rate = creep_mps / GEOMETRY.wheel_radius_m
+    for k in range(int(seconds * 120)):
+        pose = odometry.update(k / 120, noise.wheel_rates((rate, rate)), noise.steering((0.0, 0.0)))
+        tracker.map_from_base(k / 120, pose, standing=k + 1 >= 24)
+    return pose
+
+
+def test_a_long_stand_while_holding_does_not_add_up_the_odometry_noise():
+    # U30: 1,228 s STOPPED in the insertion filled the 15 m limit with noise (the step sum grows linearly at rest).
+    tracker = _holding_at_limit()
+    _stand(tracker, 1500.0)
+    assert tracker.hold_travel_m < 0.5
+
+
+def test_a_creep_while_standing_still_counts():
+    tracker = _holding_at_limit()
+    _stand(tracker, 600.0, creep_mps=0.005)
+    assert tracker.hold_travel_m >= 0.9 * 0.005 * 600.0
+
+
+def test_moving_after_a_stand_goes_back_to_the_step_sum():
+    tracker = _holding_at_limit()
+    tracker.map_from_base(0.0, (0.25, 0, 0))
+    tracker.map_from_base(0.0, (0.5, 0, 0))
+    for k in range(1, 11):
+        tracker.map_from_base(0.0, (0.5 + 0.01 * k, 0.0, 0.0), standing=True)
+        tracker.map_from_base(0.0, (0.5 + 0.01 * k, 0.0, 0.0), standing=True)  # twice in a tick: nothing more
+    tracker.map_from_base(0.0, (0.6, 0.25, 0.0))
+    tracker.map_from_base(0.0, (0.6, 0.5, 0.0))
+    assert tracker.hold_travel_m == pytest.approx(1.1)
+
+
+def test_a_stand_from_the_hold_itself_and_after_a_re_hold():
+    # Codex D15 round 1 P2-4: the hold's start pose has a yaw; a stand from the first call must not trip on it.
+    tracker = _holding_at_limit()
+    tracker.map_from_base(0.0, (0.0, 0.0, 0.0), standing=True)
+    tracker.map_from_base(0.0, (0.03, 0.04, 0.1), standing=True)
+    assert tracker.hold_travel_m == pytest.approx(0.05)
+    tracker.release(odom_from_base=(0.03, 0.04, 0.1))
+    tracker.hold(odom_from_base=(1.0, 0.0, 0.0))  # a new hold forgets the old stand
+    tracker.map_from_base(0.0, (1.0, 0.3, 0.0), standing=True)
+    assert tracker.hold_travel_m == pytest.approx(0.3)
+
+
+def test_a_stand_counts_net_so_motion_that_comes_back_is_not_counted():
+    # The narrower guard the plan accepts (Codex D15 round 1 P2-3): out and back with the wheels at zero counts 0.
+    tracker = _holding_at_limit()
+    tracker.map_from_base(0.0, (0.2, 0.0, 0.0), standing=True)
+    tracker.map_from_base(0.0, (0.0, 0.0, 0.0), standing=True)
+    assert tracker.hold_travel_m == pytest.approx(0.0)
+
+
+def test_without_standing_the_hold_sums_every_step_as_before():
+    # The batch path calls without the keyword; at rest its noise still adds up (the replayed arithmetic).
+    tracker = _holding_at_limit(limit_m=100.0)
+    noise, odometry = OdometryNoise(seed=0), IncrementalWheelOdometry(GEOMETRY)
+    for k in range(120 * 60):
+        tracker.map_from_base(k / 120, odometry.update(k / 120, noise.wheel_rates((0.0, 0.0)), noise.steering((0, 0))))
+    assert tracker.hold_travel_m > 0.4
+
+
 def test_tracker_speed_waits_for_the_stop_detector():
     detector = StopDetector(tick_s=1 / 120)
     detector.update(commanded_speed=0.0, speed=0.004, yaw_rate=0.0)

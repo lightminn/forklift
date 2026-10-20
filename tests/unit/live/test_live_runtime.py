@@ -1,6 +1,7 @@
 """M-c4: the live runtime with a fake core and fake Isaac hooks (plan C2, C4)."""
 
 import json
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -26,6 +27,26 @@ class Clock:
         self.t += max(0.0, s)
 
 
+def _squash(text: str) -> str:
+    """Runs of whitespace as one space: a source test that does not hang on the runner's indentation (the tick body
+    moved one level in for the persistent console plan D6's catch)."""
+    import re
+
+    return re.sub(r"\s+", " ", text)
+
+
+_MADE: list = []  # every runtime a test made, closed after it (its live_log file; -W error, ws1 full suite)
+
+
+@pytest.fixture(autouse=True)
+def _close_runtimes():
+    yield
+    while _MADE:
+        rt = _MADE.pop()
+        if not rt._log.closed:
+            rt.close()
+
+
 def runtime(tmp_path, **k):
     targets = TargetsBook()
     targets.add_pallet("P-1", "epal6", Pose(5.0, 0.0, 0.0))
@@ -38,6 +59,7 @@ def runtime(tmp_path, **k):
     clock = Clock()
     rt = LiveRuntime(core, hooks, output=tmp_path, port_file=tmp_path / "port.json", dt=DT, clock=clock,
                      sleep=clock.sleep, session_epoch=9, **k)
+    _MADE.append(rt)
     return rt, core, did, clock
 
 
@@ -155,6 +177,21 @@ def test_feedback_keeps_the_time_its_sample_was_made(tmp_path):
         rt.close()
 
 
+def test_feedback_carries_the_odometry_position_for_the_stand_waiver(tmp_path):
+    """Main 2026-10-19: the waiver's creep is measured between odometry positions, feedback gaps included."""
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        rt.before_step(0.0)
+        rt.after_step(DT, odom_speed=0.0, yaw_rate=0.0, rendered=False, odom_xy=(1.5, -0.25))
+        assert rt.feedback.odom_xy == (1.5, -0.25)
+        rt.before_step(DT)
+        rt.after_step(2 * DT, odom_speed=0.0, yaw_rate=0.0, rendered=False)
+        assert rt.feedback.odom_xy is None
+    finally:
+        rt.close()
+
+
 def test_the_welcome_carries_the_chassis_outline_the_console_draws(tmp_path):
     # without it the page cannot draw the truck or its teleop sweep (C3)
     rt, *_ = runtime(tmp_path)
@@ -211,3 +248,808 @@ def test_a_carriage_camera_says_it_rides_the_lift():
     mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
     assert live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=True)["rides_lift"]
     assert not live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=False)["rides_lift"]
+
+
+def test_the_live_video_camera_renders_the_picture_as_sent():
+    # The video comes from its own camera (near plane 0.05 m; the perception camera's 1.0 m left the lower third of
+    # the picture black, 2026-10-18 demo) rendered at the sent size, so the page's camera_model is that camera's.
+    from sim.isaac.live_runtime import live_camera_model, live_video_size
+    from tools.scene_rig import Camera as RigCamera
+
+    mount = RigCamera((0.619, 0.0, 0.27), 0.10).base_from_optical()
+    for k in (SimpleNamespace(width=1280, height=720, fx=640.0, fy=640.0, cx=640.0, cy=360.0),
+              SimpleNamespace(width=640, height=480, fx=465.7, fy=465.7, cx=320.0, cy=240.0)):
+        w, h = live_video_size(k, 640)
+        m = live_camera_model(k, mount, rear_axle_offset_m=-0.34, sent_width=640, rides_lift=True)
+        assert (m["width"], m["height"]) == (w, h) and w <= 640
+        assert m["fx"] / m["width"] == pytest.approx(k.fx / k.width)  # the same field of view
+
+
+def test_the_runner_streams_the_live_video_camera_with_a_near_plane_for_the_forks():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    head = source[:source.index("from live_runtime import live_video_size")][-400:]
+    assert "sys.path.insert(0, repo_root_)" in head  # live_runtime imports console/: the root first (Isaac run 4115)
+    setup = source[source.index("live_video_size(perception_calibration, 640)"):][:2500]
+    assert '"/LiveVideoCamera"' in setup and "resolution=(video_w_, video_h_)" in setup
+    assert "set_clipping_range(near_distance=0.05" in setup
+    assert "live_video_camera" in source[source.index("live_cam_ = "):][:200]
+
+
+def test_the_plan_rides_the_state_when_it_changes_and_again_every_two_seconds():
+    # The page draws the plan as a road (contract 6: on change only); a page that connects later gets it at the next
+    # refresh. Isaac live sent none at all before (2026-10-18 demo: the plan layer stayed empty in AUTO).
+    from sim.isaac.live_runtime import OMIT, PlanFeed
+
+    xs = np.linspace(0.0, 9.0, 1000)
+    poses = np.column_stack((xs, np.zeros_like(xs), np.zeros_like(xs)))
+    dirs = np.ones(1000)
+    dirs[900:] = -1  # a cusp: the page marks it with a node
+    feed = PlanFeed(refresh_s=2.0)
+    first = feed.update(7, lambda: (poses, dirs), now=0.0)
+    assert first["revision"] == 1 and 2 <= len(first["poses"]) <= 202
+    assert first["poses"][0] == [0.0, 0.0, 1] and first["poses"][-1] == [9.0, 0.0, -1]
+    signs = [p[2] for p in first["poses"]]
+    k = signs.index(-1)
+    assert first["poses"][k - 1][0] == pytest.approx(xs[899], abs=1e-3) and first["poses"][k][0] == pytest.approx(xs[900], abs=1e-3)
+    assert feed.update(7, lambda: (poses, dirs), now=1.0) is OMIT
+    assert feed.update(7, lambda: (poses, dirs), now=2.1)["revision"] == 1  # the refresh, same plan
+    assert feed.update(8, lambda: (poses[:10], dirs[:10]), now=2.2)["revision"] == 2
+    assert feed.update(None, None, now=2.3) is None  # no plan any more: said once
+    assert feed.update(None, None, now=2.4) is OMIT
+
+
+def test_the_runner_hands_the_followed_path_to_the_live_state():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    call = source[source.index("live.publish(\n"):][:1600]  # the tick's own call (live_failed's is on one line)
+    assert "plan_key=" in call and "plan_poses=" in call
+
+
+def test_a_cancelled_mission_ends_the_mission_but_not_a_live_run():
+    # 2026-10-18 demo (ws1 run 4129): the operator cancelled 1.7 s after a submit and the run ended "mission_cancelled";
+    # live, a cancel frees the slot (commands: cancelled -> idle at the next apply) and the session goes on.
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    flat = _squash(source)
+    assert "if cancel_stop_ and live is None: break" in flat
+    # persistent console plan D1: live, the confirmed cancel goes through the mission end (recorded)
+    assert "if cancel_stop_ and live is not None:" in flat and 'else: live.end_mission(t, "cancelled", "operator")' in flat
+    # plan D4: a cancel that could not recover ends with its own reason
+    assert 'if core.commands.status == "recovery_required": live.end_mission(t, "recovery_required"' in flat
+
+
+def test_the_withdraw_tracking_certificate_is_checked_under_the_obstacle_layer_every_tick():
+    # 7610ed5 put the live first-leg replan between `if obstacle is not None:` and the withdraw tracking check, which
+    # then ran only inside the replan's branch (found by the persistent-console survey, 2026-10-18).
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text())
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    (call,) = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and n.value.startswith("withdraw_tracking_exceeded")] or [
+        n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)
+        and any(isinstance(v, ast.Constant) and "withdraw_tracking_exceeded" in str(v.value) for v in n.values)]
+    ifs = []
+    node = call
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, ast.If):
+            ifs.append(ast.unparse(node.test))
+    assert ifs[1] == "obstacle is not None", ifs[:3]
+
+
+# --- the persistent console's mission end (docs/plans/2026-10-18-persistent-live-console.md D1) ---------------------
+def ending(tmp_path, verdict=None):
+    """A runtime whose mission runs, with the end's hooks recorded in order."""
+    order = []
+    from types import SimpleNamespace as NS
+
+    from sim.isaac.live_runtime import EndHooks
+
+    end = EndHooks(stop=lambda: order.append("stop"), unlock_wheels=lambda: order.append("unlock"),
+                   drain_trackers=lambda: order.append("drain"),
+                   judge_delivery=lambda: order.append("judge") or (verdict or NS(ok=True, reason=None,
+                                                                                   delivery_error_m=0.02)))
+    rt, core, did, clock = runtime(tmp_path, end=end)
+    core.abandon_jobs = lambda t: order.append(("abandon", t))
+    core.end_reset = lambda t: order.append(("reset", t)) or {"state": {"async_plans": [{"site": "leg"}]}}
+    from forklift_core.mission.commands import Submit
+
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    core.commands.apply(10.0)  # the fixture's arbiter has no feedback (stopping): the submit goes in directly
+    core.commands.start()
+    return rt, core, order
+
+
+def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_path):
+    rt, core, order = ending(tmp_path)
+    core.commands.begin_wait(11.0)
+    entry = rt.end_mission(20.0, "complete", None)
+    assert order == ["stop", ("abandon", 20.0), "unlock", "drain", "judge", ("reset", 20.0)]
+    assert isinstance(entry.pop("ended_unix"), float)  # plan D13 item 1: the wall time, stamped once
+    assert entry == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 10.0,
+                     "ended_s": 20.0, "pallet_id": "P-1", "destination_id": "D-1"}
+    entry = rt.results.last
+    assert core.commands.status == "done" and core.commands.waits == [] and rt.results.last == entry
+    seq, message = rt.store.get("missions")
+    assert seq == 1 and message == {"t": "missions", "missions_seq": 1, "results": [entry]}
+    record = json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())
+    assert record["result"] == entry and record["delivery_error_m"] == 0.02
+    assert record["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
+    assert rt.end_mission(21.0, "failed", "late") is None  # ended once
+    rt.tick_start(21.0, False)
+    assert core.commands.status == "idle" and rt.results.last == entry
+
+
+def test_a_completed_mission_that_misses_the_destination_fails_with_the_checks_message(tmp_path):
+    from types import SimpleNamespace as NS
+
+    rt, core, _ = ending(tmp_path, NS(ok=False, reason="Pallet missed the green destination center",
+                                      delivery_error_m=0.11))
+    entry = rt.end_mission(20.0, "complete", None)
+    assert entry["outcome"] == "failed" and entry["reason"] == "Pallet missed the green destination center"
+    assert core.commands.status == "failed" and core.commands.end_reason == entry["reason"]
+
+
+def test_a_failed_mission_is_not_judged_and_keeps_its_reason(tmp_path):
+    rt, core, order = ending(tmp_path)
+    entry = rt.end_mission(15.0, "failed", "Pallet was not lifted")
+    assert "judge" not in order and entry["outcome"] == "failed" and entry["reason"] == "Pallet was not lifted"
+
+
+def test_a_cancel_confirmed_standing_is_recorded_as_cancelled(tmp_path):
+    from forklift_core.mission.commands import Cancel
+
+    rt, core, order = ending(tmp_path)
+    core.commands.queue(Cancel())
+    rt.tick_start(12.0, False)
+    assert core.commands.status == "cancelling" and rt.results.last is None
+    core.commands.cancelled(13.0)  # the core's paused tick: standing confirmed
+    entry = rt.end_mission(13.0, "cancelled", "operator")
+    assert entry["outcome"] == "cancelled" and entry["reason"] == "operator" and "judge" not in order
+    assert core.commands.pauses == []  # handed to the record
+
+
+def test_a_mission_cancelled_before_it_ran_is_recorded_at_the_tick_start(tmp_path):
+    from forklift_core.mission.commands import Cancel, Submit
+
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(11.0, "failed", "x")
+    rt.tick_start(12.0, False)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    core.commands.apply(13.0)
+    core.commands.queue(Cancel())
+    rt.tick_start(14.0, False)  # accepted, nothing moved: cancelled at once
+    assert rt.results.last["mission_id"] == "m2" and rt.results.last["outcome"] == "cancelled"
+    assert rt.results.last["started_s"] == 13.0 and rt.results.last["ended_s"] == 14.0
+
+
+def test_no_mission_no_result(tmp_path):
+    rt, core, _, _ = runtime(tmp_path)
+    assert rt.end_mission(1.0, "failed", "x") is None and rt.results.last is None
+
+
+def test_the_state_carries_the_last_result_from_the_runtime():
+    import inspect
+
+    from sim.isaac import live_runtime
+
+    source = inspect.getsource(live_runtime.LiveRuntime.publish)
+    assert 'msg["last_result"] = self.results.last' in source
+
+
+def test_a_record_that_cannot_be_written_is_marked_in_the_result(tmp_path):
+    rt, core, _ = ending(tmp_path)
+    (tmp_path / "missions").write_text("not a folder")
+    entry = rt.end_mission(20.0, "failed", "x")
+    assert entry["record_error"].startswith(("FileExistsError", "NotADirectoryError"))
+    assert rt.results.last["record_error"] == entry["record_error"]
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == entry["record_error"]
+
+
+def test_a_completed_mission_ends_the_mission_but_not_a_live_run():
+    """2026-10-18 demo: "한 운반 사이클 끝나니까 잡이 걍 죽는데" -- live, the end of the timers goes through end_mission."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    block = _squash(source[source.index("and core.lift_and_timers(t, dt)):"):][:500])
+    assert "if live is None: break" in block
+    assert 'live.end_mission(t, "complete", None)' in block and "paused_, requested_speed, curvature = True" in block
+    assert "end=LiveEndHooks(stop=live_zero_wheels, unlock_wheels=live_unlock_wheels," in source
+
+
+def test_a_cancel_confirmed_standing_logs_its_end_once(tmp_path):
+    from forklift_core.mission.commands import Cancel
+
+    rt, core, _ = ending(tmp_path)
+    core.commands.queue(Cancel())
+    rt.tick_start(12.0, False)
+    core.commands.cancelled(13.0)
+    rt.end_mission(13.0, "cancelled", "operator")
+    ends = [r for r in core.commands.log if r["command"] == "end"]
+    assert ends == [{"t": 13.0, "command": "end", "accepted": True, "reason": "operator", "mission_id": "m1",
+                     "status": "cancelled"}]
+
+
+def test_a_preparation_ended_by_a_stop_is_collected_at_the_tick_start_once(tmp_path):
+    """Persistent console plan D2: the fixture's arbiter has no feedback, so its stop kind is not none."""
+    rt, core, order = ending(tmp_path)
+    core.commands.status = "accepted"
+    core.commands.begin_prepare()
+    rt.tick_start(12.0, False)
+    last = rt.results.last
+    assert last["mission_id"] == "m1" and last["outcome"] == "failed" and last["reason"].startswith("prepare:")
+    assert [r["command"] for r in core.commands.log].count("end") == 1
+    assert ("abandon", 12.0) in order
+
+
+def test_a_submit_is_refused_while_the_forks_may_be_in_a_pocket(tmp_path):
+    """Codex stage 2 design P1: a cancel during the insertion, then the same pallet submitted again (until D4/D5)."""
+    from forklift_core.mission.commands import Submit
+
+    rt, core, did, clock = runtime(tmp_path)
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    rt.tick_start(1.0, False, clear_for_submit=False)
+    assert captured[-1].clear_for_submit is False
+    rt.tick_start(2.0, False)
+    assert captured[-1].clear_for_submit is True
+
+
+def test_the_pallet_deliverable_as_carried_reaches_the_submit(tmp_path):
+    """Persistent console plan D5 6c item 1: the runner names the carried pallet a submit may deliver as it is."""
+    rt, core, did, clock = runtime(tmp_path)
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+    rt.tick_start(1.0, False, submit_refusal="cargo_held", loaded_pallet="P-1")
+    assert captured[-1].loaded_pallet == "P-1" and captured[-1].submit_refusal == "cargo_held"
+    rt.tick_start(2.0, False)
+    assert captured[-1].loaded_pallet is None
+
+
+def test_a_preparation_ended_after_the_apply_is_collected_before_the_next_one(tmp_path):
+    """Codex stage 2 design round 2 P2: a job_hold failure (timeout, no candidate) comes after the tick's apply; the
+    next apply frees the slot first, so it is collected before it -- exactly once, at the end log's time."""
+    rt, core, order = ending(tmp_path)
+    core.commands.status = "accepted"
+    core.commands.begin_prepare()
+    core.commands.terminate("failed", 11.5, "prepare:timeout")  # job_hold, late in tick 11.5
+    rt.tick_start(12.0, False)
+    last = rt.results.last
+    assert last["outcome"] == "failed" and last["reason"] == "prepare:timeout" and last["ended_s"] == 11.5
+    rt.tick_start(13.0, False)
+    assert rt.results.seq == 1 and core.commands.status == "idle"
+
+
+def test_the_last_missions_records_are_written_off_the_control_thread(tmp_path):
+    """Persistent console plan D2: the adoption hands the last mission's records over (MissionBaseline.restore)."""
+    rt, core, did, clock = runtime(tmp_path)
+    records = {"state": {"async_plans": [{"site": "leg", "wall_s": np.float64(0.25)}]}, "obstacle": {}, "pocket": {}}
+    rt.archive("m1", records)
+    rt.close()  # waits for the writes
+    written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert written["state"]["async_plans"] == [{"site": "leg", "wall_s": 0.25}]
+
+
+def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
+    """Persistent console plan D2 (stage 2 design, 3rd edition): the runner's side of the preparation."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    # no setup ladder live (a live session starts without a mission), and the worker is required
+    assert 'if getattr(args, "live", False):\n' in source and "initial_candidates = []" in source
+    assert 'raise ValueError("a live session needs the planning worker' in source
+    # each submit is prepared once the control pose is this tick's, and stands while it is
+    flat = _squash(source)
+    # (plan D5 6c: a loaded submit is prepared by its own branch, at the same point)
+    assert ('if live is not None and core.commands.status in ("accepted", "preparing") and not core.job_pending(): '
+            '# persistent console plan D2: the submitted mission\'s first leg, from here (D5 6c: a loaded one\'s '
+            '# whole delivery) (live_prepare_loaded if core.commands.mission_loaded else live_prepare)(t, rear)') in flat
+    assert (source.index("(live_prepare_loaded if core.commands.mission_loaded else live_prepare)(t, rear)")
+            < source.index("plan_wait_ = core.jobs is not None and core.job_hold("))
+    assert 'core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):' in source  # accepted is not paused
+    assert 'if live is not None and core.commands.status in ("accepted", "preparing"): plan_wait_ = True' in flat
+    assert "submit_refusal=core.cargo.submit_refusal()," in source  # plan D5a: the forks, at the last tick's end
+    # the adoption's runner part and the session's baseline, before the console starts
+    assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
+    start = source.index("            live.start()  # after the SLAM warm-up")
+    before = source[start - 1600:start]  # (the D8 record spool is made between them)
+    assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
+    # D-0 live only; the session's end ends a mission still on and skips the batch judgement
+    assert source.index('core.targets.add_destination("D-0"') > source.index('    if getattr(args, "live", False):\n        # Persistent console plan D2/D3')
+    assert 'live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")' in source
+    # the temporary handling D2 replaces is gone
+    for gone in ("live_first_replan_", "live_last_rear_", "at_start", "start_submitted", "hall=True"):
+        assert gone not in source, gone
+
+
+def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
+    """Codex stage 2 impl P2-5: the records moved at the next adoption went under whatever result was last."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert written == {"state": {"async_plans": [{"site": "leg"}]}}
+
+
+def test_the_end_logs_its_record_cost_and_the_archive_its_own(tmp_path):
+    """Persistent console plan D1 step 7, U29: the end tick's record cost (bound 20 ms) is measured apart from the
+    rest of the end, and the records written off the control thread log their size and wall time."""
+    rt, core, order = ending(tmp_path)
+    write = rt._write_log
+    rt._write_log = lambda line: (time.sleep(0.05) if '"mission_end"' in line else None, write(line))
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    logged = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()]
+    cost = next(e["mission_end_cost"] for e in logged if "mission_end_cost" in e)
+    # the end's own log line is part of the record (Codex U29 review P2-3: it was left out)
+    assert cost["mission_id"] == "m1" and 0.05 <= cost["record_wall_s"] <= cost["end_wall_s"]
+    assert cost["restore_wall_s"] is None  # the stand-in core has no timed restore
+    archive = next(e["archive"] for e in logged if "archive" in e)
+    assert archive["mission_id"] == "m1" and archive["end_mono"] >= archive["start_mono"]
+    assert archive["bytes"] == (tmp_path / "missions" / "m1" / "records.json").stat().st_size
+
+
+def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(tmp_path):
+    """Plan U29: a write failure shows in the results book -- the records' write too (Codex U29 review P2-4: only the
+    result's did); the writer thread queues it and the control thread notes and publishes it."""
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt.end_mission(15.0, "failed", "x")
+    for writer, _ in rt._writers:
+        writer.join(timeout=5.0)
+    assert "record_error" not in rt.results.last
+    rt.tick_start(16.0, False)
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == rt.results.last["record_error"]
+
+
+def test_a_records_write_failure_after_the_last_tick_is_noted_before_the_runs_results(tmp_path):
+    """Codex U29 review round 2 P2-1: a writer failing after the last tick was lost at the close, and the runner took
+    its results before the close; settle_records joins the writers and notes them, and the close does too."""
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt.end_mission(15.0, "failed", "x")
+    rt.settle_records()
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    assert source.index("live.settle_records()") < source.index('"mission_results": live.results.message()')
+    (tmp_path / "b" / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt2, core2, _ = ending(tmp_path / "b")
+    rt2.end_mission(15.0, "failed", "x")
+    rt2.close()
+    assert rt2.results.last["record_error"].startswith("records.json: IsADirectoryError")
+
+
+def test_a_records_writer_past_the_settle_limit_is_marked_unsettled_once(tmp_path, monkeypatch):
+    """Codex U29 review round 3 P2: a writer still writing at the limit left the run's results without a mark; the
+    limit is one deadline for all writers and the mark is made once (plan D1: what is left at the limit is counted
+    unsettled and not changed after)."""
+    import threading
+
+    import sim.isaac.live_runtime as live_runtime
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    monkeypatch.setattr(live_runtime, "_jsonable", lambda value: gate.wait(5.0) and str(value))
+    rt.end_mission(15.0, "failed", "x")  # the stand-in records hold no object; write one that waits
+    rt.archive("m1", {"state": {"slow": object()}}, rt.results.last["seq"])
+    rt.settle_records(timeout_s=0.05)
+    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    gate.set()
+    rt.settle_records(timeout_s=5.0)
+    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+
+
+def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):
+    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it."""
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    write = rt._write_log
+
+    def failing(line):
+        if '"archive_error"' in line:
+            raise OSError("log full")
+        write(line)
+
+    rt._write_log = failing
+    rt.end_mission(15.0, "failed", "x")
+    rt.settle_records()
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+
+
+def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
+    """Codex D6 design P2-6: the end (also after the physics step) fixes the lift target at the measured height."""
+    rt, core, order = ending(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.08)
+    rt.hooks.lift_position = lambda: 0.031
+    held = []
+    rt.hooks.hold_lift = held.append
+    rt.end_mission(15.0, "failed", "x")
+    # within the hold tolerance (0.02 m) of the measured lift: a target that ran ahead stops near it (main
+    # 2026-10-19, plan D14 condition 3 amended)
+    assert held == [pytest.approx(0.051)] and core.ms.lift_command == pytest.approx(0.051)
+
+
+def test_a_loaded_standing_lift_keeps_its_target_through_three_gate_events(tmp_path):
+    """Main 2026-10-19: a pallet on the forks sags the lift 33 mm (13.6 kg on the 4000 N/m drive, above a = 0.02 m);
+    three STOPs in a row while it stands must not lower it -- the loaded tolerance covers the sag."""
+    rt, core, did, clock = runtime(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.20)
+    core.cargo = SimpleNamespace(relation="carrying", load="confirmed")
+    rt.loaded_hold_tolerance_m = 0.0434
+    did["lift_pos"] = 0.20 - 0.0334
+    rt.start()
+    try:
+        t = 0.0
+        for _ in range(3):
+            rt.arbiter.stop(clock(), "stop:test")
+            step(rt, clock, t)
+            assert did["lift"][-1] == pytest.approx(0.20)
+            rt._lift_latch = None  # the gate lifted between the events
+            t += DT
+        assert core.ms.lift_command == pytest.approx(0.20)
+    finally:
+        rt.close()
+
+
+def test_an_unknown_cargo_keeps_the_loaded_tolerance(tmp_path):
+    """Codex D14 impl round 4 P1-2: a scene failure turns the cargo unknown before the end -- the pallet may still be
+    on the forks, so the end's hold keeps the loaded tolerance (it lowered a moving loaded lift by 8.5 mm)."""
+    (tmp_path / "e").mkdir()
+    rt, core, order = ending(tmp_path / "e")
+    core.ms = SimpleNamespace(lift_command=0.10)
+    core.cargo = SimpleNamespace(relation="unknown", load="unknown")
+    rt.loaded_hold_tolerance_m = 0.0434
+    rt.hooks.lift_position = lambda: 0.07155
+    held = []
+    rt.hooks.hold_lift = held.append
+    rt.end_mission(15.0, "failed", "x")
+    assert held == [pytest.approx(0.10)]
+
+def test_a_standing_lifts_sag_is_not_taken_for_a_new_target_at_a_gate_or_an_end(tmp_path):
+    """Main 2026-10-19: a loaded lift standing 9 mm below its target (the drive's gravity sag) keeps the target at
+    the gate's latch and at a mission's end -- the measured height would lower it by the sag at every event."""
+    rt, core, did, clock = runtime(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.20)
+    did["lift_pos"] = 0.191
+    rt.start()
+    try:
+        rt.arbiter.stop(clock(), "stop:test")
+        step(rt, clock, 0.0)
+        assert did["lift"][-1] == pytest.approx(0.20)
+    finally:
+        rt.close()
+    (tmp_path / "end").mkdir()
+    rt2, core2, order = ending(tmp_path / "end")
+    core2.ms = SimpleNamespace(lift_command=0.20)
+    rt2.hooks.lift_position = lambda: 0.191
+    held = []
+    rt2.hooks.hold_lift = held.append
+    rt2.end_mission(15.0, "failed", "x")
+    assert held == [pytest.approx(0.20)] and core2.ms.lift_command == pytest.approx(0.20)
+
+
+def test_the_state_carries_the_scene_and_a_damaged_scene_refuses_submits(tmp_path):
+    from forklift_core.mission.commands import Submit
+
+    rt, core, did, clock = runtime(tmp_path)
+    rt.scene = {"damaged": {"reason": "Pallet displaced before pickup", "t": 3.0}}
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+    core.commands.queue(Submit("P-1", "D-1", core.targets.revision))
+    rt.tick_start(4.0, False)
+    assert captured[-1].scene_damaged is True
+    import inspect
+
+    from sim.isaac import live_runtime
+
+    assert 'msg["scene"] = self.scene' in inspect.getsource(live_runtime.LiveRuntime.publish)
+
+
+def test_a_live_missions_failure_in_its_tick_ends_the_mission_and_the_tick_finishes_once():
+    """Persistent console plan D6 (stage 3 design): one catch around the tick body; only live mission and scene
+    reasons are handled, the output and the physics step run once."""
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    tree = ast.parse(source)
+    (loop,) = [n for n in ast.walk(tree) if isinstance(n, ast.For)
+               and "range(int(120 * args.max_sim_seconds))" in ast.unparse(n.iter)]
+    assert ast.unparse(loop.body[0]) == "live_tick_out_ = live_stepped_ = False"
+    (body,) = [n for n in loop.body if isinstance(n, ast.Try)]
+    (handler,) = body.handlers
+    assert ast.unparse(handler.type) == "RuntimeError"
+    text = ast.unparse(handler)
+    assert ("if live is None or isinstance(exc_, SessionFailure) or classify_failure(str(exc_)) == 'session':\n"
+            "        raise") in text
+    assert "live_failed(t, str(exc_), live_tick_out_, live_stepped_" in text
+    # the flags follow the output and the physics step, and the step's flag comes before capture_stepped
+    inside = source[source.index("            try:\n                if early_ports:"):]
+    assert inside.index("live_tick_out_ = True") > inside.index("out_ = live.tick_end(")
+    step_at = inside.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')
+    assert step_at < inside.index("live_stepped_ = True") < inside.index("core.capture_stepped(")
+    failed = source[source.index("        def live_failed("):source.index("        for step in (")]
+    assert failed.index("live.end_mission(t_") < failed.index("if not ticked_:") < failed.index("if not stepped__:")
+
+
+def test_a_supervised_runtime_offers_the_scene_reset_and_binds_the_port_it_is_given(tmp_path):
+    """Persistent console plan D7/D9: a fixed port across epochs; the reset only where a supervisor restarts it."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+    rt, core, did, clock = runtime(tmp_path, port=free, supervised=True)
+    assert rt.welcome["capabilities"]["sim_reset"] is True and rt.arbiter.sim_reset_allowed
+    assert rt.start() == free
+    (tmp_path / "plain").mkdir()
+    plain, *_ = runtime(tmp_path / "plain")
+    assert plain.welcome["capabilities"]["sim_reset"] is False and not plain.arbiter.sim_reset_allowed
+
+
+def test_the_runner_leaves_its_loop_on_a_session_request_with_its_exit_code():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    flat = _squash(source)
+    assert "for step in (itertools.count() if live is not None else range(int(120 * args.max_sim_seconds))):" in flat
+    head = flat[flat.index("if live is not None and live.arbiter.session_request is not None:"):][:400]
+    assert 'state["live_session_request"] = live.arbiter.session_request break' in head
+    assert '{"end": 0, "reset": 3}' in flat and 'raise SystemExit(state.get("live_exit_code", 0) if state["success"] else 1)' in flat
+
+
+def test_a_live_runtime_judges_requests_by_the_ledger(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    assert rt.arbiter.config.request_tokens is True
+
+
+def test_the_camera_latency_keeps_a_window_and_counts_every_frame(tmp_path):
+    """Persistent console plan D8: a session left up for hours keeps the last hour of latencies, not every one."""
+    from sim.isaac.live_runtime import LatencyWindow
+
+    window = LatencyWindow(maxlen=3)
+    for v in (0.05, 0.40, 0.01, 0.02, 0.03):
+        window.append(v)
+    assert list(window) == [0.01, 0.02, 0.03]
+    report = window.report()
+    assert report["n"] == 5 and report["max"] == 0.40  # the whole session
+    assert report["window_n"] == 3 and report["window_median"] == 0.02
+    rt, *_ = runtime(tmp_path)
+    assert isinstance(rt.camera_latency, LatencyWindow) and isinstance(rt.camera_pixel_latency, LatencyWindow)
+    assert rt.camera_latency.maxlen == 36_000
+
+
+def test_the_arbiters_events_are_logged_once_and_then_let_go(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        rt.arbiter.stop(clock(), "stop:test")
+        step(rt, clock, 0.0)
+        rt.tick_start(0.0, near_active=False)
+        assert rt.arbiter.events == []
+        step(rt, clock, DT)
+        rt.tick_start(DT, near_active=False)
+    finally:
+        rt.close()
+    logged = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()]
+    stops = [(e["t"], e["event"]) for e in logged if e.get("arbiter") and e.get("reason") == "stop:test"]
+    assert stops and len(stops) == len(set(stops))  # each boundary event logged, and only once
+
+
+def test_the_live_log_rolls_over_and_keeps_the_newest_files(tmp_path):
+    rt, *_ = runtime(tmp_path, log_rotate_bytes=200, log_keep=2)
+    for i in range(40):
+        rt.log({"event": "x", "i": i})
+    rt.close()
+    names = sorted(p.name for p in tmp_path.glob("live_log.jsonl*"))
+    assert names == ["live_log.jsonl", "live_log.jsonl.1", "live_log.jsonl.2"]
+    kept = [json.loads(line) for name in names[::-1][:-1] + ["live_log.jsonl"]  # oldest first
+            for line in (tmp_path / name).read_text().splitlines()]
+    xs = [e["i"] for e in kept if e.get("event") == "x"]
+    assert xs == list(range(xs[0], 40)) and xs[0] > 0  # the newest entries, in order, the oldest gone
+    # a file rolls once it reaches the limit: at most the limit plus its last line (the end record is the longest)
+    assert all(p.stat().st_size < 200 + max(len(line) + 1 for line in p.read_text().splitlines())
+               for p in tmp_path.glob("live_log.jsonl.*"))
+
+
+def test_the_log_rolls_over_safely_while_a_record_writer_also_logs(tmp_path):
+    """The mission records' writer thread logs its errors (plan D2): the rollover is one owner's, so no line is lost
+    or cut while another thread writes."""
+    import threading
+
+    rt, *_ = runtime(tmp_path, log_rotate_bytes=500, log_keep=1000)
+
+    def writer(tag):
+        for i in range(300):
+            rt.log({"event": "w", "tag": tag, "i": i})
+
+    threads = [threading.Thread(target=writer, args=(k,)) for k in range(3)]
+    for th in threads:
+        th.start()
+    writer(9)
+    for th in threads:
+        th.join()
+    rt.close()
+    lines = [json.loads(line) for p in tmp_path.glob("live_log.jsonl*") for line in p.read_text().splitlines()]
+    seen = {(e["tag"], e["i"]) for e in lines if e.get("event") == "w"}
+    assert len(seen) == 4 * 300
+
+
+def test_the_rolled_log_says_how_often_it_rolled_so_a_reader_knows_what_is_gone(tmp_path):
+    from forklift_core.live.spool import read_live_log
+
+    rt, *_ = runtime(tmp_path, log_rotate_bytes=200, log_keep=50)
+    for i in range(10):
+        rt.log({"event": "x", "i": i})
+    rt.close()
+    index = json.loads((tmp_path / "live_log.index.json").read_text())
+    assert index["keep"] == 50 and index["rotations"] >= 1
+    assert [e["i"] for e in read_live_log(tmp_path) if e.get("event") == "x"] == list(range(10))
+    rt2, *_ = runtime(tmp_path / "x" if (tmp_path / "x").mkdir() is None else None, log_rotate_bytes=200, log_keep=1)
+    for i in range(20):
+        rt2.log({"event": "x", "i": i})
+    rt2.close()
+    with pytest.raises(ValueError, match="rolled"):
+        read_live_log(tmp_path / "x")
+
+
+def test_a_stop_during_a_loaded_lift_ramp_holds_within_the_loaded_tolerance(tmp_path):
+    """Main 2026-10-19: loaded, the tolerance is the loaded sag plus a margin -- a STOP while the lift ramp carries a
+    pallet up (target ahead of the measurement by the 63 mm loaded sag) keeps the target: the pallet just off the
+    floor is not set down again (the drop stays within the margin)."""
+    rt, core, did, clock = runtime(tmp_path)
+    core.ms = SimpleNamespace(lift_command=0.10)
+    core.cargo = SimpleNamespace(relation="constrained", load="acquiring")
+    rt.loaded_hold_tolerance_m = 0.0334 + 0.01
+    did["lift_pos"] = 0.10 - 0.0334
+    rt.start()
+    try:
+        rt.arbiter.stop(clock(), "stop:test")
+        step(rt, clock, 0.0)
+        assert did["lift"][-1] == pytest.approx(0.10)  # within a_eff of the measurement: kept
+    finally:
+        rt.close()
+    (tmp_path / "empty").mkdir()
+    rt2, core2, did2, clock2 = runtime(tmp_path / "empty")
+    core2.ms = SimpleNamespace(lift_command=0.10)
+    core2.cargo = SimpleNamespace(relation="free", load="none")
+    rt2.loaded_hold_tolerance_m = 0.0434
+    did2["lift_pos"] = 0.04
+    rt2.start()
+    try:
+        rt2.arbiter.stop(clock2(), "stop:test")
+        step(rt2, clock2, 0.0)
+        assert did2["lift"][-1] == pytest.approx(0.06)  # empty forks: the plain tolerance (0.02 m)
+    finally:
+        rt2.close()
+
+
+def test_a_preparation_ended_with_advice_puts_it_in_the_result(tmp_path):
+    """Persistent console plan D13 item 6: the advice the commands' end kept reaches the published result."""
+    rt, core, order = ending(tmp_path)
+    advice = {"backoff_m": 0.1, "backoff_max_m": 0.3, "from_rear": [0.0, 0.0, 0.0]}
+    assert core.commands.terminate("failed", 15.0, "prepare:all_candidates_failed:invalid_start", advice=advice)
+    rt.collect_end(16.0)
+    assert rt.results.last["advice"] == advice and rt.results.last["ended_s"] == 15.0
+
+
+def test_a_passed_delivery_verifies_the_pallet_at_its_destination(tmp_path):
+    """Persistent console plan D3 (3rd ed.): the verified place is set only once the delivery verdict passed."""
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(20.0, "complete", None)
+    assert core.targets.pallets["P-1"].at == "D-1"
+
+
+def test_a_failed_delivery_leaves_no_verified_place(tmp_path):
+    from types import SimpleNamespace as NS
+
+    rt, core, order = ending(tmp_path, verdict=NS(ok=False, reason="Pallet missed the green destination center",
+                                                  delivery_error_m=0.081))
+    rt.end_mission(20.0, "complete", None)
+    assert core.targets.pallets["P-1"].at is None and rt.results.last["outcome"] == "failed"
+
+
+def test_a_tick_trace_records_the_pacing_and_the_step_on_the_runtimes_clock(tmp_path):
+    # Real-time plan 5.12 D12a: q, d, S from the pacer, the end of after_step, the control marks of the tick
+    # before the step; W_i = q[i+1] - S[i] holds the step and the next control tick.
+    from sim.isaac.tick_trace import COLUMNS, TickTrace, work
+
+    rt, core, did, clock_ = runtime(tmp_path)
+    trace = rt.trace = TickTrace(10, clock_)  # the runtime's own clock
+    rt.start()
+    try:
+        for k in range(3):
+            trace.control("ctrl_start", clock_())
+            clock_.t += 0.002  # the control tick
+            trace.control("replies_s", 0.0005)
+            trace.control("ctrl_end", clock_())
+            step(rt, clock_, k * DT, cost=0.020 if k == 1 else 0.001)
+    finally:
+        rt.close()
+    with np.load(tmp_path / "tick_trace.npz") as saved:
+        assert list(saved["columns"]) == list(COLUMNS)
+        data = saved["data"]
+    col = {n: i for i, n in enumerate(COLUMNS)}
+    assert data.shape == (3, len(COLUMNS))
+    assert data[0, col["d"]] == 0.0  # the first step waits for nothing
+    assert data[1, col["S"]] - data[0, col["S"]] == pytest.approx(DT)  # 1 ms step + 2 ms control < spacing
+    assert data[2, col["d"]] == 0.0  # after the 20 ms step the next is late already
+    assert list(data[:, col["live_step"]]) == [0, 1, 2]
+    assert data[1, col["replies_s"]] == pytest.approx(0.0005)
+    assert data[1, col["ctrl_end"]] - data[1, col["ctrl_start"]] == pytest.approx(0.002)
+    assert data[1, col["after_end"]] - data[1, col["S"]] == pytest.approx(0.020)
+    w = work(data)
+    assert w[1] == pytest.approx(0.020 + 0.002)  # the step, then the next control tick, before its wait
+    assert np.isnan(w[2])
+    with open(tmp_path / "live_log.jsonl") as log:
+        end = [json.loads(line) for line in log if '"event": "end"' in line][0]
+    assert end["tick_trace"]["rows"] == 3 and end["tick_trace"]["dropped"] == 0
+
+
+def test_a_full_tick_trace_counts_the_steps_it_dropped():
+    from sim.isaac.tick_trace import TickTrace
+
+    clock_ = Clock()
+    trace = TickTrace(2, clock_)
+    for k in range(4):
+        trace.begin()
+        trace.set("q", float(k))
+        trace.flag("scan")
+    assert trace.rows == 4 and trace.dropped == 2
+    assert list(trace.data[:, 0]) == [0.0, 1.0]
+    assert list(trace.data[:, -1]) == [8.0, 8.0]  # the scan bit, set once per row
+
+
+def test_without_a_trace_the_runtime_writes_none(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    rt.start()
+    try:
+        step(rt, clock, 0.0)
+    finally:
+        rt.close()
+    assert not (tmp_path / "tick_trace.npz").exists()
+
+
+def test_the_camera_phase_puts_the_render_on_the_physics_counter(tmp_path):
+    # Real-time plan 5.12 D12b: without a phase, by the runtime's own steps; with one, k ticks after a scan tick
+    # whatever the runtime's count (a warm-up before the first control tick moves the physics counter only).
+    rt, core, did, clock = runtime(tmp_path)
+    try:
+        due = []
+        for k in range(24):
+            if rt.camera_due():
+                due.append(k)
+            step(rt, clock, k * DT)
+        assert due == [11, 23]
+        assert [t for t in range(100, 124) if rt.camera_due(t, 6)] == [102, 114]
+        assert [t for t in range(100, 124) if rt.camera_due(t, 0)] == [108, 120]
+    finally:
+        rt.close()
+
+
+def test_a_control_flag_lands_on_the_step_it_was_asked_for():
+    from sim.isaac.tick_trace import FLAGS, TickTrace
+
+    trace = TickTrace(4, Clock())
+    trace.control_flag("capture")
+    trace.begin()
+    trace.flag("rendered")
+    trace.begin()
+    assert int(trace.data[0, -1]) == (1 << FLAGS.index("capture")) | (1 << FLAGS.index("rendered"))
+    assert np.isnan(trace.data[1, -1])  # the next step carries none

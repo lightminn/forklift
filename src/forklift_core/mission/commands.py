@@ -3,7 +3,7 @@
 Pure: no Isaac, no numpy. The core owns one :class:`MissionCommands`; the runner queues commands (from a schedule
 file in a batch run, from the arbiter later) and the core applies the queue at the start of a control tick.
 
-Lifecycle: ``idle -> accepted -> running <-> paused -> resuming -> running``; ``cancel`` goes through
+Lifecycle: ``idle -> accepted [-> preparing, live] -> running <-> paused -> resuming -> running``; ``cancel`` goes through
 ``cancelling`` (standing still is confirmed first) to ``cancelled``; the mission's own end is ``done`` or
 ``failed``. A finished mission leaves the lifecycle ``idle`` for the next ``submit``.
 
@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-ACTIVE = ("accepted", "running", "paused", "resuming", "held", "cancelling")
-FINAL = ("done", "failed", "cancelled")
+# recovering: a cancel stood with the forks in a pocket and the truck backs out (persistent console plan D4)
+ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering")
+FINAL = ("done", "failed", "cancelled", "recovery_required")
 STOP_KINDS = ("none", "controlled", "preempt")
 PRIORITY = {"hold_off": -1, "cancel": 0, "hold_on": 1, "pause": 1, "resume": 2, "submit": 2}
 
@@ -74,13 +75,22 @@ class Context:
 
     stop_kind: str = "none"
     near_tracker: bool = False  # a near-field tracker exists (pause is refused, E3)
-    clear_for_submit: bool = True  # empty forks and outside the near section (else recovery_required)
+    clear_for_submit: bool = True  # outside a SLAM hold and the near section (else recovery_required)
+    # live: what the forks are in refuses a submit (persistent console plan D5a: recovery_required, cargo_held)
+    submit_refusal: str | None = None
+    scene_damaged: bool = False  # live: the scene's damage is latched (persistent console plan D6; else scene_damaged)
+    # live: the SLAM tracker tracks or holds (plan D3; warming_up -- before its scan 4 processed -- localization_lost)
+    localization_ok: bool = True
+    # live: the pallet on the forks a submit may deliver as it is carried (plan D5 6c; the runner's conditions
+    # met), else None -- a cargo_held refusal lets that one submit through as a loaded submit
+    loaded_pallet: str | None = None
 
 
 class MissionCommands:
     def __init__(self, targets=None) -> None:
         self.targets = targets  # M-a4: a submit must name the current targets list (TargetsBook.check_submit)
         self.status = "idle"
+        self.recovery = False  # plan D4: the mission is a recovery (kept through a pause and its resume)
         self.mission_id: str | None = None
         self.mission: Submit | None = None
         self.mission_gen = 0
@@ -98,6 +108,11 @@ class MissionCommands:
         self.pause_hold_count: int | None = None  # the SLAM hold episode at the stop's first paused tick
         self.pause_holding = False  # SLAM was holding then
         self.pause_release_pending = False  # a SLAM release was due then (R9, R14: it may happen while paused)
+        self.end_reason: str | None = None  # why the last mission ended (live: terminate), for its result
+        self.end_advice: dict | None = None  # what that end advises the operator (plan D13 item 6), for its result
+        self.mission_loaded = False  # plan D5 6c: the mission delivers the pallet already on the forks
+        self.end_logged_for: str | None = None  # the mission whose end is in the log (terminate, note_end)
+        self.adopted_id: str | None = None  # the mission that ran (start, adopt): only it moves the targets list
 
     # --- the queue ---------------------------------------------------------------------------------------------
     def queue(self, command) -> None:
@@ -112,7 +127,11 @@ class MissionCommands:
         commands = sorted(self._queue, key=lambda c: PRIORITY[c.kind])  # sorted() is stable: same rank keeps order
         self._queue = []
         records = []
-        if context.stop_kind != "none" and self.status in ("running", "resuming"):
+        if context.stop_kind != "none" and self.status == "preparing":
+            # Persistent console plan D2: a stop ends a preparation (nothing has moved; the operator submits again).
+            self.terminate("failed", t, "prepare:stopped" if context.stop_kind == "preempt" else "prepare:paused")
+            records.append(self.log[-1])
+        if context.stop_kind != "none" and self.status in ("running", "resuming", "recovering"):
             # E7: the arbiter's stop is a pause of the mission (resumed only by a resume once it is lifted).
             if self.paused_since is None:
                 self._stop_boundary(t)
@@ -134,25 +153,38 @@ class MissionCommands:
         return records
 
     def _submit(self, t, command: Submit, context: Context):
-        if self.status in ACTIVE:
+        if self.status in ACTIVE or self.status in FINAL:  # FINAL: ended in this apply, its end collected first
             return "mission_active"
         if context.stop_kind != "none":
             return "stopping"
+        if context.scene_damaged:
+            return "scene_damaged"
+        loaded = False
+        if context.submit_refusal is not None:
+            # plan D5 6c: the carried pallet itself, its conditions met, goes as a loaded submit
+            loaded = (context.submit_refusal == "cargo_held" and context.loaded_pallet is not None
+                      and command.pallet_id == context.loaded_pallet)
+            if not loaded:
+                return context.submit_refusal
         if not context.clear_for_submit:
             return "recovery_required"
+        if not context.localization_ok:
+            return "localization_lost"
         if self.targets is not None:
-            refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision)
+            refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision,
+                                                loaded=loaded)
             if refused is not None:
                 return refused
         self._issued += 1
         self.mission_id, self.mission, self.status = f"m{self._issued}", command, "accepted"
+        self.mission_loaded = loaded
         self.resume_check = None  # the last mission's resume is not this one's (Codex M-b review round 5 P1)
         return None
 
     def _pause(self, t, command: Pause, context: Context):
         if self.status == "held":
             return "held"
-        if self.status not in ("running", "resuming"):
+        if self.status not in ("running", "resuming", "recovering"):
             return "not_running"
         if context.near_tracker:
             return "near_tracking_active"
@@ -174,11 +206,13 @@ class MissionCommands:
         return None
 
     def _cancel(self, t, command: Cancel, context: Context):
+        if self.recovery and self.status in ACTIVE:
+            return "recovering"  # a recovery is stopped by a pause or STOP, not cancelled (plan D4)
         if self.status not in ACTIVE or self.status == "cancelling":
             return "not_running"
         if command.mission_id is not None and command.mission_id != self.mission_id:
             return "unknown_mission"
-        if self.status == "accepted":  # nothing has moved yet
+        if self.status in ("accepted", "preparing"):  # nothing has moved yet
             self.status = "cancelled"
             self.mission_gen += 1
             return None
@@ -208,7 +242,11 @@ class MissionCommands:
     # --- the arbiter's hold (M-b B6) ------------------------------------------------------------------------------
     def hold_on(self, t: float, *, record: bool = True) -> bool:
         """The operator takes over (TELEOP): an active mission is held -- its work clock stops (one open stop), a
-        new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel."""
+        new generation, a resume's checks dropped. Held is left only by ``hold_off`` (to paused) or a cancel. A
+        preparation it ends instead (persistent console plan D2): driven by hand, the mission is submitted again."""
+        if self.status == "preparing":
+            self.terminate("failed", t, "prepare:teleop")
+            return True
         if self.status not in ("accepted", "running", "paused", "resuming"):
             return False
         if self.paused_since is None:
@@ -241,13 +279,28 @@ class MissionCommands:
         """The mission's first tick runs."""
         if self.status == "accepted":
             self.status = "running"
+            self.adopted_id = self.mission_id
+
+    def begin_prepare(self) -> None:
+        """A live submit's first leg is being planned (persistent console plan D2)."""
+        if self.status != "accepted":
+            raise RuntimeError(f"begin_prepare from {self.status}")
+        self.status = "preparing"
+
+    def adopt(self) -> None:
+        """The prepared mission starts: running, a new generation (nothing asked while preparing is taken)."""
+        if self.status != "preparing":
+            raise RuntimeError(f"adopt from {self.status}")
+        self.status = "running"
+        self.adopted_id = self.mission_id
+        self.mission_gen += 1
 
     def resumed(self, t: float) -> float:
         """The resume steps passed: running again. Returns the pause's length (deadline-type anchors move by it)."""
         if self.status != "resuming":
             raise RuntimeError(f"resumed from {self.status}")
         length = self._close_pause(t)
-        self.status = "running"
+        self.status = "recovering" if self.recovery else "running"
         self.mission_gen += 1
         return length
 
@@ -259,6 +312,23 @@ class MissionCommands:
         self.status = "paused"
         self.log.append({"t": t, "command": "resume", "accepted": False, "reason": reason,
                          "mission_id": self.mission_id, "status": self.status})
+
+    def begin_recovery(self, t: float) -> None:
+        """A cancel stood with the forks in a pocket (plan D4): the truck backs out before the mission ends; the
+        cancel's stop closes (the recovery's work clock runs)."""
+        if self.status != "cancelling":
+            raise RuntimeError(f"begin_recovery from {self.status}")
+        self._close_pause(t)
+        self.status, self.recovery = "recovering", True
+        self.mission_gen += 1
+        self._record(t, "recovery")
+
+    def recovered(self, t: float) -> None:
+        """The recovery backed the forks out: the mission ends cancelled."""
+        if self.status not in ("recovering", "resuming"):  # resuming: already out when the resume re-judged it
+            raise RuntimeError(f"recovered from {self.status}")
+        self._close_pause(t)
+        self.status, self.recovery = "cancelled", False
 
     def cancelled(self, t: float) -> None:
         """Standing still confirmed after a cancel."""
@@ -276,6 +346,46 @@ class MissionCommands:
         if self.status in ACTIVE:
             self._close_pause(self.paused_since if t is None and self.paused_since is not None else t)
             self.status = outcome
+
+    # --- a live run's mission end (docs/plans/2026-10-18-persistent-live-console.md D1) --------------------------
+    def close_open(self, t: float) -> None:
+        """Close the open pause and the open wait at ``t`` (D1 step 5a); the status does not change."""
+        self._close_pause(t)
+        self.end_wait(t)
+
+    def terminate(self, outcome: str, t: float, reason: str | None, advice: dict | None = None) -> bool:
+        """End the active mission at ``t`` with ``outcome`` and ``reason`` (D1 step 9): the open stops close, a new
+        generation (a plan asked before cannot be taken), one log entry. False, nothing changed: no active mission."""
+        if outcome not in FINAL:
+            raise ValueError(outcome)
+        if self.status not in ACTIVE:
+            return False
+        self.close_open(t)
+        self.status, self.end_reason, self.end_logged_for = outcome, reason, self.mission_id
+        self.end_advice = advice
+        self.recovery = False
+        self.mission_gen += 1
+        self._record(t, "end")
+        self.log[-1]["reason"] = reason
+        return True
+
+    def note_end(self, t: float, reason: str | None) -> None:
+        """Log the end of a mission the core already ended (a cancel confirmed standing: ``cancelled``)."""
+        if self.status not in FINAL:
+            raise RuntimeError(f"note_end while {self.status}")
+        self.end_reason, self.end_logged_for = reason, self.mission_id
+        self.end_advice = None
+        self._record(t, "end")
+        self.log[-1]["reason"] = reason
+
+    def take_clock(self) -> dict:
+        """The finished mission's pauses and waits, handed to its record; the next mission's work clock starts
+        clean (D1 step 8)."""
+        if self.status in ACTIVE:
+            raise RuntimeError(f"take_clock while {self.status}")
+        clock = {"pauses": self.pauses, "waits": self.waits}
+        self.pauses, self.waits = [], []
+        return clock
 
     def _close_pause(self, t: float) -> float:
         if self.paused_since is None:

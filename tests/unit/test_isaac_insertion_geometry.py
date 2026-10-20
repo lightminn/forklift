@@ -483,3 +483,79 @@ def test_the_grounded_article_is_checked_against_the_grounded_boxes_not_waived()
     boxes = {b.name: b for b in MODULE.grounded_boxes(MODULE.pallet_boxes(geometry))}
     assert not any(n.startswith("bottom_board") for n in boxes)
     assert all(b.centre_m[2] - b.size_m[2] / 2 == pytest.approx(0.0) for n, b in boxes.items() if n.startswith("block"))
+
+
+def test_the_body_and_the_carriage_are_checked_against_the_pallet_too(geometry):
+    """Persistent console plan D6 (Codex stage 3 review P2): with no live mission the pallet's outline leaves the 2D
+    check; the truck's own boxes -- the base link's and the carriage's -- meet its solids in 3D instead."""
+    assert geometry.body_boxes and geometry.carriage_boxes
+    names = {b[0] for b in geometry.body_boxes}
+    assert {"underbody_collision", "footwell_collision", "left_sill_collision", "mast_rail_1_collision"} <= names
+    assert all("post" in n or "door" in n or "brace" in n for n in geometry.body_boxes_skipped)  # the cab, up high
+    assert not geometry.body_contacts((-3.0, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))
+    assert not geometry.body_contacts((-1.35, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))  # forks only in
+    over = geometry.body_contacts((0.80, 0, 0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))  # driven onto it
+    assert {name for name, _ in over} & {b[0] for b in geometry.body_boxes}
+
+
+def test_the_wheels_are_part_of_the_truck_body_check():
+    """Codex stage 3 review round 2 P2: driven alongside, the measured truck's rear tyre met the pallet's side 15 mm
+    deep and neither check saw it (the tyres are links of their own)."""
+    measured = MODULE.InsertionGeometry.from_urdfs(
+        ROOT / "sim/models/dls08_measured/forklift.urdf", ROOT / "sim/models/epal6_pallet/pallet.urdf")
+    wheels = {b[0]: b for b in measured.wheel_boxes}
+    assert set(wheels) == {"front_left_tire_collision", "front_right_tire_collision", "rear_left_tire_collision",
+                           "rear_right_tire_collision"}
+    _, centre, half = wheels["rear_right_tire_collision"]
+    assert np.allclose(centre, (-0.34, -0.265, 0.125)) and np.allclose(half, (0.125, 0.04, 0.125))
+    _, centre, half = wheels["front_left_tire_collision"]  # steered: the tyre's own box, turned by its angle
+    assert np.allclose(centre, (0.32, 0.265, 0.125)) and np.allclose(half, (0.125, 0.04, 0.125))
+    assert measured.wheel_steer["front_left_tire_collision"] == "left_steer"
+    assert measured.wheel_steer["rear_left_tire_collision"] is None
+    touching = measured.body_contacts((0.34, 0.69, 0.0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))
+    assert any(name == "rear_right_tire_collision" for name, _ in touching)
+    assert not measured.body_contacts((0.34, 1.20, 0.0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0))
+
+
+def test_a_steered_tyre_is_checked_at_its_measured_angle():
+    """Codex stage 3 review round 3 P2: a box around every steering angle met the pallet 16 mm deep where the tyre
+    itself stays 44 mm clear over the whole +-15 deg range."""
+    measured = MODULE.InsertionGeometry.from_urdfs(
+        ROOT / "sim/models/dls08_measured/forklift.urdf", ROOT / "sim/models/epal6_pallet/pallet.urdf")
+    for angle in np.radians([-15, 0, 15]):
+        steering = {"left_steer": float(angle), "right_steer": float(angle)}
+        assert not measured.body_contacts((-0.32, 0.78, 0.0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0),
+                                          steering=steering), angle
+    # a steered tyre pushed into the pallet's side is still seen, whatever the angle
+    hit = measured.body_contacts((-0.32, 0.66, 0.0), (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0),
+                                 steering={"left_steer": 0.2, "right_steer": 0.2})
+    assert any(name == "front_right_tire_collision" for name, _ in hit)
+
+
+def test_the_body_check_is_the_same_when_the_whole_scene_turns():
+    """Truck and pallet turned and moved together: the same contacts (the steered tyre's frame composes the base's
+    orientation with its angle)."""
+    measured = MODULE.InsertionGeometry.from_urdfs(
+        ROOT / "sim/models/dls08_measured/forklift.urdf", ROOT / "sim/models/epal6_pallet/pallet.urdf")
+    steering = {"left_steer": 0.2, "right_steer": 0.2}
+    # a turn with tilt in it (a yaw alone leaves the quaternion's x and y at zero and hides their sign)
+    axis = np.array([0.3, -0.5, 0.8]) / np.linalg.norm([0.3, -0.5, 0.8])
+    angle = 0.9
+    q = (math.cos(angle / 2), *(math.sin(angle / 2) * axis))
+    rot = MODULE._rotation(q)
+    shift = np.array([5.0, -2.0, 0.4])
+    hits = 0
+    for base in ((-0.32, 0.66, 0.0), (-0.32, 0.78, 0.0), (0.34, 0.69, 0.0), (-0.32, 0.70, 0.0)):
+        here = measured.body_contacts(base, (1, 0, 0, 0), 0.0, (0, 0, 0), (1, 0, 0, 0), steering=steering)
+        there = measured.body_contacts(shift + rot @ np.asarray(base), q, 0.0, shift, q, steering=steering)
+        assert sorted(here) == sorted(there), base
+        hits += bool(here)
+    assert hits >= 2  # contacts and clear poses both compared
+
+
+def test_a_frame_turned_about_its_own_z_composes_on_the_right():
+    axis = np.array([0.3, -0.5, 0.8]) / np.linalg.norm([0.3, -0.5, 0.8])
+    q = (math.cos(0.45), *(math.sin(0.45) * axis))
+    a = 0.26
+    rz = np.array([[math.cos(a), -math.sin(a), 0], [math.sin(a), math.cos(a), 0], [0, 0, 1]])
+    assert np.allclose(MODULE._rotation(MODULE._turned_about_z(q, a)), MODULE._rotation(q) @ rz, atol=1e-12)

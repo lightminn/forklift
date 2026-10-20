@@ -31,6 +31,7 @@ import math
 import socket
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +39,7 @@ import rclpy
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -66,6 +68,161 @@ def quaternion_yaw(q) -> float:
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
+class MapStore:
+    """The maps slam_toolbox publishes. ``latest_map.npz`` is rewritten at every map either way (the runner's planner
+    reads it while the run goes on). A batch bridge keeps every map for ``maps.json``/``maps.npz`` at the end. A
+    persistent one (a live session left up for hours, persistent console plan D8b) keeps none in memory: a map the
+    same as the last (cells, size, resolution, origin) only bumps a count, a changed one goes to
+    ``maps/map_NNNNNN.npz`` with its metadata a line of ``maps.jsonl``; a run of repeats is closed by a
+    ``{"repeat_of": i, "repeats": n, ...}`` line. Every map keeps its own index, as before."""
+
+    def __init__(self, output_dir: Path, persistent: bool) -> None:
+        self.output_dir, self.persistent = Path(output_dir), bool(persistent)
+        self.maps: list[dict] = []
+        self.map_arrays: dict[str, np.ndarray] = {}
+        self.received = 0
+        self._last = None  # persistent: (meta, data) of the last map written
+        self._repeats = None  # persistent: the open run of repeats of the last map written
+
+    def add(self, *, stamp_ns: int, resolution_m: float, width: int, height: int, origin: list, data: np.ndarray,
+            after_scan_id: int, received_wall_s: float, frame_id: str = "map") -> None:
+        index = self.received
+        self.received += 1
+        meta = {"index": index, "after_scan_id": after_scan_id, "stamp_ns": stamp_ns,
+                "received_wall_s": received_wall_s, "resolution_m": resolution_m, "width": width, "height": height,
+                "origin": origin}
+        if self.persistent:
+            meta["frame_id"] = frame_id
+        if not self.persistent:
+            self.maps.append(meta)
+            self.map_arrays[f"map_{index:04d}"] = data
+        else:
+            last = self._last
+            if (last is not None and last[0]["resolution_m"] == resolution_m and last[0]["origin"] == origin
+                    and last[0]["frame_id"] == frame_id and last[1].shape == data.shape
+                    and np.array_equal(last[1], data)):
+                run = self._repeats or {"repeat_of": last[0]["index"], "repeats": 0}
+                run.update(repeats=run["repeats"] + 1, last_index=index, last_stamp_ns=stamp_ns,
+                           last_after_scan_id=after_scan_id, last_received_wall_s=received_wall_s)
+                self._repeats = run
+            else:
+                self._close_repeats()
+                folder = self.output_dir / "maps"
+                folder.mkdir(parents=True, exist_ok=True)
+                tmp = folder / f"map_{index:06d}.tmp.npz"
+                np.savez_compressed(tmp, data=data)
+                os.replace(tmp, folder / f"map_{index:06d}.npz")
+                self._append_line(meta)
+                self._last = (meta, data)
+        tmp = self.output_dir / "latest_map.tmp.npz"
+        np.savez(tmp, data=data, origin=np.asarray(origin, dtype=float), resolution_m=float(resolution_m),
+                 index=int(index), after_scan_id=int(after_scan_id), stamp_ns=int(stamp_ns))
+        os.replace(tmp, self.output_dir / "latest_map.npz")
+
+    def _append_line(self, entry: dict) -> None:
+        with open(self.output_dir / "maps.jsonl", "a") as handle:
+            handle.write(json.dumps(entry) + "\n")
+
+    def _close_repeats(self) -> None:
+        if self._repeats is not None:
+            self._append_line(self._repeats)
+            self._repeats = None
+
+    def save(self) -> None:
+        if self.persistent:
+            self._close_repeats()
+            return
+        (self.output_dir / "maps.json").write_text(json.dumps(self.maps))
+        if self.map_arrays:
+            np.savez_compressed(self.output_dir / "maps.npz", **self.map_arrays)
+
+
+class ReplyRecords:
+    """The bridge's reply records. A batch bridge keeps them for ``bridge_records.json``; a persistent one hands
+    each, as a line of ``records.jsonl``, to a writer thread of its own and keeps only what the verdict needs (plan
+    D8b). The serve thread never waits on the disk -- it reads the next scan right after the append, and the
+    runner's reply limit is 1 s (Codex D8b round 2 P2). More than ``queue_records`` lines waiting drops the line,
+    counted in ``dropped`` (a write error too); lines still waiting or being written when ``save`` gives up are
+    ``unsettled``, and what ``save`` reported stays (Codex D8b round 3 P2-1)."""
+
+    def __init__(self, output_dir: Path, persistent: bool, queue_records: int = 10_000) -> None:
+        self.output_dir, self.persistent = Path(output_dir), bool(persistent)
+        self.kept: list[dict] = []
+        self.failed = 0
+        self.any_stray = False
+        self.dropped = 0
+        self.unsettled = 0
+        self.queue_records = int(queue_records)
+        self._inflight = 0
+        self._closed = False
+        self._lines: deque = deque()
+        self._cond = threading.Condition()
+        self._closing = False
+        self._file = None
+        self._writer = None
+
+    def append(self, record: dict) -> None:
+        if record["status"] not in ("processed", "skipped"):
+            self.failed += 1
+        self.any_stray = self.any_stray or bool(record.get("stray_pose_stamps_ns"))
+        if not self.persistent:
+            self.kept.append(record)
+            return
+        line = json.dumps(record) + "\n"
+        with self._cond:
+            if self._writer is None:
+                self._writer = threading.Thread(target=self._write_loop, name="bridge-records", daemon=True)
+                self._writer.start()
+            if len(self._lines) >= self.queue_records:
+                self.dropped += 1
+                return
+            self._lines.append(line)
+            self._cond.notify()
+
+    def _write_line(self, line: str) -> None:
+        if self._file is None:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self._file = open(self.output_dir / "records.jsonl", "a")  # noqa: SIM115 -- closed by the writer
+        self._file.write(line)
+        self._file.flush()
+
+    def _write_loop(self) -> None:
+        while True:
+            with self._cond:
+                while not self._lines and not self._closing:
+                    self._cond.wait(0.5)
+                if not self._lines:
+                    break
+                line = self._lines.popleft()
+                self._inflight = 1
+            try:
+                self._write_line(line)
+                ok = True
+            except OSError:
+                ok = False
+            with self._cond:
+                self._inflight = 0
+                if not ok and not self._closed:
+                    self.dropped += 1
+        if self._file is not None:
+            self._file.close()
+
+    def save(self, timeout_s: float = 30.0) -> None:
+        if self.persistent:
+            with self._cond:
+                self._closing = True
+                self._cond.notify()
+                writer = self._writer
+            if writer is not None:
+                writer.join(timeout_s)
+            with self._cond:
+                self._closed = True
+                self.unsettled = len(self._lines) + self._inflight  # waiting or being written at the deadline
+                self._lines.clear()
+            return
+        (self.output_dir / "bridge_records.json").write_text(json.dumps(self.kept))
+
+
 class IsaacSlamBridge(Node):
     def __init__(self):
         super().__init__("isaac_slam_bridge")
@@ -74,6 +231,7 @@ class IsaacSlamBridge(Node):
         self.declare_parameter("laser_xyz_yaw", [-0.12, 0.0, 1.05, 0.0])
         self.declare_parameter("reply_timeout_s", 60.0)
         self.declare_parameter("warmup_wait_s", 1.0)
+        self.declare_parameter("persistent", False)  # a live session left up for hours (plan D8b)
         self.socket_path = self.get_parameter("socket_path").value
         self.output_dir = Path(self.get_parameter("output_dir").value)
         self.laser = [float(v) for v in self.get_parameter("laser_xyz_yaw").value]
@@ -102,12 +260,15 @@ class IsaacSlamBridge(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE,
         )
-        self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos)
-        self.maps: list[dict] = []
+        # Its own group (plan D8b, Codex D8b round 1 P2): the default group is mutually exclusive, so a map being
+        # stored (compressed to disk in a persistent bridge) would hold up the /pose callback a reply waits on.
+        self.map_group = MutuallyExclusiveCallbackGroup()
+        self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos, callback_group=self.map_group)
+        persistent = bool(self.get_parameter("persistent").value)
         self.map_lock = threading.Lock()  # metadata and grids change together
-        self.map_arrays: dict[str, np.ndarray] = {}
+        self.map_store = MapStore(self.output_dir, persistent)
         self.last_scan_id = -1
-        self.records: list[dict] = []
+        self.replies = ReplyRecords(self.output_dir, persistent)
 
     # --- ROS side ---------------------------------------------------------
     def on_pose(self, msg: PoseWithCovarianceStamped) -> None:
@@ -129,42 +290,20 @@ class IsaacSlamBridge(Node):
             self._add_map(msg)
 
     def _add_map(self, msg: OccupancyGrid) -> None:
-        index = len(self.maps)
         info = msg.info
-        self.maps.append(
-            {
-                "index": index,
-                "after_scan_id": self.last_scan_id,
-                "stamp_ns": stamp_ns(msg.header.stamp),
-                "received_wall_s": time.monotonic(),
-                "resolution_m": info.resolution,
-                "width": info.width,
-                "height": info.height,
-                "origin": [
-                    info.origin.position.x,
-                    info.origin.position.y,
-                    quaternion_yaw(info.origin.orientation),
-                ],
-            }
+        self.map_store.add(
+            stamp_ns=stamp_ns(msg.header.stamp),
+            resolution_m=info.resolution,
+            width=info.width,
+            height=info.height,
+            origin=[info.origin.position.x, info.origin.position.y, quaternion_yaw(info.origin.orientation)],
+            frame_id=msg.header.frame_id,
+            # The runner's planner reads the newest map while the run goes on (P5 D3 delta, 2026-10-06): written
+            # whole, then renamed, so a reader never sees half a file.
+            data=np.asarray(msg.data, dtype=np.int8).reshape(info.height, info.width),
+            after_scan_id=self.last_scan_id,
+            received_wall_s=time.monotonic(),
         )
-        self.map_arrays[f"map_{index:04d}"] = np.asarray(msg.data, dtype=np.int8).reshape(
-            info.height, info.width
-        )
-        # The runner's planner reads the newest map while the run goes on (P5 D3
-        # delta, 2026-10-06): written whole, then renamed, so a reader never
-        # sees half a file.
-        meta = self.maps[-1]
-        tmp = self.output_dir / "latest_map.tmp.npz"
-        np.savez(
-            tmp,
-            data=self.map_arrays[f"map_{index:04d}"],
-            origin=np.asarray(meta["origin"], dtype=float),
-            resolution_m=float(meta["resolution_m"]),
-            index=int(index),
-            after_scan_id=int(meta["after_scan_id"]),
-            stamp_ns=int(meta["stamp_ns"]),
-        )
-        os.replace(tmp, self.output_dir / "latest_map.npz")
 
     def publish_static(self) -> None:
         x, y, z, yaw = self.laser
@@ -271,44 +410,54 @@ class IsaacSlamBridge(Node):
                 reply = slam_link.Reply(
                     scan.scan_id, scan.stamp_s, status, map_from_odom, version, elapsed
                 )
-                self.records.append(
-                    {
-                        "scan_id": scan.scan_id,
-                        "stamp_s": scan.stamp_s,
-                        "status": status,
-                        "sent": kind,
-                        "stray_pose_stamps_ns": stray,
-                        "slam_alive": slam_alive,
-                        "map_from_odom": list(map_from_odom),
-                        "slam_pose": list(pose) if pose else None,
-                        "wall_s": elapsed,
-                    }
-                )
-                conn.sendall(slam_link.encode_reply(reply))
+                record_ = {
+                    "scan_id": scan.scan_id,
+                    "stamp_s": scan.stamp_s,
+                    "status": status,
+                    "sent": kind,
+                    "stray_pose_stamps_ns": stray,
+                    "slam_alive": slam_alive,
+                    "map_from_odom": list(map_from_odom),
+                    "slam_pose": list(pose) if pose else None,
+                    "wall_s": elapsed,
+                }
+                try:
+                    conn.sendall(slam_link.encode_reply(reply))
+                finally:
+                    # After the reply (plan D8b, Codex D8b round 1 P2): a persistent bridge writes the record to
+                    # disk, and the runner waits on the reply with a 1 s limit.
+                    self.replies.append(record_)
                 if status == "failed":
                     break
         server.close()
 
+    def _write_status(self, status: dict) -> None:
+        tmp = self.output_dir / "bridge_status.tmp.json"
+        tmp.write_text(json.dumps(status))
+        os.replace(tmp, self.output_dir / "bridge_status.json")
+
     def save(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Pending until the records are settled (Codex D8b round 3 P2-2): a container removed while they drain
+        # leaves a status that does not read as final and clean.
+        self._write_status({"pending": True, "ok": False})
         with self.cond:
             stray = list(self.stray)
-        if stray and not any(r.get("stray_pose_stamps_ns") for r in self.records):
+        if stray and not self.replies.any_stray:
             # Arrived after the last reply: keep it in the record.
-            self.records.append({"status": "stray_after_last_reply", "stray": stray})
-        failed = [r for r in self.records if r["status"] != "processed" and r["status"] != "skipped"]
-        # The verdict a run summary must read: a stray after the last reply
-        # never reached the runner (Codex v3.4 P2).
-        self.ok = not stray and not failed
-        (self.output_dir / "bridge_status.json").write_text(
-            json.dumps({"ok": self.ok, "stray_pose_stamps_ns": stray, "failed": len(failed)})
-        )
-        (self.output_dir / "bridge_records.json").write_text(json.dumps(self.records))
+            self.replies.append({"status": "stray_after_last_reply", "stray": stray})
+        self.replies.save()
         with self.map_lock:
-            maps, arrays = list(self.maps), dict(self.map_arrays)
-        (self.output_dir / "maps.json").write_text(json.dumps(maps))
-        if arrays:
-            np.savez_compressed(self.output_dir / "maps.npz", **arrays)
+            self.map_store.save()
+        failed = self.replies.failed
+        # The verdict a run summary must read: a stray after the last reply
+        # never reached the runner (Codex v3.4 P2). A persistent bridge's record lines it could not keep, or had
+        # not written by the deadline, are counted beside it.
+        self.ok = not stray and not failed
+        status = {"ok": self.ok, "stray_pose_stamps_ns": stray, "failed": failed}
+        if self.replies.persistent:
+            status.update(records_dropped=self.replies.dropped, records_unsettled=self.replies.unsettled)
+        self._write_status(status)
 
 
 def main(args=None) -> int:

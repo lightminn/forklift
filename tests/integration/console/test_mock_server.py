@@ -79,6 +79,9 @@ def test_second_client_is_observer_but_can_stop(tmp_path, unused_tcp_port):
                         "t": "lease_request",
                         "request_id": "1",
                         "session_epoch": wa["session_epoch"],
+                        # the request ledger, as the live runner (persistent console plan D7/D13)
+                        "request_token": wa["request_token"],
+                        "request_seq": 1,
                     }
                 )
             )
@@ -104,6 +107,8 @@ def test_second_client_is_observer_but_can_stop(tmp_path, unused_tcp_port):
                         "t": "lease_request",
                         "request_id": "2",
                         "session_epoch": wb["session_epoch"],
+                        "request_token": wb["request_token"],
+                        "request_seq": 1,
                     }
                 )
             )

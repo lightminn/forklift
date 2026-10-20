@@ -2,7 +2,7 @@
 // destinations as stations, the truck with its mode glow and tag, and the teleop
 // predicted sweep. Display only; nothing here decides motion.
 
-import { fitView, worldToScreen } from "./mapview.js";
+import { contentBounds, syncView, worldToScreen } from "./mapview.js";
 import { palletKindLabel } from "./profile.js";
 
 export function fitCanvas(cv) {
@@ -82,22 +82,8 @@ export function drawMap(cv, model, tok, view, layers) {
   const h = H / dpr;
   const c = cv.getContext("2d");
   const grid = model.grid;
-  const B = worldBounds(grid);
-  const worldKey = `${B.x0},${B.y0},${B.w}x${B.h}`;
-  if (!view.fitted || view.worldKey !== worldKey || view.sizeKey !== `${w}x${h}`) {
-    if (!view.fitted || view.worldKey !== worldKey) fitView(view, B.w, B.h, w, h, 0.04, B.x0, B.y0);
-    else {
-      // canvas resized: keep the zoom level and the centre
-      const keep = view.scale / view.fitScale;
-      const { cx, cy } = view;
-      fitView(view, B.w, B.h, w, h, 0.04, B.x0, B.y0);
-      view.scale = view.fitScale * keep;
-      view.cx = cx;
-      view.cy = cy;
-    }
-    view.worldKey = worldKey;
-    view.sizeKey = `${w}x${h}`;
-  }
+  const B = worldBounds(grid); // the grid's own rectangle (its cells and lines)
+  syncView(view, contentBounds(grid, model.targets, model.state), w, h);
   const st = model.state;
   if (view.follow && st?.pose) {
     view.cx = st.pose.x_m;

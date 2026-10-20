@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import math
 import secrets
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from console.mock_vehicle import paths
+from forklift_core.mission.results import ResultsBook
+from forklift_core.safety.generations import RequestLedger
 from console.mock_vehicle.world import (
     CAMERA_MODEL,
     CHASSIS,
@@ -51,6 +54,8 @@ LEASE_REQUIRED = {
     "mission_cancel",
     "recovery",
     "lease_release",
+    "session_end",  # persistent console plan D7/D13: as the live runner
+    "sim_reset",
 }
 RELIABLE = LEASE_REQUIRED | {"stop", "lease_request", "targets_request"}
 LATEST_ONLY = {"echo", "teleop", "input_state"}
@@ -63,6 +68,8 @@ STOPPED_ALLOWED = {
     "mission_cancel",
     "mission_pause",
     "targets_request",
+    "session_end",  # the arbiter takes them in STOPPED too (stand, feedback, no mission)
+    "sim_reset",
 }
 INT_FIELDS = ("session_epoch", "control_gen", "arm_gen", "seq")
 LIFT_TOP_M = 0.28
@@ -86,6 +93,9 @@ class Config:
     stop_threshold_mps: float = 0.02
     stop_hold_s: float = 0.5
     result_cache_max: int = 4096
+    # persistent console plan D7/D13: the live runner's request ledger (tokens); the server turns it on, the older
+    # unit tests keep the request-id store
+    request_tokens: bool = False
 
 
 def _is_int(v) -> bool:
@@ -194,6 +204,18 @@ class MockVehicle:
         self.last_permission_direction = 1
         self.clients: dict[str, set] = {}
         self.events: list[dict] = []
+        # persistent console plan D13 item 8: as the live runner -- the shared request ledger, the results book, the
+        # scene latch, the session requests, and the states the screen's D13 cases need (``inject``)
+        self.ledger = RequestLedger()
+        self.results = ResultsBook()
+        self.scene = {"damaged": None}
+        self.session_request = None  # "end" | "reset", taken by the server
+        self.session_ending = False  # accepted: every later leased request is refused session_ending
+        self._policy_override = None  # injected recovery policy fields (lift_dirs, drive_mode, ...)
+        self.recovery = None
+        self._permit_override = None
+        self._booked = None
+        self.at: dict[str, str] = {}  # plan D3: where each pallet is verified to stand (set at a delivery here)
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -282,6 +304,8 @@ class MockVehicle:
     # --------------------------------------------------------------- connection
     def connect(self, client_id: str, conn_id: str | None = None) -> dict:
         self.clients.setdefault(client_id, set()).add(conn_id)
+        token = self.ledger.issue() if self.cfg.request_tokens else None
+        registered = token is not None and self.ledger.register(token, client_id, conn_id, self._now())
         caps = {
             "mission": True,
             "teleop_direct": True,
@@ -309,8 +333,9 @@ class MockVehicle:
                 "model_turning_radius_m": 1.0 / CHASSIS.max_curvature_inv_m,
             },
             "provisional_limits": True,
+            "sim_reset": True,  # a scene reset starts a new session (D13; the live runner's when supervised)
         }
-        return {
+        welcome = {
             "t": "welcome",
             "api": API,
             "vehicle_id": "mock-1",
@@ -318,8 +343,14 @@ class MockVehicle:
             "backend": "mock",
             "capabilities": caps,
         }
+        if registered:
+            welcome["request_token"] = token
+        return welcome
 
     def disconnect(self, client_id: str, conn_id: str | None = None) -> None:
+        token = self.ledger.token_of(client_id, conn_id)
+        if token is not None:
+            self.ledger.retire(token)
         conns = self.clients.get(client_id)
         if conns is not None:
             conns.discard(conn_id)
@@ -447,7 +478,11 @@ class MockVehicle:
                 "curvature_inv_m": self.applied_curvature_inv_m,
                 "stop_kind": self.stop_kind,
             },
-            "permit": {"limit_mps": self.permit[0], "reason": self.permit[1]},
+            "permit": (
+                {"limit_mps": self._permit_override[0], "reason": self._permit_override[1]}
+                if self._permit_override
+                else {"limit_mps": self.permit[0], "reason": self.permit[1]}
+            ),
             "limits": {
                 "forward_mps": self.cfg.forward_mps * scale,
                 "reverse_mps": self.cfg.reverse_mps * scale,
@@ -464,8 +499,16 @@ class MockVehicle:
             },
             "pacing": None,
             "stopped_confirmed": self.stopped_confirmed,
+            "feedback_ok": True,  # the fake vehicle always measures its speed
+            "last_result": self.results.last,
+            "scene": {"damaged": dict(self.scene["damaged"]) if self.scene["damaged"] else None},
+            "recovery": dict(self.recovery) if self.recovery else None,
             "teleop_allowed": teleop_reason is None,
             "teleop_forbidden_reason": teleop_reason,
+            "lift_dirs": [-1, 1] if self.lift_allowed else [],
+            "drive_mode": "normal",
+            "stand_waiver": None,
+            **(self._policy_override or {}),
             "plan": self._plan(),
         }
 
@@ -507,6 +550,8 @@ class MockVehicle:
                 "request_id": msg.get("request_id"),
                 "reason": "unsupported",
             }
+        if self.cfg.request_tokens or "request_token" in msg:
+            return self._handle_ledger(client_id, msg, conn_id)
         key = (client_id, msg.get("session_epoch"), msg["request_id"])
         if key in self._results:  # contract 1, rule 1
             return self._results[key]
@@ -514,6 +559,23 @@ class MockVehicle:
             return self._reply(msg, reason="busy")  # not stored
         result = self._reliable(client_id, msg, conn_id)
         self._results[key] = result
+        return result
+
+    def _handle_ledger(self, client_id: str, msg: dict, conn_id) -> dict:
+        """Persistent console plan D7 (contract 1, the request ledger), as the live arbiter: admitted by the
+        connection's token and seq before it runs; a forgotten request is stale, never run again."""
+        token, seq = msg.get("request_token"), msg.get("request_seq")
+        if not (_is_int(token) and _is_int(seq)):
+            return self._reply(msg, reason="invalid")
+        if msg.get("session_epoch") != self.session_epoch:
+            return self._reply(msg, reason="stale_epoch")  # before the ledger, unstored
+        verdict, stored = self.ledger.admit(token, client_id, conn_id, seq)
+        if verdict == "stored":
+            return stored
+        if verdict in ("stale", "busy"):
+            return self._reply(msg, reason=verdict)
+        result = self._reliable(client_id, msg, conn_id)
+        self.ledger.put(token, seq, result, self._now())
         return result
 
     @staticmethod
@@ -544,6 +606,8 @@ class MockVehicle:
             return self._reply(msg, reason="stale_lease")
         if msg.get("control_gen") != self.control_gen:
             return self._reply(msg, reason="stale_control")
+        if self.session_ending:
+            return self._reply(msg, reason="session_ending")  # the session closes (as the live arbiter, D7)
         if self.mode == "STOPPED" and t not in STOPPED_ALLOWED:
             return self._reply(msg, reason="stopped_locked")
         handler = getattr(self, "_req_" + t)
@@ -618,14 +682,21 @@ class MockVehicle:
 
     # --------------------------------------------------------------- mission API
     def _req_mission_submit(self, msg: dict) -> dict:
+        self._book_end(self._now())  # the ended mission is booked before a new one replaces it
+        if self.scene["damaged"] is not None:
+            return self._reply(msg, reason="scene_damaged")  # automatic work waits for a scene reset (D6)
         if msg.get("targets_revision") != self.targets_revision:
             return self._reply(msg, reason="stale_targets")
         pallet = next(
             (p for p in self.world.pallets if p.pallet_id == msg.get("pallet_id")), None
         )
         dest = self.world.destinations.get(msg.get("destination_id"))
-        if pallet is None or dest is None or pallet.state != "available":
-            return self._reply(msg, reason="invalid")
+        if pallet is None or dest is None or pallet.state not in ("available", "delivered"):
+            return self._reply(msg, reason="invalid")  # delivered: available again where it lies (plan D3)
+        if self.at.get(pallet.pallet_id) == msg.get("destination_id"):
+            return self._reply(msg, reason="already_there")
+        if self._occupied(pallet, dest):
+            return self._reply(msg, reason="destination_occupied")
         if self.forks_in_pocket:  # a new job starts with an empty observe approach
             return self._reply(msg, reason="fork_in_pocket")
         if self._load() is not None:
@@ -655,6 +726,21 @@ class MockVehicle:
         self._event("mission", mission_id=self.mission["mission_id"], status="accepted")
         return self._reply(msg, mission_id=self.mission["mission_id"])
 
+    def _occupied(self, pallet, dest) -> bool:
+        """Plan D3, as the targets book: another pallet on the floor (its outline grown 0.21 m) overlapping the
+        submitted one placed at the destination."""
+        from forklift_core.safety.pallet_permit import obb_overlap  # noqa: PLC0415
+
+        for other in self.world.pallets:
+            if other is pallet or other.state == "carried":
+                continue
+            grow = 0.21
+            if obb_overlap([[other.pose.x_m, other.pose.y_m]],
+                           (other.depth_m / 2 + grow, other.width_m / 2 + grow), [other.pose.yaw_rad],
+                           (dest.x_m, dest.y_m), (pallet.depth_m / 2, pallet.width_m / 2), dest.yaw_rad)[0]:
+                return True
+        return False
+
     def _mission_matches(self, msg: dict) -> bool:
         return (
             self.mission is not None
@@ -682,6 +768,8 @@ class MockVehicle:
         return self._reply(msg)
 
     def _req_mission_resume(self, msg: dict) -> dict:
+        if self.scene["damaged"] is not None:
+            return self._reply(msg, reason="scene_damaged")
         m = self.mission
         if not self._mission_matches(msg) or m["status"] not in ("paused", "held"):
             return self._reply(msg, reason="invalid")
@@ -751,6 +839,88 @@ class MockVehicle:
                 if limit == 0.0:
                     return reason
         return None
+
+    # ---------------------------------------------- persistent console plan D13 (as the live runner)
+    FINAL = ("done", "failed", "cancelled", "recovery_required")
+    ACTIVE = ("accepted", "preparing", "running", "paused", "held", "resuming", "recovering")
+
+    def make_missions(self) -> dict:
+        return self.results.message()
+
+    def _book(self, *, mission_id, outcome, reason, started_s, pallet_id, destination_id, advice=None) -> dict:
+        entry = self.results.add(mission_id=mission_id, outcome=outcome, reason=reason, started_s=started_s,
+                                 ended_s=self._now(), pallet_id=pallet_id, destination_id=destination_id,
+                                 advice=advice)
+        self.events.append(self.make_missions())
+        return entry
+
+    def _book_end(self, now: float) -> None:
+        """A mission that reached a final status is booked once and published (contract 5.2)."""
+        m = self.mission
+        if m is None or m["status"] not in self.FINAL or self._booked == m["mission_id"]:
+            return
+        self._booked = m["mission_id"]
+        reason = m.get("reason") or ("operator" if m["status"] == "cancelled" else None)
+        self._book(mission_id=m["mission_id"], outcome=m["status"], reason=reason, started_s=m.get("started_t"),
+                   pallet_id=m["pallet_id"], destination_id=m["destination_id"], advice=m.get("advice"))
+
+    def _session_request(self, msg: dict, kind: str) -> dict:
+        # the arbiter's order after the lease: the feedback (always measured here), the stand, no mission on
+        if not self.stopped_confirmed:
+            return self._reply(msg, reason="not_stopped")
+        if self.mission is not None and self.mission["status"] in self.ACTIVE:
+            return self._reply(msg, reason="mission_active")
+        self.session_request = kind
+        self.session_ending = True
+        if self.mode in ("AUTO", "TELEOP"):
+            self._set_mode("PAUSED")
+        else:
+            self._boundary()
+        return self._reply(msg)
+
+    def _req_session_end(self, msg: dict) -> dict:
+        return self._session_request(msg, "end")
+
+    def _req_sim_reset(self, msg: dict) -> dict:
+        return self._session_request(msg, "reset")
+
+    def reset_session(self) -> None:
+        """The scene back to its start under a new session epoch (the live runner's supervisor restarts it)."""
+        self.__init__(self.clock, self.token, self.cfg)
+
+    def inject(self, kind: str) -> None:
+        """The screen's D13 cases without driving into them (fake vehicle only, for the page's tests)."""
+        now = self._now()
+        if kind == "scene_damage":
+            if self.scene["damaged"] is None:
+                self.scene["damaged"] = {"reason": "Forbidden fork/pallet contact", "t": now, "unix": time.time()}
+            return
+        self.missions_created += 1
+        mission_id = f"M-{self.missions_created:04d}"
+        if kind == "recovery_required":
+            self.recovery = {"stage": "in_pocket", "grounded": False, "evidence": True, "aligned": True,
+                             "pallet_id": "P-01"}
+            # as the live state sends a lifted, pressed pocket: lower only, the stand waived (plan D14)
+            self._policy_override = {"lift_dirs": [-1], "drive_mode": "normal", "stand_waiver": "lower_only",
+                                     "teleop_forbidden_reason": "recovery:lower_first", "teleop_allowed": True}
+            self._book(mission_id=mission_id, outcome="recovery_required", reason="recovery:blocked:test",
+                       started_s=now, pallet_id="P-01", destination_id="D-A")
+        elif kind == "steering_wait":
+            self.recovery = {"stage": "in_pocket", "grounded": True, "evidence": True, "aligned": True,
+                             "pallet_id": "P-01"}
+            self._permit_override = (0.0, "recovery:steering")
+            self._policy_override = {"lift_dirs": [], "drive_mode": "reverse_straight", "stand_waiver": None,
+                                     "teleop_forbidden_reason": None, "teleop_allowed": True}
+            self.missions_created -= 1
+        elif kind == "invalid_start":
+            self._book(mission_id=mission_id, outcome="failed",
+                       reason="prepare:all_candidates_failed:invalid_start;invalid_start", started_s=now,
+                       pallet_id="P-01", destination_id="D-A",
+                       advice={"backoff_m": 0.15, "backoff_max_m": 0.6,
+                               "from_rear": [self.pose.x_m, self.pose.y_m, self.pose.yaw_rad]})
+        else:
+            self.missions_created -= 1
+            raise ValueError(f"unknown injection {kind!r}")
 
     def _req_recovery(self, msg: dict) -> dict:
         if msg.get("action") != "withdraw_straight" or not self.forks_in_pocket:
@@ -849,6 +1019,8 @@ class MockVehicle:
     # ------------------------------------------------------------------ control
     def step(self, dt_s: float) -> None:
         now = self._now()
+        self.ledger.purge(now)  # D7: once a cycle, as the live arbiter
+        self._book_end(now)
         if (
             self.lease is not None
             and now - self.lease["last_sent"] > self.cfg.lease_timeout_s
@@ -1134,6 +1306,9 @@ class MockVehicle:
         m["phase_index"] += 1
         if m["phase_index"] >= len(PHASES):
             m["status"], m["phase"] = "done", "complete"
+            if self.at.get(m["pallet_id"]) != m["destination_id"]:
+                self.at[m["pallet_id"]] = m["destination_id"]  # plan D3: verified there only at done (as live)
+                self.targets_revision += 1  # a list change (Codex D3 impl round 2 P3)
             m["legs"] = []
             self._event("mission", mission_id=m["mission_id"], status="done")
             self._set_mode("PAUSED")
@@ -1153,6 +1328,7 @@ class MockVehicle:
         p = self._pallet()
         if m["phase"] == "lift":
             p.state, self.world.carried = "carried", p.pallet_id
+            self.at.pop(p.pallet_id, None)
             self.targets_revision += 1  # contract 5.1: a target's state changed
         self._event("phase", phase=m["phase"])
 

@@ -1,13 +1,15 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile, forbidText, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
-import { blockReason, currentDestination, missionProgress, PHASES, subtaskOf } from "./wizard.js";
+import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
+import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
+import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
 const STATUS = {
   accepted: ["acc", "수락"],
+  preparing: ["acc", "준비 중"],
   running: ["acc", "실행 중"],
   paused: ["warn", "일시정지"],
   held: ["warn", "보류"],
@@ -15,6 +17,8 @@ const STATUS = {
   done: ["ok", "완료"],
   failed: ["crit", "실패"],
   cancelled: ["", "취소됨"],
+  recovering: ["acc", "복구하며 물러나는 중"],
+  recovery_required: ["crit", "복구 필요"],
 };
 const STEP_KO = {
   stop_confirmed: "정지 확인",
@@ -44,7 +48,7 @@ function badge(el, cls, text) {
 // "P-1 → D-1 · " when the vehicle names the mission's targets, else nothing
 const route = (mi) => (mi.pallet_id ? `${mi.pallet_id} → ${mi.destination_id ?? "?"} · ` : "");
 
-export function renderPallets(targets, onPick) {
+export function renderPallets(targets, onPick, load = null) {
   const box = $("pallet-list");
   const checked = document.querySelector('input[name="pal"]:checked')?.value;
   const firstList = box.children.length === 0;
@@ -52,8 +56,9 @@ export function renderPallets(targets, onPick) {
   for (const p of targets.pallets) {
     const lab = document.createElement("label");
     lab.className = "pal";
-    const avail = p.state === "available";
-    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(palletKindLabel(p.kind))}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(PALLET_STATE[p.state] ?? p.state)}</span>`;
+    const avail = selectable(p, load);
+    const carried = carriedLabel(p, load); // plan D5 6c: the pallet on the forks, delivered as it is carried
+    lab.innerHTML = `<input type="radio" name="pal" value="${esc(p.pallet_id)}"><span><b>${esc(p.pallet_id)} · ${esc(palletKindLabel(p.kind))}</b><small>${Number.isFinite(p.depth_m) && Number.isFinite(p.width_m) ? `${Math.round(p.depth_m * 1000)} × ${Math.round(p.width_m * 1000)} mm` : "크기 모름"} · ${p.pose ? `(${p.pose.x_m.toFixed(1)}, ${p.pose.y_m.toFixed(1)}) m` : "포크 위"}</small></span><span class="chip ${avail ? "" : "ok"}">${esc(carried ?? PALLET_STATE[p.state] ?? p.state)}</span>`;
     const input = lab.querySelector("input");
     input.disabled = !avail;
     input.checked = avail && p.pallet_id === checked;
@@ -71,7 +76,7 @@ export function renderPallets(targets, onPick) {
   dest.innerHTML =
     '<option value="">하역 위치를 고르세요</option>' +
     targets.destinations
-      .map((d) => `<option value="${esc(d.destination_id)}">${esc(d.destination_id)} · (${d.pose.x_m.toFixed(1)}, ${d.pose.y_m.toFixed(1)}) m</option>`)
+      .map((d) => `<option value="${esc(d.destination_id)}">${esc(destinationLabel(d.destination_id))} · (${d.pose.x_m.toFixed(1)}, ${d.pose.y_m.toFixed(1)}) m</option>`)
       .join("");
   if (keep && targets.destinations.some((d) => d.destination_id === keep)) dest.value = keep;
   else if (firstDest && targets.destinations.length) dest.value = targets.destinations[0].destination_id;
@@ -178,6 +183,8 @@ export function render(m) {
   for (const [id, be] of [["be-real", "real"], ["be-isaac", "isaac"], ["be-mock", "mock"]]) $(id).setAttribute("aria-pressed", String(w?.backend === be));
   if (!st) {
     $("m-open").disabled = true;
+    $("mission-gate").textContent = ""; // an old session's recovery hint (Codex U30 review round 2 P3)
+    renderSession(m, null, lease, prof, monitor); // a new session's welcome before its first state: nothing old stays
     return;
   }
 
@@ -207,7 +214,7 @@ export function render(m) {
 
   // progress strip and destination
   const prog = $("d-progress");
-  const active = mi && ["accepted", "running", "paused", "held", "resuming"].includes(mi.status);
+  const active = mi && ["accepted", "preparing", "running", "paused", "held", "resuming", "recovering"].includes(mi.status);
   if (mi) {
     const ph = PHASES.find(([en]) => en === mi.phase);
     $("req-status-line").textContent = `${mko}${ph && mi.status !== "done" ? ` · ${ph[1]}` : ""}${mi.reason ? ` · ${mi.reason}` : ""}`;
@@ -222,19 +229,25 @@ export function render(m) {
     $("d-prog-pct").textContent = "";
   }
   $("d-dest").textContent = currentDestination(mi) ?? (monitor ? "알 수 없음 (관찰 전용)" : "지정된 목적지 없음");
+  renderSession(m, st, lease, prof, monitor);
 
   // mission
   const why = blockReason({ state: st, canMission: prof.mission, hasLease: lease, mode, mission: mi });
-  $("mission-gate").textContent = "";
   const ready = $("ready-line");
   ready.className = `ready ${why ? "warn" : "ok"}`;
   ready.querySelector("span").textContent = why ?? "작업을 받을 수 있습니다";
   $("m-open").disabled = Boolean(why);
-  $("m-pause").disabled = !lease || !mi || mi.status !== "running";
+  // a recovery is paused, not cancelled (persistent console plan D4)
+  $("m-pause").disabled = !lease || !mi || !["running", "recovering"].includes(mi.status);
+  // the mission now is a recovery: paused or resuming too, never a new mission still in its old phase (D4)
+  const recovery = Boolean(mi && (String(mi.phase || "").startsWith("recover_") || mi.phase === "clear_out")
+    && ["recovering", "paused", "resuming", "held"].includes(mi.status));
+  $("m-cancel").title = recovery ? "복구 중에는 취소 대신 일시정지합니다" : "";
   const resume = resumeState({ state: st, mission: mi, hasLease: lease });
   $("m-resume").disabled = !resume.enabled;
-  $("m-resume").title = resume.why;
-  $("m-cancel").disabled = !lease || !active;
+  $("m-resume").title = resume.why || resume.hint;
+  $("mission-gate").textContent = resume.hint;  // visible on a touch screen too (no hover)
+  $("m-cancel").disabled = !lease || !active || recovery;
   if (mi) {
     $("req-id").textContent = `${mi.mission_id}${mi.pallet_id ? ` · ${mi.pallet_id} → ${mi.destination_id ?? "?"}` : ""}`;
     chip($("req-status"), mcls, mi.reason ? `${mko} · ${mi.reason}` : mko);
@@ -279,7 +292,7 @@ export function render(m) {
   $("r-st").textContent = st.steering_rad ? deg(st.steering_rad[0]) : "—";
   $("r-lift").textContent = Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—";
   $("r-load").textContent = st.load?.state === "loaded" ? `적재 · ${st.load.pallet_id ?? "팔레트 모름"}` : st.load?.state === "empty" ? "없음" : "측정 안 됨";
-  $("r-permit").textContent = permitText(st.permit);
+  $("r-permit").textContent = permitText(st.permit, st.teleop_forbidden_reason);
   $("r-cmd").textContent = st.command && st.applied ? `${st.command.speed_mps.toFixed(2)} → ${st.applied.speed_mps.toFixed(2)} m/s` : "—";
   if (m.chassis) $("r-radius").textContent = m.chassis.model_turning_radius_m.toFixed(2);
   $("r-phase-t").textContent = mi && Number.isFinite(mi.phase_elapsed_s) ? `${mi.phase_elapsed_s.toFixed(1)} s (일시정지 동안 멈춤)` : "—";
@@ -292,8 +305,10 @@ export function render(m) {
 
   // teleop
   const inTele = mode === "TELEOP";
-  const enterStand = inTele ? null : standWhy(st); // entering TELEOP is refused until the truck stands
-  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || Boolean(forbidden) || Boolean(enterStand);
+  const enterStand = inTele ? null : standWhy(st, { waivable: true }); // refused until the truck stands (or waived)
+  // plan D14: a state that only lowers may be entered (teleop_allowed), though driving is forbidden there
+  const teleopOk = st.teleop_allowed === undefined ? !forbidden : st.teleop_allowed !== false;
+  $("t-enter").disabled = !prof.teleop || !lease || inTele || mode === "STOPPED" || !teleopOk || Boolean(enterStand);
   $("t-enter").title = enterStand ?? "";
   $("t-exit").disabled = !lease || !inTele;
   const gate = m.teleop.gate;
@@ -308,8 +323,10 @@ export function render(m) {
   $("deadman").disabled = !live;
   $("deadman").dataset.on = String(Boolean(live && m.teleop.lastRead?.deadman));
   $("joy").setAttribute("aria-disabled", String(!live));
-  $("lift-up").disabled = $("lift-dn").disabled = !live || !prof.lift || st.lift_allowed === false;
-  $("lift-val").textContent = `${Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—"} / 280 mm`;
+  const lc = liftControls(st); // plan D14: each direction on its own
+  $("lift-up").disabled = !live || !prof.lift || !lc.up;
+  $("lift-dn").disabled = !live || !prof.lift || !lc.down;
+  $("lift-val").textContent = `${Number.isFinite(st.lift_m) ? Math.round(st.lift_m * 1000) : "—"} / ${lc.limitMm} mm`;
   $("m-direct").setAttribute("aria-pressed", String(gate.mode === "direct"));
   $("m-video").setAttribute("aria-pressed", String(gate.mode === "video"));
   $("direct-confirm").hidden = gate.canSend();
@@ -326,7 +343,8 @@ export function render(m) {
   bar($("b-s"), -sn);
   $("b-v-t").textContent = `${cmd.speed_mps.toFixed(2)} m/s`;
   $("b-s-t").textContent = `${cmd.curvature_inv_m.toFixed(2)} 1/m`;
-  $("limits").textContent = st.limits ? `상한 전진 ${lim.forward_mps.toFixed(2)} · 후진 ${lim.reverse_mps.toFixed(2)} m/s${lim.provisional ? " (잠정)" : ""}${st.drive_allowed === false ? " · 주행 금지" : ""}` : "상한 —";
+  const note = recoveryNote(st);
+  $("limits").textContent = st.limits ? `상한 전진 ${lim.forward_mps.toFixed(2)} · 후진 ${lim.reverse_mps.toFixed(2)} m/s${lim.provisional ? " (잠정)" : ""}${st.drive_allowed === false ? " · 주행 금지" : ""}${note ? ` · ${note}` : ""}` : "상한 —";
   const pr = st.permit?.reason;
   if (!pr) chip($("permit-chip"), "", "허가 판정 없음");
   else chip($("permit-chip"), pr === "ok" ? "ok" : pr.startsWith("occupied") ? "crit" : "warn", pr === "ok" ? "주행 허가 ok" : pr);
@@ -343,4 +361,64 @@ export function render(m) {
   const notes = [...(st.notes ?? []), ...(m.frameNote ? [m.frameNote] : [])];
   $("notes").hidden = notes.length === 0;
   $("notes").textContent = notes.join(" · ");
+}
+
+const OUTCOME = { done: ["ok", "완료"], failed: ["crit", "실패"], cancelled: ["warn", "취소"], recovery_required: ["crit", "복구 필요"] };
+
+function wallTime(unix) {
+  if (!Number.isFinite(unix)) return "";
+  const d = new Date(unix * 1000);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((v) => String(v).padStart(2, "0")).join(":");
+}
+
+// Persistent console plan D13: the scene banner, the results book, the recovery guidance, the advice, the session
+// buttons. The vehicle decides; these show what it said and enable a button only when it could be taken.
+function renderSession(m, stIn, lease, prof, monitor) {
+  const st = stIn ?? {};
+  const damaged = st.scene?.damaged ?? null;
+  $("scene-banner").hidden = !damaged;
+  if (damaged) $("scene-text").textContent = `${reasonText(damaged.reason).text}${damaged.unix ? ` · ${wallTime(damaged.unix)}` : ""}`;
+  const note = $("session-note");
+  note.hidden = !m.sessionNote;
+  note.textContent = m.sessionNote ?? "";
+
+  const book = m.results;
+  if (book && book.version !== m.cache.resultsVersion) {
+    m.cache.resultsVersion = book.version;
+    const rows = book.rows();
+    $("results-list").innerHTML = rows.length ? rows.map((r) => {
+      const [cls, ko] = OUTCOME[r.outcome] ?? ["", r.outcome];
+      const why = r.reason ? reasonText(r.reason) : null;
+      const advice = adviceText(r.advice);
+      const span = Number.isFinite(r.started_s) && Number.isFinite(r.ended_s) ? ` · ${(r.ended_s - r.started_s).toFixed(0)} s` : "";
+      return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
+    }).join("") : '<li class="hint">아직 끝난 미션이 없습니다</li>';
+    $("results-older").textContent = book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "";
+  }
+
+  const guide = recoveryGuide(st);
+  const g = $("recovery-guide");
+  g.hidden = !guide;
+  if (guide) g.innerHTML = `<b>수동 복구 · ${esc(guide.next)}</b><br>${guide.notes.map(esc).join(" · ")}${guide.permit ? `<br>${esc(guide.permit)}` : ""}`;
+  // the advice of the last result, while no newer mission runs (it is from the pose at that failure)
+  const last = st.last_result;
+  const active = st.mission && MISSION_ACTIVE.includes(st.mission.status);
+  const advice = !active && last?.advice ? adviceText(last.advice) : null;
+  const a = $("advice-line");
+  a.hidden = !advice;
+  if (advice) a.textContent = `${advice}${st.permit?.reason ? ` · 현재 구동 허가: ${permitText(st.permit, st.teleop_forbidden_reason)}` : ""}`;
+
+  const caps = m.session.welcome?.capabilities ?? {};
+  const btn = sessionButtons(st, { hasLease: lease && !monitor && prof.control, caps });
+  for (const [id, kind, b, whyId] of [["s-end", "session_end", btn.end, "s-end-why"], ["s-reset", "sim_reset", btn.reset, "s-reset-why"], ["scene-reset", "sim_reset", btn.reset, null]]) {
+    const el = $(id);
+    el.hidden = !b.shown;
+    const armed = m.confirm?.pending(m.confirmKey?.(kind), performance.now());
+    el.disabled = !b.enabled;
+    el.dataset.confirm = armed ? "armed" : "";
+    el.textContent = armed ? (kind === "sim_reset" ? "정말 초기화? (5 s)" : "정말 종료? (5 s)") : (kind === "sim_reset" ? "장면 초기화" : "세션 종료");
+    el.title = b.why;
+    if (whyId) $(whyId).textContent = b.why;
+    if (!b.enabled && armed) m.confirm.cancel(); // the condition broke: the confirm is gone
+  }
 }

@@ -515,3 +515,5 @@ def test_the_fifth_failed_replan_refuses_before_it_would_wait():
     with pytest.raises(RuntimeError, match="obstacle_replan_failed in observe"):
         w.replan(t=56.0)
     assert w.obstacle.get("replan_wait", {}) == {}
+
+
