@@ -7578,6 +7578,7 @@ def drive(S, isaac) -> None:
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
             live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
+            live.settle_records()  # a records write failure on its result before the results are taken (U29)
             state.update({"success": True, "mission_results": live.results.message()["results"],
                           "simulated_time_s": world.current_time - initial_time,
                           "simulation_wall_s": time.monotonic() - simulation_started_wall})

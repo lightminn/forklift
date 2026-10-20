@@ -1,6 +1,7 @@
 """M-c4: the live runtime with a fake core and fake Isaac hooks (plan C2, C4)."""
 
 import json
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -580,6 +581,94 @@ def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
     rt.close()
     written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
     assert written == {"state": {"async_plans": [{"site": "leg"}]}}
+
+
+def test_the_end_logs_its_record_cost_and_the_archive_its_own(tmp_path):
+    """Persistent console plan D1 step 7, U29: the end tick's record cost (bound 20 ms) is measured apart from the
+    rest of the end, and the records written off the control thread log their size and wall time."""
+    rt, core, order = ending(tmp_path)
+    write = rt._write_log
+    rt._write_log = lambda line: (time.sleep(0.05) if '"mission_end"' in line else None, write(line))
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    logged = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()]
+    cost = next(e["mission_end_cost"] for e in logged if "mission_end_cost" in e)
+    # the end's own log line is part of the record (Codex U29 review P2-3: it was left out)
+    assert cost["mission_id"] == "m1" and 0.05 <= cost["record_wall_s"] <= cost["end_wall_s"]
+    assert cost["restore_wall_s"] is None  # the stand-in core has no timed restore
+    archive = next(e["archive"] for e in logged if "archive" in e)
+    assert archive["mission_id"] == "m1" and archive["end_mono"] >= archive["start_mono"]
+    assert archive["bytes"] == (tmp_path / "missions" / "m1" / "records.json").stat().st_size
+
+
+def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(tmp_path):
+    """Plan U29: a write failure shows in the results book -- the records' write too (Codex U29 review P2-4: only the
+    result's did); the writer thread queues it and the control thread notes and publishes it."""
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt.end_mission(15.0, "failed", "x")
+    for writer, _ in rt._writers:
+        writer.join(timeout=5.0)
+    assert "record_error" not in rt.results.last
+    rt.tick_start(16.0, False)
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == rt.results.last["record_error"]
+
+
+def test_a_records_write_failure_after_the_last_tick_is_noted_before_the_runs_results(tmp_path):
+    """Codex U29 review round 2 P2-1: a writer failing after the last tick was lost at the close, and the runner took
+    its results before the close; settle_records joins the writers and notes them, and the close does too."""
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt.end_mission(15.0, "failed", "x")
+    rt.settle_records()
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    assert source.index("live.settle_records()") < source.index('"mission_results": live.results.message()')
+    (tmp_path / "b" / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt2, core2, _ = ending(tmp_path / "b")
+    rt2.end_mission(15.0, "failed", "x")
+    rt2.close()
+    assert rt2.results.last["record_error"].startswith("records.json: IsADirectoryError")
+
+
+def test_a_records_writer_past_the_settle_limit_is_marked_unsettled_once(tmp_path, monkeypatch):
+    """Codex U29 review round 3 P2: a writer still writing at the limit left the run's results without a mark; the
+    limit is one deadline for all writers and the mark is made once (plan D1: what is left at the limit is counted
+    unsettled and not changed after)."""
+    import threading
+
+    import sim.isaac.live_runtime as live_runtime
+
+    rt, core, order = ending(tmp_path)
+    gate = threading.Event()
+    monkeypatch.setattr(live_runtime, "_jsonable", lambda value: gate.wait(5.0) and str(value))
+    rt.end_mission(15.0, "failed", "x")  # the stand-in records hold no object; write one that waits
+    rt.archive("m1", {"state": {"slow": object()}}, rt.results.last["seq"])
+    rt.settle_records(timeout_s=0.05)
+    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+    gate.set()
+    rt.settle_records(timeout_s=5.0)
+    assert rt.results.last["record_error"] == "records.json: unsettled after 0.05 s"
+
+
+def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):
+    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it."""
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    write = rt._write_log
+
+    def failing(line):
+        if '"archive_error"' in line:
+            raise OSError("log full")
+        write(line)
+
+    rt._write_log = failing
+    rt.end_mission(15.0, "failed", "x")
+    rt.settle_records()
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
 
 
 def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):

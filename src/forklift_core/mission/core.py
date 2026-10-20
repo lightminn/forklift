@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 
@@ -5138,7 +5139,10 @@ class MissionCore:
                 obstacle["layer"].depth_support = None
             state.setdefault("pocket_check", {}).update(pocket["check"].summary(), frames_read=pocket["frames_read"])
             pocket["check"] = None
-        return self.baseline.restore(self) if self.baseline is not None else {}
+        began = time.perf_counter()
+        records = self.baseline.restore(self) if self.baseline is not None else {}
+        self.restore_wall_s = time.perf_counter() - began  # plan U29: holds the records' handover (top-level copies)
+        return records
 
     def hold_slam(self, t: float, *, held_frame_pallet: bool) -> None:
         """Hold the SLAM correction, keeping which estimates the hold began with: those were made under earlier
