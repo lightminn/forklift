@@ -313,3 +313,31 @@ def test_the_gyro_age_table_reads_quantized_runs_only(tmp_path):
         MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=1, odometry_heading="gyro",
                                            gyro_model=ROOT / "config/gyro_model_spec_typical.yaml",
                                            gyro_mount="carriage_low_measured"))
+
+
+def test_a_reported_run_s_wheel_angles_make_a_team_spec_table_and_a_team_spec_run_is_not_regenerated(tmp_path):
+    """V-G2 bootstrap: a run that read the reported (here garbage, zero) rates still recorded the wheel angles, so the
+    team-spec table counts them; the source model is recorded and a team-spec run is refused."""
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    from forklift_core.localization.encoders import odometry_table_problem
+
+    _team_spec_run(tmp_path, model_name="team_spec_quantized")
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    with pytest.raises(SystemExit, match="reads runs recorded on the reported rates"):
+        MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=1, regenerate_encoder="team_spec_quantized"))
+    meta.pop("encoder_model")  # recorded as reported
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+    log = dict(np.load(tmp_path / "slam_log.npz"))
+    for key in ("wheel_counts", "wheel_increments_rad", "steering_measured_rad", "drive_command_zero"):
+        log.pop(key)
+    np.savez_compressed(tmp_path / "slam_log.npz", **log)
+    table = MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=1, regenerate_encoder="team_spec_quantized"))
+    reported = MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=1))
+    assert max(table["position_max_m"]) < 0.006 < max(reported["position_max_m"])
+    assert table["noise"]["encoder_model"] == "team_spec_quantized" and table["noise"]["regenerated_from"] == "reported"
+    assert odometry_table_problem(table, encoder_model="team_spec_quantized", wheel_radius_m=0.125,
+                                  geometric_radius=True) is None

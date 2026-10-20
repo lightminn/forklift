@@ -3,6 +3,7 @@
     python tools/p0a_measure.py odometry --run <run dir> [--run ...] [--draws 10]
     python tools/p0a_measure.py age --run <run dir> [--run ...] [--draws 5]
         [--odometry-heading gyro --gyro-model config/gyro_model_spec_typical.yaml [--gyro-mount NAME]]
+        [--regenerate-encoder team_spec_quantized]
     python tools/p0a_measure.py lift --run <run dir> [--run ...]
     python tools/p0a_measure.py standoff [--depth-m 0.36] [--band-m 0.10]
 
@@ -24,6 +25,14 @@ bias) on the log's own per-tick command condition (drive_command_zero: a run rec
 whose truck moves before the first bias, or that never gets one, is refused (the runner does not drive before it), as
 is a sample fault; the run is named.
 
+age --regenerate-encoder team_spec_quantized (V-G2 bootstrap, 2026-10-21): a table for team-spec runs from runs that
+read the reported rates. The team's encoders read the engine's continuous joint angles, which every run records
+(wheel_angles_rad), so each draw counts the recorded rear wheel angles and true steering through the runner's own
+TeamEncoderModel (that sensor's phases) and integrates them as a team-spec run would: the error team-spec odometry
+would have shown on those trajectories. The table records the source model; a run already recorded with team-spec
+encoders is refused (it has its own counts). team_spec_quantized has no INL, so its draws repeat the same counts (they
+are not independent sensor samples); the gyro heading still redraws its gyro per draw.
+
 lift: pallet origin height and lift joint per phase from result.json samples,
 which explains the gap between the commanded lift_target_m and the carried
 pallet's height.
@@ -43,7 +52,13 @@ from pathlib import Path
 
 import numpy as np
 
-from forklift_core.localization.encoders import encoder_odometry_inputs
+from forklift_core.live.spool import load_slam_log
+from forklift_core.localization.encoders import (
+    TeamEncoderModel,
+    encoder_model_spec,
+    encoder_odometry_inputs,
+    sensor_phases,
+)
 from forklift_core.localization.slam_pose import OdometryNoise
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
@@ -178,7 +193,7 @@ def odometry_command(args) -> dict:
     per_run = []
     all_d, all_p, all_y = [], [], []
     for run in args.run:
-        log = np.load(run / "slam_log.npz")
+        log = load_slam_log(run)  # a batch run's slam_log.npz or a live run's complete spool
         meta = json.loads((run / "meta.json").read_text())
         g = meta["odometry_geometry"]
         geometry = AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"])
@@ -324,10 +339,33 @@ def gyro_rear_odometry(stamps, increments, steering, base_pose, command_zero, ge
     return out, state["updates"]
 
 
+def regenerated_inputs(log, name: str, phase_seed: int) -> dict:
+    """encoder_odometry_inputs' team-spec counts for a log recorded on the reported rates: the recorded continuous rear
+    wheel angles and true steering read through TeamEncoderModel(name, sensor_phases(phase_seed))."""
+    stamps = np.asarray(log["joint_stamps_s"], dtype=float)
+    angles = np.asarray(log["wheel_angles_rad"], dtype=float)
+    steering_true = np.asarray(log["steering_rad"], dtype=float)
+    if angles.shape != (len(stamps), 4) or not np.isfinite(angles).all():
+        raise ValueError("wheel_angles_rad must be finite and (N, 4)")
+    if steering_true.shape != (len(stamps), 2) or not np.isfinite(steering_true).all():
+        raise ValueError("steering_rad must be finite and (N, 2)")
+    model = TeamEncoderModel(encoder_model_spec(name), sensor_phases(phase_seed))
+    rows = [model.read(angles[k, 2:4], steering_true[k]) for k in range(len(stamps))]
+    return {"kind": "increments", "increments": np.array([r[0] for r in rows], dtype=float),
+            "steering": np.array([r[1] for r in rows], dtype=float)}
+
+
 def age_command(args) -> dict:
     """Odometry error by observation age, from every recorded scan stamp (Codex P0a)."""
     refuse_recorded(args.run)
     model = encoder_model_of(args.run)
+    regenerate = getattr(args, "regenerate_encoder", None)
+    if regenerate is not None:
+        if model != "reported":
+            raise SystemExit(f"--regenerate-encoder reads runs recorded on the reported rates, these are {model}")
+        if encoder_model_spec(regenerate) is None:
+            raise SystemExit(f"--regenerate-encoder {regenerate}: not a team-spec encoder model")
+        source_model, model = model, regenerate
     radius = odometry_radius_of(args.run)
     heading = getattr(args, "odometry_heading", "steering")
     gyro = None
@@ -346,7 +384,7 @@ def age_command(args) -> dict:
     maxima = np.zeros((len(AGES_S), 2))
     per_run = []
     for run in args.run:
-        log = np.load(run / "slam_log.npz")
+        log = load_slam_log(run)  # a batch run's slam_log.npz or a live run's complete spool
         meta = json.loads((run / "meta.json").read_text())
         g = meta["odometry_geometry"]
         geometry = AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"])
@@ -357,14 +395,20 @@ def age_command(args) -> dict:
         rates = log["wheel_rates_rad_s"].astype(float)[:, 2:4]
         steering = log["steering_rad"].astype(float)
         run_max = np.zeros_like(maxima)
-        encoders = encoder_odometry_inputs(log, meta)["kind"]
+        encoders = "increments" if regenerate is not None else encoder_odometry_inputs(log, meta)["kind"]
+
+        def drawn_inputs(draw_):
+            if regenerate is not None:
+                return regenerated_inputs(log, regenerate, 20_000 + draw_)
+            return encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw_)
+
         bias_updates = []
-        if gyro is not None and "drive_command_zero" not in log.files:
+        if gyro is not None and "drive_command_zero" not in log:
             raise SystemExit(f"{run}: no drive_command_zero in slam_log.npz (recorded before the gyro build): the bias "
                              "block's command condition cannot be replayed")
         for draw in range(args.draws):
             if gyro is not None:
-                drawn = encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw)
+                drawn = drawn_inputs(draw)
                 try:
                     odom, updates = gyro_rear_odometry(stamps, drawn["increments"], drawn["steering"],
                                                        log["base_pose_world"].astype(float), log["drive_command_zero"],
@@ -373,7 +417,7 @@ def age_command(args) -> dict:
                     raise SystemExit(f"{run}: {exc}") from exc
                 bias_updates.append(updates)
             elif encoders == "increments":
-                drawn = encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw)
+                drawn = drawn_inputs(draw)
                 odom = integrate_wheel_odometry_increments(
                     stamps, drawn["increments"], drawn["steering"], geometry, initial_pose=tuple(truth[0])
                 )
@@ -393,13 +437,18 @@ def age_command(args) -> dict:
                         **({"gyro_bias_updates": bias_updates} if gyro is not None else {})})
     table = cumulative_table(maxima)
     noise = odometry_noise_record(model)
+    if regenerate is not None:
+        noise.update(regenerated_from=source_model,
+                     draws="each draw counts the recorded wheel angles through another sensor unit's phases; "
+                     f"{regenerate} has no INL, so the draws repeat the same counts")
     if gyro is not None:
         noise.update(odometry_heading="gyro", gyro_model_sha256=gyro_sha, gyro_mount=mount_name,
                      gyro_draws="each draw also draws another simulated gyro (seed 20000 + draw)")
     return {
         "source": ("wheel odometry (rear wheel rates + steering), OdometryNoise model redrawn" if model == "reported"
                    else "wheel odometry from the team-spec encoders (rear wheel counts) on the simulated gyro's heading"
-                   if gyro is not None else "wheel odometry from the team-spec encoders (rear wheel counts + steering)"),
+                   if gyro is not None else "wheel odometry from the team-spec encoders (rear wheel counts + steering)")
+        + (f", counted from the {source_model} runs' recorded wheel angles" if regenerate is not None else ""),
         "noise": noise,
         "odometry_wheel_radius_m": radius,
         "reference": "rear axle centre",
@@ -491,6 +540,8 @@ def main() -> None:
     age.add_argument("--run", type=Path, action="append", required=True)
     age.add_argument("--draws", type=int, default=5)
     age.add_argument("--odometry-heading", choices=("steering", "gyro"), default="steering")
+    age.add_argument("--regenerate-encoder", choices=("team_spec_quantized", "team_spec_typical_inl"), default=None,
+                     help="count a reported run's recorded wheel angles as this team-spec encoder (V-G2 bootstrap)")
     age.add_argument("--gyro-model", type=Path, default=None)
     age.add_argument("--gyro-mount", default="carriage_low_measured",
                      help="the runs' --perception-mount (the gyro is the camera's IMU)")
