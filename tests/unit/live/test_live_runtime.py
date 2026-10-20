@@ -615,6 +615,42 @@ def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(t
     assert rt.store.get("missions")[1]["results"][0]["record_error"] == rt.results.last["record_error"]
 
 
+def test_a_records_write_failure_after_the_last_tick_is_noted_before_the_runs_results(tmp_path):
+    """Codex U29 review round 2 P2-1: a writer failing after the last tick was lost at the close, and the runner took
+    its results before the close; settle_records joins the writers and notes them, and the close does too."""
+    from pathlib import Path
+
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt.end_mission(15.0, "failed", "x")
+    rt.settle_records()
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+    source = (Path(__file__).resolve().parents[3] / "sim/isaac/run_transport.py").read_text()
+    assert source.index("live.settle_records()") < source.index('"mission_results": live.results.message()')
+    (tmp_path / "b" / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt2, core2, _ = ending(tmp_path / "b")
+    rt2.end_mission(15.0, "failed", "x")
+    rt2.close()
+    assert rt2.results.last["record_error"].startswith("records.json: IsADirectoryError")
+
+
+def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):
+    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it."""
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    write = rt._write_log
+
+    def failing(line):
+        if '"archive_error"' in line:
+            raise OSError("log full")
+        write(line)
+
+    rt._write_log = failing
+    rt.end_mission(15.0, "failed", "x")
+    rt.settle_records()
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+
+
 def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):
     """Codex D6 design P2-6: the end (also after the physics step) fixes the lift target at the measured height."""
     rt, core, order = ending(tmp_path)

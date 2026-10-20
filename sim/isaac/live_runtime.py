@@ -156,9 +156,12 @@ class LiveRuntime:
                 (folder / "records.json").write_text(text)
             except (OSError, TypeError, ValueError) as exc:
                 error = f"{type(exc).__name__}: {exc}"
-                self.log({"archive_error": error, "mission_id": mission_id})
-                if seq is not None:
+                if seq is not None:  # first: a failing log write below must not lose it (Codex U29 round 2 P2-2)
                     self._archive_errors.append((seq, f"records.json: {error}"))
+                try:
+                    self.log({"archive_error": error, "mission_id": mission_id})
+                except OSError:
+                    pass  # the result carries it
                 return
             # U29: when it ran on the tick trace's clock (it holds the interpreter lock against the control thread
             # while it encodes) and its size
@@ -170,6 +173,13 @@ class LiveRuntime:
         writer.start()
         self._writers.append(writer)
 
+    def settle_records(self, timeout_s: float = 30.0) -> None:
+        """The records writers joined and their failures noted on the results (the run's results are taken after it;
+        Codex U29 review round 2 P2-1)."""
+        for writer in self._writers:
+            writer.join(timeout=timeout_s)
+        self._note_archive_errors()
+
     def close(self) -> None:
         if self.trace is not None:
             # D12a: the table is written once, here, first (a failing server stop below must not lose it).
@@ -177,8 +187,7 @@ class LiveRuntime:
                 self.trace_saved = self.trace.save(self.output / "tick_trace.npz")
             except Exception as exc:  # noqa: BLE001 -- recorded, never raised over the run's own end
                 self.trace_saved = {"error": repr(exc), "rows": self.trace.rows}
-        for writer in self._writers:
-            writer.join(timeout=30.0)
+        self.settle_records()
         ended = self.server.stop()
         if self.port_file is not None:
             write_port_file(self.port_file, {"host": self.server.host, "port": self.server.port,
