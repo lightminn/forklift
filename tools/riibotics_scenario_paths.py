@@ -16,10 +16,10 @@ alignment straight. The footprint the planner uses (half-width 0.36 m) is wider 
 measured body (0.315 m) and its steered tyres (0.336 m); a case planned with 0.336 m is a
 control and is kept apart from the standard result.
 
-A failure is classified by its stage and status: a goal pose in collision (invalid_goal or
-invalid_start), a fixed straight in collision (straight_collision), or a search that found
-nothing within its retries (no_path, expansion_limit, timeout) -- the last does not prove
-that no path exists. Gear changes are counted over the whole mission in driving order,
+A failure is classified by its stage and status: a start or goal pose refused (invalid_start or
+invalid_goal), a fixed straight in collision (straight_collision), or a search that found
+nothing within its retries (no_path, expansion_limit, timeout) -- this does not prove that
+no path exists -- or a case that ran past its wall-clock limit (case_timeout, stage unknown). Gear changes are counted over the whole mission in driving order,
 stage boundaries included. A planned path is not a driven one: tracking, perception and
 contact are not checked here.
 
@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import math
 import multiprocessing
@@ -72,7 +73,7 @@ BLOCK_WIDTH_M = 3.4          # blocks drawn about as wide as the gaps between th
 BLOCK_DEPTH_M = 5.0          # how far the blocks, and the gaps between them, run below the aisle
 START_BEFORE_RACK_M = 3.0    # the truck enters the aisle this far before slot 0's left edge
 SLOTS, FILLED = 12, 6        # rack slots; the first FILLED hold pallets
-TRAILER_GAP_M = 0.10         # between pallet rows in the trailer, and before the back wall (scaled world)
+TRAILER_GAP_M = 0.10         # default gap between pallet rows in the trailer and before its back wall (scaled world)
 STEERED_TYRE_HALF_WIDTH_M = 0.336   # measured-chassis tyre box at 15 deg (Codex 2026-10-20), control only
 
 
@@ -148,15 +149,15 @@ TRAILER_CASES = {
 }
 
 
-def trailer_case(scale: float, pallet, case: str):
+def trailer_case(scale: float, pallet, case: str, row_gap: float = TRAILER_GAP_M):
     """Forks enter along +y; outside the trailer at y >= 0 is the dock wall, the yard below is open."""
     inner = TRAILER_M * scale
     width, depth = pallet.overall_width_m, pallet.overall_depth_m
     columns = 2 if 2 * width < inner else 1
     clear = (inner - columns * width) / (columns + 1)
     col_x = [-(width + clear) / 2, (width + clear) / 2] if columns == 2 else [0.0]
-    length = 3 * (depth + TRAILER_GAP_M) + TRAILER_GAP_M
-    row_y = [length - TRAILER_GAP_M - depth / 2 - r * (depth + TRAILER_GAP_M) for r in range(3)]
+    length = 3 * (depth + row_gap) + row_gap
+    row_y = [length - row_gap - depth / 2 - r * (depth + row_gap) for r in range(3)]
     kind, grid = TRAILER_CASES[case]
     props, target = [], None
     for r, row in enumerate(grid):
@@ -181,12 +182,12 @@ def trailer_case(scale: float, pallet, case: str):
         props=tuple(props),
         bounds=bounds,
     )
-    return scenario, {"inner_m": inner, "columns": columns, "side_clear_m": clear, "length_m": length,
+    return scenario, {"inner_m": inner, "columns": columns, "side_clear_m": clear, "row_gap_m": row_gap, "length_m": length,
                       "column_x_m": col_x, "row_y_m": row_y, "grid": grid, "kind": kind,
                       "target": target, "bounds": asdict(bounds)}
 
 
-def cases(only: str | None) -> list[dict]:
+def cases(only: str | None, row_gaps=(TRAILER_GAP_M,)) -> list[dict]:
     out = []
     for scale in SCALES:
         for pallet in PALLETS:
@@ -202,12 +203,16 @@ def cases(only: str | None) -> list[dict]:
                                             "align_m": align, "kappa": kappa})
             if only in (None, "trailer"):
                 for case in TRAILER_CASES:
-                    for kappa, footprint in ((0.29, "planner"), (0.36, "planner"), (0.29, "tyres")):
-                        out.append({**base, "scene": "trailer", "case": case, "kappa": kappa,
-                                    "footprint": footprint})
+                    for row_gap in row_gaps:
+                        for kappa, footprint in ((0.29, "planner"), (0.36, "planner"), (0.29, "tyres")):
+                            out.append({**base, "scene": "trailer", "case": case, "kappa": kappa,
+                                        "footprint": footprint, "row_gap_m": row_gap})
     keys = ("pick_over", "drop_over", "slot_gap_m", "case", "kappa", "align_m", "footprint")
+    # Names kept from the first run (row gap 0.10); other row gaps get a suffix.
     for c in out:
         c["name"] = f"{c['scene']}_{c['scale']}_{c['pallet']}_" + "_".join(f"{k}{c[k]}" for k in keys if k in c)
+        if c.get("row_gap_m", TRAILER_GAP_M) != TRAILER_GAP_M:
+            c["name"] += f"_row_gap_m{c['row_gap_m']}"
     return out
 
 
@@ -223,14 +228,16 @@ def build(case: dict):
         scenario, info = aisle_case(scale, pallet, case["pick_over"], case["drop_over"],
                                     case["slot_gap_m"], case["back_gap_m"])
     else:
-        scenario, info = trailer_case(scale, pallet, case["case"])
+        scenario, info = trailer_case(scale, pallet, case["case"], case.get("row_gap_m", TRAILER_GAP_M))
     return scenario, info, geometry
 
 
 def classify(status: str) -> str:
+    """Report labels: start or goal pose refused, fixed straight in collision, search found nothing
+    (not a proof that no path exists), success. The raw status is kept beside it."""
     detail = status.split(":")[-1]
     if detail in ("invalid_goal", "invalid_start"):
-        return "goal_in_collision"
+        return "pose_refused"
     if detail == "straight_collision":
         return "straight_in_collision"
     if detail in ("no_path", "expansion_limit", "timeout"):
@@ -265,12 +272,21 @@ def scene_record(case: dict) -> dict:
     return {**case, "info": info, "scenario": asdict(scenario), "geometry": asdict(geometry), "goals": goals}
 
 
+def input_sha256(case: dict, timeout_s: float) -> str:
+    """Scene, geometry, planner settings, this tool's source and the timeout: a stored result is
+    reused only when all of them match (Codex 2026-10-20: a name alone left back_gap and timeout out)."""
+    blob = json.dumps({"scene": scene_record(case), "timeout_s": timeout_s,
+                       "tool": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
 def run_case(case: dict, path: Path) -> None:
     try:
         record = scene_record(case)
     except ValueError as exc:
         path.write_text(json.dumps({**case, "outcome": "scene_failure", "reason": str(exc)}, indent=1))
         return
+    record["input_sha256"] = case["input_sha256"]
     path.with_suffix(".scene.json").write_text(json.dumps(record, indent=1, default=str))
     scenario, _, geometry = build(case)
     config = make_transport_planner_config(curvature_limit_inv_m=case["kappa"], clearance_m=0.10,
@@ -287,15 +303,22 @@ def run_case(case: dict, path: Path) -> None:
 def _worker(args):
     case, out, timeout = args
     path = out / f"{case['name']}.json"
+    try:
+        case = {**case, "input_sha256": input_sha256(case, timeout)}
+    except ValueError:
+        case = {**case, "input_sha256": None}
     if path.exists():
-        return case["name"], json.loads(path.read_text()).get("outcome")
+        old = json.loads(path.read_text())
+        if old.get("input_sha256") == case["input_sha256"]:
+            return case["name"], old.get("outcome")
+        path.unlink()   # different inputs under the same name: plan again
     proc = multiprocessing.get_context("spawn").Process(target=run_case, args=(case, path))
     proc.start()
     proc.join(timeout)
     if proc.is_alive():
         proc.kill()
         proc.join()
-        path.write_text(json.dumps({**case, "outcome": "search_found_nothing", "status": "wall_timeout",
+        path.write_text(json.dumps({**case, "outcome": "case_timeout", "status": "wall_timeout",
                                     "timeout_s": timeout}, indent=1))
     elif not path.exists():
         path.write_text(json.dumps({**case, "outcome": "crash", "exitcode": proc.exitcode}, indent=1))
@@ -309,9 +332,10 @@ def main() -> None:
     parser.add_argument("--timeout-s", type=float, default=900.0)
     parser.add_argument("--only", choices=("aisle", "trailer"))
     parser.add_argument("--dry", action="store_true", help="write the scenes and goal poses, plan nothing")
+    parser.add_argument("--trailer-row-gaps", type=float, nargs="+", default=[TRAILER_GAP_M])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    todo = cases(args.only)
+    todo = cases(args.only, tuple(args.trailer_row_gaps))
     (args.output / "cases.json").write_text(json.dumps(todo, indent=1))
     if args.dry:
         for case in todo:
