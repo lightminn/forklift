@@ -4,7 +4,7 @@
 #SBATCH --gres=shard:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --time=02:00:00
+#SBATCH --time=02:30:00
 #SBATCH --signal=B:TERM@120
 # A SLAM survey epoch (docs/plans/2026-10-20-slam-localization-session.md L2, S2): one epoch of the console's live
 # runner -- the runner command is the one deploy/console/isaac_live.sbatch writes, word for word (a test holds the two
@@ -18,7 +18,9 @@
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/slam_survey.sbatch OUT
 #   optional: PORT (8799), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), TOUR (a tour .npz), TOUR_CONFIG
 #   (config/slam_survey_tour.yaml: the judged region's aisles), CYCLE (P-1:D-1,P-1:D-0, without TOUR: the missions,
-#   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded)
+#   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded),
+#   RIGID_SCENE (a scene.usda of this scene for the moving check when the epoch exported none -- a tour plans no
+#   mission, and the runner exports its stage when a mission plans)
 #
 # Run from the repository root.
 set -u
@@ -118,8 +120,10 @@ if [ -f "$EP/bridge/bundle/map.posegraph" ]; then
   echo "readback exit $? $(date -Is)"
 fi
 # what can move in the survey's stage (the truck and the carried pallet only, or recorded)
-[ -f "$EP/run/scene.usda" ] && "$VENV_PY" "$ROOT/tools/list_rigid_bodies.py" "$EP/run/scene.usda" "$OUT/rigid_bodies.json" \
-  > "$OUT/rigid_bodies.log" 2>&1
+RIGID_FROM=$EP/run/scene.usda
+[ -f "$RIGID_FROM" ] || RIGID_FROM=${RIGID_SCENE:-}
+[ -n "$RIGID_FROM" ] && [ -f "$RIGID_FROM" ] && "$VENV_PY" "$ROOT/tools/list_rigid_bodies.py" "$RIGID_FROM" \
+  "$OUT/rigid_bodies.json" > "$OUT/rigid_bodies.log" 2>&1
 "$VENV_PY" "$ROOT/tools/slam_survey_bundle.py" --epoch "$EP" --readback "$OUT/readback" \
   --rigid-bodies "$OUT/rigid_bodies.json" --tour-config "${TOUR_CONFIG:-$ROOT/config/slam_survey_tour.yaml}" \
   ${TOUR:+--tour-path "$TOUR" --probe "$OUT/probe.json"} --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \

@@ -210,9 +210,13 @@ def permit_pickup_zone(result: dict) -> Rectangle:
                      zone.x_max_m - zone.x_min_m + 2 * grow, zone.y_max_m - zone.y_min_m + 2 * grow, 0.0)
 
 
-def plan_tour(result: dict, tour: list) -> SimpleNamespace:
-    """The tour from home through ``tour`` back home, around the props and the permit's pickup zone (in place of the
-    pallet's own outline: ``plan_survey_route`` adds a pickup pallet of the geometry's size, here the zone's)."""
+PLAN_KEYS = ("scenario", "geometry", "travel_planner_config")  # what a replan needs of the result, kept in the tour file
+
+
+def plan_tour(result: dict, tour: list, start=None) -> SimpleNamespace:
+    """The tour from ``start`` (home when None) through ``tour`` back home, around the props and the permit's pickup
+    zone (in place of the pallet's own outline: ``plan_survey_route`` adds a pickup pallet of the geometry's size, here
+    the zone's)."""
     s, g = result["scenario"], result["geometry"]
     zone = permit_pickup_zone(result)
     transport = SimpleNamespace(props=[SimpleNamespace(rectangle=_rect(p["rectangle"])) for p in s["props"]],
@@ -221,9 +225,17 @@ def plan_tour(result: dict, tour: list) -> SimpleNamespace:
     geometry = SimpleNamespace(unloaded_footprint=Footprint(**g["unloaded_footprint"]),
                                pallet_depth_m=zone.length_m, pallet_width_m=zone.width_m)
     home = Pose2D(**s["start_rear"])
-    route = [home] + [Pose2D(*p) for p in tour] + [home]
+    route = [home if start is None else Pose2D(*start)] + [Pose2D(*p) for p in tour] + [home]
     config = PlannerConfig(**result["travel_planner_config"])
-    return plan_survey_route(SimpleNamespace(transport=transport), route, config, geometry=geometry)
+    plan = plan_survey_route(SimpleNamespace(transport=transport), route, config, geometry=geometry)
+    if not plan.success and start is not None and config.clearance_m > 0:
+        # a replan from where the truck stopped off its path: the planner's clearance may not hold at the start pose;
+        # once more with none, as the runner retries a blocked replan (mission core, clearance 0)
+        from dataclasses import replace
+
+        plan = plan_survey_route(SimpleNamespace(transport=transport), route, replace(config, clearance_m=0.0),
+                                 geometry=geometry)
+    return plan
 
 
 def uncovered_clusters(cells: np.ndarray, cell_m: float = CELL_M) -> list[np.ndarray]:
@@ -292,14 +304,18 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
 
 
 def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.0, poll_hz=20.0, factor=0.3,
-                  curvature_rate=0.5, accel=0.8, kappa_limit=0.36, max_sim_s=4000.0, **driver_args) -> dict:
+                  curvature_rate=0.5, accel=0.8, kappa_limit=0.36, max_sim_s=4000.0, curvature_gain=1.0,
+                  plant_curvature_rate=None, plan_input=None, **driver_args) -> dict:
     """The tour through a CPU model of the teleop chain (Codex v2.5 review P2-3): an ideal rear-axle bicycle at
     ``physics_hz``, the teleop's curvature slew (``TeleopLimits.curvature_rate_inv_m_s``) and speed slew, states at
-    ``state_hz`` and polls at ``poll_hz`` of wall time (sim = wall x ``factor``), no permit, no SLAM error. Returns the
-    driver's end, sim time, progress and events."""
+    ``state_hz`` and polls at ``poll_hz`` of wall time (sim = wall x ``factor``), no permit, no SLAM error; the plant
+    turns ``curvature_gain`` of the curvature commanded and, with ``plant_curvature_rate``, reaches it at that rate
+    (the steering joints' lag behind the applied command). With
+    ``plan_input`` (the tour file's) a replan request is planned at once. Returns the driver's end, sim time, progress,
+    replans and events."""
     driver = TourDriver(poses, directions, curvatures, kappa=kappa_limit, **driver_args)
     x, y, yaw = (float(v) for v in poses[0])
-    v = k = 0.0
+    v = k = k_plant = 0.0
     sim, wall, seq, command = 0.0, 0.0, 0, (0.0, 0.0)
     driver.start(0.0)
     next_state, next_poll, state = 0.0, 0.0, None
@@ -310,11 +326,16 @@ def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.
         if wall >= next_state:
             seq += 1
             state = {"state_seq": seq, "mode": "TELEOP", "armed": True, "rear_axle_speed_mps": v,
+                     "applied": {"speed_mps": v, "curvature_inv_m": k},
+                     "steering_rad": [math.atan(k_plant * 0.66)] * 2,
                      "pose": {"x_m": x, "y_m": y, "yaw_rad": yaw}, "pacing": {"target_factor": factor, "ok": True}}
             next_state += 1.0 / state_hz
         if wall >= next_poll:
             new, end = driver.step(wall, state)
             command = new if new is not None else command
+            if driver.replan_request is not None and plan_input is not None:
+                start, left = driver.replan_request
+                driver.adopt(wall, plan_tour(plan_input, [list(w) for w in left], start=start), left)
             next_poll += 1.0 / poll_hz
         speed_cap = driver.forward if command[0] >= 0 else driver.reverse
         target_v, target_k = command[0] * speed_cap, command[1] * kappa_limit
@@ -322,9 +343,11 @@ def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.
         v += max(-accel * dt, min(accel * dt, target_v - v))
         x += v * math.cos(yaw) * dt
         y += v * math.sin(yaw) * dt
-        yaw += v * k * dt
+        step_p = math.inf if plant_curvature_rate is None else plant_curvature_rate * dt
+        k_plant += max(-step_p, min(step_p, k - k_plant))
+        yaw += v * k_plant * curvature_gain * dt
         sim += dt
-    return {"end": end, "sim_s": sim, "progress_m": driver.best, "events": driver.events}
+    return {"end": end, "sim_s": sim, "progress_m": driver.best, "replans": driver.replans, "events": driver.events}
 
 
 class TourDriver:
@@ -342,25 +365,37 @@ class TourDriver:
       released after ``release_s`` standing at the leg's end; the last leg likewise ends ``arrived`` within
       ``goal_slack_m``. Both are recorded.
     - No progress for ``stall_s`` of drivable time fails the tour (time with teleop forbidden for pacing counts apart,
-      up to ``pacing_wait_s`` in a row); no new state for ``stale_s`` fails it; so do a tracker failure and a mode
-      that leaves TELEOP. A failure is never skipped past.
+      up to ``pacing_wait_s`` in a row); no new state for ``stale_s`` fails it; so does a mode that leaves TELEOP. A
+      failure is never skipped past.
+    - Each leg starts by steering standing (departure, a cusp passed, a replan): speed 0 with the leg's curvature until the
+      state's applied curvature is within ``steer_tolerance`` of it and the measured steering (``steering_rad``) has
+      settled (moved under ``steer_settle_rad`` since the last state). The teleop's curvature slews 0.5 1/m/s, so a cusp
+      that flips the steering takes 1.4 sim s; moving meanwhile left the Isaac truck (ws1 job 6826, truth and estimate
+      alike) 0.28 m off a leg at the planner's curvature limit.
+    - A tracker failure (off the path by ``max_cross_track_m``, or an endpoint heading) stops the truck and, with
+      ``waypoints`` and up to ``max_replans`` times, asks for a new path from the stopped pose through the waypoints
+      not yet passed (``replan_request``; the caller plans and ``adopt``s it) -- as the runner replans a stalled leg.
+      The Isaac tour of ws1 job 6826 left its path by 0.36 m 5.8 m in: a cusp left the axle off the path and the
+      correction saturated the curvature the plant could not quite give.
     """
 
     def __init__(self, poses, directions, curvatures, *, forward_mps=0.5, reverse_mps=0.25, kappa=0.36,
                  cruise_mps=0.30, stall_s=60.0, pacing_wait_s=900.0, stale_s=10.0, enter_s=20.0, release_s=3.0,
-                 goal_slack_m=0.3):
-        from forklift_core.control.path_tracking import RearAxlePathTracker, TrackerConfig
-
+                 goal_slack_m=0.3, waypoints=None, max_replans=12, max_cross_track_m=0.5, steer_tolerance=0.05,
+                 steer_wait_s=20.0, steer_settle_rad=0.01):
         self.forward, self.reverse, self.kappa = float(forward_mps), float(reverse_mps), float(kappa)
-        self.tracker = RearAxlePathTracker(poses, directions, curvatures, TrackerConfig(
-            cruise_speed_mps=min(cruise_mps, self.forward), max_curvature_inv_m=self.kappa,
-            max_acceleration_mps2=0.30, lookahead_m=0.28, position_tolerance_m=0.10, yaw_tolerance_rad=0.15,
-            cusp_position_tolerance_m=0.10, cusp_yaw_tolerance_rad=0.10, cusp_brake_window_m=0.008,
-            cusp_heading_pending_rad=0.20, overshoot_tolerance_m=0.05, stop_speed_mps=0.012,
-            max_cross_track_error_m=0.35, max_reverse_speed_mps=self.reverse))
+        self.cruise, self.max_cross_track_m = min(cruise_mps, self.forward), float(max_cross_track_m)
+        self.can_replan = waypoints is not None
+        self.waypoints = [tuple(map(float, w)) for w in (waypoints if waypoints is not None else [])]
+        self.max_replans, self.replans = int(max_replans), 0
+        self.replan_request = None  # (pose, waypoints left) once the truck stands after a tracker failure
+        self.steer_tolerance, self.steer_wait_s = float(steer_tolerance), float(steer_wait_s)
+        self._leg, self._steer_since = None, None
+        self.steer_settle_rad, self._last_steer = float(steer_settle_rad), None
+        self._failed = None
+        self._set_path(poses, directions, curvatures)
         self.stall_s, self.pacing_wait_s, self.stale_s = stall_s, pacing_wait_s, stale_s
         self.enter_s, self.release_s, self.goal_slack_m = enter_s, release_s, goal_slack_m
-        self.last_index = len(poses) - 1
         self.events: list = []
         self.started_wall = self.last_seq = self.last_state_wall = self.last_feedback_wall = None
         self.departed = False
@@ -370,6 +405,41 @@ class TourDriver:
         self.command = None
         self.last_cmd = None
 
+    def _set_path(self, poses, directions, curvatures) -> None:
+        from forklift_core.control.path_tracking import RearAxlePathTracker, TrackerConfig
+
+        poses = np.asarray(poses, float)
+        self.tracker = RearAxlePathTracker(poses, directions, curvatures, TrackerConfig(
+            cruise_speed_mps=self.cruise, max_curvature_inv_m=self.kappa,
+            max_acceleration_mps2=0.30, lookahead_m=0.28, position_tolerance_m=0.10, yaw_tolerance_rad=0.15,
+            cusp_position_tolerance_m=0.10, cusp_yaw_tolerance_rad=0.10, cusp_brake_window_m=0.008,
+            cusp_heading_pending_rad=0.20, overshoot_tolerance_m=0.05, stop_speed_mps=0.012,
+            max_cross_track_error_m=self.max_cross_track_m, max_reverse_speed_mps=self.reverse))
+        self.last_index = len(poses) - 1
+        # where each waypoint not yet passed lies on this path (the planner passes through them exactly)
+        self.marks = [int(np.argmin(np.hypot(poses[:, 0] - w[0], poses[:, 1] - w[1]))) for w in self.waypoints]
+        self.base_progress = getattr(self, "best", 0.0)
+
+    def waypoints_left(self, segment_index: int) -> list:
+        return [w for w, m in zip(self.waypoints, self.marks) if m > segment_index]
+
+    def adopt(self, now: float, plan, waypoints_left: list) -> bool:
+        """A replanned path from the stopped pose (``replan_request``) through ``waypoints_left``; False fails the
+        tour (the plan failed)."""
+        self.replan_request = None
+        if plan is None or not plan.success:
+            self._event(now, "replan_failed", status=None if plan is None else plan.status)
+            self._failed = "replan_failed"
+            return False
+        self.waypoints = [tuple(map(float, w)) for w in waypoints_left]
+        self._set_path(plan.poses, plan.directions, plan.curvatures_inv_m)
+        self._leg = None  # the new path's first leg steers standing too
+        self.drivable_idle = self.pacing_idle = 0.0
+        self.stand_since = None
+        self._event(now, "replanned", replans=self.replans, waypoints_left=len(self.waypoints),
+                    length_m=float(plan.length_m))
+        return True
+
     def start(self, now: float) -> None:
         self.started_wall = self.last_state_wall = self.last_feedback_wall = now
 
@@ -377,6 +447,8 @@ class TourDriver:
         self.events.append({"wall": now, "event": name, "progress_m": self.best, **fields})
 
     def step(self, now: float, s: dict | None):
+        if self._failed is not None:
+            return (0.0, 0.0), self._failed
         if s is None or s.get("state_seq") == self.last_seq:
             if now - self.last_state_wall > self.stale_s:
                 self._event(now, "state_stale")
@@ -404,11 +476,22 @@ class TourDriver:
         self.last_feedback_wall = now
         factor = float((s.get("pacing") or {}).get("target_factor") or 1.0)
         dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
+        if self.replan_request is not None or getattr(self, "_replan_wait", None) is not None:
+            # stopping after a tracker failure; the request goes out once the truck stands (planned from where it is)
+            if self.replan_request is None and abs(float(speed)) < 0.01:
+                self.replan_request = ((pose["x_m"], pose["y_m"], pose["yaw_rad"]), self._replan_wait)
+                self._replan_wait = None
+            return (0.0, 0.0), None
         tracker = self.tracker
         cmd = tracker.update((pose["x_m"], pose["y_m"], pose["yaw_rad"]), float(speed), dt)
         self.last_cmd = cmd
+        progress = self.base_progress + cmd.progress_m
         if cmd.status == "failed":
             self._event(now, "tracker_failed", failure=cmd.failure, pose=pose, position_error_m=cmd.position_error_m)
+            if self.can_replan and self.replans < self.max_replans:
+                self.replans += 1
+                self._replan_wait = self.waypoints_left(cmd.segment_index)
+                return (0.0, 0.0), None
             return (0.0, 0.0), f"tracker_failed:{cmd.failure}"
         if cmd.status == "arrived":
             self._event(now, "arrived", position_error_m=cmd.position_error_m)
@@ -424,10 +507,26 @@ class TourDriver:
             elif tracker.release_cusp(True):
                 self._event(now, "cusp_released", position_error_m=cmd.position_error_m, yaw_error_rad=cmd.yaw_error_rad)
                 self.stand_since = None
+        # steer standing at a leg's start (see the class doc)
+        if tracker.leg_index != self._leg:
+            self._leg, self._steer_since = tracker.leg_index, now
+        steer = s.get("steering_rad")
+        steer_now = None if not steer else float(np.mean(steer))
+        settling = (steer_now is not None and self._last_steer is not None
+                    and abs(steer_now - self._last_steer) > self.steer_settle_rad)
+        self._last_steer = steer_now
+        if self._steer_since is not None:
+            applied = (s.get("applied") or {}).get("curvature_inv_m")
+            off = applied is not None and abs(float(applied) - cmd.curvature_inv_m) > self.steer_tolerance
+            if (off or settling) and now - self._steer_since < self.steer_wait_s:
+                tracker.restart_speed_slew(0.0)
+                self.command = (0.0, max(-1.0, min(1.0, cmd.curvature_inv_m / self.kappa)))
+                return self.command, None
+            self._steer_since = None
         cap = self.forward if cmd.speed_mps >= 0 else self.reverse
         self.command = (max(-1.0, min(1.0, cmd.speed_mps / cap)), max(-1.0, min(1.0, cmd.curvature_inv_m / self.kappa)))
-        if cmd.progress_m > self.best + 0.05:
-            self.best, self.drivable_idle, self.pacing_idle = cmd.progress_m, 0.0, 0.0
+        if progress > self.best + 0.05:
+            self.best, self.drivable_idle, self.pacing_idle = progress, 0.0, 0.0
         else:
             pacing = ((s.get("teleop_forbidden_reason") or "").startswith("pacing")
                       or not (s.get("pacing") or {}).get("ok", True))
@@ -491,7 +590,8 @@ def main(argv=None) -> int:
         report["unsurveyed_estimate"] = region_coverage(placeable_estimate(result), both)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         np.savez(args.out, poses=plan.poses, directions=plan.directions, curvatures_inv_m=plan.curvatures_inv_m,
-                 tour=np.asarray(tour, float), scenario_sha256=np.asarray(scenario_sha256(result)))
+                 tour=np.asarray(tour, float), scenario_sha256=np.asarray(scenario_sha256(result)),
+                 plan_input=np.asarray(json.dumps({k: result[k] for k in PLAN_KEYS})))
     print(json.dumps(report))
     (args.out.with_suffix(".json")).write_text(json.dumps(report, indent=1))
     return 0 if plan.success else 1

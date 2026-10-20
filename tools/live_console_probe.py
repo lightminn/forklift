@@ -1117,9 +1117,10 @@ async def tour_scenario(p: Probe, args):
     import numpy as np
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from survey_tour import TourDriver
+    from survey_tour import TourDriver, plan_tour
 
     data = np.load(args.tour_path)
+    plan_input = json.loads(str(data["plan_input"])) if "plan_input" in data.files else None
     tour = p.report["tour"] = {"path": str(args.tour_path), "samples": int(len(data["poses"]))}
     await p.open()
     await p.until(lambda s: True, 10, label="first_state")
@@ -1132,7 +1133,8 @@ async def tour_scenario(p: Probe, args):
                         forward_mps=float(limits.get("forward_mps", 0.5)),
                         reverse_mps=float(limits.get("reverse_mps", 0.25)),
                         kappa=float(limits.get("curvature_inv_m", 0.36)), cruise_mps=args.tour_cruise_mps,
-                        stall_s=args.tour_stall_s, pacing_wait_s=args.tour_pacing_wait_s)
+                        stall_s=args.tour_stall_s, pacing_wait_s=args.tour_pacing_wait_s,
+                        waypoints=data["tour"].tolist() if plan_input is not None else None)
     tour["events"] = driver.events
     await p.request("mode_request", to="PAUSED")
     await p.until(p.standing, 20, label="standing_before_teleop")
@@ -1161,6 +1163,20 @@ async def tour_scenario(p: Probe, args):
             command = new if new is not None else command
             if command is not None:
                 await p.teleop(*command, True)
+            if end is None and driver.replan_request is not None:
+                # plan off the event loop (the echo task keeps answering ticks), holding zero meanwhile
+                start, left = driver.replan_request
+                job = asyncio.get_running_loop().run_in_executor(
+                    None, lambda: plan_tour(plan_input, [list(w) for w in left], start=start))
+                while not job.done():
+                    await p.teleop(0.0, 0.0, True)
+                    await asyncio.sleep(0.05)
+                try:
+                    plan = job.result()
+                except Exception as exc:  # noqa: BLE001 -- a planner error is a failed replan, recorded
+                    driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": repr(exc)})
+                    plan = None
+                driver.adopt(time.monotonic(), plan, left)
     tour["end"], tour["progress_m"] = end, float(driver.best)
     stop_by = time.monotonic() + 15.0
     while time.monotonic() < stop_by and not (p.state and p.standing(p.state)) and p.closed_code is None:

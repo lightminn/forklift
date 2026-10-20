@@ -390,3 +390,22 @@ def test_the_tour_plans_around_the_permits_prior_pickup_zone():
     z = st.permit_pickup_zone(SCENE)
     # BAY_PICKUP_ZONE x 2.6-3.6, y -0.2-1.5, grown by the pallet's half diagonal 0.5 + 0.182 + 0.01 + 0.05
     assert abs((z.x_m - z.length_m / 2) - (2.6 - 0.742)) < 1e-9 and abs((z.y_m + z.width_m / 2) - (1.5 + 0.742)) < 1e-9
+
+
+def test_a_leg_starts_by_steering_standing():
+    """ws1 job 6826: moving while the teleop curvature still slewed left the truck off its leg."""
+    poses = np.column_stack((np.linspace(0, 2, 41), np.zeros(41), np.zeros(41)))
+    driver = st.TourDriver(poses, np.ones(41, dtype=np.int8), np.zeros(41))
+    driver.start(0.0)
+    # the steering left hard over from the last leg: the straight leg's ~0 curvature is asked standing
+    command, end = driver.step(0.1, {**_state(1), "applied": {"curvature_inv_m": -0.3}, "steering_rad": [-0.2, -0.2]})
+    assert end is None and command[0] == 0.0 and abs(command[1]) < 0.1
+    state = {**_state(2), "applied": {"curvature_inv_m": 0.0}, "steering_rad": [-0.05, -0.05]}
+    assert driver.step(0.2, state)[0][0] == 0.0  # the joints still turning
+    state = {**_state(3), "applied": {"curvature_inv_m": 0.0}, "steering_rad": [-0.05, -0.05]}
+    assert driver.step(0.3, state)[0][0] > 0.0  # settled: drive
+
+
+def test_a_slow_steering_plant_still_arrives():
+    out = st.simulate_tour(*_straight_with_cusp(), max_sim_s=300.0, plant_curvature_rate=0.25)
+    assert out["end"] == "arrived"
