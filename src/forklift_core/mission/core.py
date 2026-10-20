@@ -64,6 +64,7 @@ import numpy as np
 
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
+from forklift_core.mission.baseline import start_digest
 from forklift_core.mission.cargo import APPROACH_GAP_M, CargoState
 from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M
 from forklift_core.mission.commands import MissionCommands
@@ -192,6 +193,8 @@ class MissionCore:
         self.capture_acquired_s: float | None = None  # D9c: its acquisition time, for the plan it asks
         self.prepare_attempts = 0  # persistent console plan D2: the current submit's preparation requests
         self.baseline = None  # persistent console plan D2: the mission-owned state before a live session's first mission
+        self.record_start_digest = False  # use case U21 on Isaac: digest the mission-owned state at each start
+        self.start_digest = None  # this mission's start digest (taken by the live end into the mission's records)
         self.end_release_due: dict | None = None  # plan D1 step 4: an end release waiting for the truck to stand
         self.hold_basis: dict | None = None  # the estimates a SLAM hold began with (those stay map estimates)
         self.fresh_depth_wait: tuple | None = None  # (since, acquisition stamp): an async near build's first frame
@@ -5669,6 +5672,8 @@ class MissionCore:
         ms.phase, ms.phase_started = "observe", t
         state["phase"] = ms.phase
         self.commands.adopt()
+        if self.record_start_digest:
+            self.start_digest = start_digest(self)
 
     def start_loaded_mission(self, t: float, plan, inputs: dict, ready=None) -> None:
         """A loaded submit's adoption (plan D5 6c item 4): the baseline back, the mission's inputs into the options,
@@ -5708,6 +5713,8 @@ class MissionCore:
         self.loaded_wait = {"since": float(t)}
         state.setdefault("loaded_lift_wait", []).append({"start_s": float(t)})
         self.commands.adopt()
+        if self.record_start_digest:
+            self.start_digest = start_digest(self)
 
     LOADED_START_WAIT_S = 60.0
 

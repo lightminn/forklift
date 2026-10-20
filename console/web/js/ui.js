@@ -393,7 +393,10 @@ function renderSession(m, stIn, lease, prof, monitor) {
       const span = Number.isFinite(r.started_s) && Number.isFinite(r.ended_s) ? ` · ${(r.ended_s - r.started_s).toFixed(0)} s` : "";
       return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
     }).join("") : '<li class="hint">아직 끝난 미션이 없습니다</li>';
-    $("results-older").textContent = book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "";
+    $("results-older").textContent = [
+      book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "",
+      book.recordErrorsOlder ? `목록 밖 결과의 기록 실패 ${book.recordErrorsOlder}건(실행 로그에 있음)` : "",
+    ].filter(Boolean).join(" · ");
   }
 
   const guide = recoveryGuide(st);
