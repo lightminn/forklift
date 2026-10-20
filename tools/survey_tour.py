@@ -511,18 +511,21 @@ class TourDriver:
         if cmd.status == "arrived":
             self._event(now, "arrived", position_error_m=cmd.position_error_m)
             return (0.0, 0.0), "arrived"
-        standing = abs(float(speed)) < 0.03 and abs(cmd.speed_mps) < 0.02
+        standing = abs(float(speed)) < 0.03  # not moving, whatever the tracker asks (a stall either way)
         self.stand_since = (self.stand_since or now) if standing else None
         at_leg_end = tracker.leg_remaining_m() <= tracker.leg_end_window_m()  # release_cusp's own condition
+        handled = False
         if standing and at_leg_end and now - self.stand_since >= self.release_s:
             if tracker.leg_end_index == self.last_index:
                 if cmd.position_error_m <= self.goal_slack_m:
                     self._event(now, "arrived_slack", position_error_m=cmd.position_error_m, yaw_error_rad=cmd.yaw_error_rad)
                     return (0.0, 0.0), "arrived"
+                # short of the goal by more than the slack: the stall below replans (Codex v2.5 round 4 P2-1)
             elif tracker.release_cusp(True):
                 self._event(now, "cusp_released", position_error_m=cmd.position_error_m, yaw_error_rad=cmd.yaw_error_rad)
                 self.stand_since = None
-        elif (standing and self.stand_since is not None and now - self.stand_since >= self.release_s
+                handled = True
+        if (not handled and standing and self.stand_since is not None and now - self.stand_since >= self.release_s
               and self._steer_since is None and tracker.leg_remaining_m() <= STUCK_NEAR_END_M
               and self.can_replan and self.replans < self.max_replans):
             # stood short of a leg end outside its tolerance, the tracker asking ~nothing (ws1 job 6828: 0.24 m beside

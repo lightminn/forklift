@@ -415,20 +415,48 @@ def test_a_slow_steering_plant_still_arrives():
     assert out["end"] == "arrived"
 
 
+def _drive_to(driver, poses_xy, t0=0.0, seq0=0, speed=0.2):
+    """Feed the driver states along ``poses_xy`` (on the path, heading 0), then return (t, seq)."""
+    t, seq = t0, seq0
+    for x, y in poses_xy:
+        seq, t = seq + 1, t + 0.1
+        driver.step(t, {**_state(seq, speed=speed), "pose": {"x_m": x, "y_m": y, "yaw_rad": 0.0}})
+    return t, seq
+
+
 def test_standing_short_of_a_leg_end_outside_its_tolerance_replans():
     """ws1 job 6828: 0.24 m beside a cusp waypoint the braking profile reached zero and the tour stood 60 s."""
     poses, directions, curv = _straight_with_cusp()
     driver = st.TourDriver(poses, directions, curv, waypoints=[[2.0, 0.0, 0.0]], release_s=3.0)
     driver.start(0.0)
-    seq, t = 1, 0.1
-    driver.step(t, {**_state(seq, x=1.99), "pose": {"x_m": 1.99, "y_m": 0.24, "yaw_rad": 0.0}})
+    t, seq = _drive_to(driver, [(x, 0.0) for x in np.linspace(0.0, 1.85, 40)] + [(1.85 + 0.024 * k, 0.04 * k)
+                                                                                  for k in range(1, 6)])
     request = None
-    while request is None and t < 10.0:
+    while request is None and t < 30.0:
         seq, t = seq + 1, t + 0.1
-        driver.step(t, {**_state(seq), "pose": {"x_m": 1.99, "y_m": 0.24, "yaw_rad": 0.0}, "rear_axle_speed_mps": 0.0})
+        # short of the cusp (2.0) by more than its release window, as 6828 stood
+        driver.step(t, {**_state(seq), "pose": {"x_m": 1.97, "y_m": 0.24, "yaw_rad": 0.0}, "rear_axle_speed_mps": 0.0})
         request = driver.replan_request
-    assert request is not None and [e["event"] for e in driver.events][-1] in ("stuck", "tracker_failed")
+    events = [e["event"] for e in driver.events]
+    assert request is not None and "stuck" in events and "tracker_failed" not in events
     assert request[1] == []  # the cusp waypoint beside (0.24 m) counts as passed
+
+
+def test_standing_short_of_the_last_goal_beyond_the_slack_replans():
+    """Codex v2.5 round 4 P2-1: the last goal 0.4 m away (beyond the 0.3 m slack) must not stall the tour."""
+    poses = np.column_stack((np.linspace(0, 2, 41), np.zeros(41), np.zeros(41)))
+    driver = st.TourDriver(poses, np.ones(41, dtype=np.int8), np.zeros(41), waypoints=[], release_s=3.0)
+    driver.start(0.0)
+    t, seq = _drive_to(driver, [(x, 0.0) for x in np.linspace(0.0, 1.9, 40)] + [(1.9 + 0.02 * k, 0.02 * k)
+                                                                                 for k in range(1, 6)])
+    request = None
+    while request is None and t < 30.0:
+        seq, t = seq + 1, t + 0.1
+        _, end = driver.step(t, {**_state(seq), "pose": {"x_m": 2.0, "y_m": 0.4, "yaw_rad": 0.0},
+                                 "rear_axle_speed_mps": 0.0})
+        assert end is None
+        request = driver.replan_request
+    assert request is not None and "stuck" in [e["event"] for e in driver.events]
 
 
 def test_planning_time_is_neither_idle_nor_stale_and_a_truck_that_never_stands_fails():
@@ -450,7 +478,8 @@ def test_planning_time_is_neither_idle_nor_stale_and_a_truck_that_never_stands_f
 
 
 def test_a_listed_scene_from_another_run_must_share_this_stage(tmp_path):
-    result = {**SCENE, "scene_sha256": {"scene.usda": "a"}, "forklift_urdf_sha256": "u", "pallet_urdf_sha256": "p",
+    result = {**SCENE, "scene_sha256": {"scene.usda": "a", "animated.usda": "z"}, "forklift_urdf_sha256": "u",
+              "pallet_urdf_sha256": "p", "arguments": {"base_scene": "/base/scene.usda"},
               "script_sha256": "s", "prism_colliders": {"columns": 37}, "low_obstacles_removed": {"props_kept": 37},
               "source_sha256": {"sim/isaac/scene.py": "b"}, "factory": {"layout_sha256": "l"}}
     run, ref = tmp_path / "run", tmp_path / "ref"
@@ -463,3 +492,7 @@ def test_a_listed_scene_from_another_run_must_share_this_stage(tmp_path):
     out = sb.rigid_provenance(rigid, run, result, ref)
     assert not out["ok"] and out["differ"] == ["scene_builder_sha256"]
     assert not sb.rigid_provenance({**rigid, "scene": "/elsewhere/scene.usda"}, run, result, ref)["ok"]
+    # the same directory's other file opened (Codex v2.5 round 4 P2-2)
+    (ref / "result.json").write_text(json.dumps({**result, "arguments": {"base_scene": "/base/animated.usda"}}))
+    out = sb.rigid_provenance(rigid, run, result, ref)
+    assert not out["ok"] and "base_scene_file" in out["differ"]

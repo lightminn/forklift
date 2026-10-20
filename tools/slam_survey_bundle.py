@@ -244,7 +244,12 @@ def stage_provenance(result: dict) -> dict:
     """What the runner's stage is built from: the base scene's files, the URDFs, the runner script, the scene builder
     (sim/isaac/scene.py), the factory layout, the prism colliders, the dropped low props and the scenario itself."""
     src = result.get("source_sha256") or {}
+    base = (result.get("arguments") or {}).get("base_scene")
+    name = Path(base).name if base else None
+    # scene_sha256 hashes every USD file beside the base scene; the one opened is the argument (Codex v2.5 round 4 P2-2)
     return {**{k: result.get(k) for k in STAGE_KEYS},
+            "base_scene_file": name,
+            "base_scene_file_sha256": (result.get("scene_sha256") or {}).get(name) if name else None,
             "scene_builder_sha256": src.get("sim/isaac/scene.py") if isinstance(src, dict) else None,
             "layout_sha256": (result.get("factory") or {}).get("layout_sha256"),
             "scenario_sha256": survey_tour.scenario_sha256(result) if "scenario" in result else None}
