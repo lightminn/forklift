@@ -1,6 +1,7 @@
 """M-c4: the live runtime with a fake core and fake Isaac hooks (plan C2, C4)."""
 
 import json
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -586,14 +587,32 @@ def test_the_end_logs_its_record_cost_and_the_archive_its_own(tmp_path):
     """Persistent console plan D1 step 7, U29: the end tick's record cost (bound 20 ms) is measured apart from the
     rest of the end, and the records written off the control thread log their size and wall time."""
     rt, core, order = ending(tmp_path)
+    write = rt._write_log
+    rt._write_log = lambda line: (time.sleep(0.05) if '"mission_end"' in line else None, write(line))
     rt.end_mission(15.0, "failed", "x")
     rt.close()
     logged = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()]
-    end = next(e for e in logged if "mission_end" in e)
-    assert 0.0 <= end["record_wall_s"] <= end["end_wall_s"]
+    cost = next(e["mission_end_cost"] for e in logged if "mission_end_cost" in e)
+    # the end's own log line is part of the record (Codex U29 review P2-3: it was left out)
+    assert cost["mission_id"] == "m1" and 0.05 <= cost["record_wall_s"] <= cost["end_wall_s"]
+    assert cost["restore_wall_s"] is None  # the stand-in core has no timed restore
     archive = next(e["archive"] for e in logged if "archive" in e)
-    assert archive["mission_id"] == "m1" and archive["wall_s"] >= 0.0
+    assert archive["mission_id"] == "m1" and archive["end_mono"] >= archive["start_mono"]
     assert archive["bytes"] == (tmp_path / "missions" / "m1" / "records.json").stat().st_size
+
+
+def test_a_records_write_failure_is_noted_in_the_results_book_at_the_next_tick(tmp_path):
+    """Plan U29: a write failure shows in the results book -- the records' write too (Codex U29 review P2-4: only the
+    result's did); the writer thread queues it and the control thread notes and publishes it."""
+    rt, core, order = ending(tmp_path)
+    (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
+    rt.end_mission(15.0, "failed", "x")
+    for writer in rt._writers:
+        writer.join(timeout=5.0)
+    assert "record_error" not in rt.results.last
+    rt.tick_start(16.0, False)
+    assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")
+    assert rt.store.get("missions")[1]["results"][0]["record_error"] == rt.results.last["record_error"]
 
 
 def test_a_mission_end_holds_the_lift_where_it_is(tmp_path):

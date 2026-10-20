@@ -73,6 +73,7 @@ class LiveRuntime:
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
         self._ended_id: str | None = None  # the mission end_mission last ended (each ends once)
         self._writers: list = []  # the threads writing the missions' records (plan D2), joined at close
+        self._archive_errors: deque = deque()  # (seq, error) from the writers, noted at the next tick start
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -142,22 +143,27 @@ class LiveRuntime:
         self.log({"event": "start", "port": port, "session_epoch": self.session_epoch})
         return port
 
-    def archive(self, mission_id: str, records: dict) -> None:
+    def archive(self, mission_id: str, records: dict, seq: int | None = None) -> None:
         """Write a mission's records (handed over at the next adoption) to missions/<id>/records.json off the
-        control thread; the dict is the mission's own (moved out of the core), so nothing changes it meanwhile."""
+        control thread; the dict is the mission's own (moved out of the core), so nothing changes it meanwhile. A
+        failure is noted on result ``seq`` at the next tick start (plan U29)."""
         def write():
             folder = self.output / "missions" / mission_id
-            start = time.perf_counter()
+            start = self.clock()
             try:
                 folder.mkdir(parents=True, exist_ok=True)
                 text = json.dumps(records, default=_jsonable)
                 (folder / "records.json").write_text(text)
             except (OSError, TypeError, ValueError) as exc:
-                self.log({"archive_error": f"{type(exc).__name__}: {exc}", "mission_id": mission_id})
+                error = f"{type(exc).__name__}: {exc}"
+                self.log({"archive_error": error, "mission_id": mission_id})
+                if seq is not None:
+                    self._archive_errors.append((seq, f"records.json: {error}"))
                 return
-            # U29: its size and wall time (it holds the interpreter lock against the control thread while it encodes)
-            self.log({"archive": {"mission_id": mission_id, "bytes": len(text.encode()),
-                                  "wall_s": time.perf_counter() - start}})
+            # U29: when it ran on the tick trace's clock (it holds the interpreter lock against the control thread
+            # while it encodes) and its size
+            self.log({"archive": {"mission_id": mission_id, "bytes": len(text.encode()), "start_mono": start,
+                                  "end_mono": self.clock()}})
 
         self._writers = [w for w in self._writers if w.is_alive()]
         writer = threading.Thread(target=write, name=f"archive-{mission_id}", daemon=True)
@@ -237,8 +243,24 @@ class LiveRuntime:
                                                       localization_ok=localization_ok,
                                                       loaded_pallet=loaded_pallet))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
+        self._note_archive_errors()
         self._flush(t)
         return stop_kind, records
+
+    def _note_archive_errors(self) -> None:
+        """The records writes that failed since the last tick, on their results, published (plan U29)."""
+        if not self._archive_errors:
+            return
+        while self._archive_errors:
+            seq, error = self._archive_errors.popleft()
+            kept = next((e for e in self.results.message()["results"] if e["seq"] == seq), None)
+            if kept is None:
+                continue  # pushed out of the book; the log has it
+            before = kept.get("record_error")
+            self.results.note(seq, record_error=error if before is None else f"{before}; {error}")
+        message = self.results.message()
+        self.store.put("missions", self.results.seq, message)
+        self.channels.put(None, message)
 
     # --- a mission's end (docs/plans/2026-10-18-persistent-live-console.md D1) -------------------------------------
     def collect_end(self, t: float) -> None:
@@ -293,7 +315,7 @@ class LiveRuntime:
             self.core.targets.verify_at(mission.pallet_id, mission.destination_id)
         recording = time.perf_counter()  # plan D1 step 7 (U29): the record cost from here, bound 20 ms
         if any(records.values()):
-            self.archive(mission_id, records)  # under this mission's own id (Codex stage 2 impl P2-5)
+            self.archive(mission_id, records, entry["seq"])  # under this mission's own id (Codex stage 2 impl P2-5)
         try:  # step 7: bounded (the result, its clock); the mission's paths and logs go by chunks (plan D8)
             folder = self.output / "missions" / mission_id
             folder.mkdir(parents=True, exist_ok=True)
@@ -304,9 +326,13 @@ class LiveRuntime:
         message = self.results.message()
         self.store.put("missions", self.results.seq, message)  # a client connecting later gets it after the targets
         self.channels.put(None, message)
+        self.log({"mission_end": entry, "tick_t": t, **extra})
         done = time.perf_counter()
-        self.log({"mission_end": entry, "tick_t": t, **extra, "record_wall_s": done - recording,
-                  "end_wall_s": done - began})
+        # U29: the record cost (the handover to the writer, the result, the publish and the end's log line) and the
+        # whole end; the restore's (the mission state back to the start, with the records' top-level copies) apart
+        self.log({"mission_end_cost": {"mission_id": mission_id, "record_wall_s": done - recording,
+                                       "end_wall_s": done - began,
+                                       "restore_wall_s": getattr(self.core, "restore_wall_s", None)}})
         return entry
 
     def _flush(self, t: float) -> None:
