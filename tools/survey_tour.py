@@ -225,7 +225,7 @@ def plan_tour(result: dict, tour: list, start=None, clearance_m: float = SURVEY_
     The tour drives on the SLAM map pose while it is planned in world, so the map's error comes off the clearance: ws1
     job 6837 (r6) stood with the true rear axle 0.22 m from a prop where the estimate read 0.36, the teleop permit
     holding it (``occupied``), and every replan at 0.10 m gave the same blocked leg. A replan from a pose that does not
-    keep ``clearance_m`` itself (stopped off the path) is tried once more at the run's planner clearance -- never at 0
+    keep ``clearance_m`` itself (stopped off the path) is planned at the run's planner clearance -- never at 0
     (r6's fallback to 0 would plan the very leg the permit holds). The
     judged region keeps the run's planner clearance (``judged_region``): only the driving clearance grows. Returns the
     planner's result fields and ``clearance_m``, the clearance the plan was made with."""
@@ -241,14 +241,14 @@ def plan_tour(result: dict, tour: list, start=None, clearance_m: float = SURVEY_
     from dataclasses import fields, replace
 
     config = PlannerConfig(**result["travel_planner_config"])
-    ladder = [max(clearance_m, config.clearance_m)]
-    if start is not None and ladder[0] > config.clearance_m:
-        ladder.append(config.clearance_m)
-    for clearance in ladder:
-        plan = plan_survey_route(SimpleNamespace(transport=transport), route, replace(config, clearance_m=clearance),
-                                 geometry=geometry)
-        if plan.success:
-            break
+    clearance = max(clearance_m, config.clearance_m)
+    if start is not None and clearance > config.clearance_m:
+        checker = FootprintCollisionChecker(scenario_obstacles(result) + [zone], geometry.unloaded_footprint,
+                                            transport.bounds)
+        if not checker.free(tuple(map(float, start)), clearance):
+            clearance = config.clearance_m  # the start alone: a later leg infeasible at the tour's clearance fails
+    plan = plan_survey_route(SimpleNamespace(transport=transport), route, replace(config, clearance_m=clearance),
+                             geometry=geometry)
     return SimpleNamespace(**{f.name: getattr(plan, f.name) for f in fields(plan)}, clearance_m=clearance)
 
 
@@ -284,7 +284,9 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
     g = result["geometry"]["unloaded_footprint"]
     checker = FootprintCollisionChecker(scenario_obstacles(result) + [permit_pickup_zone(result)], Footprint(**g),
                                         Bounds(**result["scenario"]["bounds"]))
-    clearance = float(result["travel_planner_config"].get("clearance_m", 0.0))
+    # the candidate's heading at the clearance the tour plans with (Codex review of 8aeb773 P2: at the planner's 0.10
+    # a heading the 0.30 plan then refuses skipped the whole cluster)
+    clearance = max(SURVEY_CLEARANCE_M, float(result["travel_planner_config"].get("clearance_m", 0.0)))
     plan = plan_tour(result, tour)
     if not plan.success:
         return tour, plan

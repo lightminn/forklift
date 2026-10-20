@@ -535,6 +535,10 @@ def test_the_tour_keeps_its_clearance_and_a_replan_never_drops_below_the_planner
     near = st.plan_tour(scene, tour, start=(0.0, 0.45, 0.0))  # the truck's side 0.19 m from the prop
     assert near.success and near.clearance_m == 0.1
     assert not st.plan_tour(scene, tour, start=(0.0, 0.6, 0.0)).success  # 0.04 m: no clearance-0 retry
+    # a start that keeps 0.30 m does not lower the tour's clearance for a waypoint that cannot (Codex review P3)
+    tight = [[-1.0, 0.45, 0.0]]  # the truck's side 0.19 m from the prop
+    assert not st.plan_tour(scene, tight).success
+    assert not st.plan_tour(scene, tight, start=(-1.0, -1.5, 0.0)).success
 
 
 def test_each_permit_block_is_recorded_once_with_the_pose_it_held():
