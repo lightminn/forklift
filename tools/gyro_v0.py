@@ -32,6 +32,8 @@ WINS, POSITION_M, YAW_RAD = 16, 0.10, 0.03
 
 
 def plan(runs: dict, out_root: Path) -> list[dict]:
+    out_root = out_root.resolve()  # the replay resolves its output directory; the comparison must see the same path
+    runs = {key: Path(run_dir).resolve() for key, run_dir in runs.items()}
     entries = []
     for key, run_dir in runs.items():
         for seed in SEEDS:
@@ -45,12 +47,20 @@ def plan(runs: dict, out_root: Path) -> list[dict]:
     return entries
 
 
-def record_scans(run_dir: str, cache: dict) -> int:
+def record_facts(run_dir: str, cache: dict) -> tuple[int, str]:
+    """(scans in the record, the record digest every odometry file of this run must carry)."""
     if run_dir not in cache:
-        from forklift_core.live.spool import load_list
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from gyro_heading_offline import record_digest, run_geometry
+        from forklift_core.live.spool import load_list, load_slam_log
 
-        cache[run_dir] = len(load_list(Path(run_dir) / "spool", "slam.records"))
+        records = load_list(Path(run_dir) / "spool", "slam.records")
+        cache[run_dir] = (len(records), record_digest(load_slam_log(Path(run_dir)), records, run_geometry(Path(run_dir))))
     return cache[run_dir]
+
+
+def _finite(value) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
 
 
 def node_stamps(dump: Path) -> list:
@@ -77,18 +87,20 @@ def outcome(entry: dict, cache: dict) -> dict:
     checks = {"done": status.get("state") == "done",
               "driver": status.get("driver_exit") == 0, "container": status.get("container_exit") == 0,
               "eval": status.get("eval_exit") == 0, "serialized": status.get("serialize_ok") is True,
-              "all_scans": status.get("sent") == record_scans(entry["run_dir"], cache),
+              "all_scans": status.get("sent") == record_facts(entry["run_dir"], cache)[0],
               "paired": bool(v2.get("nodes")) and v2.get("paired") == v2.get("nodes"),
-              "yaw": v2.get("yaw_max_rad") is not None,
+              "values": _finite(v2.get("position_max_m")) and _finite(v2.get("yaw_max_rad")),
               # processed replies and the saved graph's nodes, one to one by stamp
               "nodes": (len(set(processed)) == len(processed) == len(nodes) == len(set(nodes)) == v2.get("nodes")
-                        and set(processed) == set(nodes)),
+                        == (v2.get("graph") or {}).get("vertices") and set(processed) == set(nodes)),
               # what actually ran is what the matrix planned
-              "config": (config.get("noise_seed") == entry["noise_seed"]
+              # V-G0: the scan noise is the seed's own redraw, never given ranges
+              "config": (config.get("noise_seed") == entry["seed"] and config.get("ranges_bin") is None
                          and config.get("run") == str(Path(entry["run_dir"]).resolve())
-                         and config.get("odom_file") == str(out / "odom.npz")),
+                         and config.get("odom_file") == str((out / "odom.npz").resolve())),
               "odometry": (odom.get("arm") == entry["arm"] and odom.get("seed") == entry["seed"]
-                           and (entry["arm"] == "steering" or odom.get("bundle") == entry["bundle"]))}
+                           and (entry["arm"] == "steering" or odom.get("bundle") == entry["bundle"])
+                           and odom.get("record_sha256") == record_facts(entry["run_dir"], cache)[1])}
     bad = [k for k, ok in checks.items() if not ok]
     if bad:
         return {"position_max_m": math.inf, "yaw_max_rad": math.inf, "invalid": bad}
@@ -112,8 +124,10 @@ def matrix_problems(entries: list[dict]) -> list[str]:
         problems.append("duplicate entries")
     if set(keys) != expected:
         problems.append(f"{len(expected - set(keys))} planned remaps missing, {len(set(keys) - expected)} unplanned")
-    if len({e["out"] for e in entries}) != len(entries):
+    if len({str(Path(e["out"]).resolve()) for e in entries}) != len(entries):
         problems.append("two entries share an output directory")
+    if any(e.get("noise_seed") != e["seed"] for e in entries):
+        problems.append("an entry's scan-noise seed is not its seed")
     return problems
 
 

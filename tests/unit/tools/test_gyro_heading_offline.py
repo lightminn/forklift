@@ -92,19 +92,21 @@ def test_the_gyro_heading_integrates_the_rate_less_its_bias_and_the_wheels_give_
     assert abs(np.sum(np.hypot(*np.diff(pose[:, :2], axis=0).T)) - 0.008 * 0.125 * moving) < 1e-9
 
 
-def _entry(tmp_path, run, arm, bundle, seed, *, position, yaw=0.01, ok=True, sent=10, noise_seed=None, stamps=(0.1, 0.2, 0.3)):
+def _entry(tmp_path, run, arm, bundle, seed, *, position, yaw=0.01, ok=True, sent=10, noise_seed=None, stamps=(0.1, 0.2, 0.3),
+           digest="d" * 64, vertices=3, ranges_bin=None):
     out = tmp_path / run / f"{arm}_{bundle}_s{seed}"
     (out / "bridge" / "dump").mkdir(parents=True)
     (out / "status.json").write_text(json.dumps({"state": "done", "driver_exit": 0 if ok else 1, "container_exit": 0,
                                                  "eval_exit": 0, "sent": sent, "serialize_ok": True}))
     (out / "v2.json").write_text(json.dumps({"nodes": 3, "paired": 3, "position_max_m": position, "yaw_max_rad": yaw,
-                                             "graph": {"vertices": 3}}))
+                                             "graph": {"vertices": vertices}}))
     (out / "drive.jsonl").write_text("".join(json.dumps({"stamp_s": t}) + "\n" for t in stamps))
     (out / "bridge" / "dump" / "nodes.csv").write_text("stamp_s\n0.1\n0.2\n0.3\n")
     run_dir = tmp_path / f"rec_{run}"
     (out / "drive.log").write_text("config " + json.dumps({"run": str(run_dir.resolve()), "noise_seed": seed if noise_seed is None else noise_seed,
-                                                          "odom_file": str(out / "odom.npz")}) + "\n")
-    (out / "odom.json").write_text(json.dumps({"arm": arm, "bundle": bundle or "A+", "seed": seed}) + "\n")
+                                                          "odom_file": str(out / "odom.npz"), "ranges_bin": ranges_bin}) + "\n")
+    (out / "odom.json").write_text(json.dumps({"arm": arm, "bundle": bundle or "A+", "seed": seed,
+                                               "record_sha256": digest}) + "\n")
     return {"run": run, "run_dir": str(run_dir), "arm": arm, "bundle": bundle, "seed": seed, "out": str(out),
             "noise_seed": seed}
 
@@ -116,7 +118,7 @@ def small_matrix(monkeypatch):
     monkeypatch.setattr(gyro_v0, "JUDGED", ("A+",))
     monkeypatch.setattr(gyro_v0, "RECORDED", ())
     monkeypatch.setattr(gyro_v0, "REQUIRED_RUNS", ("r6",))
-    monkeypatch.setattr(gyro_v0, "record_scans", lambda run_dir, cache: 10)
+    monkeypatch.setattr(gyro_v0, "record_facts", lambda run_dir, cache: (10, "d" * 64))
 
 
 def _matrix(tmp_path, **gyro):
@@ -139,7 +141,8 @@ def test_the_verdict_counts_a_failed_or_short_run_as_infinite_and_judges_each_bu
     assert result["cells"]["r6/A+"]["wins"] == 3 and not result["pass"]
 
 
-@pytest.mark.parametrize("change", [{"noise_seed": 7}, {"stamps": (0.1, 0.1, 0.3)}])
+@pytest.mark.parametrize("change", [{"noise_seed": 7}, {"stamps": (0.1, 0.1, 0.3)}, {"yaw": float("nan")},
+                                    {"digest": "e" * 64}, {"vertices": 0}, {"ranges_bin": "live.bin"}])
 def test_a_run_that_used_other_settings_or_whose_replies_are_not_its_nodes_does_not_count(tmp_path, small_matrix, change):
     result = gyro_v0.verdict(_matrix(tmp_path, **change))
     assert result["cells"]["r6/A+"]["invalid"]["gyro"] == 2
@@ -195,3 +198,10 @@ def test_the_record_digest_changes_with_the_wheel_data():
     geometry = gh.AckermannOdometryGeometry(0.66, 0.53, 0.125)
     other = {**log, "wheel_angles_rad": np.full((3, 4), 0.1)}
     assert gh.record_digest(log, records, geometry) != gh.record_digest(other, records, geometry)
+
+
+def test_the_manifest_holds_absolute_paths_as_the_replay_resolves_them(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    entries = gyro_v0.plan({"r6": "rec6", "r7": "rec7"}, Path("results"))
+    assert all(Path(e["out"]).is_absolute() and Path(e["run_dir"]).is_absolute() for e in entries)
+    assert all(e["noise_seed"] == e["seed"] for e in entries) and not gyro_v0.matrix_problems(entries)
