@@ -245,7 +245,7 @@ def test_a_clean_known_pallet_is_fitted_within_the_pocket_tolerances(spec, place
     # True, with the unverified items listed (Codex 2026-10-16: a known template is not a measurement).
     truth_ok = any(f.fit["pickable"] for f in truth.faces if f.accessible and f.axis == cand.axis)
     assert cand.pickable is (None if truth_ok else False)
-    assert cand.pending == F.FAR_PENDING
+    assert cand.pending == F.KNOWN_FAR_PENDING
 
 
 def test_left_is_the_larger_lateral_pocket():

@@ -99,6 +99,7 @@ def no_pallet(stamp_ns: int, clock_domain: str, reason: str) -> PocketObservatio
 
 def _candidate_record(c) -> dict:
     return {"candidate_id": c.candidate_id, "proposal_id": c.proposal_id, "hypothesis": c.hypothesis, "geometry": c.geometry,
+            "axis": c.axis, "support_z_m": float(c.support_z_m),  # the side evidence's target (plan 2026-10-19 task 4)
             "identity": c.identity, "range_m": float(c.range_m), "insertion_yaw_rad": float(c.insertion_yaw_rad),
             "left_m": list(c.left.centre_m), "right_m": list(c.right.centre_m),
             "pallet_centre_m": list(c.pallet_centre_m), "pickable": c.pickable}

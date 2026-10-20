@@ -72,6 +72,9 @@ from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
 from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
+from forklift_core.mission import bottom_deck_legs
+from forklift_core.perception import bottom_deck_evidence, bottom_deck_permit
+from forklift_core.perception.bottom_deck_evidence import BottomDeckTarget
 from forklift_core.perception.pocket_detector import DetectorParams
 from forklift_core.localization.scan_docking import laser_points
 from forklift_core.localization.slam_pose import compose, invert
@@ -414,6 +417,23 @@ class MissionCore:
                 }
                 transition("near_tracking_stopped", t)
                 return SimpleNamespace(stop=True, rear=rear)
+            if getattr(self.options, "bottom_deck_check", "off") == "on":
+                # Plan 2026-10-19 task 3: the side evidence permits this insertion only when it read present and
+                # was taken of the pallet the near capture now targets (the planned pickup: where the forks go).
+                pickup_ = self.pocket["planning_pickup"]
+                deck_ = state.setdefault("bottom_deck", {})
+                shape_ = self.pallet_geometry.geometry_version
+                at_ = {"target": [pickup_.x_m, pickup_.y_m, pickup_.yaw_rad], "shape": shape_}
+                record_ = deck_.get("record")  # kept as JSON (BottomDeckRecord.to_record)
+                refusal_ = bottom_deck_permit.insert_refusal(
+                    None if record_ is None else bottom_deck_permit.BottomDeckRecord.from_record(record_),
+                    (pickup_.x_m, pickup_.y_m), pickup_.yaw_rad, shape_)
+                if refusal_ is not None:
+                    deck_["refused"] = {"reason": refusal_, "time_s": t, **at_}
+                    state["mission_result"] = "bottom_deck_refused"
+                    transition("bottom_deck_refused", t)
+                    return SimpleNamespace(stop=True, rear=rear)
+                deck_["permitted"] = {"time_s": t, **at_}
             transition("insert", t)
         elif ms.phase == "insert":
             state["insertion_error"] = {
@@ -1207,6 +1227,12 @@ class MissionCore:
         the start is inside the clearance, then clearance 0, other observation candidates before recognition,
         the whole mission again after it), and what is installed -- an escape, a backoff, a wait, the same
         path or the new path. Returns the control pose (moved by a release) and the requested speed."""
+        if self.bottom_deck_leg_active():
+            # Plan 2026-10-19 task 4: a side leg is replanned to its own stand only, released first; its failure
+            # ends the face -- never the far candidates or the mission replan below (Codex design round 1 P2).
+            self.obstacle["blocked_ticks"] = 0
+            out_ = self.bottom_deck_recover(t, rear, "blocked")
+            return SimpleNamespace(rear=out_.rear, requested_speed=0.0)
         ms, state, obstacle, slam, pocket, hooks, options = (self.ms, self.state, self.obstacle, self.slam, self.pocket,
                                                             self.hooks, self.options)
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
@@ -2064,6 +2090,24 @@ class MissionCore:
             # Plan D8 S4c-3 stage 2: no recovery runs held in the realignment (the
             # S4c-2 failure's replan did) -- whatever its budget.
             require(False, "near_capture_realign_held_recovery")
+        deck_miss_ = (
+            # Plan 2026-10-19 task 4 (Codex implementation round 1 P2): without SLAM the observe replan below never
+            # runs; a side leg's heading miss still ends its own way instead of failing the tracker.
+            slam is None and self.bottom_deck_leg_active()
+            and tracking.status == "failed" and tracking.failure == "endpoint_heading" and not tracking.off_path
+        )
+        if deck_miss_:
+            tracking = replace(tracking, status="braking", speed_mps=0.0)
+            # Stopped first (as the transport's cusp recovery without SLAM; Codex implementation round 2 P2): the
+            # command stays 0 until the truck stands, then the face ends or the stand is planned again.
+            stopped_ = (float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers["observe"].config.stop_speed_mps
+                        and abs(float(hooks.truth_yaw_rate())) <= cusp_stop_yaw_rate_radps)
+            if stopped_:
+                out_ = self.bottom_deck_recover(t, rear, "observe_miss")
+                rear = out_.rear
+                if out_.installed and ms.phase == "observe":
+                    tracking = trackers["observe"].update(rear, signed_speed, dt)  # the new leg's, not the old one
+                    ms.last_tracking = tracking
         observe_miss = (
             slam is not None
             and ms.phase == "observe"
@@ -2081,7 +2125,14 @@ class MissionCore:
         if observe_miss:
             ms.observe_stall_ticks = 0
             tracking = replace(tracking, status="braking", speed_mps=0.0)
-            if slam["stop_now"]:
+            if slam["stop_now"] and self.bottom_deck_leg_active():
+                # Plan 2026-10-19 task 4: released before the replan; a retreat makes no detour (design rounds 4-5).
+                out_ = self.bottom_deck_recover(t, rear, "observe_miss")
+                rear = out_.rear
+                if out_.installed and ms.phase == "observe":
+                    tracking = trackers["observe"].update(rear, signed_speed, dt)  # the new leg's, not the old one
+                    ms.last_tracking = tracking
+            elif slam["stop_now"]:
                 target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
                 replan_start = wall()
                 replanned = plan_observation_leg(
@@ -2537,6 +2588,9 @@ class MissionCore:
             known_pallet((planning_pickup.x_m, planning_pickup.y_m, planning_pickup.yaw_rad),
                          obstacle["layer"].known_config.get("r_fix_pickup_m", 0.05),
                          f"recognised:attempt{len(state.get('observation_attempts', []))}")
+        if self.bottom_deck_on() and "bottom_deck" not in state:
+            # Plan 2026-10-19 task 4: the side legs before the mission plan and any near capture.
+            return self._bottom_deck_begin(t, rear, base, yaw, attempt, attempt_number, observation, planning_pickup)
         planning_start = wall()
         planning_trace = []
         if self.jobs is not None:
@@ -2706,6 +2760,352 @@ class MissionCore:
         if built_now is not None and built_now != built_before:
             self.fresh_depth_wait = (float(t), float(ctx["acquired_s"]))  # a fresh pocket frame must follow (D8b)
         self._refresh_for_new_leg(t, rear)  # the new leg's path check before the first move
+
+    # --- plan 2026-10-19 task 4: the bottom-deck side legs (design rounds 1-5, Codex converged) ---
+    def bottom_deck_on(self) -> bool:
+        return getattr(self.options, "bottom_deck_check", "off") == "on"
+
+    def bottom_deck_leg_active(self) -> bool:
+        """A side leg (a stand or a retake's retreat) is the observe leg now: its arrival is the side capture's."""
+        deck_ = self.state.get("bottom_deck")
+        return bool(deck_ and deck_.get("leg") is not None and self.ms.phase == "observe")
+
+    def _bottom_deck_target(self, attempt: dict, pickup):
+        """The judged target from the far observation: the pickup estimate's centre and insertion yaw, and -- when
+        the far recognition read it -- the used candidate's hypothesis, axis, support and id (Codex design round
+        1 P2). The detector path has none of them: the run's shape, the x axis and the floor. Returns the target
+        dict or a refusal reason."""
+        shape_run = self.pallet_geometry.geometry_version
+        far_ = attempt.get("recognition")
+        if far_ is not None:
+            used_ = far_.get("used") or {}
+            if any(used_.get(k) is None for k in ("candidate_id", "hypothesis", "axis", "support_z_m")):
+                return "far_record_incomplete"
+            shape, axis = str(used_["hypothesis"]).split(":")[0], used_["axis"]
+            support, candidate, track = float(used_["support_z_m"]), used_["candidate_id"], far_.get("selected_track")
+        else:
+            shape, axis, support, candidate, track = shape_run, "x", 0.0, None, None
+        if shape != shape_run:
+            return "shape_mismatch"
+        if axis not in bottom_deck_legs.FACES:
+            return "far_record_incomplete"
+        return {"centre_xy": [float(pickup.x_m), float(pickup.y_m)], "insertion_yaw_rad": float(pickup.yaw_rad),
+                "model_yaw_rad": bottom_deck_legs.model_yaw(float(pickup.yaw_rad), axis), "shape": shape,
+                "axis": axis, "support_z_m": support, "candidate_id": candidate,
+                "track_id": None if track is None else str(track)}
+
+    def _bottom_deck_stand(self, face: int):
+        tg_ = self.state["bottom_deck"]["target"]
+        return bottom_deck_legs.stand(tg_["centre_xy"], tg_["insertion_yaw_rad"], tg_["axis"], face,
+                                      mount_x_m=self.options.camera_mount_x_m,
+                                      rear_axle_offset_m=self.options.rear_axle_offset_m)
+
+    def _bottom_deck_plan(self, rear, face: int, goal=None):
+        """A side leg to the face's stand (or to ``goal``) from ``rear``: at the planning clearance, then at none
+        (as an observe replan). The planner checks the whole footprint against the map and the grid -- a stand
+        or a retreat end that collides is refused (invalid_goal), so is a path through an obstacle."""
+        options, hooks, geometry = self.options, self.hooks, self.geometry
+        grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
+        planner_config, scenario = options.planner_config, options.scenario
+        side_ = getattr(self, "bottom_deck_bounds", None)  # the side stage's bounds (also before a leg is active)
+        observe_bounds_ = side_ if side_ is not None else self.observe_bounds()
+        target = PlanningPose(*(self._bottom_deck_stand(face).rear if goal is None else goal))
+        start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+        plan_ = plan_observation_leg(grid_world(scenario), target, planner_config, geometry=geometry,
+                                     start_rear=start, pickup_bounds=observe_bounds_, extended=False,
+                                     **grid_kwargs("observe"))
+        if not plan_.success:
+            tight = replace(planner_config, clearance_m=0.0)
+            plan_ = plan_observation_leg(grid_world(scenario), target, tight, geometry=geometry,
+                                         start_rear=start, pickup_bounds=observe_bounds_, extended=False,
+                                         **grid_kwargs("observe"))
+        return plan_
+
+    def _bottom_deck_install(self, t: float, path, kind: str, face: int, captures: int) -> None:
+        """Install a side leg as the observe leg: its own replan budget and no-progress watch (Codex design
+        round 2 P2), the path records."""
+        ms, state, obstacle, hooks, paths, trackers = (self.ms, self.state, self.obstacle, self.hooks, self.paths,
+                                                       self.trackers)
+        paths["observe"] = path
+        trackers["observe"] = RearAxlePathTracker(path.poses, path.directions, path.curvatures_inv_m,
+                                                  trackers["observe"].config)
+        state.setdefault("paths", {})["observe"] = hooks.path_record(path)
+        hooks.write_paths()
+        state["observe_replan_leg"] = {"serial": state["observe_replan_leg"]["serial"] + 1,
+                                       "start": len(state["observe_replans"])}
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()
+        state["observation_waypoint_selected"] = np.asarray(path.poses[-1]).tolist()
+        ms.phase_started = t
+        state["bottom_deck"]["leg"] = {"kind": kind, "face": int(face), "captures": int(captures), "time_s": t}
+
+    def _bottom_deck_release_if_held(self, t: float, event: str):
+        """Release a SLAM hold before a side plan or a side capture's next step reads the pose (Codex design
+        rounds 1-4): the grid re-projected, the estimates and the judged target carried into the released
+        frame, the runner's rear set. Returns the released rear, or None when nothing was held."""
+        slam = self.slam
+        if slam is None or slam["tracker"].mode != "holding":
+            return None
+        released_ = self._release_reproject(t, event)
+        fc_ = released_["frame_change"]
+        tg_ = self.state["bottom_deck"]["target"]
+        x_, y_, yaw_ = compose(fc_, (tg_["centre_xy"][0], tg_["centre_xy"][1], tg_["insertion_yaw_rad"]))
+        tg_.update(centre_xy=[float(x_), float(y_)], insertion_yaw_rad=float(yaw_),
+                   model_yaw_rad=bottom_deck_legs.model_yaw(float(yaw_), tg_["axis"]))
+        self.state["bottom_deck"].setdefault("releases", []).append(
+            {"time_s": t, "event": event, "frame_change": [float(v) for v in fc_], "jump_m": released_["jump_m"],
+             "after_attempts": len(self.state["bottom_deck"]["attempts"])})  # the recompute carries the target
+        rear_ = np.asarray(released_["after"], dtype=float)
+        self.hooks.set_rear(rear_)
+        return rear_
+
+    def _bottom_deck_refuse(self, t: float, reason: str, rear) -> SimpleNamespace:
+        """End the mission at the side stage (Codex design round 1: no reason to drive to the insert gate)."""
+        state = self.state
+        deck_ = state["bottom_deck"]
+        deck_["status"] = "failed" if deck_.get("status") == "pending" else deck_.get("status")
+        deck_["leg"] = None
+        deck_["refused"] = {"reason": reason, "time_s": t, "stage": "side"}
+        state["mission_result"] = "bottom_deck_refused"
+        self.transition("bottom_deck_refused", t)
+        return SimpleNamespace(stop=True, rear=rear, installed=False)
+
+    def _bottom_deck_begin(self, t: float, rear, base, yaw: float, attempt: dict, attempt_number: int, observation,
+                           pickup) -> SimpleNamespace:
+        """The first valid far observation with the check on: no mission plan yet, the side legs first (all of
+        them before any near capture)."""
+        state, obstacle = self.state, self.obstacle
+        deck_ = state["bottom_deck"] = {"status": "pending", "leg": None, "faces": [], "attempts": [], "record": None}
+        self.bottom_deck_far = SimpleNamespace(observation=observation, attempt_number=attempt_number,
+                                               base=np.asarray(base, dtype=float), yaw=float(yaw))
+        target_ = self._bottom_deck_target(attempt, pickup)
+        if isinstance(target_, str):
+            deck_["target"] = None
+            out_ = self._bottom_deck_refuse(t, "bottom_deck_target_mismatch" if target_ == "shape_mismatch"
+                                            else "bottom_deck_unobserved", rear)
+            deck_["refused"]["detail"] = target_
+            return SimpleNamespace(stop=True, observation=observation, near_leg=None, handled=True)
+        deck_["target"] = target_
+        if obstacle is not None:
+            # What grid_kwargs("mission") would have set (Codex design round 1 P2): the side plans see the
+            # recognised pallet, not the pickup zone, and a failure is not handed to the far candidates.
+            obstacle["pickup_estimate"] = pickup
+        order_ = bottom_deck_legs.ordered_faces(target_["axis"], target_["centre_xy"], target_["insertion_yaw_rad"],
+                                                rear_xy=(float(rear[0]), float(rear[1])),
+                                                mount_x_m=self.options.camera_mount_x_m,
+                                                rear_axle_offset_m=self.options.rear_axle_offset_m)
+        stands_ = {f: self._bottom_deck_stand(f) for f in order_}
+        # The side stage's own bounds (Codex A'): the pickup zone confines the pickup legs for the search's sake, not
+        # as a wall, and a side stand of a pallet near its edge lies outside it. Every side plan, retreat, recovery
+        # and cusp check uses these; the last stand must lie in the zone (with the next planner's start margin) so
+        # the mission planned after the side legs starts inside it.
+        zone_, fp_ = self.observe_bounds(), self.geometry.unloaded_footprint  # the batch zone; live: the hall
+        margin_ = min(float(self.options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
+        in_zone_ = {f: zone_ is None or bottom_deck_legs.inside(zone_, stands_[f].rear, fp_, margin_) for f in order_}
+        if target_["axis"] == "x":
+            order_ = tuple(sorted(order_, key=lambda f: in_zone_[f]))  # outside the zone first (stable: nearer first)
+        self.bottom_deck_bounds = zone_ if zone_ is None else bottom_deck_legs.side_bounds(
+            zone_, self.options.scenario.bounds,
+            [stands_[f].rear for f in order_] + [bottom_deck_legs.retreat_pose(stands_[f].rear) for f in order_],
+            fp_, margin_)
+        deck_["order"] = list(order_)
+        deck_["stands"] = {str(f): {"rear": list(stands_[f].rear), "camera_xy": list(stands_[f].camera_xy),
+                                    "in_zone": bool(in_zone_[f])} for f in order_}
+        deck_["bounds"] = None if self.bottom_deck_bounds is None else asdict(self.bottom_deck_bounds)
+        if not in_zone_[order_[-1]]:
+            out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
+            deck_["refused"]["detail"] = "last_stand_outside_zone"
+            return SimpleNamespace(stop=True, observation=observation, near_leg=None, handled=True)
+        # The legs in their order reachable before the first side leg starts (task 4: else no side leg at all):
+        # from here to the first stand, and from the first stand to the second.
+        plans_ = {order_[0]: self._bottom_deck_plan(rear, order_[0]),
+                  order_[1]: self._bottom_deck_plan(stands_[order_[0]].rear, order_[1])}
+        deck_["reachable"] = {str(f): p.status for f, p in plans_.items()}
+        if not all(p.success for p in plans_.values()):
+            out_ = self._bottom_deck_refuse(t, "bottom_deck_unobserved", rear)
+            deck_["refused"]["detail"] = "stand_unreachable"
+            return SimpleNamespace(stop=True, observation=observation, near_leg=None, handled=True)
+        self._bottom_deck_install(t, plans_[order_[0]], "stand", order_[0], 0)
+        self.hooks.set_inset_status("옆면 증거 위치로 이동")
+        return SimpleNamespace(stop=False, observation=observation, near_leg=None, handled=True)
+
+    def _bottom_deck_scene_target(self, rear_est):
+        """The judged target in the capture's base frame, by the control estimate (never the truth)."""
+        tg_ = self.state["bottom_deck"]["target"]
+        off_ = abs(self.options.rear_axle_offset_m)
+        base_ = (float(rear_est[0]) + off_ * math.cos(float(rear_est[2])),
+                 float(rear_est[1]) + off_ * math.sin(float(rear_est[2])), float(rear_est[2]))
+        cx_, cy_, my_ = compose(invert(base_), (tg_["centre_xy"][0], tg_["centre_xy"][1], tg_["model_yaw_rad"]))
+        return BottomDeckTarget((float(cx_), float(cy_)), float(my_), self.options.bottom_deck_spec,
+                                float(tg_["support_z_m"])), base_
+
+    def bottom_deck_capture(self, t: float, rear, step: int) -> SimpleNamespace:
+        """The side leg's arrival. A retreat's end: release, then the leg back to the same stand (a retake
+        arrives afresh). A stand: one standing frame judged on its face, saved; a decision or the third capture
+        ends the face, anything else retreats for a retake. Returns ``stop``, ``rear``."""
+        state, hooks, options = self.state, self.hooks, self.options
+        deck_ = state["bottom_deck"]
+        leg_ = deck_["leg"]
+        face = leg_["face"]
+        if leg_["kind"] == "retreat":
+            rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_retreat_end")
+            rear = rear if rear_ is None else rear_
+            plan_ = self._bottom_deck_plan(rear, face)
+            if not plan_.success:
+                return self._bottom_deck_face_end(t, rear, "unobserved", f"no_path:{plan_.status}")
+            self._bottom_deck_install(t, plan_, "stand", face, leg_["captures"])
+            return SimpleNamespace(stop=False, rear=rear, installed=True)
+        number_ = len(deck_["attempts"]) + 1
+        rec_ = {"face": face, "capture": leg_["captures"] + 1, "time_s": t, "step": step,
+                "rear_arrival": [float(v) for v in rear]}
+        try:
+            scene_, _, capture_attempts_ = hooks.perception_capture().capture(
+                max_attempts=options.perception_max_attempts)
+        except options.adapter.CaptureFailure as exc:
+            rec_.update(verdict="unobserved", reason=f"capture_failed:{exc.reason}")
+        else:
+            rear_est_ = hooks.slam_rear(hooks.now_s()) if self.slam is not None else rear
+            target_b_, base_est_ = self._bottom_deck_scene_target(rear_est_)
+            axis_ = deck_["target"]["axis"]
+            arrived_ = bottom_deck_evidence.arrival_ok(scene_, target_b_, face=face, axis=axis_)
+            cam_ = bottom_deck_evidence.camera_xyz(scene_)[:2]
+            rec_.update(capture_attempts=capture_attempts_, base_estimate=list(base_est_),
+                        rear_estimate=[float(v) for v in rear_est_],
+                        theta_e_deg=bottom_deck_evidence.stand_angle_deg(cam_, target_b_, face),
+                        range_m=float(np.linalg.norm(cam_ - np.asarray(target_b_.centre_xy))),
+                        truth_rear=[float(v) for v in hooks.truth_rear()])
+            if not arrived_:
+                rec_.update(verdict="unobserved", reason="arrival")
+            else:
+                ev_ = bottom_deck_evidence.evaluate_side(scene_, target_b_, face=face,
+                                                         params=options.bottom_deck_params)
+                rec_.update(verdict=ev_.verdict, reason=ev_.reason, gaps=[g.state for g in ev_.gaps])
+            rec_["npz"] = f"bottom_deck/side_{number_:02d}.npz"
+            hooks.save_npz(rec_["npz"], depth_m=np.asarray(scene_.depth_m, dtype=float),
+                           intrinsics=np.asarray([scene_.intrinsics.width, scene_.intrinsics.height,
+                                                  scene_.intrinsics.fx, scene_.intrinsics.fy,
+                                                  scene_.intrinsics.cx, scene_.intrinsics.cy], dtype=float),
+                           intrinsics_frame=scene_.intrinsics.frame_id,
+                           mount_translation=np.asarray(scene_.base_from_optical.translation_m, dtype=float),
+                           mount_rotation=np.asarray(scene_.base_from_optical.rotation, dtype=float),
+                           target_base=np.asarray([*target_b_.centre_xy, target_b_.model_yaw_rad,
+                                                   target_b_.support_z_m]),
+                           target_map=np.asarray([*deck_["target"]["centre_xy"], deck_["target"]["model_yaw_rad"]]),
+                           rear_estimate=np.asarray(rec_["rear_estimate"], dtype=float),
+                           truth_rear=np.asarray(rec_["truth_rear"], dtype=float),
+                           face=face, axis=axis_, shape=deck_["target"]["shape"],
+                           params=json.dumps(asdict(options.bottom_deck_params)), verdict=rec_["verdict"],
+                           reason=rec_["reason"], stamp_ns=int(scene_.stamp_ns))
+        deck_["attempts"].append(rec_)
+        leg_["captures"] += 1
+        rear_ = self._bottom_deck_release_if_held(t, "release_at_bottom_deck_capture")
+        rear = rear if rear_ is None else rear_
+        if rec_["verdict"] in ("present", "absent") or leg_["captures"] >= bottom_deck_legs.CAPTURES:
+            return self._bottom_deck_face_end(t, rear, rec_["verdict"], rec_["reason"])
+        # A retake arrives afresh: back off to a point behind the stand, planned (Codex implementation round 1 P1:
+        # the planner checks the footprint along it), then the leg back to the stand. No detour: a retreat the
+        # planner can only make long ends the face.
+        back_ = bottom_deck_legs.retreat_pose(self._bottom_deck_stand(face).rear)
+        plan_ = self._bottom_deck_plan(rear, face, goal=back_)
+        if not plan_.success or plan_.length_m > bottom_deck_legs.RETREAT_MAX_M:
+            return self._bottom_deck_face_end(t, rear, "unobserved",
+                                              "retreat_detour" if plan_.success else f"retreat_blocked:{plan_.status}")
+        self._bottom_deck_install(t, plan_, "retreat", face, leg_["captures"])
+        return SimpleNamespace(stop=False, rear=rear, installed=True)
+
+    def _bottom_deck_face_end(self, t: float, rear, verdict: str, reason: str) -> SimpleNamespace:
+        """One face concluded: the next face's leg, or the two-face policy -- present plans the mission from here
+        (the near capture is set up only now), anything else ends the mission (Codex design round 5)."""
+        deck_ = self.state["bottom_deck"]
+        leg_ = deck_["leg"]
+        deck_["faces"].append({"face": leg_["face"], "verdict": verdict, "reason": reason,
+                               "captures": leg_["captures"]})
+        deck_["leg"] = None
+        rest_ = [f for f in deck_["order"] if f not in [x["face"] for x in deck_["faces"]]]
+        if verdict != "absent" and rest_:
+            rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_next_face")
+            rear = rear if rear_ is None else rear_
+            plan_ = self._bottom_deck_plan(rear, rest_[0])
+            if plan_.success:
+                self._bottom_deck_install(t, plan_, "stand", rest_[0], 0)
+                return SimpleNamespace(stop=False, rear=rear, installed=True)
+            deck_["faces"].append({"face": rest_[0], "verdict": "unobserved", "reason": f"no_path:{plan_.status}",
+                                   "captures": 0})
+        return self._bottom_deck_conclude(t, rear)
+
+    def _bottom_deck_conclude(self, t: float, rear) -> SimpleNamespace:
+        state, pocket, hooks, options = self.state, self.pocket, self.hooks, self.options
+        deck_ = state["bottom_deck"]
+        # Released before the record is made: the record's centre is the one the planned pickup is carried to
+        # (a release after it would move the pickup away from the record -- found with Codex round 2).
+        rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_done")
+        rear = rear if rear_ is None else rear_
+        verdicts_ = [f["verdict"] for f in deck_["faces"]]
+        faces_seen_ = {f["face"] for f in deck_["faces"] if f["verdict"] == "present"}
+        verdict = ("absent" if "absent" in verdicts_ else
+                   "present" if len(faces_seen_) == 2 and set(verdicts_) == {"present"} else "unobserved")
+        tg_ = deck_["target"]
+        applied_ = None if self.slam is None else self.slam["tracker"].applied
+        deck_["record"] = bottom_deck_permit.BottomDeckRecord(
+            verdict=verdict, faces=tuple(deck_["faces"]), centre_xy=tuple(tg_["centre_xy"]),
+            model_yaw_rad=tg_["model_yaw_rad"], shape=tg_["shape"], axis=tg_["axis"],
+            support_z_m=tg_["support_z_m"], candidate_id=tg_["candidate_id"], track_id=tg_["track_id"],
+            captured_s=tuple(a["time_s"] for a in deck_["attempts"]),
+            correction_s=None if applied_ is None else float(applied_[1]),
+            params_sha256=bottom_deck_permit.params_digest(options.bottom_deck_params)).to_record()
+        deck_["status"] = "done"
+        if verdict != "present":
+            return self._bottom_deck_refuse(t, "no_bottom_deck" if verdict == "absent" else "bottom_deck_unobserved",
+                                            rear)
+        zone_ = self.observe_bounds()
+        margin_ = min(float(options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
+        if zone_ is not None and not bottom_deck_legs.inside(zone_, rear, self.geometry.unloaded_footprint, margin_):
+            # Where the truck actually stands after the last capture and its release (Codex A'): the mission is
+            # planned in the zone, so a start outside it ends here rather than in an invalid_start failure.
+            out_ = self._bottom_deck_refuse(t, "side_stage_outside_zone", rear)
+            deck_["refused"]["rear"] = [float(v) for v in rear]
+            return out_
+        far_ = self.bottom_deck_far
+        planning_pickup = pocket["planning_pickup"]
+        planning_start, planning_trace = hooks.wall(), []
+        grid_world, grid_kwargs, plan_transport = hooks.grid_world, hooks.grid_kwargs, hooks.plan_transport
+        planner_config, scenario, geometry = options.planner_config, options.scenario, self.geometry
+        return_to_pose, pickup_bounds, travel_config = options.return_to_pose, options.pickup_bounds, options.travel_config
+        start_rear_pose = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+        plans = plan_transport(  # the same call as observe_succeeded's, from where the side legs ended
+            grid_world(scenario), planner_config, geometry=geometry, target_pickup=planning_pickup,
+            start_rear=start_rear_pose, return_to=return_to_pose, pickup_bounds=pickup_bounds,
+            travel_config=travel_config, trace=planning_trace, **grid_kwargs("mission", planning_pickup))
+        near_leg = self._observe_install(plans, planning_trace, planning_start, far_.attempt_number)
+        if self.obstacle is not None:
+            self.obstacle.setdefault("progress", {}).clear()
+        self.near_leg_or_recapture(t, rear, far_.base, far_.yaw, far_.observation, far_.attempt_number, near_leg)
+        return SimpleNamespace(stop=False, rear=rear, installed=True)
+
+    def bottom_deck_recover(self, t: float, rear, why: str) -> SimpleNamespace:
+        """A recovery that would replace a side leg's path (blocked, a heading miss or a stall): released first
+        (Codex design rounds 3-5). A retreat makes no detour -- the face's retakes end there; a stand is planned
+        again to the same stand, and a failure ends the face. Returns ``stop``, ``rear``, ``installed``."""
+        deck_ = self.state["bottom_deck"]
+        leg_ = deck_["leg"]
+        rear_ = self._bottom_deck_release_if_held(t, f"bottom_deck_{why}")
+        rear = rear if rear_ is None else rear_
+        deck_.setdefault("recoveries", []).append({"time_s": t, "why": why, "kind": leg_["kind"],
+                                                   "face": leg_["face"]})
+        if leg_["kind"] == "retreat":
+            return self._bottom_deck_face_end(t, rear, "unobserved", f"retreat_{why}")
+        if sum(1 for r in deck_["recoveries"] if r["face"] == leg_["face"]) > bottom_deck_legs.RECOVERIES_PER_FACE:
+            # Every install restarts the leg's replan budget, so the face carries its own bound.
+            return self._bottom_deck_face_end(t, rear, "unobserved", f"{why}:recovery_limit")
+        plan_ = self._bottom_deck_plan(rear, leg_["face"])
+        if not plan_.success:
+            return self._bottom_deck_face_end(t, rear, "unobserved", f"{why}:{plan_.status}")
+        if self.hooks.same_path(plan_, self.paths["observe"], self.trackers["observe"].remaining_to_goal_m()):
+            # The same path again is a wait (as blocked_replan's D4): it does not restart the no-progress watch.
+            deck_["recoveries"][-1]["same_path"] = True
+            return SimpleNamespace(stop=False, rear=rear, installed=False)
+        self._bottom_deck_install(t, plan_, "stand", leg_["face"], leg_["captures"])
+        return SimpleNamespace(stop=False, rear=rear, installed=True)
 
     def near_leg_or_recapture(self, t: float, rear, base, yaw: float, observation, attempt_number: int, near_leg,
                               acquired=None) -> None:
@@ -3172,7 +3572,8 @@ class MissionCore:
             attempt["observation_source"] = far_record.get("source") or "none"
             attempt["recognition"] = {k: far_record.get(k) for k in (
                 "status", "reasons", "reason", "source", "observations", "selected_track", "frames", "drive_frames",
-                "used_error", "single_error", "detector_error", "lag_fit", "leg")}
+                "used_error", "single_error", "detector_error", "lag_fit", "leg",
+                "used")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
         if near is not None and near.get("retry_stand"):
             # Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet; no
             # candidate moves on old estimates.
@@ -3785,7 +4186,6 @@ class MissionCore:
         grid_world = self.hooks.grid_world
         ms = self.ms
         obstacle = self.obstacle
-        pickup_bounds = self.options.pickup_bounds
         pickup_zone = self.options.pickup_zone
         scenario = self.options.scenario
         from forklift_core.planning.grid_collision import FootprintCollisionChecker as GridChecker
@@ -4484,19 +4884,34 @@ class MissionCore:
         the two-pose stand in observe -- its follower result, end hold and recoveries are
         bypassed until the re-observation (near["retry_stand"]). Returns the release record."""
         near_tracking = self.options.near_tracking  # a runner module-level name
+        near, paths, trackers = self.near, self.paths, self.trackers
+        from forklift_core.planning.hybrid_astar import PlanResult as _PlanResult
+
+        released_ = self._release_reproject(now_s, hold_event)
+        jump_m, jump_rad, frame_change, before_, after_ = (released_["jump_m"], released_["jump_rad"],
+                                                           released_["frame_change"], released_["before"],
+                                                           released_["after"])
+        applied_before_, reprojected_ = released_["applied_before"], released_["reprojected"]
+        heading_ = np.array([math.cos(float(after_[2])), math.sin(float(after_[2]))])
+        stand_ = np.array([[*(np.asarray(after_[:2], dtype=float) - near_tracking.RETRY_STAND_M * heading_),
+                            float(after_[2])], [float(after_[0]), float(after_[1]), float(after_[2])]])
+        paths["observe"] = _PlanResult(True, "success", stand_, np.ones(2, dtype=np.int8), np.zeros(2),
+                                       near_tracking.RETRY_STAND_M, 0)
+        trackers["observe"] = RearAxlePathTracker(stand_, np.ones(2), np.zeros(2), trackers["observe"].config)
+        near["retry_stand"] = True
+        return {"jump_m": jump_m, "jump_rad": jump_rad, "frame_change": list(frame_change),
+                "rear_before": [float(v) for v in before_], "rear_after": [float(v) for v in after_],
+                "applied_before": applied_before_, "reprojected": reprojected_}
+
+    def _release_reproject(self, now_s: float, hold_event: str) -> dict:
+        """Release the SLAM hold, re-project the grid with the released correction before any plan reads it, and
+        carry the pickup estimate and the planning target into the released frame (release_and_stand's first
+        half; the bottom-deck side legs release the same way, plan 2026-10-19 task 4). Returns what it did."""
         loaded = self.hooks.loaded()
-        ms = self.ms
-        near = self.near
-        obstacle = self.obstacle
-        paths = self.paths
-        pocket = self.pocket
-        slam = self.slam
-        slam_odom_base = self.hooks.slam_odom_base
-        slam_rear = self.hooks.slam_rear
-        trackers = self.trackers
+        ms, obstacle, pocket, slam = self.ms, self.obstacle, self.pocket, self.slam
+        slam_odom_base, slam_rear = self.hooks.slam_odom_base, self.hooks.slam_rear
         from forklift_core.localization.slam_pose import compose as pose_compose
         from forklift_core.localization.slam_pose import invert as pose_invert
-        from forklift_core.planning.hybrid_astar import PlanResult as _PlanResult
 
         before_ = slam_rear(now_s)
         applied_before_ = [float(v) for v in slam["tracker"].applied[0]]
@@ -4526,16 +4941,8 @@ class MissionCore:
             obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
         if pocket.get("planning_pickup") is not None:
             pocket["planning_pickup"] = carried(pocket["planning_pickup"])
-        heading_ = np.array([math.cos(float(after_[2])), math.sin(float(after_[2]))])
-        stand_ = np.array([[*(np.asarray(after_[:2], dtype=float) - near_tracking.RETRY_STAND_M * heading_),
-                            float(after_[2])], [float(after_[0]), float(after_[1]), float(after_[2])]])
-        paths["observe"] = _PlanResult(True, "success", stand_, np.ones(2, dtype=np.int8), np.zeros(2),
-                                       near_tracking.RETRY_STAND_M, 0)
-        trackers["observe"] = RearAxlePathTracker(stand_, np.ones(2), np.zeros(2), trackers["observe"].config)
-        near["retry_stand"] = True
-        return {"jump_m": jump_m, "jump_rad": jump_rad, "frame_change": list(frame_change),
-                "rear_before": [float(v) for v in before_], "rear_after": [float(v) for v in after_],
-                "applied_before": applied_before_, "reprojected": reprojected_}
+        return {"jump_m": jump_m, "jump_rad": jump_rad, "frame_change": frame_change, "before": before_,
+                "after": after_, "applied_before": applied_before_, "reprojected": reprojected_}
 
     def release_after_backoff(self, now_s, event):
         """Obstacle recovery v4 E3: a SLAM hold -- whenever it began -- released at a backoff's or
@@ -5361,7 +5768,11 @@ class MissionCore:
     def observe_bounds(self):
         """The bounds of the observation travel (persistent console plan D2): a live run plans it in the hall
         (``options.observe_bounds`` None) wherever the operator left the truck; a batch run's options have none, so
-        its observation keeps the pickup bounds."""
+        its observation keeps the pickup bounds. On a bottom-deck side leg, the side stage's own bounds (plan 2026-10-19
+        task 5): every check of that leg -- its replans and the cusp check -- sees the bounds it was planned in."""
+        side_ = getattr(self, "bottom_deck_bounds", None)
+        if side_ is not None and self.bottom_deck_leg_active():
+            return side_
         options = self.options
         return options.observe_bounds if hasattr(options, "observe_bounds") else options.pickup_bounds
 

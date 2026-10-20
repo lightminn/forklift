@@ -1,6 +1,7 @@
 """M-a1 slice 2: the arrival transitions, the follower's time limit, the lift ramp and the timed transitions moved
 from the runner (behaviour, state, call order, effects up to a refusal -- the plan's M-a1 criterion)."""
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -188,3 +189,52 @@ def test_settle_goes_home_or_completes_and_home_settle_records_the_return_error(
     assert core.lift_and_timers(11.1, 0.01) is True and ms.phase == "complete"
     assert state["return_home_error"]["position_m"] == pytest.approx(5.0)
     assert state["return_home_error"]["yaw_rad"] == pytest.approx(0.05)
+
+
+# --- plan 2026-10-19 task 3: the bottom-deck insert permission at approach -> insert ---
+
+def _bottom_deck(verdict, *, pickup=(3.0, 1.0, 0.3), check="on"):
+    from forklift_core.perception import bottom_deck_permit as P
+    from forklift_core.perception.bottom_deck_evidence import BottomDeckParams
+    core, ms, state, log = make("approach")
+    core.options.bottom_deck_check = check
+    core.pallet_geometry = SimpleNamespace(geometry_version="epal6")
+    core.pocket["planning_pickup"] = SimpleNamespace(x_m=pickup[0], y_m=pickup[1], yaw_rad=pickup[2])
+    if verdict is not None:
+        state["bottom_deck"] = {"record": P.BottomDeckRecord(
+            verdict=verdict, faces=(), centre_xy=(3.0, 1.0), model_yaw_rad=0.3, shape="epal6", axis="x",
+            support_z_m=0.0, candidate_id=None, track_id=None, captured_s=(5.0, 8.0), correction_s=None,
+            params_sha256=P.params_digest(BottomDeckParams())).to_record()}
+    return core, ms, state
+
+
+@pytest.mark.parametrize("verdict, pickup, reason", [
+    (None, (3.0, 1.0, 0.3), "bottom_deck_unobserved"),
+    ("unobserved", (3.0, 1.0, 0.3), "bottom_deck_unobserved"),
+    ("absent", (3.0, 1.0, 0.3), "no_bottom_deck"),
+    ("present", (3.3, 1.0, 0.3), "bottom_deck_target_mismatch"),
+])
+def test_the_bottom_deck_check_stops_the_truck_before_the_forks_go_in(verdict, pickup, reason):
+    core, ms, state = _bottom_deck(verdict, pickup=pickup)
+    result = core.arrive(21.0, track())
+    assert result.stop is True and ms.phase == "bottom_deck_refused"
+    assert state["mission_result"] == "bottom_deck_refused"
+    assert state["bottom_deck"]["refused"] == {"reason": reason, "time_s": 21.0, "target": list(pickup),
+                                               "shape": "epal6"}
+    assert state["transitions"] == [{"from": "approach", "to": "bottom_deck_refused", "time_s": 21.0}]
+    assert json.loads(json.dumps(state)) == state  # the runner writes the state as JSON (Codex task 3 P2)
+
+
+def test_a_present_record_on_the_same_target_lets_the_insertion_start():
+    core, ms, state = _bottom_deck("present", pickup=(3.05, 0.95, 0.3 + math.pi))
+    result = core.arrive(21.0, track())
+    assert result.stop is False and ms.phase == "insert"
+    assert state["bottom_deck"]["permitted"] == {"time_s": 21.0, "target": [3.05, 0.95, 0.3 + math.pi],
+                                                 "shape": "epal6"}
+    assert json.loads(json.dumps(state)) == state
+
+
+def test_with_the_check_off_the_record_is_not_read():
+    core, ms, state = _bottom_deck("absent", check="off")
+    assert core.arrive(21.0, track()).stop is False and ms.phase == "insert"
+    assert set(state["bottom_deck"]) == {"record"}

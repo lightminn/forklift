@@ -180,7 +180,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # retry from a start inside the clearance; sixth: the other observation
     # candidates tried when that leg stays blocked. The last two plan_transport
     # calls: the mission replanned from where the truck stands after recognition
-    # when that leg stays blocked, and its zero-clearance retry.
+    # when that leg stays blocked, and its zero-clearance retry. Plan 2026-10-19 task 4 adds
+    # the bottom-deck side leg (to its stand or a retake's retreat point) and its zero-clearance
+    # retry, and the mission planned from where the side legs ended.
     assert sorted(node.func.id for node in calls) == [
         "plan_observation_leg",
         "plan_observation_leg",
@@ -188,6 +190,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
+        "plan_observation_leg",
+        "plan_observation_leg",
+        "plan_transport",
         "plan_transport",
         "plan_transport",
         "plan_transport",
@@ -897,8 +902,14 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     # the obstacle replan's one moved to the mission core (M-a1 slice 3c)
     replan = CORE.read_text()
     assert 'obstacle.setdefault("progress", {}).clear()' in replan[replan.index("    def blocked_replan("):]
+    # ... and every bottom-deck side leg installed, and the mission planned after the side legs (plan 2026-10-19
+    # task 4, Codex design round 2 P2): two more.
+    side = replan.index("    def _bottom_deck_install(self, ")
+    assert 'obstacle.setdefault("progress", {}).clear()' in replan[side : replan.index("\n    def ", side + 10)]
+    conclude = replan.index("    def _bottom_deck_conclude(self, ")
+    assert 'obstacle.setdefault("progress", {}).clear()' in replan[conclude : replan.index("\n    def ", conclude + 10)]
     assert source.count('obstacle.setdefault("progress", {}).clear()') + replan.count(
-        'obstacle.setdefault("progress", {}).clear()') == 6
+        'obstacle.setdefault("progress", {}).clear()') == 8
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():
@@ -1216,7 +1227,10 @@ def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
     near = moved.index("if near_leg is not None:")  # the near leg install moved to the core (M-a1 slice 4b-v)
     reset = moved.index('state["observe_replan_leg"] = {\n', near)
     assert reset < moved.index("paths[\"observe\"] = near_leg", near)
-    assert source.count('state["observe_replan_leg"] = {') + moved.count('state["observe_replan_leg"] = {') == 2
+    # ... and a bottom-deck side leg opens its own (plan 2026-10-19 task 4), where it is installed.
+    side = moved.index("    def _bottom_deck_install(self, ")
+    assert 'state["observe_replan_leg"] = {' in moved[side : moved.index("\n    def ", side + 10)]
+    assert source.count('state["observe_replan_leg"] = {') + moved.count('state["observe_replan_leg"] = {') == 3
 
 
 def test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run():
