@@ -343,7 +343,7 @@ class TourDriver:
         self.enter_s, self.release_s, self.goal_slack_m = enter_s, release_s, goal_slack_m
         self.last_index = len(poses) - 1
         self.events: list = []
-        self.started_wall = self.last_seq = self.last_state_wall = None
+        self.started_wall = self.last_seq = self.last_state_wall = self.last_feedback_wall = None
         self.departed = False
         self.best = 0.0
         self.drivable_idle = self.pacing_idle = 0.0
@@ -352,7 +352,7 @@ class TourDriver:
         self.last_cmd = None
 
     def start(self, now: float) -> None:
-        self.started_wall = self.last_state_wall = now
+        self.started_wall = self.last_state_wall = self.last_feedback_wall = now
 
     def _event(self, now, name, **fields):
         self.events.append({"wall": now, "event": name, "progress_m": self.best, **fields})
@@ -377,7 +377,12 @@ class TourDriver:
             return None, "left_teleop"
         pose, speed = s.get("pose") or {}, s.get("rear_axle_speed_mps")
         if speed is None or pose.get("x_m") is None:
+            # a state with no pose or speed is no feedback: the same limit as no state (Codex v2.5 round 2 P3)
+            if now - self.last_feedback_wall > self.stale_s:
+                self._event(now, "feedback_missing")
+                return (0.0, 0.0), "feedback_missing"
             return None, None
+        self.last_feedback_wall = now
         factor = float((s.get("pacing") or {}).get("target_factor") or 1.0)
         dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
         tracker = self.tracker

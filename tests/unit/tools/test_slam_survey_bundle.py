@@ -360,3 +360,12 @@ def test_the_known_fraction_reads_the_grid_at_each_cell():
             "resolution_m": 1.0}
     cells = np.array([[0.5, 0.5], [1.5, 0.5], [0.5, 1.5], [1.5, 1.5], [5.0, 5.0]])
     assert abs(sb.known_fraction(cells, grid) - 0.4) < 1e-12  # row 0 is y in [0, 1): (1.5, 0.5) free, (0.5, 1.5) occupied
+
+
+def test_states_without_pose_or_speed_are_no_feedback():
+    driver = st.TourDriver(*_straight_with_cusp(), stale_s=2.0)
+    driver.start(0.0)
+    assert driver.step(0.1, _state(1))[1] is None  # departed
+    bare = {"state_seq": 2, "mode": "TELEOP", "armed": True, "rear_axle_speed_mps": None, "pose": None}
+    assert driver.step(1.0, bare)[1] is None
+    assert driver.step(2.5, {**bare, "state_seq": 3})[1] == "feedback_missing"
