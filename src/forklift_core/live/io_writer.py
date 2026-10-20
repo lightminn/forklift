@@ -130,11 +130,12 @@ class OrderedWriter:
 
 
 def encode_in_pieces(value, default, *, piece_items: int = 256, yield_every: int = 16):
-    """``json.dumps(value, default=default)`` in pieces (joined, the same text): a long list goes ``piece_items``
-    items at a time and containers are entered, so no single C call encodes a whole large record -- the writer
-    thread gives the interpreter lock back between pieces (a one-shot encode of a 2 MB record held it 11.6 ms
-    against the control thread, 2026-10-20). Every ``yield_every`` pieces it also sleeps 0 s, so a waiting thread
-    gets the lock at once rather than after the switch interval."""
+    """``json.dumps(value, default=default)`` in pieces (joined, the same text): lists and tuples go ``piece_items``
+    items at a time and text-keyed dicts are entered, so the writer thread gives the interpreter lock back between
+    pieces (a one-shot encode of a 2 MB record held it 11.6 ms against the control thread, 2026-10-20). Every
+    ``yield_every`` pieces it also sleeps 0 s, so a waiting thread gets the lock at once rather than after the switch
+    interval. Not split (each one piece, however large): what ``default`` turns into data (an ndarray's list) and a
+    dict with keys JSON would turn into text."""
     count = 0
 
     def leaf(v) -> str:

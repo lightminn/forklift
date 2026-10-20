@@ -43,6 +43,10 @@ class ResultsBook:
         raise KeyError(seq)
 
     @property
+    def keep(self) -> int:
+        return self._entries.maxlen
+
+    @property
     def last(self) -> dict | None:
         return dict(self._entries[-1]) if self._entries else None
 

@@ -384,7 +384,9 @@ def test_a_completed_mission_is_judged_on_the_truth_recorded_and_published(tmp_p
     rt.settle_records()  # plan U29: the writer writes the mission's files
     record = json.loads((tmp_path / "missions" / "m1" / "result.json").read_text())
     assert record["result"] == entry and record["delivery_error_m"] == 0.02
-    assert record["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
+    assert record["clock_summary"] == {"pauses": 0, "pause_s": 0.0, "waits": 1, "wait_s": 9.0}
+    records = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
+    assert records["clock"] == {"pauses": [], "waits": [[11.0, 20.0]]}
     assert rt.end_mission(21.0, "failed", "late") is None  # ended once
     rt.tick_start(21.0, False)
     assert core.commands.status == "idle" and rt.results.last == entry
@@ -582,7 +584,7 @@ def test_the_end_archives_the_missions_records_under_its_own_id(tmp_path):
     rt.end_mission(15.0, "failed", "x")
     rt.close()
     written = json.loads((tmp_path / "missions" / "m1" / "records.json").read_text())
-    assert written == {"state": {"async_plans": [{"site": "leg"}]}}
+    assert written == {"state": {"async_plans": [{"site": "leg"}]}, "clock": {"pauses": [], "waits": []}}
 
 
 def test_the_end_logs_its_record_cost_and_the_archive_its_own(tmp_path):
@@ -759,65 +761,123 @@ def test_a_record_error_of_a_result_out_of_the_book_is_counted_in_the_missions_m
     assert message["record_errors_older"] == 1 and "record_error" not in message["results"][0]
     rt.close()
     end = [json.loads(line) for line in (tmp_path / "live_log.jsonl").read_text().splitlines()
-           if '"event": "end"' in line][0]
-    assert end["io"] == {"dropped_lines": 0, "line_errors": 0, "dropped_mission_files": 0,
-                         "record_errors_older": 1}
+           if '"log_end"' in line][0]
+    assert end["log_end"] == {"dropped_lines": 0, "line_errors": 0, "dropped_mission_files": 0,
+                              "record_errors_older": 1}
 
 
 @pytest.mark.skipif(__import__("os").environ.get("FORKLIFT_U29_GATE") != "1",
                     reason="plan U29 performance gate: run on purpose on ws1 (FORKLIFT_U29_GATE=1)")
-def test_u29_end_tick_record_cost_gate(tmp_path):
+def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
     """Plan U29 performance gate (user 2026-10-20: measured on the CPU; Codex U29 design review: fixed conditions,
     every sample kept). Each repetition times the end tick's record work -- the spool cut (ten times the largest
-    measured chunk, with the spool's writer running) and the whole end_mission (its records ten times the largest
-    measured, 195 KB) -- while the previous repetition's writer encodes its records. FORKLIFT_U29_GATE_REPS
-    repetitions (200), the walls to FORKLIFT_U29_GATE_OUT; the gate fails if any is over 20 ms."""
+    measured chunk, its writer running) and the whole end_mission (records about twenty times the largest measured,
+    195 KB) -- while the previous repetition's writer is inside its records' encoding (it signals entering it; Codex
+    U29 implementation review P2-1: unsynchronised, the earlier writers had not started). The last repetition of each
+    ten ends with its writer full (the drop path). FORKLIFT_U29_GATE_REPS repetitions (200), the walls and overlaps
+    to FORKLIFT_U29_GATE_OUT; the gate fails if a wall is over 20 ms, and is void if a timed end did not overlap."""
+    import gc
     import os
+    import threading
     from pathlib import Path
 
+    import sim.isaac.live_runtime as live_runtime
     from forklift_core.live.spool import RecordSpool
 
+    class Signal:  # the writer entered its records' encoding (event), and goes on when the next end begins (go)
+        def __init__(self):
+            self.event, self.go = threading.Event(), threading.Event()
+
+    plain = live_runtime._jsonable
+
+    def signalling(value):
+        if isinstance(value, Signal):
+            value.event.set()
+            value.go.wait(10.0)
+            return "signal"
+        return plain(value)
+
+    monkeypatch.setattr(live_runtime, "_jsonable", signalling)
+    collections = []  # garbage collections that began inside a timed end (kept in the samples, counted)
+    timing = {"on": False}
+
+    def watch(phase, info):
+        if phase == "start" and timing["on"]:
+            collections.append((len(walls), info.get("generation")))
+
+    gc.callbacks.append(watch)
     reps = int(os.environ.get("FORKLIFT_U29_GATE_REPS", "200"))
-    walls = []
-    for batch in range(0, reps, 10):  # ten made first, then ended back to back: the earlier writers still encode
+    walls, overlapped, still_after, full = [], [], [], []
+    for batch in range(0, reps, 10):  # ten made first, then ended back to back
         made = []
         for i in range(batch, min(batch + 10, reps)):
             (tmp_path / f"r{i}").mkdir()
             rt, core, order = ending(tmp_path / f"r{i}")
-            records = {"state": {"scans": [[0.5 + k * 1e-6] * 360 for k in range(300)]}}  # ~2 MB as JSON
+            signal = Signal()
+            records = {"signal": signal,  # first: encoded first
+                       "state": {"scans": [[0.5 + k * 1e-6] * 360 for k in range(600)]}}  # ~4 MB as JSON
             core.end_reset = lambda t, records=records: records
             spool = RecordSpool(tmp_path / f"r{i}" / "spool", interval_s=0.0, queue_cuts=6)
             scans: list = []
             spool.register("slam_log.scan", scans, keep=1)
             scans.extend([[0.25] * 360 for _ in range(1000)])  # ~2 MB as JSON: ten 10 s chunks
-            made.append((rt, spool))
-        for rt, spool in made:
+            gate = threading.Event()
+            if i == min(batch + 10, reps) - 1:  # the last of the ten: its writer full
+                for k in range(live_runtime.MISSION_FILES_PENDING):
+                    rt.io.put_keyed(("stuck", k), lambda gate=gate: gate.wait(30.0) and [])
+            made.append((rt, spool, signal, gate))
+        # As the runner does before its first control tick (main 1e53cbe): what the setup made is frozen, so a
+        # collection of the gate's own setup does not land in a timed end; collections that do are counted.
+        gc.collect()
+        gc.freeze()
+        previous = previous_rt = None
+        for rt, spool, signal, gate in made:
+            writing = previous is not None and previous.event.is_set() and bool(previous_rt.io.settle(0.0))
+            if previous is not None:
+                previous.go.set()  # the previous writer encodes the rest of its 4 MB while this end runs
+            timing["on"] = True
             began = time.perf_counter()
             spool.tick(1.0)
             rt.end_mission(15.0, "failed", "x")
             walls.append(time.perf_counter() - began)
-        for rt, spool in made:
+            timing["on"] = False
+            overlapped.append(writing)  # the previous writer was inside its encoding when this end began
+            still_after.append(previous_rt is not None and bool(previous_rt.io.settle(0.0)))
+            full.append(gate is made[-1][3])
+            if not full[-1]:
+                assert signal.event.wait(10.0), "the writer did not enter the records' encoding"
+            previous, previous_rt = signal, rt
+        for rt, spool, signal, gate in made:
+            signal.go.set()
+            gate.set()
             rt.close()
             spool.close()
+        gc.unfreeze()
+    gc.callbacks.remove(watch)
     out = os.environ.get("FORKLIFT_U29_GATE_OUT")
     if out:
-        Path(out).write_text(json.dumps({"reps": reps, "walls_s": walls, "max_s": max(walls),
+        Path(out).write_text(json.dumps({"reps": reps, "walls_s": walls, "overlapped": overlapped,
+                                         "still_writing_after": still_after, "full": full,
+                                         "collections_in_timed_ends": collections, "max_s": max(walls),
                                          "p50_s": sorted(walls)[len(walls) // 2]}))
+    firsts = set(range(0, reps, 10))
+    assert all(overlapped[i] for i in range(reps) if i not in firsts), "void: a timed end did not overlap an encoding"
     assert max(walls) <= 0.020, f"max {max(walls) * 1e3:.2f} ms over {reps}"
 
 
 def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):
-    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it."""
+    """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it; and
+    (implementation review P3) the writer's own log line failing must not replace the file's error."""
     rt, core, order = ending(tmp_path)
     (tmp_path / "missions" / "m1" / "records.json").mkdir(parents=True)
-    write = rt._write_log
+    append = rt._append_log
 
     def failing(line):
         if '"archive_error"' in line:
             raise OSError("log full")
-        write(line)
+        append(line)
 
-    rt._write_log = failing
+    rt._append_log = failing
     rt.end_mission(15.0, "failed", "x")
     rt.settle_records()
     assert rt.results.last["record_error"].startswith("records.json: IsADirectoryError")

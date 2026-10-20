@@ -272,10 +272,12 @@ def load_slam_log(run, *, allow_incomplete: bool = False) -> dict:
     return log
 
 
-def read_live_log(run) -> list[dict]:
+def read_live_log(run, *, allow_incomplete: bool = False) -> list[dict]:
     """A live run's ``live_log.jsonl`` entries, oldest first across its rolled files (``.N`` … ``.1``, then the
     current one). Refused when files rolled off (``live_log.index.json``: more rotations than kept), since what is
-    left would read as the whole session."""
+    left would read as the whole session; and, for a log made by the ordered writer (its first line says
+    ``log_writer``, plan U29), when its end summary (``log_end``) is missing or counts lost lines -- unless
+    ``allow_incomplete``. A log from before the writer has neither and is read as it is."""
     run = Path(run)
     index = run / "live_log.index.json"
     parts = [run / "live_log.jsonl"]
@@ -288,4 +290,13 @@ def read_live_log(run) -> list[dict]:
         missing = [p.name for p in parts if not p.exists()]
         if missing:
             raise ValueError(f"{run}: live log parts missing: {missing}")
-    return [json.loads(line) for part in parts if part.exists() for line in part.read_text().splitlines() if line]
+    entries = [json.loads(line) for part in parts if part.exists() for line in part.read_text().splitlines() if line]
+    if allow_incomplete or not any(e.get("log_writer") == "ordered" for e in entries[:1]):
+        return entries
+    end = next((e["log_end"] for e in reversed(entries) if "log_end" in e), None)
+    if end is None:
+        raise ValueError(f"{run}: the live log has no end summary (the session did not close its writer)")
+    if end.get("dropped_lines") or end.get("line_errors"):
+        raise ValueError(f"{run}: the live log lost lines ({end['dropped_lines']} dropped, {end['line_errors']} "
+                         "failed)")
+    return entries
