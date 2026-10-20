@@ -14,7 +14,10 @@ set -u
 OUT=$(realpath -m "$1"); RUN=$(realpath "$2"); SETS=$3; shift 3
 ROOT=$(pwd)
 PY=${VENV_PY:-/home/projects/forklift/.venv/bin/python}
+# a fresh directory only: an earlier run's status, graph or replies must never be read as this one's
+if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then echo "output $OUT is not empty"; exit 2; fi
 mkdir -p "$OUT/bridge" "$OUT/sock"
+echo '{"state": "pending"}' > "$OUT/status.json"
 JOB=${SLURM_JOB_ID:-local$$}
 CPUS=$(taskset -cp $$ | awk -F': ' '{print $2}')
 CPU0=$(echo "$CPUS" | cut -d, -f1 | cut -d- -f1)
@@ -29,7 +32,9 @@ done
 ODOM=()
 if [ -n "${ODOM_ARGS:-}" ]; then
   # shellcheck disable=SC2086 -- ODOM_ARGS is a list of arguments
-  "$PY" "$ROOT/tools/gyro_heading_offline.py" "$RUN" "$OUT/odom.npz" $ODOM_ARGS > "$OUT/odom.json" || exit 3
+  if ! "$PY" "$ROOT/tools/gyro_heading_offline.py" "$RUN" "$OUT/odom.npz" $ODOM_ARGS > "$OUT/odom.json" 2> "$OUT/odom.err"; then
+    echo '{"state": "failed", "odom_exit": 1}' > "$OUT/status.json"; exit 3
+  fi
   ODOM=(--odom-file "$OUT/odom.npz")
 fi
 NAME=slam_remap_${JOB}
@@ -47,6 +52,6 @@ docker logs "$NAME" > "$OUT/container.log" 2>&1
 EV=$?
 SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)
 SER=$(grep -c "result=0" "$OUT/bridge/serialize.log" 2>/dev/null)
-printf '{"driver_exit": %s, "container_exit": %s, "eval_exit": %s, "sent": %s, "serialize_ok": %s}\n' \
+printf '{"state": "done", "driver_exit": %s, "container_exit": %s, "eval_exit": %s, "sent": %s, "serialize_ok": %s}\n' \
   "$DRV" "${CON:-null}" "$EV" "${SENT:-null}" "$([ "${SER:-0}" -ge 1 ] && echo true || echo false)" > "$OUT/status.json"
 cat "$OUT/status.json" "$OUT/v2.json"

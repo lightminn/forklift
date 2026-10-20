@@ -30,7 +30,7 @@ import hashlib
 import json
 import math
 import sys
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -45,6 +45,7 @@ from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry 
 ENCODER_MODEL = "team_spec_quantized"
 CAMERA = Path(__file__).resolve().parents[1] / "config" / "isaac_perception_camera.yaml"
 REAR_AXLE_OFFSET_M = 0.34
+MAX_GAP_S = 0.05  # plan G2's sample deadline: an offline record with a longer joint gap is refused
 
 
 @dataclass(frozen=True)
@@ -124,14 +125,14 @@ def encoder_reads(wheel_angles: np.ndarray, steering: np.ndarray):
 def standstill_bias(vertical: np.ndarray, dt: np.ndarray, still: np.ndarray, model: GyroModel):
     """Per interval the bias in force (NaN before the first update) and the update count. ``still[i]``: interval i had
     no count change on either rear wheel."""
-    block = max(1, int(round(model.zupt_s / float(np.median(dt)))))
-    d2r = math.pi / 180
-    white_var = (model.noise_dps_rthz * d2r) ** 2 / float(np.median(dt)) + (model.lsb_dps * d2r) ** 2 / 12
+    step = float(np.median(dt))
+    block = max(1, int(round(model.zupt_s / step)))
+    white_var = (model.noise_dps_rthz * math.pi / 180) ** 2 / step  # plan V-G0: k N^2 / dt
     bias = np.full(len(vertical), np.nan)
     current, run, updates = math.nan, 0, 0
     for i in range(len(vertical)):
         bias[i] = current  # the estimate in force over this interval (updated after it)
-        run = run + 1 if still[i] else 0
+        run = run + 1 if still[i] and dt[i] <= 1.5 * step else 0  # a gap breaks the block
         if run and run % block == 0:
             window = vertical[i - block + 1:i + 1]
             if np.var(window) <= model.zupt_k * white_var:
@@ -143,6 +144,8 @@ def standstill_bias(vertical: np.ndarray, dt: np.ndarray, still: np.ndarray, mod
 def gyro_odometry(stamps, increments, vertical, still, model: GyroModel, start_rear, wheel_radius_m):
     """Rear-axle poses (N, 3): distance from the increments, heading from (vertical - bias)."""
     dt = np.diff(stamps)
+    if np.any(dt > MAX_GAP_S) or np.any(dt <= 0):
+        raise ValueError(f"joint log gap or reversal (largest step {dt.max():.3f} s, deadline {MAX_GAP_S} s)")
     bias, updates = standstill_bias(vertical, dt, still, model)
     pose = np.empty((len(stamps), 3))
     x, y, yaw = (float(v) for v in start_rear)
@@ -150,7 +153,7 @@ def gyro_odometry(stamps, increments, vertical, still, model: GyroModel, start_r
     for i in range(len(dt)):
         distance = float(np.mean(increments[i + 1])) * wheel_radius_m
         if math.isnan(bias[i]):
-            if distance != 0.0:
+            if np.any(increments[i + 1] != 0):  # either wheel's count, not their mean
                 raise RuntimeError(f"the truck moved at {stamps[i + 1]:.3f} s before the first standstill bias update")
             dyaw = 0.0
         else:
@@ -158,20 +161,36 @@ def gyro_odometry(stamps, increments, vertical, still, model: GyroModel, start_r
         mid = yaw + dyaw / 2
         x, y, yaw = x + distance * math.cos(mid), y + distance * math.sin(mid), yaw + dyaw
         pose[i + 1] = (x, y, yaw)
+    if updates == 0:
+        raise RuntimeError("no standstill bias update in the whole record")
     return pose, updates
+
+
+def record_digest(log: dict, records: list, geometry: AckermannOdometryGeometry) -> str:
+    """sha256 over the arrays the arms are built from, the records' stamps and odometry, and the geometry."""
+    h = hashlib.sha256()
+    for key in ("joint_stamps_s", "wheel_angles_rad", "steering_rad", "base_pose_world"):
+        h.update(key.encode())
+        h.update(np.ascontiguousarray(np.asarray(log[key], float)).tobytes())
+    h.update(np.asarray([[r["scan_id"], r["stamp_s"], *r["odom_base"], *r["truth_base"]] for r in records], float).tobytes())
+    h.update(json.dumps(asdict(geometry), sort_keys=True).encode())
+    return h.hexdigest()
+
+
+def run_geometry(run: Path) -> AckermannOdometryGeometry:
+    g = json.loads((run / "result.json").read_text())["arguments"]["drive_geometry"]
+    return AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"])
 
 
 def run_inputs(run: Path) -> dict:
     log = load_slam_log(run)
     records = load_list(run / "spool", "slam.records")
-    result = json.loads((run / "result.json").read_text())
-    g = result["arguments"]["drive_geometry"]
-    return {"t": np.asarray(log["joint_stamps_s"], float),
+    geometry = run_geometry(run)
+    return {"t": np.asarray(log["joint_stamps_s"], float), "digest": record_digest(log, records, geometry),
             "wheel_angles": np.asarray(log["wheel_angles_rad"], float)[:, 2:4],
             "steering": np.asarray(log["steering_rad"], float),
             "base": np.asarray(log["base_pose_world"], float),
-            "records": records,
-            "geometry": AckermannOdometryGeometry(g["wheelbase_m"], g["track_m"], g["wheel_radius_m"])}
+            "records": records, "geometry": geometry}
 
 
 def build(run: Path, arm: str, bundle: str, seed: int) -> dict:
@@ -206,9 +225,7 @@ def build(run: Path, arm: str, bundle: str, seed: int) -> dict:
     info["odom_error_m"] = {"median": float(np.median(np.hypot(*(base[:, :2] - truth[:, :2]).T))),
                             "max": float(np.max(np.hypot(*(base[:, :2] - truth[:, :2]).T)))}
     return {"odom_base": base, "scan_id": np.array([r["scan_id"] for r in records]), "stamp_s": stamps,
-            "run": str(run.resolve()), "spool_manifest_sha256": hashlib.sha256((run / "spool" / "manifest.json")
-                                                                               .read_bytes()).hexdigest(),
-            "info": info}
+            "run": str(run.resolve()), "record_sha256": inputs["digest"], "info": info}
 
 
 def main(argv=None) -> int:
@@ -221,9 +238,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     built = build(a.run, a.arm, a.bundle, a.seed)
     np.savez(a.out, odom_base=built["odom_base"], scan_id=built["scan_id"], stamp_s=built["stamp_s"],
-             run=np.asarray(built["run"]), spool_manifest_sha256=np.asarray(built["spool_manifest_sha256"]),
+             run=np.asarray(built["run"]), record_sha256=np.asarray(built["record_sha256"]),
              info=np.asarray(json.dumps(built["info"])))
-    print(json.dumps(built["info"]))
+    print(json.dumps({**built["info"], "record_sha256": built["record_sha256"]}))
     return 0
 
 

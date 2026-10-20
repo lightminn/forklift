@@ -6,8 +6,8 @@ Every scan the runner sent, in order: the recorded clean ranges plus the shared-
 finite beams and clipped to the range limits) -- a redraw, not the live stream; ``--ranges-bin`` (tools range dump of a
 saved graph) puts given ranges on the scans at its stamps instead (the live graph's own keyframes reproduce the live
 graph). The odometry is the record's ``odom_base`` (spool ``slam.records``), or ``--odom-file`` (tools/
-gyro_heading_offline.py), checked against the record: same run, spool manifest hash, scan ids and stamps. The bridge's
-own KeyframeGate picks keyframes, as live. Prints ``sent N scans`` -- N is checked against the record by the summary.
+gyro_heading_offline.py), checked against the record: same run, a hash over the record's arrays, scan ids and stamps. The bridge's
+own KeyframeGate picks keyframes, as live. Prints ``config {...}`` (what this replay used) and ``sent N scans`` -- N is checked against the record by the summary.
 
     python tools/slam_remap_drive.py RUN_DIR SOCKET OUT_JSONL [--noise-seed S] [--odom-file F] [--ranges-bin B]
 """
@@ -15,7 +15,6 @@ own KeyframeGate picks keyframes, as live. Prints ``sent N scans`` -- N is check
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 import time
@@ -24,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from forklift_core.live.spool import load_list, load_slam_log  # noqa: E402
 from forklift_core.localization import slam_link  # noqa: E402
 
@@ -45,12 +45,13 @@ def read_ranges_bin(path: Path) -> dict:
     return out
 
 
-def load_odom_file(path: Path, run: Path, records: list) -> np.ndarray:
+def load_odom_file(path: Path, run: Path, records: list, digest: str) -> np.ndarray:
+    """The file's odometry, refused unless it was built from this record (tools/gyro_heading_offline.record_digest)."""
     z = np.load(path)
     if str(z["run"]) != str(run.resolve()):
         raise SystemExit(f"odometry file is for {z['run']}, not {run.resolve()}")
-    if str(z["spool_manifest_sha256"]) != hashlib.sha256((run / "spool" / "manifest.json").read_bytes()).hexdigest():
-        raise SystemExit("odometry file's spool manifest hash differs from the run's")
+    if str(z["record_sha256"]) != digest:
+        raise SystemExit("odometry file's record hash differs from the run's")
     if not (np.array_equal(z["scan_id"], [r["scan_id"] for r in records])
             and np.array_equal(z["stamp_s"], [r["stamp_s"] for r in records])):
         raise SystemExit("odometry file's scan ids or stamps differ from the record")
@@ -62,7 +63,7 @@ def main(argv=None) -> int:
     ap.add_argument("run", type=Path)
     ap.add_argument("socket")
     ap.add_argument("out", type=Path)
-    ap.add_argument("--noise-seed", type=int, default=0)
+    ap.add_argument("--noise-seed", type=int, required=True)
     ap.add_argument("--odom-file", type=Path, default=None)
     ap.add_argument("--ranges-bin", type=Path, default=None)
     a = ap.parse_args(argv)
@@ -76,7 +77,14 @@ def main(argv=None) -> int:
         raise SystemExit("spool records are not scans 0..n-1 of the slam log")
     if not np.allclose([r["stamp_s"] for r in records], stamps, atol=1e-6):
         raise SystemExit("spool stamps differ from the slam log")
-    odom = load_odom_file(a.odom_file, a.run, records) if a.odom_file else None
+    odom = None
+    if a.odom_file:
+        from gyro_heading_offline import record_digest, run_geometry
+
+        odom = load_odom_file(a.odom_file, a.run, records, record_digest(log, records, run_geometry(a.run)))
+    print("config " + json.dumps({"run": str(a.run.resolve()), "noise_seed": a.noise_seed,
+                                  "odom_file": str(a.odom_file) if a.odom_file else None,
+                                  "ranges_bin": str(a.ranges_bin) if a.ranges_bin else None}), flush=True)
     given = read_ranges_bin(a.ranges_bin) if a.ranges_bin else {}
     rng = np.random.default_rng([a.noise_seed, 7])
     for _ in range(600):

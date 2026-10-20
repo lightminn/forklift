@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 SEEDS = tuple(range(1000, 1020))
+REQUIRED_RUNS = ("r6", "r7")
 JUDGED = ("A+", "A-")
 RECORDED = ("B1+", "B1-", "B2", "B3")
 WINS, POSITION_M, YAW_RAD = 16, 0.10, 0.03
@@ -52,28 +53,74 @@ def record_scans(run_dir: str, cache: dict) -> int:
     return cache[run_dir]
 
 
+def node_stamps(dump: Path) -> list:
+    import csv
+
+    with open(dump / "nodes.csv", newline="") as handle:
+        return [round(float(row["stamp_s"]), 6) for row in csv.DictReader(handle)]
+
+
 def outcome(entry: dict, cache: dict) -> dict:
     """The run's V2' maxima, or inf with why it does not count."""
     out = Path(entry["out"])
     try:
         status = json.loads((out / "status.json").read_text())
         v2 = json.loads((out / "v2.json").read_text())
-        processed = sum(1 for line in (out / "drive.jsonl").read_text().splitlines() if line)
-    except (OSError, ValueError) as exc:
-        return {"position_max_m": math.inf, "yaw_max_rad": math.inf, "invalid": f"unreadable: {exc}"}
-    checks = {"driver": status.get("driver_exit") == 0, "container": status.get("container_exit") == 0,
+        replies = [json.loads(line) for line in (out / "drive.jsonl").read_text().splitlines() if line]
+        config = next(json.loads(line[len("config "):]) for line in (out / "drive.log").read_text().splitlines()
+                      if line.startswith("config "))
+        odom = json.loads((out / "odom.json").read_text().splitlines()[-1])
+        nodes = node_stamps(out / "bridge" / "dump")
+    except (OSError, ValueError, StopIteration, KeyError, IndexError) as exc:
+        return {"position_max_m": math.inf, "yaw_max_rad": math.inf, "invalid": f"unreadable: {exc!r}"}
+    processed = [round(float(r["stamp_s"]), 6) for r in replies]
+    checks = {"done": status.get("state") == "done",
+              "driver": status.get("driver_exit") == 0, "container": status.get("container_exit") == 0,
               "eval": status.get("eval_exit") == 0, "serialized": status.get("serialize_ok") is True,
               "all_scans": status.get("sent") == record_scans(entry["run_dir"], cache),
-              "paired": v2.get("nodes") and v2.get("paired") == v2.get("nodes"),
+              "paired": bool(v2.get("nodes")) and v2.get("paired") == v2.get("nodes"),
               "yaw": v2.get("yaw_max_rad") is not None,
-              "nodes": processed == v2.get("nodes") == (v2.get("graph") or {}).get("vertices")}
+              # processed replies and the saved graph's nodes, one to one by stamp
+              "nodes": (len(set(processed)) == len(processed) == len(nodes) == len(set(nodes)) == v2.get("nodes")
+                        and set(processed) == set(nodes)),
+              # what actually ran is what the matrix planned
+              "config": (config.get("noise_seed") == entry["noise_seed"]
+                         and config.get("run") == str(Path(entry["run_dir"]).resolve())
+                         and config.get("odom_file") == str(out / "odom.npz")),
+              "odometry": (odom.get("arm") == entry["arm"] and odom.get("seed") == entry["seed"]
+                           and (entry["arm"] == "steering" or odom.get("bundle") == entry["bundle"]))}
     bad = [k for k, ok in checks.items() if not ok]
     if bad:
         return {"position_max_m": math.inf, "yaw_max_rad": math.inf, "invalid": bad}
     return {"position_max_m": float(v2["position_max_m"]), "yaw_max_rad": float(v2["yaw_max_rad"]), "invalid": None}
 
 
+def matrix_problems(entries: list[dict]) -> list[str]:
+    """What the entries lack of the pre-registered matrix (both records, distinct, every arm x bundle x seed once)."""
+    problems = []
+    dirs = {}
+    for e in entries:
+        dirs.setdefault(e["run"], set()).add(str(Path(e["run_dir"]).resolve()))
+    if sorted(dirs) != sorted(REQUIRED_RUNS):
+        problems.append(f"runs {sorted(dirs)} are not {list(REQUIRED_RUNS)}")
+    if any(len(v) != 1 for v in dirs.values()) or len({next(iter(v)) for v in dirs.values()}) != len(dirs):
+        problems.append("each run needs one record of its own")
+    keys = [(e["run"], e["arm"], e["bundle"], e["seed"]) for e in entries]
+    expected = {(r, "steering", None, s) for r in REQUIRED_RUNS for s in SEEDS} | {
+        (r, "gyro", b, s) for r in REQUIRED_RUNS for b in JUDGED + RECORDED for s in SEEDS}
+    if len(keys) != len(set(keys)):
+        problems.append("duplicate entries")
+    if set(keys) != expected:
+        problems.append(f"{len(expected - set(keys))} planned remaps missing, {len(set(keys) - expected)} unplanned")
+    if len({e["out"] for e in entries}) != len(entries):
+        problems.append("two entries share an output directory")
+    return problems
+
+
 def verdict(entries: list[dict]) -> dict:
+    problems = matrix_problems(entries)
+    if problems:
+        return {"cells": {}, "pass": False, "matrix_problems": problems}
     cache: dict = {}
     results = {(e["run"], e["arm"], e["bundle"], e["seed"]): outcome(e, cache) for e in entries}
     runs = sorted({e["run"] for e in entries})
