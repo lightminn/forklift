@@ -901,6 +901,8 @@ def arguments() -> argparse.Namespace:
             )
         if args.perception_mount == "carriage_low_measured" and "dls08_measured" not in str(args.forklift_urdf):
             parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
+    # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
+    args.pallet_prior_loaded = None
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
