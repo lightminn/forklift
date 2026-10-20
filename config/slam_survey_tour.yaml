@@ -16,12 +16,16 @@ aisles:
   - [[-11.4, -19.6], [-11.4, 6.45]]
   - [[-1.0, -19.6], [-1.0, 6.45]]
   - [[2.9, -19.6], [2.9, 6.45]]
-# tour: 31 rear-axle waypoints, a snake over the aisles completed by tools/survey_tour.py --refine 8 against the
-# judged region (U16's observation poses included); planned on the first survey's scene (ws1 job 6765): 294.5 m,
-# 44 gear cusps, 60 m in reverse, the judged region all covered, 22.9 m2 of the placeable estimate left.
+# tour: 32 rear-axle waypoints, a snake over the aisles completed by tools/survey_tour.py --refine against the
+# judged region (U16's 7 observation poses included), planned around the teleop permit's pickup zone (the tour never
+# recognises the pallet, so the permit keeps the whole prior zone out -- ws1 job 6807 stood on pallet:P-1 when
+# planned around the pallet alone); on the first survey's scene (ws1 job 6765): 294.1 m, 48 gear cusps, 59 m in
+# reverse, the judged region all covered, 22.9 m2 of the placeable estimate left; the CPU teleop-chain model
+# (survey_tour.simulate_tour) arrives.
 tour:
-  - [3.600, -1.500, 1.570796]
+  - [3.000, -1.600, 0.000000]
   - [-0.225, 3.725, 1.643296]
+  - [3.000, 2.900, 0.000000]
   - [3.600, 4.500, 1.570796]
   - [-3.000, 6.450, 3.141593]
   - [-20.000, 6.450, 3.141593]

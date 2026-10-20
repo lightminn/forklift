@@ -1112,8 +1112,8 @@ async def tour_scenario(p: Probe, args):
     """SLAM localization plan L2 v2.5: the survey epoch's tour. The path tools/survey_tour.py planned is driven by
     teleop with tools/survey_tour.py's TourDriver (the runner's path tracker on the state's map pose and measured
     speed, a bounded cusp release, the stall, staleness and TELEOP checks -- it fails the tour, never skips ahead).
-    Ends at home and, with --end-session after an arrival, ends the session; a failed tour leaves the session up (the
-    job stops the runner and no graph is written)."""
+    With --end-session the session ends either way, so the job does not hold the GPU to its time limit (ws1 job 6807
+    did); the bundle tool reads the tour's end from this report and fails a survey whose tour did not arrive."""
     import numpy as np
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1167,7 +1167,7 @@ async def tour_scenario(p: Probe, args):
         await p.teleop(0.0, 0.0, True)
         await asyncio.sleep(0.05)
     await p.request("mode_request", to="PAUSED")
-    if args.end_session and p.closed_code is None and end == "arrived":
+    if args.end_session and p.closed_code is None:
         await p.until(p.standing, 30, label="standing_before_end")
         p.report["session_end"] = await p.request_until_standing("session_end")
         stop = time.monotonic() + 120

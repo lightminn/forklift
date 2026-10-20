@@ -193,14 +193,33 @@ def region_coverage(region: np.ndarray, sites: np.ndarray, radius_m: float = CEL
             "farthest_cell": region[int(np.argmax(d))].tolist() if len(d) else None}
 
 
+TOUR_ZONE_EXTRA_M = 0.05
+
+
+def permit_pickup_zone(result: dict) -> Rectangle:
+    """The keep-out zone the teleop pallet permit holds an unrecognised (prior) pallet as -- the tour never recognises
+    it: the runner's pickup-zone prior (``BAY_PICKUP_ZONE`` grown by the pallet's half diagonal, run_transport) grown by
+    ``PRIOR_POSE_MARGIN_M + ENVELOPE_M`` (``pallet_permit.zones_from``) and ``TOUR_ZONE_EXTRA_M``. The first tour (ws1
+    job 6807) stood still on ``pallet:P-1`` beside the pallet itself, planned around with 0.10 m."""
+    from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as zone
+    from forklift_core.safety.pallet_permit import ENVELOPE_M, PRIOR_POSE_MARGIN_M
+
+    g = result["geometry"]
+    grow = math.hypot(g["pallet_depth_m"], g["pallet_width_m"]) / 2 + PRIOR_POSE_MARGIN_M + ENVELOPE_M + TOUR_ZONE_EXTRA_M
+    return Rectangle((zone.x_min_m + zone.x_max_m) / 2, (zone.y_min_m + zone.y_max_m) / 2,
+                     zone.x_max_m - zone.x_min_m + 2 * grow, zone.y_max_m - zone.y_min_m + 2 * grow, 0.0)
+
+
 def plan_tour(result: dict, tour: list) -> SimpleNamespace:
+    """The tour from home through ``tour`` back home, around the props and the permit's pickup zone (in place of the
+    pallet's own outline: ``plan_survey_route`` adds a pickup pallet of the geometry's size, here the zone's)."""
     s, g = result["scenario"], result["geometry"]
-    pickup = s["pickup"]
+    zone = permit_pickup_zone(result)
     transport = SimpleNamespace(props=[SimpleNamespace(rectangle=_rect(p["rectangle"])) for p in s["props"]],
-                                pickup=SimpleNamespace(x_m=pickup["x_m"], y_m=pickup["y_m"], yaw_rad=pickup["yaw_rad"]),
+                                pickup=SimpleNamespace(x_m=zone.x_m, y_m=zone.y_m, yaw_rad=zone.yaw_rad),
                                 bounds=Bounds(**s["bounds"]))
     geometry = SimpleNamespace(unloaded_footprint=Footprint(**g["unloaded_footprint"]),
-                               pallet_depth_m=g["pallet_depth_m"], pallet_width_m=g["pallet_width_m"])
+                               pallet_depth_m=zone.length_m, pallet_width_m=zone.width_m)
     home = Pose2D(**s["start_rear"])
     route = [home] + [Pose2D(*p) for p in tour] + [home]
     config = PlannerConfig(**result["travel_planner_config"])
@@ -237,7 +256,7 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
     when covered, after ``rounds`` additions, or when no added waypoint plans (that cluster is then skipped)."""
     region = judged
     g = result["geometry"]["unloaded_footprint"]
-    checker = FootprintCollisionChecker(scenario_obstacles(result, pallet=True), Footprint(**g),
+    checker = FootprintCollisionChecker(scenario_obstacles(result) + [permit_pickup_zone(result)], Footprint(**g),
                                         Bounds(**result["scenario"]["bounds"]))
     clearance = float(result["travel_planner_config"].get("clearance_m", 0.0))
     plan = plan_tour(result, tour)

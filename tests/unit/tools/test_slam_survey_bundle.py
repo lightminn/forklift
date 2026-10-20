@@ -369,3 +369,24 @@ def test_states_without_pose_or_speed_are_no_feedback():
     bare = {"state_seq": 2, "mode": "TELEOP", "armed": True, "rear_axle_speed_mps": None, "pose": None}
     assert driver.step(1.0, bare)[1] is None
     assert driver.step(2.5, {**bare, "state_seq": 3})[1] == "feedback_missing"
+
+
+def test_a_tour_that_did_not_arrive_fails_the_survey(tmp_path):
+    epoch, readback, params = _epoch(tmp_path)
+    np.savez(tmp_path / "tour.npz", poses=np.zeros((2, 3)), scenario_sha256=np.asarray(st.scenario_sha256(SCENE)))
+    for end, ok in (("stalled", False), ("arrived", True)):
+        (tmp_path / "probe.json").write_text(json.dumps({"tour": {"end": end, "progress_m": 2.8, "events": []}}))
+        report = tmp_path / f"report_{end}.json"
+        sb.main(["--epoch", str(epoch), "--readback", str(readback), "--slam-params", str(params), "--image", "x",
+                 "--rigid-bodies", str(tmp_path / "rigid.json"), "--root", str(tmp_path), "--tour-config",
+                 str(tmp_path / "tour.yaml"), "--tour-path", str(tmp_path / "tour.npz"), "--probe",
+                 str(tmp_path / "probe.json"), "--out", str(tmp_path / f"bundle_{end}"), "--report", str(report)])
+        out = json.loads(report.read_text())
+        assert out["tour"]["ok"] is ok and out["ok"] is ok and out["coverage"]["tour_scene_matches"]
+
+
+def test_the_tour_plans_around_the_permits_prior_pickup_zone():
+    """ws1 job 6807 stood on pallet:P-1: an unrecognised pallet is the whole prior zone to the teleop permit."""
+    z = st.permit_pickup_zone(SCENE)
+    # BAY_PICKUP_ZONE x 2.6-3.6, y -0.2-1.5, grown by the pallet's half diagonal 0.5 + 0.182 + 0.01 + 0.05
+    assert abs((z.x_m - z.length_m / 2) - (2.6 - 0.742)) < 1e-9 and abs((z.y_m + z.width_m / 2) - (1.5 + 0.742)) < 1e-9

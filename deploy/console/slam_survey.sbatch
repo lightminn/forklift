@@ -122,7 +122,7 @@ fi
   > "$OUT/rigid_bodies.log" 2>&1
 "$VENV_PY" "$ROOT/tools/slam_survey_bundle.py" --epoch "$EP" --readback "$OUT/readback" \
   --rigid-bodies "$OUT/rigid_bodies.json" --tour-config "${TOUR_CONFIG:-$ROOT/config/slam_survey_tour.yaml}" \
-  ${TOUR:+--tour-path "$TOUR"} --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \
+  ${TOUR:+--tour-path "$TOUR" --probe "$OUT/probe.json"} --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \
   --image "$(docker image inspect -f '{{.Id}}' forklift/ros2-dev:jazzy)" \
   ${REFERENCE_RUN:+--reference-run "$REFERENCE_RUN"} --out "$OUT/bundle" --report "$OUT/survey_report.json"
 brc=$?

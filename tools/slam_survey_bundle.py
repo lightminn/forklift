@@ -322,6 +322,8 @@ def main(argv=None) -> int:
     ap.add_argument("--rigid-bodies", type=Path, default=None, help="tools/list_rigid_bodies.py's output")
     ap.add_argument("--tour-config", type=Path, default=None, help="config/slam_survey_tour.yaml (its aisles)")
     ap.add_argument("--tour-path", type=Path, default=None, help="the tour the survey drove (tools/survey_tour.py)")
+    ap.add_argument("--probe", type=Path, default=None,
+                    help="the console probe's report: with --tour-path the tour must have arrived")
     ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
                     help="the snapshot the run ran from (its relative argument paths)")
     ap.add_argument("--out", type=Path, required=True)
@@ -367,6 +369,11 @@ def main(argv=None) -> int:
                     path_points(args.reference_run), np.column_stack((nodes["x"], nodes["y"])), COVERAGE_RADIUS_M)}
             except (OSError, ValueError) as exc:
                 report["reference_path"] = {"reference": str(args.reference_run), "reason": str(exc)}
+    if args.tour_path is not None:
+        probe = json.loads(args.probe.read_text()) if args.probe and args.probe.exists() else {}
+        tour = probe.get("tour") or {}
+        report["tour"] = {"ok": tour.get("end") == "arrived", "end": tour.get("end"), "progress_m": tour.get("progress_m"),
+                          "events": [e for e in tour.get("events") or [] if e.get("event") != "departed"][-20:]}
     rigid = json.loads(args.rigid_bodies.read_text()) if args.rigid_bodies and args.rigid_bodies.exists() else None
     report["moving"] = moving_check(rigid, arguments)
 
@@ -408,7 +415,8 @@ def main(argv=None) -> int:
         report["map_id"] = manifest["map_id"]
         written = True
     report["bundle_written"] = written
-    report["ok"] = bool(written and all(report[k]["ok"] for k in ("world", "start", "coverage", "cost", "moving")))
+    report["ok"] = bool(written and all(report[k]["ok"] for k in ("world", "start", "coverage", "cost", "moving"))
+                        and (report.get("tour") or {"ok": True})["ok"])
     args.report.write_text(json.dumps(report, indent=1))
     print(json.dumps({k: (v.get("ok") if isinstance(v, dict) else v) for k, v in report.items()}))
     return 0 if report["ok"] else 1
