@@ -600,3 +600,102 @@ def test_the_return_narrows_the_far_recognitions_zone_to_the_pallet_judged():
     w.arrive(30.0)
     assert zones == [((PICKUP.x_m, PICKUP.y_m), L.REOBSERVE_RADIUS_M)]
     assert w.deck["reobservation_zone"]["radius_m"] == L.REOBSERVE_RADIUS_M
+
+
+NEXT = (1.0, 1.0, 0.0)  # the next fixed observation point (the far stand is REAR)
+
+
+def reobserve_attempt(status="reobserve", reason="uncertain_in_radius"):
+    return {"recognition": {"status": status, "reason": reason, "leg": 1}}
+
+
+def returned(waypoints=(tuple(REAR), NEXT), **kw):
+    """Both faces present, arrived back at the far stand (the capture cleared the return leg)."""
+    w = World(verdicts=["present", "present"], **kw)
+    w.core.options.observation_waypoints = waypoints
+    w.ms.next_candidate_index = 1  # the far stand was the first point
+    w.begin()
+    w.arrive()
+    w.arrive(30.0)
+    w.deck["leg"] = None
+    return w
+
+
+def test_a_look_again_decision_takes_the_next_observation_point_as_a_return_leg():
+    # Isaac ecf4be5 s1: an unconfirmed proposal in reach at the re-observation stop asked to look again; the far
+    # observation's own answer is the next fixed point (observe_failed's ladder), so the re-observation takes it.
+    w = returned(zone=ZONE)
+    w.obstacle["progress"] = {"phase": "observe", "best_m": 0.3, "since_s": 10.0}
+    serial = w.state["observe_replan_leg"]["serial"]
+    ended = w.core.observe_failed(36.0, REAR, reobserve_attempt(), 3,
+                                  SimpleNamespace(status="no_pallet", reason="uncertain_in_radius"))
+    assert ended is False and w.deck["status"] == "returning" and w.deck["leg"]["kind"] == "return"
+    assert tuple(w.core.paths["observe"].poses[-1]) == pytest.approx(NEXT)
+    assert w.ms.next_candidate_index == 2
+    assert w.obstacle["progress"] == {} and w.state["observe_replan_leg"]["serial"] == serial + 1
+    plans = [c for c in w.calls if c[0] == "plan_observation_leg"]
+    assert plans[-1][2]["bounds"] == Bounds(**w.deck["bounds"])  # the side stage's bounds, as its recoveries
+    assert w.deck["reobservation_attempts"][-1] == {
+        "time_s": 36.0, "attempt": 3, "far_leg": 1, "status": "reobserve", "reason": "uncertain_in_radius",
+        "outcome": "retry", "candidate_index": 1, "goal": list(NEXT)}
+    assert "refused" not in w.deck
+
+
+@pytest.mark.parametrize("status,reason", [("ask_operator", "multiple_in_radius"),
+                                           ("none", "no_candidate_in_radius"),
+                                           ("selected", "target_inconsistent")])
+def test_a_reobservation_that_does_not_ask_to_look_again_is_refused(status, reason):
+    w = returned()
+    ended = w.core.observe_failed(36.0, REAR, reobserve_attempt(status, reason), 3,
+                                  SimpleNamespace(status="no_pallet", reason=reason))
+    assert ended is True and w.deck["refused"]["reason"] == "bottom_deck_reobservation_failed"
+    assert w.deck["refused"]["detail"] == reason and w.ms.next_candidate_index == 1
+    assert w.deck["reobservation_attempts"][-1]["outcome"] == "refused"
+
+
+def test_a_blocked_retry_leg_is_replanned_to_its_own_point_with_its_own_budget():
+    w = World(verdicts=["present", "present"])
+    w.core.options.observation_waypoints = (tuple(REAR), NEXT)
+    w.ms.next_candidate_index = 1
+    w.begin()
+    w.arrive()
+    w.arrive(30.0)
+    w.core.blocked_replan(31.0, np.array([0.5, 0.5, 0.0]), 0.0, 0.1)  # one recovery on the return itself
+    assert tuple(w.core.paths["observe"].poses[-1]) == pytest.approx(tuple(REAR))
+    w.deck["leg"] = None
+    w.core.observe_failed(36.0, REAR, reobserve_attempt(), 3, SimpleNamespace(status="no_pallet", reason="x"))
+    for i in range(L.RETURN_RECOVERIES):
+        w.core.blocked_replan(37.0 + i, np.array([0.5, 0.5, 0.0]), 0.0, 0.1)
+        assert w.deck["leg"]["kind"] == "return"
+        assert tuple(w.core.paths["observe"].poses[-1]) == pytest.approx(NEXT)  # the retry's point, not the far stand
+    w.core.blocked_replan(45.0, np.array([0.5, 0.5, 0.0]), 0.0, 0.1)
+    assert w.deck["refused"]["reason"] == "bottom_deck_return_failed"
+    assert "plan_transport" not in w.names()  # never the mission replan
+
+
+def test_the_retries_end_at_the_bound_and_when_the_points_run_out():
+    points = (tuple(REAR),) + tuple((1.0 + k, 1.0, 0.0) for k in range(L.REOBSERVE_RETRIES + 1))
+    w = returned(waypoints=points)
+    for k in range(L.REOBSERVE_RETRIES):
+        assert w.core.observe_failed(36.0 + k, REAR, reobserve_attempt(), 3 + k,
+                                     SimpleNamespace(status="no_pallet", reason="r")) is False
+        w.deck["leg"] = None
+    assert w.core.observe_failed(50.0, REAR, reobserve_attempt(), 9, SimpleNamespace(status="no_pallet", reason="r"))
+    assert w.deck["refused"]["reason"] == "bottom_deck_reobservation_failed"
+    w2 = returned(waypoints=(tuple(REAR),))
+    assert w2.core.observe_failed(36.0, REAR, reobserve_attempt(), 3, SimpleNamespace(status="no_pallet", reason="r"))
+    assert w2.deck["refused"]["detail"] == "candidates_exhausted"
+    assert w2.deck["reobservation_attempts"][-1]["outcome"] == "exhausted"
+
+
+def test_a_retried_reobservation_is_still_checked_against_the_record():
+    w = returned()
+    w.core.observe_failed(36.0, REAR, reobserve_attempt(), 3, SimpleNamespace(status="no_pallet", reason="r"))
+    w.deck["leg"] = None
+    out = w.core._bottom_deck_reobserved(40.0, REAR, reobserve_attempt("selected", None),
+                                         Pose2D(PICKUP.x_m + 0.2, PICKUP.y_m, PICKUP.yaw_rad))
+    assert out is not None and w.deck["refused"]["reason"] == "bottom_deck_target_mismatch"
+    assert w.deck["reobservation_attempts"][-1]["outcome"] == "mismatch"
+    w = returned()
+    assert w.core._bottom_deck_reobserved(40.0, REAR, reobserve_attempt("selected", None), PICKUP) is None
+    assert w.deck["reobservation_attempts"][-1]["outcome"] == "accepted"

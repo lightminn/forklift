@@ -2344,10 +2344,7 @@ class MissionCore:
         require, wall, grid_world, grid_kwargs, plan_observation_leg = (
             hooks.require, hooks.wall, hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg)
         if self.bottom_deck_returning():
-            # No other observation candidate: the pallet judged must be seen again from the far stand.
-            self._bottom_deck_refuse(t, "bottom_deck_reobservation_failed", rear, stage="reobserve")
-            self.state["bottom_deck"]["refused"]["detail"] = getattr(observation, "reason", None)
-            return True
+            return self._bottom_deck_reobserve_failed(t, rear, attempt, attempt_number, observation)
         apply_tracker_profile, realign_install, record_tracker_configs = (
             self.apply_tracker_profile, self.realign_install, self.record_tracker_configs)
         attempt["retry_reason"] = (
@@ -3089,7 +3086,8 @@ class MissionCore:
                                             rear)
         # Two faces present: back to the far observation point, observe again there and go on as without the side
         # legs (the near leg then starts where it always did). The record stays the map target judged.
-        plan_ = self._bottom_deck_plan(rear, None, goal=self.bottom_deck_far.waypoint)
+        self.bottom_deck_return_goal = self.bottom_deck_far.waypoint  # a look-again retry moves it on
+        plan_ = self._bottom_deck_plan(rear, None, goal=self.bottom_deck_return_goal)
         if not plan_.success:
             out_ = self._bottom_deck_refuse(t, "bottom_deck_return_failed", rear, stage="return")
             deck_["refused"]["detail"] = plan_.status
@@ -3106,6 +3104,48 @@ class MissionCore:
         self._bottom_deck_install(t, plan_, "return", None, 0)
         self.hooks.set_inset_status("원거리 관측 위치로 복귀")
         return SimpleNamespace(stop=False, rear=rear, installed=True)
+
+    def _bottom_deck_reobserve_failed(self, t: float, rear, attempt: dict, attempt_number: int, observation) -> bool:
+        """A re-observation that did not see the pallet judged. A decision that asks to look again (an uncertain or an
+        unresolved object in reach of the record's zone -- Isaac ecf4be5 s1) takes the next fixed observation point,
+        as the far observation's own failure does (observe_failed's ladder), as a return leg: planned in the side
+        stage's bounds, its recoveries aimed at that point, the record and the zone kept. Any other failure, the
+        bound or no plannable point refuses. True ends the mission loop (Codex retry design round 1)."""
+        deck_ = self.state["bottom_deck"]
+        far_ = attempt.get("recognition") or {}
+        reason_ = getattr(observation, "reason", None)
+        tries_ = deck_.setdefault("reobservation_attempts", [])
+        retries_ = sum(1 for a in tries_ if a["outcome"] == "retry")
+        tries_.append({"time_s": t, "attempt": attempt_number, "far_leg": far_.get("leg"), "status": far_.get("status"),
+                       "reason": far_.get("reason", reason_), "outcome": "refused"})
+
+        def refuse(detail):
+            self._bottom_deck_refuse(t, "bottom_deck_reobservation_failed", rear, stage="reobserve")
+            deck_["refused"]["detail"] = detail
+            return True
+
+        if (far_.get("status") != "reobserve" or far_.get("reason") not in bottom_deck_legs.REOBSERVE_RETRY_REASONS
+                or self.state.get("near_capture", {}).get("status") == "pending"
+                or retries_ >= bottom_deck_legs.REOBSERVE_RETRIES):
+            return refuse(reason_)
+        waypoints_ = self.options.observation_waypoints
+        while self.ms.next_candidate_index < len(waypoints_):
+            index_ = self.ms.next_candidate_index
+            self.ms.next_candidate_index += 1  # the far observation's ladder: a point tried is not tried again
+            goal_ = tuple(float(v) for v in waypoints_[index_])
+            plan_ = self._bottom_deck_plan(rear, None, goal=goal_)
+            self.state.setdefault("observation_candidates", []).append(
+                {"candidate_index": index_, "pose": list(goal_), "start_rear": np.asarray(rear).tolist(),
+                 "success": plan_.success, "status": plan_.status, "bottom_deck_reobservation": True,
+                 "search_attempts": [list(entry) for entry in plan_.search_attempts]})
+            if plan_.success:
+                tries_[-1].update(outcome="retry", candidate_index=index_, goal=list(goal_))
+                self.bottom_deck_return_goal = goal_
+                self._bottom_deck_install(t, plan_, "return", None, 0)  # a fresh replan budget and progress watch
+                self.hooks.set_inset_status("다음 관측 위치에서 재관측")
+                return False
+        tries_[-1]["outcome"] = "exhausted"
+        return refuse("candidates_exhausted")
 
     def _bottom_deck_reobserved(self, t: float, rear, attempt: dict, target_pickup):
         """The re-observation's estimate against the record: the same shape (the far recognition's hypothesis when it
@@ -3124,6 +3164,9 @@ class MissionCore:
                                   "shape": shape_, "refusal": refusal_,
                                   "used_error": (far_ or {}).get("used_error"),
                                   "single_error": (far_ or {}).get("single_error")}
+        deck_.setdefault("reobservation_attempts", []).append(
+            {"time_s": t, "far_leg": (far_ or {}).get("leg"), "status": (far_ or {}).get("status"),
+             "outcome": "mismatch" if refusal_ is not None else "accepted"})
         if refusal_ is not None:
             return self._bottom_deck_refuse(t, "bottom_deck_target_mismatch", rear, stage="reobserve")
         deck_["status"] = "done"
@@ -3143,13 +3186,18 @@ class MissionCore:
         rear = rear if rear_ is None else rear_
         deck_.setdefault("recoveries", []).append({"time_s": t, "why": why, "kind": leg_["kind"],
                                                    "face": leg_["face"]})
+        if leg_["kind"] == "return":
+            deck_["recoveries"][-1]["goal"] = list(self.bottom_deck_return_goal)
         if leg_["kind"] == "retreat":
             return self._bottom_deck_face_end(t, rear, "unobserved", f"retreat_{why}")
         if leg_["kind"] == "return":
-            # Back to the far observation point: a detour is allowed (it is a far observation leg), bounded apart.
-            if sum(1 for r in deck_["recoveries"] if r["kind"] == "return") > bottom_deck_legs.RETURN_RECOVERIES:
+            # Back to the far observation point (or a retry's next point): a detour is allowed (it is a far observation
+            # leg), bounded apart for each point.
+            goal_ = list(self.bottom_deck_return_goal)
+            if (sum(1 for r in deck_["recoveries"] if r["kind"] == "return" and r.get("goal") == goal_)
+                    > bottom_deck_legs.RETURN_RECOVERIES):
                 return self._bottom_deck_refuse(t, "bottom_deck_return_failed", rear, stage="return")
-            plan_ = self._bottom_deck_plan(rear, None, goal=self.bottom_deck_far.waypoint)
+            plan_ = self._bottom_deck_plan(rear, None, goal=self.bottom_deck_return_goal)
             if not plan_.success:
                 return self._bottom_deck_refuse(t, "bottom_deck_return_failed", rear, stage="return")
             if self.hooks.same_path(plan_, self.paths["observe"], self.trackers["observe"].remaining_to_goal_m()):
@@ -3443,6 +3491,8 @@ class MissionCore:
             self._bottom_deck_refuse(float(hooks.now_s()), "bottom_deck_reobservation_failed",
                                      None, stage="reobserve")
             self.state["bottom_deck"]["refused"]["detail"] = f"capture_failed:{exc.reason}"
+            self.state["bottom_deck"].setdefault("reobservation_attempts", []).append(
+                {"time_s": float(hooks.now_s()), "outcome": "capture_failed", "reason": exc.reason})
             return SimpleNamespace(aborted=False, refused=True)
         hooks.require(False, f"perception_capture_failed:{exc.reason}")
 

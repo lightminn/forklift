@@ -407,8 +407,8 @@ def test_every_observation_candidate_record_keeps_its_search_attempts():
         ):
             (record,) = call.args
             records.append({key.value for key in record.keys})
-    # Two observation branches plus the priority-5 obstacle-block fallback.
-    assert len(records) == 3
+    # Two observation branches plus the priority-5 obstacle-block fallback and the bottom-deck re-observation's retry.
+    assert len(records) == 4
     for keys in records:
         assert {"search_attempts", "start_rear", "status"} <= keys
 
