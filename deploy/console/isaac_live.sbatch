@@ -13,7 +13,9 @@
 # (before the time limit) is passed to the supervisor, which ends the runner and its bridge and starts no more.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/isaac_live.sbatch OUT
-#   optional: PORT (8798), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces)
+#   optional: PORT (8798), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), MAP_BUNDLE (a survey map bundle,
+#   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
+#   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0")
 #
 # Run from the repository root. Open the console through   ssh -N -L 8798:127.0.0.1:$PORT <host>.
 set -u
@@ -21,6 +23,10 @@ OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
+if [ -n "${MAP_BUNDLE:-}" ]; then
+  MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
+  : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
+fi
 JOB=${SLURM_JOB_ID:-local$$}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -30,15 +36,20 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'ROOT=%q\nBASE_SCENE=%q\nFORKLIFT_URDF=%q\nVENV_PY=%q\nJOB=%q\nCPU0=%q\n' \
     "$ROOT" "$BASE_SCENE" "$FORKLIFT_URDF" "$VENV_PY" "$JOB" "$CPU0"
   printf 'PORT=%q\nFACTOR=%q\nSEED=%q\nEXTRA_ARGS=%q\n' "${PORT:-8798}" "${FACTOR:-0.4}" "${SEED:-0}" "${EXTRA_ARGS:-}"
+  printf 'MAP_BUNDLE=%q\nMAP_START_POSE=%q\n' "${MAP_BUNDLE:-}" "${MAP_START_POSE:-}"
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
 #!/bin/bash
-# epoch $1, its directory $2: the SLAM bridge takes one connection, so each epoch has its own
+# epoch $1, its directory $2: the SLAM bridge takes one connection, so each epoch has its own; with MAP_BUNDLE the
+# session's map id $3 and bundle $4 (the supervisor's) -- the bundle mounted read-only, localization (plan L4)
 . "$(dirname "$0")/env.sh"
 mkdir -p "$2/bridge" "$2/sock"
+LOC=()
+[ -n "${MAP_BUNDLE:-}" ] && LOC=(-v "$4:/bundle:ro" -e SLAM_MAP_BUNDLE=/bundle -e SLAM_EXPECTED_MAP_ID="$3"
+                                 -e SLAM_MAP_START_POSE="$MAP_START_POSE")
 docker run -d --name "slam_bridge_${JOB}_e$1" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
-  -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" \
+  -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" "${LOC[@]}" \
   forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
 EOT
 cat > "$OUT/stop.sh" <<'EOT'
@@ -54,9 +65,11 @@ fi
 EOT
 cat > "$OUT/runner.sh" <<'EOT'
 #!/bin/bash
-# epoch $1, its directory $2, the port file $3
+# epoch $1, its directory $2, the port file $3, the session's map id $4 and survey bundle $5 (with MAP_BUNDLE)
 . "$(dirname "$0")/env.sh"
 cd "$ROOT"
+LOC=()  # SLAM localization plan L7: localize on the survey bundle from the start (unset: online mapping)
+[ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --base-scene "$BASE_SCENE" \
@@ -69,18 +82,20 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --grid-planning --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
-  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS \
+  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \
   --output "$2/run" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 json() { "$VENV_PY" -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@"; }
 trap 'for c in $(docker ps -aq --filter "name=slam_bridge_${JOB}_e"); do docker rm -f "$c" >/dev/null; done' EXIT
 echo "host=$(hostname) job=$JOB out=$OUT"
-"$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" \
-  --bridge "$(json bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}')" \
+SUP_LOC=()
+[ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")
+"$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" "${SUP_LOC[@]}" \
+  --bridge "$(json bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')" \
   --bridge-stop "$(json bash "$OUT/stop.sh" '{epoch}')" \
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
-  --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}')" &
+  --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}' '{expected_map_id}' '{map_bundle}')" &
 SUP=$!
 trap 'kill -TERM "$SUP" 2>/dev/null' TERM INT  # Slurm's TERM: the supervisor ends the runner and the bridge
 wait "$SUP"

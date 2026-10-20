@@ -551,3 +551,18 @@ def test_each_permit_block_is_recorded_once_with_the_pose_it_held():
         driver.step(t, {**_state(seq, x=0.5, speed=0.0), "permit": {"limit_mps": limit, "reason": "occupied"}})
     blocks = [e for e in driver.events if e["event"] == "permit_blocked"]
     assert len(blocks) == 2 and blocks[0]["pose"]["x_m"] == 0.5 and blocks[0]["permit"]["reason"] == "occupied"
+
+
+def test_the_live_job_localizes_on_a_bundle_only_when_given_one():
+    """SLAM localization plan L7 (S5): MAP_BUNDLE mounts the bundle into the bridge, passes the session's map id to
+    the bridge and the runner, and has the supervisor check and hash it; unset, every command is today's."""
+    live = (ROOT / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    bridge, runner = _heredoc(live, "bridge.sh"), _heredoc(live, "runner.sh")
+    assert '[ -n "${MAP_BUNDLE:-}" ] && LOC=(-v "$4:/bundle:ro" -e SLAM_MAP_BUNDLE=/bundle' in bridge
+    assert '-e SLAM_EXPECTED_MAP_ID="$3"' in bridge and '-e SLAM_MAP_START_POSE="$MAP_START_POSE"' in bridge
+    assert '[ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")' in runner
+    assert '$EXTRA_ARGS "${LOC[@]}"' in runner
+    assert '[ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")' in live
+    assert "'{expected_map_id}' '{map_bundle}'" in live
+    survey = (ROOT / "deploy" / "console" / "slam_survey.sbatch").read_text()
+    assert "printf 'MAP_BUNDLE=\\nMAP_START_POSE=\\n'" in survey  # a survey never localizes (console review P3)
