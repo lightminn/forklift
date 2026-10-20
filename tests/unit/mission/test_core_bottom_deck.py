@@ -699,3 +699,18 @@ def test_a_retried_reobservation_is_still_checked_against_the_record():
     w = returned()
     assert w.core._bottom_deck_reobserved(40.0, REAR, reobserve_attempt("selected", None), PICKUP) is None
     assert w.deck["reobservation_attempts"][-1]["outcome"] == "accepted"
+
+
+def test_a_retry_point_the_mission_could_not_start_from_is_skipped():
+    # Codex retry review round 5 P2: the side bounds reach a point whose footprint leaves the pickup zone, and the
+    # mission planned there after the re-observation fails approach:invalid_start; the next point is taken instead.
+    outside = (0.0, 3.0, 0.0)
+    w = returned(waypoints=(tuple(REAR), outside, NEXT), zone=ZONE)
+    assert w.core.observe_failed(36.0, REAR, reobserve_attempt(), 3,
+                                 SimpleNamespace(status="no_pallet", reason="r")) is False
+    assert tuple(w.core.paths["observe"].poses[-1]) == pytest.approx(NEXT)
+    goals = [c[2]["goal"] for c in w.calls if c[0] == "plan_observation_leg"]
+    assert not any(np.allclose(g, outside) for g in goals)
+    skipped = [c for c in w.state["observation_candidates"] if c["pose"] == list(outside)]
+    assert skipped and skipped[0]["status"] == "outside_mission_zone" and skipped[0]["success"] is False
+    assert w.deck["reobservation_attempts"][-1]["candidate_index"] == 2

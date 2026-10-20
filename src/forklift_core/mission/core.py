@@ -2930,6 +2930,7 @@ class MissionCore:
         # observation point in the zone, so no stand need lie in it (Codex return design round 2 P2 2).
         zone_, fp_ = self.observe_bounds(), self.geometry.unloaded_footprint  # the batch zone; live: the hall
         margin_ = min(float(self.options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
+        self.bottom_deck_zone = (zone_, fp_, margin_)  # where the mission after the re-observation starts from
         self.bottom_deck_bounds = zone_ if zone_ is None else bottom_deck_legs.side_bounds(
             zone_, self.options.scenario.bounds,
             [stands_[f].rear for f in order_] + [bottom_deck_legs.retreat_pose(stands_[f].rear) for f in order_]
@@ -3133,7 +3134,13 @@ class MissionCore:
             index_ = self.ms.next_candidate_index
             self.ms.next_candidate_index += 1  # the far observation's ladder: a point tried is not tried again
             goal_ = tuple(float(v) for v in waypoints_[index_])
-            plan_ = self._bottom_deck_plan(rear, None, goal=goal_)
+            zone_, fp_, margin_ = self.bottom_deck_zone
+            if zone_ is not None and not bottom_deck_legs.inside(zone_, goal_, fp_, margin_):
+                # Reachable in the side bounds, but the mission planned there after the re-observation starts in the
+                # pickup bounds (approach:invalid_start; Codex retry review round 5 P2): not a re-observation point.
+                plan_ = SimpleNamespace(success=False, status="outside_mission_zone", search_attempts=())
+            else:
+                plan_ = self._bottom_deck_plan(rear, None, goal=goal_)
             self.state.setdefault("observation_candidates", []).append(
                 {"candidate_index": index_, "pose": list(goal_), "start_rear": np.asarray(rear).tolist(),
                  "success": plan_.success, "status": plan_.status, "bottom_deck_reobservation": True,
