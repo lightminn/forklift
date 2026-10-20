@@ -260,13 +260,14 @@ def add_scene_pallets(stage: Usd.Stage, app, pallet_usd: Path, visuals, root: st
     paths = []
     for index, visual in enumerate(v for v in visuals if v.kind == "pallet"):
         r = visual.rectangle
-        prim = stage.DefinePrim(f"{root}/Pallet_{index}", "Xform")
+        # The pose goes on a holder; the referenced pallet keeps the transform ops its import wrote.
+        holder = UsdGeom.Xform.Define(stage, f"{root}/Pallet_{index}")
+        xf = UsdGeom.XformCommonAPI(holder)
+        xf.SetTranslate(Gf.Vec3d(float(r.x_m), float(r.y_m), 0.0))
+        xf.SetRotate(Gf.Vec3f(0.0, 0.0, float(math.degrees(r.yaw_rad))))
+        prim = stage.DefinePrim(f"{root}/Pallet_{index}/Asset", "Xform")
         prim.GetReferences().AddReference(str(pallet_usd))
-        transform = UsdGeom.Xformable(prim)
-        transform.ClearXformOpOrder()
-        transform.AddTranslateOp().Set(Gf.Vec3d(float(r.x_m), float(r.y_m), 0.0))
-        transform.AddOrientOp().Set(Gf.Quatf(math.cos(r.yaw_rad / 2), 0, 0, math.sin(r.yaw_rad / 2)))
-        paths.append(str(prim.GetPath()))
+        paths.append(str(holder.GetPrim().GetPath()))
     for _ in range(6):
         app.update()
     for path in paths:
