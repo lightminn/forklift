@@ -101,13 +101,15 @@ def work_segments(result: dict) -> list[tuple]:
 
 
 def observation_poses(reference_runs: list) -> list[tuple]:
-    """The observation poses a reference run's missions planned (its result.json and missions/*/result.json)."""
+    """The observation poses a reference run's missions planned: its result.json and, per mission, the archived
+    ``missions/<id>/records.json`` (its ``state``; the mission's result.json holds only the outcome)."""
     poses = []
     for run in reference_runs:
-        for path in [Path(run) / "result.json"] + sorted((Path(run) / "missions").glob("*/result.json")):
+        for path in [Path(run) / "result.json"] + sorted((Path(run) / "missions").glob("*/records.json")):
             if not path.exists():
                 continue
             data = json.loads(path.read_text())
+            data = data.get("state", data) if path.name == "records.json" else data
             for c in data.get("observation_candidates") or []:
                 if c.get("pose") is not None:
                     poses.append(tuple(c["pose"][:2]))
@@ -268,6 +270,154 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
         tour, plan = candidate, trial
         log(json.dumps({"added": tour[index], "at": index, "cluster_cells": len(cluster), "length_m": round(plan.length_m, 1)}))
     return tour, plan
+
+
+def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.0, poll_hz=20.0, factor=0.3,
+                  curvature_rate=0.5, accel=0.8, kappa_limit=0.36, max_sim_s=4000.0, **driver_args) -> dict:
+    """The tour through a CPU model of the teleop chain (Codex v2.5 review P2-3): an ideal rear-axle bicycle at
+    ``physics_hz``, the teleop's curvature slew (``TeleopLimits.curvature_rate_inv_m_s``) and speed slew, states at
+    ``state_hz`` and polls at ``poll_hz`` of wall time (sim = wall x ``factor``), no permit, no SLAM error. Returns the
+    driver's end, sim time, progress and events."""
+    driver = TourDriver(poses, directions, curvatures, kappa=kappa_limit, **driver_args)
+    x, y, yaw = (float(v) for v in poses[0])
+    v = k = 0.0
+    sim, wall, seq, command = 0.0, 0.0, 0, (0.0, 0.0)
+    driver.start(0.0)
+    next_state, next_poll, state = 0.0, 0.0, None
+    dt = 1.0 / physics_hz
+    end = None
+    while sim < max_sim_s and end is None:
+        wall = sim / factor
+        if wall >= next_state:
+            seq += 1
+            state = {"state_seq": seq, "mode": "TELEOP", "armed": True, "rear_axle_speed_mps": v,
+                     "pose": {"x_m": x, "y_m": y, "yaw_rad": yaw}, "pacing": {"target_factor": factor, "ok": True}}
+            next_state += 1.0 / state_hz
+        if wall >= next_poll:
+            new, end = driver.step(wall, state)
+            command = new if new is not None else command
+            next_poll += 1.0 / poll_hz
+        speed_cap = driver.forward if command[0] >= 0 else driver.reverse
+        target_v, target_k = command[0] * speed_cap, command[1] * kappa_limit
+        k += max(-curvature_rate * dt, min(curvature_rate * dt, target_k - k))
+        v += max(-accel * dt, min(accel * dt, target_v - v))
+        x += v * math.cos(yaw) * dt
+        y += v * math.sin(yaw) * dt
+        yaw += v * k * dt
+        sim += dt
+    return {"end": end, "sim_s": sim, "progress_m": driver.best, "events": driver.events}
+
+
+class TourDriver:
+    """The tour's teleop driver (the console probe's tour scenario; plan L2 v2.5): one call per poll with the latest
+    state message, returns ``(command, end)`` -- the teleop ``(speed_ratio, curvature_ratio)`` to send now (None: keep
+    the last) and, once the tour is over, why (``arrived`` or a failure). The runner's ``RearAxlePathTracker`` with its
+    return-home settings, the tour's own tolerances (a repositioning drive, not docking), closed on the state's map pose
+    (the rear axle's SLAM estimate) and measured rear-axle speed, on each *new* state only.
+
+    - The tour starts at the first new state in TELEOP after ``start`` (an older PAUSED state is not a departure); none
+      within ``enter_s`` fails it.
+    - The tracker's dt is the wall time between states times the declared factor, held to a physics step .. 0.15 s
+      (states carry no sim time).
+    - A gear cusp the tracker holds short of its tolerance (the teleop curvature slew leaves the axle off it) is
+      released after ``release_s`` standing at the leg's end; the last leg likewise ends ``arrived`` within
+      ``goal_slack_m``. Both are recorded.
+    - No progress for ``stall_s`` of drivable time fails the tour (time with teleop forbidden for pacing counts apart,
+      up to ``pacing_wait_s`` in a row); no new state for ``stale_s`` fails it; so do a tracker failure and a mode
+      that leaves TELEOP. A failure is never skipped past.
+    """
+
+    def __init__(self, poses, directions, curvatures, *, forward_mps=0.5, reverse_mps=0.25, kappa=0.36,
+                 cruise_mps=0.30, stall_s=60.0, pacing_wait_s=900.0, stale_s=10.0, enter_s=20.0, release_s=3.0,
+                 goal_slack_m=0.3):
+        from forklift_core.control.path_tracking import RearAxlePathTracker, TrackerConfig
+
+        self.forward, self.reverse, self.kappa = float(forward_mps), float(reverse_mps), float(kappa)
+        self.tracker = RearAxlePathTracker(poses, directions, curvatures, TrackerConfig(
+            cruise_speed_mps=min(cruise_mps, self.forward), max_curvature_inv_m=self.kappa,
+            max_acceleration_mps2=0.30, lookahead_m=0.28, position_tolerance_m=0.10, yaw_tolerance_rad=0.15,
+            cusp_position_tolerance_m=0.10, cusp_yaw_tolerance_rad=0.10, cusp_brake_window_m=0.008,
+            cusp_heading_pending_rad=0.20, overshoot_tolerance_m=0.05, stop_speed_mps=0.012,
+            max_cross_track_error_m=0.35, max_reverse_speed_mps=self.reverse))
+        self.stall_s, self.pacing_wait_s, self.stale_s = stall_s, pacing_wait_s, stale_s
+        self.enter_s, self.release_s, self.goal_slack_m = enter_s, release_s, goal_slack_m
+        self.last_index = len(poses) - 1
+        self.events: list = []
+        self.started_wall = self.last_seq = self.last_state_wall = None
+        self.departed = False
+        self.best = 0.0
+        self.drivable_idle = self.pacing_idle = 0.0
+        self.stand_since = None
+        self.command = None
+        self.last_cmd = None
+
+    def start(self, now: float) -> None:
+        self.started_wall = self.last_state_wall = now
+
+    def _event(self, now, name, **fields):
+        self.events.append({"wall": now, "event": name, "progress_m": self.best, **fields})
+
+    def step(self, now: float, s: dict | None):
+        if s is None or s.get("state_seq") == self.last_seq:
+            if now - self.last_state_wall > self.stale_s:
+                self._event(now, "state_stale")
+                return None, "state_stale"
+            return None, None
+        dt_wall, self.last_state_wall, self.last_seq = now - self.last_state_wall, now, s.get("state_seq")
+        if not self.departed:
+            if s.get("mode") != "TELEOP" or not s.get("armed", True):
+                if now - self.started_wall > self.enter_s:
+                    self._event(now, "teleop_not_entered", mode=s.get("mode"))
+                    return None, "teleop_not_entered"
+                return None, None
+            self.departed = True
+            self._event(now, "departed")
+        if s.get("mode") != "TELEOP":
+            self._event(now, "left_teleop", mode=s.get("mode"), stop_kind=s.get("stop_kind"))
+            return None, "left_teleop"
+        pose, speed = s.get("pose") or {}, s.get("rear_axle_speed_mps")
+        if speed is None or pose.get("x_m") is None:
+            return None, None
+        factor = float((s.get("pacing") or {}).get("target_factor") or 1.0)
+        dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
+        tracker = self.tracker
+        cmd = tracker.update((pose["x_m"], pose["y_m"], pose["yaw_rad"]), float(speed), dt)
+        self.last_cmd = cmd
+        if cmd.status == "failed":
+            self._event(now, "tracker_failed", failure=cmd.failure, pose=pose, position_error_m=cmd.position_error_m)
+            return (0.0, 0.0), f"tracker_failed:{cmd.failure}"
+        if cmd.status == "arrived":
+            self._event(now, "arrived", position_error_m=cmd.position_error_m)
+            return (0.0, 0.0), "arrived"
+        standing = abs(float(speed)) < 0.01 and abs(cmd.speed_mps) < 1e-9
+        self.stand_since = (self.stand_since or now) if standing else None
+        at_leg_end = tracker.leg_remaining_m() <= tracker.leg_end_window_m()  # release_cusp's own condition
+        if standing and at_leg_end and now - self.stand_since >= self.release_s:
+            if tracker.leg_end_index == self.last_index:
+                if cmd.position_error_m <= self.goal_slack_m:
+                    self._event(now, "arrived_slack", position_error_m=cmd.position_error_m, yaw_error_rad=cmd.yaw_error_rad)
+                    return (0.0, 0.0), "arrived"
+            elif tracker.release_cusp(True):
+                self._event(now, "cusp_released", position_error_m=cmd.position_error_m, yaw_error_rad=cmd.yaw_error_rad)
+                self.stand_since = None
+        cap = self.forward if cmd.speed_mps >= 0 else self.reverse
+        self.command = (max(-1.0, min(1.0, cmd.speed_mps / cap)), max(-1.0, min(1.0, cmd.curvature_inv_m / self.kappa)))
+        if cmd.progress_m > self.best + 0.05:
+            self.best, self.drivable_idle, self.pacing_idle = cmd.progress_m, 0.0, 0.0
+        else:
+            pacing = ((s.get("teleop_forbidden_reason") or "").startswith("pacing")
+                      or not (s.get("pacing") or {}).get("ok", True))
+            if pacing:
+                self.pacing_idle += dt_wall
+            else:
+                self.drivable_idle += dt_wall
+                self.pacing_idle = 0.0
+            if self.drivable_idle > self.stall_s or self.pacing_idle > self.pacing_wait_s:
+                self._event(now, "stalled", pose=pose, permit=s.get("permit"), drive_allowed=s.get("drive_allowed"),
+                            teleop_forbidden_reason=s.get("teleop_forbidden_reason"), pacing=s.get("pacing"),
+                            status=cmd.status, drivable_idle_s=self.drivable_idle, pacing_idle_s=self.pacing_idle)
+                return (0.0, 0.0), "stalled"
+        return self.command, None
 
 
 def main(argv=None) -> int:

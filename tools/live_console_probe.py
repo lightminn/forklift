@@ -1109,18 +1109,18 @@ async def reset_scenario(p: Probe, args):
 
 
 async def tour_scenario(p: Probe, args):
-    """SLAM localization plan L2 v2.5: the survey epoch's tour. The path tools/survey_tour.py planned (rear-axle
-    poses, directions, curvatures) is driven by teleop with the runner's own path tracker (its return-home settings),
-    closed on the state's map pose (the rear axle's SLAM estimate) and measured rear-axle speed, each new state; the
-    command goes as ratios of the state's limits. A gear cusp is the tracker's (stop, then the next leg). The tour
-    fails -- it is not skipped ahead or let through -- when the tracker fails, the mode leaves TELEOP, or the progress
-    stands still for ``--tour-stall-s`` (``--tour-pacing-wait-s`` while the runner forbids teleop for pacing); the
-    state's permit and reasons are kept. Ends at home and, with --end-session, ends the session."""
+    """SLAM localization plan L2 v2.5: the survey epoch's tour. The path tools/survey_tour.py planned is driven by
+    teleop with tools/survey_tour.py's TourDriver (the runner's path tracker on the state's map pose and measured
+    speed, a bounded cusp release, the stall, staleness and TELEOP checks -- it fails the tour, never skips ahead).
+    Ends at home and, with --end-session after an arrival, ends the session; a failed tour leaves the session up (the
+    job stops the runner and no graph is written)."""
     import numpy as np
-    from forklift_core.control.path_tracking import RearAxlePathTracker, TrackerConfig
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from survey_tour import TourDriver
 
     data = np.load(args.tour_path)
-    tour = p.report["tour"] = {"path": str(args.tour_path), "samples": int(len(data["poses"])), "events": []}
+    tour = p.report["tour"] = {"path": str(args.tour_path), "samples": int(len(data["poses"]))}
     await p.open()
     await p.until(lambda s: True, 10, label="first_state")
     lease = await p.request("lease_request")
@@ -1128,14 +1128,12 @@ async def tour_scenario(p: Probe, args):
     p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
     await p.until(p.standing, 30, label="standing_at_start")
     limits = (p.state or {}).get("limits") or {}
-    forward, reverse = float(limits.get("forward_mps", 0.5)), float(limits.get("reverse_mps", 0.25))
-    kappa = float(limits.get("curvature_inv_m", 0.36))
-    tracker = RearAxlePathTracker(data["poses"], data["directions"], data["curvatures_inv_m"], TrackerConfig(
-        cruise_speed_mps=min(args.tour_cruise_mps, forward), max_curvature_inv_m=kappa, max_acceleration_mps2=0.30,
-        lookahead_m=0.28, position_tolerance_m=0.03, yaw_tolerance_rad=0.05, cusp_position_tolerance_m=0.03,
-        cusp_yaw_tolerance_rad=0.05, cusp_brake_window_m=0.008, cusp_heading_pending_rad=0.08,
-        overshoot_tolerance_m=0.03, stop_speed_mps=0.012, max_cross_track_error_m=0.35,
-        max_reverse_speed_mps=reverse))
+    driver = TourDriver(data["poses"], data["directions"], data["curvatures_inv_m"],
+                        forward_mps=float(limits.get("forward_mps", 0.5)),
+                        reverse_mps=float(limits.get("reverse_mps", 0.25)),
+                        kappa=float(limits.get("curvature_inv_m", 0.36)), cruise_mps=args.tour_cruise_mps,
+                        stall_s=args.tour_stall_s, pacing_wait_s=args.tour_pacing_wait_s)
+    tour["events"] = driver.events
     await p.request("mode_request", to="PAUSED")
     await p.until(p.standing, 20, label="standing_before_teleop")
     entered = None
@@ -1146,70 +1144,30 @@ async def tour_scenario(p: Probe, args):
             break
         await asyncio.sleep(0.5)
     tour["teleop"] = entered
+    end = None
     if not entered or entered.get("t") != "ack":
-        tour["end"] = "teleop_refused"
-        return
-    arm = await p.request("arm")
-    p.arm_gen = (arm or {}).get("arm_gen", 0)
-    last_seq, last_wall = None, time.monotonic()
-    best, best_wall, end = 0.0, time.monotonic(), None
-    command = None
-    while end is None:
-        await asyncio.sleep(0.05)
-        s = p.state
-        if p.closed_code is not None:
-            end = "closed"
-            break
-        if s is None or s.get("state_seq") == last_seq:
+        end = "teleop_refused"
+    else:
+        arm = await p.request("arm")
+        p.arm_gen = (arm or {}).get("arm_gen", 0)
+        driver.start(time.monotonic())  # a state from before this instant is not a departure (Codex v2.5 P2-4)
+        command = None
+        while end is None:
+            await asyncio.sleep(0.05)
+            if p.closed_code is not None:
+                end = "closed"
+                break
+            new, end = driver.step(time.monotonic(), p.state)
+            command = new if new is not None else command
             if command is not None:
                 await p.teleop(*command, True)
-            continue
-        last_seq = s.get("state_seq")
-        now = time.monotonic()
-        factor = float(((s.get("pacing") or {}).get("target_factor")) or 1.0)
-        dt, last_wall = max((now - last_wall) * factor, 1e-3), now
-        if s.get("mode") != "TELEOP":
-            end = "left_teleop"
-            tour["events"].append({"mono": now, "event": end, "mode": s.get("mode"), "stop_kind": s.get("stop_kind")})
-            break
-        pose, speed = s.get("pose") or {}, s.get("rear_axle_speed_mps")
-        if speed is None or pose.get("x_m") is None:
-            continue
-        cmd = tracker.update((pose["x_m"], pose["y_m"], pose["yaw_rad"]), float(speed), dt)
-        if cmd.cusp_pending and p.standing(s):
-            tracker.release_cusp(True)
-            tour["events"].append({"mono": now, "event": "cusp_released", "progress_m": cmd.progress_m})
-        if cmd.status == "failed":
-            end = f"tracker_failed:{cmd.failure}"
-            tour["events"].append({"mono": now, "event": end, "pose": pose, "progress_m": cmd.progress_m,
-                                   "position_error_m": cmd.position_error_m})
-            break
-        if cmd.status == "arrived":
-            end = "arrived"
-            break
-        cap = forward if cmd.speed_mps >= 0 else reverse
-        command = (max(-1.0, min(1.0, cmd.speed_mps / cap)), max(-1.0, min(1.0, cmd.curvature_inv_m / kappa)))
-        await p.teleop(*command, True)
-        if cmd.progress_m > best + 0.05:
-            best, best_wall = cmd.progress_m, now
-        pacing_blocked = ((s.get("teleop_forbidden_reason") or "").startswith("pacing")
-                          or not (s.get("pacing") or {}).get("ok", True))
-        limit = args.tour_pacing_wait_s if pacing_blocked else args.tour_stall_s
-        if now - best_wall > limit:
-            end = "stalled"
-            tour["events"].append({"mono": now, "event": end, "progress_m": cmd.progress_m, "pose": pose,
-                                   "permit": s.get("permit"), "drive_allowed": s.get("drive_allowed"),
-                                   "teleop_forbidden_reason": s.get("teleop_forbidden_reason"),
-                                   "pacing": s.get("pacing"), "status": cmd.status})
-    tour["end"] = end
-    tour["progress_m"] = best
+    tour["end"], tour["progress_m"] = end, float(driver.best)
     stop_by = time.monotonic() + 15.0
     while time.monotonic() < stop_by and not (p.state and p.standing(p.state)) and p.closed_code is None:
         await p.teleop(0.0, 0.0, True)
         await asyncio.sleep(0.05)
     await p.request("mode_request", to="PAUSED")
     if args.end_session and p.closed_code is None and end == "arrived":
-        # a failed tour leaves the session up: the job's end (or its time limit) stops the runner, no graph is written
         await p.until(p.standing, 30, label="standing_before_end")
         p.report["session_end"] = await p.request_until_standing("session_end")
         stop = time.monotonic() + 120

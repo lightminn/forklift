@@ -74,11 +74,12 @@ def test_coverage_finds_the_farthest_path_point():
     assert sb.coverage_check(path[:2], nodes, 3.0)["ok"]
 
 
-def test_the_cost_check_counts_processed_keyframes_only():
+def test_the_cost_check_records_processed_keyframes_only():
     records = [{"status": "processed", "wall_s": 0.05}] * 9 + [{"status": "skipped", "wall_s": 5.0},
                                                                  {"status": "processed", "wall_s": 0.31}]
     out = sb.cost_check(records)
-    assert out["processed"] == 10 and abs(out["max_s"] - 0.31) < 1e-12 and not out["ok"]
+    assert out["processed"] == 10 and abs(out["max_s"] - 0.31) < 1e-12 and out["over_0_3_s"] == 1
+    assert out["ok"]  # recorded, not judged (L2 v2.5: V1' and V5 judge the deployment cost)
     assert abs(out["last10_mean_s"] - 0.31) < 1e-12
 
 
@@ -308,3 +309,54 @@ def test_the_tour_records_the_scene_it_was_planned_on():
     assert a == st.scenario_sha256(json.loads(json.dumps(SCENE)))
     other = {**SCENE, "scenario": {**SCENE["scenario"], "seed": 1}}
     assert a != st.scenario_sha256(other)
+
+
+def _straight_with_cusp():
+    """2 m forward along x, then 1 m back: one gear cusp."""
+    fwd = np.column_stack((np.linspace(0, 2, 41), np.zeros(41), np.zeros(41)))
+    back = np.column_stack((np.linspace(2, 1, 21)[1:], np.zeros(20), np.zeros(20)))
+    poses = np.vstack((fwd, back))
+    directions = np.r_[np.ones(41), -np.ones(20)].astype(np.int8)
+    return poses, directions, np.zeros(len(poses))
+
+
+def _state(seq, mode="TELEOP", x=0.0, speed=0.0, pacing_ok=True, forbidden=None):
+    return {"state_seq": seq, "mode": mode, "armed": True, "rear_axle_speed_mps": speed,
+            "pose": {"x_m": x, "y_m": 0.0, "yaw_rad": 0.0}, "pacing": {"target_factor": 0.3, "ok": pacing_ok},
+            "teleop_forbidden_reason": forbidden}
+
+
+def test_a_tour_with_a_cusp_completes_through_the_teleop_slews():
+    out = st.simulate_tour(*_straight_with_cusp(), max_sim_s=200.0)
+    assert out["end"] == "arrived" and out["progress_m"] > 2.8
+
+
+def test_the_state_from_before_teleop_is_not_a_departure():
+    driver = st.TourDriver(*_straight_with_cusp())
+    driver.start(0.0)
+    assert driver.step(0.05, _state(1, mode="PAUSED")) == (None, None)  # Codex v2.5 P2-4: not left_teleop
+    command, end = driver.step(0.15, _state(2))
+    assert end is None and command[0] > 0 and driver.departed
+    driver2 = st.TourDriver(*_straight_with_cusp(), enter_s=1.0)
+    driver2.start(0.0)
+    assert driver2.step(1.5, _state(1, mode="PAUSED"))[1] == "teleop_not_entered"
+
+
+def test_pacing_time_does_not_spend_the_drivable_stall_budget_and_silence_is_a_failure():
+    driver = st.TourDriver(*_straight_with_cusp(), stall_s=5.0, pacing_wait_s=100.0, stale_s=2.0)
+    driver.start(0.0)
+    seq, t = 0, 0.0
+    for _ in range(700):  # 70 s with teleop forbidden for pacing, standing
+        seq, t = seq + 1, t + 0.1
+        assert driver.step(t, _state(seq, pacing_ok=False, forbidden="pacing"))[1] is None
+    for _ in range(20):  # recovered: 2 s of drivable standing is within the 5 s budget (Codex v2.5 P2-5)
+        seq, t = seq + 1, t + 0.1
+        assert driver.step(t, _state(seq))[1] is None
+    assert driver.step(t + 2.5, _state(seq))[1] == "state_stale"  # the same state for 2.5 s
+
+
+def test_the_known_fraction_reads_the_grid_at_each_cell():
+    grid = {"data": np.array([[-1, 0], [100, -1]], dtype=np.int8), "origin": np.array([0.0, 0.0, 0.0]),
+            "resolution_m": 1.0}
+    cells = np.array([[0.5, 0.5], [1.5, 0.5], [0.5, 1.5], [1.5, 1.5], [5.0, 5.0]])
+    assert abs(sb.known_fraction(cells, grid) - 0.4) < 1e-12  # row 0 is y in [0, 1): (1.5, 0.5) free, (0.5, 1.5) occupied

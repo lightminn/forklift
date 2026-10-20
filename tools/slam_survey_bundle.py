@@ -17,7 +17,7 @@ sent). This writes, from those:
   bridge answered processed reached the runner), ``nodes`` (the graph's scans are the epoch's processed scans, by
   stamp), ``world`` (V2': every node's corrected base pose against the Isaac truth at its stamp, unaligned),
   ``start`` (map <- world is the identity: the first node's odometric pose is the truth), ``coverage`` (every path
-  point of the reference run within the radius of a node), ``cost`` (the survey's keyframe processing seconds),
+  point of the reference run within the radius of a node), ``cost`` (the survey's keyframe processing seconds, recorded only),
   ``moving`` (what can move and reach the LiDAR plane besides the truck and the carried pallet; not run is a fail).
 
     python tools/slam_survey_bundle.py --epoch OUT/epoch_1 --readback OUT/readback --slam-params YAML \\
@@ -48,7 +48,7 @@ import survey_tour  # noqa: E402
 WORLD_POSITION_MAX_M = 0.10
 WORLD_YAW_MAX_RAD = 0.03
 COVERAGE_RADIUS_M = 3.0
-SURVEY_KEYFRAME_MAX_S = 0.3
+SURVEY_KEYFRAME_MAX_S = 0.3  # counted, not judged (L2 v2.5)
 START_POSITION_MAX_M = 0.01
 START_YAW_MAX_RAD = 0.005
 LIDAR_PLANE_M = 1.05  # the laser's height above base_link (laser_xyz_yaw), the base on the floor
@@ -162,7 +162,23 @@ def coverage_check(path_xy: np.ndarray, node_xy: np.ndarray, radius_m: float, ch
             "outside": int((nearest > radius_m).sum()), "radius_m": radius_m}
 
 
-def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs: list, tour_path: Path | None) -> dict:
+def known_fraction(cells: np.ndarray, grid: dict | None) -> float | None:
+    """The share of ``cells`` whose grid cell the survey's map observed (free or occupied, not unknown) -- nearness to
+    a node is not observation (agy v2.5 review); recorded, not judged."""
+    if grid is None or not len(cells):
+        return None
+    res, (ox, oy) = float(grid["resolution_m"]), (float(grid["origin"][0]), float(grid["origin"][1]))
+    data = np.asarray(grid["data"])
+    ix = np.floor((cells[:, 0] - ox) / res).astype(int)
+    iy = np.floor((cells[:, 1] - oy) / res).astype(int)
+    inside = (ix >= 0) & (iy >= 0) & (ix < data.shape[1]) & (iy < data.shape[0])
+    known = np.zeros(len(cells), bool)
+    known[inside] = data[iy[inside], ix[inside]] != -1
+    return float(known.mean())
+
+
+def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs: list, tour_path: Path | None,
+                    grid: dict | None = None) -> dict:
     """L2 v2.5: the judged region (aisle bands, work approaches, observation poses, home) fully within reach of the
     final nodes, in the rear-axle frame; the placeable estimate's uncovered part reported, not judged; the tour the
     survey drove planned on this very scene."""
@@ -170,7 +186,7 @@ def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs
     sites = np.column_stack((rx, ry))
     aisles = [tuple(map(tuple, a)) for a in tour_config["aisles"]]
     judged = survey_tour.judged_region(result, aisles, survey_tour.observation_poses(reference_runs))
-    out = {"judged": survey_tour.region_coverage(judged, sites),
+    out = {"judged": survey_tour.region_coverage(judged, sites), "judged_known_fraction": known_fraction(judged, grid),
            "unsurveyed_estimate": survey_tour.region_coverage(survey_tour.placeable_estimate(result), sites),
            "observation_poses": len(survey_tour.observation_poses(reference_runs))}
     scene = survey_tour.scenario_sha256(result)
@@ -192,9 +208,10 @@ def cost_check(records: list) -> dict:
     if not len(wall):
         return {"ok": False, "processed": 0}
     tail = wall[-max(1, len(wall) // 10):]
-    return {"ok": bool(wall.max() <= SURVEY_KEYFRAME_MAX_S), "processed": int(len(wall)),
+    # L2 v2.5: recorded, not judged (the deployment cost is V1' and V5's); ok says only that the survey processed any
+    return {"ok": True, "processed": int(len(wall)),
             "mean_s": float(wall.mean()), "p99_s": float(np.percentile(wall, 99)), "max_s": float(wall.max()),
-            "last10_mean_s": float(tail.mean()), "limit_max_s": SURVEY_KEYFRAME_MAX_S}
+            "last10_mean_s": float(tail.mean()), "over_0_3_s": int((wall > SURVEY_KEYFRAME_MAX_S).sum())}
 
 
 def moving_check(rigid: dict | None, arguments: dict) -> dict:
@@ -342,7 +359,7 @@ def main(argv=None) -> int:
         else:
             references = [args.reference_run] if args.reference_run else []
             report["coverage"] = judged_coverage(result, nodes, yaml.safe_load(args.tour_config.read_text()),
-                                                 references, args.tour_path)
+                                                 references, args.tour_path, grid)
         if args.reference_run is not None:
             # the operational path of a reference run, recorded beside the verdict (base frame, as its truth is)
             try:
