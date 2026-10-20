@@ -241,3 +241,93 @@ def test_the_live_jobs_stop_waits_for_the_bridge_to_finish_before_removing_it():
     job = (root / "deploy" / "console" / "isaac_live.sbatch").read_text()
     stop = job[job.index('cat > "$OUT/stop.sh"'):]
     assert stop.index('timeout 45 docker wait "slam_bridge_${JOB}_e$1"') < stop.index('docker rm -f "slam_bridge_${JOB}_e$1"')
+
+
+def _survey_bundle(tmp_path):
+    import json
+
+    import numpy as np
+
+    from forklift_core.localization import slam_map as sm
+
+    folder = tmp_path / "bundle"
+    folder.mkdir()
+    data = np.zeros((40, 40), np.int8)
+    data[30, 5:35] = 100  # a wall 1.5 m ahead of the start (y 1.50-1.55)
+    (folder / "map.posegraph").write_bytes(b"g")
+    (folder / "map.data").write_bytes(b"d")
+    np.savez(folder / "grid.npz", data=data, origin=np.array([-1.0, 0.0, 0.0]), resolution_m=0.05)
+    hashes = {n: sm.file_sha256(folder / n) for n in sm.BUNDLE_FILES}
+    (folder / "manifest.json").write_text(json.dumps({"format": sm.FORMAT, "map_id": sm.map_id_of(hashes),
+                                                      "files": hashes}))
+    return folder, sm.map_id_of(hashes), sm.Grid(data, (-1.0, 0.0, 0.0), 0.05)
+
+
+def _wall_scan(module):
+    import numpy as np
+
+    # the laser at the start (base 0, 0, pi/2; mount x -0.12, so at y -0.12) looking at the wall: y 1.52 + 0.12
+    return module.slam_link.Scan(6, 0.6, (0.0, 0.0, 0.0), np.full(3, 1.64, np.float32), -0.05, 0.05, 0.2, 12.0)
+
+
+def test_a_localization_bridge_passes_a_loaded_map_and_scans_on_the_survey_walls(tmp_path):
+    """SLAM localization plan L4: the 7th start-up reply carries the map id only when both checks pass."""
+    import math
+
+    module = _rules()
+    folder, map_id, grid = _survey_bundle(tmp_path)
+    start = (0.0, 0.0, math.pi / 2)
+    loc = module.Localization.from_parameters(str(folder), map_id, start, [-0.12, 0.0, 1.05, 0.0])
+    assert loc.error is None and loc.bundle.map_id == map_id
+    for _ in range(3):
+        loc.add_bootstrap(_wall_scan(module), (0.0, 0.0, math.pi / 2))
+    assert loc.check().startswith("slam_map_not_loaded: no /map")  # no /map yet
+    loc.map = grid
+    assert loc.check() is None and loc.passed and loc.record()["map_loaded"]
+
+
+def test_a_localization_bridge_names_why_it_refuses_to_start(tmp_path):
+    import math
+
+    import numpy as np
+
+    module = _rules()
+    folder, map_id, grid = _survey_bundle(tmp_path)
+    laser = [-0.12, 0.0, 1.05, 0.0]
+    assert module.Localization.from_parameters(str(folder), "0" * 64, (0, 0, 0), laser).error.startswith(
+        "slam_map_mismatch: map_id")
+    assert module.Localization.from_parameters(str(folder), "", (0, 0, 0), laser).error.startswith(
+        "slam_map_mismatch: no expected map id")
+    assert module.Localization.from_parameters("", map_id, (0, 0, 0), laser) is None  # mapping
+    loc = module.Localization.from_parameters(str(folder), map_id, (0.0, 0.0, math.pi / 2), laser)
+    loc.map = module.slam_map.Grid(np.zeros((40, 40), np.int8), (-1.0, 0.0, 0.0), 0.05)  # an empty graph's /map
+    loc.add_bootstrap(_wall_scan(module), (0.0, 0.0, math.pi / 2))
+    assert loc.check().startswith("slam_map_not_loaded: the /map shows 0.000")
+    loc.map = grid
+    loc.fractions, loc.poses = [], []
+    for pose in ((0.0, 0.0, math.pi / 2), (0.0, 0.0, math.pi / 2), (0.3, 0.0, math.pi / 2)):  # the last 0.3 m off
+        loc.add_bootstrap(_wall_scan(module), pose)
+    assert loc.check().startswith("slam_not_localized")
+
+
+def test_the_localization_params_change_only_the_localization_keys(tmp_path):
+    import sys
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[4]
+    sys.path.insert(0, str(root / "tools"))
+    import slam_localization_params as slp
+
+    folder, map_id, _ = _survey_bundle(tmp_path)
+    src = root / "ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml"
+    out = tmp_path / "loc.yaml"
+    assert slp.main([str(src), str(out), str(folder), map_id, "-2.0,0.0,0.0"]) == 0
+    before = yaml.safe_load(src.read_text())["slam_toolbox"]["ros__parameters"]
+    after = yaml.safe_load(out.read_text())["slam_toolbox"]["ros__parameters"]
+    changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+    assert changed == {"mode", "map_file_name", "map_start_pose", "scan_buffer_size", "loop_match_minimum_chain_size",
+                       "do_loop_closing"}
+    assert after["map_file_name"] == str(folder / "map") and after["map_start_pose"] == [-2.0, 0.0, 0.0]
+    assert slp.main([str(src), str(tmp_path / "no.yaml"), str(folder), "0" * 64, "0,0,0"]) == 1
+    assert not (tmp_path / "no.yaml").exists()

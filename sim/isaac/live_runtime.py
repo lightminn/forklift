@@ -80,6 +80,7 @@ class LiveRuntime:
         self.io_budget_s = 30.0  # the session end's whole wait on the writer (settles and close share it)
         self._io_deadline: float | None = None
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
+        self.slam_info: dict | None = None  # SLAM localization plan L6: set by the runner for a localization session
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
         # Reliable requests are judged by the request ledger here: a session lives long (persistent console plan D7).
@@ -398,7 +399,8 @@ class LiveRuntime:
         advice = cmds.end_advice if cmds.end_logged_for == mission_id else None  # plan D13 item 6
         entry = self._add_result(mission_id=mission_id, outcome=cmds.status, reason=reason, started_s=started,
                                  ended_s=float(t), pallet_id=mission.pallet_id if mission else None,
-                                 destination_id=mission.destination_id if mission else None, advice=advice)
+                                 destination_id=mission.destination_id if mission else None, advice=advice,
+                                 map_id=(self.slam_info or {}).get("map_id"))
         clock = cmds.take_clock()  # step 8: the next mission's work clock starts clean
         records = self.core.end_reset(t)  # steps 3 and 8: the pocket check closed, the mission's state back to the start
         if cmds.status == "done" and mission is not None:
@@ -468,6 +470,8 @@ class LiveRuntime:
                 msg["plan"] = plan
             msg["last_result"] = self.results.last  # the session's last mission outcome, after its slot is free
             msg["scene"] = self.scene  # a latched damage: automatic work refused until the scene is reset (D6)
+            if self.slam_info is not None:  # SLAM localization plan L6: absent = online mapping (or not known)
+                msg["slam"] = dict(self.slam_info)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
@@ -740,7 +744,7 @@ def _result_text(entry: dict, clock: dict, extra: dict) -> str:
     text = json.dumps({"result": entry, "clock_summary": summary, **extra}, default=_jsonable)
     if len(text) <= RESULT_BYTES:
         return text
-    keep = {k: entry.get(k) for k in ("seq", "mission_id", "outcome", "started_s", "ended_s", "ended_unix",
+    keep = {k: entry.get(k) for k in ("seq", "mission_id", "outcome", "started_s", "ended_s", "ended_unix", "map_id",
                                       "pallet_id", "destination_id")}
     return json.dumps({"result": keep, "clock_summary": summary, "cut_from_bytes": len(text)}, default=_jsonable)
 

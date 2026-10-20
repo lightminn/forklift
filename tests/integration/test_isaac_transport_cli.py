@@ -389,6 +389,9 @@ def test_slam_feedback_options_validate_before_startup(tmp_path) -> None:
     for flags, expected in (
         (["--slam-feedback", socket_path], "--record-slam and --use-perception"),
         (["--slam-noise-seed", "3"], "--slam-noise-seed requires --slam-feedback"),
+        # SLAM localization plan L7: the bundle needs the SLAM link and the session's map id, and the id the bundle
+        (["--slam-map-bundle", str(tmp_path)], "--slam-map-bundle requires --slam-feedback and --expected-map-id"),
+        (["--expected-map-id", "a" * 64], "--expected-map-id requires --slam-map-bundle"),
     ):
         result = subprocess.run(
             [
@@ -1038,9 +1041,13 @@ def test_a_live_slam_link_failure_ends_the_session_not_only_the_mission() -> Non
     a run ends as before; a console that outlives missions tells it apart); the batch lockstep keeps require."""
     source = SCRIPT.read_text()
     assert "class SessionFailure(RuntimeError):" in source
-    assert source.count('raise SessionFailure(f"slam_link_failed: {exc}") from exc') == 3
+    assert source.count('raise SessionFailure(f"slam_link_failed: {exc}") from exc') == 2  # the async link's
     assert 'raise SessionFailure("slam_prewarm_timeout")' in source
-    assert source.count('require(False, f"slam_link_failed: {exc}")') == 1  # the batch lockstep exchange
+    # the lockstep exchange (the live warm-up, the batch run): a localization start check's own reason (SLAM
+    # localization plan L4), else slam_link_failed as before
+    assert 'slam_reason_ = f"slam_link_failed: {exc}"' in source
+    assert source.count("raise SessionFailure(slam_reason_) from exc") == 1
+    assert source.count("require(False, slam_reason_)") == 1
 
 
 @pytest.mark.parametrize("extra, message", [

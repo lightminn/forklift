@@ -26,7 +26,12 @@ STATUSES = ("processed", "skipped", "failed")
 
 
 class SlamLinkFailure(RuntimeError):
-    """The bridge did not answer this scan correctly in time."""
+    """The bridge did not answer this scan correctly in time. ``reason``: the bridge's own reason for a ``failed``
+    reply (the localization start checks, plan L4), None otherwise."""
+
+    def __init__(self, message: str, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
 
 
 class KeyframeGate:
@@ -58,11 +63,16 @@ class KeyframeGate:
         min_heading_rad: float = 0.5,
         min_interval_s: float = 0.5,
         startup_scans: int = 5,
+        startup_expect: tuple | None = None,
     ):
         self.min_distance2 = float(min_distance_m) ** 2
         self.min_heading = float(min_heading_rad)
         self.min_interval_ns = int(round(float(min_interval_s) * 1e9))
         self.startup_scans = int(startup_scans)
+        # which start-up scans (1-based) expect a /pose: the 1st and the last (slam_toolbox drops its 2nd-4th); a
+        # localization bridge sends seven and expects the 1st and 5th-7th (SLAM localization plan L4)
+        self.startup_expect = (tuple(int(v) for v in startup_expect) if startup_expect is not None
+                               else (1, self.startup_scans))
         self.sent = 0
         self.reference = None  # stamp_ns of the last processed keyframe
         self.previous = None  # pose of the previous scan seen
@@ -79,7 +89,7 @@ class KeyframeGate:
         self.previous = pose
         if self.sent < self.startup_scans:
             self.sent += 1
-            return "expect_pose" if self.sent in (1, self.startup_scans) else "startup_drop"
+            return "expect_pose" if self.sent in self.startup_expect else "startup_drop"
         stamp_ns = int(round(float(stamp_s) * 1e9))
         if stamp_ns - self.reference < self.min_interval_ns:
             return "local"
@@ -114,6 +124,10 @@ class Reply:
     map_from_odom: tuple
     version: int
     slam_wall_s: float
+    # optional, sent only when set: a failed reply's reason, and the map a localization bridge checked and runs on
+    # (SLAM localization plan L4)
+    reason: str | None = None
+    map_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in STATUSES:
@@ -171,6 +185,8 @@ def encode_reply(reply: Reply) -> bytes:
             "map_from_odom": [float(v) for v in reply.map_from_odom],
             "version": int(reply.version),
             "slam_wall_s": float(reply.slam_wall_s),
+            **({"reason": str(reply.reason)} if reply.reason is not None else {}),
+            **({"map_id": str(reply.map_id)} if reply.map_id is not None else {}),
         }
     )
 
@@ -186,7 +202,13 @@ def decode_reply(body: bytes) -> Reply:
         tuple(header["map_from_odom"]),
         header["version"],
         header["slam_wall_s"],
+        header.get("reason"),
+        header.get("map_id"),
     )
+
+
+def _failure_text(scan_id: int, reason: str | None) -> str:
+    return f"bridge reported failure for scan {scan_id}" + (f": {reason}" if reason else "")
 
 
 def _recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -228,7 +250,7 @@ class SlamLinkClient:
                 f"reply for scan {reply.scan_id} @{reply.stamp_s} to scan {scan.scan_id} @{scan.stamp_s}"
             )
         if reply.status == "failed":
-            raise SlamLinkFailure(f"bridge reported failure for scan {scan.scan_id}")
+            raise SlamLinkFailure(_failure_text(scan.scan_id, reply.reason), reply.reason)
         return reply
 
     def close(self) -> None:
@@ -266,6 +288,7 @@ class AsyncSlamLink:
         self.max_depth = 0
         self.last_reply_id: int | None = None
         self._looked: float | None = None  # the clock just before the last poll's read
+        self._closed = False  # the bridge closed the connection (reported once the replies before it are taken)
         self.long_poll_gaps: list[tuple[float, float]] = []
 
     def enqueue(self, scan: Scan, meta: dict) -> None:
@@ -298,11 +321,14 @@ class AsyncSlamLink:
             self.in_flight = (*self.in_flight[:2], self.clock())  # out whole: the deadline starts now
 
     def _read(self) -> list[bytes]:
+        """The complete replies received. A closed connection is reported after them (``self._closed``), so a
+        ``failed`` reply sent just before the bridge ended keeps its reason (Codex S3 design P2)."""
         try:
             while True:
                 chunk = self.client.sock.recv(65536)
                 if not chunk:
-                    raise SlamLinkFailure("the bridge closed the connection")
+                    self._closed = True
+                    break
                 self._buffer += chunk
         except (BlockingIOError, InterruptedError):
             pass
@@ -341,11 +367,13 @@ class AsyncSlamLink:
                 raise SlamLinkFailure(
                     f"reply for scan {reply.scan_id} @{reply.stamp_s} to scan {scan.scan_id} @{scan.stamp_s}")
             if reply.status == "failed":
-                raise SlamLinkFailure(f"bridge reported failure for scan {scan.scan_id}")
+                raise SlamLinkFailure(_failure_text(scan.scan_id, reply.reason), reply.reason)
             self.in_flight = None
             self.last_reply_id = int(reply.scan_id)
             out.append((reply, meta, sent, received))
             self._pump()
+        if self._closed:
+            raise SlamLinkFailure("the bridge closed the connection")
         if (self.in_flight is not None and self.in_flight[2] is not None
                 and now - self.in_flight[2] > self.deadline_s):  # not there at a read after it
             raise SlamLinkFailure(

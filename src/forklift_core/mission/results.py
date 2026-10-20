@@ -22,13 +22,17 @@ class ResultsBook:
         self._entries: deque = deque(maxlen=keep)
 
     def add(self, *, mission_id: str, outcome: str, reason: str | None, started_s: float | None, ended_s: float,
-            pallet_id: str | None, destination_id: str | None, advice: dict | None = None) -> dict:
+            pallet_id: str | None, destination_id: str | None, advice: dict | None = None,
+            map_id: str | None = None) -> dict:
         if outcome not in OUTCOMES:
             raise ValueError(f"unknown outcome {outcome!r}")
         self.seq += 1
         entry = {"seq": self.seq, "mission_id": mission_id, "outcome": outcome, "reason": reason,
                  "started_s": started_s, "ended_s": ended_s, "ended_unix": float(self._wall()),
-                 "pallet_id": pallet_id, "destination_id": destination_id}
+                 "pallet_id": pallet_id, "destination_id": destination_id,
+                 # SLAM localization plan L6: the survey map the mission ran on (None: online mapping); the link
+                 # across epochs, since each epoch starts a new book
+                 "map_id": map_id}
         if advice is not None:
             entry["advice"] = dict(advice)  # D13 item 6: how far back before the next preparation's start passes
         self._entries.append(entry)

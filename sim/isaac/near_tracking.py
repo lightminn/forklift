@@ -1054,7 +1054,12 @@ RUN_SPECIFIC_ARGUMENTS = (
 # holding that value matches measurement records that predate the argument, any other value
 # is a difference (2026-10-13: --return-turnaround, off unless given; 2026-10-14: the
 # --repeat-at-near-capture diagnostic, off unless given; the --steering-probe diagnostic likewise).
-POST_MEASUREMENT_ARGUMENTS = {"return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
+POST_MEASUREMENT_ARGUMENTS = {
+                              # 2026-10-21 SLAM localization plan L7: the SLAM mode and the map, read from the run's
+                              # verified record (run_condition), never from the bundle's path; every earlier record
+                              # mapped online with no map
+                              "slam_mode": "mapping", "map_id": None,
+                              "return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
                               "tyre_contact_log": False, "steering_probe_set": "standard",
                               # 2026-10-15: the odometry's encoders; a record without the argument read
                               # the engine-reported rates, so a team-spec run differs from those tables.
@@ -1162,12 +1167,25 @@ def contract_arguments(arguments: dict) -> dict:
     }
 
 
+# the raw localization arguments: their meaning (slam_mode, map_id) is compared instead (SLAM localization plan L7)
+SLAM_MAP_ARGUMENTS = ("slam_map_bundle", "expected_map_id")
+
+
+def slam_semantics(result: dict) -> dict:
+    """``slam_mode`` and ``map_id`` of a run: localization on the map its runner verified, else online mapping."""
+    record = result.get("slam_map") or {}
+    if record.get("mode") == "localization":
+        return {"slam_mode": "localization", "map_id": record.get("map_id")}
+    return {"slam_mode": "mapping", "map_id": None}
+
+
 def run_condition(result: dict, root: Path | None) -> dict:
     """What a run is measured under, as tools/s4_drive_terms.py exports it and the runner
     checks it: its shared arguments, recorded settings, follower configs (speed fields
     aside) and input files by content -- an argument naming a file is compared by that
     file's content, not by how its path is written (Codex S4a-1 2nd review P3)."""
-    arguments = result.get("arguments") or {}
+    arguments = {k: v for k, v in (result.get("arguments") or {}).items() if k not in SLAM_MAP_ARGUMENTS}
+    arguments.update(slam_semantics(result))
     files = input_files_skipping(arguments, root, RUN_SPECIFIC_ARGUMENTS)
     by_content = {
         label.removeprefix("argument ")

@@ -23,6 +23,8 @@ PREFIXES = {
     "perception_capture_failed:sensor_metadata_unavailable": SESSION,
     "plan_worker_dead": SESSION,  # the planning worker could not be started again (Codex D6 P2-4)
     "localization_stale": SESSION, "slam_link_failed": SESSION, "slam_prewarm_timeout": SESSION,
+    # SLAM localization plan L4: the survey map bundle at session start (slam_map_mismatch stops the supervisor at once)
+    "slam_map_mismatch": SESSION, "slam_map_not_loaded": SESSION, "slam_not_localized": SESSION,
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
     "Mission exceeded simulation time budget": SESSION, "mission_cancelled": SESSION,
@@ -56,6 +58,7 @@ DYNAMIC_SITES = {
     ("sim/isaac/run_transport.py", "'near_field_contract:' + '; '.join(problems_)"): SESSION,
     ("sim/isaac/run_transport.py", "verdict_.reason or ''"): SESSION,  # the batch run's delivery check
     ("sim/isaac/run_transport.py", "f"): SESSION,  # f-strings with no fixed head (setup messages)
+    ("sim/isaac/run_transport.py", "slam_reason_"): SESSION,  # an L4 reason (slam_map_*, slam_not_localized) or the link's
     ("sim/isaac/run_transport.py", "reason_"): SCENE,  # scene_require's own raise: the truth checks' reasons
     ("src/forklift_core/mission/core.py", "plans.status"): MISSION,  # "<phase>:<status>"
     ("src/forklift_core/mission/core.py", "failure"): MISSION,  # a docking retry's "docking_*"

@@ -17,7 +17,8 @@ def test_results_are_numbered_in_order_and_the_last_one_is_kept():
     first = entry(book)
     second = entry(book, "m2", "failed", "Pallet was not lifted")
     assert first == {"seq": 1, "mission_id": "m1", "outcome": "done", "reason": None, "started_s": 1.0,
-                     "ended_s": 9.0, "ended_unix": 1792400000.5, "pallet_id": "P-1", "destination_id": "D-1"}
+                     "ended_s": 9.0, "ended_unix": 1792400000.5, "pallet_id": "P-1", "destination_id": "D-1",
+                     "map_id": None}
     assert second["seq"] == 2 and book.last == second
     assert book.message() == {"t": "missions", "missions_seq": 2, "results": [first, second]}
 
@@ -69,3 +70,13 @@ def test_a_result_carries_the_advice_only_when_there_is_one():
                        started_s=1.0, ended_s=2.0, pallet_id="P-1", destination_id="D-1",
                        advice={"backoff_m": 0.1, "backoff_max_m": 0.3, "from_rear": [0.0, 0.0, 0.0]})
     assert "advice" not in plain and advised["advice"]["backoff_m"] == 0.1
+
+
+def test_a_result_names_the_survey_map_its_mission_ran_on():
+    """SLAM localization plan L6: the map id links results across epochs (each epoch starts a new book)."""
+    from forklift_core.mission.results import ResultsBook
+
+    book = ResultsBook(wall=lambda: 0.0)
+    entry = book.add(mission_id="m1", outcome="done", reason=None, started_s=1.0, ended_s=2.0, pallet_id="P-1",
+                     destination_id="D-1", map_id="ab" * 32)
+    assert entry["map_id"] == "ab" * 32 and book.last["map_id"] == "ab" * 32

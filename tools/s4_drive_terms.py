@@ -261,11 +261,13 @@ def merge(tables: list[list]) -> list:
 
 
 from sim.isaac.near_tracking import (  # noqa: E402,F401 -- shared with the runner's contract
+    SLAM_MAP_ARGUMENTS,
     condition_problems,
     config_paths,
     file_sha256,
     input_files_skipping,
     run_condition,
+    slam_semantics,
     snapshot_relative,
     snapshot_root,
 )
@@ -296,7 +298,11 @@ def reference_problems(key: str, result: dict, reference: dict) -> list[str]:
     )
     if not feedback or feedback != feedback_ref:
         problems.append(f"{key}: slam_feedback differs from the D8b run")
-    args, args_ref = result.get("arguments") or {}, reference.get("arguments") or {}
+    # SLAM localization plan L7: the mode and the map by meaning, never the bundle's path (Codex S3 review P2)
+    args, args_ref = (
+        {**{k: v for k, v in (r.get("arguments") or {}).items() if k not in SLAM_MAP_ARGUMENTS}, **slam_semantics(r)}
+        for r in (result, reference)
+    )
     for name in sorted(set(args) | set(args_ref)):
         if name in ARGUMENTS_BY_DESIGN:
             continue
