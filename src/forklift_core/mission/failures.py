@@ -23,6 +23,8 @@ PREFIXES = {
     "perception_capture_failed:sensor_metadata_unavailable": SESSION,
     "plan_worker_dead": SESSION,  # the planning worker could not be started again (Codex D6 P2-4)
     "localization_stale": SESSION, "slam_link_failed": SESSION, "slam_prewarm_timeout": SESSION,
+    # SLAM localization plan L4: the survey map bundle at session start (slam_map_mismatch stops the supervisor at once)
+    "slam_map_mismatch": SESSION, "slam_map_not_loaded": SESSION, "slam_not_localized": SESSION,
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
     "Mission exceeded simulation time budget": SESSION, "mission_cancelled": SESSION,
