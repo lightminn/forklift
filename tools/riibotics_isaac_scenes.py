@@ -10,8 +10,8 @@ are built here, each as one transport mission (pick one pallet, deliver it, retu
   conveyor (2) take the pallet at the end of conveyor A and put it at the end of conveyor B
 
 The conveyor's height is not modelled: its pallets stand higher (0.37 m scaled) than the forks lift
-(0.32 m), so the pallets stand on the floor in a cell left open in each conveyor, which is drawn
-as a 0.37 m box either side of the cell (below the LiDAR plane, as a real conveyor would be).
+(0.32 m), so the pallets stand on the floor at the conveyor's edge, in a cell cleared in it; the
+rest of each conveyor is a 0.37 m box (below the LiDAR plane, as a real conveyor would be).
 A sequence (line, random) is one scene per pallet: scene k holds the pallets still waiting and
 the ones already delivered, and picks pallet k.
 
@@ -94,6 +94,7 @@ HALL = Bounds(-25.6, 4.7, -22.9, 8.3)
 WALL_H_M = 1.36          # trailer walls: 2.6 m inside height
 RACK_H_M = 1.50          # rack back frame
 CONVEYOR_H_M = round(0.70 * 1.46 / 2.8, 3)   # scenario 2: about 0.7 m, scaled by length (0.365 m)
+CONVEYOR_BAND_M, CONVEYOR_BACK_M = 0.25, 0.25  # conveyor cleared beside / behind a pallet (fleet demo p4)
 WALL_T_M = 0.08
 ZONE_GROW_M = 0.25
 ZONE_YAW_RAD = math.radians(12)
@@ -251,30 +252,34 @@ def _rotate(scenario: TransportScenario, visuals: list[dict]) -> tuple[Transport
 
 
 def conveyor_scene():
-    """Scenario 2, read off its drawing (9.0 mm/px; riibotics_cpu_video.conveyor_scene): the forks
-    point left into conveyor A for the pickup and up into conveyor B for the drop. Each conveyor is
-    two boxes with a cell open round its pallet (half its width + 0.15 m along the conveyor). The
-    drawing's pickup faces -x, so the scene is turned by -90 deg first (forks along +y, as the others)."""
+    """Scenario 2, read off its drawing (9.0 mm/px): the forks point left into conveyor A for the
+    pickup and up into conveyor B for the drop. As in the fleet demo scene (p4): each pallet's entry
+    face is flush with its conveyor's edge (the carriage cannot reach in further), the conveyor is
+    cleared CONVEYOR_BAND_M beside the pallet and CONVEYOR_BACK_M behind it. The drawing's pickup
+    faces -x, so the scene is turned by -90 deg first (forks along +y, as the others)."""
     pallet = load_pallet_geometry(PALLETS[PALLET])
-    m = PX_M
-    pick = PalletSite(339 * m, -400 * m, math.pi)
-    drop = PalletSite(1490 * m, -185 * m, UP)
-    tip_x, tip_y = _drawing(697, 637)
-    start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
-    open_m = pallet.overall_width_m / 2 + 0.15
+    m, d = PX_M, pallet.overall_depth_m
     a = (263 * m, 415 * m, -470 * m, -12 * m)               # conveyor A: x0, x1, y0, y1
     b = (1414 * m, 1872 * m, -257 * m, -113 * m)            # conveyor B
+    pick = PalletSite(a[1] - d / 2, -400 * m, math.pi)      # entry face on A's east edge
+    drop = PalletSite(1490 * m, b[2] + d / 2, UP)            # entry face on B's south edge
+    tip_x, tip_y = _drawing(697, 637)
+    start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
+    band = pallet.overall_width_m / 2 + CONVEYOR_BAND_M
     h = CONVEYOR_H_M
-    pieces = [((a[0] + a[1]) / 2, (pick.y_m + open_m + a[3]) / 2, a[1] - a[0], a[3] - pick.y_m - open_m),
-              ((a[0] + a[1]) / 2, (a[2] + pick.y_m - open_m) / 2, a[1] - a[0], pick.y_m - open_m - a[2]),
-              ((b[0] + drop.x_m - open_m) / 2, (b[2] + b[3]) / 2, drop.x_m - open_m - b[0], b[3] - b[2]),
-              ((drop.x_m + open_m + b[1]) / 2, (b[2] + b[3]) / 2, b[1] - drop.x_m - open_m, b[3] - b[2])]
+    boxes = [(a[0], a[1], pick.y_m + band, a[3]),                                   # A upstream
+             (a[0], pick.x_m - d / 2 - CONVEYOR_BACK_M, a[2], pick.y_m + band),     # A behind the pallet
+             (drop.x_m + band, b[1], b[2], b[3]),                                   # B downstream
+             (drop.x_m - band, drop.x_m + band, drop.y_m + d / 2 + CONVEYOR_BACK_M, b[3])]  # B behind
+    if drop.x_m - band - b[0] > 0.05:
+        boxes.append((b[0], drop.x_m - band, b[2], b[3]))                         # B upstream
+    pieces = [((x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0) for x0, x1, y0, y1 in boxes]
     props = tuple(prop("conveyor", x, y, length, width, 0.0, h) for x, y, length, width in pieces)
     bounds = Bounds(a[0] - 1.5, b[1] + 1.0, start.y_m - 2.0, a[3] + 1.0)
     scenario = TransportScenario(seed=0, start_rear=start, pickup=pick, destination=drop, props=props, bounds=bounds)
     visuals = [_visual("wall", x, y, length, width, 0.0, h, CONVEYOR_GREY) for x, y, length, width in pieces]
     scenario, visuals = _rotate(scenario, visuals)
-    return scenario, visuals, {"conveyor_height_m": h, "open_cell_half_m": round(open_m, 3)}
+    return scenario, visuals, {"conveyor_height_m": h, "band_m": CONVEYOR_BAND_M, "back_m": CONVEYOR_BACK_M}
 
 
 # ---- placement in the hall ----

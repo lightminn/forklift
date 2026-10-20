@@ -115,7 +115,7 @@ def test_the_conveyors_stand_below_the_lidar_plane_where_the_planner_sees_them(w
     scene = written["conveyor"]
     walls = [v for v in scene.visuals if v.kind == "wall"]
     props = [p for p in scene.scenario.props if p.asset.uri == "riibotics:conveyor"]
-    assert len(walls) == len(props) == 4
+    assert len(walls) == len(props) >= 4
     assert all(0.3 < v.height_m < 1.05 for v in walls)
     for wall, prop in zip(walls, props):
         r, w = prop.rectangle, wall.rectangle
