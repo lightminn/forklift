@@ -564,3 +564,5 @@ def test_the_live_job_localizes_on_a_bundle_only_when_given_one():
     assert '$EXTRA_ARGS "${LOC[@]}"' in runner
     assert '[ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")' in live
     assert "'{expected_map_id}' '{map_bundle}'" in live
+    survey = (ROOT / "deploy" / "console" / "slam_survey.sbatch").read_text()
+    assert "printf 'MAP_BUNDLE=\\nMAP_START_POSE=\\n'" in survey  # a survey never localizes (console review P3)

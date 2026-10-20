@@ -41,6 +41,8 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
     "$ROOT" "$BASE_SCENE" "$FORKLIFT_URDF" "$VENV_PY" "$JOB" "$CPU0"
   printf 'PORT=%q\nFACTOR=%q\nSEED=%q\nEXTRA_ARGS=%q\n' "${PORT:-8799}" "${FACTOR:-0.4}" "${SEED:-0}" "${EXTRA_ARGS:-}"
   printf 'MAP_PARAMS=%q\n' "$MAP_PARAMS"
+  # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
+  printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
