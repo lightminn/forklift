@@ -104,6 +104,20 @@ Codex 2 회차(P1 2·P2 4)로 두 가지가 드러났다: v2 D4 가 기댄 "rele
   표는 `tools/p0a_measure.py` 로 자이로 오도메트리에서 잰다. 표 없는 자이로 실행은 장애물 층과 함께 쓸 수 없다. 조향 대체 표는 필요 없다(D5).
 - 근거리 경계·구동 항: 계약 비교가 `odometry_heading` 을 보므로 자이로 조건의 측정 전까지 근접 추적 실행은 거부된다.
 - spool `slam_log.gyro`, `slam.heading`(편향 갱신); 결과 `heading` 요약(갱신 수, 마지막 b̂, 편향 나이 분포).
+- **구현(2026-10-21, (A))에서 바꾼 것:** 자이로 실행의 경계 기록은 재생하지 않고 이름 붙은 오류로 거부한다(`tools/boundary_replay.py`
+  `UNREPLAYABLE_ON["odometry_heading"]`, PR #68 의 `bottom_deck_check` 와 같은 방식) — 표본기는 RNG 를 가진 setup 객체라 스냅숏에 `$opaque` 로 남는다. 아래의
+  감시 키 복원 방식은 재생을 지원할 때((B) 이전)의 설계로 남긴다. 기본 조향 기록의 재생은 바뀌지 않는다(replay gate 29).
+- **구현에서 더한 것(2026-10-21, Codex 구현 리뷰 4 회 수렴 — 1 회차 P2 5·P3 2, 2 회차 P2 2·P3 1, 3 회차 P2 1, 4 회차 닫음):**
+  - 이 빌드부터 팀 엔코더 실행의 SLAM 로그는 틱마다 `drive_command_zero`(적용 속도 0 이고 마지막 요청 속도 0)를 남긴다. 자이로 나이 표(`p0a_measure age
+    --odometry-heading gyro`)는 이 값으로 편향 블록을 러너와 똑같이 돌리고, 이 키가 없는 기록은 받지 않는다. 그래서 **자이로 나이 표는 이 빌드로 기록한 조향
+    실행에서 만든다** — V-G2 의 짝 조향 조사(SEED 0·1·2)를 먼저 이 빌드로 돌린다. 키는 `odometry_heading` 인자가 있는 실행에만 만든다(이전 기록의 재생 스냅숏에는
+    그 인자가 없어 로그가 기록 그대로 남는다).
+  - 나이 표는 첫 편향 전 이동, 편향 없는 기록, 60 s 안에 편향이 없는 기록을 거부한다(러너가 그 실행을 하지 않으므로). 표는 자이로 모델 sha 와 카메라 장착을
+    적고, 러너는 다른 헤딩·모델·장착의 표를 거부한다.
+  - 고장(D5)과 60 s 안에 첫 편향이 없는 경우(`slam_prewarm_timeout`, batch 포함 모든 경로)는 그 물리 틱에서 바퀴를 0 으로 둔 뒤 세션을 끝낸다. 범위 검사는
+    수직 투영 전 센서 3 축에 한다.
+  - 기록: `result.json` `gyro_model`(모델·표본기 b₀·부호) 과 `gyro_heading`(갱신 수·마지막 b̂·[블록 끝 시각, b̂] 이력), SLAM 로그 `gyro_samples`
+    ([t, wx, wy, wz]). 위의 spool `slam_log.gyro`·`slam.heading` 이름 대신 이것을 쓴다.
 - 경계 재생: 물리 step 은 하나의 기록 호출이라(`run_transport.py` 6283, `RecordingGate` 는 안쪽 호출을 따로 기록하지 않는다 — Codex 2 회차 P2-6) 자이로 표본과
   적분 상태는 **step 의 결과로 복원한다**: 편향 b̂·t_b·블록 진행·자이로 오도메트리 상태를 `slam` 의 감시 키 목록(6298)에 넣어 step 뒤 값으로 되살린다
   (`odom_rear`·`odom_yaw_rate` 와 같은 방식). 자이로 서비스는 setup 서비스로 두고 재생에서는 부르지 않는다. 새 setup 이름은 `SETUP_NAMES_ADDED`(off = steering).
