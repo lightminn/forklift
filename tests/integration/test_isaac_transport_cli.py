@@ -1095,10 +1095,11 @@ def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     import re
 
     source = SCRIPT.read_text()
-    assert re.search(r'state\.get\("near_capture", \{\}\)\.get\("status"\) != "pending"\s+and not core\.bottom_deck_leg_active\(\)\)',
+    assert re.search(r'state\.get\("near_capture", \{\}\)\.get\("status"\) != "pending"\s+and not core\.bottom_deck_side_leg\(\)\)',
                      source)
-    assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_leg_active():' in source
-    arrival = re.search(r'if args\.use_perception and ms\.phase == "observe":\s+if core\.bottom_deck_leg_active\(\):', source)
+    assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_side_leg():' in source
+    # the return to the far stand is a far observation leg: its arrival is the ordinary capture
+    arrival = re.search(r'if args\.use_perception and ms\.phase == "observe":\s+if core\.bottom_deck_side_leg\(\):', source)
     assert arrival
     block = source[arrival.start(): arrival.start() + 1000]
     assert block.index("core.bottom_deck_capture(t, rear, step)") < block.index("elif live is not None and core.jobs")
@@ -1109,6 +1110,8 @@ def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     replan = source.index("replan_tick_ = core.blocked_replan(")
     assert stop.search(source, replan).start() < replan + 300
     assert source.count('getattr(succeeded_, "handled", False)') == 2  # the batch and the live observation paths
+    # a re-observation capture refused by name ends the loop (not the bare require it was)
+    assert re.search(r'if getattr\(captured_, "refused", False\):\s+break', source)
 
 
 def test_a_grounded_urdf_needs_the_grounded_article_declared(tmp_path):

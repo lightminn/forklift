@@ -118,3 +118,13 @@ def test_a_decision_without_a_saved_frame_is_not_evidence(tmp_path):
         "record": {"verdict": "present"}}}))
     out = R.recompute(tmp_path)
     assert not out["match"] and out["policy"] == "present" and len(out["problems"]) >= 2
+
+
+
+def test_a_release_that_did_not_carry_the_target_is_not_applied(tmp_path):
+    # side-stage releases leave the map target where it was (carried False); only carried ones move it
+    _run(tmp_path, "pallet")
+    rec = json.loads((tmp_path / "result.json").read_text())
+    rec["bottom_deck"]["releases"] = [{"frame_change": [0.2, 0.0, 0.0], "after_attempts": 2, "carried": False}]
+    (tmp_path / "result.json").write_text(json.dumps(rec))
+    assert R.recompute(tmp_path)["match"]
