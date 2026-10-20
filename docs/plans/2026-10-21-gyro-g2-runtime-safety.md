@@ -14,7 +14,8 @@ Codex 2 회차(P1 2·P2 4)로 두 가지가 드러났다: v2 D4 가 기댄 "rele
 수십 초–수 분이다). 실행 안전 장치를 시뮬 검증 전에 다 닫으려는 접근은 실측 IMU 값 없이 한도를 정해야 해서 닫히지 않는다. 그래서 둘로 나눈다.
 
 - **(A) 검증용 최소 구현 — 이 문서의 D1·D2·D5·D6·D7.** 자이로 방향, 정지 편향 갱신, 편향 준비 전 구동 금지, 고장 → 세션 실패, 기록·재생·계약. 목적은
-  V-G1–V-G3(시뮬 정확도·임무)이다. 시뮬은 정지 중 미끄럼·밀림이 없고(전제가 성립) 기울기도 0.001° 이하라 (B) 의 위험이 나타나지 않는다. **기본값은 조향**이고,
+  V-G1–V-G3(시뮬 정확도·임무)이다. 시뮬은 정지 중 미끄럼·밀림이 없고(전제가 성립) 기울기도 0.001° 이하다 — 그래도 모형의 잡음·편향·온도로 hold 안의
+  방향 오차는 생기므로, (A) 는 그 조건에서 안전 채택을 판정하지 않고 V-G3 에서 hold 구간 방향 오차를 잰다. **기본값은 조향**이고,
   자이로 모드는 `--odometry-heading gyro` 로만 켜지며 콘솔 라이브 sbatch 는 쓰지 않는다. 결과는 "검증용, 채택 전 안전 설계 없음"으로 적는다.
 - **(B) 채택 전 안전 설계 — D3·D4(v2)를 여기로 미룬다.** hold 의 방향 오차 상한, 흡수된 회전 감시, release 의 점프 판정(지금 코드에 없음 — 조향 모드에도
   없는 공백이다)은 G4 의 실측 IMU 값(잡음·편향 불안정성·온도·USB 간격)으로 한도를 정한 뒤, 자이로를 운용 오도메트리로 채택하기 전에 따로 설계·검토한다.
@@ -28,9 +29,9 @@ Codex 2 회차(P1 2·P2 4)로 두 가지가 드러났다: v2 D4 가 기댄 "rele
 - yaw rate 소비자: 러너의 `StopDetector.update(yaw_rate=…)`(5596), 근거리 추적의 정지 프레임 승인과 불확실성(3672·5501, 3927), 라이브 피드백(6071–6073 —
   안전 중재기에 `yaw_rate_radps` 로 가고 중재기의 **자기 StopDetector**(`safety/arbiter.py` 545)가 쓴다). 경계 재생은 `slam` 의 `odom_yaw_rate` 등을 상태 키로
   복원한다(6298).
-- `SlamPoseTracker`: warming_up → tracking → holding → release. release 는 받은 보정을 적용하며, 자세 점프가 `release_limits`(0.02 m·0.02 rad,
-  `state["slam_feedback"]`)를 넘으면 `slam_release_*` 로 임무가 실패한다(MISSION). 임무의 release gate 는 `mission/core.py` 3998, constrained/unknown 화물은
-  해제 불가(847).
+- `SlamPoseTracker`: warming_up → tracking → holding → release. release 는 받은 보정을 적용한다. `release_limits`(0.02 m·0.02 rad)는 점프가 그보다 크면
+  **다시 계획하는 문턱**이고(`mission/core.py` 5024), 실패는 그 재계획이 실패할 때뿐이다(5110) — 점프 크기 자체로 임무를 끝내는 판정은 없다(Codex 2 회차).
+  임무의 release gate 는 3998, constrained/unknown 화물은 해제 불가(847).
 - 장애물 층: 관측 셀 나이마다 오도메트리 오차 표로 팽창·FREE 축소를 정한다; 적용 검사 `encoders.py` 289 `odometry_table_problem` 은 인코더 모형과 바퀴
   반지름만 본다. 표를 만드는 측정은 `tools/p0a_measure.py`.
 - prewarm: live 이고 비동기 링크가 켜졌거나 localization 일 때만(6374). mapping 은 5 번째 시작 scan(약 0.408 s, 49 틱)에 tracking.
@@ -42,8 +43,8 @@ Codex 2 회차(P1 2·P2 4)로 두 가지가 드러났다: v2 D4 가 기댄 "rele
 
 - 자이로 표본은 **어댑터 포트** `isaac.gyro_sample()` 이 낸다(물리 틱마다 한 번, 3 축 측정값 rad/s). 안에서: `w_body = R(q)ᵀ·w_world`(`get_angular_velocity`,
   `get_world_pose`), `w_imu = R_trueᵀ·w_body`(R_true = 주입 장착 오차 · 실행의 실제 카메라 장착 회전), 축마다 (1 + s)·w + b₀ + β·t + 랜덤워크 + 백색 N/√dt,
-  양자화. RNG·적분 상태는 서비스 안에만 있고 러너의 `slam`·`state` 에는 값(표본)만 들어온다 — 경계 기록은 포트의 반환값을 기록하므로 재생은 기록값을
-  그대로 받는다(Codex P2-10: 상태에 RNG 객체를 두면 codec 이 `$opaque` 로 거부한다).
+  양자화. RNG 는 서비스 안에만 있고 러너의 `slam`·`state` 에는 값(표본·편향·적분 상태)만 들어온다(Codex 1 회차 P2-10: 상태에 RNG 객체를 두면 codec 이
+  `$opaque` 로 거부한다). 재생은 서비스를 부르지 않고 step 뒤 감시 키로 상태를 되살린다(D7).
 - 매개변수 `config/gyro_model_*.yaml`(형식 `gyro_model/1`). 결과 `gyro_model` 에 내용·해시·실제 b₀·온도 부호를 남긴다. 표본은 spool `slam_log.gyro` 에
   남기고 `meta.json` 의 spool 그룹에 등록하며, `load_slam_log` 가 읽는다(지금은 joint·scan·silenced 만 읽는다).
 
@@ -102,14 +103,14 @@ Codex 2 회차(P1 2·P2 4)로 두 가지가 드러났다: v2 D4 가 기댄 "rele
 - 장애물 나이 표: 머리에 `odometry_heading`·`gyro_model_sha256`·`zupt` 를 더하고 `odometry_table_problem` 이 대조한다(조향 표에는 `steering` 이 기본). 자이로
   표는 `tools/p0a_measure.py` 로 자이로 오도메트리에서 잰다. 표 없는 자이로 실행은 장애물 층과 함께 쓸 수 없다. 조향 대체 표는 필요 없다(D5).
 - 근거리 경계·구동 항: 계약 비교가 `odometry_heading` 을 보므로 자이로 조건의 측정 전까지 근접 추적 실행은 거부된다.
-- spool `slam_log.gyro`, `slam.heading`(편향 갱신·`bias_suspect`·hold 상한 추이); 결과 `heading` 요약.
+- spool `slam_log.gyro`, `slam.heading`(편향 갱신); 결과 `heading` 요약(갱신 수, 마지막 b̂, 편향 나이 분포).
 - 경계 재생: 물리 step 은 하나의 기록 호출이라(`run_transport.py` 6283, `RecordingGate` 는 안쪽 호출을 따로 기록하지 않는다 — Codex 2 회차 P2-6) 자이로 표본과
   적분 상태는 **step 의 결과로 복원한다**: 편향 b̂·t_b·블록 진행·자이로 오도메트리 상태를 `slam` 의 감시 키 목록(6298)에 넣어 step 뒤 값으로 되살린다
   (`odom_rear`·`odom_yaw_rate` 와 같은 방식). 자이로 서비스는 setup 서비스로 두고 재생에서는 부르지 않는다. 새 setup 이름은 `SETUP_NAMES_ADDED`(off = steering).
   자이로 실행 기록 하나의 재생 사례(V-G1).
 - `gyro_sample()` 의 반환: `(stamp_s, w_imu[3], seq)` — `stamp_s` 는 물리 시각(그 틱의 끝), `seq` 는 표본 번호(같은 표본을 두 번 받으면 같은 seq 라 중복으로
   안다). 간격·역행 판정(D5)은 이 stamp 와 seq 로 한다(Codex P3).
-- 콘솔: 상태 `slam.heading`(선택): `{"mode": "gyro", "bias_age_s", "hold_bound_rad"}`. 계약 문서 추가만.
+- 콘솔: (A) 는 콘솔 라이브에 쓰지 않으므로 상태 필드를 더하지 않는다((B) 에서 정한다).
 
 ## 3. 검증 (구현 단계, V-G1 상세)
 
@@ -125,8 +126,8 @@ Codex 2 회차(P1 2·P2 4)로 두 가지가 드러났다: v2 D4 가 기댄 "rele
 ## 4. 남는 위험·열린 것
 
 - D4 의 남는 위험(흡수된 회전이 hold 안에서 release 까지 안 보임) — V-G1 고장 주입과 G4 로 잰다.
-- 긴 연속 주행 중 편향 갱신 없음(agy 3): tracking 은 SLAM 보정이 방향을 고치므로 지도 위치에는 크게 영향이 없고, hold 는 D3 의 나이 조건이 막는다.
-  조사·임무의 정지 간격 분포를 V-G2 에서 적는다.
+- 긴 연속 주행 중 편향 갱신 없음(agy 3): tracking 은 SLAM 보정이 방향을 고치므로 지도 위치에는 크게 영향이 없다; hold 안의 영향은 (B) 의 나이 조건이 다룰
+  일이다. 조사·임무의 정지 간격과 hold 진입 때 편향 나이 분포를 V-G2·V-G3 에서 적는다.
 - 마스트 기울기·진동(agy 1)과 실차 USB 간격(agy 4), 정지 상태 정합 흔들림(agy 2, D4 의 한도 0.02 rad 근거)은 G4 와 실차 시험에서 잰다. 시뮬은 기울기
   0.001° 이하라 보이지 않는다.
 - 기본 한도(hold 0.02 rad, bias_check 0.02 rad, 나이 60 s, 간격 50 ms)는 가정이다 — V-G2 결과와 G4 로 다시 정한다.
@@ -173,7 +174,12 @@ v3 재계산: Codex 2 회차의 U(14 s) — 정지 hold 에서 0.5 s 마다 갱�
 | P2 step 안 포트는 따로 기록되지 않음 | 자이로 상태를 step 뒤 감시 키로 복원 |
 | P3 표본 시각·누락 표현 | `(stamp_s, w_imu, seq)` |
 
-### 5.4 agy 독립 검토 (Gemini 3.8 Flash High, v1 본문만)
+### 5.4 Codex 3 회차 (v3) — (A) 범위에서 수렴
+
+"no new P1/P2" — (A) 의 분리(시뮬 검증 전용·기본 조향·콘솔 라이브 제외)와 step 뒤 감시 키 복원을 실제 `RecordingGate`·`DictWatch`·`ReplayGate` 로 CPU 에서
+확인(고장 예외 step 의 복원·전파, 조향 기록 불변 포함). P3 두 건(본문·상위 계획에 남은 v2 설명, "위험이 나타나지 않는다"의 과한 표현)을 고쳤다.
+
+### 5.5 agy 독립 검토 (Gemini 3.8 Flash High, v1 본문만)
 
 마스트 기울기·진동(실차 G4), 정지 정합 흔들림 0.01 rad(한도를 0.02 rad 로 올리고 실패가 아니라 사건으로 낮춤), 긴 연속 주행(D3 나이 조건, V-G2 기록),
 USB 간격 50 ms(모형 파일 값, G4 로 다시 정함), 포크 끼임·밀기에 의한 흡수 회전(D4 남는 위험, V-G1 고장 주입·G4).
