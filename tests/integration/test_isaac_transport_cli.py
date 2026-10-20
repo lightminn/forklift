@@ -836,8 +836,11 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     # The release and the stand, shared with the S4c-3 realignment (the release half is _release_reproject since
     # plan 2026-10-19 task 4 shares it with the bottom-deck side legs).
     assert "self._release_reproject(now_s, hold_event)" in functions["release_and_stand"]
+    # the grid re-projection is _reproject_after_release, called from _release_reproject (the bottom-deck
+    # re-observation shares it)
+    assert "obstacle['layer'].refresh(" in functions["_reproject_after_release"]
     shared = functions["_release_reproject"] + functions["release_and_stand"]
-    order = ["self.release_slam(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
+    order = ["self.release_slam(", "self._reproject_after_release(", "carried(obstacle['pickup_estimate'])",
              "near['retry_stand'] = True"]
     positions = [shared.index(o) for o in order]
     assert positions == sorted(positions), order
@@ -858,7 +861,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     # What (x) judges by: each frame's hold, the re-projection, and the re-observation as
     # placed with the target the planner used.
     assert "'episode': near['episode']" in functions["feed_near_frame"]
-    assert "'reprojected': reprojected_" in shared and "reprojected_ = {" in shared
+    assert "'reprojected': reprojected_" in shared and "reprojected_ = self._reproject_after_release(" in shared
     assert shared.index("applied_before_ = [") < shared.index("self.release_slam(")
     moved = CORE.read_text()  # the observation's handling moved to the mission core (M-a1 slice 4b-iv)
     placed = moved.index("Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.")
@@ -976,7 +979,8 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     source = SCRIPT.read_text()
     tree = ast.parse(source)
     functions = runner_and_core_functions(tree)
-    shared = functions["_release_reproject"] + functions["release_and_stand"]  # the release half shared (task 4)
+    shared = (functions["_release_reproject"] + functions["_reproject_after_release"]
+              + functions["release_and_stand"])  # the release half shared (task 4), its grid half apart
     for needed in ("self.release_slam(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):
         assert needed in shared, needed
