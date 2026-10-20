@@ -4,19 +4,21 @@
 #SBATCH --gres=shard:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --time=01:30:00
+#SBATCH --time=02:00:00
 #SBATCH --signal=B:TERM@120
 # A SLAM survey epoch (docs/plans/2026-10-20-slam-localization-session.md L2, S2): one epoch of the console's live
 # runner -- the runner command is the one deploy/console/isaac_live.sbatch writes, word for word (a test holds the two
-# together) -- in mapping mode, as every live session runs now. The console probe drives the survey's missions (CYCLE)
-# and ends the session. Once the runner has closed its socket (no scan sent or being processed), the bridge has
+# together) -- in mapping mode, as every live session runs now. The console probe drives the survey's tour (TOUR: the
+# path tools/survey_tour.py planned on this scene, driven by teleop with the runner's path tracker; plan L2 v2.5) or,
+# without TOUR, pallet missions (CYCLE), and ends the session. Once the runner has closed its socket (no scan sent or being processed), the bridge has
 # slam_toolbox write its pose graph (tools/slam_bridge_container.sh, SLAM_SERIALIZE); a fresh container then reads
 # that graph back with no scan sent (tools/slam_bundle_container.sh) and tools/slam_survey_bundle.py writes the bundle
 # (graph, grid from the read-back, manifest, map_id) and the survey's checks to OUT/bundle and OUT/survey_report.json.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/slam_survey.sbatch OUT
-#   optional: PORT (8799), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), CYCLE (P-1:D-1,P-1:D-0: the
-#   missions, pallet:destination), REFERENCE_RUN (a run directory of operational missions for the coverage check)
+#   optional: PORT (8799), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), TOUR (a tour .npz), TOUR_CONFIG
+#   (config/slam_survey_tour.yaml: the judged region's aisles), CYCLE (P-1:D-1,P-1:D-0, without TOUR: the missions,
+#   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded)
 #
 # Run from the repository root.
 set -u
@@ -86,8 +88,13 @@ echo "host=$(hostname) job=$JOB out=$OUT start $(date -Is)"
   --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}')" > "$OUT/supervisor.log" 2>&1 &
 SUP=$!
 trap 'kill -TERM "$SUP" 2>/dev/null' TERM INT
-"$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
-  --scenario cycle --cycle "${CYCLE:-P-1:D-1,P-1:D-0}" --end-session > "$OUT/probe.log" 2>&1
+if [ -n "${TOUR:-}" ]; then
+  "$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
+    --scenario tour --tour-path "$TOUR" --end-session > "$OUT/probe.log" 2>&1
+else
+  "$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
+    --scenario cycle --cycle "${CYCLE:-P-1:D-1,P-1:D-0}" --end-session > "$OUT/probe.log" 2>&1
+fi
 echo "probe exit $? $(date -Is)"
 wait "$SUP"
 rc=$?
@@ -114,7 +121,8 @@ fi
 [ -f "$EP/run/scene.usda" ] && "$VENV_PY" "$ROOT/tools/list_rigid_bodies.py" "$EP/run/scene.usda" "$OUT/rigid_bodies.json" \
   > "$OUT/rigid_bodies.log" 2>&1
 "$VENV_PY" "$ROOT/tools/slam_survey_bundle.py" --epoch "$EP" --readback "$OUT/readback" \
-  --rigid-bodies "$OUT/rigid_bodies.json" --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \
+  --rigid-bodies "$OUT/rigid_bodies.json" --tour-config "${TOUR_CONFIG:-$ROOT/config/slam_survey_tour.yaml}" \
+  ${TOUR:+--tour-path "$TOUR"} --slam-params "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" \
   --image "$(docker image inspect -f '{{.Id}}' forklift/ros2-dev:jazzy)" \
   ${REFERENCE_RUN:+--reference-run "$REFERENCE_RUN"} --out "$OUT/bundle" --report "$OUT/survey_report.json"
 brc=$?

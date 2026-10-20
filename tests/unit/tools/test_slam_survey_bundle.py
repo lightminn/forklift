@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from tools import slam_survey_bundle as sb
+from tools import survey_tour as st
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -136,6 +137,16 @@ def test_the_graphs_scans_must_be_the_epochs_processed_scans():
     assert not sb.nodes_check(nodes, records)["ok"]
 
 
+SCENE = {
+    "scenario": {"seed": 0, "start_rear": {"x_m": 0.0, "y_m": 0.0, "yaw_rad": 0.0},
+                 "pickup": {"x_m": 1.8, "y_m": 0.0, "yaw_rad": 0.0}, "destination": {"x_m": 1.8, "y_m": 0.0, "yaw_rad": 0.0},
+                 "props": [], "bounds": {"x_min_m": -3.0, "x_max_m": 3.0, "y_min_m": -3.0, "y_max_m": 3.0}},
+    "geometry": {"unloaded_footprint": {"front_m": 1.29, "rear_m": 0.17, "half_width_m": 0.36}, "pallet_depth_m": 0.6,
+                 "pallet_width_m": 0.8, "inserted_offset_m": 1.26, "prealign_offset_m": 3.79},
+    "travel_planner_config": {"clearance_m": 0.1},
+}
+
+
 def _epoch(tmp_path, *, serialized=True, grid_matches=True, grid_resolution=0.05, lost_reply=False):
     epoch, readback = tmp_path / "epoch_1", tmp_path / "readback"
     bridge, run = epoch / "bridge", epoch / "run"
@@ -165,9 +176,10 @@ def _epoch(tmp_path, *, serialized=True, grid_matches=True, grid_resolution=0.05
     (run / "meta.json").write_text(json.dumps({"spool": {"joint": "slam_log.joint", "scan": "slam_log.scan",
                                                          "silenced": "slam_log.silenced", "root": "spool"}}))
     (run / "exit_code").write_text(json.dumps({"code": 0, "reason": None}))
+    site = {"x_m": 1.8, "y_m": 0.0, "yaw_rad": 0.0}  # its approach: rear axle x 0.54 .. -1.99
     (run / "result.json").write_text(json.dumps({"seed": 0, "scene_sha256": "s", "arguments": {
-        "seed": 0, "slam_noise_seed": 0, "settings": str(tmp_path / "slam.yaml")},
-        "factory": {"layout_version": "v2", "layout_sha256": "f"}}))
+        "seed": 0, "slam_noise_seed": 0, "settings": str(tmp_path / "slam.yaml"), "rear_axle_offset_m": -0.34},
+        "factory": {"layout_version": "v2", "layout_sha256": "f"}, **SCENE}))
     (epoch / "bridge_container_exit").write_text("0\n")
     with open(readback / "dump" / "nodes.csv", "w") as handle:
         handle.write("unique_id,state_id,stamp_s,x,y,yaw,odom_x,odom_y,odom_yaw\n")
@@ -188,6 +200,7 @@ def _epoch(tmp_path, *, serialized=True, grid_matches=True, grid_resolution=0.05
     params = tmp_path / "slam.yaml"
     params.write_text("slam_toolbox: {}\n")
     (tmp_path / "rigid.json").write_text(json.dumps({"rigid_bodies": [], "time_varying": []}))
+    (tmp_path / "tour.yaml").write_text("aisles:\n  - [[0.0, 0.0], [0.5, 0.0]]\ntour: []\n")
     return epoch, readback, params
 
 
@@ -195,6 +208,7 @@ def _main(tmp_path, epoch, readback, params):
     report = tmp_path / "report.json"
     code = sb.main(["--epoch", str(epoch), "--readback", str(readback), "--slam-params", str(params),
                     "--image", "sha256:x", "--rigid-bodies", str(tmp_path / "rigid.json"), "--root", str(tmp_path),
+                    "--tour-config", str(tmp_path / "tour.yaml"),
                     "--out", str(tmp_path / "bundle"), "--report", str(report)])
     return code, json.loads(report.read_text())
 
@@ -211,6 +225,7 @@ def test_a_clean_survey_writes_a_bundle_whose_manifest_rehashes(tmp_path):
     with np.load(bundle / "grid.npz") as grid:
         assert grid["data"].tolist() == [[-1, 100], [0, 0]]
     assert abs(report["world"]["position_max_m"] - 0.01) < 1e-9 and report["coverage"]["ok"]
+    assert report["coverage"]["judged"]["uncovered"] == 0
     assert manifest["inputs"]["settings"]["sha256"] == sb.sha256(tmp_path / "slam.yaml")
     assert manifest["noise"] == {"slam_noise_seed": 0} and manifest["factory"]["layout_sha256"] == "f"
 
@@ -233,12 +248,12 @@ def test_a_bridge_container_that_did_not_end_cleanly_writes_no_bundle(tmp_path):
     assert code == 1 and not report["finalize"]["ok"] and not report["bundle_written"]
 
 
-def test_an_incomplete_spool_fails_the_truth_checks_and_coverage(tmp_path):
+def test_an_incomplete_spool_fails_the_truth_checks(tmp_path):
     epoch, readback, params = _epoch(tmp_path)
     manifest = epoch / "run" / "spool" / "manifest.json"
     manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "complete": False}))
     code, report = _main(tmp_path, epoch, readback, params)
-    assert code == 1 and not report["coverage"]["ok"] and not report["world"]["ok"] and not report["received"]["ok"]
+    assert code == 1 and not report["world"]["ok"] and not report["start"]["ok"] and not report["received"]["ok"]
 
 
 def _heredoc(text, name):
@@ -262,3 +277,34 @@ def test_the_bridge_container_writes_the_graph_after_the_bridge_and_before_slam_
     serialize = script.index("/slam_toolbox/serialize_map")
     assert bridge < serialize < script.index("kill $SLAM")
     assert 'if [ -n "${SLAM_SERIALIZE:-}" ]' in script
+
+
+def test_a_far_aisle_leaves_the_judged_region_uncovered(tmp_path):
+    epoch, readback, params = _epoch(tmp_path)
+    (tmp_path / "tour.yaml").write_text("aisles:\n  - [[0.0, 0.0], [0.5, 0.0]]\n  - [[0.0, 2.5], [2.5, 2.5]]\ntour: []\n")
+    code, report = _main(tmp_path, epoch, readback, params)
+    assert code == 1 and not report["coverage"]["ok"] and report["coverage"]["judged"]["uncovered"] > 0
+    assert report["bundle_written"]  # coverage judges the survey, it does not stop the bundle
+
+
+def test_the_judged_region_is_the_bands_approaches_and_home_away_from_walls_and_props():
+    result = {**SCENE, "scenario": {**SCENE["scenario"], "props": [
+        {"rectangle": {"x_m": 0.0, "y_m": 1.0, "length_m": 0.4, "width_m": 0.4, "yaw_rad": 0.0}}]}}
+    cells = st.judged_region(result, [((-2.0, -2.0), (2.0, -2.0))], [(2.0, 2.0)])
+    d = lambda x, y: np.min(np.hypot(cells[:, 0] - x, cells[:, 1] - y))  # noqa: E731
+    assert d(0.0, -2.0) < 0.2 and d(2.0, 2.0) < 0.2 and d(-1.0, 0.0) < 0.2  # band, observation disc, approach
+    assert d(0.0, 1.0) > 0.3  # under the prop (0.27 from it at least)
+    assert cells[:, 1].min() >= -3.0 + 0.27 - 1e-9  # the rear axle cannot be nearer the wall than rear + clearance
+    assert d(-2.5, 2.5) > 1.0  # nothing judged there
+
+
+def test_a_base_pose_moves_back_to_its_rear_axle():
+    x, y = st.base_to_rear(np.array([1.0]), np.array([2.0]), np.array([np.pi / 2]), -0.34)
+    assert abs(x[0] - 1.0) < 1e-12 and abs(y[0] - 1.66) < 1e-12
+
+
+def test_the_tour_records_the_scene_it_was_planned_on():
+    a = st.scenario_sha256(SCENE)
+    assert a == st.scenario_sha256(json.loads(json.dumps(SCENE)))
+    other = {**SCENE, "scenario": {**SCENE["scenario"], "seed": 1}}
+    assert a != st.scenario_sha256(other)

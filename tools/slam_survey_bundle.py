@@ -36,9 +36,13 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from forklift_core.live.spool import load_list, load_slam_log  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import survey_tour  # noqa: E402
 
 # Provisional (plan section 5: Claude's proposals, to be changed only in the plan's table with a reason).
 WORLD_POSITION_MAX_M = 0.10
@@ -156,6 +160,26 @@ def coverage_check(path_xy: np.ndarray, node_xy: np.ndarray, radius_m: float, ch
             "farthest_m": float(nearest.max()) if len(nearest) else None,
             "farthest_point": path_xy[worst].tolist() if worst is not None else None,
             "outside": int((nearest > radius_m).sum()), "radius_m": radius_m}
+
+
+def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs: list, tour_path: Path | None) -> dict:
+    """L2 v2.5: the judged region (aisle bands, work approaches, observation poses, home) fully within reach of the
+    final nodes, in the rear-axle frame; the placeable estimate's uncovered part reported, not judged; the tour the
+    survey drove planned on this very scene."""
+    rx, ry = survey_tour.base_to_rear(nodes["x"], nodes["y"], nodes["yaw"], result["arguments"]["rear_axle_offset_m"])
+    sites = np.column_stack((rx, ry))
+    aisles = [tuple(map(tuple, a)) for a in tour_config["aisles"]]
+    judged = survey_tour.judged_region(result, aisles, survey_tour.observation_poses(reference_runs))
+    out = {"judged": survey_tour.region_coverage(judged, sites),
+           "unsurveyed_estimate": survey_tour.region_coverage(survey_tour.placeable_estimate(result), sites),
+           "observation_poses": len(survey_tour.observation_poses(reference_runs))}
+    scene = survey_tour.scenario_sha256(result)
+    if tour_path is not None:
+        with np.load(tour_path) as tour:
+            planned_on = str(tour["scenario_sha256"]) if "scenario_sha256" in tour.files else None
+        out["tour_scene_matches"] = planned_on == scene
+    out["ok"] = bool(out["judged"]["ok"] and out.get("tour_scene_matches", True))
+    return out
 
 
 def path_points(run: Path) -> np.ndarray:
@@ -279,6 +303,8 @@ def main(argv=None) -> int:
                     help="a run directory of operational missions (its path is checked for coverage); the survey's "
                          "own path otherwise")
     ap.add_argument("--rigid-bodies", type=Path, default=None, help="tools/list_rigid_bodies.py's output")
+    ap.add_argument("--tour-config", type=Path, default=None, help="config/slam_survey_tour.yaml (its aisles)")
+    ap.add_argument("--tour-path", type=Path, default=None, help="the tour the survey drove (tools/survey_tour.py)")
     ap.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
                     help="the snapshot the run ran from (its relative argument paths)")
     ap.add_argument("--out", type=Path, required=True)
@@ -311,13 +337,19 @@ def main(argv=None) -> int:
             tolerance = 0.5 * float(np.median(np.diff(joint_stamps)))  # half a physics step
             report["world"] = world_check(nodes, joint_stamps, base, tolerance)
             report["start"] = start_check(nodes, joint_stamps, base, tolerance)
-        reference = args.reference_run or run
-        try:
-            report["coverage"] = {"reference": str(reference),
-                                  **coverage_check(path_points(reference), np.column_stack((nodes["x"], nodes["y"])),
-                                                   COVERAGE_RADIUS_M)}
-        except (OSError, ValueError) as exc:
-            report["coverage"] = {"reference": str(reference), "ok": False, "reason": str(exc)}
+        if args.tour_config is None:
+            report["coverage"] = {"ok": False, "reason": "no tour config: the judged region is not defined"}
+        else:
+            references = [args.reference_run] if args.reference_run else []
+            report["coverage"] = judged_coverage(result, nodes, yaml.safe_load(args.tour_config.read_text()),
+                                                 references, args.tour_path)
+        if args.reference_run is not None:
+            # the operational path of a reference run, recorded beside the verdict (base frame, as its truth is)
+            try:
+                report["reference_path"] = {"reference": str(args.reference_run), **coverage_check(
+                    path_points(args.reference_run), np.column_stack((nodes["x"], nodes["y"])), COVERAGE_RADIUS_M)}
+            except (OSError, ValueError) as exc:
+                report["reference_path"] = {"reference": str(args.reference_run), "reason": str(exc)}
     rigid = json.loads(args.rigid_bodies.read_text()) if args.rigid_bodies and args.rigid_bodies.exists() else None
     report["moving"] = moving_check(rigid, arguments)
 
