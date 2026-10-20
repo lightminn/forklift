@@ -17,7 +17,7 @@ from scene_file import load_scene  # noqa: E402
 
 from tools import riibotics_isaac_scenes as tool  # noqa: E402
 
-SCENES = ("aisle", "aisle_out", "trailer", "line_1", "line_2", "line_3", "random_1", "random_2", "random_3")
+SCENES = ("aisle", "aisle_out", "trailer", "conveyor", "line_1", "line_2", "line_3", "random_1", "random_2", "random_3")
 # The planner's unloaded footprint (run_transport: axle to fork tip, rear 0.17, half-width 0.36)
 TRUCK = Footprint(1.29, 0.17, 0.36)
 
@@ -26,7 +26,7 @@ TRUCK = Footprint(1.29, 0.17, 0.36)
 def written(tmp_path_factory):
     out = tmp_path_factory.mktemp("scenes")
     built = tool.scenes()
-    assert tuple(built) == ("aisle", "aisle_out", "trailer") + tuple(
+    assert tuple(built) == ("aisle", "aisle_out", "trailer", "conveyor") + tuple(
         name for k in range(3) for name in (f"line_{k + 1}", f"random_{k + 1}"))
     paths = {}
     for name, scene in built.items():
@@ -107,6 +107,21 @@ def test_the_trailer_walls_and_the_rack_frame_reach_the_lidar_plane(written):
     for name, kind in (("trailer", "wall"), ("aisle", "wall")):
         walls = [v for v in written[name].visuals if v.kind == kind]
         assert walls and all(v.height_m > 1.05 for v in walls)
+
+
+def test_the_conveyors_stand_below_the_lidar_plane_where_the_planner_sees_them(written):
+    """The conveyor's height is not modelled for the forks, but its boxes are there: what Isaac
+    collides with is what the planner avoids, and the LiDAR (1.05 m) sees neither."""
+    scene = written["conveyor"]
+    walls = [v for v in scene.visuals if v.kind == "wall"]
+    props = [p for p in scene.scenario.props if p.asset.uri == "riibotics:conveyor"]
+    assert len(walls) == len(props) == 4
+    assert all(0.3 < v.height_m < 1.05 for v in walls)
+    for wall, prop in zip(walls, props):
+        r, w = prop.rectangle, wall.rectangle
+        assert (w.x_m, w.y_m) == pytest.approx((r.x_m, r.y_m))
+        assert (w.length_m, w.width_m) == pytest.approx((r.length_m, r.width_m))
+        assert math.cos(w.yaw_rad - r.yaw_rad) == pytest.approx(1.0)
 
 
 def test_a_scene_file_is_refused_with_another_format_or_an_unknown_kind(tmp_path, written):

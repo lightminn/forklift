@@ -7,8 +7,11 @@ are built here, each as one transport mission (pick one pallet, deliver it, retu
   line     (3) three pallets in a column, carried one after another to the unloading column
   random   (4) five pallets placed loosely (yaw within 10 deg), three carried to the unloading row
   trailer  (5) a trailer walled except for its entrance: take the front pallet out
+  conveyor (2) take the pallet at the end of conveyor A and put it at the end of conveyor B
 
-The conveyor (2) is left out: its pallets stand higher than the forks lift (week-8 analysis).
+The conveyor's height is not modelled: its pallets stand higher (0.37 m scaled) than the forks lift
+(0.32 m), so the pallets stand on the floor in a cell left open in each conveyor, which is drawn
+as a 0.37 m box either side of the cell (below the LiDAR plane, as a real conveyor would be).
 A sequence (line, random) is one scene per pallet: scene k holds the pallets still waiting and
 the ones already delivered, and picks pallet k.
 
@@ -90,6 +93,7 @@ HALL = Bounds(-25.6, 4.7, -22.9, 8.3)
 # Heights of what Isaac draws (scaled 0.521 from typical real sizes; all above the 1.05 m LiDAR plane)
 WALL_H_M = 1.36          # trailer walls: 2.6 m inside height
 RACK_H_M = 1.50          # rack back frame
+CONVEYOR_H_M = round(0.70 * 1.46 / 2.8, 3)   # scenario 2: about 0.7 m, scaled by length (0.365 m)
 WALL_T_M = 0.08
 ZONE_GROW_M = 0.25
 ZONE_YAW_RAD = math.radians(12)
@@ -222,6 +226,57 @@ def random_scene(k: int):
     return scenario, visuals, {"sequence_index": k, **info}
 
 
+CONVEYOR_GREY = (0.79, 0.81, 0.83)
+
+
+def _rotate(scenario: TransportScenario, visuals: list[dict]) -> tuple[TransportScenario, list[dict]]:
+    """The scene frame turned by -90 deg about its origin (x, y -> y, -x), headings with it."""
+    def point(x, y):
+        return y, -x
+
+    def rect(r: Rectangle) -> Rectangle:
+        return Rectangle(*point(r.x_m, r.y_m), r.length_m, r.width_m, r.yaw_rad - UP)
+
+    b = scenario.bounds
+    turned = TransportScenario(
+        seed=scenario.seed,
+        start_rear=Pose2D(*point(scenario.start_rear.x_m, scenario.start_rear.y_m), scenario.start_rear.yaw_rad - UP),
+        pickup=PalletSite(*point(scenario.pickup.x_m, scenario.pickup.y_m), scenario.pickup.yaw_rad - UP),
+        destination=PalletSite(*point(scenario.destination.x_m, scenario.destination.y_m),
+                               scenario.destination.yaw_rad - UP),
+        props=tuple(PlacedProp(p.asset, rect(p.rectangle)) for p in scenario.props),
+        bounds=Bounds(b.y_min_m, b.y_max_m, -b.x_max_m, -b.x_min_m))
+    moved = [{**v, "x_m": v["y_m"], "y_m": -v["x_m"], "yaw_rad": v["yaw_rad"] - UP} for v in visuals]
+    return turned, moved
+
+
+def conveyor_scene():
+    """Scenario 2, read off its drawing (9.0 mm/px; riibotics_cpu_video.conveyor_scene): the forks
+    point left into conveyor A for the pickup and up into conveyor B for the drop. Each conveyor is
+    two boxes with a cell open round its pallet (half its width + 0.15 m along the conveyor). The
+    drawing's pickup faces -x, so the scene is turned by -90 deg first (forks along +y, as the others)."""
+    pallet = load_pallet_geometry(PALLETS[PALLET])
+    m = PX_M
+    pick = PalletSite(339 * m, -400 * m, math.pi)
+    drop = PalletSite(1490 * m, -185 * m, UP)
+    tip_x, tip_y = _drawing(697, 637)
+    start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
+    open_m = pallet.overall_width_m / 2 + 0.15
+    a = (263 * m, 415 * m, -470 * m, -12 * m)               # conveyor A: x0, x1, y0, y1
+    b = (1414 * m, 1872 * m, -257 * m, -113 * m)            # conveyor B
+    h = CONVEYOR_H_M
+    pieces = [((a[0] + a[1]) / 2, (pick.y_m + open_m + a[3]) / 2, a[1] - a[0], a[3] - pick.y_m - open_m),
+              ((a[0] + a[1]) / 2, (a[2] + pick.y_m - open_m) / 2, a[1] - a[0], pick.y_m - open_m - a[2]),
+              ((b[0] + drop.x_m - open_m) / 2, (b[2] + b[3]) / 2, drop.x_m - open_m - b[0], b[3] - b[2]),
+              ((drop.x_m + open_m + b[1]) / 2, (b[2] + b[3]) / 2, b[1] - drop.x_m - open_m, b[3] - b[2])]
+    props = tuple(prop("conveyor", x, y, length, width, 0.0, h) for x, y, length, width in pieces)
+    bounds = Bounds(a[0] - 1.5, b[1] + 1.0, start.y_m - 2.0, a[3] + 1.0)
+    scenario = TransportScenario(seed=0, start_rear=start, pickup=pick, destination=drop, props=props, bounds=bounds)
+    visuals = [_visual("wall", x, y, length, width, 0.0, h, CONVEYOR_GREY) for x, y, length, width in pieces]
+    scenario, visuals = _rotate(scenario, visuals)
+    return scenario, visuals, {"conveyor_height_m": h, "open_cell_half_m": round(open_m, 3)}
+
+
 # ---- placement in the hall ----
 
 def _turn(x: float, y: float) -> tuple[float, float]:
@@ -269,6 +324,7 @@ def to_hall(scenario: TransportScenario, visuals: list[dict]) -> tuple[Transport
 # aisle_out: the same slot with the pallet 3 cm out of the rack instead of 3 cm in -- 3 cm in leaves the
 # extraction 2.8 mm inside the rack-back bound (back gap 0.15 m, an assumption; Isaac r4 and Codex 2026-10-20).
 PICKUP_ERRORS = {"aisle": (0.03, -0.05, 2.0), "aisle_out": (-0.03, -0.05, 2.0), "trailer": (-0.04, 0.05, -2.0),
+                 "conveyor": (0.04, -0.05, 2.0),
                  "line_1": (0.05, -0.06, 3.0), "line_2": (-0.04, 0.05, -2.0), "line_3": (0.03, 0.04, 2.0),
                  "random_1": (0.06, -0.08, 0.0), "random_2": (-0.07, 0.05, 0.0), "random_3": (0.05, 0.07, 0.0)}
 
@@ -300,7 +356,8 @@ def views(s: TransportScenario) -> dict:
 
 
 def scenes() -> dict:
-    out = {"aisle": aisle_scene(), "aisle_out": aisle_scene(), "trailer": trailer_scene()}
+    out = {"aisle": aisle_scene(), "aisle_out": aisle_scene(), "trailer": trailer_scene(),
+           "conveyor": conveyor_scene()}
     for k in range(3):
         out[f"line_{k + 1}"] = line_scene(k)
         out[f"random_{k + 1}"] = random_scene(k)
