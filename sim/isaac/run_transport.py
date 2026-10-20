@@ -4975,6 +4975,8 @@ def drive(S, isaac) -> None:
             save_capture=save_capture,
             # The far recognition's decision (--recognition far), None otherwise.
             far_recognition=far_recognition_hook if far_runtime is not None else None,
+            far_recognition_zone=(lambda centre_, radius_: far_runtime.set_zone(centre_, radius_))
+            if far_runtime is not None else None,
             # M-a1 slice 5: the release at a stop, the measured steering.
             steering_position=lambda: robot.get_joint_positions()[steers],
             # M-a1 slice 6d: the near field's mission side (near_tick, the correction redraws, installs, retry).

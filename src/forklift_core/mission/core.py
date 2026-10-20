@@ -3095,6 +3095,14 @@ class MissionCore:
             deck_["refused"]["detail"] = plan_.status
             return out_
         deck_["status"] = "returning"
+        zone_hook_ = getattr(self.hooks, "far_recognition_zone", None)
+        if zone_hook_ is not None:
+            # The re-observation looks for the pallet judged, not for any pallet in the pickup zone: another object
+            # metres away must not leave it undecided (Isaac dc44a32: a 0.07-score proposal 2.6 m off read as an
+            # uncertain candidate in the zone's 1 m radius). The gate's 0.15 m still binds what is adopted.
+            zone_hook_(tuple(deck_["record"]["centre_xy"]), bottom_deck_legs.REOBSERVE_RADIUS_M)
+            deck_["reobservation_zone"] = {"centre_xy": list(deck_["record"]["centre_xy"]),
+                                           "radius_m": bottom_deck_legs.REOBSERVE_RADIUS_M}
         self._bottom_deck_install(t, plan_, "return", None, 0)
         self.hooks.set_inset_status("원거리 관측 위치로 복귀")
         return SimpleNamespace(stop=False, rear=rear, installed=True)

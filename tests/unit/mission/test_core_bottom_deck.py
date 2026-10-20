@@ -588,3 +588,15 @@ def test_the_return_legs_no_progress_watch_does_not_carry_into_the_near_leg():
     w.obstacle["progress"] = {"phase": "observe", "best_m": 0.5, "since_s": 10.0}  # the return's, nearly arrived
     assert w.core._bottom_deck_reobserved(35.0, REAR, {}, PICKUP) is None
     assert w.obstacle["progress"] == {}
+
+
+
+def test_the_return_narrows_the_far_recognitions_zone_to_the_pallet_judged():
+    w = World(verdicts=["present", "present"])
+    zones = []
+    w.hooks.far_recognition_zone = lambda centre, radius: zones.append((centre, radius))
+    w.begin()
+    w.arrive()
+    w.arrive(30.0)
+    assert zones == [((PICKUP.x_m, PICKUP.y_m), L.REOBSERVE_RADIUS_M)]
+    assert w.deck["reobservation_zone"]["radius_m"] == L.REOBSERVE_RADIUS_M

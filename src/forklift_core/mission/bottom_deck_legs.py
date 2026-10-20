@@ -22,6 +22,7 @@ THETA_E_DEG = {"x": 35.0, "y": 0.0}
 FACES = {"x": (1, -1), "y": (1, -1)}
 RETREAT_M = 0.3
 RETREAT_MAX_M = 1.0  # a longer planned retreat is a detour: the face ends (no detour on held odometry)
+REOBSERVE_RADIUS_M = 0.3  # the re-observation's zone around the pallet judged (the gate binds 0.15 m)
 RETURN_RECOVERIES = 3  # replans of the return to the far observation point before it is given up
 RECOVERIES_PER_FACE = 3  # path-replacing recoveries on one face before it is given up
 TRAVEL_M = 0.3  # room around the stands and retreats for the side legs to manoeuvre
