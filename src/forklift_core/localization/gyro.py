@@ -11,8 +11,9 @@ Two parts:
   now, tools/boundary_replay.py UNREPLAYABLE_ON -- the sampler holds its RNG): the algorithm rotates the sample back to the body by the *known* mount (the camera's only), takes the
   vertical rate, keeps a standstill bias from non-overlapping blocks (both rear wheel counts unchanged, the applied
   command zero, the block's variance at most k N^2/dt), and gives the heading increment (raw - bias) dt once a bias exists.
-  A sample gap past the model's deadline, a NaN, a rate beyond the range or a stamp that does not advance is a fault
-  (``GyroFault``): the run ends its session (design D5).
+  A sample gap past the model's deadline, a NaN or a rate beyond the range on any of the three sensor axes, or a stamp
+  that does not advance is a fault (``GyroFault``): the run ends its session (design D5). Each bias update is kept in
+  ``history`` as [block end s, bias rad/s] (design D7's heading record).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 FORMAT = "gyro_model/1"
+FIRST_BIAS_LIMIT_S = 60.0  # design D2: no first bias by this sim second ends the session as slam_prewarm_timeout does
 D2R = math.pi / 180.0
 
 
@@ -121,7 +123,14 @@ class GyroSampler:
 
 def new_heading_state() -> dict:
     """The heading's plain state (watched by the boundary replay)."""
-    return {"bias": None, "bias_end_s": None, "updates": 0, "block": [], "last_stamp": None, "last_seq": None}
+    return {"bias": None, "bias_end_s": None, "updates": 0, "block": [], "last_stamp": None, "last_seq": None,
+            "history": []}
+
+
+def heading_summary(state: dict) -> dict:
+    """The run's heading record (design D7): the updates, the last bias and every [block end s, bias rad/s]."""
+    return {"updates": state["updates"], "bias_rad_s": state["bias"], "bias_end_s": state["bias_end_s"],
+            "history": [list(h) for h in state["history"]]}
 
 
 def vertical_rate(known_mount_rotation, w_imu) -> float:
@@ -130,9 +139,14 @@ def vertical_rate(known_mount_rotation, w_imu) -> float:
 
 
 def heading_step(state: dict, model: GyroModel, *, stamp_s: float, seq: int, raw_rate: float, wheels_still: bool,
-                 command_zero: bool, dt: float) -> float | None:
-    """One physics tick: fault checks, the standstill block, and the heading increment (None while no bias exists)."""
+                 command_zero: bool, dt: float, w_imu=None) -> float | None:
+    """One physics tick: fault checks, the standstill block, and the heading increment (None while no bias exists).
+    ``w_imu``: the sample's three sensor axes, each range-checked before the projection hides one (Codex G2 (A) P2)."""
     max_rate = model.range_dps * D2R
+    if w_imu is not None:
+        axes = np.asarray(w_imu, float)
+        if axes.shape != (3,) or not np.isfinite(axes).all() or np.any(np.abs(axes) > max_rate):
+            raise GyroFault(f"slam_gyro_fault: sample {seq} axes {axes.tolist()!r}")
     if not math.isfinite(raw_rate) or abs(raw_rate) > max_rate:
         raise GyroFault(f"slam_gyro_fault: sample {seq} rate {raw_rate!r}")
     if state["last_stamp"] is not None:
@@ -150,6 +164,7 @@ def heading_step(state: dict, model: GyroModel, *, stamp_s: float, seq: int, raw
             if float(np.var(window)) <= model.zupt_k * white_var:
                 state["bias"], state["bias_end_s"] = float(window.mean()), float(stamp_s)
                 state["updates"] += 1
+                state["history"].append([float(stamp_s), state["bias"]])
             state["block"] = []  # non-overlapping: the next block starts afresh
     else:
         state["block"] = []
@@ -158,5 +173,5 @@ def heading_step(state: dict, model: GyroModel, *, stamp_s: float, seq: int, raw
     return (raw_rate - state["bias"]) * dt
 
 
-__all__ = ["FORMAT", "GyroFault", "GyroModel", "GyroSampler", "heading_step", "new_heading_state", "quat_matrix",
-           "rot_y", "vertical_rate"]
+__all__ = ["FIRST_BIAS_LIMIT_S", "FORMAT", "GyroFault", "GyroModel", "GyroSampler", "heading_step", "heading_summary",
+           "new_heading_state", "quat_matrix", "rot_y", "vertical_rate"]

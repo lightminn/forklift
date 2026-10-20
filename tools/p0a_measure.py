@@ -20,8 +20,9 @@ draw regenerates the counts as another sensor unit (as the steering table does) 
 (forklift_core.localization.gyro, seed 20000 + draw) on the recorded body attitude, the yaw rate from the logged
 orientations' yaw differences (the log has no body angular velocity; plan V-G0's planar approximation); the heading
 then runs the runner's own algorithm tick for tick (heading_step, the steering increments until the first standstill
-bias). The offline approximation: the standstill block needs no zero command (the log does not hold the command), only
-both rear wheel counts unchanged. A sample fault ends the table with the run named.
+bias) on the log's own per-tick command condition (drive_command_zero: a run recorded before it is refused). A run
+whose truck moves before the first bias, or that never gets one, is refused (the runner does not drive before it), as
+is a sample fault; the run is named.
 
 lift: pallet origin height and lift joint per phase from result.json samples,
 which explains the gap between the commanded lift_target_m and the carried
@@ -292,7 +293,8 @@ def gyro_mount_of(runs, mount: str) -> str:
     return mount
 
 
-def gyro_rear_odometry(stamps, increments, steering, base_pose, geometry, initial_pose, model, mount, seed: int):
+def gyro_rear_odometry(stamps, increments, steering, base_pose, command_zero, geometry, initial_pose, model, mount,
+                       seed: int):
     """Rear-axle odometry (N, 3) on the gyro heading, through the runner's sampler and heading_step, tick for tick."""
     from forklift_core.localization import gyro as G
     from forklift_core.localization.slam_pose import IncrementalWheelOdometry
@@ -306,13 +308,17 @@ def gyro_rear_odometry(stamps, increments, steering, base_pose, geometry, initia
     out = np.empty((len(stamps), 3))
     for i in range(len(stamps)):
         g_stamp, w_imu, g_seq = sampler.sample(stamps[i], (0.0, 0.0, rates[i]), base_pose[i, 3:7])
+        still = increments[i][0] == 0 and increments[i][1] == 0
         dyaw = G.heading_step(state, model, stamp_s=g_stamp, seq=g_seq, raw_rate=G.vertical_rate(sampler.known, w_imu),
-                              wheels_still=increments[i][0] == 0 and increments[i][1] == 0, command_zero=True,
-                              dt=1 / 120)
+                              wheels_still=still, command_zero=bool(command_zero[i]), dt=1 / 120, w_imu=w_imu)
+        if state["bias"] is None and i > 0 and not still:
+            raise RuntimeError(f"the truck moved at {stamps[i]:.3f} s before the first standstill bias (the runner holds it)")
         if dyaw is not None:
             out[i] = odometry.update_increments_heading(stamps[i], increments[i], dyaw)
         else:
             out[i] = odometry.update_increments(stamps[i], increments[i], steering[i])
+    if state["updates"] == 0:
+        raise RuntimeError("no standstill bias update in the whole record")
     return out, state["updates"]
 
 
@@ -351,13 +357,16 @@ def age_command(args) -> dict:
         run_max = np.zeros_like(maxima)
         encoders = encoder_odometry_inputs(log, meta)["kind"]
         bias_updates = []
+        if gyro is not None and "drive_command_zero" not in log.files:
+            raise SystemExit(f"{run}: no drive_command_zero in slam_log.npz (recorded before the gyro build): the bias "
+                             "block's command condition cannot be replayed")
         for draw in range(args.draws):
             if gyro is not None:
                 drawn = encoder_odometry_inputs(log, meta, phase_seed=20_000 + draw)
                 try:
                     odom, updates = gyro_rear_odometry(stamps, drawn["increments"], drawn["steering"],
-                                                       log["base_pose_world"].astype(float), geometry, truth[0],
-                                                       gyro[0], gyro[1], 20_000 + draw)
+                                                       log["base_pose_world"].astype(float), log["drive_command_zero"],
+                                                       geometry, truth[0], gyro[0], gyro[1], 20_000 + draw)
                 except Exception as exc:  # a gyro fault (a log gap) or an odometry refusal: the run named
                     raise SystemExit(f"{run}: {exc}") from exc
                 bias_updates.append(updates)

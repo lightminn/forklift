@@ -112,7 +112,7 @@ def test_triangle_cells_cover_every_cell_the_triangle_touches():
 
 
 def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4, model_name="team_spec_typical_inl",
-                   still_s=0.0, turn_rad_s=0.0):
+                   still_s=0.0, turn_rad_s=0.0, command_zero=None):
     """A straight 10 s run whose reported rates are garbage (zero) while the wheel joint angles move
     with the truck: a replay that read the rates would see no motion."""
     import json
@@ -144,7 +144,7 @@ def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4, mode
         steering_rad=np.zeros((steps, 2)), base_pose_world=base, wheel_angles_rad=continuous,
         wheel_counts=np.array([r[2] for r in rows], dtype=np.int64),
         wheel_increments_rad=np.array([r[0] for r in rows]), steering_measured_rad=np.array([r[1] for r in rows]),
-        scan_stamps_s=t[::12])
+        scan_stamps_s=t[::12], drive_command_zero=(moving == 0) if command_zero is None else command_zero)
     (directory / "meta.json").write_text(json.dumps({
         "record_boundary": False,
         "encoder_model": model.record(),
@@ -269,6 +269,33 @@ def test_the_gyro_age_table_runs_the_runner_s_heading_and_records_its_model_and_
     (tmp_path / "result.json").write_text(json.dumps({"arguments": {"perception_mount": "legacy"}}))
     with pytest.raises(SystemExit, match="recorded with --perception-mount legacy"):
         MODULE.age_command(gyro_args)
+
+
+def test_a_gyro_age_table_follows_the_logged_command_and_refuses_what_the_runner_would_not_do(tmp_path):
+    """Codex G2 (A) P2: the bias block's command condition comes from the log (a command on while the wheels stand
+    makes no bias); a truck moving before the first bias, a run with no bias, or a log without the condition is refused."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pytest
+
+    args = dict(draws=1, odometry_heading="gyro", gyro_model=ROOT / "config/gyro_model_spec_typical.yaml",
+                gyro_mount="carriage_low_measured")
+    cases = {"moving": dict(still_s=0.0), "commanded": dict(still_s=1.0, command_zero=np.zeros(1200, bool))}
+    for name, kw in cases.items():
+        run = tmp_path / name
+        run.mkdir()
+        _team_spec_run(run, model_name="team_spec_quantized", **kw)
+        with pytest.raises(SystemExit, match="moved at|no standstill bias"):
+            MODULE.age_command(SimpleNamespace(run=[run], **args))
+    run = tmp_path / "old"
+    run.mkdir()
+    _team_spec_run(run, model_name="team_spec_quantized", still_s=1.0)
+    log = dict(np.load(run / "slam_log.npz"))
+    log.pop("drive_command_zero")
+    np.savez_compressed(run / "slam_log.npz", **log)
+    with pytest.raises(SystemExit, match="no drive_command_zero"):
+        MODULE.age_command(SimpleNamespace(run=[run], **args))
 
 
 def test_the_gyro_age_table_reads_quantized_runs_only(tmp_path):

@@ -45,6 +45,9 @@ def test_the_samples_carry_the_model_s_noise_scale_and_quantisation():
         _, w, _ = sampler.sample(i / 120, [0.0, 0.0, 0.3], [1.0, 0.0, 0.0, 0.0])
         rates.append(G.vertical_rate(MOUNT, w))
     rates = np.asarray(rates)
+    _, w, _ = sampler.sample(12_001 / 120, [0.0, 0.0, 0.3], [1.0, 0.0, 0.0, 0.0])
+    lsb = model.lsb_dps * math.pi / 180
+    assert np.allclose(np.asarray(w) / lsb, np.round(np.asarray(w) / lsb), atol=1e-9)  # every axis on the LSB grid
     assert abs(rates.mean() / 0.3 - 1.01) < 2e-3
     assert abs(rates.std() * math.sqrt(1 / 120) * 180 / math.pi / 0.014 - 1) < 0.05
 
@@ -67,6 +70,8 @@ def test_a_standstill_block_sets_the_bias_and_motion_or_a_command_or_a_varying_r
     out = [_step(state, stamp=(i + 1) / 120, seq=i + 1, rate=bias + noise[i]) for i in range(240)]
     assert out[58] is None and out[59] is not None  # the first block ends at the 60th tick
     assert state["updates"] == 4 and abs(state["bias"] - bias) < math.radians(0.05)
+    summary = G.heading_summary(state)
+    assert [h[0] for h in summary["history"]] == pytest.approx([0.5, 1.0, 1.5, 2.0]) and summary["bias_rad_s"] == state["bias"]
     for still, zero in ((False, True), (True, False)):
         state = G.new_heading_state()
         for i in range(240):
@@ -83,6 +88,15 @@ def test_the_heading_increment_is_the_rate_less_its_bias():
     for i in range(60):
         _step(state, stamp=(i + 1) / 120, seq=i + 1, rate=0.002, model=QUIET)
     assert _step(state, stamp=61 / 120, seq=61, rate=0.102, still=False, zero=False, model=QUIET) == pytest.approx(0.1 / 120)
+
+
+def test_an_out_of_range_axis_the_vertical_projection_hides_is_a_gyro_fault():
+    state = G.new_heading_state()
+    w = [math.radians(1001), 0.0, 0.0]  # the sensor x axis (right): no vertical component in this mount
+    assert abs(G.vertical_rate(MOUNT, w)) < 1e-12
+    with pytest.raises(G.GyroFault, match="axes"):
+        G.heading_step(state, MODEL, stamp_s=0.1, seq=1, raw_rate=0.0, wheels_still=True, command_zero=True, dt=1 / 120,
+                       w_imu=w)
 
 
 @pytest.mark.parametrize("stamps, seqs, rate, match", [

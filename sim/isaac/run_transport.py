@@ -4543,7 +4543,9 @@ def drive(S, isaac) -> None:
         encoder_model = None
         if encoder_spec is not None:
             encoder_model = TeamEncoderModel(encoder_spec, sensor_phases(args.slam_noise_seed))
-            slam_log.update(wheel_counts=[], wheel_increments_rad=[], steering_measured_rad=[])
+            # drive_command_zero: the gyro bias block's command condition per tick (gyro-heading plan G2 (A) D2), kept
+            # on every team-spec log so a gyro age table can be built from steering runs (Codex G2 (A) P2)
+            slam_log.update(wheel_counts=[], wheel_increments_rad=[], steering_measured_rad=[], drive_command_zero=[])
         state["encoder_model"] = {"name": "reported"} if encoder_model is None else encoder_model.record()
         state["lidar_synthetic"] = lidar_config
     if args.slam_feedback is not None:
@@ -5609,6 +5611,10 @@ def drive(S, isaac) -> None:
                 slam_log["wheel_counts"].append(counts_)
                 slam_log["wheel_increments_rad"].append(increments_)
                 slam_log["steering_measured_rad"].append(steering_measured_)
+                # The applied wheel speed and the last requested speed both zero (the bias block's condition)
+                command_zero_ = ((state.get("applied_command") or (0.0, []))[0] == 0.0
+                                 and (slam is None or slam.get("last_command", 0.0) == 0.0))
+                slam_log["drive_command_zero"].append(command_zero_)
             if slam is not None and encoder_model is not None:
                 previous_yaw = slam["odom_rear"][2]
                 dyaw_ = None
@@ -5620,15 +5626,29 @@ def drive(S, isaac) -> None:
                                                                           now_q)
                     if slam_log is not None:
                         slam_log["gyro_samples"].append([g_stamp_, *w_imu_])
-                    applied_speed_ = (state.get("applied_command") or (0.0, []))[0]
+                    updates_before_ = slam["gyro"]["updates"]
                     try:
                         dyaw_ = gm_.heading_step(
                             slam["gyro"], slam["gyro_model"], stamp_s=g_stamp_, seq=g_seq_,
                             raw_rate=gm_.vertical_rate(slam["gyro_sampler"].known, w_imu_),
                             wheels_still=increments_[0] == 0 and increments_[1] == 0,
-                            command_zero=slam.get("last_command", 0.0) == 0.0 and applied_speed_ == 0.0, dt=1 / 120)
+                            command_zero=command_zero_, dt=1 / 120, w_imu=w_imu_)
+                        reason_ = None
+                        if slam["gyro"]["bias"] is None and stamp_now > gm_.FIRST_BIAS_LIMIT_S:
+                            reason_ = "slam_prewarm_timeout"  # design D2: on every path, batch included
                     except gm_.GyroFault as exc_:
-                        raise SessionFailure(str(exc_)) from exc_  # design D5: the session ends
+                        reason_ = str(exc_)
+                    if reason_ is not None:
+                        # Design D5: the wheels stop at this physics step (as a preempt stops them), then the session
+                        # ends; the steering stays where it is.
+                        robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+                        state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
+                        state["command_speed"] = 0.0
+                        slam["last_command"] = 0.0
+                        state["gyro_heading"] = gm_.heading_summary(slam["gyro"])
+                        raise SessionFailure(reason_)
+                    if slam["gyro"]["updates"] != updates_before_:
+                        state["gyro_heading"] = gm_.heading_summary(slam["gyro"])
                 if dyaw_ is not None:
                     slam["odom_rear"] = slam["odometry"].update_increments_heading(stamp_now, increments_, dyaw_)
                 else:
