@@ -124,6 +124,17 @@ def test_the_conveyors_stand_below_the_lidar_plane_where_the_planner_sees_them(w
         assert math.cos(w.yaw_rad - r.yaw_rad) == pytest.approx(1.0)
 
 
+def test_the_conveyor_scene_plans_through_insertion_and_extraction(tmp_path):
+    """With the mission settings (clearance 0.10 m) and the pallet off its slot, the whole transport plans:
+    the first cut cell (pallet 0.38 m inside the conveyor) refused the insertion straight (Codex 2026-10-21 P2)."""
+    path = tmp_path / "conveyor.json"
+    path.write_text(json.dumps(tool.scene_record("conveyor", tool.conveyor_scene())))
+    tool.plan_scene(path, tmp_path)
+    result = json.loads((tmp_path / "conveyor.plan.json").read_text())
+    assert result["outcome"] == "success", result.get("status")
+    assert {"insert", "extract", "transport", "withdraw", "return_home"} <= set(result["lengths_m"])
+
+
 def test_a_scene_file_is_refused_with_another_format_or_an_unknown_kind(tmp_path, written):
     record = tool.scene_record("aisle", tool.scenes()["aisle"])
     bad = tmp_path / "bad.json"
