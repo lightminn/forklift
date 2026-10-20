@@ -216,6 +216,70 @@ def add_prism_colliders(stage: Usd.Stage, columns, root: str = "/World/PrismColl
     return {"root": root, "columns": count}
 
 
+def _colour_material(stage: Usd.Stage, path: str, colour) -> UsdShade.Material:
+    from pxr import Sdf
+
+    material = UsdShade.Material.Define(stage, path)
+    shader = UsdShade.Shader.Define(stage, path + "/Shader")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(tuple(float(c) for c in colour))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.8)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    return material
+
+
+def add_scene_boxes(stage: Usd.Stage, visuals, root: str = "/World/Scene") -> dict:
+    """A scene file's walls (solid boxes that collide) and floor patches (2 mm, drawn only).
+
+    Each box is one cube scaled to its rectangle and height, standing on the floor; the
+    pallets of the scene file go in after the mission pallet (add_scene_pallets).
+    """
+    walls = floors = 0
+    for index, visual in enumerate(v for v in visuals if v.kind in ("wall", "floor")):
+        r = visual.rectangle
+        height = visual.height_m if visual.kind == "wall" else 0.002
+        cube = UsdGeom.Cube.Define(stage, f"{root}/{visual.kind.capitalize()}_{index}")
+        cube.CreateSizeAttr(1.0)
+        xf = UsdGeom.XformCommonAPI(cube)
+        xf.SetTranslate(Gf.Vec3d(float(r.x_m), float(r.y_m), height / 2))
+        xf.SetRotate(Gf.Vec3f(0.0, 0.0, float(math.degrees(r.yaw_rad))))
+        xf.SetScale(Gf.Vec3f(float(r.length_m), float(r.width_m), height))
+        material = _colour_material(stage, f"{root}/Looks/Colour_{index}", visual.colour)
+        UsdShade.MaterialBindingAPI.Apply(cube.GetPrim()).Bind(material)
+        if visual.kind == "wall":
+            UsdPhysics.CollisionAPI.Apply(cube.GetPrim()).CreateCollisionEnabledAttr(True)
+            walls += 1
+        else:
+            floors += 1
+    return {"root": root, "walls": walls, "floors": floors}
+
+
+def add_scene_pallets(stage: Usd.Stage, app, pallet_usd: Path, visuals, root: str = "/World/ScenePallets") -> list[str]:
+    """Static copies of the mission pallet (the URDF import create_pallet wrote) at the scene's
+    pallet rectangles: the same boxes and colliders, without a rigid body, on the floor."""
+    paths = []
+    for index, visual in enumerate(v for v in visuals if v.kind == "pallet"):
+        r = visual.rectangle
+        prim = stage.DefinePrim(f"{root}/Pallet_{index}", "Xform")
+        prim.GetReferences().AddReference(str(pallet_usd))
+        transform = UsdGeom.Xformable(prim)
+        transform.ClearXformOpOrder()
+        transform.AddTranslateOp().Set(Gf.Vec3d(float(r.x_m), float(r.y_m), 0.0))
+        transform.AddOrientOp().Set(Gf.Quatf(math.cos(r.yaw_rad / 2), 0, 0, math.sin(r.yaw_rad / 2)))
+        paths.append(str(prim.GetPath()))
+    for _ in range(6):
+        app.update()
+    for path in paths:
+        for child in Usd.PrimRange(stage.GetPrimAtPath(path)):
+            if child.HasAPI(UsdPhysics.RigidBodyAPI):
+                child.RemoveAPI(UsdPhysics.RigidBodyAPI)
+            if child.HasAPI(UsdPhysics.ArticulationRootAPI):
+                child.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+            if child.HasAPI(UsdPhysics.MassAPI):
+                child.RemoveAPI(UsdPhysics.MassAPI)
+    return paths
+
+
 def hide_overhead(stage: Usd.Stage, root: str = "/World/Environment") -> list[str]:
     """Hide warehouse parts lying wholly above 3 m, for a top-down overview.
 

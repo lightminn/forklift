@@ -3790,7 +3790,9 @@ class MissionCore:
         if ms.phase in ("transport", "return_home"):
             return escape_leg(ms.phase)[2]
         pickup_ = None
-        if grid_planning:
+        # A grid plan, and a --layout scene run on its prior map (options.pickup_prior; absent in older records),
+        # never plan on the pickup pallet's true pose: the zone before recognition, the estimate after it.
+        if grid_planning or getattr(self.options, "pickup_prior", False):
             known_ = obstacle.get("pickup_estimate")
             pickup_ = pickup_zone if known_ is None else Rectangle(
                 known_.x_m, known_.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, known_.yaw_rad
