@@ -76,6 +76,27 @@ def control_errors(control: list) -> dict:
             "yaw_max_rad": float(yaw.max()), "yaw_rmse_rad": float(np.sqrt(np.mean(yaw**2)))}
 
 
+def correction_jumps(records: list) -> dict:
+    """Each processed keyframe's correction against the previous one, both composed with its odometry -- the pose change
+    the correction alone makes (reported, not judged: Codex V5 diagnosis P2, loop closure can jump the pose)."""
+    def compose(a, b):
+        c, s = math.cos(a[2]), math.sin(a[2])
+        return (a[0] + c * b[0] - s * b[1], a[1] + s * b[0] + c * b[1], a[2] + b[2])
+
+    out, previous = [], None
+    for r in records:
+        if r.get("status") != "processed" or r.get("map_from_odom") is None:
+            continue
+        if previous is not None:
+            before, after = compose(previous, r["odom_base"]), compose(r["map_from_odom"], r["odom_base"])
+            out.append((math.hypot(after[0] - before[0], after[1] - before[1]),
+                        abs(math.remainder(after[2] - before[2], 2 * math.pi))))
+        previous = r["map_from_odom"]
+    j = np.asarray(out, float).reshape(-1, 2)
+    return {"n": int(len(j)), "position_max_m": float(j[:, 0].max()) if len(j) else None,
+            "yaw_max_rad": float(j[:, 1].max()) if len(j) else None, "position_over_0_05_m": int((j[:, 0] > 0.05).sum())}
+
+
 def mission_list(run: Path) -> list[dict]:
     """Every mission the session ended, from the live log's ``mission_end`` entries (the authoritative list), each with
     its ``missions/<id>/result.json`` delivery error; a mission whose result file is missing says so (Codex V5 P2)."""
@@ -131,7 +152,7 @@ def report(run: Path, min_done: int = 7, min_hours: float = 2.0) -> dict:
         "deliveries": {"ok": not delivery_failed, "failed": delivery_failed,
                        "errors_m": {m["mission_id"]: m["delivery_error_m"] for m in missions}},
     }
-    return {"run": str(run), "slam_map": result.get("slam_map"), "checks": checks,
+    return {"run": str(run), "slam_map": result.get("slam_map"), "checks": checks, "jumps": correction_jumps(records),
             "missions": missions, "ok": all(c["ok"] for c in checks.values())}
 
 
