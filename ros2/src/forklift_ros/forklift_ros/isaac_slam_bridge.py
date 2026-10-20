@@ -48,6 +48,7 @@ from sensor_msgs.msg import LaserScan
 from tf2_msgs.msg import TFMessage
 
 from forklift_core.localization import slam_link
+from forklift_core.localization import slam_map
 from forklift_core.localization.slam_pose import compose, invert
 
 
@@ -223,6 +224,64 @@ class ReplyRecords:
         (self.output_dir / "bridge_records.json").write_text(json.dumps(self.kept))
 
 
+class Localization:
+    """A localization bridge's bundle and its start checks (SLAM localization plan L4). A bundle that cannot be used
+    is kept as ``error`` (``slam_map_mismatch: ...``): the bridge still opens its socket and answers the first scan
+    ``failed`` with it, so the reason reaches the runner and its supervisor (Codex S3 design P2)."""
+
+    def __init__(self, bundle, error, start, laser):
+        self.bundle, self.error, self.start, self.laser = bundle, error, tuple(float(v) for v in start), laser
+        self.first_processed = False
+        self.map: slam_map.Grid | None = None
+        self.fractions: list[float] = []
+        self.poses: list[tuple] = []
+        self.coverage: float | None = None
+        self.passed = False
+        self.failure: str | None = None
+
+    @classmethod
+    def from_parameters(cls, folder: str, expected: str, start, laser) -> "Localization | None":
+        if not folder:
+            return None
+        try:
+            bundle, error = slam_map.load_bundle(Path(folder), expected or None), None
+        except slam_map.MapBundleError as exc:
+            bundle, error = None, str(exc)
+        if bundle is not None and not expected:
+            bundle, error = None, f"{slam_map.MISMATCH}: no expected map id given"
+        return cls(bundle, error, start, laser)
+
+    def add_bootstrap(self, scan: slam_link.Scan, base_pose) -> None:
+        x, y, _, yaw = self.laser
+        laser_pose = compose(tuple(base_pose), (x, y, yaw))
+        self.fractions.append(slam_map.endpoint_fraction(
+            self.bundle.grid, laser_pose, scan.ranges_m, scan.angle_min_rad, scan.angle_increment_rad,
+            scan.range_min_m, scan.range_max_m))
+        self.poses.append(tuple(float(v) for v in base_pose))
+
+    def check(self) -> str | None:
+        """None when both start checks pass, else the reason."""
+        if self.map is None:
+            self.failure = f"{slam_map.NOT_LOADED}: no /map after the first processed scan"
+            return self.failure
+        self.coverage = slam_map.map_coverage(self.bundle.grid, self.map)
+        if not self.coverage >= slam_map.MAP_LOADED_MIN:
+            self.failure = f"{slam_map.NOT_LOADED}: the /map shows {self.coverage:.3f} of the survey's occupied cells"
+            return self.failure
+        if not slam_map.localized(self.fractions, self.poses, self.start):
+            self.failure = (f"{slam_map.NOT_LOCALIZED}: endpoint fractions {[round(f, 3) for f in self.fractions]}, "
+                            f"poses {[[round(v, 3) for v in p] for p in self.poses]}")
+            return self.failure
+        self.passed = True
+        return None
+
+    def record(self) -> dict:
+        return {"map_id": None if self.bundle is None else self.bundle.map_id, "error": self.error,
+                "map_loaded": self.coverage is not None and self.coverage >= slam_map.MAP_LOADED_MIN,
+                "coverage": self.coverage, "endpoint_fractions": self.fractions, "bootstrap_poses": self.poses,
+                "start": list(self.start), "passed": self.passed, "failure": self.failure}
+
+
 class IsaacSlamBridge(Node):
     def __init__(self):
         super().__init__("isaac_slam_bridge")
@@ -232,6 +291,11 @@ class IsaacSlamBridge(Node):
         self.declare_parameter("reply_timeout_s", 60.0)
         self.declare_parameter("warmup_wait_s", 1.0)
         self.declare_parameter("persistent", False)  # a live session left up for hours (plan D8b)
+        # SLAM localization plan L4: a survey bundle folder ('' = mapping, today's path), the session's map id and
+        # the start pose slam_toolbox is told (map <- base_link)
+        self.declare_parameter("localization_bundle", "")
+        self.declare_parameter("expected_map_id", "")
+        self.declare_parameter("map_start_pose", [0.0, 0.0, 0.0])
         self.socket_path = self.get_parameter("socket_path").value
         self.output_dir = Path(self.get_parameter("output_dir").value)
         self.laser = [float(v) for v in self.get_parameter("laser_xyz_yaw").value]
@@ -263,12 +327,16 @@ class IsaacSlamBridge(Node):
         # Its own group (plan D8b, Codex D8b round 1 P2): the default group is mutually exclusive, so a map being
         # stored (compressed to disk in a persistent bridge) would hold up the /pose callback a reply waits on.
         self.map_group = MutuallyExclusiveCallbackGroup()
-        self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos, callback_group=self.map_group)
+        self._map_sub = self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos,
+                                                 callback_group=self.map_group)
         persistent = bool(self.get_parameter("persistent").value)
         self.map_lock = threading.Lock()  # metadata and grids change together
         self.map_store = MapStore(self.output_dir, persistent)
         self.last_scan_id = -1
         self.replies = ReplyRecords(self.output_dir, persistent)
+        self.localization = Localization.from_parameters(
+            self.get_parameter("localization_bundle").value, self.get_parameter("expected_map_id").value,
+            self.get_parameter("map_start_pose").value, self.laser)
 
     # --- ROS side ---------------------------------------------------------
     def on_pose(self, msg: PoseWithCovarianceStamped) -> None:
@@ -286,8 +354,19 @@ class IsaacSlamBridge(Node):
             self.cond.notify_all()
 
     def on_map(self, msg: OccupancyGrid) -> None:
+        loc = self.localization
+        if loc is not None and loc.map is not None:
+            return  # localization keeps the first /map after the first processed scan only (plan L3)
         with self.map_lock:
             self._add_map(msg)
+        if loc is not None and loc.first_processed:
+            info = msg.info
+            grid = slam_map.Grid(np.asarray(msg.data, dtype=np.int8).reshape(info.height, info.width),
+                                 (info.origin.position.x, info.origin.position.y, quaternion_yaw(info.origin.orientation)),
+                                 float(info.resolution))
+            with self.cond:
+                loc.map = grid
+                self.cond.notify_all()
 
     def _add_map(self, msg: OccupancyGrid) -> None:
         info = msg.info
@@ -304,6 +383,12 @@ class IsaacSlamBridge(Node):
             after_scan_id=self.last_scan_id,
             received_wall_s=time.monotonic(),
         )
+
+    def _drop_map_subscription(self) -> None:
+        """No /map subscriber: slam_toolbox's updateMap then skips the grid's rebuild (plan L3)."""
+        sub, self._map_sub = getattr(self, "_map_sub", None), None
+        if sub is not None:
+            self.destroy_subscription(sub)
 
     def publish_static(self) -> None:
         x, y, z, yaw = self.laser
@@ -348,6 +433,8 @@ class IsaacSlamBridge(Node):
     def wait_ready(self) -> None:
         """/tf_static out, and slam_toolbox listening on /scan."""
         self.publish_static()
+        if self.localization is not None and self.localization.error is not None:
+            return  # no slam_toolbox was started on an unusable bundle: the first scan is answered with the reason
         deadline = time.monotonic() + 120.0
         while self.count_subscribers("/scan") == 0:
             if time.monotonic() > deadline:
@@ -362,7 +449,9 @@ class IsaacSlamBridge(Node):
         server.listen(1)
         (self.output_dir / "bridge_ready").write_text("ready\n")
         conn, _ = server.accept()
-        gate = slam_link.KeyframeGate()
+        loc = self.localization
+        gate = (slam_link.KeyframeGate(startup_scans=7, startup_expect=(1, 5, 6, 7)) if loc is not None
+                else slam_link.KeyframeGate())
         map_from_odom = (0.0, 0.0, 0.0)
         version = 0
         with conn:
@@ -375,6 +464,7 @@ class IsaacSlamBridge(Node):
                 key = int(round(scan.stamp_s * 1e9))
                 start = time.monotonic()
                 kind = gate.classify(scan.stamp_s, scan.odom_from_base)
+                startup_index = gate.sent if kind != "local" and gate.sent <= gate.startup_scans else None
                 if kind != "local":
                     with self.cond:
                         self.awaited = key
@@ -396,19 +486,40 @@ class IsaacSlamBridge(Node):
                     self.count_publishers("/pose") > 0 and self.count_subscribers("/scan") > 0
                 )
                 elapsed = time.monotonic() - start
-                if stray or not slam_alive:
+                reason, map_id = None, None
+                if loc is not None and loc.error is not None:
+                    status, reason = "failed", loc.error  # the bundle could not be used (slam_map_mismatch: ...)
+                elif stray or not slam_alive:
                     status = "failed"
                 elif pose is not None:
                     map_from_odom = compose(pose, invert(scan.odom_from_base))
                     version += 1
                     status = "processed"
                     gate.processed(scan.stamp_s, scan.odom_from_base)
+                    if loc is not None:
+                        loc.first_processed = True
+                        if startup_index in (5, 6, 7):
+                            loc.add_bootstrap(scan, pose)
+                        if startup_index == 7:
+                            # the checks before the 7th reply, within this scan's one deadline (pose + /map)
+                            remaining = max(0.0, self.reply_timeout_s - (time.monotonic() - start))
+                            with self.cond:
+                                self.cond.wait_for(lambda: loc.map is not None, timeout=remaining)
+                            reason = loc.check()
+                            if reason is not None:
+                                status = "failed"
+                            else:
+                                map_id = loc.bundle.map_id
+                            self._drop_map_subscription()
+                        elif loc.passed:
+                            map_id = loc.bundle.map_id
                 elif expected:
                     status = "failed"
                 else:
                     status = "skipped"
+                elapsed = time.monotonic() - start
                 reply = slam_link.Reply(
-                    scan.scan_id, scan.stamp_s, status, map_from_odom, version, elapsed
+                    scan.scan_id, scan.stamp_s, status, map_from_odom, version, elapsed, reason=reason, map_id=map_id
                 )
                 record_ = {
                     "scan_id": scan.scan_id,
@@ -420,6 +531,7 @@ class IsaacSlamBridge(Node):
                     "map_from_odom": list(map_from_odom),
                     "slam_pose": list(pose) if pose else None,
                     "wall_s": elapsed,
+                    **({"reason": reason} if reason is not None else {}),
                 }
                 try:
                     conn.sendall(slam_link.encode_reply(reply))
@@ -455,6 +567,9 @@ class IsaacSlamBridge(Node):
         # not written by the deadline, are counted beside it.
         self.ok = not stray and not failed
         status = {"ok": self.ok, "stray_pose_stamps_ns": stray, "failed": failed}
+        loc = getattr(self, "localization", None)  # a bridge built without __init__ (the rule tests) has none
+        if loc is not None:
+            status["localization"] = loc.record()
         if self.replies.persistent:
             status.update(records_dropped=self.replies.dropped, records_unsettled=self.replies.unsettled)
         self._write_status(status)
