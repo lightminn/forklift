@@ -112,5 +112,7 @@ def test_another_scene_or_scene_argument_does_not_match_the_survey(tmp_path):
         "the scene's USD files differ from the survey's"]
     assert sm.run_mismatches(manifest, **{**ok, "arguments": {"prism_colliders": False}}) == [
         "argument prism_colliders differs from the survey's"]
+    noise = {**ok, "arguments": {"prism_colliders": True, "slam_noise_seed": 7}}
+    assert sm.run_mismatches(manifest, **noise) == ["argument slam_noise_seed differs from the survey's"]  # Codex r2
     assert "obstacle_layer differs from the survey's" in sm.run_mismatches(
         manifest, **{**ok, "input_sha256": {**same, "obstacle_layer": "x"}})

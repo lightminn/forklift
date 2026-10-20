@@ -3538,6 +3538,8 @@ def drive(S, isaac) -> None:
         settings = _bound["settings"]
     if "site_poses" in _bound:
         site_poses = _bound["site_poses"]
+    if "slam_bundle_" in _bound:
+        slam_bundle_ = _bound["slam_bundle_"]
     if "stage" in _bound:
         stage = _bound["stage"]
     if "state" in _bound:

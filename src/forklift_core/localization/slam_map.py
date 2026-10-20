@@ -28,8 +28,8 @@ OCCUPIED = 65  # /map values: 100 occupied, 0 free, -1 unknown (the survey's own
 # the input files a survey and a localization run must share (manifest "inputs", by content): the scene, the truck,
 # the hall, the scan and the shared scan's noise (the obstacle layer config)
 SHARED_INPUTS = ("base_scene", "forklift_urdf", "factory_layout", "lidar", "obstacle_layer")
-# the run arguments that change what the LiDAR plane sees (manifest "run" "arguments")
-SHARED_ARGUMENTS = ("prism_colliders",)
+# the run arguments that change what the LiDAR plane sees or the SLAM noise (manifest "run" "arguments")
+SHARED_ARGUMENTS = ("prism_colliders", "slam_noise_seed", "slam_noise_spec")  # + the SLAM noise (plan L2)
 MAP_LOADED_MIN = 0.95  # plan L4: the /map after the first processed scan covers >= 95 % of the survey's occupied cells
 READY_MIN = 0.80  # plan L4: bootstrap scans 5-7 each put >= 80 % of their endpoints on the survey's walls
 START_POSITION_M, START_YAW_RAD = 0.10, 0.05
