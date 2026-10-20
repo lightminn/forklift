@@ -259,3 +259,70 @@ def test_shelf_reads_a_closed_face(group):
     draws = E.scene_draws(group, "shelf", 8, "dev")
     recs = [E._judge_once(group, "shelf", draws, f, False, "rig") for f in E.FACES]
     assert {(r["verdict"], r["evidence_reason"]) for r in recs} == {("unobserved", "closed_face")}
+
+
+# -- the v2 error model (plan task 5: Isaac side stands put the target 4-9 cm off along the face normal) -----------
+
+def test_the_v1_bands_draw_exactly_as_before_and_v2_bands_are_their_own():
+    assert E.BANDS["dev"] == 300_000 and E.BANDS["eval"] == 700_000  # the opened eval stays what it was
+    assert E.MODEL["dev"] == E.MODEL["eval"] == "v1" and E.MODEL["dev2"] == E.MODEL["eval2"] == "v2"
+    assert len({E.BANDS[b] for b in E.BANDS}) == len(E.BANDS)
+    v1 = E.scene_draws("epal6:x", "pallet", 3, "dev")
+    assert abs(v1["lateral"]) <= 0.03 and v1["model"] == "v1"
+    lat = [E.scene_draws("epal6:x", "pallet", i, "dev2")["lateral"] for i in range(200)]
+    assert max(map(abs, lat)) <= 0.10 and max(map(abs, lat)) > 0.08  # the normal error reaches the Isaac range
+
+
+def test_v2_adds_a_per_capture_pose_error_and_v1_does_not():
+    d1 = E.scene_draws("t11_06:y", "pallet", 5, "dev")
+    assert "loc" not in E.retry_stand(d1, 1, 0) and "loc" not in E.retry_stand(d1, 1, 2)
+    d2 = E.scene_draws("t11_06:y", "pallet", 5, "dev2")
+    a, b = E.retry_stand(d2, 1, 0)["loc"], E.retry_stand(d2, 1, 1)["loc"]
+    assert a != b and all(abs(v) <= 0.02 for v in (*a[:2], *b[:2])) and abs(a[2]) <= 1.0
+    case = E.face_case("t11_06:y", "pallet", {**d2, "face1": E.retry_stand(d2, 1, 0)}, 1, False, "rig")
+    assert case.lateral_err_m == pytest.approx(d2["lateral"] + a[1])
+    assert case.along_err_m == pytest.approx(d2["along"] + a[0]) and case.yaw_err_deg == pytest.approx(d2["yaw"] + a[2])
+
+
+def test_rows_name_their_model_seed_base_and_judge():
+    rows = E.run_job(("epal6:x", "pallet", 0, "dev2"))
+    assert {(r["model"], r["seed_base"]) for r in rows} == {("v2", 400_000)}
+    assert len({r["judge_sha256"] for r in rows}) == 1 and len(rows[0]["judge_sha256"]) == 64
+
+
+def test_dev_records_are_refused_on_both_eval_bands():
+    for band in ("eval", "eval2"):
+        with pytest.raises(SystemExit):
+            E.main(["run", "--band", band, "--n", "1", "--records", "0", "--out", "/dev/null", "--noise-off"])
+
+
+def test_a_band_mixing_judges_models_or_seed_bases_is_refused():
+    # Codex anchor round 1 P2 2: two judge hashes, or v1 / 300000 labels in dev2, passed the summary
+    rows = [{**r, "band": "dev2", "model": "v2", "seed_base": 400_000, "judge_sha256": "a" * 64,
+             "tools_sha256": "b" * 64} for r in _planned_rows("dev2")]
+    assert E.summarise(rows)["dev2 epal6:x smooth=off K=rig"]["complete"]
+    for field, value, msg in (("judge_sha256", "c" * 64, "judge_sha256"), ("tools_sha256", "d" * 64, "tools_sha256"),
+                              ("model", "v1", "model"), ("seed_base", 300_000, "seed_base")):
+        bad = [dict(r) for r in rows]
+        bad[0][field] = value
+        with pytest.raises(ValueError, match=msg):
+            E.summarise(bad)
+
+
+def test_a_v2_band_always_needs_its_provenance():
+    # Codex anchor round 2 P2: dropping "model" from every dev2 row skipped the check
+    rows = [{**r, "band": "dev2", "model": "v2", "seed_base": 400_000, "judge_sha256": "a" * 64,
+             "tools_sha256": "b" * 64} for r in _planned_rows("dev2")]
+    for drop in (("model",), ("model", "seed_base", "judge_sha256", "tools_sha256")):
+        bad = [{k: v for k, v in r.items() if k not in drop} for r in rows]
+        with pytest.raises(ValueError):
+            E.summarise(bad)
+    E.summarise(_planned_rows("dev"))  # v1 rows from before the fields still summarise
+
+
+def test_v1_rows_keeping_any_provenance_field_are_checked():
+    # Codex anchor round 3 P2 2: v1 rows with mixed judges passed once "model" alone was dropped
+    rows = [{**r, "judge_sha256": "a" * 64, "tools_sha256": "b" * 64, "seed_base": 300_000} for r in _planned_rows("dev")]
+    rows[0]["judge_sha256"] = "c" * 64
+    with pytest.raises(ValueError):
+        E.summarise(rows)

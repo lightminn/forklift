@@ -257,3 +257,49 @@ def test_unknown_bins_do_not_split_a_row():
     assert B._row_runs(list("OOSS????SSSSOOO"), 0.5) == [["S", 2, 12]]
     assert B._row_runs(list("OOSSOSSSOO"), 0.5) == [["S", 5, 8]]          # an open bin splits; 2 bins too short
     assert B._row_runs(list("O??S????OO"), 0.5) == []                     # mostly unknown: not a row
+
+
+# -- the face search (plan task 5: the side stands' pose error, 4-9 cm along the face normal in Isaac) ---------------
+
+@pytest.mark.parametrize("shape", ["epal6", "t11_06"])
+@pytest.mark.parametrize("normal_m", [-0.10, -0.07, 0.07, 0.10])
+def test_a_face_off_its_estimate_by_up_to_10_cm_is_found_and_judged(shape, normal_m):
+    for structure, want in (("pallet", "present"), ("grounded", "absent")):
+        ev = judge(S.SideCase(shape, structure, face=1, lateral_err_m=normal_m))
+        assert ev.verdict == want, (structure, normal_m, ev.reason)
+        assert abs(ev.face_shift_m) == pytest.approx(abs(normal_m), abs=0.02)  # where the face was found
+
+
+def test_the_floor_is_not_taken_for_the_face_under_a_calibration_error():
+    # Codex task 5 anchor round 1 P2 1: by absolute height the floor entered T11's 24-51 mm band and won
+    case = S.SideCase("t11_06", "pallet", face=1, theta_e_deg=0.0, along_err_m=0.1, lateral_err_m=0.1, yaw_err_deg=5.0,
+                      tilt_err_deg=1.0, height_err_m=-0.01)
+    assert judge(case).verdict == "present"
+
+
+def test_a_face_further_off_than_the_search_is_not_judged():
+    # Codex anchor round 1 P2 2: a 160 mm error was searched to -145 mm and the refit went on to read present
+    ev = judge(S.SideCase("epal6", "pallet", face=1, lateral_err_m=0.16, yaw_err_deg=5.0))
+    assert ev.verdict == "unobserved" and ev.reason in ("face_shift", "face_ambiguous", "no_side_points")
+
+
+@pytest.mark.parametrize("structure", ["pallet", "grounded"])
+def test_a_board_standing_before_the_face_is_never_evidence(structure):
+    for off in (0.04, 0.08, 0.11):
+        ev = judge(S.SideCase("epal6", structure, face=1, occluder=True, occluder_offset_m=off, lateral_err_m=0.05))
+        assert ev.verdict != "present", (structure, off, ev.reason)
+        if structure == "pallet":
+            assert ev.verdict != "absent", (off, ev.reason)
+
+
+@pytest.mark.parametrize("structure", ["pallet", "grounded"])
+@pytest.mark.parametrize("tilt_deg,ahead_m", [(0.0, 0.07), (6.0, 0.07), (0.0, 0.04)])
+def test_a_rival_surface_in_another_direction_still_leaves_the_face_open(structure, tilt_deg, ahead_m):
+    # Codex anchor implementation round 1 P2 1: two vertical patches 70 mm before a T11 y face, tilted 6 deg
+    # together, were missed by a rival check made in the winning direction only (0.92 of the face's score)
+    half_w = rs.known_spec("t11_06").overall_width_m / 2
+    a = math.radians(tilt_deg)
+    boxes = tuple((x * math.cos(a), half_w + ahead_m + x * math.sin(a), 0.0375, 0.10, 0.005, 0.032, tilt_deg)
+                  for x in (-0.39, 0.39))
+    ev = judge(S.SideCase("t11_06", structure, face=1, theta_e_deg=0.0, extra_boxes=boxes))
+    assert ev.verdict != "present", (tilt_deg, ev.reason)

@@ -1106,6 +1106,15 @@ def test_a_grounded_urdf_needs_the_grounded_article_declared(tmp_path):
     assert result.returncode == 2 and "Pallet collision box names mismatch" in result.stderr
 
 
+def test_the_side_check_moves_the_perception_cameras_near_plane_to_the_d435i_min_z_only_when_on():
+    # Plan 2026-10-19 task 5: Isaac's default 1.0 m near plane cut the side frames at the 1.35 m stand
+    source = SCRIPT.read_text()
+    block = source[source.index('if getattr(args, "bottom_deck_check", "off") == "on":\n            # Plan 2026-10-19 task 5'):]
+    block = block[: block.index("if args.recognition == \"far\":")]
+    assert "perception_camera.set_clipping_range(near_distance=0.28, far_distance=perception_far_m)" in block
+    assert 'state["perception_clipping_range_m"]' in block
+
+
 def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
     source = SCRIPT.read_text()
     block = source[source.index('far_learned["worker"] = WorkerProposer('):]

@@ -16,6 +16,7 @@ off its nominal dimensions (the judge keeps the nominal spec): the dimension-tol
 """
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -32,7 +33,15 @@ if str(ROOT) not in sys.path:
 from forklift_core.perception import bottom_deck_evidence as B  # noqa: E402
 from tools import bottom_deck_scenes as S  # noqa: E402
 
-BANDS = {"dev": 300_000, "eval": 700_000}          # seed bases; dev tunes, eval is opened once
+# Seed bases; dev tunes, eval is opened once. v1 (dev, eval) is the task 2 model, its eval opened at ce0f714; v2
+# (dev2, eval2) widens the face-normal candidate error to +-100 mm and adds a per-capture pose error -- the Isaac
+# side stands put the target 4-9 cm off along the face normal (plan task 5). A band never changes model.
+BANDS = {"dev": 300_000, "eval": 700_000, "dev2": 400_000, "eval2": 900_000}
+MODEL = {"dev": "v1", "eval": "v1", "dev2": "v2", "eval2": "v2"}
+DEV_BANDS = ("dev", "dev2")
+JUDGE_SHA256 = hashlib.sha256(Path(B.__file__).read_bytes()).hexdigest()
+# The evaluator and the scene recipe as well: a band's rows must all come from one judge, one recipe, one model.
+TOOLS_SHA256 = hashlib.sha256(Path(__file__).read_bytes() + Path(S.__file__).read_bytes()).hexdigest()
 GROUPS = ("epal6:x", "t11_06:x", "t11_06:y")
 THETA_E = {"x": 35.0, "y": 0.0}
 NEG_KINDS = ("grounded", "shelf", "deckless", "grounded+nb", "grounded+plate", "grounded+ledge1", "grounded+ledge2",
@@ -53,8 +62,9 @@ def scene_draws(group: str, kind: str, index: int, band: str) -> dict:
     """All random draws of one scene, deterministic in (band, group, kind, index)."""
     key = [BANDS[band], GROUPS.index(group), _kind_id(kind), index]
     rng = np.random.default_rng(key)
-    d = {"seed_key": key, "along": rng.uniform(-0.1, 0.1), "lateral": rng.uniform(-0.03, 0.03),
-         "yaw": rng.uniform(-5.0, 5.0)}
+    lateral_m = 0.03 if MODEL[band] == "v1" else 0.10  # one draw either way: v1's stream is unchanged
+    d = {"seed_key": key, "model": MODEL[band], "along": rng.uniform(-0.1, 0.1),
+         "lateral": rng.uniform(-lateral_m, lateral_m), "yaw": rng.uniform(-5.0, 5.0)}
     for f in FACES:
         d[f"face{f}"] = {"dx": rng.uniform(-0.1, 0.1), "dy": rng.uniform(-0.1, 0.1), "heading": rng.uniform(-5.0, 5.0),
                          "tilt": rng.uniform(-1.0, 1.0), "height": rng.uniform(-0.01, 0.01),
@@ -104,6 +114,9 @@ def face_case(group: str, kind: str, draws: dict, face: int, smooth: bool, k_nam
               tilt_err_deg=fd["tilt"], height_err_m=fd["height"], noise_seed=fd["noise"], smooth=smooth,
               intrinsics=S.D435I_640 if k_name == "d435i" else None,
               along_err_m=draws["along"], lateral_err_m=draws["lateral"], yaw_err_deg=draws["yaw"], dims_delta_m=dims)
+    if "loc" in fd:  # v2: this capture's pose error on top of the target's
+        kw.update(along_err_m=kw["along_err_m"] + fd["loc"][0], lateral_err_m=kw["lateral_err_m"] + fd["loc"][1],
+                  yaw_err_deg=kw["yaw_err_deg"] + fd["loc"][2])
     if variant.get("noise") == "off":
         kw["noise_seed"] = None
     if "normal_err_m" in variant:      # the face-normal (model y) candidate error at a fixed size, sign drawn
@@ -127,11 +140,15 @@ def face_case(group: str, kind: str, draws: dict, face: int, smooth: bool, k_nam
 def retry_stand(draws: dict, face: int, attempt: int) -> dict:
     """A fresh arrival (and a fresh frame) for a retried stand; the calibration error stays."""
     fd = draws[f"face{face}"]
-    if attempt == 0:
-        return fd
-    rng = np.random.default_rng([*draws["seed_key"], 11, face + 1, attempt])
-    return {**fd, "dx": rng.uniform(-0.1, 0.1), "dy": rng.uniform(-0.1, 0.1), "heading": rng.uniform(-5.0, 5.0),
-            "noise": int(rng.integers(0, 2**31 - 1))}
+    if attempt > 0:
+        rng = np.random.default_rng([*draws["seed_key"], 11, face + 1, attempt])
+        fd = {**fd, "dx": rng.uniform(-0.1, 0.1), "dy": rng.uniform(-0.1, 0.1), "heading": rng.uniform(-5.0, 5.0),
+              "noise": int(rng.integers(0, 2**31 - 1))}
+    if draws.get("model", "v1") == "v2":
+        # The localisation at this capture: the target in the camera's frame moves by it (along, normal, yaw).
+        lrng = np.random.default_rng([*draws["seed_key"], 13, face + 1, attempt])
+        fd = {**fd, "loc": (lrng.uniform(-0.02, 0.02), lrng.uniform(-0.02, 0.02), lrng.uniform(-1.0, 1.0))}
+    return fd
 
 
 def judge_face(group, kind, draws, face, smooth, k_name, dims=(), variant=None) -> dict:
@@ -211,7 +228,9 @@ def run_job(args):
     rows = []
     for smooth_name, k_name in CONFIGS:
         faces = [judge_face(group, kind, draws, f, smooth_name == "on", k_name, dims, variant) for f in FACES]
-        rows.append({"band": band, "group": group, "kind": kind, "index": index, "smooth": smooth_name, "K": k_name,
+        rows.append({"band": band, "model": MODEL[band], "seed_base": BANDS[band], "judge_sha256": JUDGE_SHA256,
+                     "tools_sha256": TOOLS_SHA256,
+                     "group": group, "kind": kind, "index": index, "smooth": smooth_name, "K": k_name,
                      "variant": variant_name(dims, variant), "faces": faces, "final": policy(faces),
                      "opposite_faces": sorted(f["view_face"] for f in faces) == [-1, 1],
                      "outside_assumption": ledge4_inside_band(group, kind, draws), "plan_n": plan_n,
@@ -238,7 +257,7 @@ def cmd_run(a):
         variant["noise"] = "off"
     if a.normal_err_m is not None:
         variant["normal_err_m"] = a.normal_err_m
-    if (dims or variant) and a.band != "dev":
+    if (dims or variant) and a.band not in DEV_BANDS:
         raise SystemExit("--dims / --noise-off / --normal-err-m are dev records; eval is opened once, nominal")
     jobs = job_list(a.groups.split(","), a.n, a.records, a.band)
     if a.kinds:
@@ -295,6 +314,21 @@ def summarise(rows):
         if key in seen:
             raise ValueError(f"duplicate scene row {key}")
         seen.add(key)
+    for band in {r["band"] for r in rows}:
+        # Shards and partial reruns merged into one bound must be one population (Codex anchor round 1 P2 2): the
+        # band's model and seed base, one judge and one evaluator/recipe. v1 rows from before these fields carry none.
+        sel = [r for r in rows if r["band"] == band]
+        fields = ("model", "seed_base", "judge_sha256", "tools_sha256")
+        # Only v1 rows from before the fields go unchecked: every row without any of them (Codex anchor round 3).
+        if MODEL[band] != "v1" or any(f in r for r in sel for f in fields):
+            for field, want in (("model", MODEL[band]), ("seed_base", BANDS[band])):
+                got = {r.get(field) for r in sel}
+                if got != {want}:
+                    raise ValueError(f"band {band}: {field} {sorted(map(str, got))}, expected {want!r}")
+            for field in ("judge_sha256", "tools_sha256"):
+                got = {r.get(field) for r in sel}
+                if len(got) != 1 or None in got:
+                    raise ValueError(f"band {band}: rows from {len(got)} {field} values")
     out = {}
     for band, group, variant in sorted({(r["band"], r["group"], r["variant"]) for r in rows}):
         for smooth, k_name in CONFIGS:

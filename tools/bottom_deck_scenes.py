@@ -86,6 +86,7 @@ class SideCase:
     intrinsics: PinholeIntrinsics | None = None   # None: the rig grid (fx 465.7)
     damaged_face: int = 1            # "damaged": the outer bottom board of this face misses its gap-0 span
     dims_delta_m: tuple = ()         # ((geometry field, delta), ...): the built article off nominal, the spec nominal
+    extra_boxes: tuple = ()          # tests: ((x, y, z, size x, size y, size z, yaw deg), ...) in the true model frame
 
 
 def geometry(shape: str):
@@ -222,6 +223,9 @@ def render_side(case: SideCase):
     if case.occluder:
         c = centre + ey * (case.occluder_face or case.face) * (half_w + case.occluder_offset_m)
         distractors.append(scene_rig.Box((c[0], c[1], 0.03 + 0.1), (g.overall_depth_m, 0.02, 0.2), myaw))
+    for bx, by, bz, sx, sy, sz, byaw in case.extra_boxes:
+        c = centre + ex * bx + ey * by
+        distractors.append(scene_rig.Box((c[0], c[1], bz), (sx, sy, sz), myaw + math.radians(byaw)))
     true_cam = scene_rig.Camera((CAMERA.xyz_m[0], 0.0, CAMERA.xyz_m[2] + case.height_err_m),
                                 TILT_RAD + math.radians(case.tilt_err_deg))
     out = instance_rig.render_instances(instances, distractors=distractors, camera=true_cam, back_wall=False,

@@ -88,6 +88,13 @@ class BottomDeckParams:
     top_cluster_fraction: float = 0.1
     top_cluster_min: int = 4
     max_support_m: float = 0.03
+    # The face search (plan task 5): the side stand's pose error put the target 4-9 cm off the face along its normal
+    # in Isaac, beyond side_window_m. The face is found first, then judged as before.
+    face_search_m: float = 0.12             # the face may lie this far off the target's face along its normal
+    face_compete: float = 0.6               # a second vertical surface this strong: which one is the face is open
+    face_min_span: float = 0.5              # x block band height: a bin's points must span this to count as a face
+    face_max_yaw_deg: float = 10.0          # the refitted face against the target's face direction
+    face_yaw_search_deg: float = 6.0        # the face direction searched around the target's (1 deg steps)
     seed: int = 0
 
 
@@ -123,6 +130,7 @@ class BottomDeckEvidence:
     plane: tuple = ()           # the refitted face: (point x, point y, normal x, normal y)
     marker_m: float = math.nan
     profile: str = ""
+    face_shift_m: float = 0.0   # where the face was found off the target's face, along its outward normal
 
 
 def nominal_gaps(spec: PalletSpec) -> tuple:
@@ -246,8 +254,87 @@ def evaluate_side(scene, target: BottomDeckTarget, *, face: int | None = None,
     def out(verdict, reason, **kw):
         return BottomDeckEvidence(verdict, reason, face=seen, range_m=range_m, **kw)
 
-    # 1. the side plane from block-height points near the nominal face; heights above a provisional floor fitted in
-    #    front of the nominal face, so a camera tilt / height error does not slide the band onto the bottom board
+    n_target, p_target = n.copy(), p0.copy()
+
+    # 0. the face search: the vertical surface at block height within face_search_m of the target's face. Heights
+    #    are above a provisional floor fitted beyond where the face can be (absolute heights let the floor into a
+    #    low band under a calibration error -- Codex anchor round 1). A bin counts only when its points span the band
+    #    (a vertical surface, not the floor or a low board); a second bin cluster nearly as strong leaves the face
+    #    open. The face moves the target along its normal only.
+    shift = 0.0
+    if params.face_search_m > 0:
+        rel = pts - p0
+        off0, s0 = rel @ n, rel @ ex
+        reach = params.face_search_m
+        along0 = np.abs(s0) <= half_x + params.profile_pad_m
+        ahead = valid & along0 & (off0 > reach + params.floor_offset_m[0]) & (off0 < reach + params.floor_offset_m[1]) \
+            & (pts[..., 2] < params.floor_max_z_m)
+        if ahead.sum() < params.floor_min_points:
+            return out("unobserved", "no_floor")
+        pre_f = dominant_floor(s0[ahead], off0[ahead], pts[..., 2][ahead], params)
+        if pre_f is None:
+            return out("unobserved", "no_floor")
+        zf = pts[..., 2] - (pre_f.coef[0] + pre_f.coef[1] * s0 + pre_f.coef[2] * off0)
+        win = reach + params.side_window_m
+        cand = valid & along0 & (np.abs(off0) <= win + 0.06) & (zf >= blk[0]) & (zf <= blk[1])
+        rc, zc = rel[cand][:, :2], zf[cand]
+        edges_f = np.arange(-win, win + params.bin_m, params.bin_m)
+        k = max(1, int(round(params.plane_tol_m / params.bin_m)))
+        found, hyps = None, []
+        # The face direction is searched too: a target yaw error smears a wide face over several bins (T11 head on,
+        # 5 deg over 1.1 m), which would read as rival surfaces. Every direction's peaks are kept as face hypotheses:
+        # a rival is judged across directions, not in the winning one only (Codex anchor implementation round 1).
+        for a in np.radians(np.arange(-params.face_yaw_search_deg, params.face_yaw_search_deg + 0.5, 1.0)):
+            na = np.array([n[0] * math.cos(a) - n[1] * math.sin(a), n[0] * math.sin(a) + n[1] * math.cos(a)])
+            oc_all = rc @ na
+            inside_ = np.abs(oc_all) <= win
+            idx = np.full(len(oc_all), -1)
+            idx[inside_] = np.digitize(oc_all[inside_], edges_f) - 1
+            counts = np.bincount(idx[inside_], minlength=len(edges_f) - 1)[: len(edges_f) - 1].astype(float)
+            span_ok = np.zeros(len(counts), bool)
+            for i in np.nonzero(counts >= 3)[0]:
+                zi = zc[idx == i]
+                span_ok[i] = (zi.max() - zi.min()) >= params.face_min_span * (blk[1] - blk[0])
+            face_counts = np.where(span_ok, counts, 0.0)
+            score = np.convolve(face_counts, np.ones(2 * k + 1), mode="same")
+            for i in np.nonzero(face_counts > 0)[0]:  # every vertical bin: a near rival is not hidden by the face's peak
+                centre_i = 0.5 * (edges_f[i] + edges_f[i + 1])
+                hyps.append(np.abs(oc_all - centre_i) <= params.plane_tol_m)
+            best_a = int(np.argmax(face_counts))
+            if found is None or face_counts[best_a] > found[2][found[3]]:
+                found = (a, na, face_counts, best_a, oc_all, score)
+        a, na, face_counts, best, oc, score = found
+        # The face is the strongest bin itself (smoothing would drag it toward the sparse points beside a sharp face);
+        # the smoothed score, a plane's worth of bins, weighs a rival surface.
+        if score.max() < params.side_min_points or face_counts[best] == 0:
+            return out("unobserved", "no_side_points")
+        centre_best = 0.5 * (edges_f[best] + edges_f[best + 1])
+        on_best = np.abs(oc - centre_best) <= 2 * params.plane_tol_m
+        # A rival's strength is its own points off the chosen face (a bin beside the face shares the face's points
+        # and is no rival); they must still span the band, a vertical surface of their own.
+        band_h = blk[1] - blk[0]
+        rival = []
+        for h in hyps:
+            own = h & ~on_best
+            if own.sum() >= params.face_compete * score[best] and own.sum() >= 0.5 * h.sum() \
+                    and np.ptp(zc[own]) >= params.face_min_span * band_h:
+                rival.append(h)
+        if rival:
+            return out("unobserved", "face_ambiguous")
+        centre_b = 0.5 * (edges_f[best] + edges_f[best + 1])
+        sel = np.abs(oc - centre_b) <= params.plane_tol_m
+        shift = float(np.median(oc[sel])) if sel.any() else float(centre_b)
+        if abs(shift) > reach:
+            return out("unobserved", "face_shift", face_shift_m=shift)
+        n = np.array([na[0], na[1], 0.0])
+        ex = np.array([n[1], -n[0], 0.0]) * (1.0 if np.array([n[1], -n[0]]) @ np.array([c, s]) >= 0 else -1.0)
+        p0 = p0 + n * shift
+
+    def out(verdict, reason, **kw):  # noqa: F811 -- every later reading records where the face was found
+        return BottomDeckEvidence(verdict, reason, face=seen, range_m=range_m, face_shift_m=shift, **kw)
+
+    # 1. the side plane from block-height points near the (found) face; heights above a provisional floor fitted in
+    #    front of it, so a camera tilt / height error does not slide the band onto the bottom board
     rel = pts - p0
     off0, s0 = rel @ n, rel @ ex
     near0 = valid & (off0 > params.floor_offset_m[0]) & (off0 < params.floor_offset_m[1]) \
@@ -270,6 +357,13 @@ def evaluate_side(scene, target: BottomDeckTarget, *, face: int | None = None,
     m = m + nn[:2] * np.median(r[inl])
     n, p0 = nn, np.array([m[0], m[1], 0.0])
     ex = np.array([line[0], line[1], 0.0]) * (1.0 if line @ np.array([c, s]) >= 0 else -1.0)
+    # The refit may not carry the face further than the search did (Codex anchor round 1 P2 2): its offset at the
+    # target's face centre and its direction are bounded against the target's face.
+    face_off = float((p0 - p_target) @ n_target)
+    yaw_off = math.degrees(math.acos(max(-1.0, min(1.0, float(n[:2] @ n_target[:2])))))
+    if params.face_search_m > 0 and (abs(face_off) > params.face_search_m + params.plane_tol_m
+                                     or yaw_off > params.face_max_yaw_deg):
+        return out("unobserved", "face_shift")
     origin_s = float((centre - p0) @ ex)
     to_cam = (cam - p0)[:2]
     theta_face = math.degrees(math.acos(max(-1.0, min(1.0, float(n[:2] @ to_cam / np.linalg.norm(to_cam))))))

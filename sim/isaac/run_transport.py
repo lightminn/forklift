@@ -2632,6 +2632,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
+        if getattr(args, "bottom_deck_check", "off") == "on":
+            # Plan 2026-10-19 task 5: Isaac's default near plane is 1.0 m, which cut the pallet's near half and the
+            # floor before it out of every side frame at the 1.35 m stand (Isaac runs 85cc2fe). The D435i's min-Z,
+            # as the pocket camera already uses; only with the side check on, so off runs see what they always saw.
+            _, perception_far_m = perception_camera.get_clipping_range()
+            perception_camera.set_clipping_range(near_distance=0.28, far_distance=perception_far_m)
+            state["perception_clipping_range_m"] = list(map(float, perception_camera.get_clipping_range()))
         if args.recognition == "far":
             # Far recognition: oracle instance masks from the semantic segmentation. The run's pallet is
             # instance 0, the factory's storage pallets the next ids (proposed too, so they can compete), and
