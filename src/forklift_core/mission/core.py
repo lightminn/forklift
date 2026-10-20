@@ -101,6 +101,13 @@ ALIGN_HEADING_RAD = 0.02  # plan D14: the straight reverse's heading tolerance t
 RECOVERY_LOWER_MIN_S = 1.0  # the lowered verdict is read after this much of recover_lower (the lift ramps down first)
 
 
+def slam_may_drive(slam: dict) -> bool:
+    """SLAM lets the truck move: the tracker past warming up and, with the gyro heading, a standstill bias found
+    (gyro-heading plan G2 (A) D2: no drive before the first bias, on every path)."""
+    gyro = slam.get("gyro")
+    return slam["tracker"].may_drive() and (gyro is None or gyro.get("bias") is not None)
+
+
 @dataclass
 class RecoveryPath:
     """A recovery's retrace (plan D4): rear-axle poses, all reversing."""
@@ -2199,8 +2206,8 @@ class MissionCore:
             tracking.speed_mps,
             tracking.curvature_inv_m,
         )
-        if slam is not None and not slam["tracker"].may_drive():
-            requested_speed = 0.0  # warming up: hold still
+        if slam is not None and not slam_may_drive(slam):
+            requested_speed = 0.0  # warming up (or no gyro bias yet): hold still
         if (
             dwells is not None and ms.phase == "approach"
             and state.get("near_capture", {}).get("status") == "done"
@@ -4025,7 +4032,7 @@ class MissionCore:
                 rear = slam_rear(t)  # the released estimate, this very tick
                 hooks.set_rear(rear)  # the runner's closures read its rear (Codex slice-3 P2)
                 slam["control"][-1][1:4] = rear.tolist()
-        warming = slam is not None and not slam["tracker"].may_drive()
+        warming = slam is not None and not slam_may_drive(slam)
         return SimpleNamespace(releasing=releasing, warming=warming, rear=rear)
 
     def assemble_command(self, t: float, dt: float, requested_speed: float, curvature: float, kappa: float,

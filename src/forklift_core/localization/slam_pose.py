@@ -91,6 +91,30 @@ class IncrementalWheelOdometry:
         self._last = (stamp, None, curvature)
         return tuple(self.pose)
 
+    def update_increments_heading(self, stamp_s, rear_wheel_increments_rad, dyaw_rad: float) -> tuple[float, float, float]:
+        """The gyro-heading odometry (gyro-heading plan G2 (A) D2): the distance from the rear wheels' increments, the heading
+        change from the gyro, the position along the interval's mid heading. Same state as ``update_increments`` (the
+        steering path); the curvature it remembers is not used."""
+        self._use("increments")
+        stamp = _finite_scalar(stamp_s, "stamp_s")
+        increments = np.asarray(rear_wheel_increments_rad, dtype=float)
+        if increments.shape != (2,) or not np.isfinite(increments).all():
+            raise ValueError("wheel increments must be two finite values")
+        dyaw = _finite_scalar(dyaw_rad, "dyaw_rad")
+        if self._last is not None:
+            last_stamp = self._last[0]
+            if stamp - last_stamp <= 0:
+                raise ValueError("stamps must be strictly increasing")
+            distance = increments.mean() * self.geometry.wheel_radius_m
+            x, y, yaw = self.pose
+            mid = yaw + dyaw / 2
+            self.pose = [x + distance * math.cos(mid), y + distance * math.sin(mid), yaw + dyaw]
+            self.interval_speed = distance / (stamp - last_stamp)
+        else:
+            self.interval_speed = 0.0
+        self._last = (stamp, None, self._last[2] if self._last is not None else 0.0)
+        return tuple(self.pose)
+
     def update(self, stamp_s, rear_wheel_rates_rad_s, steering_rad) -> tuple[float, float, float]:
         self._use("rates")
         stamp = _finite_scalar(stamp_s, "stamp_s")

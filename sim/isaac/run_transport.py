@@ -656,6 +656,18 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--slam-noise-seed", type=int, default=None)
     parser.add_argument(
+        "--odometry-heading",
+        choices=("steering", "gyro"),
+        default="steering",
+        help="Gyro-heading plan G2 (A) (docs/plans/2026-10-21-gyro-g2-runtime-safety.md): the SLAM odometry's heading "
+        "from the steering angles (steering, as before) or from a simulated D435i gyro with a standstill bias "
+        "(gyro: needs --gyro-model, --encoder-model team_spec_quantized, --use-perception; a verification build, "
+        "not for the console's live job).",
+    )
+    parser.add_argument("--gyro-model", type=Path, default=None, help="With --odometry-heading gyro: a gyro_model/1 file.")
+    parser.add_argument("--gyro-fault-at", type=float, default=None,
+                        help="With --odometry-heading gyro: every gyro sample from this sim second on is NaN (a test).")
+    parser.add_argument(
         "--encoder-model",
         choices=("reported", "team_spec_quantized", "team_spec_typical_inl"),
         default="reported",
@@ -916,6 +928,12 @@ def arguments() -> argparse.Namespace:
         parser.error("--slam-map-bundle requires --slam-feedback and --expected-map-id")
     if args.expected_map_id is not None and args.slam_map_bundle is None:
         parser.error("--expected-map-id requires --slam-map-bundle")
+    if args.odometry_heading == "gyro" and (args.gyro_model is None or args.encoder_model != "team_spec_quantized"
+                                            or args.slam_feedback is None or not args.use_perception):
+        parser.error("--odometry-heading gyro requires --gyro-model, --encoder-model team_spec_quantized, "
+                     "--slam-feedback and --use-perception")
+    if args.odometry_heading != "gyro" and (args.gyro_model is not None or args.gyro_fault_at is not None):
+        parser.error("--gyro-model and --gyro-fault-at require --odometry-heading gyro")
     if args.perception_mount in ("carriage_low", "carriage_low_measured"):
         if not args.use_perception:
             parser.error("--perception-mount carriage_low needs --use-perception")
@@ -1166,8 +1184,15 @@ def age_table_problem(table: dict, args) -> str | None:
     odometry wheel radius; forklift_core.localization.encoders.odometry_table_problem), or None."""
     from forklift_core.localization.encoders import odometry_table_problem
 
+    heading = getattr(args, "odometry_heading", "steering")
+    gyro = {}
+    if heading == "gyro":  # the table must have drawn this run's gyro model, in this run's camera mount
+        from forklift_core.localization.gyro import GyroModel
+
+        gyro = {"gyro_model_sha256": GyroModel.load(args.gyro_model)[1], "gyro_mount": args.perception_mount}
     return odometry_table_problem(table, encoder_model=args.encoder_model, wheel_radius_m=odometry_wheel_radius(args),
-                                  geometric_radius=args.odometry_wheel_radius_m is None)
+                                  geometric_radius=args.odometry_wheel_radius_m is None, odometry_heading=heading,
+                                  **gyro)
 
 
 def probe_segments() -> list[tuple[str, float, float, float]]:
@@ -4589,6 +4614,21 @@ def drive(S, isaac) -> None:
         }
         if slam_bundle_ is not None:
             slam["bundle"] = slam_bundle_  # localization only: a mapping run's slam dict is as before
+        if getattr(args, "odometry_heading", "steering") == "gyro":
+            # Gyro-heading plan G2 (A) D1/D2: the simulated gyro (the run's camera mount, the noise seed) and the
+            # heading's plain state; a steering run's slam dict is as before
+            from forklift_core.localization import gyro as gyro_module
+
+            gyro_model_, gyro_sha_ = gyro_module.GyroModel.load(args.gyro_model)
+            slam["gyro_sampler"] = gyro_module.GyroSampler(gyro_model_, perception_mount.rotation,
+                                                           args.slam_noise_seed or 0, fault_at_s=args.gyro_fault_at)
+            slam["gyro_model"] = gyro_model_
+            slam["gyro"] = gyro_module.new_heading_state()
+            slam["gyro_module"] = gyro_module
+            state["gyro_model"] = {"file": str(args.gyro_model), "sha256": gyro_sha_, **gyro_model_.record(),
+                                   **slam["gyro_sampler"].record()}
+            if slam_log is not None:
+                slam_log["gyro_samples"] = []
         state["slam_feedback"] = {
             "socket": str(args.slam_feedback),
             "noise_seed": args.slam_noise_seed,
@@ -5571,7 +5611,28 @@ def drive(S, isaac) -> None:
                 slam_log["steering_measured_rad"].append(steering_measured_)
             if slam is not None and encoder_model is not None:
                 previous_yaw = slam["odom_rear"][2]
-                slam["odom_rear"] = slam["odometry"].update_increments(stamp_now, increments_, steering_measured_)
+                dyaw_ = None
+                if slam.get("gyro") is not None:
+                    # Gyro-heading plan G2 (A) D2: the sample, the standstill bias, the heading increment (None
+                    # until the first bias: the truck is held then, so the steering increments add nothing)
+                    gm_ = slam["gyro_module"]
+                    g_stamp_, w_imu_, g_seq_ = slam["gyro_sampler"].sample(stamp_now, robot.get_angular_velocity(),
+                                                                          now_q)
+                    if slam_log is not None:
+                        slam_log["gyro_samples"].append([g_stamp_, *w_imu_])
+                    applied_speed_ = (state.get("applied_command") or (0.0, []))[0]
+                    try:
+                        dyaw_ = gm_.heading_step(
+                            slam["gyro"], slam["gyro_model"], stamp_s=g_stamp_, seq=g_seq_,
+                            raw_rate=gm_.vertical_rate(slam["gyro_sampler"].known, w_imu_),
+                            wheels_still=increments_[0] == 0 and increments_[1] == 0,
+                            command_zero=slam.get("last_command", 0.0) == 0.0 and applied_speed_ == 0.0, dt=1 / 120)
+                    except gm_.GyroFault as exc_:
+                        raise SessionFailure(str(exc_)) from exc_  # design D5: the session ends
+                if dyaw_ is not None:
+                    slam["odom_rear"] = slam["odometry"].update_increments_heading(stamp_now, increments_, dyaw_)
+                else:
+                    slam["odom_rear"] = slam["odometry"].update_increments(stamp_now, increments_, steering_measured_)
                 slam["odom_speed"] = slam["odometry"].interval_speed
             elif slam is not None:
                 rates = slam["noise"].wheel_rates(rates_true[2:4])
@@ -6378,7 +6439,8 @@ def drive(S, isaac) -> None:
             # tracker's age limit only backs up the reply deadline (Codex D9 1st P2-2, P2-3).
             prewarm_wall_ = time.monotonic()
             prewarm_steps_ = 0
-            while slam["tracker"].mode == "warming_up":
+            while slam["tracker"].mode == "warming_up" or (slam.get("gyro") is not None
+                                                           and slam["gyro"]["bias"] is None):
                 step_world(False)
                 prewarm_steps_ += 1
                 if prewarm_steps_ > 120 * 60:
@@ -8136,6 +8198,8 @@ def main() -> None:
             and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
             # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
             and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
+            # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
+            and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
             and (
                 k not in {"quarter_eye", "quarter_target", "quarter_focal"}
                 or (v is not None and (k != "quarter_focal" or v != 2.5))

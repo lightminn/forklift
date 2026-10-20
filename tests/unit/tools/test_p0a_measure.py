@@ -111,7 +111,8 @@ def test_triangle_cells_cover_every_cell_the_triangle_touches():
     assert (4, 2) not in cells  # beyond the hypotenuse
 
 
-def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4):
+def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4, model_name="team_spec_typical_inl",
+                   still_s=0.0, turn_rad_s=0.0):
     """A straight 10 s run whose reported rates are garbage (zero) while the wheel joint angles move
     with the truck: a replay that read the rates would see no motion."""
     import json
@@ -120,16 +121,22 @@ def _team_spec_run(directory, *, garbage_rates=True, steps=1200, speed=0.4):
 
     radius, rear_x = 0.125, -0.34
     t = np.arange(steps) / 120
-    x = speed * t
-    base = np.column_stack((x, np.zeros(steps), np.zeros(steps), np.ones(steps), np.zeros((steps, 3))))
-    theta = x / radius
+    moving = np.clip(t - still_s, 0.0, None)
+    s = speed * moving
+    yaw = turn_rad_s * moving
+    if turn_rad_s:  # an arc at the rear axle's speed (heading truth only; the steering stays recorded as 0)
+        x, y = speed / turn_rad_s * np.sin(yaw), speed / turn_rad_s * (1 - np.cos(yaw))
+    else:
+        x, y = s, np.zeros(steps)
+    base = np.column_stack((x, y, np.zeros(steps), np.cos(yaw / 2), np.zeros((steps, 2)), np.sin(yaw / 2)))
+    theta = s / radius
     angles = np.column_stack((theta, theta, theta, theta))
     wrapped = np.mod(angles + 2 * np.pi, 4 * np.pi) - 2 * np.pi
     from forklift_core.localization.encoders import AngleUnwrapper
 
     unwrap = [AngleUnwrapper() for _ in range(4)]
     continuous = np.array([[u.update(v) for u, v in zip(unwrap, row, strict=True)] for row in wrapped])
-    model = TeamEncoderModel(encoder_model_spec("team_spec_typical_inl"), sensor_phases(3))
+    model = TeamEncoderModel(encoder_model_spec(model_name), sensor_phases(3))
     rows = [model.read(continuous[k, 2:4], (0.0, 0.0)) for k in range(steps)]
     np.savez_compressed(
         directory / "slam_log.npz", joint_stamps_s=t,
@@ -234,3 +241,43 @@ def test_a_run_whose_recording_cannot_be_verified_is_refused(tmp_path):
         MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=1, start_every=120, max_age_s=None))
     (tmp_path / "result.json").write_text(json.dumps({"arguments": {}}))
     MODULE.odometry_command(SimpleNamespace(run=[tmp_path], draws=1, start_every=120, max_age_s=None))
+
+
+def test_the_gyro_age_table_runs_the_runner_s_heading_and_records_its_model_and_mount(tmp_path):
+    """Gyro-heading plan G2 (A): a team_spec_quantized run standing 1 s, then turning at 0.2 rad/s with the steering
+    recorded as 0 -- the steering table sees no turn, the gyro table follows it (bias found in the standstill)."""
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    from forklift_core.localization.encoders import odometry_table_problem
+
+    _team_spec_run(tmp_path, model_name="team_spec_quantized", still_s=1.0, turn_rad_s=0.2)
+    gyro_args = SimpleNamespace(run=[tmp_path], draws=2, odometry_heading="gyro",
+                                gyro_model=ROOT / "config/gyro_model_spec_typical.yaml", gyro_mount="carriage_low_measured")
+    gyro = MODULE.age_command(gyro_args)
+    steering = MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=2))
+    assert max(gyro["yaw_max_rad"]) < 0.03 < max(steering["yaw_max_rad"])
+    assert gyro["noise"]["odometry_heading"] == "gyro" and gyro["noise"]["gyro_mount"] == "carriage_low_measured"
+    assert all(n >= 1 for n in gyro["runs"][0]["gyro_bias_updates"]) and "odometry_heading" not in steering["noise"]
+    kw = dict(encoder_model="team_spec_quantized", wheel_radius_m=0.125, geometric_radius=True, odometry_heading="gyro")
+    sha = gyro["noise"]["gyro_model_sha256"]
+    assert odometry_table_problem(gyro, **kw, gyro_model_sha256=sha, gyro_mount="carriage_low_measured") is None
+    assert "gyro model" in odometry_table_problem(gyro, **kw, gyro_model_sha256="0" * 64, gyro_mount="carriage_low_measured")
+    assert "mount" in odometry_table_problem(gyro, **kw, gyro_model_sha256=sha, gyro_mount="legacy")
+    (tmp_path / "result.json").write_text(json.dumps({"arguments": {"perception_mount": "legacy"}}))
+    with pytest.raises(SystemExit, match="recorded with --perception-mount legacy"):
+        MODULE.age_command(gyro_args)
+
+
+def test_the_gyro_age_table_reads_quantized_runs_only(tmp_path):
+    from types import SimpleNamespace
+
+    import pytest
+
+    _team_spec_run(tmp_path, still_s=1.0)  # team_spec_typical_inl
+    with pytest.raises(SystemExit, match="reads team_spec_quantized runs"):
+        MODULE.age_command(SimpleNamespace(run=[tmp_path], draws=1, odometry_heading="gyro",
+                                           gyro_model=ROOT / "config/gyro_model_spec_typical.yaml",
+                                           gyro_mount="carriage_low_measured"))

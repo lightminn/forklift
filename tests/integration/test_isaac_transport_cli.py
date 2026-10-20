@@ -392,6 +392,9 @@ def test_slam_feedback_options_validate_before_startup(tmp_path) -> None:
         # SLAM localization plan L7: the bundle needs the SLAM link and the session's map id, and the id the bundle
         (["--slam-map-bundle", str(tmp_path)], "--slam-map-bundle requires --slam-feedback and --expected-map-id"),
         (["--expected-map-id", "a" * 64], "--expected-map-id requires --slam-map-bundle"),
+        # gyro-heading plan G2 (A): the gyro needs its model, the team encoders, the SLAM link and the camera mount
+        (["--odometry-heading", "gyro"], "--odometry-heading gyro requires --gyro-model"),
+        (["--gyro-model", str(tmp_path)], "--gyro-model and --gyro-fault-at require --odometry-heading gyro"),
     ):
         result = subprocess.run(
             [
