@@ -865,6 +865,92 @@ def test_u29_end_tick_record_cost_gate(tmp_path, monkeypatch):
     assert max(walls) <= 0.020, f"max {max(walls) * 1e3:.2f} ms over {reps}"
 
 
+def test_the_result_file_is_bounded_and_the_whole_clock_goes_with_the_records(tmp_path):
+    """Codex U29 implementation review P2-4: the result's clock had no bound (6,000 waits made 106 KB against D1's
+    64 KB, encoded on the control thread). The result file keeps the clock's summary; the records keep the clock."""
+    rt, core, order = ending(tmp_path)
+    core.commands.waits[:] = [[float(i), i + 0.5] for i in range(6000)]
+    rt.end_mission(15.0, "failed", "x")
+    rt.close()
+    folder = tmp_path / "missions" / "m1"
+    record = json.loads((folder / "result.json").read_text())
+    assert (folder / "result.json").stat().st_size <= 64 * 1024
+    assert record["clock_summary"] == {"pauses": 0, "pause_s": 0.0, "waits": 6000, "wait_s": 3000.0}
+    assert len(json.loads((folder / "records.json").read_text())["clock"]["waits"]) == 6000
+
+
+def test_a_result_over_its_bound_is_written_cut_down(tmp_path):
+    rt, core, order = ending(tmp_path)
+    rt.end_mission(15.0, "failed", "x" * 100_000)
+    rt.close()
+    path = tmp_path / "missions" / "m1" / "result.json"
+    record = json.loads(path.read_text())
+    assert path.stat().st_size <= 64 * 1024 and record["cut_from_bytes"] > 64 * 1024
+    assert record["result"]["mission_id"] == "m1" and record["result"]["outcome"] == "failed"
+
+
+def test_a_noted_result_pushed_out_of_the_book_is_counted_once(tmp_path):
+    """Codex U29 implementation review P2-3: a result whose error was shown, then pushed out of the newest 100,
+    left no trace in the message."""
+    from forklift_core.mission.results import ResultsBook
+
+    rt, core, order = ending(tmp_path)
+    rt.results = ResultsBook(keep=1)
+    rt.end_mission(15.0, "failed", "x")
+    rt._note_record_error(1, "records.json: OSError: full")
+    rt._add_result(mission_id="m2", outcome="failed", reason="y", started_s=None, ended_s=20.0, pallet_id=None,
+                   destination_id=None)
+    rt._note_record_error(1, "files unsettled after 30 s")  # a later error for the same result
+    rt._publish_missions()
+    assert rt.store.get("missions")[1]["record_errors_older"] == 1
+    rt.close()
+
+
+def test_the_session_end_waits_on_one_io_budget(tmp_path):
+    """Codex U29 implementation review P2-5: the runner's settle, the close's settle and the writer's close each
+    waited their own 30 s."""
+    import threading
+
+    rt, core, order = ending(tmp_path)
+    rt.io_budget_s = 0.3
+    gate = threading.Event()
+    rt.io.put_keyed(("stuck", 0), lambda: gate.wait(5.0) and [])
+    began = time.monotonic()
+    rt.settle_records()
+    rt.close()
+    assert time.monotonic() - began < 0.6
+    gate.set()
+
+
+def test_a_log_with_lost_lines_says_so_and_its_reader_refuses_it(tmp_path):
+    """Codex U29 implementation review P2-2: the counts were fixed before the queue drained, and a reader took a log
+    with lost lines as whole (bundle_coverage reads a missing TELEOP span as auto)."""
+    from forklift_core.live.spool import read_live_log
+
+    rt, core, order = ending(tmp_path)
+
+    def boom():
+        raise OSError("disk")
+
+    rt.io.put_line(boom, 1)
+    rt.close()
+    entries = read_live_log(tmp_path, allow_incomplete=True)
+    assert entries[0].get("log_writer") == "ordered"
+    assert entries[-1]["log_end"] == {"dropped_lines": 0, "line_errors": 1, "dropped_mission_files": 0,
+                                      "record_errors_older": 0}
+    with pytest.raises(ValueError, match="lost"):
+        read_live_log(tmp_path)
+
+
+def test_a_log_whose_end_summary_is_missing_is_refused(tmp_path):
+    from forklift_core.live.spool import read_live_log
+
+    (tmp_path / "live_log.jsonl").write_text('{"log_writer": "ordered"}\n{"event": "x"}\n')
+    with pytest.raises(ValueError, match="end"):
+        read_live_log(tmp_path)
+    assert len(read_live_log(tmp_path, allow_incomplete=True)) == 2
+
+
 def test_a_records_write_failure_reaches_the_result_when_its_log_line_fails(tmp_path):
     """Codex U29 review round 2 P2-2: the error went to the log first and a failing log write lost it; and
     (implementation review P3) the writer's own log line failing must not replace the file's error."""
