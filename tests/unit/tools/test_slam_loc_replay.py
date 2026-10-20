@@ -24,8 +24,9 @@ def _session(tmp_path):
     return run, bundle, live
 
 
-def _replies(path, ids, *, correction=(0.0, 0.0, 0.0)):
-    path.write_text("".join(json.dumps({"scan_id": i, "stamp_s": i / 10.0, "status": "processed",
+def _replies(path, ids, *, correction=(0.0, 0.0, 0.0), skipped=()):
+    path.write_text("".join(json.dumps({"scan_id": i, "stamp_s": i / 10.0,
+                                        "status": "skipped" if i in skipped else "processed",
                                         "map_from_odom": list(correction) if i == 3 else [0.0, 0.0, 0.0],
                                         "odom": [i * 0.1, 0.0, 0.0], "truth_base": [i * 0.1, 0.0, 0.0]}) + "\n"
                             for i in ids))
@@ -51,6 +52,25 @@ def test_a_replay_that_stopped_early_is_not_complete(tmp_path):
     _replies(tmp_path / "r.jsonl", [0])  # a prefix: one processed reply
     out = _eval(run, tmp_path / "r.jsonl", bundle, live)
     assert out.returncode == 1 and not json.loads(out.stdout)["complete"]
+
+
+def test_a_keyframe_that_should_have_a_pose_but_was_skipped_is_not_complete(tmp_path):
+    run, bundle, live = _session(tmp_path)
+    _replies(tmp_path / "r.jsonl", [0, 1, 3], skipped=(3,))
+    out = _eval(run, tmp_path / "r.jsonl", bundle, live)
+    assert out.returncode == 1 and not json.loads(out.stdout)["complete"]
+
+
+def test_bridge_records_missing_their_tail_are_refused(tmp_path):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import pytest
+    import slam_loc_replay_drive as drive
+
+    _, _, live = _session(tmp_path)
+    records = [{"scan_id": i, "stamp_s": i / 10.0} for i in range(5)]  # the runner sent five
+    with pytest.raises(SystemExit, match="one for one"):
+        drive.sent_ids(live, records)
+    assert drive.sent_ids(live, records[:4]) == [0, 1, 3]
 
 
 def test_the_localization_variant_closes_loops_over_short_links():

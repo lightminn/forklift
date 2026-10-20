@@ -32,12 +32,13 @@ ANG0, DANG = -np.pi, 2 * np.pi / 1600
 STD, CUT = 0.02, 0.06
 
 
-def sent_ids(bridge_records: Path) -> list[int]:
-    """The scan ids the live bridge sent to slam_toolbox, in order (start-up scans and keyframes)."""
+def sent_ids(bridge_records: Path, records: list) -> list[int]:
+    """The scan ids the live bridge sent to slam_toolbox, in order (start-up scans and keyframes). The bridge records
+    must be the runner's scans one for one -- same ids and stamps, none missing at the end (Codex P2)."""
     rows = [json.loads(line) for line in bridge_records.read_text().splitlines() if line]
-    ids = [r["scan_id"] for r in rows]
-    if ids != list(range(len(ids))):
-        raise SystemExit("the bridge records are not scans 0..n-1")
+    if [r["scan_id"] for r in rows] != [r["scan_id"] for r in records] or not all(
+            abs(a["stamp_s"] - b["stamp_s"]) < 1e-6 for a, b in zip(rows, records)):
+        raise SystemExit("the bridge records are not the runner's scans one for one (ids, stamps or a lost tail)")
     return [r["scan_id"] for r in rows if r["sent"] != "local"]
 
 
@@ -61,7 +62,7 @@ def main(argv=None) -> int:
         raise SystemExit("spool records are not scans 0..n-1 of the slam log")
     if not np.allclose([r["stamp_s"] for r in records], stamps, atol=1e-6):
         raise SystemExit("spool stamps differ from the slam log")
-    send = set(sent_ids(a.bridge_records))
+    send = set(sent_ids(a.bridge_records, records))
     key = "odom_base" if a.odom == "recorded" else "truth_base"
     print("config " + json.dumps({"run": str(a.run.resolve()), "noise_seed": a.noise_seed, "odom": a.odom,
                                   "until_s": a.until_s, "keyframes": len(send)}), flush=True)

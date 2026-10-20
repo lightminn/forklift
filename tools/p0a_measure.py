@@ -439,8 +439,9 @@ def age_command(args) -> dict:
     noise = odometry_noise_record(model)
     if regenerate is not None:
         noise.update(regenerated_from=source_model,
-                     draws="each draw counts the recorded wheel angles through another sensor unit's phases; "
-                     f"{regenerate} has no INL, so the draws repeat the same counts")
+                     draws="each draw counts the recorded wheel angles through another sensor unit's phases"
+                     + ("; team_spec_quantized has no INL, so the draws repeat the same counts"
+                        if regenerate == "team_spec_quantized" else ""))
     if gyro is not None:
         noise.update(odometry_heading="gyro", gyro_model_sha256=gyro_sha, gyro_mount=mount_name,
                      gyro_draws="each draw also draws another simulated gyro (seed 20000 + draw)")

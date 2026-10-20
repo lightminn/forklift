@@ -7,7 +7,8 @@ occupied cells (one cell dilated, forklift_core.localization.slam_map.endpoint_f
 Summaries by ``--bin-s`` of sim time (median and max position error, max yaw error, median endpoint fractions). The
 correction jumps: each processed reply's correction against the previous one, both composed with the same (this
 reply's) odometry -- the pose change the correction alone makes. Complete (exit 0) only when the replies are every
-scan the live bridge sent up to ``--until-s`` (ids and stamps), none failed and every value finite (Codex P2).
+scan the live bridge sent up to ``--until-s`` (ids and stamps), every one the live bridge expected a /pose for is
+processed (a start-up drop may be skipped), none failed and every value finite (Codex P2).
 
     python tools/slam_loc_replay_eval.py RUN_DIR REPLIES_JSONL BUNDLE BRIDGE_RECORDS [--until-s T] [--bin-s 100]
 """
@@ -54,11 +55,14 @@ def main(argv=None) -> int:
     rows, jumps = [], []
     replies = [json.loads(line) for line in a.replies.read_text().splitlines() if line]
     live = [json.loads(line) for line in a.bridge_records.read_text().splitlines() if line]
-    expected = [(r["scan_id"], r["stamp_s"]) for r in live if r["sent"] != "local" and r["stamp_s"] <= a.until_s]
+    sent = [r for r in live if r["sent"] != "local" and r["stamp_s"] <= a.until_s]
+    expected = [(r["scan_id"], r["stamp_s"]) for r in sent]
     got = [(r["scan_id"], r["stamp_s"]) for r in replies]
+    must = {r["scan_id"] for r in sent if r["sent"] == "expect_pose"}
     values = [v for r in replies for v in (*r["map_from_odom"], *r["odom"], *r["truth_base"])]
     complete = (len(got) == len(expected) and all(g[0] == e[0] and abs(g[1] - e[1]) < 1e-6 for g, e in zip(got, expected))
-                and not any(r["status"] == "failed" for r in replies) and all(math.isfinite(v) for v in values))
+                and not any(r["status"] == "failed" for r in replies) and all(math.isfinite(v) for v in values)
+                and all(r["status"] == "processed" for r in replies if r["scan_id"] in must))
     previous = None
     for r in replies:
         if r["status"] != "processed":
