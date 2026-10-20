@@ -355,17 +355,22 @@ class IsaacSlamBridge(Node):
 
     def on_map(self, msg: OccupancyGrid) -> None:
         loc = self.localization
-        if loc is not None and loc.map is not None:
-            return  # localization keeps the first /map after the first processed scan only (plan L3)
+        with self.cond:
+            if loc is not None and loc.map is not None:
+                return  # localization keeps the first /map after the first processed scan only (plan L3)
+            # decided at the entry (Codex S3 review P2): a map that came before the first processed reply is not
+            # adopted because the reply landed while it was being stored
+            eligible = loc is not None and loc.first_processed
         with self.map_lock:
             self._add_map(msg)
-        if loc is not None and loc.first_processed:
+        if eligible:
             info = msg.info
             grid = slam_map.Grid(np.asarray(msg.data, dtype=np.int8).reshape(info.height, info.width),
                                  (info.origin.position.x, info.origin.position.y, quaternion_yaw(info.origin.orientation)),
                                  float(info.resolution))
             with self.cond:
-                loc.map = grid
+                if loc.map is None:
+                    loc.map = grid
                 self.cond.notify_all()
 
     def _add_map(self, msg: OccupancyGrid) -> None:
@@ -497,7 +502,8 @@ class IsaacSlamBridge(Node):
                     status = "processed"
                     gate.processed(scan.stamp_s, scan.odom_from_base)
                     if loc is not None:
-                        loc.first_processed = True
+                        with self.cond:
+                            loc.first_processed = True
                         if startup_index in (5, 6, 7):
                             loc.add_bootstrap(scan, pose)
                         if startup_index == 7:

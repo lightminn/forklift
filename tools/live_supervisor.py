@@ -69,6 +69,8 @@ def _mark_crashed(port_file: Path, epoch: int, code: int, reason: str | None = N
     info.update(state="crashed", epoch=epoch, exit_code=code)
     if reason is not None:
         info["reason"] = reason
+    else:
+        info.pop("reason", None)  # an earlier epoch's reason is not this one's (Codex S3 review P3)
     tmp = port_file.with_name(port_file.name + ".tmp")
     tmp.write_text(json.dumps(info))
     os.replace(tmp, port_file)

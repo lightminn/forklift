@@ -3063,6 +3063,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["phase"] = "steering_probe_done"
         state["success"] = True
         return
+    # SLAM localization plan L4: the survey bundle this run localizes on -- its files hashed again against the
+    # session's map id, the run's seed, scene, input files and scene arguments against the survey's
+    # (slam_map_mismatch otherwise). Before the obstacle layer: its grid is the planner's static SLAM layer from the
+    # first plan on (Codex S3 review P2).
+    slam_bundle_ = None
+    if getattr(args, "slam_map_bundle", None) is not None:
+        from forklift_core.localization import slam_map as slam_map_module
+
+        try:
+            slam_bundle_ = slam_map_module.load_bundle(args.slam_map_bundle, args.expected_map_id)
+        except slam_map_module.MapBundleError as exc:
+            raise SessionFailure(str(exc)) from exc
+        mismatches_ = slam_map_module.run_mismatches(
+            slam_bundle_.manifest, seed=args.seed, scene_sha256=state.get("scene_sha256"),
+            arguments=state.get("arguments"),
+            input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
+                                  if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
+                                  else None)
+                          for name_ in slam_map_module.SHARED_INPUTS})
+        if mismatches_:
+            raise SessionFailure(f"{slam_map_module.MISMATCH}: " + "; ".join(mismatches_))
+        state["slam_map"] = {"mode": "localization", "map_id": slam_bundle_.map_id,
+                             "bundle": str(args.slam_map_bundle), "confirmed_by_bridge": False}
     obstacle = None  # the priority-5 obstacle layer
     if args.obstacle_layer is not None:
         import obstacle_layer as obstacle_module
@@ -3103,6 +3126,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "unpermitted": [],
             "min_allowed": {},
         }
+        if slam_bundle_ is not None and obstacle["layer"].memory is not None:
+            # SLAM localization plan L3: occupancy dated 1 s before the run's first stamp (0), so every live clear
+            # may remove it; set into the layer's own memory before any plan (a scratch copy inherits it)
+            grid_ = slam_bundle_.grid
+            obstacle["layer"].memory.set_slam(grid_.data, tuple(grid_.origin[:2]), grid_.resolution_m, grid_.origin[2],
+                                              stamp_s=-1.0, index=-1, after_scan_id=-1, stamp_ns=-1_000_000_000,
+                                              map_id=slam_bundle_.map_id)
+            obstacle["survey_map_id"] = slam_bundle_.map_id
         state["obstacle_layer"] = {
             "config": str(args.obstacle_layer),
             "act": bool(args.obstacle_act),
@@ -3991,17 +4022,9 @@ def drive(S, isaac) -> None:
         else:
             use_slam = False
             map_note = None
-            survey_ = slam_ref.get("bundle") if slam_ref is not None else None
-            if layer_.memory is not None and survey_ is not None:
-                # SLAM localization plan L3: the survey grid is the only static SLAM layer, set once with its
-                # occupancy dated 1 s before the run's first stamp (0), so every live clear may remove it; the
-                # bridge's latest_map.npz is not read.
-                if not obstacle.get("survey_grid_set"):
-                    grid_ = survey_.grid
-                    layer_.memory.set_slam(grid_.data, tuple(grid_.origin[:2]), grid_.resolution_m, grid_.origin[2],
-                                           stamp_s=-1.0, index=-1, after_scan_id=-1, stamp_ns=-1_000_000_000,
-                                           map_id=survey_.map_id)
-                    obstacle["survey_grid_set"] = True
+            if layer_.memory is not None and obstacle.get("survey_map_id") is not None:
+                # SLAM localization plan L3: the survey grid, set into the layer's memory when it was made, is the
+                # only static SLAM layer; the bridge's latest_map.npz is not read.
                 use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
             elif layer_.memory is not None and args.slam_map_dir is not None:
                 latest = args.slam_map_dir / "latest_map.npz"
@@ -4513,26 +4536,6 @@ def drive(S, isaac) -> None:
             dock = recorded_function(dock, "Planner", "dock", boundary)
         from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
 
-        # SLAM localization plan L4: the survey bundle this run localizes on -- its files hashed again against the
-        # session's map id, the run's seed and input files against the survey's (slam_map_mismatch otherwise).
-        slam_bundle_ = None
-        if getattr(args, "slam_map_bundle", None) is not None:
-            from forklift_core.localization import slam_map as slam_map_module
-
-            try:
-                slam_bundle_ = slam_map_module.load_bundle(args.slam_map_bundle, args.expected_map_id)
-            except slam_map_module.MapBundleError as exc:
-                raise SessionFailure(str(exc)) from exc
-            mismatches_ = slam_map_module.run_mismatches(
-                slam_bundle_.manifest, seed=args.seed,
-                input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
-                                      if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
-                                      else None)
-                              for name_ in slam_map_module.SHARED_INPUTS})
-            if mismatches_:
-                raise SessionFailure(f"{slam_map_module.MISMATCH}: " + "; ".join(mismatches_))
-            state["slam_map"] = {"mode": "localization", "map_id": slam_bundle_.map_id,
-                                 "bundle": str(args.slam_map_bundle), "confirmed_by_bridge": False}
         # The known start (odom = map = world); the plan's v3 state machine.
         slam_start = (
             scenario.start_rear.x_m,
@@ -5735,13 +5738,17 @@ def drive(S, isaac) -> None:
                                          f"not {slam['bundle'].map_id}")
                 # The odometry starts at the world start and map = world: the first correction is the identity
                 # within the start tolerance -- a bridge told another start pose would pass its own check there.
-                start_dx_, start_dy_, start_dyaw_ = (float(v) for v in reply.map_from_odom)
-                start_dyaw_ = math.atan2(math.sin(start_dyaw_), math.cos(start_dyaw_))
-                if math.hypot(start_dx_, start_dy_) > 0.10 or abs(start_dyaw_) > 0.05:
-                    raise SessionFailure(f"slam_not_localized: the start correction is ({start_dx_:.3f}, "
-                                         f"{start_dy_:.3f}, {start_dyaw_:.3f}), not within 0.10 m / 0.05 rad")
+                offset_ = abs(args.rear_axle_offset_m)
+                start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
+                               slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
+                at_ = compose(tuple(reply.map_from_odom), slam_odom_base())  # the map pose this reply gives now
+                start_dyaw_ = math.atan2(math.sin(at_[2] - start_base_[2]), math.cos(at_[2] - start_base_[2]))
+                start_off_ = math.hypot(at_[0] - start_base_[0], at_[1] - start_base_[1])
+                if start_off_ > 0.10 or abs(start_dyaw_) > 0.05:  # Codex S3 review P2: the pose, not map<-odom
+                    raise SessionFailure(f"slam_not_localized: the map pose at the start is {start_off_:.3f} m / "
+                                         f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
                 state["slam_map"]["confirmed_by_bridge"] = True
-                state["slam_map"]["start_correction"] = [start_dx_, start_dy_, start_dyaw_]
+                state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
             truth_yaw, _ = yaw_and_tilt(now_q)
             slam["records"].append(
                 {

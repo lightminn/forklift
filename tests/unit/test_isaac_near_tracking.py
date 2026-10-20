@@ -1164,3 +1164,19 @@ def test_the_slam_mode_and_map_are_compared_by_meaning_not_by_the_bundle_path(tm
     assert sorted(problems(mapping, on_a)) == ["arguments map_id differs from the measurement runs",
                                                "arguments slam_mode differs from the measurement runs"]
     assert "input_files" not in str(problems(on_a, on_a))  # the bundle folder is not an input file
+
+
+def test_the_d8b_reference_check_compares_the_slam_map_by_meaning_too(tmp_path):
+    """Codex S3 review P2: s4_drive_terms' reference check hashed the bundle folder as an input file."""
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "tools"))
+    import s4_drive_terms
+
+    run = {"arguments": {"slam_map_bundle": str(tmp_path), "expected_map_id": "a" * 64},
+           "slam_map": {"mode": "localization", "map_id": "a" * 64}, "slam_feedback": {"x": 1}}
+    elsewhere = {**run, "arguments": {"slam_map_bundle": str(tmp_path / "copy"), "expected_map_id": "a" * 64}}
+    other = {**run, "slam_map": {"mode": "localization", "map_id": "b" * 64}}
+    assert s4_drive_terms.reference_problems("k", run, elsewhere) == []
+    assert s4_drive_terms.reference_problems("k", run, other) == ["k: argument map_id differs from the D8b run"]

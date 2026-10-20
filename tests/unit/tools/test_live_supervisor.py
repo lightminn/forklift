@@ -203,3 +203,11 @@ def test_a_failed_process_keeps_its_own_code_and_its_written_reason(tmp_path):
                  exit_file="{epoch_dir}/run/exit_code", max_epochs=1)
     assert result["codes"] == [1]
     assert json.loads((tmp_path / "live_port.json").read_text())["reason"] == "slam_not_localized: fractions"
+
+
+def test_an_epoch_without_a_reason_does_not_show_the_previous_one(tmp_path):
+    """Codex S3 review P3: epoch 2's crash showed epoch 1's localization reason."""
+    result = run(tmp_path, writes_exit([1, 1], ["slam_not_localized: x", None], process_code=0),
+                 exit_file="{epoch_dir}/run/exit_code", max_epochs=2)
+    assert result["codes"] == [1, 1]
+    assert "reason" not in json.loads((tmp_path / "live_port.json").read_text())

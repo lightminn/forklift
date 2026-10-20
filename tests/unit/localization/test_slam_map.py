@@ -80,3 +80,37 @@ def test_readiness_needs_every_scan_on_the_walls_and_near_the_start_across_pi():
     assert not sm.localized([0.9, 0.79, 0.95], good, start)
     assert not sm.localized([0.9, 0.9, 0.9], good[:2] + [(1.2, 2.0, math.pi)], start)
     assert not sm.localized([], [], start)
+
+
+@pytest.mark.parametrize("manifest", ["null", "[]", '{"format": "slam_map_bundle/1"}'])
+def test_a_manifest_that_is_not_a_bundle_manifest_is_a_mismatch_not_a_crash(tmp_path, manifest):
+    """Codex S3 review P2: null or [] raised AttributeError, past the supervisor's and the bridge's reason paths."""
+    folder, _ = _bundle(tmp_path, _grid())
+    (folder / "manifest.json").write_text(manifest)
+    with pytest.raises(sm.MapBundleError, match="slam_map_mismatch"):
+        sm.load_bundle(folder)
+
+
+def test_a_grid_that_is_not_a_map_is_a_mismatch(tmp_path):
+    folder, manifest = _bundle(tmp_path, _grid())
+    np.savez(folder / "grid.npz", data=np.zeros(4, np.int8), origin=np.zeros(3), resolution_m=0.05)
+    hashes = {name: sm.file_sha256(folder / name) for name in sm.BUNDLE_FILES}
+    (folder / "manifest.json").write_text(json.dumps({**manifest, "files": hashes, "map_id": sm.map_id_of(hashes)}))
+    with pytest.raises(sm.MapBundleError, match="not a 2-D map"):
+        sm.load_bundle(folder)
+
+
+def test_another_scene_or_scene_argument_does_not_match_the_survey(tmp_path):
+    """Codex S3 review P2: the base scene file alone missed a referenced USD and the colliders."""
+    _, manifest = _bundle(tmp_path, _grid())
+    manifest["run"] = {"scene_sha256": {"scene.usda": "s", "props.usda": "p"}, "arguments": {"prism_colliders": True}}
+    same = {name: "h_" + name for name in sm.SHARED_INPUTS}
+    ok = dict(seed=0, input_sha256=same, scene_sha256={"scene.usda": "s", "props.usda": "p"},
+              arguments={"prism_colliders": True})
+    assert sm.run_mismatches(manifest, **ok) == []
+    assert sm.run_mismatches(manifest, **{**ok, "scene_sha256": {"scene.usda": "s", "props.usda": "q"}}) == [
+        "the scene's USD files differ from the survey's"]
+    assert sm.run_mismatches(manifest, **{**ok, "arguments": {"prism_colliders": False}}) == [
+        "argument prism_colliders differs from the survey's"]
+    assert "obstacle_layer differs from the survey's" in sm.run_mismatches(
+        manifest, **{**ok, "input_sha256": {**same, "obstacle_layer": "x"}})

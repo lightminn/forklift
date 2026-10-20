@@ -25,8 +25,11 @@ import numpy as np
 FORMAT = "slam_map_bundle/1"
 BUNDLE_FILES = ("map.posegraph", "map.data", "grid.npz")
 OCCUPIED = 65  # /map values: 100 occupied, 0 free, -1 unknown (the survey's own caster reads >= 65)
-# the input files a survey and a localization run must share (manifest "inputs", by content)
-SHARED_INPUTS = ("base_scene", "forklift_urdf", "factory_layout", "lidar")
+# the input files a survey and a localization run must share (manifest "inputs", by content): the scene, the truck,
+# the hall, the scan and the shared scan's noise (the obstacle layer config)
+SHARED_INPUTS = ("base_scene", "forklift_urdf", "factory_layout", "lidar", "obstacle_layer")
+# the run arguments that change what the LiDAR plane sees (manifest "run" "arguments")
+SHARED_ARGUMENTS = ("prism_colliders",)
 MAP_LOADED_MIN = 0.95  # plan L4: the /map after the first processed scan covers >= 95 % of the survey's occupied cells
 READY_MIN = 0.80  # plan L4: bootstrap scans 5-7 each put >= 80 % of their endpoints on the survey's walls
 START_POSITION_M, START_YAW_RAD = 0.10, 0.05
@@ -108,6 +111,8 @@ def load_bundle(folder: Path, expected_map_id: str | None = None) -> MapBundle:
         manifest = json.loads((folder / "manifest.json").read_text())
     except (OSError, ValueError) as exc:
         raise MapBundleError(f"{MISMATCH}: manifest unreadable ({exc})") from exc
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
+        raise MapBundleError(f"{MISMATCH}: the manifest is not a bundle manifest")
     if manifest.get("format") != FORMAT:
         raise MapBundleError(f"{MISMATCH}: format {manifest.get('format')!r}, not {FORMAT}")
     hashes = {}
@@ -124,20 +129,32 @@ def load_bundle(folder: Path, expected_map_id: str | None = None) -> MapBundle:
         raise MapBundleError(f"{MISMATCH}: map_id {actual[:12]} is not the session's {str(expected_map_id)[:12]}")
     try:
         grid = Grid.from_npz(folder / "grid.npz")
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         raise MapBundleError(f"{MISMATCH}: grid unreadable ({exc})") from exc
+    if (grid.data.ndim != 2 or not grid.data.size or len(grid.origin) != 3 or not all(map(math.isfinite, grid.origin))
+            or not (math.isfinite(grid.resolution_m) and grid.resolution_m > 0)):
+        raise MapBundleError(f"{MISMATCH}: the grid is not a 2-D map with an origin and a resolution")
     return MapBundle(folder, actual, manifest, grid)
 
 
-def run_mismatches(manifest: dict, *, seed, input_sha256: dict) -> list[str]:
-    """What of this run differs from the survey's: its seed and the shared input files (``input_sha256``: argument
-    name -> this run's file hash, None when the run names none)."""
+def run_mismatches(manifest: dict, *, seed, input_sha256: dict, scene_sha256: dict | None = None,
+                   arguments: dict | None = None) -> list[str]:
+    """What of this run differs from the survey's: its seed, its scene (every USD beside the base scene, by content),
+    the shared input files (``input_sha256``: argument name -> this run's file hash, None when the run names none) and
+    the arguments that change what the LiDAR plane sees."""
     out = []
     if manifest.get("seed") != seed:
         out.append(f"seed {seed} is not the survey's {manifest.get('seed')}")
-    inputs = manifest.get("inputs") or {}
+    run = manifest.get("run") if isinstance(manifest.get("run"), dict) else {}
+    if scene_sha256 is not None and run.get("scene_sha256") != scene_sha256:
+        out.append("the scene's USD files differ from the survey's")
+    survey_arguments = run.get("arguments") if isinstance(run.get("arguments"), dict) else {}
+    for name in SHARED_ARGUMENTS:
+        if arguments is not None and (arguments or {}).get(name) != survey_arguments.get(name):
+            out.append(f"argument {name} differs from the survey's")
+    inputs = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
     for name in SHARED_INPUTS:
-        want = (inputs.get(name) or {}).get("sha256")
+        want = (inputs.get(name) or {}).get("sha256") if isinstance(inputs.get(name), dict) else None
         if want is None or input_sha256.get(name) != want:
             out.append(f"{name} differs from the survey's")
     return out
