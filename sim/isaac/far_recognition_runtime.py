@@ -179,6 +179,8 @@ class FarRuntime:
         self.source = proposer if isinstance(proposer, LearnedSource) else None  # saves rgb and proposals
         self.pallet_depth_m, self.pallet_shape = float(pallet_depth_m), pallet_shape
         self.zone_centre_xy, self.zone_radius_m = tuple(float(v) for v in zone_centre_xy), float(zone_radius_m)
+        self.zone_initial = {"centre_xy": list(self.zone_centre_xy), "radius_m": self.zone_radius_m}
+        self.zone_changes: list = []  # [{"leg", "centre_xy", "radius_m"}]: the zone from that leg on
         self.camera_x_m, self.dt = float(camera_x_m), float(dt)
         self.frame_every, self.lag_steps, self.drive_frames = int(frame_every), int(lag_steps), bool(drive_frames)
         self.out_dir = out_dir
@@ -210,6 +212,13 @@ class FarRuntime:
         if best is None or abs(best[1] - t_s) > 0.5 * self.dt + 1e-9:
             return None
         return best
+
+    def set_zone(self, centre_xy, radius_m: float) -> None:
+        """The instruction's zone from the current leg on (the bottom-deck re-observation: the pallet judged, not the
+        pickup zone). Recorded by leg, so the recompute replays each stop with the zone it had."""
+        self.zone_centre_xy, self.zone_radius_m = tuple(float(v) for v in centre_xy), float(radius_m)
+        self.zone_changes.append({"leg": int(self.leg), "centre_xy": list(self.zone_centre_xy),
+                                  "radius_m": self.zone_radius_m})
 
     def instruction(self, map_from_base) -> dict:
         return B.instruction_from_zone(self.zone_centre_xy, self.zone_radius_m, map_from_base)
@@ -370,7 +379,7 @@ class FarRuntime:
         return {"frames": self.frame_records, "attempts": self.attempts, "leg_endings": self.leg_endings,
                 "lag_steps": self.lag_steps,
                 "frame_every": self.frame_every, "drive_frames": self.drive_frames,
-                "zone": {"centre_xy": list(self.zone_centre_xy), "radius_m": self.zone_radius_m},
+                "zone": dict(self.zone_initial), "zone_changes": list(self.zone_changes),
                 "camera_x_m": self.camera_x_m, "fork_spacing_m": self.setup.spacing_m,
                 "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape,
                 "proposer": {**(self.proposer_record or {"kind": "oracle"}),

@@ -842,8 +842,11 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     # The release and the stand, shared with the S4c-3 realignment (the release half is _release_reproject since
     # plan 2026-10-19 task 4 shares it with the bottom-deck side legs).
     assert "self._release_reproject(now_s, hold_event)" in functions["release_and_stand"]
+    # the grid re-projection is _reproject_after_release, called from _release_reproject (the bottom-deck
+    # re-observation shares it)
+    assert "obstacle['layer'].refresh(" in functions["_reproject_after_release"]
     shared = functions["_release_reproject"] + functions["release_and_stand"]
-    order = ["self.release_slam(", "obstacle['layer'].refresh(", "carried(obstacle['pickup_estimate'])",
+    order = ["self.release_slam(", "self._reproject_after_release(", "carried(obstacle['pickup_estimate'])",
              "near['retry_stand'] = True"]
     positions = [shared.index(o) for o in order]
     assert positions == sorted(positions), order
@@ -864,7 +867,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     # What (x) judges by: each frame's hold, the re-projection, and the re-observation as
     # placed with the target the planner used.
     assert "'episode': near['episode']" in functions["feed_near_frame"]
-    assert "'reprojected': reprojected_" in shared and "reprojected_ = {" in shared
+    assert "'reprojected': reprojected_" in shared and "reprojected_ = self._reproject_after_release(" in shared
     assert shared.index("applied_before_ = [") < shared.index("self.release_slam(")
     moved = CORE.read_text()  # the observation's handling moved to the mission core (M-a1 slice 4b-iv)
     placed = moved.index("Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.")
@@ -982,7 +985,8 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     source = SCRIPT.read_text()
     tree = ast.parse(source)
     functions = runner_and_core_functions(tree)
-    shared = functions["_release_reproject"] + functions["release_and_stand"]  # the release half shared (task 4)
+    shared = (functions["_release_reproject"] + functions["_reproject_after_release"]
+              + functions["release_and_stand"])  # the release half shared (task 4), its grid half apart
     for needed in ("self.release_slam(", "obstacle['layer'].refresh(", "carried(pocket['planning_pickup'])",
                    "near['retry_stand'] = True", "'applied_before': applied_before_"):
         assert needed in shared, needed
@@ -1105,10 +1109,11 @@ def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     import re
 
     source = SCRIPT.read_text()
-    assert re.search(r'state\.get\("near_capture", \{\}\)\.get\("status"\) != "pending"\s+and not core\.bottom_deck_leg_active\(\)\)',
+    assert re.search(r'state\.get\("near_capture", \{\}\)\.get\("status"\) != "pending"\s+and not core\.bottom_deck_side_leg\(\)\)',
                      source)
-    assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_leg_active():' in source
-    arrival = re.search(r'if args\.use_perception and ms\.phase == "observe":\s+if core\.bottom_deck_leg_active\(\):', source)
+    assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_side_leg():' in source
+    # the return to the far stand is a far observation leg: its arrival is the ordinary capture
+    arrival = re.search(r'if args\.use_perception and ms\.phase == "observe":\s+if core\.bottom_deck_side_leg\(\):', source)
     assert arrival
     block = source[arrival.start(): arrival.start() + 1000]
     assert block.index("core.bottom_deck_capture(t, rear, step)") < block.index("elif live is not None and core.jobs")
@@ -1119,6 +1124,8 @@ def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     replan = source.index("replan_tick_ = core.blocked_replan(")
     assert stop.search(source, replan).start() < replan + 300
     assert source.count('getattr(succeeded_, "handled", False)') == 2  # the batch and the live observation paths
+    # a re-observation capture refused by name ends the loop (not the bare require it was)
+    assert re.search(r'if getattr\(captured_, "refused", False\):\s+break', source)
 
 
 def test_a_grounded_urdf_needs_the_grounded_article_declared(tmp_path):
@@ -1144,3 +1151,17 @@ def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
     assert "device_id=args.recognition_device_id" in block
     assert 'far_learned["active_providers"] = far_learned["worker"].providers()' in block
     assert 'atexit.register(far_learned["worker"].close)' in block
+
+
+def test_the_far_zone_change_is_saved_into_the_run_state_when_it_is_made():
+    """Codex ecf4be5 P2: a run that ends after the zone is narrowed but before the next stop still records the
+    change (the state's recognition summary is refreshed by the zone hook, not only by a stop)."""
+    import re
+
+    source = SCRIPT.read_text()
+    hook = re.search(r"def far_recognition_zone_hook\(centre_, radius_\):(.*?)\n    def ", source, re.S)
+    assert hook is not None
+    body = hook.group(1)
+    assert body.index("far_runtime.set_zone(centre_, radius_)") < body.index(
+        'state.setdefault("recognition", {}).update(far_runtime.summary())')
+    assert "far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None," in source

@@ -1,5 +1,6 @@
 """The far recognition's runner side on the CPU rig (docs/plans/2026-10-18-isaac-recognition-far-capture.md)."""
 import importlib.util
+import json
 import math
 from dataclasses import replace
 from pathlib import Path
@@ -386,3 +387,46 @@ def test_rerunning_the_model_recomputes_the_decision_not_only_the_numbers(tmp_pa
     assert [RC.differences(*p) for p in same] == [[]]
     flipped = RC.recompute(tmp_path, recognition=summary, model=_DepthModel(0.49975))
     assert any(RC.differences(*p) for p in flipped)
+
+
+def test_a_zone_narrowed_for_a_later_leg_is_recorded_and_recomputed_per_leg(tmp_path):
+    """Plan 2026-10-19 (the bottom-deck re-observation): the zone becomes the judged pallet's centre for the legs
+    after the change; the summary keeps the change by leg and the recompute replays every stop with its zone."""
+    from tools import recompute_far_recognition as RC
+
+    run = _runtime(out_dir=tmp_path / "recognition")
+    xs = _leg()
+    _drive(run, 0, xs)
+    obs0, rec0 = _stop(run, xs)
+    run.set_zone(PALLET[:2], 0.3)
+    assert run.zone_radius_m == 0.3 and run.zone_changes == [{"leg": 1, "centre_xy": list(PALLET[:2]),
+                                                             "radius_m": 0.3}]
+    _drive(run, 0, xs)
+    obs1, rec1 = _stop(run, xs)
+    assert obs1.status == "valid"
+    summary = run.summary()
+    assert summary["zone"]["radius_m"] == 0.6 and summary["zone_changes"][0]["leg"] == 1  # the first zone kept
+    (tmp_path / "result.json").write_text(json.dumps({"recognition": summary}))
+    pairs = RC.recompute(tmp_path)
+    assert len(pairs) == 2 and all(a.get("status") == b.get("status") for a, b in pairs)
+
+
+def test_the_recompute_needs_the_zone_change_to_match_a_stop_the_narrowed_zone_turns_away(tmp_path):
+    """Codex ecf4be5 P2: a zone moved 0.4 m off the pallet with radius 0.3 m turns the second stop away; the
+    recompute matches only with the recorded change, and without it reads the first zone and selects again."""
+    from tools import recompute_far_recognition as RC
+
+    run = _runtime(out_dir=tmp_path / "recognition")
+    xs = _leg()
+    _drive(run, 0, xs)
+    obs0, _ = _stop(run, xs)
+    assert obs0.status == "valid"
+    run.set_zone((PALLET[0] + 0.4, PALLET[1]), 0.3)
+    _drive(run, 0, xs)
+    obs1, _ = _stop(run, xs)
+    assert obs1.status != "valid"
+    summary = run.summary()
+    (tmp_path / "result.json").write_text(json.dumps({"recognition": summary}))
+    assert all(not RC.differences(a, b) for a, b in RC.recompute(tmp_path))
+    stale = {**summary, "zone_changes": []}
+    assert any(RC.differences(a, b) for a, b in RC.recompute(tmp_path, recognition=stale))

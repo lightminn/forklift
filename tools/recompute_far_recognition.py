@@ -90,8 +90,13 @@ def recompute(run_dir: Path, *, recognition: dict | None = None, model=None) -> 
     far = runtime.far
     far.start_leg()
     out, attempts, leg = [], iter(rec["attempts"]), 0
+    changes = sorted(rec.get("zone_changes") or [], key=lambda c: c["leg"])
     for path in sorted((run_dir / "recognition").glob("frame_*.npz")):
         z = np.load(path)
+        for change in changes:  # the zone a leg had (a re-observation narrows it to the pallet judged)
+            if change["leg"] <= leg:
+                runtime.zone_centre_xy = tuple(change["centre_xy"])
+                runtime.zone_radius_m = float(change["radius_m"])
         scene, ids, odom = _scene(z), np.asarray(z["instance_ids"]), tuple(float(v) for v in z["odom"])
         if replay is not None:
             if "proposal_masks" not in z.files:

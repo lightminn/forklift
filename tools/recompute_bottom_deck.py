@@ -92,8 +92,8 @@ def recompute(run: Path) -> dict:
                 if record and params_digest(params_of(str(z["params"]))) != record.get("params_sha256"):
                     problems.append(f"{a['npz']}: the judge's parameters differ from the record's digest")
                 pose = tuple(float(v) for v in z["target_map"])
-                for r in releases:  # the releases after this capture carried the target the record holds
-                    if r["after_attempts"] >= n:
+                for r in releases:  # releases after this capture that carried the target (PR #68 records did)
+                    if r.get("carried", True) and r["after_attempts"] >= n:
                         pose = compose(tuple(r["frame_change"]), pose)
                 carried.append((n, pose))
                 if int(z["face"]) != int(a["face"]):
