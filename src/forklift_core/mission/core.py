@@ -2804,16 +2804,17 @@ class MissionCore:
         options, hooks, geometry = self.options, self.hooks, self.geometry
         grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
         planner_config, scenario = options.planner_config, options.scenario
-        pickup_bounds = getattr(self, "bottom_deck_bounds", options.pickup_bounds)  # the side stage's bounds
+        side_ = getattr(self, "bottom_deck_bounds", None)  # the side stage's bounds (also before a leg is active)
+        observe_bounds_ = side_ if side_ is not None else self.observe_bounds()
         target = PlanningPose(*(self._bottom_deck_stand(face).rear if goal is None else goal))
         start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
         plan_ = plan_observation_leg(grid_world(scenario), target, planner_config, geometry=geometry,
-                                     start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                                     start_rear=start, pickup_bounds=observe_bounds_, extended=False,
                                      **grid_kwargs("observe"))
         if not plan_.success:
             tight = replace(planner_config, clearance_m=0.0)
             plan_ = plan_observation_leg(grid_world(scenario), target, tight, geometry=geometry,
-                                         start_rear=start, pickup_bounds=pickup_bounds, extended=False,
+                                         start_rear=start, pickup_bounds=observe_bounds_, extended=False,
                                          **grid_kwargs("observe"))
         return plan_
 
@@ -2895,7 +2896,7 @@ class MissionCore:
         # as a wall, and a side stand of a pallet near its edge lies outside it. Every side plan, retreat, recovery
         # and cusp check uses these; the last stand must lie in the zone (with the next planner's start margin) so
         # the mission planned after the side legs starts inside it.
-        zone_, fp_ = self.options.pickup_bounds, self.geometry.unloaded_footprint
+        zone_, fp_ = self.observe_bounds(), self.geometry.unloaded_footprint  # the batch zone; live: the hall
         margin_ = min(float(self.options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
         in_zone_ = {f: zone_ is None or bottom_deck_legs.inside(zone_, stands_[f].rear, fp_, margin_) for f in order_}
         if target_["axis"] == "x":
@@ -3053,7 +3054,7 @@ class MissionCore:
         if verdict != "present":
             return self._bottom_deck_refuse(t, "no_bottom_deck" if verdict == "absent" else "bottom_deck_unobserved",
                                             rear)
-        zone_ = options.pickup_bounds
+        zone_ = self.observe_bounds()
         margin_ = min(float(options.planner_config.clearance_m), float(self.geometry.approach_gap_m) / 2)
         if zone_ is not None and not bottom_deck_legs.inside(zone_, rear, self.geometry.unloaded_footprint, margin_):
             # Where the truck actually stands after the last capture and its release (Codex A'): the mission is
@@ -4182,9 +4183,6 @@ class MissionCore:
         grid_world = self.hooks.grid_world
         ms = self.ms
         obstacle = self.obstacle
-        pickup_bounds = self.options.pickup_bounds
-        if self.bottom_deck_leg_active():
-            pickup_bounds = getattr(self, "bottom_deck_bounds", pickup_bounds)  # as the side legs were planned
         pickup_zone = self.options.pickup_zone
         scenario = self.options.scenario
         from forklift_core.planning.grid_collision import FootprintCollisionChecker as GridChecker
@@ -5763,7 +5761,11 @@ class MissionCore:
     def observe_bounds(self):
         """The bounds of the observation travel (persistent console plan D2): a live run plans it in the hall
         (``options.observe_bounds`` None) wherever the operator left the truck; a batch run's options have none, so
-        its observation keeps the pickup bounds."""
+        its observation keeps the pickup bounds. On a bottom-deck side leg, the side stage's own bounds (plan 2026-10-19
+        task 5): every check of that leg -- its replans and the cusp check -- sees the bounds it was planned in."""
+        side_ = getattr(self, "bottom_deck_bounds", None)
+        if side_ is not None and self.bottom_deck_leg_active():
+            return side_
         options = self.options
         return options.observe_bounds if hasattr(options, "observe_bounds") else options.pickup_bounds
 

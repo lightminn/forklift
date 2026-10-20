@@ -502,9 +502,14 @@ def test_a_truck_left_outside_the_zone_after_the_side_legs_is_refused_not_planne
     assert w.deck["refused"]["reason"] == "side_stage_outside_zone" and "plan_transport" not in w.names()
 
 
-def test_the_cusp_check_on_a_side_leg_uses_the_side_bounds():
-    import inspect
-
-    source = inspect.getsource(MissionCore.cusp_leg_checker)
-    assert 'pickup_bounds = getattr(self, "bottom_deck_bounds", pickup_bounds)' in source
-    assert source.index("if self.bottom_deck_leg_active():") < source.index("leg_obstacles(")
+def test_the_observation_bounds_are_the_side_bounds_while_a_side_leg_drives():
+    # every check of a side leg (its replans, the cusp check through observe_bounds) sees the bounds it was planned
+    # in; before and after the side stage the observation bounds are the zone again (found merging main, where the
+    # cusp check moved to observe_bounds())
+    w = World(zone=ZONE, pickup=SEED0, verdicts=["present", "present"])
+    assert w.core.observe_bounds() == ZONE
+    w.begin()
+    assert w.core.bottom_deck_leg_active() and w.core.observe_bounds() == Bounds(**w.deck["bounds"])
+    w.arrive()
+    w.arrive(30.0)
+    assert not w.core.bottom_deck_leg_active() and w.core.observe_bounds() == ZONE
