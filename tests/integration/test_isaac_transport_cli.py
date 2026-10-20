@@ -1141,3 +1141,17 @@ def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
     assert "device_id=args.recognition_device_id" in block
     assert 'far_learned["active_providers"] = far_learned["worker"].providers()' in block
     assert 'atexit.register(far_learned["worker"].close)' in block
+
+
+def test_the_far_zone_change_is_saved_into_the_run_state_when_it_is_made():
+    """Codex ecf4be5 P2: a run that ends after the zone is narrowed but before the next stop still records the
+    change (the state's recognition summary is refreshed by the zone hook, not only by a stop)."""
+    import re
+
+    source = SCRIPT.read_text()
+    hook = re.search(r"def far_recognition_zone_hook\(centre_, radius_\):(.*?)\n    def ", source, re.S)
+    assert hook is not None
+    body = hook.group(1)
+    assert body.index("far_runtime.set_zone(centre_, radius_)") < body.index(
+        'state.setdefault("recognition", {}).update(far_runtime.summary())')
+    assert "far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None," in source

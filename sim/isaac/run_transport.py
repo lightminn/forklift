@@ -4887,6 +4887,12 @@ def drive(S, isaac) -> None:
         state.setdefault("recognition", {}).update(far_runtime.summary())
         return observation_, record_
 
+    def far_recognition_zone_hook(centre_, radius_):
+        """The bottom-deck re-observation's zone (the pallet judged). The run state is refreshed here too, so a run
+        that ends before the next stop still records the change (Codex ecf4be5 P2)."""
+        far_runtime.set_zone(centre_, radius_)
+        state.setdefault("recognition", {}).update(far_runtime.summary())
+
     def save_npz_at_output(name, **arrays):
         """A diagnostic dump under the run's output (a subfolder such as bottom_deck/ is made on first use)."""
         (args.output / name).parent.mkdir(parents=True, exist_ok=True)
@@ -4975,8 +4981,7 @@ def drive(S, isaac) -> None:
             save_capture=save_capture,
             # The far recognition's decision (--recognition far), None otherwise.
             far_recognition=far_recognition_hook if far_runtime is not None else None,
-            far_recognition_zone=(lambda centre_, radius_: far_runtime.set_zone(centre_, radius_))
-            if far_runtime is not None else None,
+            far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None,
             # M-a1 slice 5: the release at a stop, the measured steering.
             steering_position=lambda: robot.get_joint_positions()[steers],
             # M-a1 slice 6d: the near field's mission side (near_tick, the correction redraws, installs, retry).
