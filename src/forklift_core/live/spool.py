@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core.live.io_writer import Yielder, free_gradually
+
 ERRORS_KEPT = 10  # the last write errors kept (with the total count): a failing disk does not grow the list
 
 
@@ -56,6 +58,7 @@ class RecordSpool:
         self._running.set()
         self._last = 0.0
         self._cuts, self._cut_wall_max = 0, 0.0
+        self._yielder = Yielder()
         self._thread = threading.Thread(target=self._write_loop, name="record-spool", daemon=True)
         self._thread.start()
 
@@ -132,6 +135,9 @@ class RecordSpool:
             except (OSError, TypeError, ValueError) as exc:
                 ok = False
                 error = f"{name}: {type(exc).__name__}: {exc}"
+            holder = [payload]
+            del payload
+            free_gradually(holder, self._yielder)  # plan U29: a chunk freed in one go held the lock against control
             with self._cond:
                 self._inflight = None
                 self._unwritten[cut_no] -= 1
@@ -155,7 +161,12 @@ class RecordSpool:
         path = folder / f"{number:06d}.{kind}"
         tmp = folder / f"{number:06d}.{kind}.tmp"
         if kind == "jsonl":
-            tmp.write_text("".join(json.dumps(item, default=_jsonable) + "\n" for item in payload))
+            # Plan U29: streamed line by line, the lock handed to the control thread now and then (one whole-chunk
+            # string held it against the control thread)
+            with open(tmp, "w", encoding="utf-8") as handle:
+                for item in payload:
+                    handle.write(json.dumps(item, default=_jsonable) + "\n")
+                    self._yielder.maybe()
         else:
             with open(tmp, "wb") as handle:
                 np.savez(handle, **{key: np.asarray(values) for key, values in payload.items()})
@@ -275,12 +286,18 @@ def load_slam_log(run, *, allow_incomplete: bool = False) -> dict:
 def read_live_log(run, *, allow_incomplete: bool = False) -> list[dict]:
     """A live run's ``live_log.jsonl`` entries, oldest first across its rolled files (``.N`` … ``.1``, then the
     current one). Refused when files rolled off (``live_log.index.json``: more rotations than kept), since what is
-    left would read as the whole session; and, for a log made by the ordered writer (its first line says
-    ``log_writer``, plan U29), when its end summary (``log_end``) is missing or counts lost lines -- unless
-    ``allow_incomplete``. A log from before the writer has neither and is read as it is."""
+    left would read as the whole session; when rolled parts lie there without the index (its write failed: the
+    current part alone would read as a whole old log); when an end summary (``log_end``, plan U29) counts lost lines;
+    and, for a log made by the ordered writer (its first line says ``log_writer``), when that summary is missing --
+    the last three unless ``allow_incomplete``. A log from before the writer has neither and is read as it is."""
     run = Path(run)
     index = run / "live_log.index.json"
     parts = [run / "live_log.jsonl"]
+    if not index.exists() and any(run.glob("live_log.jsonl.[0-9]*")):
+        if not allow_incomplete:
+            raise ValueError(f"{run}: rolled live log parts without live_log.index.json (its write failed)")
+        rolled = sorted(run.glob("live_log.jsonl.[0-9]*"), key=lambda p: -int(p.suffix[1:]))
+        parts = rolled + parts
     if index.exists():
         info = json.loads(index.read_text())
         if info["rotations"] > info["keep"]:
@@ -291,11 +308,13 @@ def read_live_log(run, *, allow_incomplete: bool = False) -> list[dict]:
         if missing:
             raise ValueError(f"{run}: live log parts missing: {missing}")
     entries = [json.loads(line) for part in parts if part.exists() for line in part.read_text().splitlines() if line]
-    if allow_incomplete or not any(e.get("log_writer") == "ordered" for e in entries[:1]):
+    if allow_incomplete:
         return entries
     end = next((e["log_end"] for e in reversed(entries) if "log_end" in e), None)
     if end is None:
-        raise ValueError(f"{run}: the live log has no end summary (the session did not close its writer)")
+        if any(e.get("log_writer") == "ordered" for e in entries[:1]):
+            raise ValueError(f"{run}: the live log has no end summary (the session did not close its writer)")
+        return entries  # a log from before the writer
     if end.get("dropped_lines") or end.get("line_errors"):
         raise ValueError(f"{run}: the live log lost lines ({end['dropped_lines']} dropped, {end['line_errors']} "
                          "failed)")

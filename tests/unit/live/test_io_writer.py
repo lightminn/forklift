@@ -114,3 +114,59 @@ def test_the_pieced_encoding_is_the_one_shot_encoding():
                          "n": None, "nested": [{"x": [1, 2, {"y": "z"}]}] * 700, "empty": [], "d": {}},
                "obstacle": {}, "pocket": {"t": (1, 2)}}
     assert "".join(encode_in_pieces(records, default, piece_items=64)) == json.dumps(records, default=default)
+
+
+def test_a_disposed_value_is_let_go_off_the_caller_thread_after_its_delay():
+    """Codex U29 implementation review round 2 P2-3: records a full writer refused were freed on the control thread
+    (120,000 rows: 31 ms). The writer's disposer lets them go on its own thread, a delay after the hand-over, so the
+    caller's own references are gone by then."""
+    freed = []
+
+    class Tracked:
+        def __del__(self):
+            freed.append(threading.current_thread().name)
+
+    w = OrderedWriter(dispose_after_s=0.05)
+    w.dispose([Tracked()])
+    time.sleep(0.01)
+    assert freed == []  # not before its delay
+    deadline = time.monotonic() + 5.0
+    while not freed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert freed == ["live-io-free"]
+    w.close(5.0)
+
+
+def test_a_value_is_freed_gradually_and_a_shared_part_is_left_alone():
+    """Codex U29 implementation review round 2: freeing a large record in one go held the interpreter lock (57 ms
+    late wake-ups of the control thread in the gate). Only containers nothing else holds are emptied, a bit at a time;
+    a part shared with live code is only let go."""
+    from forklift_core.live.io_writer import free_gradually
+
+    shared = {"keep": [1, 2, 3]}
+    value = {"rows": [[k, k + 0.5] for k in range(5000)], "shared": shared, "t": ([1], [2])}
+    holder = [value]
+    del value
+    free_gradually(holder)
+    assert holder == [] and shared == {"keep": [1, 2, 3]}
+
+
+def test_the_pieces_stream_to_the_file_atomically(tmp_path):
+    import json
+
+    from forklift_core.live.io_writer import encode_in_pieces, write_pieces_atomic
+
+    value = {"rows": [[k, k * 0.5] for k in range(3000)]}
+    size = write_pieces_atomic(tmp_path / "r.json", encode_in_pieces(value, str))
+    assert json.loads((tmp_path / "r.json").read_text()) == value and size == (tmp_path / "r.json").stat().st_size
+    assert not (tmp_path / "r.json.tmp").exists()
+
+
+def test_the_yielder_sleeps_only_after_its_work_time():
+    from forklift_core.live.io_writer import Yielder
+
+    y = Yielder(work_s=10.0, rest_s=0.5)
+    began = time.perf_counter()
+    for _ in range(1000):
+        y.maybe()
+    assert time.perf_counter() - began < 0.1

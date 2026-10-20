@@ -23,7 +23,7 @@ import numpy as np
 
 from console.live.server import LiveServer, MediaStore, camera_item, grid_item, scan_item, write_port_file
 from console.vehicle_outline import DLS08_MEASURED_CHASSIS
-from forklift_core.live.io_writer import OrderedWriter, encode_in_pieces
+from forklift_core.live.io_writer import OrderedWriter, encode_in_pieces, write_pieces_atomic
 from forklift_core.live.link import Channels, Link
 from forklift_core.live.pacing import Pacer
 from forklift_core.mission.commands import FINAL, Context
@@ -153,10 +153,14 @@ class LiveRuntime:
         """Hand a mission's files to the writer: ``missions/<id>/result.json`` (``result``, its text -- encoded by
         the caller, so a dict the caller keeps cannot change it in the queue) and
         ``records.json`` (the mission's records, handed over at its end -- its own, moved out of the core, so nothing
-        changes them meanwhile). Each is written to a temporary file and renamed. A failure comes back as an outcome,
-        noted on result ``seq`` at the next tick start (plan U29); ``False``: the writer is full, nothing was
-        handed over (the caller marks it)."""
+        changes them meanwhile). Each is written to a temporary file and renamed; the records are streamed in pieces
+        and then go to the writer's disposer, freed there a bit at a time (U29: the control thread neither encodes
+        nor frees them, and neither holds the interpreter lock long against it). A failure comes back as an outcome,
+        noted on result ``seq`` at the next tick start; ``False``: the writer is full, nothing was written (the
+        records go to the disposer; the caller marks the result)."""
         folder = self.output / "missions" / mission_id
+        box = [records]
+        del records
 
         def write() -> list:
             errors = []
@@ -169,23 +173,25 @@ class LiveRuntime:
                     _write_atomic(folder / "result.json", result)
                 except OSError as exc:
                     errors.append(f"result.json: {type(exc).__name__}: {exc}")
-            if records:
+            if box[0]:
                 start = self.clock()
                 try:
-                    text = "".join(encode_in_pieces(records, _jsonable))  # the lock given back between pieces
-                    _write_atomic(folder / "records.json", text)
+                    size = write_pieces_atomic(folder / "records.json", encode_in_pieces(box[0], _jsonable))
                 except (OSError, TypeError, ValueError) as exc:
                     errors.append(f"records.json: {type(exc).__name__}: {exc}")
                 else:
-                    # U29: when it ran on the tick trace's clock (it holds the interpreter lock against the control
-                    # thread while it encodes) and its size; the writer owns the log file
-                    self._append_quietly({"archive": {"mission_id": mission_id, "bytes": len(text.encode()),
+                    # U29: when it ran on the tick trace's clock and its size; the writer owns the log file
+                    self._append_quietly({"archive": {"mission_id": mission_id, "bytes": size,
                                                       "start_mono": start, "end_mono": self.clock()}})
+            self.io.dispose(box.pop())
             if errors:
                 self._append_quietly({"archive_error": errors, "mission_id": mission_id})
             return errors
 
-        return self.io.put_keyed(seq if seq is not None else ("archive", mission_id), write)
+        if self.io.put_keyed(seq if seq is not None else ("archive", mission_id), write):
+            return True
+        self.io.dispose(box.pop())  # refused: freed on the disposer, not on this thread
+        return False
 
     def _append_quietly(self, entry: dict) -> None:
         """The writer thread's own log line: its failure is counted, never put in place of the job's outcome."""
@@ -401,6 +407,7 @@ class LiveRuntime:
         if not self.archive(mission_id, records, entry["seq"], result):
             entry = self.results.note(entry["seq"], record_error=f"result.json, records.json: dropped (writer full, "
                                                                  f"{MISSION_FILES_PENDING} pending)")
+        del records  # the writer or its disposer frees them (Codex U29 implementation review round 2 P2-3)
         self._publish_missions()
         self.log({"mission_end": entry, "tick_t": t, **extra})
         done = time.perf_counter()
