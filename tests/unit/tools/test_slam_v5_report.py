@@ -21,7 +21,8 @@ def test_keyframes_are_windowed_by_the_runner_s_wall_clock_and_only_processed_on
     assert all(abs(w["max_s"] - 0.05) < 1e-12 for w in windows)
 
 
-def _session(tmp_path, *, hours=2.0, gap_window=None, control=None, ends=None, drop_result=None, wall=None):
+def _session(tmp_path, *, hours=2.0, gap_window=None, control=None, ends=None, drop_result=None, wall=None,
+             untimed=False):
     run = tmp_path / "run"
     (run / "missions").mkdir(parents=True)
     t = 0.0
@@ -31,6 +32,8 @@ def _session(tmp_path, *, hours=2.0, gap_window=None, control=None, ends=None, d
             records.append({"status": "processed", "queued_mono": 1000.0 + t, "slam_wall_s": 0.05 if wall is None
                             else wall(t)})
         t += 10.0
+    if untimed:
+        records[-1]["slam_wall_s"] = float("nan")  # past the last whole window
     rows = control or [[i, 1.0, 2.0, 0.1, 1.01, 2.0, 0.11] for i in range(100)]
     spool = RecordSpool(run / "spool", interval_s=1.0)
     spool.register("slam.records", records)
@@ -62,10 +65,17 @@ def test_a_clean_two_hour_session_passes(tmp_path):
                + [("m8", "failed", "Pallet missed the green destination center", 0.20)]), "deliveries"),
     (dict(drop_result="m3"), "missions"),  # a mission the log ended with no result file
     (dict(ends=[("m%d" % i, "done", None, 0.02) for i in range(1, 7)]), "missions"),  # six done
+    (dict(ends=[("m%d" % i, "done", None, 0.02) for i in range(1, 7)] + [("m7", "done", None, None)]), "deliveries"),
+    (dict(untimed=True), "keyframe"),
 ])
 def test_what_v5_does_not_accept(tmp_path, kw, check):
     out = v5.report(_session(tmp_path, **kw))
     assert not out["ok"] and not out["checks"][check]["ok"]
+
+
+def test_the_hours_asked_for_are_covered_not_rounded(tmp_path):
+    out = v5.report(_session(tmp_path), min_hours=2.2)  # 2 h of keyframes: 4 windows, 2.2 h needs 5
+    assert out["checks"]["windows"]["need"] == 5 and not out["checks"]["windows"]["ok"]
 
 
 def test_a_control_chunk_missing_from_the_spool_is_refused(tmp_path):

@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -98,16 +99,20 @@ def report(run: Path, min_done: int = 7, min_hours: float = 2.0) -> dict:
     failure = result.get("failure_reason") or ""
     records = load_list(run / "spool", "slam.records")
     control = load_list(run / "spool", "slam.control")  # its manifest count checked, as the records' are
-    processed = [float(r["slam_wall_s"]) for r in records if r.get("status") == "processed" and
-                 r.get("slam_wall_s") is not None]
+    # every processed keyframe's bridge time, present and finite (a missing or NaN one would drop out of max/p99)
+    processed = [r.get("slam_wall_s") for r in records if r.get("status") == "processed"]
+    timed = all(v is not None and np.isfinite(float(v)) for v in processed)
+    processed = [float(v) for v in processed if v is not None]
     windows, span = keyframe_windows(records)
-    need = int(round(min_hours * 3600 / WINDOW_S))
+    need = int(math.ceil(min_hours * 3600 / WINDOW_S - 1e-9))  # whole windows covering at least min_hours
     # The plan's delivery bound: the console's U-case check (forklift_core.mission.delivery: the pallet centre under
     # 0.08 m from the destination, grounded, the forks out). A done mission passed it; a mission that failed it, or
     # whose result file is missing, fails V5 here.
     delivery_failed = [m["mission_id"] for m in missions
                        if m["reason"] in (MISSED, NOT_GROUNDED, FORK_INSIDE)
-                       or (m["delivery_error_m"] is not None and not m["delivery_error_m"] < 0.08)]
+                       or (m["delivery_error_m"] is not None and not m["delivery_error_m"] < 0.08)
+                       or (m["outcome"] == "done" and m["result_file"] and m["delivery_error_m"] is None)]  # a done one
+    # has its error
     missing = [m["mission_id"] for m in missions if not m["result_file"]]
     checks = {
         "missions": {"ok": done >= min_done and not missing, "done": done, "of": len(missions), "min": min_done,
@@ -115,9 +120,10 @@ def report(run: Path, min_done: int = 7, min_hours: float = 2.0) -> dict:
         "ending": {"ok": not any(failure.startswith(b) for b in BAD_ENDS)
                    and not any((m["reason"] or "").startswith(BAD_ENDS) for m in missions),
                    "failure_reason": failure or None},
-        "keyframe": {"ok": bool(processed) and max(processed) <= KEYFRAME_MAX_S, "processed": len(processed),
+        "keyframe": {"ok": bool(processed) and timed and max(processed) <= KEYFRAME_MAX_S, "processed": len(processed),
+                     "all_timed": timed,
                      "max_s": max(processed) if processed else None,
-                     "p99_s": float(np.percentile(processed, 99)) if processed else None},
+                     "p99_s": float(np.percentile(processed, 99)) if processed and timed else None},
         "windows": {"ok": len(windows) >= need and all(w["samples"] >= WINDOW_MIN_SAMPLES for w in windows)
                     and windows[-1]["p99_s"] <= P99_GROWTH * windows[0]["p99_s"],
                     "span_s": span, "need": need, "windows": windows},
