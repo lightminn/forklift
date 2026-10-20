@@ -496,3 +496,17 @@ def test_a_listed_scene_from_another_run_must_share_this_stage(tmp_path):
     (ref / "result.json").write_text(json.dumps({**result, "arguments": {"base_scene": "/base/animated.usda"}}))
     out = sb.rigid_provenance(rigid, run, result, ref)
     assert not out["ok"] and "base_scene_file" in out["differ"]
+
+
+def test_no_progress_replans_before_it_fails_the_tour():
+    """ws1 job 6831: the pallet permit held the truck mid-leg; a new path from there before the 60 s stall."""
+    poses, directions, curv = _straight_with_cusp()
+    driver = st.TourDriver(poses, directions, curv, waypoints=[[2.0, 0.0, 0.0]], replan_stall_s=5.0, stall_s=60.0)
+    driver.start(0.0)
+    t, seq = _drive_to(driver, [(x, 0.0) for x in np.linspace(0.0, 0.5, 10)])
+    while driver.replan_request is None and t < 30.0:
+        seq, t = seq + 1, t + 0.1
+        _, end = driver.step(t, {**_state(seq, speed=0.0), "pose": {"x_m": 0.5, "y_m": 0.0, "yaw_rad": 0.0},
+                                 "permit": {"limit_mps": 0.0, "reason": "pallet:P-1"}})
+        assert end is None
+    assert driver.replan_request is not None and "stall_replan" in [e["event"] for e in driver.events]

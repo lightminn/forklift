@@ -365,7 +365,8 @@ class TourDriver:
     - A gear cusp the tracker holds short of its tolerance (the teleop curvature slew leaves the axle off it) is
       released after ``release_s`` standing at the leg's end; the last leg likewise ends ``arrived`` within
       ``goal_slack_m``. Both are recorded.
-    - No progress for ``stall_s`` of drivable time fails the tour (time with teleop forbidden for pacing counts apart,
+    - No progress for ``replan_stall_s`` of drivable time replans from where the truck is (while replans are left);
+      no progress for ``stall_s`` fails the tour (time with teleop forbidden for pacing counts apart,
       up to ``pacing_wait_s`` in a row); no new state for ``stale_s`` fails it; so does a mode that leaves TELEOP. A
       failure is never skipped past.
     - Each leg starts by steering standing (departure, a cusp passed, a replan): speed 0 with the leg's curvature until the
@@ -383,7 +384,7 @@ class TourDriver:
     def __init__(self, poses, directions, curvatures, *, forward_mps=0.5, reverse_mps=0.25, kappa=0.36,
                  cruise_mps=0.30, stall_s=60.0, pacing_wait_s=900.0, stale_s=10.0, enter_s=20.0, release_s=3.0,
                  goal_slack_m=0.3, waypoints=None, max_replans=24, max_cross_track_m=0.5, steer_tolerance=0.05,
-                 steer_wait_s=20.0, steer_settle_rad=0.01, stop_wait_s=30.0):
+                 steer_wait_s=20.0, steer_settle_rad=0.01, stop_wait_s=30.0, replan_stall_s=20.0):
         self.forward, self.reverse, self.kappa = float(forward_mps), float(reverse_mps), float(kappa)
         self.cruise, self.max_cross_track_m = min(cruise_mps, self.forward), float(max_cross_track_m)
         self.can_replan = waypoints is not None
@@ -394,6 +395,7 @@ class TourDriver:
         self._leg, self._steer_since = None, None
         self.steer_settle_rad, self._last_steer = float(steer_settle_rad), None
         self.stop_wait_s, self._stop_since = float(stop_wait_s), None
+        self.replan_stall_s = float(replan_stall_s)
         self._failed = None
         self._set_path(poses, directions, curvatures)
         self.stall_s, self.pacing_wait_s, self.stale_s = stall_s, pacing_wait_s, stale_s
@@ -578,6 +580,14 @@ class TourDriver:
             else:
                 self.drivable_idle += dt_wall
                 self.pacing_idle = 0.0
+            if self.drivable_idle > self.replan_stall_s and self.can_replan and self.replans < self.max_replans:
+                # no progress anywhere on a leg (ws1 job 6831: the pallet permit held a truck turned toward the pickup
+                # zone): a new path from here -- it may start backing away -- before the stall fails the tour
+                self._event(now, "stall_replan", pose=pose, permit=s.get("permit"), drivable_idle_s=self.drivable_idle)
+                self.replans += 1
+                self._replan_wait = self.waypoints_left(cmd.segment_index, (pose["x_m"], pose["y_m"]))
+                self.drivable_idle = 0.0
+                return (0.0, 0.0), None
             if self.drivable_idle > self.stall_s or self.pacing_idle > self.pacing_wait_s:
                 self._event(now, "stalled", pose=pose, permit=s.get("permit"), drive_allowed=s.get("drive_allowed"),
                             teleop_forbidden_reason=s.get("teleop_forbidden_reason"), pacing=s.get("pacing"),
