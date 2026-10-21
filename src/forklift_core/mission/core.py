@@ -2352,6 +2352,14 @@ class MissionCore:
             hooks.require, hooks.wall, hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg)
         if self.bottom_deck_returning():
             return self._bottom_deck_reobserve_failed(t, rear, attempt, attempt_number, observation)
+        far_ = attempt.get("recognition") or {}
+        if far_.get("status") == "not_pickable" and "fork_spacing_adjust" in (
+                list(far_.get("reasons") or []) + [far_.get("reason")]):
+            # The pallet the far recognition read does not fit the forks at this spacing (T11 at 0.3725 m, 2026-10-21):
+            # another viewpoint does not change the spacing, so the mission ends by name instead of trying the next
+            # observation points until the obstacle watch stops it.
+            state["mission_result"] = "not_pickable"
+            require(False, "not_pickable:fork_spacing_adjust")
         apply_tracker_profile, realign_install, record_tracker_configs = (
             self.apply_tracker_profile, self.realign_install, self.record_tracker_configs)
         attempt["retry_reason"] = (
