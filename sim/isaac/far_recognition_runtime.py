@@ -27,7 +27,7 @@ from forklift_core.perception import recognition_bridge as B  # noqa: E402
 from forklift_core.perception.candidate_tracking import TrackBounds  # noqa: E402
 from forklift_core.perception.fork_fit import ForkSetup, load_site_defaults  # noqa: E402
 from forklift_core.perception.pallet_geometry import load_pallet_geometry  # noqa: E402
-from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_geometry  # noqa: E402
+from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, VARIANT_OF, spec_from_geometry  # noqa: E402
 from forklift_core.perception.scene_dataset import SceneInput  # noqa: E402
 
 SHAPES = ("epal6", "t11_06")
@@ -106,9 +106,13 @@ def relative(base, other):
     return (c * dx + s * dy, -s * dx + c * dy, _wrap(other[2] - base[2]))
 
 
-def known_specs(root: Path = ROOT) -> dict:
+def known_specs(root: Path = ROOT, run_shape: str | None = None) -> dict:
+    """The known shapes the far recognition fits. A run whose pallet is a test-article variant (VARIANT_OF) has
+    the variant in its parent's place, under its own key: the face cannot tell them apart, the run's instruction
+    can (plan 2026-10-22)."""
+    keys = [run_shape if VARIANT_OF.get(run_shape) == k else k for k in SHAPES]
     return {k: spec_from_geometry(load_pallet_geometry(root / f"config/pallet_geometry_{k}.yaml"),
-                                  entry_axes=KNOWN_ENTRY_AXES[k]) for k in SHAPES}
+                                  entry_axes=KNOWN_ENTRY_AXES[k]) for k in keys}
 
 
 def fork_spacing_m(blades) -> float:
@@ -168,7 +172,7 @@ class FarRuntime:
                  zone_radius_m: float, camera_x_m: float, dt: float, frame_every: int = 24, lag_steps: int = 0,
                  drive_frames: bool = True, out_dir: Path | None = None, root: Path = ROOT, proposer=None,
                  identity_threshold=None, proposer_record=None):
-        self.specs = known_specs(root)
+        self.specs = known_specs(root, run_shape=pallet_shape)
         site = load_site_defaults(root / "config/site_load_defaults.yaml", self.specs)
         self.site = {self.specs[k].name: v for k, v in site.items()}
         self.setup = ForkSetup(float(fork_spacing))

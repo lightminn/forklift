@@ -107,6 +107,8 @@ def load_pallet_prior(path: Path) -> PalletPrior:
         # A published standard envelope scaled to a printable test article. The
         # scaling is designed, not measured; replace once the article exists.
         "t11_published_standard_scaled_design",
+        # The shallow T11 cycle test article (plan 2026-10-22): designed, a test article only.
+        "t11_06_shallow_cycle_test_article",
     }:
         raise ValueError("Unsupported source_provenance")
     version = data["catalogue_version"]

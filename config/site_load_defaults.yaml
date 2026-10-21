@@ -6,3 +6,4 @@ source: site_default
 shapes:
   epal6: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}
   t11_06: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}
+  t11_06_d600: {pallet_mass_kg: 10.0, load_mass_kg: 0.0, com: centred}  # the shallow T11 cycle test article

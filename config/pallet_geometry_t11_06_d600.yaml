@@ -1,0 +1,46 @@
+# CYCLE TEST ARTICLE, not a canonical T11: the T11 x0.6 article (config/pallet_geometry_t11_06.yaml) made
+# shallow, 660 x 600 x 90 mm. User decision 2026-10-22: a test article only, for the Isaac bottom-deck cycle.
+# It does not settle the canonical T11 geometry (ADR 0002, openings 235 / 350 still open) and must not
+# replace config/pallet_geometry_t11_06.yaml.
+#
+# Why 0.600 m: the insertion target is min(depth x 0.6, carriage limit 0.346 - reserve 0.016) = 0.330 m.
+# T11 x0.6 (0.660 m) puts its centre exactly at 0.330 m, 0 mm past it, and every Isaac lift tipped
+# (docs/validation/2026-10-22-t11-bottom-deck.md). At 0.600 m the centre is 0.300 m, 30 mm short of the
+# target -- the same nominal margin as EPAL 6. 0.610 m (+25 mm) is the decision's bound.
+#
+# Every other number is the T11 x0.6 article's: the entry face (width, openings, block widths, heights,
+# boards) is identical. Along the depth the three block rows sit at x = -0.26 / 0 / +0.26 m with 0.18 m
+# gaps (0.21 m at 0.660 m). Only the x entry is used (docs/plans/2026-10-22-t11-shallow-test-article.md).
+#
+# Axes: x insertion depth, y approach-face width, z up; origin at floor centre.
+source_provenance: t11_06_shallow_cycle_test_article
+geometry_version: t11_06_d600
+overall_width_m: 0.660      # y, the face the forks enter
+overall_depth_m: 0.600      # x; the cycle test article (user decision 2026-10-22), see the header
+overall_height_m: 0.090     # z
+
+# Vertical layers. 0.015 + 0.045 + 0.015 + 0.015 = 0.090.
+deck_bottom_m: 0.015        # bottom boards
+block_height_m: 0.045       # fork opening height
+stringer_m: 0.015           # boards spanning the width, on top of the blocks
+top_board_thickness_m: 0.015  # top boards
+
+# Blocks: 3 across the 660 face by 3 along the 600 depth = 9 (rows 3 x 80 + 2 x 180 = 600 along x).
+# 3 x 80 + 2 x 210 = 660.
+block_widths_m: [0.080, 0.080, 0.080]
+block_depth_m: 0.080                   # along the insertion axis, all three rows
+
+# Bottom boards run the full depth, one under each block column. On this
+# article they are longitudinal: they span x, not y. That is what makes the
+# lower band visible through the openings under yaw.
+bottom_board_widths_m: [0.080, 0.080, 0.080]
+
+# Top boards run the full depth, 7 of them across the face.
+# 7 x 82.5 = 577.5 of the 660 mm face, leaving six 13.75 mm slots.
+top_board_count: 7
+top_board_width_m: 0.0825
+
+# The fork openings are between the block columns and are open to the floor:
+# the bottom boards sit under the columns, not under the openings.
+# Derived: opening width (660 - 240) / 2 = 210 mm, deck_top 15 + 15 = 30 mm,
+# pocket centres y = +/- 145 mm, z = 37.5 mm.
