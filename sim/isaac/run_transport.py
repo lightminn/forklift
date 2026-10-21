@@ -369,7 +369,7 @@ def arguments() -> argparse.Namespace:
         "--near-capture-expected",
         choices=("off", "on"),
         default="off",
-        help="Plan 2026-10-22 task A: on -- the near capture's detector keeps only candidates within 0.25 m and 15 deg "
+        help="Plan 2026-10-22 task A: on -- the near capture's detector keeps only candidates within 0.20 m and 15 deg "
         "of the planned pickup (in the capture's control base) and selects among them as before; none inside is "
         "no_pallet:no_expected_candidate. Continuity of the far choice, not identity. Needs --use-perception and "
         "--planning-target perception.",

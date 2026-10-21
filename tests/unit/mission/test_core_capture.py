@@ -283,10 +283,10 @@ def test_the_near_capture_looks_for_the_pallet_where_the_plan_expects_it():
     assert site.x_m == pytest.approx(math.cos(yaw) * dx + math.sin(yaw) * dy, abs=1e-12)
     assert site.y_m == pytest.approx(-math.sin(yaw) * dx + math.cos(yaw) * dy, abs=1e-12)
     assert site.yaw_rad == pytest.approx(0.1, abs=1e-12)
-    assert (site.radius_m, site.axis_tolerance_rad) == (0.25, pytest.approx(math.radians(15.0)))
+    assert (site.radius_m, site.axis_tolerance_rad) == (0.20, pytest.approx(math.radians(15.0)))
     record = out.attempt["expected"]
     assert record["site"] == [site.x_m, site.y_m, site.yaw_rad]
-    assert record["radius_m"] == 0.25 and record["candidates"][0]["inside"] is True
+    assert record["radius_m"] == 0.20 and record["candidates"][0]["inside"] is True
     assert record["planning_pickup"] == [3.4, 6.1, 1.6]
 
 

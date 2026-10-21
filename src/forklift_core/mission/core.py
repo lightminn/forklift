@@ -156,12 +156,13 @@ def record_tracker_configs_in(state: dict, trackers: dict) -> None:
     )
 
 
+# Plan 2026-10-22 task A: the near capture's candidates must lie this close to the planned pickup. The far->near
+# estimate shift over every ws1 record is at most 0.121 m (yaw 0.033 rad) and aisle_out's nearest straddling pattern
+# sat 0.353 m from the pallet: 0.20 m keeps the pallet and leaves that pattern out at the largest shift seen.
+NEAR_EXPECTED_RADIUS_M = 0.20
+NEAR_EXPECTED_AXIS_RAD = math.radians(15.0)
 # M-a3c (R11): a pause that moved the truck more than this from where it stopped (the docking straight was checked
 # from there) -- a stop that holds stays well inside it (the stop detector's 12 mm/s mean over 0.2 s).
-# Plan 2026-10-22 task A: the near capture's candidates must lie this close to the planned pickup (the far->near
-# estimate shift over every ws1 record: max 0.121 m, yaw 0.033 rad; a straddling pattern at 0.35 m in aisle_out).
-NEAR_EXPECTED_RADIUS_M = 0.25
-NEAR_EXPECTED_AXIS_RAD = math.radians(15.0)
 PAUSE_MOVED_M = 0.01
 PAUSE_MOVED_RAD = 0.01
 # M-a3 (E3): a stop not seen standing this long after it began is reported as not_stopped.
