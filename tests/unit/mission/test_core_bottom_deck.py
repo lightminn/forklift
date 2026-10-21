@@ -771,6 +771,7 @@ def test_other_not_pickable_reasons_still_look_again():
     w.core.options.observation_waypoints = ((0.0, 0.0, 0.0), NEXT)
     w.ms.next_candidate_index = 1
     w.state["observation_candidates"] = []
+    w.hooks.set_inset = lambda *a: None
     assert w.core.observe_failed(30.0, REAR, reobserve_attempt("not_pickable", "lift_alignment_needed"), 2,
                                  SimpleNamespace(status="no_pallet", reason="lift_alignment_needed")) is False
     assert w.ms.next_candidate_index == 2
