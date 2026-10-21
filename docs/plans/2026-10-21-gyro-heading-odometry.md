@@ -249,6 +249,24 @@ arc·칸을 남기지 않는다 — `tools/survey_tour.py`, 진단값은 `drive_
 `low_obstacles_removed` 도 달라, 같은 스냅숏만으로는 부족하고 장면 출처가 모두 일치하는 기준 실행(또는 그 epoch 자체의 장면 내보내기)이 필요하다.
 나이 표 수치: 조향 표 10 s 위치 0.1445 m(위 0.145 는 올림), 자이로 표 0.042 m·0.033 rad.
 
+### 4.3 V-G2 2 차 시도 — 사전 등록 (2026-10-21, 사용자 결정 "새 V-G2 6 회", 실행 전)
+
+1 차 시도(4.2)의 전체 불합격과 원자료는 그대로 둔다. 2 차는 설정 오류(장면과 맞지 않는 순회)를 바로잡은 **새 V-G2 전체 판정**이다 — 1 차의 SEED 0
+통과를 합치지 않는다. 같은 seed 를 다시 쓰므로 보지 않은 seed 로의 일반화 증거가 아니라 고친 절차의 재검증이다.
+
+- **순회 규칙.** SEED 마다 그 장면에서 계획한다: `tools/survey_tour.py plan --result <그 SEED 장면의 실행 result.json> --tour config/slam_survey_tour.yaml`
+  (입력 result 는 1 차 조향 실행 `test_runs/live/vg2/steer_s{S}/epoch_1/run/result.json`). `--seed` 는 보관 팔레트 배치도 바꾼다 — SEED 1·2 에는
+  (−4.0, −10.5) 에 팔레트가 있어 22 번 waypoint(y −10.8)가 계획 불가(`leg22:invalid_goal`)였으므로 y −11.8 로 옮겼다(−11.4·−11.6 은 SEED 1·2 에서 불가,
+  −11.8 은 세 장면 모두 성공·판정 영역 덮개 예측 0 칸 미덮개). 설정 sha256 `08d346c2…`(커밋 67d71b6). 경로: `test_runs/live/vg2b/tour_s{0,1,2}.npz`
+  sha256 `6f1603ae…`·`7b07a8c8…`·`f0d76f55…`(길이 298–300 m, 전환점 48–50). 같은 SEED 의 두 팔은 같은 경로 파일을 쓴다.
+- **코드·설정.** 스냅숏 `vg2b_b5f3831`(main bf543e9 + 순회 수정 + 자이로 표). 조향 팔 `--encoder-model team_spec_quantized --obstacle-layer
+  config/obstacle_layer_single_team_spec.yaml`(표 sha256 `0bcf52a4…`), 자이로 팔은 거기에 `--obstacle-layer config/obstacle_layer_single_team_spec_gyro.yaml
+  --odometry-heading gyro --gyro-model config/gyro_model_spec_typical.yaml`(표 `016a59e2…`, 모형 `9fa678a4…`). 두 표는 1 차와 같은 파일이다(다시 만들지 않음).
+  `deploy/console/slam_survey.sbatch`, 배속 0.3, `SEED` 0·1·2, `TOUR_CONFIG` 기본(같은 설정), `RIGID_RUN` r1·`REFERENCE_RUN` U16 은 1 차와 같다.
+- **판정(4 장 3 항 그대로).** 자이로 3 회 모두 V2′ 의 모든 조건(위치 최대 ≤ 0.10 m, 방향 최대 ≤ 0.03 rad, 노드 대응·확정·재적재, 덮개, 순회 도착)과
+  `tour_scene_matches` 참. 하나라도 못 미치면 전체 불합격. 도착하지 못한 실행은 다시 돌리지 않는다. 조향 팔은 비교로만 적는다. 움직이는 물체 검사는 V2′ 조건 밖이며
+  r1 과의 출처 불일치로 실패할 것으로 예상한다(4.2) — 판정에 넣지 않고 그대로 적는다.
+
 ## 5. 순서
 
 V-G0 의 도구(재생 조건·오프라인 G1·G2)와 그 시험 → V-G0 → 합격이면 G2 실행 안전 설계 문서 + 3 회 검토 → G1·G2·G3 구현 + V-G1 → V-G2 → V-G3 → 사용자에게 채택 결정 요청. G4 측정 요청은 V-G0
