@@ -85,6 +85,7 @@ KNOWN = {
         "",
     },
     "src/forklift_core/mission/core.py": {
+        "not_pickable:fork_spacing_adjust",  # the forks do not fit the far reading at this spacing (2026-10-21)
         "obstacle_no_progress in ", "near_capture_realign_held_recovery", "Tracking timeout in ", "Tracking failed in ",
         "perception_capture_failed:", "observation_discarded:", "docking_retry_no_plan:", "docking_unaligned:",
         "slam_release_replan_failed: ", "async_plan_failed:", "near_field_frame_released",
