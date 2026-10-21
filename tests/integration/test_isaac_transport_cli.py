@@ -1241,3 +1241,20 @@ def test_the_expected_detector_port_passes_the_site_and_the_waiver_through() -> 
     port = eval(m.group(1), {"detect_pockets_expected": lambda *a, **k: calls.append((a, k)) or "R"})  # noqa: S307
     assert port("INPUT", "PRIOR", "PARAMS", "SITE", lower_evidence=False) == "R"
     assert calls == [(("INPUT", "PRIOR", "PARAMS", "SITE"), {"lower_evidence": False})]
+
+
+def test_the_mission_options_read_the_new_near_capture_switches_with_their_defaults() -> None:
+    """Codex implementation round 1 P2: a boundary replay restores the recorded Namespace without the parser, so a
+    record from before the options has neither attribute; the options read them with the defaults it ran at."""
+    import argparse
+
+    source = SCRIPT.read_text()
+    lines = [line.strip() for line in source.splitlines() if "near_capture_redraw_lateral_m=" in line
+             or "near_capture_expected=" in line]
+    exprs = [line.split("=", 1)[1].rstrip(",") for line in lines if line.startswith("near_capture_")]
+    assert len(exprs) == 2, lines
+    old = argparse.Namespace()
+    assert [eval(e, {"args": old}) for e in exprs] == [0.05, "off"]  # noqa: S307
+    new = argparse.Namespace(near_capture_redraw_lateral_m=0.1, near_capture_expected="on")
+    assert [eval(e, {"args": new}) for e in exprs] == [0.1, "on"]  # noqa: S307
+

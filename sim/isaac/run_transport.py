@@ -5237,8 +5237,10 @@ def drive(S, isaac) -> None:
                                 near_capture_box_yaw_rad=args.near_capture_box_yaw_rad,
                                 approach_straight_speed_mps=args.approach_straight_speed_mps,
                                 near_capture_redraw=args.near_capture_redraw, G2=G2, yaw_and_tilt=yaw_and_tilt,
-                                near_capture_redraw_lateral_m=args.near_capture_redraw_lateral_m,
-                                near_capture_expected=args.near_capture_expected,
+                                # Plan 2026-10-22 (Codex implementation round 1 P2): a boundary record's restored
+                                # Namespace from before these options has neither; it ran at the defaults.
+                                near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
+                                near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,

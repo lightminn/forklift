@@ -109,3 +109,23 @@ def test_an_expected_site_must_be_finite_and_positive(bad):
     args.update(bad)
     with pytest.raises(ValueError):
         P.ExpectedSite(args["x_m"], args["y_m"], args["yaw_rad"], args["radius_m"], args["axis_rad"])
+
+
+@pytest.mark.parametrize("bias_m", [0.0, 0.12, -0.12])
+def test_the_run_radius_keeps_the_target_with_the_expected_site_off_by_the_largest_shift_seen(bias_m):
+    """Plan 2026-10-22 section 8 (Codex implementation round 1 P3): the mission's own radius and axis, the expected
+    site moved across by up to the largest far->near shift on record (0.121 m)."""
+    from forklift_core.mission.core import NEAR_EXPECTED_AXIS_RAD, NEAR_EXPECTED_RADIUS_M
+
+    assert NEAR_EXPECTED_RADIUS_M == 0.20
+    sc = two_pallets(3.2, 1.0, -0.1)
+    site = P.ExpectedSite(3.2, -0.1 + bias_m, 0.0, NEAR_EXPECTED_RADIUS_M, NEAR_EXPECTED_AXIS_RAD)
+    result, gate = P.detect_pockets_expected(sc, PRIOR, PARAMS, site)
+    assert result.observation.status == "valid"
+    cx, cy = centre(result.observation)
+    assert math.hypot(cx - 3.2, cy + 0.1) < 0.02
+    # Between the two radii: a candidate the 0.15 m tests would drop is kept at the run's radius.
+    if abs(bias_m) > 0.0:
+        target = [c for c in gate if math.hypot(c.centre_m[0] - 3.2, c.centre_m[1] + 0.1) < 0.02]
+        assert target and all(0.10 < c.distance_m <= NEAR_EXPECTED_RADIUS_M and c.inside for c in target)
+
