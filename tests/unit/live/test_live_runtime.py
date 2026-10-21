@@ -83,7 +83,16 @@ def test_a_stop_zeroes_the_wheels_at_the_next_step_and_latches_the_lift_once(tmp
         assert did["zero"] == 2 and did["lift"] == [0.10, 0.10]
     finally:
         rt.close()
-    assert json.loads((tmp_path / "port.json").read_text())["state"] == "ended"
+    info = json.loads((tmp_path / "port.json").read_text())
+    # the server opened: its start time stays at the close (the supervisor tells a run's failure from a start's by it;
+    # Codex standby review P2-2)
+    assert info["state"] == "ended" and isinstance(info["started"], float)
+
+
+def test_a_runtime_closed_without_starting_its_server_says_no_start(tmp_path):
+    rt, core, did, clock = runtime(tmp_path)
+    rt.close()
+    assert "started" not in json.loads((tmp_path / "port.json").read_text())
 
 
 def test_a_frame_is_one_per_render_time_and_its_latency_counts_from_the_step_start(tmp_path):

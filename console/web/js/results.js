@@ -242,3 +242,41 @@ const DESTINATIONS = { "D-0": "원래 자리(D-0)", "D-1": "목적지(D-1)" };
 export function destinationLabel(id) {
   return DESTINATIONS[id] ?? id;
 }
+
+// The supervisor's standby (contract 6, /api/v1/session): what the session is doing while no runner serves the port.
+// A start check that failed before the runner's server opened is a "세션 시작 실패" (SLAM localization plan L4).
+const STANDBY_END = { map_mismatch: "지도가 맞지 않음", failing: "같은 원인으로 거듭 실패", epoch_limit: "실행 횟수 한도",
+                      ended: "끝냄", terminated: "작업이 끝남" };
+
+export function standbyText(s) {
+  if (!s || s.standby !== true) return null;
+  const last = s.last_exit;
+  const parts = [];
+  if (last && last.exit_code !== 0 && last.exit_code !== 3) {
+    const why = reasonText(last.reason ?? `exit ${last.exit_code}`);
+    const shown = why.code && why.text !== why.code ? `${why.text} (${why.code})` : why.text;
+    parts.push(`${last.stage === "run" ? "세션이 끊겼습니다" : "세션 시작 실패"}: ${shown}`);
+  }
+  if (s.phase === "starting") parts.push(`세션을 시작하는 중 (${s.epoch}번째)`);
+  else if (s.phase === "cleanup") parts.push("정리 중");
+  else if (s.phase === "backoff" && s.retry) parts.push(`${s.next_epoch}번째 세션을 곧 시작합니다`);
+  else if (s.phase === "stopped") parts.push(`세션이 멈췄습니다(${STANDBY_END[s.end] ?? s.end})`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+// The state's optional slam field (contract 6): present only for a session localizing on a survey map; absent is
+// online mapping or not known. map_loaded is the session's start check, not the localization's health now.
+export function slamLabel(st) {
+  if (!st) return { text: "—", title: "" };
+  const slam = st.slam;
+  if (!slam) return { text: "온라인 작성 또는 모름", title: "상태에 slam 필드가 없음" };
+  const id = String(slam.map_id ?? "");
+  return { text: `지도 ${slam.mode === "localization" ? "위치추정" : slam.mode} · ${id.slice(0, 8)}`,
+           title: `지도 ${id}${slam.map_loaded ? " · 세션 시작 검사 통과" : ""}` };
+}
+
+// The session note on screen: the standby's answer (where the session is now) over this page's own waiting note
+// (a reset asked for and then a failed start: Codex standby review P2-1).
+export function noteText(m) {
+  return m.standbyNote ?? m.sessionNote ?? "";
+}

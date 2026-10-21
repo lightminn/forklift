@@ -3,7 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
-import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons } from "./results.js";
+import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
@@ -211,6 +211,9 @@ export function render(m) {
   const mi = st.mission;
   const [mcls, mko] = mi ? STATUS[mi.status] ?? ["", mi.status] : ["", monitor ? "모름" : "작업 없음"];
   badge($("b-work"), mcls, mko);
+  const sl = slamLabel(m.session.state); // contract 6: absent = online mapping or not known
+  $("b-slam").textContent = sl.text;
+  $("b-slam").title = sl.title;
 
   // progress strip and destination
   const prog = $("d-progress");
@@ -379,8 +382,8 @@ function renderSession(m, stIn, lease, prof, monitor) {
   $("scene-banner").hidden = !damaged;
   if (damaged) $("scene-text").textContent = `${reasonText(damaged.reason).text}${damaged.unix ? ` · ${wallTime(damaged.unix)}` : ""}`;
   const note = $("session-note");
-  note.hidden = !m.sessionNote;
-  note.textContent = m.sessionNote ?? "";
+  note.textContent = noteText(m); // the standby's (between runners, contract 6) over the page's own
+  note.hidden = !note.textContent;
 
   const book = m.results;
   if (book && book.version !== m.cache.resultsVersion) {
@@ -391,7 +394,7 @@ function renderSession(m, stIn, lease, prof, monitor) {
       const why = r.reason ? reasonText(r.reason) : null;
       const advice = adviceText(r.advice);
       const span = Number.isFinite(r.started_s) && Number.isFinite(r.ended_s) ? ` · ${(r.ended_s - r.started_s).toFixed(0)} s` : "";
-      return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
+      return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}${r.map_id ? ` · <span class="mono" title="지도 ${esc(r.map_id)}">지도 ${esc(String(r.map_id).slice(0, 8))}</span>` : ""}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
     }).join("") : '<li class="hint">아직 끝난 미션이 없습니다</li>';
     $("results-older").textContent = [
       book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "",

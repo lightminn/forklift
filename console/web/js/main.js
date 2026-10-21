@@ -12,7 +12,7 @@ import { API, createSession } from "./protocol.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
-import { ConfirmGate, ResultsBook } from "./results.js";
+import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -62,6 +62,7 @@ const m = {
   results: new ResultsBook(), // plan D13
   confirm: new ConfirmGate(),
   sessionNote: null,
+  standbyNote: null, // the supervisor's standby between runners (contract 6), cleared by a welcome
   sessionEnding: null,
   session: null,
   link: { up: false, tickGapMs: null, lastTickAt: null },
@@ -146,6 +147,8 @@ m.session.subscribe((msg) => {
       $("dest").innerHTML = "";
     }
     m.results.welcome(msg.session_epoch); // plan D13: the results seq starts again in a new session
+    standbyAsk += 1; // an answer still on its way is older than this welcome (Codex standby design P2-2)
+    m.standbyNote = null;
     if (m.sessionEnding === "sim_reset" && msg.session_epoch !== m.endingEpoch) {
       m.sessionEnding = null; // the reset scene's new session is up
       m.sessionNote = null;
@@ -211,6 +214,25 @@ m.session.subscribe((msg) => {
   }
 });
 
+// Between runners the supervisor's standby serves the port (contract 6): ask it where the session is. An answer is
+// used only if no welcome came since and it is the newest question; it is a note, never the vehicle's state.
+let standbyAsk = 0;
+async function askStandby() {
+  const ask = ++standbyAsk;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 2000); // the request and its body
+  let note = null;
+  try {
+    const r = await fetch("/api/v1/session", { cache: "no-store", signal: abort.signal });
+    if (r.ok) note = standbyText(await r.json());
+  } catch {
+    note = null; // no standby (or no answer in time): the reconnects go on as before
+  } finally {
+    clearTimeout(timer);
+  }
+  if (ask === standbyAsk && !m.linkWelcome) m.standbyNote = note;
+}
+
 function connectControl() {
   const ws = new WebSocket(`ws://${location.host}/api/v1/control`);
   control = ws;
@@ -237,6 +259,7 @@ function connectControl() {
       return;
     }
     if (m.sessionEnding === "sim_reset") m.sessionNote = "장면 초기화 중 · 새 세션을 기다립니다";
+    askStandby();
     const wait = Math.max(1000, m.dropUntil - performance.now());
     setTimeout(connectControl, wait);
   });

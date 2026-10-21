@@ -157,3 +157,35 @@ test("record errors of results already out of the list are counted (record_error
   book.welcome(2);
   assert.equal(book.recordErrorsOlder, 0);
 });
+
+test("the standby's session state reads as a start failure, a stopped session or the next epoch (contract 6)", async () => {
+  const { standbyText } = await import("../js/results.js");
+  const failed = { standby: true, phase: "backoff", retry: true, next_epoch: 3, epoch: 2,
+                   last_exit: { epoch: 2, exit_code: 1, reason: "slam_not_localized: 0.4 m", stage: "start" } };
+  assert.equal(standbyText(failed), "세션 시작 실패: 지도에서 위치를 잡지 못했습니다 (slam_not_localized: 0.4 m) · 3번째 세션을 곧 시작합니다");
+  const mismatch = { standby: true, phase: "stopped", end: "map_mismatch", retry: false, epoch: 0,
+                     last_exit: { epoch: 0, exit_code: 1, reason: "slam_map_mismatch: scene", stage: "start" } };
+  assert.equal(standbyText(mismatch), "세션 시작 실패: 지도 묶음이 세션의 지도와 다릅니다 (slam_map_mismatch: scene) · 세션이 멈췄습니다(지도가 맞지 않음)");
+  const run = { standby: true, phase: "cleanup", epoch: 1,
+                last_exit: { epoch: 1, exit_code: 1, reason: "slam_link_failed: scan 7", stage: "run" } };
+  assert.equal(standbyText(run), "세션이 끊겼습니다: SLAM 연결이 끊겼습니다 (slam_link_failed: scan 7) · 정리 중");
+  assert.equal(standbyText({ standby: true, phase: "starting", epoch: 1, last_exit: null }), "세션을 시작하는 중 (1번째)");
+  assert.equal(standbyText({ phase: "running" }), null); // not a standby answer
+  assert.equal(standbyText(null), null);
+});
+
+test("the SLAM label says localization on a named map, or that it is not known (contract 6)", async () => {
+  const { slamLabel } = await import("../js/results.js");
+  const id = "ab".repeat(32);
+  assert.deepEqual(slamLabel({ slam: { mode: "localization", map_id: id, map_loaded: true } }),
+                   { text: "지도 위치추정 · abababab", title: `지도 ${id} · 세션 시작 검사 통과` });
+  assert.deepEqual(slamLabel({ mode: "AUTO" }), { text: "온라인 작성 또는 모름", title: "상태에 slam 필드가 없음" });
+  assert.deepEqual(slamLabel(null), { text: "—", title: "" });
+});
+
+test("the standby's note is shown over a waiting note of this page's own (Codex standby review P2-1)", async () => {
+  const { noteText } = await import("../js/results.js");
+  assert.equal(noteText({ sessionNote: "장면 초기화 중 · 새 세션을 기다립니다", standbyNote: "세션 시작 실패: x" }), "세션 시작 실패: x");
+  assert.equal(noteText({ sessionNote: "세션을 끝내는 중", standbyNote: null }), "세션을 끝내는 중");
+  assert.equal(noteText({ sessionNote: null, standbyNote: null }), "");
+});
