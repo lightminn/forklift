@@ -205,14 +205,16 @@ class _NoStandby:
         pass
 
 
-def _opened_its_server(port_file: Path, since_wall: float) -> bool:
-    """The runner wrote its port file running (its server opened) after it was started: a failure after that is a
-    run's, before it a start's."""
+def _opened_its_server(port_file: Path, since_wall: float, pid: int) -> bool:
+    """This runner (its pid) opened its server after it was started -- its port file carries the server's start time,
+    running or at its close (LiveRuntime keeps it; Codex standby review P2-2): a failure after that is a run's,
+    before it a start's."""
     try:
         info = json.loads(port_file.read_text())
     except (OSError, ValueError):
         return False
-    return info.get("state") in ("running", "ended", "stop_failed") and float(info.get("started") or 0) >= since_wall - 1
+    return (info.get("pid") == pid and info.get("state") in ("running", "ended", "stop_failed")
+            and float(info.get("started") or 0) >= since_wall - 1)
 
 
 class _Stop:
@@ -318,6 +320,7 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                                 if stop.asked:
                                     process = _end_child(stop.child, grace_s)
                                     break
+                        pid = stop.child.pid
                         stop.child = None
                         code = process
                         if exit_file is not None:
@@ -332,7 +335,7 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                             elif process == 0:
                                 _log(out, {"event": "no_exit_file", "epoch": epoch})
                                 code, reason = 1, "no_exit_file"
-                        stage = "run" if _opened_its_server(port_file, started_wall) else "start"
+                        stage = "run" if _opened_its_server(port_file, started_wall, pid) else "start"
             except (OSError, subprocess.SubprocessError) as exc:  # the bridge or the runner would not start
                 _log(out, {"event": "start_failed", "epoch": epoch, "error": f"{type(exc).__name__}: {exc}"})
                 code, reason = 1, f"start_failed: {type(exc).__name__}"
@@ -376,7 +379,9 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             end = time.monotonic() + backoff_s
             while time.monotonic() < end and not stop.asked:
                 time.sleep(min(0.5, backoff_s))
-        return stopped({"epochs": epoch, "end": "terminated" if stop.asked else "epoch_limit", "codes": codes}, False)
+        # the end decides the linger, not the last runner's code (an epoch limit after a reset too; Codex standby P2-3)
+        return stopped({"epochs": epoch, "end": "terminated" if stop.asked else "epoch_limit", "codes": codes},
+                       not stop.asked)
     finally:
         standby.close()
         for sig, handler in previous.items():

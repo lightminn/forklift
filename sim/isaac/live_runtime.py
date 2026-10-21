@@ -80,6 +80,7 @@ class LiveRuntime:
         self.io_budget_s = 30.0  # the session end's whole wait on the writer (settles and close share it)
         self._io_deadline: float | None = None
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
+        self.started_wall: float | None = None  # when start() opened the server (None: it never did)
         self.slam_info: dict | None = None  # SLAM localization plan L6: set by the runner for a localization session
         self.dt = dt
         self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
@@ -143,10 +144,11 @@ class LiveRuntime:
     # --- lifecycle -------------------------------------------------------------------------------------------------
     def start(self) -> int:
         port = self.server.start()
+        self.started_wall = time.time()
         if self.port_file is not None:
             write_port_file(self.port_file, {"host": self.server.host, "port": port,
                                              "session_epoch": self.session_epoch, "pid": os.getpid(),
-                                             "started": time.time(), "state": "running"})
+                                             "started": self.started_wall, "state": "running"})
         self.log({"event": "start", "port": port, "session_epoch": self.session_epoch})
         return port
 
@@ -239,9 +241,11 @@ class LiveRuntime:
         self.settle_records()
         ended = self.server.stop()
         if self.port_file is not None:
-            write_port_file(self.port_file, {"host": self.server.host, "port": self.server.port,
-                                             "session_epoch": self.session_epoch, "pid": os.getpid(),
-                                             "state": "ended" if ended else "stop_failed"})
+            info = {"host": self.server.host, "port": self.server.port, "session_epoch": self.session_epoch,
+                    "pid": os.getpid(), "state": "ended" if ended else "stop_failed"}
+            if self.started_wall is not None:  # the server opened: the supervisor tells a run's end from a start's
+                info["started"] = self.started_wall  # by it (Codex standby review P2-2)
+            write_port_file(self.port_file, info)
         for entry in self.link.log:
             self._write_log(json.dumps(entry) + "\n")
         self.link.log.clear()

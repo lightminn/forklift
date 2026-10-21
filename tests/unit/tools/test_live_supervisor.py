@@ -304,8 +304,9 @@ def test_the_standby_shows_a_start_failure_and_hands_the_port_to_the_runner(tmp_
 def test_a_run_failure_is_told_apart_and_the_backoff_names_the_next_epoch(tmp_path):
     port, web = _free_port(), _web(tmp_path)
     # epoch 1 opens its server (port file running, started now) then fails; epoch 2 ends the session
-    runner = [PY, "-c", "import json,sys,time,pathlib; e=int(sys.argv[1]); "
-              "pathlib.Path(sys.argv[2]).write_text(json.dumps({'state':'running','started':time.time()})); "
+    runner = [PY, "-c", "import json,os,sys,time,pathlib; e=int(sys.argv[1]); "
+              "pathlib.Path(sys.argv[2]).write_text(json.dumps({'state':'running','started':time.time(),"
+              "'pid':os.getpid()})); "
               "sys.exit(1 if e == 1 else 0)", "{epoch}", "{port_file}"]
     seen, thread = _watch(port, lambda s: s["phase"] == "backoff", then_term=False)
     result = sup.supervise(out=tmp_path / "out", runner=runner, port_file=tmp_path / "live_port.json", backoff_s=2.0,
@@ -338,3 +339,44 @@ def test_the_live_job_has_the_supervisor_serve_the_consoles_port_between_runners
     live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
     assert ('--standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" '
             '--standby-linger-s "${STANDBY_LINGER_S:-300}"') in live
+
+
+def test_a_run_ended_through_the_runtimes_close_is_a_run_and_one_without_its_server_a_start(tmp_path):
+    """Codex standby review P2-2: LiveRuntime.close rewrote the port file without its start time, so every failure
+    read as a start failure. The close keeps it (when the server opened); the pid ties it to this runner."""
+    import os
+
+    port = _free_port()
+    web = _web(tmp_path)
+    # epochs 1 and 3: opened (the close's ended file keeps started and the runner's pid); epoch 2: closed
+    # without opening (no started) and failed; epoch 3 ends the session
+    runner = [PY, "-c", "import json,os,sys,time,pathlib; e=int(sys.argv[1]); p=pathlib.Path(sys.argv[2]); "
+              "info={'state':'ended','pid':os.getpid()}; "
+              "info.update({'started':time.time()} if e != 2 else {}); p.write_text(json.dumps(info)); "
+              "sys.exit(0 if e == 3 else 1)", "{epoch}", "{port_file}"]
+    stages = []
+    orig = sup.Standby.update
+
+    def spy(self, **fields):
+        if fields.get("last_exit"):
+            stages.append(fields["last_exit"]["stage"])
+        return orig(self, **fields)
+
+    sup.Standby.update = spy
+    try:
+        result = sup.supervise(out=tmp_path / "out", runner=runner, port_file=tmp_path / "live_port.json",
+                               backoff_s=0.0, standby_port=port, web_root=web)
+    finally:
+        sup.Standby.update = orig
+    assert result["end"] == "ended" and stages == ["run", "start", "run"]
+    assert os.getpid()  # (the runner's pid is its own, not this process's)
+
+
+def test_an_epoch_limit_after_a_scene_reset_lingers_too(tmp_path):
+    """Codex standby review P2-3: whether the standby lingers follows the end, not the last runner's code."""
+    port, web = _free_port(), _web(tmp_path)
+    seen, thread = _watch(port, lambda s: s["phase"] == "stopped")
+    result = sup.supervise(out=tmp_path / "out", runner=runner_exiting(3), port_file=tmp_path / "live_port.json",
+                           backoff_s=0.0, max_epochs=1, standby_port=port, web_root=web, standby_linger_s=30.0)
+    thread.join(5.0)
+    assert result["end"] == "epoch_limit" and seen.get("state", {}).get("end") == "epoch_limit"

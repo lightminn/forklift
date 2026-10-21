@@ -182,3 +182,10 @@ test("the SLAM label says localization on a named map, or that it is not known (
   assert.deepEqual(slamLabel({ mode: "AUTO" }), { text: "온라인 작성 또는 모름", title: "상태에 slam 필드가 없음" });
   assert.deepEqual(slamLabel(null), { text: "—", title: "" });
 });
+
+test("the standby's note is shown over a waiting note of this page's own (Codex standby review P2-1)", async () => {
+  const { noteText } = await import("../js/results.js");
+  assert.equal(noteText({ sessionNote: "장면 초기화 중 · 새 세션을 기다립니다", standbyNote: "세션 시작 실패: x" }), "세션 시작 실패: x");
+  assert.equal(noteText({ sessionNote: "세션을 끝내는 중", standbyNote: null }), "세션을 끝내는 중");
+  assert.equal(noteText({ sessionNote: null, standbyNote: null }), "");
+});

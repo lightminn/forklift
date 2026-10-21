@@ -274,3 +274,9 @@ export function slamLabel(st) {
   return { text: `지도 ${slam.mode === "localization" ? "위치추정" : slam.mode} · ${id.slice(0, 8)}`,
            title: `지도 ${id}${slam.map_loaded ? " · 세션 시작 검사 통과" : ""}` };
 }
+
+// The session note on screen: the standby's answer (where the session is now) over this page's own waiting note
+// (a reset asked for and then a failed start: Codex standby review P2-1).
+export function noteText(m) {
+  return m.standbyNote ?? m.sessionNote ?? "";
+}

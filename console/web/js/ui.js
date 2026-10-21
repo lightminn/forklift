@@ -3,7 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
-import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
+import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
 const MODE_CLS = { AUTO: "acc", TELEOP: "tel", PAUSED: "ok", STOPPED: "crit" };
@@ -382,8 +382,8 @@ function renderSession(m, stIn, lease, prof, monitor) {
   $("scene-banner").hidden = !damaged;
   if (damaged) $("scene-text").textContent = `${reasonText(damaged.reason).text}${damaged.unix ? ` · ${wallTime(damaged.unix)}` : ""}`;
   const note = $("session-note");
-  note.hidden = !(m.sessionNote || m.standbyNote);
-  note.textContent = m.sessionNote ?? m.standbyNote ?? ""; // the standby's: between runners (contract 6)
+  note.textContent = noteText(m); // the standby's (between runners, contract 6) over the page's own
+  note.hidden = !note.textContent;
 
   const book = m.results;
   if (book && book.version !== m.cache.resultsVersion) {
