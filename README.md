@@ -51,6 +51,8 @@ python examples/sensor_geometry.py
 - [`perception/pocket_detector.py`](src/forklift_core/perception/pocket_detector.py)·[`evaluation.py`](src/forklift_core/perception/evaluation.py)·[`overlay.py`](src/forklift_core/perception/overlay.py): 명시적 팔레트 prior를 쓰는 깊이 기반 포켓 인식, 정답 비교·지표 집계, RGB 정답·추정 표시. [평가 CLI 실행 안내](docs/development.md#포켓-인식-평가-실행). 전체 데이터 세트 튜닝·최종 평가는 별도 단계다.
 - [`tests/`](tests/): 단위, 축 방향, 누락값, 잘못된 보정값·메타데이터, 실행 예제를 검증한다.
 
+하위 제어 MCU 펌웨어는 아직 보드와 무관한 C 코어와 호스트 시험만 있다([`firmware/`](firmware/README.md)). pytest 의 `tests/integration/test_firmware_host.py` 가 CMake 로 빌드해 C 시험과 C↔Python 링크 교차 시험을 돌린다(CMake·C 컴파일러가 없으면 skip). Jetson 쪽 링크 대응은 [`mcu_link`](src/forklift_core/mcu_link/)(시리얼·ROS 비의존)다.
+
 위 명령은 코어 합성 시험 **64개**와 원격 제출 도구의 로컬 시험을 함께 실행한다. 코어 64개 통과는 위 수학·입력 계약의 합성 시험 결과다. D435i/RPLIDAR의 실측 정확도, 포켓 검출 성능, 지게차 A–D 동작 성공을 뜻하지 않는다. [검증 기록](docs/validation/2026-09-10-sensor-core.md)에 확인 범위와 미검증 항목을 구분했다.
 
 ## 중간 정리와 전체 로드맵
