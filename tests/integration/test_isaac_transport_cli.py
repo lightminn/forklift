@@ -1250,11 +1250,20 @@ def test_the_mission_options_read_the_new_near_capture_switches_with_their_defau
 
     source = SCRIPT.read_text()
     lines = [line.strip() for line in source.splitlines() if "near_capture_redraw_lateral_m=" in line
-             or "near_capture_expected=" in line]
+             or "near_capture_expected=" in line or "near_capture_lower=" in line]
     exprs = [line.split("=", 1)[1].rstrip(",") for line in lines if line.startswith("near_capture_")]
-    assert len(exprs) == 2, lines
+    assert len(exprs) == 3, lines
     old = argparse.Namespace()
-    assert [eval(e, {"args": old}) for e in exprs] == [0.05, "off"]  # noqa: S307
-    new = argparse.Namespace(near_capture_redraw_lateral_m=0.1, near_capture_expected="on")
-    assert [eval(e, {"args": new}) for e in exprs] == [0.1, "on"]  # noqa: S307
+    assert [eval(e, {"args": old}) for e in exprs] == [0.05, "off", "gate"]  # noqa: S307
+    new = argparse.Namespace(near_capture_redraw_lateral_m=0.1, near_capture_expected="on",
+                             near_capture_lower="waive_far_confirmed")
+    assert [eval(e, {"args": new}) for e in exprs] == [0.1, "on", "waive_far_confirmed"]  # noqa: S307
+
+
+def test_the_check_off_near_lower_waiver_needs_the_expected_site() -> None:
+    """Plan 2026-10-22 task C: the waiver's condition 2 is the expected site's."""
+    result = subprocess.run([*_cli_base(), "--near-capture-lower", "waive_far_confirmed"], capture_output=True,
+                            text=True, check=False)
+    assert result.returncode == 2
+    assert "--near-capture-lower waive_far_confirmed needs --near-capture-expected on" in result.stderr
 

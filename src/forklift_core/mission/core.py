@@ -161,6 +161,10 @@ def record_tracker_configs_in(state: dict, trackers: dict) -> None:
 # sat 0.353 m from the pallet: 0.20 m keeps the pallet and leaves that pattern out at the largest shift seen.
 NEAR_EXPECTED_RADIUS_M = 0.20
 NEAR_EXPECTED_AXIS_RAD = math.radians(15.0)
+# Plan 2026-10-22 task C (user decision 2026-10-22): the check-off near lower waiver needs the far detector's own pallet
+# within this of the adopted far estimate, and the near candidate within this of the expected site.
+NEAR_WAIVER_RADIUS_M = 0.15
+NEAR_WAIVER_AXIS_RAD = math.radians(15.0)
 # M-a3c (R11): a pause that moved the truck more than this from where it stopped (the docking straight was checked
 # from there) -- a stop that holds stays well inside it (the stop detector's 12 mm/s mean over 0.2 s).
 PAUSE_MOVED_M = 0.01
@@ -3219,6 +3223,76 @@ class MissionCore:
         return bool(getattr(self.options, "near_capture_expected", "off") == "on"
                     and self.state.get("near_capture", {}).get("status") == "pending")
 
+    def _near_waiver_on(self) -> bool:
+        """Plan 2026-10-22 task C: --near-capture-lower waive_far_confirmed (needs --near-capture-expected on)."""
+        return getattr(self.options, "near_capture_lower", "gate") == "waive_far_confirmed"
+
+    def _expected_record(self, site: ExpectedSite, candidates_) -> dict:
+        pickup_ = self.pocket["planning_pickup"]
+        return {
+            "site": [site.x_m, site.y_m, site.yaw_rad], "radius_m": site.radius_m,
+            "axis_tolerance_rad": site.axis_tolerance_rad,
+            "planning_pickup": [float(pickup_.x_m), float(pickup_.y_m), float(pickup_.yaw_rad)],
+            "candidates": [asdict(c_) for c_ in candidates_],
+        }
+
+    def _far_waiver_refusal(self) -> tuple[str | None, dict]:
+        """Condition 1 of the user's decision: the far capture this near capture follows passed the full detector at
+        its own thresholds, and the pallet that detector saw is the adopted far estimate. (refusal or None, record)."""
+        near_ = self.state["near_capture"]
+        number_ = near_.get("far_attempt")
+        record_ = {"far_attempt": number_}
+        attempts_ = self.state.get("observation_attempts") or []
+        if not isinstance(number_, int) or not 1 <= number_ <= len(attempts_):
+            return "far_attempt_missing", record_
+        far_ = attempts_[number_ - 1]
+        detector_ = far_.get("detector_reference", far_.get("pocket_observation")) or {}
+        record_["far_detector_status"] = detector_.get("status")
+        if detector_.get("status") != "valid":
+            return f"far_detector:{detector_.get('status')}", record_
+        if far_.get("lower_evidence", True) is not True:
+            return "far_lower_waived", record_
+        if far_.get("expected") is not None:
+            return "far_restricted", record_
+        site_ = far_.get("detector_site")
+        if site_ is None:
+            return "far_detector_site_missing", record_
+        estimate_ = near_["far_estimate_m"]
+        link_m_ = math.hypot(float(site_[0]) - float(estimate_["x_m"]), float(site_[1]) - float(estimate_["y_m"]))
+        link_rad_ = abs(math.atan2(math.sin(float(site_[2]) - float(estimate_["yaw_rad"])),
+                                   math.cos(float(site_[2]) - float(estimate_["yaw_rad"]))))
+        record_.update(far_detector_site=[float(v) for v in site_],
+                       far_estimate=[float(estimate_[k]) for k in ("x_m", "y_m", "yaw_rad")],
+                       far_link_m=link_m_, far_link_rad=link_rad_)
+        if link_m_ > NEAR_WAIVER_RADIUS_M or link_rad_ > NEAR_WAIVER_AXIS_RAD:
+            return "far_link", record_
+        return None, record_
+
+    def _near_lower_waiver(self, attempt: dict, detection, site: ExpectedSite, detector_input, prior, params):
+        """Plan 2026-10-22 task C (user decision 2026-10-22, conditional): a near capture with the check off that found
+        no valid pocket inside its expected site is detected once more with the lower band waived -- only after a far
+        capture that passed in full (condition 1), only among candidates within 0.15 m and 15 deg of the expected site
+        (condition 2), and recorded each time with its conditions (condition 3). The first result stands otherwise."""
+        first_ = detection.observation
+        refusal_, record_ = self._far_waiver_refusal()
+        record_["first"] = {"status": first_.status, "reason": first_.reason}
+        if refusal_ is None:
+            narrow_ = ExpectedSite(site.x_m, site.y_m, site.yaw_rad, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
+            second_, candidates_ = self.hooks.detect_pockets_expected(detector_input, prior, params, narrow_,
+                                                                      lower_evidence=False)
+            record_["second"] = self._expected_record(narrow_, candidates_)
+            if second_.observation.status == "valid":
+                record_["applied"] = True
+                record_["first"]["expected"] = attempt["expected"]
+                attempt["expected"] = record_["second"]
+                attempt["lower_evidence"] = False
+                attempt["lower_waiver"] = record_
+                return second_
+            refusal_ = f"second:{second_.observation.status}:{second_.observation.reason}"
+        record_.update(applied=False, why=refusal_)
+        attempt["lower_waiver"] = record_
+        return detection
+
     def _near_expected_site(self, base, yaw: float) -> ExpectedSite:
         """The planned pickup in base_link at the capture's control base (x, y, yaw)."""
         pickup_ = self.pocket["planning_pickup"]
@@ -3781,15 +3855,19 @@ class MissionCore:
             # view (aisle_out picked the neighbour 0.94 m away). Continuity of the far choice, not identity.
             site = self._near_expected_site(base, yaw)
             detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, params, site, **waive_kw)
-            pickup_ = self.pocket["planning_pickup"]
-            attempt["expected"] = {
-                "site": [site.x_m, site.y_m, site.yaw_rad], "radius_m": site.radius_m,
-                "axis_tolerance_rad": site.axis_tolerance_rad,
-                "planning_pickup": [float(pickup_.x_m), float(pickup_.y_m), float(pickup_.yaw_rad)],
-                "candidates": [asdict(c_) for c_ in candidates_],
-            }
+            attempt["expected"] = self._expected_record(site, candidates_)
+            if not waive_kw and detection.observation.status != "valid" and self._near_waiver_on():
+                detection = self._near_lower_waiver(attempt, detection, site, detector_input, prior, params)
         else:
             detection = detect_pockets(detector_input, prior, params, **waive_kw)
+            if self._near_waiver_on() and detection.observation.status == "valid":
+                # Plan 2026-10-22 task C condition 1: the pallet this capture's own detector saw, in the control
+                # frame of this capture -- a far capture's adopted estimate may be the learned recognition's.
+                depth_ = float(options.pallet_prior_loaded.overall_depth_m)
+                site_ = options.adapter.estimate_world_pallet_site(
+                    options.adapter.estimate_pallet_center_m(detection.observation, depth_),
+                    detection.observation.insertion_yaw_rad, (float(base[0]), float(base[1])), float(yaw))
+                attempt["detector_site"] = [float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)]
         observation = detection.observation
         if far_capture:
             reference = observation

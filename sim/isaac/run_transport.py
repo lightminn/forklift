@@ -375,6 +375,17 @@ def arguments() -> argparse.Namespace:
         "--planning-target perception.",
     )
     parser.add_argument(
+        "--near-capture-lower",
+        choices=("gate", "waive_far_confirmed"),
+        default="gate",
+        help="Plan 2026-10-22 task C (user decision 2026-10-22, conditional): waive_far_confirmed -- a near capture "
+        "with no valid pocket in its expected site is detected once more with the lower band waived, only after a far "
+        "capture that passed the full detector at its own thresholds (its detector's pallet within 0.15 m and 15 deg "
+        "of the adopted far estimate) and only among candidates within 0.15 m and 15 deg of the expected site; each "
+        "case is recorded (lower_waiver). The bottom-deck check's own waiver is unchanged. Needs "
+        "--near-capture-expected on.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -987,6 +998,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
     if args.near_capture_expected == "on" and not (args.use_perception and args.planning_target == "perception"):
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
+    if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
+        parser.error("--near-capture-lower waive_far_confirmed needs --near-capture-expected on")
     # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
     args.pallet_prior_loaded = None
     if args.use_perception:
@@ -5241,6 +5254,7 @@ def drive(S, isaac) -> None:
                                 # Namespace from before these options has neither; it ran at the defaults.
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
+                                near_capture_lower=getattr(args, "near_capture_lower", "gate"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,

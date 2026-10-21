@@ -309,3 +309,126 @@ def test_an_options_object_without_the_switch_is_off():
     del w.core.options.near_capture_expected
     w.run()
     assert w.restricted == [] and w.plain == [{}]
+
+
+# --- plan 2026-10-22 task C: the near lower band waived with the check off (user decision, conditional) ---------
+
+FAR_ESTIMATE = {"x_m": 3.4, "y_m": 6.1, "yaw_rad": 1.6}
+
+
+@dataclass
+class Seen:
+    status: str
+    reason: str | None = None
+    insertion_yaw_rad: float = 0.02
+
+
+def waiver_c_world(*, first="no_pallet", second="valid", far=None, near_capture="pending", lower="waive_far_confirmed",
+                   inside=True):
+    """A capture whose restricted detector is valid only with the lower band waived (or as given)."""
+    from forklift_core.perception.pocket_detector import ExpectedCandidate
+
+    w = World(near_capture=near_capture, slam_mode="holding")
+    w.calls_c = []
+
+    def detect(inp, prior, params, **kw):
+        w.calls_c.append(("plain", None, kw))
+        return SimpleNamespace(observation=Seen("valid"), diagnostics=DetectionDiag())
+
+    def detect_expected(inp, prior, params, expected, **kw):
+        w.calls_c.append(("restricted", expected, kw))
+        status = second if kw.get("lower_evidence") is False else first
+        reason = None if status == "valid" else "no_opening_pattern"
+        return (SimpleNamespace(observation=Seen(status, reason), diagnostics=DetectionDiag()),
+                (ExpectedCandidate(0, (2.0, 0.1), 0.01, 0.12 if inside else 0.18, 0.02, 99.0, True),))
+
+    w.hooks.detect_pockets = detect
+    w.hooks.detect_pockets_expected = detect_expected
+    w.core.options.near_capture_expected = "on"
+    w.core.options.near_capture_lower = lower
+    w.core.options.adapter.estimate_pallet_center_m = lambda obs, depth: (2.5, 0.1)
+    w.core.options.adapter.estimate_world_pallet_site = lambda xy, yaw, base_xy, base_yaw: SimpleNamespace(
+        x_m=base_xy[0] + xy[0], y_m=base_xy[1] + xy[1], yaw_rad=base_yaw + yaw)
+    w.pocket["planning_pickup"] = SimpleNamespace(**FAR_ESTIMATE)
+    if near_capture == "pending":
+        w.state["near_capture"].update(far_attempt=1, far_estimate_m=dict(FAR_ESTIMATE))
+        record = {"pocket_observation": {"status": "valid"}, "detector_site": [3.42, 6.08, 1.61]}
+        record.update(far or {})
+        w.state["observation_attempts"][0] = record
+    return w
+
+
+def test_the_near_lower_band_is_waived_once_the_far_capture_passed_in_full_and_the_record_says_why():
+    w = waiver_c_world()
+    out = w.run()
+    first, second = [c for c in w.calls_c if c[0] == "restricted"]
+    assert first[2] == {} and second[2] == {"lower_evidence": False}
+    assert (second[1].radius_m, second[1].axis_tolerance_rad) == (0.15, pytest.approx(math.radians(15.0)))
+    assert (first[1].radius_m, second[1].x_m, second[1].y_m) == (0.20, first[1].x_m, first[1].y_m)
+    assert out.observation.status == "valid"
+    waiver = out.attempt["lower_waiver"]
+    assert waiver["applied"] is True and waiver["far_attempt"] == 1
+    assert waiver["far_detector_status"] == "valid" and waiver["far_link_m"] == pytest.approx(math.hypot(0.02, 0.02))
+    assert (waiver["first"]["status"], waiver["first"]["reason"]) == ("no_pallet", "no_opening_pattern")
+    assert waiver["first"]["expected"]["radius_m"] == 0.20  # the first pass, kept beside the waived one
+    assert out.attempt["lower_evidence"] is False and out.attempt["expected"]["radius_m"] == 0.15
+
+
+def test_a_near_capture_valid_on_the_first_pass_waives_nothing():
+    w = waiver_c_world(first="valid")
+    out = w.run()
+    assert len([c for c in w.calls_c if c[0] == "restricted"]) == 1
+    assert "lower_waiver" not in out.attempt and "lower_evidence" not in out.attempt
+
+
+@pytest.mark.parametrize("far, why", [
+    ({"pocket_observation": {"status": "no_pallet"}}, "far_detector:no_pallet"),
+    ({"detector_reference": {"status": "invalid"}}, "far_detector:invalid"),
+    ({"lower_evidence": False}, "far_lower_waived"),
+    ({"expected": {"site": [0, 0, 0]}}, "far_restricted"),
+    ({"detector_site": None}, "far_detector_site_missing"),
+    ({"detector_site": [3.6, 6.1, 1.6]}, "far_link"),
+    ({"detector_site": [3.4, 6.1, 1.95]}, "far_link"),
+])
+def test_each_far_condition_refuses_the_waiver_by_name(far, why):
+    w = waiver_c_world(far=far)
+    out = w.run()
+    assert len([c for c in w.calls_c if c[0] == "restricted"]) == 1
+    waiver = out.attempt["lower_waiver"]
+    assert waiver["applied"] is False and waiver["why"] == why
+    assert out.observation.status == "no_pallet" and "lower_evidence" not in out.attempt
+
+
+def test_a_second_pass_without_a_valid_candidate_keeps_the_first_result():
+    w = waiver_c_world(second="no_pallet")
+    out = w.run()
+    waiver = out.attempt["lower_waiver"]
+    assert waiver["applied"] is False and waiver["why"] == "second:no_pallet:no_opening_pattern"
+    assert out.observation.status == "no_pallet" and "lower_evidence" not in out.attempt
+    assert out.attempt["expected"]["radius_m"] == 0.20
+
+
+def test_the_far_capture_records_its_detector_site_only_with_the_waiver_option():
+    w = waiver_c_world(near_capture=None)
+    out = w.run()
+    # the SLAM base (2.9, 3.6, 1.5) moved 0.4 m ahead, plus the stub's (2.5, 0.1) offset
+    bx, by = 2.9 + 0.4 * math.cos(1.5), 3.6 + 0.4 * math.sin(1.5)
+    assert out.attempt["detector_site"] == pytest.approx([bx + 2.5, by + 0.1, 1.52])
+    w = waiver_c_world(near_capture=None, lower="gate")
+    assert "detector_site" not in w.run().attempt
+
+
+def test_the_gate_default_never_waives():
+    w = waiver_c_world(lower="gate")
+    out = w.run()
+    assert len([c for c in w.calls_c if c[0] == "restricted"]) == 1
+    assert "lower_waiver" not in out.attempt and out.observation.status == "no_pallet"
+
+
+def test_the_check_on_waiver_is_not_this_one():
+    w = waiver_c_world()
+    w.core.options.bottom_deck_check = "on"
+    w.state["bottom_deck"] = {"status": "done", "leg": None, "record": {"verdict": "present"}}
+    out = w.run()
+    (_, _, kw), = [c for c in w.calls_c if c[0] == "restricted"]
+    assert kw == {"lower_evidence": False} and "lower_waiver" not in out.attempt

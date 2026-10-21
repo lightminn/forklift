@@ -1105,7 +1105,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "scene_file": None,
                               # 2026-10-22: the near capture's expected site and the untracked re-draw's lateral box
                               # (docs/plans/2026-10-22-near-recapture-scenes.md); off / 0.05 in every earlier run.
-                              "near_capture_expected": "off", "near_capture_redraw_lateral_m": 0.05}
+                              "near_capture_expected": "off", "near_capture_redraw_lateral_m": 0.05,
+                              # 2026-10-22 task C: the check-off near lower waiver; gate in every earlier run.
+                              "near_capture_lower": "gate"}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
