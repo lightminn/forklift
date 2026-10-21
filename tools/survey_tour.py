@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import math
 import sys
@@ -281,28 +282,31 @@ def uncovered_clusters(cells: np.ndarray, cell_m: float = CELL_M) -> list[np.nda
 
 
 def _cover_candidates(cell, yaw: float, radius_m: float):
-    """Where a waypoint for ``cell`` may stand, nearest first: the cell's centre, then rings around it that still cover
-    it (a judged cell is one the rear axle can hold, not one the whole footprint fits at every heading), each at the
-    path's heading, reversed, then across."""
-    headings = (yaw, yaw + math.pi, yaw + math.pi / 2, yaw - math.pi / 2)
-    yield from ((float(cell[0]), float(cell[1]), h) for h in headings)
-    for r in (r for r in REFINE_RING_M if r < radius_m):
-        for k in range(8):
-            a = k * math.pi / 4
-            yield from ((float(cell[0] + r * math.cos(a)), float(cell[1] + r * math.sin(a)), h) for h in headings)
+    """Where a waypoint for ``cell`` may stand, nearest first: the cell's centre, then every point of a ``CELL_M`` grid
+    around it that still covers it (a judged cell is one the rear axle can hold, not one the whole footprint fits at
+    every heading -- SEED 3-5's cells beside the pickup zone and the east wall took none nearer than 2 m), each at the
+    path's heading, reversed, across, then the diagonals between."""
+    headings = (yaw, yaw + math.pi, yaw + math.pi / 2, yaw - math.pi / 2,
+                yaw + math.pi / 4, yaw - math.pi / 4, yaw + 3 * math.pi / 4, yaw - 3 * math.pi / 4)
+    n = int(radius_m / CELL_M)
+    offsets = sorted(((i * CELL_M, j * CELL_M) for i in range(-n, n + 1) for j in range(-n, n + 1)
+                      if math.hypot(i, j) * CELL_M < radius_m - REFINE_INSIDE_M), key=lambda o: math.hypot(*o))
+    for dx, dy in offsets:
+        yield from ((float(cell[0] + dx), float(cell[1] + dy), h) for h in headings)
 
 
-REFINE_RING_M = (0.5, 1.0, 1.5)  # inside the cell radius, so a waypoint there still covers the cell
+REFINE_INSIDE_M = 0.05  # a candidate this far inside the radius at least, so the waypoint still covers the cell
 
 
 def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged: np.ndarray,
                 log=print, *, start=None, radius_m: float = CELL_RADIUS_M, deadline=None,
-                plan=None) -> tuple[list, SimpleNamespace, dict | None]:
+                plan=None, tries: int = 8) -> tuple[list, SimpleNamespace, dict | None]:
     """Greedy: plan the tour (from ``start``, home when None; ``plan`` when it is already planned); for the largest
     cluster of ``judged`` cells it leaves farther than ``radius_m`` (with ``sites``, other survey nodes or the poses
     already driven, in the rear-axle frame), add a waypoint at the cluster's cell nearest the path -- or the nearest
     placeable pose around it (``_cover_candidates``) -- heading as the path does there (or reversed, or across), between
-    the two waypoints the path passes it between; replan. Stops when covered, after ``rounds`` additions, past
+    the two waypoints the path passes it between; replan, trying up to ``tries`` placeable poses (SEED 3's first one
+    in the north-west corner had no path on to the next waypoint). Stops when covered, after ``rounds`` additions, past
     ``deadline`` (time.monotonic()), or when no added waypoint plans (that cluster is then skipped). Returns the tour,
     its plan and the judged coverage at ``radius_m`` of ``sites`` and the plan (None when the plan failed): a cluster
     left uncovered stays in it -- the caller fails on it, never drops the cells (gyro plan 4.5 F2/F3)."""
@@ -334,13 +338,17 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
         cell = cluster[int(np.argmin(d))]
         at = int(np.argmin(np.hypot(poses[:, 0] - cell[0], poses[:, 1] - cell[1])))
         yaw = float(poses[at, 2])
-        spot = next((c for c in _cover_candidates(cell, yaw, radius_m) if checker.free(c, clearance)), None)
         # the waypoint the path passes before this sample: the waypoints sit on the path exactly
         marks = [int(np.argmin(np.hypot(poses[:, 0] - x, poses[:, 1] - y))) for x, y, _ in tour]
         index = sum(1 for m in marks if m <= at)
-        candidate = tour[:index] + [[spot[0], spot[1], float(math.atan2(math.sin(spot[2]), math.cos(spot[2])))]] \
-            + tour[index:] if spot is not None else None
-        trial = plan_tour(result, candidate, start=start) if candidate is not None else None
+        candidate = trial = None
+        spots = (c for c in _cover_candidates(cell, yaw, radius_m) if checker.free(c, clearance))
+        for spot in itertools.islice(spots, tries):
+            candidate = tour[:index] + [[spot[0], spot[1], float(math.atan2(math.sin(spot[2]), math.cos(spot[2])))]] \
+                + tour[index:]
+            trial = plan_tour(result, candidate, start=start)
+            if trial.success or (deadline is not None and time.monotonic() > deadline):
+                break
         if trial is None or not trial.success:
             skipped.add(tuple(np.round(cluster.mean(0), 1)))
             log(json.dumps({"skipped_cluster": cluster.mean(0).round(2).tolist(), "cells": len(cluster)}))
