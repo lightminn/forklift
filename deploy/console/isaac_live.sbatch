@@ -13,7 +13,7 @@
 # (before the time limit) is passed to the supervisor, which ends the runner and its bridge and starts no more.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/isaac_live.sbatch OUT
-#   optional: PORT (8798), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), MAP_BUNDLE (a survey map bundle,
+#   optional: PORT (8798), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
 #   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
 #   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0")
 #
@@ -91,7 +91,11 @@ trap 'for c in $(docker ps -aq --filter "name=slam_bridge_${JOB}_e"); do docker 
 echo "host=$(hostname) job=$JOB out=$OUT"
 SUP_LOC=()
 [ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")
+# Between runners the supervisor serves the console's port itself (contract 6): the page and /api/v1/session, so a
+# start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
+# (300 s: the job holds its slot that long; 0 turns it off).
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" "${SUP_LOC[@]}" \
+  --standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" --standby-linger-s "${STANDBY_LINGER_S:-300}" \
   --bridge "$(json bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')" \
   --bridge-stop "$(json bash "$OUT/stop.sh" '{epoch}')" \
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \

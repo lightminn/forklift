@@ -211,3 +211,130 @@ def test_an_epoch_without_a_reason_does_not_show_the_previous_one(tmp_path):
                  exit_file="{epoch_dir}/run/exit_code", max_epochs=2)
     assert result["codes"] == [1, 1]
     assert "reason" not in json.loads((tmp_path / "live_port.json").read_text())
+
+
+# --- the standby (contract section 6: a session that fails its start checks before its server opens) ---------------
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _get(port: int, path: str):
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=2) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except OSError:
+        return None, None
+
+
+def _watch(port: int, until, then_term: bool = True, timeout_s: float = 20.0):
+    """In a thread: poll /api/v1/session until ``until(state)``, keep that state, then TERM this process (the
+    supervisor runs on the main thread, where its signal handlers are)."""
+    import os
+    import signal
+    import threading
+
+    seen = {}
+
+    def poll():
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            code, body = _get(port, "/api/v1/session")
+            if code == 200:
+                state = json.loads(body)
+                if until(state):
+                    seen["state"] = state
+                    seen["page"] = _get(port, "/")
+                    seen["control"] = _get(port, "/api/v1/control")
+                    break
+            time.sleep(0.05)
+        if then_term:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    thread = threading.Thread(target=poll, daemon=True)
+    thread.start()
+    return seen, thread
+
+
+def _web(tmp_path):
+    web = tmp_path / "web"
+    (web / "js").mkdir(parents=True)
+    (web / "index.html").write_text("<html>console</html>")
+    (web / "js" / "main.js").write_text("// main")
+    return web
+
+
+import time  # noqa: E402 -- used by the standby helpers above
+
+
+def test_the_standby_shows_a_start_failure_and_hands_the_port_to_the_runner(tmp_path):
+    port, web = _free_port(), _web(tmp_path)
+    bound = tmp_path / "bound.txt"
+    # a runner that binds the console's port (the standby must have let it go), then fails its start checks
+    # before writing its port file running
+    runner = [PY, "-c", "import json,socket,sys,pathlib; s=socket.socket(); "
+              "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1]))); "
+              "pathlib.Path(sys.argv[2]).write_text('bound'); s.close(); "
+              "pathlib.Path(sys.argv[3]).parent.mkdir(parents=True, exist_ok=True); "
+              "pathlib.Path(sys.argv[3]).write_text(json.dumps({'code': 1, 'reason': 'slam_not_localized: 0.4 m'}))",
+              str(port), str(bound), "{epoch_dir}/run/exit_code"]
+    seen, thread = _watch(port, lambda s: s["phase"] == "stopped")
+    result = sup.supervise(out=tmp_path / "out", runner=runner, port_file=tmp_path / "live_port.json", backoff_s=0.0,
+                           max_epochs=1, exit_file="{epoch_dir}/run/exit_code", standby_port=port, web_root=web,
+                           standby_linger_s=30.0)
+    thread.join(5.0)
+    assert bound.read_text() == "bound"  # the port was the runner's while it ran
+    state = seen["state"]
+    assert state["end"] == "epoch_limit" and state["retry"] is False and state["next_epoch"] is None
+    assert state["last_exit"] == {"epoch": 1, "exit_code": 1, "reason": "slam_not_localized: 0.4 m",
+                                  "stage": "start"}
+    assert seen["page"] == (200, b"<html>console</html>") and seen["control"][0] == 503
+    assert result["end"] == "epoch_limit"
+    assert _get(port, "/api/v1/session") == (None, None)  # closed with the supervisor
+
+
+def test_a_run_failure_is_told_apart_and_the_backoff_names_the_next_epoch(tmp_path):
+    port, web = _free_port(), _web(tmp_path)
+    # epoch 1 opens its server (port file running, started now) then fails; epoch 2 ends the session
+    runner = [PY, "-c", "import json,sys,time,pathlib; e=int(sys.argv[1]); "
+              "pathlib.Path(sys.argv[2]).write_text(json.dumps({'state':'running','started':time.time()})); "
+              "sys.exit(1 if e == 1 else 0)", "{epoch}", "{port_file}"]
+    seen, thread = _watch(port, lambda s: s["phase"] == "backoff", then_term=False)
+    result = sup.supervise(out=tmp_path / "out", runner=runner, port_file=tmp_path / "live_port.json", backoff_s=2.0,
+                           standby_port=port, web_root=web)
+    thread.join(5.0)
+    state = seen["state"]
+    assert state["retry"] is True and state["next_epoch"] == 2 and state["last_exit"]["stage"] == "run"
+    assert result["end"] == "ended" and result["codes"] == [1, 0]
+
+
+def test_a_refused_map_bundle_is_shown_until_a_term_ends_the_linger(tmp_path):
+    port, web = _free_port(), _web(tmp_path)
+    (tmp_path / "bundle").mkdir()  # no manifest: refused
+    seen, thread = _watch(port, lambda s: s["phase"] == "stopped")
+    began = time.monotonic()
+    result = sup.supervise(out=tmp_path / "out", runner=[PY, "-c", "pass"], port_file=tmp_path / "live_port.json",
+                           map_bundle=tmp_path / "bundle", standby_port=port, web_root=web, standby_linger_s=60.0)
+    thread.join(5.0)
+    assert time.monotonic() - began < 20.0  # the TERM ended the linger
+    state = seen["state"]
+    assert state["end"] == "map_mismatch" and state["last_exit"]["epoch"] == 0
+    assert state["last_exit"]["stage"] == "start" and state["last_exit"]["reason"]
+    assert result["end"] == "map_mismatch"
+
+
+def test_the_live_job_has_the_supervisor_serve_the_consoles_port_between_runners():
+    """Contract section 6: the standby on the console's own port, with the page; the linger can be turned off."""
+    from pathlib import Path
+
+    live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert ('--standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" '
+            '--standby-linger-s "${STANDBY_LINGER_S:-300}"') in live
