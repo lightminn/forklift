@@ -209,3 +209,36 @@ def test_a_live_stop_inside_a_failing_capture_pauses_instead_of_ending_the_run()
     w = World(fail=True)
     w.core.hooks.live_abort = lambda: True
     assert w.run().aborted is True
+
+
+def waiver_world(*, check="on", deck_status="done", verdict="present", near_capture="pending"):
+    """Plan 2026-10-21 task C: a capture whose detector port records the keyword it was called with."""
+    w = World(near_capture=near_capture)
+    kwargs_ = []
+
+    def detect(inp, prior, params, **kw):
+        kwargs_.append(kw)
+        return SimpleNamespace(observation=Observation(), diagnostics=DetectionDiag())
+
+    w.hooks.detect_pockets = detect
+    w.core.options.bottom_deck_check = check
+    if deck_status is not None:
+        w.state["bottom_deck"] = {"status": deck_status, "leg": None, "record": {"verdict": verdict}}
+    w.kwargs = kwargs_
+    return w
+
+
+def test_the_near_capture_after_a_present_bottom_deck_waives_the_lower_band():
+    w = waiver_world()
+    out = w.run()
+    assert w.kwargs == [{"lower_evidence": False}]
+    assert out.attempt["lower_evidence"] is False
+
+
+@pytest.mark.parametrize("kw", [dict(check="off"), dict(deck_status="returning"), dict(deck_status=None),
+                                dict(verdict="absent"), dict(near_capture=None), dict(near_capture="done")])
+def test_no_other_capture_waives_the_lower_band(kw):
+    w = waiver_world(**kw)
+    out = w.run()
+    assert w.kwargs == [{}]  # the detector's default, called as before
+    assert "lower_evidence" not in out.attempt

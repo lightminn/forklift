@@ -362,7 +362,7 @@ PROPERTIES = [
          "            rear = slam_rear(now_s)\n            truth_rear_capture = [float(v) for v in rear]\n"),
     prop("s1-redraw-on", S1, "a refused near capture is redrawn before ending",
          [NC + "test_a_refused_straight_is_redrawn_under_s4c3_and_its_install_recorded"],
-         'if straight is None and near is not None and options.near_capture_redraw == "on":', "if False:"),
+         'if straight is None and self._near_capture_redraw_allowed():', "if False:"),
     prop("s1-dry-refusal", S1, "a dry run out of tolerance refuses the straight",
          [NC + "test_a_dry_run_out_of_its_tolerance_refuses_the_straight"],
          'refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"\n                        straight = None',

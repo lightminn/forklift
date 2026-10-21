@@ -7675,7 +7675,7 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "if straight is None and near is not None and options.near_capture_redraw == \"on\":",
+    "find": "if straight is None and self._near_capture_redraw_allowed():",
     "replace": "if False:",
     "count": 1
    },

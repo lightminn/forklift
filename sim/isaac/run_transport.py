@@ -342,10 +342,12 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--near-capture-redraw",
-        choices=("on", "off"),
+        choices=("on", "off", "always"),
         default="on",
         help="Plan D8 S4c-3 (test only): off skips stage 1 so a refused near capture goes to "
-        "the stage-2 realignment. Needs --near-tracking.",
+        "the stage-2 realignment (needs --near-tracking). always (plan 2026-10-21 task B): as on with the "
+        "near-field tracking, and without it a refused near capture is re-drawn too (no correction points "
+        "to check there) instead of ending the run.",
     )
     parser.add_argument(
         "--near-capture-box-yaw-rad",
@@ -353,7 +355,7 @@ def arguments() -> argparse.Namespace:
         default=0.05,
         help="Plan D8 S4c-3 (test only): the near capture's own heading box, narrower than the "
         "0.05 rad default to send near captures to the stage-1 re-draw in a smoke. (0, 0.05]. "
-        "Needs --near-tracking.",
+        "Needs --near-tracking or --near-capture-redraw always.",
     )
     parser.add_argument(
         "--near-drop-frames-from-m",
@@ -1093,11 +1095,11 @@ def arguments() -> argparse.Namespace:
             parser.error("--near-inject needs exactly one of --near-inject-lateral-m and --near-inject-yaw-rad")
     elif any(v != 0.0 for v in inject_sizes):
         parser.error("--near-inject-lateral-m / --near-inject-yaw-rad need --near-inject")
-    if args.near_capture_redraw != "on" and not args.near_tracking:
-        parser.error("--near-capture-redraw needs --near-tracking")
+    if args.near_capture_redraw == "off" and not args.near_tracking:
+        parser.error("--near-capture-redraw off needs --near-tracking")
     if args.near_capture_box_yaw_rad != 0.05:
-        if not args.near_tracking:
-            parser.error("--near-capture-box-yaw-rad needs --near-tracking")
+        if not args.near_tracking and args.near_capture_redraw != "always":
+            parser.error("--near-capture-box-yaw-rad needs --near-tracking or --near-capture-redraw always")
         if not (math.isfinite(args.near_capture_box_yaw_rad) and 0.0 < args.near_capture_box_yaw_rad <= 0.05):
             # Narrower only: the default box is the one the v3.7 collision finding fixed.
             parser.error("--near-capture-box-yaw-rad must be in (0, 0.05] rad")
@@ -5083,7 +5085,7 @@ def drive(S, isaac) -> None:
             near_tracker_create=near_tracker_create, near_fork_geometry=near_fork_geometry,
             # M-a1 slice 4b-i: the capture port (recorded when recording; built further down run()), the detector
             # port and the capture's dumps.
-            perception_capture=lambda: perception_capture, detect_pockets=lambda *a: detect_pockets(*a),
+            perception_capture=lambda: perception_capture, detect_pockets=lambda *a, **k: detect_pockets(*a, **k),
             save_capture=save_capture,
             # The far recognition's decision (--recognition far), None otherwise.
             far_recognition=far_recognition_hook if far_runtime is not None else None,

@@ -314,9 +314,9 @@ def test_a_replayed_pattern_at_another_position_stops(monkeypatch):
     """Codex: shifting a pattern's bounds kept widths and counts and passed."""
     real = diag.det._opening_candidates
 
-    def shifted(plane, prior, params, workspace, *, plane_index=0):
+    def shifted(plane, prior, params, workspace, *, plane_index=0, lower_evidence=True):
         patterns, rejections = real(
-            plane, prior, params, workspace, plane_index=plane_index
+            plane, prior, params, workspace, plane_index=plane_index, lower_evidence=lower_evidence
         )
         moved = [
             dataclasses.replace(
@@ -420,3 +420,29 @@ def test_a_far_recognition_attempt_is_replayed_against_the_detectors_reference()
            "detector_reference": {"status": "valid", "stamp_ns": 1, "x": "detector"}}
     assert D.recorded_observation(plain) is plain["pocket_observation"]
     assert D.recorded_observation(far)["x"] == "detector"
+
+
+def test_a_waived_attempt_is_replayed_with_the_waiver_in_detection_and_reconstruction():
+    """Plan 2026-10-21 task C (Codex plan round 2 P2): the lower-band waiver reaches the detection and the
+    candidate reconstruction alike; with the detection alone the replica no longer matched."""
+    from tools.measure_pocket_evidence import structure
+
+    sc = scene_rig.render(scene_rig.place(structure(GEOMETRY, "pallet"), x_m=2.0),
+                          camera=scene_rig.Camera((0.619, 0.0, 0.27)), quantize=True)
+    params = DetectorParams.derived_for(PRIOR, range_min_m=0.03, range_max_m=4.0, max_plane_candidates=12)
+    plain = diag.diagnose(sc, PRIOR, params)
+    assert plain["detection"]["observation"]["status"] == "no_pallet"
+    waived = diag.diagnose(sc, PRIOR, params, lower_evidence=False)
+    assert waived["detection"]["observation"]["status"] == "valid"
+    assert waived["selection"]["replica_matches"] and waived["extraction"]["replica_matches"]
+
+
+@pytest.mark.parametrize("attempt, expected", [({}, True), ({"lower_evidence": False}, False),
+                                               ({"lower_evidence": True}, True)])
+def test_an_attempt_names_its_lower_band_setting(attempt, expected):
+    assert diag.attempt_lower_evidence(attempt) is expected
+
+
+def test_an_attempt_with_a_non_boolean_lower_band_setting_is_refused():
+    with pytest.raises(ValueError, match="lower_evidence"):
+        diag.attempt_lower_evidence({"lower_evidence": 0})

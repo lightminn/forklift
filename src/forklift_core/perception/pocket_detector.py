@@ -448,7 +448,7 @@ def count_interior_gaps(columns: NDArray[np.bool_]) -> int:
     return len(_gap_runs(columns))
 
 
-def _opening_candidates(plane, prior, params, workspace, *, plane_index=0):
+def _opening_candidates(plane, prior, params, workspace, *, plane_index=0, lower_evidence=True):
     lateral = plane.points @ plane.left_axis
     local = np.column_stack((np.zeros(len(lateral)), lateral, plane.points[:, 2]))
     counts, origin = _column_grid(local, prior, params)
@@ -547,7 +547,10 @@ def _opening_candidates(plane, prior, params, workspace, *, plane_index=0):
         upper_right, upper_left = per_opening
         upper_threshold = params.upper_band_points or params.min_band_points
         upper_ok = min(per_opening) >= upper_threshold
-        evidence_failed = min(*supports, lower, upper) < params.min_band_points
+        # lower_evidence False (plan 2026-10-21 task C): the caller proved the bottom deck another way (the side
+        # faces); the lower band is still counted and reported, but no longer gates the pattern.
+        gated = (*supports, lower, upper) if lower_evidence else (*supports, upper)
+        evidence_failed = min(gated) < params.min_band_points
         if evidence_failed or not upper_ok:
             # The column grid increases right-to-left; expose named sides in
             # left/middle/right order without altering the legacy aggregates.
@@ -574,7 +577,8 @@ def _opening_candidates(plane, prior, params, workspace, *, plane_index=0):
                     if evidence_failed
                     else "insufficient_upper",
                     tuple(
-                        name for name, value, threshold in evidence if value < threshold
+                        name for name, value, threshold in evidence
+                        if value < threshold and (lower_evidence or name != "lower")
                     ),
                     tuple((name, int(threshold)) for name, _, threshold in evidence),
                 )
@@ -731,6 +735,8 @@ def detect_pockets(
     scene_input: SceneInput,
     prior: PalletPrior,
     params: DetectorParams = _DEFAULT_PARAMS,
+    *,
+    lower_evidence: bool = True,
 ) -> DetectionResult:
     """Estimate pockets from depth and an explicit prior, with no evaluation labels.
 
@@ -739,6 +745,8 @@ def detect_pockets(
     """
     if 2 * params.band_margin_m >= prior.opening_height_m:
         raise ValueError("band_margin_m must leave a nonempty opening height band")
+    if type(lower_evidence) is not bool:
+        raise ValueError("lower_evidence must be an explicit boolean")
     start = time.perf_counter()
     planes, rejected, candidates = [], {}, []
     rejected_patterns = []
@@ -759,7 +767,8 @@ def detect_pockets(
                     rejected[index] = "vertical_refit_residual"
                     continue
                 patterns, pattern_rejections = _opening_candidates(
-                    plane, prior, params, workspace, plane_index=index
+                    plane, prior, params, workspace, plane_index=index,
+                    lower_evidence=lower_evidence,
                 )
                 rejected_patterns.extend(pattern_rejections)
                 if not patterns:

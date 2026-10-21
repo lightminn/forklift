@@ -956,7 +956,7 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
     window = moved[branch - 2500 : branch + 3500]
     assert window.index(
         'refusal = f"near_capture_misaligned:{offsets}"'
-    ) < window.index('if straight is None and near is not None and options.near_capture_redraw == "on":')
+    ) < window.index('if straight is None and self._near_capture_redraw_allowed():')
     assert 'refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"' in window
     assert window.index("near_capture_redraw(") < window.index(
         "require(straight is not None, refusal)"
@@ -1009,7 +1009,7 @@ def test_s4c3_stage_two_realigns_once_on_the_shared_release_and_records_every_in
     assert 'state["near_tracking"].get("realigns", 0) == 0' in window
     assert window.index("near_tracking.REALIGN_MIN_LEFT_M") < window.index("start_near_realign(t, attempt_number)")
     assert window.index("start_near_realign(t, attempt_number)") < window.index("require(straight is not None, refusal)")
-    assert 'if straight is None and near is not None and options.near_capture_redraw == "on":' in core
+    assert 'if straight is None and self._near_capture_redraw_allowed():' in core
 
 
 def test_mission_commands_options_validate_before_startup(tmp_path) -> None:
@@ -1165,3 +1165,33 @@ def test_the_far_zone_change_is_saved_into_the_run_state_when_it_is_made():
     assert body.index("far_runtime.set_zone(centre_, radius_)") < body.index(
         'state.setdefault("recognition", {}).update(far_runtime.summary())')
     assert "far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None," in source
+
+
+def test_the_runner_detector_port_passes_the_lower_band_waiver_through():
+    """Plan 2026-10-21 task C (Codex plan round 2 P2): the core calls the detector port with lower_evidence=False;
+    the runner's port must hand the keyword to the detector (the old ``lambda *a`` raised TypeError)."""
+    import re
+
+    source = SCRIPT.read_text()
+    m = re.search(r"detect_pockets=(lambda [^:]*: detect_pockets\([^)]*\))", source)
+    assert m is not None
+    calls = []
+    port = eval(m.group(1), {"detect_pockets": lambda *a, **k: calls.append((a, k)) or "R"})  # noqa: S307
+    assert port("INPUT", "PRIOR", "PARAMS", lower_evidence=False) == "R"
+    assert calls == [(("INPUT", "PRIOR", "PARAMS"), {"lower_evidence": False})]
+
+
+def test_near_capture_redraw_always_needs_no_near_tracking_and_off_still_does() -> None:
+    """Plan 2026-10-21 task B: `always` re-draws a refused near capture without the near-field tracking, and lets
+    the test-only heading box narrow there (to make the re-draw happen in a smoke); `off` stays tracking-only."""
+    base = [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
+            "--forklift-urdf", str(PROVISIONAL_URDF), "--pallet-geometry", "unused.yaml", "--settings",
+            "unused.yaml", "--output", "unused", "--seed", "2"]
+    for flags, expected in ((["--near-capture-redraw", "off"], "--near-capture-redraw off needs --near-tracking"),
+                            (["--near-capture-box-yaw-rad", "0.01"],
+                             "--near-capture-box-yaw-rad needs --near-tracking or --near-capture-redraw always")):
+        result = subprocess.run([*base, *flags], capture_output=True, text=True, check=False)
+        assert result.returncode == 2 and expected in result.stderr, (flags, result.stderr)
+    result = subprocess.run([*base, "--near-capture-redraw", "always", "--near-capture-box-yaw-rad", "0.01"],
+                            capture_output=True, text=True, check=False)
+    assert "near-capture" not in result.stderr, result.stderr
