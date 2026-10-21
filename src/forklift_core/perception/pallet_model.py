@@ -12,7 +12,11 @@ from dataclasses import asdict, dataclass, fields
 from forklift_core._validation import _finite_scalar
 from forklift_core.perception.pallet_geometry import PalletBox, PalletGeometry
 
-KNOWN_ENTRY_AXES = {"epal6": ("x",), "t11_06": ("x", "y")}
+KNOWN_ENTRY_AXES = {"epal6": ("x",), "t11_06": ("x", "y"), "t11_06_d600": ("x",)}
+# Test articles that share a known shape's entry face but not its depth (plan 2026-10-22: the shallow T11 cycle
+# test article). The face alone cannot tell them apart, so a run whose pallet is the variant reads it in the parent's
+# place; any other run never sees the variant.
+VARIANT_OF = {"t11_06_d600": "t11_06"}
 TOP_STYLES = ("boards", "flat")
 _EPS = 1e-9
 
