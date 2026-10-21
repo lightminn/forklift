@@ -1,0 +1,9 @@
+# Own firmware sources only (CONTRIBUTING 4). Vendor/CubeMX code keeps its own style.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+BreakBeforeBraces: Linux
+SortIncludes: true

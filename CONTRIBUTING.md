@@ -44,7 +44,7 @@ forklift/
 │   ├── wire.py                       # 게이트웨이와 가짜 차량이 함께 쓰는 console/1 전송 규칙
 │   ├── gateway/                      # 관찰 전용 게이트웨이(C2a): ROS 2 → console/1, rclpy 는 ros_node.py 만
 │   └── mock_vehicle/                 # console/1 계약을 흉내 낸 가짜 차량 서버
-├── firmware/                         # 자체 MCU 코드; 보드 선정 후 생성
+├── firmware/                         # 자체 MCU 코드; 하드웨어 독립 코어(core/)는 보드 확정 전부터, 보드 HAL(boards/)은 보드 확정 뒤
 ├── sim/                              # 선택한 엔진의 모델·환경·어댑터
 ├── config/                           # ROS와 독립적인 실행·시나리오 설정
 ├── tests/
