@@ -44,10 +44,10 @@ static int encode(int argc, char **argv)
         m.type = LINK_DRIVE;
         m.u.drive = (link_drive){flt(a[0]),           flt(a[1]),           flt(a[2]),
                                  flt(a[3]),           (uint16_t)num(a[4]), (uint8_t)num(a[5]),
-                                 (uint16_t)num(a[6]), (uint32_t)num(a[7]), (uint32_t)num(a[8])};
+                                 (uint16_t)num(a[6]), (uint32_t)num(a[7]), (uint64_t)num(a[8])};
     } else if (strcmp(kind, "arm") == 0 && n == 2) {
         m.type = LINK_ARM;
-        m.u.arm = (link_arm){(uint32_t)num(a[0]), (uint32_t)num(a[1])};
+        m.u.arm = (link_arm){(uint32_t)num(a[0]), (uint64_t)num(a[1])};
     } else if (strcmp(kind, "disarm") == 0 && n == 0) {
         m.type = LINK_DISARM;
     } else if (strcmp(kind, "clear") == 0 && n == 1) {
@@ -56,7 +56,7 @@ static int encode(int argc, char **argv)
     } else if (strcmp(kind, "state") == 0 && n == 28) {
         link_state *s = &m.u.state;
         m.type = LINK_STATE;
-        s->mcu_time_us = (uint32_t)num(a[0]);
+        s->mcu_time_us = (uint64_t)num(a[0]);
         s->boot_id = (uint32_t)num(a[1]);
         s->arm_gen = (uint16_t)num(a[2]);
         s->last_rx_seq = (uint16_t)num(a[3]);
@@ -97,14 +97,14 @@ static void print_msg(const link_msg *m)
     switch (m->type) {
     case LINK_DRIVE: {
         const link_drive *d = &m->u.drive;
-        printf("drive %u %.9g %.9g %.9g %.9g %u %u %u %lu %lu\n", m->seq, d->left_wheel_rad_s,
+        printf("drive %u %.9g %.9g %.9g %.9g %u %u %u %lu %llu\n", m->seq, d->left_wheel_rad_s,
                d->right_wheel_rad_s, d->steering_rad, d->lift_m, d->valid_after_echo_ms, d->flags,
-               d->arm_gen, (unsigned long)d->boot_id, (unsigned long)d->echo_mcu_time_us);
+               d->arm_gen, (unsigned long)d->boot_id, (unsigned long long)d->echo_mcu_time_us);
         break;
     }
     case LINK_ARM:
-        printf("arm %u %lu %lu\n", m->seq, (unsigned long)m->u.arm.boot_id,
-               (unsigned long)m->u.arm.echo_mcu_time_us);
+        printf("arm %u %lu %llu\n", m->seq, (unsigned long)m->u.arm.boot_id,
+               (unsigned long long)m->u.arm.echo_mcu_time_us);
         break;
     case LINK_DISARM:
         printf("disarm %u\n", m->seq);
@@ -114,11 +114,11 @@ static void print_msg(const link_msg *m)
         break;
     case LINK_STATE: {
         const link_state *s = &m->u.state;
-        printf("state %u %lu %lu %u %u %u %u %lu %ld %ld %.9g %.9g %.9g %.9g", m->seq,
-               (unsigned long)s->mcu_time_us, (unsigned long)s->boot_id, s->arm_gen, s->last_rx_seq,
-               s->mode, s->reject_reason, (unsigned long)s->fault_flags, (long)s->wheel_count_left,
-               (long)s->wheel_count_right, s->wheel_rate_left_rad_s, s->wheel_rate_right_rad_s,
-               s->steering_rad, s->lift_m);
+        printf("state %u %llu %lu %u %u %u %u %lu %ld %ld %.9g %.9g %.9g %.9g", m->seq,
+               (unsigned long long)s->mcu_time_us, (unsigned long)s->boot_id, s->arm_gen,
+               s->last_rx_seq, s->mode, s->reject_reason, (unsigned long)s->fault_flags,
+               (long)s->wheel_count_left, (long)s->wheel_count_right, s->wheel_rate_left_rad_s,
+               s->wheel_rate_right_rad_s, s->steering_rad, s->lift_m);
         for (int i = 0; i < 4; i++) {
             printf(" %d", s->current_ma[i]);
         }

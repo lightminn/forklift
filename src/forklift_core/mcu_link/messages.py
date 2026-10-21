@@ -16,12 +16,13 @@ from .framing import BODY_MAX, FrameDecoder, cobs_encode, crc16_ccitt_false
 
 VERSION = 1
 U32_MAX = 2**32 - 1
+U64_MAX = 2**64 - 1
 
 _HEADER = struct.Struct("<BBH")
-_DRIVE = struct.Struct("<ffffHBHII")
-_ARM = struct.Struct("<II")
+_DRIVE = struct.Struct("<ffffHBHIQ")
+_ARM = struct.Struct("<IQ")
 _CLEAR = struct.Struct("<I")
-_STATE = struct.Struct("<IIHHBBIiiffff4h4h4BHHB")
+_STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHB")
 
 TYPE_DRIVE = 0x01
 TYPE_ARM = 0x02
@@ -128,7 +129,7 @@ class Drive:
         _check_range("valid_after_echo_ms", self.valid_after_echo_ms, 1, 0xFFFF)
         _check_range("arm_gen", self.arm_gen, 1, 0xFFFF)
         _check_range("boot_id", self.boot_id, 1, U32_MAX)
-        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U32_MAX)
+        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U64_MAX)
 
 
 @dataclass(frozen=True)
@@ -138,7 +139,7 @@ class Arm:
 
     def __post_init__(self) -> None:
         _check_range("boot_id", self.boot_id, 1, U32_MAX)
-        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U32_MAX)
+        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U64_MAX)
 
 
 @dataclass(frozen=True)

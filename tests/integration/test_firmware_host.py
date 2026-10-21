@@ -86,7 +86,7 @@ def _random_messages(rng: random.Random) -> list[tuple[str, int, object, list[st
             rng.random() < 0.5,
             rng.randint(1, 0xFFFF),
             rng.randint(1, 2**32 - 1),
-            rng.randint(0, 2**32 - 1),
+            rng.randint(0, 2**64 - 1),
         )
         args = [repr(drive.left_wheel_rad_s), repr(drive.right_wheel_rad_s)]
         args += [repr(drive.steering_rad), repr(drive.lift_m)]
@@ -94,7 +94,7 @@ def _random_messages(rng: random.Random) -> list[tuple[str, int, object, list[st
         args += [str(drive.arm_gen), str(drive.boot_id), str(drive.echo_mcu_time_us)]
         cases.append(("drive", rng.randint(0, 0xFFFF), drive, args))
     for _ in range(20):
-        arm = Arm(rng.randint(1, 2**32 - 1), rng.randint(0, 2**32 - 1))
+        arm = Arm(rng.randint(1, 2**32 - 1), rng.randint(0, 2**64 - 1))
         args = [str(arm.boot_id), str(arm.echo_mcu_time_us)]
         cases.append(("arm", rng.randint(0, 0xFFFF), arm, args))
         clear = ClearFaults(rng.randint(1, 2**32 - 1))
@@ -102,7 +102,7 @@ def _random_messages(rng: random.Random) -> list[tuple[str, int, object, list[st
         cases.append(("disarm", rng.randint(0, 0xFFFF), Disarm(), []))
     for _ in range(50):
         state = McuState(
-            rng.randint(0, 2**32 - 1),
+            rng.randint(0, 2**64 - 1),
             rng.randint(1, 2**32 - 1),
             rng.randint(0, 0xFFFF),
             rng.randint(0, 0xFFFF),

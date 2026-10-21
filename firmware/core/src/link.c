@@ -8,10 +8,10 @@
 #define CRC_LEN 2u
 #define ENCODED_MAX (LINK_BODY_MAX + 1u)
 
-#define DRIVE_LEN 29u
-#define ARM_LEN 8u
+#define DRIVE_LEN 33u
+#define ARM_LEN 12u
 #define CLEAR_LEN 4u
-#define STATE_LEN 67u
+#define STATE_LEN 71u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
 typedef struct {
@@ -33,6 +33,12 @@ static void put_u32(wr *w, uint32_t v)
 {
     put_u16(w, (uint16_t)v);
     put_u16(w, (uint16_t)(v >> 16));
+}
+
+static void put_u64(wr *w, uint64_t v)
+{
+    put_u32(w, (uint32_t)v);
+    put_u32(w, (uint32_t)(v >> 32));
 }
 
 static void put_f32(wr *w, float f)
@@ -61,6 +67,12 @@ static uint32_t get_u32(rd *r)
 {
     uint32_t lo = get_u16(r);
     return lo | ((uint32_t)get_u16(r) << 16);
+}
+
+static uint64_t get_u64(rd *r)
+{
+    uint64_t lo = get_u32(r);
+    return lo | ((uint64_t)get_u32(r) << 32);
 }
 
 static float get_f32(rd *r)
@@ -102,19 +114,19 @@ static void put_payload(wr *w, const link_msg *m)
         put_u8(w, d->flags);
         put_u16(w, d->arm_gen);
         put_u32(w, d->boot_id);
-        put_u32(w, d->echo_mcu_time_us);
+        put_u64(w, d->echo_mcu_time_us);
         break;
     }
     case LINK_ARM:
         put_u32(w, m->u.arm.boot_id);
-        put_u32(w, m->u.arm.echo_mcu_time_us);
+        put_u64(w, m->u.arm.echo_mcu_time_us);
         break;
     case LINK_CLEAR_FAULTS:
         put_u32(w, m->u.clear.boot_id);
         break;
     case LINK_STATE: {
         const link_state *s = &m->u.state;
-        put_u32(w, s->mcu_time_us);
+        put_u64(w, s->mcu_time_us);
         put_u32(w, s->boot_id);
         put_u16(w, s->arm_gen);
         put_u16(w, s->last_rx_seq);
@@ -159,19 +171,19 @@ static void get_payload(rd *r, link_msg *m)
         d->flags = get_u8(r);
         d->arm_gen = get_u16(r);
         d->boot_id = get_u32(r);
-        d->echo_mcu_time_us = get_u32(r);
+        d->echo_mcu_time_us = get_u64(r);
         break;
     }
     case LINK_ARM:
         m->u.arm.boot_id = get_u32(r);
-        m->u.arm.echo_mcu_time_us = get_u32(r);
+        m->u.arm.echo_mcu_time_us = get_u64(r);
         break;
     case LINK_CLEAR_FAULTS:
         m->u.clear.boot_id = get_u32(r);
         break;
     case LINK_STATE: {
         link_state *s = &m->u.state;
-        s->mcu_time_us = get_u32(r);
+        s->mcu_time_us = get_u64(r);
         s->boot_id = get_u32(r);
         s->arm_gen = get_u16(r);
         s->last_rx_seq = get_u16(r);

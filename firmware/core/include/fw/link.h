@@ -25,11 +25,13 @@ typedef struct {
     uint16_t valid_after_echo_ms;
     uint8_t flags;
     uint16_t arm_gen;
-    uint32_t boot_id, echo_mcu_time_us;
+    uint32_t boot_id;
+    uint64_t echo_mcu_time_us;
 } link_drive;
 
 typedef struct {
-    uint32_t boot_id, echo_mcu_time_us;
+    uint32_t boot_id;
+    uint64_t echo_mcu_time_us;
 } link_arm;
 
 typedef struct {
@@ -37,7 +39,8 @@ typedef struct {
 } link_clear;
 
 typedef struct {
-    uint32_t mcu_time_us, boot_id;
+    uint64_t mcu_time_us;
+    uint32_t boot_id;
     uint16_t arm_gen, last_rx_seq;
     uint8_t mode, reject_reason;
     uint32_t fault_flags;

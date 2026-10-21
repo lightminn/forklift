@@ -23,16 +23,16 @@ from forklift_core.mcu_link.messages import (
 )
 
 # mcu-link/1 contract section 6 golden vectors.
-ARM_1234 = "0f01023412efbeadde04030201cc6900"
+ARM_1234 = "0e01023412efbeadde0403020105010103764500"
 DRIVE_0007 = (
-    "04010107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab03ee1a00"
+    "04010107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab020101010388be00"
 )
 CLEAR_0008 = "0401040807efbeadde024e00"
 DISARM_0009 = "0401030903bc1100"
 STATE_0102 = (
-    "160181020144332211efbeadde03020201020701800108c01dfefff1fb09010103a03f"
-    "010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e002110202"
-    "040b16df00"
+    "0a01810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
+    "0103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e0"
+    "02110202040b2cbb00"
 )
 
 DRIVE = Drive(
@@ -44,10 +44,10 @@ DRIVE = Drive(
     lift_hold=True,
     arm_gen=0x0203,
     boot_id=0xDEADBEEF,
-    echo_mcu_time_us=0x00ABCDEF,
+    echo_mcu_time_us=0x00000001_00ABCDEF,
 )
 STATE = McuState(
-    mcu_time_us=0x11223344,
+    mcu_time_us=0x00000002_11223344,
     boot_id=0xDEADBEEF,
     arm_gen=0x0203,
     last_rx_seq=0x0102,
@@ -71,7 +71,7 @@ STATE = McuState(
 )
 
 GOLDEN = [
-    (Arm(boot_id=0xDEADBEEF, echo_mcu_time_us=0x01020304), 0x1234, ARM_1234),
+    (Arm(boot_id=0xDEADBEEF, echo_mcu_time_us=0x00000005_01020304), 0x1234, ARM_1234),
     (DRIVE, 7, DRIVE_0007),
     (ClearFaults(boot_id=0xDEADBEEF), 8, CLEAR_0008),
     (Disarm(), 9, DISARM_0009),
@@ -129,7 +129,7 @@ def _body(type_: int, payload: bytes) -> bytes:
     return struct.pack("<BBH", 1, type_, 5) + payload
 
 
-STATE_FORMAT = "<IIHHBBIiiffff4h4h4BHHB"
+STATE_FORMAT = "<QIHHBBIiiffff4h4h4BHHB"
 
 
 @pytest.mark.parametrize(
@@ -154,7 +154,7 @@ def test_decode_rejects_bad_framing_fields():
     with pytest.raises(LinkError):
         decode(struct.pack("<BBH", 1, 0x7F, 0))  # unknown type
     with pytest.raises(LinkError):
-        decode(struct.pack("<BBH", 1, 0x02, 0) + bytes(7))  # ARM payload 7 bytes
+        decode(struct.pack("<BBH", 1, 0x02, 0) + bytes(11))  # ARM payload 11 bytes
 
 
 def test_link_decoder_keeps_host_receive_time():

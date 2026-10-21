@@ -8,8 +8,8 @@ from forklift_core.mcu_link.framing import (
     crc16_ccitt_false,
 )
 
-# mcu-link/1 contract section 6: ARM, seq 0x1234, boot_id 0xDEADBEEF, echo 0x01020304.
-ARM_1234 = bytes.fromhex("0f01023412efbeadde04030201cc6900")
+# mcu-link/1 contract section 6: ARM, seq 0x1234, boot_id 0xDEADBEEF, echo 0x0000000501020304.
+ARM_1234 = bytes.fromhex("0e01023412efbeadde0403020105010103764500")
 
 
 def test_crc16_ccitt_false_check_value():
