@@ -124,7 +124,7 @@ def test_the_run_radius_keeps_the_target_with_the_expected_site_off_by_the_large
     assert result.observation.status == "valid"
     cx, cy = centre(result.observation)
     assert math.hypot(cx - 3.2, cy + 0.1) < 0.02
-    # Between the two radii: a candidate the 0.15 m tests would drop is kept at the run's radius.
+    # The target's candidates sit about the shift away from the moved site and stay inside the run's radius.
     if abs(bias_m) > 0.0:
         target = [c for c in gate if math.hypot(c.centre_m[0] - 3.2, c.centre_m[1] + 0.1) < 0.02]
         assert target and all(0.10 < c.distance_m <= NEAR_EXPECTED_RADIUS_M and c.inside for c in target)
