@@ -612,8 +612,9 @@ class TourDriver:
         self._stop_since = None
         self._set_path(plan.poses, plan.directions, plan.curvatures_inv_m)
         self._leg = None  # the new path's first leg steers standing too
-        # the planning took wall time with no step: it is neither idle nor a stale state (Codex v2.5 round 3 P2-2)
-        self.last_state_wall = self.last_feedback_wall = now
+        # the planning time is not idle; the states were still stepped while it planned (the probe's planning loop),
+        # so the state and feedback clocks keep their real arrivals (Codex 4.6 review P2: a reset here stretched the
+        # stale-state limit by the planning time)
         self.drivable_idle = self.pacing_idle = 0.0
         self.stand_since = None
         self._event(now, "replanned", replans=self.replans, waypoints_left=len(self.waypoints),

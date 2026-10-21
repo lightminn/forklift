@@ -279,3 +279,36 @@ def test_the_stop_clock_of_one_replan_does_not_carry_into_the_next():
     driver._replan_wait = [[2.0, 0.0, 0.0]]  # the next failure while still braking at 0.18 m/s
     seq, t = seq + 1, t + 0.1
     assert driver.step(t, _state(seq, x=0.5, speed=0.18))[1] is None
+
+
+def test_a_replan_does_not_reset_the_state_clocks():
+    """Codex 4.6 review P2: the states are stepped while the caller plans, so an adopt keeps their real arrivals --
+    a state that stops coming is stale after stale_s, not after stale_s plus the planning time."""
+    poses, directions, curv = _straight_with_cusp()
+    driver = st.TourDriver(poses, directions, curv, waypoints=[[2.0, 0.0, 0.0]], stale_s=10.0)
+    driver.start(0.0)
+    driver.step(2.0, _state(1))
+    driver.replan_request = ((0.0, 0.0, 0.0), [[2.0, 0.0, 0.0]])
+    plan = st.SimpleNamespace(success=True, poses=poses, directions=directions, curvatures_inv_m=curv, length_m=3.0)
+    driver.adopt(11.96, plan, [[2.0, 0.0, 0.0]])
+    assert driver.step(12.1, _state(1))[1] == "state_stale"
+
+
+def test_the_bundle_judges_the_cells_the_tour_was_planned_for(tmp_path):
+    """Codex 4.6 review P2: the region rebuilt at the end must be the tour file's judged cells -- a reference run left
+    out (fewer observation discs) judges another region and fails the coverage."""
+    from tools import slam_survey_bundle as sb
+
+    result = {**SCENE, "arguments": {"rear_axle_offset_m": -0.34}}
+    config = {"aisles": [[[-1.0, -1.5], [0.0, -1.5]]]}
+    cells = st.judged_region(result, [tuple(map(tuple, a)) for a in config["aisles"]], [(2.0, 2.0)])
+    nodes = {"x": np.array([0.0, -1.0, 2.0]), "y": np.array([0.0, -1.5, 2.0]), "yaw": np.zeros(3)}
+    tour = tmp_path / "tour.npz"
+    np.savez(tour, poses=np.zeros((2, 3)), scenario_sha256=np.asarray(st.scenario_sha256(result)), judged=cells)
+    observed = tmp_path / "ref"
+    observed.mkdir()
+    (observed / "result.json").write_text(json.dumps({"runtime_viewpoints": [{"pose": [2.0, 2.0, 0.0]}]}))
+    same = sb.judged_coverage(result, nodes, config, [observed], tour)
+    assert same["judged_matches_tour"] and same["tour_sha256"]
+    missing = sb.judged_coverage(result, nodes, config, [], tour)  # the reference run not given
+    assert missing["judged_matches_tour"] is False and missing["ok"] is False

@@ -151,6 +151,8 @@ def test_a_disarm_while_a_replan_plans_is_watched_and_armed_again(tmp_path, monk
     rearmed = next(e for e in tour["events"] if e["event"] == "rearmed")
     replanned = next(e for e in tour["events"] if e["event"] == "replanned")
     assert disarmed["wall"] < replanned["wall"] and rearmed["wall"] < replanned["wall"]  # handled during the plan
+    io = next(e for e in tour["events"] if e["event"] == "replan_io")
+    assert io["path_xy"] and io["driven"] == len(io["driven_xy"]) and io["elapsed_s"] >= 3.0 and io["error"] is None
     assert tour["end"] == "arrived", names
 
 

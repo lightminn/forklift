@@ -1217,7 +1217,8 @@ async def tour_scenario(p: Probe, args):
                 # answering ticks), holding zero and still watching the states meanwhile -- staleness, TELEOP left,
                 # a disarm and its rearm (Codex F1-F3 review P2)
                 start, left = driver.replan_request
-                driven, refine_log = list(driver.driven), []
+                driven, refine_log, asked = list(driver.driven), [], time.monotonic()
+                left_in = list(left)
                 job = asyncio.get_running_loop().run_in_executor(
                     None, lambda: replan_tour_bounded(plan_input, left, start, driven, judged,
                                                       radius if radius is not None else 0.0, log=refine_log))
@@ -1240,6 +1241,18 @@ async def tour_scenario(p: Probe, args):
                     driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": error})
                 for line in refine_log:
                     driver.events.append({"wall": time.monotonic(), "event": "refine", **line})
+                # what the replan was given and gave (gyro plan 4.6, Codex P3): enough to redo its coverage prediction
+                driver.events.append({
+                    "wall": time.monotonic(), "event": "replan_io", "start": list(start),
+                    "waypoints_in": [list(w) for w in left_in], "waypoints_out": [list(w) for w in left],
+                    "driven": len(driven), "driven_first": None if not driven else list(driven[0][2:]),
+                    "driven_last": None if not driven else list(driven[-1][2:]),
+                    "driven_xy": [[round(d[0], 3), round(d[1], 3)] for d in driven],
+                    "path_xy": None if plan is None or not plan.success
+                    else [[round(float(x), 3), round(float(y), 3)] for x, y in np.asarray(plan.poses)[::10, :2]],
+                    "elapsed_s": time.monotonic() - asked, "error": error,
+                    "coverage": None if coverage is None else {k: coverage[k] for k in (
+                        "ok", "uncovered", "radius_m", "farthest_m", "farthest_cell")}})
                 driver.adopt(time.monotonic(), plan, left, coverage)
     tour["end"], tour["progress_m"] = end, float(driver.best)
     stop_by = time.monotonic() + 15.0
