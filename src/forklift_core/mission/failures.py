@@ -51,6 +51,7 @@ PREFIXES = {
     "transport_recovery_after_docking": MISSION, "stall_replan_failed": MISSION, "Mission planning failed": MISSION,
     "approach:": MISSION, "insert:": MISSION, "extract:": MISSION, "transport:": MISSION, "withdraw:": MISSION,
     "return_home:": MISSION, "cusp_position_stall": MISSION,
+    "not_pickable:": MISSION,  # the far reading does not fit the forks at this spacing (2026-10-21)
 }
 
 # The require sites whose reason is made at run time, by (file, expression), with what their values are.

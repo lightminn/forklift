@@ -57,3 +57,13 @@ def test_the_candidate_builder_takes_the_same_waiver():
              for i, pl in enumerate(planes)]
     default = [len(P._opening_candidates(pl, PRIOR, PARAMS, workspace, plane_index=i)[0]) for i, pl in enumerate(planes)]
     assert sum(found) > sum(default) == 0
+
+
+def test_a_waived_rejection_does_not_name_lower_as_failed_but_keeps_its_count():
+    # Blocks fail on the upper deck; with the waiver their record must not blame the lower band it did not gate.
+    det = P.detect_pockets(scene("blocks", 2.9), PRIOR, PARAMS, lower_evidence=False)
+    rejected = [p for p in det.diagnostics.rejected_patterns if p.lower is not None]
+    assert rejected
+    assert all("lower" not in p.failed_items for p in rejected)
+    default = P.detect_pockets(scene("blocks", 2.9), PRIOR, PARAMS)
+    assert [p.lower for p in default.diagnostics.rejected_patterns if p.lower is not None] == [p.lower for p in rejected]

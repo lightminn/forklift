@@ -752,3 +752,43 @@ def test_observe_succeeded_checks_the_near_capture_before_any_adoption():
     for later in ("hooks.set_inset_estimate(", "hooks.planning_target(", "known_pallet(", 'pocket["planning_pickup"] ='):
         assert check < source.index(later)
     assert source.index("self._bottom_deck_reobserved(") < check
+
+
+def test_a_pallet_the_fork_spacing_does_not_fit_ends_by_name_without_wandering():
+    # T11 at 0.3725 m (2026-10-21): every far observation read not_pickable / fork_spacing_adjust and the mission went on
+    # to the next observation points until obstacle_no_progress. Another viewpoint does not change the spacing.
+    w = World()
+    w.core.options.observation_waypoints = ((0.0, 0.0, 0.0), NEXT)
+    w.ms.next_candidate_index = 1
+    known = reobserve_attempt("not_pickable", "fork_spacing_adjust")
+    known["recognition"]["decided"] = {"hypothesis": "t11_06:x"}
+    with pytest.raises(RuntimeError, match="not_pickable:fork_spacing_adjust"):
+        w.core.observe_failed(30.0, REAR, known, 2, SimpleNamespace(status="no_pallet", reason="fork_spacing_adjust"))
+    assert w.ms.next_candidate_index == 1
+
+
+@pytest.mark.parametrize("decided", [None, {"hypothesis": "parametric:3col"}])
+def test_a_measured_or_unnamed_misfit_still_looks_again(decided):
+    # Codex T11 review P2: a non-standard pallet's openings are measured, so another view can change the fit.
+    w = World()
+    w.core.options.observation_waypoints = ((0.0, 0.0, 0.0), NEXT)
+    w.ms.next_candidate_index = 1
+    w.state["observation_candidates"] = []
+    w.hooks.set_inset = lambda *a: None
+    attempt = reobserve_attempt("not_pickable", "fork_spacing_adjust")
+    if decided is not None:
+        attempt["recognition"]["decided"] = decided
+    assert w.core.observe_failed(30.0, REAR, attempt, 2,
+                                 SimpleNamespace(status="no_pallet", reason="fork_spacing_adjust")) is False
+    assert w.ms.next_candidate_index == 2
+
+
+def test_other_not_pickable_reasons_still_look_again():
+    w = World()
+    w.core.options.observation_waypoints = ((0.0, 0.0, 0.0), NEXT)
+    w.ms.next_candidate_index = 1
+    w.state["observation_candidates"] = []
+    w.hooks.set_inset = lambda *a: None
+    assert w.core.observe_failed(30.0, REAR, reobserve_attempt("not_pickable", "lift_alignment_needed"), 2,
+                                 SimpleNamespace(status="no_pallet", reason="lift_alignment_needed")) is False
+    assert w.ms.next_candidate_index == 2

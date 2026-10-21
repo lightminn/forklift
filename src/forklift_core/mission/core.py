@@ -2352,6 +2352,16 @@ class MissionCore:
             hooks.require, hooks.wall, hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg)
         if self.bottom_deck_returning():
             return self._bottom_deck_reobserve_failed(t, rear, attempt, attempt_number, observation)
+        far_ = attempt.get("recognition") or {}
+        decided_ = str((far_.get("decided") or {}).get("hypothesis") or "")
+        if far_.get("status") == "not_pickable" and "fork_spacing_adjust" in (
+                list(far_.get("reasons") or []) + [far_.get("reason")]) and decided_ and not decided_.startswith(
+                "parametric"):
+            # A known shape whose fixed openings do not fit the forks at this spacing (T11 at 0.3725 m, 2026-10-21):
+            # another viewpoint changes neither, so the mission ends by name instead of trying the next observation
+            # points until the obstacle watch stops it. A measured (parametric) fit may change with a better view and
+            # looks again as before (Codex T11 review P2).
+            require(False, "not_pickable:fork_spacing_adjust")
         apply_tracker_profile, realign_install, record_tracker_configs = (
             self.apply_tracker_profile, self.realign_install, self.record_tracker_configs)
         attempt["retry_reason"] = (
@@ -3756,7 +3766,7 @@ class MissionCore:
             attempt["recognition"] = {k: far_record.get(k) for k in (
                 "status", "reasons", "reason", "source", "observations", "selected_track", "frames", "drive_frames",
                 "used_error", "single_error", "detector_error", "lag_fit", "leg",
-                "used")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
+                "used", "decided")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
         if near is not None and near.get("retry_stand"):
             # Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet; no
             # candidate moves on old estimates.

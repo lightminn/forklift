@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<mujoco model="t11_06_pallet">
+  <custom>
+    <text name="pallet_provenance" data="t11_published_standard_scaled_design" />
+  </custom>
+  <worldbody>
+    <body name="pallet" pos="0 0 0">
+      <geom name="bottom_board_0" type="box" size="0.33 0.04 0.0075" pos="0 -0.29 0.0075" rgba="0.62 0.40 0.20 1" />
+      <geom name="bottom_board_1" type="box" size="0.33 0.04 0.0075" pos="0 0 0.0075" rgba="0.62 0.40 0.20 1" />
+      <geom name="bottom_board_2" type="box" size="0.33 0.04 0.0075" pos="0 0.29 0.0075" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x0_y0" type="box" size="0.04 0.04 0.0225" pos="-0.29 -0.29 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x0_y1" type="box" size="0.04 0.04 0.0225" pos="-0.29 0 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x0_y2" type="box" size="0.04 0.04 0.0225" pos="-0.29 0.29 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x1_y0" type="box" size="0.04 0.04 0.0225" pos="0 -0.29 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x1_y1" type="box" size="0.04 0.04 0.0225" pos="0 0 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x1_y2" type="box" size="0.04 0.04 0.0225" pos="0 0.29 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x2_y0" type="box" size="0.04 0.04 0.0225" pos="0.29 -0.29 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x2_y1" type="box" size="0.04 0.04 0.0225" pos="0.29 0 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="block_x2_y2" type="box" size="0.04 0.04 0.0225" pos="0.29 0.29 0.0375" rgba="0.62 0.40 0.20 1" />
+      <geom name="stringer_0" type="box" size="0.04 0.33 0.0075" pos="-0.29 0 0.0675" rgba="0.62 0.40 0.20 1" />
+      <geom name="stringer_1" type="box" size="0.04 0.33 0.0075" pos="0 0 0.0675" rgba="0.62 0.40 0.20 1" />
+      <geom name="stringer_2" type="box" size="0.04 0.33 0.0075" pos="0.29 0 0.0675" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_0" type="box" size="0.33 0.04125 0.0075" pos="0 -0.28875 0.0825" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_1" type="box" size="0.33 0.04125 0.0075" pos="0 -0.1925 0.0825" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_2" type="box" size="0.33 0.04125 0.0075" pos="0 -0.09625 0.0825" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_3" type="box" size="0.33 0.04125 0.0075" pos="0 0 0.0825" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_4" type="box" size="0.33 0.04125 0.0075" pos="0 0.09625 0.0825" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_5" type="box" size="0.33 0.04125 0.0075" pos="0 0.1925 0.0825" rgba="0.62 0.40 0.20 1" />
+      <geom name="top_board_6" type="box" size="0.33 0.04125 0.0075" pos="0 0.28875 0.0825" rgba="0.62 0.40 0.20 1" />
+    </body>
+  </worldbody>
+</mujoco>

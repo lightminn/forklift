@@ -1,0 +1,16 @@
+{
+  "geometry_file": "pallet_geometry_t11_06.yaml",
+  "geometry_sha256": "4f4fc0386f067d34d055657780c620485de1f94808d12a7db03109a2c0c57287",
+  "geometry_version": "t11_06",
+  "source_provenance": "t11_published_standard_scaled_design",
+  "generated_at": "2026-10-21T08:31:53.796687+00:00",
+  "origin": "footprint_centre_at_floor_z0",
+  "simplifications": [
+    "axis_aligned_boxes_without_chamfers_or_fasteners"
+  ],
+  "physical_dynamics_validated": false,
+  "model_sha256": {
+    "pallet.xml": "82f7929d116940c12f2dfe0cfd8eb503cace6fe45b5ad7d587ad3b9a012f256d",
+    "pallet.urdf": "d0e455e726e6270aeea545ed4786cf5a462db2bf6cb5b552b7ff72b048e92d4d"
+  }
+}

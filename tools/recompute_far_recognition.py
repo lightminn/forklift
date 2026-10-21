@@ -154,6 +154,10 @@ def differences(recorded: dict, again: dict) -> list:
     diffs = [k for k in keys if recorded.get(k) != again.get(k)]
     if (recorded.get("used") or {}) != (again.get("used") or {}):
         diffs.append("used")
+    # The candidate a not_pickable stop decided on: the mission ends at once on a known shape's misfit, so it is part
+    # of the decision. A record made before it was recorded (2026-10-22) reads as differing on such a stop.
+    if (recorded.get("decided") or {}) != (again.get("decided") or {}):
+        diffs.append("decided")
     return diffs
 
 

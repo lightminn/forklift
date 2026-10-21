@@ -430,3 +430,37 @@ def test_the_recompute_needs_the_zone_change_to_match_a_stop_the_narrowed_zone_t
     assert all(not RC.differences(a, b) for a, b in RC.recompute(tmp_path))
     stale = {**summary, "zone_changes": []}
     assert any(RC.differences(a, b) for a, b in RC.recompute(tmp_path, recognition=stale))
+
+
+def test_a_stop_the_forks_do_not_fit_records_the_candidate_decided_on():
+    # Codex T11 review P2: the mission ends at once on fork_spacing_adjust only for a known shape's fixed dimensions,
+    # so the stop names the candidate (and its hypothesis) the not_pickable decision was made on.
+    run = R.FarRuntime(fork_spacing=0.29, pallet_depth_m=EPAL.overall_depth_m, pallet_shape="epal6",
+                       zone_centre_xy=PALLET[:2], zone_radius_m=0.6, camera_x_m=CAMERA_X, dt=DT)
+    xs = _leg()
+    _drive(run, 0, xs)
+    obs, rec = _stop(run, xs)
+    assert rec["status"] == "not_pickable" and "fork_spacing_adjust" in rec["reasons"]
+    assert rec["decided"]["hypothesis"].startswith("epal6") and rec["decided"]["pickable"] is False
+
+
+def test_the_recompute_compares_the_candidate_a_not_pickable_stop_decided_on(tmp_path):
+    # Codex T11 review 2 P2: the mission's immediate end turns on decided.hypothesis, so a recompute that ignored it
+    # would pass a record whose mission behaviour differs. A record without it (made before 2026-10-22) differs too.
+    from tools import recompute_far_recognition as RC
+
+    run = R.FarRuntime(fork_spacing=0.29, pallet_depth_m=EPAL.overall_depth_m, pallet_shape="epal6",
+                       zone_centre_xy=PALLET[:2], zone_radius_m=0.6, camera_x_m=CAMERA_X, dt=DT,
+                       out_dir=tmp_path / "recognition")
+    xs = _leg()
+    _drive(run, 0, xs)
+    _stop(run, xs)
+    summary = run.summary()
+    assert [RC.differences(*p) for p in RC.recompute(tmp_path, recognition=summary)] == [[]]
+    for tamper in ({"hypothesis": "parametric:x"}, None):
+        bad = json.loads(json.dumps(summary))
+        if tamper is None:
+            bad["attempts"][0].pop("decided")
+        else:
+            bad["attempts"][0]["decided"].update(tamper)
+        assert ["decided"] == [d for p in RC.recompute(tmp_path, recognition=bad) for d in RC.differences(*p)]
