@@ -1232,7 +1232,11 @@ async def tour_scenario(p: Probe, args):
                     await p.teleop(0.0, 0.0, True)
                     await asyncio.sleep(0.05)
                 if end is not None:
-                    break  # a failure while planning: the plan (finished or killed at its limit) is not adopted
+                    # a failure while planning: the plan (finished or killed at its limit) is not adopted
+                    driver.events.append({"wall": time.monotonic(), "event": "replan_abandoned", "end": end,
+                                          "start": list(start), "waypoints_in": [list(w) for w in left_in],
+                                          "elapsed_s": time.monotonic() - asked})
+                    break
                 try:
                     left, plan, coverage, error = job.result()
                 except Exception as exc:  # noqa: BLE001 -- a planner error is a failed replan, recorded
@@ -1241,15 +1245,13 @@ async def tour_scenario(p: Probe, args):
                     driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": error})
                 for line in refine_log:
                     driver.events.append({"wall": time.monotonic(), "event": "refine", **line})
-                # what the replan was given and gave (gyro plan 4.6, Codex P3): enough to redo its coverage prediction
+                # what the replan was given and gave, whole (gyro plan 4.6, Codex P3): its coverage prediction redone
+                # from these alone -- every driven pose with its state id and correction version, the full new path
                 driver.events.append({
                     "wall": time.monotonic(), "event": "replan_io", "start": list(start),
                     "waypoints_in": [list(w) for w in left_in], "waypoints_out": [list(w) for w in left],
-                    "driven": len(driven), "driven_first": None if not driven else list(driven[0][2:]),
-                    "driven_last": None if not driven else list(driven[-1][2:]),
-                    "driven_xy": [[round(d[0], 3), round(d[1], 3)] for d in driven],
-                    "path_xy": None if plan is None or not plan.success
-                    else [[round(float(x), 3), round(float(y), 3)] for x, y in np.asarray(plan.poses)[::10, :2]],
+                    "driven": [list(d) for d in driven],
+                    "path": None if plan is None or not plan.success else np.asarray(plan.poses).tolist(),
                     "elapsed_s": time.monotonic() - asked, "error": error,
                     "coverage": None if coverage is None else {k: coverage[k] for k in (
                         "ok", "uncovered", "radius_m", "farthest_m", "farthest_cell")}})
