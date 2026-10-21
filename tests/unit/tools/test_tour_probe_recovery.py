@@ -157,3 +157,10 @@ def test_a_disarm_while_a_replan_plans_is_watched_and_armed_again(tmp_path, monk
 def test_a_replan_past_its_hard_limit_is_a_failed_replan():
     left, plan, coverage, error = survey_tour.replan_tour_bounded({"stub": True}, [], (0.0, 0.0, 0.0), hard_s=0.0)
     assert plan is None and coverage is None and error == "timeout"
+
+
+def test_a_lost_ack_of_the_first_arm_still_drives(tmp_path):
+    """Codex F1-F3 recheck P2: no later disarm opens a recovery; the probe sends the armed state's generation."""
+    vehicle = FakeVehicle(lose_ack=True)
+    tour = _run(vehicle, _tour(tmp_path))
+    assert tour["end"] == "arrived" and vehicle.arm_gen == vehicle.server_gen == 1

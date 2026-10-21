@@ -243,3 +243,39 @@ def test_a_bounded_replan_returns_the_plan_and_its_refine_log():
     tour, plan, coverage, error = st.replan_tour_bounded(SCENE, [], (0.0, -2.0, 0.0), judged=np.array([[-2.0, 2.0]]),
                                                           radius_m=1.0, log=log)
     assert error is None and plan.success and coverage["ok"] and any("added" in line for line in log)
+
+
+def test_a_disarm_after_an_ack_but_before_an_armed_state_is_asked_for_again():
+    """Codex F1-F3 recheck P2: disarmed gen 1, arm acked (gen 2), disarmed again at gen 2 before any armed state."""
+    driver, t, seq = _departed()
+    seq, t = seq + 1, t + 0.1
+    driver.step(t, {**_state(seq, x=0.6, armed=False), "arm_gen": 1})
+    driver.rearm_sent(t, {"t": "ack", "arm_gen": 2})
+    seq, t = seq + 1, t + 0.1
+    driver.step(t, {**_state(seq, x=0.6, armed=False), "arm_gen": 2})
+    assert driver.rearm_request and [e["event"] for e in driver.events].count("disarmed") == 2 and driver.rearms == 1
+    driver.rearm_sent(t, {"t": "ack", "arm_gen": 3})
+    seq, t = seq + 1, t + 0.1
+    driver.step(t, {**_state(seq, x=0.6), "arm_gen": 3})
+    assert driver.arm_gen == 3 and driver.rearms == 2
+
+
+def test_the_stop_clock_of_one_replan_does_not_carry_into_the_next():
+    """Codex F1-F3 recheck P2: stepped while the first replan planned, the stop clock started and stayed; the next
+    tracker failure, the truck still braking, then failed stop_timeout at once."""
+    poses, directions, curv = _straight_with_cusp()
+    driver = st.TourDriver(poses, directions, curv, waypoints=[[2.0, 0.0, 0.0]], stop_wait_s=2.0)
+    driver.start(0.0)
+    t, seq = 0.0, 0
+    driver._replan_wait = [[2.0, 0.0, 0.0]]  # a first tracker failure, the truck standing
+    seq, t = seq + 1, t + 0.1
+    driver.step(t, _state(seq))
+    assert driver.replan_request is not None
+    for _ in range(30):  # 3 s of states while the caller plans
+        seq, t = seq + 1, t + 0.1
+        assert driver.step(t, _state(seq)) == ((0.0, 0.0), None)
+    plan = st.SimpleNamespace(success=True, poses=poses, directions=directions, curvatures_inv_m=curv, length_m=3.0)
+    driver.adopt(t, plan, [[2.0, 0.0, 0.0]])
+    driver._replan_wait = [[2.0, 0.0, 0.0]]  # the next failure while still braking at 0.18 m/s
+    seq, t = seq + 1, t + 0.1
+    assert driver.step(t, _state(seq, x=0.5, speed=0.18))[1] is None

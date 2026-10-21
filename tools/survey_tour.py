@@ -609,6 +609,7 @@ class TourDriver:
             self._failed = "coverage_unrecoverable"
             return False
         self.waypoints = [tuple(map(float, w)) for w in waypoints_left]
+        self._stop_since = None
         self._set_path(plan.poses, plan.directions, plan.curvatures_inv_m)
         self._leg = None  # the new path's first leg steers standing too
         # the planning took wall time with no step: it is neither idle nor a stale state (Codex v2.5 round 3 P2-2)
@@ -639,8 +640,13 @@ class TourDriver:
     def _disarmed(self, now: float, s: dict, speed: float):
         """A disarmed state after departure (see the class doc): zero, the clocks stopped, ``arm`` asked for once the
         stop is confirmed."""
-        if self._disarmed_since is None:
+        new_gen = self._disarmed_since is not None and s.get("arm_gen") is not None \
+            and self._disarm_gen is not None and s.get("arm_gen") != self._disarm_gen
+        if self._disarmed_since is None or new_gen:
+            # a first disarm -- or a new one: an arm taken (the generation moved) and lost again before an armed state
+            # showed (Codex F1-F3 recheck P2): asked for afresh, the rearm count kept
             self._disarmed_since, self._disarm_gen = now, s.get("arm_gen")
+            self._arm_asked, self._arm_acked, self.rearm_request = None, False, False
             self._event(now, "disarmed", stop_kind=s.get("stop_kind"), reject=s.get("last_teleop_reject"),
                         latch=s.get("stop_latch"), speed=speed, applied=s.get("applied"))
         self.stand_since = None
@@ -717,8 +723,11 @@ class TourDriver:
         dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
         if self.replan_request is not None or getattr(self, "_replan_wait", None) is not None:
             # stopping after a tracker failure; the request goes out once the truck stands (planned from where it is),
-            # within stop_wait_s (Codex v2.5 round 3 P2-3: a truck that never stands fails the tour)
-            self._stop_since = self._stop_since if self._stop_since is not None else now
+            # within stop_wait_s (Codex v2.5 round 3 P2-3: a truck that never stands fails the tour); the clock runs only
+            # while waiting for that stand -- not while the request is out and the caller plans (the states are still
+            # stepped then: Codex F1-F3 recheck P2, it leaked into the next replan's stop)
+            if self.replan_request is None:
+                self._stop_since = self._stop_since if self._stop_since is not None else now
             if self.replan_request is None and abs(float(speed)) < 0.03:
                 self.replan_request = ((pose["x_m"], pose["y_m"], pose["yaw_rad"]), self._replan_wait)
                 self._replan_wait, self._stop_since = None, None

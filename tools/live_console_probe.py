@@ -1198,6 +1198,9 @@ async def tour_scenario(p: Probe, args):
                 driver.rearm_sent(time.monotonic(), arm)
             if driver.arm_gen is not None:
                 p.arm_gen, driver.arm_gen = driver.arm_gen, None
+            st_ = p.state or {}
+            if st_.get("armed") and st_.get("arm_gen") is not None:
+                p.arm_gen = st_["arm_gen"]  # the server's generation while armed (a first arm's ack lost too)
 
         while end is None:
             await asyncio.sleep(0.05)
@@ -1206,8 +1209,7 @@ async def tour_scenario(p: Probe, args):
                 break
             new, end = driver.step(time.monotonic(), p.state)
             command = new if new is not None else command
-            if end is None:
-                await rearm_if_asked()
+            await rearm_if_asked()
             if command is not None:
                 await p.teleop(*command, True)
             if end is None and driver.replan_request is not None:
