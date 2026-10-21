@@ -207,3 +207,39 @@ def test_the_plan_with_a_margin_carries_its_judged_cells_and_fails_when_it_misse
     assert st.main(["plan", "--result", str(result), "--tour", str(config), "--out", str(out)]) == 0
     with np.load(out) as data:
         assert "judged" not in data.files
+
+
+def test_an_arm_of_the_disarmed_generation_is_not_a_rearm():
+    """Codex F1-F3 review P2: an ack lost to a timeout -- the state's generation tells a new arm from the old one."""
+    driver, t, seq = _departed()
+    seq, t = seq + 1, t + 0.1
+    driver.step(t, {**_state(seq, x=0.6, armed=False), "arm_gen": 1})
+    assert driver.rearm_request
+    driver.rearm_sent(t, None)  # no reply
+    seq, t = seq + 1, t + 0.1
+    assert driver.step(t, {**_state(seq, x=0.6), "arm_gen": 1}) == ((0.0, 0.0), None)  # armed, but generation 1
+    assert driver.arm_gen is None and not [e for e in driver.events if e["event"] == "rearmed"]
+    seq, t = seq + 1, t + 0.1
+    driver.step(t, {**_state(seq, x=0.6), "arm_gen": 2})
+    assert driver.arm_gen == 2 and [e for e in driver.events if e["event"] == "rearmed"][0]["arm_gen"] == 2
+
+
+def test_refine_checks_its_candidates_at_the_clearance_the_plan_was_made_with():
+    """Codex F1-F3 review P2: a start that cannot keep 0.30 m plans the route at the run's 0.10 m; a waypoint
+    candidate in the same 1 m corridor is placeable at 0.10 m."""
+    walls = [{"rectangle": {"x_m": -3.5, "y_m": y, "length_m": 5.0, "width_m": 1.0, "yaw_rad": 0.0}}
+             for y in (1.0, -1.0)]
+    scene = {**SCENE, "scenario": {**SCENE["scenario"], "props": walls,
+                                   "bounds": {"x_min_m": -6.5, "x_max_m": 3.0, "y_min_m": -3.0, "y_max_m": 3.0}}}
+    start = (-2.0, 0.0, 0.0)
+    plain = st.plan_tour(scene, [], start=start)
+    assert plain.success and plain.clearance_m == 0.1
+    tour, plan, coverage = st.replan_tour(scene, [], start, judged=np.array([[-5.0, 0.0]]), radius_m=1.0)
+    assert coverage["ok"] and len(tour) == 1
+
+
+def test_a_bounded_replan_returns_the_plan_and_its_refine_log():
+    log = []
+    tour, plan, coverage, error = st.replan_tour_bounded(SCENE, [], (0.0, -2.0, 0.0), judged=np.array([[-2.0, 2.0]]),
+                                                          radius_m=1.0, log=log)
+    assert error is None and plan.success and coverage["ok"] and any("added" in line for line in log)

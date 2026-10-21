@@ -1145,7 +1145,7 @@ async def tour_scenario(p: Probe, args):
     import numpy as np
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from survey_tour import TourDriver, replan_tour
+    from survey_tour import TourDriver, replan_tour_bounded
 
     data = np.load(args.tour_path)
     plan_input = json.loads(str(data["plan_input"])) if "plan_input" in data.files else None
@@ -1186,6 +1186,19 @@ async def tour_scenario(p: Probe, args):
         p.arm_gen = (arm or {}).get("arm_gen", 0)
         driver.start(time.monotonic())  # a state from before this instant is not a departure (Codex v2.5 P2-4)
         command = None
+
+        async def rearm_if_asked():
+            # disarmed after departure (an expired deadline: gyro plan 4.5 F1), the stop confirmed: arm again; the
+            # generation every later command carries is the state's once armed (an ack lost to a timeout still
+            # armed it), an older one is refused stale_arm
+            if driver.rearm_request:
+                arm = await p.request("arm")
+                if arm is not None and arm.get("t") == "ack":
+                    p.arm_gen = arm.get("arm_gen", p.arm_gen)
+                driver.rearm_sent(time.monotonic(), arm)
+            if driver.arm_gen is not None:
+                p.arm_gen, driver.arm_gen = driver.arm_gen, None
+
         while end is None:
             await asyncio.sleep(0.05)
             if p.closed_code is not None:
@@ -1193,30 +1206,36 @@ async def tour_scenario(p: Probe, args):
                 break
             new, end = driver.step(time.monotonic(), p.state)
             command = new if new is not None else command
+            if end is None:
+                await rearm_if_asked()
             if command is not None:
                 await p.teleop(*command, True)
-            if end is None and driver.rearm_request:
-                # disarmed after departure (an expired deadline: gyro plan 4.5 F1), the stop confirmed: arm again, the
-                # ack's generation on every later command (an older one is refused stale_arm)
-                arm = await p.request("arm")
-                if arm is not None and arm.get("t") == "ack":
-                    p.arm_gen = arm.get("arm_gen", p.arm_gen)
-                driver.rearm_sent(time.monotonic(), arm)
             if end is None and driver.replan_request is not None:
-                # plan off the event loop (the echo task keeps answering ticks), holding zero meanwhile
+                # plan off the event loop in a child process killed past its hard limit (the echo task keeps
+                # answering ticks), holding zero and still watching the states meanwhile -- staleness, TELEOP left,
+                # a disarm and its rearm (Codex F1-F3 review P2)
                 start, left = driver.replan_request
                 driven, refine_log = list(driver.driven), []
                 job = asyncio.get_running_loop().run_in_executor(
-                    None, lambda: replan_tour(plan_input, left, start, driven, judged,
-                                              radius if radius is not None else 0.0, log=refine_log))
-                while not job.done():
+                    None, lambda: replan_tour_bounded(plan_input, left, start, driven, judged,
+                                                      radius if radius is not None else 0.0, log=refine_log))
+                while not job.done() and end is None:
+                    if p.closed_code is not None:
+                        end = "closed"
+                        break
+                    _, end = driver.step(time.monotonic(), p.state)
+                    if end is None:
+                        await rearm_if_asked()
                     await p.teleop(0.0, 0.0, True)
                     await asyncio.sleep(0.05)
+                if end is not None:
+                    break  # a failure while planning: the plan (finished or killed at its limit) is not adopted
                 try:
-                    left, plan, coverage = job.result()
+                    left, plan, coverage, error = job.result()
                 except Exception as exc:  # noqa: BLE001 -- a planner error is a failed replan, recorded
-                    driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": repr(exc)})
-                    plan, coverage = None, None
+                    plan, coverage, error = None, None, repr(exc)
+                if error is not None:
+                    driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": error})
                 for line in refine_log:
                     driver.events.append({"wall": time.monotonic(), "event": "refine", **line})
                 driver.adopt(time.monotonic(), plan, left, coverage)

@@ -323,6 +323,9 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
     plan = plan if plan is not None else plan_tour(result, tour, start=start)
     if not plan.success:
         return tour, plan, None
+    # a start that cannot keep the tour's clearance plans the whole route at the run's (plan_tour): the candidates
+    # are checked at what the plan was made with (Codex F1-F3 review P2)
+    clearance = float(getattr(plan, "clearance_m", None) or clearance)
     skipped: set = set()
     for _ in range(rounds):
         if deadline is not None and time.monotonic() > deadline:
@@ -360,7 +363,8 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
 
 
 REPLAN_REFINE_ROUNDS = 4
-REPLAN_REFINE_S = 60.0
+REPLAN_REFINE_S = 60.0  # the refine adds no waypoint after this
+REPLAN_HARD_S = 120.0  # a replan's child process is killed after this (the planner takes no deadline)
 
 
 def replan_tour(plan_input: dict, left: list, start, driven=(), judged=None, radius_m: float = CELL_RADIUS_M,
@@ -380,6 +384,48 @@ def replan_tour(plan_input: dict, left: list, start, driven=(), judged=None, rad
                                        log=lambda line: events.append(json.loads(line)), start=start,
                                        radius_m=radius_m, deadline=time.monotonic() + budget_s)
     return tour, plan, coverage
+
+
+def _replan_child(conn, args, kwargs):
+    try:
+        log = []
+        conn.send(("ok", (replan_tour(*args, **kwargs, log=log), log)))
+    except Exception as exc:  # noqa: BLE001 -- the parent records it as a failed replan
+        conn.send(("error", repr(exc)))
+    finally:
+        conn.close()
+
+
+def replan_tour_bounded(plan_input: dict, left: list, start, driven=(), judged=None, radius_m: float = CELL_RADIUS_M,
+                        *, budget_s: float = REPLAN_REFINE_S, hard_s: float = REPLAN_HARD_S, log=None):
+    """``replan_tour`` in a child process killed after ``hard_s`` wall s (the planner itself takes no deadline: the
+    refine's ``budget_s`` stops adding waypoints but cannot stop a plan already running -- Codex F1-F3 review P2).
+    Returns ``replan_tour``'s (waypoints, plan, coverage) and an error (None, ``"timeout"`` or the exception); on an
+    error the plan is None (a failed replan)."""
+    import multiprocessing
+
+    events = log if log is not None else []
+    ctx = multiprocessing.get_context("spawn")  # not fork: the caller is a thread of an asyncio process
+    parent, child = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_replan_child, args=(child, (plan_input, left, start, driven, judged, radius_m),
+                                                   {"budget_s": budget_s}), daemon=True)
+    proc.start()
+    child.close()
+    try:
+        if not parent.poll(hard_s):
+            proc.kill()
+            return left, None, None, "timeout"
+        kind, value = parent.recv()
+    except EOFError:
+        return left, None, None, "child_died"
+    finally:
+        proc.join(5.0)
+        parent.close()
+    if kind == "error":
+        return left, None, None, value
+    result, lines = value
+    events.extend(lines)
+    return (*result, None)
 
 
 def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.0, poll_hz=20.0, factor=0.3,
@@ -506,8 +552,9 @@ class TourDriver:
         self.max_rearms, self.rearms = int(max_rearms), 0
         self.rearm_wait_s, self.rearm_retry_s = float(rearm_wait_s), float(rearm_retry_s)
         self.rearm_request = False  # the caller sends ``arm`` and reports it with ``rearm_sent``
-        self._disarmed_since = self._arm_asked = None
+        self._disarmed_since = self._arm_asked = self._disarm_gen = None
         self._arm_acked = False
+        self.arm_gen = None  # the state's arm generation once armed again: the caller's commands carry it
         self.driven_spacing_m, self.driven = float(driven_spacing_m), []
         self._failed = None
         self._blocked = False
@@ -593,7 +640,7 @@ class TourDriver:
         """A disarmed state after departure (see the class doc): zero, the clocks stopped, ``arm`` asked for once the
         stop is confirmed."""
         if self._disarmed_since is None:
-            self._disarmed_since = now
+            self._disarmed_since, self._disarm_gen = now, s.get("arm_gen")
             self._event(now, "disarmed", stop_kind=s.get("stop_kind"), reject=s.get("last_teleop_reject"),
                         latch=s.get("stop_latch"), speed=speed, applied=s.get("applied"))
         self.stand_since = None
@@ -647,11 +694,14 @@ class TourDriver:
                 >= self.driven_spacing_m:
             self.driven.append((float(pose["x_m"]), float(pose["y_m"]), s.get("state_seq"),
                                 pose.get("correction_version")))
-        if not s.get("armed", True):
+        if not s.get("armed", True) or (self._disarmed_since is not None and self._disarm_gen is not None
+                                         and s.get("arm_gen") == self._disarm_gen):
+            # disarmed -- or armed in a state still of the disarmed generation (no new arm taken)
             return self._disarmed(now, s, float(speed))
         if self._disarmed_since is not None:
-            self._event(now, "rearmed", disarmed_s=now - self._disarmed_since, rearms=self.rearms)
-            self._disarmed_since = self._arm_asked = None
+            self.arm_gen = s.get("arm_gen")
+            self._event(now, "rearmed", disarmed_s=now - self._disarmed_since, rearms=self.rearms, arm_gen=self.arm_gen)
+            self._disarmed_since = self._arm_asked = self._disarm_gen = None
             self._arm_acked = self.rearm_request = False
             self._leg = None  # the leg starts again by steering standing
             self.stand_since = None
