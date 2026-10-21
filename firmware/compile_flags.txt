@@ -1,0 +1,7 @@
+-std=c11
+-Icore/include
+-Icore/test
+-Wall
+-Wextra
+-Wconversion
+-Wshadow
