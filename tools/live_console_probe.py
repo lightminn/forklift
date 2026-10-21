@@ -1145,11 +1145,15 @@ async def tour_scenario(p: Probe, args):
     import numpy as np
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from survey_tour import TourDriver, plan_tour
+    from survey_tour import TourDriver, replan_tour_bounded
 
     data = np.load(args.tour_path)
     plan_input = json.loads(str(data["plan_input"])) if "plan_input" in data.files else None
-    tour = p.report["tour"] = {"path": str(args.tour_path), "samples": int(len(data["poses"]))}
+    # a tour planned with a coverage margin carries its judged cells: replans keep them covered (gyro plan 4.5 F3)
+    judged = np.asarray(data["judged"]) if "judged" in data.files else None
+    radius = float(data["coverage_radius_m"]) if "coverage_radius_m" in data.files else None
+    tour = p.report["tour"] = {"path": str(args.tour_path), "samples": int(len(data["poses"])),
+                               "coverage_keeping": judged is not None, "coverage_radius_m": radius}
     await p.open()
     await p.until(lambda s: True, 10, label="first_state")
     lease = await p.request("lease_request")
@@ -1182,6 +1186,22 @@ async def tour_scenario(p: Probe, args):
         p.arm_gen = (arm or {}).get("arm_gen", 0)
         driver.start(time.monotonic())  # a state from before this instant is not a departure (Codex v2.5 P2-4)
         command = None
+
+        async def rearm_if_asked():
+            # disarmed after departure (an expired deadline: gyro plan 4.5 F1), the stop confirmed: arm again; the
+            # generation every later command carries is the state's once armed (an ack lost to a timeout still
+            # armed it), an older one is refused stale_arm
+            if driver.rearm_request:
+                arm = await p.request("arm")
+                if arm is not None and arm.get("t") == "ack":
+                    p.arm_gen = arm.get("arm_gen", p.arm_gen)
+                driver.rearm_sent(time.monotonic(), arm)
+            if driver.arm_gen is not None:
+                p.arm_gen, driver.arm_gen = driver.arm_gen, None
+            st_ = p.state or {}
+            if st_.get("armed") and st_.get("arm_gen") is not None:
+                p.arm_gen = st_["arm_gen"]  # the server's generation while armed (a first arm's ack lost too)
+
         while end is None:
             await asyncio.sleep(0.05)
             if p.closed_code is not None:
@@ -1189,22 +1209,38 @@ async def tour_scenario(p: Probe, args):
                 break
             new, end = driver.step(time.monotonic(), p.state)
             command = new if new is not None else command
+            await rearm_if_asked()
             if command is not None:
                 await p.teleop(*command, True)
             if end is None and driver.replan_request is not None:
-                # plan off the event loop (the echo task keeps answering ticks), holding zero meanwhile
+                # plan off the event loop in a child process killed past its hard limit (the echo task keeps
+                # answering ticks), holding zero and still watching the states meanwhile -- staleness, TELEOP left,
+                # a disarm and its rearm (Codex F1-F3 review P2)
                 start, left = driver.replan_request
+                driven, refine_log = list(driver.driven), []
                 job = asyncio.get_running_loop().run_in_executor(
-                    None, lambda: plan_tour(plan_input, [list(w) for w in left], start=start))
-                while not job.done():
+                    None, lambda: replan_tour_bounded(plan_input, left, start, driven, judged,
+                                                      radius if radius is not None else 0.0, log=refine_log))
+                while not job.done() and end is None:
+                    if p.closed_code is not None:
+                        end = "closed"
+                        break
+                    _, end = driver.step(time.monotonic(), p.state)
+                    if end is None:
+                        await rearm_if_asked()
                     await p.teleop(0.0, 0.0, True)
                     await asyncio.sleep(0.05)
+                if end is not None:
+                    break  # a failure while planning: the plan (finished or killed at its limit) is not adopted
                 try:
-                    plan = job.result()
+                    left, plan, coverage, error = job.result()
                 except Exception as exc:  # noqa: BLE001 -- a planner error is a failed replan, recorded
-                    driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": repr(exc)})
-                    plan = None
-                driver.adopt(time.monotonic(), plan, left)
+                    plan, coverage, error = None, None, repr(exc)
+                if error is not None:
+                    driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": error})
+                for line in refine_log:
+                    driver.events.append({"wall": time.monotonic(), "event": "refine", **line})
+                driver.adopt(time.monotonic(), plan, left, coverage)
     tour["end"], tour["progress_m"] = end, float(driver.best)
     stop_by = time.monotonic() + 15.0
     while time.monotonic() < stop_by and not (p.state and p.standing(p.state)) and p.closed_code is None:
