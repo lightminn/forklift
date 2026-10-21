@@ -76,3 +76,12 @@ def test_without_the_near_field_tracking_the_redraw_skips_the_correction_points(
     for absent in ("tracking_frame", "rollout_face_distance", "correction_points_check"):
         assert absent not in names, absent
     assert entry["tracking"] is False and "correction_points" not in entry and entry["accepted"] is True
+
+
+def test_a_tracking_runs_redraw_entry_keeps_its_recorded_shape():
+    # Codex task B implementation review 1 P2: the boundary replay compares near_capture exactly, so a tracking run's
+    # entry gains no key; only the untracked re-draw is marked.
+    import inspect
+
+    source = inspect.getsource(MissionCore.near_capture_redraw)
+    assert '"tracking": tracking_' not in source and 'entry["tracking"] = False' in source

@@ -6364,10 +6364,14 @@ class MissionCore:
             "dry_run_cruise_mps": [acceptance_.cruise_speed_mps, driven_.cruise_speed_mps],
             # The dry runs' full follower settings: the judge rolls them out again.
             "dry_run_configs": [asdict(acceptance_), asdict(driven_)],
-            "record": record_, "accepted": plans_ is not None, "tracking": tracking_,
+            "record": record_, "accepted": plans_ is not None,
         }
         if tracking_:
             entry.update({"fork_tip_x_m": tip_x_, "correction_points": points_})
+        else:
+            # Only the untracked re-draw is marked: a tracking run's entry keeps its recorded shape (Codex task B
+            # implementation review 1 P2 -- the boundary replay compares the final state exactly).
+            entry["tracking"] = False
         return plans_, entry
 
     def near_protection_prediction(self, path_, latest_, widths_, rear_now, face_distance_) -> dict:

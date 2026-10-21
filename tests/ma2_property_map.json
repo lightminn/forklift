@@ -1,7 +1,7 @@
 {
  "base_revision": "f3d0812",
  "assertions_digest": "19f9f7636eba72d21e5537c157ced764e85085c1056ba732db2a962ce0234c1f",
- "complete": true,
+ "complete": false,
  "properties": [
   {
    "id": "B0:test_runs_that_differ_only_in_wall_time_paths_snapshot_and_nondeterministic_reads_compare_equal",
@@ -7675,7 +7675,7 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "if straight is None and near is not None and options.near_capture_redraw == \"on\":",
+    "find": "if straight is None and self._near_capture_redraw_allowed():",
     "replace": "if False:",
     "count": 1
    },
