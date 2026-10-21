@@ -18,8 +18,9 @@ bool kth7801_decode(uint16_t frame, kth_crc_variant v, uint16_t *angle12)
 bool abs_axis_config_valid(const abs_axis_config *c)
 {
     if ((c->sign != 1 && c->sign != -1) || c->invalid_limit == 0 || !isfinite(c->zero_offset_rad) ||
-        !isfinite(c->sensor_per_joint) || !(c->sensor_per_joint > 0.0f) ||
-        !isfinite(c->min_joint) || !isfinite(c->max_joint) || !(c->min_joint < c->max_joint)) {
+        fabsf(c->zero_offset_rad) > TWO_PI_F || !isfinite(c->sensor_per_joint) ||
+        !(c->sensor_per_joint > 0.0f) || !isfinite(c->min_joint) || !isfinite(c->max_joint) ||
+        !(c->min_joint < c->max_joint)) {
         return false;
     }
     /* The joint range, seen on the sensor, must stay inside (-pi, pi). */
@@ -36,12 +37,13 @@ void abs_axis_init(abs_axis *a)
     a->crc_errors = 0;
 }
 
+/* Into (-pi, pi] in bounded time (no subtract loop that a large input could stall). */
 static float wrap_pi(float x)
 {
-    while (x > PI_F) {
+    x = fmodf(x, TWO_PI_F); /* (-2pi, 2pi) */
+    if (x > PI_F) {
         x -= TWO_PI_F;
-    }
-    while (x <= -PI_F) {
+    } else if (x <= -PI_F) {
         x += TWO_PI_F;
     }
     return x;

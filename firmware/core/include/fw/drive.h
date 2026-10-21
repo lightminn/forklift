@@ -138,6 +138,7 @@ typedef struct drive {
     bool init_after_clear, retry_waiting;
     uint64_t retry_at_us;
     bool spi_pending, spi_inflight;
+    uint8_t spi_tag; /* identifies the current transaction; older answers are dropped */
     uint8_t spi_ch;
     uint16_t spi_frame;
     uint64_t spi_since_us; /* pending or in flight since */
@@ -159,10 +160,12 @@ void drive_handle(drive *d, const link_msg *m);
 /* Controllers and outputs for this cycle (also left in d->out). */
 void drive_finish(drive *d, drive_outputs *out);
 
-/* One SPI transaction at a time: the frame to start (repeated until started). */
-bool drive_spi_next(drive *d, uint8_t *ch, uint16_t *frame);
+/* One SPI transaction at a time: the frame to start (repeated until started) and its tag.
+   The HAL hands the tag back with the answer; an answer with another tag (a transaction
+   that was given up or belongs to an abandoned sequence) is dropped. */
+bool drive_spi_next(drive *d, uint8_t *ch, uint16_t *frame, uint8_t *tag);
 void drive_spi_started(drive *d);
-void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo);
+void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint8_t tag);
 
 /* Fills everything but rx_errors and cycle_overruns (owned by the app). */
 void drive_fill_state(const drive *d, link_state *s);

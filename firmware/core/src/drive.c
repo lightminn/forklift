@@ -12,8 +12,9 @@ static bool finite_pos(float x)
 
 static bool pi_valid(const pi_config *p)
 {
-    return isfinite(p->kp) && isfinite(p->ki) && isfinite(p->kff) && finite_pos(p->out_max) &&
-           p->out_max <= 1.0f && isfinite(p->deadband) && p->deadband >= 0.0f;
+    return isfinite(p->kp) && p->kp >= 0.0f && isfinite(p->ki) && p->ki >= 0.0f &&
+           isfinite(p->kff) && p->kff >= 0.0f && finite_pos(p->out_max) && p->out_max <= 1.0f &&
+           isfinite(p->deadband) && p->deadband >= 0.0f;
 }
 
 bool drive_config_valid(const drive_config *c)
@@ -67,6 +68,7 @@ static void enter_fault(drive *d, uint32_t bits)
 
 static void queue_frame(drive *d, uint8_t ch, uint16_t frame)
 {
+    d->spi_tag++; /* a new transaction: answers carrying an older tag are dropped */
     d->spi_pending = true;
     d->spi_ch = ch;
     d->spi_frame = frame;
@@ -81,7 +83,7 @@ static void start_driver_init(drive *d, bool after_clear)
     d->init_ch = 0;
     d->init_sdo = 0;
     d->spi_pending = false;
-    d->spi_inflight = false; /* responses to older frames are dropped (drive_spi_result) */
+    d->spi_inflight = false; /* its late answer carries an old tag and is dropped */
     drv8244_init_start(&d->ini, (uint32_t)d->time_us, d->cfg->driver_wake_us);
 }
 
@@ -183,13 +185,14 @@ static void check_spi_timeout(drive *d)
     }
 }
 
-bool drive_spi_next(drive *d, uint8_t *ch, uint16_t *frame)
+bool drive_spi_next(drive *d, uint8_t *ch, uint16_t *frame, uint8_t *tag)
 {
     if (!d->spi_pending || d->spi_inflight) {
         return false;
     }
     *ch = d->spi_ch;
     *frame = d->spi_frame;
+    *tag = d->spi_tag;
     return true;
 }
 
@@ -199,10 +202,10 @@ void drive_spi_started(drive *d)
     d->spi_inflight = true; /* spi_since_us keeps counting from when the frame was queued */
 }
 
-void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo)
+void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint8_t tag)
 {
-    if (!d->spi_inflight || ch != d->spi_ch || ch >= DRIVE_CH_COUNT) {
-        return; /* stale or unexpected response */
+    if (!d->spi_inflight || tag != d->spi_tag || ch != d->spi_ch || ch >= DRIVE_CH_COUNT) {
+        return; /* an answer to a transaction that is no longer current */
     }
     d->spi_inflight = false;
     bool valid = drv8244_response_valid(sdo);
@@ -333,6 +336,19 @@ static void judge_driving_faults(drive *d, const drive_inputs *in)
     }
 }
 
+/* Latched bits | live status bits; recomputed after every state change a message makes. */
+static void refresh_flags(drive *d)
+{
+    uint32_t live = sensor_bits(d);
+    if (d->estop_now) {
+        live |= DRIVE_FAULT_ESTOP_INPUT;
+    }
+    if (!d->drivers_ready) {
+        live |= DRIVE_FAULT_DRIVER_NOT_READY;
+    }
+    d->fault_flags = d->latched | live;
+}
+
 void drive_begin(drive *d, const drive_inputs *in)
 {
     d->time_us += (uint32_t)(in->now_us - d->last_now32); /* widen the HAL clock */
@@ -350,11 +366,8 @@ void drive_begin(drive *d, const drive_inputs *in)
         d->lift_target = d->lift_ref = d->lift.position;
         d->stop_until_us = d->time_us + (uint64_t)d->cfg->stop_grace_ms * US_PER_MS;
     }
-    if (d->mode == DRIVE_MODE_STOPPING && d->time_us >= d->stop_until_us) {
-        d->mode = DRIVE_MODE_DISARMED;
-        reset_control(d);
-    }
-
+    /* Faults are judged while the outputs are still on, including the cycle the STOPPING
+       grace ends, so they latch before the drop to DISARMED. */
     if (driving(d)) {
         judge_driving_faults(d, in);
     } else {
@@ -362,6 +375,10 @@ void drive_begin(drive *d, const drive_inputs *in)
             d->over_active[ch] = false;
         }
         d->overrun_streak = 0;
+    }
+    if (d->mode == DRIVE_MODE_STOPPING && d->time_us >= d->stop_until_us) {
+        d->mode = DRIVE_MODE_DISARMED;
+        reset_control(d);
     }
     if (d->drivers_ready) {
         uint32_t bits = 0;
@@ -382,15 +399,7 @@ void drive_begin(drive *d, const drive_inputs *in)
 
     step_driver_init(d, in);
     step_status_poll(d);
-
-    uint32_t live = sensor_bits(d);
-    if (in->estop_active) {
-        live |= DRIVE_FAULT_ESTOP_INPUT;
-    }
-    if (!d->drivers_ready) {
-        live |= DRIVE_FAULT_DRIVER_NOT_READY;
-    }
-    d->fault_flags = d->latched | live;
+    refresh_flags(d);
 }
 
 /* ---- messages ----------------------------------------------------------------------- */
@@ -568,6 +577,7 @@ void drive_handle(drive *d, const link_msg *m)
     default:
         break;
     }
+    refresh_flags(d);
 }
 
 /* ---- control and outputs ------------------------------------------------------------ */

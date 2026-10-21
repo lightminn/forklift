@@ -65,7 +65,7 @@ typedef struct {
     uint8_t regs[DRIVE_CH_COUNT][0x0E];
     bool nfault_low[DRIVE_CH_COUNT];
     bool spi_busy, spi_done;
-    uint8_t spi_ch;
+    uint8_t spi_ch, spi_tag;
     uint16_t spi_rx;
     int spi_refusals_left;
     int spi_started;
@@ -143,7 +143,7 @@ static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
     return true;
 }
 
-static bool hal_spi_start(void *ctx, uint8_t ch, uint16_t tx)
+static bool hal_spi_start(void *ctx, uint8_t ch, uint16_t tx, uint8_t tag)
 {
     board *b = ctx;
     if (b->spi_refusals_left > 0) {
@@ -169,12 +169,13 @@ static bool hal_spi_start(void *ctx, uint8_t ch, uint16_t tx)
     b->spi_busy = true;
     b->spi_done = true;
     b->spi_ch = ch;
+    b->spi_tag = tag;
     b->spi_rx = (uint16_t)(0xC000u | ((read && addr < sizeof b->regs[0]) ? b->regs[ch][addr] : 0));
     b->spi_started++;
     return true;
 }
 
-static bool hal_spi_take(void *ctx, uint8_t *ch, uint16_t *rx)
+static bool hal_spi_take(void *ctx, uint8_t *ch, uint16_t *rx, uint8_t *tag)
 {
     board *b = ctx;
     if (!b->spi_done) {
@@ -183,6 +184,7 @@ static bool hal_spi_take(void *ctx, uint8_t *ch, uint16_t *rx)
     b->spi_done = b->spi_busy = false;
     *ch = b->spi_ch;
     *rx = b->spi_rx;
+    *tag = b->spi_tag;
     return true;
 }
 

@@ -56,10 +56,10 @@ void fw_app_tick(fw_app *app)
     }
 
     /* Responses first, so the core's lost-transaction check sees them (design 3). */
-    uint8_t ch;
+    uint8_t ch, tag;
     uint16_t rx;
-    while (hal->drv_spi_take(hal->ctx, &ch, &rx)) {
-        drive_spi_result(&app->d, ch, rx);
+    while (hal->drv_spi_take(hal->ctx, &ch, &rx, &tag)) {
+        drive_spi_result(&app->d, ch, rx, tag);
     }
 
     drive_inputs in;
@@ -88,7 +88,8 @@ void fw_app_tick(fw_app *app)
     hal->write_outputs(hal->ctx, &out); /* DRVOFF is applied before any SPI frame starts */
 
     uint16_t frame;
-    if (drive_spi_next(&app->d, &ch, &frame) && hal->drv_spi_start(hal->ctx, ch, frame)) {
+    if (drive_spi_next(&app->d, &ch, &frame, &tag) &&
+        hal->drv_spi_start(hal->ctx, ch, frame, tag)) {
         drive_spi_started(&app->d);
     }
 

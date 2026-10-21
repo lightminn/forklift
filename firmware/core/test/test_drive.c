@@ -128,12 +128,12 @@ static void tick_msgs(const link_msg *msgs, int count)
         drive_handle(&d, &msgs[i]);
     }
     drive_finish(&d, &out);
-    uint8_t ch;
+    uint8_t ch, tag;
     uint16_t frame;
-    if (!spi_refuse && drive_spi_next(&d, &ch, &frame)) {
+    if (!spi_refuse && drive_spi_next(&d, &ch, &frame, &tag)) {
         drive_spi_started(&d);
         if (!spi_mute) {
-            drive_spi_result(&d, ch, respond(ch, frame));
+            drive_spi_result(&d, ch, respond(ch, frame), tag);
         }
     }
 }
@@ -730,6 +730,111 @@ static void arm_alone_expires(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
 }
 
+static void fault_on_the_last_stopping_cycle_latches(void)
+{
+    /* Codex code review P1: a fault reaching its threshold in the cycle STOPPING ends must
+       still latch, so the next ARM needs a CLEAR. */
+    boot(0);
+    arm_and_zero();
+    ticks(149); /* deadline = now (still valid) */
+    tick();     /* STOPPING starts */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    ticks(97); /* two cycles before the grace ends */
+    in.abs_fresh[0] = false;
+    ticks(3); /* third failure lands on the cycle the grace ends */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    in.abs_fresh[0] = true;
+    tick();
+    send(arm_msg(5, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_LATCHED);
+}
+
+/* One cycle without the automatic SPI handling of tick(). */
+static void manual_cycle(const link_msg *m)
+{
+    in.now_us += cfg.period_us;
+    drive_begin(&d, &in);
+    if (m) {
+        drive_handle(&d, m);
+    }
+    drive_finish(&d, &out);
+}
+
+static void stale_spi_response_after_reinit_is_drained(void)
+{
+    /* Codex code review P2: a status read of channel L that is still unanswered when a CLEAR
+       restarts the initialisation must not be taken as the answer to the new L UNLOCK. */
+    boot(0);
+    spi_mute = true; /* status reads go out but are not answered (yet) */
+    for (int i = 0; i < 40 && !(d.spi_inflight && d.spi_ch == DRIVE_CH_L); i++) {
+        tick();
+    }
+    CHECK(d.spi_inflight && d.spi_ch == DRIVE_CH_L);
+    uint8_t old_tag = d.spi_tag;
+    in.nfault_low[DRIVE_CH_M] = true;
+    manual_cycle(NULL);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    in.nfault_low[DRIVE_CH_M] = false;
+    link_msg clear = simple(LINK_CLEAR_FAULTS, 3);
+    manual_cycle(&clear);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_BOOT);
+    manual_cycle(NULL); /* past the wake wait: the new L UNLOCK goes out */
+    uint8_t ch, tag;
+    uint16_t frame;
+    CHECK(drive_spi_next(&d, &ch, &frame, &tag));
+    CHECK_EQ_U(frame, 0x0809);
+    drive_spi_started(&d);
+    drive_spi_result(&d, DRIVE_CH_L, 0xC000, old_tag); /* the old read answers: dropped */
+    CHECK(d.spi_inflight);
+    drive_spi_result(&d, DRIVE_CH_L, 0x0000, tag); /* the device's real (bad) UNLOCK answer */
+    spi_mute = false;
+    ticks(200);
+    /* The bad UNLOCK answer fails this re-initialisation: the clear does not take. */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    CHECK(d.fault_flags & DRIVE_FAULT_DRIVER_NOT_READY);
+}
+
+static void config_rejects_negative_gains_and_huge_zero(void)
+{
+    drive_config c = make_config();
+    c.wheel_pi.kp = -1.0f;
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    c.steer_pi.ki = -0.1f;
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    c.lift_pi.kff = -0.1f;
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    c.steer.zero_offset_rad = 1e9f; /* would stall a subtract-2pi loop */
+    CHECK(!drive_config_valid(&c));
+}
+
+static void state_flags_follow_messages(void)
+{
+    /* Codex code review P2: STATE right after ARM / CLEAR reflects the new mode's bits. */
+    boot(0);
+    arm_and_zero();
+    ticks(160); /* timeout -> STOPPING */
+    ticks(100); /* -> DISARMED, COMMAND_TIMEOUT kept until the next ARM */
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT);
+    send(arm_msg(30, d.boot_id, echo_now()));
+    link_state s;
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.mode, DRIVE_MODE_ARMED);
+    CHECK(!(s.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT));
+
+    in.estop_active = true;
+    tick();
+    in.estop_active = false;
+    tick();
+    send(simple(LINK_CLEAR_FAULTS, 31));
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.mode, DRIVE_MODE_BOOT);
+    CHECK(!(s.fault_flags & DRIVE_FAULT_ESTOP_INPUT));
+    CHECK(s.fault_flags & DRIVE_FAULT_DRIVER_NOT_READY);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -754,5 +859,9 @@ int main(void)
     clock_wrap_replay();
     spi_refusal_and_timeout();
     arm_alone_expires();
+    fault_on_the_last_stopping_cycle_latches();
+    stale_spi_response_after_reinit_is_drained();
+    config_rejects_negative_gains_and_huge_zero();
+    state_flags_follow_messages();
     return FW_TEST_RESULT();
 }
