@@ -1,0 +1,335 @@
+<?xml version="1.0"?>
+<robot name="t11_06_pallet">
+  <link name="pallet">
+    <visual name="bottom_board_0">
+      <origin xyz="0 -0.29 0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.08 0.015" />
+      </geometry>
+      <material name="wood_bottom_board_0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="bottom_board_0">
+      <origin xyz="0 -0.29 0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.08 0.015" />
+      </geometry>
+    </collision>
+    <visual name="bottom_board_1">
+      <origin xyz="0 0 0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.08 0.015" />
+      </geometry>
+      <material name="wood_bottom_board_1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="bottom_board_1">
+      <origin xyz="0 0 0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.08 0.015" />
+      </geometry>
+    </collision>
+    <visual name="bottom_board_2">
+      <origin xyz="0 0.29 0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.08 0.015" />
+      </geometry>
+      <material name="wood_bottom_board_2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="bottom_board_2">
+      <origin xyz="0 0.29 0.0075" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.08 0.015" />
+      </geometry>
+    </collision>
+    <visual name="block_x0_y0">
+      <origin xyz="-0.29 -0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x0_y0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x0_y0">
+      <origin xyz="-0.29 -0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x0_y1">
+      <origin xyz="-0.29 0 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x0_y1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x0_y1">
+      <origin xyz="-0.29 0 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x0_y2">
+      <origin xyz="-0.29 0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x0_y2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x0_y2">
+      <origin xyz="-0.29 0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x1_y0">
+      <origin xyz="0 -0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x1_y0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x1_y0">
+      <origin xyz="0 -0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x1_y1">
+      <origin xyz="0 0 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x1_y1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x1_y1">
+      <origin xyz="0 0 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x1_y2">
+      <origin xyz="0 0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x1_y2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x1_y2">
+      <origin xyz="0 0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x2_y0">
+      <origin xyz="0.29 -0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x2_y0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x2_y0">
+      <origin xyz="0.29 -0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x2_y1">
+      <origin xyz="0.29 0 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x2_y1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x2_y1">
+      <origin xyz="0.29 0 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="block_x2_y2">
+      <origin xyz="0.29 0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+      <material name="wood_block_x2_y2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="block_x2_y2">
+      <origin xyz="0.29 0.29 0.0375" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.08 0.045" />
+      </geometry>
+    </collision>
+    <visual name="stringer_0">
+      <origin xyz="-0.29 0 0.0675" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.66 0.015" />
+      </geometry>
+      <material name="wood_stringer_0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="stringer_0">
+      <origin xyz="-0.29 0 0.0675" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.66 0.015" />
+      </geometry>
+    </collision>
+    <visual name="stringer_1">
+      <origin xyz="0 0 0.0675" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.66 0.015" />
+      </geometry>
+      <material name="wood_stringer_1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="stringer_1">
+      <origin xyz="0 0 0.0675" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.66 0.015" />
+      </geometry>
+    </collision>
+    <visual name="stringer_2">
+      <origin xyz="0.29 0 0.0675" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.66 0.015" />
+      </geometry>
+      <material name="wood_stringer_2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="stringer_2">
+      <origin xyz="0.29 0 0.0675" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.66 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_0">
+      <origin xyz="0 -0.28875 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_0">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_0">
+      <origin xyz="0 -0.28875 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_1">
+      <origin xyz="0 -0.1925 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_1">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_1">
+      <origin xyz="0 -0.1925 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_2">
+      <origin xyz="0 -0.09625 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_2">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_2">
+      <origin xyz="0 -0.09625 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_3">
+      <origin xyz="0 0 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_3">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_3">
+      <origin xyz="0 0 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_4">
+      <origin xyz="0 0.09625 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_4">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_4">
+      <origin xyz="0 0.09625 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_5">
+      <origin xyz="0 0.1925 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_5">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_5">
+      <origin xyz="0 0.1925 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+    <visual name="top_board_6">
+      <origin xyz="0 0.28875 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+      <material name="wood_top_board_6">
+        <color rgba="0.62 0.40 0.20 1" />
+      </material>
+    </visual>
+    <collision name="top_board_6">
+      <origin xyz="0 0.28875 0.0825" rpy="0 0 0" />
+      <geometry>
+        <box size="0.66 0.0825 0.015" />
+      </geometry>
+    </collision>
+  </link>
+</robot>
