@@ -1217,7 +1217,8 @@ async def tour_scenario(p: Probe, args):
                 # answering ticks), holding zero and still watching the states meanwhile -- staleness, TELEOP left,
                 # a disarm and its rearm (Codex F1-F3 review P2)
                 start, left = driver.replan_request
-                driven, refine_log = list(driver.driven), []
+                driven, refine_log, asked = list(driver.driven), [], time.monotonic()
+                left_in = list(left)
                 job = asyncio.get_running_loop().run_in_executor(
                     None, lambda: replan_tour_bounded(plan_input, left, start, driven, judged,
                                                       radius if radius is not None else 0.0, log=refine_log))
@@ -1231,7 +1232,11 @@ async def tour_scenario(p: Probe, args):
                     await p.teleop(0.0, 0.0, True)
                     await asyncio.sleep(0.05)
                 if end is not None:
-                    break  # a failure while planning: the plan (finished or killed at its limit) is not adopted
+                    # a failure while planning: the plan (finished or killed at its limit) is not adopted
+                    driver.events.append({"wall": time.monotonic(), "event": "replan_abandoned", "end": end,
+                                          "start": list(start), "waypoints_in": [list(w) for w in left_in],
+                                          "elapsed_s": time.monotonic() - asked})
+                    break
                 try:
                     left, plan, coverage, error = job.result()
                 except Exception as exc:  # noqa: BLE001 -- a planner error is a failed replan, recorded
@@ -1240,6 +1245,16 @@ async def tour_scenario(p: Probe, args):
                     driver.events.append({"wall": time.monotonic(), "event": "replan_error", "error": error})
                 for line in refine_log:
                     driver.events.append({"wall": time.monotonic(), "event": "refine", **line})
+                # what the replan was given and gave, whole (gyro plan 4.6, Codex P3): its coverage prediction redone
+                # from these alone -- every driven pose with its state id and correction version, the full new path
+                driver.events.append({
+                    "wall": time.monotonic(), "event": "replan_io", "start": list(start),
+                    "waypoints_in": [list(w) for w in left_in], "waypoints_out": [list(w) for w in left],
+                    "driven": [list(d) for d in driven],
+                    "path": None if plan is None or not plan.success else np.asarray(plan.poses).tolist(),
+                    "elapsed_s": time.monotonic() - asked, "error": error,
+                    "coverage": None if coverage is None else {k: coverage[k] for k in (
+                        "ok", "uncovered", "radius_m", "farthest_m", "farthest_cell")}})
                 driver.adopt(time.monotonic(), plan, left, coverage)
     tour["end"], tour["progress_m"] = end, float(driver.best)
     stop_by = time.monotonic() + 15.0

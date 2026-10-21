@@ -181,7 +181,9 @@ def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs
                     grid: dict | None = None) -> dict:
     """L2 v2.5: the judged region (aisle bands, work approaches, observation poses, home) fully within reach of the
     final nodes, in the rear-axle frame; the placeable estimate's uncovered part reported, not judged; the tour the
-    survey drove planned on this very scene."""
+    survey drove planned on this very scene. A tour file planned with a margin carries the judged cells it was
+    planned for: the region rebuilt here must be those very cells (``judged_matches_tour``, gyro plan 4.6 -- a
+    reference run left out or a changed tour config would otherwise judge another region, Codex P2)."""
     rx, ry = survey_tour.base_to_rear(nodes["x"], nodes["y"], nodes["yaw"], result["arguments"]["rear_axle_offset_m"])
     sites = np.column_stack((rx, ry))
     aisles = [tuple(map(tuple, a)) for a in tour_config["aisles"]]
@@ -193,8 +195,14 @@ def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs
     if tour_path is not None:
         with np.load(tour_path) as tour:
             planned_on = str(tour["scenario_sha256"]) if "scenario_sha256" in tour.files else None
+            planned_cells = np.asarray(tour["judged"]) if "judged" in tour.files else None
+            if "judged_source" in tour.files:
+                out["tour_judged_source"] = json.loads(str(tour["judged_source"]))
         out["tour_scene_matches"] = planned_on == scene
-    out["ok"] = bool(out["judged"]["ok"] and out.get("tour_scene_matches", True))
+        out["tour_sha256"] = sha256(tour_path)
+        if planned_cells is not None:
+            out["judged_matches_tour"] = bool(planned_cells.shape == judged.shape and np.array_equal(planned_cells, judged))
+    out["ok"] = bool(out["judged"]["ok"] and out.get("tour_scene_matches", True) and out.get("judged_matches_tour", True))
     return out
 
 
