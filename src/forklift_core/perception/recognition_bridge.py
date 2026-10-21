@@ -176,6 +176,10 @@ class FarRecognition:
             return no_pallet(scene.stamp_ns, self.clock_domain, reason), out
 
         if sel.status != "selected":
+            if sel.candidate_id is not None:
+                # The candidate a not_pickable decision was made on (its hypothesis says whether the fit used a known
+                # shape's fixed dimensions or measured ones).
+                out["decided"] = _candidate_record(next(c for c in fit.candidates if c.candidate_id == sel.candidate_id))
             return fail(sel.reasons[0] if sel.reasons else sel.status)
         single = next(c for c in fit.candidates if c.candidate_id == sel.candidate_id)
         if self._chosen is not None:

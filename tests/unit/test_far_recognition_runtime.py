@@ -430,3 +430,15 @@ def test_the_recompute_needs_the_zone_change_to_match_a_stop_the_narrowed_zone_t
     assert all(not RC.differences(a, b) for a, b in RC.recompute(tmp_path))
     stale = {**summary, "zone_changes": []}
     assert any(RC.differences(a, b) for a, b in RC.recompute(tmp_path, recognition=stale))
+
+
+def test_a_stop_the_forks_do_not_fit_records_the_candidate_decided_on():
+    # Codex T11 review P2: the mission ends at once on fork_spacing_adjust only for a known shape's fixed dimensions,
+    # so the stop names the candidate (and its hypothesis) the not_pickable decision was made on.
+    run = R.FarRuntime(fork_spacing=0.29, pallet_depth_m=EPAL.overall_depth_m, pallet_shape="epal6",
+                       zone_centre_xy=PALLET[:2], zone_radius_m=0.6, camera_x_m=CAMERA_X, dt=DT)
+    xs = _leg()
+    _drive(run, 0, xs)
+    obs, rec = _stop(run, xs)
+    assert rec["status"] == "not_pickable" and "fork_spacing_adjust" in rec["reasons"]
+    assert rec["decided"]["hypothesis"].startswith("epal6") and rec["decided"]["pickable"] is False
