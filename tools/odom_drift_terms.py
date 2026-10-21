@@ -93,22 +93,37 @@ def trajectories(log: dict, result: dict) -> dict:
         out["truth"][i] = rear_from_base(base, offset)
     out["stamps"] = stamps
     out["offset_m"] = offset
+    # The rolled distances themselves (mean of the two rear wheels): the reported rates' trapezoid and the joint
+    # angles' change, cumulative on the stamps; the truth rear axle's path length.
+    rate_mean = rates[:, 2:4].astype(float).mean(axis=1) * radius
+    dt = np.diff(stamps)
+    out["reported_rate_dist"] = np.concatenate([[0.0], np.cumsum((rate_mean[1:] + rate_mean[:-1]) / 2 * dt)])
+    out["joint_angle_dist"] = (angles[:, 2:4].mean(axis=1) - angles[0, 2:4].mean()) * radius
+    step = np.hypot(np.diff(out["truth"][:, 0]), np.diff(out["truth"][:, 1]))
+    out["truth_path"] = np.concatenate([[0.0], np.cumsum(step)])
     return out
 
 
-def reproduction_error(traj: dict, records: list) -> float:
-    """The largest distance between the rebuilt recorded odometry and every recorded ``odom_base``."""
+def reproduction(traj: dict, records: list, *, tolerance_m: float = 1e-9, tolerance_rad: float = 1e-9) -> dict:
+    """The rebuilt recorded odometry against every recorded ``odom_base``: how many were compared, how many had no
+    log sample at their stamp, the largest position and yaw differences. ``ok`` needs at least one comparison, no
+    unmatched record and both differences within tolerance."""
     stamps = traj["stamps"]
-    worst = 0.0
+    compared = unmatched = 0
+    worst_m = worst_rad = 0.0
     for r in records:
-        if "odom_base" not in r or r.get("odom_base") is None:
+        if r.get("odom_base") is None:
             continue
         i = int(np.argmin(np.abs(stamps - r["stamp_s"])))
         if abs(stamps[i] - r["stamp_s"]) > 1e-6:
+            unmatched += 1
             continue
+        compared += 1
         b = base_from_rear(traj["recorded"][i], traj["offset_m"])
-        worst = max(worst, math.hypot(b[0] - r["odom_base"][0], b[1] - r["odom_base"][1]))
-    return worst
+        worst_m = max(worst_m, math.hypot(b[0] - r["odom_base"][0], b[1] - r["odom_base"][1]))
+        worst_rad = max(worst_rad, abs(math.atan2(math.sin(b[2] - r["odom_base"][2]), math.cos(b[2] - r["odom_base"][2]))))
+    return {"compared": compared, "unmatched": unmatched, "max_position_m": worst_m, "max_yaw_rad": worst_rad,
+            "ok": compared > 0 and unmatched == 0 and worst_m <= tolerance_m and worst_rad <= tolerance_rad}
 
 
 def terms(traj: dict, t0: float, t1: float) -> dict:
@@ -121,8 +136,11 @@ def terms(traj: dict, t0: float, t1: float) -> dict:
              "rate_angle": disp["noiseless"] - disp["joint_angle"],
              "angle_truth": disp["joint_angle"] - disp["truth"]}
     total = disp["recorded"] - disp["truth"]
+    dist = {"reported_rate_m": float(traj["reported_rate_dist"][i1] - traj["reported_rate_dist"][i0]),
+            "joint_angle_m": float(traj["joint_angle_dist"][i1] - traj["joint_angle_dist"][i0]),
+            "truth_path_m": float(traj["truth_path"][i1] - traj["truth_path"][i0])}
     return {"window_s": [float(stamps[i0]), float(stamps[i1])],
-            "truth_forward_m": float(disp["truth"][0]),
+            "truth_forward_m": float(disp["truth"][0]), "distance": dist,
             "drift": {"forward_m": float(total[0]), "lateral_m": float(total[1]), "yaw_rad": float(total[2])},
             "terms": {k: {"forward_m": float(v[0]), "lateral_m": float(v[1]), "yaw_rad": float(v[2])}
                       for k, v in split.items()},
@@ -155,7 +173,7 @@ def analyse(run_dir: Path, start_phase: str = "approach", end_phase: str = "inse
     traj = trajectories(log, result)
     records = json.loads((run_dir / "slam_records.json").read_text())
     t0, t1 = phase_window(result, start_phase, end_phase)
-    return {"run": str(run_dir), "reproduction_max_m": reproduction_error(traj, records),
+    return {"run": str(run_dir), "reproduction": reproduction(traj, records),
             "window": terms(traj, t0, t1), "worst_0p3s": worst_window(traj, t0, t1)}
 
 
@@ -175,7 +193,11 @@ def main(argv=None) -> int:
             continue
         rows.append(row)
         w, k = row["window"], row["window"]["terms"]
-        print(f"{run.parent.name if run.name == 'run' else run.name:18s} repro={row['reproduction_max_m']:.2e} "
+        rp, d = row["reproduction"], w["distance"]
+        print(f"{run.parent.name if run.name == 'run' else run.name:18s} repro={'ok' if rp['ok'] else 'FAILED'}"
+              f"({rp['compared']}/{rp['compared'] + rp['unmatched']}, {rp['max_position_m']:.1e} m) "
+              f"rolled rate {(d['reported_rate_m'] - d['truth_path_m'])*1000:+6.1f} / angle "
+              f"{(d['joint_angle_m'] - d['truth_path_m'])*1000:+6.1f} mm vs path | "
               f"truth={w['truth_forward_m']:.3f} m drift={w['drift']['forward_m']*1000:+6.1f} mm = "
               f"noise {k['noise']['forward_m']*1000:+6.1f} + rate_angle {k['rate_angle']['forward_m']*1000:+6.1f} "
               f"+ angle_truth {k['angle_truth']['forward_m']*1000:+6.1f} | worst 0.3 s rate_angle "

@@ -78,11 +78,31 @@ def test_the_noise_term_is_the_rebuilt_noise_and_the_terms_still_sum():
     assert w["drift"]["forward_m"] == pytest.approx(sum(t["forward_m"] for t in w["terms"].values()), abs=1e-12)
 
 
-def test_the_rebuilt_odometry_is_checked_against_the_recorded_samples():
+def test_the_rebuilt_odometry_is_checked_against_every_recorded_sample():
+    # Codex task A review P2: no comparison, an unmatched stamp or a wrong yaw must not read as a reproduction.
     lg, res = log(), result(seed=1)
     traj = T.trajectories(lg, res)
-    i = 300
-    good = T.base_from_rear(traj["recorded"][i], -0.34)
-    assert T.reproduction_error(traj, [{"stamp_s": float(lg["joint_stamps_s"][i]), "odom_base": list(good)}]) < 1e-12
-    bad = [{"stamp_s": float(lg["joint_stamps_s"][i]), "odom_base": [good[0] + 0.01, good[1], good[2]]}]
-    assert T.reproduction_error(traj, bad) == pytest.approx(0.01)
+    stamps = [float(t) for t in lg["joint_stamps_s"][::40]]
+    good = [{"stamp_s": t, "odom_base": list(T.base_from_rear(traj["recorded"][int(round(t * 120))], -0.34))}
+            for t in stamps]
+    check = T.reproduction(traj, good)
+    assert check["compared"] == len(good) and check["unmatched"] == 0 and check["ok"]
+    assert check["max_position_m"] < 1e-12 and check["max_yaw_rad"] < 1e-12
+    assert not T.reproduction(traj, [])["ok"]  # nothing compared
+    shifted = [dict(r, stamp_s=r["stamp_s"] + 0.003) for r in good]
+    assert T.reproduction(traj, shifted)["unmatched"] == len(good) and not T.reproduction(traj, shifted)["ok"]
+    yawed = [dict(r, odom_base=[r["odom_base"][0], r["odom_base"][1], r["odom_base"][2] + 0.5]) for r in good]
+    out = T.reproduction(traj, yawed)
+    assert out["max_yaw_rad"] == pytest.approx(0.5) and not out["ok"]
+    moved = [dict(r, odom_base=[r["odom_base"][0] + 0.01, *r["odom_base"][1:]]) for r in good]
+    assert T.reproduction(traj, moved)["max_position_m"] == pytest.approx(0.01)
+
+
+def test_the_window_reports_the_rolling_distances_apart_from_the_trajectories():
+    # Codex task A review P2: the wheels' rolled distance against the truth path, not the trajectories' forward
+    # difference (the steering moves that one too).
+    w = window(log(slip=(0.5, 1.0, 1.1)), result())
+    d = w["distance"]
+    assert d["truth_path_m"] == pytest.approx(1.5, abs=2e-3)
+    assert d["joint_angle_m"] - d["truth_path_m"] == pytest.approx(0.025, abs=1e-3)
+    assert d["reported_rate_m"] == pytest.approx(d["joint_angle_m"], abs=1e-3)
