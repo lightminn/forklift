@@ -412,11 +412,13 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--layout",
-        choices=("bay", "factory"),
+        choices=("bay", "factory", "scene"),
         default="bay",
         help="bay: the original 7.7 x 4.8 m transport bay (every recorded run). "
         "factory: the same bay inside the full south hall, filled with stored "
-        "pallets and clutter, delivering to the shipping yard.",
+        "pallets and clutter, delivering to the shipping yard. "
+        "scene: one mission from --scene-file (e.g. the Riibotics demo scenarios, "
+        "tools/riibotics_isaac_scenes.py) in the south hall; its layout is the planner's prior map.",
     )
     parser.add_argument(
         "--factory-layout",
@@ -424,6 +426,8 @@ def arguments() -> argparse.Namespace:
         default=Path(__file__).resolve().parent.parent.parent
         / "config/factory_south_hall.yaml",
     )
+    parser.add_argument("--scene-file", type=Path, default=None,
+                        help="--layout scene: the scene record (sim/isaac/scene_file.py)")
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
@@ -898,10 +902,27 @@ def arguments() -> argparse.Namespace:
             parser.error("quarter eye and target must differ")
     # Explicit waypoints reproduce earlier diagnostic runs exactly; only the
     # default list gets run-time viewpoints appended after it.
-    # The placement zone is the synthetic bay's; the factory layout has its own.
+    # The placement zone is the synthetic bay's; the factory layout has its own,
+    # and a scene file its own zone and observation candidates.
     args.runtime_viewpoints = (
-        args.observation_waypoints is None and args.layout != "factory"
+        args.observation_waypoints is None and args.layout == "bay"
     )
+    if (args.layout == "scene") != (args.scene_file is not None):
+        parser.error("--layout scene and --scene-file go together")
+    if args.layout == "scene":
+        if args.min_obstacle_height_m is not None or args.prism_colliders:
+            # The scene's low pallets are part of the scenario and its boxes are their own colliders.
+            parser.error("--layout scene keeps its props as built: not with --min-obstacle-height-m or --prism-colliders")
+        if args.grid_planning:
+            # The LiDAR grid alone cannot see the scene's floor pallets (0.144 m under the 1.05 m plane).
+            parser.error("--layout scene plans on its layout (the prior map): not with --grid-planning")
+        if args.obstacle_layer is None:
+            # The pickup estimate that replaces the true pallet in its plans is kept with the obstacle layer.
+            parser.error("--layout scene needs --obstacle-layer")
+        if args.observation_waypoints is None:
+            from scene_file import load_scene
+
+            args.observation_waypoints = [list(w) for w in load_scene(args.scene_file).observation_waypoints]
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -947,6 +968,8 @@ def arguments() -> argparse.Namespace:
             )
         if args.perception_mount == "carriage_low_measured" and "dls08_measured" not in str(args.forklift_urdf):
             parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
+    # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
+    args.pallet_prior_loaded = None
     if args.use_perception:
         if args.pallet_prior is None:
             parser.error("--pallet-prior is required with --use-perception")
@@ -1588,6 +1611,8 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config, spool: 
         {**asdict(prop.rectangle), "height_m": prop.asset.height_m, "base_m": 0.0}
         for prop in scenario.props
     ]
+    if "scene_layout" in state:  # a scene file's colliders, not its keep-out areas (Codex 2026-10-20 P3)
+        obstacles = list(state["scene_layout"]["obstacles"])
     if factory is not None:
         obstacles += [
             {
@@ -1633,7 +1658,8 @@ def write_slam_record(args, state, scenario, factory, log, lidar_config, spool: 
             "source": f"{args.forklift_urdf} joint origins",
         },
         "seed": args.seed,
-        "layout_version": "bay" if factory is None else factory.layout_version,
+        "layout_version": (state["scene_layout"]["name"] if "scene_layout" in state
+                           else "bay" if factory is None else factory.layout_version),
         "obstacles": obstacles,
         "hall": asdict(scenario.bounds),
         "mission": {
@@ -2243,6 +2269,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         add_path_display,
         add_prism_colliders,
         add_props,
+        add_scene_boxes,
+        add_scene_pallets,
         configure_drives,
         create_pallet,
         hide_overhead,
@@ -2473,7 +2501,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     ms.cusp_stop_ticks, cusp_stop_needed = 0, 12
     cusp_stop_yaw_rate_radps = 0.02
     # None keeps every planner call exactly as in the original bay runs.
-    pickup_bounds = travel_config = factory = None
+    pickup_bounds = travel_config = factory = scene_layout = None
     if args.layout == "factory":
         import factory_assets
 
@@ -2521,6 +2549,25 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 )
             },
         }
+    elif args.layout == "scene":
+        from scene_file import load_scene
+
+        scene_layout = load_scene(args.scene_file)
+        scenario = scene_layout.scenario
+        state["scene_layout"] = {
+            "file": str(args.scene_file),
+            "name": scene_layout.name,
+            "sha256": scene_layout.sha256,
+            "pallet": scene_layout.pallet,
+            "pickup_zone": asdict(scene_layout.pickup_zone),
+            "visuals": {kind: sum(v.kind == kind for v in scene_layout.visuals) for kind in ("wall", "floor", "pallet")},
+            # What collides in Isaac (the SLAM record's obstacles); the props are the planner's keep-out areas.
+            "obstacles": [
+                {**asdict(v.rectangle), "base_m": 0.0,
+                 "height_m": v.height_m if v.kind == "wall" else args.pallet_geometry_loaded.overall_height_m}
+                for v in scene_layout.visuals if v.kind != "floor"
+            ],
+        }
     else:
         scenario = make_scenario(
             args.seed, catalogue, args.obstacles, geometry=geometry
@@ -2552,7 +2599,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         record_json(state["scenario"], indent=2) + "\n"
     )
     mesh_collision = not args.prism_colliders
-    if factory is None:
+    if scene_layout is not None:
+        # The scene's props are its layout for the planner; Isaac builds its visuals (pallets after the mission pallet).
+        state["props"] = add_scene_boxes(stage, scene_layout.visuals)
+        # The overview looks down from above the roof line, as the factory one does.
+        state["hidden_overhead_prims"] = len(hide_overhead(stage))
+    elif factory is None:
         state["props"] = add_props(stage, app, scenario.props, offsets, mesh_collision=mesh_collision)
     else:
         bay_props = scenario.props[: len(scenario.props) - len(factory.work_items)]
@@ -2596,6 +2648,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         scenario.pickup,
         settings["pallet_mass_kg"],
     )
+    if scene_layout is not None:
+        state["scene_pallets"] = add_scene_pallets(stage, app, args.output / "pallet.usd", scene_layout.visuals)
     base_start = np.array(
         [
             scenario.start_rear.x_m
@@ -2642,7 +2696,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     b = scenario.bounds
     center = np.array([(b.x_min_m + b.x_max_m) / 2, (b.y_min_m + b.y_max_m) / 2, 0.0])
     eye = center + np.array([0.0, 0.0, 6.0 if factory is None else 26.0])
-    look = Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye), Gf.Vec3d(*center), Gf.Vec3d(0, 1, 0))
+    overview_up = (0, 1, 0)
+    if scene_layout is not None:
+        # +x (the forks' heading into the pickup) up the frame, as the scenario drawings show it; high
+        # enough that the bounds fit at focal 1.1 (half field tan 0.9525 across, 0.5358 up) with 10 % spare.
+        overview_up = (1, 0, 0)
+        eye = center + np.array([0.0, 0.0, 1.1 * max((b.y_max_m - b.y_min_m) / 2 / 0.9525,
+                                                      (b.x_max_m - b.x_min_m) / 2 / 0.5358)])
+    look = Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye), Gf.Vec3d(*center), Gf.Vec3d(*overview_up))
     q = look.GetInverse().ExtractRotationQuat()
     camera.set_world_pose(
         position=eye,
@@ -2828,6 +2889,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
                 storage = [i_ for i_, item_ in enumerate(factory.work_items) if item_.asset.uri.endswith(_fa.PALLET)]
                 label_targets += [(f"/World/Factory/Item_{i_}", f"inst_{k_}") for k_, i_ in enumerate(storage, start=1)]
+            if scene_layout is not None:
+                # A scene's walls and floor patches are background; its static pallets compete as the factory's do.
+                if stage.GetPrimAtPath("/World/Scene").IsValid():
+                    label_targets.append(("/World/Scene", "floor"))
+                label_targets += [(p_, f"inst_{k_}") for k_, p_ in enumerate(state["scene_pallets"], start=1)]
             for path_, label_ in label_targets:
                 prim_ = stage.GetPrimAtPath(path_)
                 require(prim_.IsValid(), f"recognition label target {path_} is missing")
@@ -2982,6 +3048,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         if args.recognition == "far":
             from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _Z
+
+            if scene_layout is not None:
+                _Z = scene_layout.pickup_zone
 
             far_learned = {}
             if args.recognition_proposals == "learned":
@@ -3300,6 +3369,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # the layout's placement distribution (BAY_PICKUP_ZONE) grown by the pallet's
     # half diagonal; never built from scenario.pickup (Codex v4 P3).
     from forklift_core.planning.observation_viewpoints import BAY_PICKUP_ZONE as _ZONE
+
+    if scene_layout is not None:  # a scene file's own zone
+        _ZONE = scene_layout.pickup_zone
 
     zone_grow = math.hypot(geometry.pallet_depth_m, geometry.pallet_width_m) / 2
     pickup_zone = Rectangle(
@@ -3998,6 +4070,18 @@ def drive(S, isaac) -> None:
         release's own re-projection on that copy first (the core's _reproject: refresh at t with this
         correction and the next version -- Codex D4b impl round 2 P2-1). The shared layer is left as it was."""
         if not grid_planning:
+            if getattr(args, "layout", "bay") != "scene":
+                return {}
+            # --layout scene plans on its layout (the prior map) but, as a grid plan does, never on the pickup
+            # pallet's true pose: the pickup zone before recognition, the perceived pallet after (Codex 2026-10-20 P2).
+            if kind == "observe":
+                known = obstacle.get("pickup_estimate")
+                return {"pickup_obstacle": pickup_zone if known is None else Rectangle(
+                    known.x_m, known.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, known.yaw_rad)}
+            if kind == "mission" and target is not None:
+                obstacle["pickup_estimate"] = target
+                return {"pickup_obstacle": Rectangle(
+                    target.x_m, target.y_m, geometry.pallet_depth_m, geometry.pallet_width_m, target.yaw_rad)}
             return {}
         if scratch is not None and not scratch.get("_inner"):
             import copy as _copy
@@ -5101,6 +5185,7 @@ def drive(S, isaac) -> None:
         options=SimpleNamespace(near_tracking_stop_at=args.near_tracking_stop_at, d7_docking=args.d7_docking,
                                 dwells=dwells, safety_stops=safety_stops, home_rear=scenario.start_rear,
                                 grid_planning=grid_planning, return_turnaround=args.return_turnaround,
+                                pickup_prior=getattr(args, "layout", "bay") == "scene",
                                 planner_config=planner_config, travel_config=travel_config, scenario=scenario,
                                 return_to_pose=return_to_pose, obstacle_act=args.obstacle_act,
                                 pocket_check=args.pocket_check, mid_still_decel_mps2=MID_STILL_DECEL_MPS2,
