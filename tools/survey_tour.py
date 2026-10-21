@@ -28,6 +28,8 @@ coverage its samples would give. The survey's verdict is the saved graph's nodes
 from __future__ import annotations
 
 import argparse
+import hashlib
+import itertools
 import json
 import math
 import sys
@@ -174,11 +176,16 @@ def placeable_estimate(result: dict, cell_m: float = CELL_M, headings: int = HEA
     return np.column_stack((px[keep], py[keep]))
 
 
-def nearest_distance(points: np.ndarray, sites: np.ndarray, chunk: int = 4096) -> np.ndarray:
-    out = np.empty(len(points))
+def nearest_distance(points: np.ndarray, sites: np.ndarray, chunk: int = 2048) -> np.ndarray:
+    """Each point's distance to its nearest site, chunked on both axes (``chunk`` x ``chunk`` pairs at a time: a
+    replan's sites -- the poses driven so far and the new path -- run to thousands, Codex gyro 4.5 P2)."""
+    out = np.full(len(points), np.inf)
     for start in range(0, len(points), chunk):
         part = points[start:start + chunk]
-        out[start:start + chunk] = np.sqrt(((part[:, None, :] - sites[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+        for s0 in range(0, len(sites), chunk):
+            block = sites[s0:s0 + chunk]
+            d = np.sqrt(((part[:, None, :] - block[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+            out[start:start + chunk] = np.minimum(out[start:start + chunk], d)
     return out
 
 
@@ -274,12 +281,37 @@ def uncovered_clusters(cells: np.ndarray, cell_m: float = CELL_M) -> list[np.nda
     return sorted(clusters, key=len, reverse=True)
 
 
+def _cover_candidates(cell, yaw: float, radius_m: float):
+    """Where a waypoint for ``cell`` may stand, nearest first: the cell's centre, then every point of a ``CELL_M`` grid
+    around it that still covers it (a judged cell is one the rear axle can hold, not one the whole footprint fits at
+    every heading -- SEED 3-5's cells beside the pickup zone and the east wall took none nearer than 2 m), each at the
+    path's heading, reversed, across, then the diagonals between."""
+    headings = (yaw, yaw + math.pi, yaw + math.pi / 2, yaw - math.pi / 2,
+                yaw + math.pi / 4, yaw - math.pi / 4, yaw + 3 * math.pi / 4, yaw - 3 * math.pi / 4)
+    n = int(radius_m / CELL_M)
+    offsets = sorted(((i * CELL_M, j * CELL_M) for i in range(-n, n + 1) for j in range(-n, n + 1)
+                      if math.hypot(i, j) * CELL_M < radius_m - REFINE_INSIDE_M), key=lambda o: math.hypot(*o))
+    for dx, dy in offsets:
+        yield from ((float(cell[0] + dx), float(cell[1] + dy), h) for h in headings)
+
+
+REFINE_INSIDE_M = 0.05  # a candidate this far inside the radius at least, so the waypoint still covers the cell
+
+
 def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged: np.ndarray,
-                log=print) -> tuple[list, SimpleNamespace]:
-    """Greedy: plan the tour; for the largest cluster of ``judged`` cells it leaves uncovered (with ``sites``, other
-    survey nodes in the rear-axle frame), add a waypoint at the cluster's cell nearest the path, heading as the path does there (or
-    reversed, whichever the footprint takes), between the two waypoints the path passes it between; replan. Stops
-    when covered, after ``rounds`` additions, or when no added waypoint plans (that cluster is then skipped)."""
+                log=print, *, start=None, radius_m: float = CELL_RADIUS_M, deadline=None,
+                plan=None, tries: int = 8) -> tuple[list, SimpleNamespace, dict | None]:
+    """Greedy: plan the tour (from ``start``, home when None; ``plan`` when it is already planned); for the largest
+    cluster of ``judged`` cells it leaves farther than ``radius_m`` (with ``sites``, other survey nodes or the poses
+    already driven, in the rear-axle frame), add a waypoint at the cluster's cell nearest the path -- or the nearest
+    placeable pose around it (``_cover_candidates``) -- heading as the path does there (or reversed, or across), between
+    the two waypoints the path passes it between; replan, trying up to ``tries`` placeable poses (SEED 3's first one
+    in the north-west corner had no path on to the next waypoint). Stops when covered, after ``rounds`` additions, past
+    ``deadline`` (time.monotonic()), or when no added waypoint plans (that cluster is then skipped). Returns the tour,
+    its plan and the judged coverage at ``radius_m`` of ``sites`` and the plan (None when the plan failed): a cluster
+    left uncovered stays in it -- the caller fails on it, never drops the cells (gyro plan 4.5 F2/F3)."""
+    import time
+
     region = judged
     g = result["geometry"]["unloaded_footprint"]
     checker = FootprintCollisionChecker(scenario_obstacles(result) + [permit_pickup_zone(result)], Footprint(**g),
@@ -287,13 +319,20 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
     # the candidate's heading at the clearance the tour plans with (Codex review of 8aeb773 P2: at the planner's 0.10
     # a heading the 0.30 plan then refuses skipped the whole cluster)
     clearance = max(SURVEY_CLEARANCE_M, float(result["travel_planner_config"].get("clearance_m", 0.0)))
-    plan = plan_tour(result, tour)
+    sites = np.asarray(sites, float).reshape(-1, 2)
+    plan = plan if plan is not None else plan_tour(result, tour, start=start)
     if not plan.success:
-        return tour, plan
+        return tour, plan, None
+    # a start that cannot keep the tour's clearance plans the whole route at the run's (plan_tour): the candidates
+    # are checked at what the plan was made with (Codex F1-F3 review P2)
+    clearance = float(getattr(plan, "clearance_m", None) or clearance)
     skipped: set = set()
     for _ in range(rounds):
+        if deadline is not None and time.monotonic() > deadline:
+            log(json.dumps({"refine_deadline": True}))
+            break
         poses = np.asarray(plan.poses)
-        covered = nearest_distance(region, np.vstack([sites, poses[:, :2]])) <= CELL_RADIUS_M
+        covered = nearest_distance(region, np.vstack([sites, poses[:, :2]])) <= radius_m
         clusters = [c for c in uncovered_clusters(region[~covered]) if tuple(np.round(c.mean(0), 1)) not in skipped]
         if not clusters:
             break
@@ -302,32 +341,106 @@ def refine_tour(result: dict, tour: list, sites: np.ndarray, rounds: int, judged
         cell = cluster[int(np.argmin(d))]
         at = int(np.argmin(np.hypot(poses[:, 0] - cell[0], poses[:, 1] - cell[1])))
         yaw = float(poses[at, 2])
-        heading = next((h for h in (yaw, yaw + math.pi, yaw + math.pi / 2, yaw - math.pi / 2)
-                        if checker.free((cell[0], cell[1], h), clearance)), None)
         # the waypoint the path passes before this sample: the waypoints sit on the path exactly
         marks = [int(np.argmin(np.hypot(poses[:, 0] - x, poses[:, 1] - y))) for x, y, _ in tour]
         index = sum(1 for m in marks if m <= at)
-        candidate = tour[:index] + [[float(cell[0]), float(cell[1]), float(math.atan2(math.sin(heading), math.cos(heading)))]] + tour[index:] \
-            if heading is not None else None
-        trial = plan_tour(result, candidate) if candidate is not None else None
+        candidate = trial = None
+        spots = (c for c in _cover_candidates(cell, yaw, radius_m) if checker.free(c, clearance))
+        for spot in itertools.islice(spots, tries):
+            candidate = tour[:index] + [[spot[0], spot[1], float(math.atan2(math.sin(spot[2]), math.cos(spot[2])))]] \
+                + tour[index:]
+            trial = plan_tour(result, candidate, start=start)
+            if trial.success or (deadline is not None and time.monotonic() > deadline):
+                break
         if trial is None or not trial.success:
             skipped.add(tuple(np.round(cluster.mean(0), 1)))
             log(json.dumps({"skipped_cluster": cluster.mean(0).round(2).tolist(), "cells": len(cluster)}))
             continue
         tour, plan = candidate, trial
         log(json.dumps({"added": tour[index], "at": index, "cluster_cells": len(cluster), "length_m": round(plan.length_m, 1)}))
-    return tour, plan
+    coverage = region_coverage(region, np.vstack([sites, np.asarray(plan.poses)[:, :2]]), radius_m)
+    return tour, plan, coverage
+
+
+REPLAN_REFINE_ROUNDS = 4
+REPLAN_REFINE_S = 60.0  # the refine adds no waypoint after this
+REPLAN_HARD_S = 120.0  # a replan's child process is killed after this (the planner takes no deadline)
+
+
+def replan_tour(plan_input: dict, left: list, start, driven=(), judged=None, radius_m: float = CELL_RADIUS_M,
+                rounds: int = REPLAN_REFINE_ROUNDS, budget_s: float = REPLAN_REFINE_S, log=None):
+    """A replan from the stopped ``start`` through the waypoints ``left``. Without ``judged`` (a tour file planned
+    without a margin) it is the plain plan through them; with it (gyro plan 4.5 F3) the judged cells must stay within
+    ``radius_m`` of the poses ``driven`` so far (rear axle, map) or of the new path: waypoints are added for what the
+    new path would leave (``refine_tour``, ``rounds`` at most, within ``budget_s`` wall s). Returns (waypoints, plan,
+    coverage -- None without ``judged``)."""
+    import time
+
+    if judged is None:
+        return left, plan_tour(plan_input, [list(w) for w in left], start=start), None
+    events = log if log is not None else []
+    sites = np.asarray([d[:2] for d in driven], float).reshape(-1, 2)
+    tour, plan, coverage = refine_tour(plan_input, [list(w) for w in left], sites, rounds, np.asarray(judged, float),
+                                       log=lambda line: events.append(json.loads(line)), start=start,
+                                       radius_m=radius_m, deadline=time.monotonic() + budget_s)
+    return tour, plan, coverage
+
+
+def _replan_child(conn, args, kwargs):
+    try:
+        log = []
+        conn.send(("ok", (replan_tour(*args, **kwargs, log=log), log)))
+    except Exception as exc:  # noqa: BLE001 -- the parent records it as a failed replan
+        conn.send(("error", repr(exc)))
+    finally:
+        conn.close()
+
+
+def replan_tour_bounded(plan_input: dict, left: list, start, driven=(), judged=None, radius_m: float = CELL_RADIUS_M,
+                        *, budget_s: float = REPLAN_REFINE_S, hard_s: float = REPLAN_HARD_S, log=None):
+    """``replan_tour`` in a child process killed after ``hard_s`` wall s (the planner itself takes no deadline: the
+    refine's ``budget_s`` stops adding waypoints but cannot stop a plan already running -- Codex F1-F3 review P2).
+    Returns ``replan_tour``'s (waypoints, plan, coverage) and an error (None, ``"timeout"`` or the exception); on an
+    error the plan is None (a failed replan)."""
+    import multiprocessing
+
+    events = log if log is not None else []
+    ctx = multiprocessing.get_context("spawn")  # not fork: the caller is a thread of an asyncio process
+    parent, child = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_replan_child, args=(child, (plan_input, left, start, driven, judged, radius_m),
+                                                   {"budget_s": budget_s}), daemon=True)
+    proc.start()
+    child.close()
+    try:
+        if not parent.poll(hard_s):
+            proc.kill()
+            return left, None, None, "timeout"
+        kind, value = parent.recv()
+    except EOFError:
+        return left, None, None, "child_died"
+    finally:
+        proc.join(5.0)
+        parent.close()
+    if kind == "error":
+        return left, None, None, value
+    result, lines = value
+    events.extend(lines)
+    return (*result, None)
 
 
 def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.0, poll_hz=20.0, factor=0.3,
                   curvature_rate=0.5, accel=0.8, kappa_limit=0.36, max_sim_s=4000.0, curvature_gain=1.0,
-                  plant_curvature_rate=None, plan_input=None, **driver_args) -> dict:
+                  plant_curvature_rate=None, plan_input=None, disarm_at_s=(), judged=None,
+                  coverage_radius_m=CELL_RADIUS_M, **driver_args) -> dict:
     """The tour through a CPU model of the teleop chain (Codex v2.5 review P2-3): an ideal rear-axle bicycle at
     ``physics_hz``, the teleop's curvature slew (``TeleopLimits.curvature_rate_inv_m_s``) and speed slew, states at
     ``state_hz`` and polls at ``poll_hz`` of wall time (sim = wall x ``factor``), no permit, no SLAM error; the plant
     turns ``curvature_gain`` of the curvature commanded and, with ``plant_curvature_rate``, reaches it at that rate
     (the steering joints' lag behind the applied command). With
-    ``plan_input`` (the tour file's) a replan request is planned at once. Returns the driver's end, sim time, progress,
+    ``plan_input`` (the tour file's) a replan request is planned at once (``replan_tour``, keeping ``judged`` covered
+    at ``coverage_radius_m`` when given). At each ``disarm_at_s`` (sim s) the teleop
+    disarms as on an expired deadline (the arbiter's preempt: speed to zero, the curvature held, a stop latch until the
+    truck stands); an ``arm`` the driver asks for is acked at once. Returns the driver's end, sim time, progress,
     replans and events."""
     driver = TourDriver(poses, directions, curvatures, kappa=kappa_limit, **driver_args)
     x, y, yaw = (float(v) for v in poses[0])
@@ -337,24 +450,39 @@ def simulate_tour(poses, directions, curvatures, *, physics_hz=120, state_hz=10.
     next_state, next_poll, state = 0.0, 0.0, None
     dt = 1.0 / physics_hz
     end = None
+    armed, latch, arm_gen, disarms = True, False, 1, sorted(disarm_at_s)
     while sim < max_sim_s and end is None:
         wall = sim / factor
+        if disarms and sim >= disarms[0] and armed:
+            disarms.pop(0)
+            armed, latch = False, True
+        if latch and abs(v) < 0.01:
+            latch = False
         if wall >= next_state:
             seq += 1
-            state = {"state_seq": seq, "mode": "TELEOP", "armed": True, "rear_axle_speed_mps": v,
+            state = {"state_seq": seq, "mode": "TELEOP", "armed": armed, "rear_axle_speed_mps": v,
                      "applied": {"speed_mps": v, "curvature_inv_m": k},
                      "steering_rad": [math.atan(k_plant * 0.66)] * 2,
+                     "stopped_confirmed": abs(v) < 0.01, "feedback_ok": True,
+                     "stop_latch": {"kind": "preempt"} if latch else None,
                      "pose": {"x_m": x, "y_m": y, "yaw_rad": yaw}, "pacing": {"target_factor": factor, "ok": True}}
             next_state += 1.0 / state_hz
         if wall >= next_poll:
             new, end = driver.step(wall, state)
             command = new if new is not None else command
+            if driver.rearm_request:
+                arm_gen += 1
+                driver.rearm_sent(wall, {"t": "ack", "arm_gen": arm_gen})
+                armed = True
             if driver.replan_request is not None and plan_input is not None:
                 start, left = driver.replan_request
-                driver.adopt(wall, plan_tour(plan_input, [list(w) for w in left], start=start), left)
+                left, plan, coverage = replan_tour(plan_input, left, start, driver.driven, judged, coverage_radius_m)
+                driver.adopt(wall, plan, left, coverage)
             next_poll += 1.0 / poll_hz
         speed_cap = driver.forward if command[0] >= 0 else driver.reverse
         target_v, target_k = command[0] * speed_cap, command[1] * kappa_limit
+        if not armed:  # commands refused: the preempt's zero speed, the curvature where it was
+            target_v, target_k = 0.0, k
         k += max(-curvature_rate * dt, min(curvature_rate * dt, target_k - k))
         v += max(-accel * dt, min(accel * dt, target_v - v))
         x += v * math.cos(yaw) * dt
@@ -394,12 +522,22 @@ class TourDriver:
       not yet passed (``replan_request``; the caller plans and ``adopt``s it) -- as the runner replans a stalled leg.
       The Isaac tour of ws1 job 6826 left its path by 0.36 m 5.8 m in: a cusp left the axle off the path and the
       correction saturated the curvature the plant could not quite give.
+    - A disarm after departure (TELEOP, ``armed`` false: the teleop deadline expired, V-G2 attempt 2 SEED 1 -- a 1.46 s
+      wall pause, then every command refused until the session ended) is held at zero with the stall and steering
+      clocks stopped; once the state confirms the stop (``stopped_confirmed``, ``feedback_ok``, no ``stop_latch``)
+      ``rearm_request`` asks the caller to send ``arm`` (``rearm_sent`` records the reply; one request per disarm unless
+      refused, then again after ``rearm_retry_s``), the leg starts again by steering standing once armed. More than
+      ``max_rearms`` requests, or ``rearm_wait_s`` disarmed, fails the tour (``disarmed``).
+    - ``driven`` keeps the state's map rear-axle pose every ``driven_spacing_m`` (with its ``state_seq`` and
+      ``correction_version``): what a coverage-keeping replan counts as covered so far (a prediction -- the survey is
+      judged on the final graph's nodes).
     """
 
     def __init__(self, poses, directions, curvatures, *, forward_mps=0.5, reverse_mps=0.25, kappa=0.36,
                  cruise_mps=0.30, stall_s=60.0, pacing_wait_s=900.0, stale_s=10.0, enter_s=20.0, release_s=3.0,
                  goal_slack_m=0.3, waypoints=None, max_replans=24, max_cross_track_m=0.5, steer_tolerance=0.05,
-                 steer_wait_s=20.0, steer_settle_rad=0.01, stop_wait_s=30.0, replan_stall_s=20.0):
+                 steer_wait_s=20.0, steer_settle_rad=0.01, stop_wait_s=30.0, replan_stall_s=20.0, max_rearms=5,
+                 rearm_wait_s=30.0, rearm_retry_s=1.0, driven_spacing_m=0.25):
         self.forward, self.reverse, self.kappa = float(forward_mps), float(reverse_mps), float(kappa)
         self.cruise, self.max_cross_track_m = min(cruise_mps, self.forward), float(max_cross_track_m)
         self.can_replan = waypoints is not None
@@ -411,6 +549,13 @@ class TourDriver:
         self.steer_settle_rad, self._last_steer = float(steer_settle_rad), None
         self.stop_wait_s, self._stop_since = float(stop_wait_s), None
         self.replan_stall_s = float(replan_stall_s)
+        self.max_rearms, self.rearms = int(max_rearms), 0
+        self.rearm_wait_s, self.rearm_retry_s = float(rearm_wait_s), float(rearm_retry_s)
+        self.rearm_request = False  # the caller sends ``arm`` and reports it with ``rearm_sent``
+        self._disarmed_since = self._arm_asked = self._disarm_gen = None
+        self._arm_acked = False
+        self.arm_gen = None  # the state's arm generation once armed again: the caller's commands carry it
+        self.driven_spacing_m, self.driven = float(driven_spacing_m), []
         self._failed = None
         self._blocked = False
         self._set_path(poses, directions, curvatures)
@@ -448,15 +593,23 @@ class TourDriver:
             left = [w for w in left if math.hypot(w[0] - pose[0], w[1] - pose[1]) > passed_m]
         return left
 
-    def adopt(self, now: float, plan, waypoints_left: list) -> bool:
-        """A replanned path from the stopped pose (``replan_request``) through ``waypoints_left``; False fails the
-        tour (the plan failed)."""
+    def adopt(self, now: float, plan, waypoints_left: list, coverage: dict | None = None) -> bool:
+        """A replanned path from the stopped pose (``replan_request``) through ``waypoints_left`` (with the waypoints a
+        coverage-keeping replan added: the next replan keeps them); False fails the tour -- the plan failed, or
+        ``coverage`` (the judged cells' predicted coverage by the poses driven and this plan, at the tour's planning
+        radius) leaves cells uncovered (``coverage_unrecoverable``: the cells are never dropped)."""
         self.replan_request = None
         if plan is None or not plan.success:
             self._event(now, "replan_failed", status=None if plan is None else plan.status)
             self._failed = "replan_failed"
             return False
+        if coverage is not None and not coverage["ok"]:
+            self._event(now, "coverage_unrecoverable", **{k: coverage[k] for k in (
+                "uncovered", "radius_m", "farthest_m", "farthest_cell")})
+            self._failed = "coverage_unrecoverable"
+            return False
         self.waypoints = [tuple(map(float, w)) for w in waypoints_left]
+        self._stop_since = None
         self._set_path(plan.poses, plan.directions, plan.curvatures_inv_m)
         self._leg = None  # the new path's first leg steers standing too
         # the planning took wall time with no step: it is neither idle nor a stale state (Codex v2.5 round 3 P2-2)
@@ -464,14 +617,56 @@ class TourDriver:
         self.drivable_idle = self.pacing_idle = 0.0
         self.stand_since = None
         self._event(now, "replanned", replans=self.replans, waypoints_left=len(self.waypoints),
-                    length_m=float(plan.length_m), clearance_m=getattr(plan, "clearance_m", None))
+                    length_m=float(plan.length_m), clearance_m=getattr(plan, "clearance_m", None),
+                    **({} if coverage is None else {"coverage_farthest_m": coverage["farthest_m"]}))
         return True
 
     def start(self, now: float) -> None:
         self.started_wall = self.last_state_wall = self.last_feedback_wall = now
 
+    def rearm_sent(self, now: float, reply: dict | None) -> None:
+        """The caller sent ``arm`` for ``rearm_request``; ``reply`` its ack or reject (None: no reply)."""
+        self.rearms += 1
+        self.rearm_request = False
+        self._arm_asked = now
+        self._arm_acked = bool(reply) and reply.get("t") == "ack"
+        self._event(now, "rearm_sent", rearms=self.rearms, reply=None if reply is None else reply.get("t"),
+                    reason=None if reply is None else reply.get("reason"),
+                    arm_gen=None if reply is None else reply.get("arm_gen"))
+
     def _event(self, now, name, **fields):
         self.events.append({"wall": now, "event": name, "progress_m": self.best, **fields})
+
+    def _disarmed(self, now: float, s: dict, speed: float):
+        """A disarmed state after departure (see the class doc): zero, the clocks stopped, ``arm`` asked for once the
+        stop is confirmed."""
+        new_gen = self._disarmed_since is not None and s.get("arm_gen") is not None \
+            and self._disarm_gen is not None and s.get("arm_gen") != self._disarm_gen
+        if self._disarmed_since is None or new_gen:
+            # a first disarm -- or a new one: an arm taken (the generation moved) and lost again before an armed state
+            # showed (Codex F1-F3 recheck P2): asked for afresh, the rearm count kept
+            self._disarmed_since, self._disarm_gen = now, s.get("arm_gen")
+            self._arm_asked, self._arm_acked, self.rearm_request = None, False, False
+            self._event(now, "disarmed", stop_kind=s.get("stop_kind"), reject=s.get("last_teleop_reject"),
+                        latch=s.get("stop_latch"), speed=speed, applied=s.get("applied"))
+        self.stand_since = None
+        self.drivable_idle = self.pacing_idle = 0.0
+        if self._steer_since is not None:
+            self._steer_since = now
+        if now - self._disarmed_since > self.rearm_wait_s:
+            self._event(now, "rearm_timeout", disarmed_s=now - self._disarmed_since, rearms=self.rearms)
+            self._failed = "disarmed"
+            return (0.0, 0.0), "disarmed"
+        ready = (bool(s.get("stopped_confirmed")) and bool(s.get("feedback_ok", True)) and s.get("stop_latch") is None
+                 and abs(speed) < 0.03)
+        asked_again = self._arm_asked is not None and not self._arm_acked and now - self._arm_asked >= self.rearm_retry_s
+        if ready and (self._arm_asked is None or asked_again):
+            if self.rearms >= self.max_rearms:
+                self._event(now, "rearm_exhausted", rearms=self.rearms)
+                self._failed = "disarmed"
+                return (0.0, 0.0), "disarmed"
+            self.rearm_request = True
+        return (0.0, 0.0), None
 
     def step(self, now: float, s: dict | None):
         if self._failed is not None:
@@ -501,6 +696,21 @@ class TourDriver:
                 return (0.0, 0.0), "feedback_missing"
             return None, None
         self.last_feedback_wall = now
+        if not self.driven or math.hypot(pose["x_m"] - self.driven[-1][0], pose["y_m"] - self.driven[-1][1]) \
+                >= self.driven_spacing_m:
+            self.driven.append((float(pose["x_m"]), float(pose["y_m"]), s.get("state_seq"),
+                                pose.get("correction_version")))
+        if not s.get("armed", True) or (self._disarmed_since is not None and self._disarm_gen is not None
+                                         and s.get("arm_gen") == self._disarm_gen):
+            # disarmed -- or armed in a state still of the disarmed generation (no new arm taken)
+            return self._disarmed(now, s, float(speed))
+        if self._disarmed_since is not None:
+            self.arm_gen = s.get("arm_gen")
+            self._event(now, "rearmed", disarmed_s=now - self._disarmed_since, rearms=self.rearms, arm_gen=self.arm_gen)
+            self._disarmed_since = self._arm_asked = self._disarm_gen = None
+            self._arm_acked = self.rearm_request = False
+            self._leg = None  # the leg starts again by steering standing
+            self.stand_since = None
         permit = s.get("permit") or {}
         blocked = permit.get("limit_mps") == 0.0 and permit.get("reason") in ("occupied", "unknown")
         if blocked and not self._blocked:
@@ -513,8 +723,11 @@ class TourDriver:
         dt = min(max(dt_wall * factor, 1.0 / 120.0), 0.15)
         if self.replan_request is not None or getattr(self, "_replan_wait", None) is not None:
             # stopping after a tracker failure; the request goes out once the truck stands (planned from where it is),
-            # within stop_wait_s (Codex v2.5 round 3 P2-3: a truck that never stands fails the tour)
-            self._stop_since = self._stop_since if self._stop_since is not None else now
+            # within stop_wait_s (Codex v2.5 round 3 P2-3: a truck that never stands fails the tour); the clock runs only
+            # while waiting for that stand -- not while the request is out and the caller plans (the states are still
+            # stepped then: Codex F1-F3 recheck P2, it leaked into the next replan's stop)
+            if self.replan_request is None:
+                self._stop_since = self._stop_since if self._stop_since is not None else now
             if self.replan_request is None and abs(float(speed)) < 0.03:
                 self.replan_request = ((pose["x_m"], pose["y_m"], pose["yaw_rad"]), self._replan_wait)
                 self._replan_wait, self._stop_since = None, None
@@ -633,7 +846,12 @@ def main(argv=None) -> int:
     p.add_argument("--reference-run", type=Path, action="append", default=[],
                    help="a run of operational missions: its observation poses join the judged region")
     p.add_argument("--refine", type=int, default=0, help="add up to this many waypoints for uncovered clusters")
+    p.add_argument("--margin-m", type=float, default=0.0,
+                   help="plan the coverage this much inside the cell radius (gyro plan 4.5 F2): refine aims at it, the "
+                   "report adds judged_margin, the tour file carries the judged cells and this radius for the probe's "
+                   "coverage-keeping replans (F3), and a tour that misses it exits 1")
     args = ap.parse_args(argv)
+    radius = CELL_RADIUS_M - args.margin_m
     result = json.loads(args.result.read_text())
     config = yaml.safe_load(args.tour.read_text())
     tour = [list(map(float, p)) for p in config["tour"]]
@@ -650,7 +868,7 @@ def main(argv=None) -> int:
                               result["arguments"]["rear_axle_offset_m"])
         sites = np.column_stack((rx, ry))
     if args.refine:
-        tour, plan = refine_tour(result, tour, sites, args.refine, judged)
+        tour, plan, _ = refine_tour(result, tour, sites, args.refine, judged, radius_m=radius)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.with_suffix(".yaml").write_text(yaml.safe_dump({"tour": tour}))
     else:
@@ -666,13 +884,23 @@ def main(argv=None) -> int:
         both = np.vstack([sites, path])
         report["judged"] = region_coverage(judged, both)
         report["unsurveyed_estimate"] = region_coverage(placeable_estimate(result), both)
+        source = {"tour_config_sha256": hashlib.sha256(args.tour.read_bytes()).hexdigest(),
+                  "reference_runs": [str(r) for r in args.reference_run],
+                  "observation_poses": len(observation_poses(args.reference_run)), "nodes": None if args.nodes is None
+                  else str(args.nodes), "margin_m": args.margin_m, "radius_m": radius, "cells": int(len(judged))}
+        report["judged_source"] = source
+        if args.margin_m:
+            report["judged_margin"] = region_coverage(judged, both, radius)
         args.out.parent.mkdir(parents=True, exist_ok=True)
+        extra = {} if not args.margin_m else {
+            "judged": judged, "coverage_radius_m": np.asarray(radius), "judged_source": np.asarray(json.dumps(source))}
         np.savez(args.out, poses=plan.poses, directions=plan.directions, curvatures_inv_m=plan.curvatures_inv_m,
                  tour=np.asarray(tour, float), scenario_sha256=np.asarray(scenario_sha256(result)),
-                 plan_input=np.asarray(json.dumps({k: result[k] for k in PLAN_KEYS})))
+                 plan_input=np.asarray(json.dumps({k: result[k] for k in PLAN_KEYS})), **extra)
     print(json.dumps(report))
     (args.out.with_suffix(".json")).write_text(json.dumps(report, indent=1))
-    return 0 if plan.success else 1
+    ready = plan.success and (not args.margin_m or report["judged_margin"]["ok"])
+    return 0 if ready else 1
 
 
 if __name__ == "__main__":
