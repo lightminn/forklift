@@ -726,3 +726,29 @@ def test_without_a_pickup_zone_the_retry_point_is_checked_against_the_scenario_b
                                  SimpleNamespace(status="no_pallet", reason="r")) is False
     assert tuple(w.core.paths["observe"].poses[-1]) == pytest.approx(NEXT)
     assert [c["status"] for c in w.state["observation_candidates"] if c["pose"] == list(edge)] == ["outside_mission_zone"]
+
+
+def test_a_near_capture_off_the_record_is_refused_before_it_is_adopted():
+    # Plan 2026-10-21 task C (Codex plan round 1 P1): with the check on, the near estimate is checked against the
+    # record before it becomes the planned pickup, the known pallet or a plan -- not first at the insert gate.
+    w = returned()
+    w.deck["status"] = "done"
+    off = Pose2D(PICKUP.x_m + 0.30, PICKUP.y_m, PICKUP.yaw_rad)
+    out = w.core._bottom_deck_near_check(60.0, REAR, off)
+    assert out is not None and out.stop is True
+    assert w.deck["refused"] == {"reason": "bottom_deck_target_mismatch", "time_s": 60.0, "stage": "near"}
+    assert w.deck["near_check"]["refusal"] is not None and w.ms.phase == "bottom_deck_refused"
+    w = returned()
+    w.deck["status"] = "done"
+    assert w.core._bottom_deck_near_check(60.0, REAR, PICKUP) is None
+    assert w.deck["near_check"]["refusal"] is None and "refused" not in w.deck
+
+
+def test_observe_succeeded_checks_the_near_capture_before_any_adoption():
+    import inspect
+
+    source = inspect.getsource(MissionCore.observe_succeeded)
+    check = source.index("self._bottom_deck_near_check(")
+    for later in ("hooks.set_inset_estimate(", "hooks.planning_target(", "known_pallet(", 'pocket["planning_pickup"] ='):
+        assert check < source.index(later)
+    assert source.index("self._bottom_deck_reobserved(") < check

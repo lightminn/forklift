@@ -398,9 +398,13 @@ def diagnose(
     params: DetectorParams,
     truth: PalletTruth | None = None,
     accepted_pose=None,
+    *,
+    lower_evidence: bool = True,
 ) -> dict:
-    """Detect first; then, with the truth, say where the pallet's evidence went."""
-    result = detect_pockets(scene, prior, params)
+    """Detect first; then, with the truth, say where the pallet's evidence went. ``lower_evidence`` False replays
+    a near capture whose lower-deck band was waived (plan 2026-10-21 task C), in the detection and the
+    candidate reconstruction alike."""
+    result = detect_pockets(scene, prior, params, lower_evidence=lower_evidence)
     out = {"detection": detection_record(result)}
     points, rays = det._base_points(scene)
     camera = np.asarray(scene.base_from_optical.translation_m)
@@ -432,7 +436,7 @@ def diagnose(
             plane_records.append(record)
             continue
         patterns, rejections = det._opening_candidates(
-            plane, prior, params, workspace, plane_index=index
+            plane, prior, params, workspace, plane_index=index, lower_evidence=lower_evidence
         )
         record["rejections"] = _jsonable(rejections)
         record["rejection_objects"] = list(rejections)
@@ -831,6 +835,15 @@ def observe_pallet_pose(result: dict):
     return (float(mean[0]), float(mean[1]), float(mean[2]), mean_yaw), None
 
 
+def attempt_lower_evidence(attempt: dict) -> bool:
+    """The lower-band setting an attempt was detected with: absent (records before plan 2026-10-21) is the default
+    True; an explicit value must be a boolean."""
+    value = attempt.get("lower_evidence", True)
+    if type(value) is not bool:
+        raise ValueError(f"lower_evidence must be a boolean, not {value!r}")
+    return value
+
+
 def recorded_observation(attempt: dict) -> dict:
     """The detector's own observation of an attempt: under --recognition far the mission read the new
     recognition's (``pocket_observation``) and the detector's is kept as ``detector_reference``."""
@@ -976,8 +989,10 @@ def diagnose_attempt(run_dir: Path, number: int, pallet_urdf: Path) -> dict:
     else:
         out["truth"] = {"unavailable": why}
     scene = attempt_scene(result, attempt, depth)
+    out["lower_evidence"] = attempt_lower_evidence(attempt)
     diagnosis = diagnose(
-        scene, prior, params, truth, attempt["capture_diagnostics"]["accepted_pose"]
+        scene, prior, params, truth, attempt["capture_diagnostics"]["accepted_pose"],
+        lower_evidence=out["lower_evidence"],
     )
     recorded_detection = {
         "observation": recorded_observation(attempt),

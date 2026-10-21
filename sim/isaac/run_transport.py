@@ -5083,7 +5083,7 @@ def drive(S, isaac) -> None:
             near_tracker_create=near_tracker_create, near_fork_geometry=near_fork_geometry,
             # M-a1 slice 4b-i: the capture port (recorded when recording; built further down run()), the detector
             # port and the capture's dumps.
-            perception_capture=lambda: perception_capture, detect_pockets=lambda *a: detect_pockets(*a),
+            perception_capture=lambda: perception_capture, detect_pockets=lambda *a, **k: detect_pockets(*a, **k),
             save_capture=save_capture,
             # The far recognition's decision (--recognition far), None otherwise.
             far_recognition=far_recognition_hook if far_runtime is not None else None,

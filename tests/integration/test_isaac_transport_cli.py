@@ -1165,3 +1165,17 @@ def test_the_far_zone_change_is_saved_into_the_run_state_when_it_is_made():
     assert body.index("far_runtime.set_zone(centre_, radius_)") < body.index(
         'state.setdefault("recognition", {}).update(far_runtime.summary())')
     assert "far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None," in source
+
+
+def test_the_runner_detector_port_passes_the_lower_band_waiver_through():
+    """Plan 2026-10-21 task C (Codex plan round 2 P2): the core calls the detector port with lower_evidence=False;
+    the runner's port must hand the keyword to the detector (the old ``lambda *a`` raised TypeError)."""
+    import re
+
+    source = SCRIPT.read_text()
+    m = re.search(r"detect_pockets=(lambda [^:]*: detect_pockets\([^)]*\))", source)
+    assert m is not None
+    calls = []
+    port = eval(m.group(1), {"detect_pockets": lambda *a, **k: calls.append((a, k)) or "R"})  # noqa: S307
+    assert port("INPUT", "PRIOR", "PARAMS", lower_evidence=False) == "R"
+    assert calls == [(("INPUT", "PRIOR", "PARAMS"), {"lower_evidence": False})]

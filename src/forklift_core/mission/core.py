@@ -2582,6 +2582,12 @@ class MissionCore:
             out_ = self._bottom_deck_reobserved(t, rear, attempt, target_pickup)
             if out_ is not None:
                 return SimpleNamespace(stop=True, observation=observation, near_leg=None)
+        elif self.bottom_deck_on() and state.get("near_capture", {}).get("status") == "pending":
+            # Plan 2026-10-21 task C (Codex plan round 1 P1): the near estimate against the record before it becomes
+            # the planned pickup, the known pallet or a plan -- the insert gate alone came after the approach.
+            out_ = self._bottom_deck_near_check(t, rear, target_pickup)
+            if out_ is not None:
+                return SimpleNamespace(stop=True, observation=observation, near_leg=None)
         hooks.set_inset_estimate(observation, (float(base[0]), float(base[1]), yaw), target_pickup, scene_input, attempt_number)
         state["perception"]["perception_pickup_estimate_m"] = {
             "x_m": target_pickup.x_m,
@@ -3193,6 +3199,29 @@ class MissionCore:
             self.obstacle.setdefault("progress", {}).clear()
         return None
 
+    def _bottom_deck_lower_waived(self) -> bool:
+        """The near capture after a present bottom-deck record and its checked re-observation (plan 2026-10-21 task C)."""
+        deck_ = self.state.get("bottom_deck") or {}
+        return bool(self.bottom_deck_on() and self.state.get("near_capture", {}).get("status") == "pending"
+                    and deck_.get("status") == "done" and (deck_.get("record") or {}).get("verdict") == "present")
+
+    def _bottom_deck_near_check(self, t: float, rear, target_pickup):
+        """The near capture's estimate against the record, before adoption (plan 2026-10-21 task C): the insert gate's
+        own test (the run's shape -- the near detector reads no hypothesis). Refused (None otherwise); recorded."""
+        deck_ = self.state["bottom_deck"]
+        shape_ = self.pallet_geometry.geometry_version
+        refusal_ = None
+        if deck_.get("record") is not None:
+            refusal_ = bottom_deck_permit.insert_refusal(
+                bottom_deck_permit.BottomDeckRecord.from_record(deck_["record"]),
+                (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_)
+        deck_["near_check"] = {"time_s": t, "target": [float(target_pickup.x_m), float(target_pickup.y_m),
+                                                       float(target_pickup.yaw_rad)],
+                               "shape": shape_, "refusal": refusal_}
+        if refusal_ is not None:
+            return self._bottom_deck_refuse(t, "bottom_deck_target_mismatch", rear, stage="near")
+        return None
+
     def bottom_deck_recover(self, t: float, rear, why: str) -> SimpleNamespace:
         """A recovery that would replace a side leg's path (blocked, a heading miss or a stall): released first
         (Codex design rounds 3-5). A retreat makes no detour -- the face's retakes end there; a stand is planned
@@ -3708,7 +3737,16 @@ class MissionCore:
         far_hook = getattr(hooks, "far_recognition", None)
         far_capture = (far_hook is not None and state.get("near_capture", {}).get("status") != "pending"
                        and not (near is not None and near.get("retry_stand")))
-        detection = detect_pockets(detector_input, prior, params)
+        if self._bottom_deck_lower_waived():
+            # Plan 2026-10-21 task C: the side faces proved the bottom deck of the pallet this near capture looks at
+            # (record present, the re-observation checked against it); the near detector's lower band -- a
+            # sub-millimetre sign test on the face's own bottom board, no discrimination against deckless shapes --
+            # no longer gates it. The count is still recorded; the estimate is checked against the record before
+            # adoption (_bottom_deck_near_check).
+            attempt["lower_evidence"] = False
+            detection = detect_pockets(detector_input, prior, params, lower_evidence=False)
+        else:
+            detection = detect_pockets(detector_input, prior, params)
         observation = detection.observation
         if far_capture:
             reference = observation
