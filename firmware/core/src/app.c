@@ -56,7 +56,8 @@ void fw_app_tick(fw_app *app)
     }
 
     /* Responses first, so the core's lost-transaction check sees them (design 3). */
-    uint8_t ch, tag;
+    uint8_t ch;
+    uint32_t tag;
     uint16_t rx;
     while (hal->drv_spi_take(hal->ctx, &ch, &rx, &tag)) {
         drive_spi_result(&app->d, ch, rx, tag);

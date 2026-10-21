@@ -20,9 +20,9 @@ typedef struct {
     /* Queues the whole frame or nothing. */
     bool (*link_write_frame)(void *ctx, const uint8_t *frame, size_t len);
     /* Starts one DRV8244 transaction (false = cannot start now, e.g. the bus is busy). */
-    bool (*drv_spi_start)(void *ctx, uint8_t ch, uint16_t tx, uint8_t tag);
+    bool (*drv_spi_start)(void *ctx, uint8_t ch, uint16_t tx, uint32_t tag);
     /* A completed transaction, if any, with the tag it was started with. */
-    bool (*drv_spi_take)(void *ctx, uint8_t *ch, uint16_t *rx, uint8_t *tag);
+    bool (*drv_spi_take)(void *ctx, uint8_t *ch, uint16_t *rx, uint32_t *tag);
     void (*watchdog_kick)(void *ctx);
 } fw_hal;
 

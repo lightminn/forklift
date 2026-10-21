@@ -128,7 +128,8 @@ static void tick_msgs(const link_msg *msgs, int count)
         drive_handle(&d, &msgs[i]);
     }
     drive_finish(&d, &out);
-    uint8_t ch, tag;
+    uint8_t ch;
+    uint32_t tag;
     uint16_t frame;
     if (!spi_refuse && drive_spi_next(&d, &ch, &frame, &tag)) {
         drive_spi_started(&d);
@@ -770,7 +771,7 @@ static void stale_spi_response_after_reinit_is_drained(void)
         tick();
     }
     CHECK(d.spi_inflight && d.spi_ch == DRIVE_CH_L);
-    uint8_t old_tag = d.spi_tag;
+    uint32_t old_tag = d.spi_tag;
     in.nfault_low[DRIVE_CH_M] = true;
     manual_cycle(NULL);
     CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
@@ -779,7 +780,8 @@ static void stale_spi_response_after_reinit_is_drained(void)
     manual_cycle(&clear);
     CHECK_EQ_U(d.mode, DRIVE_MODE_BOOT);
     manual_cycle(NULL); /* past the wake wait: the new L UNLOCK goes out */
-    uint8_t ch, tag;
+    uint8_t ch;
+    uint32_t tag;
     uint16_t frame;
     CHECK(drive_spi_next(&d, &ch, &frame, &tag));
     CHECK_EQ_U(frame, 0x0809);
@@ -835,6 +837,37 @@ static void state_flags_follow_messages(void)
     CHECK(s.fault_flags & DRIVE_FAULT_DRIVER_NOT_READY);
 }
 
+static void refused_starts_do_not_cycle_spi_tags(void)
+{
+    /* Codex re-review P2: a stuck transaction makes the HAL refuse starts; queued-but-never-
+       started frames must not use up tags, or the stuck one's tag comes round again. */
+    boot(0);
+    spi_mute = true;
+    for (int i = 0; i < 40 && !(d.spi_inflight && d.spi_ch == DRIVE_CH_L); i++) {
+        tick();
+    }
+    uint32_t old_tag = d.spi_tag;
+    spi_refuse = true; /* the bus stays busy with the old read */
+    ticks(800);        /* many polls queued, refused and timed out; FAULT on the way */
+    CHECK_EQ_U(d.spi_tag, old_tag);
+    link_msg clear = simple(LINK_CLEAR_FAULTS, 4);
+    manual_cycle(&clear);
+    manual_cycle(NULL);
+    uint8_t ch;
+    uint32_t tag;
+    uint16_t frame;
+    CHECK(drive_spi_next(&d, &ch, &frame, &tag));
+    CHECK(tag != old_tag);
+    drive_spi_started(&d);
+    drive_spi_result(&d, DRIVE_CH_L, 0xC000, old_tag); /* the stuck read finally answers */
+    CHECK(d.spi_inflight);
+    drive_spi_result(&d, DRIVE_CH_L, 0x0000, tag); /* the real UNLOCK answer: bad */
+    spi_refuse = false;
+    spi_mute = false;
+    ticks(200);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -863,5 +896,6 @@ int main(void)
     stale_spi_response_after_reinit_is_drained();
     config_rejects_negative_gains_and_huge_zero();
     state_flags_follow_messages();
+    refused_starts_do_not_cycle_spi_tags();
     return FW_TEST_RESULT();
 }

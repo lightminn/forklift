@@ -68,7 +68,6 @@ static void enter_fault(drive *d, uint32_t bits)
 
 static void queue_frame(drive *d, uint8_t ch, uint16_t frame)
 {
-    d->spi_tag++; /* a new transaction: answers carrying an older tag are dropped */
     d->spi_pending = true;
     d->spi_ch = ch;
     d->spi_frame = frame;
@@ -185,24 +184,27 @@ static void check_spi_timeout(drive *d)
     }
 }
 
-bool drive_spi_next(drive *d, uint8_t *ch, uint16_t *frame, uint8_t *tag)
+bool drive_spi_next(drive *d, uint8_t *ch, uint16_t *frame, uint32_t *tag)
 {
     if (!d->spi_pending || d->spi_inflight) {
         return false;
     }
     *ch = d->spi_ch;
     *frame = d->spi_frame;
-    *tag = d->spi_tag;
+    *tag = d->spi_tag + 1u; /* the tag it gets if it starts */
     return true;
 }
 
 void drive_spi_started(drive *d)
 {
+    /* Tags advance only on transactions that really start: while an old one keeps the bus
+       busy the HAL refuses new starts, so its tag cannot come round again. */
+    d->spi_tag++;
     d->spi_pending = false;
     d->spi_inflight = true; /* spi_since_us keeps counting from when the frame was queued */
 }
 
-void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint8_t tag)
+void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint32_t tag)
 {
     if (!d->spi_inflight || tag != d->spi_tag || ch != d->spi_ch || ch >= DRIVE_CH_COUNT) {
         return; /* an answer to a transaction that is no longer current */
