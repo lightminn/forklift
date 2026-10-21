@@ -259,6 +259,10 @@ arc·칸을 남기지 않는다 — `tools/survey_tour.py`, 진단값은 `drive_
   (−4.0, −10.5) 에 팔레트가 있어 22 번 waypoint(y −10.8)가 계획 불가(`leg22:invalid_goal`)였으므로 y −11.8 로 옮겼다(−11.4·−11.6 은 SEED 1·2 에서 불가,
   −11.8 은 세 장면 모두 성공·판정 영역 덮개 예측 0 칸 미덮개). 설정 sha256 `08d346c2…`(커밋 67d71b6). 경로: `test_runs/live/vg2b/tour_s{0,1,2}.npz`
   sha256 `6f1603ae…`·`7b07a8c8…`·`f0d76f55…`(길이 298–300 m, 전환점 48–50). 같은 SEED 의 두 팔은 같은 경로 파일을 쓴다.
+  계획 명령에 `--reference-run` 이 없어 계획 보고서의 판정 칸은 9 643/9 654/9 633 이었다. U16 관측 위치 7 개를 넣어 다시 계산하면(Codex) 9 644/9 680/9 645 칸,
+  세 SEED 모두 미덮개 0 칸 — 계획 경로의 예측일 뿐 최종 노드 덮개를 보장하지 않는다. 1 차 result 로 다시 만든 장면이 세 SEED 모두 원래 `scenario`·경로의 장면 해시와
+  같음을 Codex 가 확인했다. 22 번 지점을 옮겼으므로 1 차·S2 와는 같은 궤적의 비교가 아니다 — 나란히 적되 차이를 자이로나 장면 수정 하나에 돌리지 않는다.
+  `survey_report.ok` 는 움직이는 물체 검사 실패도 포함하므로 V-G2 판정은 항목별로 따로 매긴다.
 - **코드·설정.** 스냅숏 `vg2b_b5f3831`(main bf543e9 + 순회 수정 + 자이로 표). 조향 팔 `--encoder-model team_spec_quantized --obstacle-layer
   config/obstacle_layer_single_team_spec.yaml`(표 sha256 `0bcf52a4…`), 자이로 팔은 거기에 `--obstacle-layer config/obstacle_layer_single_team_spec_gyro.yaml
   --odometry-heading gyro --gyro-model config/gyro_model_spec_typical.yaml`(표 `016a59e2…`, 모형 `9fa678a4…`). 두 표는 1 차와 같은 파일이다(다시 만들지 않음).
