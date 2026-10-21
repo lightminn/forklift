@@ -1,4 +1,5 @@
 import copy
+import json
 import math
 import sys
 from pathlib import Path
@@ -3855,3 +3856,20 @@ def test_xii_needs_a_reason_for_an_unaccepted_decision():
     silent[2]["corrections"][1]["redraw"].pop("protection_prediction")
     with pytest.raises(J.Unverified):
         _xii(silent)
+
+
+def test_xi_an_always_run_with_the_tracking_is_judged_as_an_on_run(geometry):
+    # Plan 2026-10-21 task B: with the near-field tracking, `always` is `on`; the stage-1 refusal is still required.
+    truth, nt, result = realign_case(geometry)
+    result["arguments"]["near_capture_redraw"] = "always"
+    assert check_xi_(result, nt, truth, geometry)["passed"]
+    result["near_capture_refused"][0]["recoveries"] = []
+    out = check_xi_(result, nt, truth, geometry)
+    assert not out["passed"] and "the realignment's capture has no stage-1 refusal" in out["failures"]
+
+
+def test_a_run_without_the_near_field_tracking_is_not_judged(tmp_path):
+    (tmp_path / "result.json").write_text(json.dumps({"arguments": {"near_tracking": False,
+                                                                    "near_capture_redraw": "always"}}))
+    with pytest.raises(SystemExit, match="not a near-tracking run"):
+        J.judge_run(tmp_path)

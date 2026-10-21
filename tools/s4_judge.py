@@ -3882,7 +3882,8 @@ def check_xi(result: dict, nt: dict, truth: dict, geometry, control) -> dict:
                 "the realignment's capture was not refused by its own acceptance"
             )
         stage1 = [e for e in cap.get("recoveries") or [] if e.get("stage") == "redraw"]
-        if args.get("near_capture_redraw", "on") == "on":
+        # `always` (plan 2026-10-21 task B) is `on` in a near-tracking run.
+        if args.get("near_capture_redraw", "on") in ("on", "always"):
             if not (
                 len(stage1) == 1
                 and stage1[0].get("attempt") == refused_attempt
@@ -4350,6 +4351,10 @@ def judge_run(directory: Path, data_root: Path = ROOT) -> dict:
         )
         if (directory / name).exists()
     }
+    if "result.json" in raw and not (json.loads(raw["result.json"]).get("arguments") or {}).get("near_tracking"):
+        # --near-capture-redraw always re-draws without the near-field tracking (plan 2026-10-21 task B): such a
+        # run has no near-field records and is not judged here.
+        raise SystemExit(f"{directory}: not a near-tracking run")
     if "result.json" not in raw or "pocket_frames/truth.npz" not in raw:
         raise SystemExit(f"{directory}: result.json or the truth record is missing")
     result = json.loads(raw["result.json"])
