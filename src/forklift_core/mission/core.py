@@ -75,7 +75,7 @@ from forklift_core.mission.state import MissionState
 from forklift_core.mission import bottom_deck_legs
 from forklift_core.perception import bottom_deck_evidence, bottom_deck_permit
 from forklift_core.perception.bottom_deck_evidence import BottomDeckTarget
-from forklift_core.perception.pocket_detector import DetectorParams
+from forklift_core.perception.pocket_detector import DetectorParams, ExpectedSite
 from forklift_core.localization.scan_docking import laser_points
 from forklift_core.localization.slam_pose import compose, invert
 from forklift_core.planning import PlanResult, Rectangle, collision_free_pose
@@ -158,6 +158,10 @@ def record_tracker_configs_in(state: dict, trackers: dict) -> None:
 
 # M-a3c (R11): a pause that moved the truck more than this from where it stopped (the docking straight was checked
 # from there) -- a stop that holds stays well inside it (the stop detector's 12 mm/s mean over 0.2 s).
+# Plan 2026-10-22 task A: the near capture's candidates must lie this close to the planned pickup (the far->near
+# estimate shift over every ws1 record: max 0.121 m, yaw 0.033 rad; a straddling pattern at 0.35 m in aisle_out).
+NEAR_EXPECTED_RADIUS_M = 0.25
+NEAR_EXPECTED_AXIS_RAD = math.radians(15.0)
 PAUSE_MOVED_M = 0.01
 PAUSE_MOVED_RAD = 0.01
 # M-a3 (E3): a stop not seen standing this long after it began is reported as not_stopped.
@@ -3209,6 +3213,20 @@ class MissionCore:
             self.obstacle.setdefault("progress", {}).clear()
         return None
 
+    def _near_expected_on(self) -> bool:
+        """Plan 2026-10-22 task A: a near capture (pending) under --near-capture-expected on."""
+        return bool(getattr(self.options, "near_capture_expected", "off") == "on"
+                    and self.state.get("near_capture", {}).get("status") == "pending")
+
+    def _near_expected_site(self, base, yaw: float) -> ExpectedSite:
+        """The planned pickup in base_link at the capture's control base (x, y, yaw)."""
+        pickup_ = self.pocket["planning_pickup"]
+        dx, dy = float(pickup_.x_m) - float(base[0]), float(pickup_.y_m) - float(base[1])
+        c_, s_ = math.cos(yaw), math.sin(yaw)
+        rel_ = math.atan2(math.sin(float(pickup_.yaw_rad) - yaw), math.cos(float(pickup_.yaw_rad) - yaw))
+        return ExpectedSite(c_ * dx + s_ * dy, -s_ * dx + c_ * dy, rel_, NEAR_EXPECTED_RADIUS_M,
+                            NEAR_EXPECTED_AXIS_RAD)
+
     def _bottom_deck_lower_waived(self) -> bool:
         """The near capture after a present bottom-deck record and its checked re-observation (plan 2026-10-21 task C)."""
         deck_ = self.state.get("bottom_deck") or {}
@@ -3747,6 +3765,7 @@ class MissionCore:
         far_hook = getattr(hooks, "far_recognition", None)
         far_capture = (far_hook is not None and state.get("near_capture", {}).get("status") != "pending"
                        and not (near is not None and near.get("retry_stand")))
+        waive_kw = {}
         if self._bottom_deck_lower_waived():
             # Plan 2026-10-21 task C: the side faces proved the bottom deck of the pallet this near capture looks at
             # (record present, the re-observation checked against it); the near detector's lower band -- a
@@ -3754,9 +3773,22 @@ class MissionCore:
             # no longer gates it. The count is still recorded; the estimate is checked against the record before
             # adoption (_bottom_deck_near_check).
             attempt["lower_evidence"] = False
-            detection = detect_pockets(detector_input, prior, params, lower_evidence=False)
+            waive_kw = {"lower_evidence": False}
+        if self._near_expected_on():
+            # Plan 2026-10-22 task A: the near capture looks for the pallet the mission is approaching -- the
+            # planned pickup in the control base this capture was placed with -- not for the strongest pattern in
+            # view (aisle_out picked the neighbour 0.94 m away). Continuity of the far choice, not identity.
+            site = self._near_expected_site(base, yaw)
+            detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, params, site, **waive_kw)
+            pickup_ = self.pocket["planning_pickup"]
+            attempt["expected"] = {
+                "site": [site.x_m, site.y_m, site.yaw_rad], "radius_m": site.radius_m,
+                "axis_tolerance_rad": site.axis_tolerance_rad,
+                "planning_pickup": [float(pickup_.x_m), float(pickup_.y_m), float(pickup_.yaw_rad)],
+                "candidates": [asdict(c_) for c_ in candidates_],
+            }
         else:
-            detection = detect_pockets(detector_input, prior, params)
+            detection = detect_pockets(detector_input, prior, params, **waive_kw)
         observation = detection.observation
         if far_capture:
             reference = observation
@@ -6338,16 +6370,20 @@ class MissionCore:
         base_xy_ = adapter.estimate_pallet_center_m(observation_, geometry.pallet_depth_m)
         raw_ = adapter.estimate_world_pallet_site(base_xy_, observation_.insertion_yaw_rad,
                                                  (capture_base[0], capture_base[1]), capture_base[2])
+        tracking_ = self.near is not None
+        # Plan 2026-10-22 task D: the untracked re-draw may take a wider lateral box (random_1 stood 6.7 / 9.8 cm off
+        # the new line); the default leaves the keyword out, so the recorded port call is unchanged.
+        lateral_ = float(getattr(options, "near_capture_redraw_lateral_m", 0.05))
+        lateral_kw_ = {"max_lateral_m": lateral_} if (not tracking_ and lateral_ != 0.05) else {}
         # The dry runs run inside the Planner port, so their trajectories come back in its response:
         # a replay that does not run the callbacks still checks the same correction points (M-a1 6d).
         plans_, record_, trajectories_ = redraw_docking_traced(
             grid_world(scenario), PlanningPose(*(float(v) for v in rear_now)), target_, planner_config,
             start_rear=rear_now, dry_configs=(acceptance_, driven_), geometry=geometry, pickup_bounds=pickup_bounds,
-            max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD,
+            max_yaw_rad=near_tracking.CORRECTION_MAX_YAW_RAD, **lateral_kw_,
             **correction_grid(target_, target_, rear_now),
         )
         sites_ = site_poses(target_, geometry)
-        tracking_ = self.near is not None
         points_, tip_x_ = [], None
         if tracking_:
             # The correction trigger's own distance: this observation placed at the capture base
@@ -6384,6 +6420,8 @@ class MissionCore:
             # Only the untracked re-draw is marked: a tracking run's entry keeps its recorded shape (Codex task B
             # implementation review 1 P2 -- the boundary replay compares the final state exactly).
             entry["tracking"] = False
+            if lateral_kw_:
+                entry["max_lateral_m"] = lateral_
         return plans_, entry
 
     def near_protection_prediction(self, path_, latest_, widths_, rear_now, face_distance_) -> dict:

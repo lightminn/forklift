@@ -358,6 +358,23 @@ def arguments() -> argparse.Namespace:
         "Needs --near-tracking or --near-capture-redraw always.",
     )
     parser.add_argument(
+        "--near-capture-redraw-lateral-m",
+        type=float,
+        default=0.05,
+        help="Plan 2026-10-22 task D: the untracked near re-draw's lateral box (redraw_docking max_lateral_m), "
+        "[0.05, 0.10] m; the heading box, the dry runs and the collision checks are unchanged. Needs "
+        "--near-capture-redraw always without --near-tracking (no correction point follows there).",
+    )
+    parser.add_argument(
+        "--near-capture-expected",
+        choices=("off", "on"),
+        default="off",
+        help="Plan 2026-10-22 task A: on -- the near capture's detector keeps only candidates within 0.25 m and 15 deg "
+        "of the planned pickup (in the capture's control base) and selects among them as before; none inside is "
+        "no_pallet:no_expected_candidate. Continuity of the far choice, not identity. Needs --use-perception and "
+        "--planning-target perception.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -968,6 +985,8 @@ def arguments() -> argparse.Namespace:
             )
         if args.perception_mount == "carriage_low_measured" and "dls08_measured" not in str(args.forklift_urdf):
             parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
+    if args.near_capture_expected == "on" and not (args.use_perception and args.planning_target == "perception"):
+        parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
     # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
     args.pallet_prior_loaded = None
     if args.use_perception:
@@ -1126,6 +1145,11 @@ def arguments() -> argparse.Namespace:
         if not (math.isfinite(args.near_capture_box_yaw_rad) and 0.0 < args.near_capture_box_yaw_rad <= 0.05):
             # Narrower only: the default box is the one the v3.7 collision finding fixed.
             parser.error("--near-capture-box-yaw-rad must be in (0, 0.05] rad")
+    if args.near_capture_redraw_lateral_m != 0.05:
+        if args.near_tracking or args.near_capture_redraw != "always":
+            parser.error("--near-capture-redraw-lateral-m needs --near-capture-redraw always without --near-tracking")
+        if not (math.isfinite(args.near_capture_redraw_lateral_m) and 0.05 <= args.near_capture_redraw_lateral_m <= 0.10):
+            parser.error("--near-capture-redraw-lateral-m must be in [0.05, 0.10] m")
     if args.near_drop_frames_from_m is not None:
         if not args.near_tracking:
             parser.error("--near-drop-frames-from-m needs --near-tracking")
@@ -2348,6 +2372,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         from forklift_core.perception.pocket_detector import (
             DetectorParams,
             detect_pockets,
+            detect_pockets_expected,
         )
         from forklift_core.planning import Pose2D
         from forklift_core.planning.observation_viewpoints import runtime_viewpoints
@@ -2355,6 +2380,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         if boundary is not None:
             detect_pockets = recorded_function(detect_pockets, "Perception", "detect_pockets", boundary)
+            detect_pockets_expected = recorded_function(detect_pockets_expected, "Perception",
+                                                        "detect_pockets_expected", boundary)
             runtime_viewpoints = recorded_function(runtime_viewpoints, "Planner", "runtime_viewpoints", boundary)
             plan_observation_leg = recorded_function(plan_observation_leg, "Planner", "plan_observation_leg", boundary)
 
@@ -3523,6 +3550,8 @@ def drive(S, isaac) -> None:
         cusp_stop_yaw_rate_radps = _bound["cusp_stop_yaw_rate_radps"]
     if "detect_pockets" in _bound:
         detect_pockets = _bound["detect_pockets"]
+    if "detect_pockets_expected" in _bound:
+        detect_pockets_expected = _bound["detect_pockets_expected"]
     if "directions" in _bound:
         directions = _bound["directions"]
     if "dwell_d_end_m" in _bound:
@@ -5170,6 +5199,7 @@ def drive(S, isaac) -> None:
             # M-a1 slice 4b-i: the capture port (recorded when recording; built further down run()), the detector
             # port and the capture's dumps.
             perception_capture=lambda: perception_capture, detect_pockets=lambda *a, **k: detect_pockets(*a, **k),
+            detect_pockets_expected=lambda *a, **k: detect_pockets_expected(*a, **k),
             save_capture=save_capture,
             # The far recognition's decision (--recognition far), None otherwise.
             far_recognition=far_recognition_hook if far_runtime is not None else None,
@@ -5207,6 +5237,8 @@ def drive(S, isaac) -> None:
                                 near_capture_box_yaw_rad=args.near_capture_box_yaw_rad,
                                 approach_straight_speed_mps=args.approach_straight_speed_mps,
                                 near_capture_redraw=args.near_capture_redraw, G2=G2, yaw_and_tilt=yaw_and_tilt,
+                                near_capture_redraw_lateral_m=args.near_capture_redraw_lateral_m,
+                                near_capture_expected=args.near_capture_expected,
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,

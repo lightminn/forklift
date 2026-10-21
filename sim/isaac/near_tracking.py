@@ -1102,7 +1102,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-20: the Isaac check's grounded article (evaluation only)
                               "pallet_article": "nominal",
                               # 2026-10-20: --layout scene's file (the Riibotics demo scenes); unset in every earlier run.
-                              "scene_file": None}
+                              "scene_file": None,
+                              # 2026-10-22: the near capture's expected site and the untracked re-draw's lateral box
+                              # (docs/plans/2026-10-22-near-recapture-scenes.md); off / 0.05 in every earlier run.
+                              "near_capture_expected": "off", "near_capture_redraw_lateral_m": 0.05}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

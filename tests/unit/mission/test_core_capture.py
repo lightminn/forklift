@@ -242,3 +242,70 @@ def test_no_other_capture_waives_the_lower_band(kw):
     out = w.run()
     assert w.kwargs == [{}]  # the detector's default, called as before
     assert "lower_evidence" not in out.attempt
+
+
+def expected_world(*, mode="on", near_capture="pending", slam_mode="holding", waiver=False):
+    """Plan 2026-10-22 task A: a capture whose detector ports record how they were called."""
+    from forklift_core.perception.pocket_detector import ExpectedCandidate
+
+    w = World(near_capture=near_capture, slam_mode=slam_mode)
+    w.plain, w.restricted = [], []
+
+    def detect(inp, prior, params, **kw):
+        w.plain.append(kw)
+        return SimpleNamespace(observation=Observation(), diagnostics=DetectionDiag())
+
+    def detect_expected(inp, prior, params, expected, **kw):
+        w.restricted.append((expected, kw))
+        return (SimpleNamespace(observation=Observation(), diagnostics=DetectionDiag()),
+                (ExpectedCandidate(0, (2.0, 0.1), 0.01, 0.12, 0.02, 99.0, True),))
+
+    w.hooks.detect_pockets = detect
+    w.hooks.detect_pockets_expected = detect_expected
+    w.core.options.near_capture_expected = mode
+    w.pocket["planning_pickup"] = SimpleNamespace(x_m=3.4, y_m=6.1, yaw_rad=1.6)
+    if waiver:
+        w.core.options.bottom_deck_check = "on"
+        w.state["bottom_deck"] = {"status": "done", "leg": None, "record": {"verdict": "present"}}
+    return w
+
+
+def test_the_near_capture_looks_for_the_pallet_where_the_plan_expects_it():
+    w = expected_world()
+    out = w.run()
+    assert w.plain == [] and len(w.restricted) == 1
+    site, kw = w.restricted[0]
+    assert kw == {}
+    # The control base after the capture: the SLAM rear (2.9, 3.6, 1.5) and 0.4 m ahead of it.
+    yaw = 1.5
+    bx, by = 2.9 + 0.4 * math.cos(yaw), 3.6 + 0.4 * math.sin(yaw)
+    dx, dy = 3.4 - bx, 6.1 - by
+    assert site.x_m == pytest.approx(math.cos(yaw) * dx + math.sin(yaw) * dy, abs=1e-12)
+    assert site.y_m == pytest.approx(-math.sin(yaw) * dx + math.cos(yaw) * dy, abs=1e-12)
+    assert site.yaw_rad == pytest.approx(0.1, abs=1e-12)
+    assert (site.radius_m, site.axis_tolerance_rad) == (0.25, pytest.approx(math.radians(15.0)))
+    record = out.attempt["expected"]
+    assert record["site"] == [site.x_m, site.y_m, site.yaw_rad]
+    assert record["radius_m"] == 0.25 and record["candidates"][0]["inside"] is True
+    assert record["planning_pickup"] == [3.4, 6.1, 1.6]
+
+
+def test_the_expected_site_follows_the_bottom_deck_waiver():
+    w = expected_world(waiver=True)
+    out = w.run()
+    assert w.restricted[0][1] == {"lower_evidence": False} and out.attempt["lower_evidence"] is False
+
+
+@pytest.mark.parametrize("kw", [dict(mode="off"), dict(near_capture=None), dict(near_capture="done")])
+def test_no_other_capture_is_restricted_and_off_calls_the_detector_as_before(kw):
+    w = expected_world(**kw)
+    out = w.run()
+    assert w.restricted == [] and w.plain == [{}]
+    assert "expected" not in out.attempt
+
+
+def test_an_options_object_without_the_switch_is_off():
+    w = expected_world()
+    del w.core.options.near_capture_expected
+    w.run()
+    assert w.restricted == [] and w.plain == [{}]

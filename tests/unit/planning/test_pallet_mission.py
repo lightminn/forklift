@@ -1490,6 +1490,31 @@ def test_redraw_refuses_a_truck_outside_the_box_or_too_close():
         assert plans is None and record["refused"] == "box"
 
 
+@pytest.mark.parametrize("lateral_m, yaw_rad", [(-0.0675, 0.0661), (-0.0981, 0.1050)])
+def test_a_wider_lateral_box_accepts_random_1s_stands_after_a_converging_dry_run(lateral_m, yaw_rad):
+    """Plan 2026-10-22 task D: random_1 s0 / s1 stood these offsets off the new line, 2.1 m before its end; the
+    default 0.05 m box refuses both, a 0.10 m box accepts them once the approach follower's dry run arrives."""
+    from forklift_core.control import TrackerConfig
+    from forklift_core.control.rollout import bicycle_rollout
+
+    target = PalletSite(3.4, 0.0, 0.0)
+    start = _redraw_start(target, 2.0, lateral_m, yaw_rad)
+    config = TrackerConfig(cruise_speed_mps=0.6, max_curvature_inv_m=0.36, max_acceleration_mps2=0.3,
+                           lookahead_m=0.28, position_tolerance_m=0.008, yaw_tolerance_rad=0.02,
+                           stop_speed_mps=0.012, max_cross_track_error_m=0.35, overshoot_tolerance_m=0.03)
+
+    def dry(straight):
+        return bicycle_rollout(straight.poses, straight.directions, straight.curvatures_inv_m, config,
+                               (start.x_m, start.y_m, start.yaw_rad))
+
+    plans, record = pallet_mission.redraw_docking(REDRAW_SCENARIO, start, target, dry_runs=(dry,), max_yaw_rad=0.12)
+    assert plans is None and record["refused"] == "box"
+    plans, record = pallet_mission.redraw_docking(REDRAW_SCENARIO, start, target, dry_runs=(dry,), max_yaw_rad=0.12,
+                                                  max_lateral_m=0.10)
+    assert record["refused"] is None and plans is not None
+    assert record["dry_runs"][0]["status"] == "arrived"
+
+
 def test_redraw_checks_the_approach_straight_at_the_approach_clearance():
     target = PalletSite(3.4, 0.0, 0.0)
     start = _redraw_start(target, 0.9)

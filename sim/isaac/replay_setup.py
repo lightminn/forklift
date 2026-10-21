@@ -40,6 +40,7 @@ PORT_FUNCTIONS = {name: "Planner" for name in (
     "bicycle_rollout", "final_straight_prefix", "plan_docking_reapproach", "plan_observation_leg", "plan_return_leg",
     "plan_transport", "plan_transport_leg", "redraw_docking", "runtime_viewpoints", "straight_from_pose")}
 PORT_FUNCTIONS["detect_pockets"] = "Perception"
+PORT_FUNCTIONS["detect_pockets_expected"] = "Perception"  # plan 2026-10-22 task A
 # Setup names drive's prologue lists but never reads before rebinding them (checked statically, plan R3 notes).
 EXCLUDED = {"q": "a setup Gf.Quatd; drive reads q only in hook lambdas called after the loop has assigned it"}
 
