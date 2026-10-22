@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-작성일: 2026-10-22 · 상태: 계획 4판 · 근거: [상용 FMS 사례 조사](../design/2026-10-22-fms-case-survey.md) 4절 1순위(최소안), 사용자 결정 2026-10-22(총괄 경유)
+작성일: 2026-10-22 · 상태: 구현됨(계획 4판, PR feat/console-mission-queue) · 근거: [상용 FMS 사례 조사](../design/2026-10-22-fms-case-survey.md) 4절 1순위(최소안), 사용자 결정 2026-10-22(총괄 경유)
 
 **Goal:** 자주 하는 운반을 버튼 하나로 대기열에 넣고, 대기열의 운반을 차례로 내되 **어떤 이상이 있어도 다음 미션을 자동으로 내지 않는** 콘솔 기능을 만든다.
 
@@ -182,4 +182,4 @@
 
 **② Codex 6회차(구현·화면).** P2 1건 반영: 바뀐 것이 없어도 타이머·상태마다 대기열 목록 DOM 을 다시 그려 버튼 포커스·클릭을 잃을 수 있음 → 연결부 버전은 실제 변경에만 오르고, 저장도 대기열이 바뀔 때만 하며, 목록 HTML 이 같으면 다시 넣지 않는다.
 
-②는 반영 뒤 같은 스레드에서 재검토해 수렴까지 이어 간다(구현 검토 5회차부터는 코드 리뷰).
+**② Codex 7회차.** 새 P1/P2/P3 없음 — 수렴(웹 시험 152개, DOM 대역으로 정지 2.5초·진행 2초 동안 불필요한 교체·저장 없음 확인).
