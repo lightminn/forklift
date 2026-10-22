@@ -81,6 +81,8 @@ KNOWN = {
         "Pallet dropped during transport", "Pallet slipped off forks", "Pallet displaced before pickup",
         # "slam_link_failed: " goes through slam_reason_ now (a DYNAMIC_SITE: an L4 reason or the link's own)
         "Forbidden fork/pallet contact in ", "localization_stale: ",
+        "Invalid pallet spawn after settling: ",  # a session pallet's settle check (setup; plan 2026-10-22 rigid 2.1)
+        "Session pallet displaced: ",  # a session pallet nobody handles moved (scene damage; rigid plan 2.4)
         "withdraw_tracking_exceeded:", "Perception camera did not produce depth", "Measured pallet solid overlap in ",
         "",
     },
@@ -134,7 +136,7 @@ def test_the_scene_checks_are_scene_class_and_go_through_the_latch():
     assert scene == {"Excessive body tilt in ", "Actual truck/load footprint overlap in ",
                      "Measured pallet footprint overlap in ", "Measured pallet solid overlap in ",
                      "Pallet dropped during transport", "Pallet slipped off forks", "Pallet displaced before pickup",
-                     "Forbidden fork/pallet contact in "}
+                     "Forbidden fork/pallet contact in ", "Session pallet displaced: "}
     assert all(classify(r) == "scene" for r in scene)
 
 
