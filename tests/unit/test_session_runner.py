@@ -321,9 +321,9 @@ def test_the_anchors_are_decided_before_each_payload_and_again_at_the_adoption()
     (fn,) = _functions("live_mission_ready")
     decided = []
     env = {"session": object(), "slam": None, "session_anchor_decide_": decided.append,
-           "session_anchor_poses_": lambda did, goal: {"P-5": (3.4, -8.469, 0.0)}}
+           "session_anchor_poses_": lambda did, goal, own: {"P-5": (3.4, -8.469, 0.0)}}
     exec(compile(ast.Module([fn], []), str(SCRIPT), "exec"), env)
-    inputs = {"destination_id": "D-3", "scenario": SimpleNamespace(destination=None),
+    inputs = {"destination_id": "D-3", "pallet_id": "P-3", "scenario": SimpleNamespace(destination=None),
               "slot_anchors": {"P-5": (3.4, -8.469, 0.0)}}
     assert env["live_mission_ready"](5.0, inputs) is None and decided == [5.0]
     with pytest.raises(RuntimeError, match="session_anchor_changed:P-4,P-5"):
@@ -391,3 +391,19 @@ def test_a_delivery_without_its_evidence_is_no_anchor(kw, reason, why):
     results.append({"mission_id": "m2", "outcome": "failed" if reason else "done", "reason": reason})
     scope["session_anchor_decide_"](301.0)
     assert scope["session_anchor_"] == {} and scope["state"]["session_slot_anchor_log"][-1]["why"] == why
+
+
+
+def test_a_missions_own_pallet_is_never_its_anchor():
+    """Codex impl round 1 P3: a re-pick of an anchored pallet -- its own anchor is not an obstacle of its plan, so it is
+    neither planned with nor compared at the adoption."""
+    (fn,) = _functions("session_anchor_poses_")
+    env = {"session": object(), "session_anchor_": {"P-5": "D-2", "P-4": "D-1"},
+           "session_slots_": {"D-1": (3.4, -7.182, 0.0), "D-2": (3.4, -8.469, 0.0), "D-3": (3.4, -9.756, 0.0)},
+           "session_anchor_poses": S.anchor_poses}
+    exec(compile(ast.Module([fn], []), str(SCRIPT), "exec"), env)
+    goal = SimpleNamespace(x_m=3.4, y_m=-9.756, yaw_rad=0.0)
+    assert set(env["session_anchor_poses_"]("D-3", goal, "P-5")) == {"P-4"}
+    assert env["session_anchor_poses_"]("D-3", goal, "P-5") == {"P-4": pytest.approx((3.4, -7.182, 0.0))}
+    env["session_anchor_"] = {"P-5": "D-2"}
+    assert env["session_anchor_poses_"]("D-3", goal, "P-5") == {}

@@ -250,3 +250,35 @@ def test_the_workers_branches_after_the_payload_pickle(tag, ok):
         assert out["result"].success is ok, name
         if name == "leg":
             assert out["tight"] is (not ok)  # asked again, refused again: the tight retry keeps the slot stage
+
+
+
+def _behind_delivery(scenario, geometry, tag):
+    """A box beside the withdraw's unloaded outline near the withdrawn pose (inside the clearance)."""
+    w = site_poses(scenario.destination, geometry)["withdrawn"]
+    return prop(f"session:pallet:P-7{tag}", w.x_m - 0.05, w.y_m + geometry.unloaded_footprint.half_width_m + 0.12)
+
+
+@pytest.mark.parametrize("tag, ok", [("@slot", False), ("@search", True)])
+@pytest.mark.parametrize("planner", ["transport", "loaded"])
+def test_the_withdraw_is_checked_against_the_slot_stage(monkeypatch, tag, ok, planner):
+    """Codex impl round 1 P3: the withdraw alone (the delivery straight let through), both ways, in both planners."""
+    geometry = SyntheticMissionGeometry()
+    scenario = open_scene(_behind_delivery(open_scene(), geometry, tag))
+    d = site_poses(scenario.destination, geometry)
+    real = pm._straight_plan
+
+    def delivery_free(start, goal, direction, obstacles, *a, **k):
+        if (start, goal) == (d["predelivery"], d["delivery"]):
+            obstacles = []  # the box would meet the delivery straight's wider outline too: only the withdraw is tested
+        return real(start, goal, direction, obstacles, *a, **k)
+
+    monkeypatch.setattr(pm, "_straight_plan", delivery_free)
+    search = pm._transport_search  # (and the transport search, whose goal outline reaches it too)
+    monkeypatch.setattr(pm, "_transport_search", lambda start, goal, obstacles, *a, **k: search(start, goal, [], *a, **k))
+    start = site_poses(scenario.pickup, geometry)["extracted"]
+    plan = (plan_transport(scenario, geometry=geometry) if planner == "transport"
+            else plan_loaded_delivery(scenario, start, geometry=geometry))
+    assert plan.success is ok, plan.status
+    if not ok:
+        assert plan.status == "withdraw:straight_collision"

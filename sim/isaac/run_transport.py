@@ -7073,11 +7073,13 @@ def drive(S, isaac) -> None:
                 for pid_ in [p_ for p_ in session_anchor_ if core.targets.pallets[p_].state != "delivered"]:
                     session_anchor_.pop(pid_)
 
-            def session_anchor_poses_(did_, goal_):
-                """The anchors in the goal's frame for a mission to ``did_`` with goal ``goal_`` (plan 2.1)."""
-                if session is None or not session_anchor_:
+            def session_anchor_poses_(did_, goal_, own_id_):
+                """The anchors in the goal's frame for a mission to ``did_`` with goal ``goal_`` (plan 2.1) -- its
+                neighbours only: its own pallet is no obstacle of its plan (Codex impl round 1 P3)."""
+                kept_ = {p_: d_ for p_, d_ in session_anchor_.items() if p_ != own_id_}
+                if session is None or not kept_:
                     return {}
-                return session_anchor_poses(session_anchor_, session_slots_, did_,
+                return session_anchor_poses(kept_, session_slots_, did_,
                                             (float(goal_.x_m), float(goal_.y_m), float(goal_.yaw_rad)))
 
             def unaligned_delivery_refusal_():
@@ -7186,7 +7188,7 @@ def drive(S, isaac) -> None:
                     zone_ = Rectangle(target_[0], target_[1], geometry.pallet_depth_m + 0.6,
                                       geometry.pallet_width_m + 0.6, target_[2])
                 session_anchor_decide_(t_)  # plan 2.2: before the payload (a later change does not reach it)
-                anchors_ = session_anchor_poses_(mission_.destination_id, dest_)
+                anchors_ = session_anchor_poses_(mission_.destination_id, dest_, mission_.pallet_id)
                 scenario_ = replace(session_scenario_(mission_.pallet_id, slot_anchors_=anchors_ or None),
                                     start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
                                     pickup=LiveSite(*target_),
@@ -7226,7 +7228,7 @@ def drive(S, isaac) -> None:
                                  y_ + geometry.inserted_offset_m * math.sin(yaw_), yaw_)
                 start_ = LivePose(x_, y_, yaw_)
                 session_anchor_decide_(t_)  # plan 2.2: before the payload
-                anchors_ = session_anchor_poses_(mission_.destination_id, dest_)
+                anchors_ = session_anchor_poses_(mission_.destination_id, dest_, mission_.pallet_id)
                 scenario_ = replace(session_scenario_(mission_.pallet_id, slot_anchors_=anchors_ or None),
                                     start_rear=start_, pickup=seat_,
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
@@ -7264,7 +7266,8 @@ def drive(S, isaac) -> None:
                 if session is not None:
                     session_anchor_decide_(t_)
                     planned_ = inputs_.get("slot_anchors") or {}
-                    now_ = session_anchor_poses_(inputs_["destination_id"], inputs_["scenario"].destination)
+                    now_ = session_anchor_poses_(inputs_["destination_id"], inputs_["scenario"].destination,
+                                                 inputs_["pallet_id"])
                     changed_ = sorted(p_ for p_ in set(planned_) | set(now_)
                                       if p_ not in planned_ or p_ not in now_
                                       or any(abs(a_ - b_) > 1e-9 for a_, b_ in zip(planned_[p_], now_[p_])))
