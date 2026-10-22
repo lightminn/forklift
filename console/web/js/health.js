@@ -95,9 +95,12 @@ export function healthRows(inp) {
   const media = inp.caps?.media ?? {};
   const rows = [];
   const pause = notExpected(inp);
+  // a state counts only once this connection has sent one: an older one is kept by the session across a reconnect
+  const fresh = Boolean(st) && inp.stateAt !== null && inp.welcomeAt !== null && inp.stateAt >= inp.welcomeAt
+    && inp.link.up;
   if (pause) {
     for (const key of ["control", "media", "state", "pose", "camera", "scan"]) rows.push(r(key, "off", pause));
-    return rows.concat(stateRows(inp, media));
+    return rows.concat(stateRows(inp, media, fresh, pause === "세션 종료됨"));
   }
 
   // the links
@@ -107,7 +110,6 @@ export function healthRows(inp) {
   rows.push(r("media", inp.link.mediaUp ? "ok" : "warn", inp.link.mediaUp ? "연결됨" : "재접속 중"));
 
   // what arrives since this welcome
-  const fresh = st && inp.stateAt !== null && inp.welcomeAt !== null && inp.stateAt >= inp.welcomeAt;
   if (!inp.link.up || inp.welcomeAt === null) rows.push(r("state", "unknown", "연결 기다리는 중"), r("pose", "unknown", "—"));
   else if (!fresh) {
     rows.push(inp.nowMs - inp.welcomeAt <= SILENCE_MS
@@ -124,12 +126,13 @@ export function healthRows(inp) {
   }
   rows.push(mediaRow("camera", Boolean(media.camera_rgb), inp.cameraAt, inp.cameraAt, videoStaleAfterS(st), inp));
   rows.push(mediaRow("scan", Boolean(media.scan), inp.scanAt, inp.scanReceivedAt, paced(STALE_S, st), inp));
-  return rows.concat(stateRows(inp, media));
+  return rows.concat(stateRows(inp, media, fresh, false));
 }
 
-// the grid and what the last state says (shown whether the links are expected or not)
-function stateRows(inp, media) {
-  const st = inp.state;
+// the grid and what the last state says -- that state only if this connection sent it (Codex plan round 3): before
+// one, unknown; after the operator ended the session, off
+function stateRows(inp, media, fresh, ended) {
+  const st = fresh ? inp.state : null;
   const rows = [];
   if (!media.grid) rows.push(r("grid", "off", "차량이 주지 않음"));
   else if (inp.grid?.present) rows.push(r("grid", "ok", "있음"));
@@ -137,7 +140,13 @@ function stateRows(inp, media) {
   else rows.push(r("grid", "unknown", "아직 없음"));
 
   // what the state says
-  const fb = st?.feedback_ok;
+  if (!fresh) {
+    for (const key of ["feedback", "stop", "permit", "scene"]) {
+      rows.push(ended ? r(key, "off", "세션 종료됨") : r(key, "unknown", "이 연결의 상태를 아직 받지 못함"));
+    }
+    return rows.concat(shownRows(inp));
+  }
+  const fb = st.feedback_ok;
   rows.push(fb === true ? r("feedback", "ok", "유효") : fb === false ? r("feedback", "crit", "차량 피드백 없음") : r("feedback", "unknown", "모름"));
   const cannot = inp.monitor ? " · 이 화면으로 멈출 수 없음" : "";
   const standing = st?.mode === "PAUSED" || st?.mode === "STOPPED" ? (st.stopped_confirmed === false ? "정지 확인 기다리는 중" : "") : "";
@@ -149,10 +158,15 @@ function stateRows(inp, media) {
   if (!pm || !Number.isFinite(pm.limit_mps)) rows.push(r("permit", "unknown", "판정 없음"));
   else rows.push(r("permit", pm.limit_mps === 0 ? "warn" : "ok", permitText(pm, st.teleop_forbidden_reason)));
   const dmg = st?.scene?.damaged;
-  if (!st || !st.scene) rows.push(r("scene", "off", "차량이 주지 않음"));
+  if (!st.scene) rows.push(r("scene", "off", "차량이 주지 않음"));
   else rows.push(dmg ? r("scene", "crit", `장면 손상 · ${dmg.reason}`) : r("scene", "ok", "손상 없음"));
+  return rows.concat(shownRows(inp));
+}
 
-  // shown, never raised
+// shown, never raised (from the last state the page holds, labelled as such by their values)
+function shownRows(inp) {
+  const st = inp.state;
+  const rows = [];
   rows.push(r("lease", "off", leaseValue(inp)));
   rows.push(r("slam", "off", slamLabel(st).text));
   rows.push(r("freshness", "off", freshnessValue(st)));
@@ -183,6 +197,15 @@ export class AlarmBook {
     }
     if (epoch !== null) this.epoch = epoch;
     for (const row of rows) this.#row(row, nowMs, nowUnix, viewing);
+    // seen while open and critical: not unseen when it closes elsewhere (a warning seen is not a critical one seen)
+    if (viewing) {
+      for (const a of this.#open()) {
+        if (a.level === "crit" && !a.seen) {
+          a.seen = true;
+          this.version += 1;
+        }
+      }
+    }
   }
 
   markSeen() {
@@ -193,7 +216,7 @@ export class AlarmBook {
   }
 
   toStorage() {
-    return { v: 1, alarms: this.alarms, nextId: this.nextId };
+    return { v: 1, alarms: this.alarms, nextId: this.nextId, unseenCrit: this.unseenCrit };
   }
 
   // a reopened page did not see the time it was closed: what was open is closed as unseen and judged again
@@ -202,10 +225,12 @@ export class AlarmBook {
     if (!obj || obj.v !== 1 || !Array.isArray(obj.alarms)) return b;
     b.alarms = obj.alarms.filter((a) => a && typeof a.key === "string").slice(0, KEEP).map((a) => ({ ...a }));
     b.nextId = Number.isInteger(obj.nextId) ? obj.nextId : b.alarms.length + 1;
+    b.unseenCrit = Number.isInteger(obj.unseenCrit) && obj.unseenCrit > 0 ? obj.unseenCrit : 0;
     for (const a of b.alarms) {
       if (a.cleared_unix === null) {
         a.cleared_unix = nowUnix;
         a.cleared_note = "화면 다시 열림 — 그 사이 모름";
+        if (a.level === "crit" && !a.seen) b.unseenCrit += 1; // never seen: the dot carries it over the reload
       }
     }
     return b;
@@ -225,6 +250,7 @@ export class AlarmBook {
         if (RANK[row.level] > RANK[open.level]) {
           open.level = row.level;
           open.peak_text = row.value;
+          open.seen = false; // the critical level itself has not been seen yet
           this.version += 1;
         }
         if (open.text !== row.value) {
@@ -233,7 +259,8 @@ export class AlarmBook {
         }
       } else if (nowMs - since.since >= OPEN_MS) {
         this.alarms.unshift({ id: this.nextId++, key: row.key, label: row.label, level: row.level, text: row.value,
-                              peak_text: row.value, opened_unix: since.sinceUnix, cleared_unix: null, cleared_note: null });
+                              peak_text: row.value, opened_unix: since.sinceUnix, cleared_unix: null, cleared_note: null,
+                              seen: viewing && row.level === "crit" });
         this.#trim();
         this.version += 1;
       }
@@ -251,7 +278,7 @@ export class AlarmBook {
   #close(a, nowUnix, note, viewing) {
     a.cleared_unix = nowUnix;
     a.cleared_note = note;
-    if (a.level === "crit" && !viewing) this.unseenCrit += 1;
+    if (a.level === "crit" && !viewing && !a.seen) this.unseenCrit += 1;
     this.version += 1;
   }
 

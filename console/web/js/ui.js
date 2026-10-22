@@ -3,6 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
+import { badge as alarmBadge } from "./health.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -153,6 +154,7 @@ export function log(text, level = "") {
 }
 
 export function render(m) {
+  if (m.alarms) renderHealth(m); // status panel plan D4: drawn whatever the connection
   const st = m.session.state;
   const gens = m.session.generations;
   const lease = m.session.hasLease;
@@ -514,4 +516,54 @@ function renderQueue(m, st, control) {
   $("q-done").textContent = c.done + c.failed + c.cancelled
     ? `끝낸 항목: 완료 ${c.done} · 실패 ${c.failed} · 취소 ${c.cancelled}${recent.length ? ` — 최근 ${recent.join(", ")}` : ""}`
     : "";
+}
+
+// Status panel plan D4: the status rows (a row is drawn again only when it changed), the menu badge and the alarm
+// list (drawn again when the book changes).
+const LEVEL_KO = { ok: "정상", warn: "주의", crit: "위험", unknown: "모름", off: "해당 없음" };
+const NOTE_KO = { 복구: "복구", "해당 없어짐": "해당 없어짐", "관측 종료": "관측 종료", "새 세션": "새 세션" };
+
+function clock(unix) {
+  return Number.isFinite(unix) ? wallTime(unix) : "—";
+}
+
+function renderHealth(m) {
+  const box = $("health-rows");
+  for (const row of m.health.rows) {
+    let el = box.querySelector(`[data-key="${row.key}"]`);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "hrow";
+      el.dataset.key = row.key;
+      box.append(el);
+    }
+    const html = `<i title="${esc(LEVEL_KO[row.level] ?? row.level)}"></i><b>${esc(row.label)}</b><span class="val">${esc(row.value)}</span>${row.detail ? `<span class="det">${esc(row.detail)}</span>` : ""}`;
+    if (el.dataset.level !== row.level) el.dataset.level = row.level;
+    if (el.dataset.html !== html) {
+      el.dataset.html = html;
+      el.innerHTML = html;
+    }
+  }
+
+  const b = alarmBadge(m.alarms);
+  const bd = $("health-badge");
+  bd.hidden = !b.count && !b.dot;
+  bd.textContent = b.count ? String(b.count) : "";
+  bd.dataset.level = b.level ?? "none";
+  bd.dataset.dot = String(b.dot);
+  bd.title = [b.count ? `열린 경보 ${b.count}건` : "", b.dot ? "보지 못한 위험 경보가 있었습니다" : ""].filter(Boolean).join(" · ");
+
+  if (m.cache.alarmsVersion === m.alarms.version && m.cache.alarmsBook === m.alarms) return;
+  m.cache.alarmsVersion = m.alarms.version;
+  m.cache.alarmsBook = m.alarms;
+  const open = m.alarms.alarms.filter((a) => a.cleared_unix === null);
+  const closed = m.alarms.alarms.filter((a) => a.cleared_unix !== null);
+  const item = (a) => {
+    const live = a.cleared_unix === null;
+    const span = live ? "진행 중" : `${clock(a.opened_unix)}–${clock(a.cleared_unix)} (${Math.max(0, a.cleared_unix - a.opened_unix).toFixed(0)} s)`;
+    const peak = a.peak_text && a.peak_text !== a.text ? ` · 가장 나빴을 때: ${a.peak_text}` : "";
+    const why = live ? "" : `<span class="why">닫힘: ${esc(NOTE_KO[a.cleared_note] ?? a.cleared_note ?? "—")}</span>`;
+    return `<li class="${live ? `open ${a.level}` : ""}"><span class="chip ${a.level}">${esc(LEVEL_KO[a.level])}</span><span class="what">${esc(a.label)} · ${esc(a.text)}${esc(peak)}</span><span class="when">${live ? `${esc(clock(a.opened_unix))} · ` : ""}${esc(span)}</span>${why}</li>`;
+  };
+  $("alarm-list").innerHTML = open.length || closed.length ? [...open, ...closed].map(item).join("") : '<li class="hint">경보 없음</li>';
 }

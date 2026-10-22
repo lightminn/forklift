@@ -10,6 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { createQueueWire } from "./queuewire.js";
+import { AlarmBook, healthRows } from "./health.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
@@ -66,7 +67,10 @@ const m = {
   standbyNote: null, // the supervisor's standby between runners (contract 6), cleared by a welcome
   sessionEnding: null,
   session: null,
-  link: { up: false, tickGapMs: null, lastTickAt: null },
+  link: { up: false, tickGapMs: null, lastTickAt: null, mediaUp: false },
+  welcomeAt: null, // status panel plan D2: when this control connection's welcome came (only what follows counts)
+  gridWithdrawn: null, // the reason of a withdrawn grid
+  standby: null, // the standby's own answer (contract 6), beside its note
   grid: null,
   scan: null, // {frame, points, at, approx}
   mediaEpoch: null,
@@ -141,6 +145,9 @@ const storage = (name) => {
 };
 m.queue = createQueueWire({ session: m.session, tabStore: storage("sessionStorage"), sharedStore: storage("localStorage"),
   clientId, nowMs: () => performance.now(), nowUnix: () => Date.now() / 1000, newId: randomId });
+// status panel plan D3: the alarm book, kept in this tab's sessionStorage once the vehicle is known
+m.alarms = new AlarmBook();
+m.health = { rows: [], key: null, saved: -1 };
 try {
   if (shouldReclaim(sessionStorage.getItem("console.held_lease"), clientId)) m.session.expectReclaim();
 } catch {
@@ -153,12 +160,23 @@ m.session.subscribe((msg) => {
       // a new vehicle session: nothing of the old one stays on screen
       m.grid = null;
       m.scan = null;
+      m.gridWithdrawn = null;
       m.mediaEpoch = msg.session_epoch;
       m.cache.targetsRev = null; // the same revision number in a new session is a new list
       $("pallet-list").innerHTML = "";
       $("dest").innerHTML = "";
     }
     m.results.welcome(msg.session_epoch); // plan D13: the results seq starts again in a new session
+    m.welcomeAt = performance.now();
+    m.standby = null;
+    if (m.health.key === null && typeof msg.vehicle_id === "string") {
+      m.health.key = `console.alarms.${msg.vehicle_id}.${clientId}`;
+      try {
+        m.alarms = AlarmBook.fromStorage(JSON.parse(sessionStorage.getItem(m.health.key) ?? "null"), Date.now() / 1000);
+      } catch {
+        m.alarms = new AlarmBook();
+      }
+    }
     m.queue.onWelcome(msg); // mission queue plan D6: a new session stops it
     standbyAsk += 1; // an answer still on its way is older than this welcome (Codex standby design P2-2)
     m.standbyNote = null;
@@ -200,6 +218,7 @@ m.session.subscribe((msg) => {
   } else if (msg.t === "state") {
     m.stateAt = performance.now();
     m.queue.onState(msg); // mission queue plan D3, D4: silence, anomalies, the lease, last_result
+    healthTick(); // status panel plan D3: also on each state (a background tab slows the timers, not the socket)
     const asked = disarmAsked(m.askedDisarm, m.prevState, performance.now());
     for (const c of sessionChanges(m.prevState, msg, { clientId, askedDisarm: asked })) log(c.text, c.level);
     if (m.prevState?.armed && !msg.armed) m.askedDisarm = null; // the excuse is used up by that disarm
@@ -237,15 +256,23 @@ async function askStandby() {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 2000); // the request and its body
   let note = null;
+  let raw = null;
   try {
     const r = await fetch("/api/v1/session", { cache: "no-store", signal: abort.signal });
-    if (r.ok) note = standbyText(await r.json());
+    if (r.ok) {
+      raw = await r.json();
+      note = standbyText(raw);
+    }
   } catch {
     note = null; // no standby (or no answer in time): the reconnects go on as before
+    raw = null;
   } finally {
     clearTimeout(timer);
   }
-  if (ask === standbyAsk && !m.linkWelcome) m.standbyNote = note;
+  if (ask === standbyAsk && !m.linkWelcome) {
+    m.standbyNote = note;
+    m.standby = raw;
+  }
 }
 
 function connectControl() {
@@ -269,6 +296,7 @@ function connectControl() {
     m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
     m.queue.onDisconnect(); // mission queue plan D6: stopped, a running mission goes on
     m.linkWelcome = null; // until the next welcome, STOP is queued and resent (C1 rule)
+    m.welcomeAt = null;
     if (control === ws) control = null;
     if (m.sessionEnding === "session_end") {
       // plan D13: the vehicle program ended on request and does not come back -- no reconnecting
@@ -295,7 +323,10 @@ function connectMedia() {
   const ws = new WebSocket(`ws://${location.host}/api/v1/media`);
   media = ws;
   ws.binaryType = "arraybuffer";
-  ws.addEventListener("open", subscribeMedia);
+  ws.addEventListener("open", () => {
+    m.link.mediaUp = true;
+    subscribeMedia();
+  });
   ws.addEventListener("message", async (ev) => {
     if (!(ev.data instanceof ArrayBuffer)) return;
     const { head, body } = parseFrame(ev.data);
@@ -315,13 +346,18 @@ function connectMedia() {
     } else if (head.t === "scan") {
       // age from the vehicle's own count: a scan resent on resubscribe is not fresh
       const at = performance.now() - (Number.isFinite(head.age_s) ? head.age_s * 1000 : 0);
-      m.scan = { frame: head.frame ?? null, points: decodeScan(head, body), at, approx: head.pose_at === "latest" };
+      m.scan = { frame: head.frame ?? null, points: decodeScan(head, body), at, approx: head.pose_at === "latest",
+                 receivedAt: performance.now() };
     } else if (head.t === "grid") {
       m.grid = head.withdrawn ? null : { head, cells: new Uint8Array(body) }; // withdrawn: drop the old map
+      m.gridWithdrawn = head.withdrawn ? String(head.reason ?? "사유 없음") : null;
     }
   });
   ws.addEventListener("close", () => {
-    if (media === ws) media = null;
+    if (media === ws) {
+      media = null;
+      m.link.mediaUp = false;
+    }
     if (m.sessionEnding === "session_end") return; // plan D13: the vehicle program ended; nothing comes back
     setTimeout(connectMedia, 1000);
   });
@@ -858,6 +894,31 @@ function frame(now) {
 readTokens();
 setInterval(readTokens, 1000);
 setInterval(() => m.session.pump(), 100);
+
+// ------------------------------------------------------------------ status and alarms (status panel plan)
+function healthTick() {
+  const q = m.queue.queue;
+  m.health.rows = healthRows({
+    nowMs: performance.now(), welcomeAt: m.welcomeAt, link: { up: m.link.up, mediaUp: m.link.mediaUp },
+    sessionEnding: m.sessionEnding, caps: m.session.welcome?.capabilities ?? null,
+    monitor: stopIsRefused(m.linkWelcome), hasLease: m.session.hasLease, state: m.session.state, stateAt: m.stateAt,
+    cameraAt: m.camera.lastAt, scanAt: m.scan?.at ?? null, scanReceivedAt: m.scan?.receivedAt ?? null,
+    grid: { present: Boolean(m.grid), withdrawnReason: m.gridWithdrawn }, standby: m.standby,
+    queue: { run: q.run, stopReason: q.stopReason, items: q.items.length },
+  });
+  const viewing = !$("v-health").hidden && !document.hidden;
+  m.alarms.update(m.health.rows, performance.now(), Date.now() / 1000, { epoch: m.session.epoch, viewing });
+  if (viewing) m.alarms.markSeen();
+  if (m.health.key && m.alarms.version !== m.health.saved) {
+    m.health.saved = m.alarms.version;
+    try {
+      sessionStorage.setItem(m.health.key, JSON.stringify(m.alarms.toStorage()));
+    } catch {
+      /* storage unavailable: the list lives for this page only */
+    }
+  }
+}
+setInterval(healthTick, 100);
 // mission queue plan D3: its own 250 ms timer (animation frames stop in a hidden tab); a stop is logged once
 let queueRun = m.queue.queue.run;
 setInterval(() => {

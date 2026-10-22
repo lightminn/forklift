@@ -121,6 +121,16 @@ test("a failed start shows through a reset in progress (Codex plan round 2)", ()
   assert.equal(row(rows, "control").level, "crit");
 });
 
+test("before a state of this connection, the state's rows are unknown (Codex plan round 3)", () => {
+  const old = { ...STATE, feedback_ok: true, mode: "STOPPED", scene: { damaged: null } };
+  const rows = healthRows(input({ state: old, stateAt: W - 100, nowMs: W + 500 }));
+  for (const key of ["feedback", "stop", "permit", "scene"]) assert.equal(row(rows, key).level, "unknown", key);
+  const down = healthRows(input({ state: old, link: { up: false, mediaUp: true }, welcomeAt: null }));
+  for (const key of ["feedback", "stop", "permit", "scene"]) assert.equal(row(down, key).level, "unknown", key);
+  const ended = healthRows(input({ state: old, link: { up: false, mediaUp: false }, welcomeAt: null, sessionEnding: "session_end" }));
+  for (const key of ["feedback", "stop", "permit", "scene"]) assert.equal(row(ended, key).level, "off", key);
+});
+
 test("a permit with no limit is unknown", () => {
   assert.equal(lv({ state: { ...STATE, permit: { limit_mps: null, reason: "no_feedback" } } }, "permit"), "unknown");
 });
@@ -215,6 +225,52 @@ test("only the last 100 alarms are kept; open ones stay", () => {
   }
   assert.ok(b.alarms.length <= 100);
   assert.ok(b.alarms.some((a) => a.key === "scene" && a.cleared_unix === null));
+});
+
+test("the unseen-critical mark survives a reload until the page is seen (Codex plan round 3)", () => {
+  const c = new AlarmBook();
+  for (let t = 0; t <= 600; t += 100) c.update([R("stop", "crit")], t, t / 1000, { epoch: 1, viewing: false });
+  for (let t = 700; t <= 1_800; t += 100) c.update([R("stop", "ok")], t, t / 1000, { epoch: 1, viewing: false });
+  const r = AlarmBook.fromStorage(JSON.parse(JSON.stringify(c.toStorage())), 5);
+  assert.equal(badge(r).dot, true);
+  c.markSeen();
+  assert.equal(badge(AlarmBook.fromStorage(JSON.parse(JSON.stringify(c.toStorage())), 5)).dot, false);
+});
+
+test("a critical alarm seen while open is not unseen when it closes elsewhere (Codex plan round 3)", () => {
+  const c = new AlarmBook();
+  for (let t = 0; t <= 600; t += 100) c.update([R("stop", "crit")], t, t / 1000, { epoch: 1, viewing: false });
+  c.update([R("stop", "crit")], 700, 0.7, { epoch: 1, viewing: true });
+  c.markSeen();
+  for (let t = 800; t <= 2_000; t += 100) c.update([R("stop", "ok")], t, t / 1000, { epoch: 1, viewing: false });
+  assert.equal(badge(c).dot, false);
+});
+
+test("seeing an alarm while it was only a warning does not count as seeing it critical (Codex plan round 4)", () => {
+  const c = new AlarmBook();
+  for (let t = 0; t <= 600; t += 100) c.update([R("state", "warn")], t, t / 1000, { epoch: 1, viewing: true });
+  c.markSeen();
+  for (let t = 700; t <= 900; t += 100) c.update([R("state", "crit")], t, t / 1000, { epoch: 1, viewing: false });
+  for (let t = 1_000; t <= 2_200; t += 100) c.update([R("state", "ok")], t, t / 1000, { epoch: 1, viewing: false });
+  assert.equal(badge(c).dot, true);
+});
+
+test("an unseen critical alarm still open at a reload leaves the dot (Codex plan round 4)", () => {
+  const c = new AlarmBook();
+  for (let t = 0; t <= 600; t += 100) c.update([R("stop", "crit")], t, t / 1000, { epoch: 1, viewing: false });
+  assert.equal(badge(AlarmBook.fromStorage(JSON.parse(JSON.stringify(c.toStorage())), 5)).dot, true);
+  const d = new AlarmBook();
+  for (let t = 0; t <= 600; t += 100) d.update([R("stop", "crit")], t, t / 1000, { epoch: 1, viewing: true });
+  assert.equal(badge(AlarmBook.fromStorage(JSON.parse(JSON.stringify(d.toStorage())), 5)).dot, false);
+});
+
+test("seeing an open critical alarm changes the version so it is stored (Codex plan round 4)", () => {
+  const c = new AlarmBook();
+  for (let t = 0; t <= 600; t += 100) c.update([R("stop", "crit")], t, t / 1000, { epoch: 1, viewing: false });
+  const v = c.version;
+  c.update([R("stop", "crit")], 700, 0.7, { epoch: 1, viewing: true });
+  assert.notEqual(c.version, v);
+  assert.equal(c.alarms[0].seen, true);
 });
 
 test("restored alarms that were open are closed as unseen", () => {
