@@ -162,7 +162,8 @@ def test_the_live_teleop_permit_takes_the_pallet_zones_and_advances_them():
     """Plan D10: the target pallets on the same arcs and outline as the grid permit; the slower wins; the installed
     distances are advanced by the same driving; the U11 control flag turns it off (live only)."""
     src = _runner()
-    assert "zones_ = live_zones_from(core.targets, pickup_zone)" in src and "live_pallet_perm.limit(zones_, core.targets.revision" in src
+    # (a session scene: each pallet's own zone, plan 2026-10-22-rigid-session-pallets 2.5)
+    assert "zones_ = live_zones_from(core.targets, pickup_zone if session is None" in src and "live_pallet_perm.limit(zones_, core.targets.revision" in src
     assert "if pallet_[0] < result_[0]:" in src
     assert src.index("live_perm.advance(driven_)") < src.index("live_pallet_perm.advance(driven_)")
     assert "if obstacle is not None and not args.live_test_no_pallet_permit else None" in src

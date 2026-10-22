@@ -207,6 +207,7 @@ class FarRuntime:
         self.frame_every, self.lag_steps, self.drive_frames = int(frame_every), int(lag_steps), bool(drive_frames)
         self.out_dir = out_dir
         self.paused = False  # set while a stationary capture steps the world
+        self.truth_instance = 0  # the run's pallet among the instance ids (a session's mission pallet, its own)
         self.stop_pending = False  # a live stop decision waits for its work: no driving frame meanwhile
         self.writer = None  # a live run's file writer, writer(path, arrays) (the control thread never writes)
         self.steps: deque = deque(maxlen=max(8 * (self.lag_steps + 1), 256))
@@ -311,7 +312,7 @@ class FarRuntime:
                                                                               "untracked", "held", "new")})
         # evaluation only (the lag fit): the proposal that best covers truth instance 0, by IoU >= 0.5 -- never the
         # proposal's id or order (Codex)
-        truth = np.asarray(instance_ids) == 0
+        truth = np.asarray(instance_ids) == self.truth_instance
         ious = [((p.mask & truth).sum() / max(1, (p.mask | truth).sum()), p.proposal_id) for p in self.far.last_proposals]
         best = max(ious, default=(0.0, None))
         self.leg_frames.append({"t_s": row[1], "tick": int(tick), "candidates": rec["candidates"],

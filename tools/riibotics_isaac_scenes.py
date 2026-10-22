@@ -33,6 +33,12 @@ standing in for the estimate.
 
     python tools/riibotics_isaac_scenes.py --output config/riibotics_scenes
     python tools/riibotics_isaac_scenes.py --output <dir> --plan [--only aisle] [--jobs 4]
+    python tools/riibotics_isaac_scenes.py --output <dir> --slot-markers   # also <name>_m.json for line / random
+
+Slot markers (docs/plans/2026-10-22-open-zone-docking.md D3): the open unloading zones of line and random leave the
+delivery docking match a single far wall, so it refuses (degenerate). A `_m` copy puts two plates behind every
+unloading slot (slot_markers) -- in the planner's props and in what Isaac draws -- and the plain scene stays for
+regression.
 """
 
 from __future__ import annotations
@@ -66,12 +72,13 @@ from riibotics_scenario_paths import (  # noqa: E402
     trailer_case,
 )
 
-from scene_file import FORMAT, scenario_from_record  # noqa: E402
+from scene_file import FORMAT, SESSION_FORMAT, scenario_from_record  # noqa: E402
 
 from forklift_core.perception.pallet_geometry import load_pallet_geometry  # noqa: E402
 from forklift_core.planning import Pose2D  # noqa: E402
 from forklift_core.planning.geometry import Bounds, Rectangle  # noqa: E402
 from forklift_core.planning.pallet_mission import (  # noqa: E402
+    AssetSpec,
     D7_PLANNER_OPTIONS,
     PalletSite,
     PlacedProp,
@@ -112,6 +119,52 @@ ZONE_GREY = (0.62, 0.62, 0.60)
 UNLOAD_BLUE = (0.35, 0.50, 0.70)
 WALL_GREY = (0.70, 0.72, 0.75)
 RACK_ORANGE = (0.85, 0.45, 0.12)
+
+
+# Slot markers (plan 2026-10-22 open-zone docking D3): per unloading slot two plates parallel to its entry, from
+# MARKER_BEHIND_M to MARKER_BEHIND_M + MARKER_L_M beyond its far edge (the pallet's front face), MARKER_SIDE_M to
+# either side of its axis (halfway to a slot beside it in the same row when nearer: a plate 1.5 m out would stand
+# 0.21 m off the neighbour's axis, inside its planning clearance); they cover the 1.05 m LiDAR plane by 0.25 m. Sized against the 13 refused
+# delivery matches (ws1 test_runs/riibotics/marker_sizing.py): side panels beside the slot hide the far wall from
+# the station's reference scan, plates nearer than 1.5 m to the axis left the middle line slot short of inliers.
+MARKER_URI = "riibotics:slot_marker"
+MARKER_L_M, MARKER_T_M, MARKER_H_M = 0.90, 0.03, 1.30
+MARKER_BEHIND_M, MARKER_SIDE_M, MARKER_MERGE_M = 0.05, 1.50, 0.30
+MARKER_COLOUR = (0.95, 0.80, 0.10)
+SLOT_DEPTH_M = 0.60  # EPAL 6 along the forks: a slot's far edge is half of it ahead of its centre
+MARKED_KINDS = ("line", "random")
+
+
+def _beside(a: PalletSite, b: PalletSite) -> float | None:
+    """b's lateral offset from a when b stands beside a in the same row (same entry yaw, same depth), else None."""
+    if abs(math.atan2(math.sin(a.yaw_rad - b.yaw_rad), math.cos(a.yaw_rad - b.yaw_rad))) > 1e-6:
+        return None
+    c, sn = math.cos(a.yaw_rad), math.sin(a.yaw_rad)
+    dx, dy = b.x_m - a.x_m, b.y_m - a.y_m
+    along, lateral = dx * c + dy * sn, -dx * sn + dy * c
+    return lateral if abs(along) < 0.05 and abs(lateral) > 1e-6 else None
+
+
+def slot_markers(slots: list[PalletSite]) -> list[Rectangle]:
+    """The plates of a set of unloading slots (each a PalletSite: centre and entry yaw): MARKER_SIDE_M to either
+    side of a slot's axis, or halfway to the slot beside it in the same row when that is nearer (shared plates
+    then coincide); plates whose centres are closer than MARKER_MERGE_M become one at their midpoint."""
+    plates: list[list[float]] = []
+    for s in slots:
+        c, sn = math.cos(s.yaw_rad), math.sin(s.yaw_rad)
+        ahead = SLOT_DEPTH_M / 2 + MARKER_BEHIND_M + MARKER_L_M / 2
+        offsets = [o for o in (_beside(s, other) for other in slots if other is not s) if o is not None]
+        for sign in (1.0, -1.0):
+            same_side = [abs(o) for o in offsets if o * sign > 0]
+            side = sign * min([MARKER_SIDE_M] + [o / 2 for o in same_side])
+            x, y = s.x_m + ahead * c - side * sn, s.y_m + ahead * sn + side * c
+            near = [q for q in plates if math.hypot(q[0] - x, q[1] - y) < MARKER_MERGE_M]
+            if near:
+                q = near[0]
+                q[0], q[1] = (q[0] + x) / 2, (q[1] + y) / 2
+            else:
+                plates.append([x, y, s.yaw_rad])
+    return [Rectangle(x, y, MARKER_L_M, MARKER_T_M, yaw) for x, y, yaw in plates]
 
 
 def pallet_visuals(scenario: TransportScenario) -> list[dict]:
@@ -199,31 +252,50 @@ def _sequence_scene(loading: list[PalletSite], unloading: list[PalletSite], orde
     return scenario, visuals, {"pick": pick, "drop": drop, "delivered": sorted(done)}
 
 
-def line_scene(k: int):
+def line_unloading() -> list[PalletSite]:
+    return [_site(1118, py) for py in (87, 205, 323)]       # deepest first
+
+
+def random_unloading() -> list[PalletSite]:
+    return [_site(px, 48) for px in (1125, 1268, 1411)]
+
+
+def line_defs():
     """Scenario 3: three pallets in a column, the unloading column 8.9 m to the right; the
     deepest unloading slot is filled first. Drawn: pallets at y 95 / 215 / 333 px, columns at
-    x 124 and 1118 px, fork tips at y 605 px."""
+    x 124 and 1118 px, fork tips at y 605 px. (loading, unloading, order, start, zones, margin)"""
     loading = [_site(124, py) for py in (333, 215, 95)]          # front first
-    unloading = [_site(1118, py) for py in (87, 205, 323)]       # deepest first
+    unloading = line_unloading()
     tip_x, tip_y = _drawing(124, 605)
     start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
     zones = [((25 * PX_M, 223 * PX_M, -600 * PX_M, -15 * PX_M), ZONE_GREY),
              ((1020 * PX_M, 1217 * PX_M, -600 * PX_M, 0.0), UNLOAD_BLUE)]
-    scenario, visuals, info = _sequence_scene(loading, unloading, [(0, 0), (1, 1), (2, 2)], k, start, zones, 1.6)
-    return scenario, visuals, {"sequence_index": k, **info}
+    return loading, unloading, [(0, 0), (1, 1), (2, 2)], start, zones, 1.6
 
 
-def random_scene(k: int):
+def random_defs():
     """Scenario 4: five pallets in the loading area, three carried to the unloading row.
     Drawn centres (px) and tilts; the drawing's tilts are capped at the scenario's 10 deg."""
     loading = [_site(121, 68), _site(127, 189), _site(343, 213, -8.0), _site(185, 356, 10.0),
                _site(495, 312, -6.0)]
-    unloading = [_site(px, 48) for px in (1125, 1268, 1411)]
+    unloading = random_unloading()
     tip_x, tip_y = _drawing(327, 515)
     start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
     zones = [((28 * PX_M, 670 * PX_M, -485 * PX_M, 0.5), ZONE_GREY),
              ((1043 * PX_M, 1684 * PX_M, -485 * PX_M, 0.5), UNLOAD_BLUE)]
-    scenario, visuals, info = _sequence_scene(loading, unloading, [(3, 0), (4, 1), (2, 2)], k, start, zones, 1.2)
+    return loading, unloading, [(3, 0), (4, 1), (2, 2)], start, zones, 1.2
+
+
+SEQUENCES = {"line": line_defs, "random": random_defs}
+
+
+def line_scene(k: int):
+    scenario, visuals, info = _sequence_scene(*line_defs()[:3], k, *line_defs()[3:])
+    return scenario, visuals, {"sequence_index": k, **info}
+
+
+def random_scene(k: int):
+    scenario, visuals, info = _sequence_scene(*random_defs()[:3], k, *random_defs()[3:])
     return scenario, visuals, {"sequence_index": k, **info}
 
 
@@ -280,6 +352,32 @@ def conveyor_scene():
     visuals = [_visual("wall", x, y, length, width, 0.0, h, CONVEYOR_GREY) for x, y, length, width in pieces]
     scenario, visuals = _rotate(scenario, visuals)
     return scenario, visuals, {"conveyor_height_m": h, "band_m": CONVEYOR_BAND_M, "back_m": CONVEYOR_BACK_M}
+
+
+def with_slot_markers(kind: str, built):
+    """A scene with the plates of every unloading slot of its zone (the slots of the whole sequence, filled or not)
+    added to the planner's props and to the visuals (walls Isaac collides with, role slot_marker)."""
+    if kind not in MARKED_KINDS:
+        raise ValueError(f"no unloading slots to mark in a {kind} scene")
+    scenario, visuals, info = built
+    plates = slot_markers({"line": line_unloading, "random": random_unloading}[kind]())
+    asset = AssetSpec(MARKER_URI, MARKER_L_M, MARKER_T_M, MARKER_H_M)
+    props = scenario.props + tuple(PlacedProp(asset, r) for r in plates)
+    marks = [{**_visual("wall", r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad, MARKER_H_M, MARKER_COLOUR),
+              "role": "slot_marker"} for r in plates]
+    return replace(scenario, props=props), visuals + marks, {**info, "slot_markers": True}
+
+
+def unloading_slots_hall(kind: str, built) -> list[PalletSite]:
+    """The unloading slots of a scene in the hall frame (tests: the plates against the slots)."""
+    scenario, _, _ = built
+    probe = replace(scenario, props=())
+    sites = {"line": line_unloading, "random": random_unloading}[kind]()
+    out = []
+    for s in sites:
+        moved, _, _ = to_hall(replace(probe, pickup=s), [])
+        out.append(moved.pickup)
+    return out
 
 
 # ---- placement in the hall ----
@@ -383,13 +481,62 @@ def scene_record(name: str, built) -> dict:
     scenario = _heights(scenario)
     hall, visuals, placement = to_hall(scenario, visuals)
     nominal = PalletSite(hall.pickup.x_m, hall.pickup.y_m, 0.0)
-    dx, dy, dyaw = PICKUP_ERRORS[name]
+    dx, dy, dyaw = PICKUP_ERRORS[name.removesuffix("_m")]  # a marked copy picks as its plain scene
     hall = replace(hall, pickup=PalletSite(nominal.x_m + dx, nominal.y_m + dy,
                                            hall.pickup.yaw_rad + math.radians(dyaw)))
     return {"format": FORMAT, "name": name, "pallet": PALLET, "scenario": asdict(hall),
             "pickup_nominal": asdict(nominal), "pickup_zone": pickup_zone(nominal),
             "observation_waypoints": observation_waypoints(nominal),
             "visuals": visuals, "views": views(hall), "source": {**info, "placement": placement}}
+
+
+# Pallets a session never carries still stand off their slot (component <= 0.08 m, as the carried ones' errors).
+SESSION_EXTRA_ERRORS = {"random": {0: (0.04, -0.03, 1.0), 1: (-0.03, 0.04, -1.0)}}
+
+
+def session_record(kind: str, markers: bool = False) -> dict:
+    """One session scene (docs/plans/2026-10-22-session-scene-pallet-props.md 2.1-2.2): every pallet of the sequence
+    scenario with its nominal slot (the drawing's site and tilt, in the hall), its truth (nominal + its own error -- the
+    carried ones keep the error their v1 scene k gave them) and the zone and candidates made from its nominal; the
+    unloading slots as destinations D-1..; the drawing's order. Its pallets are not visuals: Isaac makes them from
+    pallets[].truth (PR 3). ``markers``: the slot markers of the marked v1 copies (``with_slot_markers``) as the
+    session's static props and walls, the scene named ``<kind>_m``."""
+    loading, unloading, order, start, zones, margin = SEQUENCES[kind]()
+    pallet = load_pallet_geometry(PALLETS[PALLET])
+    # The hall placement is the v1 scenes' (their bounds come from every site and the start, the same for each k).
+    probe = [pallet_prop(f"site_{i}", s.x_m, s.y_m, pallet, s.yaw_rad) for i, s in enumerate(loading + unloading)]
+    xs = [s.x_m for s in loading + unloading] + [start.x_m]
+    ys = [s.y_m for s in loading + unloading] + [start.y_m]
+    bounds = Bounds(min(xs) - margin, max(xs) + margin, start.y_m - 2.0, max(ys) + margin)
+    scenario = TransportScenario(seed=0, start_rear=start, pickup=loading[order[0][0]],
+                                 destination=unloading[order[0][1]], props=tuple(probe), bounds=bounds)
+    visuals = [_visual("floor", (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0.0, 0.0, colour)
+               for (x0, x1, y0, y1), colour in zones]
+    if markers:
+        scenario, visuals, _ = with_slot_markers(kind, (scenario, visuals, {}))
+    hall, visuals, placement = to_hall(scenario, visuals)
+    sites = [PalletSite(p.rectangle.x_m, p.rectangle.y_m, p.rectangle.yaw_rad) for p in hall.props[:len(probe)]]
+    nominal, slots = sites[:len(loading)], sites[len(loading):]
+    errors = {li: PICKUP_ERRORS[f"{kind}_{k + 1}"] for k, (li, _) in enumerate(order)}
+    errors.update(SESSION_EXTRA_ERRORS.get(kind, {}))
+    pallets = []
+    for i, n in enumerate(nominal):
+        dx, dy, dyaw = errors[i]
+        pallets.append({
+            "pallet_id": f"P-{i + 1}", "nominal": asdict(n),
+            "truth": asdict(PalletSite(n.x_m + dx, n.y_m + dy, n.yaw_rad + math.radians(dyaw))),
+            "zone": {"x_min_m": n.x_m - ZONE_GROW_M, "x_max_m": n.x_m + ZONE_GROW_M, "y_min_m": n.y_m - ZONE_GROW_M,
+                     "y_max_m": n.y_m + ZONE_GROW_M, "yaw_centre_rad": n.yaw_rad, "yaw_half_rad": ZONE_YAW_RAD},
+            "observation_waypoints": observation_waypoints(n)})
+    first = replace(hall, props=())
+    return {"format": SESSION_FORMAT, "name": f"{kind}_m" if markers else kind, "pallet": PALLET,
+            "start_rear": asdict(hall.start_rear), "bounds": asdict(hall.bounds),
+            "static_props": [asdict(p) for p in hall.props[len(probe):]],
+            "pallets": pallets,
+            "destinations": [{"destination_id": f"D-{j + 1}", **asdict(s)} for j, s in enumerate(slots)],
+            "sequence": [[f"P-{li + 1}", f"D-{ui + 1}"] for li, ui in order],
+            "visuals": visuals, "views": views(first),
+            "source": {"placement": placement, "errors": errors, **({"slot_markers": True} if markers else {})}}
 
 
 # ---- CPU planning check with the Isaac mission settings ----
@@ -482,11 +629,29 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--timeout-s", type=float, default=1200)
     parser.add_argument("--grow-pallets", default="0", help="comma-separated keep-outs (m) around neighbour pallets")
+    parser.add_argument("--slot-markers", action="store_true",
+                        help="also write <name>_m.json with slot markers for the line / random scenes (plan 2026-10-22)")
+    parser.add_argument("--session", choices=tuple(SEQUENCES), action="append", default=[],
+                        help="also write this sequence as one session scene (<name>_session.json)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    for kind in args.session:
+        path = args.output / f"{kind}_session.json"
+        path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
+        print("session", path)
+        if args.slot_markers and kind in MARKED_KINDS:  # the marked copy beside it (<kind>_m_session.json)
+            path = args.output / f"{kind}_m_session.json"
+            path.write_text(json.dumps(session_record(kind, markers=True), indent=1) + "\n")
+            print("session", path)
     only = set(args.only.split(",")) if args.only else None
     paths = []
-    for name, built in scenes().items():
+    built_scenes = scenes()
+    if args.slot_markers:
+        for name in list(built_scenes):
+            kind = name.split("_")[0]
+            if kind in MARKED_KINDS:
+                built_scenes[f"{name}_m"] = with_slot_markers(kind, built_scenes[name])
+    for name, built in built_scenes.items():
         if only and name not in only:
             continue
         path = args.output / f"{name}.json"

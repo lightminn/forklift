@@ -64,7 +64,13 @@
 
 - 하역 중심 0.09–0.10 m 벗어남(cycle m1, cancel m2)은 열린 하역 구역 정밀도 문제다. 별도 세션의 계획(`docs/plans` 열린 구역 도킹)이 다룬다.
 - 운반 추종 시간 초과(cycle m3)는 다리 끝 크리프·교착 계열이다. 다른 세션이 담당한다.
-- reject 세션의 첫 epoch 는 시작할 때 학습 작업자의 warm-up 이 GPU 메모리 할당에 실패했다(`bfc_arena`, 동시에 Isaac 4–5 개). 감독기가 epoch 2 로 다시 띄웠다. 원거리 코드 이전부터 있던 VRAM 경합이다.
+- reject 세션의 첫 epoch 는 시작할 때 학습 작업자의 warm-up 이 GPU 메모리 할당에 실패했다(`bfc_arena`).
+  - 그 시각 GPU 0 에는 다른 잡들이 12.0 GB 를 쓰고 있었다.
+  - 감독기가 epoch 2 로 다시 띄웠다. epoch 1 은 설정 중에 끝나 live 기록도 미션도 없다. 탐침의 세션(`session_epoch`)은 epoch 2 의 것이다. 재시작은 판정에 섞이지 않았다.
+- VRAM 실측(`ct1_vram_419efe6`, 빈 GPU 1 에 `shard:4`, main 시나리오, 잡의 프로세스 트리를 5 s 마다 표본):
+  - live 원거리 세션 하나의 최대는 3,886 MiB 다(Isaac 3,372 + 학습 작업자 514).
+  - shard 하나는 4,076 MiB(16,303/4)라 여유가 5 % 다. 작업자 warm-up 의 순간 최대는 표본 사이에 있어 재지 못했다.
+  - 그래서 학습 제안을 쓰는 live 세션은 `--gres=shard:2` 로 잡는다(`isaac_live.sbatch` 머리말, ws1 `ct1_far.sbatch`).
 - main 탐침의 텔레옵 구간은 배속 미달(`state_forbids_teleop:pacing`)로 거절됐다. 원인은 같은 GPU 부하다. 미션은 재개 뒤 끝까지 갔다.
 
 ## 교차검증

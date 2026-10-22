@@ -1078,6 +1078,7 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,
                               "live_test_stop_in_capture": False, "live_test_camera_freeze": None,
                               "live_test_far_zone_offset_m": None,  # 2026-10-22: the live far rejection test
+                              "session": False,  # 2026-10-22: a session scene file (live only, refused with near tracking)
                               "live_test_marker": False, "live_camera_latency_bound_s": None,
                               "live_camera_pixel_lag_s": 0.2, "live_test_permit_compare": False, "live_test_no_pallet_permit": False,
                               "live_test_recovery_blocked": None, "live_test_return_correction_drops": 0,
@@ -1110,7 +1111,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-22 task C: the check-off near lower waiver; gate in every earlier run.
                               "near_capture_lower": "gate",
                               # 2026-10-22 trailer exit: the transport exit prefix; off in every earlier run.
-                              "exit_clearance_m": None}
+                              "exit_clearance_m": None,
+                              # 2026-10-22 open-zone docking D2: the sim-only weak-direction docking acceptance; off before.
+                              "docking_acceptance": "information"}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

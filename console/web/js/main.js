@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { createQueueWire } from "./queuewire.js";
-import { AlarmBook, healthRows } from "./health.js";
+import { AlarmBook, healthRows, queueStopText } from "./health.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
@@ -901,7 +901,7 @@ function healthTick() {
   m.health.rows = healthRows({
     nowMs: performance.now(), welcomeAt: m.welcomeAt, link: { up: m.link.up, mediaUp: m.link.mediaUp },
     sessionEnding: m.sessionEnding, caps: m.session.welcome?.capabilities ?? null,
-    monitor: stopIsRefused(m.linkWelcome), hasLease: m.session.hasLease, state: m.session.state, stateAt: m.stateAt,
+    monitor: stopIsRefused(m.linkWelcome), hasLease: m.session.hasLease, clientId, state: m.session.state, stateAt: m.stateAt,
     cameraAt: m.camera.lastAt, scanAt: m.scan?.at ?? null, scanReceivedAt: m.scan?.receivedAt ?? null,
     grid: { present: Boolean(m.grid), withdrawnReason: m.gridWithdrawn }, standby: m.standby,
     queue: { run: q.run, stopReason: q.stopReason, items: q.items.length },
@@ -924,7 +924,7 @@ let queueRun = m.queue.queue.run;
 setInterval(() => {
   m.queue.tick();
   const q = m.queue.queue;
-  if (queueRun === "running" && q.run === "stopped") log(`대기열 멈춤 · ${q.stopReason}`, q.stopReason === "완료" ? "" : "warn");
+  if (queueRun === "running" && q.run === "stopped") log(`대기열 멈춤 · ${queueStopText(q.stopReason)}`, q.stopReason === "완료" ? "" : "warn");
   queueRun = q.run;
 }, 250);
 setInterval(() => {

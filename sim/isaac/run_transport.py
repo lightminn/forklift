@@ -457,6 +457,15 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--scene-file", type=Path, default=None,
                         help="--layout scene: the scene record (sim/isaac/scene_file.py)")
     parser.add_argument(
+        "--docking-acceptance",
+        choices=("information", "precision"),
+        default="information",
+        help="Delivery docking match acceptance (docs/plans/2026-10-22-open-zone-docking.md). information: every start "
+        "must pass the information gate, as always. precision -- SIM ONLY: starts refused only as degenerate (a single "
+        "far wall) are taken when the conditional precision, face-deletion, range and bound checks pass; it takes faces "
+        "moved together after teaching and a repeated pattern beyond its range wrongly, so never on the real vehicle.",
+    )
+    parser.add_argument(
         "--exit-clearance-m",
         type=float,
         default=None,
@@ -911,6 +920,7 @@ def arguments() -> argparse.Namespace:
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
     args, unknown = parser.parse_known_args()
+    args.session = False  # a session scene file sets it below (plan 2026-10-22-rigid-session-pallets)
     if args.bottom_deck_check == "on":
         # Plan 2026-10-19 task 4: the side legs and the insert permission are defined for a batch run on the
         # perception target only (an oracle target would be permitted 0.3 m off the pallet judged -- Codex task 3).
@@ -966,10 +976,14 @@ def arguments() -> argparse.Namespace:
         if args.obstacle_layer is None:
             # The pickup estimate that replaces the true pallet in its plans is kept with the obstacle layer.
             parser.error("--layout scene needs --obstacle-layer")
-        if args.observation_waypoints is None:
-            from scene_file import load_scene
+        from scene_file import SESSION_FORMAT, load_scene, load_session, scene_format, session_as_scene
 
-            args.observation_waypoints = [list(w) for w in load_scene(args.scene_file).observation_waypoints]
+        # Plan 2026-10-22-rigid-session-pallets: a session scene (several rigid pallets, a mission each) is a live
+        # console's own; its first mission sets the scene up.
+        args.session = scene_format(args.scene_file) == SESSION_FORMAT
+        first_ = session_as_scene(load_session(args.scene_file)) if args.session else load_scene(args.scene_file)
+        if args.observation_waypoints is None:
+            args.observation_waypoints = [list(w) for w in first_.observation_waypoints]
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -1129,6 +1143,17 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
+    if getattr(args, "session", False):
+        # Plan 2026-10-22-rigid-session-pallets section 2: a session is run from the console, its near capture's
+        # refusals redrawn (the neighbour sweep, 2.6); the bottom-deck legs and near tracking are not defined for it.
+        if not args.live:
+            parser.error("a session scene file needs --live")
+        if args.near_capture_redraw != "always":
+            parser.error("a session scene file needs --near-capture-redraw always")
+        if args.near_tracking or getattr(args, "bottom_deck_check", "off") != "off" or args.record_pocket_frames:
+            # (the pocket recorder's truth has no pallet id: one pallet's record -- Codex PR 3 impl round 1 P3)
+            parser.error("a session scene file is not defined with --near-tracking, --bottom-deck-check on or "
+                         "--record-pocket-frames")
     if args.return_turnaround is None:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
@@ -2568,6 +2593,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     cusp_stop_yaw_rate_radps = 0.02
     # None keeps every planner call exactly as in the original bay runs.
     pickup_bounds = travel_config = factory = scene_layout = None
+    session = session_handles = session_rest = None  # a session scene file's (plan 2026-10-22-rigid-session-pallets)
     if args.layout == "factory":
         import factory_assets
 
@@ -2618,7 +2644,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     elif args.layout == "scene":
         from scene_file import load_scene
 
-        scene_layout = load_scene(args.scene_file)
+        if args.session:  # plan 2026-10-22-rigid-session-pallets: several rigid pallets, the first mission sets up
+            from scene_file import load_session, session_as_scene
+
+            session = load_session(args.scene_file)
+            scene_layout = session_as_scene(session)
+            state["session"] = {"pallets": [p_.pallet_id for p_ in session.pallets],
+                                "destinations": [d_ for d_, _ in session.destinations],
+                                "sequence": [list(m_) for m_ in session.sequence]}
+        else:
+            scene_layout = load_scene(args.scene_file)
         scenario = scene_layout.scenario
         state["scene_layout"] = {
             "file": str(args.scene_file),
@@ -2685,9 +2720,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["prism_colliders"] = add_prism_colliders(stage, prism_columns(scenario, factory))
         # The overview has to see the whole hall from above the roof line.
         state["hidden_overhead_prims"] = len(hide_overhead(stage))
-    state["destination_marker"] = add_destination(
-        stage, scenario.destination.x_m, scenario.destination.y_m
-    )
+    if session is not None:  # a ring at every unloading slot (plan 2026-10-22-rigid-session-pallets 2.3)
+        from session_pallets import prim_name as session_prim_name
+
+        state["destination_markers"] = {d_: add_destination(stage, site_.x_m, site_.y_m,
+                                                            path=f"/World/Destinations/{session_prim_name(d_)}")
+                                        for d_, site_ in session.destinations}
+    else:
+        state["destination_marker"] = add_destination(
+            stage, scenario.destination.x_m, scenario.destination.y_m
+        )
     # The scene above and scenario.json keep the true destination; with a prior
     # error (plan D7c δ runs) everything that plans from here on, and the docking
     # match's prior, sees the moved one. The reference scan and the evaluation use
@@ -2705,15 +2747,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "planning_destination": asdict(scenario.destination),
             "truth_destination": asdict(truth_destination),
         }
-    pallet = create_pallet(
-        world,
-        stage,
-        app,
-        args.pallet_urdf,
-        args.output,
-        scenario.pickup,
-        settings["pallet_mass_kg"],
-    )
+    if session is None:
+        pallet = create_pallet(
+            world,
+            stage,
+            app,
+            args.pallet_urdf,
+            args.output,
+            scenario.pickup,
+            settings["pallet_mass_kg"],
+        )
+    else:
+        # Plan 2026-10-22-rigid-session-pallets 2.1-2.2: every session pallet a rigid body at its truth, one import;
+        # the runner's pallet is the mission's (PalletSwitch), the scene's first mission's to begin with.
+        from scene import import_pallet_usd, place_pallet
+        from session_pallets import PalletSwitch, check_prim_names, pallet_prim, prim_name as session_prim_name
+
+        check_prim_names([p_.pallet_id for p_ in session.pallets])
+        session_usd_ = import_pallet_usd(args.pallet_urdf, args.output, settings["pallet_mass_kg"])
+        session_handles = {p_.pallet_id: place_pallet(world, stage, app, session_usd_, p_.truth,
+                                                      prim_path=pallet_prim(p_.pallet_id),
+                                                      name=f"pallet_{session_prim_name(p_.pallet_id)}")
+                           for p_ in session.pallets}
+        pallet = PalletSwitch(session_handles, session.sequence[0][0])
     if scene_layout is not None:
         state["scene_pallets"] = add_scene_pallets(stage, app, args.output / "pallet.usd", scene_layout.visuals)
     base_start = np.array(
@@ -2740,6 +2796,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         stage,
         settings,
         expected_pallet_box_count=len(insertion_geometry.pallet_boxes),
+        **({} if session is None else {"pallet_roots": tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets)}),
     )
     # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
     from scene import plant_readback, tyre_contact_readback
@@ -2960,7 +3017,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # (plan v2, Codex P1).
             from isaacsim.core.utils.semantics import add_labels
 
-            label_targets = [("/World/Pallet", "inst_0"), ("/World/Environment", "floor")]
+            if session is None:
+                label_targets = [("/World/Pallet", "inst_0"), ("/World/Environment", "floor")]
+            else:  # plan 2.8: each session pallet its own instance, P-k -> inst_{k-1} in the session's order
+                label_targets = [(pallet_prim(p_.pallet_id), f"inst_{k_}") for k_, p_ in enumerate(session.pallets)]
+                label_targets.append(("/World/Environment", "floor"))
             if factory is not None:
                 import factory_assets as _fa
 
@@ -3167,6 +3228,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 identity_threshold=args.recognition_tau if far_learned else None,
                 proposer_record=far_learned.get("record"),
             )
+            if session is not None:  # the first mission's pallet (later ones set at their switch)
+                far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])
             far_intrinsics = adapter.read_isaac_intrinsics(perception_camera).integer_index
             _plain_capture = perception_capture.capture
 
@@ -3203,6 +3266,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         and abs(initial_pallet[2]) < 0.005,
         "Invalid pallet spawn after settling",
     )
+    if session is not None:
+        # Every session pallet settled where it was placed (the same 5 mm rule), each one's rest pose from here.
+        from session_pallets import RestWatch
+
+        session_rest = RestWatch()
+        for p_ in session.pallets:
+            pos_, q_ = session_handles[p_.pallet_id].get_world_pose()
+            require(np.linalg.norm(pos_[:2] - [p_.truth.x_m, p_.truth.y_m]) < 0.005 and abs(pos_[2]) < 0.005,
+                    f"Invalid pallet spawn after settling: {p_.pallet_id}")
+            session_rest.rest(p_.pallet_id, pos_, q_)
     require(
         np.linalg.norm(initial_base[:2] - base_start[:2]) < 0.005,
         "Truck spawn displaced",
@@ -3571,6 +3644,14 @@ def drive(S, isaac) -> None:
         _bound["far_live"] = None
     if "far_live" in _bound:
         far_live = _bound["far_live"]
+    if "session" not in _bound:  # a setup recorded before sessions (2026-10-22)
+        _bound["session"] = _bound["session_handles"] = _bound["session_rest"] = None
+    if "session" in _bound:
+        session = _bound["session"]
+    if "session_handles" in _bound:
+        session_handles = _bound["session_handles"]
+    if "session_rest" in _bound:
+        session_rest = _bound["session_rest"]
     if "ARC_POSES" in _bound:
         ARC_POSES = _bound["ARC_POSES"]
     if "CUSP_STALL" in _bound:
@@ -5241,6 +5322,9 @@ def drive(S, isaac) -> None:
                 "bottom_deck_spec": spec_from_geometry(args.pallet_geometry_loaded, entry_axes=KNOWN_ENTRY_AXES[shape_]),
                 "camera_mount_x_m": float(perception_mount.translation_m[0])}
 
+    # Plan 2026-10-22-session-scene-pallet-props 2.6: a live session's other pallets join the obstacles the docking
+    # correction's dry run checks (the list itself keeps what the run spawns and removes); None: no others.
+    session_extra_ = {"fn": None}
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
@@ -5293,7 +5377,8 @@ def drive(S, isaac) -> None:
             # M-a1 slice 6b: the docking's ports -- the loop's control and true pose, the world clock and stage,
             # the truth obstacles its dry run checks (SimTruth), the recorded planners and the LiDAR geometry.
             rear=lambda: rear, world=lambda: world, stage=lambda: stage,
-            truth_obstacles=lambda: obstacles, dock=lambda *a, **k: dock(*a, **k),
+            truth_obstacles=lambda: obstacles if session_extra_["fn"] is None else obstacles + session_extra_["fn"](),
+            dock=lambda *a, **k: dock(*a, **k),
             plan_docking_reapproach=lambda *a, **k: plan_docking_reapproach(*a, **k),
             add_path_display=lambda *a: isaac.add_path_display(*a),
             laser_mount=lambda: laser_mount, beam_angles=lambda: beam_angles,
@@ -5356,6 +5441,7 @@ def drive(S, isaac) -> None:
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
+                                docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,
@@ -5393,15 +5479,22 @@ def drive(S, isaac) -> None:
         if shape_path_.exists():
             shape_ = load_shape_(shape_path_)
             core.targets.add_shape(shape_path_.stem, float(shape_.overall_depth_m), float(shape_.overall_width_m))
-    core.targets.add_pallet("P-1", Path(args.pallet_geometry).stem, MissionTargetPose(
-        float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
-        depth_m=float(args.pallet_geometry_loaded.overall_depth_m),  # the console draws it (C3)
-        width_m=float(args.pallet_geometry_loaded.overall_width_m),
-        # plan D3: live, D-0 is this place by definition (registered from the same pickup, the spawn checked 5 mm)
-        at="D-0" if getattr(args, "live", False) else None)
-    core.targets.add_destination("D-1", MissionTargetPose(
-        float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
-    if getattr(args, "live", False):
+    if session is not None:  # plan 2026-10-22-rigid-session-pallets 2.5: every pallet and slot of the session
+        from scene_file import register_session
+
+        register_session(core.targets, session, kind=Path(args.pallet_geometry).stem,
+                         depth_m=float(args.pallet_geometry_loaded.overall_depth_m),
+                         width_m=float(args.pallet_geometry_loaded.overall_width_m), live=True)
+    else:
+        core.targets.add_pallet("P-1", Path(args.pallet_geometry).stem, MissionTargetPose(
+            float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
+            depth_m=float(args.pallet_geometry_loaded.overall_depth_m),  # the console draws it (C3)
+            width_m=float(args.pallet_geometry_loaded.overall_width_m),
+            # plan D3: live, D-0 is this place by definition (registered from the same pickup, the spawn checked 5 mm)
+            at="D-0" if getattr(args, "live", False) else None)
+        core.targets.add_destination("D-1", MissionTargetPose(
+            float(scenario.destination.x_m), float(scenario.destination.y_m), float(scenario.destination.yaw_rad)))
+    if getattr(args, "live", False) and session is None:
         # Persistent console plan D2/D3: the first pallet's own place is a destination too (live only: a batch run's
         # targets revision stays as it was).
         core.targets.add_destination("D-0", MissionTargetPose(
@@ -5684,6 +5777,7 @@ def drive(S, isaac) -> None:
                             "base_orientation_wxyz": frame_q,
                             "pallet_position_m": frame_pallet,
                             "pallet_orientation_wxyz": frame_pq,
+                            **({} if session is None else {"pallet_id": pallet.current}),
                             "lift_m": float(
                                 robot.get_joint_positions()[lift_index[0]]
                             ),
@@ -5715,6 +5809,8 @@ def drive(S, isaac) -> None:
             layer = obstacle["layer"]
             loaded_now = ms.phase in ("lift", "extract", "transport", "lower")
             prefixes = (planar_lidar.SELF_PREFIX,) + (("/World/Pallet",) if loaded_now else ())
+            if session is not None:
+                prefixes = session_self_prefixes(loaded_now)
             started = time.monotonic()
             raw = {} if shared_raw is None else dict(shared_raw)
             for sensor in (layer.sensors if shared_raw is None else ()):
@@ -5823,11 +5919,67 @@ def drive(S, isaac) -> None:
             else:
                 read_()
 
+        session_truth_rects_ = []  # the other session pallets' outlines where they stand now (plan 2.4)
+        session_truth_ids_ = []  # their ids, in the same order
+        if session is not None:
+            from session_pallets import NeighbourGap
+
+            session_gap = NeighbourGap()
+
+        def session_tick_head(step_: int, t_: float) -> None:
+            """Plan 2026-10-22-rigid-session-pallets 2.3-2.4, at a tick's head before its truth sample: the switch an
+            adoption asked for (the leaving pallet's pose its rest pose, the far recognition's truth instance, a new
+            trace evidence for a new pallet), then the other pallets: each against its rest pose (a move past 1 cm or
+            0.01 rad is scene damage) and its outline where it stands, for this tick's truth checks."""
+            nonlocal trace_evidence, session_truth_rects_, session_truth_ids_
+            carried_ = core.cargo.pallet_id if core.cargo.relation == "carrying" else None
+            switched_ = pallet.apply_pending(step_, carried_id=carried_)
+            if switched_ is not None:
+                old_, new_ = switched_
+                pos_, q_ = pallet.handle(old_).get_world_pose()
+                session_rest.rest(old_, pos_, q_)
+                state.setdefault("session_switches", []).append(
+                    {"step": int(step_), "t": float(t_), "from": old_, "to": new_})
+                if far_runtime is not None:
+                    far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(new_)
+                if trace_evidence is not None:
+                    npos_, nq_ = pallet.get_world_pose()
+                    trace_evidence = live_records.TraceEvidence()
+                    trace_evidence.ground((float(npos_[0]), float(npos_[1]), yaw_and_tilt(nq_)[0]))
+            rects_, ids_ = [], []
+            for p_ in session.pallets:
+                id_ = p_.pallet_id
+                if id_ == pallet.current or id_ == carried_:
+                    continue
+                pos_, q_ = session_handles[id_].get_world_pose()
+                (moved_m_, moved_rad_), ok_ = session_rest.check(id_, pos_, q_)
+                if not ok_:
+                    scene_require(t_, False,
+                                  f"Session pallet displaced: {id_} ({moved_m_:.3f} m, {moved_rad_:.3f} rad)")
+                rects_.append(Rectangle(float(pos_[0]), float(pos_[1]), geometry.pallet_depth_m,
+                                        geometry.pallet_width_m, yaw_and_tilt(q_)[0]))
+                ids_.append(id_)
+            session_truth_rects_, session_truth_ids_ = rects_, ids_
+            state["session_rest_largest"] = {k_: list(v_) for k_, v_ in session_rest.largest.items()}
+
+        def session_self_prefixes(loaded_by_phase: bool) -> tuple:
+            """Plan 2026-10-22-rigid-session-pallets 2.7: the LiDAR leaves out only the pallet the forks carry --
+            the cargo's (teleop and idle carrying too), else the mission's own in a loaded phase."""
+            from session_pallets import self_filter_prefix
+
+            carried_ = core.cargo.pallet_id if core.cargo.relation == "carrying" else None
+            if carried_ is None and loaded_by_phase:
+                carried_ = pallet.current
+            return (planar_lidar.SELF_PREFIX,) + ((self_filter_prefix(carried_),) if carried_ is not None else ())
+
         def far_observing(observing_: bool) -> bool:
             """A live run takes far frames and logs steps only for a running mission without a STOP at this physics
-            step (task 6); a batch run as it did."""
+            step (task 6); a batch run as it did. A session waiting for its pallet switch takes none (the new
+            mission's records would read the old pallet; plan 2026-10-22-rigid-session-pallets 2.3)."""
             if far_live is None:
                 return observing_
+            if session is not None and pallet.pending is not None:
+                return False
             return frr.live_observing(core.commands.status, observing_, live.stopped_in_tick)
 
         def step_world(render: bool) -> None:
@@ -5982,6 +6134,8 @@ def drive(S, isaac) -> None:
                     return
                 loaded_scan = ms.phase in ("lift", "extract", "transport", "lower")
                 prefixes_ = (planar_lidar.SELF_PREFIX,) + (("/World/Pallet",) if loaded_scan else ())
+                if session is not None:
+                    prefixes_ = session_self_prefixes(loaded_scan)
                 distances, hits, own_ = planar_lidar.cast_scan_flags(
                     origin, directions, scan_pattern.range_max_m, own_prefixes=prefixes_
                 )
@@ -6492,7 +6646,8 @@ def drive(S, isaac) -> None:
                     # Plan D10: the target pallets (grown by their margins) on the same arcs and outline; installed
                     # again on a new grid snapshot, a targets change or a correction (the pose moves without driving).
                     applied_ = obstacle.get("applied")
-                    zones_ = live_zones_from(core.targets, pickup_zone)
+                    zones_ = live_zones_from(core.targets, pickup_zone if session is None
+                                             else {id_: e_["zone"] for id_, e_ in live_session_["pallets"].items()})
                     ctx_ = core.cargo.recovery_context
                     pkey_ = (key_, None if applied_ is None else tuple(float(v) for v in applied_))
                     if ctx_ is not None:
@@ -6777,21 +6932,81 @@ def drive(S, isaac) -> None:
             from forklift_core.planning.pallet_mission import PalletSite as LiveSite
 
             live_session_ = {
-                "scenario": scenario, "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
-                "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
-                "zone": pickup_zone, "bounds": pickup_bounds, "wait": scenario.start_rear,
+                "scenario": scenario,
+                # Plan 2026-10-22-session-scene-pallet-props 2.4: what each pallet's preparation starts from -- its
+                # candidates, the pose they move with (registered; the truth pickup for a v1 or bay run, as before),
+                # its zone and bounds. One pallet here (P-1); a session scene (PR 3) gives each its own.
+                "pallets": {"P-1": {
+                    "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
+                    "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
+                    "zone": pickup_zone, "bounds": pickup_bounds}},
+                "nominal": {},  # a session's drawn slots, id -> (x, y, yaw); none for P-1 alone
+                "shape": (float(geometry.pallet_depth_m), float(geometry.pallet_width_m),
+                          float(args.pallet_geometry_loaded.overall_height_m)),
+                "wait": scenario.start_rear,
                 # the destinations' truth (simulation only): D-1 the scenario's, D-0 the first pallet's own place
                 "truth": {"D-1": truth_destination, "D-0": scenario.pickup},
+                "far_zones": {},  # a session's search zone per pallet (plan 2026-10-22-rigid-session-pallets 2.5)
                 "base_z": float(slam["docking"].get("reference_base_z_m")) if slam is not None
                 and slam["docking"].get("reference_base_z_m") is not None else None,
             }
 
+            if session is not None:
+                # Plan 2026-10-22-rigid-session-pallets 2.5: each pallet's own candidates, reference (its registered
+                # pose), zone (the pickup prior from its centre range) and far search zone; the drawn slots; the
+                # slots' truth (a session's destination is its slot).
+                from scene_file import zone_rect as session_zone_rect
+
+                live_session_["pallets"] = {
+                    p_.pallet_id: {"template": [tuple(float(v) for v in w) for w in p_.observation_waypoints],
+                                   "reference": (float(p_.registered.x_m), float(p_.registered.y_m),
+                                                 float(p_.registered.yaw_rad)),
+                                   "zone": session_zone_rect(p_.zone, geometry.pallet_depth_m, geometry.pallet_width_m),
+                                   "bounds": None}
+                    for p_ in session.pallets}
+                live_session_["nominal"] = {p_.pallet_id: (p_.nominal.x_m, p_.nominal.y_m, p_.nominal.yaw_rad)
+                                            for p_ in session.pallets}
+                live_session_["far_zones"] = {
+                    p_.pallet_id: (((p_.zone.x_min_m + p_.zone.x_max_m) / 2, (p_.zone.y_min_m + p_.zone.y_max_m) / 2),
+                                   math.hypot((p_.zone.x_max_m - p_.zone.x_min_m) / 2,
+                                              (p_.zone.y_max_m - p_.zone.y_min_m) / 2))
+                    for p_ in session.pallets}
+                live_session_["truth"] = {d_: site_ for d_, site_ in session.destinations}
+
             from forklift_core.safety.pallet_permit import preparation_obstacle as live_preparation_obstacle
+            from forklift_core.safety.pallet_permit import session_pallet_props as live_session_pallet_props
 
             def prep_obstacle_of(entry_, at_first_, pose_=None):
                 """The pallet obstacle the next preparation's observation plan holds (plan D4b item 1)."""
-                return live_preparation_obstacle(entry_, live_session_["zone"] if at_first_ else None, pose=pose_,
+                zone_ = live_session_["pallets"][entry_.pallet_id]["zone"] if at_first_ else None
+                return live_preparation_obstacle(entry_, zone_, pose=pose_,
                                                  size=(geometry.pallet_depth_m, geometry.pallet_width_m))
+
+            def session_scenario_(exclude_id_, moved_=None, moved_ids_=()):
+                """The session scene a preparation plans in (plan 2026-10-22-session-scene-pallet-props 2.6): the
+                static props and the other pallets by their basis (decision D1: a prior one at its drawn slot + 0.25
+                m). With P-1 alone there are no others: the scene's own props, as before."""
+                others_ = live_session_pallet_props(core.targets, exclude_id=exclude_id_, nominal=live_session_["nominal"],
+                                                    shape=live_session_["shape"], prior_grow_m=0.25, moved=moved_,
+                                                    moved_ids=moved_ids_)
+                base_ = live_session_["scenario"]
+                return base_ if not others_ else replace(base_, props=tuple(base_.props) + others_)
+
+            def session_extra_rects_():
+                """The mission's other pallets' planning outlines in the planning frame, for the near straight's sweep
+                (the docking dry run checks their true outlines, ``session_truth_rects_``)."""
+                mission_ = core.commands.mission
+                return [p_.rectangle for p_ in live_session_pallet_props(
+                    core.targets, exclude_id=None if mission_ is None else mission_.pallet_id,
+                    nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=0.25)]
+
+            if len(live_session_["pallets"]) > 1:  # P-1 alone: no others, the list as it was
+                # The docking dry run's obstacles are the world's truth (its poses are moved into the truth frame):
+                # the other pallets where they stand now, not their planning outlines (Codex PR 3 impl round 1 P2).
+                session_extra_["fn"] = lambda: list(session_truth_rects_)
+            if session is not None:  # plan 2026-10-22-rigid-session-pallets 2.6: the near straight swept past them
+                core.options.near_capture_neighbour_sweep = True
+                core.hooks.session_neighbour_rects = session_extra_rects_
 
             prep_check_cache_ = {}
 
@@ -6816,15 +7031,17 @@ def drive(S, isaac) -> None:
                 mission_ = core.commands.mission
                 entry_ = None if mission_ is None else core.targets.pallets.get(mission_.pallet_id)
                 pallet_obs_ = None
+                moved_ids_ = ()
                 if entry_ is not None and entry_.pose is not None:
                     at_first_ = (float(entry_.pose.x_m), float(entry_.pose.y_m),
-                                 float(entry_.pose.yaw_rad)) == live_session_["reference"]
+                                 float(entry_.pose.yaw_rad)) == live_session_["pallets"][entry_.pallet_id]["reference"]
                     carried_pose_ = None
                     if frame_ is not None:
                         pallet_held_, destination_held_ = core._held_estimates()
                         if destination_held_ if entry_.state == "delivered" else pallet_held_:
                             x_, y_, yaw_ = moved((entry_.pose.x_m, entry_.pose.y_m, entry_.pose.yaw_rad))
                             carried_pose_ = replace(entry_.pose, x_m=x_, y_m=y_, yaw_rad=yaw_)
+                            moved_ids_ = (entry_.pallet_id,)  # the release's own judgement, by id (2.6)
                     pallet_obs_ = prep_obstacle_of(entry_, at_first_ and carried_pose_ is None, carried_pose_)
                 occupancy_ = None
                 if grid_planning:
@@ -6848,8 +7065,9 @@ def drive(S, isaac) -> None:
                             scratch={"use_slam": use_slam_, "release_at": release_at_})["occupancy"])
                     occupancy_ = prep_check_cache_["occupancy"]
                 obstacles_, footprint_, bounds_ = prep_leg_obstacles(
-                    "observe", grid_world(live_session_["scenario"]), geometry, pickup_obstacle=pallet_obs_,
-                    pickup_bounds=None)
+                    "observe", grid_world(session_scenario_(None if mission_ is None else mission_.pallet_id,
+                                                            None if frame_ is None else moved, moved_ids_)),
+                    geometry, pickup_obstacle=pallet_obs_, pickup_bounds=None)
                 return bool(prep_make_checker(obstacles_, footprint_, bounds_, occupancy_).free(
                     pose_, planner_config.clearance_m + float(extra_m)))
 
@@ -6861,15 +7079,16 @@ def drive(S, isaac) -> None:
                 pallet_ = core.targets.pallets[mission_.pallet_id].pose
                 dest_ = core.targets.destinations[mission_.destination_id]
                 target_ = (float(pallet_.x_m), float(pallet_.y_m), float(pallet_.yaw_rad))
-                at_first_ = target_ == live_session_["reference"]
-                waypoints_ = relocate_waypoints(live_session_["template"], live_session_["reference"], target_)
+                own_ = live_session_["pallets"][mission_.pallet_id]  # plan 2026-10-22-session-scene 2.4
+                at_first_ = target_ == own_["reference"]
+                waypoints_ = relocate_waypoints(own_["template"], own_["reference"], target_)
                 # Plan D4b item 1: by the pallet's basis -- prior: the bay's zone (at its first place); recognised or
                 # delivered: the outline grown by its uncertainty (the start check below uses the same function).
                 zone_ = prep_obstacle_of(core.targets.pallets[mission_.pallet_id], at_first_)
                 if zone_ is None:
                     zone_ = Rectangle(target_[0], target_[1], geometry.pallet_depth_m + 0.6,
                                       geometry.pallet_width_m + 0.6, target_[2])
-                scenario_ = replace(live_session_["scenario"],
+                scenario_ = replace(session_scenario_(mission_.pallet_id),
                                     start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
                                     pickup=LiveSite(*target_),
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
@@ -6880,13 +7099,14 @@ def drive(S, isaac) -> None:
                             "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
                             "deadline": time.monotonic() + 2 * len(waypoints_) * 20.0}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
-                           "pickup_bounds": live_session_["bounds"] if at_first_ else None, "pickup_zone": zone_,
+                           "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 if far_live is not None:
                     # Plan 2026-10-22-live-far-recognition task 7: a prior pallet is looked for in the scene's zone, a
                     # recognised or delivered one around its estimate, the same radius (not at its first place).
-                    inputs_["far_zone"] = (far_live.setup_zone[0] if at_first_ else target_[:2], far_live.setup_zone[1])
+                    first_zone_ = live_session_["far_zones"].get(mission_.pallet_id, far_live.setup_zone)
+                    inputs_["far_zone"] = (first_zone_[0] if at_first_ else target_[:2], first_zone_[1])
                     if args.live_test_far_zone_offset_m is not None and not far_live.test_offset_used:
                         far_live.test_offset_used = True  # the session's first mission only (section 4's rejection)
                         (cx_, cy_), r_ = inputs_["far_zone"]
@@ -6905,7 +7125,7 @@ def drive(S, isaac) -> None:
                 seat_ = LiveSite(x_ + geometry.inserted_offset_m * math.cos(yaw_),
                                  y_ + geometry.inserted_offset_m * math.sin(yaw_), yaw_)
                 start_ = LivePose(x_, y_, yaw_)
-                scenario_ = replace(live_session_["scenario"], start_rear=start_, pickup=seat_,
+                scenario_ = replace(session_scenario_(mission_.pallet_id), start_rear=start_, pickup=seat_,
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
                 grid_ = grid_kwargs(None, loaded_as=True)  # the transport leg's grid, the carried pallet the truck's
                 payload_ = {"args": (grid_world(scenario_), start_),
@@ -6952,7 +7172,16 @@ def drive(S, isaac) -> None:
                 scenario, truth_destination = inputs_["scenario"], inputs_["truth_destination"]
                 pickup_zone, pickup_bounds, return_to_pose = (inputs_["pickup_zone"], inputs_["pickup_bounds"],
                                                               inputs_["wait_pose"])
-                initial_pallet, pallet_q_ = pallet.get_world_pose()  # the truth checks: displaced from here
+                if session is not None:
+                    # Plan 2026-10-22-rigid-session-pallets 2.3: the switch is made at the next tick's head; what the
+                    # adoption fixes reads the new pallet itself.
+                    pallet.request(core.commands.mission.pallet_id)
+                    state.setdefault("session_switch_requests", []).append(
+                        {"t": float(t_), "pallet_id": core.commands.mission.pallet_id,
+                         "mission_id": core.commands.mission_id})
+                    initial_pallet, pallet_q_ = pallet.handle(core.commands.mission.pallet_id).get_world_pose()
+                else:
+                    initial_pallet, pallet_q_ = pallet.get_world_pose()  # the truth checks: displaced from here
                 pickup_obstacle = Rectangle(float(initial_pallet[0]), float(initial_pallet[1]), geometry.pallet_depth_m,
                                             geometry.pallet_width_m, yaw_and_tilt(pallet_q_)[0])
                 if obstacle is not None:
@@ -7101,6 +7330,8 @@ def drive(S, isaac) -> None:
                 cusp_hold = False  # plan cusp position stall v7 K3: zero command, steering held
                 safety_hold = False  # plan D8 S4: a safety stop -- the final wheel command steps to zero
                 base, q = robot.get_world_pose()
+                if session is not None:
+                    session_tick_head(step, t)
                 ppos, pq = pallet.get_world_pose()
                 # Before anything reads them (Codex D6 review P2: a NaN reached the withdraw check first, a mission
                 # failure; and a NaN quaternion read as tilt, scene damage): the session's own failure.
@@ -7218,7 +7449,8 @@ def drive(S, isaac) -> None:
                 footprint = (
                     geometry.loaded_footprint if loaded else geometry.unloaded_footprint
                 )
-                checked_obstacles = obstacles + (
+                truth_world_ = obstacles if session is None else obstacles + session_truth_rects_
+                checked_obstacles = truth_world_ + (
                     # Without a live mission the forks may be put into the pockets by hand: the outline is no contact
                     # there; the fork/pallet contact check below judges it (Codex D6 design P2-7).
                     [pickup_obstacle] if ms.phase in ("approach", "observe") and not live_idle_ else []
@@ -7251,6 +7483,14 @@ def drive(S, isaac) -> None:
                     # stop before the wall is judged from the end pose and the scanned wall, not by this check.
                     b_ = scenario.bounds
                     truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
+                if session is not None:
+                    from session_pallets import footprint_corners as session_fp_corners, rect_corners as session_rc
+
+                    session_gap.update(t, ms.phase, pallet.current,
+                                       session_fp_corners(truth_rear, footprint.front_m, footprint.rear_m,
+                                                          footprint.half_width_m),
+                                       {r_id_: session_rc(r_) for r_id_, r_ in zip(session_truth_ids_, session_truth_rects_)})
+                    state["session_neighbour_gap"] = session_gap.smallest
                 truth_hits_ = [o for o in checked_obstacles
                                if SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear))]
                 scene_require(
@@ -7277,7 +7517,7 @@ def drive(S, isaac) -> None:
                 scene_require(
                     t, collision_free_pose(
                         [ppos[0], ppos[1], pallet_yaw],
-                        [o for o in obstacles if not any(o is r_ for r_ in in_outline)],
+                        [o for o in truth_world_ if not any(o is r_ for r_ in in_outline)],
                         Footprint(
                             geometry.pallet_depth_m / 2,
                             geometry.pallet_depth_m / 2,
@@ -8095,6 +8335,8 @@ def drive(S, isaac) -> None:
                     }
                     if tracking is not None:
                         sample["tracking"] = asdict(tracking)
+                    if session is not None:
+                        sample["pallet_id"] = pallet.current  # whose pose the pallet fields are (plan 2.8)
                     state["samples"].append(sample)
                     if step % 240 == 0:
                         print("SAMPLE", record_json(sample), flush=True)

@@ -305,9 +305,8 @@ def hide_overhead(stage: Usd.Stage, root: str = "/World/Environment") -> list[st
     return hidden
 
 
-def add_destination(stage: Usd.Stage, x_m: float, y_m: float) -> str:
+def add_destination(stage: Usd.Stage, x_m: float, y_m: float, path: str = "/World/Destination") -> str:
     """Visible green floor ring, with no collision or rigid-body API."""
-    path = "/World/Destination"
     mesh = UsdGeom.Mesh.Define(stage, path)
     points, faces, indices = [], [], []
     segments = 96
@@ -359,8 +358,21 @@ def create_pallet(
     output: Path,
     site,
     mass_kg: float,
+    *,
+    prim_path: str = "/World/Pallet",
+    name: str = "pallet",
+    usd: Path | None = None,
 ) -> SingleRigidPrim:
-    """Import original pallet boxes with explicitly synthetic uniform-volume inertia."""
+    """Import original pallet boxes with explicitly synthetic uniform-volume inertia, and place one at ``site``
+    (``prim_path``, scene object ``name``). ``usd``: a pallet already imported (a session's next pallets reuse the
+    first one's import, plan 2026-10-22-rigid-session-pallets 2.1)."""
+    if usd is None:
+        usd = import_pallet_usd(urdf_path, output, mass_kg)
+    return place_pallet(world, stage, app, usd, site, prim_path=prim_path, name=name)
+
+
+def import_pallet_usd(urdf_path: Path, output: Path, mass_kg: float) -> Path:
+    """The pallet URDF with synthetic uniform-volume inertia, imported once to ``output/pallet.usd``."""
     # Assign synthetic mass using the exact 22 source boxes and parallel-axis theorem.
     tree = ET.parse(urdf_path)
     link = tree.getroot().find("link")
@@ -419,18 +431,22 @@ def create_pallet(
         dest_path=str(output / "pallet.usd"),
     )
     assert ok, "Pallet import failed"
-    stage.DefinePrim("/World/Pallet", "Xform").GetReferences().AddReference(
-        str(output / "pallet.usd")
-    )
+    return output / "pallet.usd"
+
+
+def place_pallet(world: World, stage: Usd.Stage, app, usd: Path, site, *, prim_path: str = "/World/Pallet",
+                 name: str = "pallet") -> SingleRigidPrim:
+    """One free rigid pallet referencing ``usd`` at ``prim_path``, spawned 15 mm above ``site``."""
+    stage.DefinePrim(prim_path, "Xform").GetReferences().AddReference(str(usd))
     for _ in range(10):
         app.update()
     rigid = [
         p
-        for p in Usd.PrimRange(stage.GetPrimAtPath("/World/Pallet"))
+        for p in Usd.PrimRange(stage.GetPrimAtPath(prim_path))
         if p.HasAPI(UsdPhysics.RigidBodyAPI)
     ]
     assert len(rigid) == 1, [str(p.GetPath()) for p in rigid]
-    for p in Usd.PrimRange(stage.GetPrimAtPath("/World/Pallet")):
+    for p in Usd.PrimRange(stage.GetPrimAtPath(prim_path)):
         assert not p.IsA(UsdPhysics.Joint), (
             "Pallet must be free, without a fixed attachment"
         )
@@ -439,7 +455,7 @@ def create_pallet(
     pallet = world.scene.add(
         SingleRigidPrim(
             prim_path=str(rigid[0].GetPath()),
-            name="pallet",
+            name=name,
             position=np.array([site.x_m, site.y_m, 0.015]),
             orientation=np.array(
                 [math.cos(site.yaw_rad / 2), 0, 0, math.sin(site.yaw_rad / 2)]
@@ -526,10 +542,12 @@ def configure_drives(
     settings: dict,
     *,
     expected_pallet_box_count: int | None,
+    pallet_roots: tuple = ("/World/Pallet",),
 ) -> dict:
     """Set documented synthetic dynamics on the execution scene only.
 
-    expected_pallet_box_count=None means the scene holds no pallet to lift.
+    expected_pallet_box_count=None means the scene holds no pallet to lift. ``pallet_roots``: every liftable
+    pallet's root (a session's several, plan 2026-10-22-rigid-session-pallets 2.1), each set and box-counted alike.
     """
     physics_material = UsdShade.Material.Define(stage, "/World/ContactMaterial")
     material_api = UsdPhysics.MaterialAPI.Apply(physics_material.GetPrim())
@@ -545,7 +563,7 @@ def configure_drives(
         physx_material.CreateCompliantContactDampingAttr(float(settings.get("contact_damping_n_s_per_m", 0.0)))
     roots = ["/World/Forklift"]
     if expected_pallet_box_count is not None:
-        roots.append("/World/Pallet")
+        roots.extend(pallet_roots)
     # Importer stores collision groups as instances; edit the stage copy only.
     for root_path in roots:
         instances = [
@@ -634,8 +652,9 @@ def configure_drives(
     # is not a dimension or layout check (that is
     # assert_pallet_urdf_matches_named_boxes, run before spawn).
     if expected_pallet_box_count is not None:
-        assert collision_counts["/World/Pallet"] == expected_pallet_box_count, (
-            collision_counts
-        )
+        for root_path in pallet_roots:
+            assert collision_counts[root_path] == expected_pallet_box_count, (
+                collision_counts
+            )
 
     return collision_counts
