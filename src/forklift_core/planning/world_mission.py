@@ -14,6 +14,10 @@ A pallet that arrives later, or a truck that parks later, therefore never
 lands on a route planned earlier, and a waiting truck at a holding place is
 off every other route -- the precondition fleet_traffic's no-lock argument
 needs. Ranks are the order jobs were given (the Dispatcher counts them).
+With ``standing`` (one truck alone) the slot keep-outs are only round the
+slots named there, where a pallet stands: a place emptied is floor again, so
+a pallet behind it can be reached. A pallet put down later may then land on
+a route planned earlier, so the no-lock argument does not hold.
 
 Plan 2026-10-17 (large random floors): ``od="random"`` takes any pallet to any
 free place, whatever the slots' roles; a **chained** job (``start`` -1) begins
@@ -77,13 +81,15 @@ def keep_outs(
     *,
     own_slots: tuple[str, ...],
     own_holding: tuple[int, ...],
+    standing: frozenset[str] | None = None,
 ) -> list[Rectangle]:
-    """Planning obstacles of one job: the floor plus everyone else's places."""
+    """Planning obstacles of one job: the floor plus everyone else's places
+    (``standing``: only the slots named there, not every slot)."""
     rects = world.obstacle_rects()
     rects += [
         pallet_box(s.site, geometry).grow(PALLET_KEEP_M).rect()
         for s in world.slots
-        if s.name not in own_slots
+        if s.name not in own_slots and (standing is None or s.name in standing)
     ]
     rects += [
         holding_box(p, geometry, TRUCK_GAP_M).rect()
@@ -102,8 +108,10 @@ def plan_stage(
     travel_config: PlannerConfig,
     geometry: SyntheticMissionGeometry,
     extra: list[Rectangle] = (),
+    standing: frozenset[str] | None = None,
 ):
-    """One stage of a job from ``start`` (a travel stage may start anywhere)."""
+    """One stage of a job from ``start`` (a travel stage may start anywhere);
+    ``standing`` as keep_outs."""
     own = (job.source.name, job.sink.name)
     near = []
     if stage == "to_pickup" and job.after is not None:
@@ -116,6 +124,7 @@ def plan_stage(
         geometry,
         own_slots=own,
         own_holding=(job.start, job.home),
+        standing=standing,
     ) + list(extra)
     bounds = world.bounds
     unloaded, loaded = geometry.unloaded_footprint, geometry.loaded_footprint
@@ -231,8 +240,10 @@ def plan_job(
     start: Pose2D | None = None,
     extra: list[Rectangle] = (),
     forked: bool = False,
+    standing: frozenset[str] | None = None,
 ) -> FleetPlan:
-    """Stages from ``first_stage`` (default: all of them), or the first failure.
+    """Stages from ``first_stage`` (default: all of them), or the first failure;
+    ``standing`` as keep_outs.
 
     Each stage starts where the one before ends by stage_end, not by its path,
     so with ``forked`` every stage is planned at once in its own forked
@@ -241,7 +252,7 @@ def plan_job(
     order = STAGES[STAGES.index(first_stage) :]
     poses = [world.holding[job.start] if start is None else start]
     poses += [stage_end(stage, job, world, geometry) for stage in order[:-1]]
-    args = [(stage, pose, job, world, config, travel_config, geometry, extra) for stage, pose in zip(order, poses, strict=True)]
+    args = [(stage, pose, job, world, config, travel_config, geometry, extra, standing) for stage, pose in zip(order, poses, strict=True)]
     runs = [Forked(plan_stage, *a) for a in args] if forked else []
     try:
         stages = {}

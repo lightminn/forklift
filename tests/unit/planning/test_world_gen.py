@@ -3,7 +3,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from forklift_core.planning.geometry import Bounds, Pose2D
 from forklift_core.planning.pallet_mission import (
+    PalletSite,
     SyntheticMissionGeometry,
     make_transport_planner_config,
     site_poses,
@@ -12,13 +14,21 @@ from forklift_core.planning.world_gen import (
     PALLET_KEEP_M,
     STRUCTURES,
     TRUCK_GAP_M,
+    Slot,
+    WorldMap,
     holding_box,
     holding_exit,
     make_world,
     pallet_box,
     run_up_box,
 )
-from forklift_core.planning.world_mission import Dispatcher, keep_outs, plan_job
+from forklift_core.planning.world_mission import (
+    Dispatcher,
+    Job,
+    keep_outs,
+    plan_job,
+    plan_stage,
+)
 
 GEOMETRY = SyntheticMissionGeometry()
 SEEDS = (100, 101, 102)
@@ -81,6 +91,35 @@ def test_keep_outs_leave_out_only_the_jobs_own_places(worlds):
     assert len(rects) == base + (len(world.slots) - 2) + (len(world.holding) - 2)
     held = holding_box(world.holding[2], GEOMETRY, TRUCK_GAP_M).rect()
     assert held in rects
+
+
+def test_keep_outs_round_standing_pallets_only(worlds):
+    world = worlds[("shop", 100)]
+    source, sink = world.sources()[0], world.sinks()[0]
+    standing = frozenset(s.name for s in world.slots[:3]) | {source.name}
+    rects = keep_outs(world, GEOMETRY, own_slots=(source.name, sink.name), own_holding=(0, 1), standing=standing)
+    base = len(world.obstacles) + len(world.holding) - 2
+    assert len(rects) == base + len(standing - {source.name, sink.name})
+    gone = next(s for s in world.slots if s.name not in standing | {source.name, sink.name})
+    assert pallet_box(gone.site, GEOMETRY).grow(PALLET_KEEP_M).rect() not in rects
+
+
+def test_a_pallet_behind_an_emptied_place_is_reached_once_it_is_floor():
+    # Two places one behind the other, forks in from the south; the front one has been emptied.
+    north = np.pi / 2
+    front = Slot("S1", "source", PalletSite(6.0, 5.0, north), "line")
+    back = Slot("S2", "source", PalletSite(6.0, 6.0, north), "line")
+    sink = Slot("D1", "sink", PalletSite(2.0, 10.0, north), "drop")
+    world = WorldMap("line", 0, (12.0, 12.0), Bounds(0.0, 12.0, 0.0, 12.0), (), (front, back, sink),
+                     (Pose2D(11.0, 1.0, north),), (), ())
+    job = Job(1, 0, back, sink, -1, 0)
+    config = make_transport_planner_config(max_expansions=30000)
+    travel = replace(config, obstacle_heuristic_resolution_m=0.25)
+    start = Pose2D(6.0, 1.0, north)
+    blocked = plan_stage("to_pickup", start, job, world, config, travel, GEOMETRY)
+    assert blocked.status == "invalid_goal"  # the line-up pose is in the front place's keep-out
+    reached = plan_stage("to_pickup", start, job, world, config, travel, GEOMETRY, standing=frozenset({"S2"}))
+    assert reached.success, reached.status
 
 
 def test_dispatcher_hands_out_pallets_and_places_once(worlds):
