@@ -3423,10 +3423,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                 "cap_m": transport_exit.cap_m, "band_bottom_m": band_bottom_,
                                 "walls": [asdict(r) for r in exit_walls_]}
     if geometry.lidar_keepout_m > 0:
-        # P1c (docs/plans/2026-10-23-planner-permission-clearance.md): the planner backs a loaded transport that starts
-        # inside the grown band out first. The run builds that prefix here and hands it on as an explicit one, so the
-        # hooks (exit_prefix_m -- the permission acts on the prefix), the planning worker's jobs and a replay's setup all
-        # see the one the planner used (Codex P1c review P1).
+        # P1c (docs/plans/2026-10-23-planner-permission-clearance.md): every transport plan backs a loaded transport that
+        # starts inside the grown band out first, building its prefix at that call's clearance (a clearance-0 replan
+        # needs a shorter one -- Codex P1c review round 2 P2); the core reads the adopted prefix from the installed
+        # path's exit_prefix record (MissionCore.exit_prefix_m), so the permission acts on it.
         from forklift_core.planning.pallet_mission import keepout_exit_prefix
 
         search_clearance_ = (travel_config if travel_config is not None else planner_config).clearance_m
@@ -3436,9 +3436,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             raise SystemExit(f"--exit-clearance-m {transport_exit.clearance_m} is below the {auto_.clearance_m:.3f} m "
                              "the --lidar-keepout-m search needs; leave it out (the keepout builds its own prefix)")
         if transport_exit is None and auto_ is not None:
-            transport_exit = auto_
-            state["exit_prefix"] = {"clearance_m": auto_.clearance_m, "step_m": auto_.step_m, "cap_m": auto_.cap_m,
-                                    "source": "lidar_keepout", "walls": [asdict(r) for r in auto_.obstacles]}
+            state["exit_prefix"] = {"source": "lidar_keepout", "lidar_keepout_m": geometry.lidar_keepout_m,
+                                    "clearance_m_at_search_clearance": auto_.clearance_m, "step_m": auto_.step_m,
+                                    "cap_m": auto_.cap_m, "walls": [asdict(r) for r in auto_.obstacles]}
 
     grid_planning = bool(args.grid_planning)
     if obstacle is not None and obstacle["layer"].known_enabled and not grid_planning:
