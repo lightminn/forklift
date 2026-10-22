@@ -223,6 +223,20 @@ class RearAxlePathTracker:
         """Path length still to drive to the final pose, from current progress."""
         return max(0.0, float(self._distance[-1] - self._progress))
 
+    def progress_m(self) -> float:
+        """Path length driven so far (the tracker's progress along its path)."""
+        return float(self._progress)
+
+    def leading_reverse_straight_m(self) -> float:
+        """Length of the reverse straight the path starts with: samples reversing at zero curvature, the start heading
+        kept (0 when it starts otherwise) -- the transport exit prefix's shape (pallet_mission.ExitPrefix)."""
+        reverse = (self._directions[1:] < 0) & (self._curvatures[1:] == 0.0) & (
+            np.abs(np.arctan2(np.sin(self._poses[1:, 2] - self._poses[0, 2]), np.cos(self._poses[1:, 2] - self._poses[0, 2])))
+            < 1e-9)
+        broken = np.flatnonzero(~reverse)
+        last = len(reverse) if not broken.size else int(broken[0])
+        return float(self._distance[last]) if last > 0 else 0.0
+
     # Cusp position stall (docs/plans/2026-10-04-lidar-obstacle-map.md, "cusp 위치 정체 복구
     # 설계 7판"): read-only views of the leg being driven, and a release of its cusp from the
     # measured pose. None of them changes how update() tracks or accepts.

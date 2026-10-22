@@ -1017,6 +1017,27 @@ class MissionCore:
         self._recovery_install_gen = self.commands.mission_gen
         return True
 
+    def exit_prefix_m(self) -> float:
+        """The exit prefix of the transport path being driven (pallet_mission.ExitPrefix, docs/plans/
+        2026-10-22-riibotics-trailer-exit.md D1): the straight reverse its planner put first, worked out again from the
+        tracker's start pose and the run's ExitPrefix (hooks.exit_prefix) and held only where the path does start with
+        that straight -- so a split (arm_docking) keeps it, a replan gets its own, the docked straight none. 0 without an
+        exit prefix. Cached per tracker."""
+        exit_ = getattr(self.hooks, "exit_prefix", None)
+        tracker = self.trackers.get("transport")
+        if exit_ is None or tracker is None:
+            return 0.0
+        cached = getattr(self, "_exit_prefix_cache", None)
+        if cached is not None and cached[0] is tracker:
+            return cached[1]
+        from forklift_core.planning.pallet_mission import exit_prefix_length_m
+
+        start = PlanningPose(*(float(v) for v in tracker._poses[0]))
+        delta = exit_prefix_length_m(start, self.geometry.loaded_footprint, exit_) or 0.0
+        value = delta if delta > 0 and tracker.leading_reverse_straight_m() >= delta - 1e-6 else 0.0
+        self._exit_prefix_cache = (tracker, value)
+        return value
+
     def permission_acting(self) -> tuple[bool, bool]:
         """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
         (the permission's own reading, shared by the permission tick and its watch while paused)."""
@@ -1032,6 +1053,10 @@ class MissionCore:
         if slam is not None and slam["docking"].get("reapproach"):
             # Nor is a D7c re-approach (Codex D7c review P1-2): the
             # permission, and the safety evaluation, act on all of it.
+            docking_straight = False
+        if docking_straight and ms.phase == "transport" and trackers["transport"].progress_m() < self.exit_prefix_m():
+            # Nor is the transport's exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md D1, Codex 2nd P1): on
+            # a short transport the delivery straight's window (after arm_docking's split) can reach back into it.
             docking_straight = False
         acting = (
             ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw", "clear_out")

@@ -165,6 +165,9 @@ class PlanResult:
     # compared and chosen -- the direct plan and each reverse-arc candidate's status and cost
     # terms. None for every other plan.
     turnaround: dict | None = None
+    # Transport exit prefix (pallet_mission.ExitPrefix, docs/plans/2026-10-22-riibotics-trailer-exit.md): the straight
+    # reverse put before a loaded transport search, its length and why. None when no exit prefix was asked for.
+    exit_prefix: dict | None = None
 
 
 def _wrap(angle):
