@@ -2150,9 +2150,13 @@ def projection_node(value, services: dict, roots=(), _stack=()):
                  for k, v in value.items()]
         return {"$dict": sorted(items, key=lambda kv: json.dumps(kv[0], sort_keys=True))}
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        # the fields a record keeps (replay_codec.recorded_fields: a later field at its default is left out, so a
+        # record from before it projects the same)
+        from forklift_core.mission.replay_codec import recorded_fields
+
         return {"$object": f"{type(value).__module__}:{type(value).__qualname__}",
                 "attrs": {f.name: projection_node(getattr(value, f.name), services, roots, stack)
-                          for f in dataclasses.fields(value)}}
+                          for f in recorded_fields(value)}}
     if type(value) in (types_.SimpleNamespace, argparse.Namespace):  # plain attribute bags
         return {"$object": type(value).__qualname__,
                 "attrs": {k: projection_node(v, services, roots, stack) for k, v in sorted(vars(value).items())}}

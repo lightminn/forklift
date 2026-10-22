@@ -139,3 +139,18 @@ def test_the_setup_snapshot_restores_the_same_exit_prefix(tmp_path):
     assert item["kind"] == "value"
     restored = decode(item["node"], {})
     assert restored == exit_ and isinstance(restored, ExitPrefix)
+
+
+def test_the_final_state_projection_leaves_an_unset_exit_prefix_out():
+    # Codex code review round 2 P2: a record's final-state hash was taken before the field existed
+    import numpy as np
+
+    import run_transport
+
+    from forklift_core.planning.hybrid_astar import PlanResult
+
+    plain = PlanResult(True, "success", np.zeros((2, 3)), np.ones(2, dtype=np.int8), np.zeros(2), 0.1, 3)
+    marked = PlanResult(True, "success", np.zeros((2, 3)), np.ones(2, dtype=np.int8), np.zeros(2), 0.1, 3,
+                        exit_prefix={"length_m": 0.35})
+    assert "exit_prefix" not in run_transport.projection_node(plain, {})["attrs"]
+    assert "exit_prefix" in run_transport.projection_node(marked, {})["attrs"]
