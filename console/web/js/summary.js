@@ -20,16 +20,17 @@ function stats(values) {
   return { n: s.length, median: median(s), max: s[s.length - 1] };
 }
 
-// One line per meaning (plan D2): the reason table's head, or for a failed first plan the candidates' statuses
-// sorted, so the same failure in another candidate order is the same line.
+// One line per description (plan D2): the reason table's description of the code's head -- two heads with one
+// description are one line -- or for a failed first plan the candidates' statuses sorted, so the same failure in
+// another candidate order is the same line. Each code's own count stays with the line.
 function groupOf(code) {
-  if (!code) return { key: "", text: "사유 없음" };
+  if (!code) return { key: "none", text: "사유 없음" };
   if (code.startsWith(ALL_FAILED)) {
     const canonical = ALL_FAILED + code.slice(ALL_FAILED.length).split(";").filter(Boolean).sort().join(";");
-    return { key: canonical, text: reasonText(canonical).text };
+    return { key: `all:${canonical}`, text: reasonText(canonical).text };
   }
-  const { head, text } = reasonHead(code);
-  return { key: head, text };
+  const { text } = reasonHead(code);
+  return { key: `text:${text}`, text };
 }
 
 // book: results.js ResultsBook; targets: the targets list (for the pallets' kinds), may be null

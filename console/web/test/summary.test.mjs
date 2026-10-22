@@ -50,6 +50,14 @@ test("groups reasons by their meaning, most first", () => {
   assert.deepEqual(approach.codes.map(([c, n]) => [c, n]).sort(), [["approach:no_path", 1], ["approach:timeout", 1]]);
 });
 
+test("two table heads with one description make one line (Codex plan round 2)", () => {
+  const s = summarize(book([res("failed", { reason: "Measured pallet footprint overlap in transport" }),
+                            res("failed", { reason: "Measured pallet solid overlap in insert: box" })]));
+  assert.equal(s.reasons.length, 1);
+  assert.equal(s.reasons[0].count, 2);
+  assert.equal(s.reasons[0].codes.length, 2);
+});
+
 test("candidate failures group by their sorted status counts", () => {
   const a = "prepare:all_candidates_failed:invalid_start;timeout";
   const b = "prepare:all_candidates_failed:timeout;invalid_start";
