@@ -57,6 +57,9 @@ export const REASONS = {
   "Session pallet displaced": "작업하지 않는 팔레트가 밀렸습니다(장면 손상)",
   // the mission's own work
   "session_anchor_unaligned:": "하역 칸 정합 없이 옆 팔레트에 막혀 하역 직선 전에 멈췄습니다",
+  "scene_replan_exhausted:": "멈춘 자리에서 다시 계획하는 횟수를 다 써서 멈췄습니다",
+  "scene_replan_failed:": "멈춘 자리에서 다시 계획하지 못해 멈췄습니다",
+  "scene_replan_refused:": "다시 계획한 경로가 출발 허가를 받지 못해 멈췄습니다",
   "Tracking timeout": "경로 추종 시간이 지났습니다",
   "Tracking failed": "경로 추종에 실패했습니다",
   "obstacle_": "장애물 때문에 멈췄습니다",

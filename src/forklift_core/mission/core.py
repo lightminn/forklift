@@ -72,6 +72,7 @@ from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
 from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
+from forklift_core.mission.scene_replan import SceneReplan
 from forklift_core.mission import bottom_deck_legs
 from forklift_core.perception import bottom_deck_evidence, bottom_deck_permit
 from forklift_core.perception.bottom_deck_evidence import BottomDeckTarget
@@ -236,6 +237,14 @@ class MissionCore:
         # the tolerance, before the truck drives.
         self.loaded_wait: dict | None = None
         self.loaded_lift_band: tuple | None = None
+        # The scene-mode replan device (docs/plans/2026-10-23-scene-replan.md): one request at a time ahead of the
+        # follower; its records are the mission's (state["scene_replans"], made at the first request -- a run without
+        # one keeps its state as it was), its budget reset at each mission's end.
+        self.scene_replan = SceneReplan(None)
+        self.scene_mail = None  # the device's plan answer: ("ok", result) | ("ok_fail", status) | ("dropped", why)
+        self.scene_raised = False  # a request raised in this tick's follower: the rest of the tick stands
+        self.scene_escape: dict | None = None  # the escape prefix driven for a request
+        self.scene_correction: dict = {}  # the largest SLAM correction contribution on the current gear leg
 
     def known_transition(self, from_phase: str, next_phase: str, t: float) -> None:
         """Known pallets across the mission (plan v10 D5)."""
@@ -1652,6 +1661,7 @@ class MissionCore:
             hooks.require, hooks.dump_tracking, self.cusp_heading_end, self.cusp_heading_offset, self.cusp_tick)
         slam_odom_base, slam_error = hooks.slam_odom_base, hooks.slam_error
         cusp_holds, CUSP_HEADING_HOLD_PHASES = hooks.cusp_holds(), options.cusp_heading_hold_phases
+        self.scene_raised = False
         limit = core.tracking_limit(t)  # M-a1 slice 2
         if self.commands.work_elapsed(ms.phase_started, t) >= limit:
             dump_tracking("timeout", ms.last_tracking)
@@ -1701,6 +1711,10 @@ class MissionCore:
         # is held at zero, then started from the measured pose or handed on (K2/K3).
         tracking, cusp_hold = cusp_tick(t, rear, raw_tracking_, tracking, retry_stand_)
         ms.last_tracking = tracking
+        if self.scene_raised:
+            # Scene-mode replan plan 2.1 (Codex round 1 P2-1): the request's tick stands -- no SLAM hold below, no
+            # stall, recovery, command or arrival after this in the runner; the device takes the next tick.
+            return SimpleNamespace(tracking=tracking, cusp_hold=True, scene_raised=True)
         if (
             slam is not None
             and not retry_stand_
@@ -1721,7 +1735,7 @@ class MissionCore:
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": slam_error()}
             )
-        return SimpleNamespace(tracking=tracking, cusp_hold=cusp_hold)
+        return SimpleNamespace(tracking=tracking, cusp_hold=cusp_hold, scene_raised=False)
 
     def docking_and_stall(self, t: float, rear, tracking, signed_speed: float, dt: float, loaded: bool) -> SimpleNamespace:
         """After the follower's rules: the D7c docking stop at the delivery straight (a), the final goal
@@ -3685,14 +3699,26 @@ class MissionCore:
         slam, obstacle, hooks = self.slam, self.obstacle, self.hooks
         tracker = slam["tracker"]
         before = tracker.applied
+        # Scene-mode replan plan 2.4: the correction's contribution -- the same odometry under the correction before
+        # and after -- per reply and over the tick (a scene run only; the others compute nothing new).
+        watch_ = bool(getattr(self.options, "pickup_prior", False)) and replies
+        rear0_ = prev_ = (tuple(float(v) for v in hooks.slam_rear(t)) if watch_ else None)
+        reply_max_ = 0.0
         for reply, meta, sent_mono, received_mono in replies:
             tracker.receive(reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom)
+            if watch_:
+                now_ = tuple(float(v) for v in hooks.slam_rear(t))
+                reply_max_ = max(reply_max_, math.hypot(now_[0] - prev_[0], now_[1] - prev_[1]))
+                prev_ = now_
             slam["records"].append({
                 **meta, "link": "async", "status": reply.status, "map_from_odom": list(reply.map_from_odom),
                 "received_after": list(tracker.received[0]) if tracker.received is not None else None,
                 "applied_after": list(tracker.applied[0]) if tracker.applied is not None else None,
                 "mode": tracker.mode, "hold": self.hold_count(), "sent_mono": sent_mono,
                 "received_mono": received_mono, "applied_tick_s": float(t), "slam_wall_s": reply.slam_wall_s})
+        if watch_:
+            self.scene_correction_note(t, math.hypot(prev_[0] - rear0_[0], prev_[1] - rear0_[1]), reply_max_,
+                                       prev_[2] - rear0_[2])
         if obstacle is None or tracker.applied is None or tracker.applied is before:
             return
         applied_now = tuple(float(v) for v in tracker.applied[0])
@@ -4361,6 +4387,7 @@ class MissionCore:
         monitor = self.hooks.cusp_monitor() if hasattr(self.hooks, "cusp_monitor") else None
         if monitor is not None:
             monitor.shift_time(length)
+        self.scene_replan.shift_time(length)
         if ms.phase in trackers:
             trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
         return rear
@@ -4786,10 +4813,24 @@ class MissionCore:
         if result_.force_replan and obstacle is not None:
             if grid_planning:
                 obstacle["force_replan"] = ms.phase
+            elif self.scene_replan_allowed():
+                # Scene-mode replan plan 2.2: the hand-off goes to the device (no grid replan in a scene layout).
+                why_ = self.scene_replan_raise(now_s, "cusp_handed", rear_now, detail={"latch": "handed"})
+                require(why_ is None, why_ or "")
+                return replace(result_.tracking, speed_mps=0.0), True
             elif cusp_monitor.latch is not None:
                 # The obstacle replan exists only with grid planning (Codex implementation review P1).
                 cusp_monitor.latch.record["events"].append({"time_s": now_s, "event": "force_skipped_no_grid"})
         if result_.end is not None:
+            if result_.end == "cusp_position_stall" and self.scene_replan_allowed():
+                # Scene-mode replan plan 2.2 (the stall recovery design v7 revised): a stall refused on its pose bounds
+                # after its stop was confirmed is planned again from where the truck stands, not ended.
+                rec_ = cusp_monitor.latch.record if cusp_monitor.latch is not None else {}
+                why_ = self.scene_replan_raise(now_s, "cusp_pose", rear_now, deviation={
+                    "position_m": rec_.get("position_error_m"), "yaw_rad": rec_.get("yaw_error_rad"),
+                    "far": bool((rec_.get("judged") or {}).get("far")) if isinstance(rec_.get("judged"), dict) else None})
+                require(why_ is None, why_ or "")
+                return replace(result_.tracking, speed_mps=0.0), True
             dump_tracking(result_.end, result_.tracking)
             require(False, result_.end)
         return result_.tracking, result_.hold
@@ -5985,7 +6026,7 @@ class MissionCore:
         hooks.require(ok, f"async_plan_failed:{str(value).splitlines()[0] if value else ''}")
         {"observe": self._observe_finish, "release": self._release_finish,
          "live_leg": self._live_leg_finish, "dock": self._dock_finish,
-         "observe_failed": self._observe_failed_finish}[p.site](p, value, t, rear)
+         "observe_failed": self._observe_failed_finish, "scene_replan": self._scene_finish}[p.site](p, value, t, rear)
         return SimpleNamespace(hold=True)
 
     def _drop(self, p, t: float, why: str, *, count: bool) -> None:
@@ -6001,6 +6042,11 @@ class MissionCore:
             self.return_correction_drops[key] = self.return_correction_drops.get(key, 0) + 1
             self.state.setdefault("return_correction_drops", []).append(
                 {"time_s": float(t), "phase": p.phase, "count": self.return_correction_drops[key]})
+            count = False
+        if p.site == "scene_replan":
+            # Scene-mode replan plan 2.1 (Codex round 2 P2-3): the device asks again and bounds its own drops (3 per
+            # request, 4 requests); outside the shared per-site count.
+            self.scene_mail = ("dropped", why)
             count = False
         if count:
             drops = self.state.setdefault("async_plan_drops", {})
@@ -6062,6 +6108,318 @@ class MissionCore:
             else:
                 self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
 
+    # --- the scene-mode replan device (docs/plans/2026-10-23-scene-replan.md) ---------------------------------------
+    SCENE_PHASES = ("transport", "return_home")
+
+    def scene_replan_allowed(self) -> bool:
+        """A request may be raised: a scene layout, a travel leg, none of the rules that keep their own recoveries
+        (plan 2.1: a docking accepted or re-approaching, near, the bottom-deck legs, a backoff or escape)."""
+        ms, slam, obstacle = self.ms, self.slam, self.obstacle
+        if not getattr(self.options, "pickup_prior", False) or ms.phase not in self.SCENE_PHASES:
+            return False
+        if slam is not None and (slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
+            return False
+        if obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase:
+            return False
+        if self.near_active() or self.bottom_deck_leg_active():
+            return False
+        return True
+
+    def scene_correction_note(self, t: float, net_m: float, reply_max_m: float, net_yaw_rad: float = 0.0) -> None:
+        """Plan 2.4: the largest correction contribution since the current gear leg began (its tracker and leg)."""
+        ms, trackers = self.ms, self.trackers
+        key_ = (id(trackers[ms.phase]), trackers[ms.phase].leg_index) if ms.phase in trackers else None
+        c_ = self.scene_correction
+        if c_.get("key") != key_:
+            c_.clear()
+            c_.update(key=key_, since_s=float(t), net_max_m=0.0, net_at_s=None, reply_max_m=0.0, net_yaw_rad=0.0)
+        if net_m > c_["net_max_m"]:
+            c_.update(net_max_m=float(net_m), net_at_s=float(t), net_yaw_rad=float(net_yaw_rad))
+        c_["reply_max_m"] = max(c_["reply_max_m"], float(reply_max_m))
+
+    def _scene_control_jump(self) -> dict | None:
+        """Plan 2.4 (simulation): the largest one-tick change of control minus truth since the current gear leg began."""
+        slam = self.slam
+        since_ = self.scene_correction.get("since_s")
+        if slam is None or since_ is None or not slam.get("control"):
+            return None
+        best_, at_, prev_ = 0.0, None, None
+        for row in slam["control"]:
+            if row[0] < since_ or len(row) < 7:
+                continue
+            d_ = (row[1] - row[4], row[2] - row[5])
+            if prev_ is not None:
+                step_ = math.hypot(d_[0] - prev_[0], d_[1] - prev_[1])
+                if step_ > best_:
+                    best_, at_ = step_, float(row[0])
+            prev_ = d_
+        return {"step_max_m": best_, "at_s": at_}
+
+    def scene_replan_raise(self, t: float, trigger: str, rear, *, deviation=None, extra_obstacles_fn=None,
+                           clearance_m=None, detail=None) -> str | None:
+        """Raise the device's request (plan 2.1): None when taken or noted, the end reason when the budget is spent.
+        The tick that raises it stands (``scene_raised``)."""
+        ms, trackers, hooks = self.ms, self.trackers, self.hooks
+        self.scene_replan.records = self.state.setdefault("scene_replans", [])
+        tracker_ = trackers.get(ms.phase)
+        truth_ = getattr(hooks, "truth_rear", None)
+        correction_ = {k: v for k, v in self.scene_correction.items() if k != "key"} or None
+        jump_ = self._scene_control_jump()
+        why_ = self.scene_replan.request(
+            t, trigger, phase=ms.phase, tracker_serial=None if tracker_ is None else id(tracker_) % 10**6,
+            leg=None if tracker_ is None else tracker_.leg_index, rear=rear,
+            truth_rear=None if truth_ is None else truth_(),
+            deviation=deviation, correction_jump={"slam": correction_, "control_minus_truth": jump_},
+            extra_obstacles_fn=extra_obstacles_fn, clearance_m=clearance_m, detail=detail)
+        if why_ is None:
+            self.scene_raised = True
+        return why_
+
+    def scene_replan_request(self, t: float, trigger: str, *, rear=None, extra_obstacles_fn=None, clearance_m=None,
+                             detail=None) -> str | None:
+        """The device's entry for a trigger outside the follower (plan 2.1, the permit-stop trigger of the
+        permission-clearance session): the same as a follower's raise; ``rear`` defaults to the runner's."""
+        rear_ = rear if rear is not None else self.hooks.rear()
+        return self.scene_replan_raise(t, trigger, rear_, extra_obstacles_fn=extra_obstacles_fn,
+                                       clearance_m=clearance_m, detail=detail)
+
+    def _scene_finish(self, p, value, t: float, rear) -> None:
+        result = value["result"]
+        self.scene_mail = ("ok", result) if result.success else ("ok_fail", result.status)
+
+    def _scene_preview(self, tracker, t: float, rear, dt: float) -> dict:
+        """Plan 2.1 steps 6 and 9: a tracker copy's first command from the stop pose -- its status branched first; a
+        failure-free braking (a cusp switch) previewed one tick further -- and the permission's candidate check on
+        the leg it starts, at that command's curvature and at the wheels' measured one."""
+        obstacle, hooks = self.obstacle, self.hooks
+        pose_ = np.asarray(rear, dtype=float)
+        pv = tracker.update(pose_, 0.0, dt)
+        for _ in range(2):
+            if pv.status == "failed":
+                return {"status": "failed", "ok": False, "why": f"failed:{pv.failure}"}
+            if getattr(pv, "off_path", False):
+                return {"status": "off_path", "ok": False, "why": "off_path"}
+            if pv.status == "arrived":
+                return {"status": "arrived", "ok": True, "why": "arrived"}
+            if getattr(pv, "cusp_pending", False):
+                return {"status": "cusp_pending", "ok": True, "why": "cusp_pending"}
+            if pv.status != "braking":
+                break
+            pv = tracker.update(pose_, 0.0, dt)  # the switch to the next gear leg: the leg actually started
+        else:
+            return {"status": "failed", "ok": False, "why": "braking_twice"}
+        leg_, direction_ = tracker.leg_ahead()
+        kappa_ = float(pv.curvature_inv_m)
+        wheelbase_ = float(self.options.drive_geometry.wheelbase_m)
+        out = {"status": "tracking", "kappa": kappa_, "steer_rad": math.atan(kappa_ * wheelbase_),
+               "direction": int(direction_)}
+        if obstacle is None:
+            out.update(ok=True, why="no_layer")
+            return out
+        permit_ = obstacle["layer"].candidate_permit(
+            t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
+            curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
+            cap_mps=float(tracker.config.cruise_speed_mps))
+        out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
+        return out
+
+    def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
+        """The device's world this tick (plan 2.1)."""
+        import copy
+
+        from forklift_core.control import escape as esc
+        from forklift_core.planning.grid_collision import FootprintCollisionChecker
+        from forklift_core.planning.pallet_mission import AssetSpec, PlacedProp
+
+        ms, slam, obstacle, hooks, options = self.ms, self.slam, self.obstacle, self.hooks, self.options
+        paths, trackers, state, geometry = self.paths, self.trackers, self.state, self.geometry
+        core = self
+        box = SimpleNamespace(rear=np.asarray(rear, dtype=float))
+
+        def stopped():
+            return bool(slam["stop_now"]) if slam is not None else abs(float(signed_speed)) < 0.01
+
+        def busy():
+            pending_ = core.pending is not None and core.pending.site != "scene_replan"
+            return pending_ or (slam is not None and slam.get("pending_release") is not None)
+
+        def release():
+            if slam is None or slam["tracker"].mode != "holding":
+                return
+            out_ = core.release_and_carry(t)
+            if out_.get("released"):
+                box.rear = np.asarray(out_["rear"], dtype=float)
+                hooks.set_rear(box.rear)
+                if slam.get("control"):
+                    slam["control"][-1][1:4] = box.rear.tolist()
+
+        def scenario_now(extra):
+            scenario = options.scenario
+            if ms.phase == "transport":
+                sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
+            else:
+                sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+            if extra:
+                sc_ = replace(sc_, props=tuple(sc_.props) + tuple(
+                    PlacedProp(AssetSpec("scene_replan:extra", float(r.length_m), float(r.width_m), 1.0), r)
+                    for r in extra))
+            return sc_
+
+        def submit(extra, clearance_m):
+            cfg_, travel_ = options.planner_config, options.travel_config
+            if clearance_m is not None:
+                cfg_ = replace(cfg_, clearance_m=float(clearance_m))
+                travel_ = replace(travel_, clearance_m=float(clearance_m)) if travel_ is not None else None
+            sc_ = hooks.grid_world(scenario_now(extra))
+            start_ = PlanningPose(float(box.rear[0]), float(box.rear[1]), float(box.rear[2]))
+            if ms.phase == "transport":
+                kind_, args_, extra_kw_ = "transport", (sc_, start_, cfg_), core._exit_prefix_kwargs()
+            else:
+                kind_, args_, extra_kw_ = "return", (sc_, start_, options.return_to_pose, cfg_), {}
+            kwargs_ = dict(geometry=geometry, travel_config=travel_, **extra_kw_)
+            if core.jobs is not None:
+                payload_ = {"kind": kind_, "args": args_, "kwargs": {**kwargs_, "deadline": time.monotonic() + 20.0},
+                            "retry_on": (), "tight_args": args_, "tight_kwargs": kwargs_}
+                core._request("scene_replan", "leg", payload_, t, box.rear, core._applied_now(), ctx={})
+                return
+            planner_ = hooks.plan_transport_leg if kind_ == "transport" else hooks.plan_return_leg
+            result_ = planner_(*args_, **kwargs_)
+            core.scene_mail = ("ok", result_) if result_.success else ("ok_fail", result_.status)
+
+        def poll():
+            mail_, core.scene_mail = core.scene_mail, None
+            return mail_
+
+        def candidate(result):
+            tracker_ = RearAxlePathTracker(result.poses, result.directions, result.curvatures_inv_m,
+                                           trackers[ms.phase].config)
+            return core._scene_preview(tracker_, t, box.rear, dt)
+
+        def install(result):
+            paths[ms.phase] = result
+            state["paths"][ms.phase] = hooks.path_record(result)
+            hooks.write_paths()
+            config_ = (core.scene_escape or {}).get("config", trackers[ms.phase].config)
+            trackers[ms.phase] = RearAxlePathTracker(result.poses, result.directions, result.curvatures_inv_m, config_)
+            state.setdefault("paths_replaced", []).append(
+                {"leg": ms.phase, "time_s": float(t), "by": "scene_replan", "path": state["paths"].get(ms.phase)})
+            if ms.phase == "transport" and slam is not None:
+                core.arm_docking()
+            ms.phase_started = t
+            core._refresh_for_new_leg(t, box.rear)
+
+        def escape_plan(extra, clearance_m):
+            if obstacle is None:
+                return None
+            _, _, _, (rects_, footprint_, bounds_) = core.escape_leg(ms.phase)
+            checker_ = FootprintCollisionChecker(list(rects_) + list(extra), footprint_, bounds_)
+            layer_ = obstacle["layer"]
+            loaded_ = bool(hooks.loaded())
+            pose_ = tuple(float(v) for v in box.rear)
+            pconf_ = layer_.permission.config
+            speed_ = options.backoff_speed_mps
+            stop_len_ = pconf_.stopping.distance_m(speed_) + pconf_.step_m
+            psi_ = float(layer_.error_table.at(layer_.grid_config.occupied_max_age_s)[1])
+            clear_ = float(clearance_m) if clearance_m is not None else float(
+                (options.travel_config or options.planner_config).clearance_m)
+            cell_ = float(layer_.snapshot.resolution_m) if layer_.snapshot is not None else 0.05
+            kappa_now_ = float(hooks.held_kappa())
+            candidates_ = esc.evaluate(
+                pose_,
+                sweep_free=lambda poses_, d_: esc.rectangles_sweep_free(checker_, poses_),
+                path_blocked=lambda poses_, d_, x_, r_: layer_.check_candidate(
+                    poses_, current_pose=pose_, direction=d_, loaded=loaded_, extra_margin_m=x_, extra_ramp_m=r_).blocked,
+                arc_blocked=lambda k_, d_: layer_.check_arc_candidate(
+                    current_pose=pose_, curvature_inv_m=k_, direction=d_, loaded=loaded_, cap_mps=speed_).blocked,
+                end_clearance=lambda region_: (lambda v_: (min(v_) >= 0.0, min(v_)))(
+                    [esc.clearance_m(checker_.free, p_) for p_ in region_]),
+                kappa_now=kappa_now_, stop_length_m=stop_len_, planner_clearance_m=clear_, psi_rad=psi_, cell_m=cell_)
+            leg_dir_ = trackers[ms.phase].leg_ahead()[1]
+            choice_ = esc.choose(candidates_, int(leg_dir_))
+            state.setdefault("scene_escape_candidates", []).append(
+                {"time_s": float(t), "candidates": [c_.record() for c_ in candidates_],
+                 "chosen": None if choice_ is None else choice_.record()})
+            if choice_ is None:
+                return None
+            poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
+            permit_ = layer_.candidate_permit(t, poses_, current_pose=pose_, direction=int(choice_.direction),
+                                              loaded=loaded_, curvature_inv_m=0.0,
+                                              measured_curvature_inv_m=kappa_now_, cap_mps=speed_)
+            state["scene_escape_candidates"][-1]["permit"] = permit_
+            if not permit_["ok"]:
+                return None  # the prefix itself must start (Codex counterexample: an end clear, a start held at 0)
+            return poses_, int(choice_.direction), int(leg_dir_)
+
+        def escape_install(chosen):
+            poses_, direction_, leg_dir_ = chosen
+            config0_ = trackers[ms.phase].config
+            n_ = len(poses_)
+            trackers[ms.phase] = RearAxlePathTracker(
+                poses_, np.full(n_, direction_, dtype=np.int8), np.zeros(n_),
+                replace(config0_, cruise_speed_mps=options.backoff_speed_mps,
+                        position_tolerance_m=esc.END_POSITION_TOL_M, yaw_tolerance_rad=esc.END_YAW_TOL_RAD,
+                        overshoot_tolerance_m=esc.END_POSITION_TOL_M))
+            # The existing escape's ownership, so the permission acts on it every tick (Codex round 3 P2-2).
+            obstacle["backoff"] = {"phase": ms.phase, "config": config0_, "time_s": float(t), "leg_dir": leg_dir_,
+                                   "escape": True, "scene": True}
+            core.scene_escape = {"status": "running", "config": config0_, "zero_since": None}
+            ms.phase_started = t
+            core._refresh_for_new_leg(t, box.rear)
+
+        def escape_state():
+            return (core.scene_escape or {}).get("status", "done")
+
+        def escape_clear():
+            if obstacle is not None and obstacle.get("backoff", {}).get("scene"):
+                obstacle.pop("backoff", None)  # the ownership goes; install restores the tracker settings
+            if core.scene_escape is not None:
+                core.scene_escape["status"] = "cleared"
+
+        def steering_error(target_rad):
+            measured_ = math.atan(float(hooks.held_kappa()) * float(options.drive_geometry.wheelbase_m))
+            return measured_ - float(target_rad)
+
+        def preview():
+            return core._scene_preview(copy.deepcopy(trackers[ms.phase]), t, box.rear, dt)
+
+        return SimpleNamespace(stopped=stopped, busy=busy, release=release, submit=submit, poll=poll,
+                               candidate=candidate, install=install, escape_plan=escape_plan,
+                               escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
+                               steering_error=steering_error, preview=preview, box=box)
+
+    def scene_replan_tick(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
+        """The device's tick ahead of the follower (plan 2.1): owned or not, what the wheels and steering get, the
+        control pose after a release; a request that ends raises its reason."""
+        ms, trackers, slam = self.ms, self.trackers, self.slam
+        self.scene_raised = False
+        if not self.scene_replan.active():
+            return SimpleNamespace(owned=False, rear=rear)
+        ports = self._scene_ports(t, rear, signed_speed, dt)
+        out_ = self.scene_replan.step(t, ports)
+        self.hooks.require(out_.end is None, out_.end or "")
+        result = SimpleNamespace(owned=out_.owned, output=out_.output, rear=ports.box.rear, requested_speed=0.0,
+                                 curvature=0.0)
+        if out_.output == "presteer":
+            result.curvature = math.tan(float(out_.steer_rad)) / float(self.options.drive_geometry.wheelbase_m)
+        elif out_.output == "escape" and self.scene_escape is not None:
+            tracker_ = trackers[ms.phase]
+            tracking = tracker_.update(ports.box.rear, signed_speed, dt)
+            ms.last_tracking = tracking
+            standing_ = ports.stopped()
+            if tracking.status == "arrived" or (
+                    standing_ and (tracking.status == "failed" or tracker_.remaining_to_goal_m() <= 1e-6)):
+                self.scene_escape["status"] = "done"
+            else:
+                allowed_ = self.last_permission[0] if self.last_permission is not None else None
+                if allowed_ is not None and allowed_ <= 0.0 and standing_:
+                    self.scene_escape["zero_since"] = self.scene_escape.get("zero_since") or float(t)
+                    if t - self.scene_escape["zero_since"] >= 1.0:
+                        self.scene_escape["status"] = "stopped"
+                else:
+                    self.scene_escape["zero_since"] = None
+                result.requested_speed, result.curvature = tracking.speed_mps, tracking.curvature_inv_m
+        return result
+
     def end_reset(self, t: float) -> dict:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
         the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
@@ -6093,6 +6451,8 @@ class MissionCore:
         began = time.perf_counter()
         records = self.baseline.restore(self) if self.baseline is not None else {}
         self.restore_wall_s = time.perf_counter() - began  # plan U29: holds the records' handover (top-level copies)
+        self.scene_replan.reset()  # a mission's budget (never a tracker's or a pause's)
+        self.scene_mail, self.scene_raised, self.scene_escape, self.scene_correction = None, False, None, {}
         return records
 
     def hold_slam(self, t: float, *, held_frame_pallet: bool) -> None:

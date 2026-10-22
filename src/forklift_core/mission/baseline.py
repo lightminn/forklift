@@ -37,6 +37,7 @@ MISSION_KEYS = {
         # plan 2026-10-22-live-far-recognition: the mission's far summary and its dropped far stops
         "recognition_mission", "recognition_discarded",
         "mission_scenario",  # CT-1 PR 4: a session mission's planning scene (its other pallets as props)
+        "scene_replans", "scene_escape_candidates",  # the scene-mode replan device (plan 2026-10-23-scene-replan 2.1)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
