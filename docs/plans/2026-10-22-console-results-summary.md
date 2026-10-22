@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-작성일: 2026-10-22 · 상태: 계획 2판 · 근거: [상용 FMS 사례 조사](../design/2026-10-22-fms-case-survey.md) 4절 3순위(**최소안**), 사용자 결정 2026-10-22(총괄 경유: 후보 1→3 최소안을 PR 하나씩, 확장안은 하지 않음)
+작성일: 2026-10-22 · 상태: 구현됨(계획 2판, PR feat/console-results-summary) · 근거: [상용 FMS 사례 조사](../design/2026-10-22-fms-case-survey.md) 4절 3순위(**최소안**), 사용자 결정 2026-10-22(총괄 경유: 후보 1→3 최소안을 PR 하나씩, 확장안은 하지 않음)
 
 **Goal:** 연속 운용 결과를 발표·보고에 쓸 수 있게, 지금 세션의 결과 기록부(계약 5.2)를 완료·실패·취소 수, 사유별 수, 미션 소요 시간으로 요약해 화면에 보인다 — 무엇을 셀 수 있고 무엇을 셀 수 없는지와 함께.
 
@@ -76,3 +76,5 @@
 **② Codex 2회차(계획 2판 + Task 1).** 새 P1/P2 없음(수렴). P3 1건 반영: 설명이 같은 서로 다른 머리가 두 줄로 나옴 → 묶음 키를 머리의 설명으로(시험 `two table heads with one description make one line`).
 
 **② Codex 3회차(화면).** P1 없음, P2 2·P3 1 반영: 늘 보여야 할 집계 범위 문구가 접힌 상세 안에 있음 → 상세 밖 `sum-scope` 로 / 기존 결과 머리의 "앞선 N건은 기록 파일에만" 문구가 파일 보존을 단정 → "현재 목록에 없습니다" / 계산 불가 원인을 "시작 시각 없음"으로 단정 → "시각 없음 또는 유효하지 않은 구간".
+
+**② Codex 4회차.** 새 P1/P2/P3 없음 — 수렴.
