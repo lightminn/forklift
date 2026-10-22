@@ -81,3 +81,10 @@ def test_the_a2_config_differs_from_the_single_one_only_in_its_range_noise():
     a = yaml.safe_load((ROOT / "config/obstacle_layer_single.yaml").read_text())
     b = yaml.safe_load((ROOT / "config/obstacle_layer_single_a2.yaml").read_text())
     assert b.pop("range_noise") == {"model": "a2_spec"} and a == b
+
+
+def test_the_planning_memory_marks_at_least_the_widest_range_bound():
+    # Codex P3a review P2: a 0.1 m memory disk left a hit read 0.135 m short at 4.5 m outside the memory
+    a2 = layer("obstacle_layer_single_a2")
+    assert a2.memory.hit_radius_m == pytest.approx(a2.noise_cut_m) and a2.memory.hit_radius_m > 0.1
+    assert layer("obstacle_layer_single").memory.hit_radius_m == pytest.approx(0.1)  # unchanged
