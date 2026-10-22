@@ -14,6 +14,11 @@ A pallet that arrives later, or a truck that parks later, therefore never
 lands on a route planned earlier, and a waiting truck at a holding place is
 off every other route -- the precondition fleet_traffic's no-lock argument
 needs. Ranks are the order jobs were given (the Dispatcher counts them).
+
+Plan 2026-10-17 (large random floors): ``od="random"`` takes any pallet to any
+free place, whatever the slots' roles; a **chained** job (``start`` -1) begins
+where the truck's last drop left it -- no holding place to leave, stages from
+``to_pickup`` on.
 """
 
 from __future__ import annotations
@@ -60,8 +65,9 @@ class Job:
     truck: int
     source: Slot
     sink: Slot
-    start: int  # holding place the truck leaves
+    start: int  # holding place the truck leaves (-1: chained, none)
     home: int  # holding place it ends at
+    after: Slot | None = None  # chained: the slot the truck has just lowered on
 
 
 def keep_outs(
@@ -97,10 +103,17 @@ def plan_stage(
     extra: list[Rectangle] = (),
 ):
     """One stage of a job from ``start`` (a travel stage may start anywhere)."""
+    own = (job.source.name, job.sink.name)
+    near = []
+    if stage == "to_pickup" and job.after is not None:
+        # A chained job leaves from in front of the pallet just put down: that
+        # pallet, not its keep-out, as on the way to a holding place.
+        own += (job.after.name,)
+        near = [pallet_box(job.after.site, geometry).rect()]
     props = keep_outs(
         world,
         geometry,
-        own_slots=(job.source.name, job.sink.name),
+        own_slots=own,
         own_holding=(job.start, job.home),
     ) + list(extra)
     bounds = world.bounds
@@ -123,7 +136,7 @@ def plan_stage(
             _search(
                 start,
                 pickup["prealign"],
-                props + [source_pallet],
+                props + [source_pallet] + near,
                 unloaded,
                 bounds,
                 travel_config,
@@ -237,8 +250,10 @@ class Dispatcher:
 
     Sources start filled with probability ``fill``; an emptied source fills
     again ``restock_s`` later, a filled sink empties ``ship_s`` later -- the
-    flow never runs dry. Holding places are taken by idle trucks or reserved
-    for a job's end.
+    flow never runs dry. ``od="random"``: every slot starts filled with
+    probability ``fill``, a job takes any pallet to any free slot and nothing
+    restocks or ships -- the pallets only move. Holding places are taken by
+    idle trucks or reserved for a job's end.
     """
 
     world: WorldMap
@@ -246,6 +261,7 @@ class Dispatcher:
     fill: float = 0.6
     restock_s: float = 60.0
     ship_s: float = 120.0
+    od: str = "roles"  # "roles": sources to sinks; "random": any pallet to any free slot
     occupied: dict = field(default_factory=dict)
     reserved: set = field(default_factory=set)
     holding_taken: dict = field(default_factory=dict)  # place -> truck
@@ -256,9 +272,11 @@ class Dispatcher:
     ranks: int = 0  # traffic ranks handed out, one per route given
 
     def __post_init__(self) -> None:
+        if self.od not in ("roles", "random"):
+            raise ValueError(f"od must be roles or random, not {self.od}")
         for slot in self.world.slots:
             self.occupied[slot.name] = (
-                slot.role == "source" and self.rng.random() < self.fill
+                (self.od == "random" or slot.role == "source") and self.rng.random() < self.fill
             )
 
     def spawn(self, trucks: int) -> list[int]:
@@ -281,17 +299,23 @@ class Dispatcher:
                 self.occupied[t[1]] = t[2]
         self.timers = keep
 
-    def next_job(self, truck: int, at: int) -> Job | None:
+    def next_job(self, truck: int, at: int, after: Slot | None = None) -> Job | None:
+        """A job for the truck at holding place ``at``, or (``at`` -1) chained
+        on from its drop at ``after``, whose pallet it does not pick again."""
         slots = {s.name: s for s in self.world.slots}
+        anyrole = self.od == "random"
         sources = [
             n
             for n, s in slots.items()
-            if s.role == "source" and self.occupied[n] and n not in self.reserved
+            if (anyrole or s.role == "source")
+            and self.occupied[n]
+            and n not in self.reserved
+            and (after is None or n != after.name)
         ]
         sinks = [
             n
             for n, s in slots.items()
-            if s.role == "sink" and not self.occupied[n] and n not in self.reserved
+            if (anyrole or s.role == "sink") and not self.occupied[n] and n not in self.reserved
         ]
         homes = [
             k
@@ -306,7 +330,16 @@ class Dispatcher:
         self.reserved |= {source, sink}
         self.holding_taken[home] = truck  # ``at`` stays taken until it leaves
         self.jobs += 1
-        return Job(self.jobs, truck, slots[source], slots[sink], at, home)
+        return Job(self.jobs, truck, slots[source], slots[sink], at, home, after)
+
+    def free_home(self, job: Job) -> None:
+        """Chaining: give back the holding place job would have ended at."""
+        if self.holding_taken.get(job.home) == job.truck:
+            del self.holding_taken[job.home]
+
+    def take_home(self, job: Job) -> None:
+        """The chained job did not start: the truck heads for job's place again."""
+        self.holding_taken[job.home] = job.truck
 
     def next_rank(self) -> int:
         """Traffic rank for a route given now -- a new job's or a re-planned one's:
@@ -321,12 +354,14 @@ class Dispatcher:
     def lifted(self, job: Job, now: float) -> None:
         self.occupied[job.source.name] = False
         self.reserved.discard(job.source.name)
-        self.timers.append((now + self.restock_s, job.source.name, True))
+        if self.od == "roles":
+            self.timers.append((now + self.restock_s, job.source.name, True))
 
     def lowered(self, job: Job, now: float) -> None:
         self.occupied[job.sink.name] = True
         self.reserved.discard(job.sink.name)
-        self.timers.append((now + self.ship_s, job.sink.name, False))
+        if self.od == "roles":
+            self.timers.append((now + self.ship_s, job.sink.name, False))
 
     def abandon(self, job: Job, *, reached_pickup: bool, unreachable: bool) -> None:
         """A job that cannot go on: free what it held (the truck keeps its place)."""

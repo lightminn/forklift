@@ -14,7 +14,8 @@ where trucks start and wait, and labelled zones for drawing.
   L, joined by doors in a partition wall or by a one-lane corridor.
 
 Every dimension is drawn from a range written here (Claude's choices, not a
-plant drawing). Everything is axis-aligned. Candidates that fail the checks --
+plant drawing); ``scale`` stretches the halls' ranges (not the doors,
+corridors, aisles or the things in a hall, of which a bigger hall holds more). Everything is axis-aligned. Candidates that fail the checks --
 a pallet or its run-up on an obstacle, a place the truck cannot reach on a
 coarse grid -- are dropped and counted in ``WorldMap.dropped``.
 Metres and radians; x east, y north, origin at the south-west inner corner.
@@ -493,9 +494,9 @@ def _store(rng, floor: _Floor, area: Box, zone: str, geometry) -> None:
 # -- structures ------------------------------------------------------------------
 
 
-def _single(rng, structure: str, geometry, trucks: int):
-    w = rng.uniform(70.0, 110.0) if structure == "rack" else rng.uniform(60.0, 100.0)
-    h = rng.uniform(45.0, 70.0) if structure == "rack" else rng.uniform(50.0, 80.0)
+def _single(rng, structure: str, geometry, trucks: int, scale: float):
+    w = scale * (rng.uniform(70.0, 110.0) if structure == "rack" else rng.uniform(60.0, 100.0))
+    h = scale * (rng.uniform(45.0, 70.0) if structure == "rack" else rng.uniform(50.0, 80.0))
     hall = Box(0.0, 0.0, w, h)
     floor = _Floor(hall.grow(-BOUND_INSET_M))
     _hall_walls(floor, hall, {})
@@ -512,16 +513,16 @@ def _single(rng, structure: str, geometry, trucks: int):
     return floor, (w, h)
 
 
-def _multi(rng, geometry, trucks: int):
+def _multi(rng, geometry, trucks: int, scale: float):
     shape = str(rng.choice(["line", "line3", "L"]))
     kinds = list(rng.permutation(["rack", "shop"]))
     if shape == "line3":
         kinds.append(str(rng.choice(["rack", "shop"])))
     halls, joins = [], []  # joins: (hall a, hall b, axis, coordinate, overlap lo, hi, connector length)
-    x, base_h = 0.0, rng.uniform(42.0, 58.0)
+    x, base_h = 0.0, scale * rng.uniform(42.0, 58.0)
     if shape in ("line", "line3"):
         for k, kind in enumerate(kinds):
-            w = rng.uniform(38.0, 55.0)
+            w = scale * rng.uniform(38.0, 55.0)
             h = base_h * rng.uniform(0.8, 1.15)
             y0 = rng.uniform(0.0, max(0.0, base_h * 1.15 - h)) if k else 0.0
             halls.append((kind, Box(x, y0, x + w, y0 + h)))
@@ -530,9 +531,9 @@ def _multi(rng, geometry, trucks: int):
             if k + 1 < len(kinds):
                 joins.append((k, k + 1, gap))
     else:
-        w1, h1 = rng.uniform(55.0, 80.0), rng.uniform(38.0, 50.0)
+        w1, h1 = scale * rng.uniform(55.0, 80.0), scale * rng.uniform(38.0, 50.0)
         halls.append((kinds[0], Box(0.0, 0.0, w1, h1)))
-        w2, h2 = rng.uniform(36.0, 48.0), rng.uniform(34.0, 48.0)
+        w2, h2 = scale * rng.uniform(36.0, 48.0), scale * rng.uniform(34.0, 48.0)
         gap = WALL_M if rng.random() < 0.5 else rng.uniform(10.0, 18.0)
         halls.append((kinds[1], Box(0.0, h1 + gap, w2, h1 + gap + h2)))
         joins.append((0, 1, gap))
@@ -676,15 +677,17 @@ def make_world(
     *,
     geometry: SyntheticMissionGeometry,
     trucks: int = 10,
+    scale: float = 1.0,
 ) -> WorldMap:
-    """One random factory floor of the given structure for this seed."""
+    """One random factory floor of the given structure for this seed; ``scale``
+    stretches the halls (1: the floors every earlier run used)."""
     if structure not in STRUCTURES:
         raise ValueError(f"structure must be one of {STRUCTURES}")
     rng = np.random.default_rng([seed, STRUCTURES.index(structure), 0x574F524C])
     if structure == "multi":
-        floor, size = _multi(rng, geometry, trucks)
+        floor, size = _multi(rng, geometry, trucks, scale)
     else:
-        floor, size = _single(rng, structure, geometry, trucks)
+        floor, size = _single(rng, structure, geometry, trucks, scale)
     inner = floor.inner
     walls = [b for _, b in floor.obstacles]
     dropped: Counter = Counter()

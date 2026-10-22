@@ -26,6 +26,13 @@ noise. Conditions (the plan's table):
 
     C0 none · C1 faults · C2 communication · C3 pose noise · C4 people · C5 all
 
+Large random floors (docs/plans/2026-10-17-fleet-large-random-chained.md):
+``--world-scale`` stretches the halls, ``--od random`` takes any pallet to any
+free slot, and ``--chain`` lets a truck that has just withdrawn from a drop take
+the next job from there (rank kept, as for a re-plan) instead of driving to its
+holding place first; with no job to take, or none the traffic mode admits, it
+drives there as before.
+
 Safety is judged on the true poses: truck-truck (stopped trucks included),
 truck-floor (static floor, spills, pallets standing at slots) and truck-person
 contact.
@@ -183,6 +190,7 @@ class Truck:
         self.error = np.zeros(3)  # truth - believed (pose noise)
         self.stopped_until = 0.0  # temporary breakdown
         self.pending_replan = False
+        self.chain = False  # --chain: ask for the next job before to_holding
         self.held = None  # windows: (job, plan, since) waiting for a lock-free order
         self.jobs_done = 0
         self.job_started = 0.0
@@ -212,6 +220,8 @@ class Truck:
     def job_items(plan) -> list:
         items = []
         for stage in STAGES:
+            if stage not in plan.stages:  # a chained job has no leave
+                continue
             items.append(("path", stage, plan.stages[stage]))
             if stage == "insert":
                 items.append(("wait", "lift", LIFT_S))
@@ -287,6 +297,12 @@ class Truck:
         self.item += 1
         if self.item >= len(self.items):
             return "done"
+        if self.chain and self.items[self.item][1] == "to_holding":
+            return "chain"  # the caller starts the next job or enter_item()s this one
+        self.enter_item(manager)
+        return "next"
+
+    def enter_item(self, manager):
         kind, stage, payload = self.items[self.item]
         if kind == "wait":
             self.wait_left = payload
@@ -295,7 +311,6 @@ class Truck:
             self.segments = _segments(payload)
             self.segment, self.progress, self.v = 0, 0.0, 0.0
         manager.set_footprint(self.name, self.footprint())
-        return "next"
 
     def route_progress(self) -> float:
         if self.state != "job":
@@ -403,8 +418,8 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
     config, travel = configs
     flags = CONDITIONS[condition]
     rng = np.random.default_rng([seed, trucks_n, list(CONDITIONS).index(condition), 7])
-    world = make_world(structure, seed, geometry=geometry, trucks=trucks_n)
-    dispatcher = Dispatcher(world, np.random.default_rng([seed, trucks_n, 11]))
+    world = make_world(structure, seed, geometry=geometry, trucks=trucks_n, scale=args.world_scale)
+    dispatcher = Dispatcher(world, np.random.default_rng([seed, trucks_n, 11]), od=args.od)
     places = dispatcher.spawn(trucks_n)
     cap = args.accel_cap if args.accel_cap is not None else settings["drive_acceleration_mps2"]
     physics = None
@@ -447,6 +462,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         t.physics = physics
         t.drive_physics = args.vehicle == "physics"
         t.eta_physics = args.eta == "physics"
+        t.chain = args.chain
         t.set_load(0.0)
     loads = []
     named = {t.name: t for t in trucks}
@@ -517,6 +533,46 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         for c in manager.route_conflicts():
             if t.name in (c["truck"], c["route_of"]):
                 events.append({"t_s": round(now, 1), "kind": "precondition", "after": after, **c})
+
+    chains = {"started": 0, "no_job": 0, "plan_failed": 0, "refused": 0}
+
+    def chain(t):
+        """--chain: t has withdrawn from its drop -- its next job from there, its
+        rank kept (as for a re-plan: it may stand on routes given after its own).
+        False: no job, none planned or none admitted; it drives to its holding
+        place as before."""
+        old, old_kg = t.job, t.load_kg
+        dispatcher.free_home(old)
+        job = dispatcher.next_job(t.k, -1, after=old.sink)
+        why = "no_job"
+        if job is not None:
+            result = plan(job, "to_pickup", Pose2D(*map(float, t.pose)))
+            if not result.success:
+                # A first stage that fails says something about where t stands, not the pair.
+                dispatcher.abandon(job, reached_pickup=False, unreachable=not result.status.startswith("to_pickup:"))
+                job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1), "chained": True})
+                why = "plan_failed"
+            else:
+                load = float(load_rng.uniform(load_lo, load_hi))
+                t.set_load(load)
+                if manager.windows is not None and not manager.trial_route(t.name, t.chunks(t.job_items(result), 0)[0]):
+                    dispatcher.abandon(job, reached_pickup=False, unreachable=False)
+                    t.set_load(old_kg)
+                    why = "refused"
+                else:
+                    why = None
+        if why is not None:
+            dispatcher.take_home(old)
+            chains[why] += 1
+            return False
+        chains["started"] += 1
+        t.jobs_done += 1
+        job_log.append({"job": old.number, "truck": t.k, "status": "done", "t_s": round(now, 1), "took_s": round(now - t.job_started, 1)})
+        loads.append(load)
+        t.place = job.home
+        t.start_job(job, result, now, manager, None)
+        preconditions(t, "chain")
+        return True
 
     def affected(t, box):
         if t.state != "job":
@@ -763,7 +819,10 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         # -- motion ----------------------------------------------------------
         for t in trucks:
             block = truck_block_m(t, people.pos)
-            if t.step(now, manager, dispatcher, block) == "done":
+            stepped = t.step(now, manager, dispatcher, block)
+            if stepped == "chain" and not chain(t):
+                t.enter_item(manager)
+            if stepped == "done":
                 t.jobs_done += 1
                 job_log.append({"job": t.job.number, "truck": t.k, "status": "done", "t_s": round(now, 1), "took_s": round(now - t.job_started, 1)})
                 t.place = t.job.home
@@ -869,6 +928,10 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         "vehicle": args.vehicle,
         "eta": args.eta,
         "pace": args.pace,
+        "world_scale": args.world_scale,
+        "od": args.od,
+        "chain": args.chain,
+        "chains": chains,
         "queue_opt": args.queue_opt if args.traffic == "queues" else None,
         "accel_cap": cap,
         "load_kg_mean": round(float(np.mean(loads)), 2) if loads else None,
@@ -984,6 +1047,10 @@ def main(argv=None) -> int:
     parser.add_argument("--mapf-replan-s", type=float, default=5.0)
     parser.add_argument("--tile-m", type=float, default=0.25)
     parser.add_argument("--tile-horizon-m", type=float, default=0.0, help="0: the whole route")
+    # Large random floors (plan 2026-10-17-fleet-large-random-chained).
+    parser.add_argument("--world-scale", type=float, default=1.0, help="stretch the halls (1: the floors of every earlier run)")
+    parser.add_argument("--od", default="roles", choices=("roles", "random"), help="roles: sources to sinks; random: any pallet to any free slot")
+    parser.add_argument("--chain", action="store_true", help="take the next job from the drop, not from a holding place")
     # Physical model (plan 2026-10-12).
     parser.add_argument("--vehicle", default="kinematic", choices=("kinematic", "physics"))
     parser.add_argument("--eta", default="simple", choices=("simple", "physics"))
@@ -1005,7 +1072,7 @@ def main(argv=None) -> int:
         out = args.output / f"{args.structure}_{seed}_{args.condition}_{args.trucks}"
         start = time.perf_counter()
         result = run(args.structure, seed, args.trucks, args.condition, args, settings, geometry, (config, travel), out)
-        line = {k: result[k] for k in ("structure", "seed", "trucks", "condition", "traffic", "vehicle", "eta", "pace", "queue_opt", "status", "sim_s", "jobs_done", "jobs_per_hour", "plan_failed", "contacts", "cycles", "stalls", "preconditions", "replans", "waiting_share", "resolution", "waits")}
+        line = {k: result[k] for k in ("structure", "seed", "trucks", "condition", "traffic", "vehicle", "eta", "pace", "queue_opt", "od", "chain", "chains", "status", "sim_s", "jobs_done", "jobs_per_hour", "plan_failed", "contacts", "cycles", "stalls", "preconditions", "replans", "waiting_share", "resolution", "waits")}
         line["wall_s"] = round(time.perf_counter() - start, 1)
         print(json.dumps(line, ensure_ascii=False), flush=True)
     return 0

@@ -1,7 +1,13 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
-from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
+from forklift_core.planning.pallet_mission import (
+    SyntheticMissionGeometry,
+    make_transport_planner_config,
+    site_poses,
+)
 from forklift_core.planning.world_gen import (
     PALLET_KEEP_M,
     STRUCTURES,
@@ -12,7 +18,7 @@ from forklift_core.planning.world_gen import (
     pallet_box,
     run_up_box,
 )
-from forklift_core.planning.world_mission import Dispatcher, keep_outs
+from forklift_core.planning.world_mission import Dispatcher, keep_outs, plan_job
 
 GEOMETRY = SyntheticMissionGeometry()
 SEEDS = (100, 101, 102)
@@ -118,3 +124,61 @@ def test_a_pallet_does_not_come_back_under_a_truck(worlds):
     standing.clear()
     dispatcher.tick(later + 0.1, lambda name: name in standing)
     assert dispatcher.occupied[job.source.name] and dispatcher.timers == []
+
+
+def test_a_larger_scale_stretches_the_halls_and_fills_them():
+    small = make_world("rack", 100, geometry=GEOMETRY, trucks=20)
+    assert make_world("rack", 100, geometry=GEOMETRY, trucks=20, scale=1.0) == small
+    big = make_world("rack", 100, geometry=GEOMETRY, trucks=20, scale=1.5)
+    assert big.size_m == pytest.approx(tuple(1.5 * v for v in small.size_m), abs=0.02)
+    assert len(big.slots) > 2 * len(small.slots)
+    assert len(big.holding) == len(small.holding)
+
+
+def test_random_jobs_take_any_pallet_to_any_free_slot(worlds):
+    world = worlds[("shop", 101)]
+    dispatcher = Dispatcher(world, np.random.default_rng(0), fill=0.5, od="random")
+    assert any(dispatcher.occupied[s.name] for s in world.sinks())
+    places = dispatcher.spawn(8)
+    jobs = [dispatcher.next_job(k, places[k]) for k in range(8)]
+    assert {(j.source.role, j.sink.role) for j in jobs} > {("source", "sink")}
+    dispatcher.lifted(jobs[0], 10.0)
+    dispatcher.lowered(jobs[0], 20.0)
+    assert dispatcher.timers == []  # nothing restocks or ships: the pallets only move
+
+
+def test_a_chained_job_leaves_from_the_drop_but_not_with_its_pallet(worlds):
+    world = worlds[("shop", 101)]
+    dispatcher = Dispatcher(world, np.random.default_rng(0), fill=0.5, od="random")
+    places = dispatcher.spawn(1)
+    job = dispatcher.next_job(0, places[0])
+    dispatcher.left(job)
+    dispatcher.lifted(job, 10.0)
+    dispatcher.lowered(job, 20.0)
+    for name in dispatcher.occupied:  # the pallet just put down is the only one
+        dispatcher.occupied[name] = name == job.sink.name
+    dispatcher.free_home(job)
+    assert dispatcher.next_job(0, -1, after=job.sink) is None
+    dispatcher.take_home(job)
+    assert dispatcher.holding_taken == {job.home: 0}
+    dispatcher.free_home(job)
+    again = dispatcher.next_job(0, -1)
+    assert again.start == -1 and again.source == job.sink
+    assert dispatcher.holding_taken == {again.home: 0}
+
+
+def test_a_chained_job_plans_from_in_front_of_the_pallet_it_put_down(worlds):
+    world = worlds[("shop", 101)]
+    dispatcher = Dispatcher(world, np.random.default_rng(0), fill=0.5, od="random")
+    places = dispatcher.spawn(1)
+    job = dispatcher.next_job(0, places[0])
+    chained = dispatcher.next_job(0, -1, after=job.sink)
+    config = make_transport_planner_config(max_expansions=30000)
+    travel = replace(config, obstacle_heuristic_resolution_m=0.25)
+    start = site_poses(job.sink.site, GEOMETRY)["withdrawn"]
+    result = plan_job(chained, world, config, travel, GEOMETRY, first_stage="to_pickup", start=start)
+    assert result.success, result.status
+    assert list(result.stages)[0] == "to_pickup"
+    # The pallet's keep-out covers where the truck stands after withdrawing.
+    plain = plan_job(replace(chained, after=None), world, config, travel, GEOMETRY, first_stage="to_pickup", start=start)
+    assert plain.status == "to_pickup:invalid_start"
