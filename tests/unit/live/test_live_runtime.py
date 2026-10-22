@@ -580,7 +580,9 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     before = source[start - 1900:start]  # (the D8 record spool and the U21 start digest switch are between them)
     assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
     # D-0 live only; the session's end ends a mission still on and skips the batch judgement
-    assert source.index('core.targets.add_destination("D-0"') > source.index('    if getattr(args, "live", False):\n        # Persistent console plan D2/D3')
+    # (not with a session scene: its slots are its destinations, plan 2026-10-22-rigid-session-pallets 2.5)
+    assert source.index('core.targets.add_destination("D-0"') > source.index(
+        '    if getattr(args, "live", False) and session is None:\n        # Persistent console plan D2/D3')
     assert 'live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")' in source
     # the temporary handling D2 replaces is gone
     for gone in ("live_first_replan_", "live_last_rear_", "at_start", "start_submitted", "hall=True"):
