@@ -80,8 +80,9 @@ def _tick_scope(carrying=None):
     wrapper = ast.FunctionDef(
         name="_wrap", args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
         body=[ast.parse("trace_evidence = scope['trace_evidence']").body[0],
-              ast.parse("session_truth_rects_ = []").body[0], fn,
-              ast.parse("return session_tick_head, (lambda: (trace_evidence, session_truth_rects_))").body[0]],
+              ast.parse("session_truth_rects_ = []").body[0], ast.parse("session_truth_ids_ = []").body[0], fn,
+              ast.parse("return session_tick_head, (lambda: (trace_evidence, session_truth_rects_, "
+                        "session_truth_ids_))").body[0]],
         decorator_list=[], returns=None, type_params=[])
     module = ast.fix_missing_locations(ast.Module([wrapper], []))
     env = dict(scope, scope=scope)
@@ -93,17 +94,19 @@ def _tick_scope(carrying=None):
 def test_a_requested_switch_is_made_at_the_next_tick_head_with_its_records():
     head, read, sw, handles, rest, damage, scope, old_trace = _tick_scope()
     head(10, 1.0)
-    trace, rects = read()
+    trace, rects, ids = read()
     assert trace is old_trace and sorted((r.x_m, r.y_m) for r in rects) == [(1.0, 3.0), (1.0, 6.0)]
+    assert [(i, r.y_m) for i, r in zip(ids, rects)] == [("P-2", 3.0), ("P-3", 6.0)]  # ids in the outlines' order
     handles["P-1"].set(3.0, -8.9)  # delivered at its slot, then P-2 adopted
     sw.request("P-2")
     head(11, 1.1)
-    trace, rects = read()
+    trace, rects, ids = read()
     assert sw.current == "P-2" and scope["far_runtime"].truth_instance == 1
     assert scope["state"]["session_switches"] == [{"step": 11, "t": 1.1, "from": "P-1", "to": "P-2"}]
     assert trace is not old_trace and trace.ground_at == pytest.approx((1.0, 3.0, 0.0))  # a new pallet's evidence
     assert rest.poses["P-1"][0] == pytest.approx((3.0, -8.9, 0.0))  # rested where it left
     assert sorted((r.x_m, r.y_m) for r in rects) == [(1.0, 6.0), (3.0, -8.9)]  # the others where they stand
+    assert dict(zip(ids, ((r.x_m, r.y_m) for r in rects))) == {"P-1": (3.0, -8.9), "P-3": (1.0, 6.0)}
     assert damage == []
 
 
@@ -196,7 +199,9 @@ def test_a_session_scene_is_a_live_console_run_with_the_redraw_always(tmp_path, 
     for extra, message in [((), "needs --live"),
                            (("--live",), "needs --near-capture-redraw always"),
                            (("--live", "--near-capture-redraw", "always", "--bottom-deck-check", "on"),
-                            "--bottom-deck-check on is a batch run")]:  # refused by its own rule already
+                            "--bottom-deck-check on is a batch run"),  # refused by its own rule already
+                           (("--live", "--near-capture-redraw", "always", "--record-pocket-frames"),
+                            "--record-pocket-frames")]:  # its truth names no pallet (Codex PR 3 impl round 1 P3)
         with pytest.raises(SystemExit):
             _session_args(tmp_path, *extra)
         assert message in capsys.readouterr().err
@@ -215,3 +220,32 @@ def test_the_near_straight_meets_a_neighbour_its_box_check_cannot_see():
     near = Rectangle(1.2, 1.09, 0.6 + 0.5, 0.8 + 0.5, 0.0)
     assert not core._sweep_clear(trajectory, [near])
     assert core._sweep_clear(trajectory, [Rectangle(1.2, 2.5, 1.1, 1.3, 0.0)])
+
+
+def test_the_gap_to_a_neighbour_is_the_outlines_distance_and_its_smallest_is_kept():
+    from forklift_core.planning.geometry import Rectangle
+
+    truck = S.footprint_corners((0.0, 0.0, 0.0), 1.0, 0.2, 0.3)  # x -0.2..1.0, y -0.3..0.3
+    ahead = S.rect_corners(Rectangle(1.5, 0.0, 0.6, 0.8, 0.0))  # x 1.2..1.8
+    beside = S.rect_corners(Rectangle(0.4, 1.0, 0.6, 0.8, 0.0))  # y 0.6..1.4
+    turned = S.rect_corners(Rectangle(2.0, 0.0, 1.0, 1.0, math.pi / 4))  # its corner at x 2 - 0.7071
+    assert S.polygon_gap(truck, ahead) == pytest.approx(0.2)
+    assert S.polygon_gap(truck, beside) == pytest.approx(0.3)
+    assert S.polygon_gap(truck, turned) == pytest.approx(2.0 - math.sqrt(0.5) - 1.0)
+    assert S.polygon_gap(truck, S.rect_corners(Rectangle(0.9, 0.0, 0.6, 0.8, 0.0))) == 0.0  # overlapping
+    gap = S.NeighbourGap()
+    gap.update(1.0, "approach", "P-1", truck, {"P-2": ahead, "P-3": beside})
+    gap.update(2.0, "transport", "P-1", S.footprint_corners((0.1, 0.0, 0.0), 1.0, 0.2, 0.3), {"P-2": ahead,
+                                                                                             "P-3": beside})
+    assert gap.smallest["P-2"] == {"m": pytest.approx(0.1), "t": 2.0, "phase": "transport", "mission_pallet": "P-1"}
+    assert gap.smallest["P-3"]["t"] == 1.0  # the same gap later does not replace the first
+
+
+def test_the_runner_wires_the_session_records_to_its_truth():
+    """Codex PR 3 impl round 1: the docking dry run checks the true outlines, the first mission's far truth instance is
+    its pallet's, the gap is recorded every tick, the video log names its pallet."""
+    source = SCRIPT.read_text()
+    assert 'session_extra_["fn"] = lambda: list(session_truth_rects_)' in source
+    assert "far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])" in source
+    assert 'state["session_neighbour_gap"] = session_gap.smallest' in source
+    assert '**({} if session is None else {"pallet_id": pallet.current})' in source

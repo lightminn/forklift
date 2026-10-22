@@ -1150,8 +1150,10 @@ def arguments() -> argparse.Namespace:
             parser.error("a session scene file needs --live")
         if args.near_capture_redraw != "always":
             parser.error("a session scene file needs --near-capture-redraw always")
-        if args.near_tracking or getattr(args, "bottom_deck_check", "off") != "off":
-            parser.error("a session scene file is not defined with --near-tracking or --bottom-deck-check on")
+        if args.near_tracking or getattr(args, "bottom_deck_check", "off") != "off" or args.record_pocket_frames:
+            # (the pocket recorder's truth has no pallet id: one pallet's record -- Codex PR 3 impl round 1 P3)
+            parser.error("a session scene file is not defined with --near-tracking, --bottom-deck-check on or "
+                         "--record-pocket-frames")
     if args.return_turnaround is None:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
@@ -3226,6 +3228,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 identity_threshold=args.recognition_tau if far_learned else None,
                 proposer_record=far_learned.get("record"),
             )
+            if session is not None:  # the first mission's pallet (later ones set at their switch)
+                far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])
             far_intrinsics = adapter.read_isaac_intrinsics(perception_camera).integer_index
             _plain_capture = perception_capture.capture
 
@@ -5773,6 +5777,7 @@ def drive(S, isaac) -> None:
                             "base_orientation_wxyz": frame_q,
                             "pallet_position_m": frame_pallet,
                             "pallet_orientation_wxyz": frame_pq,
+                            **({} if session is None else {"pallet_id": pallet.current}),
                             "lift_m": float(
                                 robot.get_joint_positions()[lift_index[0]]
                             ),
@@ -5915,13 +5920,18 @@ def drive(S, isaac) -> None:
                 read_()
 
         session_truth_rects_ = []  # the other session pallets' outlines where they stand now (plan 2.4)
+        session_truth_ids_ = []  # their ids, in the same order
+        if session is not None:
+            from session_pallets import NeighbourGap
+
+            session_gap = NeighbourGap()
 
         def session_tick_head(step_: int, t_: float) -> None:
             """Plan 2026-10-22-rigid-session-pallets 2.3-2.4, at a tick's head before its truth sample: the switch an
             adoption asked for (the leaving pallet's pose its rest pose, the far recognition's truth instance, a new
             trace evidence for a new pallet), then the other pallets: each against its rest pose (a move past 1 cm or
             0.01 rad is scene damage) and its outline where it stands, for this tick's truth checks."""
-            nonlocal trace_evidence, session_truth_rects_
+            nonlocal trace_evidence, session_truth_rects_, session_truth_ids_
             carried_ = core.cargo.pallet_id if core.cargo.relation == "carrying" else None
             switched_ = pallet.apply_pending(step_, carried_id=carried_)
             if switched_ is not None:
@@ -5936,7 +5946,7 @@ def drive(S, isaac) -> None:
                     npos_, nq_ = pallet.get_world_pose()
                     trace_evidence = live_records.TraceEvidence()
                     trace_evidence.ground((float(npos_[0]), float(npos_[1]), yaw_and_tilt(nq_)[0]))
-            rects_ = []
+            rects_, ids_ = [], []
             for p_ in session.pallets:
                 id_ = p_.pallet_id
                 if id_ == pallet.current or id_ == carried_:
@@ -5948,7 +5958,8 @@ def drive(S, isaac) -> None:
                                   f"Session pallet displaced: {id_} ({moved_m_:.3f} m, {moved_rad_:.3f} rad)")
                 rects_.append(Rectangle(float(pos_[0]), float(pos_[1]), geometry.pallet_depth_m,
                                         geometry.pallet_width_m, yaw_and_tilt(q_)[0]))
-            session_truth_rects_ = rects_
+                ids_.append(id_)
+            session_truth_rects_, session_truth_ids_ = rects_, ids_
             state["session_rest_largest"] = {k_: list(v_) for k_, v_ in session_rest.largest.items()}
 
         def session_self_prefixes(loaded_by_phase: bool) -> tuple:
@@ -6982,14 +6993,17 @@ def drive(S, isaac) -> None:
                 return base_ if not others_ else replace(base_, props=tuple(base_.props) + others_)
 
             def session_extra_rects_():
-                """The mission's other pallets for the docking dry run (the carried one is left out by itself)."""
+                """The mission's other pallets' planning outlines in the planning frame, for the near straight's sweep
+                (the docking dry run checks their true outlines, ``session_truth_rects_``)."""
                 mission_ = core.commands.mission
                 return [p_.rectangle for p_ in live_session_pallet_props(
                     core.targets, exclude_id=None if mission_ is None else mission_.pallet_id,
                     nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=0.25)]
 
             if len(live_session_["pallets"]) > 1:  # P-1 alone: no others, the list as it was
-                session_extra_["fn"] = session_extra_rects_
+                # The docking dry run's obstacles are the world's truth (its poses are moved into the truth frame):
+                # the other pallets where they stand now, not their planning outlines (Codex PR 3 impl round 1 P2).
+                session_extra_["fn"] = lambda: list(session_truth_rects_)
             if session is not None:  # plan 2026-10-22-rigid-session-pallets 2.6: the near straight swept past them
                 core.options.near_capture_neighbour_sweep = True
                 core.hooks.session_neighbour_rects = session_extra_rects_
@@ -7469,6 +7483,14 @@ def drive(S, isaac) -> None:
                     # stop before the wall is judged from the end pose and the scanned wall, not by this check.
                     b_ = scenario.bounds
                     truth_bounds = type(b_)(b_.x_min_m - 3.0, b_.x_max_m + 3.0, b_.y_min_m - 3.0, b_.y_max_m + 3.0)
+                if session is not None:
+                    from session_pallets import footprint_corners as session_fp_corners, rect_corners as session_rc
+
+                    session_gap.update(t, ms.phase, pallet.current,
+                                       session_fp_corners(truth_rear, footprint.front_m, footprint.rear_m,
+                                                          footprint.half_width_m),
+                                       {r_id_: session_rc(r_) for r_id_, r_ in zip(session_truth_ids_, session_truth_rects_)})
+                    state["session_neighbour_gap"] = session_gap.smallest
                 truth_hits_ = [o for o in checked_obstacles
                                if SHAPE_MEETS(o, truth_shape, tuple(float(v) for v in truth_rear))]
                 scene_require(

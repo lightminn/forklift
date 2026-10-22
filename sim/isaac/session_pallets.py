@@ -97,6 +97,72 @@ def _rotation_between(q0, q1) -> float:
     return 2 * math.acos(min(1.0, dot))
 
 
+def _corners_rect(x, y, length, width, yaw):
+    c, s = math.cos(yaw), math.sin(yaw)
+    hx, hy = length / 2, width / 2
+    return [(x + c * u - s * v, y + s * u + c * v) for u, v in ((hx, hy), (-hx, hy), (-hx, -hy), (hx, -hy))]
+
+
+def footprint_corners(rear, front_m, rear_m, half_width_m):
+    """The planner's outline (rear axle frame: front_m ahead, rear_m behind, half_width_m aside) at ``rear``."""
+    x, y, yaw = (float(v) for v in rear)
+    c, s = math.cos(yaw), math.sin(yaw)
+    local = ((front_m, half_width_m), (-rear_m, half_width_m), (-rear_m, -half_width_m), (front_m, -half_width_m))
+    return [(x + c * u - s * v, y + s * u + c * v) for u, v in local]
+
+
+def rect_corners(r) -> list:
+    return _corners_rect(float(r.x_m), float(r.y_m), float(r.length_m), float(r.width_m), float(r.yaw_rad))
+
+
+def _separated(a, b) -> bool:
+    for poly in (a, b):
+        n = len(poly)
+        for i in range(n):
+            ex, ey = poly[(i + 1) % n][0] - poly[i][0], poly[(i + 1) % n][1] - poly[i][1]
+            ax, ay = -ey, ex
+            pa = [px * ax + py * ay for px, py in a]
+            pb = [px * ax + py * ay for px, py in b]
+            if max(pa) < min(pb) or max(pb) < min(pa):
+                return True
+    return False
+
+
+def _point_segment(p, a, b) -> float:
+    abx, aby = b[0] - a[0], b[1] - a[1]
+    t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / max(abx * abx + aby * aby, 1e-18)
+    t = min(1.0, max(0.0, t))
+    return math.hypot(p[0] - (a[0] + t * abx), p[1] - (a[1] + t * aby))
+
+
+def polygon_gap(a, b) -> float:
+    """The gap between two convex outlines (corner lists); 0 when they touch or overlap."""
+    if not _separated(a, b):
+        return 0.0
+    best = math.inf
+    for poly, other in ((a, b), (b, a)):
+        n = len(other)
+        for p in poly:
+            for i in range(n):
+                best = min(best, _point_segment(p, other[i], other[(i + 1) % n]))
+    return best
+
+
+class NeighbourGap:
+    """The smallest gap seen between the truck's outline and each other session pallet's true outline (CT-1 D1's
+    record: the real distance to the neighbours, plan 2026-10-22-rigid-session-pallets section 4)."""
+
+    def __init__(self):
+        self.smallest: dict = {}  # id -> {"m", "t", "phase", "mission_pallet"}
+
+    def update(self, t: float, phase: str, mission_pallet: str, truck_corners, others: dict) -> None:
+        for pallet_id, corners in others.items():
+            gap = polygon_gap(truck_corners, corners)
+            seen = self.smallest.get(pallet_id)
+            if seen is None or gap < seen["m"]:
+                self.smallest[pallet_id] = {"m": gap, "t": float(t), "phase": phase, "mission_pallet": mission_pallet}
+
+
 class RestWatch:
     """Where the pallets nobody handles rest, and the largest move seen. ``rest(id, position, quaternion)`` fixes one;
     ``check(id, position, quaternion)`` returns the move ((metres in 3D, radians of the whole rotation), whether it
