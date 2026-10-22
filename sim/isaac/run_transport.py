@@ -457,6 +457,15 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--scene-file", type=Path, default=None,
                         help="--layout scene: the scene record (sim/isaac/scene_file.py)")
     parser.add_argument(
+        "--docking-acceptance",
+        choices=("information", "precision"),
+        default="information",
+        help="Delivery docking match acceptance (docs/plans/2026-10-22-open-zone-docking.md). information: every start "
+        "must pass the information gate, as always. precision -- SIM ONLY: starts refused only as degenerate (a single "
+        "far wall) are taken when the conditional precision, face-deletion, range and bound checks pass; it takes faces "
+        "moved together after teaching and a repeated pattern beyond its range wrongly, so never on the real vehicle.",
+    )
+    parser.add_argument(
         "--exit-clearance-m",
         type=float,
         default=None,
@@ -5299,6 +5308,7 @@ def drive(S, isaac) -> None:
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
+                                docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,

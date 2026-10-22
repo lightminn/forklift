@@ -187,4 +187,178 @@ def match_scans(
     )
 
 
-__all__ = ["MatchResult", "match_scans", "transform_points"]
+
+
+# ---- sim-only weak-direction acceptance (docs/plans/2026-10-22-open-zone-docking.md D2) ----
+#
+# A delivery match refused only because one direction is weakly observed (a single far wall with a few sideways faces)
+# is taken when these hold at the agreed pose. They are local checks, not proofs: faces moved together after teaching
+# and a repeated pattern farther away than the range check are taken wrongly (the plan's documented risk). Not for the
+# real vehicle.
+
+PRECISION_SIGMA_M = 0.005
+PRECISION_SIGMA_RAD = 0.0005
+PRECISION_CARRIER_SHARE = 0.2
+PRECISION_GROUP_LINK_M = 1.0
+PRECISION_GROUP_MIN_POINTS = 3
+PRECISION_FACET_LINK_M = 0.10
+PRECISION_FACET_COS = cos(0.5236)  # 30 deg
+PRECISION_DROP_MIN_INFORMATION = 5.0
+PRECISION_DROP_SHIFT_M = 0.01
+PRECISION_DROP_SHIFT_RAD = 0.0005
+PRECISION_RANGE_M = 0.20
+PRECISION_RANGE_STEP_M = 0.05
+PRECISION_AGREE_M = 0.01
+PRECISION_AGREE_RAD = 0.005
+PRECISION_BOUND_M = 0.20
+
+
+@dataclass(frozen=True)
+class PrecisionCheck:
+    accepted: bool
+    reason: str  # "ok" or why not (sd, one_group, group_shift, not_unique, bound, refine_<reason>)
+    pose: tuple  # the re-solved pose (live frame in the reference frame)
+    record: dict
+
+
+def _information_rows(reference, normals, live, pose, inlier_m):
+    moved = transform_points(live, pose)
+    j, d = _nearest(reference, moved)
+    inl = d < inlier_m
+    n, p = normals[j[inl]], moved[inl]
+    residual = ((p - reference[j[inl]]) * n).sum(1)
+    lever = p - np.asarray(pose[:2])
+    # u = (dx, dy, dyaw): the yaw column is per radian at each point's lever arm, i.e. a 1 m lever about the origin
+    jac = np.column_stack((n[:, 0], n[:, 1], n[:, 0] * -lever[:, 1] + n[:, 1] * lever[:, 0]))
+    return jac, residual, inl, j, p
+
+
+def _sigma(jac, residual):
+    scale = 1.4826 * float(np.median(np.abs(residual - np.median(residual))))
+    h = jac.T @ jac
+    try:
+        cov = scale * scale * np.linalg.inv(h)
+    except np.linalg.LinAlgError:
+        return scale, (float("inf"),) * 3
+    return scale, tuple(float(v) for v in np.sqrt(np.clip(np.diag(cov), 0.0, None)))
+
+
+def _link_groups(points, link):
+    label = -np.ones(len(points), int)
+    current = 0
+    for i in range(len(points)):
+        if label[i] >= 0:
+            continue
+        label[i] = current
+        stack = [i]
+        while stack:
+            k = stack.pop()
+            near = np.where((label < 0) & (np.hypot(*(points - points[k]).T) < link))[0]
+            label[near] = current
+            stack.extend(near.tolist())
+        current += 1
+    return label
+
+
+def _facets(reference, normals, link, min_cos):
+    """Reference faces: points linked within `link` whose normals agree to `min_cos` (a wall's side face is not
+    the wall)."""
+    label = -np.ones(len(reference), int)
+    current = 0
+    for i in range(len(reference)):
+        if label[i] >= 0:
+            continue
+        label[i] = current
+        stack = [i]
+        while stack:
+            k = stack.pop()
+            near = np.where((label < 0) & (np.hypot(*(reference - reference[k]).T) < link)
+                            & (np.abs(normals @ normals[k]) >= min_cos))[0]
+            label[near] = current
+            stack.extend(near.tolist())
+        current += 1
+    return label
+
+
+def _close_pose(a, b, metres, radians):
+    turn = atan2(sin(a[2] - b[2]), cos(a[2] - b[2]))
+    return hypot(a[0] - b[0], a[1] - b[1]) <= metres and abs(turn) <= radians
+
+
+def precision_check(reference, live, pose, prior, *, inlier_m: float = 0.05, max_correspondence_m: float = 0.3,
+                    min_inlier_fraction: float = 0.6, max_median_residual_m: float = 0.03) -> PrecisionCheck:
+    """The D2 checks at `pose` (an agreed start pose), `prior` = the initial laser pose of the match (the plan's)."""
+    reference = np.asarray(reference, dtype=float).reshape(-1, 2)
+    live = np.asarray(live, dtype=float).reshape(-1, 2)
+    record: dict = {}
+    gates = dict(inlier_m=inlier_m, min_inlier_fraction=min_inlier_fraction,
+                 max_median_residual_m=max_median_residual_m, min_information=0.0)
+    # (1) the final solve on the inlier set the gates use; its gates judged again
+    refined = match_scans(reference, live, initial=pose, max_correspondence_m=inlier_m, **gates)
+    record["refined_reason"] = refined.reason
+    if refined.reason != "ok":
+        return PrecisionCheck(False, f"refine_{refined.reason}", tuple(pose), record)
+    p1 = refined.pose
+    normals = _normals(reference)
+    jac, residual, inl, nearest, points = _information_rows(reference, normals, live, p1, inlier_m)
+    # (2), (3) the weak direction and the conditional precision
+    h = jac.T @ jac
+    w, v = np.linalg.eigh(h)
+    weak = v[:, 0]
+    scale, sigma = _sigma(jac, residual)
+    _, sigma_thin = _sigma(jac[::4], residual[::4])
+    record.update(min_information=float(w[0]), weak=[float(c) for c in weak], scale_m=scale, sigma_m=list(sigma),
+                  sigma_decimated_m=list(sigma_thin))
+    if sigma[0] > PRECISION_SIGMA_M or sigma[1] > PRECISION_SIGMA_M or sigma[2] > PRECISION_SIGMA_RAD:
+        return PrecisionCheck(False, "sd", p1, record)
+    # (4) the weak direction carried by two groups at least; dropping each group's reference faces keeps the pose
+    share = (jac @ weak) ** 2
+    carriers = np.where(share >= PRECISION_CARRIER_SHARE * share.max())[0]
+    labels = _link_groups(points[carriers], PRECISION_GROUP_LINK_M)
+    groups = [carriers[labels == k] for k in range(labels.max() + 1) if (labels == k).sum() >= PRECISION_GROUP_MIN_POINTS]
+    record["groups"] = len(groups)
+    record["group_sizes"] = [int(len(g)) for g in groups]
+    if len(groups) < 2:
+        return PrecisionCheck(False, "one_group", p1, record)
+    facets = _facets(reference, normals, PRECISION_FACET_LINK_M, PRECISION_FACET_COS)
+    live_nearest, live_nearest_d = _nearest(reference, transform_points(live, p1))
+    drops = []
+    for g in groups:
+        faces = np.unique(facets[nearest[g]])
+        keep_ref = ~np.isin(facets, faces)
+        keep_live = ~(np.isin(facets[live_nearest], faces) & (live_nearest_d < max_correspondence_m))
+        again = match_scans(reference[keep_ref], live[keep_live], initial=p1, **gates)
+        moved = hypot(again.pose[0] - p1[0], again.pose[1] - p1[1])
+        turn = abs(atan2(sin(again.pose[2] - p1[2]), cos(again.pose[2] - p1[2])))
+        drops.append({"faces": int(len(faces)), "reason": again.reason, "min_information": again.min_information,
+                      "shift_m": moved, "turn_rad": turn})
+        if (again.reason != "ok" or again.min_information < PRECISION_DROP_MIN_INFORMATION
+                or moved > PRECISION_DROP_SHIFT_M or turn > PRECISION_DROP_SHIFT_RAD):
+            record["drops"] = drops
+            return PrecisionCheck(False, "group_shift", p1, record)
+    record["drops"] = drops
+    # (5) every start along the weak direction within the range ends at the same pose
+    agree = True
+    ends = []
+    k = int(round(PRECISION_RANGE_M / PRECISION_RANGE_STEP_M))
+    for step in range(-k, k + 1):
+        start = (p1[0] + step * PRECISION_RANGE_STEP_M * weak[0], p1[1] + step * PRECISION_RANGE_STEP_M * weak[1],
+                 p1[2] + step * PRECISION_RANGE_STEP_M * weak[2])
+        end = match_scans(reference, live, initial=start, max_correspondence_m=max_correspondence_m, **gates)
+        ends.append([float(c) for c in end.pose])
+        if not _close_pose(end.pose, p1, PRECISION_AGREE_M, PRECISION_AGREE_RAD):
+            agree = False
+    record["range_agree"] = agree
+    record["range_ends"] = ends
+    if not agree:
+        return PrecisionCheck(False, "not_unique", p1, record)
+    # (6) this round's correction along the weak direction
+    du = (p1[0] - prior[0], p1[1] - prior[1], atan2(sin(p1[2] - prior[2]), cos(p1[2] - prior[2])))
+    along = abs(float(np.dot(weak, du)))
+    record["weak_correction_m"] = along
+    if along > PRECISION_BOUND_M:
+        return PrecisionCheck(False, "bound", p1, record)
+    return PrecisionCheck(True, "ok", p1, record)
+
+
+__all__ = ["MatchResult", "PrecisionCheck", "match_scans", "precision_check", "transform_points"]

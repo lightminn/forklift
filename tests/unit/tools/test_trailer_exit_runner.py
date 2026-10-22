@@ -154,3 +154,18 @@ def test_the_final_state_projection_leaves_an_unset_exit_prefix_out():
                         exit_prefix={"length_m": 0.35})
     assert "exit_prefix" not in run_transport.projection_node(plain, {})["attrs"]
     assert "exit_prefix" in run_transport.projection_node(marked, {})["attrs"]
+
+
+def test_the_docking_acceptance_is_off_unless_given_and_part_of_the_contract():
+    import near_tracking
+
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["docking_acceptance"] == "information"
+    source = SCRIPT.read_text()
+    block = source[source.index('"--docking-acceptance",'):][:700]
+    assert 'choices=("information", "precision")' in block and 'default="information"' in block
+    assert "SIM ONLY" in block and "never on the real vehicle" in block
+    assert 'docking_acceptance=getattr(args, "docking_acceptance", "information"),' in source
+    from test_riibotics_isaac_scenes import _runner_args as runner_args
+
+    assert runner_args([]).docking_acceptance == "information"
+    assert runner_args(["--docking-acceptance", "precision"]).docking_acceptance == "precision"
