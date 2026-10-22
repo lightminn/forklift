@@ -639,7 +639,7 @@ def test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the
     assert source.count("adapter.detector_input(") + core.count("adapter.detector_input(") == 2
     assert "adapter.detector_input(\n            scene_input, options.depth_quantize_mm\n" in core
     assert "repeat_input, args.depth_quantize_mm" in source
-    assert "detection = detect_pockets(detector_input, prior, params)" in core
+    assert "detection = detect_pockets(detector_input, prior, params, **waive_kw)" in core
     assert 'attempt["base_from_optical"] = {' in core
     assert 'attempt["depth_quantize_mm"] = options.depth_quantize_mm' in core
     tree = ast.parse(source)
