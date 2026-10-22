@@ -1,4 +1,4 @@
-# 장면 모드 재계획 장치와 다리 끝 cusp 정체 복구 — 계획 (2026-10-23, 2판)
+# 장면 모드 재계획 장치와 다리 끝 cusp 정체 복구 — 계획 (2026-10-23, 3판)
 
 사용자 결정(2026-10-23, 총괄 세션 경유): 다리 끝 정체 복구 A·B 를 진행한다.
 
@@ -80,7 +80,22 @@
 - live·배치 모두. 단계 `transport`·`return_home`.
 - 제외(지금 규칙 유지): D7 도킹 수용 뒤·재접근 중(`transport_recovery_after_docking`·도킹 재시도), near·bottom-deck·held realign.
 
-**진행**: 요청이 있는 동안, tick 의 추종 단계 **앞**에서 상태 기계 `scene_replan_step(t, rear)` 를 돈다. 그 tick 은 0 명령이고 추종·정체·도착 처리를 하지 않는다.
+**tick 안 자리와 명령 소유**(Codex 2차 P2-1):
+
+- 순서는 `release_gate` → `job_hold` → **장면 재계획 상태 기계** → (상태 기계가 그 tick 을 소유하지 않을 때만) 일반 `follow`.
+- 하단의 허가·명령 조립·live 중재는 그대로 돈다.
+- 요청이 있는 동안 기존 `live_leg` 요청은 끼어들지 않는다.
+- 상태별 출력:
+
+| 상태 | 바퀴 | 조향 | 추종 |
+|---|---|---|---|
+| 대기(`wait_stop`·`wait_jobs`·`plan`·`check`) | 제동 0 | 지금 값 유지(hold) | 생략 |
+| `presteer` | 0 | 목표 곡률로 변경(hold 아님 — `plan_wait_`/`dwell_hold` 를 쓰지 않는다) | 생략 |
+| `escape` | 탈출 접두 전용 추종기 | 추종기 명령 | 그 추종기만, 매 tick 허가 |
+
+- 탈출 접두의 끝(도착·정지)은 장치가 소비한다. 일반 도착 처리로 넘기지 않는다.
+
+**진행**: 요청이 있는 동안 상태 기계 `scene_replan_step(t, rear)` 를 돈다.
 
 1. `wait_stop`: 정지 확인(`stop_now`, 없으면 truth 속도)까지 기다린다.
 2. `wait_jobs`: 다른 계획 작업·보류 중인 SLAM 해제가 있으면 끝날 때까지 기다린다(기존 `live_leg` 의 D8b 가드와 같은 조건, core 602–617).
@@ -91,7 +106,14 @@
    - 장애물 = 계획기가 장면에서 만드는 장애물 + `extra_obstacles_fn()`. 장치는 장애물 집합을 따로 만들지 않는다(P1c 자동 적용).
    - **tight 재시도는 하지 않는다**. 기존 `_leg_payload` 의 여유 0 재시도는 `invalid_start` 를 지우고 `clearance_m` 덮어쓰기를 취소한다(Codex 1차 P2-6). 장치 전용 payload 를 쓴다.
    - live 는 작업자에 보낸다(새 site `scene_replan`, 요청 id, 20 s 기한). 배치는 동기다.
-   - 응답이 `superseded`·`moving`·`correction` 으로 버려지면 같은 요청으로 `plan` 을 다시 보낸다(예산을 다시 세지 않는다, Codex 1차 P2-2). 일시 정지·STOP 뒤 재개도 같은 요청을 이어 간다.
+   - 응답이 버려지면 같은 요청으로 돌아간다(예산을 다시 세지 않는다, Codex 1차 P2-2).
+     - `moving` 이면 `wait_stop` 으로 돌아간다. 제출마다 정지·보류 해제·작업 점유를 다시 확인한다(D8b 가드, core 610, Codex 2차 P2-3).
+     - `superseded`·`correction` 이면 `wait_jobs` 로 돌아간다.
+     - 일시 정지·STOP 뒤 재개도 같은 요청을 이어 간다.
+   - **유한 상한**(Codex 2차 P2-3):
+     - 한 요청의 버림·재제출은 3 회까지다. 넘으면 `scene_replan_failed:<trigger>:dropped` 다.
+     - 이 site 는 기존 `_drop` 의 site 누적 상한(3 회, core 6005)에서 뺀다. 대신 이 요청별 상한과 요청 수 예산(4)이 묶는다(최대 12 회).
+     - 한 요청 전체(정지 대기부터 재개까지)는 작업 시계 60 s 다. 넘으면 `scene_replan_failed:<trigger>:timeout` 다. 정지 대기에도 기한이 생긴다. 요청 중에는 일반 추종 시간 초과가 돌지 않기 때문이다.
 5. `escape`: 결과가 `invalid_start` 면 탈출 접두를 만든다.
    - 기존 `escape.evaluate/straight/choose` 를 장면 장애물 + 추가 장애물 + 이번 여유로 부른다. 격자 래퍼 `find_escape` 는 장면 모드의 `grid_kwargs` 에 점유 격자가 없어 쓸 수 없다(Codex 1차 P2-5).
    - 접두는 6 의 허가 검사를 첫 틱부터 받는다.
@@ -100,12 +122,24 @@
 6. `check`: 설치 전 허가 검사(장치 안에서 구현, 기준은 그쪽 P6):
    - 그 tick 의 실제 격자 스냅숏을 쓴다.
    - **후보 전용 허가 문맥**에서 검사한다. 기존 허가 객체의 `path_check`·`_driven_since_m` 를 읽으면 옛 경로 상태가 섞인다(Codex 1차 P2-3: 새 경로 `verified_m` 3.0·`blocked` None 인데 허용 0 인 반례).
+     - 만드는 법(Codex 2차 P3): 새 `DrivePermission(layer.permission.config)` 를 만든다.
+     - 거기에 `layer.footprints(loaded, direction)` 와 **가공된 `layer.snapshot`**(shadow·known·면제 처리가 된 것, obstacle_layer 296)을 넣는다.
+     - 후보 첫 다리로 `update` 한 뒤 `allowed_speed(t, layer.last_scan_s, …)` 를 부른다.
+     - 원본 허가의 `allowed_speed` 는 `last_estop` 을 바꾸므로 부르지 않는다. raw 격자로 스냅숏을 새로 만들지 않는다.
    - 대상은 후보 tracker 의 **첫 기어 다리**다(`leg_ahead`). 검증 거리가 `min(lookahead, 다리 길이)` 에 닿고 `blocked` 가 None 이어야 한다.
    - 출발 허가: 후보 tracker 의 첫 명령(곡률·방향·속도 상한)으로 `check_arc`·`allowed_speed` > 0 이어야 한다.
    - 지금 바퀴의 **측정 조향 곡률**(runtime 이 쓰는 held curvature, run_transport 8057)로 정지 호 검사도 통과해야 한다(포화 조향에서 반대로 재출발하는 경우 포함).
    - 기록: `verified_m`·`blocked`·첫 틱 허용 속도·두 곡률·이유.
 7. `install`: `_live_leg_finish` 의 설치 부분(경로·tracker·운반 도킹 정지점 재무장·새 다리 허가 갱신)을 쓴다. 실패 처리(`live_replanned` 재시도 예약)는 쓰지 않는다 — 장면 모드에는 그 재시도 경로가 없다(Codex 1차 P2-2).
-8. `presteer`: 설치 뒤 0 명령으로 첫 명령 곡률까지 조향을 맞춘다(측정 조향이 허용 안에 들거나 1.0 s 가 지나면 끝, agy 지적 — 조향 변화율 1 rad/s 로 출발 초기 오차가 생긴다). 그다음 요청을 닫고 추종을 재개한다.
+8. `presteer`: 설치 뒤 바퀴 0 으로 첫 명령의 조향각까지 조향을 맞춘다(agy 지적 — 조향 변화율 1 rad/s 로 출발 초기 오차가 생긴다).
+   - 완료: 두 앞바퀴 측정 조향이 명령과 0.02 rad 안.
+   - 만료: 1.0 s. 만료는 완료와 구분해 기록하고(`presteer: aligned|timeout`, 남은 조향 오차), 다음 단계로 간다.
+9. `resume_check`: 출발 직전 다시 검사한다(Codex 2차 P2-2 — 해제 뒤에는 tracking 모드라 새 보정이 바로 적용되고, 정지 중 자세가 6 cm 옮겨지면 직선 후보의 첫 곡률이 0 → −0.36 으로 바뀐 반례).
+   - 정지 확인.
+   - 지금 제어 자세에서 **설치된 tracker 의 첫 명령**을 다시 계산한다.
+   - 최신 스냅숏으로 6 의 허가 검사를 다시 한다.
+   - 첫 명령 조향이 presteer 목표와 0.02 rad 넘게 다르면 `presteer` 로 돌아간다(요청당 2 회까지). 허가가 떨어지면 같은 요청의 `plan` 으로 돌아간다(버림 상한에 센다).
+   - 통과하면 요청을 닫고 일반 추종을 재개한다.
 
 **종료**(모두 MISSION 분류):
 
@@ -181,6 +215,10 @@
   - 허가 검사는 후보 전용 문맥이다(옛 경로 상태를 읽지 않음). 첫 기어 다리, 측정 조향 정지 호를 본다.
   - presteer 는 조향이 맞거나 1 s 뒤 끝난다.
   - 허가 검사: 검증 거리 부족·blocked·첫 틱 허용 0 이면 설치하지 않는다(사유별). 접두도 첫 틱부터 검사한다.
+  - 후보 전용 허가 문맥은 **실제 객체**로 시험한다(가짜 허가만으로 하지 않음): 원본 허가 객체·스냅숏이 불변이고, 원본 허용 0 인 자리에서 후보가 허용 > 0 이 되는 경우(Codex 2차 P3).
+  - 상태별 출력: 대기는 조향 hold, presteer 는 hold 없이 조향 변경, escape 는 전용 추종. 요청 중 `live_leg` 이 끼어들지 않는다.
+  - `resume_check`: 정지 중 자세가 옮겨져 첫 명령이 바뀌면 presteer 로, 허가가 떨어지면 재계획으로 간다.
+  - 상한: 요청별 버림 3 회, 요청 전체 60 s, `moving` 버림은 정지 대기로 간다. `_drop` 의 site 누적 상한에서 빠진다.
   - `clearance_m` 덮어쓰기가 작업자 payload·동기 호출 둘 다에 간다. `extra_obstacles` 가 장면 장애물에 더해진다.
   - 예산: 합산 4·트리거별 3, 같은 자리 반복도 센다.
   - 장면 모드 transport·return_home 에서 요청 → 정지 대기 → 계획 → 허가 통과 → 설치(운반이면 도킹 재무장)·기록 한 줄.
@@ -222,6 +260,14 @@
 - 1.2 의 횡오차는 `slam.control` 을 정체 다리 구간으로 제한해 다시 계산했다.
 
 ## 7. 검토 기록
+
+### 2판 → 3판
+
+- **② Codex 재검토(2차)**: 새 P1 없음, P2 셋·P3 둘 — 모두 받아들였다.
+  - P2-1 요청 중 명령 소유가 escape·presteer 와 모순 → tick 순서와 상태별 출력 표, `live_leg` 배제.
+  - P2-2 presteer 뒤 출발 조건 변화 → `resume_check`(정지·첫 명령 재계산·허가 재검사).
+  - P2-3 재제출·유한 종료 → `moving` 은 정지 대기로, 요청별 버림 3 회, 요청 전체 60 s, `_drop` site 상한에서 제외.
+  - P3 후보 허가 문맥 만드는 법·실제 객체 시험, presteer 완료/만료 구분과 허용 0.02 rad.
 
 ### 1판 → 2판
 
