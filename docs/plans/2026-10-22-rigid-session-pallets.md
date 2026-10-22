@@ -1,4 +1,4 @@
-# 다중 강체 팔레트·원자적 미션 전환 — 연속 이송 CT-1 PR ③ (1판)
+# 다중 강체 팔레트·원자적 미션 전환 — 연속 이송 CT-1 PR ③ (2판)
 
 브랜치 `feat/ct1-rigid-pallets`(origin/main `11d7015` = PR #102 뒤). 상위 계획 `docs/plans/2026-10-22-continuous-transport-ct1.md` 3절 PR ③. PR ② 인계: `docs/plans/2026-10-22-session-scene-pallet-props.md` 4절.
 
@@ -54,91 +54,118 @@
 
 **세션 모드**: `--scene-file` 이 `riibotics_isaac_session_v1` 이면 켜진다.
 
-- 세션 모드는 `--live`·`--layout scene` 에서만 받는다.
-- 배치·경계 기록·`--recognition far` 없는 조합의 허용 여부는 2.6.
+- 세션 모드는 `--live`·`--layout scene`·`--near-capture-redraw always` 에서만 받는다(2.6).
+- 배치·`--record-boundary`·`--bottom-deck-check on`·`--near-tracking` 은 거부한다.
 - v1 장면·bay·배치의 경로는 그대로다(리플레이 게이트 29 건, 같은 port 호출).
 
 ### 2.1 모든 팔레트를 강체로
 
-- usd 는 한 번만 가져온다(`create_pallet` 를 import 와 배치로 나눈다).
-- 세션 팔레트 k 는 `/World/SessionPallets/{id}`(`P-1` 포함 — 세션 모드에서는 `/World/Pallet` 을 만들지 않는다)에 둔다. 장면 객체 이름은 `pallet_{id}` 이고, 자리는 `pallets[].truth` 다.
+- **이름**: 논리 id(`P-1`)와 prim 이름을 나눈다.
+  - `pallet_prim(id)` = `/World/SessionPallets/` + id 의 `-` 를 `_` 로 바꾼 이름(`P_1`). USD 는 `-` 를 받지 않는다(Codex 1차 P1, `Sdf.Path` 재현).
+  - 물리 뿌리·의미 분할 라벨·LiDAR 접두가 모두 이 함수 하나를 쓴다. 로더는 id 가 `[A-Za-z][A-Za-z0-9_-]*` 이고 바꾼 이름끼리 겹치지 않는지 검사한다.
+- usd 는 한 번만 가져온다(`create_pallet` 를 import 와 배치로 나눈다). 각 팔레트 자리는 `pallets[].truth` 이고, 장면 객체 이름은 `pallet_{prim 이름}` 이다.
+- 세션 모드에서는 `/World/Pallet` 을 만들지 않는다.
 - 정적 복사본(`add_scene_pallets`)은 v1 에만 남긴다.
 - `configure_drives` 의 뿌리: 세션 모드는 모든 세션 팔레트 뿌리에 재질·오프셋·상자 수 단언을 한다.
-- 정착: 모든 팔레트를 5 mm·z 5 mm 로 검사한다(지금 규칙을 팔레트마다).
+- 정착: 모든 팔레트를 5 mm·z 5 mm 로 검사한다(지금 규칙, 팔레트마다).
+- 물리 설정은 `/World/Pallet` 과 같다(잠 문턱 등은 바꾸지 않는다). 다른 팔레트의 표류는 2.4 감시가 기록한다.
 
 ### 2.2 손잡이 대리 객체 `PalletSwitch`(순수, `sim/isaac/session_pallets.py`)
 
 - `{id: handle}` 과 현재 id 를 가진다. `get_world_pose`·`set_world_pose`·`get_mass`·`get_linear_velocity`·`get_angular_velocity` 를 지금 손잡이에 넘긴다.
+- `handle(id)` 는 특정 팔레트를 직접 읽게 한다.
 - 세션 모드에서 러너의 `pallet` 은 이 객체다. v1 은 손잡이 그대로다.
-- 전환은 `switch(id)` 하나다. 바꾼 id 와 시각을 기록한다.
+- 전환 `switch(id)` 는 바꾼 id 와 틱을 기록한다.
 
-### 2.3 채택 틱의 원자적 전환
+### 2.3 전환은 채택 다음 틱의 머리에서 (분열 없음)
 
-`live_mission_start`(채택 hook) 안, 다른 일보다 먼저 한 곳에서 한꺼번에 바꾼다.
-
-1. `pallet.switch(mission.pallet_id)`
-2. 그 틱의 truth 표본 `ppos`·`pq`·`pallet_yaw`·`pallet_tilt` 를 새 손잡이로 다시 읽는다(`drive` 의 nonlocal). 그 뒤의 hook(`pallet_z`·`insertion_measured`·`truth_relative_yaw`)·`cargo_rel`·0.1 s 표본이 새 팔레트를 본다.
-3. `initial_pallet`·`pickup_obstacle`(지금처럼 다시 읽음)
-4. `truth_destination` = 세션 목적지 truth(= 칸 자세 — 세션 목적지는 칸 그 자체)
-5. 하역 고리: 미션 목적지로 옮긴다.
-6. 원거리 인식 truth 인스턴스 = 그 팔레트의 `inst_k`
-7. truth 장애물 목록 `obstacles`:
-   - static 소품, 실행 중 생성된 장애물, 다른 세션 팔레트의 지금 truth 외곽(채택 순간 읽음)을 합친다.
-   - 생성 장애물의 소유는 그대로 러너다(합치기만 한다).
-8. `TraceEvidence` 의 기준 초기화 — 새 팔레트의 바닥 자세를 기준으로 한다.
-
+- 채택 hook(`live_mission_start`)이 하는 일:
+  - 새 팔레트 id 를 `pending_switch` 로 둔다.
+  - 미션 값을 정한다. 이때 새 팔레트는 `pallet.handle(id)` 로 직접 읽는다.
+    - `initial_pallet`·`pickup_obstacle`
+    - `truth_destination` = 세션 목적지 칸 자세
+    - 하역 고리를 미션 목적지로 옮긴다.
+- 그 틱의 남은 일은 끝까지 옛 팔레트를 본다. 채택 틱은 `job_hold` 가 `hold=True` 라 주행하지 않는다(core 5948).
+- **다음 틱 머리**(truth 표본 `ppos, pq` 를 읽기 직전, RT 7153)에서 `pending_switch` 가 있으면 한꺼번에 바꾼다.
+  1. `pallet.switch(id)`
+  2. 나가는 팔레트의 지금 자세를 그 팔레트의 쉬는 자세로 확정한다(2.4).
+  3. 원거리 인식 truth 인스턴스 = 새 팔레트의 `inst_k`
+  4. truth 장애물 목록의 다른 팔레트 외곽을 갱신한다(2.4).
+  5. `TraceEvidence`: 다른 id 로 바뀔 때만 새로 만든다. 새 팔레트는 바닥에 있으므로 바닥 기준 = 그 자세다. 같은 id(실은 채 재제출)면 지금 증거를 그대로 둔다(Codex 1차 P2, agy).
+  - 그 뒤 그 틱의 모든 소비자(검사·hook·`cargo_rel`·0.1 s 표본·영상 기록)가 새 팔레트를 본다.
+- 운반 중에는 다른 팔레트의 제출이 거절된다(`cargo_held`, `commands.py` 79). 그래서 전환 때 나가는 팔레트는 늘 바닥에 있다. 그래도 바닥이 아니면(cargo 가 그 id 를 싣고 있음) 전환을 세션 오류로 거부한다(계약 위반).
 - 준비 실패·취소·거절에는 채택이 없으므로 아무것도 바꾸지 않는다.
 - 미션 끝 뒤 cargo·복구가 남아도 다음 채택 전까지 같은 팔레트를 가리킨다.
 
-### 2.4 지금 팔레트가 아닌 팔레트의 밀림 감시
+### 2.4 지금 팔레트가 아닌 팔레트: 쉬는 자세·밀림 감시·truth 장애물
 
-- 쉬는 자세: 세션 시작 정착 뒤, 그리고 그 팔레트의 미션이 하역 판정을 받은 뒤(그 미션의 끝)에 확정한다.
-- 12 틱마다 읽는다. 1 cm 또는 0.01 rad 를 넘으면 `scene_require` 의 장면 손상(`Session pallet displaced: {id}`) → 그 미션 종료, 이후 제출 거부(지금의 장면 손상 규칙).
-- 지금 팔레트는 감시하지 않는다(지금의 떨어짐·미끄러짐·밀림 검사가 맡는다).
+- **쉬는 자세**: 세션 시작 정착 때 모든 팔레트에, 그리고 전환 때 나가는 팔레트에 확정한다. 하역 판정·수동 접지·취소 여부와 무관하게 전환 순간의 자세다(Codex 1차 P2, agy P1).
+- **감시**: 12 틱마다 지금 팔레트가 아니고 cargo 가 싣지 않은 팔레트를 읽는다.
+  - 1 cm 또는 0.01 rad 를 넘으면 `scene_require` 의 장면 손상 `Session pallet displaced: {id}` → 그 미션 종료, 이후 제출 거부(지금의 장면 손상 규칙).
+  - 이 접두를 `failures.py`(SCENE)·`results.js` 에 등록하고, 세션이 살아 다음 상태(제출 거부)로 가는지 시험한다(Codex 1차 P2).
+- **표류 기록**: 감시가 읽은 최대 변위를 팔레트마다 기록한다. Isaac 에서 물리 표류만으로 문턱을 넘는지 본다(agy P2).
+- **truth 장애물 목록**(`obstacles`): static 소품 + 생성 장애물(러너 소유 그대로) + 다른 팔레트의 쉬는 자세 외곽이다.
+  - 다른 팔레트의 외곽은 세션 시작과 전환 때 갱신한다.
+  - 미션이 없는 동안(idle)에도 지금 팔레트가 바닥에 있으면 그 외곽을 겹침 검사에 넣는다. teleop 으로 하역된 팔레트에 부딪히는 것을 잡는다(agy P2). 세션 모드만.
 
 ### 2.5 세션 어댑터 연결(PR ② 인계)
 
 - 등록: `register_session(core.targets, session, kind, depth, width, live=True)` — 모든 팔레트·D-1..D-m.
-- 준비 입력: `live_session_["pallets"]` 를 세션 팔레트마다 {`template` = 후보, `reference` = `registered`, `zone` = `zone_rect(zone)`, `bounds`} 로 만든다. `nominal` 은 세션 공칭이다.
-  - `bounds`: `None` — `--layout scene` 은 지금도 `pickup_bounds` 가 없다(RT 2579, 공장 배치만 2607).
-- `live_session_["truth"]` = 세션 목적지(D-k) 칸 자세(이상적 칸 — 하역 판정의 기준).
+- 준비 입력 `live_session_["pallets"][id]`:
+  - `template` = 후보, `reference` = `registered`, `zone` = `zone_rect(zone)`, `bounds` = `None`(`--layout scene` 은 지금도 없다, RT 2579).
+  - `far_zone` = 그 팔레트 구역 중심 + 중심 범위의 반대각선(지금 setup 구역 규칙, RT 3165–3171). 처음 자리에서 쓴다. 인식·하역 뒤는 추정 기준(PR ① 규칙)이다. P-2 가 P-1 구역을 쓰지 않는다(Codex 1차 P2).
+- `nominal` = 세션 공칭.
+- `live_session_["truth"]` = 세션 목적지(D-k) 칸 자세.
+- teleop 허가·수동 정리: 세션 모드는 `zones_from(targets, {id: zone_rect})` 로 모든 사전 팔레트의 자기 구역을 넘긴다. 실은 채 재제출(구역 없음)에서도 그 지도는 그대로다(Codex 1차 P2).
 - `session_extra_` 는 팔레트가 둘 이상이면 켜진다(PR ② 코드 그대로).
 - v1 은 지금 코드 그대로다(PR ② 동등성 시험이 지킨다).
 
-### 2.6 근접 기본 직선의 이웃 sweep(PR ② 인계, Codex 반례)
+### 2.6 근접 기본 직선의 이웃 sweep(PR ② 인계)
 
-- 세션 모드에서 기본 직선의 dry run 궤적(`trajectory`)의 빈 외곽을 쓸고 간 범위가 세션 이웃 소품(`session_extra_` 의 사각형)과 겹치면 `near_capture_misaligned:neighbour_sweep` 로 거절한다 → 재작도 경로로 간다(재작도는 자기 소품 검사를 한다).
-- v1 은 끈다(옵션 플래그 `near_capture_neighbour_sweep`, 세션 모드만 켬 — 리플레이 불변).
+- 세션 모드에서 검사한다. 기본 직선의 dry run 궤적(`RolloutResult.trajectory`)을 빈 외곽으로 쓸고 간 범위가 세션 이웃 소품(`session_extra_` 의 사각형)과 겹치면 `near_capture_misaligned:neighbour_sweep` 로 거절한다.
+- 세션 모드는 `--near-capture-redraw always` 를 요구한다(parser). 그래서 거절은 재작도로 간다. 재작도는 자기 궤적·소품 검사를 한다(Codex 1차 P2).
+- 옵션 `near_capture_neighbour_sweep` 은 세션 모드만 켠다(v1 리플레이 불변).
 
-### 2.7 센서 자기 필터
+### 2.7 센서 자기 필터(agy P1)
 
-- 실린 팔레트만 자기로 뺀다. 세션 모드의 접두는 `"/World/SessionPallets/{carried_id}/"`(뒤 슬래시 포함 — 다른 id 와 섞이지 않음)다.
-- 어느 팔레트가 실렸는지는 `PalletSwitch` 의 지금 id 와 단계(지금 규칙)로 정한다.
-- v1 은 지금 문자열 그대로다.
+- 실린 판단 = 지금 규칙(단계 lift·extract·transport·lower) 또는 cargo 가 싣고 있음(teleop·idle 운반 포함).
+- 뺄 팔레트 = cargo 가 싣고 있으면 그 id, 아니면 실린 단계의 지금 팔레트다.
+- 접두는 `pallet_prim(id) + "/"` 다(다른 id 와 섞이지 않음).
+- v1 은 지금 문자열·규칙 그대로다.
 
-### 2.8 의미 분할 라벨
+### 2.8 의미 분할 라벨·기록
 
-- 세션 팔레트 `P-k` → `inst_{k-1}`(P-1 = inst_0).
-- 원거리 런타임의 truth 인스턴스를 `FarRuntime.truth_instance` 로 둔다(기본 0). 채택 때 바꾼다.
+- 세션 모드 라벨: 팔레트 `pallet_prim(P-k)` → `inst_{k-1}`, `/World/Scene` → floor. `/World/Pallet` 은 요구하지 않는다(agy P2: 지금은 없으면 시작 단언이 실패한다).
+- 원거리 런타임의 truth 인스턴스를 `FarRuntime.truth_instance` 로 둔다(기본 0). 전환 때 바꾼다.
+- 영상 프레임 기록·D8b truth·0.1 s 표본에 세션 모드는 `pallet_id` 를 함께 남긴다(agy P3).
 
-### 2.9 조합
+### 2.9 남는 것
 
-- 세션 모드는 `--live` 필수다. 배치·`--record-boundary`·`--bottom-deck-check on`·`--near-tracking` 은 거부한다.
-- `--recognition far` 는 권장이고 필수는 아니다(검출기만으로도 돈다).
-- 새 인자는 없다(장면 파일 형식으로 판단한다). 근접 계약(`POST_MEASUREMENT_ARGUMENTS`)에 바뀌는 것이 없음을 시험한다.
+- 운영자의 미션 순서가 다른 팔레트에 막히면 준비가 실패한다(`prepare:all_candidates_failed`). 순서 규칙은 CT-2 다(agy P2).
+- 경계 기록·리플레이는 세션 모드를 지원하지 않는다(거부). 회귀는 CPU 시험과 Isaac 기록으로 본다(agy P3).
 
 ## 3. 시험 (먼저)
 
-- `PalletSwitch`: 위임, 전환 기록, 모르는 id 거부.
-- 원자 전환(CPU 가짜 손잡이 둘, 서로 다른 자세):
-  - 채택 틱에 모든 truth 소비자가 같은 id 를 본다. 대상은 `ppos`·hook 셋·`initial_pallet`·`pickup_obstacle`·`truth_destination`·원거리 truth 인스턴스·`obstacles` 의 이웃·흔적 증거 기준이다.
-  - 준비 실패·취소에서는 이전 id 가 유지된다.
+- `pallet_prim`: `-` 치환, 겹침 거부, USD 경로 유효성(로컬 pxr 가 있으면).
+- `PalletSwitch`: 위임, `handle(id)`, 전환 기록, 모르는 id 거부.
+- 전환(러너 함수를 AST 로 뽑아 실행 — 기존 시작 판정 시험과 같은 방식. 가짜 손잡이 둘, 서로 다른 자세):
+  - 채택 틱의 남은 일은 옛 팔레트를 본다.
+  - 다음 틱은 모든 소비자가 새 id 를 본다. 대상은 `ppos`·hook 셋·`cargo_rel`·원거리 truth 인스턴스·`obstacles` 의 다른 팔레트·흔적 증거다.
+  - 채택 때 정한 `initial_pallet`·`pickup_obstacle`·`truth_destination` 은 새 팔레트의 값이다.
+  - 같은 id 재제출이면 흔적 증거를 보존한다(운반 중 15 mm 미끄러짐이 계속 잡힘).
+  - 준비 실패·취소는 이전 id 를 유지한다.
   - 끝난 뒤 cargo·복구가 남으면 다음 채택 전까지 유지된다.
-  - 러너 함수는 AST 로 뽑아 실행한다 — 기존 시작 판정 시험과 같은 방식.
-- 밀림 감시: 1 cm·0.01 rad 경계, 쉬는 자세 확정 시점(하역 판정 뒤), 지금 팔레트 제외.
-- 근접 기본 직선 이웃 sweep: Codex 반례(2.1 m 직선, 시작 0.049 m·0.049 rad, 이웃 공칭 (1.2, 1.09, 0) + 0.25)가 거절되고, 옵션을 끄면 지금과 같다.
-- 자기 필터 접두: 실린 id 만, 다른 세션 팔레트는 남는다.
-- parser: 세션 모드 조합 거부·허용.
+  - 나가는 팔레트를 cargo 가 싣고 있으면 거부한다.
+- 쉬는 자세·감시:
+  - 하역 뒤 복귀 중 취소 → 다음 채택: 감시가 정상 팔레트를 밀림으로 잡지 않는다.
+  - 1 cm·0.01 rad 경계, 지금 팔레트·실린 팔레트 제외.
+  - `Session pallet displaced` 는 SCENE 분류이고 세션이 산다.
+- 근접 기본 직선 이웃 sweep: Codex 반례(2.1 m 직선, 시작 0.049 m·0.049 rad, 이웃 공칭 (1.2, 1.09, 0) + 0.25)가 거절되고 재작도로 들어간다. 옵션을 끄면 지금과 같다.
+- 자기 필터: 단계 밖 cargo 운반에서도 실린 id 만 빠지고, 다른 세션 팔레트는 남는다.
+- teleop 구역: 팔레트마다 자기 구역, 실은 채 재제출에서도 유지.
+- 원거리 구역: P-2 의 처음 자리 구역이 P-2 중심이다.
+- 라벨: 세션 모드에 `/World/Pallet` 없이 시작한다.
+- parser: 세션 모드 조합 거부·허용(`--near-capture-redraw always` 필수).
 - 리플레이 게이트 29 건, ws1 전체.
 
 ## 4. 검증 (Isaac, ws1)
@@ -168,4 +195,29 @@
   - `RolloutResult.trajectory`(rollout.py 28–31)
   - LiveSession 구조(RT 6793–6810)
 - 자기 필터 부분 문자열 문제: `"/World/Pallet" in "/World/Pallets/P-2/..."` 는 참이다. 그래서 세션 팔레트를 `/World/SessionPallets/` 아래에 두고 뒤 슬래시 접두를 쓴다. v1 의 `/World/Pallet` 은 `/World/SessionPallets/...` 와 겹치지 않는다(부분 문자열이 아니다).
+
+## 7. 검토 기록
+
+### 1판 → 2판
+
+- **② Codex 적대적 검토(1차, 새 스레드): P1 1·P2 6 — 모두 받아들였다.**
+  - P1: USD 가 `P-1` 의 `-` 를 받지 않는다 → `pallet_prim`.
+  - P2:
+    - teleop 구역이 하나 → 팔레트별 지도.
+    - 원거리 탐색 구역이 첫 팔레트에 남는다 → 팔레트별 `far_zone`.
+    - 흔적 증거 초기화가 실은 채 재제출을 깬다 → 다른 id 일 때만.
+    - 하역 뒤 취소면 쉬는 자세가 낡는다 → 전환 순간 확정.
+    - 새 오류의 분류 → SCENE 등록.
+    - 기본 설정에서 재작도로 안 간다 → `always` 필수.
+- **③ 독립 검토(agy, Gemini 3.8 Flash Medium; ② 를 보지 않음): P1 3·P2 4·P3 2.**
+  - 받아들임:
+    - 실린 채 끝난 팔레트의 쉬는 자세.
+    - 틱 분열 → 다음 틱 머리 전환.
+    - 자기 필터가 단계만 봄 → cargo 포함.
+    - idle 의 지금 팔레트 겹침 검사.
+    - `/World/Pallet` 라벨 단언.
+    - 순서는 CT-2.
+    - 기록에 `pallet_id`.
+    - 리플레이 제외 명시.
+  - 받아들이지 않음: 물리 잠 문턱 변경. `/World/Pallet` 과 같은 물리를 두고 표류를 기록해 판단한다.
 
