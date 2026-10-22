@@ -349,3 +349,22 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .results li .why { grid-column: 1 / -1; color: var(--muted); overflow-wrap: anywhere; } .results li .advice { grid-column: 1 / -1; color: var(--warn); }
 .session-row .btn[data-confirm="armed"] { background: var(--crit); color: #fff; }
 .reset-row { margin-top: 14px; }
+/* mission queue plan D9: the queue under the task assignment */
+.queue-sect { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 6px; }
+.queue-sect[data-stopped="true"] .sp-head b { color: var(--warn); }
+.queue-sect .btn[data-confirm="armed"] { background: var(--warn); color: #fff; }
+.presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.presets .preset { display: inline-flex; align-items: stretch; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; max-width: 100%; }
+.presets .preset button { border: 0; background: var(--panel-2); padding: 3px 8px; font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.presets .preset button:disabled { opacity: 0.45; cursor: not-allowed; }
+.presets .preset .x { border-left: 1px solid var(--line-2); color: var(--muted); }
+.queue-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 240px; overflow: auto; }
+.queue-items li { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; align-items: center; font-size: 12px; padding: 4px 6px; border-radius: 6px; background: var(--panel-2); }
+.queue-items li .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.queue-items li .what { overflow-wrap: anywhere; }
+.queue-items li .acts { display: inline-flex; gap: 2px; }
+.queue-items li .acts button { border: 1px solid var(--line-2); background: transparent; border-radius: 6px; padding: 1px 6px; font-size: 11.5px; cursor: pointer; }
+.queue-items li .acts button:disabled { opacity: 0.35; cursor: not-allowed; }
+.queue-items li .st { grid-column: 1 / -1; color: var(--muted); }
+.queue-items li.uncertain { outline: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
+.queue-items li.uncertain .st { color: var(--warn); }

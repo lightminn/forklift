@@ -216,6 +216,20 @@
             <button class="btn teleop-ghost wide" id="go-tele" type="button">수동 조종 화면으로</button>
           </div>
 
+          <div class="queue-sect" id="queue">
+            <div class="sp-head"><b>대기열</b><span class="chip" id="q-run">멈춤</span></div>
+            <div class="hint" id="q-why"></div>
+            <div class="notice warn" id="q-save" hidden></div>
+            <div class="row three">
+              <button class="btn" id="q-resume" type="button">재개</button>
+              <button class="btn" id="q-stop" type="button">멈춤</button>
+              <button class="btn" id="q-clear" type="button">비우기</button>
+            </div>
+            <div class="presets" id="q-presets" aria-label="저장된 운반"></div>
+            <ol class="queue-items" id="q-items"></ol>
+            <div class="hint" id="q-done"></div>
+          </div>
+
           <div class="results-sect">
             <div class="sp-head"><b>미션 결과</b><span class="hint" id="results-older"></span></div>
             <ol class="results" id="results-list"><li class="hint">아직 끝난 미션이 없습니다</li></ol>
@@ -309,6 +323,8 @@
       <span class="hint" id="wz-why"></span>
       <button class="btn" id="wz-back" type="button">이전</button>
       <button class="btn primary" id="wz-next" type="button">다음</button>
+      <button class="btn" id="q-save-preset" type="button" hidden>운반 저장</button>
+      <button class="btn" id="q-add" type="button" hidden>대기열에 넣기</button>
       <button class="btn primary" id="m-start" type="button" hidden>작업 시작</button>
     </footer>
   </div>

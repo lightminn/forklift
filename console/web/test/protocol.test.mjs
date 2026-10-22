@@ -142,3 +142,28 @@ test("without a token (the fake vehicle) requests are as before", () => {
   assert.equal(sent.at(-1).request_token, undefined);
   assert.equal(sent.at(-1).request_seq, undefined);
 });
+
+test("a request can carry an id chosen by the caller (the mission queue saves it before sending)", () => {
+  const { s, sent } = setup();
+  s.request("mission_submit", { pallet_id: "P-1" }, { requestId: "q-1" });
+  assert.equal(sent.at(-1).request_id, "q-1");
+  assert.equal(sent.at(-1).pallet_id, "P-1");
+});
+
+test("a forgotten request is not resent and its late answer settles nothing", async () => {
+  const { s, sent, tick } = setup();
+  let settled = false;
+  s.request("mission_submit", { pallet_id: "P-1" }, { requestId: "q-1" }).then(() => { settled = true; });
+  const other = s.request("mission_pause", { mission_id: "M-1" });
+  const otherId = sent.at(-1).request_id;
+  s.forget("q-1");
+  tick(600);
+  s.pump();
+  assert.equal(sent.filter((m) => m.request_id === "q-1").length, 1, "sent once, never again");
+  assert.equal(sent.filter((m) => m.request_id === otherId).length, 2, "the other request is still resent");
+  s.onMessage({ t: "ack", request_id: "q-1", mission_id: "M-7" });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  s.onMessage({ t: "ack", request_id: otherId });
+  assert.equal((await other).t, "ack");
+});
