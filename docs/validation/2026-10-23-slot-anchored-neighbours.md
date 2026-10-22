@@ -23,19 +23,34 @@
 |---|---|---|---|
 | random_m s0 | P-4 → D-1 · P-5 → D-2 · P-3 → D-3 | **done · done · done** | 1.2 · 3.6 · 1.6 cm |
 | random_m s1 | 같은 순서 | done · **실패** `Tracking timeout in observe` · done | 3.2 · — · 0.9 cm |
-| line_m s0 | P-1 → D-1 · P-2 → D-2 · P-3 → D-3 | (작성 중) | |
-| line_m s1 | 같은 순서 | (작성 중) | |
+| line_m s0 | P-1 → D-1 · P-2 → D-2 · P-3 → D-3 | done · done · **실패** `Tracking timeout in return_home`(하역 뒤) | 1.6 · 2.6 · 1.6 cm |
+| line_m s1 | 같은 순서 | done · done · **실패** `cusp_position_stall`(운반 중) | 1.8 · 2.5 · — |
 
 - **앵커**(`session_slot_anchor_log`):
   - random_m s0: P-4 → D-1·P-5 → D-2 둘 다 `anchored`. 세 번째 미션(P-3 → D-3)이 앵커 장면으로 계획돼 하역했다. PR ③ 에서 두 번 다 막혔던 미션이다.
   - random_m s1: P-4 `anchored`, P-5 `docking_not_accepted`. P-5 는 관측 단계에서 끝나 하역 도킹이 없었다.
+  - line_m s0·s1: P-1 → D-1·P-2 → D-2 `anchored`. 세 번째 미션은 둘 다 계획·하역 직선 단계를 통과했다(실패는 아래 분류).
 - **도킹 거부 되돌림**(`session_anchor_unaligned`): 두 실행 모두 호출되지 않았다. 앵커로 계획한 미션은 모두 하역 도킹이 수용됐다.
 - **밀림 0.** 손대지 않은 팔레트의 쉬는 자세 대비 최대 이동은 0.041 mm·0.00019 rad 이하다. 장면 손상·금지 접촉은 0 이다.
   - PR ③ 검증 문서의 "2 mm 이하"는 요약 스크립트 단위(mm)를 m 로 읽은 오기다. 실제로는 0.002 mm 이하였다.
-- **이웃 실제 최소 간격**: random_m s0 은 P-5 0.436 m(운반, P-3 미션), P-4 0.445 m. s1 은 P-5 0.460 m 다.
+- **이웃 실제 최소 간격**: random_m s0 은 P-5 0.436 m(운반, P-3 미션), P-4 0.445 m. s1 은 P-5 0.460 m 다. line_m 은 s0·s1 모두 P-2 0.34 m(추출, P-1 미션)다. PR ③ 의 0.353 m 와 같은 자리다.
 - **다리 끝 크리프**: #105 병합 전 같은 장면에서는 3 건(속도 0.0121 m/s·곡률 0.36 고정)이 나왔다. 병합 뒤 두 실행에서는 없다.
-  - s1 의 실패는 다른 양상이다. 관측 다리 cusp 에서 위치 오차 0.163 m·명령 0 으로 22 s 서 있다가 시간 초과로 끝났다(cusp 정체). 다리 끝 담당 세션에 넘겼다.
-- 실시간 배율: random_m s0 0.349(시뮬 588.5 s / 벽 1686.6 s), s1 0.345(494.8 s / 1436.1 s).
+  - s1 의 실패는 다른 양상이다(cusp 정체). 다리 끝 담당 세션 답: #105 하한 소관이 아니라 cusp 정체 래치(`cusp_stall.py`) 소관이다.
+    - cusp 래치는 첫 정체(224.5 s, 위치 오차 0.049 m)를 잡았다. 관측 재계획 두 번(230.8·242.6 s)으로 예산을 다 썼다.
+    - 그 뒤 두 번째 정체(250–272 s)는 위치 오차 0.163 m·명령 0 으로 22 s 서 있었고, 래치 기록 없이 `Tracking timeout in observe` 로 끝났다.
+    - 기록: `ct1_anc_9ddc5d5_random_s1/live/epoch_1/run/missions/m2/records.json`(`cusp_stalls`·`observe_replans`·`tracking_failure`).
+- 실시간 배율: random_m s0 0.349(시뮬 588.5 s / 벽 1686.6 s), s1 0.345(494.8 s / 1436.1 s). line_m s0 0.357(573.7 / 1605.8 s), s1 0.352(459.9 / 1306.3 s).
+
+### 실패 분류 — 칸 앵커와 무관한 제어 단계
+
+| 실행 | 단계 | 양상 | 소관 |
+|---|---|---|---|
+| random_m s1 m2 | 관측 | cusp 래치가 첫 정체를 잡고 관측 재계획 예산 2 회를 다 씀. 두 번째 정체(오차 0.163 m)는 래치 기록 없이 시간 초과 | cusp 정체 래치 |
+| line_m s0 m3 | 복귀 | 하역 1.6 cm 뒤 해제 재계획 경로를 잘 따라감. 경로 61 번 자세(−0.17, −8.07)에서 명령 0·`at_cusp` 로 85 s 서 있다가 시간 초과. SLAM 위치 오차 최대 0.28 m(튐 없음) | 복귀 다리 정지(원인 미확인) |
+| line_m s1 m3 | 운반 | 운반 다리 끝에서 위치 오차 0.075 m 로 cusp 정체 래치 → `cusp_position_stall` | cusp 정체 래치 |
+
+- 세 실패 모두 계획 단계를 통과한 뒤 주행·cusp 단계에서 났다. 칸 앵커는 하역 직선·후퇴의 계획 검사만 바꾼다. 복귀 탐색은 추정 단계 장애물을 쓰고, 앵커가 없을 때와 같은 목록이다(시험).
+- 기록: 각 실행 폴더 `run/missions/m{2,3}/records.json`(`cusp_stalls`·`observe_replans`·`tracking_failure`), `run.log` SAMPLE.
 
 ## 시험
 
