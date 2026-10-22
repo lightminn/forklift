@@ -13,8 +13,8 @@ dependencies = ["numpy>=1.23"]
 test = ["pytest>=7"]
 model = ["PyYAML>=6", "mujoco>=3.3,<4", "Pillow>=10"]
 dataset = ["Pillow>=10"]
-fleet = ["scipy>=1.9"]  # scipy.optimize.milp for the global crossing order (fleet_queue_opt)
-dev = ["pytest>=7", "ruff", "build", "pip-tools", "Pillow>=10", "PyYAML>=6", "scipy>=1.9"]
+fleet = ["scipy>=1.9", "highspy>=1.15"]  # the global crossing order (fleet_queue_opt): scipy.optimize.milp; highspy for --opt-time-s
+dev = ["pytest>=7", "ruff", "build", "pip-tools", "Pillow>=10", "PyYAML>=6", "scipy>=1.9", "highspy>=1.15"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -455,6 +455,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         opt_period_s=args.opt_period_s,
         node_limit=args.node_limit,
         opt_horizon_s=args.opt_horizon_s,
+        opt_time_s=args.opt_time_s,
         mapf_window_s=args.mapf_window_s,
         mapf_replan_s=args.mapf_replan_s,
         tile_m=args.tile_m,
@@ -939,6 +940,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         "chains": chains,
         "queue_opt": args.queue_opt if args.traffic == "queues" else None,
         "opt_horizon_s": args.opt_horizon_s if args.traffic == "queues" else None,
+        "opt_time_s": args.opt_time_s if args.traffic == "queues" else None,
         "accel_cap": cap,
         "load_kg_mean": round(float(np.mean(loads)), 2) if loads else None,
         "stops": sum(t.stops for t in trucks),
@@ -1049,6 +1051,8 @@ def main(argv=None) -> int:
     parser.add_argument("--opt-period-s", type=float, default=5.0)
     parser.add_argument("--node-limit", type=int, default=2000)
     parser.add_argument("--opt-horizon-s", type=float, help="global orders: only crossings reached within this (free flow); default all")
+    parser.add_argument("--opt-time-s", type=float,
+                        help="global orders: start from the current orders, keep the best found in this many s (highspy; runs no longer repeat exactly)")
     # Literature baselines (plan 2026-10-17): --traffic adg | sections | mapf | tiles.
     parser.add_argument("--mapf-window-s", type=float, default=30.0)
     parser.add_argument("--mapf-replan-s", type=float, default=5.0)

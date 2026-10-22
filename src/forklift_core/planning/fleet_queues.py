@@ -33,7 +33,9 @@ who goes first in them by queues:
   turns run as well. With ``opt_horizon_s`` only orders whose crossing a
   truck reaches within that many seconds (free flow) are choices; the ones
   further on keep their order this time, as fixed ones do (plan
-  2026-10-17-fleet-large-random-chained, 「계산 줄이기」).
+  2026-10-17-fleet-large-random-chained, 「계산 줄이기」). With ``opt_time_s``
+  the solve starts from the current orders and stops after that many seconds
+  with the best found (fleet_queue_opt).
 - **Pace.** ``pace`` gives the speed at which a truck reaches the end of the
   grant it will be held at just as the truck ahead lets it go on (``None``:
   no cap, below ``pace_min_mps`` or nothing to wait for). Safety stays with
@@ -90,6 +92,7 @@ class Queues(Windows):
         opt_period_s: float = 5.0,
         node_limit: int = 2000,
         opt_horizon_s: float | None = None,
+        opt_time_s: float | None = None,
         **kwargs,
     ) -> None:
         if optimiser not in ("local", "global"):
@@ -100,6 +103,7 @@ class Queues(Windows):
         self.opt_period_s = opt_period_s
         self.node_limit = node_limit
         self.opt_horizon_s = opt_horizon_s
+        self.opt_time_s = opt_time_s
         self.members: dict[int, Member] = {}
         self._next_member = 0
         self._last_global = -np.inf
@@ -393,7 +397,7 @@ class Queues(Windows):
             waited = 0.0 if t.waiting_since_s is None else now - t.waiting_since_s
             weights[n] = 1.0 + waited / self.age_s
         t0 = time.perf_counter()
-        solved = solve_orders(self, self.crossings, trucks, fixed, weights, self.node_limit)
+        solved = solve_orders(self, self.crossings, trucks, fixed, weights, self.node_limit, self.opt_time_s)
         self.counts["global_wall_ms"] += int(round(1000 * (time.perf_counter() - t0)))
         if solved is None:
             self.counts["global_failed"] += 1

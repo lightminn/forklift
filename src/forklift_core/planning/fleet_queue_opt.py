@@ -19,6 +19,11 @@ solution only if fleet_windows' own cost falls. scipy.optimize.milp (HiGHS)
 is imported only here, so the package itself needs NumPy alone; a node limit,
 not a wall-clock one, bounds the search so a run repeats exactly.
 
+With ``time_limit_s`` the same model goes to highspy instead, started from
+the current orders (their delays from the model with the orders held), and
+the best solution found by then is returned. The search is bounded in time,
+so a run no longer repeats exactly.
+
 The constraint matrix is built sparse: HiGHS gets the same model as from the
 dense rows it replaced (whose size grew with orders x checkpoints).
 """
@@ -59,7 +64,42 @@ def _roles(windows, crossings, trucks, fixed):
     return out
 
 
-def solve_orders(windows, crossings, trucks, fixed: dict, weights: dict, node_limit: int):
+def _highs(matrix, lower, objective, upper, n_cols, start, node_limit, time_limit_s):
+    """The model in highspy, started from the binaries at ``start`` (their
+    delays solved with them held) and stopped after time_limit_s with the best
+    solution found; None if there is none."""
+    import highspy
+
+    def solve(col_lower, col_upper, mip, begin=None):
+        lp = highspy.HighsLp()
+        lp.num_col_, lp.num_row_ = matrix.shape[1], matrix.shape[0]
+        lp.col_cost_, lp.col_lower_, lp.col_upper_ = objective, col_lower, col_upper
+        lp.row_lower_, lp.row_upper_ = lower, np.full(len(lower), highspy.kHighsInf)
+        lp.a_matrix_.format_ = highspy.MatrixFormat.kColwise
+        lp.a_matrix_.start_, lp.a_matrix_.index_, lp.a_matrix_.value_ = matrix.indptr, matrix.indices, matrix.data
+        h = highspy.Highs()
+        h.setOptionValue("output_flag", False)
+        h.setOptionValue("threads", 1)  # no worker threads in a process the planner forks
+        if mip:
+            lp.integrality_ = [highspy.HighsVarType.kInteger if j >= n_cols else highspy.HighsVarType.kContinuous for j in range(lp.num_col_)]
+            h.setOptionValue("time_limit", float(time_limit_s))
+            h.setOptionValue("mip_max_nodes", int(node_limit))
+        h.passModel(lp)
+        if begin is not None:
+            solution = highspy.HighsSolution()
+            solution.col_value, solution.value_valid = list(begin), True
+            h.setSolution(solution)
+        h.run()
+        if h.getInfo().primal_solution_status != highspy.kSolutionStatusFeasible:
+            return None
+        return np.array(h.getSolution().col_value)
+
+    held_lower, held_upper = np.zeros(len(upper)), upper.copy()
+    held_lower[n_cols:] = held_upper[n_cols:] = start
+    return solve(np.zeros(len(upper)), upper, True, solve(held_lower, held_upper, False))
+
+
+def solve_orders(windows, crossings, trucks, fixed: dict, weights: dict, node_limit: int, time_limit_s: float | None = None):
     """Delays as fleet_windows.timed returns them ({truck: (checkpoint arc
     lengths, delay from each on)}) for the best orders found; None if the
     solve finds no solution."""
@@ -122,14 +162,18 @@ def solve_orders(windows, crossings, trucks, fixed: dict, weights: dict, node_li
     integrality[n_cols:] = 1
     upper = np.full(n_vars, _BIG_M)
     upper[n_cols:] = 1.0
-    result = milp(
-        objective,
-        constraints=LinearConstraint(matrix, np.array(lower), np.inf),
-        integrality=integrality,
-        bounds=Bounds(np.zeros(n_vars), upper),
-        options={"node_limit": node_limit, "presolve": True, "disp": False},
-    )
-    if result.x is None:
+    if time_limit_s is not None:
+        start = np.array([1.0 if crossings[cid].first == crossings[cid].a else 0.0 for cid in choices])
+        x = _highs(matrix, np.array(lower), objective, upper, n_cols, start, node_limit, time_limit_s)
+    else:
+        result = milp(
+            objective,
+            constraints=LinearConstraint(matrix, np.array(lower), np.inf),
+            integrality=integrality,
+            bounds=Bounds(np.zeros(n_vars), upper),
+            options={"node_limit": node_limit, "presolve": True, "disp": False},
+        )
+        x = result.x
+    if x is None:
         return None
-    x = result.x
     return {n: (p, np.array([x[column[(n, j)]] for j in range(len(p))])) for n, p in points.items()}

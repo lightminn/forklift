@@ -228,6 +228,39 @@ def test_an_order_horizon_leaves_further_crossings_as_they_are():
             assert q.cost(q.crossings, manager.trucks, 0.0) == pytest.approx(best, abs=1e-6)
 
 
+def test_a_time_limited_solve_starts_from_the_current_orders():
+    # highspy from the worst lock-free orders: stopped at once it gives them back,
+    # given time it finds what the node-limited solve finds.
+    pytest.importorskip("highspy")
+    from forklift_core.planning.fleet_queue_opt import solve_orders
+
+    routes = {
+        "a": _line(-12, 0, 20, 0), "b": _line(-20, 8, 12, 8),
+        "c": _line(0, 16, 0, -14, yaw=-math.pi / 2), "d": _line(8, -18, 8, 14),
+    }
+    manager = _manager(routes, queue_opt="global", issue_s=1.0)
+    q, trucks = manager.windows, manager.trucks
+    crossings = list(q.crossings.values())
+    worst, cost = None, -np.inf
+    for firsts in itertools.product(*[(c.a, c.b) for c in crossings]):
+        for c, f in zip(crossings, firsts, strict=True):
+            c.first = f
+        if not q._run(q.crossings, trucks)[1] and q.cost(q.crossings, trucks, 0.0) > cost:
+            worst, cost = firsts, q.cost(q.crossings, trucks, 0.0)
+    for c, f in zip(crossings, worst, strict=True):
+        c.first = f
+    weights = dict.fromkeys(trucks, 1.0)
+
+    def total(delays):
+        return sum(float(d[-1]) for _, d in delays.values())
+
+    held = total(solve_orders(q, q.crossings, trucks, {c.id: c.first for c in crossings}, weights, 2000))
+    best = total(solve_orders(q, q.crossings, trucks, {}, weights, 2000))
+    assert held > best + 1e-6
+    assert total(solve_orders(q, q.crossings, trucks, {}, weights, 2000, 0.0)) == pytest.approx(held, abs=1e-6)
+    assert total(solve_orders(q, q.crossings, trucks, {}, weights, 2000, 10.0)) == pytest.approx(best, abs=1e-6)
+
+
 def test_the_global_solve_keeps_fixed_orders():
     routes = {"a": _line(3, 0, 14, 0), "b": _line(6, -8, 6, 8)}
     manager = _manager(routes, queue_opt="global")
