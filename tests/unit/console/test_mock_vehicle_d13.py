@@ -272,3 +272,22 @@ def test_the_verified_place_at_done_is_a_new_targets_revision(env):
         if v.mission["status"] == "done":
             break
     assert v.mission["status"] == "done" and v.targets_revision > before
+
+
+def test_fail_running_ends_the_running_mission_as_failed(env):
+    """Mission queue plan Task 3: the screen's queue test needs a mission that fails while it runs."""
+    v, clock = env
+    c = Client(v)
+    c.take_lease()
+    stand(v, clock)
+    with pytest.raises(ValueError):
+        v.inject("fail_running")  # nothing runs yet
+    mid = submit(c, v)
+    stand(v, clock, 0.2)
+    v.inject("fail_running")
+    stand(v, clock, 0.2)
+    st = v.make_state()
+    assert st["mode"] == "PAUSED" and st["mission"]["status"] == "failed"
+    assert st["last_result"]["mission_id"] == mid and st["last_result"]["outcome"] == "failed"
+    assert st["last_result"]["reason"] == "test:fail_running"
+    assert v.make_missions()["results"][0]["mission_id"] == mid

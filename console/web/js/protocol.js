@@ -109,9 +109,10 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     emit(msg);
   }
 
-  function request(type, fields = {}) {
+  // opts.requestId: an id the caller chose (the mission queue records it before the request goes out)
+  function request(type, fields = {}, opts = {}) {
     // generations the page does not know yet are left out, never sent as null
-    const msg = { t: type, request_id: newId() };
+    const msg = { t: type, request_id: opts.requestId ?? newId() };
     if (epoch !== null) msg.session_epoch = epoch;
     if (leaseId !== null) msg.lease_id = leaseId;
     if (controlGen !== null) msg.control_gen = controlGen;
@@ -147,6 +148,12 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
       pending.set(msg.request_id, { msg, resolve, lastSent: now() });
       send(msg);
     });
+  }
+
+  // Stop sending a request and drop its answer when it comes (the mission queue, once it has stopped, sends nothing
+  // more for that submit; the request already out cannot be taken back). Its promise never settles.
+  function forget(requestId) {
+    pending.delete(requestId);
   }
 
   // The control connection closed: the old lease may not be used any more.
@@ -195,6 +202,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
       reclaim = true; // a reloaded page that held the lease
     },
     request,
+    forget,
     pump,
     stop,
     teleopCommand,

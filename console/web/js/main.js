@@ -9,6 +9,7 @@ import { drawMap, palletAt } from "./map.js";
 import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
+import { createQueueWire } from "./queuewire.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
@@ -129,6 +130,17 @@ const clientId = tabClientId();
 // a new one (the close handler reconnects)
 m.session = createSession({ clientId, send, now: () => performance.now(), newId: randomId,
   onStaleToken: () => control?.close() });
+// mission queue plan D7: the queue in this tab's sessionStorage, the saved transports in localStorage (either may be
+// unavailable: the queue then says it is not stored)
+const storage = (name) => {
+  try {
+    return window[name];
+  } catch {
+    return null;
+  }
+};
+m.queue = createQueueWire({ session: m.session, tabStore: storage("sessionStorage"), sharedStore: storage("localStorage"),
+  clientId, nowMs: () => performance.now(), nowUnix: () => Date.now() / 1000, newId: randomId });
 try {
   if (shouldReclaim(sessionStorage.getItem("console.held_lease"), clientId)) m.session.expectReclaim();
 } catch {
@@ -147,6 +159,7 @@ m.session.subscribe((msg) => {
       $("dest").innerHTML = "";
     }
     m.results.welcome(msg.session_epoch); // plan D13: the results seq starts again in a new session
+    m.queue.onWelcome(msg); // mission queue plan D6: a new session stops it
     standbyAsk += 1; // an answer still on its way is older than this welcome (Codex standby design P2-2)
     m.standbyNote = null;
     if (m.sessionEnding === "sim_reset" && msg.session_epoch !== m.endingEpoch) {
@@ -175,6 +188,7 @@ m.session.subscribe((msg) => {
     }
   } else if (msg.t === "missions") {
     m.results.update(msg); // plan D13: the results book (contract 5.2)
+    m.queue.onResults(msg.results ?? []);
   } else if (msg.t === "event") {
     log(`${msg.kind}${msg.reason ? ` · ${msg.reason}` : ""}${msg.phase ? ` · ${msg.phase}` : ""}${msg.status ? ` · ${msg.status}` : ""}`, msg.kind.includes("stop") ? "crit" : "");
   } else if (msg.t === "ack" && typeof msg.lease_id === "string") {
@@ -185,6 +199,7 @@ m.session.subscribe((msg) => {
     }
   } else if (msg.t === "state") {
     m.stateAt = performance.now();
+    m.queue.onState(msg); // mission queue plan D3, D4: silence, anomalies, the lease, last_result
     const asked = disarmAsked(m.askedDisarm, m.prevState, performance.now());
     for (const c of sessionChanges(m.prevState, msg, { clientId, askedDisarm: asked })) log(c.text, c.level);
     if (m.prevState?.armed && !msg.armed) m.askedDisarm = null; // the excuse is used up by that disarm
@@ -238,6 +253,7 @@ function connectControl() {
   control = ws;
   ws.addEventListener("open", () => {
     m.link.up = true;
+    m.queue.onOpen();
     ws.send(JSON.stringify({ t: "hello", api: API, client_id: clientId }));
   });
   ws.addEventListener("message", (ev) => {
@@ -251,6 +267,7 @@ function connectControl() {
     m.link.up = false;
     m.confirm.cancel(); // plan D13: a confirm belongs to the connection it was armed on
     m.session.onDisconnect(); // the old lease is not used again; the next welcome reclaims it
+    m.queue.onDisconnect(); // mission queue plan D6: stopped, a running mission goes on
     m.linkWelcome = null; // until the next welcome, STOP is queued and resent (C1 rule)
     if (control === ws) control = null;
     if (m.sessionEnding === "session_end") {
@@ -324,6 +341,7 @@ function askDisarm() {
 }
 
 function pressStop(source) {
+  m.queue.operatorAction("stop"); // mission queue plan D4: before anything else
   noteDisarmAsked();
   if (stopIsRefused(m.linkWelcome)) {
     $("nostop").hidden = false;
@@ -461,6 +479,7 @@ $("m-start").onclick = () => {
   const pallet = document.querySelector('input[name="pal"]:checked')?.value;
   const targets = m.session.targets;
   if (!pallet || !targets) return;
+  m.queue.operatorAction("manual_submit"); // mission queue plan D4: a manual mission stops the queue first
   // not req(): this handler logs its own refusal (one line, not two)
   m.session.request("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
     if (r && r.t === "reject") {
@@ -471,9 +490,57 @@ $("m-start").onclick = () => {
     } else if (r) closeWizard();
   });
 };
-$("m-pause").onclick = () => req("mission_pause", { mission_id: missionId() });
+$("m-pause").onclick = () => {
+  m.queue.operatorAction("pause"); // mission queue plan D4: the queue stops first
+  req("mission_pause", { mission_id: missionId() });
+};
 $("m-resume").onclick = () => req("mission_resume", { mission_id: missionId() });
-$("m-cancel").onclick = () => req("mission_cancel", { mission_id: missionId() });
+$("m-cancel").onclick = () => {
+  m.queue.operatorAction("cancel");
+  req("mission_cancel", { mission_id: missionId() });
+};
+
+// ------------------------------------------------------------------ mission queue (plan D8, D9)
+function queueConfirm(kind, then) {
+  if (m.confirm.click(m.confirmKey(kind), performance.now()) === "send") then();
+}
+$("q-resume").onclick = () => queueConfirm("queue_resume", () => {
+  if (m.queue.resume()) log("대기열 재개");
+});
+$("q-stop").onclick = () => m.queue.stop(); // logged by the queue timer below
+$("q-clear").onclick = () => queueConfirm("queue_clear", () => m.queue.clear());
+$("q-items").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b || b.disabled) return;
+  const id = b.dataset.id;
+  const act = b.dataset.act;
+  if (act === "up" || act === "down") m.queue.move(id, act === "up" ? -1 : 1);
+  else if (act === "del") m.queue.remove(id);
+  else m.queue.resolveUncertain(id, act); // drop | resubmit
+});
+$("q-presets").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || b.disabled) return;
+  if (b.dataset.preset) {
+    if (m.queue.queuePreset(b.dataset.preset)) log(`대기열에 넣음 · ${b.textContent}`);
+  } else if (b.dataset.unpreset) m.queue.removePreset(b.dataset.unpreset);
+});
+$("q-add").onclick = () => {
+  const sel = wizardSelection();
+  if (!sel.pallet || !sel.destination) return;
+  m.queue.add({ pallet_id: sel.pallet, destination_id: sel.destination });
+  log(`대기열에 넣음 · ${sel.pallet} → ${sel.destination}`);
+  closeWizard();
+};
+$("q-save-preset").onclick = () => {
+  const sel = wizardSelection();
+  if (!sel.pallet || !sel.destination || !m.session.hasLease) return;
+  const p = m.queue.savePreset({ pallet_id: sel.pallet, destination_id: sel.destination });
+  if (p) {
+    m.wz.note = `운반 저장됨 · ${p.label}`;
+    refreshWizard();
+  }
+};
 $("recover").onclick = () => req("recovery", { action: "withdraw_straight" });
 $("t-enter").onclick = () => req("mode_request", { to: "TELEOP" });
 $("t-exit").onclick = () => {
@@ -653,6 +720,8 @@ function refreshWizard() {
     selection: sel,
     template: all.find((t) => t.code === m.wz.template) ?? null,
     block: blockCtx(),
+    hasLease: m.session.hasLease,
+    queueRunning: m.queue.queue.run === "running",
   });
 }
 function drawTemplates() {
@@ -789,6 +858,14 @@ function frame(now) {
 readTokens();
 setInterval(readTokens, 1000);
 setInterval(() => m.session.pump(), 100);
+// mission queue plan D3: its own 250 ms timer (animation frames stop in a hidden tab); a stop is logged once
+let queueRun = m.queue.queue.run;
+setInterval(() => {
+  m.queue.tick();
+  const q = m.queue.queue;
+  if (queueRun === "running" && q.run === "stopped") log(`대기열 멈춤 · ${q.stopReason}`, q.stopReason === "완료" ? "" : "warn");
+  queueRun = q.run;
+}, 250);
 setInterval(() => {
   render(m);
   if (m.wz.open && m.session.state?.mode && ["AUTO", "TELEOP", "STOPPED"].includes(m.session.state.mode)) closeWizard();
