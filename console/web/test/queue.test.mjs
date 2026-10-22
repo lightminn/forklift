@@ -453,6 +453,25 @@ test("a late result for an uncertain item leaves the submit in flight alone (Cod
   assert.equal(r.phase, "submitting");
 });
 
+test("after a reconnect only a state received since counts: an old one never lets a resume submit (Codex round 5)", () => {
+  const q = new MissionQueue();
+  q.onWelcome(3);
+  q.onState(READY, 10_000);
+  q.add(item());
+  q.onDisconnect();
+  q.onWelcome(3); // the same session again; the page still holds the 90 s old state
+  assert.equal(q.resume(100_000), true);
+  assert.equal(q.next(ctx(), 100_000, newId), null, "no state since the welcome");
+  assert.deepEqual(q.tick(101_000), {});
+  assert.equal(q.run, "running", "waits for the first state");
+  q.tick(102_100);
+  assert.equal(q.run, "stopped", "no first state within 2 s");
+  assert.equal(q.stopReason, "상태 수신 끊김");
+  assert.equal(q.resume(103_000), true);
+  q.onState(READY, 103_500);
+  assert.ok(q.next(ctx(), 103_500, newId), "a state received since: it may submit");
+});
+
 test("marking an uncertain item for resubmit forgets the mission it may have started", () => {
   const q = running([item("P-1", "D-1")]);
   ack(q, submitOnce(q, 10_000), "M-1");

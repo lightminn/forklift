@@ -25,17 +25,23 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
   let welcomed = false; // this connection's welcome (the session keeps the last one across a reconnect)
   let hadLease = false;
   let saveNote = null; // the screen's warning when the queue could not be stored
-  let version = 0;
+  let version = 0; // the wire's own changes (saved transports, the save note, a restored queue) -- not every tick
+  let savedAt = -1; // the queue version last stored
 
   const bump = () => { version += 1; };
 
+  // stored when the queue changed (a tick or a state that changes nothing writes nothing and redraws nothing)
   function save() {
-    if (!vehicleId) return true;
+    if (!vehicleId || queue.version === savedAt) return true;
+    savedAt = queue.version;
+    const before = saveNote;
     try {
       tabStore.setItem(queueKey(vehicleId, clientId), JSON.stringify(queue.toStorage()));
       saveNote = null;
+      if (before !== null) bump();
       return true;
     } catch {
+      bump();
       saveNote = "저장 안 됨 — 새로고침하면 대기열을 잃습니다";
       try {
         tabStore.removeItem(queueKey(vehicleId, clientId)); // an older copy must not come back as the queue
@@ -58,8 +64,14 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
   function apply(out) {
     if (out && out.forget !== undefined) session.forget(out.forget);
     save();
-    bump();
     return out;
+  }
+
+  // the lease as the session holds it now: an ack gives it with no state, a state takes it away (Codex r5)
+  function checkLease() {
+    const has = session.hasLease;
+    if (hadLease && !has) apply(queue.onLeaseLost());
+    hadLease = has;
   }
 
   function ctx() {
@@ -87,6 +99,8 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
         vehicleId = msg.vehicle_id;
         queue = MissionQueue.fromStorage(readJson(tabStore, queueKey(vehicleId, clientId)),
                                          { epoch: msg.session_epoch, results });
+        savedAt = -1;
+        bump(); // a new queue object: its own version starts again
         const stored = readJson(sharedStore, presetsKey(vehicleId));
         presets = Array.isArray(stored) ? stored.filter((p) => p && typeof p.preset_id === "string") : [];
       }
@@ -102,9 +116,7 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
     },
     onState(state) {
       const out = queue.onState(state, nowMs());
-      const has = session.hasLease;
-      if (hadLease && !has) apply(queue.onLeaseLost());
-      hadLease = has;
+      checkLease();
       if (state?.last_result) queue.onResult(state.last_result, nowMs()); // the results book carries it too
       apply(out);
     },
@@ -118,6 +130,7 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
       return apply(queue.operatorAction(kind));
     },
     resume() {
+      checkLease();
       const ok = queue.resume(nowMs());
       apply({});
       return ok;
@@ -169,10 +182,10 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
     },
     // ------------------------------------------------------------ the timer (plan D3: 250 ms, not animation frames)
     tick() {
+      checkLease();
       apply(queue.tick(nowMs()));
       const n = queue.next(ctx(), nowMs(), newId);
       if (n) submit(n.submit);
-      bump();
     },
     // ------------------------------------------------------------ for the screen
     get queue() { return queue; },

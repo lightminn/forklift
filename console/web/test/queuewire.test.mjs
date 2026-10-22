@@ -170,6 +170,43 @@ test("a reopened connection submits nothing before its own welcome", async () =>
   assert.equal(h.submits().length, 1);
 });
 
+test("a lease taken by an ack (no state since) and then lost stops the queue (Codex round 5)", async () => {
+  const h = harness();
+  h.session.hasLease = false;
+  h.welcome();
+  h.state(READY);
+  h.w.add({ pallet_id: "P-1", destination_id: "D-0" });
+  h.w.add({ pallet_id: "P-2", destination_id: "D-1" });
+  h.session.hasLease = true; // the lease ack: no state yet
+  assert.equal(h.w.resume(), true);
+  h.w.tick();
+  assert.equal(h.submits().length, 1);
+  await h.answer(h.submits()[0], { t: "ack", mission_id: "M-1" });
+  h.session.hasLease = false; // released or taken: the next state says so
+  h.state(RUNNING("M-1"));
+  assert.equal(h.w.queue.run, "stopped");
+  h.session.hasLease = true;
+  h.result("M-1", "done");
+  h.run(5000, READY);
+  assert.equal(h.submits().length, 1);
+});
+
+test("ticks and states that change nothing keep the version and write nothing (Codex round 6)", async () => {
+  const tabStore = fakeStore();
+  const h = harness({ tabStore });
+  h.welcome();
+  h.state(READY);
+  h.w.add({ pallet_id: "P-1", destination_id: "D-0" }); // stopped, nothing to do
+  const v = h.w.version;
+  const writes = tabStore.log.length;
+  h.run(2500, READY);
+  assert.equal(h.w.version, v, "the screen redraws nothing");
+  assert.equal(tabStore.log.length, writes, "the storage is not written again");
+  h.w.remove(h.w.queue.items[0].item_id);
+  assert.notEqual(h.w.version, v);
+  assert.ok(tabStore.log.length > writes);
+});
+
 test("a result that comes before the ack is applied once the ack names it", async () => {
   const h = harness();
   await ready(h, [["P-1", "D-0"], ["P-2", "D-1"]]);

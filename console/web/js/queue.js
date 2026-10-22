@@ -52,7 +52,8 @@ export class MissionQueue {
     this.finished = []; // newest first: {item, outcome, reason, mission_id}
     this.counts = { done: 0, failed: 0, cancelled: 0 };
     this.epoch = null;
-    this.lastStateAt = null;
+    this.lastStateAt = null; // when the last state was received -- only a received state sets it (Codex r5)
+    this.waitSince = null; // resumed with no state since the welcome: the first one is due by SILENCE_MS
     this.lastResultAt = null;
     this.applied = new Set(); // mission ids whose result was applied (last_result and missions both carry it)
     this.early = new Map(); // mission id -> result seen before the ack named it
@@ -92,7 +93,7 @@ export class MissionQueue {
     if (!this.items.length || this.items.some((it) => it.uncertain)) return false; // the operator decides first
     this.run = "running";
     this.stopReason = null;
-    this.lastStateAt ??= nowMs;
+    this.waitSince = nowMs;
     return this.#changed();
   }
 
@@ -149,7 +150,8 @@ export class MissionQueue {
 
   onState(state, nowMs) {
     let out = {};
-    if (this.run === "running" && this.lastStateAt !== null && nowMs - this.lastStateAt > SILENCE_MS) {
+    const ref = this.lastStateAt ?? this.waitSince;
+    if (this.run === "running" && ref !== null && nowMs - ref > SILENCE_MS) {
       out = this.stop("상태 수신 끊김"); // decided before the late state refreshes the clock (plan D3)
     }
     this.lastStateAt = nowMs;
@@ -208,9 +210,8 @@ export class MissionQueue {
   }
 
   tick(nowMs) {
-    if (this.run === "running" && this.lastStateAt !== null && nowMs - this.lastStateAt > SILENCE_MS) {
-      return this.stop("상태 수신 끊김");
-    }
+    const ref = this.lastStateAt ?? this.waitSince;
+    if (this.run === "running" && ref !== null && nowMs - ref > SILENCE_MS) return this.stop("상태 수신 끊김");
     return {};
   }
 
@@ -247,9 +248,9 @@ export class MissionQueue {
 
   static fromStorage(obj, { epoch, results = [] } = {}) {
     const q = new MissionQueue();
-    q.stopReason = "콘솔 다시 열림";
     q.epoch = epoch ?? null;
-    if (!obj || obj.v !== 1 || !Array.isArray(obj.items)) return q;
+    if (!obj || obj.v !== 1 || !Array.isArray(obj.items)) return q; // nothing stored: a new queue
+    q.stopReason = "콘솔 다시 열림";
     q.items = obj.items.filter((it) => it && typeof it.item_id === "string" && KINDS.has(it.kind)).map((it) => ({ ...it }));
     if (Array.isArray(obj.finished)) q.finished = obj.finished.slice(0, FINISHED_KEEP);
     if (obj.counts && typeof obj.counts === "object") q.counts = { done: 0, failed: 0, cancelled: 0, ...obj.counts };

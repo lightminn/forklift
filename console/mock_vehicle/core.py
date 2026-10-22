@@ -895,6 +895,15 @@ class MockVehicle:
             if self.scene["damaged"] is None:
                 self.scene["damaged"] = {"reason": "Forbidden fork/pallet contact", "t": now, "unix": time.time()}
             return
+        if kind == "fail_running":
+            # the mission queue's case (its plan, Task 3): the running mission fails where it is; booked by step()
+            m = self.mission
+            if m is None or m["status"] not in self.ACTIVE:
+                raise ValueError("fail_running: no mission is running")
+            m["status"], m["reason"], m["legs"] = "failed", "test:fail_running", []
+            self._event("mission", mission_id=m["mission_id"], status="failed")
+            self._set_mode("PAUSED")
+            return
         self.missions_created += 1
         mission_id = f"M-{self.missions_created:04d}"
         if kind == "recovery_required":
