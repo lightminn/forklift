@@ -3422,6 +3422,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["exit_prefix"] = {"clearance_m": transport_exit.clearance_m, "step_m": transport_exit.step_m,
                                 "cap_m": transport_exit.cap_m, "band_bottom_m": band_bottom_,
                                 "walls": [asdict(r) for r in exit_walls_]}
+    if geometry.lidar_keepout_m > 0:
+        # P1c (docs/plans/2026-10-23-planner-permission-clearance.md): the planner backs a loaded transport that starts
+        # inside the grown band out first. The run builds that prefix here and hands it on as an explicit one, so the
+        # hooks (exit_prefix_m -- the permission acts on the prefix), the planning worker's jobs and a replay's setup all
+        # see the one the planner used (Codex P1c review P1).
+        from forklift_core.planning.pallet_mission import keepout_exit_prefix
+
+        search_clearance_ = (travel_config if travel_config is not None else planner_config).clearance_m
+        auto_ = keepout_exit_prefix(scenario, geometry, search_clearance_)
+        if transport_exit is not None and auto_ is not None and transport_exit.clearance_m < auto_.clearance_m:
+            # the search would start inside its own band again (trailer, G 0.15 with 0.30: invalid_start)
+            raise SystemExit(f"--exit-clearance-m {transport_exit.clearance_m} is below the {auto_.clearance_m:.3f} m "
+                             "the --lidar-keepout-m search needs; leave it out (the keepout builds its own prefix)")
+        if transport_exit is None and auto_ is not None:
+            transport_exit = auto_
+            state["exit_prefix"] = {"clearance_m": auto_.clearance_m, "step_m": auto_.step_m, "cap_m": auto_.cap_m,
+                                    "source": "lidar_keepout", "walls": [asdict(r) for r in auto_.obstacles]}
 
     grid_planning = bool(args.grid_planning)
     if obstacle is not None and obstacle["layer"].known_enabled and not grid_planning:
@@ -8916,6 +8933,8 @@ def main() -> None:
             and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
             # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
             and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
+            # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
+            and (k != "lidar_keepout_m" or v != 0.0)
             # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
             and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
             and (

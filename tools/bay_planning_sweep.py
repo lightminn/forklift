@@ -128,7 +128,10 @@ def factory_scene(job: dict):
 
 
 def scene_sha256(scenario, geometry, min_top_m) -> str:
-    scene = json.dumps({"scenario": asdict(scenario), "geometry": asdict(geometry),
+    from forklift_core.mission.replay_codec import recorded_fields
+
+    kept = {f.name for f in recorded_fields(geometry)}  # P1c's keepout fields only when set: an unset run hashes as before
+    scene = json.dumps({"scenario": asdict(scenario), "geometry": {k: v for k, v in asdict(geometry).items() if k in kept},
                         "colliders": "truth floor rectangles", "min_top_m": min_top_m},
                        sort_keys=True, default=str)
     return hashlib.sha256(scene.encode()).hexdigest()

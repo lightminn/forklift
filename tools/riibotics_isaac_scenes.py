@@ -658,7 +658,7 @@ def plan_scene(path: Path, out: Path, grow_m: float = 0.0, keepout_m: float = 0.
 
 
 def _result_name(name: str, grow_m: float, keepout_m: float = 0.0) -> str:
-    keep = "" if keepout_m == 0 else f".keep{keepout_m:.2f}"
+    keep = "" if keepout_m == 0 else f".keep{keepout_m!r}"  # exact: two values never share a file (Codex P2)
     return f"{name}{keep}.plan.json" if grow_m == 0 else f"{name}.grow{grow_m:.2f}{keep}.plan.json"
 
 
@@ -678,6 +678,8 @@ def _plan_worker(args):
         return result.name, f"crash {proc.exitcode}"
     record = json.loads(result.read_text())
     if record.get("scene_sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+        return result.name, "stale_result"
+    if record.get("lidar_keepout_m", 0.0) != keepout_m:
         return result.name, "stale_result"
     return result.name, record["outcome"]
 

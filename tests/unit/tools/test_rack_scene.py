@@ -95,7 +95,7 @@ def test_the_rack_copy_plans_its_whole_mission_with_the_planners_lidar_keepout(t
     path = tmp_path / "aisle_rack.json"
     path.write_text(json.dumps(record("aisle_rack")))
     tool.plan_scene(path, tmp_path, keepout_m=0.15)
-    result = json.loads((tmp_path / "aisle_rack.keep0.15.plan.json").read_text())
+    result = json.loads((tmp_path / "aisle_rack.keep0.15.plan.json").read_text())  # repr(0.15) == "0.15"
     assert result["outcome"] == "success" and result["lidar_keepout_m"] == 0.15
 
 
