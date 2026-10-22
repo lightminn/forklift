@@ -205,6 +205,26 @@ def load_session(path: Path) -> SessionScene:
         source_format=SESSION_FORMAT)
 
 
+def register_session(targets, session: SessionScene, *, kind: str, depth_m: float, width_m: float, live: bool) -> None:
+    """Every pallet and destination of a session into the targets list (plan 2026-10-22-session-scene-pallet-props
+    2.3): each pallet at its registered pose with its real size (a pallet without one would draw no teleop zone) under
+    the runner's shape key, then each destination. A converted v1 scene makes the runner's own calls, in its order:
+    P-1 (``at`` D-0 live), D-1, then live D-0 = P-1's place. A session's first places are not destinations (CT-2)."""
+    from forklift_core.mission.targets import Pose
+
+    v1 = session.source_format == FORMAT
+    for p in session.pallets:
+        r = p.registered
+        targets.add_pallet(p.pallet_id, kind, Pose(float(r.x_m), float(r.y_m), float(r.yaw_rad)),
+                           depth_m=float(depth_m), width_m=float(width_m),
+                           at="D-0" if live and v1 and p.pallet_id == "P-1" else None)
+    for destination_id, site in session.destinations:
+        targets.add_destination(destination_id, Pose(float(site.x_m), float(site.y_m), float(site.yaw_rad)))
+    if live and v1:
+        r = session.pallet_by_id("P-1").registered
+        targets.add_destination("D-0", Pose(float(r.x_m), float(r.y_m), float(r.yaw_rad)))
+
+
 def session_from_scene(scene: SceneFile) -> SessionScene:
     """A v1 scene as a one-pallet session, everything a v1 run reads kept as it is: P-1's registered pose and relocation
     reference are the scenario's pickup (as the runner registers it), its candidates and zone the file's (yaw centred at

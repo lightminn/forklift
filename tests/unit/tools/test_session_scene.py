@@ -135,3 +135,41 @@ def test_the_zone_obstacle_is_the_runners_pickup_prior():
 
     r = zone_rect(PickupZone(1.0, 1.5, -0.25, 0.25, 0.2), 0.8, 0.6)
     assert (r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad) == pytest.approx((1.25, 0.0, 1.5, 1.5, 0.0))
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_registering_a_v1_session_makes_the_runners_own_targets(v1, live):
+    """Plan 2.3: the same ids, poses, sizes, at and revision as run_transport's registration (5395-5409)."""
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    from scene_file import register_session
+
+    scene = v1["line_2"]
+    s = scene.scenario
+    runner = TargetsBook()
+    runner.add_pallet("P-1", "pallet_geometry_epal6", Pose(float(s.pickup.x_m), float(s.pickup.y_m),
+                                                          float(s.pickup.yaw_rad)),
+                      depth_m=1.2, width_m=0.8, at="D-0" if live else None)
+    runner.add_destination("D-1", Pose(float(s.destination.x_m), float(s.destination.y_m),
+                                       float(s.destination.yaw_rad)))
+    if live:
+        runner.add_destination("D-0", Pose(float(s.pickup.x_m), float(s.pickup.y_m), float(s.pickup.yaw_rad)))
+    ours = TargetsBook()
+    register_session(ours, session_from_scene(scene), kind="pallet_geometry_epal6", depth_m=1.2, width_m=0.8, live=live)
+    assert ours.pallets == runner.pallets and ours.destinations == runner.destinations
+    assert ours.revision == runner.revision and ours._issued == runner._issued
+
+
+def test_a_session_registers_every_pallet_with_its_size_at_its_drawn_slot(sessions):
+    from forklift_core.mission.targets import TargetsBook
+
+    from scene_file import register_session
+
+    loaded, _ = sessions
+    tb = TargetsBook()
+    register_session(tb, loaded["random"], kind="pallet_geometry_epal6", depth_m=1.2, width_m=0.8, live=True)
+    assert sorted(tb.pallets) == ["P-1", "P-2", "P-3", "P-4", "P-5"] and sorted(tb.destinations) == ["D-1", "D-2", "D-3"]
+    for p in loaded["random"].pallets:
+        entry = tb.pallets[p.pallet_id]
+        assert (entry.pose.x_m, entry.pose.y_m, entry.pose.yaw_rad) == (p.nominal.x_m, p.nominal.y_m, p.nominal.yaw_rad)
+        assert (entry.depth_m, entry.width_m, entry.basis, entry.at) == (1.2, 0.8, "prior", None)
