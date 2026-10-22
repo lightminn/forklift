@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from forklift_core.control import RearAxlePathTracker
+from forklift_core.control import RearAxlePathTracker, ackermann_command
+from forklift_core.control.path_tracking import AckermannGeometry
 from forklift_core.mission.core import MissionCore
 from forklift_core.mission.failures import MISSION, classify
 from forklift_core.mission.state import MissionState
@@ -23,6 +24,8 @@ from forklift_core.planning.pallet_mission import (
 )
 
 DT = 1 / 120
+DRIVE = AckermannGeometry(wheelbase_m=0.66, track_m=0.53, wheel_radius_m=0.125, max_steering_rad=0.2618,
+                          max_wheel_rate_rad_s=8.0)
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,7 @@ def make(*, scene=True, jobs=None, held=None):
         require=require, grid_world=lambda sc: sc, path_record=lambda p: {"status": p.status, "n": len(p.poses)},
         write_paths=lambda: calls.append(("write_paths",)), set_rear=lambda r: calls.append(("set_rear", tuple(r))),
         held_kappa=lambda: held["kappa"], loaded=lambda: True, rear=lambda: rear["pose"],
+        steering_actual=lambda: ackermann_command(0.0, held["kappa"], DRIVE).steering_rad,
         truth_rear=lambda: rear["pose"] + 0.01, dump_tracking=lambda *a: calls.append(("dump",) + a),
         plan_transport_leg=lambda *a, **k: (calls.append(("plan_transport_leg",)), plan_transport_leg(*a, **k))[1],
         plan_return_leg=lambda *a, **k: (calls.append(("plan_return_leg",)), plan_return_leg(*a, **k))[1],
@@ -65,8 +69,7 @@ def make(*, scene=True, jobs=None, held=None):
     ms = MissionState(phase="transport", phase_started=0.0)
     state = {"paths": {"transport": {"status": "success"}}, "transitions": []}
     options = SimpleNamespace(pickup_prior=scene, scenario=scenario, planner_config=config, travel_config=None,
-                              return_to_pose=scenario.start_rear, drive_geometry=SimpleNamespace(wheelbase_m=0.66,
-                                                                                                 track_m=0.53),
+                              return_to_pose=scenario.start_rear, drive_geometry=DRIVE,
                               backoff_speed_mps=0.1, dwells=None, safety_stops=None,
                               cusp_heading_hold_phases=("observe", "return_home"))
     core = MissionCore(ms, state=state, obstacle=None, slam=None, pocket={"check": None},
@@ -257,14 +260,15 @@ def test_a_far_observation_stall_takes_the_next_candidate_with_its_own_budget():
     _observe(core, ms, state, waypoints=[(-2.0, 1.0, 0.0), (-1.5, -1.5, 0.3), (-2.5, 2.0, 0.0)])
     assert core.scene_far_observe()
     old = core.trackers["observe"]
-    pose = core.scene_observe_candidate(5.0, np.array([-2.2, 0.2, 0.0]))
-    assert pose is not None and core.trackers["observe"] is not old and ms.next_candidate_index == 2
+    took = core.scene_observe_candidate(5.0, np.array([-2.2, 0.2, 0.0]))
+    assert took.installed and core.trackers["observe"] is not old and ms.next_candidate_index == 2
     assert state["observation_waypoint_selected"] == [-1.5, -1.5, 0.3]
     assert state["observe_replan_leg"] == {"serial": 4, "start": 0}
     rec = state["scene_replans"][-1]
     assert rec["trigger"] == "observe_stall" and rec["outcome"] == "installed"
     ms.next_candidate_index = 3
-    assert core.scene_observe_candidate(6.0, np.array([-2.2, 0.2, 0.0])) is None  # none left
+    none = core.scene_observe_candidate(6.0, np.array([-2.2, 0.2, 0.0]))  # none left: the pose back, nothing tried
+    assert not none.installed and not none.tried and none.rear.tolist() == [-2.2, 0.2, 0.0]
 
 
 def test_the_far_observation_rule_is_a_scene_s_before_recognition_only():
@@ -331,3 +335,49 @@ def test_an_escape_prefix_is_found_checked_installed_under_the_escape_ownership_
     result = plan_transport_leg(_scene(), Pose2D(*pose), core.options.planner_config, geometry=core.geometry)
     ports.install(result)
     assert core.trackers["transport"].config == config0
+
+
+
+def test_the_correction_contribution_composes_the_transforms_without_reading_slam_rear():
+    """Codex impl round 1 P2-1: slam_rear checks freshness and may refuse before the reply that makes it fresh is
+    in; the contribution is the same odometry pose under the correction before and after."""
+    core, ms, state, calls, rear, held = make()
+
+    class Tracker:
+        applied = ((0.0, 0.0, 0.0), 1.0)
+        received = None
+        mode = "tracking"
+
+        def receive(self, scan_id, stamp_s, status, map_from_odom):
+            self.applied = (tuple(map_from_odom), stamp_s)
+
+    core.slam = {"tracker": Tracker(), "records": []}
+    core.hooks.slam_odom_base = lambda: (2.0, 0.0, 0.0)
+    core.hooks.slam_rear = lambda t: (_ for _ in ()).throw(RuntimeError("localization_stale"))
+    core.hold_count = lambda: 0
+    reply = SimpleNamespace(scan_id=1, stamp_s=1.2, status="ok", map_from_odom=(0.0, 0.064, 0.0), slam_wall_s=0.0)
+    core.slam_replies(1.26, [(reply, {}, 0.0, 0.0)], loaded=False)
+    assert core.scene_correction["net_max_m"] == pytest.approx(0.064)
+
+
+def test_the_batch_leg_plan_does_not_pass_the_exit_prefix_twice():
+    """Codex impl round 1 P2-6: the batch hook binds the exit prefix itself; only the worker's payload carries it."""
+    core, ms, state, calls, rear, held = make()
+    seen = {}
+    core.hooks.exit_prefix = "PREFIX"
+
+    def hook(*a, **k):
+        seen.update(k)
+        return plan_transport_leg(*a, **k)
+
+    core.hooks.plan_transport_leg = hook
+    core.scene_replan_raise(10.0, "cusp_pose", rear["pose"])
+    _drive(core, rear, held)
+    assert "exit_prefix" not in seen
+    core2, *_rest = make(jobs=Jobs())
+    core2.state["async_plans"] = []
+    core2.commands.begin_wait = core2.commands.end_wait = lambda *a, **k: None
+    core2.hooks.exit_prefix = "PREFIX"
+    core2.scene_replan_raise(10.0, "cusp_pose", rear["pose"])
+    core2.scene_replan_tick(10.0, rear["pose"], 0.0, DT)
+    assert core2.jobs.submitted[-1][1]["kwargs"]["exit_prefix"] == "PREFIX"

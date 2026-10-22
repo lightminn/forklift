@@ -5373,6 +5373,8 @@ def drive(S, isaac) -> None:
             # M-a1 slice 6a: the cusp rules' ports -- the loop's load state and control speed (read when
             # called), the held steering and the standing test (Vehicle reads; truth without SLAM).
             loaded=lambda: loaded, signed_speed=lambda: signed_speed, held_kappa=lambda: held_kappa(),
+            # the scene-mode replan's presteer: each front wheel's measured steering (FL, FR)
+            steering_actual=lambda: np.asarray(robot.get_joint_positions()[steers], dtype=float),
             cusp_standing=lambda: cusp_standing(),
             # M-a1 slice 6b: the docking's ports -- the loop's control and true pose, the world clock and stage,
             # the truth obstacles its dry run checks (SimTruth), the recorded planners and the LiDAR geometry.

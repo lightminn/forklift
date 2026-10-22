@@ -14,8 +14,8 @@ class Ports:
                  steer=None, extra=None):
         self.stopped_, self.busy_ = stopped, busy
         self.plans = list(plans or [("ok", "path-1")])
-        self.candidates = list(candidates or [{"status": "tracking", "ok": True, "why": "ok", "steer_rad": 0.2}])
-        self.previews = list(previews or [{"status": "tracking", "ok": True, "why": "ok", "steer_rad": 0.2}])
+        self.candidates = list(candidates or [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+        self.previews = list(previews or [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
         self.escape_ = escape
         self.steer = list(steer or [0.0])
         self.extra = extra if extra is not None else (lambda: [])
@@ -64,6 +64,10 @@ class Ports:
     def steering_error(self, target):
         return self.steer.pop(0) if len(self.steer) > 1 else self.steer[0]
 
+    @staticmethod
+    def steer_gap(a, b):
+        return abs(a - b)
+
     def preview(self):
         return self.previews.pop(0) if len(self.previews) > 1 else self.previews[0]
 
@@ -99,7 +103,7 @@ def test_a_request_waits_for_the_stop_then_plans_checks_installs_presteers_and_h
     assert steps[-1].owned is False and steps[-1].end is None  # handed back to the follower
     kinds = [x if isinstance(x, str) else x[0] for x in ports.log]
     assert kinds == ["release", "submit", "candidate", "install"]
-    assert any(s.output == "presteer" and s.steer_rad == 0.2 for s in steps)
+    assert any(s.output == "presteer" and s.steer == 0.2 for s in steps)
     rec = records[-1]
     assert rec["trigger"] == "cusp_pose" and rec["outcome"] == "installed" and rec["presteer"] == "aligned"
     assert rec["budget_left"] == {"total": 3, "cusp_pose": 2}
@@ -211,7 +215,7 @@ def test_a_failed_candidate_is_planned_again_and_counts_as_a_drop():
     dev, records = _device()
     ports = Ports(plans=[("ok", "p1"), ("ok", "p2")],
                   candidates=[{"status": "failed", "ok": False, "why": "endpoint_heading"},
-                              {"status": "tracking", "ok": True, "why": "ok", "steer_rad": 0.1}])
+                              {"status": "tracking", "ok": True, "why": "ok", "steer": 0.1}])
     _ask(dev)
     _run(dev, ports, n=80)
     assert ("install", "p2") in ports.log and ("install", "p1") not in ports.log and records[-1]["drops"] == 1
@@ -228,8 +232,8 @@ def test_an_arrived_candidate_is_installed_and_handed_back_at_once():
 
 def test_the_resume_check_sends_a_moved_start_back_to_presteer_and_a_lost_permit_back_to_plan():
     dev, records = _device()
-    ports = Ports(steer=[0.0], previews=[{"status": "tracking", "ok": True, "why": "ok", "steer_rad": 0.35},
-                                         {"status": "tracking", "ok": True, "why": "ok", "steer_rad": 0.35}])
+    ports = Ports(steer=[0.0], previews=[{"status": "tracking", "ok": True, "why": "ok", "steer": 0.35},
+                                         {"status": "tracking", "ok": True, "why": "ok", "steer": 0.35}])
     _ask(dev)
     _run(dev, ports)
     rec = records[-1]
@@ -237,8 +241,8 @@ def test_the_resume_check_sends_a_moved_start_back_to_presteer_and_a_lost_permit
     assert [s for s, _ in rec["states"]].count("presteer") == 2  # the first target, then the moved start's
     dev, records = _device()
     ports = Ports(plans=[("ok", "p1"), ("ok", "p2")],
-                  previews=[{"status": "tracking", "ok": False, "why": "start:limit", "steer_rad": 0.2},
-                            {"status": "tracking", "ok": True, "why": "ok", "steer_rad": 0.2}])
+                  previews=[{"status": "tracking", "ok": False, "why": "start:limit", "steer": 0.2},
+                            {"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
     _ask(dev)
     _run(dev, ports, n=80)
     assert ("install", "p2") in ports.log
@@ -281,3 +285,21 @@ def test_a_second_request_while_one_runs_is_noted_not_taken():
     _ask(dev)
     assert _ask(dev, t=10.05, trigger="permit_stop") is None
     assert dev.request_["trigger"] == "cusp_pose" and records[-1]["ignored"] == ["permit_stop"]
+
+
+def test_a_stop_lost_while_waiting_for_the_other_jobs_waits_for_the_stop_again():
+    dev, _ = _device()
+    ports = Ports(busy=True)
+    _ask(dev)
+    dev.step(10.0, ports)
+    assert dev.state == "wait_jobs"
+    ports.busy_, ports.stopped_ = False, False
+    assert dev.step(10.1, ports).output == "hold" and dev.state == "wait_stop"
+    assert not any(isinstance(x, tuple) and x[0] == "submit" for x in ports.log)
+
+
+def test_an_abort_closes_the_record():
+    dev, records = _device()
+    _ask(dev)
+    dev.abort("async_plan_failed")
+    assert not dev.active() and records[-1]["outcome"] == "failed" and records[-1]["reason"] == "async_plan_failed"

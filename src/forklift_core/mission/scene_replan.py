@@ -14,12 +14,14 @@ the budget and the records only:
 - ``stopped()``, ``busy()``, ``release()``;
 - ``submit(extra, clearance_m)`` / ``poll()`` -> None (waiting) | ("ok", result) | ("ok_fail", status) |
   ("dropped", why);
-- ``candidate(result)`` / ``preview()`` -> {"status", "ok", "why", "steer_rad", ...} (a copy's preview: a
-  failure-free braking previewed one tick further, the leg actually started);
+- ``candidate(result)`` / ``preview()`` -> {"status", "ok", "why", "steer", ...} (a copy's preview: a
+  failure-free braking previewed one tick further, the leg actually started; ``steer`` the first command's steering
+  target, opaque here);
 - ``install(result)``;
 - ``escape_plan(extra, clearance_m)`` -> path | None, ``escape_install(path)``, ``escape_state()`` ->
   "running" | "done" | "stopped", ``escape_clear()``;
-- ``steering_error(target_rad)`` -> measured minus target.
+- ``steering_error(target)`` -> the largest wheel's gap to it (rad); ``steer_gap(a, b)`` -> the largest wheel's
+  gap between two targets.
 """
 
 from __future__ import annotations
@@ -42,8 +44,8 @@ class SceneReplanConfig:
 @dataclass
 class StepResult:
     owned: bool  # the device owns this tick: the follower, stall and arrival rules do not run
-    output: str | None = None  # "hold" (brake, steering held) | "presteer" (wheels 0, steering to steer_rad) | "escape"
-    steer_rad: float | None = None
+    output: str | None = None  # "hold" (brake, steering held) | "presteer" (wheels 0, steering to steer) | "escape"
+    steer: object = None
     end: str | None = None  # the mission ends with this reason
 
 
@@ -74,6 +76,12 @@ class SceneReplan:
 
     def active(self) -> bool:
         return self.request_ is not None
+
+    def abort(self, reason: str) -> None:
+        """The request ends outside the machine (a worker's exception): its record closed with the reason."""
+        if self.request_ is not None:
+            self.request_["record"].update(outcome="failed", reason=reason)
+            self.request_, self.state = None, None
 
     def _left(self, trigger: str) -> dict:
         return {"total": self.config.budget_total - self.used_total,
@@ -147,6 +155,9 @@ class SceneReplan:
                     return hold
                 self._go("wait_jobs", t)
             elif state == "wait_jobs":
+                if not ports.stopped():  # every submit stands (Codex impl round 1 P2-5)
+                    self._go("wait_stop", t)
+                    return hold
                 if ports.busy():
                     return hold
                 if not r["released"]:
@@ -194,7 +205,7 @@ class SceneReplan:
                 if not candidate.get("ok"):
                     return self._end("refused", f"scene_replan_refused:{trigger}:{candidate.get('why')}")
                 ports.install(value)
-                r["target"], r["presteer_since"] = float(candidate["steer_rad"]), float(t)
+                r["target"], r["presteer_since"] = candidate.get("steer"), float(t)
                 self._go("presteer", t)
             elif state == "escape":
                 escape = ports.escape_state()
@@ -208,14 +219,14 @@ class SceneReplan:
                 self._go("wait_stop", t)
                 return hold
             elif state == "presteer":
-                error = float(ports.steering_error(r["target"]))
-                r["record"]["presteer_error_rad"] = abs(error)
-                if abs(error) <= self.config.presteer_tolerance_rad:
+                error = abs(float(ports.steering_error(r["target"])))
+                r["record"]["presteer_error_rad"] = error
+                if error <= self.config.presteer_tolerance_rad:
                     r["record"]["presteer"] = "aligned"
                 elif t - r["presteer_since"] >= self.config.presteer_timeout_s:
                     r["record"]["presteer"] = "timeout"
                 else:
-                    return StepResult(owned=True, output="presteer", steer_rad=r["target"])
+                    return StepResult(owned=True, output="presteer", steer=r["target"])
                 self._go("resume_check", t)
             elif state == "resume_check":
                 if not ports.stopped():
@@ -226,13 +237,13 @@ class SceneReplan:
                 if preview.get("status") in REPLAN_STATUSES or not preview.get("ok"):
                     out = self._drop(t, "wait_jobs")
                     return out or hold
-                steer = preview.get("steer_rad")
-                if steer is not None and abs(float(steer) - r["target"]) > self.config.presteer_tolerance_rad:
+                steer = preview.get("steer")
+                if steer is not None and ports.steer_gap(steer, r["target"]) > self.config.presteer_tolerance_rad:
                     if r["record"]["represteers"] >= self.config.represteers_per_request:
                         out = self._drop(t, "wait_jobs")
                         return out or hold
                     r["record"]["represteers"] += 1
-                    r["target"], r["presteer_since"] = float(steer), float(t)
+                    r["target"], r["presteer_since"] = steer, float(t)
                     self._go("presteer", t)
                     continue
                 return self._hand_back()

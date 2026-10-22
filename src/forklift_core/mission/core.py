@@ -2182,12 +2182,14 @@ class MissionCore:
             # Scene-mode replan plan 2.3 (B): the first far observation's stall tries the remaining observation
             # candidates before the same waypoint is planned again.
             took_ = self.scene_observe_candidate(t, rear)
-            if took_ is not None:
+            rear = took_.rear  # released or not, the pose every later plan of this tick starts from
+            if took_.installed:
                 ms.observe_stall_ticks = 0
-                rear = took_
                 tracking = trackers["observe"].update(rear, signed_speed, dt)
                 ms.last_tracking = tracking
                 return SimpleNamespace(tracking=tracking, rear=rear)
+            if took_.tried:  # one candidate planned this tick (live keeps its tick short): the next on the next
+                return SimpleNamespace(tracking=replace(tracking, status="braking", speed_mps=0.0), rear=rear)
         observe_miss = (
             observe_stall_
             and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
@@ -3720,13 +3722,16 @@ class MissionCore:
         before = tracker.applied
         # Scene-mode replan plan 2.4: the correction's contribution -- the same odometry under the correction before
         # and after -- per reply and over the tick (a scene run only; the others compute nothing new).
-        watch_ = bool(getattr(self.options, "pickup_prior", False)) and replies
-        rear0_ = prev_ = (tuple(float(v) for v in hooks.slam_rear(t)) if watch_ else None)
+        # (the transforms composed with the same odometry pose -- not slam_rear, whose freshness check may refuse
+        # before the reply that makes it fresh is in, Codex impl round 1 P2-1)
+        watch_ = bool(getattr(self.options, "pickup_prior", False)) and replies and before is not None
+        odom_ = tuple(float(v) for v in hooks.slam_odom_base()) if watch_ else None
+        rear0_ = prev_ = (tuple(float(v) for v in compose(tuple(before[0]), odom_)) if watch_ else None)
         reply_max_ = 0.0
         for reply, meta, sent_mono, received_mono in replies:
             tracker.receive(reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom)
-            if watch_:
-                now_ = tuple(float(v) for v in hooks.slam_rear(t))
+            if watch_ and tracker.applied is not None:
+                now_ = tuple(float(v) for v in compose(tuple(tracker.applied[0]), odom_))
                 reply_max_ = max(reply_max_, math.hypot(now_[0] - prev_[0], now_[1] - prev_[1]))
                 prev_ = now_
             slam["records"].append({
@@ -6042,6 +6047,8 @@ class MissionCore:
         if why is not None:
             self._drop(p, t, why, count=True)
             return SimpleNamespace(hold=True)
+        if not ok and p.site == "scene_replan":
+            self.scene_replan.abort("async_plan_failed")  # its record closed (Codex impl round 1 P3)
         hooks.require(ok, f"async_plan_failed:{str(value).splitlines()[0] if value else ''}")
         {"observe": self._observe_finish, "release": self._release_finish,
          "live_leg": self._live_leg_finish, "dock": self._dock_finish,
@@ -6158,13 +6165,12 @@ class MissionCore:
         return not (self.near_active() or self.realign_active() or self.bottom_deck_leg_active())
 
     def scene_observe_candidate(self, t: float, rear):
-        """Plan 2.3 (B): from the stop -- the hold released first (the candidates are map poses) -- the next
-        observation candidates in turn; the first that plans is installed with its own replan budget. Returns the
-        control pose when one is installed, else None (none left or none planned)."""
+        """Plan 2.3 (B): from the stop -- the hold released first, whatever follows (the candidates are map poses,
+        and the same waypoint's replan after them starts from the released pose too, Codex impl round 1 P2-3) -- the
+        next observation candidate, one per call (the tick stays short live as the waypoint's own replan does,
+        P2-2); installed with its own replan budget when it plans. Returns (installed, tried, rear)."""
         ms, state, slam, hooks, options = self.ms, self.state, self.slam, self.hooks, self.options
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
-        if ms.next_candidate_index >= len(options.observation_waypoints or ()):
-            return None
         rear_ = np.asarray(rear, dtype=float)
         if slam is not None and slam["tracker"].mode == "holding":
             out_ = self.release_and_carry(t)
@@ -6173,8 +6179,10 @@ class MissionCore:
                 hooks.set_rear(rear_)
                 if slam.get("control"):
                     slam["control"][-1][1:4] = rear_.tolist()
+        if ms.next_candidate_index >= len(options.observation_waypoints or ()):
+            return SimpleNamespace(installed=False, tried=False, rear=rear_)
         start_ = PlanningPose(float(rear_[0]), float(rear_[1]), float(rear_[2]))
-        while ms.next_candidate_index < len(options.observation_waypoints):
+        if ms.next_candidate_index < len(options.observation_waypoints):
             index_ = ms.next_candidate_index
             ms.next_candidate_index += 1
             coordinates_ = options.observation_waypoints[index_]
@@ -6199,8 +6207,8 @@ class MissionCore:
                 trackers["observe"] = RearAxlePathTracker(plan_.poses, plan_.directions, plan_.curvatures_inv_m,
                                                           trackers["observe"].config)
                 ms.phase_started = t
-                return rear_
-        return None
+                return SimpleNamespace(installed=True, tried=True, rear=rear_)
+        return SimpleNamespace(installed=False, tried=True, rear=rear_)
 
     def scene_correction_note(self, t: float, net_m: float, reply_max_m: float, net_yaw_rad: float = 0.0) -> None:
         """Plan 2.4: the largest correction contribution since the current gear leg began (its tracker and leg)."""
@@ -6288,8 +6296,8 @@ class MissionCore:
         leg_, direction_ = tracker.leg_ahead()
         kappa_ = float(pv.curvature_inv_m)
         wheelbase_ = float(self.options.drive_geometry.wheelbase_m)
-        out = {"status": "tracking", "kappa": kappa_, "steer_rad": math.atan(kappa_ * wheelbase_),
-               "direction": int(direction_)}
+        out = {"status": "tracking", "kappa": kappa_, "steer": kappa_, "direction": int(direction_),
+               "wheelbase_m": wheelbase_}
         if obstacle is None:
             out.update(ok=True, why="no_layer")
             return out
@@ -6353,10 +6361,11 @@ class MissionCore:
                 kind_, args_, extra_kw_ = "transport", (sc_, start_, cfg_), core._exit_prefix_kwargs()
             else:
                 kind_, args_, extra_kw_ = "return", (sc_, start_, options.return_to_pose, cfg_), {}
-            kwargs_ = dict(geometry=geometry, travel_config=travel_, **extra_kw_)
+            kwargs_ = dict(geometry=geometry, travel_config=travel_)
             if core.jobs is not None:
-                payload_ = {"kind": kind_, "args": args_, "kwargs": {**kwargs_, "deadline": time.monotonic() + 20.0},
-                            "retry_on": (), "tight_args": args_, "tight_kwargs": kwargs_}
+                worker_kw_ = {**kwargs_, **extra_kw_}  # the worker's planner is unbound: the exit prefix goes along
+                payload_ = {"kind": kind_, "args": args_, "kwargs": {**worker_kw_, "deadline": time.monotonic() + 20.0},
+                            "retry_on": (), "tight_args": args_, "tight_kwargs": worker_kw_}
                 core._request("scene_replan", "leg", payload_, t, box.rear, core._applied_now(), ctx={})
                 return
             planner_ = hooks.plan_transport_leg if kind_ == "transport" else hooks.plan_return_leg
@@ -6377,6 +6386,7 @@ class MissionCore:
             state["paths"][ms.phase] = hooks.path_record(result)
             hooks.write_paths()
             config_ = (core.scene_escape or {}).get("config", trackers[ms.phase].config)
+            core.scene_escape = None  # consumed: a later install keeps its own leg's settings (Codex impl round 1 P2-4)
             trackers[ms.phase] = RearAxlePathTracker(result.poses, result.directions, result.curvatures_inv_m, config_)
             state.setdefault("paths_replaced", []).append(
                 {"leg": ms.phase, "time_s": float(t), "by": "scene_replan", "path": state["paths"].get(ms.phase)})
@@ -6452,9 +6462,17 @@ class MissionCore:
             if core.scene_escape is not None:
                 core.scene_escape["status"] = "cleared"
 
-        def steering_error(target_rad):
-            measured_ = math.atan(float(hooks.held_kappa()) * float(options.drive_geometry.wheelbase_m))
-            return measured_ - float(target_rad)
+        def wheel_targets(kappa_):
+            return ackermann_command(0.0, float(kappa_), options.drive_geometry).steering_rad
+
+        def steering_error(target_kappa):
+            # each front wheel against its own Ackermann angle (Codex impl round 1 P3: the mean held curvature
+            # hides +0.08 / -0.08 rad)
+            actual_ = [float(v) for v in hooks.steering_actual()]
+            return max(abs(a_ - b_) for a_, b_ in zip(actual_, wheel_targets(target_kappa)))
+
+        def steer_gap(a_, b_):
+            return max(abs(x_ - y_) for x_, y_ in zip(wheel_targets(a_), wheel_targets(b_)))
 
         def preview():
             return core._scene_preview(copy.deepcopy(trackers[ms.phase]), t, box.rear, dt)
@@ -6462,7 +6480,7 @@ class MissionCore:
         return SimpleNamespace(stopped=stopped, busy=busy, release=release, submit=submit, poll=poll,
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
-                               steering_error=steering_error, preview=preview, box=box)
+                               steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box)
 
     def scene_replan_tick(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's tick ahead of the follower (plan 2.1): owned or not, what the wheels and steering get, the
@@ -6477,7 +6495,7 @@ class MissionCore:
         result = SimpleNamespace(owned=out_.owned, output=out_.output, rear=ports.box.rear, requested_speed=0.0,
                                  curvature=0.0)
         if out_.output == "presteer":
-            result.curvature = math.tan(float(out_.steer_rad)) / float(self.options.drive_geometry.wheelbase_m)
+            result.curvature = float(out_.steer)  # the target is the first command's curvature
         elif out_.output == "escape" and self.scene_escape is not None:
             tracker_ = trackers[ms.phase]
             tracking = tracker_.update(ports.box.rear, signed_speed, dt)
