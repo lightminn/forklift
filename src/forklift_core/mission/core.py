@@ -204,8 +204,10 @@ class MissionCore:
         self.jobs = None
         self.pending: SimpleNamespace | None = None  # the plan being waited for
         self.release_replan_needed: dict | None = None  # a discarded release replan to ask again when running
+        self.observe_failed_needed: dict | None = None  # a discarded re-observation plan (live) to ask again
         self.capture_live = None  # D9c: the capture running over control ticks
         self.observation_live = None  # D9c: a finished capture's observation, handled on the next tick
+        self.far_leg_recaptures = 0  # a live far stop captured again after its leg ended (plan 2026-10-22 T1 (A) 3)
         self.capture_acquired_s: float | None = None  # D9c: its acquisition time, for the plan it asks
         self.prepare_attempts = 0  # persistent console plan D2: the current submit's preparation requests
         self.baseline = None  # persistent console plan D2: the mission-owned state before a live session's first mission
@@ -2410,6 +2412,12 @@ class MissionCore:
                 f"near_capture_failed:{attempt['retry_reason']}",
             )
         hooks.set_inset(f"인식 실패 #{attempt_number} · 재관측 이동", f"사유: {observation.reason}")
+        if self.jobs is not None and getattr(hooks, "live_abort", None) is not None and not options.repeat_captures:
+            # A live run (plan 2026-10-22-live-far-recognition task 10): the remaining candidates are the planning
+            # worker's -- the truck stands at the observation pose meanwhile and the ticks go on (D8b).
+            self._observe_failed_request(t, rear, {"first": ms.next_candidate_index,
+                                                   "retry_reason": attempt["retry_reason"]})
+            return False
         planning_start = wall()
         observe_plan = None
         while ms.next_candidate_index < len(
@@ -2483,6 +2491,49 @@ class MissionCore:
         realign_install("observe_candidate")  # Plan D8 S4c-3 stage 2
         record_tracker_configs()
         return False
+
+    def _observe_failed_request(self, t: float, rear, ctx: dict) -> None:
+        """The candidates left after ``ctx["first"]`` asked of the worker from where the truck stands, on the near
+        ladder only (as the synchronous re-observation), within 20 s each."""
+        options, hooks = self.options, self.hooks
+        waypoints = [tuple(float(v) for v in w) for w in options.observation_waypoints[ctx["first"]:]]
+        grid = dict(hooks.grid_kwargs("observe"))
+        grid.pop("deadline", None)
+        world = hooks.grid_world(replace(options.scenario,
+                                         start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))))
+        payload = {"world": world, "waypoints": waypoints, "config": options.planner_config,
+                   "geometry": self.geometry, "pickup_bounds": self.observe_bounds(), "grid_kwargs": grid,
+                   "ladders": (False,), "deadline": time.monotonic() + max(1, len(waypoints)) * 20.0}
+        self._request("observe_failed", "observe_ladder", payload, t, rear, self._applied_now(), dict(ctx))
+
+    def _observe_failed_finish(self, p, value, t: float, rear) -> None:
+        """The worker's answer for the remaining candidates: the first reachable one installed as the observe leg
+        (as the synchronous loop does), else the mission ends as it did (all candidates exhausted)."""
+        ms, state, options = self.ms, self.state, self.options
+        first = p.ctx["first"]
+        for c in value["candidates"]:
+            state["observation_candidates"].append(
+                {"candidate_index": first + int(c["candidate_index"]), "pose": c["pose"], "start_rear": c["start_rear"],
+                 "success": c["success"], "status": c["status"],
+                 "analytic_expansion_interval": c.get("analytic_expansion_interval"),
+                 "search_attempts": c.get("search_attempts", []), "extended_ladder": c.get("extended_ladder", False)})
+        state["planning_wall_s"] += float(value.get("wall_s", 0.0))
+        if value["result"] is None:
+            ms.next_candidate_index = len(options.observation_waypoints)
+            state["planning_status"] = "all_candidates_exhausted"
+            reasons = ";".join(c["status"] for c in state["observation_candidates"])
+            if value.get("timed_out"):
+                reasons += ";timeout"
+            self.hooks.require(False, f"observe:all_candidates_exhausted:{p.ctx['retry_reason']}:{reasons}")
+        ms.next_candidate_index = first + int(value["selected"]) + 1
+        state["observation_waypoint_selected"] = list(state["observation_candidates"][-1]["pose"])
+        state["planning_status"] = value["result"].status
+        self.paths["observe"] = value["result"]
+        self.trackers["observe"] = self.observe_tracker(value["result"])
+        ms.phase_started = t
+        self.apply_tracker_profile()
+        self.realign_install("observe_candidate")
+        self.record_tracker_configs()
 
     def observe_tracker(self, plan):
         """The observation leg's follower, as the setup makes it (shared by the next candidate and a live
@@ -3712,16 +3763,79 @@ class MissionCore:
             self.capture_live.attempt["aborted"] = "paused"
             self.capture_live = None
 
+    FAR_LEG_RECAPTURES = 1  # a live far stop whose leg ended before its decision: captured again once (T1 (A) 3)
+
     def observation_freeze(self, t: float, captured) -> None:
-        """D9c: the observation is handled on the next tick; what it rests on is fixed now (Codex D9 1st P1)."""
+        """D9c: the observation is handled on the next tick; what it rests on is fixed now (Codex D9 1st P1). A
+        live far stop's decision is still being worked on: the work clocks stand until it is taken or dropped."""
+        far = getattr(captured, "far_pending", None)
         self.observation_live = SimpleNamespace(captured=captured, applied=self._applied_now(),
                                                 gen=self.commands.mission_gen, phase=self.ms.phase,
-                                                acquired_s=float(self.hooks.now_s()), t=float(t))
+                                                acquired_s=float(self.hooks.now_s()), t=float(t), far=far,
+                                                far_wait=False)
+        if far is not None and not (self.commands.waits and self.commands.waits[-1][1] is None):
+            self.commands.begin_wait(t)
+            self.observation_live.far_wait = True
+
+    def _far_wait_end(self, o, t: float) -> None:
+        if getattr(o, "far_wait", False):
+            self.commands.end_wait(t)
+            o.far_wait = False
+
+    def observation_drop(self, t: float, why: str) -> None:
+        """A pause, a cancel or a mission end drops the frozen observation; a far decision still pending is
+        dropped with it (``recognition_discarded``) -- the arrival captures again when running."""
+        o, self.observation_live = self.observation_live, None
+        if o is None:
+            return
+        self._far_wait_end(o, t)
+        if getattr(o, "far", None) is not None:
+            cancel = getattr(self.hooks, "far_recognition_cancel", None)
+            if cancel is not None:
+                cancel(why)
+            self.state.setdefault("recognition_discarded", []).append(
+                {"time_s": float(t), "captured_s": o.t, "why": why})
+
+    def _far_take(self, t: float, o):
+        """A frozen far stop's decision: None while it is worked on (the observation stays frozen), else the
+        captured namespace with the decided observation -- or with a ``no_pallet`` one once its leg ended twice
+        (observe failed: the next candidate). A leg that ended once drops the observation and captures again."""
+        got = self.hooks.far_recognition_poll(o.far)  # may raise recognition_timeout / recognition_error:
+        if got.state == "waiting":
+            return None
+        self.observation_live = None
+        self._far_wait_end(o, t)
+        captured = o.captured
+        if got.state == "done":
+            self.far_leg_recaptures = 0
+            captured.observation = got.observation
+            self._far_adopt(captured.attempt, got.record)
+            captured.attempt["pocket_observation"] = asdict(got.observation)
+            return captured
+        self.state.setdefault("recognition_discarded", []).append(
+            {"time_s": float(t), "captured_s": o.t, "why": got.why})
+        if got.why != "leg":
+            return False  # a STOP or cancel cleared it: nothing to take, the pause handles the rest
+        self.far_leg_recaptures = getattr(self, "far_leg_recaptures", 0) + 1
+        if self.far_leg_recaptures <= self.FAR_LEG_RECAPTURES:
+            return False  # captured again where the truck stands, in the new leg
+        self.far_leg_recaptures = 0
+        captured.observation = got.observation
+        captured.attempt["observation_source"] = "none"
+        captured.attempt["recognition"] = {"status": "invalid", "reason": got.observation.reason, "source": None}
+        captured.attempt["pocket_observation"] = asdict(got.observation)
+        return captured
 
     def observation_take(self, t: float):
         """The fixed observation if nothing it rests on changed (the correction, the run, the phase); else it is
-        dropped (counted, 3 at most per run) and None -- the arrival captures again."""
-        o, self.observation_live = self.observation_live, None
+        dropped (counted, 3 at most per run) and None -- the arrival captures again. A live far stop's decision
+        is waited for first (None, the observation kept frozen)."""
+        o = self.observation_live
+        if getattr(o, "far", None) is not None:
+            taken = self._far_take(t, o)
+            if taken is None or taken is False:
+                return None
+        self.observation_live = None
         why = ("mission" if self.commands.status != "running" or self.commands.mission_gen != o.gen
                else "phase" if self.ms.phase != o.phase
                else "correction" if self._applied_now() != o.applied else None)
@@ -3730,6 +3844,9 @@ class MissionCore:
             return o.captured
         drops = self.state.setdefault("observation_drops", [])
         drops.append({"time_s": float(t), "captured_s": o.t, "why": why})
+        if getattr(o, "far", None) is not None:  # a far decision taken, then dropped with its observation
+            self.state.setdefault("recognition_discarded", []).append(
+                {"time_s": float(t), "captured_s": o.t, "why": why})
         self.hooks.require(len(drops) <= self.ASYNC_MAX_DISCARDS, f"observation_discarded:{why}")
         return None
 
@@ -3896,15 +4013,20 @@ class MissionCore:
                     detection.observation.insertion_yaw_rad, (float(base[0]), float(base[1])), float(yaw))
                 attempt["detector_site"] = [float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)]
         observation = detection.observation
+        far_pending = None
         if far_capture:
             reference = observation
-            observation, far_record = far_hook(scene_input, base, yaw, reference)
             attempt["detector_reference"] = asdict(reference)
-            attempt["observation_source"] = far_record.get("source") or "none"
-            attempt["recognition"] = {k: far_record.get(k) for k in (
-                "status", "reasons", "reason", "source", "observations", "selected_track", "frames", "drive_frames",
-                "used_error", "single_error", "detector_error", "lag_fit", "leg",
-                "used", "decided")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
+            far_submit = getattr(hooks, "far_recognition_submit", None)
+            if far_submit is not None:
+                # A live run (plan 2026-10-22-live-far-recognition T1 (A)): the decision's work goes to the far
+                # worker; the observation is frozen with it (observation_freeze) and taken once it is decided
+                # (observation_take). The detector's stays as the reference only, never adopted.
+                far_pending = far_submit(scene_input, base, yaw, reference)
+                attempt["observation_source"] = "pending"
+            else:
+                observation, far_record = far_hook(scene_input, base, yaw, reference)
+                self._far_adopt(attempt, far_record)
         if near is not None and near.get("retry_stand"):
             # Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet; no
             # candidate moves on old estimates.
@@ -3929,7 +4051,16 @@ class MissionCore:
                                frame_diagnostics=frame_diagnostics, capture_attempts=capture_attempts,
                                capture_diagnostics=capture_diagnostics, base=base, q=q, yaw=yaw, forward=forward,
                                rear=rear, rear_stamp=rear_stamp, prior=prior, params=params, detection=detection,
-                               observation=observation)
+                               observation=observation, far_pending=far_pending)
+
+    @staticmethod
+    def _far_adopt(attempt: dict, far_record: dict) -> None:
+        """The far recognition's decision on the attempt's record."""
+        attempt["observation_source"] = far_record.get("source") or "none"
+        attempt["recognition"] = {k: far_record.get(k) for k in (
+            "status", "reasons", "reason", "source", "observations", "selected_track", "frames", "drive_frames",
+            "used_error", "single_error", "detector_error", "lag_fit", "leg",
+            "used", "decided")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
 
     # --- M-a3: the paused tick and the resume (docs/plans/2026-10-16-m-a3-mission-commands.md E3-E6) ---
     def permission_watch(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
@@ -5783,6 +5914,10 @@ class MissionCore:
                 need, self.release_replan_needed = self.release_replan_needed, None
                 self._release_request(t, need)
                 return SimpleNamespace(hold=True)
+            if self.observe_failed_needed is not None and not paused and self.commands.status == "running":
+                ctx, self.observe_failed_needed = self.observe_failed_needed, None
+                self._observe_failed_request(t, rear, ctx)
+                return SimpleNamespace(hold=True)
             return SimpleNamespace(hold=False)
         if abs(float(truth_speed)) > 0.05:
             p.moving_since = t if p.moving_since is None else p.moving_since
@@ -5818,7 +5953,8 @@ class MissionCore:
             return SimpleNamespace(hold=True)
         hooks.require(ok, f"async_plan_failed:{str(value).splitlines()[0] if value else ''}")
         {"observe": self._observe_finish, "release": self._release_finish,
-         "live_leg": self._live_leg_finish, "dock": self._dock_finish}[p.site](p, value, t, rear)
+         "live_leg": self._live_leg_finish, "dock": self._dock_finish,
+         "observe_failed": self._observe_failed_finish}[p.site](p, value, t, rear)
         return SimpleNamespace(hold=True)
 
     def _drop(self, p, t: float, why: str, *, count: bool) -> None:
@@ -5843,6 +5979,8 @@ class MissionCore:
             self.release_replan_needed = p.ctx["need"]
         elif p.site == "live_leg":
             self.obstacle.setdefault("live_replanned", {})[p.phase] = False
+        elif p.site == "observe_failed":
+            self.observe_failed_needed = p.ctx  # asked again from where the truck stands when the mission runs
         # observe: nothing to undo -- the truck stands at the observation pose and captures again
 
     # --- a live mission's preparation (docs/plans/2026-10-18-persistent-live-console.md D2) ------------------------
@@ -6159,9 +6297,14 @@ class MissionCore:
             self.state["async_plans"][-1].update(finished_s=float(t), dropped="abandoned")
             self.pending = None
         self.release_replan_needed = None
+        self.observe_failed_needed = None
         self.fresh_depth_wait = None
         self.capture_abandon()
-        self.observation_live = None
+        self.observation_drop(t, "mission_end")
+        self.far_leg_recaptures = 0
+        far_end = getattr(self.hooks, "far_recognition_mission_end", None)
+        if far_end is not None:  # plan 2026-10-22-live-far-recognition task 7: the mission's far summary, every end
+            far_end(t)
         self.capture_acquired_s = None
 
     def hold_count(self) -> int:

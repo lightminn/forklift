@@ -290,3 +290,12 @@ def test_the_test_death_kills_the_worker_once_as_it_starts_that_job(tmp_path):
         assert ok and value["result"] == 2 and w.restarts == 1
     finally:
         w.close()
+
+
+def test_a_re_observation_ladder_runs_the_near_ladder_only(monkeypatch):
+    """Plan 2026-10-22-live-far-recognition task 10: a live observe failure's remaining candidates, as the
+    synchronous re-observation plans them (extended=False)."""
+    calls = fake_leg(monkeypatch)
+    payload = {**ladder_payload([(1, 0, 0), (2, 0, 0)]), "ladders": (False,)}
+    out = pw._run("observe_ladder", payload)
+    assert [(c[0][0], c[1]) for c in calls] == [(1, False), (2, False)] and out["result"] is None

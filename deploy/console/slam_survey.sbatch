@@ -43,6 +43,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'MAP_PARAMS=%q\n' "$MAP_PARAMS"
   # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
   printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
+  printf 'SCENE_FILE=\n'  # the console's runner word for word: the factory hall
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -72,16 +73,18 @@ cat > "$OUT/runner.sh" <<'EOT'
 cd "$ROOT"
 LOC=()  # SLAM localization plan L7: localize on the survey bundle from the start (unset: online mapping)
 [ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
+LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-planning)
+[ -n "${SCENE_FILE:-}" ] && LAYOUT=(--layout scene --scene-file "$SCENE_FILE")
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --base-scene "$BASE_SCENE" \
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml \
   --forklift-urdf "$FORKLIFT_URDF" --settings config/isaac_transport_measured.yaml \
   --delivery-straight-m 1.5 --alignment-straight-m 2.1 --withdrawal-m 0.55 --insertion-reserve-m 0.016 \
-  --min-obstacle-height-m 1.15 --prism-colliders --layout factory --fps 60 \
+  "${LAYOUT[@]}" --fps 60 \
   --use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
-  --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --grid-planning --seed "$SEED" \
+  --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \

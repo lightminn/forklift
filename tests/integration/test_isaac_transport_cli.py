@@ -1111,7 +1111,8 @@ def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
     source = SCRIPT.read_text()
     assert re.search(r'state\.get\("near_capture", \{\}\)\.get\("status"\) != "pending"\s+and not core\.bottom_deck_side_leg\(\)\)',
                      source)
-    assert 'if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_side_leg():' in source
+    assert ('if far_runtime is not None and far_observing(ms.phase == "observe" and not core.bottom_deck_side_leg()):'
+            in source)
     # the return to the far stand is a far observation leg: its arrival is the ordinary capture
     arrival = re.search(r'if args\.use_perception and ms\.phase == "observe":\s+if core\.bottom_deck_side_leg\(\):', source)
     assert arrival

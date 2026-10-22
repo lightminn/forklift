@@ -6,6 +6,11 @@ fork spacing, pallet depth), replays every leg through recognition_bridge.FarRec
 stop's status, reason, source, selected track and used candidate with the recorded attempt. Exit 0 when
 every stop matches exactly.
 
+A live run (docs/plans/2026-10-22-live-far-recognition.md) keeps each mission apart: pass its
+<run>/recognition_missions/<mission id>/ directory, laid out the same way. Only the frames its tick applied were
+saved, numbered in the order they were applied; the ones dropped (a STOP, another generation, an ended leg, a full
+queue) are listed in its ``live.jobs`` record and are not replayed.
+
 A learned run (stage 3, ``--recognition-proposals learned``) also saved each frame's RGB and the proposals the
 decision used (the model's, or the geometric fallback's with its failures); the replay feeds those back with the
 run's tau, so the decision is recomputed exactly whatever device ran the model. ``--onnx`` additionally reruns
