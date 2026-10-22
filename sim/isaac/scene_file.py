@@ -208,6 +208,27 @@ def load_session(path: Path) -> SessionScene:
         source_format=SESSION_FORMAT)
 
 
+def scene_format(path: Path) -> str:
+    """The format a scene file says it is (a v1 scene or a session)."""
+    return str(json.loads(Path(path).read_bytes()).get("format"))
+
+
+def session_as_scene(session: SessionScene, index: int = 0) -> SceneFile:
+    """A session's mission ``index`` (of its order) in the v1 shape the runner's setup reads (plan
+    2026-10-22-rigid-session-pallets): that pallet's truth as the pickup, its destination, the static props, the
+    session's walls and floors -- its pallets are not visuals, they are rigid bodies made from pallets[].truth. The
+    zone's yaw bound is kept absolute (the runner reads it only for runtime viewpoints, off for a scene)."""
+    pid, did = session.sequence[index]
+    p = session.pallet_by_id(pid)
+    z = p.zone
+    scenario = TransportScenario(seed=0, start_rear=session.start_rear, pickup=p.truth,
+                                 destination=session.destination(did), props=session.static_props,
+                                 bounds=session.bounds)
+    return SceneFile(name=session.name, pallet=session.pallet, sha256=session.sha256, scenario=scenario,
+                     pickup_zone=PickupZone(z.x_min_m, z.x_max_m, z.y_min_m, z.y_max_m, z.yaw_half_rad),
+                     observation_waypoints=p.observation_waypoints, visuals=session.visuals, pickup_nominal=p.nominal)
+
+
 def register_session(targets, session: SessionScene, *, kind: str, depth_m: float, width_m: float, live: bool) -> None:
     """Every pallet and destination of a session into the targets list (plan 2026-10-22-session-scene-pallet-props
     2.3): each pallet at its registered pose with its real size (a pallet without one would draw no teleop zone) under

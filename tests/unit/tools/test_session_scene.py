@@ -207,3 +207,20 @@ def test_the_adapter_gives_the_runners_own_preparation_inputs_for_every_v1_scene
                "template": [tuple(float(v) for v in w) for w in p1.observation_waypoints],
                "zone": (r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad)}
     assert adapter == runner
+
+
+def test_a_sessions_first_mission_is_the_runners_setup_scene(sessions):
+    from scene_file import scene_format, session_as_scene
+
+    loaded, paths = sessions
+    assert scene_format(paths["random"]) == SESSION_FORMAT
+    s = loaded["random"]
+    scene = session_as_scene(s)
+    p4 = s.pallet_by_id("P-4")
+    assert scene.scenario.pickup == p4.truth and scene.scenario.destination == s.destination("D-1")
+    assert scene.scenario.props == s.static_props and scene.scenario.start_rear == s.start_rear
+    assert scene.observation_waypoints == p4.observation_waypoints and scene.pickup_nominal == p4.nominal
+    assert all(v.kind != "pallet" for v in scene.visuals)
+    z = scene.pickup_zone
+    assert (z.x_min_m, z.x_max_m, z.yaw_max_rad) == (p4.zone.x_min_m, p4.zone.x_max_m, p4.zone.yaw_half_rad)
+    assert session_as_scene(s, 2).scenario.pickup == s.pallet_by_id("P-3").truth

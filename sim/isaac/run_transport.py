@@ -920,6 +920,7 @@ def arguments() -> argparse.Namespace:
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
     args, unknown = parser.parse_known_args()
+    args.session = False  # a session scene file sets it below (plan 2026-10-22-rigid-session-pallets)
     if args.bottom_deck_check == "on":
         # Plan 2026-10-19 task 4: the side legs and the insert permission are defined for a batch run on the
         # perception target only (an oracle target would be permitted 0.3 m off the pallet judged -- Codex task 3).
@@ -975,10 +976,14 @@ def arguments() -> argparse.Namespace:
         if args.obstacle_layer is None:
             # The pickup estimate that replaces the true pallet in its plans is kept with the obstacle layer.
             parser.error("--layout scene needs --obstacle-layer")
-        if args.observation_waypoints is None:
-            from scene_file import load_scene
+        from scene_file import SESSION_FORMAT, load_scene, load_session, scene_format, session_as_scene
 
-            args.observation_waypoints = [list(w) for w in load_scene(args.scene_file).observation_waypoints]
+        # Plan 2026-10-22-rigid-session-pallets: a session scene (several rigid pallets, a mission each) is a live
+        # console's own; its first mission sets the scene up.
+        args.session = scene_format(args.scene_file) == SESSION_FORMAT
+        first_ = session_as_scene(load_session(args.scene_file)) if args.session else load_scene(args.scene_file)
+        if args.observation_waypoints is None:
+            args.observation_waypoints = [list(w) for w in first_.observation_waypoints]
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -1138,6 +1143,15 @@ def arguments() -> argparse.Namespace:
         parser.error("--live does not take --repeat-captures (its captures bypass the stop boundary, plan C2)")
     if args.live and args.record_boundary:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
+    if getattr(args, "session", False):
+        # Plan 2026-10-22-rigid-session-pallets section 2: a session is run from the console, its near capture's
+        # refusals redrawn (the neighbour sweep, 2.6); the bottom-deck legs and near tracking are not defined for it.
+        if not args.live:
+            parser.error("a session scene file needs --live")
+        if args.near_capture_redraw != "always":
+            parser.error("a session scene file needs --near-capture-redraw always")
+        if args.near_tracking or getattr(args, "bottom_deck_check", "off") != "off":
+            parser.error("a session scene file is not defined with --near-tracking or --bottom-deck-check on")
     if args.return_turnaround is None:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
@@ -2577,6 +2591,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     cusp_stop_yaw_rate_radps = 0.02
     # None keeps every planner call exactly as in the original bay runs.
     pickup_bounds = travel_config = factory = scene_layout = None
+    session = session_handles = session_rest = None  # a session scene file's (plan 2026-10-22-rigid-session-pallets)
     if args.layout == "factory":
         import factory_assets
 
@@ -2627,7 +2642,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     elif args.layout == "scene":
         from scene_file import load_scene
 
-        scene_layout = load_scene(args.scene_file)
+        if args.session:  # plan 2026-10-22-rigid-session-pallets: several rigid pallets, the first mission sets up
+            from scene_file import load_session, session_as_scene
+
+            session = load_session(args.scene_file)
+            scene_layout = session_as_scene(session)
+            state["session"] = {"pallets": [p_.pallet_id for p_ in session.pallets],
+                                "destinations": [d_ for d_, _ in session.destinations],
+                                "sequence": [list(m_) for m_ in session.sequence]}
+        else:
+            scene_layout = load_scene(args.scene_file)
         scenario = scene_layout.scenario
         state["scene_layout"] = {
             "file": str(args.scene_file),
@@ -2694,9 +2718,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["prism_colliders"] = add_prism_colliders(stage, prism_columns(scenario, factory))
         # The overview has to see the whole hall from above the roof line.
         state["hidden_overhead_prims"] = len(hide_overhead(stage))
-    state["destination_marker"] = add_destination(
-        stage, scenario.destination.x_m, scenario.destination.y_m
-    )
+    if session is not None:  # a ring at every unloading slot (plan 2026-10-22-rigid-session-pallets 2.3)
+        from session_pallets import prim_name as session_prim_name
+
+        state["destination_markers"] = {d_: add_destination(stage, site_.x_m, site_.y_m,
+                                                            path=f"/World/Destinations/{session_prim_name(d_)}")
+                                        for d_, site_ in session.destinations}
+    else:
+        state["destination_marker"] = add_destination(
+            stage, scenario.destination.x_m, scenario.destination.y_m
+        )
     # The scene above and scenario.json keep the true destination; with a prior
     # error (plan D7c δ runs) everything that plans from here on, and the docking
     # match's prior, sees the moved one. The reference scan and the evaluation use
@@ -2714,15 +2745,29 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "planning_destination": asdict(scenario.destination),
             "truth_destination": asdict(truth_destination),
         }
-    pallet = create_pallet(
-        world,
-        stage,
-        app,
-        args.pallet_urdf,
-        args.output,
-        scenario.pickup,
-        settings["pallet_mass_kg"],
-    )
+    if session is None:
+        pallet = create_pallet(
+            world,
+            stage,
+            app,
+            args.pallet_urdf,
+            args.output,
+            scenario.pickup,
+            settings["pallet_mass_kg"],
+        )
+    else:
+        # Plan 2026-10-22-rigid-session-pallets 2.1-2.2: every session pallet a rigid body at its truth, one import;
+        # the runner's pallet is the mission's (PalletSwitch), the scene's first mission's to begin with.
+        from scene import import_pallet_usd, place_pallet
+        from session_pallets import PalletSwitch, check_prim_names, pallet_prim, prim_name as session_prim_name
+
+        check_prim_names([p_.pallet_id for p_ in session.pallets])
+        session_usd_ = import_pallet_usd(args.pallet_urdf, args.output, settings["pallet_mass_kg"])
+        session_handles = {p_.pallet_id: place_pallet(world, stage, app, session_usd_, p_.truth,
+                                                      prim_path=pallet_prim(p_.pallet_id),
+                                                      name=f"pallet_{session_prim_name(p_.pallet_id)}")
+                           for p_ in session.pallets}
+        pallet = PalletSwitch(session_handles, session.sequence[0][0])
     if scene_layout is not None:
         state["scene_pallets"] = add_scene_pallets(stage, app, args.output / "pallet.usd", scene_layout.visuals)
     base_start = np.array(
@@ -2749,6 +2794,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         stage,
         settings,
         expected_pallet_box_count=len(insertion_geometry.pallet_boxes),
+        **({} if session is None else {"pallet_roots": tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets)}),
     )
     # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
     from scene import plant_readback, tyre_contact_readback
@@ -2969,7 +3015,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # (plan v2, Codex P1).
             from isaacsim.core.utils.semantics import add_labels
 
-            label_targets = [("/World/Pallet", "inst_0"), ("/World/Environment", "floor")]
+            if session is None:
+                label_targets = [("/World/Pallet", "inst_0"), ("/World/Environment", "floor")]
+            else:  # plan 2.8: each session pallet its own instance, P-k -> inst_{k-1} in the session's order
+                label_targets = [(pallet_prim(p_.pallet_id), f"inst_{k_}") for k_, p_ in enumerate(session.pallets)]
+                label_targets.append(("/World/Environment", "floor"))
             if factory is not None:
                 import factory_assets as _fa
 
@@ -3212,6 +3262,16 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         and abs(initial_pallet[2]) < 0.005,
         "Invalid pallet spawn after settling",
     )
+    if session is not None:
+        # Every session pallet settled where it was placed (the same 5 mm rule), each one's rest pose from here.
+        from session_pallets import RestWatch
+
+        session_rest = RestWatch()
+        for p_ in session.pallets:
+            pos_, q_ = session_handles[p_.pallet_id].get_world_pose()
+            require(np.linalg.norm(pos_[:2] - [p_.truth.x_m, p_.truth.y_m]) < 0.005 and abs(pos_[2]) < 0.005,
+                    f"Invalid pallet spawn after settling: {p_.pallet_id}")
+            session_rest.rest(p_.pallet_id, pos_, q_)
     require(
         np.linalg.norm(initial_base[:2] - base_start[:2]) < 0.005,
         "Truck spawn displaced",
@@ -3580,6 +3640,14 @@ def drive(S, isaac) -> None:
         _bound["far_live"] = None
     if "far_live" in _bound:
         far_live = _bound["far_live"]
+    if "session" not in _bound:  # a setup recorded before sessions (2026-10-22)
+        _bound["session"] = _bound["session_handles"] = _bound["session_rest"] = None
+    if "session" in _bound:
+        session = _bound["session"]
+    if "session_handles" in _bound:
+        session_handles = _bound["session_handles"]
+    if "session_rest" in _bound:
+        session_rest = _bound["session_rest"]
     if "ARC_POSES" in _bound:
         ARC_POSES = _bound["ARC_POSES"]
     if "CUSP_STALL" in _bound:
