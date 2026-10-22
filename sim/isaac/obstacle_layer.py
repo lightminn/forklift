@@ -200,9 +200,11 @@ class ObstacleLayer:
 
             hit_radius_ = float(g.get("memory_hit_radius_m", 0.1))
             if self.range_noise_model == "a2_spec":
-                # an endpoint marks a fixed disk: at least the widest range bound it can need (Codex P3a review P2 --
-                # 0.1 m left a hit read 0.135 m short at 4.5 m outside the memory once its scan expired)
-                hit_radius_ = max(hit_radius_, self.noise_cut_m)
+                # an endpoint marks a fixed disk of cells: at least the widest range bound it can need (Codex P3a
+                # review P2 -- 0.1 m left a hit read 0.135 m short at 4.5 m outside the memory once its scan expired),
+                # plus the quantization (round 2 P2): the endpoint's cell and the memory cell under the planning grid
+                # cell holding the truth sit < bound/res + 1.5 cells apart on each axis, so 1.5 sqrt(2) res more
+                hit_radius_ = max(hit_radius_, self.noise_cut_m + 1.5 * math.sqrt(2.0) * float(g["resolution_m"]))
             self.memory = PlanningMemory(hall.x_min_m, hall.y_min_m, hall.x_max_m, hall.y_max_m,
                                          float(g["resolution_m"]), hit_radius_m=hit_radius_)
 

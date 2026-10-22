@@ -7,8 +7,12 @@ import numpy as np
 import pytest
 
 from forklift_core.perception.obstacle_grid import (
+    FREE,
+    OCCUPIED,
     AgeErrorTable,
     GridConfig,
+    ObstacleGrid,
+    ObstacleScan,
     a2_spec_accuracy_m,
     a2_spec_cut_m,
 )
@@ -59,8 +63,6 @@ def test_an_unknown_model_is_refused():
 
 
 # ---- the grid itself (Codex P3a review P3: the marking and clearing, not only the bound function) ----
-
-from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, ObstacleGrid, ObstacleScan  # noqa: E402
 
 ANGLES = np.linspace(-np.pi, np.pi, 1440, endpoint=False)
 

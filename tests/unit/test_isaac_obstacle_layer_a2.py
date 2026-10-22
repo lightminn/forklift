@@ -86,5 +86,25 @@ def test_the_a2_config_differs_from_the_single_one_only_in_its_range_noise():
 def test_the_planning_memory_marks_at_least_the_widest_range_bound():
     # Codex P3a review P2: a 0.1 m memory disk left a hit read 0.135 m short at 4.5 m outside the memory
     a2 = layer("obstacle_layer_single_a2")
-    assert a2.memory.hit_radius_m == pytest.approx(a2.noise_cut_m) and a2.memory.hit_radius_m > 0.1
+    # the widest cut plus the cell quantization (round 2 P2)
+    assert a2.memory.hit_radius_m == pytest.approx(a2.noise_cut_m + 1.5 * np.sqrt(2.0) * 0.05)
     assert layer("obstacle_layer_single").memory.hit_radius_m == pytest.approx(0.1)  # unchanged
+
+
+@pytest.mark.parametrize("true_m", [3.05, 4.5, 5.1])
+def test_the_planning_memory_keeps_the_true_surface_after_its_scan_expires(true_m):
+    # Codex P3a review round 2 P2: with a disk of the bare cut, true 5.1 m read 4.909 m put the endpoint cell 0.20 m
+    # from the truth cell -- outside a 0.195 m disk -- and the truth left the plan once the live grid dropped the scan
+    lay = layer("obstacle_layer_single_a2")
+    n = len(lay.beam_angles)
+    fan = np.abs(lay.beam_angles) <= np.radians(10.0)  # a surface across the beams ahead, every one read short
+    distances = np.where(fan, true_m, np.inf)
+    given = np.where(fan, true_m - a2_spec_cut_m(np.full(n, true_m)), np.inf)
+    sensor = lay.sensors[0]
+    lay.add_scans(0.0, {sensor.name: (distances, fan, np.zeros(n, bool), None, given)}, odom_rear=(0.0, 0.0, 0.0),
+                  loaded=False)
+    x_true = sensor.xyz_m[0] - lay.rear_x + true_m
+    for now in (0.1, 2.0):  # live, then long after occupied_max_age_s
+        occ = lay.planner_grid(now, (0.0, 0.0, 0.0), 0)
+        i, j = occ.cell_of(x_true, 0.0)
+        assert occ.occupied[i, j], now
