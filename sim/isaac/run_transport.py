@@ -8125,11 +8125,11 @@ def drive(S, isaac) -> None:
             # Persistent console plan D1: each mission was judged at its own end (the results book); the session
             # ends here (at the loop's limit until D7), a mission still on as session_end.
             live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
-            if far_live is not None:
-                far_live.close()  # the far worker thread ends with the session
             # The session's end decides the exit (plan D9): 0 ended, 3 a new scene; the supervisor reads it.
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
+            if far_live is not None:
+                far_live.close()  # after the last mission's far record is closed (Codex impl round 2 P2)
             live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
             live.settle_records()  # a records write failure on its result before the results are taken (U29)
             state.update({"success": True, "mission_results": live.results.message()["results"],
@@ -8418,6 +8418,8 @@ def drive(S, isaac) -> None:
                     state["async_plan_worker"]["restarts"] = core.jobs.restarts
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["async_plan_worker_close_error"] = repr(exc_)
+            if locals().get("far_live") is not None:
+                far_live.close()  # the far worker ends with the run, however it ends (idempotent)
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)

@@ -494,3 +494,46 @@ def test_the_runner_takes_nothing_in_on_a_stopped_step_and_keeps_the_metadata_a_
     head = src[src.index("def far_drive_frame"):src.index("def read_() -> None:")]
     assert 'rendering_s_ = float(frame_["rendering_time"]) - initial_time' in head  # outside the read's boundary
     assert "far_live.close()" in src
+
+
+# --- Codex implementation round 2 ------------------------------------------------------------------------------------
+def test_a_job_finished_but_not_polled_at_the_end_is_accounted():
+    xs = G._leg()
+    run = G._runtime(R, lag_steps=11)
+    live = R.LiveFar(run)
+    try:
+        live.start_mission("m1", zone_centre_xy=G.PALLET[:2], zone_radius_m=0.6, out_dir=None)
+        _drive_live(live, xs, pump=False, ticks=range(30))
+        _wait_idle(live)  # finished, never pumped
+        summary = live.end_mission("m1")
+    finally:
+        live.close()
+    assert [(j["status"], j["why"]) for j in summary["live"]["jobs"]] == [("dropped", "mission_end")]
+
+
+def test_a_late_result_of_an_ended_mission_stays_out_of_the_next_ones_record():
+    xs = G._leg()
+    run = G._runtime(R, lag_steps=11)
+    gate = _Gate(run.compute)
+    live = R.LiveFar(run, worker=R.FarWorker(gate))
+    try:
+        live.start_mission("m1", zone_centre_xy=G.PALLET[:2], zone_radius_m=0.6, out_dir=None)
+        _drive_live(live, xs, pump=False, ticks=range(30))
+        assert gate.started.wait(10)
+        first = live.end_mission("m1")
+        live.start_mission("m2", zone_centre_xy=G.PALLET[:2], zone_radius_m=0.6, out_dir=None)
+        gate.go.set()
+        _wait_idle(live)
+        live.pump(2, active=True)
+        second = live.end_mission("m2")
+    finally:
+        live.close()
+    assert [j["status"] for j in first["live"]["jobs"]] == ["in_flight"]
+    assert second["live"]["jobs"] == [] and run.frame_records == []
+
+
+def test_the_session_closes_the_far_worker_after_its_last_missions_record_and_on_any_end():
+    src = (ROOT / "sim/isaac/run_transport.py").read_text()
+    end = src.index('live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")')
+    assert src.index("far_live.close()", end) - end < 300  # right after, not before
+    assert 'if locals().get("far_live") is not None:\n                far_live.close()' in src  # the finally

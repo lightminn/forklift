@@ -528,10 +528,14 @@ class FarWorker:
             self._waiting.clear()
             return out
 
-    def running(self):
-        """The job being worked on, if any."""
+    def end(self) -> tuple:
+        """At a mission's end, in one hold of the lock (Codex implementation round 2 P2): the jobs not started
+        (dropped), the finished ones not polled yet, and the one being worked on (None if none)."""
         with self._cond:
-            return self._running
+            waiting, done = list(self._waiting), list(self._done)
+            self._waiting.clear()
+            self._done.clear()
+            return waiting, done, self._running
 
     def poll(self) -> list:
         with self._cond:
@@ -653,6 +657,8 @@ class LiveFar:
         if self.error is not None:
             failure, self.error = self.error, None
         for job, status, payload in self.worker.poll():
+            if job.get("mission") != self.mission_id:
+                continue  # an ended mission's late result: accounted at its end (in flight), never applied
             mine = self.handle is not None and job["seq"] == self.handle.seq
             if status == "dropped":
                 why = payload
@@ -747,12 +753,15 @@ class LiveFar:
         the earlier mission's record is not its own; Codex implementation round 1 P2). Its ``record_errors`` is the
         mission's own list, not a copy: the session writer runs its jobs in order, so a record written after this
         mission's frame files carries their errors too."""
-        self.clear("mission_end")
-        for job, status, payload in self.worker.poll():
-            self._note(job, "dropped", "mission_end" if status != "dropped" else payload)
-        running = self.worker.running()
+        waiting, done, running = self.worker.end()
+        for job in waiting:
+            self._note(job, "dropped", "mission_end")
+        for job, status, payload in done:
+            if job.get("mission") == self.mission_id:
+                self._note(job, "dropped", "mission_end" if status != "dropped" else payload)
         if running is not None and running.get("mission") == self.mission_id:
             self._note(running, "in_flight", "mission_end")  # an earlier mission's was accounted at its own end
+        self._end("mission_end")
         if self.mission_id is None or self.mission_id != mission_id:
             return None
         out = self.summary()
