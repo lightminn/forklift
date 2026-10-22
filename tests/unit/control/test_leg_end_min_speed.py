@@ -204,14 +204,21 @@ def test_no_floor_when_the_heading_is_turned_away():
     assert abs(command.speed_mps) < path_tracking.LEG_END_MIN_SPEED_MPS / 10
 
 
-def test_no_floor_for_an_end_a_straight_run_brings_inside():
-    # 11.2 mm across, 4 mm to go, turned -0.7 rad towards the path: a straight run ends 7.83 mm across.
-    tracker = RearAxlePathTracker(*straight(), GOAL)
-    for pose in along(0.996, 0.0112, 0.0):
-        tracker.update(pose, 0.1, 0.02)
+def settled_speed(tracker, pose, ticks=12):
+    """The command after the slew has had time to reach the target, the pose held."""
     tracker.restart_speed_slew(0.0)
-    command = tracker.update([0.996, 0.0112, -0.7], 0.0, DT)
-    assert abs(command.speed_mps) < path_tracking.LEG_END_MIN_SPEED_MPS / 2
+    for _ in range(ticks):
+        command = tracker.update(pose, 0.0, DT)
+    return abs(command.speed_mps)
+
+
+def test_no_floor_for_an_end_a_straight_run_brings_inside():
+    # 11.2 mm across, 3.5 mm to go, turned -0.7 rad towards the path: a straight run (tan) ends 8.25 mm across,
+    # inside the tolerance plus margin; a sin extrapolation would read 8.95 mm and add the floor.
+    tracker = RearAxlePathTracker(*straight(), GOAL)
+    for pose in along(0.9965, 0.0112, 0.0):
+        tracker.update(pose, 0.1, 0.02)
+    assert settled_speed(tracker, [0.9965, 0.0112, -0.7]) == pytest.approx(1.5 * 0.0035, abs=1e-6)
 
 
 def test_the_floor_never_exceeds_the_configured_caps():
@@ -239,9 +246,9 @@ def test_behind_the_progress_counts_only_on_the_last_segment():
     p = poses[1, :2] - 0.002 * u - 0.0079 * normal
     for f in np.linspace(0.0, 1.0, 40):
         tracker.update([*(poses[0, :2] + f * (p - poses[0, :2])), 0.0], 0.1, 0.02)
-    tracker.restart_speed_slew(0.0)
-    command = tracker.update([*p, 0.0], 0.0, DT)
-    assert abs(command.speed_mps) < path_tracking.LEG_END_MIN_SPEED_MPS / 2
+    remaining = tracker.remaining_to_goal_m()
+    assert remaining < path_tracking.LEG_END_SLACK_M
+    assert settled_speed(tracker, [*p, 0.0]) <= 1.5 * remaining + 1e-9  # the old creep, not the floor
 
 
 def test_arrival_and_the_brake_against_motion_are_unchanged():
