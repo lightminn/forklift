@@ -99,8 +99,11 @@ timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${
 rc=$?
 echo "runner exit $rc $(date -Is)"
 echo "OUT_OF_DEVICE lines: $(grep -c OUT_OF_DEVICE "$OUT/run.log")"
-# The runner also records its own result code (Isaac can leave the process with 0 after a failure).
-if [ "$rc" -eq 0 ] && [ -f "$OUT/run/exit_code" ] && [ "$(tr -d '[:space:]' < "$OUT/run/exit_code")" != 0 ]; then
-  rc=$(tr -d '[:space:]' < "$OUT/run/exit_code"); echo "runner recorded exit code $rc"
+# The runner also records its own result code as JSON {"code": .., "reason": ..} (Isaac can leave the process with 0
+# after a failure).
+if [ "$rc" -eq 0 ] && [ -f "$OUT/run/exit_code" ]; then
+  recorded=$("$VENV_PY" -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("code") or 0))' "$OUT/run/exit_code") \
+    || recorded=1
+  if [ "$recorded" != 0 ]; then rc=$recorded; echo "runner recorded exit code $rc"; fi
 fi
 exit "$rc"

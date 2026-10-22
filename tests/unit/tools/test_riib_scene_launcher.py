@@ -134,3 +134,15 @@ def test_the_runner_exit_code_is_the_jobs(tmp_path):
     fake.chmod(0o755)
     out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(fake))
     assert out.returncode == 7, (out.returncode, out.stdout, out.stderr)
+
+
+@pytest.mark.parametrize("recorded, expected", [(0, 0), (3, 3)])
+def test_the_runners_recorded_code_counts_when_the_process_ended_with_zero(tmp_path, recorded, expected):
+    # Codex re-review P2: the runner writes run/exit_code as JSON {"code": .., "reason": ..}
+    fake = tmp_path / "fakepy"
+    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n"
+                    "for a in \"$@\"; do if [ \"$prev\" = --output ]; then mkdir -p \"$a\"; "
+                    f"echo '{{\"code\": {recorded}, \"reason\": null}}' > \"$a/exit_code\"; fi; prev=$a; done\nexit 0\n")
+    fake.chmod(0o755)
+    out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(fake))
+    assert out.returncode == expected, (out.returncode, out.stdout, out.stderr)
