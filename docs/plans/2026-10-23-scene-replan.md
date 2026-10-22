@@ -66,7 +66,8 @@
 
 - `core.scene_replan_request(t, trigger, *, extra_obstacles_fn=None, clearance_m=None, detail=None)`.
   - `trigger`: `"cusp_pose"`(A) · `"cusp_handed"`(래치의 장애물 인계, 장면 모드) · `"permit_stop"`(P6, 그 세션).
-  - `extra_obstacles_fn()`: **계획하는 그 순간**(해제·재투영 뒤)에 불러 계획 프레임 Rectangle 들을 받는다. P6 은 그때의 격자에서 막힌 칸을 다시 뽑는다(Codex 1차 P2-4: 해제 전 스냅숏에서 만든 사각형은 해제 뒤 프레임이 다르다).
+  - `extra_obstacles_fn()`: **계획하는 그 순간**(해제·재투영 뒤)에 불러 계획 프레임 Rectangle 들을 받는다. P6 은 그때의 허가 스냅숏으로 지금 경로 앞을 다시 검사해, 막힌 칸(`path_blocked_cells`, 없으면 `blocked_cells`)을 이웃끼리 합친 사각형 목록으로 돌려준다(없으면 빈 목록, Codex 1차 P2-4: 해제 전 스냅숏에서 만든 사각형은 해제 뒤 프레임이 다르다).
+    - 콜백이 예외를 던지면 빈 장애물로 계획하지 않는다. 그 발동을 `scene_replan_failed:<trigger>:obstacles_error` 로 끝낸다("v-g2" 세션 요청).
   - `clearance_m`: 이번 재계획의 계획 여유 덮어쓰기(None 이면 평소 값).
   - `detail`: 기록용.
 - 요청은 **플래그만 세운다**(`self.scene_replan` 에 요청 한 건). 그 tick 은 0 명령·조향 유지로 끝난다.
