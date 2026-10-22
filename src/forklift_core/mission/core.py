@@ -1017,6 +1017,27 @@ class MissionCore:
         self._recovery_install_gen = self.commands.mission_gen
         return True
 
+    def exit_prefix_m(self) -> float:
+        """The exit prefix of the transport path being driven (pallet_mission.ExitPrefix, docs/plans/
+        2026-10-22-riibotics-trailer-exit.md D1): the straight reverse its planner put first, worked out again from the
+        tracker's start pose and the run's ExitPrefix (hooks.exit_prefix) and held only where the path does start with
+        that straight -- so a split (arm_docking) keeps it, a replan gets its own, the docked straight none. 0 without an
+        exit prefix. Cached per tracker."""
+        exit_ = getattr(self.hooks, "exit_prefix", None)
+        tracker = self.trackers.get("transport")
+        if exit_ is None or tracker is None:
+            return 0.0
+        cached = getattr(self, "_exit_prefix_cache", None)
+        if cached is not None and cached[0] is tracker:
+            return cached[1]
+        from forklift_core.planning.pallet_mission import exit_prefix_length_m
+
+        start = PlanningPose(*(float(v) for v in tracker._poses[0]))
+        delta = exit_prefix_length_m(start, self.geometry.loaded_footprint, exit_) or 0.0
+        value = delta if delta > 0 and tracker.leading_reverse_straight_m() >= delta - 1e-6 else 0.0
+        self._exit_prefix_cache = (tracker, value)
+        return value
+
     def permission_acting(self) -> tuple[bool, bool]:
         """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
         (the permission's own reading, shared by the permission tick and its watch while paused)."""
@@ -1032,6 +1053,11 @@ class MissionCore:
         if slam is not None and slam["docking"].get("reapproach"):
             # Nor is a D7c re-approach (Codex D7c review P1-2): the
             # permission, and the safety evaluation, act on all of it.
+            docking_straight = False
+        if docking_straight and ms.phase == "transport" and (prefix_m := self.exit_prefix_m()) > 0 \
+                and trackers["transport"].progress_m() < prefix_m:
+            # Nor is the transport's exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md D1, Codex 2nd P1): on
+            # a short transport the delivery straight's window (after arm_docking's split) can reach back into it.
             docking_straight = False
         acting = (
             ms.phase in ("observe", "approach", "transport", "return_home", "recover_withdraw", "clear_out")
@@ -2640,7 +2666,8 @@ class MissionCore:
             # straight) is finished then, with this capture's acquisition kept apart (_observe_finish).
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
-                           trace=planning_trace, **grid_kwargs("mission", planning_pickup))
+                           trace=planning_trace, **grid_kwargs("mission", planning_pickup),
+                           **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -5541,14 +5568,23 @@ class MissionCore:
         cfg, travel = options.planner_config, options.travel_config
         tight_cfg = replace(cfg, clearance_m=0.0)
         tight_travel = replace(travel, clearance_m=0.0) if travel is not None else None
+        exit_kw = {}
         if kind == "transport":
             args, tight_args = (scenario_, start, cfg), (scenario_, start, tight_cfg)
+            exit_kw = self._exit_prefix_kwargs()
         else:
             args = (scenario_, start, options.return_to_pose, cfg)
             tight_args = (scenario_, start, options.return_to_pose, tight_cfg)
-        return {"kind": kind, "args": args, "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw),
+        return {"kind": kind, "args": args,
+                "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw, **exit_kw),
                 "retry_on": tuple(retry_on), "tight_args": tight_args,
-                "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw)}
+                "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw, **exit_kw)}
+
+    def _exit_prefix_kwargs(self) -> dict:
+        """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;
+        docs/plans/2026-10-22-riibotics-trailer-exit.md D1); none when the run has none."""
+        exit_ = getattr(self.hooks, "exit_prefix", None)
+        return {} if exit_ is None else {"exit_prefix": exit_}
 
     def _refresh_for_new_leg(self, t: float, rear) -> None:
         """Right after a plan is taken: the permission's path check on the new leg before the first move (D8b)."""

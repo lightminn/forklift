@@ -9,7 +9,7 @@ the distinct insertion, loading, transport, unloading, and withdrawal stages.
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from math import ceil, cos, pi, sin
+from math import ceil, cos, floor, inf, pi, sin
 
 import numpy as np
 
@@ -589,7 +589,134 @@ def _append_straight(first, second):
         shot_fallback=first.shot_fallback or second.shot_fallback,
         root_shot=first.root_shot,
         cycles_generated=first.cycles_generated + second.cycles_generated,
+        exit_prefix=first.exit_prefix,  # the transport's exit prefix (ExitPrefix) through its delivery straight
     )
+
+
+@dataclass(frozen=True)
+class ExitPrefix:
+    """The straight reverse a loaded transport leg starts with (docs/plans/2026-10-22-riibotics-trailer-exit.md D1):
+    until the loaded footprint keeps ``clearance_m`` from every rectangle of ``obstacles`` -- the walls the obstacle
+    layer's LiDAR sees, whose band (about 0.2 m) the planner's clearance (0.10 m) does not keep -- in ``step_m`` steps up to
+    ``cap_m``. The Riibotics trailer stopped when the transport's first turn swung the pallet, still in the trailer
+    mouth, into that band (t1_trailer, 2026-10-21)."""
+
+    obstacles: tuple
+    clearance_m: float
+    step_m: float = 0.05
+    cap_m: float = 1.0
+
+    def __post_init__(self) -> None:
+        obstacles = tuple(self.obstacles)
+        if not all(isinstance(r, Rectangle) for r in obstacles):
+            raise TypeError("exit obstacles must be Rectangles")
+        object.__setattr__(self, "obstacles", obstacles)
+        for name in ("clearance_m", "step_m", "cap_m"):
+            if not np.isfinite(getattr(self, name)):
+                raise ValueError(f"exit prefix {name} must be finite")
+        if self.clearance_m <= 0 or self.step_m <= 0 or self.cap_m < 0:
+            raise ValueError("exit prefix clearance and step must be positive, its cap non-negative")
+
+
+def _footprint_corners(pose: Pose2D, footprint: Footprint) -> np.ndarray:
+    c, s = cos(pose.yaw_rad), sin(pose.yaw_rad)
+    local = ((footprint.front_m, footprint.half_width_m), (-footprint.rear_m, footprint.half_width_m),
+             (-footprint.rear_m, -footprint.half_width_m), (footprint.front_m, -footprint.half_width_m))
+    return np.array([(pose.x_m + c * u - s * v, pose.y_m + s * u + c * v) for u, v in local])
+
+
+def _rectangle_corners(r: Rectangle) -> np.ndarray:
+    c, s = cos(r.yaw_rad), sin(r.yaw_rad)
+    hl, hw = r.length_m / 2, r.width_m / 2
+    return np.array([(r.x_m + c * u - s * v, r.y_m + s * u + c * v) for u, v in ((hl, hw), (-hl, hw), (-hl, -hw), (hl, -hw))])
+
+
+def _separated(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two convex quadrilaterals are apart (a separating axis among their edge normals)."""
+    for poly in (a, b):
+        for i in range(4):
+            edge = poly[(i + 1) % 4] - poly[i]
+            axis = np.array((-edge[1], edge[0]))
+            pa, pb = a @ axis, b @ axis
+            if pa.max() < pb.min() or pb.max() < pa.min():
+                return True
+    return False
+
+
+def _point_segment(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    t = 0.0 if not ab.any() else float(np.clip(np.dot(p - a, ab) / np.dot(ab, ab), 0.0, 1.0))
+    return float(np.hypot(*(p - (a + t * ab))))
+
+
+def footprint_clearance_m(pose: Pose2D, footprint: Footprint, rectangles) -> float:
+    """The smallest distance between the footprint at ``pose`` and any of ``rectangles`` (0 when one overlaps, inf for
+    none)."""
+    corners = _footprint_corners(pose, footprint)
+    best = inf
+    for rect in rectangles:
+        other = _rectangle_corners(rect)
+        if not _separated(corners, other):
+            return 0.0
+        for p, q in ((corners, other), (other, corners)):
+            for point in p:
+                for i in range(4):
+                    best = min(best, _point_segment(point, q[i], q[(i + 1) % 4]))
+    return best
+
+
+def _reversed_by(pose: Pose2D, distance_m: float) -> Pose2D:
+    return Pose2D(pose.x_m - distance_m * cos(pose.yaw_rad), pose.y_m - distance_m * sin(pose.yaw_rad), pose.yaw_rad)
+
+
+def exit_prefix_length_m(start: Pose2D, footprint: Footprint, exit_prefix: ExitPrefix) -> float | None:
+    """The shortest straight reverse from ``start`` (0, step, 2 step, ... cap) after which ``footprint`` keeps the exit
+    clearance from the exit obstacles; None when none within the cap does."""
+    steps = int(floor(exit_prefix.cap_m / exit_prefix.step_m + 1e-9))
+    for k in range(steps + 1):
+        distance = k * exit_prefix.step_m
+        if footprint_clearance_m(_reversed_by(start, distance), footprint, exit_prefix.obstacles) >= exit_prefix.clearance_m:
+            return distance
+    return None
+
+
+def _join_prefix(prefix: PlanResult, search: PlanResult, record: dict) -> PlanResult:
+    """The straight reverse then the search from its end, the search's own records kept."""
+    poses = np.concatenate((prefix.poses, search.poses[1:]))
+    directions = np.concatenate((prefix.directions, search.directions[1:]))
+    curvatures = np.concatenate((prefix.curvatures_inv_m, search.curvatures_inv_m[1:]))
+    directions[0], curvatures[0] = directions[1], curvatures[1]
+    return replace(search, poses=poses, directions=directions, curvatures_inv_m=curvatures,
+                   length_m=prefix.length_m + search.length_m, exit_prefix=record)
+
+
+def _transport_search(start, goal, props, footprint, bounds, config, *, occupancy=None, deadline=None,
+                      exit_prefix: ExitPrefix | None = None) -> PlanResult:
+    """The loaded transport search; with ``exit_prefix`` it starts with the straight reverse ExitPrefix asks for, checked
+    against the props, bounds and grid at the search's clearance. Without a clear pose within the cap, a straight the
+    props refuse, or no search from the prefix's end, the plain search from ``start``, its record saying why."""
+    def plain() -> PlanResult:
+        return _search(start, goal, props, footprint, bounds, config, occupancy=occupancy, deadline=deadline)
+
+    if exit_prefix is None:
+        return plain()
+    record = {"start": [float(start.x_m), float(start.y_m), float(start.yaw_rad)], "clearance_m": exit_prefix.clearance_m,
+              "step_m": exit_prefix.step_m, "cap_m": exit_prefix.cap_m, "length_m": 0.0}
+    distance = exit_prefix_length_m(start, footprint, exit_prefix)
+    if distance is None:
+        return replace(plain(), exit_prefix={**record, "status": "unmet:clearance"})
+    if distance == 0:
+        return replace(plain(), exit_prefix={**record, "status": "clear",
+                                             "min_clearance_m": footprint_clearance_m(start, footprint, exit_prefix.obstacles)})
+    end = _reversed_by(start, distance)
+    straight = _straight_plan(start, end, -1, props, footprint, bounds, config.clearance_m, occupancy)
+    if not straight.success:
+        return replace(plain(), exit_prefix={**record, "status": "unmet:straight_collision"})
+    search = _search(end, goal, props, footprint, bounds, config, occupancy=occupancy, deadline=deadline)
+    if not search.success:
+        return replace(plain(), exit_prefix={**record, "status": f"unmet:search_{search.status}"})
+    return _join_prefix(straight, search, {**record, "status": "prefix", "length_m": distance,
+                                            "min_clearance_m": footprint_clearance_m(end, footprint, exit_prefix.obstacles)})
 
 
 def plan_observation_leg(
@@ -877,8 +1004,10 @@ def plan_transport_leg(
     travel_config: PlannerConfig | None = None,
     occupancy=None,
     deadline=None,
+    exit_prefix: ExitPrefix | None = None,
 ) -> PlanResult:
-    """The loaded transport leg alone, from ``start_rear`` to the delivery pose.
+    """The loaded transport leg alone, from ``start_rear`` to the delivery pose (with ``exit_prefix``, starting with
+    its straight reverse -- ExitPrefix).
 
     The same search and final straight as plan_transport's transport stage, for
     replanning from the measured pose when a gear cusp stops out of heading
@@ -890,7 +1019,7 @@ def plan_transport_leg(
     travel_config = travel_config if travel_config is not None else config
     props, footprint, bounds = leg_obstacles("transport", scenario, geometry)
     destination = site_poses(scenario.destination, geometry)
-    search = _search(
+    search = _transport_search(
         start_rear,
         destination["predelivery"],
         props,
@@ -899,6 +1028,7 @@ def plan_transport_leg(
         travel_config,
         occupancy=occupancy,
         deadline=deadline,
+        exit_prefix=exit_prefix,
     )
     if not search.success:
         return search
@@ -1395,6 +1525,7 @@ def plan_loaded_delivery(
     occupancy=None,
     docking_occupancy=None,
     deadline=None,
+    exit_prefix: ExitPrefix | None = None,
 ) -> MissionPlan:
     """The delivery of a pallet already on the forks (persistent console plan D5 6c): from ``start_rear`` the same
     steps plan_transport takes from its extracted pose on -- the transport search with the loaded footprint (on a
@@ -1418,14 +1549,15 @@ def plan_loaded_delivery(
     props = [prop.rectangle for prop in scenario.props]
     destination = site_poses(scenario.destination, geometry)
     grid = docking_occupancy if docking_occupancy is not None else occupancy
-    transport = note("transport_search", _search(start_rear, destination["predelivery"], props,
-                                                 geometry.loaded_footprint, scenario.bounds, travel_config,
-                                                 occupancy=grid, deadline=deadline))
+    transport = note("transport_search", _transport_search(start_rear, destination["predelivery"], props,
+                                                           geometry.loaded_footprint, scenario.bounds, travel_config,
+                                                           occupancy=grid, deadline=deadline, exit_prefix=exit_prefix))
     if transport.status == "invalid_start" and occupancy is not None:
-        transport = note("transport_search_tight", _search(start_rear, destination["predelivery"], props,
-                                                           geometry.loaded_footprint, scenario.bounds,
-                                                           replace(travel_config, clearance_m=0.0), occupancy=grid,
-                                                           deadline=deadline))
+        transport = note("transport_search_tight", _transport_search(start_rear, destination["predelivery"], props,
+                                                                     geometry.loaded_footprint, scenario.bounds,
+                                                                     replace(travel_config, clearance_m=0.0),
+                                                                     occupancy=grid, deadline=deadline,
+                                                                     exit_prefix=exit_prefix))
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
     tail = note("transport_straight", _straight_plan(destination["predelivery"], destination["delivery"], 1, props,
@@ -1465,6 +1597,7 @@ def plan_transport(
     pickup_obstacle: Rectangle | None = None,
     docking_occupancy=None,
     deadline=None,
+    exit_prefix: ExitPrefix | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -1611,7 +1744,7 @@ def plan_transport(
         return MissionPlan(False, f"extract:{extract.status}")
     transport = note(
         "transport_search",
-        _search(
+        _transport_search(
             pickup["extracted"],
             destination["predelivery"],
             props,
@@ -1620,6 +1753,7 @@ def plan_transport(
             travel_config,
             occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
             deadline=deadline,
+            exit_prefix=exit_prefix,
         ),
     )
     if transport.status == "invalid_start" and occupancy is not None:
@@ -1629,7 +1763,7 @@ def plan_transport(
         # placement error and the permission guards every tick.
         transport = note(
             "transport_search_tight",
-            _search(
+            _transport_search(
                 pickup["extracted"],
                 destination["predelivery"],
                 props,
@@ -1638,6 +1772,7 @@ def plan_transport(
                 replace(travel_config, clearance_m=0.0),
                 occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
                 deadline=deadline,
+                exit_prefix=exit_prefix,
             ),
         )
     if not transport.success:

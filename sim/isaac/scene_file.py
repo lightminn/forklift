@@ -45,6 +45,13 @@ class SceneFile:
     visuals: tuple[SceneVisual, ...]
 
 
+def exit_walls(scene: SceneFile, band_bottom_m: float) -> tuple[Rectangle, ...]:
+    """The transport exit prefix's obstacles (docs/plans/2026-10-22-riibotics-trailer-exit.md D1): the walls Isaac
+    draws and collides that reach the obstacle layer's band (top at or above its bottom, so the 1.05 m LiDAR plane
+    meets them). Floor patches and the static pallet copies are not walls; the props stay the planner's."""
+    return tuple(v.rectangle for v in scene.visuals if v.kind == "wall" and v.height_m >= band_bottom_m)
+
+
 def scenario_from_record(s: dict) -> TransportScenario:
     return TransportScenario(
         seed=int(s["seed"]),

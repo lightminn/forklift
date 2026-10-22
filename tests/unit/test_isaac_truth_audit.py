@@ -27,10 +27,16 @@ def _hook_forwards(tree) -> set:
         kw = a.kwarg.arg if a.kwarg else None
         positional = [p.arg for p in a.args]
         args_ok = [ast.unparse(x) for x in call.args] == positional + ([f"*{star}"] if star else [])
-        kws_ok = [(k.arg, ast.unparse(k.value)) for k in call.keywords] == ([(None, kw)] if kw else [])
+        kws = [(k.arg, ast.unparse(k.value)) for k in call.keywords]
+        if kws[-1:] == [(None, EXIT_KWARGS)]:  # the transport hooks add the run's exit prefix (2026-10-22 plan)
+            kws = kws[:-1]
+        kws_ok = kws == ([(None, kw)] if kw else [])
         if args_ok and kws_ok and (star or kw or positional):
             ids.add(id(call))
     return ids
+
+
+EXIT_KWARGS = "{} if transport_exit is None else {'exit_prefix': transport_exit}"  # as ast.unparse writes it
 
 
 def _calls(prefix):

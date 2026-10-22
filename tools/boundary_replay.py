@@ -42,6 +42,8 @@ SETUP_NAMES_ADDED = {
     "frr": ("recognition", "off", None),
     # SLAM localization plan L7 (2026-10-21): every earlier record mapped online, with no survey bundle
     "slam_bundle_": ("slam_map_bundle", None, None),
+    # Trailer exit plan (2026-10-22): every earlier record planned its transports with no exit prefix
+    "transport_exit": ("exit_clearance_m", None, None),
 }
 
 

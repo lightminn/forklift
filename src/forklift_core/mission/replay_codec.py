@@ -54,6 +54,16 @@ def _resolve(qualname: str) -> type:
 _PLAIN_TYPES = (type(None), bool, int, float, str, bytes)
 
 
+def recorded_fields(value: Any) -> list:
+    """The dataclass fields a record keeps: all of them, except a field added later with
+    ``metadata={"record_omit_default": True}`` while it holds its default -- a record written before the field
+    existed then compares equal, and decoding gives the default back (PlanResult.exit_prefix, plan
+    2026-10-22 trailer exit). A set value is always kept and compared."""
+    return [f for f in dataclasses.fields(value)
+            if not (f.metadata.get("record_omit_default") and f.default is not dataclasses.MISSING
+                    and getattr(value, f.name) == f.default)]
+
+
 def plain_value(value: Any) -> bool:
     """A scalar this codec encodes by value (shared with the recorder's change check): exactly a built-in
     scalar, a numpy scalar of an encoded kind or a pathlib path -- not a subclass that may carry more state."""
@@ -175,11 +185,11 @@ class Encoder:
             return {"$tuple": [self.encode(v) for v in value]}
         if dataclasses.is_dataclass(value) and not isinstance(value, type) and immutable(value):
             return {"$dataclass": _qualname(type(value)),  # a value: no identity (sharing it is harmless)
-                    "fields": {f.name: self.encode(getattr(value, f.name)) for f in dataclasses.fields(value)}}
+                    "fields": {f.name: self.encode(getattr(value, f.name)) for f in recorded_fields(value)}}
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
             return self._shared(value, lambda: {
                 "$dataclass": _qualname(type(value)),
-                "fields": {f.name: self.encode(getattr(value, f.name)) for f in dataclasses.fields(value)}})
+                "fields": {f.name: self.encode(getattr(value, f.name)) for f in recorded_fields(value)}})
         if isinstance(value, list):
             return self._shared(value, lambda: {"$list": [self.encode(v) for v in value]})
         if isinstance(value, collections.deque):
