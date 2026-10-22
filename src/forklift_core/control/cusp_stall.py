@@ -434,11 +434,21 @@ class CuspStallMonitor:
         latch = self.latch
         if latch is not None:
             # Bound to its key: a leg switch, a new tracker or phase, a status other than tracking or an
-            # exclusion ends it -- a failure is never covered.
+            # exclusion ends it -- a failure is never covered. Not the tracker's brake against a measured speed
+            # running back along the leg (docs/plans/2026-10-22-cusp-latch-braking.md): a standing truck's
+            # odometry mean crossed the stop speed for a few ticks at a time and closed the latch before its 5 s
+            # judgement, over and over (Isaac n2_random_1_s0); the latch holds the wheels at zero meanwhile.
             why = None
+            against_motion = (
+                raw.status == "braking"
+                and raw.failure is None
+                and not raw.cusp_pending
+                and raw.at_cusp
+                and tracker.braking_against_motion
+            )
             if latch.key != key or latch.tracker is not tracker:
                 why = "key_changed"
-            elif raw.status != "tracking":
+            elif raw.status != "tracking" and not against_motion:
                 why = f"status:{raw.status}"
             elif excluded is not None or retry_stand:
                 why = f"excluded:{excluded or 'retry_stand'}"
