@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from .fleet_mission import FleetPlan, _chain
+from .forked import Forked
 from .geometry import Pose2D, Rectangle
 from .hybrid_astar import PlannerConfig
 from .pallet_mission import (
@@ -229,19 +230,30 @@ def plan_job(
     first_stage: str = "leave",
     start: Pose2D | None = None,
     extra: list[Rectangle] = (),
+    forked: bool = False,
 ) -> FleetPlan:
-    """Stages from ``first_stage`` (default: all of them), or the first failure."""
-    stages = {}
-    pose = world.holding[job.start] if start is None else start
-    for stage in STAGES[STAGES.index(first_stage) :]:
-        result = plan_stage(
-            stage, pose, job, world, config, travel_config, geometry, extra
-        )
-        if not result.success:
-            return FleetPlan(False, f"{stage}:{result.status}", stages)
-        stages[stage] = result
-        pose = stage_end(stage, job, world, geometry)
-    return FleetPlan(True, "success", stages)
+    """Stages from ``first_stage`` (default: all of them), or the first failure.
+
+    Each stage starts where the one before ends by stage_end, not by its path,
+    so with ``forked`` every stage is planned at once in its own forked
+    process; the stages are still taken in order up to the first failure, so
+    the plan is the sequential one."""
+    order = STAGES[STAGES.index(first_stage) :]
+    poses = [world.holding[job.start] if start is None else start]
+    poses += [stage_end(stage, job, world, geometry) for stage in order[:-1]]
+    args = [(stage, pose, job, world, config, travel_config, geometry, extra) for stage, pose in zip(order, poses, strict=True)]
+    runs = [Forked(plan_stage, *a) for a in args] if forked else []
+    try:
+        stages = {}
+        for k, stage in enumerate(order):
+            result = runs[k].result() if forked else plan_stage(*args[k])
+            if not result.success:
+                return FleetPlan(False, f"{stage}:{result.status}", stages)
+            stages[stage] = result
+        return FleetPlan(True, "success", stages)
+    finally:
+        for run in runs:
+            run.cancel()
 
 
 @dataclass

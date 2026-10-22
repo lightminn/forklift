@@ -182,3 +182,32 @@ def test_a_chained_job_plans_from_in_front_of_the_pallet_it_put_down(worlds):
     # The pallet's keep-out covers where the truck stands after withdrawing.
     plain = plan_job(replace(chained, after=None), world, config, travel, GEOMETRY, first_stage="to_pickup", start=start)
     assert plain.status == "to_pickup:invalid_start"
+
+
+def _same_plan(a, b):
+    assert (a.success, a.status, list(a.stages)) == (b.success, b.status, list(b.stages))
+    for name in a.stages:
+        np.testing.assert_array_equal(a.stages[name].poses, b.stages[name].poses)
+
+
+# This process has BLAS threads; the runs that fork set OMP/OPENBLAS_NUM_THREADS=1 (forked.py).
+@pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+def test_forked_stages_and_a_ladder_run_ahead_give_the_sequential_plans(worlds, monkeypatch):
+    from forklift_core.planning import pallet_mission
+
+    world = worlds[("rack", 100)]
+    dispatcher = Dispatcher(world, np.random.default_rng(3), fill=0.6, od="random")
+    places = dispatcher.spawn(4)
+    jobs = [dispatcher.next_job(k, places[k]) for k in range(4)]
+    # A small budget without the obstacle heuristic: searches run out, climb the
+    # retry ladder and some jobs fail part way.
+    config = travel = make_transport_planner_config(max_expansions=150)
+    sequential = [plan_job(job, world, config, travel, GEOMETRY) for job in jobs]
+    assert any(len(s.search_attempts) > 1 for p in sequential for s in p.stages.values())
+    assert any(p.success for p in sequential) and not all(p.success for p in sequential)
+    monkeypatch.setattr(pallet_mission, "_SPECULATE_AFTER_S", 0.0)
+    for job, plan in zip(jobs, sequential, strict=True):
+        forked = plan_job(job, world, config, travel, GEOMETRY, forked=True)
+        _same_plan(forked, plan)
+        for name, stage in plan.stages.items():
+            assert forked.stages[name].search_attempts == stage.search_attempts

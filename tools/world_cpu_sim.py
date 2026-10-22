@@ -64,7 +64,10 @@ from forklift_core.planning.fleet_traffic import (
     pose_at,
 )
 from forklift_core.planning.geometry import Pose2D
-from forklift_core.planning.pallet_mission import make_transport_planner_config
+from forklift_core.planning.pallet_mission import (
+    make_transport_planner_config,
+    speculate,
+)
 from forklift_core.planning.world_gen import (
     PALLET_KEEP_M,
     Box,
@@ -514,6 +517,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
             first_stage=first_stage,
             start=start,
             extra=[b.rect() for _, b in extra_boxes] + list(avoid),
+            forked=args.fork_plans,
         )
         plans.append(
             {
@@ -1054,6 +1058,8 @@ def main(argv=None) -> int:
     parser.add_argument("--world-scale", type=float, default=1.0, help="stretch the halls (1: the floors of every earlier run)")
     parser.add_argument("--od", default="roles", choices=("roles", "random"), help="roles: sources to sinks; random: any pallet to any free slot")
     parser.add_argument("--chain", action="store_true", help="take the next job from the drop, not from a holding place")
+    parser.add_argument("--fork-plans", action="store_true",
+                        help="plan a job's stages at once and run a long search's retries ahead, in forked processes (same plans, more cores)")
     # Physical model (plan 2026-10-12).
     parser.add_argument("--vehicle", default="kinematic", choices=("kinematic", "physics"))
     parser.add_argument("--eta", default="simple", choices=("simple", "physics"))
@@ -1062,6 +1068,8 @@ def main(argv=None) -> int:
     parser.add_argument("--tip-share", type=float, default=0.5)
     parser.add_argument("--sim-s", type=float, default=1800.0)
     args = parser.parse_args(argv)
+    if args.fork_plans:
+        speculate(2.0)  # a search still going after 2 s starts its retries alongside
     fleet = _fleet_tool()
     settings = yaml.safe_load(args.settings.read_text())
     config = make_transport_planner_config(

@@ -19,6 +19,7 @@ from forklift_core.perception.pallet_geometry import (
     target_insertion_depth_m,
 )
 
+from .forked import Forked
 from .geometry import (
     Bounds,
     Footprint,
@@ -63,6 +64,10 @@ FALLBACK_FINE_PRIMITIVE_M = 0.10
 # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P6).
 FALLBACK_BOXED_COLLISION_STEP_M = 0.01
 _RETRIED_STATUSES = ("expansion_limit", "no_path")
+# None: _search runs its ladder one search after another. A number of seconds:
+# once the first search has run that long, or has run out, the rest of the
+# ladder starts in forked processes (speculate()).
+_SPECULATE_AFTER_S = None
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
 
@@ -97,22 +102,51 @@ def _retries(config, extended=True):
         yield replace(fine, primitive_length_m=FALLBACK_FINE_PRIMITIVE_M)
 
 
+def speculate(after_s: float | None) -> None:
+    """Let _search run its retry ladder in forked processes once its first
+    search has taken ``after_s`` or has run out (None, the default: one search
+    after another). The ladder's own choices are then made over the finished
+    searches in order and the unused ones are stopped, so the result and its
+    attempts are the sequential ones -- only sooner, on more cores."""
+    global _SPECULATE_AFTER_S
+    _SPECULATE_AFTER_S = after_s
+
+
 def _search(
     start, goal, obstacles, footprint, bounds, config, extended=True
 ) -> PlanResult:
     """plan_hybrid_astar, retried on a finer lattice, then at denser analytic
     intervals, then (``extended``) on the fine lattice with more budget and a
     shorter primitive, if it runs out."""
+    runs = {}  # config -> Forked search started ahead of the ladder
+    try:
+        return _ladder(start, goal, obstacles, footprint, bounds, config, extended, runs)
+    finally:
+        for run in runs.values():
+            run.cancel()
+
+
+def _ladder(start, goal, obstacles, footprint, bounds, config, extended, runs):
     attempts = []
     closed = []  # configs whose queue closed (no_path), budget aside
 
     attempts_config = []
+    args = (start, goal, obstacles, footprint, bounds)
+
+    def ahead(from_config):
+        """Start the ladder after from_config in forked processes."""
+        for retry in _retries(from_config, extended):
+            if retry not in runs:
+                runs[retry] = Forked(plan_hybrid_astar, *args, retry)
 
     def attempt(attempt_config):
         attempts_config.append(attempt_config)
-        result = plan_hybrid_astar(
-            start, goal, obstacles, footprint, bounds, attempt_config
-        )
+        run = runs.pop(attempt_config, None)
+        if run is None and _SPECULATE_AFTER_S is not None and not attempts:
+            run = Forked(plan_hybrid_astar, *args, attempt_config)
+            if not run.ready(_SPECULATE_AFTER_S):
+                ahead(attempt_config)  # a long first search: not boxed in
+        result = run.result() if run is not None else plan_hybrid_astar(*args, attempt_config)
         attempts.append(
             (
                 attempt_config.analytic_expansion_interval,
@@ -137,6 +171,8 @@ def _search(
     ):
         config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
         result = attempt(config)
+    if _SPECULATE_AFTER_S is not None and result.status in _RETRIED_STATUSES:
+        ahead(config)
     for retry in _retries(config, extended):
         if result.status == "no_path":
             closed.append(replace(attempts_config[-1], max_expansions=1))
