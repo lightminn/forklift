@@ -5031,6 +5031,22 @@ class MissionCore:
             start, config, geometry=geometry, travel_config=travel, **grid_kwargs(None),
         )
 
+    PRECISION_CUMULATIVE_M = 0.20
+
+    @classmethod
+    def _precision_cumulative(cls, result, delivery):
+        """D2's cumulative bound (plan 2026-10-22 open-zone docking): a weak-direction acceptance must not move the
+        delivery goal more than 0.20 m from the first SLAM goal over all rounds -- a D7c re-approach seeds from the
+        latest goal, so each round's own bound does not limit the sum. Measured as the goal positions' distance (a
+        frame change of the whole path would mix in the yaw about the origin, Codex v4 P2)."""
+        if not getattr(result, "accepted", False) or getattr(result, "reason", None) != "ok:precision":
+            return result
+        moved = math.hypot(result.goal_estimate[0] - delivery[0], result.goal_estimate[1] - delivery[1])
+        record = dict(result.precision or {}, cumulative_m=moved)
+        if moved <= cls.PRECISION_CUMULATIVE_M:
+            return replace(result, precision=record)
+        return replace(result, accepted=False, reason="degenerate:cumulative", goal_estimate=None, precision=record)
+
     def dock_at_delivery_straight(self, t: float, answer=None) -> None:
         """Match the live scan to the delivery reference and re-place the goal.
 
@@ -5102,9 +5118,13 @@ class MissionCore:
         reference = tuple(docking.get("delivery_rear_reference", delivery))
         seeded = docking.get("retry_seed_goal") is not None
         seed = tuple(docking["retry_seed_goal"]) if seeded else delivery
+        # Plan 2026-10-22 open-zone docking D2 (sim only, off by default): the weak-direction acceptance, passed only
+        # when it is on so the recorded calls of every other run keep their shape.
+        acceptance_ = getattr(options, "docking_acceptance", "information")
+        acceptance_kw = {} if acceptance_ == "information" else {"acceptance": acceptance_}
         if answer is None and self.jobs is not None:
             self._request("dock", "dock", {"args": (slam["reference_points"], live), "kwargs": dict(
-                rear_from_laser=rear_from_laser, estimate_rear=estimate, delivery_rear=seed)},
+                rear_from_laser=rear_from_laser, estimate_rear=estimate, delivery_rear=seed, **acceptance_kw)},
                 t, rear, self._applied_now(), ctx={"estimate": estimate, "live": live, "rear_from_laser": rear_from_laser,
                                                    "reference": reference, "seed": seed, "seeded": seeded,
                                                    "truth_rear": tuple(float(v) for v in truth_rear)})
@@ -5121,7 +5141,9 @@ class MissionCore:
                 rear_from_laser=rear_from_laser,
                 estimate_rear=estimate,
                 delivery_rear=seed,
+                **acceptance_kw,
             )
+        result = self._precision_cumulative(result, delivery)
         # Evaluation only: where the delivery pose really is in the estimate frame.
         expected = compose(estimate, compose(invert(tuple(truth_rear)), reference))
         docking.update(
@@ -5179,6 +5201,8 @@ class MissionCore:
                 # Each round's own starts: the top-level ones are the last match's.
                 "starts": docking["starts"],
                 "start_details": docking["start_details"],
+                # the D2 checks of this round (only with --docking-acceptance precision)
+                **({"precision": result.precision} if getattr(result, "precision", None) is not None else {}),
             }
         )
         if options.d7_docking:

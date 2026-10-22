@@ -19,12 +19,12 @@ bounded.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import atan2, cos, hypot, sin
 
 import numpy as np
 
-from forklift_core.localization.scan_match import match_scans
+from forklift_core.localization.scan_match import match_scans, precision_check
 from forklift_core.localization.slam_pose import compose, invert
 
 
@@ -37,6 +37,9 @@ class DockingResult:
     correction: tuple | None  # planned -> matched relative pose
     starts: tuple  # per start: (accepted, reason, Q)
     start_details: tuple = ()  # per start: iterations, cycle, inlier fraction, residual, information
+    # acceptance="precision" (sim only, plan 2026-10-22 open-zone docking D2): the checks' record. None otherwise --
+    # and then not recorded, so boundary records keep their shape (replay_codec.recorded_fields).
+    precision: dict | None = field(default=None, metadata={"record_omit_default": True})
 
 
 def laser_points(ranges, angles) -> np.ndarray:
@@ -84,7 +87,14 @@ def dock(
     agree_rad: float = 0.005,
     perturbations=((0.0, 0.0, 0.0), (0.15, 0.0, 0.0), (-0.15, 0.0, 0.0), (0.0, 0.15, 0.0),
                    (0.0, -0.15, 0.0), (0.0, 0.0, 0.05), (0.0, 0.0, -0.05)),
+    acceptance: str = "information",
 ) -> DockingResult:
+    """acceptance: "information" (every start must pass match_scans, as always) or "precision" -- SIM ONLY (plan
+    2026-10-22 open-zone docking D2): starts refused only as degenerate are taken when scan_match.precision_check
+    passes. It takes faces moved together after teaching and a repeated pattern beyond its range check wrongly;
+    never use it on the real vehicle."""
+    if acceptance not in ("information", "precision"):
+        raise ValueError(f"unknown acceptance {acceptance!r}")
     x = tuple(float(v) for v in rear_from_laser)
     planned = compose(invert(delivery_rear), estimate_rear)  # R0
     q0 = compose(compose(invert(x), planned), x)
@@ -102,20 +112,35 @@ def dock(
         if result.accepted:
             poses.append(result.pose)
     details = tuple(details)
+    record = None
+    reason_ok = "ok"
     if len(poses) < len(perturbations):
         bad = [s[1] for s in starts if not s[0]]
-        return DockingResult(False, f"start_rejected:{bad[0]}", None, None, None, tuple(starts), details)
+        weak_only = acceptance == "precision" and all(s[0] or s[1] == "degenerate" for s in starts)
+        if not weak_only:
+            return DockingResult(False, f"start_rejected:{bad[0]}", None, None, None, tuple(starts), details)
+        every = [s[2] for s in starts]
+        if not all(_close(p, every[0], agree_m, agree_rad) for p in every[1:]):
+            return DockingResult(False, "ambiguous", None, None, None, tuple(starts), details)
+        check = precision_check(reference_points, live_points, every[0], q0)
+        record = {"reason": check.reason, **check.record}
+        if not check.accepted:
+            return DockingResult(False, f"degenerate:{check.reason}", None, None, None, tuple(starts), details, record)
+        poses = [check.pose]
+        reason_ok = "ok:precision"
     if not all(_close(p, poses[0], agree_m, agree_rad) for p in poses[1:]):
-        return DockingResult(False, "ambiguous", None, None, None, tuple(starts), details)
+        return DockingResult(False, "ambiguous", None, None, None, tuple(starts), details, record)
     q = poses[0]
     relative = compose(compose(x, q), invert(x))
     correction = compose(invert(planned), relative)
     if hypot(correction[0], correction[1]) > max_correction_m or abs(
         atan2(sin(correction[2]), cos(correction[2]))
     ) > max_correction_rad:
-        return DockingResult(False, "correction_out_of_bounds", None, relative, correction, tuple(starts), details)
+        return DockingResult(False, "correction_out_of_bounds", None, relative, correction, tuple(starts), details,
+                             record)
     goal = compose(estimate_rear, invert(relative))
-    return DockingResult(True, "ok", tuple(goal), tuple(relative), tuple(correction), tuple(starts), details)
+    return DockingResult(True, reason_ok, tuple(goal), tuple(relative), tuple(correction), tuple(starts), details,
+                         record)
 
 
 __all__ = ["DockingResult", "dock", "laser_points", "ray_scan"]
