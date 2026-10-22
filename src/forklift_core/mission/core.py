@@ -3840,6 +3840,9 @@ class MissionCore:
             return o.captured
         drops = self.state.setdefault("observation_drops", [])
         drops.append({"time_s": float(t), "captured_s": o.t, "why": why})
+        if getattr(o, "far", None) is not None:  # a far decision taken, then dropped with its observation
+            self.state.setdefault("recognition_discarded", []).append(
+                {"time_s": float(t), "captured_s": o.t, "why": why})
         self.hooks.require(len(drops) <= self.ASYNC_MAX_DISCARDS, f"observation_discarded:{why}")
         return None
 

@@ -934,6 +934,7 @@ def test_a_far_decision_is_dropped_when_the_correction_changed_while_it_was_work
     answers.append(SimpleNamespace(state="done", observation=Obs("valid"), record={"source": "fused"}))
     assert core.observation_take(50.5) is None
     assert state["observation_drops"][-1]["why"] == "correction" and core.commands.waits[-1][1] == 50.5
+    assert state["recognition_discarded"][-1]["why"] == "correction"  # counted as a far drop too
 
 
 def test_a_leg_ended_before_the_decision_captures_again_once_then_fails_the_observation():

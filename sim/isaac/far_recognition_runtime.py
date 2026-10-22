@@ -520,11 +520,18 @@ class FarWorker:
             self._waiting.append(job)
             self._cond.notify_all()
 
-    def clear(self, why: str) -> None:
-        """Every job not started yet is dropped (a STOP, a cancel, a generation or a mission change)."""
+    def clear(self) -> list:
+        """Every job not started yet is dropped (a STOP, a cancel, a generation or a mission change); returned, so
+        the caller notes them at once (Codex implementation round 1 P2)."""
         with self._cond:
-            while self._waiting:
-                self._done.append((self._waiting.popleft(), "dropped", why))
+            out = list(self._waiting)
+            self._waiting.clear()
+            return out
+
+    def running(self):
+        """The job being worked on, if any."""
+        with self._cond:
+            return self._running
 
     def poll(self) -> list:
         with self._cond:
@@ -594,7 +601,7 @@ class LiveFar:
     # --- hand-over -----------------------------------------------------------------------------------------------
     def _tag(self, job: dict, gen) -> dict:
         self.seq += 1
-        job.update(seq=self.seq, gen=gen, submitted=float(self.clock()))
+        job.update(seq=self.seq, gen=gen, submitted=float(self.clock()), mission=self.mission_id)
         return job
 
     def drive(self, gen, *args, **kw) -> None:
@@ -617,8 +624,8 @@ class LiveFar:
             self._end("superseded")
         scene = kw["scene_input"]
         self.handle = SimpleNamespace(seq=job["seq"], gen=gen, leg=job["leg"], submitted=job["submitted"],
-                                      state="waiting", why=None, result=None, stamp_ns=int(scene.stamp_ns),
-                                      clock_domain=scene.clock_domain)
+                                      state="waiting", why=None, result=None, decided=None,
+                                      stamp_ns=int(scene.stamp_ns), clock_domain=scene.clock_domain)
         self.rt.stop_pending = True
         self.worker.submit(job)
         return self.handle
@@ -677,17 +684,22 @@ class LiveFar:
                 obs, rec = self.rt.stop_apply(job, payload)
                 self._note(job, "applied")
                 self.handle.state, self.handle.result = "done", (obs, rec)
+                self.handle.decided = float(self.clock())  # judged against the wait limit (stop_state)
                 self.rt.stop_pending = False
         if failure is not None:
             raise RuntimeError(f"recognition_error:{type(failure).__name__}")
 
     def stop_state(self, handle) -> str:
+        """``waiting``, ``done`` or ``invalid``; a decision not made within the wait limit -- still waiting, or
+        applied after it -- raises ``recognition_timeout`` (Codex implementation round 1 P2)."""
         if handle is not self.handle:
             return "invalid" if handle.state == "waiting" else handle.state
-        if handle.state == "waiting":
-            if handle.leg != self.rt.leg:
-                self._end("leg")
-            elif float(self.clock()) - handle.submitted > self.stop_wait_s:
+        if handle.state == "waiting" and handle.leg != self.rt.leg:
+            self._end("leg")
+        elif handle.state in ("waiting", "done"):
+            at = handle.decided if handle.decided is not None else float(self.clock())
+            if at - handle.submitted > self.stop_wait_s:
+                handle.state, handle.result = "waiting", None
                 self._end("timeout")
                 raise RuntimeError("recognition_timeout")
         return handle.state
@@ -699,14 +711,15 @@ class LiveFar:
         return handle.result
 
     def clear(self, why: str) -> None:
-        """A STOP, a cancel or a mission end: the waiting work and the pending stop are dropped."""
-        self.worker.clear(why)
+        """A STOP, a cancel or a mission end: the waiting work and the pending stop are dropped (noted now)."""
+        for job in self.worker.clear():
+            self._note(job, "dropped", why)
         self._end(why)
 
     # --- the mission -----------------------------------------------------------------------------------------------
     def start_mission(self, mission_id, *, zone_centre_xy, zone_radius_m: float, out_dir: Path | None) -> None:
         self.clear("mission")
-        for job, status, payload in self.worker.poll():  # an earlier mission's: noted nowhere, dropped
+        for job, status, payload in self.worker.poll():  # an earlier mission's, accounted at its end (in flight)
             pass
         self.handle, self.error, self.mission_id = None, None, mission_id
         self.log, self.record_errors, self.applied = [], [], 0
@@ -727,21 +740,41 @@ class LiveFar:
         if not self.io.put_line(job, nbytes):
             errors.append(f"{path.name}: refused")
 
+    def end_mission(self, mission_id):
+        """A live mission's end, whatever ended it: every job not started is dropped and noted, finished ones not yet
+        taken in are noted dropped, the one being worked on is noted in flight (its result is never applied). The
+        mission's final summary, or None when this mission was never adopted here (it ended while being prepared --
+        the earlier mission's record is not its own; Codex implementation round 1 P2). Its ``record_errors`` is the
+        mission's own list, not a copy: the session writer runs its jobs in order, so a record written after this
+        mission's frame files carries their errors too."""
+        self.clear("mission_end")
+        for job, status, payload in self.worker.poll():
+            self._note(job, "dropped", "mission_end" if status != "dropped" else payload)
+        running = self.worker.running()
+        if running is not None and running.get("mission") == self.mission_id:
+            self._note(running, "in_flight", "mission_end")  # an earlier mission's was accounted at its own end
+        if self.mission_id is None or self.mission_id != mission_id:
+            return None
+        out = self.summary()
+        out["live"]["record_errors"] = self.record_errors
+        self.mission_id = None
+        return out
+
     def write_json(self, path: Path, record: dict) -> None:
-        """A mission's JSON record on the session's writer (directly without one)."""
-        text = dumps(record)
+        """A mission's JSON record on the session's writer (directly without one), made when the writer reaches it
+        -- after the frame files handed over before it."""
         errors = self.record_errors
 
         def job():
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(text)
+                path.write_text(dumps(record))
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
 
         if self.io is None:
             job()
-        elif not self.io.put_line(job, len(text)):
+        elif not self.io.put_line(job, 1 << 16):
             errors.append(f"{path.name}: refused")
 
     def summary(self) -> dict:

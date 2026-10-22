@@ -396,3 +396,101 @@ def test_live_jobs_are_recorded_with_their_order_and_the_recompute_replays_the_a
     (tmp_path / "m1" / "result.json").write_text(json.dumps({"recognition": summary}, default=float))
     pairs = RC.recompute(tmp_path / "m1")
     assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
+
+
+# --- Codex implementation round 1 ------------------------------------------------------------------------------------
+def test_a_decision_applied_after_the_wait_limit_is_a_timeout():
+    xs = G._leg()
+    run = G._runtime(R, lag_steps=11)
+    gate = _Gate(run.compute)
+    clock = _Clock()
+    live = R.LiveFar(run, worker=R.FarWorker(gate), clock=clock)
+    try:
+        handle = live.stop(1, **_stop_kw(xs, 1.0))
+        clock.t += 29.99
+        assert live.stop_state(handle) == "waiting"
+        clock.t += 0.11
+        gate.go.set()
+        _wait_idle(live)
+        live.pump(1, active=True)  # decided at 30.1 s
+        with pytest.raises(RuntimeError, match="^recognition_timeout$"):
+            live.stop_state(handle)
+    finally:
+        live.close()
+
+
+def test_a_decision_applied_in_time_is_not_a_timeout_when_read_a_tick_later():
+    xs = G._leg()
+    run = G._runtime(R, lag_steps=11)
+    clock = _Clock()
+    live = R.LiveFar(run, clock=clock)
+    try:
+        handle = live.stop(1, **_stop_kw(xs, 1.0))
+        _wait_idle(live)
+        clock.t += 29.9
+        live.pump(1, active=True)
+        clock.t += 0.5  # read on the next tick, past the limit: decided in time
+        assert live.stop_state(handle) == "done"
+    finally:
+        live.close()
+
+
+def test_a_missions_end_accounts_for_every_job_and_owns_only_its_own_record(tmp_path):
+    xs = G._leg()
+    run = G._runtime(R, lag_steps=11)
+    gate = _Gate(run.compute)
+    live = R.LiveFar(run, worker=R.FarWorker(gate))
+    try:
+        live.start_mission("m1", zone_centre_xy=G.PALLET[:2], zone_radius_m=0.6, out_dir=tmp_path / "m1")
+        _drive_live(live, xs, pump=False, ticks=range(80))  # frames at 24, 48, 72 handed over
+        assert gate.started.wait(10)
+        assert live.end_mission("m2") is None  # not the mission this record belongs to
+        live.start_mission("m3", zone_centre_xy=G.PALLET[:2], zone_radius_m=0.6, out_dir=tmp_path / "m3")
+        _drive_live(live, xs, pump=False, ticks=range(80))  # m1's frame 24 still in the worker
+        summary = live.end_mission("m3")
+        assert live.end_mission("m3") is None  # ended once
+    finally:
+        gate.go.set()
+        live.close()
+    jobs = summary["live"]["jobs"]
+    assert len(jobs) == 3 and {j["status"] for j in jobs} <= {"dropped", "in_flight"}
+    assert all(j["why"] == "mission_end" for j in jobs)
+
+
+def test_write_errors_after_the_end_reach_the_missions_record(tmp_path):
+    import json
+
+    pending = []
+
+    class _IO:
+        def put_line(self, job, nbytes):
+            pending.append(job)
+            return True
+
+    xs = G._leg()
+    run = G._runtime(R, lag_steps=11)
+    live = R.LiveFar(run, io=_IO())
+    try:
+        live.start_mission("m1", zone_centre_xy=G.PALLET[:2], zone_radius_m=0.6,
+                           out_dir=tmp_path / "blocked" / "recognition")
+        (tmp_path / "blocked").write_text("a file where the directory should be")
+        _drive_live(live, xs, ticks=range(30))
+        _wait_idle(live)
+        live.pump(1, active=True)
+        summary = live.end_mission("m1")
+        live.write_json(tmp_path / "result.json", {"recognition": summary})
+        assert summary["live"]["record_errors"] == []  # nothing written yet
+        for job in pending:  # the writer reaches them in order: the frame, then the record
+            job()
+    finally:
+        live.close()
+    assert summary["live"]["record_errors"] and "frame_0001.npz" in summary["live"]["record_errors"][0]
+    assert json.loads((tmp_path / "result.json").read_text())["recognition"]["live"]["record_errors"]
+
+
+def test_the_runner_takes_nothing_in_on_a_stopped_step_and_keeps_the_metadata_a_session_contract():
+    src = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert 'active=core.commands.status == "running" and not live.stopped_in_tick)' in src
+    head = src[src.index("def far_drive_frame"):src.index("def read_() -> None:")]
+    assert 'rendering_s_ = float(frame_["rendering_time"]) - initial_time' in head  # outside the read's boundary
+    assert "far_live.close()" in src

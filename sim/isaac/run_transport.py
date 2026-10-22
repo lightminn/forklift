@@ -5206,8 +5206,9 @@ def drive(S, isaac) -> None:
     def far_recognition_mission_end_hook(t_):
         """A live mission's end, whatever ended it: the far work dropped, the mission's recognition summary its
         own record (``recognition_mission``) and its directory's result.json, by the session's writer."""
-        far_live.clear("mission_end")
-        summary_ = far_live.summary()
+        summary_ = far_live.end_mission(core.commands.mission_id)
+        if summary_ is None:
+            return  # the mission ended before its adoption: no far recognition of its own
         state["recognition_mission"] = summary_
         if far_live.mission_dir is not None:
             far_live.write_json(far_live.mission_dir / "result.json", {"recognition": summary_})
@@ -5792,6 +5793,8 @@ def drive(S, isaac) -> None:
             hands its work to the far worker; a failure of its read is raised by the tick, after this step's other
             sensors (plan 2026-10-22-live-far-recognition task 9)."""
             frame_ = perception_camera.get_current_frame()
+            # the sensor's own contract (its metadata): a session failure, as before (task 9; Codex impl round 1 P2)
+            rendering_s_ = float(frame_["rendering_time"]) - initial_time
 
             def read_() -> None:
                 semantic_ = frr.decode_mission_semantic(frame_.get("semantic_segmentation"))
@@ -5803,7 +5806,7 @@ def drive(S, isaac) -> None:
                 depth_ = adapter.normalize_depth(raw_)[0] if ready_ else None  # the camera's first renders are empty
                 applied_ = slam["tracker"].applied if slam is not None else None
                 frame_args_ = (
-                    tick_, float(frame_["rendering_time"]) - initial_time, rgba_[:, :, :3] if ready_ else None, depth_,
+                    tick_, rendering_s_, rgba_[:, :, :3] if ready_ else None, depth_,
                     semantic_.instance_ids if semantic_.ready else None, far_intrinsics, perception_mount,
                     tuple(float(v) for v in applied_[0]) if applied_ is not None else (0.0, 0.0, 0.0))
                 if far_live is not None:
@@ -8063,7 +8066,10 @@ def drive(S, isaac) -> None:
                 if far_live is not None:
                     # Plan 2026-10-22-live-far-recognition T1 (A): what the far worker finished, taken in by tag, after
                     # this tick's physics step (a failure is the mission's, the step not run again).
-                    far_live.pump(core.commands.mission_gen, active=core.commands.status == "running")
+                    # A STOP at this step is a boundary too: the status and generation change only at the next
+                    # tick's commands, so nothing is taken in on its tick (Codex impl round 1 P2).
+                    far_live.pump(core.commands.mission_gen,
+                                  active=core.commands.status == "running" and not live.stopped_in_tick)
                 if pocket_frames and step % 12 == 0:
                     read_pocket_frame()
                 if step % 12 == 0:
@@ -8115,6 +8121,8 @@ def drive(S, isaac) -> None:
             # Persistent console plan D1: each mission was judged at its own end (the results book); the session
             # ends here (at the loop's limit until D7), a mission still on as session_end.
             live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
+            if far_live is not None:
+                far_live.close()  # the far worker thread ends with the session
             # The session's end decides the exit (plan D9): 0 ended, 3 a new scene; the supervisor reads it.
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
