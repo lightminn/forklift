@@ -8313,6 +8313,8 @@ def drive(S, isaac) -> None:
                     }
                     if tracking is not None:
                         sample["tracking"] = asdict(tracking)
+                    if session is not None:
+                        sample["pallet_id"] = pallet.current  # whose pose the pallet fields are (plan 2.8)
                     state["samples"].append(sample)
                     if step % 240 == 0:
                         print("SAMPLE", record_json(sample), flush=True)
