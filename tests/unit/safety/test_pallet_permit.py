@@ -211,3 +211,27 @@ def test_each_prior_pallet_keeps_out_of_its_own_zone():
     assert sorted(out) == ["P-1", "P-2"]  # no zone given: none drawn (P-3, P-4)
     assert (out["P-2"].x_m, out["P-2"].y_m) == (1.0, 2.0)
     assert out["P-2"].length_m == pytest.approx(1.5 + 2 * (PRIOR_POSE_MARGIN_M + ENVELOPE_M))
+
+
+def test_an_anchored_delivered_pallet_is_a_search_prop_and_a_slot_prop():
+    """Plan 2026-10-22-slot-anchored-neighbours 2.4: a delivered pallet with a slot anchor is two props -- ``@search``
+    where the targets list has it (the frame change applies to it), ``@slot`` at the anchor, the same growth; an anchor
+    for a pallet that is not delivered (a prior one, the carried one) changes nothing."""
+    from forklift_core.mission.targets import Pose
+    from forklift_core.planning.pallet_mission import SEARCH_TAG, SLOT_TAG
+    from forklift_core.safety.pallet_permit import session_pallet_props
+
+    tb = _session_book()
+    tb.put_down("P-4", Pose(8.05, 0.12, 0.01), uncertainty_m=0.21)
+    anchors = {"P-4": (8.0, 0.0, 0.0), "P-2": (5.0, 5.0, 0.0)}  # P-2 is a prior: its anchor is ignored
+    shift = lambda p: (p[0] + 0.3, p[1], p[2])  # noqa: E731
+    props = session_pallet_props(tb, exclude_id="P-1", nominal={}, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25,
+                                 moved=shift, moved_ids=("P-4",), slot_anchors=anchors)
+    by_uri = {p.asset.uri: p.rectangle for p in props}
+    assert sorted(by_uri) == ["session:pallet:P-2", "session:pallet:P-3", f"session:pallet:P-4{SEARCH_TAG}",
+                              f"session:pallet:P-4{SLOT_TAG}"]
+    search, slot = by_uri[f"session:pallet:P-4{SEARCH_TAG}"], by_uri[f"session:pallet:P-4{SLOT_TAG}"]
+    assert (search.x_m, search.y_m, search.length_m) == pytest.approx((8.35, 0.12, 1.02))
+    assert (slot.x_m, slot.y_m, slot.yaw_rad, slot.length_m, slot.width_m) == pytest.approx((8.0, 0.0, 0.0, 1.02, 1.22))
+    plain = session_pallet_props(tb, exclude_id="P-1", nominal={}, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25)
+    assert [p.asset.uri for p in plain] == ["session:pallet:P-2", "session:pallet:P-3", "session:pallet:P-4"]

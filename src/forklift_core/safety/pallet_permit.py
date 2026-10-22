@@ -77,14 +77,19 @@ def preparation_obstacle(pallet, pickup_zone, *, pose=None, size=None):
 
 
 def session_pallet_props(targets, *, exclude_id, nominal: dict, shape, prior_grow_m: float, moved=None,
-                         moved_ids=()) -> tuple:
+                         moved_ids=(), slot_anchors=None) -> tuple:
     """The other pallets of a session as planning props (plan 2026-10-22-session-scene-pallet-props 2.6; one function
     for the live preparation's scene, its start check, the post-release preview and the worker's input). A prior
     pallet is its drawn slot (``nominal``: id -> (x, y, yaw)) grown by ``prior_grow_m`` (decision D1); a recognised or
     delivered one its outline where the targets list has it, grown by its uncertainty (the recognised margin when
     none). The mission's own pallet (``exclude_id``), a carried one and one without a pose are left out.
     ``shape`` = (depth, width, height). ``moved`` (x, y, yaw) -> (x, y, yaw) applies to the ids in ``moved_ids`` only:
-    the estimates the hold found, as the release itself judges them -- never by basis."""
+    the estimates the hold found, as the release itself judges them -- never by basis. ``slot_anchors`` (id -> (x, y,
+    yaw), the slot it was put down in, in the goal's frame): a delivered pallet there is two props, its estimate tagged
+    for the searches and its slot tagged for the delivery straight and the withdraw (plan 2026-10-22-slot-anchored-
+    neighbours 2.4); an anchor for a pallet not delivered changes nothing."""
+    from forklift_core.planning.pallet_mission import SEARCH_TAG, SLOT_TAG
+
     from forklift_core.planning.geometry import Rectangle
     from forklift_core.planning.pallet_mission import AssetSpec, PlacedProp
 
@@ -105,8 +110,16 @@ def session_pallet_props(targets, *, exclude_id, nominal: dict, shape, prior_gro
             if moved is not None and pallet_id in moved_ids:
                 x, y, yaw = (float(v) for v in moved((x, y, yaw)))
             grow = RECOGNISED_MARGIN_M if pallet.uncertainty_m is None else float(pallet.uncertainty_m)
-        out.append(PlacedProp(AssetSpec(f"session:pallet:{pallet_id}", depth + 2 * grow, width + 2 * grow, height),
-                              Rectangle(x, y, depth + 2 * grow, width + 2 * grow, yaw)))
+        size = (depth + 2 * grow, width + 2 * grow)
+        anchor = (slot_anchors or {}).get(pallet_id) if pallet.basis == "delivered" else None
+        if anchor is None:
+            out.append(PlacedProp(AssetSpec(f"session:pallet:{pallet_id}", *size, height), Rectangle(x, y, *size, yaw)))
+            continue
+        ax, ay, ayaw = (float(v) for v in anchor)
+        out.append(PlacedProp(AssetSpec(f"session:pallet:{pallet_id}{SEARCH_TAG}", *size, height),
+                              Rectangle(x, y, *size, yaw)))
+        out.append(PlacedProp(AssetSpec(f"session:pallet:{pallet_id}{SLOT_TAG}", *size, height),
+                              Rectangle(ax, ay, *size, ayaw)))
     return tuple(out)
 
 
