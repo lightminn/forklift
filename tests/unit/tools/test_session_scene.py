@@ -37,7 +37,7 @@ def v1(tmp_path_factory):
     out = tmp_path_factory.mktemp("v1")
     scenes = {}
     for name, built in tool.scenes().items():
-        if name.startswith(("line_", "random_")):
+        if True:  # every v1 scene (the adapter's equivalence covers them all)
             path = out / f"{name}.json"
             path.write_text(json.dumps(tool.scene_record(name, built)))
             scenes[name] = load_scene(path)
@@ -137,14 +137,18 @@ def test_the_zone_obstacle_is_the_runners_pickup_prior():
     assert (r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad) == pytest.approx((1.25, 0.0, 1.5, 1.5, 0.0))
 
 
+ALL_V1 = ("aisle", "aisle_out", "trailer", "conveyor", "line_1", "line_2", "line_3", "random_1", "random_2", "random_3")
+
+
+@pytest.mark.parametrize("name", ALL_V1)
 @pytest.mark.parametrize("live", [False, True])
-def test_registering_a_v1_session_makes_the_runners_own_targets(v1, live):
+def test_registering_a_v1_session_makes_the_runners_own_targets(v1, live, name):
     """Plan 2.3: the same ids, poses, sizes, at and revision as run_transport's registration (5395-5409)."""
     from forklift_core.mission.targets import Pose, TargetsBook
 
     from scene_file import register_session
 
-    scene = v1["line_2"]
+    scene = v1[name]
     s = scene.scenario
     runner = TargetsBook()
     runner.add_pallet("P-1", "pallet_geometry_epal6", Pose(float(s.pickup.x_m), float(s.pickup.y_m),
@@ -181,7 +185,7 @@ def test_a_tilted_zone_has_no_runner_pickup_zone(sessions):
         loaded["random"].pallet_by_id("P-4").zone.centre_zone()
 
 
-@pytest.mark.parametrize("name", ["line_1", "line_2", "line_3", "random_1", "random_2", "random_3"])
+@pytest.mark.parametrize("name", ALL_V1)
 def test_the_adapter_gives_the_runners_own_preparation_inputs_for_every_v1_scene(v1, name):
     """Plan 2.4 / 2.1 (3판 amendment): what run_transport builds for P-1 -- the truth pickup as the reference, the scene's
     candidates as the template, its zone grown into the pickup prior -- is what the v1 session adapter gives, so PR 3

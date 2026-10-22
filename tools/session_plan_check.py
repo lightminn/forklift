@@ -118,11 +118,13 @@ def _reach(fp) -> float:
     return math.hypot(max(fp.front_m, fp.rear_m), fp.half_width_m)
 
 
-def leg_clearance(poses, fp, outlines: dict) -> dict:
+def leg_clearance(poses, fp, outlines: dict, directions=None) -> dict:
     """The leg's smallest gap to each outline: sampled at the planned poses and on the arcs between them (each step
     moving no outline point more than STEP_M), with the continuous lower bound; a segment whose bound reaches 0 is
-    sampled again at FINE_STEP_M. ``outlines`` id -> Rectangle. Returns per id {min_m, bound_m, status}."""
+    sampled again at FINE_STEP_M. ``outlines`` id -> Rectangle; ``directions`` the planner's +1/-1 per pose (the
+    arc into pose i is driven in directions[i]). Returns per id {min_m, bound_m, status}."""
     poses = np.asarray(poses, dtype=float)
+    directions = None if directions is None else [int(d) for d in np.asarray(directions).ravel()]
     out = {}
     reach = _reach(fp)
     for oid, rect in outlines.items():
@@ -132,10 +134,11 @@ def leg_clearance(poses, fp, outlines: dict) -> dict:
             sampled = min(sampled, distance(footprint_corners(poses[i], fp), corners))
         for i in range(1, len(poses)):
             a, b = poses[i - 1], poses[i]
-            seg = _segment(a, b, reach, corners, fp, STEP_M)
+            d = None if directions is None else directions[i]
+            seg = _segment(a, b, reach, corners, fp, STEP_M, d)
             lower = seg[0] - seg[1] / 2
             if lower <= 0 < seg[0]:
-                seg = _segment(a, b, reach, corners, fp, FINE_STEP_M)
+                seg = _segment(a, b, reach, corners, fp, FINE_STEP_M, d)
                 lower = seg[0] - seg[1] / 2
             sampled, bound = min(sampled, seg[0]), min(bound, lower)
         if len(poses) == 1:
@@ -145,38 +148,49 @@ def leg_clearance(poses, fp, outlines: dict) -> dict:
     return out
 
 
-def arc(a, b):
-    """The motion a -> b as (pose_at(t) for t in [0, 1], its length): the circular arc tangent to a's heading
-    (driven forwards or backwards) through b -- a straight when b lies on a's heading line. The position sweeps the
-    angle between the radii (on the side the heading change turns, when that is ambiguous); the heading goes from a's
-    to b's evenly."""
+def arc(a, b, direction: int | None = None):
+    """The motion a -> b as (pose_at(t) for t in [0, 1], its length): the circular arc tangent to a's heading through b
+    -- a straight when b lies on a's heading line. ``direction`` (+1 forwards, -1 backwards: the planner's direction
+    for b) sets which way round it turns: forwards it turns towards the centre's side, backwards away from it. Without
+    one it is read from the chord (ahead of a: forwards); a chord square to a's heading (a half circle) is then
+    ambiguous and refused. The heading goes from a's to b's evenly (b's as the planner wrote it, normalised)."""
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     dyaw = math.remainder(float(b[2] - a[2]), math.tau)
     chord = b[:2] - a[:2]
-    normal = np.array([-math.sin(a[2]), math.cos(a[2])])
+    heading = np.array([math.cos(a[2]), math.sin(a[2])])
+    normal = np.array([-heading[1], heading[0]])
     across = float(chord @ normal)
     if abs(across) < 1e-12:
         length = float(np.linalg.norm(chord))
         return (lambda t: (a[0] + t * chord[0], a[1] + t * chord[1], a[2] + t * dyaw)), length
-    rho = float(chord @ chord) / (2 * across)  # signed radius along a's normal
+    if direction is None:
+        along = float(chord @ heading)
+        if abs(along) < 1e-9:
+            raise ValueError("a half-circle step without its direction is ambiguous")
+        direction = 1 if along > 0 else -1
+    rho = float(chord @ chord) / (2 * across)  # signed radius along a's normal (> 0: the centre on the left)
     centre = a[:2] + rho * normal
     r0, r1 = a[:2] - centre, b[:2] - centre
     sweep = math.atan2(r0[0] * r1[1] - r0[1] * r1[0], float(r0 @ r1))
-    if dyaw != 0 and sweep * dyaw < 0:
-        sweep += math.copysign(math.tau, dyaw)  # the other way round, as the heading turns
+    turn = math.copysign(1.0, rho) * (1 if direction > 0 else -1)  # +1: counter-clockwise
+    if sweep * turn < 0:
+        sweep += math.copysign(math.tau, turn)
+    dyaw_t = dyaw  # the heading change taken the way the truck turns (its normalised sign may be the other)
+    if dyaw_t * sweep < 0:
+        dyaw_t += math.copysign(math.tau, sweep)
 
     def pose_at(t):
         c, s_ = math.cos(t * sweep), math.sin(t * sweep)
         x, y = centre + np.array([c * r0[0] - s_ * r0[1], s_ * r0[0] + c * r0[1]])
-        return float(x), float(y), float(a[2] + t * dyaw)
+        return float(x), float(y), float(a[2] + t * dyaw_t)
 
     return pose_at, abs(rho * sweep)
 
 
-def _segment(a, b, reach, corners, fp, step):
+def _segment(a, b, reach, corners, fp, step, direction=None):
     """(the smallest sampled gap along the arc a -> b, the largest outline-point move between samples)."""
-    pose_at, length = arc(a, b)
-    move = length + abs(math.remainder(float(b[2] - a[2]), math.tau)) * reach
+    pose_at, length = arc(a, b, direction)
+    move = length + abs(pose_at(1.0)[2] - float(a[2])) * reach
     n = max(1, int(math.ceil(move / step)))
     best = math.inf
     for k in range(n + 1):
@@ -267,7 +281,7 @@ def check_session(path: Path, *, prior_grow_m: float = 0.25, planner=None) -> di
             elif name in OWN_SLOT:
                 outlines[pid] = _rect(dest, pallet)
             fp = geometry.loaded_footprint if name in LOADED else geometry.unloaded_footprint
-            clear = leg_clearance(leg.poses, fp, outlines)
+            clear = leg_clearance(leg.poses, fp, outlines, getattr(leg, "directions", None))
             nearest = min(clear, key=lambda oid: clear[oid]["bound_m"]) if clear else None
             entry["stages"][name] = {"nearest": nearest, **({} if nearest is None else clear[nearest]),
                                      "all": clear}

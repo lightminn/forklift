@@ -38,19 +38,34 @@ def test_a_turn_is_sampled_on_its_arc_not_its_chord():
     the box at its bottom; the chord between the two poses does not."""
     r = 1 / 0.29
     a, b = (-r, r, -math.pi / 2), (r, r, math.pi / 2)
-    pose_at, length = C.arc(a, b)
+    pose_at, length = C.arc(a, b, direction=1)
     assert length == pytest.approx(math.pi * r)
     assert pose_at(0.5)[:2] == pytest.approx((0.0, 0.0), abs=1e-9)
     rect = {"P-9": Rectangle(0.0, -0.759, 0.6, 0.8, 0.0)}
-    out = C.leg_clearance([a, b], Footprint(1.29, 0.17, 0.36), rect)["P-9"]
+    out = C.leg_clearance([a, b], Footprint(1.29, 0.17, 0.36), rect, directions=[1, 1])["P-9"]
     assert out["status"] == "contact_observed"
+
+
+@pytest.mark.parametrize("end_yaw", [math.pi, -math.pi])
+def test_a_half_circle_turns_the_way_the_truck_drives_whatever_the_end_headings_sign(end_yaw):
+    """Codex PR 2 implementation round 2 P2: forwards from (0, 0, 0) round a half circle to (0, 2R) the planner may
+    write the end heading as -pi; the arc must still pass (R, R), where a box stands."""
+    r = 1 / 0.29
+    a, b = (0.0, 0.0, 0.0), (0.0, 2 * r, end_yaw)
+    pose_at, _ = C.arc(a, b, direction=1)
+    assert pose_at(0.5)[:2] == pytest.approx((r, r), abs=1e-9)
+    rect = {"P-9": Rectangle(r + 0.759, r, 0.6, 0.8, math.pi / 2)}
+    out = C.leg_clearance([a, b], Footprint(1.29, 0.17, 0.36), rect, directions=[1, 1])["P-9"]
+    assert out["status"] == "contact_observed"
+    with pytest.raises(ValueError, match="ambiguous"):
+        C.arc(a, b)  # a half circle without its direction
 
 
 def test_a_reversing_turn_is_sampled_on_its_arc():
     """Backwards a quarter circle about the origin: (R, 0) heading +y, reversing clockwise to (0, -R) heading +x."""
     r = 2.0
     a, b = (r, 0.0, math.pi / 2), (0.0, -r, 0.0)
-    pose_at, length = C.arc(a, b)
+    pose_at, length = C.arc(a, b, direction=-1)
     assert length == pytest.approx(math.pi / 2 * r)
     assert pose_at(0.5)[:2] == pytest.approx((r / math.sqrt(2), -r / math.sqrt(2)), abs=1e-9)
     assert pose_at(1.0)[:2] == pytest.approx(b[:2], abs=1e-9)
@@ -86,9 +101,10 @@ def _session(tmp_path, n=2):
     return path
 
 
-def _leg(poses, status="success"):
-    return SimpleNamespace(success=status == "success", status=status, poses=np.asarray(poses, dtype=float),
-                           curvatures_inv_m=np.zeros(len(poses)))
+def _leg(poses, status="success", direction=1):
+    poses = np.asarray(poses, dtype=float)
+    return SimpleNamespace(success=status == "success", status=status, poses=poses,
+                           directions=np.full(len(poses), direction), curvatures_inv_m=np.zeros(len(poses)))
 
 
 def _planners(approach_end_x=None, insert_into=True, fail_first=False, legs_override=None):
@@ -107,10 +123,11 @@ def _planners(approach_end_x=None, insert_into=True, fail_first=False, legs_over
         end = face - front - 0.10 if approach_end_x is None else approach_end_x
         legs = {"approach": _leg([(1.6, y, 0.0), (end, y, 0.0)]),
                 "insert": _leg([(end, y, 0.0), (end + (0.4 if insert_into else 0.0), y, 0.0)]),
-                "extract": _leg([(end + 0.4, y, 0.0), (end - 0.3, y, 0.0)]),
+                "extract": _leg([(end + 0.4, y, 0.0), (end - 0.3, y, 0.0)], direction=-1),
                 "transport": _leg([(end - 0.3, y, 0.0), (12.0, scenario.destination.y_m, 0.0)]),
-                "withdraw": _leg([(12.0, scenario.destination.y_m, 0.0), (11.5, scenario.destination.y_m, 0.0)]),
-                "return_home": _leg([(11.5, scenario.destination.y_m, 0.0), (0.0, 0.0, 0.0)])}
+                "withdraw": _leg([(12.0, scenario.destination.y_m, 0.0), (11.5, scenario.destination.y_m, 0.0)],
+                                 direction=-1),
+                "return_home": _leg([(11.5, scenario.destination.y_m, 0.0), (0.0, 0.0, 0.0)], direction=-1)}
         legs.update((legs_override or {})(scenario) if legs_override else {})
         return SimpleNamespace(success=True, status="success", **legs)
 
@@ -159,12 +176,12 @@ def test_a_loaded_leg_is_judged_with_the_loaded_outline(tmp_path):
 def test_the_withdraw_meets_the_others_and_the_return_meets_its_own_delivered_pallet(tmp_path):
     path = _session(tmp_path, n=2)
     # the withdraw backs through P-2's place (5, 3)
-    through = lambda sc: {"withdraw": _leg([(3.5, 3.0, 0.0), (4.5, 3.0, 0.0)])} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
+    through = lambda sc: {"withdraw": _leg([(4.5, 3.0, 0.0), (3.5, 3.0, 0.0)], direction=-1)} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
     out = C.check_session(path, planner=_planners(legs_override=through))
     assert out["missions"][0]["outcome"] == "contact_observed"
     assert out["missions"][0]["stages"]["withdraw"]["nearest"] == "P-2"
     # the return drives back over the slot it just filled (15, 0)
-    back = lambda sc: {"return_home": _leg([(13.0, 0.0, 0.0), (15.5, 0.0, 0.0)])} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
+    back = lambda sc: {"return_home": _leg([(15.5, 0.0, 0.0), (13.0, 0.0, 0.0)], direction=-1)} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
     out = C.check_session(path, planner=_planners(legs_override=back))
     assert out["missions"][0]["outcome"] == "contact_observed"
     assert out["missions"][0]["stages"]["return_home"]["nearest"] == "P-1"
