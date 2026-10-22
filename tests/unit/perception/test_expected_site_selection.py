@@ -100,6 +100,21 @@ def test_the_waiver_and_the_site_combine():
     assert math.hypot(centre(result.observation)[0] - 3.0, centre(result.observation)[1]) < 0.02
 
 
+def test_the_waiver_finds_nothing_once_the_site_is_off_by_more_than_its_radius():
+    """Plan 2026-10-22 task C condition 2 on real geometry (Codex C review P3): the waived pass keeps only candidates
+    within 0.15 m; the target, found with the waiver at its own site, is dropped with the site 0.18 m off."""
+    from forklift_core.mission.core import NEAR_WAIVER_AXIS_RAD, NEAR_WAIVER_RADIUS_M
+
+    sc = two_pallets(3.0, 0.95)
+    near_ = P.ExpectedSite(3.0, 0.0, 0.0, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
+    assert P.detect_pockets_expected(sc, PRIOR, PARAMS, near_, lower_evidence=False)[0].observation.status == "valid"
+    off_ = P.ExpectedSite(3.0, -0.18, 0.0, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
+    result, gate = P.detect_pockets_expected(sc, PRIOR, PARAMS, off_, lower_evidence=False)
+    assert (result.observation.status, result.observation.reason) == ("no_pallet", "no_expected_candidate")
+    target = [c for c in gate if math.hypot(c.centre_m[0] - 3.0, c.centre_m[1]) < 0.02]
+    assert target and all(not c.inside and c.distance_m > NEAR_WAIVER_RADIUS_M for c in target)
+
+
 @pytest.mark.parametrize("bad", [
     dict(radius_m=0.0), dict(radius_m=-0.1), dict(radius_m=math.nan), dict(axis_rad=0.0), dict(axis_rad=math.pi),
     dict(x_m=math.inf),

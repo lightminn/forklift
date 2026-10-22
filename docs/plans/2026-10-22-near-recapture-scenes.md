@@ -60,7 +60,7 @@
   1. 원거리 캡처가 lower 포함 전체 검출을 정식 문턱으로 통과했을 것(어떤 면제도 적용되지 않은 통과).
   2. 근접 후보가 A 의 위치 제한 — 원거리 추정 위치 기준 **0.15 m·15°** — 안일 것(결정 문구의 값. A 의 선택 반경 0.20 m 보다 좁다).
   3. 면제가 적용될 때마다 실행 기록에 남길 것(어느 조건으로 면제됐는지 포함).
-  - "원거리에서 lower 를 통과한 목표"의 연결(Codex P3): 원거리에서 채택 관측이 학습 인식 결과로 바뀌므로, 원거리 기본 검출기의 관측이 `valid` 인 것만으로는 부족하다. 그 검출기 관측이 가리키는 팔레트 위치(`detector_site`, 원거리 캡처의 제어 base 로 옮긴 것)가 채택된 원거리 추정(`near_capture.far_estimate_m`, 같은 시점·같은 좌표)과 0.15 m·15° 안이어야 한다.
+  - "원거리에서 lower 를 통과한 목표"의 연결(Codex P3): 원거리에서 채택 관측이 학습 인식 결과로 바뀌므로, 원거리 기본 검출기의 관측이 `valid` 인 것만으로는 부족하다. 그 검출기 관측이 가리키는 팔레트 위치(`detector_site`, 원거리 캡처의 제어 base 자세로 지도 좌표계에 옮긴 것 — 그래서 `far_estimate_m` 과 바로 비교된다)가 채택된 원거리 추정(`near_capture.far_estimate_m`, 같은 시점·같은 좌표)과 0.15 m·15° 안이어야 한다.
 - **범위 밖**: 근접 다리의 느슨한 도착 규칙 자체(이번에는 D 로 받는다), 하역 구역 정밀도(2순위), 연속 이송(다음 계획), 트레일러·좁은 통로 경로, 속도.
 
 ## 3. 작업
@@ -101,7 +101,7 @@
 
 - 러너: `--near-capture-lower {gate,waive_far_confirmed}`(기본 `gate`). `waive_far_confirmed` 는 `--near-capture-expected on` 일 때만. `POST_MEASUREMENT_ARGUMENTS` 에 `"near_capture_lower": "gate"`. 옛 Namespace 는 `getattr` 기본값으로 읽는다.
 - 미션(옵션이 `waive_far_confirmed` 일 때만; 기본값의 호출·기록은 그대로):
-  - 근접이 아닌 캡처마다 검출기 자신의 관측이 `valid` 면 그 위치를 캡처의 제어 base 로 옮겨 `attempt["detector_site"]` 에 남긴다(채택 관측이 학습 인식으로 바뀌는 원거리 인식 실행에서도 검출기 쪽).
+  - 근접이 아닌 캡처마다 검출기 자신의 관측이 `valid` 면 그 위치를 캡처의 제어 base 자세로 지도 좌표계에 옮겨 `attempt["detector_site"]` 에 남긴다(채택 관측이 학습 인식으로 바뀌는 원거리 인식 실행에서도 검출기 쪽).
   - 근접 캡처는 먼저 A 그대로(0.20 m, lower 문턱 유지) 검출한다. `valid` 면 끝 — 면제는 쓰지 않는다.
   - `valid` 가 아니면 조건 1 을 본다: 원거리 시도(`near_capture.far_attempt`)의 검출기 관측이 `valid`, 그 시도에 `lower_evidence` 면제·예상 위치 제한이 없음, `detector_site` 가 `far_estimate_m` 과 0.15 m·15° 안. 밑판 검사 켬의 면제가 이미 적용된 캡처는 이 경로를 타지 않는다.
   - 조건 1 이 맞으면 같은 예상 위치로 반경 0.15 m·15°, `lower_evidence=False` 로 다시 검출한다(조건 2). `valid` 면 그 결과를 쓰고, 아니면 첫 결과를 쓴다.
