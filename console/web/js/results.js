@@ -54,6 +54,7 @@ export const REASONS = {
   "Pallet missed the green destination center": "팔레트가 목적지 중심을 벗어났습니다",
   "Delivered pallet is not grounded": "내려놓은 팔레트가 바닥에 닿지 않았습니다",
   "Fork still inside delivered pallet": "내려놓은 뒤에도 포크가 팔레트 안에 남았습니다",
+  "Session pallet displaced": "작업하지 않는 팔레트가 밀렸습니다(장면 손상)",
   // the mission's own work
   "Tracking timeout": "경로 추종 시간이 지났습니다",
   "Tracking failed": "경로 추종에 실패했습니다",

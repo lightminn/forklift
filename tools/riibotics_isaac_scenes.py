@@ -494,12 +494,13 @@ def scene_record(name: str, built) -> dict:
 SESSION_EXTRA_ERRORS = {"random": {0: (0.04, -0.03, 1.0), 1: (-0.03, 0.04, -1.0)}}
 
 
-def session_record(kind: str) -> dict:
+def session_record(kind: str, markers: bool = False) -> dict:
     """One session scene (docs/plans/2026-10-22-session-scene-pallet-props.md 2.1-2.2): every pallet of the sequence
     scenario with its nominal slot (the drawing's site and tilt, in the hall), its truth (nominal + its own error -- the
     carried ones keep the error their v1 scene k gave them) and the zone and candidates made from its nominal; the
     unloading slots as destinations D-1..; the drawing's order. Its pallets are not visuals: Isaac makes them from
-    pallets[].truth (PR 3)."""
+    pallets[].truth (PR 3). ``markers``: the slot markers of the marked v1 copies (``with_slot_markers``) as the
+    session's static props and walls, the scene named ``<kind>_m``."""
     loading, unloading, order, start, zones, margin = SEQUENCES[kind]()
     pallet = load_pallet_geometry(PALLETS[PALLET])
     # The hall placement is the v1 scenes' (their bounds come from every site and the start, the same for each k).
@@ -511,8 +512,10 @@ def session_record(kind: str) -> dict:
                                  destination=unloading[order[0][1]], props=tuple(probe), bounds=bounds)
     visuals = [_visual("floor", (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0.0, 0.0, colour)
                for (x0, x1, y0, y1), colour in zones]
+    if markers:
+        scenario, visuals, _ = with_slot_markers(kind, (scenario, visuals, {}))
     hall, visuals, placement = to_hall(scenario, visuals)
-    sites = [PalletSite(p.rectangle.x_m, p.rectangle.y_m, p.rectangle.yaw_rad) for p in hall.props]
+    sites = [PalletSite(p.rectangle.x_m, p.rectangle.y_m, p.rectangle.yaw_rad) for p in hall.props[:len(probe)]]
     nominal, slots = sites[:len(loading)], sites[len(loading):]
     errors = {li: PICKUP_ERRORS[f"{kind}_{k + 1}"] for k, (li, _) in enumerate(order)}
     errors.update(SESSION_EXTRA_ERRORS.get(kind, {}))
@@ -526,12 +529,14 @@ def session_record(kind: str) -> dict:
                      "y_max_m": n.y_m + ZONE_GROW_M, "yaw_centre_rad": n.yaw_rad, "yaw_half_rad": ZONE_YAW_RAD},
             "observation_waypoints": observation_waypoints(n)})
     first = replace(hall, props=())
-    return {"format": SESSION_FORMAT, "name": kind, "pallet": PALLET,
-            "start_rear": asdict(hall.start_rear), "bounds": asdict(hall.bounds), "static_props": [],
+    return {"format": SESSION_FORMAT, "name": f"{kind}_m" if markers else kind, "pallet": PALLET,
+            "start_rear": asdict(hall.start_rear), "bounds": asdict(hall.bounds),
+            "static_props": [asdict(p) for p in hall.props[len(probe):]],
             "pallets": pallets,
             "destinations": [{"destination_id": f"D-{j + 1}", **asdict(s)} for j, s in enumerate(slots)],
             "sequence": [[f"P-{li + 1}", f"D-{ui + 1}"] for li, ui in order],
-            "visuals": visuals, "views": views(first), "source": {"placement": placement, "errors": errors}}
+            "visuals": visuals, "views": views(first),
+            "source": {"placement": placement, "errors": errors, **({"slot_markers": True} if markers else {})}}
 
 
 # ---- CPU planning check with the Isaac mission settings ----
@@ -634,6 +639,10 @@ def main() -> None:
         path = args.output / f"{kind}_session.json"
         path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
         print("session", path)
+        if args.slot_markers and kind in MARKED_KINDS:  # the marked copy beside it (<kind>_m_session.json)
+            path = args.output / f"{kind}_m_session.json"
+            path.write_text(json.dumps(session_record(kind, markers=True), indent=1) + "\n")
+            print("session", path)
     only = set(args.only.split(",")) if args.only else None
     paths = []
     built_scenes = scenes()

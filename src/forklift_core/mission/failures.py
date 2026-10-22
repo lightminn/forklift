@@ -38,6 +38,8 @@ PREFIXES = {
     "Perception camera local pose differs": SESSION, "--odometry-wheel-radius-m": SESSION,
     "Pallet missed the green destination center": SESSION, "Delivered pallet is not grounded": SESSION,
     "Fork still inside delivered pallet": SESSION,
+    # a session's pallet nobody handles moved past its rest bound (plan 2026-10-22-rigid-session-pallets 2.4)
+    "Session pallet displaced": SCENE,
     "recognition label target": SESSION,  # main's far recognition (2026-10-18): the scene's label prim is missing
     # the mission's own work: that mission fails
     "Tracking timeout": MISSION, "Tracking failed": MISSION, "obstacle_": MISSION,
