@@ -34,11 +34,16 @@ standing in for the estimate.
     python tools/riibotics_isaac_scenes.py --output config/riibotics_scenes
     python tools/riibotics_isaac_scenes.py --output <dir> --plan [--only aisle] [--jobs 4]
     python tools/riibotics_isaac_scenes.py --output <dir> --slot-markers   # also <name>_m.json for line / random
+    python tools/riibotics_isaac_scenes.py --output <dir> --rack           # also aisle_rack / aisle_out_rack
 
 Slot markers (docs/plans/2026-10-22-open-zone-docking.md D3): the open unloading zones of line and random leave the
 delivery docking match a single far wall, so it refuses (degenerate). A `_m` copy puts two plates behind every
 unloading slot (slot_markers) -- in the planner's props and in what Isaac draws -- and the plain scene stays for
 regression.
+
+Rack copies (docs/plans/2026-10-22-riibotics-aisle.md, user decisions D-A A1 and D-C C1a): `--rack` also writes
+aisle_rack / aisle_out_rack -- the 0.20 m back gap (assumed, the plain scenes keep 0.15 m) and a rack frame at every
+slot boundary with the slot gap widened to clear it. The plain aisle scenes stay for regression.
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ from bay_planning_sweep import mission_geometry  # noqa: E402
 from riibotics_scenario_paths import (  # noqa: E402
     PALLETS,
     SCALES,
+    SLOTS,
     STAGES,
     UP,
     aisle_case,
@@ -134,6 +140,19 @@ MARKER_COLOUR = (0.95, 0.80, 0.10)
 SLOT_DEPTH_M = 0.60  # EPAL 6 along the forks: a slot's far edge is half of it ahead of its centre
 MARKED_KINDS = ("line", "random")
 
+# Rack copies of the aisle (plan 2026-10-22 riibotics-aisle, user decisions D-A A1 and D-C C1a): the back gap is
+# assumed 0.20 m instead of 0.15 m (the plain scenes leave the truth extraction 2.8 mm to spare, so a few millimetres
+# of recognition error decide it), and every slot boundary gets a rack frame -- an upright at the entry face and one
+# at the back -- standing through the LiDAR plane. An upright is assumed 0.10 m square real (0.052 m scaled); the
+# slot gap widens to RACK_SLOT_GAP_M because at the plain 0.20 m the slot pitch equals the loaded footprint plus
+# its clearance, so a post of any thickness blocks the delivery and the extraction straights.
+# Neither the gap, the post nor the back gap comes from Riibotics (questions in the plan, section 6).
+UPRIGHT_URI = "riibotics:rack_upright"
+UPRIGHT_M = round(0.10 * 1.46 / 2.8, 3)
+RACK_BACK_GAP_M = 0.20
+RACK_SLOT_GAP_M = 0.58
+RACK_KINDS = ("aisle", "aisle_out")
+
 
 def _beside(a: PalletSite, b: PalletSite) -> float | None:
     """b's lateral offset from a when b stands beside a in the same row (same entry yaw, same depth), else None."""
@@ -177,10 +196,31 @@ def pallet_visuals(scenario: TransportScenario) -> list[dict]:
     return out
 
 
-def aisle_scene(scale_name: str = "length", slot_gap: float = 0.20):
+def rack_uprights(slot_x: list[float], pitch: float, aisle: float, depth: float, back_gap: float) -> list[Rectangle]:
+    """A rack frame at every slot boundary (scene frame): a front upright whose aisle face is flush with the pallets'
+    entry face and a back upright against the back frame."""
+    front = aisle / 2 + UPRIGHT_M / 2
+    back = aisle / 2 + depth + back_gap - UPRIGHT_M / 2
+    edges = [slot_x[0] - pitch / 2] + [x + pitch / 2 for x in slot_x]
+    return [Rectangle(x, y, UPRIGHT_M, UPRIGHT_M, 0.0) for x in edges for y in (front, back)]
+
+
+def aisle_scene(scale_name: str = "length", slot_gap: float = 0.20, back_gap: float = 0.15, uprights: bool = False):
     pallet = load_pallet_geometry(PALLETS[PALLET])
-    scenario, info = aisle_case(SCALES[scale_name], pallet, "gap", "gap", slot_gap, 0.15)
+    scenario, info = aisle_case(SCALES[scale_name], pallet, "gap", "gap", slot_gap, back_gap)
+    if uprights:
+        pitch = info["pitch_m"]
+        posts = rack_uprights([slot_gap / 2 + pitch * (i + 0.5) for i in range(SLOTS)], pitch, info["aisle_m"],
+                              pallet.overall_depth_m, back_gap)
+        asset = AssetSpec(UPRIGHT_URI, UPRIGHT_M, UPRIGHT_M, RACK_H_M)
+        scenario = replace(scenario, props=scenario.props + tuple(PlacedProp(asset, r) for r in posts))
+        info = {**info, "rack_uprights": len(posts), "upright_m": UPRIGHT_M}
     visuals = pallet_visuals(scenario)
+    for p in scenario.props:
+        if p.asset.uri == UPRIGHT_URI:
+            r = p.rectangle
+            visuals.append({**_visual("wall", r.x_m, r.y_m, r.length_m, r.width_m, 0.0, RACK_H_M, RACK_ORANGE),
+                            "role": "rack_upright"})
     b = scenario.bounds
     # The rack's back frame stands just past the planner's bound (the rack row is the bound).
     visuals.append(_visual("wall", (b.x_min_m + b.x_max_m) / 2, b.y_max_m + WALL_T_M / 2,
@@ -368,6 +408,12 @@ def with_slot_markers(kind: str, built):
     return replace(scenario, props=props), visuals + marks, {**info, "slot_markers": True}
 
 
+def rack_scene(slot_gap: float = RACK_SLOT_GAP_M, back_gap: float = RACK_BACK_GAP_M):
+    """The aisle with rack frames and the assumed 0.20 m back gap (RACK_* above); aisle and aisle_out stay as they
+    were for regression."""
+    return aisle_scene(slot_gap=slot_gap, back_gap=back_gap, uprights=True)
+
+
 def unloading_slots_hall(kind: str, built) -> list[PalletSite]:
     """The unloading slots of a scene in the hall frame (tests: the plates against the slots)."""
     scenario, _, _ = built
@@ -481,7 +527,7 @@ def scene_record(name: str, built) -> dict:
     scenario = _heights(scenario)
     hall, visuals, placement = to_hall(scenario, visuals)
     nominal = PalletSite(hall.pickup.x_m, hall.pickup.y_m, 0.0)
-    dx, dy, dyaw = PICKUP_ERRORS[name.removesuffix("_m")]  # a marked copy picks as its plain scene
+    dx, dy, dyaw = PICKUP_ERRORS[name.removesuffix("_m").removesuffix("_rack")]  # a copy picks as its plain scene
     hall = replace(hall, pickup=PalletSite(nominal.x_m + dx, nominal.y_m + dy,
                                            hall.pickup.yaw_rad + math.radians(dyaw)))
     return {"format": FORMAT, "name": name, "pallet": PALLET, "scenario": asdict(hall),
@@ -626,6 +672,8 @@ def main() -> None:
     parser.add_argument("--grow-pallets", default="0", help="comma-separated keep-outs (m) around neighbour pallets")
     parser.add_argument("--slot-markers", action="store_true",
                         help="also write <name>_m.json with slot markers for the line / random scenes (plan 2026-10-22)")
+    parser.add_argument("--rack", action="store_true",
+                        help="also write aisle_rack.json / aisle_out_rack.json with rack frames (plan 2026-10-22 aisle)")
     parser.add_argument("--session", choices=tuple(SEQUENCES), action="append", default=[],
                         help="also write this sequence as one session scene (<name>_session.json)")
     args = parser.parse_args()
@@ -642,6 +690,9 @@ def main() -> None:
             kind = name.split("_")[0]
             if kind in MARKED_KINDS:
                 built_scenes[f"{name}_m"] = with_slot_markers(kind, built_scenes[name])
+    if args.rack:
+        for name in RACK_KINDS:
+            built_scenes[f"{name}_rack"] = rack_scene()
     for name, built in built_scenes.items():
         if only and name not in only:
             continue
