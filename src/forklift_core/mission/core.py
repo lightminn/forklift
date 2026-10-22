@@ -1043,8 +1043,12 @@ class MissionCore:
             # path does (an arm_docking split keeps the start, a replan installs its own path and record)
             path = getattr(self, "paths", {}).get("transport")
             record = getattr(path, "exit_prefix", None) or {}
-            same_start = path is not None and len(path.poses) and np.allclose(path.poses[0], tracker._poses[0])
-            delta = float(record.get("length_m", 0.0)) if record.get("status") == "prefix" and same_start else 0.0
+            if record.get("status") != "prefix":
+                delta = 0.0  # no prefix on this path: nothing else is read from it (Codex round 3 P2)
+            else:
+                poses = getattr(path, "poses", None)
+                same_start = poses is not None and len(poses) and np.allclose(poses[0], tracker._poses[0])
+                delta = float(record.get("length_m", 0.0)) if same_start else 0.0
         value = delta if delta > 0 and tracker.leading_reverse_straight_m() >= delta - 1e-6 else 0.0
         self._exit_prefix_cache = (tracker, value)
         return value
