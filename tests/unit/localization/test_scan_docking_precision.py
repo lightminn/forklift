@@ -179,3 +179,23 @@ def test_a_correction_beyond_the_weak_bound_is_refused():
 def test_an_unknown_acceptance_is_refused():
     with pytest.raises(ValueError):
         run(TWO, acceptance="lenient")
+
+
+def test_a_singular_decimated_sigma_is_recorded_as_none_through_dock(monkeypatch):
+    # Codex re-review P3: the whole dock() record, with the decimated information made singular
+    import json
+
+    from forklift_core.localization import scan_match as SM
+
+    real, calls = SM._sigma, []
+
+    def sigma(jac, residual):
+        calls.append(len(jac))
+        if len(calls) % 2 == 0:  # the second call of each check is the 1/4-decimated one
+            return 0.01, (float("inf"),) * 3
+        return real(jac, residual)
+
+    monkeypatch.setattr(SM, "_sigma", sigma)
+    taken, _ = run(TWO)
+    assert taken.reason == "ok:precision" and taken.precision["sigma_decimated_m"] == [None, None, None]
+    json.dumps(taken.precision, allow_nan=False)
