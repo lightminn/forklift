@@ -355,6 +355,43 @@ class ObstacleLayer:
         return TurnaroundArcCheck(self.permission, self.snapshot, footprint, own,
                                   callback_spec or {"kind": "turnaround_arc"})
 
+    def candidate_permit(self, now_s: float, path_ahead, *, current_pose, direction: int, loaded: bool,
+                         curvature_inv_m: float, measured_curvature_inv_m: float, cap_mps: float) -> dict:
+        """The scene-mode replan's check before a candidate is installed (docs/plans/2026-10-23-scene-replan.md
+        2.1 step 6): ``path_ahead`` -- the candidate tracker's first gear leg -- on the processed snapshot, in a fresh
+        DrivePermission so the layer's own (its path check, the distance driven since, its last stop arc) is neither
+        read nor changed. ok: the walk verified min(lookahead, the leg's length) with nothing blocked, and the start
+        allowed above zero both at the first command's curvature and at the wheels' measured one."""
+        poses = np.asarray(path_ahead, dtype=float)
+        out = {"ok": False, "verified_m": 0.0, "blocked": None, "allowed_mps": 0.0, "measured_allowed_mps": 0.0,
+               "why": None}
+        if self.snapshot is None:
+            out["why"] = "no_snapshot"
+            return out
+        footprint, own = self.footprints(loaded, direction)
+        candidate = DrivePermission(self.permission.config)
+        check = candidate.update(self.snapshot, poses, footprint, own, current_pose=current_pose, direction=direction)
+        length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+        need = min(float(self.permission.config.lookahead_m), length)
+        allowed = [candidate.allowed_speed(now_s, self.last_scan_s, current_pose=current_pose, curvature_inv_m=k,
+                                           direction=direction, footprint=footprint, own_footprint=own,
+                                           speed_cap_mps=cap_mps)
+                   for k in (curvature_inv_m, measured_curvature_inv_m)]
+        out.update(verified_m=float(check.verified_m), blocked=check.blocked, allowed_mps=float(allowed[0][0]),
+                   measured_allowed_mps=float(allowed[1][0]), allowed_why=allowed[0][1],
+                   measured_allowed_why=allowed[1][1], need_m=need)
+        if check.blocked is not None:
+            out["why"] = f"blocked:{check.blocked}"
+        elif check.verified_m + 1e-9 < need - float(self.permission.config.step_m):
+            out["why"] = "unverified"
+        elif allowed[0][0] <= 0.0:
+            out["why"] = f"start:{allowed[0][1]}"
+        elif allowed[1][0] <= 0.0:
+            out["why"] = f"measured_start:{allowed[1][1]}"
+        else:
+            out["ok"], out["why"] = True, "ok"
+        return out
+
     def check_arc_candidate(self, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
                             cap_mps: float):
         """The emergency-stop arc the permission would walk at this curvature and direction."""
