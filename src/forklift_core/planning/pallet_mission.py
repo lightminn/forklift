@@ -266,13 +266,33 @@ class TransportScenario:
 SEARCH_TAG, SLOT_TAG = "@search", "@slot"
 
 
-def scenario_props(scenario: TransportScenario, stage: str = "search") -> list[Rectangle]:
+# The LiDAR plane (docs/plans/2026-10-23-planner-permission-clearance.md P1c): the obstacle layer only sees props
+# taller than this, and paints each of its hits wider than the prop (the mark radius), so the searches keep those
+# props ``SyntheticMissionGeometry.lidar_keepout_m`` wider on each side; the fixed straights keep them at their size.
+LIDAR_PLANE_M = 1.05
+
+
+def scenario_props(scenario: TransportScenario, stage: str = "search", *, keepout_m: float = 0.0,
+                   plane_m: float = LIDAR_PLANE_M) -> list[Rectangle]:
     """The obstacle rectangles of ``scenario`` a check at ``stage`` sees: "search" leaves out the slot-stage props,
-    "slot" (the delivery straight and the withdraw) the search-stage ones. A scene without tags gives one list."""
+    "slot" (the delivery straight and the withdraw) the search-stage ones. A scene without tags gives one list.
+    ``keepout_m`` > 0 grows every prop taller than ``plane_m`` by that much on each side (the searches, P1c)."""
     if stage not in ("search", "slot"):
         raise ValueError(f"unknown stage {stage!r}")
     drop = SLOT_TAG if stage == "search" else SEARCH_TAG
-    return [p.rectangle for p in scenario.props if not p.asset.uri.endswith(drop)]
+    kept = [p for p in scenario.props if not p.asset.uri.endswith(drop)]
+    if keepout_m <= 0.0:
+        return [p.rectangle for p in kept]
+    return [Rectangle(p.rectangle.x_m, p.rectangle.y_m, p.rectangle.length_m + 2 * keepout_m,
+                      p.rectangle.width_m + 2 * keepout_m, p.rectangle.yaw_rad)
+            if p.asset.height_m > plane_m else p.rectangle for p in kept]
+
+
+def lidar_visible_props(scenario: TransportScenario, stage: str = "search",
+                        plane_m: float = LIDAR_PLANE_M) -> list[Rectangle]:
+    """The rectangles, at their size, of the props at ``stage`` taller than the LiDAR plane ``plane_m``."""
+    drop = SLOT_TAG if stage == "search" else SEARCH_TAG
+    return [p.rectangle for p in scenario.props if not p.asset.uri.endswith(drop) and p.asset.height_m > plane_m]
 
 
 @dataclass(frozen=True)
@@ -298,6 +318,10 @@ class SyntheticMissionGeometry:
     spawn_clearance_m: float = 0.12
     carriage_limit_m: float = CARRIAGE_INSERTION_LIMIT_M  # Pass the run's model limit.
     insertion_reserve_m: float = INSERTION_RESERVE_M  # Policy; diagnostic sweeps only.
+    # P1c (docs/plans/2026-10-23-planner-permission-clearance.md): how much wider the searches keep the props taller
+    # than lidar_plane_m. Off (0) by default; a record leaves both out while they hold their defaults.
+    lidar_keepout_m: float = field(default=0.0, metadata={"record_omit_default": True})
+    lidar_plane_m: float = field(default=LIDAR_PLANE_M, metadata={"record_omit_default": True})
 
     inserted_offset_m: float = field(init=False)
     approach_offset_m: float = field(init=False)
@@ -326,6 +350,8 @@ class SyntheticMissionGeometry:
         object.__setattr__(self, "predelivery_offset_m", predelivery)
         object.__setattr__(self, "loaded_footprint", loaded)
 
+        if not (np.isfinite(self.lidar_keepout_m) and self.lidar_keepout_m >= 0.0 and np.isfinite(self.lidar_plane_m)):
+            raise ValueError("lidar_keepout_m must be a finite non-negative length and lidar_plane_m finite")
         for value in (
             self.pallet_depth_m,
             self.pallet_width_m,
@@ -706,7 +732,7 @@ def _join_prefix(prefix: PlanResult, search: PlanResult, record: dict) -> PlanRe
 
 
 def _transport_search(start, goal, props, footprint, bounds, config, *, occupancy=None, deadline=None,
-                      exit_prefix: ExitPrefix | None = None) -> PlanResult:
+                      exit_prefix: ExitPrefix | None = None, straight_props=None) -> PlanResult:
     """The loaded transport search; with ``exit_prefix`` it starts with the straight reverse ExitPrefix asks for, checked
     against the props, bounds and grid at the search's clearance. Without a clear pose within the cap, a straight the
     props refuse, or no search from the prefix's end, the plain search from ``start``, its record saying why."""
@@ -724,7 +750,9 @@ def _transport_search(start, goal, props, footprint, bounds, config, *, occupanc
         return replace(plain(), exit_prefix={**record, "status": "clear",
                                              "min_clearance_m": footprint_clearance_m(start, footprint, exit_prefix.obstacles)})
     end = _reversed_by(start, distance)
-    straight = _straight_plan(start, end, -1, props, footprint, bounds, config.clearance_m, occupancy)
+    # the prefix is a fixed straight: the props at their size when the search sees them grown (P1c)
+    straight = _straight_plan(start, end, -1, props if straight_props is None else straight_props, footprint, bounds,
+                              config.clearance_m, occupancy)
     if not straight.success:
         return replace(plain(), exit_prefix={**record, "status": "unmet:straight_collision"})
     search = _search(end, goal, props, footprint, bounds, config, occupancy=occupancy, deadline=deadline)
@@ -732,6 +760,20 @@ def _transport_search(start, goal, props, footprint, bounds, config, *, occupanc
         return replace(plain(), exit_prefix={**record, "status": f"unmet:search_{search.status}"})
     return _join_prefix(straight, search, {**record, "status": "prefix", "length_m": distance,
                                             "min_clearance_m": footprint_clearance_m(end, footprint, exit_prefix.obstacles)})
+
+
+def keepout_exit_prefix(scenario: TransportScenario, geometry: SyntheticMissionGeometry, clearance_m: float,
+                        exit_prefix: ExitPrefix | None = None) -> ExitPrefix | None:
+    """The loaded transport's exit prefix under P1c: ``exit_prefix`` when one is given; with a keepout, a straight
+    reverse until the loaded footprint is 1.5 (G + clearance) + 0.01 m clear of the LiDAR-visible props at their size
+    -- the search then starts outside the band it keeps (the prefix measures a Euclidean gap, the search inflates
+    along the body's axes, up to sqrt 2 apart at a corner); otherwise None."""
+    if exit_prefix is not None or geometry.lidar_keepout_m <= 0.0:
+        return exit_prefix
+    visible = lidar_visible_props(scenario, plane_m=geometry.lidar_plane_m)
+    if not visible:
+        return None
+    return ExitPrefix(tuple(visible), 1.5 * (geometry.lidar_keepout_m + clearance_m) + 0.01)
 
 
 def plan_observation_leg(
@@ -984,7 +1026,7 @@ def leg_obstacles(
     sweep against them (plan 2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①, cusp
     position stall v7)."""
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    props = scenario_props(scenario)
+    props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
     if kind == "observe":
         pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
             scenario.pickup.x_m,
@@ -1043,7 +1085,8 @@ def plan_transport_leg(
         travel_config,
         occupancy=occupancy,
         deadline=deadline,
-        exit_prefix=exit_prefix,
+        exit_prefix=keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix),
+        straight_props=scenario_props(scenario),
     )
     if not search.success:
         return search
@@ -1087,7 +1130,7 @@ def plan_docking_reapproach(
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
-    props = scenario_props(scenario)
+    props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
     result = _search(
         start_rear,
         line_start,
@@ -1562,18 +1605,22 @@ def plan_loaded_delivery(
         return result
 
     props = scenario_props(scenario)
+    search_props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
     slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     destination = site_poses(scenario.destination, geometry)
     grid = docking_occupancy if docking_occupancy is not None else occupancy
-    transport = note("transport_search", _transport_search(start_rear, destination["predelivery"], props,
+    exit_ = keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix)
+    transport = note("transport_search", _transport_search(start_rear, destination["predelivery"], search_props,
                                                            geometry.loaded_footprint, scenario.bounds, travel_config,
-                                                           occupancy=grid, deadline=deadline, exit_prefix=exit_prefix))
+                                                           occupancy=grid, deadline=deadline, exit_prefix=exit_,
+                                                           straight_props=props))
     if transport.status == "invalid_start" and occupancy is not None:
-        transport = note("transport_search_tight", _transport_search(start_rear, destination["predelivery"], props,
-                                                                     geometry.loaded_footprint, scenario.bounds,
+        transport = note("transport_search_tight", _transport_search(start_rear, destination["predelivery"],
+                                                                     search_props, geometry.loaded_footprint,
+                                                                     scenario.bounds,
                                                                      replace(travel_config, clearance_m=0.0),
                                                                      occupancy=grid, deadline=deadline,
-                                                                     exit_prefix=exit_prefix))
+                                                                     exit_prefix=exit_, straight_props=props))
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
     tail = note("transport_straight", _straight_plan(destination["predelivery"], destination["delivery"], 1,
@@ -1590,7 +1637,7 @@ def plan_loaded_delivery(
         return MissionPlan(True, "success", None, None, None, transport, withdraw)
     delivered = Rectangle(scenario.destination.x_m, scenario.destination.y_m, geometry.pallet_depth_m,
                           geometry.pallet_width_m, scenario.destination.yaw_rad)
-    return_home = note("return_home", _search(destination["withdrawn"], return_to, props + [delivered],
+    return_home = note("return_home", _search(destination["withdrawn"], return_to, search_props + [delivered],
                                               geometry.unloaded_footprint, scenario.bounds, travel_config,
                                               occupancy=grid, deadline=deadline))
     if not return_home.success:
@@ -1674,6 +1721,8 @@ def plan_transport(
         return result
 
     props = scenario_props(scenario)
+    # the searches see the LiDAR-visible props grown by the keepout, the fixed straights at their size (P1c)
+    search_props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
     slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     pickup = site_poses(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
@@ -1695,7 +1744,7 @@ def plan_transport(
         _search(
             start_rear if start_rear is not None else scenario.start_rear,
             pickup["prealign"],
-            props + [pallet],
+            search_props + [pallet],
             geometry.unloaded_footprint,
             near_bounds,
             approach_config,
@@ -1759,18 +1808,20 @@ def plan_transport(
     )
     if not extract.success:
         return MissionPlan(False, f"extract:{extract.status}")
+    exit_ = keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix)
     transport = note(
         "transport_search",
         _transport_search(
             pickup["extracted"],
             destination["predelivery"],
-            props,
+            search_props,
             geometry.loaded_footprint,
             scenario.bounds,
             travel_config,
             occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
             deadline=deadline,
-            exit_prefix=exit_prefix,
+            exit_prefix=exit_,
+            straight_props=props,
         ),
     )
     if transport.status == "invalid_start" and occupancy is not None:
@@ -1783,13 +1834,14 @@ def plan_transport(
             _transport_search(
                 pickup["extracted"],
                 destination["predelivery"],
-                props,
+                search_props,
                 geometry.loaded_footprint,
                 scenario.bounds,
                 replace(travel_config, clearance_m=0.0),
                 occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
                 deadline=deadline,
-                exit_prefix=exit_prefix,
+                exit_prefix=exit_,
+                straight_props=props,
             ),
         )
     if not transport.success:
@@ -1841,7 +1893,7 @@ def plan_transport(
         _search(
             destination["withdrawn"],
             return_to,
-            props + [delivered],
+            search_props + [delivered],
             geometry.unloaded_footprint,
             scenario.bounds,
             travel_config,

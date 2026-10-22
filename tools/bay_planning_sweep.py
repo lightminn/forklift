@@ -114,7 +114,9 @@ def factory_scene(job: dict):
     specs = assets.offline_specs(ASSET_ROOT)
     pallet_geometry = load_pallet_geometry(Path(job["pallet_geometry"]))
     straights = {k: job[k] for k in ("alignment_straight_m", "delivery_straight_m", "withdrawal_m")}
-    geometry = mission_geometry(Path(job["forklift_urdf"]), pallet_geometry, job["reserve_m"], **straights)
+    # P1c (docs/plans/2026-10-23-planner-permission-clearance.md): the runner's --lidar-keepout-m, 0 when unset
+    geometry = mission_geometry(Path(job["forklift_urdf"]), pallet_geometry, job["reserve_m"], **straights,
+                                lidar_keepout_m=job.get("lidar_keepout_m", 0.0))
     factory = make_factory_scenario(
         job["seed"], load_factory_layout(Path(job["factory_layout"])), [specs[name] for name in BAY_ASSETS],
         assets.factory_assets(specs), job["obstacles"], geometry=geometry,
@@ -390,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delivery-straight-m", type=float, default=1.5)
     parser.add_argument("--withdrawal-m", type=float, default=0.55)
     parser.add_argument("--search-budget-s", type=float, default=20.0)
+    parser.add_argument("--lidar-keepout-m", type=float, default=0.0,
+                        help="factory: the runner's --lidar-keepout-m (P1c, plan 2026-10-23); 0 plans as before")
     args = parser.parse_args(argv)
     if args.layout == "factory" and args.scene_from != "self":
         # The factory scene follows the planning geometry (Codex D7 3rd P3): a fixed
@@ -447,6 +451,8 @@ def main(argv: list[str] | None = None) -> int:
             delivery_straight_m=args.delivery_straight_m, withdrawal_m=args.withdrawal_m,
             search_budget_s=args.search_budget_s,
         )
+        if args.lidar_keepout_m:  # only when set, so an unset run hashes as before
+            inputs["lidar_keepout_m"] = args.lidar_keepout_m
         inputs["sources_sha256"].update({
             str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in [ROOT / "src/forklift_core/planning/factory_layout.py",

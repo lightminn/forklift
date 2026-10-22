@@ -474,6 +474,16 @@ def arguments() -> argparse.Namespace:
         "(m, > 0) from the scene's walls tall enough for the obstacle layer's band; none within the cap (or a "
         "blocked straight) plans as before and is recorded. Off: plans as every earlier run.",
     )
+    parser.add_argument(
+        "--lidar-keepout-m",
+        type=float,
+        default=0.0,
+        help="docs/plans/2026-10-23-planner-permission-clearance.md P1c: the planner's searches keep every prop taller "
+        "than the LiDAR plane (1.05 m) this much (m, >= 0) wider on each side -- the obstacle layer paints its hits wider "
+        "than the prop; the fixed straights keep the props at their size, and a loaded transport starting inside the "
+        "grown band backs out straight first unless --exit-clearance-m sets that prefix. 0 (default): as every earlier "
+        "run. Not with --grid-planning, whose world has no props to grow.",
+    )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
@@ -966,6 +976,10 @@ def arguments() -> argparse.Namespace:
             parser.error("--exit-clearance-m needs --layout scene")
         if not (math.isfinite(args.exit_clearance_m) and args.exit_clearance_m > 0):
             parser.error("--exit-clearance-m must be a positive number of metres")
+    if not (math.isfinite(args.lidar_keepout_m) and args.lidar_keepout_m >= 0):
+        parser.error("--lidar-keepout-m must be a finite non-negative number of metres")
+    if args.lidar_keepout_m > 0 and getattr(args, "grid_planning", False):
+        parser.error("--lidar-keepout-m grows the scene's props, which --grid-planning plans without")
     if args.layout == "scene":
         if args.min_obstacle_height_m is not None or args.prism_colliders:
             # The scene's low pallets are part of the scenario and its boxes are their own colliders.
@@ -2540,6 +2554,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         delivery_straight_m=args.delivery_straight_m,
         alignment_straight_m=args.alignment_straight_m,
         withdrawal_m=args.withdrawal_m,
+        lidar_keepout_m=args.lidar_keepout_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
     # The truck unloaded is its body and two fork blades, not their hull (D4).
@@ -2690,7 +2705,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # The pose the mission began at, or None when no return leg was requested.
     return_to_pose = scenario.start_rear if args.return_home else None
     state["scenario"] = asdict(scenario)
-    state["geometry"] = asdict(geometry)
+    # the fields a record keeps (P1c's keepout fields only when set), so a run with it off records as before
+    from forklift_core.mission.replay_codec import recorded_fields
+
+    kept_ = {f.name for f in recorded_fields(geometry)}
+    state["geometry"] = {k: v for k, v in asdict(geometry).items() if k in kept_}
     state["pallet_geometry_source"] = str(args.pallet_geometry)
     state["pallet_geometry_sha256"] = hashlib.sha256(
         args.pallet_geometry.read_bytes()
