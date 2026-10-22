@@ -252,10 +252,32 @@ test("a lost vehicle feedback between items stops, and its recovery does not sub
   feed(q, 11_000, 20_000);
   q.onResult({ seq: 1, mission_id: "M-1", outcome: "done" }, 20_000);
   q.onState({ ...READY, feedback_ok: false, stopped_confirmed: false }, 20_200);
+  assert.equal(q.next(ctx({ state: { ...READY, feedback_ok: false } }), 20_200, newId), null, "nothing goes out while it is lost");
+  q.onState({ ...READY, feedback_ok: false, stopped_confirmed: false }, 20_700);
   assert.equal(q.run, "stopped");
   assert.match(q.stopReason, /피드백/);
   q.onState(READY, 21_500);
   assert.equal(q.next(ctx(), 21_500, newId), null);
+});
+
+test("one stale-feedback state while the queue's mission runs does not stop it (Isaac live run 2026-10-22)", () => {
+  // the live runner sends a state every 0.1 s with a 0.1 s feedback age limit; a control tick longer than that
+  // (rendering, planning) shows as one state with feedback_ok false during a normal AUTO run
+  const q = running([item("P-1", "D-1"), item("P-2", "D-0")]);
+  ack(q, submitOnce(q, 10_000), "M-1");
+  const auto = { ...READY, mode: "AUTO", stop_kind: "none", mission: { mission_id: "M-1", status: "running" } };
+  feed(q, 10_100, 15_000, auto);
+  q.onState({ ...auto, feedback_ok: false }, 15_100);
+  q.onState(auto, 15_200);
+  q.onState({ ...auto, feedback_ok: false }, 15_500);
+  q.onState(auto, 15_600);
+  assert.equal(q.run, "running");
+  q.onState({ ...auto, feedback_ok: false }, 16_000);
+  q.onState({ ...auto, feedback_ok: false }, 16_300);
+  assert.equal(q.run, "running", "0.3 s of loss");
+  q.onState({ ...auto, feedback_ok: false }, 16_500);
+  assert.equal(q.run, "stopped", "0.5 s of loss is a loss");
+  assert.match(q.stopReason, /피드백/);
 });
 
 test("a foreign active mission stops the queue; our own mission seen before the ack does not", () => {

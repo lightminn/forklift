@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AlarmBook, badge, healthRows } from "../js/health.js";
+import { AlarmBook, badge, healthRows, queueStopText } from "../js/health.js";
 import { CALM_REASONS } from "../js/queue.js";
 
 // ---- fixtures: a connected fake vehicle a little after its welcome -------------------------------------------------
@@ -133,6 +133,17 @@ test("before a state of this connection, the state's rows are unknown (Codex pla
 
 test("a permit with no limit is unknown", () => {
   assert.equal(lv({ state: { ...STATE, permit: { limit_mps: null, reason: "no_feedback" } } }, "permit"), "unknown");
+});
+
+test("a queue stop reason reads in words, its code kept beside it (Isaac live run 2026-10-22)", () => {
+  const code = "observe:all_candidates_exhausted:perception_no_pallet:no_candidate_in_radius:success;success";
+  assert.match(queueStopText(`실패: ${code}`), /^실패: .*팔레트를 찾지 못했습니다/);
+  assert.match(queueStopText("거부: already_there"), /^거부: 그 팔레트는 이미/);
+  assert.equal(queueStopText("연결 끊김"), "연결 끊김");
+  assert.equal(queueStopText(null), "—");
+  const r = row(healthRows(input({ queue: { run: "stopped", stopReason: `실패: ${code}`, items: 1 } })), "queue");
+  assert.match(r.value, /팔레트를 찾지 못했습니다/);
+  assert.equal(r.detail, code);
 });
 
 test("the queue row warns only for an anomaly stop with items left", () => {

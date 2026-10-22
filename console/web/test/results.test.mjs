@@ -16,6 +16,14 @@ test("a reason is explained by its longest known head, the code kept beside it",
   assert.notEqual(longer.text, shorter.text); // near_field_contract beats near_field_
 });
 
+test("observation points used up says the recognition, not the path (Isaac live run 2026-10-22)", () => {
+  // every viewpoint was reached (each status success); the recognition never confirmed the pallet
+  const code = "observe:all_candidates_exhausted:perception_no_pallet:no_candidate_in_radius:success;success;success";
+  assert.match(reasonText(code).text, /팔레트를 찾지 못했습니다/);
+  assert.match(reasonText("observe:all_candidates_exhausted:perception_ambiguous:x:success").text, /확정하지 못했습니다/);
+  assert.match(reasonText("observe:no_path").text, /경로/, "a plain observe failure still reads as the path");
+});
+
 test("an unknown reason is shown as its code", () => {
   assert.deepEqual(reasonText("brand_new_reason"), { text: "brand_new_reason", code: "brand_new_reason" });
   assert.equal(reasonText(null).text, "");

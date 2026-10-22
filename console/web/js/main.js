@@ -10,7 +10,7 @@ import { createMapView, panBy, zoomAt, zoomPercent } from "./mapview.js";
 import { decodeScan, parseFrame } from "./media.js";
 import { API, createSession } from "./protocol.js";
 import { createQueueWire } from "./queuewire.js";
-import { AlarmBook, healthRows } from "./health.js";
+import { AlarmBook, healthRows, queueStopText } from "./health.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
@@ -924,7 +924,7 @@ let queueRun = m.queue.queue.run;
 setInterval(() => {
   m.queue.tick();
   const q = m.queue.queue;
-  if (queueRun === "running" && q.run === "stopped") log(`대기열 멈춤 · ${q.stopReason}`, q.stopReason === "완료" ? "" : "warn");
+  if (queueRun === "running" && q.run === "stopped") log(`대기열 멈춤 · ${queueStopText(q.stopReason)}`, q.stopReason === "완료" ? "" : "warn");
   queueRun = q.run;
 }, 250);
 setInterval(() => {

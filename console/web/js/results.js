@@ -64,6 +64,10 @@ export const REASONS = {
   "pocket_check_refused": "포켓 확인에서 삽입을 거절했습니다",
   "near_field_": "근접 추적에 실패했습니다",
   "observe:": "관찰 경로를 계획하지 못했습니다",
+  // every observation point was reached and looked from; the recognition never confirmed the pallet (core.py:
+  // observe:all_candidates_exhausted:perception_<status>:<reason>:<each point's plan status>)
+  "observe:all_candidates_exhausted:": "관찰 지점을 모두 돌았지만 인식이 팔레트를 확정하지 못했습니다",
+  "observe:all_candidates_exhausted:perception_no_pallet": "관찰 지점을 모두 돌았지만 팔레트를 찾지 못했습니다",
   "observe_replan_failed": "관찰 경로를 다시 계획하지 못했습니다",
   "docking_": "도킹에 실패했습니다",
   "slam_release_": "SLAM 고정을 풀지 못했습니다",

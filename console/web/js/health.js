@@ -2,9 +2,9 @@
 // Pure module: no DOM, no clocks -- times come in as arguments. The limits are the console's own (profile.js,
 // queue.js); the vehicle is not asked for anything new.
 
-import { STALE_S, permitText, staleness, stopKind, videoStaleAfterS } from "./profile.js";
+import { STALE_S, permitText, rejectText, staleness, stopKind, videoStaleAfterS } from "./profile.js";
 import { CALM_REASONS, SILENCE_MS } from "./queue.js";
-import { slamLabel, standbyText } from "./results.js";
+import { reasonText, slamLabel, standbyText } from "./results.js";
 
 const OPEN_MS = 500; // warn/crit this long opens an alarm (plan D3; damping, not a limit)
 const CLEAR_MS = 1000; // ok this long closes it
@@ -67,11 +67,28 @@ function sessionRow(inp) {
   return r("session", "ok", notes || "이상 없음");
 }
 
+// The queue's stop reason in words: a mission failure through the results table, a refusal through the reject
+// table (the queue keeps the codes; Isaac live run 2026-10-22 showed them raw)
+export function queueStopText(reason) {
+  if (!reason) return "—";
+  const failed = /^실패: (.+)$/.exec(reason);
+  if (failed) return `실패: ${reasonText(failed[1]).text}`;
+  const refused = /^거부: (.+)$/.exec(reason);
+  if (refused) return `거부: ${rejectText(refused[1])}`;
+  return reason;
+}
+
+// the code behind a stop reason, when the words above replaced it
+const stopCode = (reason) => /^(?:실패|거부): (.+)$/.exec(reason ?? "")?.[1] ?? "";
+
 function queueRow(q) {
   if (!q) return r("queue", "off", "—");
   if (q.run === "running") return r("queue", "ok", "실행 중");
-  if (q.items > 0 && !CALM_REASONS.includes(q.stopReason)) return r("queue", "warn", `대기열 멈춤: ${q.stopReason}`);
-  return r("queue", "off", q.items > 0 ? `멈춤 · ${q.stopReason}` : "비어 있음");
+  const text = queueStopText(q.stopReason);
+  if (q.items > 0 && !CALM_REASONS.includes(q.stopReason)) {
+    return r("queue", "warn", `대기열 멈춤: ${text}`, stopCode(q.stopReason));
+  }
+  return r("queue", "off", q.items > 0 ? `멈춤 · ${text}` : "비어 있음");
 }
 
 function leaseValue(inp) {
