@@ -15,7 +15,7 @@ instantaneously; an adapter must account for steering rate and stop at cusps.
 import heapq
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from itertools import count
 from math import acos, atan2, ceil, cos, hypot, isfinite, pi, sin, sqrt
 
@@ -166,8 +166,9 @@ class PlanResult:
     # terms. None for every other plan.
     turnaround: dict | None = None
     # Transport exit prefix (pallet_mission.ExitPrefix, docs/plans/2026-10-22-riibotics-trailer-exit.md): the straight
-    # reverse put before a loaded transport search, its length and why. None when no exit prefix was asked for.
-    exit_prefix: dict | None = None
+    # reverse put before a loaded transport search, its length and why. None when no exit prefix was asked for --
+    # and then not recorded, so a boundary record from before the field replays unchanged (replay_codec).
+    exit_prefix: dict | None = field(default=None, metadata={"record_omit_default": True})
 
 
 def _wrap(angle):

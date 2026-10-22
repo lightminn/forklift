@@ -246,8 +246,10 @@ class BoundaryRecorder:
         if isinstance(value, float) and not math.isfinite(value):
             return {"$float": repr(value)}
         if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            from forklift_core.mission.replay_codec import recorded_fields
+
             return {"$dataclass": type(value).__name__,
-                    **{f.name: self._encode(getattr(value, f.name)) for f in dataclasses.fields(value)}}
+                    **{f.name: self._encode(getattr(value, f.name)) for f in recorded_fields(value)}}
         if isinstance(value, dict):
             return {str(k): self._encode(v) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
@@ -305,8 +307,10 @@ def _hash_only(value: Any) -> Any:
         digest = hashlib.sha256(str(array.dtype).encode() + repr(array.shape).encode() + array.tobytes())
         return {"$sha256": digest.hexdigest(), "dtype": str(array.dtype), "shape": list(array.shape)}
     if dataclasses.is_dataclass(value) and not isinstance(value, type):  # e.g. a SceneInput holding frames
+        from forklift_core.mission.replay_codec import recorded_fields
+
         return {"$dataclass": type(value).__name__,
-                **{f.name: _hash_only(getattr(value, f.name)) for f in dataclasses.fields(value)}}
+                **{f.name: _hash_only(getattr(value, f.name)) for f in recorded_fields(value)}}
     if isinstance(value, dict):
         return {k: _hash_only(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

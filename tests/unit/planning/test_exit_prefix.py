@@ -118,9 +118,30 @@ def test_the_loaded_delivery_and_the_whole_mission_take_the_prefix_too():
     delivery = plan_loaded_delivery(scenario(), EXTRACTED, CONFIG, geometry=GEOMETRY, exit_prefix=exit_)
     assert delivery.success and delivery.transport.exit_prefix["status"] == "prefix"
     assert delivery.transport.exit_prefix["length_m"] == exit_prefix_length_m(EXTRACTED, GEOMETRY.loaded_footprint, exit_)
-    signature = pm.plan_transport.__code__.co_varnames[:pm.plan_transport.__code__.co_argcount
-                                                         + pm.plan_transport.__code__.co_kwonlyargcount]
-    assert "exit_prefix" in signature
+    mission = pm.plan_transport(scenario(), CONFIG, geometry=GEOMETRY, exit_prefix=exit_)  # the whole mission
+    assert mission.success and mission.transport.exit_prefix["status"] == "prefix"
+    assert mission.transport.exit_prefix["length_m"] > 0 and np.all(mission.transport.directions[:3] == -1)
+    assert pm.plan_transport(scenario(), CONFIG, geometry=GEOMETRY).transport.exit_prefix is None
+
+
+def test_a_plan_without_a_prefix_records_as_before_and_one_with_it_keeps_it(tmp_path):
+    # Codex code review P2: a boundary record from before the field must replay -- the field is left out of the
+    # record while it is None, and kept (and compared) when set
+    from forklift_core.mission.boundary_record import BoundaryRecorder
+    from forklift_core.mission.replay_codec import decode, encode
+
+    from forklift_core.planning.hybrid_astar import PlanResult
+
+    plain = PlanResult(True, "success", np.zeros((2, 3)), np.ones(2, dtype=np.int8), np.zeros(2), 0.1, 3)
+    marked = PlanResult(True, "success", np.zeros((2, 3)), np.ones(2, dtype=np.int8), np.zeros(2), 0.1, 3,
+                        exit_prefix={"status": "prefix", "length_m": 0.35})
+    node, arrays = encode(plain, opaque_ok=True)
+    assert "exit_prefix" not in node["fields"] and "turnaround" in node["fields"]
+    assert decode(node, arrays).exit_prefix is None  # an old record's PlanResult comes back with the default
+    node, arrays = encode(marked, opaque_ok=True)
+    assert decode(node, arrays).exit_prefix == marked.exit_prefix
+    recorder = BoundaryRecorder(tmp_path / "boundary")  # format 1: the comparison form every older record holds
+    assert "exit_prefix" not in recorder._encode(plain) and recorder._encode(marked)["exit_prefix"]["length_m"] == 0.35
 
 
 @pytest.mark.parametrize("kwargs", [dict(clearance_m=0.0), dict(clearance_m=-0.1), dict(clearance_m=math.nan),

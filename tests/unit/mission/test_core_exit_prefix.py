@@ -89,3 +89,22 @@ def test_a_blocked_cell_ahead_of_the_prefix_holds_the_truck_after_the_split():
     core._exit_prefix_cache = None
     out = core.permission_watch(1.1, (0.0, 0.0, 0.0), 0.0, True)
     assert not out.acting and not out.obstacle_hold and obs["permission_cap"] is None
+
+
+def test_arm_docking_keeps_the_prefix_acting_on_a_short_transport():
+    # the real split (Codex code review P3): 0.40 m reverse prefix + 1.50 m forward delivery straight
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    full = path((0.40, -1), (1.50, 1))
+    core = transport_core(full)
+    from forklift_core.planning.hybrid_astar import PlanResult
+
+    length = float(np.sum(np.hypot(*np.diff(full._poses[:, :2], axis=0).T)))
+    core.paths["transport"] = PlanResult(True, "success", full._poses, full._directions.astype(np.int8),
+                                         full._curvatures, length, 0)
+    core.hooks.final_straight_prefix = final_straight_prefix
+    core.slam = {"docking": {"status": "pending"}}
+    core.arm_docking()
+    assert core.slam["docking"]["status"] == "armed"
+    assert core.trackers["transport"] is not full and core.exit_prefix_m() > 0
+    assert core.permission_acting() == (True, False)

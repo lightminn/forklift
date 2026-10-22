@@ -1054,7 +1054,8 @@ class MissionCore:
             # Nor is a D7c re-approach (Codex D7c review P1-2): the
             # permission, and the safety evaluation, act on all of it.
             docking_straight = False
-        if docking_straight and ms.phase == "transport" and trackers["transport"].progress_m() < self.exit_prefix_m():
+        if docking_straight and ms.phase == "transport" and (prefix_m := self.exit_prefix_m()) > 0 \
+                and trackers["transport"].progress_m() < prefix_m:
             # Nor is the transport's exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md D1, Codex 2nd P1): on
             # a short transport the delivery straight's window (after arm_docking's split) can reach back into it.
             docking_straight = False

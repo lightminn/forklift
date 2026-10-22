@@ -43,10 +43,15 @@ def runner_run(tree):
     merged.body = run.body[:-2] + body  # without the hand-over (import, return drive(...))
     return merged
 
+_EXIT_KWARGS = "{} if transport_exit is None else {'exit_prefix': transport_exit}"  # as ast.unparse writes it
+
+
 def _pass_through(call) -> bool:
-    """``f(*a, **k)``: the runner's hook for the core, every argument passed straight on."""
+    """``f(*a, **k)``: the runner's hook for the core, every argument passed straight on (the transport hooks add
+    the run's exit prefix, docs/plans/2026-10-22-riibotics-trailer-exit.md)."""
     return (bool(call.args) and all(isinstance(a, ast.Starred) and isinstance(a.value, ast.Name) for a in call.args)
-            and all(k.arg is None and isinstance(k.value, ast.Name) for k in call.keywords))
+            and all(k.arg is None and (isinstance(k.value, ast.Name) or ast.unparse(k.value) == _EXIT_KWARGS)
+                    for k in call.keywords))
 
 
 @pytest.mark.parametrize("d7", [False, True])
@@ -164,6 +169,8 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         coordinates=(scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad),
         # The priority-5 mission replan after recognition plans to the same pickup.
         pocket={"planning_pickup": scenario.pickup},
+        # No transport exit prefix (--exit-clearance-m off): the plans see what they always saw.
+        transport_exit=None,
     )
     # The obstacle replan's calls moved to the mission core (M-a1 slice 3c), its names bound to the same ports.
     calls = [
