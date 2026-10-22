@@ -22,6 +22,9 @@
     <button class="rail-item" type="button" data-view="events">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="9"/></svg>이벤트 기록
     </button>
+    <button class="rail-item" type="button" data-view="health">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>상태·경보<span class="rail-badge" id="health-badge" hidden></span>
+    </button>
     <button class="rail-item" type="button" data-view="link">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/></svg>통신
     </button>
@@ -101,6 +104,14 @@
       <section class="page" id="v-events" data-view-panel="events" hidden>
         <header><h2>이벤트 기록</h2><span class="hint">최근 순 · 모드 전이, 거부, 만료, 끊김, 재무장</span></header>
         <ol class="log" id="log"></ol>
+      </section>
+
+      <section class="page" id="v-health" data-view-panel="health" hidden>
+        <header><h2>상태·경보</h2><span class="hint">콘솔이 받는 값으로 판정합니다 · 차량이 내는 경보 원장이 아닙니다</span></header>
+        <div class="health-rows" id="health-rows"></div>
+        <h3>경보</h3>
+        <p class="hint">시각은 이 화면이 처음 본 시각(브라우저 시계)입니다 — 실제 발생 시각과 다를 수 있고, 화면이 닫혀 있거나 잠든 동안의 일은 없습니다. 새로고침해도 이 탭에는 남지만 다른 탭·기기와는 공유하지 않습니다.</p>
+        <ol class="alarms" id="alarm-list"><li class="hint">경보 없음</li></ol>
       </section>
 
       <section class="page" id="v-link" data-view-panel="link" hidden>
@@ -232,6 +243,11 @@
 
           <div class="results-sect">
             <div class="sp-head"><b>미션 결과</b><span class="hint" id="results-older"></span></div>
+            <div class="summary" id="results-summary" hidden>
+              <div class="sum-line" id="sum-line"></div>
+              <div class="hint" id="sum-scope"></div>
+              <details class="sum-more"><summary>요약 자세히</summary><div id="sum-detail"></div></details>
+            </div>
             <ol class="results" id="results-list"><li class="hint">아직 끝난 미션이 없습니다</li></ol>
           </div>
         </div>

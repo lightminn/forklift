@@ -5,7 +5,7 @@
 import { ACTIVE } from "./results.js";
 import { selectable } from "./wizard.js";
 
-const SILENCE_MS = 2000; // no state for this long: the link is treated as gone (plan D3, D6)
+export const SILENCE_MS = 2000; // no state for this long: the link is treated as gone (plan D3, D6)
 const SETTLE_MS = 1000; // after a result, before the next submit (plan D3; the cycle probe's 1 s)
 const FINISHED_KEEP = 50;
 const PREEMPT = new Set(["preempt", "safety_preempt"]); // live arbiter, fake vehicle
@@ -41,6 +41,9 @@ export function presetStatus(preset, targets, state) {
 }
 
 const OPERATOR = { cancel: "운용자 취소", pause: "운용자 일시정지", stop: "STOP", manual_submit: "수동 지시" };
+// Stop reasons that are the operator's own doing or the queue at rest -- not an anomaly to raise (status panel plan
+// D2). A STOP seen in the state ("정지됨(STOP)": another device or the vehicle) is not one of them.
+export const CALM_REASONS = ["시작 전", "완료", "콘솔 다시 열림", "운용자 멈춤", ...Object.values(OPERATOR)];
 
 export class MissionQueue {
   constructor() {
