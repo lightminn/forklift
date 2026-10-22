@@ -6,6 +6,8 @@
   adopted mid-tick is switched to at the next tick's head (``request`` / ``apply_pending``), so no tick reads two.
 - ``RestWatch``: where the other pallets rest and whether one moved (scene damage) -- rest poses fixed at the session's
   start and when a pallet stops being the mission's.
+- ``decide_anchor`` / ``anchor_poses``: a delivered pallet anchored to its slot for the next missions' delivery straight
+  and withdraw (docs/plans/2026-10-22-slot-anchored-neighbours.md 2.2-2.3).
 """
 from __future__ import annotations
 
@@ -183,3 +185,52 @@ class RestWatch:
         seen = self.largest.setdefault(pallet_id, [0.0, 0.0])
         seen[0], seen[1] = max(seen[0], moved_m), max(seen[1], moved_rad)
         return (moved_m, moved_rad), (moved_m <= self.bound_m and moved_rad <= self.bound_rad)
+
+
+# --- slot anchors (docs/plans/2026-10-22-slot-anchored-neighbours.md 2.2) ------------------------------------------
+DELIVERY_VERDICT_REASONS = ("Pallet missed the green destination center", "Delivered pallet is not grounded",
+                            "Fork still inside delivered pallet")
+NORMAL_END_PHASES = ("withdraw", "settle", "return_home", "home_settle", "complete")
+
+
+def decide_anchor(evidence: dict, *, reason: str | None, trace_valid_now: bool) -> tuple:
+    """Whether the pallet a mission put down is anchored to its slot: (True, "anchored") or (False, the first missing
+    piece). ``evidence`` is what the mission's end kept (its docking accepted, the lower -> withdraw passed, the targets
+    list's delivered entry, the trace evidence, the end phase); ``reason`` its result's reason, read once the result is
+    in (a delivery verdict or scene damage refuses it); ``trace_valid_now`` the trace evidence when deciding (a move
+    after the end refuses it)."""
+    from forklift_core.mission.failures import SCENE, classify
+
+    reason = reason or ""
+    if reason.startswith(DELIVERY_VERDICT_REASONS):
+        return False, "delivery_verdict"
+    if reason and classify(reason) == SCENE:
+        return False, "scene_damage"
+    for key, why in (("docking_accepted", "docking_not_accepted"), ("lowered", "not_lowered"),
+                     ("delivered", "not_delivered"), ("trace_valid", "trace_invalid_at_end")):
+        if not evidence.get(key):
+            return False, why
+    if evidence.get("end_phase") not in NORMAL_END_PHASES:
+        return False, f"end_phase:{evidence.get('end_phase')}"
+    if not trace_valid_now:
+        return False, "trace_invalid_now"
+    return True, "anchored"
+
+
+def _compose(a, b):
+    c, s_ = math.cos(a[2]), math.sin(a[2])
+    return (a[0] + c * b[0] - s_ * b[1], a[1] + s_ * b[0] + c * b[1], a[2] + b[2])
+
+
+def _invert(a):
+    c, s_ = math.cos(a[2]), math.sin(a[2])
+    return (-c * a[0] - s_ * a[1], s_ * a[0] - c * a[1], -a[2])
+
+
+def anchor_poses(anchors: dict, slots: dict, goal_id: str, goal) -> dict:
+    """The anchored pallets' slots in the goal's frame: T = goal o slots[goal_id]^-1 applied to each anchored pallet's
+    slot (``anchors``: pallet id -> destination id; ``slots``: destination id -> registered (x, y, yaw)). A goal at its
+    registered pose gives the registered slots; a goal moved by a release moves them with it (Codex plan round 1
+    P2-3)."""
+    t = _compose(tuple(float(v) for v in goal), _invert(tuple(float(v) for v in slots[goal_id])))
+    return {pid: _compose(t, tuple(float(v) for v in slots[did])) for pid, did in anchors.items()}

@@ -100,6 +100,7 @@ KNOWN = {
         "obstacle_replan_failed in ", "transport_recovery_after_docking", "stall_replan_failed:",
         "observe_replan_failed:", "obstacle_blocked in ", "obstacle_replan_limit in ", "async_near_no_fresh_depth",
         "plan_worker_dead: ",
+        "session_anchor_unaligned:",  # an unaligned delivery straight the anchors allowed (plan 2026-10-22-slot 2.3)
     },
 }
 
