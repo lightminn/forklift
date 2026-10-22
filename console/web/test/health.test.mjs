@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AlarmBook, badge, healthRows } from "../js/health.js";
+import { AlarmBook, badge, healthRows, queueStopText } from "../js/health.js";
 import { CALM_REASONS } from "../js/queue.js";
 
 // ---- fixtures: a connected fake vehicle a little after its welcome -------------------------------------------------
@@ -133,6 +133,45 @@ test("before a state of this connection, the state's rows are unknown (Codex pla
 
 test("a permit with no limit is unknown", () => {
   assert.equal(lv({ state: { ...STATE, permit: { limit_mps: null, reason: "no_feedback" } } }, "permit"), "unknown");
+});
+
+test("a lease this tab held, seen after its link dropped, is not another device's (Isaac live run 2026-10-22)", () => {
+  const st = { ...STATE, lease: { holder: "me" } };
+  assert.match(row(healthRows(input({ state: st, hasLease: false, link: { up: false, mediaUp: true }, welcomeAt: null })), "lease").value,
+               /이 기기/);
+  assert.match(row(healthRows(input({ state: { ...STATE, lease: { holder: "other" } }, hasLease: false })), "lease").value,
+               /다른 기기/);
+});
+
+test("with the link down and no standby answer the session is unknown, not fine (Isaac live run 2026-10-22)", () => {
+  // between a runner's failure and the next session's welcome the standby's answer can be gone: closing the session
+  // alarm as recovered then was wrong
+  assert.equal(lv({ link: { up: false, mediaUp: false }, welcomeAt: null, standby: null }, "session"), "unknown");
+  // the socket open again but no welcome yet: still nothing says it is fine (Codex ops round 3)
+  assert.equal(lv({ link: { up: true, mediaUp: true }, welcomeAt: null, standby: null }, "session"), "unknown");
+  assert.equal(lv({}, "session"), "ok");
+});
+
+test("a session alarm stays open while the socket is open again but the welcome has not come (Codex ops round 3)", () => {
+  const failed = { standby: true, phase: "backoff", retry: true, next_epoch: 2,
+                   last_exit: { exit_code: 1, stage: "run", reason: "slam_link_failed" } };
+  const b = new AlarmBook();
+  const at = (t, over) => b.update(healthRows(input({ nowMs: t, ...over })), t, t / 1000, { epoch: 1, viewing: true });
+  for (let t = W; t <= W + 700; t += 100) at(t, { link: { up: false, mediaUp: false }, welcomeAt: null, standby: failed });
+  assert.ok(b.alarms.some((a) => a.key === "session" && a.cleared_unix === null));
+  for (let t = W + 800; t <= W + 2_500; t += 100) at(t, { link: { up: true, mediaUp: true }, welcomeAt: null, standby: null });
+  assert.ok(b.alarms.some((a) => a.key === "session" && a.cleared_unix === null), "not closed as recovered");
+});
+
+test("a queue stop reason reads in words, its code kept beside it (Isaac live run 2026-10-22)", () => {
+  const code = "observe:all_candidates_exhausted:perception_no_pallet:no_candidate_in_radius:success;success";
+  assert.match(queueStopText(`실패: ${code}`), /^실패: .*팔레트를 찾지 못해/);
+  assert.match(queueStopText("거부: already_there"), /^거부: 그 팔레트는 이미/);
+  assert.equal(queueStopText("연결 끊김"), "연결 끊김");
+  assert.equal(queueStopText(null), "—");
+  const r = row(healthRows(input({ queue: { run: "stopped", stopReason: `실패: ${code}`, items: 1 } })), "queue");
+  assert.match(r.value, /팔레트를 찾지 못해/);
+  assert.equal(r.detail, code);
 });
 
 test("the queue row warns only for an anomaly stop with items left", () => {

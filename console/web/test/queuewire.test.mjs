@@ -120,7 +120,7 @@ test("each anomaly while a mission runs: the mission is left alone and no next s
     cancel: (h) => h.w.operatorAction("cancel"),
     stop: (h) => h.w.operatorAction("stop"),
     preempt: (h) => h.state({ ...RUNNING("M-1"), stop_kind: "safety_preempt" }),
-    feedback: (h) => h.state({ ...RUNNING("M-1"), feedback_ok: false }),
+    feedback: (h) => h.run(750, { ...RUNNING("M-1"), feedback_ok: false }), // a loss that lasts (0.5 s)
   };
   for (const [name, hit] of Object.entries(anomalies)) {
     const h = harness();

@@ -3,7 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
-import { badge as alarmBadge } from "./health.js";
+import { badge as alarmBadge, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
@@ -464,7 +464,7 @@ function renderQueue(m, st, control) {
   $("queue").dataset.stopped = String(!running && q.items.length > 0);
   $("q-why").textContent = running
     ? (q.phase === "submitting" ? "제출 중" : q.phase === "in_mission" ? `진행 중 ${q.current?.mission_id ?? ""}` : "다음 항목 조건 기다리는 중")
-    : `멈춤 — ${q.stopReason ?? "—"}${uncertain ? " · 불확실 항목을 먼저 정리하세요" : ""}`;
+    : `멈춤 — ${queueStopText(q.stopReason)}${uncertain ? " · 불확실 항목을 먼저 정리하세요" : ""}`;
   const save = $("q-save");
   save.hidden = !w.saveNote;
   save.textContent = w.saveNote ?? "";
@@ -481,7 +481,7 @@ function renderQueue(m, st, control) {
     el.textContent = armed ? armedText : idle;
     if (!ok && armed) m.confirm.cancel();
   }
-  $("q-resume").title = running ? "" : `멈춘 이유: ${q.stopReason ?? "—"}`;
+  $("q-resume").title = running ? "" : `멈춘 이유: ${q.stopReason ?? "—"}`; // the code itself, for the record
   $("q-stop").disabled = !running;
 
   const mi = st?.mission && MISSION_ACTIVE.includes(st.mission.status) ? st.mission : null;
