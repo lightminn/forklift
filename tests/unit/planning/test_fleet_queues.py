@@ -191,6 +191,43 @@ def test_the_global_solve_finds_the_best_orders_on_a_small_grid():
     assert q.cost(q.crossings, manager.trucks, 0.0) == pytest.approx(best, abs=1e-6)
 
 
+def test_the_order_model_is_the_one_its_dense_rows_gave(monkeypatch):
+    # scipy turns dense rows into this very CSC matrix, so HiGHS sees the same model.
+    import scipy.optimize
+    from scipy.sparse import csc_array
+
+    routes = {
+        "a": _line(-12, 0, 20, 0), "b": _line(-20, 8, 12, 8),
+        "c": _line(0, 16, 0, -14, yaw=-math.pi / 2), "d": _line(8, -18, 8, 14),
+    }
+    manager = _manager(routes, queue_opt="global", issue_s=1.0)
+    seen, real = [], scipy.optimize.milp
+    monkeypatch.setattr(scipy.optimize, "milp", lambda *a, **k: seen.append(k["constraints"].A) or real(*a, **k))
+    manager.windows._optimise_global(0.0, manager.trucks)
+    (matrix,) = seen
+    dense = csc_array(matrix.toarray())
+    for part in ("indptr", "indices", "data"):
+        np.testing.assert_array_equal(getattr(matrix, part), getattr(dense, part))
+
+
+def test_an_order_horizon_leaves_further_crossings_as_they_are():
+    routes = {
+        "a": _line(-12, 0, 20, 0), "b": _line(-20, 8, 12, 8),
+        "c": _line(0, 16, 0, -14, yaw=-math.pi / 2), "d": _line(8, -18, 8, 14),
+    }
+    for horizon in (0.0, 1e6):
+        manager = _manager(routes, queue_opt="global", issue_s=1.0, opt_horizon_s=horizon)
+        q = manager.windows
+        before = {c.id: c.first for c in q.crossings.values()}
+        best = _costs_of_every_order(manager)
+        q._optimise_global(0.0, manager.trucks)
+        assert not q._run(q.crossings, manager.trucks)[1]
+        if horizon == 0.0:  # every crossing is further on: nothing turns
+            assert {c.id: c.first for c in q.crossings.values()} == before
+        else:  # all of them within: the best orders, as without a horizon
+            assert q.cost(q.crossings, manager.trucks, 0.0) == pytest.approx(best, abs=1e-6)
+
+
 def test_the_global_solve_keeps_fixed_orders():
     routes = {"a": _line(3, 0, 14, 0), "b": _line(6, -8, 6, 8)}
     manager = _manager(routes, queue_opt="global")

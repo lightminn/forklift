@@ -18,6 +18,9 @@ Stop costs (physics timing) are left out of the model; the caller keeps a
 solution only if fleet_windows' own cost falls. scipy.optimize.milp (HiGHS)
 is imported only here, so the package itself needs NumPy alone; a node limit,
 not a wall-clock one, bounds the search so a run repeats exactly.
+
+The constraint matrix is built sparse: HiGHS gets the same model as from the
+dense rows it replaced (whose size grew with orders x checkpoints).
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ def solve_orders(windows, crossings, trucks, fixed: dict, weights: dict, node_li
     lengths, delay from each on)}) for the best orders found; None if the
     solve finds no solution."""
     from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import coo_array
 
     roles = _roles(windows, crossings, trucks, fixed)
     if not roles:
@@ -86,29 +90,29 @@ def solve_orders(windows, crossings, trucks, fixed: dict, weights: dict, node_li
         j = int(np.searchsorted(p, g_value + _TOL, side="right")) - 1
         return column[(name, j)] if j >= 0 else None
 
-    rows, lower = [], []
+    entries, lower = [], []  # (row, column, value): no two in a row share a column
     for cid, second, first, at, release, mine, base in roles:
-        row = np.zeros(n_vars)
-        row[delay_column(second, at)] += 1.0
+        r = len(lower)
+        entries.append((r, delay_column(second, at), 1.0))
         lead = delay_column(first, release)
         if lead is not None:
-            row[lead] -= 1.0
+            entries.append((r, lead, -1.0))
         rhs = base - mine
         if cid in binary:  # y = 1: a first
             if first == crossings[cid].a:  # active when y = 1: ... - M (1 - y) >= rhs
-                row[binary[cid]] -= _BIG_M
+                entries.append((r, binary[cid], -_BIG_M))
                 rhs -= _BIG_M
             else:  # active when y = 0: ... - M y >= rhs
-                row[binary[cid]] += _BIG_M
-        rows.append(row)
+                entries.append((r, binary[cid], _BIG_M))
         lower.append(rhs)
     for n, p in points.items():  # delays only grow along a route
         for j in range(1, len(p)):
-            row = np.zeros(n_vars)
-            row[column[(n, j)]] = 1.0
-            row[column[(n, j - 1)]] = -1.0
-            rows.append(row)
+            r = len(lower)
+            entries += [(r, column[(n, j)], 1.0), (r, column[(n, j - 1)], -1.0)]
             lower.append(0.0)
+    rows, cols, values = (np.array(x) for x in zip(*entries, strict=True))
+    matrix = coo_array((values.astype(float), (rows, cols)), shape=(len(lower), n_vars)).tocsc()
+    matrix.sort_indices()
     objective = np.zeros(n_vars)
     for n, p in points.items():
         for j in range(len(p)):
@@ -120,7 +124,7 @@ def solve_orders(windows, crossings, trucks, fixed: dict, weights: dict, node_li
     upper[n_cols:] = 1.0
     result = milp(
         objective,
-        constraints=LinearConstraint(np.array(rows), np.array(lower), np.inf),
+        constraints=LinearConstraint(matrix, np.array(lower), np.inf),
         integrality=integrality,
         bounds=Bounds(np.zeros(n_vars), upper),
         options={"node_limit": node_limit, "presolve": True, "disp": False},

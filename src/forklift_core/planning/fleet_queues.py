@@ -30,7 +30,10 @@ who goes first in them by queues:
   tickets; ``"global"`` (fleet_queue_opt) sets every open member's ticket from
   one mixed-integer solve of all open orders every ``opt_period_s``, kept only
   if the orders stay free of locks and the weighted delay falls; the local
-  turns run as well.
+  turns run as well. With ``opt_horizon_s`` only orders whose crossing a
+  truck reaches within that many seconds (free flow) are choices; the ones
+  further on keep their order this time, as fixed ones do (plan
+  2026-10-17-fleet-large-random-chained, 「계산 줄이기」).
 - **Pace.** ``pace`` gives the speed at which a truck reaches the end of the
   grant it will be held at just as the truck ahead lets it go on (``None``:
   no cap, below ``pace_min_mps`` or nothing to wait for). Safety stays with
@@ -86,6 +89,7 @@ class Queues(Windows):
         optimiser: str = "local",
         opt_period_s: float = 5.0,
         node_limit: int = 2000,
+        opt_horizon_s: float | None = None,
         **kwargs,
     ) -> None:
         if optimiser not in ("local", "global"):
@@ -95,6 +99,7 @@ class Queues(Windows):
         self.optimiser = optimiser
         self.opt_period_s = opt_period_s
         self.node_limit = node_limit
+        self.opt_horizon_s = opt_horizon_s
         self.members: dict[int, Member] = {}
         self._next_member = 0
         self._last_global = -np.inf
@@ -379,6 +384,10 @@ class Queues(Windows):
 
         index = self._index(self.members)
         fixed = {c.id: c.first for c in self.crossings.values() if not self._open(c, index)}
+        if self.opt_horizon_s is not None:  # orders further on than the horizon stay as they are
+            for c in self.crossings.values():
+                if c.id not in fixed and min(self._free(trucks[m.truck], float(trucks[m.truck].g[m.lo])) for m in self._pair(c, index)) > self.opt_horizon_s:
+                    fixed[c.id] = c.first
         weights = {}
         for n, t in trucks.items():
             waited = 0.0 if t.waiting_since_s is None else now - t.waiting_since_s

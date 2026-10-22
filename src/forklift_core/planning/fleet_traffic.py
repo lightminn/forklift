@@ -60,7 +60,8 @@ held by such a truck's body as late as it (fleet_windows).
 ``mode="queues"`` (plan 2026-10-16) is windows mode with the orders kept as
 queues per place, a window for every truck in line and expired members
 joining the line again (fleet_queues); ``queue_opt="global"`` adds the
-mixed-integer solve of all open orders (fleet_queue_opt), and ``pace`` a
+mixed-integer solve of all open orders (fleet_queue_opt; ``opt_horizon_s``:
+only those a truck reaches within it), and ``pace`` a
 speed cap in each permit so a truck reaches where it will be held just as it
 may go on.
 
@@ -317,6 +318,7 @@ class TrafficManager:
         queue_opt: str = "local",
         opt_period_s: float = 5.0,
         node_limit: int = 2000,
+        opt_horizon_s: float | None = None,
         mapf_window_s: float = 30.0,
         mapf_replan_s: float = 5.0,
         tile_m: float = 0.25,
@@ -360,7 +362,8 @@ class TrafficManager:
             self.windows = Windows(**timing)
         elif mode == "queues":
             self.windows = Queues(
-                pace_min_mps=pace_min_mps, optimiser=queue_opt, opt_period_s=opt_period_s, node_limit=node_limit, **timing
+                pace_min_mps=pace_min_mps, optimiser=queue_opt, opt_period_s=opt_period_s, node_limit=node_limit,
+                opt_horizon_s=opt_horizon_s, **timing
             )
         elif mode == "adg":
             self.windows = FixedOrders(**timing)

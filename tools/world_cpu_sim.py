@@ -451,6 +451,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         queue_opt=args.queue_opt,
         opt_period_s=args.opt_period_s,
         node_limit=args.node_limit,
+        opt_horizon_s=args.opt_horizon_s,
         mapf_window_s=args.mapf_window_s,
         mapf_replan_s=args.mapf_replan_s,
         tile_m=args.tile_m,
@@ -933,6 +934,7 @@ def run(structure, seed, trucks_n, condition, args, settings, geometry, configs,
         "chain": args.chain,
         "chains": chains,
         "queue_opt": args.queue_opt if args.traffic == "queues" else None,
+        "opt_horizon_s": args.opt_horizon_s if args.traffic == "queues" else None,
         "accel_cap": cap,
         "load_kg_mean": round(float(np.mean(loads)), 2) if loads else None,
         "stops": sum(t.stops for t in trucks),
@@ -1042,6 +1044,7 @@ def main(argv=None) -> int:
     parser.add_argument("--queue-opt", default="local", choices=("local", "global"))
     parser.add_argument("--opt-period-s", type=float, default=5.0)
     parser.add_argument("--node-limit", type=int, default=2000)
+    parser.add_argument("--opt-horizon-s", type=float, help="global orders: only crossings reached within this (free flow); default all")
     # Literature baselines (plan 2026-10-17): --traffic adg | sections | mapf | tiles.
     parser.add_argument("--mapf-window-s", type=float, default=30.0)
     parser.add_argument("--mapf-replan-s", type=float, default=5.0)
