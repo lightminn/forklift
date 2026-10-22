@@ -84,10 +84,12 @@ def trajectories(log: dict, result: dict, meta: dict | None = None) -> dict:
     offset = float(args["rear_axle_offset_m"])
     start = tuple(float(v) for v in result["slam_feedback"]["start_rear"])
     seed = args.get("slam_noise_seed")
-    if args.get("slam_noise_spec"):
-        raise ValueError("a --slam-noise-spec run is not rebuilt here (its steering sigma differs)")
+    if args.get("odometry_heading") == "gyro":
+        raise ValueError("a gyro-heading run is not rebuilt here (its odometry integrates the gyro yaw)")
     inputs = encoder_odometry_inputs(log, meta or {})
     counted = inputs["kind"] == "increments"
+    if args.get("slam_noise_spec") and not counted:
+        raise ValueError("a --slam-noise-spec run is not rebuilt here (its steering sigma differs)")
     noise = OdometryNoise(seed=seed or 0, enabled=seed is not None and not counted)
     stamps = np.asarray(log["joint_stamps_s"], float)
     rates = np.asarray(log["wheel_rates_rad_s"])
@@ -187,6 +189,14 @@ def phase_window(result: dict, start_phase: str = "approach", end_phase: str = "
     return float(t0), float(t1)
 
 
+def covers(traj: dict, t0: float, t1: float) -> bool:
+    """Whether the log's stamps span [t0, t1] (within one sample): terms() clips an end past the log to its last
+    sample, which would shorten the window (Codex tool review P2)."""
+    stamps = traj["stamps"]
+    step = float(np.median(np.diff(stamps)))
+    return stamps[0] <= t0 + step and t1 <= stamps[-1] + step
+
+
 def near_capture_time(result: dict) -> float | None:
     """The accepted near capture's control time (its observation attempt), None without one."""
     near = result.get("near_capture") or {}
@@ -234,6 +244,10 @@ def analyse(run_dir: Path, start_phase: str = "approach", end_phase: str = "inse
     row["reproduction"] = reproduction(traj, records)
     if not row["reproduction"]["ok"]:
         return {**row, "status": "reproduction_failure"}
+    for cls, a, b in ((status, t0, t1), (hold_status, h0, h1)):
+        if cls == "complete" and not covers(traj, a, b):
+            return {**row, "status": "reproduction_failure",
+                    "error": f"the log ({traj['stamps'][0]:.2f}-{traj['stamps'][-1]:.2f} s) does not cover {a:.2f}-{b:.2f} s"}
     if status == "complete":
         row["window"], row["worst_0p3s"] = terms(traj, t0, t1), worst_window(traj, t0, t1)
     if hold_status == "complete":
@@ -269,9 +283,14 @@ def main(argv=None) -> int:
         name = run.parent.name if run.name == "run" else run.name
         try:
             row = analyse(run, args.start_phase, args.end_phase)
-        except (FileNotFoundError, KeyError, ValueError) as exc:
-            # A run whose record cannot be read or rebuilt counts as a reproduction failure, never as a pass.
-            row = {"run": str(run), "encoder_model": "unknown", "status": "reproduction_failure",
+        except (FileNotFoundError, KeyError, ValueError, IndexError) as exc:
+            # A run whose record cannot be read or rebuilt counts as a reproduction failure, never as a pass, under
+            # its own encoder model when meta.json names it (Codex tool review P3).
+            try:
+                model = json.loads((run / "meta.json").read_text()).get("encoder_model", {"name": "reported"})["name"]
+            except (FileNotFoundError, ValueError, KeyError, TypeError):
+                model = "unknown"
+            row = {"run": str(run), "encoder_model": model, "status": "reproduction_failure",
                    "error": f"{type(exc).__name__}: {exc}", "window": None, "hold": None}
         rows.append(row)
         if row["status"] != "complete":

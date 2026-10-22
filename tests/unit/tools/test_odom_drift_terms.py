@@ -191,3 +191,51 @@ def test_a_mid_failure_or_an_unreproduced_run_is_counted_but_not_summarised(tmp_
     assert tq["hold_forward_abs_median_m"] == pytest.approx(abs((0.004 - 0.015) / 2))
     assert tq["hold_forward_max_abs_m"] == pytest.approx(0.015)  # the sign does not hide the worst one
     assert s["reported"]["valid"] == 0 and s["reported"]["hold_forward_max_abs_m"] is None
+
+
+def test_a_window_the_log_does_not_cover_is_not_a_complete_window():
+    # Codex tool review P2: a log cut before the insert's end would shorten the window and shrink the drift.
+    lg, res = log(n=300), result()  # 2.49 s of log, the insert ends at 3.0 s
+    traj = T.trajectories(lg, res)
+    assert not T.covers(traj, 0.0, 3.0)
+    assert T.covers(traj, 0.0, 2.0)
+    assert not T.covers(traj, -0.5, 2.0)
+
+
+def test_analyse_counts_an_uncovered_window_as_a_reproduction_failure(tmp_path):
+    lg, res = log(n=300), result(seed=1)
+    traj = T.trajectories(lg, res)
+    records = [{"stamp_s": float(t), "odom_base": list(T.base_from_rear(traj["recorded"][k], -0.34))}
+               for k, t in enumerate(lg["joint_stamps_s"]) if k % 12 == 0]
+    import json as _json
+    (tmp_path / "result.json").write_text(_json.dumps(res))
+    (tmp_path / "slam_records.json").write_text(_json.dumps(records))
+    np.savez(tmp_path / "slam_log.npz", **lg)
+    row = T.analyse(tmp_path)
+    assert row["reproduction"]["ok"]
+    assert row["status"] == "reproduction_failure" and "cover" in row["error"]
+    assert T.summary([row])["reported"]["valid"] == 0
+
+
+def test_a_gyro_heading_run_is_refused_and_a_noise_spec_is_allowed_on_team_spec():
+    lg, meta = team_spec(log())
+    res = result(seed=3)
+    res["arguments"]["slam_noise_spec"] = "3sigma"
+    T.trajectories(lg, res, meta)  # no wheel/steering gaussian noise on team-spec: the spec's sigma does not apply
+    res["arguments"]["odometry_heading"] = "gyro"
+    with pytest.raises(ValueError, match="gyro"):
+        T.trajectories(lg, res, meta)
+
+
+def test_main_keeps_the_model_name_of_a_run_it_could_not_rebuild(tmp_path, capsys):
+    lg, meta = team_spec(log())
+    lg["wheel_counts"] = lg["wheel_counts"] + 1
+    import json as _json
+    (tmp_path / "result.json").write_text(_json.dumps(result(seed=3)))
+    (tmp_path / "meta.json").write_text(_json.dumps(meta))
+    (tmp_path / "slam_records.json").write_text("[]")
+    np.savez(tmp_path / "slam_log.npz", **lg)
+    out = tmp_path / "rows.json"
+    T.main([str(tmp_path), "--json", str(out)])
+    s = _json.loads(out.read_text())["summary"]
+    assert s["team_spec_quantized"]["counts"] == {"reproduction_failure": 1}
