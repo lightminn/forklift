@@ -412,7 +412,8 @@ function renderSession(m, stIn, lease, prof, monitor) {
       return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}${r.map_id ? ` · <span class="mono" title="지도 ${esc(r.map_id)}">지도 ${esc(String(r.map_id).slice(0, 8))}</span>` : ""}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
     }).join("") : '<li class="hint">아직 끝난 미션이 없습니다</li>';
     $("results-older").textContent = [
-      book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "",
+      // results summary plan D3 (Codex round 3): no promise that the files hold them -- writing is asynchronous
+      book.older ? `앞선 ${book.older}건은 현재 목록에 없습니다` : "",
       book.recordErrorsOlder ? `목록 밖 결과의 기록 실패 ${book.recordErrorsOlder}건(실행 로그에 있음)` : "",
     ].filter(Boolean).join(" · ");
   }
@@ -601,8 +602,9 @@ function renderSummary(s) {
     <h4>설명별 건수</h4>${reasons}
     <h4>팔레트별</h4>${pallets}
     <h4>경과 시간</h4>
-    <p class="sum-dur">완료: ${esc(secsOf(s.durations.done))}<br>그 밖: ${esc(secsOf(s.durations.notDone))}${s.noDuration ? `<br>계산 불가 ${s.noDuration}건(시작 시각 없음)` : ""}</p>
+    <p class="sum-dur">완료: ${esc(secsOf(s.durations.done))}<br>그 밖: ${esc(secsOf(s.durations.notDone))}${s.noDuration ? `<br>계산 불가 ${s.noDuration}건(시각 없음 또는 유효하지 않은 구간)` : ""}</p>
     <p class="hint">제출 수락부터 끝날 때까지의 경과입니다(준비·계획 대기·일시정지 포함, 주행 시간이 아님). 차량 시계 기준이라 시뮬레이션 배속이 1보다 작으면 벽시계로는 더 깁니다.</p>
     ${s.recordErrors || s.recordErrorsOlder ? `<p class="hint">기록 파일 실패: 목록 안 ${s.recordErrors}건 · 목록 밖 ${s.recordErrorsOlder}건</p>` : ""}
-    <p class="hint">${scope.map(esc).join("<br>")}</p>`;
+`;
+  $("sum-scope").innerHTML = scope.map(esc).join("<br>"); // always shown, outside the folded details (Codex round 3)
 }
