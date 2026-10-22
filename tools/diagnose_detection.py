@@ -400,12 +400,19 @@ def diagnose(
     accepted_pose=None,
     *,
     lower_evidence: bool = True,
+    expected: det.ExpectedSite | None = None,
 ) -> dict:
     """Detect first; then, with the truth, say where the pallet's evidence went. ``lower_evidence`` False replays
     a near capture whose lower-deck band was waived (plan 2026-10-21 task C), in the detection and the
-    candidate reconstruction alike."""
-    result = detect_pockets(scene, prior, params, lower_evidence=lower_evidence)
+    candidate reconstruction alike; ``expected`` replays a near capture restricted to its expected site (plan
+    2026-10-22 task A) the same way."""
+    if expected is None:
+        result = detect_pockets(scene, prior, params, lower_evidence=lower_evidence)
+    else:
+        result, gate = det.detect_pockets_expected(scene, prior, params, expected, lower_evidence=lower_evidence)
     out = {"detection": detection_record(result)}
+    if expected is not None:
+        out["expected"] = {"site": _jsonable(expected), "candidates": _jsonable(gate)}
     points, rays = det._base_points(scene)
     camera = np.asarray(scene.base_from_optical.translation_m)
     workspace = det._filter_workspace(points, camera, prior, params)
@@ -449,6 +456,9 @@ def diagnose(
             score = pattern.support_count + pattern.deck_count
             score *= 1 + sum(count.behind_fraction for count in opening_rays.values())
             distance = float(np.linalg.norm((plane.point - camera)[:2]))
+            inside = True
+            if expected is not None:
+                inside = det.expected_candidate(plane, pattern, prior, expected, index, score).inside
             if not pattern.upper_ok:
                 final = {
                     "stage": "upper",
@@ -468,10 +478,13 @@ def diagnose(
                 "distance_m": distance,
                 "final": final,
             }
+            if expected is not None:
+                entry["inside_expected"] = inside
             record["patterns"].append(entry)
-            candidates.append(
-                (score, -distance, index, len(record["patterns"]) - 1, plane, pattern)
-            )
+            if inside:
+                candidates.append(
+                    (score, -distance, index, len(record["patterns"]) - 1, plane, pattern)
+                )
         plane_records.append(record)
     winner = max(candidates, key=lambda c: c[:2]) if candidates else None
     out["selection"] = {
@@ -844,6 +857,16 @@ def attempt_lower_evidence(attempt: dict) -> bool:
     return value
 
 
+def attempt_expected(attempt: dict) -> det.ExpectedSite | None:
+    """The expected site an attempt's detection was restricted to (plan 2026-10-22 task A); None without one."""
+    record = attempt.get("expected")
+    if record is None:
+        return None
+    x, y, yaw = record["site"]
+    return det.ExpectedSite(float(x), float(y), float(yaw), float(record["radius_m"]),
+                            float(record["axis_tolerance_rad"]))
+
+
 def recorded_observation(attempt: dict) -> dict:
     """The detector's own observation of an attempt: under --recognition far the mission read the new
     recognition's (``pocket_observation``) and the detector's is kept as ``detector_reference``."""
@@ -990,9 +1013,10 @@ def diagnose_attempt(run_dir: Path, number: int, pallet_urdf: Path) -> dict:
         out["truth"] = {"unavailable": why}
     scene = attempt_scene(result, attempt, depth)
     out["lower_evidence"] = attempt_lower_evidence(attempt)
+    expected = attempt_expected(attempt)
     diagnosis = diagnose(
         scene, prior, params, truth, attempt["capture_diagnostics"]["accepted_pose"],
-        lower_evidence=out["lower_evidence"],
+        lower_evidence=out["lower_evidence"], expected=expected,
     )
     recorded_detection = {
         "observation": recorded_observation(attempt),

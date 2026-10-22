@@ -731,6 +731,67 @@ def _status_observation(scene, status, reason):
     )
 
 
+@dataclass(frozen=True)
+class ExpectedSite:
+    """Where a caller expects the pallet, in base_link: its centre, its insertion yaw (the observation's
+    ``insertion_yaw_rad``) and how far a candidate may lie from them (plan 2026-10-22 task A -- the near capture looks
+    for the pallet the mission is approaching, not for the strongest pattern in view)."""
+
+    x_m: float
+    y_m: float
+    yaw_rad: float
+    radius_m: float
+    axis_tolerance_rad: float
+
+    def __post_init__(self):
+        for name in ("x_m", "y_m", "yaw_rad", "radius_m", "axis_tolerance_rad"):
+            _finite_scalar(getattr(self, name), name)
+        if self.radius_m <= 0:
+            raise ValueError("radius_m must be positive")
+        if not 0 < self.axis_tolerance_rad < math.pi / 2:
+            raise ValueError("axis_tolerance_rad must be in (0, pi/2)")
+
+
+@dataclass(frozen=True)
+class ExpectedCandidate:
+    """One candidate pattern against the expected site: the pallet centre it implies (the front midpoint of its two
+    openings moved half the prior's depth along its insertion yaw, as the mission's own estimate), its distance and
+    axis error, and whether it stays in the selection."""
+
+    plane_index: int
+    centre_m: tuple[float, float]
+    yaw_rad: float
+    distance_m: float
+    axis_error_rad: float
+    score: float
+    inside: bool
+
+
+def expected_candidate(plane, pattern, prior, expected, plane_index, score) -> ExpectedCandidate:
+    """A candidate pattern against the expected site (shared with tools/diagnose_detection's replica)."""
+    cx, cy, cyaw = _pattern_site(plane, pattern, prior)
+    off_m = math.hypot(cx - expected.x_m, cy - expected.y_m)
+    axis = abs(yaw_difference_rad(cyaw, expected.yaw_rad))
+    inside = off_m <= expected.radius_m and axis <= expected.axis_tolerance_rad
+    return ExpectedCandidate(plane_index, (cx, cy), cyaw, off_m, axis, float(score), inside)
+
+
+def _pattern_site(plane, pattern, prior):
+    """The pallet centre (x, y) and insertion yaw a pattern implies, as _build_observation and the adapter's
+    estimate_pallet_center_m would compute them for it."""
+    fronts = [
+        plane.point + (sum(gap) / 2 - plane.point @ plane.left_axis) * plane.left_axis
+        for gap in pattern.gaps
+    ]
+    yaw = yaw_difference_rad(math.atan2(plane.normal[1], plane.normal[0]) + math.pi, 0.0)
+    half = prior.overall_depth_m / 2
+    return (
+        float((fronts[0][0] + fronts[1][0]) / 2 + half * math.cos(yaw)),
+        float((fronts[0][1] + fronts[1][1]) / 2 + half * math.sin(yaw)),
+        float(yaw),
+    )
+
+
 def detect_pockets(
     scene_input: SceneInput,
     prior: PalletPrior,
@@ -743,13 +804,37 @@ def detect_pockets(
     Configuration errors raise ValueError. Missing or insufficient observations
     return no_pallet/invalid. Both sigmas are unknown (None) in this baseline.
     """
+    return _detect(scene_input, prior, params, lower_evidence, None)[0]
+
+
+def detect_pockets_expected(
+    scene_input: SceneInput,
+    prior: PalletPrior,
+    params: DetectorParams,
+    expected: ExpectedSite | None,
+    *,
+    lower_evidence: bool = True,
+) -> tuple[DetectionResult, tuple[ExpectedCandidate, ...]]:
+    """detect_pockets with the candidates restricted to an expected site (plan 2026-10-22 task A).
+
+    Every candidate pattern whose implied centre is farther than ``radius_m`` from the site, or whose insertion yaw
+    differs by more than ``axis_tolerance_rad``, is dropped before the detector's own selection (the highest score,
+    then the nearest plane); the rest is unchanged. No candidate inside the site is ``no_pallet:no_expected_candidate``.
+    Returns the result and every candidate's record. ``expected`` None is detect_pockets exactly, with no records.
+    """
+    if expected is not None and not isinstance(expected, ExpectedSite):
+        raise ValueError("expected must be an ExpectedSite or None")
+    return _detect(scene_input, prior, params, lower_evidence, expected)
+
+
+def _detect(scene_input, prior, params, lower_evidence, expected):
     if 2 * params.band_margin_m >= prior.opening_height_m:
         raise ValueError("band_margin_m must leave a nonempty opening height band")
     if type(lower_evidence) is not bool:
         raise ValueError("lower_evidence must be an explicit boolean")
     start = time.perf_counter()
     planes, rejected, candidates = [], {}, []
-    rejected_patterns = []
+    rejected_patterns, gate = [], []
     selected_plane, selected_pattern, selected_rays = None, None, {}
     exception_traceback = None
     try:
@@ -787,9 +872,16 @@ def detect_pockets(
                         count.behind_fraction for count in opening_rays.values()
                     )
                     distance = float(np.linalg.norm((plane.point - camera)[:2]))
+                    if expected is not None:
+                        gate.append(expected_candidate(plane, pattern, prior, expected, index, score))
+                        if not gate[-1].inside:
+                            continue
                     candidates.append(
                         (score, -distance, index, plane, pattern, opening_rays)
                     )
+                if expected is not None and patterns and index not in rejected and not any(
+                        c[2] == index for c in candidates):
+                    rejected[index] = "outside_expected"
             if candidates:
                 (
                     _,
@@ -834,7 +926,8 @@ def detect_pockets(
                 observation = _status_observation(
                     scene_input,
                     "no_pallet",
-                    "no_front_plane" if not planes else "no_opening_pattern",
+                    "no_front_plane" if not planes
+                    else "no_expected_candidate" if gate else "no_opening_pattern",
                 )
     except Exception as exc:
         exception_traceback = traceback.format_exc()
@@ -861,4 +954,4 @@ def detect_pockets(
         exception_traceback,
         tuple(rejected_patterns),
     )
-    return DetectionResult(observation, diagnostics)
+    return DetectionResult(observation, diagnostics), tuple(gate)

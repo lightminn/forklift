@@ -446,3 +446,33 @@ def test_an_attempt_names_its_lower_band_setting(attempt, expected):
 def test_an_attempt_with_a_non_boolean_lower_band_setting_is_refused():
     with pytest.raises(ValueError, match="lower_evidence"):
         diag.attempt_lower_evidence({"lower_evidence": 0})
+
+
+def _two_pallets(x_m, neighbour_dy_m, target_y_m=0.0):
+    boxes = (scene_rig.place(scene_rig.pallet(GEOMETRY), x_m=x_m, y_m=target_y_m)
+             + scene_rig.place(scene_rig.pallet(GEOMETRY), x_m=x_m, y_m=target_y_m + neighbour_dy_m))
+    return scene_rig.render(boxes, camera=scene_rig.Camera((0.619, 0.0, 0.27)), quantize=True)
+
+
+@pytest.mark.parametrize("x, dy, ty, site, status", [
+    (3.2, 1.0, -0.1, (3.2, -0.1), "valid"),       # another candidate than the plain detector's is selected
+    (3.0, 0.95, 0.0, (3.0, -0.6), "no_pallet"),   # every candidate is outside
+    (3.0, 0.95, 0.0, (3.0, 0.45), "invalid"),     # the one inside fails its final checks, as before
+])
+def test_an_expected_site_is_replayed_in_detection_and_reconstruction(x, dy, ty, site, status):
+    """Plan 2026-10-22 task A (Codex plan round 1 P2): the expected site filters the replica's candidates as it
+    filters the detector's; with the detection alone the replica selected the plain winner."""
+    from forklift_core.perception.pocket_detector import ExpectedSite
+
+    expected = ExpectedSite(site[0], site[1], 0.0, 0.15, 0.26)
+    out = diag.diagnose(_two_pallets(x, dy, ty), PRIOR, PARAMS, expected=expected)
+    assert out["detection"]["observation"]["status"] == status
+    assert out["extraction"]["replica_matches"] and out["selection"]["replica_matches"]
+    assert out["expected"]["candidates"]
+
+
+def test_an_attempt_names_its_expected_site():
+    assert diag.attempt_expected({}) is None
+    site = diag.attempt_expected({"expected": {"site": [3.0, -0.1, 0.02], "radius_m": 0.25,
+                                               "axis_tolerance_rad": 0.2617993877991494, "candidates": []}})
+    assert (site.x_m, site.y_m, site.yaw_rad, site.radius_m) == (3.0, -0.1, 0.02, 0.25)

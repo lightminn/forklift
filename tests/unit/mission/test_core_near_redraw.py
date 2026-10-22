@@ -36,6 +36,7 @@ def core(*, near, redraw):
 
     def traced(world, rear_pose, target, config, **kw):
         calls.append(("redraw_docking_traced", kw.get("max_yaw_rad")))
+        calls.append(("redraw_kwargs", sorted(kw), kw.get("max_lateral_m")))
         return plans, {"refused": None}, ["TRAJ1", "TRAJ2"]
 
     hooks = SimpleNamespace(
@@ -76,6 +77,34 @@ def test_without_the_near_field_tracking_the_redraw_skips_the_correction_points(
     for absent in ("tracking_frame", "rollout_face_distance", "correction_points_check"):
         assert absent not in names, absent
     assert entry["tracking"] is False and "correction_points" not in entry and entry["accepted"] is True
+
+
+def _redraw(near, lateral):
+    c, calls = core(near=near, redraw="always")
+    if lateral is not None:
+        c.options.near_capture_redraw_lateral_m = lateral
+    if near is not None:
+        c.hooks.tracking_frame = lambda: SimpleNamespace(fork_tip_x_m=0.9)
+    _, entry = c.near_capture_redraw(np.array([0.0, 0.0, 0.05]), (0.37, 0.0, 0.05), Obs(Side(), Side()), 4, Cfg(),
+                                     Cfg(), 50.0)
+    (_, keys, value), = [x for x in calls if x[0] == "redraw_kwargs"]
+    return keys, value, entry
+
+
+def test_the_untracked_redraw_takes_the_wider_lateral_box():
+    """Plan 2026-10-22 task D: random_1 stood 6.7 / 9.8 cm off the new line; redraw_docking's 0.05 m box refused
+    both. The untracked re-draw passes the run's lateral box; the dry runs and collision checks stay."""
+    keys, value, entry = _redraw(None, 0.10)
+    assert value == 0.10 and "max_lateral_m" in keys
+    assert entry["max_lateral_m"] == 0.10
+
+
+@pytest.mark.parametrize("near, lateral", [(None, None), (None, 0.05)])
+def test_the_default_lateral_box_calls_the_redraw_as_before(near, lateral):
+    # The boundary replay compares the port call's keywords: the default leaves max_lateral_m out entirely.
+    keys, value, entry = _redraw(near, lateral)
+    assert "max_lateral_m" not in keys and value is None
+    assert "max_lateral_m" not in entry
 
 
 def test_a_tracking_runs_redraw_entry_keeps_its_recorded_shape():

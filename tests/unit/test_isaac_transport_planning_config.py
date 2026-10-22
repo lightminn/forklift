@@ -475,7 +475,8 @@ def test_runtime_viewpoints_only_follow_the_default_bay_list():
     ]
     rule = ast.unparse(assign.value)
     assert "args.observation_waypoints is None" in rule
-    assert "args.layout != 'factory'" in rule
+    # the bay's placement zone only: the factory layout and a scene file have their own candidates
+    assert "args.layout == 'bay'" in rule
 
 
 def test_runtime_viewpoints_see_the_pallet_only_as_an_unlabelled_rectangle():
@@ -638,7 +639,7 @@ def test_the_detector_sees_rounded_depth_only_when_asked_and_attempts_record_the
     assert source.count("adapter.detector_input(") + core.count("adapter.detector_input(") == 2
     assert "adapter.detector_input(\n            scene_input, options.depth_quantize_mm\n" in core
     assert "repeat_input, args.depth_quantize_mm" in source
-    assert "detection = detect_pockets(detector_input, prior, params)" in core
+    assert "detection = detect_pockets(detector_input, prior, params, **waive_kw)" in core
     assert 'attempt["base_from_optical"] = {' in core
     assert 'attempt["depth_quantize_mm"] = options.depth_quantize_mm' in core
     tree = ast.parse(source)

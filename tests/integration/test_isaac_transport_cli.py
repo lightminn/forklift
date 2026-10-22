@@ -863,7 +863,7 @@ def test_s4c2_a_terminal_mismatch_or_refusal_retries_once_from_a_fresh_far_captu
     seen = moved.index("Plan D8 S4c-2 / S4c-3: the re-observation must see the pallet")
     assert '"near_field_retry_no_detection" if stand_key_ == "retry"' in moved[seen : seen + 900]
     assert "require(False, reason_)" in moved[seen : seen + 900]
-    assert moved.index("detection = detect_pockets(detector_input, prior, params)") < seen
+    assert moved.index("detection = detect_pockets(detector_input, prior, params, **waive_kw)") < seen
     # What (x) judges by: each frame's hold, the re-projection, and the re-observation as
     # placed with the target the planner used.
     assert "'episode': near['episode']" in functions["feed_near_frame"]
@@ -1195,3 +1195,75 @@ def test_near_capture_redraw_always_needs_no_near_tracking_and_off_still_does() 
     result = subprocess.run([*base, "--near-capture-redraw", "always", "--near-capture-box-yaw-rad", "0.01"],
                             capture_output=True, text=True, check=False)
     assert "near-capture" not in result.stderr, result.stderr
+
+
+def _cli_base():
+    return [sys.executable, str(SCRIPT), "--base-scene", "unused.usda", "--pallet-urdf", "unused.urdf",
+            "--forklift-urdf", str(PROVISIONAL_URDF), "--pallet-geometry", "unused.yaml", "--settings",
+            "unused.yaml", "--output", "unused", "--seed", "2"]
+
+
+def test_near_capture_expected_needs_the_perception_planning_target() -> None:
+    """Plan 2026-10-22 task A (Codex plan round 1 P1): the expected site is the perceived pickup -- a truth or
+    nominal planning target must not steer the detector, and the check reads the argument, not the state's
+    source string (camera_depth_detection)."""
+    expected = "--near-capture-expected on needs --use-perception and --planning-target perception"
+    for flags in (["--near-capture-expected", "on"],
+                  ["--near-capture-expected", "on", "--use-perception", "--planning-target", "oracle_nominal"]):
+        result = subprocess.run([*_cli_base(), *flags], capture_output=True, text=True, check=False)
+        assert result.returncode == 2 and expected in result.stderr, (flags, result.stderr)
+
+
+def test_near_capture_redraw_lateral_is_for_the_untracked_always_redraw_only() -> None:
+    """Plan 2026-10-22 task D: a wider lateral box only where no correction point follows (untracked `always`),
+    and never past 0.10 m."""
+    needs = "--near-capture-redraw-lateral-m needs --near-capture-redraw always without --near-tracking"
+    for flags, expected in ((["--near-capture-redraw-lateral-m", "0.1"], needs),
+                            (["--near-capture-redraw-lateral-m", "0.1", "--near-capture-redraw", "on"], needs),
+                            (["--near-capture-redraw", "always", "--near-capture-redraw-lateral-m", "0.12"],
+                             "--near-capture-redraw-lateral-m must be in [0.05, 0.10] m"),
+                            (["--near-capture-redraw", "always", "--near-capture-redraw-lateral-m", "nan"],
+                             "--near-capture-redraw-lateral-m must be in [0.05, 0.10] m")):
+        result = subprocess.run([*_cli_base(), *flags], capture_output=True, text=True, check=False)
+        assert result.returncode == 2 and expected in result.stderr, (flags, result.stderr)
+    result = subprocess.run([*_cli_base(), "--near-capture-redraw", "always", "--near-capture-redraw-lateral-m",
+                             "0.1"], capture_output=True, text=True, check=False)
+    assert "near-capture" not in result.stderr, result.stderr
+
+
+def test_the_expected_detector_port_passes_the_site_and_the_waiver_through() -> None:
+    import re
+
+    source = SCRIPT.read_text()
+    m = re.search(r"detect_pockets_expected=(lambda [^:]*: detect_pockets_expected\([^)]*\))", source)
+    assert m is not None
+    calls = []
+    port = eval(m.group(1), {"detect_pockets_expected": lambda *a, **k: calls.append((a, k)) or "R"})  # noqa: S307
+    assert port("INPUT", "PRIOR", "PARAMS", "SITE", lower_evidence=False) == "R"
+    assert calls == [(("INPUT", "PRIOR", "PARAMS", "SITE"), {"lower_evidence": False})]
+
+
+def test_the_mission_options_read_the_new_near_capture_switches_with_their_defaults() -> None:
+    """Codex implementation round 1 P2: a boundary replay restores the recorded Namespace without the parser, so a
+    record from before the options has neither attribute; the options read them with the defaults it ran at."""
+    import argparse
+
+    source = SCRIPT.read_text()
+    lines = [line.strip() for line in source.splitlines() if "near_capture_redraw_lateral_m=" in line
+             or "near_capture_expected=" in line or "near_capture_lower=" in line]
+    exprs = [line.split("=", 1)[1].rstrip(",") for line in lines if line.startswith("near_capture_")]
+    assert len(exprs) == 3, lines
+    old = argparse.Namespace()
+    assert [eval(e, {"args": old}) for e in exprs] == [0.05, "off", "gate"]  # noqa: S307
+    new = argparse.Namespace(near_capture_redraw_lateral_m=0.1, near_capture_expected="on",
+                             near_capture_lower="waive_far_confirmed")
+    assert [eval(e, {"args": new}) for e in exprs] == [0.1, "on", "waive_far_confirmed"]  # noqa: S307
+
+
+def test_the_check_off_near_lower_waiver_needs_the_expected_site() -> None:
+    """Plan 2026-10-22 task C: the waiver's condition 2 is the expected site's."""
+    result = subprocess.run([*_cli_base(), "--near-capture-lower", "waive_far_confirmed"], capture_output=True,
+                            text=True, check=False)
+    assert result.returncode == 2
+    assert "--near-capture-lower waive_far_confirmed needs --near-capture-expected on" in result.stderr
+
