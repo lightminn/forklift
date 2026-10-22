@@ -40,3 +40,15 @@
   - 호 처짐(`clearance_unproven`).
   - 단계표(접근은 자기 팔레트 포함, 삽입은 제외 — 접근 끝 1 cm 침범을 잡는다), `prior_failed`, 하역 칸 반영.
 - `tests/unit/safety/test_pallet_permit.py`: `session_pallet_props` 의 기저별 크기·제외, `moved_ids` 로만 옮김, 팔레트별 teleop 구역.
+- ws1 전체(`~/bin/forklift-ws1-pytest`, `97457a3`): 5884 통과, 실패 10 건. 10 건은 모두 알려진 ws1 전용이다(mujoco 없음 6, evaluate_cli·remote_model_jobs 2, diagnose 게이트 2).
+- 리플레이 게이트(M-a1 29 건, 스냅숏 `ct1_4c00834`): 29/29 가 갈라짐 없이 재생됐다. 그 뒤 러너는 바뀌지 않았다.
+
+## 교차검증
+
+- 계획: 독립 검토 3 회를 거쳤다. 이어서 Codex 재검토 3차에서 수렴했다("새 P1/P2 없음").
+  - ① 직접 재계산.
+  - ② Codex 적대적 검토: P2 4·P3 1.
+  - ③ Codex 새 스레드 독립 검토(agy 는 사용량 조회 실패로 대신했다): P2 8·P3 2.
+- 구현: Codex 검토 3차에서 수렴했다.
+  - 1차 P2 3: 연속 하한이 현을 씀, 해제 미리보기 시험 하네스, 어댑터 연결 범위.
+  - 2차 P2 1: 원호의 도는 쪽은 주행 방향으로 정한다.
