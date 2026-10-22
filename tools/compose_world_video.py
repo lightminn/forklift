@@ -36,6 +36,9 @@ COLOURS = [
     (230, 85, 60), (60, 140, 230), (245, 180, 40), (90, 190, 110), (170, 100, 220),
     (40, 200, 200), (240, 120, 180), (160, 160, 60), (120, 200, 250), (250, 150, 80),
     (150, 110, 70), (200, 200, 200),
+    # 20 trucks (plan 2026-10-17-fleet-large-random-chained)
+    (255, 105, 105), (100, 110, 255), (200, 240, 90), (255, 215, 140), (140, 230, 190),
+    (220, 160, 255), (255, 255, 120), (110, 160, 140),
 ]
 LOG_STAGES = ("idle", "leave", "to_pickup", "insert", "extract", "to_drop", "withdraw",
               "to_holding", "lift", "lower", "broken")
@@ -323,9 +326,10 @@ def main(argv=None) -> int:
     expiries = [(e["t_s"], int(e["truck"][6:])) for e in events if e.get("kind") == "window_expired"]
     depth, width_p = world["footprints"]["pallet"]
     places = []  # (polygon, colour): pallet places by role, then holding places
+    anyrole = result.get("od") == "random"  # any pallet to any free place: roles say nothing
     for _, role, x, y, yaw, _ in world["slots"]:
         poly = project(corners((x, y, yaw), (depth / 2, depth / 2, width_p / 2)))
-        places.append(([tuple(q) for q in poly], (235, 200, 140, 150) if role == "source" else (120, 220, 235, 170)))
+        places.append(([tuple(q) for q in poly], (235, 200, 140, 150) if role == "source" or anyrole else (120, 220, 235, 170)))
     for x, y, yaw in world["holding"]:
         places.append(([tuple(q) for q in project(corners((x, y, yaw), fp_unloaded))], (190, 195, 205, 110)))
     written = 0
@@ -475,7 +479,8 @@ def main(argv=None) -> int:
             if result.get("dressing") else "주황: 랙 · 파랑: 기계 · 회색: 벽·기둥"
         )
         below = VIEW_H + TOP + (68 if alert is not None else 40)
-        draw.text((24, below), f"가는 선: 팔레트 칸(황토 = 출발, 하늘 = 도착), 대기 칸(회색) · {scene_note}", font=small, fill=(150, 155, 165))
+        slots_ko = "팔레트 칸(황토, 출발 · 도착 무작위)" if anyrole else "팔레트 칸(황토 = 출발, 하늘 = 도착)"
+        draw.text((24, below), f"가는 선: {slots_ko}, 대기 칸(회색) · {scene_note}", font=small, fill=(150, 155, 165))
         draw.text((24, below + 28), "합성 시뮬레이션(Isaac Sim 5.1) · 실측 차체 모델 · 정답 위치(SLAM 끔) · 무작위로 만든 공장(실재 도면 아님)", font=small, fill=(150, 155, 165))
         if args.preview_png is not None:
             canvas.save(args.preview_png)

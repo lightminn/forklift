@@ -31,6 +31,12 @@ tracker; poses are the simulator's (no SLAM: cost, and the plan's choice).
 - Making room (plan 2026-10-11 (h)), as in world_cpu_sim: a truck its
   protective field has held for --yield-s (0: off) backs straight away from
   it by up to --yield-back-m once it stands still, comes back and drives on.
+- Large random floors (docs/plans/2026-10-17-fleet-large-random-chained.md),
+  as in world_cpu_sim: --world-scale, --od random, --chain (the next job from
+  where the truck withdrew from its drop, rank kept; with none to take, or none
+  admitted, it drives to its holding place as before). --max-wall-seconds ends
+  a run that would outlast its Slurm limit early, with every record written and
+  the reached time in "stopped".
 
 Safety is judged on the truth every 0.1 s (truck-truck, truck-floor,
 truck-standing pallet, truck-person) and recorded; nothing is stopped by it.
@@ -117,6 +123,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--queue-opt", default="local", choices=("local", "global"))
     parser.add_argument("--opt-period-s", type=float, default=5.0)
     parser.add_argument("--node-limit", type=int, default=2000)
+    parser.add_argument("--opt-horizon-s", type=float, help="global orders: only crossings reached within this (free flow); default all")
     # Literature baselines (plan 2026-10-17): --traffic adg | sections | mapf | tiles.
     parser.add_argument("--mapf-window-s", type=float, default=30.0)
     parser.add_argument("--mapf-replan-s", type=float, default=5.0)
@@ -133,6 +140,13 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1440)
     parser.add_argument("--height", type=int, default=810)
     parser.add_argument("--max-sim-seconds", type=float, default=1200.0)
+    parser.add_argument(
+        "--max-wall-seconds", type=float, help="end the run normally (records written) after this much wall time"
+    )
+    # Large random floors (plan 2026-10-17-fleet-large-random-chained).
+    parser.add_argument("--world-scale", type=float, default=1.0, help="stretch the halls (1: the floors of every earlier run)")
+    parser.add_argument("--od", default="roles", choices=("roles", "random"), help="roles: sources to sinks; random: any pallet to any free slot")
+    parser.add_argument("--chain", action="store_true", help="take the next job from the drop, not from a holding place")
     args, unknown = parser.parse_known_args()
     if 120 % args.fps:
         parser.error("--fps must divide 120")
@@ -213,6 +227,8 @@ class Truck:
 
         items = []
         for stage in STAGES:
+            if stage not in plan.stages:  # a chained job has no leave
+                continue
             items.append(("path", stage, plan.stages[stage]))
             if stage == "insert":
                 items.append(("lift", "lift", None))
@@ -273,13 +289,18 @@ class Truck:
         self.item += 1
         if self.item >= len(self.items):
             return "done"
+        if self.ctx["chain"] and self.items[self.item][1] == "to_holding":
+            return "chain"  # the loop starts the next job or enter_item()s this one
+        self.enter_item(now)
+        return "next"
+
+    def enter_item(self, now):
         self.stage_started = now
         kind, stage, payload = self.items[self.item]
         if kind == "path":
             self.loaded = stage in self.ctx["loaded_stages"]
             self.load_path(payload)
         self.ctx["traffic"].set_footprint(self.name, self.footprint())
-        return "next"
 
     def load_path(self, result):
         from forklift_core.control import RearAxlePathTracker
@@ -323,6 +344,7 @@ class Truck:
 
 
 def run(app, args, settings, state) -> None:
+    wall_started = time.monotonic()
     import omni.usd
     import planar_lidar
     from chassis_contract import (
@@ -409,7 +431,7 @@ def run(app, args, settings, state) -> None:
         max_expansions=args.expansions,
     )
     travel = replace(config, obstacle_heuristic_resolution_m=0.25)
-    wm = make_world(args.structure, args.seed, geometry=geometry, trucks=args.trucks)
+    wm = make_world(args.structure, args.seed, geometry=geometry, trucks=args.trucks, scale=args.world_scale)
     state["world"] = {
         "size_m": wm.size_m,
         "sources": len(wm.sources()),
@@ -447,7 +469,7 @@ def run(app, args, settings, state) -> None:
     state["scene_chassis"] = chassis_record(chassis)
 
     world = World(stage_units_in_meters=1.0, physics_dt=1 / 120, rendering_dt=1 / 120)
-    dispatcher = Dispatcher(wm, np.random.default_rng([args.seed, args.trucks, 11]))
+    dispatcher = Dispatcher(wm, np.random.default_rng([args.seed, args.trucks, 11]), od=args.od)
     places = dispatcher.spawn(args.trucks)
     b = wm.bounds
     pool = [
@@ -624,6 +646,7 @@ def run(app, args, settings, state) -> None:
         queue_opt=args.queue_opt,
         opt_period_s=args.opt_period_s,
         node_limit=args.node_limit,
+        opt_horizon_s=args.opt_horizon_s,
         mapf_window_s=args.mapf_window_s,
         mapf_replan_s=args.mapf_replan_s,
         tile_m=args.tile_m,
@@ -639,6 +662,7 @@ def run(app, args, settings, state) -> None:
         "limits": physical_limits(args, settings),
         "tracker_config": tracker_config,
         "loaded_stages": LOADED_STAGES,
+        "chain": args.chain,
         "log_stages": log_stages,
         "routes": [],
     }
@@ -702,6 +726,45 @@ def run(app, args, settings, state) -> None:
         plans.append({"job": job.number, "truck": job.truck, "from": first_stage,
                       "status": result.status, "wall_s": round(time.monotonic() - started, 2)})
         return result
+
+    chains = {"started": 0, "no_job": 0, "plan_failed": 0, "refused": 0}
+
+    def chain(t, rear):
+        """--chain, as in world_cpu_sim: t has withdrawn from its drop -- its next
+        job from there, rank kept; False: it drives to its holding place."""
+        old = t.job
+        dispatcher.free_home(old)
+        job = dispatcher.next_job(t.k, -1, after=old.sink)
+        why = "no_job"
+        if job is not None:
+            result = plan(job, "to_pickup", Pose2D(*map(float, rear)))
+            if not result.success:
+                dispatcher.abandon(job, reached_pickup=False, unreachable=not result.status.startswith("to_pickup:"))
+                job_log.append({"job": job.number, "truck": t.k, "status": "plan_failed", "why": result.status, "t_s": round(now, 1), "chained": True})
+                why = "plan_failed"
+            elif traffic.windows is not None and not traffic.trial_route(t.name, t.chunks(t.job_items(result), 0)[0]):
+                dispatcher.abandon(job, reached_pickup=False, unreachable=False)
+                why = "refused"
+            else:
+                why = None
+        if why is not None:
+            dispatcher.take_home(old)
+            chains[why] += 1
+            return False
+        chains["started"] += 1
+        t.jobs_done += 1
+        job_log.append({"job": old.number, "truck": t.k, "status": "done", "t_s": round(now, 1), "took_s": round(now - t.job_started, 1)})
+        put_pallet(t.k, job.source.site)
+        handled[job.source.name] = t.k
+        sync_stands()
+        t.place = job.home
+        t.start_job(job, result, now, None)
+        if traffic.windows is not None and not traffic.windows.last_feasible:
+            events.append({"t_s": round(now, 2), "kind": "precondition", "after": "chain", "truck": t.name, "why": "order_lock"})
+        for c in traffic.route_conflicts():
+            if t.name in (c["truck"], c["route_of"]):
+                events.append({"t_s": round(now, 2), "kind": "precondition", **c})
+        return True
 
     faults = []
     if args.faults:
@@ -1045,6 +1108,9 @@ def run(app, args, settings, state) -> None:
             if now - last_motion_s > 180.0:
                 state["stopped"] = f"gridlock: no truck moved for 180 s at {now:.1f} s"
                 break
+            if args.max_wall_seconds and time.monotonic() - wall_started > args.max_wall_seconds:
+                state["stopped"] = f"wall limit: {args.max_wall_seconds:.0f} s of wall time at {now:.1f} s"
+                break
         if tick % people_every == 0 and len(people.pos):
             bodies_now = oriented_rects(np.array([truths[t.name][0] for t in trucks]), [t.footprint() for t in trucks], 0.0)
             people.step(dt * people_every, bodies_now)
@@ -1088,7 +1154,10 @@ def run(app, args, settings, state) -> None:
                         handled.pop(t.job.sink.name, None)
                         put_pallet(t.k, pool[t.k])
                         sync_stands()
-                    if t.next_item(now) == "done":
+                    stepped = t.next_item(now)
+                    if stepped == "chain" and not chain(t, rear):
+                        t.enter_item(now)
+                    if stepped == "done":
                         t.jobs_done += 1
                         job_log.append({"job": t.job.number, "truck": t.k, "status": "done", "t_s": round(now, 1), "took_s": round(now - t.job_started, 1)})
                         t.place = t.job.home
@@ -1182,9 +1251,14 @@ def run(app, args, settings, state) -> None:
         replans=sum(e["kind"] == "replan" for e in events),
         fills_held=len(dispatcher.held_back),
         traffic=args.traffic,
+        world_scale=args.world_scale,
+        od=args.od,
+        chain=args.chain,
+        chains=chains,
         eta=args.eta,
         pace=args.pace,
         queue_opt=args.queue_opt if args.traffic == "queues" else None,
+        opt_horizon_s=args.opt_horizon_s if args.traffic == "queues" else None,
         windows=traffic.windows.summary() if traffic.windows is not None else None,
         jobs_held=sum(e["kind"] == "job_held" for e in events),
         resolution=resolution_counts(events),
