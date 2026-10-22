@@ -88,10 +88,67 @@ def test_faces_moved_together_are_taken_wrongly__the_documented_risk():
     assert error == pytest.approx(0.10, abs=0.01)  # the goal is placed 10 cm off: the check cannot see it
 
 
-def test_a_repeated_pattern_inside_the_range_is_refused_as_not_unique():
+def test_a_repeated_pattern_finer_than_the_starts_is_ambiguous():
     comb = wall(*[pilaster(-3.0 + 0.15 * k, width=0.075, depth=0.10) for k in range(40)])
     result, _ = run(comb)
-    assert not result.accepted, result.reason
+    assert not result.accepted and result.reason == "ambiguous", result.reason
+
+
+@pytest.mark.parametrize("prior_dy, reason", [(0.0, "ok"), (0.12, "not_unique")])
+def test_the_range_check_about_the_prior_finds_the_next_tooth(prior_dy, reason):
+    # teeth 0.35 m apart, checked directly (the dock's own starts already disagree on such a pattern): the range
+    # +-0.20 m about a prior 0.12 m off reaches the next tooth; about the true pose it does not (Codex P2-2: the range
+    # is centred on the prior, not on the solved pose)
+    from forklift_core.localization.scan_match import match_scans, precision_check
+
+    comb = wall(*[pilaster(-3.0 + 0.35 * k, width=0.15, depth=0.30) for k in range(17)])
+    reference = scan(comb, DELIVERY)
+    truth_now = compose(DELIVERY, (-1.5, 0.0, 0.0))
+    live = scan(comb, truth_now, noise=0.02, seed=1)
+    q_true = compose(compose(invert(LASER), compose(invert(DELIVERY), truth_now)), LASER)
+    pose = match_scans(reference, live, initial=q_true, min_information=0.0).pose
+    check = precision_check(reference, live, pose, (q_true[0], q_true[1] + prior_dy, q_true[2]))
+    assert check.reason == reason, (check.reason, check.record.get("range_ends"))
+
+
+def test_the_live_points_order_does_not_change_the_result():
+    # Codex implementation review P2-1: the facet lookup used the inlier rows' index into the full live array
+    reference = scan(TWO, DELIVERY)
+    truth_now = compose(DELIVERY, (-1.5, 0.0, 0.0))
+    estimate_now = compose(truth_now, (0.0, 0.05, 0.0))
+    live = scan(TWO, truth_now, noise=0.02, seed=1)
+    reasons = set()
+    for seed in range(3):
+        order = np.random.default_rng(seed).permutation(len(live))
+        r = dock(reference, live[order], rear_from_laser=LASER, estimate_rear=estimate_now, delivery_rear=DELIVERY,
+                 acceptance="precision")
+        reasons.add(r.reason)
+    assert reasons == {"ok:precision"}
+
+
+def test_a_range_start_that_fails_its_own_solve_is_not_agreement(monkeypatch):
+    from dataclasses import replace
+
+    from forklift_core.localization import scan_match as SM
+
+    real = SM.match_scans
+    monkeypatch.setattr(SM, "match_scans", lambda *a, **k: replace(real(*a, **k), accepted=False, reason="not_converged"))
+    reference = scan(TWO, DELIVERY)
+    live = scan(TWO, compose(DELIVERY, (-1.5, 0.0, 0.0)), noise=0.02, seed=1)
+    pose = real(reference, live, initial=(-1.5, 0.0, 0.0), min_information=0.0).pose
+    agree, _, reasons = SM._range_check(reference, live, pose, (0.0, 1.0, 0.0), pose,
+                                        dict(min_information=0.0), 0.3)
+    assert agree is False and set(reasons) == {"not_converged"}
+
+
+def test_non_finite_diagnostics_are_recorded_as_none():
+    from forklift_core.localization.scan_match import _finite_or_none
+
+    assert _finite_or_none([float("inf"), 0.003, float("nan")]) == [None, 0.003, None]
+    import json
+
+    taken, _ = run(TWO)
+    json.dumps(taken.precision, allow_nan=False)  # the runner's record_json would raise on inf
 
 
 def test_a_well_constrained_match_is_the_same_in_either_mode():

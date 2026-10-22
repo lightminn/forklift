@@ -4911,9 +4911,9 @@ class MissionCore:
         if not result.accepted or result.reason != "ok:precision":
             return result
         moved = math.hypot(result.goal_estimate[0] - delivery[0], result.goal_estimate[1] - delivery[1])
-        if moved <= cls.PRECISION_CUMULATIVE_M:
-            return result
         record = dict(result.precision or {}, cumulative_m=moved)
+        if moved <= cls.PRECISION_CUMULATIVE_M:
+            return replace(result, precision=record)
         return replace(result, accepted=False, reason="degenerate:cumulative", goal_estimate=None, precision=record)
 
     def dock_at_delivery_straight(self, t: float, answer=None) -> None:

@@ -18,9 +18,11 @@ def result(goal, reason="ok:precision", accepted=True):
     return DockingResult(accepted, reason, goal, (0, 0, 0), (0, 0, 0), (), (), {"reason": "ok"})
 
 
-def test_a_goal_within_the_bound_is_kept():
+def test_a_goal_within_the_bound_is_kept_and_its_cumulative_move_recorded():
     r = result((DELIVERY[0] + 0.10, DELIVERY[1] - 0.15, 0.0))
-    assert MissionCore._precision_cumulative(r, DELIVERY) is r
+    out = MissionCore._precision_cumulative(r, DELIVERY)
+    assert out.accepted and out.goal_estimate == r.goal_estimate
+    assert out.precision["cumulative_m"] == pytest.approx(math.hypot(0.10, 0.15))
 
 
 def test_a_turn_in_place_is_no_movement():

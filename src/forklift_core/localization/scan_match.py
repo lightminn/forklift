@@ -243,6 +243,27 @@ def _sigma(jac, residual):
     return scale, tuple(float(v) for v in np.sqrt(np.clip(np.diag(cov), 0.0, None)))
 
 
+def _finite_or_none(values):
+    """Diagnostics for JSON records (the runner writes with allow_nan=False): a non-finite value is None."""
+    return [float(v) if np.isfinite(v) else None for v in values]
+
+
+def _range_check(reference, live, prior, weak, target, gates, max_correspondence_m):
+    """Starts along the weak direction about the prior, +-PRECISION_RANGE_M in PRECISION_RANGE_STEP_M steps: each must
+    pass its own solve (converged, inliers, residual) and end at `target`."""
+    agree, ends, reasons = True, [], []
+    k = int(round(PRECISION_RANGE_M / PRECISION_RANGE_STEP_M))
+    for step in range(-k, k + 1):
+        d = step * PRECISION_RANGE_STEP_M
+        start = (prior[0] + d * weak[0], prior[1] + d * weak[1], prior[2] + d * weak[2])
+        end = match_scans(reference, live, initial=start, max_correspondence_m=max_correspondence_m, **gates)
+        ends.append([float(c) for c in end.pose])
+        reasons.append(end.reason)
+        if end.reason != "ok" or not _close_pose(end.pose, target, PRECISION_AGREE_M, PRECISION_AGREE_RAD):
+            agree = False
+    return agree, ends, reasons
+
+
 def _link_groups(points, link):
     label = -np.ones(len(points), int)
     current = 0
@@ -307,8 +328,8 @@ def precision_check(reference, live, pose, prior, *, inlier_m: float = 0.05, max
     weak = v[:, 0]
     scale, sigma = _sigma(jac, residual)
     _, sigma_thin = _sigma(jac[::4], residual[::4])
-    record.update(min_information=float(w[0]), weak=[float(c) for c in weak], scale_m=scale, sigma_m=list(sigma),
-                  sigma_decimated_m=list(sigma_thin))
+    record.update(min_information=float(w[0]), weak=[float(c) for c in weak], scale_m=scale,
+                  sigma_m=_finite_or_none(sigma), sigma_decimated_m=_finite_or_none(sigma_thin))
     if sigma[0] > PRECISION_SIGMA_M or sigma[1] > PRECISION_SIGMA_M or sigma[2] > PRECISION_SIGMA_RAD:
         return PrecisionCheck(False, "sd", p1, record)
     # (4) the weak direction carried by two groups at least; dropping each group's reference faces keeps the pose
@@ -322,9 +343,10 @@ def precision_check(reference, live, pose, prior, *, inlier_m: float = 0.05, max
         return PrecisionCheck(False, "one_group", p1, record)
     facets = _facets(reference, normals, PRECISION_FACET_LINK_M, PRECISION_FACET_COS)
     live_nearest, live_nearest_d = _nearest(reference, transform_points(live, p1))
+    inlier_nearest = nearest[inl]  # the reference point of each inlier row (g indexes the inlier rows)
     drops = []
     for g in groups:
-        faces = np.unique(facets[nearest[g]])
+        faces = np.unique(facets[inlier_nearest[g]])
         keep_ref = ~np.isin(facets, faces)
         keep_live = ~(np.isin(facets[live_nearest], faces) & (live_nearest_d < max_correspondence_m))
         again = match_scans(reference[keep_ref], live[keep_live], initial=p1, **gates)
@@ -337,19 +359,11 @@ def precision_check(reference, live, pose, prior, *, inlier_m: float = 0.05, max
             record["drops"] = drops
             return PrecisionCheck(False, "group_shift", p1, record)
     record["drops"] = drops
-    # (5) every start along the weak direction within the range ends at the same pose
-    agree = True
-    ends = []
-    k = int(round(PRECISION_RANGE_M / PRECISION_RANGE_STEP_M))
-    for step in range(-k, k + 1):
-        start = (p1[0] + step * PRECISION_RANGE_STEP_M * weak[0], p1[1] + step * PRECISION_RANGE_STEP_M * weak[1],
-                 p1[2] + step * PRECISION_RANGE_STEP_M * weak[2])
-        end = match_scans(reference, live, initial=start, max_correspondence_m=max_correspondence_m, **gates)
-        ends.append([float(c) for c in end.pose])
-        if not _close_pose(end.pose, p1, PRECISION_AGREE_M, PRECISION_AGREE_RAD):
-            agree = False
+    # (5) every start along the weak direction within the range about the prior passes and ends at the same pose
+    agree, ends, reasons = _range_check(reference, live, prior, weak, p1, gates, max_correspondence_m)
     record["range_agree"] = agree
     record["range_ends"] = ends
+    record["range_reasons"] = reasons
     if not agree:
         return PrecisionCheck(False, "not_unique", p1, record)
     # (6) this round's correction along the weak direction
