@@ -135,6 +135,21 @@ test("a permit with no limit is unknown", () => {
   assert.equal(lv({ state: { ...STATE, permit: { limit_mps: null, reason: "no_feedback" } } }, "permit"), "unknown");
 });
 
+test("a lease this tab held, seen after its link dropped, is not another device's (Isaac live run 2026-10-22)", () => {
+  const st = { ...STATE, lease: { holder: "me" } };
+  assert.match(row(healthRows(input({ state: st, hasLease: false, link: { up: false, mediaUp: true }, welcomeAt: null })), "lease").value,
+               /이 기기/);
+  assert.match(row(healthRows(input({ state: { ...STATE, lease: { holder: "other" } }, hasLease: false })), "lease").value,
+               /다른 기기/);
+});
+
+test("with the link down and no standby answer the session is unknown, not fine (Isaac live run 2026-10-22)", () => {
+  // between a runner's failure and the next session's welcome the standby's answer can be gone: closing the session
+  // alarm as recovered then was wrong
+  assert.equal(lv({ link: { up: false, mediaUp: false }, welcomeAt: null, standby: null }, "session"), "unknown");
+  assert.equal(lv({}, "session"), "ok");
+});
+
 test("a queue stop reason reads in words, its code kept beside it (Isaac live run 2026-10-22)", () => {
   const code = "observe:all_candidates_exhausted:perception_no_pallet:no_candidate_in_radius:success;success";
   assert.match(queueStopText(`실패: ${code}`), /^실패: .*팔레트를 찾지 못해/);

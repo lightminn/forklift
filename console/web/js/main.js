@@ -901,7 +901,7 @@ function healthTick() {
   m.health.rows = healthRows({
     nowMs: performance.now(), welcomeAt: m.welcomeAt, link: { up: m.link.up, mediaUp: m.link.mediaUp },
     sessionEnding: m.sessionEnding, caps: m.session.welcome?.capabilities ?? null,
-    monitor: stopIsRefused(m.linkWelcome), hasLease: m.session.hasLease, state: m.session.state, stateAt: m.stateAt,
+    monitor: stopIsRefused(m.linkWelcome), hasLease: m.session.hasLease, clientId, state: m.session.state, stateAt: m.stateAt,
     cameraAt: m.camera.lastAt, scanAt: m.scan?.at ?? null, scanReceivedAt: m.scan?.receivedAt ?? null,
     grid: { present: Boolean(m.grid), withdrawnReason: m.gridWithdrawn }, standby: m.standby,
     queue: { run: q.run, stopReason: q.stopReason, items: q.items.length },

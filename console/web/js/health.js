@@ -63,6 +63,8 @@ function sessionRow(inp) {
   if (inp.sessionEnding === "session_end") return r("session", "off", "세션 종료됨");
   if (inp.sessionEnding === "sim_reset") return r("session", "off", "장면 초기화 중");
   if (s && s.standby === true) return r("session", "off", standbyText(s) ?? "세션 기동 중");
+  // no link and no standby answer: nothing says the session is fine (Isaac live run 2026-10-22)
+  if (!inp.link.up) return r("session", "unknown", "모름 · 연결 기다리는 중");
   const notes = Array.isArray(inp.state?.notes) && inp.state.notes.length ? inp.state.notes.join(" · ") : "";
   return r("session", "ok", notes || "이상 없음");
 }
@@ -96,6 +98,8 @@ function leaseValue(inp) {
   if (inp.hasLease) return "이 기기";
   if (!st || st.lease === null || st.lease === undefined) return "모름";
   if (st.lease.holder === null || st.lease.holder === undefined) return "아무도 쥐지 않음";
+  // the last state still names this tab after its link dropped (Isaac live run 2026-10-22)
+  if (inp.clientId && st.lease.holder === inp.clientId) return "이 기기 · 연결이 끊겨 다시 받아야 함";
   return "다른 기기가 쥠";
 }
 
