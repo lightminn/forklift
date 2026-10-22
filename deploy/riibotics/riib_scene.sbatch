@@ -12,15 +12,17 @@
 #                  --near-capture-redraw always, --near-capture-redraw-lateral-m 0.10 (slam mode only: they need the
 #                  perception planning target)
 #   MARKERS=on     line_* / random_* run their slot-marker copy <scene>_m.json (PR #99); the other scenes have none
+#   RACK=on        aisle / aisle_out run their rack copy <scene>_rack.json: rack uprights, wider slot gaps and the
+#                  0.20 m back gap (user decision 2026-10-22, docs/plans/2026-10-22-riibotics-aisle.md D-A, D-C)
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
-# no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off. Anything else goes through EXTRA_ARGS.
+# no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
 # for one with sbatch --gres=shard:1. DRY_RUN=1 prints the runner's arguments, one per line, and starts nothing.
 #
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -29,17 +31,20 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
+case "$RACK" in on|off) ;; *) echo "RACK must be on or off"; exit 2;; esac
 NAME=$SCENE
 case "$SCENE" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
   line_*|random_*) [ "$MARKERS" = on ] && NAME=${SCENE}_m ;;
+  *_rack) [ "$RACK" = off ] && { echo "SCENE=$SCENE is a rack copy but RACK=off"; exit 2; } ;;
+  aisle|aisle_out) [ "$RACK" = on ] && NAME=${SCENE}_rack ;;
 esac
 SCENE_FILE=$SCENE_DIR/$NAME.json
-[ -f "$SCENE_FILE" ] || { echo "no scene file $SCENE_FILE (tools/riibotics_isaac_scenes.py --slot-markers writes the _m copies)"; exit 2; }
+[ -f "$SCENE_FILE" ] || { echo "no scene file $SCENE_FILE (tools/riibotics_isaac_scenes.py --slot-markers / --rack write the _m / _rack copies)"; exit 2; }
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2
 # A run directory is used once: an earlier run's bridge_ready would pass for this bridge's, its records would mix.
 if [ "${DRY_RUN:-0}" != 1 ] && { [ -e "$OUT/run" ] || [ -e "$OUT/bridge/bridge_ready" ]; }; then
@@ -48,8 +53,8 @@ fi
 mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
-echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s SCENE_FILE=%s\n' "$MODE" "$NEAR" "$MARKERS" "$SCENE_FILE" > "$OUT/riib_defaults.txt"
+echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK $(date -Is)"
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s SCENE_FILE=%s\n' "$MODE" "$NEAR" "$MARKERS" "$RACK" "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 read QE QT < <("$VENV_PY" -c "import json,sys;v=json.load(open(sys.argv[1]))['views'];print(','.join(map(str,v['quarter_eye'])),','.join(map(str,v['quarter_target'])))" "$SCENE_FILE")
 COMMON=(--base-scene "$BASE_SCENE"
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml

@@ -19,7 +19,7 @@ NEAR = ["--near-capture-expected", "on", "--near-capture-lower", "waive_far_conf
 def dry_run(tmp_path, scene="line_2", **env):
     scenes = tmp_path / "scenes"
     scenes.mkdir(exist_ok=True)
-    for name in ("line_2", "line_2_m", "aisle"):
+    for name in ("line_2", "line_2_m", "aisle", "aisle_rack", "trailer"):
         (scenes / f"{name}.json").write_text(json.dumps({"views": {"quarter_eye": [1, 2, 3], "quarter_target": [4, 5, 6]}}))
     base = {"SNAP": str(ROOT), "SCENE_DIR": str(scenes), "SCENE": scene, "BASE_SCENE": "scene.usda",
             "FORKLIFT_URDF": str(ROOT / "sim/models/dls08_measured/forklift.urdf"), "VENV_PY": sys.executable,
@@ -47,7 +47,7 @@ def test_the_defaults_turn_the_near_options_and_the_marker_copy_on(tmp_path):
     assert contains(args, NEAR)
     assert args[args.index("--scene-file") + 1].endswith("line_2_m.json")
     assert contains(args, ["--recognition", "far"]) and contains(args, ["--d7-docking"])
-    assert (tmp_path / "out/riib_defaults.txt").read_text().startswith("MODE=slam NEAR=on MARKERS=on")
+    assert (tmp_path / "out/riib_defaults.txt").read_text().startswith("MODE=slam NEAR=on MARKERS=on RACK=on")
 
 
 def test_the_older_combinations_are_chosen_explicitly(tmp_path):
@@ -60,13 +60,21 @@ def test_the_older_combinations_are_chosen_explicitly(tmp_path):
     assert "no effect in MODE=truth" in truth.stderr
 
 
-def test_scenes_without_slot_markers_run_as_they_are(tmp_path):
+def test_scenes_without_copies_run_as_they_are(tmp_path):
+    args = args_of(dry_run(tmp_path, scene="trailer"))
+    assert args[args.index("--scene-file") + 1].endswith("trailer.json")
+
+
+def test_the_aisle_runs_its_rack_copy_by_default_and_the_plain_scene_with_rack_off(tmp_path):
     args = args_of(dry_run(tmp_path, scene="aisle"))
-    assert args[args.index("--scene-file") + 1].endswith("aisle.json")
+    assert args[args.index("--scene-file") + 1].endswith("aisle_rack.json")
+    plain = args_of(dry_run(tmp_path, scene="aisle", RACK="off"))
+    assert plain[plain.index("--scene-file") + 1].endswith("aisle.json")
 
 
 @pytest.mark.parametrize("env", [{"MODE": "fast"}, {"NEAR": "maybe"}, {"SCENE": "line_2_m", "MARKERS": "off"},
-                                 {"SCENE": "line_9"}])
+                                 {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
+                                 {"SCENE": "aisle_out"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)
     assert out.returncode != 0
