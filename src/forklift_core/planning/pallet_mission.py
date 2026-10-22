@@ -288,6 +288,13 @@ def scenario_props(scenario: TransportScenario, stage: str = "search", *, keepou
             if p.asset.height_m > plane_m else p.rectangle for p in kept]
 
 
+def _keepout_of(geometry) -> dict:
+    """scenario_props' keepout arguments from a geometry; one without the P1c fields (a stand-in in a test or an older
+    caller) plans as before."""
+    return {"keepout_m": float(getattr(geometry, "lidar_keepout_m", 0.0)),
+            "plane_m": float(getattr(geometry, "lidar_plane_m", LIDAR_PLANE_M))}
+
+
 def lidar_visible_props(scenario: TransportScenario, stage: str = "search",
                         plane_m: float = LIDAR_PLANE_M) -> list[Rectangle]:
     """The rectangles, at their size, of the props at ``stage`` taller than the LiDAR plane ``plane_m``."""
@@ -768,12 +775,13 @@ def keepout_exit_prefix(scenario: TransportScenario, geometry: SyntheticMissionG
     reverse until the loaded footprint is 1.5 (G + clearance) + 0.01 m clear of the LiDAR-visible props at their size
     -- the search then starts outside the band it keeps (the prefix measures a Euclidean gap, the search inflates
     along the body's axes, up to sqrt 2 apart at a corner); otherwise None."""
-    if exit_prefix is not None or geometry.lidar_keepout_m <= 0.0:
+    keep = _keepout_of(geometry)
+    if exit_prefix is not None or keep["keepout_m"] <= 0.0:
         return exit_prefix
-    visible = lidar_visible_props(scenario, plane_m=geometry.lidar_plane_m)
+    visible = lidar_visible_props(scenario, plane_m=keep["plane_m"])
     if not visible:
         return None
-    return ExitPrefix(tuple(visible), 1.5 * (geometry.lidar_keepout_m + clearance_m) + 0.01)
+    return ExitPrefix(tuple(visible), 1.5 * (keep["keepout_m"] + clearance_m) + 0.01)
 
 
 def plan_observation_leg(
@@ -1026,7 +1034,7 @@ def leg_obstacles(
     sweep against them (plan 2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①, cusp
     position stall v7)."""
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
+    props = scenario_props(scenario, **_keepout_of(geometry))
     if kind == "observe":
         pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
             scenario.pickup.x_m,
@@ -1130,7 +1138,7 @@ def plan_docking_reapproach(
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
-    props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
+    props = scenario_props(scenario, **_keepout_of(geometry))
     result = _search(
         start_rear,
         line_start,
@@ -1605,7 +1613,7 @@ def plan_loaded_delivery(
         return result
 
     props = scenario_props(scenario)
-    search_props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
+    search_props = scenario_props(scenario, **_keepout_of(geometry))
     slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     destination = site_poses(scenario.destination, geometry)
     grid = docking_occupancy if docking_occupancy is not None else occupancy
@@ -1722,7 +1730,7 @@ def plan_transport(
 
     props = scenario_props(scenario)
     # the searches see the LiDAR-visible props grown by the keepout, the fixed straights at their size (P1c)
-    search_props = scenario_props(scenario, keepout_m=geometry.lidar_keepout_m, plane_m=geometry.lidar_plane_m)
+    search_props = scenario_props(scenario, **_keepout_of(geometry))
     slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     pickup = site_poses(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
