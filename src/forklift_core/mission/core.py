@@ -2665,7 +2665,8 @@ class MissionCore:
             # straight) is finished then, with this capture's acquisition kept apart (_observe_finish).
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
-                           trace=planning_trace, **grid_kwargs("mission", planning_pickup))
+                           trace=planning_trace, **grid_kwargs("mission", planning_pickup),
+                           **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -5566,14 +5567,23 @@ class MissionCore:
         cfg, travel = options.planner_config, options.travel_config
         tight_cfg = replace(cfg, clearance_m=0.0)
         tight_travel = replace(travel, clearance_m=0.0) if travel is not None else None
+        exit_kw = {}
         if kind == "transport":
             args, tight_args = (scenario_, start, cfg), (scenario_, start, tight_cfg)
+            exit_kw = self._exit_prefix_kwargs()
         else:
             args = (scenario_, start, options.return_to_pose, cfg)
             tight_args = (scenario_, start, options.return_to_pose, tight_cfg)
-        return {"kind": kind, "args": args, "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw),
+        return {"kind": kind, "args": args,
+                "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw, **exit_kw),
                 "retry_on": tuple(retry_on), "tight_args": tight_args,
-                "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw)}
+                "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw, **exit_kw)}
+
+    def _exit_prefix_kwargs(self) -> dict:
+        """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;
+        docs/plans/2026-10-22-riibotics-trailer-exit.md D1); none when the run has none."""
+        exit_ = getattr(self.hooks, "exit_prefix", None)
+        return {} if exit_ is None else {"exit_prefix": exit_}
 
     def _refresh_for_new_leg(self, t: float, rear) -> None:
         """Right after a plan is taken: the permission's path check on the new leg before the first move (D8b)."""

@@ -74,3 +74,18 @@ def test_a_replan_gets_its_own_prefix():
     first = core.exit_prefix_m()
     core.trackers["transport"] = path((0.20, -1), start=(-0.4, 0.0))  # replanned from where it stopped, clear already
     assert first > 0 and core.exit_prefix_m() == 0.0
+
+
+def test_a_blocked_cell_ahead_of_the_prefix_holds_the_truck_after_the_split():
+    # the permission watch on the prefix of a short transport: the layer's zero is the command's cap (plan test 10)
+    from test_core_pause import Layer
+
+    core, obs, _ = make("transport", tracker=path((0.40, -1)), layer=Layer(allowed=0.0, why="occupied"), speed=-0.2)
+    core.geometry = SimpleNamespace(alignment_straight_m=1.0, delivery_straight_m=1.5, loaded_footprint=LOADED)
+    core.hooks.exit_prefix = EXIT
+    out = core.permission_watch(1.0, (0.0, 0.0, 0.0), 0.0, True)
+    assert out.acting and out.obstacle_hold and obs["permission_cap"] == (1.0, 0.0)
+    core.hooks.exit_prefix = None  # without the prefix the window's exception lets it through, as before
+    core._exit_prefix_cache = None
+    out = core.permission_watch(1.1, (0.0, 0.0, 0.0), 0.0, True)
+    assert not out.acting and not out.obstacle_hold and obs["permission_cap"] is None

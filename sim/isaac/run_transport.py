@@ -456,6 +456,15 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--scene-file", type=Path, default=None,
                         help="--layout scene: the scene record (sim/isaac/scene_file.py)")
+    parser.add_argument(
+        "--exit-clearance-m",
+        type=float,
+        default=None,
+        help="--layout scene, docs/plans/2026-10-22-riibotics-trailer-exit.md D1: every transport plan starts with "
+        "the shortest straight reverse (0.05 m steps, at most 1.0 m) after which the loaded footprint is this far "
+        "(m, > 0) from the scene's walls tall enough for the obstacle layer's band; none within the cap (or a "
+        "blocked straight) plans as before and is recorded. Off: plans as every earlier run.",
+    )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
@@ -937,6 +946,12 @@ def arguments() -> argparse.Namespace:
     )
     if (args.layout == "scene") != (args.scene_file is not None):
         parser.error("--layout scene and --scene-file go together")
+    if args.exit_clearance_m is not None:
+        if args.layout != "scene":
+            # Its obstacles are the scene file's walls.
+            parser.error("--exit-clearance-m needs --layout scene")
+        if not (math.isfinite(args.exit_clearance_m) and args.exit_clearance_m > 0):
+            parser.error("--exit-clearance-m must be a positive number of metres")
     if args.layout == "scene":
         if args.min_obstacle_height_m is not None or args.prism_colliders:
             # The scene's low pallets are part of the scenario and its boxes are their own colliders.
@@ -1847,6 +1862,8 @@ def path_record(path) -> dict:
             list(entry) for entry in getattr(path, "search_attempts", ())
         ],
         "turnaround": getattr(path, "turnaround", None),
+        # the transport exit prefix's record (docs/plans/2026-10-22-riibotics-trailer-exit.md), only when asked for
+        **({"exit_prefix": path.exit_prefix} if getattr(path, "exit_prefix", None) is not None else {}),
     }
 
 
@@ -3279,6 +3296,21 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             ],
         }
 
+    # The transport exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md D1): its obstacles are the
+    # scene's walls the 1.05 m LiDAR plane meets (tall enough to reach the obstacle layer's band), as Isaac
+    # draws and collides them; the scene's props stay the planner's keep-out areas.
+    transport_exit = None
+    if getattr(args, "exit_clearance_m", None) is not None:
+        from forklift_core.planning.pallet_mission import ExitPrefix
+        from scene_file import exit_walls
+
+        band_bottom_ = float(obstacle["layer"].band_bottom_m)
+        exit_walls_ = exit_walls(scene_layout, band_bottom_)
+        transport_exit = ExitPrefix(exit_walls_, float(args.exit_clearance_m))
+        state["exit_prefix"] = {"clearance_m": transport_exit.clearance_m, "step_m": transport_exit.step_m,
+                                "cap_m": transport_exit.cap_m, "band_bottom_m": band_bottom_,
+                                "walls": [asdict(r) for r in exit_walls_]}
+
     grid_planning = bool(args.grid_planning)
     if obstacle is not None and obstacle["layer"].known_enabled and not grid_planning:
         # The recognised pallet reaches the layer through the grid plan's pickup
@@ -3691,6 +3723,10 @@ def drive(S, isaac) -> None:
         straight_from_pose = _bound["straight_from_pose"]
     if "tracker_book" in _bound:
         tracker_book = _bound["tracker_book"]
+    if "transport_exit" in _bound:
+        transport_exit = _bound["transport_exit"]
+    else:  # a record set up before the exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md)
+        transport_exit = None
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     if "truth_destination" in _bound:
@@ -4553,6 +4589,7 @@ def drive(S, isaac) -> None:
             travel_config=travel_config,
             trace=planning_trace,
             **grid_kwargs("mission"),
+            **({} if transport_exit is None else {"exit_prefix": transport_exit}),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
         state["planning_wall_s"] = time.monotonic() - planning_start
@@ -5164,7 +5201,11 @@ def drive(S, isaac) -> None:
             # M-a1 slice 3a: ports read when called (the recorded planners and wall clock when recording).
             wall=lambda: time.monotonic(), grid_world=lambda sc: grid_world(sc),
             grid_kwargs=lambda *a, **k: grid_kwargs(*a, **k),
-            plan_transport_leg=lambda *a, **k: plan_transport_leg(*a, **k),
+            # the transport planners plan with the run's exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md),
+            # and the core reads it for the permission over the prefix
+            plan_transport_leg=lambda *a, **k: plan_transport_leg(
+                *a, **k, **({} if transport_exit is None else {"exit_prefix": transport_exit})),
+            exit_prefix=transport_exit,
             plan_return_leg=lambda *a, **k: plan_return_leg(*a, **k),
             path_record=path_record,
             write_paths=lambda: (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n"),
@@ -5173,7 +5214,8 @@ def drive(S, isaac) -> None:
             save_npz=save_npz_at_output,
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
-            plan_transport=lambda *a, **k: plan_transport(*a, **k),
+            plan_transport=lambda *a, **k: plan_transport(
+                *a, **k, **({} if transport_exit is None else {"exit_prefix": transport_exit})),
             final_straight_prefix=lambda *a: final_straight_prefix(*a),
             same_path=same_path, path_stats=path_stats,
             # M-a1 slice 4a: the follower rules' helpers and the cusp heading holds (built further down run()).
@@ -6766,7 +6808,8 @@ def drive(S, isaac) -> None:
                 payload_ = {"args": (grid_world(scenario_), start_),
                             "kwargs": {"config": planner_config, "geometry": geometry,
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
-                                       "occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0},
+                                       "occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0,
+                                       **({} if transport_exit is None else {"exit_prefix": transport_exit})},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
                            "pickup_bounds": None, "pickup_zone": None,
