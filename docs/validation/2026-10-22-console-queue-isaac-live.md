@@ -46,8 +46,8 @@
 
 ## 4. 시험·검토
 
-- 웹 시험 `node --test "console/web/test/*.test.mjs"` 191 통과. ws1 `forklift-ws1-pytest tests/unit/console tests/integration/console` 결과는 PR 본문.
-- Codex: 수정 1차(피드백 상실 0.5 s, 문구) — P2 1·P3 1 → 반영 → 2회차 수렴(새 P1/P2 없음). 표시 수정(세션 unknown, 권한 값)은 3회차.
+- 웹 시험 `node --test "console/web/test/*.test.mjs"` 192 통과. ws1 `forklift-ws1-pytest tests/unit/console tests/integration/console` 156 통과·1 건너뜀(설명표 시험 포함).
+- Codex: 수정 1차(피드백 상실 0.5 s, 문구) — P2 1·P3 1 → 반영 → 2회차 수렴. 표시 수정(세션 unknown, 권한 값) 3회차 — P2 1(소켓만 열리고 welcome 전에도 세션 경보가 복구로 닫힘) → 반영 → **4회차 수렴(새 P1/P2 없음)**.
 - 시험용으로, 수정 전 '차량 피드백 없음' 멈춤을 3 초 뒤 대신 재개하는 페이지 스크립트를 16:15–16:17 에만 걸었다(빈도 확인용 — 그 동안 멈춤 1 회). 나머지 재개·STOP·취소·끊김은 화면 버튼과 터널로 직접 했다.
 
 ## 5. 화면
