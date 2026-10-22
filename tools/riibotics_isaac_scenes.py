@@ -123,7 +123,8 @@ RACK_ORANGE = (0.85, 0.45, 0.12)
 
 # Slot markers (plan 2026-10-22 open-zone docking D3): per unloading slot two plates parallel to its entry, from
 # MARKER_BEHIND_M to MARKER_BEHIND_M + MARKER_L_M beyond its far edge (the pallet's front face), MARKER_SIDE_M to
-# either side of its axis; they cover the 1.05 m LiDAR plane by 0.25 m both ways. Sized against the 13 refused
+# either side of its axis (halfway to a slot beside it in the same row when nearer: a plate 1.5 m out would stand
+# 0.21 m off the neighbour's axis, inside its planning clearance); they cover the 1.05 m LiDAR plane by 0.25 m. Sized against the 13 refused
 # delivery matches (ws1 test_runs/riibotics/marker_sizing.py): side panels beside the slot hide the far wall from
 # the station's reference scan, plates nearer than 1.5 m to the axis left the middle line slot short of inliers.
 MARKER_URI = "riibotics:slot_marker"
@@ -134,14 +135,28 @@ SLOT_DEPTH_M = 0.60  # EPAL 6 along the forks: a slot's far edge is half of it a
 MARKED_KINDS = ("line", "random")
 
 
+def _beside(a: PalletSite, b: PalletSite) -> float | None:
+    """b's lateral offset from a when b stands beside a in the same row (same entry yaw, same depth), else None."""
+    if abs(math.atan2(math.sin(a.yaw_rad - b.yaw_rad), math.cos(a.yaw_rad - b.yaw_rad))) > 1e-6:
+        return None
+    c, sn = math.cos(a.yaw_rad), math.sin(a.yaw_rad)
+    dx, dy = b.x_m - a.x_m, b.y_m - a.y_m
+    along, lateral = dx * c + dy * sn, -dx * sn + dy * c
+    return lateral if abs(along) < 0.05 and abs(lateral) > 1e-6 else None
+
+
 def slot_markers(slots: list[PalletSite]) -> list[Rectangle]:
-    """The plates of a set of unloading slots (each a PalletSite: centre and entry yaw); plates of neighbouring
-    slots whose centres are closer than MARKER_MERGE_M become one at their midpoint."""
+    """The plates of a set of unloading slots (each a PalletSite: centre and entry yaw): MARKER_SIDE_M to either
+    side of a slot's axis, or halfway to the slot beside it in the same row when that is nearer (shared plates
+    then coincide); plates whose centres are closer than MARKER_MERGE_M become one at their midpoint."""
     plates: list[list[float]] = []
     for s in slots:
         c, sn = math.cos(s.yaw_rad), math.sin(s.yaw_rad)
         ahead = SLOT_DEPTH_M / 2 + MARKER_BEHIND_M + MARKER_L_M / 2
-        for side in (MARKER_SIDE_M, -MARKER_SIDE_M):
+        offsets = [o for o in (_beside(s, other) for other in slots if other is not s) if o is not None]
+        for sign in (1.0, -1.0):
+            same_side = [abs(o) for o in offsets if o * sign > 0]
+            side = sign * min([MARKER_SIDE_M] + [o / 2 for o in same_side])
             x, y = s.x_m + ahead * c - side * sn, s.y_m + ahead * sn + side * c
             near = [q for q in plates if math.hypot(q[0] - x, q[1] - y) < MARKER_MERGE_M]
             if near:

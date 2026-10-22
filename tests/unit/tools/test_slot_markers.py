@@ -38,8 +38,21 @@ def test_plates_turn_with_the_slot():
     assert sorted(round(r.x_m, 6) for r in plates) == [-0.5, 2.5]
 
 
-def test_plates_of_neighbouring_slots_closer_than_0_3_m_merge():
-    a, b = PalletSite(3.4, 0.0, 0.0), PalletSite(3.4, -2.8, 0.0)  # a's right plate at -1.5, b's left plate at -1.3
+def test_slots_side_by_side_share_the_plate_halfway_between_them():
+    # random's row: 1.287 m apart -- 1.5 m out would put a plate 0.21 m off the neighbour's axis
+    row = [PalletSite(3.4, y, 0.0) for y in (-7.182, -8.469, -9.756)]
+    plates = sorted(tool.slot_markers(row), key=lambda r: r.y_m)
+    assert [round(r.y_m, 4) for r in plates] == [-11.256, -9.1125, -7.8255, -5.682]
+
+
+def test_slots_one_behind_another_keep_their_plates_out_to_the_side():
+    column = [PalletSite(x, -8.946, 0.0) for x in (3.0, 1.938, 0.876)]  # line's column: not side by side
+    plates = tool.slot_markers(column)
+    assert len(plates) == 6 and {round(r.y_m, 3) for r in plates} == {-10.446, -7.446}
+
+
+def test_plates_closer_than_0_3_m_merge():
+    a, b = PalletSite(3.4, 0.0, 0.0), PalletSite(3.45, -2.8, 0.0)  # not in one row (5 cm deeper): -1.5 and -1.3
     plates = tool.slot_markers([a, b])
     assert len(plates) == 3
     assert any(r.y_m == pytest.approx(-1.4) for r in plates)
@@ -73,9 +86,11 @@ def test_plates_stay_clear_of_every_slot_and_inside_the_hall(name):
     slots = tool.unloading_slots_hall(kind, tool.scenes()[name])
     for site in slots:
         pallet = Rectangle(site.x_m, site.y_m, 0.60, 0.80, site.yaw_rad)
-        # the pallet standing in the slot and the truck's forks reaching its far edge touch no plate
+        # the pallet standing in the slot, grown by the planner's clearance, touches no plate
+        clearance = tool.CLEARANCE_M
         assert collision_free_pose(Pose2D(site.x_m, site.y_m, site.yaw_rad), [Rectangle(**r) for r in plates],
-                                   Footprint(0.30, 0.30, 0.40), tool.HALL), (name, site, pallet)
+                                   Footprint(0.30 + clearance, 0.30 + clearance, 0.40 + clearance), tool.HALL), \
+            (name, site, pallet)
     for r in plates:
         assert tool.HALL.x_min_m < r["x_m"] < tool.HALL.x_max_m and tool.HALL.y_min_m < r["y_m"] < tool.HALL.y_max_m
 
