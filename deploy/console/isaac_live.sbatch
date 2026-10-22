@@ -19,7 +19,9 @@
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
-#   for the learned proposals, the model and interpreter of that host.
+#   for the learned proposals, the model and interpreter of that host -- then submit with --gres=shard:2: the
+#   session's Isaac (3.4 GB) and the learned worker (0.5 GB) peaked at 3.9 GB of a 4 GB shard (2026-10-22), too
+#   close for a GPU shared with other jobs (a worker's warm-up ran out of GPU memory once).
 #
 # Run from the repository root. Open the console through   ssh -N -L 8798:127.0.0.1:$PORT <host>.
 set -u
