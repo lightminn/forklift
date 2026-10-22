@@ -237,7 +237,8 @@ LiDAR 면(1.05 m)을 지나는 사전 지도 구조를 계획기가 G 만큼 더
 **사용자 결정(2026-10-23): 연속 이송 세션의 다리 끝 정체 복구 A 와 하나의 장면 모드 재계획 장치로 합친다.**
 공통 장치는 그 세션이 만들고(`docs/plans/2026-10-23-scene-replan.md`, feat/scene-replan), 이 작업은 허가 정지 트리거를 그 위에 얹는다. 맞춘 인터페이스(2026-10-23):
 
-- 진입점 `core.scene_replan_request(t, trigger, *, extra_obstacles=(), clearance_m=None, detail=None)`. 이 작업의 트리거는 `"permit_stop"` 이다.
+- 진입점 `core.scene_replan_request(t, trigger, *, extra_obstacles_fn=None, clearance_m=None, detail=None)`. 이 작업의 트리거는 `"permit_stop"` 이다.
+  요청은 플래그로 서고, tick 앞 상태 기계가 처리한다. `extra_obstacles_fn` 은 인자 없는 콜백이다. 장치가 hold 를 해제·재투영한 뒤 계획하는 순간에 부르므로, 사각형이 바뀐 프레임에 맞는다(그 세션 Codex P2-4, feat/scene-replan e441fdd).
 - 공통 장치가 하는 일:
   - 정지 확인 → hold 해제·재투영 → 그 다리 재계획(`plan_transport_leg`/`plan_return_leg`, 장애물 = 장면 + `extra_obstacles`) → `invalid_start` 면 직진 후진 탈출 한 번 → 다시 계획.
   - **설치 전 허가 검사:** 그 틱의 GridSnapshot 으로 `check_path` 검증 거리 ≥ min(lookahead, 경로 길이)·blocked 없음, 추종기 첫 명령의 `check_arc`·`allowed_speed` > 0. 탈출 접두도 첫 틱부터 같은 검사를 한다.
@@ -245,7 +246,7 @@ LiDAR 면(1.05 m)을 지나는 사전 지도 구조를 계획기가 G 만큼 더
   - 장애물 집합은 계획기에 맡긴다 — P1c 가 바꾼 탐색 장애물 규칙이 자동으로 적용된다.
 - 이 작업(트리거)이 하는 일:
   - 조건: 허가 상한 0·이유 `occupied` 가 T = 3.0 s 이어짐. 단계 transport / return_home 이고, 공통 장치의 제외 조건(도킹 수용·재접근, near/bottom-deck/held realign, backoff/escape)을 따른다.
-  - `extra_obstacles`: 마지막 허가 검사의 막힌 칸을 칸 사각형으로 만들어 이웃끼리 합친 것.
+  - `extra_obstacles_fn`: 호출 시점 permission 스냅숏으로 계획 경로 앞을 다시 검사해, 막힌 칸(`path_blocked_cells`, 없으면 `blocked_cells`)을 칸 사각형으로 만들어 이웃끼리 합쳐 돌려준다. 막힌 칸이 없으면 빈 목록이다. 콜백 예외는 그 발동의 실패(`scene_replan_failed:permit_stop:obstacles_error`)로 기록한다.
   - `clearance_m`: 평소 값 + 0.10 m. 값은 1.1·P3 측정에서 운반 필요 G 의 아래쪽이다. 시험으로 다시 본다.
 - 순서: 공통 장치 PR 이 먼저 머지되고, 그 뒤에 트리거를 얹는다.
 
