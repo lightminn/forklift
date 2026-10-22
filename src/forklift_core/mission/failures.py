@@ -52,6 +52,9 @@ PREFIXES = {
     "approach:": MISSION, "insert:": MISSION, "extract:": MISSION, "transport:": MISSION, "withdraw:": MISSION,
     "return_home:": MISSION, "cusp_position_stall": MISSION,
     "not_pickable:": MISSION,  # the far reading does not fit the forks at this spacing (2026-10-21)
+    # the live far recognition (plan 2026-10-22-live-far-recognition): its work failed, or its stop decision did not
+    # come within 30 s -- that mission ends, the session goes on
+    "recognition_error:": MISSION, "recognition_timeout": MISSION,
 }
 
 # The require sites whose reason is made at run time, by (file, expression), with what their values are.

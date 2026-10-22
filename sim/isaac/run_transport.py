@@ -811,6 +811,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
+    parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
+                        help="tests only (plan 2026-10-22-live-far-recognition section 4): the session's first mission "
+                        "looks for its pallet this far (+x) from where it is -- a recognition that finds no pallet in its "
+                        "zone, so the mission fails and the session takes the next submit")
     parser.add_argument("--live-test-stop-in-capture", action="store_true",
                         help="M-c tests only: a STOP arrives at a physics step inside the first capture (the path a "
                         "console STOP takes, at a moment a client cannot aim for)")
@@ -1097,8 +1101,7 @@ def arguments() -> argparse.Namespace:
             parser.error("--recognition far needs --use-perception and --slam-feedback")
         if args.near_tracking or args.pocket_check:
             parser.error("--recognition far is not defined with --near-tracking or --pocket-check")
-        if getattr(args, "live", False):
-            parser.error("--recognition far is a batch run (the live capture path is out of its scope)")
+        # A live run takes it too: its work on a thread of its own (docs/plans/2026-10-22-live-far-recognition.md).
         if args.recognition_frame_every <= 0 or args.recognition_pixel_lag_steps < 0:
             parser.error("--recognition-frame-every must be positive, --recognition-pixel-lag-steps nonnegative")
     if args.record_pocket_frames and args.slam_feedback is None:
@@ -1128,6 +1131,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--live is not replayed: not with --record-boundary (plan C4)")
     if args.return_turnaround is None:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
+    if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
+        parser.error("--live-test-far-zone-offset-m needs --live and --recognition far")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
                           or args.live_test_recovery_blocked or args.live_test_return_correction_drops
                           or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
@@ -2923,8 +2928,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
     far_runtime = far_intrinsics = frr = None  # the far recognition (--recognition far)
+    far_live = None  # a live run's far worker (plan 2026-10-22-live-far-recognition), made with the live session
     if args.recognition == "far":
         import far_recognition_runtime as frr
+
+        def far_semantic(payload):
+            """The stop capture's semantic decode. A live run's failure here is the mission's (task 9 of
+            docs/plans/2026-10-22-live-far-recognition.md), not the session's; a batch run raises as it did."""
+            if not getattr(args, "live", False):
+                return frr.decode_mission_semantic(payload)
+            try:
+                return frr.decode_mission_semantic(payload)
+            except Exception as exc:  # noqa: BLE001 -- the mission's failure, by its type
+                raise RuntimeError(f"recognition_error:{type(exc).__name__}") from exc
     if args.use_perception:
         perception_camera.initialize()
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
@@ -3104,7 +3120,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
-            semantic_fn=(lambda: frr.decode_mission_semantic(
+            semantic_fn=(lambda: far_semantic(
                 perception_camera.get_current_frame().get("semantic_segmentation"))) if args.recognition == "far" else None,
         )
         if args.recognition == "far":
@@ -3551,6 +3567,10 @@ def drive(S, isaac) -> None:
         far_intrinsics = _bound["far_intrinsics"]
     if "frr" in _bound:
         frr = _bound["frr"]
+    if "far_live" not in _bound:  # a setup recorded before the live far recognition (2026-10-22)
+        _bound["far_live"] = None
+    if "far_live" in _bound:
+        far_live = _bound["far_live"]
     if "ARC_POSES" in _bound:
         ARC_POSES = _bound["ARC_POSES"]
     if "CUSP_STALL" in _bound:
@@ -5160,6 +5180,43 @@ def drive(S, isaac) -> None:
         state.setdefault("recognition", {}).update(far_runtime.summary())
         return observation_, record_
 
+    def far_recognition_submit_hook(scene_input_, base_, yaw_, reference_):
+        """A live run's far stop (plan 2026-10-22-live-far-recognition T1 (A)): everything it rests on fixed now,
+        its work handed to the far worker; the mission core waits for the decision (far_recognition_poll_hook)."""
+        truth_b_, truth_q_ = robot.get_world_pose()
+        pallet_p_, pallet_q_ = pallet.get_world_pose()
+        return far_live.stop(
+            core.commands.mission_gen, scene_input=scene_input_, instance_ids=perception_capture.state.instance_ids,
+            initial_time_s=initial_time, control_base=(float(base_[0]), float(base_[1]), float(yaw_)),
+            odom_base=slam_odom_base(),
+            truth_base=(float(truth_b_[0]), float(truth_b_[1]), yaw_and_tilt(truth_q_)[0]),
+            truth_pallet=(float(pallet_p_[0]), float(pallet_p_[1]), yaw_and_tilt(pallet_q_)[0]),
+            detector_observation=reference_)
+
+    def far_recognition_poll_hook(handle_):
+        """The live far stop's state for the mission core: waiting, done (its observation and record) or invalid
+        (why, with a no_pallet observation for an observe failure)."""
+        from types import SimpleNamespace as _NS
+
+        state_ = far_live.stop_state(handle_)  # recognition_timeout past 30 s
+        if state_ == "waiting":
+            return _NS(state="waiting")
+        if state_ == "done":
+            observation_, record_ = far_live.take(handle_)
+            return _NS(state="done", observation=observation_, record=record_)
+        return _NS(state="invalid", why=handle_.why,
+                   observation=frr.B.no_pallet(handle_.stamp_ns, handle_.clock_domain, f"far_{handle_.why}"))
+
+    def far_recognition_mission_end_hook(t_):
+        """A live mission's end, whatever ended it: the far work dropped, the mission's recognition summary its
+        own record (``recognition_mission``) and its directory's result.json, by the session's writer."""
+        summary_ = far_live.end_mission(core.commands.mission_id)
+        if summary_ is None:
+            return  # the mission ended before its adoption: no far recognition of its own
+        state["recognition_mission"] = summary_
+        if far_live.mission_dir is not None:
+            far_live.write_json(far_live.mission_dir / "result.json", {"recognition": summary_})
+
     def far_recognition_zone_hook(centre_, radius_):
         """The bottom-deck re-observation's zone (the pallet judged). The run state is refreshed here too, so a run
         that ends before the next stop still records the change (Codex ecf4be5 P2)."""
@@ -5736,20 +5793,42 @@ def drive(S, isaac) -> None:
             )
 
         def far_drive_frame(tick_: int) -> None:
-            """One driving frame for the far recognition: render-metadata time, pixels and instance ids."""
+            """One driving frame for the far recognition: render-metadata time, pixels and instance ids. A live run
+            hands its work to the far worker; a failure of its read is raised by the tick, after this step's other
+            sensors (plan 2026-10-22-live-far-recognition task 9)."""
             frame_ = perception_camera.get_current_frame()
-            semantic_ = frr.decode_mission_semantic(frame_.get("semantic_segmentation"))
-            rgba_ = np.array(perception_camera.get_rgba(), copy=True)
-            raw_ = np.array(perception_camera.get_depth(), copy=True)
-            if raw_.ndim == 3 and raw_.shape[-1] == 1:
-                raw_ = np.squeeze(raw_, axis=-1)
-            ready_ = raw_.shape == (far_intrinsics.height, far_intrinsics.width) and rgba_.ndim == 3
-            depth_ = adapter.normalize_depth(raw_)[0] if ready_ else None  # the camera's first renders are empty
-            applied_ = slam["tracker"].applied if slam is not None else None
-            far_runtime.drive_frame(
-                tick_, float(frame_["rendering_time"]) - initial_time, rgba_[:, :, :3] if ready_ else None, depth_,
-                semantic_.instance_ids if semantic_.ready else None, far_intrinsics, perception_mount,
-                tuple(float(v) for v in applied_[0]) if applied_ is not None else (0.0, 0.0, 0.0))
+            # the sensor's own contract (its metadata): a session failure, as before (task 9; Codex impl round 1 P2)
+            rendering_s_ = float(frame_["rendering_time"]) - initial_time
+
+            def read_() -> None:
+                semantic_ = frr.decode_mission_semantic(frame_.get("semantic_segmentation"))
+                rgba_ = np.array(perception_camera.get_rgba(), copy=True)
+                raw_ = np.array(perception_camera.get_depth(), copy=True)
+                if raw_.ndim == 3 and raw_.shape[-1] == 1:
+                    raw_ = np.squeeze(raw_, axis=-1)
+                ready_ = raw_.shape == (far_intrinsics.height, far_intrinsics.width) and rgba_.ndim == 3
+                depth_ = adapter.normalize_depth(raw_)[0] if ready_ else None  # the camera's first renders are empty
+                applied_ = slam["tracker"].applied if slam is not None else None
+                frame_args_ = (
+                    tick_, rendering_s_, rgba_[:, :, :3] if ready_ else None, depth_,
+                    semantic_.instance_ids if semantic_.ready else None, far_intrinsics, perception_mount,
+                    tuple(float(v) for v in applied_[0]) if applied_ is not None else (0.0, 0.0, 0.0))
+                if far_live is not None:
+                    far_live.drive(core.commands.mission_gen, *frame_args_)
+                else:
+                    far_runtime.drive_frame(*frame_args_)
+
+            if far_live is not None:
+                far_live.read_frame(read_)
+            else:
+                read_()
+
+        def far_observing(observing_: bool) -> bool:
+            """A live run takes far frames and logs steps only for a running mission without a STOP at this physics
+            step (task 6); a batch run as it did."""
+            if far_live is None:
+                return observing_
+            return frr.live_observing(core.commands.status, observing_, live.stopped_in_tick)
 
         def step_world(render: bool) -> None:
             """One physics step and everything that must see every step
@@ -5772,8 +5851,8 @@ def drive(S, isaac) -> None:
             # The far recognition's driving frames: every frame_every steps of a far observe leg (not the near
             # capture's leg, not inside a stationary capture), rendered here and read after the odometry below.
             far_due = far_runtime is not None and far_runtime.due(
-                tick, observing=ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
-                and not core.bottom_deck_side_leg())  # plan 2026-10-19 task 4: no far frames on a side leg
+                tick, observing=far_observing(ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
+                and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
@@ -5870,7 +5949,7 @@ def drive(S, isaac) -> None:
                 # Every tracker in this runner stops at 0.012 m/s; its arrival
                 # and gear-change checks wait for the noise-aware detector.
                 slam["tracker_speed"] = slam["stop"].tracker_speed(0.012)
-            if far_runtime is not None and ms.phase == "observe" and not core.bottom_deck_side_leg():
+            if far_runtime is not None and far_observing(ms.phase == "observe" and not core.bottom_deck_side_leg()):
                 # Each step's odom and truth (the driving frames' poses and the pixel-lag fit's input).
                 pallet_now_, pallet_q_now_ = pallet.get_world_pose()
                 far_runtime.record_step(tick, stamp_now, slam_odom_base(),
@@ -6296,6 +6375,18 @@ def drive(S, isaac) -> None:
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
+            if far_runtime is not None:
+                # Plan 2026-10-22-live-far-recognition T1 (A): the far work on a thread of its own, applied on the
+                # tick by tag; its files on the session's writer; no driving frame inside a capture session.
+                far_live = frr.LiveFar(far_runtime, io=live.io)
+                far_live.setup_zone = (tuple(far_runtime.zone_centre_xy), float(far_runtime.zone_radius_m))
+                far_live.test_offset_used = False
+                _plain_session = perception_capture.session
+                perception_capture.session = lambda **kw_: frr.GuardedSession(_plain_session(**kw_), far_runtime)
+                core.hooks.far_recognition_submit = far_recognition_submit_hook
+                core.hooks.far_recognition_poll = far_recognition_poll_hook
+                core.hooks.far_recognition_cancel = far_live.clear
+                core.hooks.far_recognition_mission_end = far_recognition_mission_end_hook
             # plan D14 (main 2026-10-19): the loaded hold tolerance for the gate, a mission end and the manual lift
             live.loaded_hold_tolerance_m = live.arbiter.lift.loaded_tolerance_m = live_loaded_tolerance_
             core.lift_hold_tolerance = live.hold_tolerance  # the core's first pause holds the same way (Codex r5 P1)
@@ -6329,7 +6420,7 @@ def drive(S, isaac) -> None:
                     live.trace.set("tick", stepper["tick"])
                     # The far frame's request is made inside step_world; the same expression here, for the record
                     # only (far_runtime.due is pure; Codex 5.12 implementation round 2 P2).
-                    far_ = far_runtime is not None and far_runtime.due(stepper["tick"], observing=(
+                    far_ = far_runtime is not None and far_runtime.due(stepper["tick"], observing=far_observing(
                         ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"))
                     for flag_, on_ in (("live_camera", camera_), ("video", frame_), ("render_arg", render),
                                        ("scan", scan_), ("far", far_)):
@@ -6792,6 +6883,16 @@ def drive(S, isaac) -> None:
                            "pickup_bounds": live_session_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
+                if far_live is not None:
+                    # Plan 2026-10-22-live-far-recognition task 7: a prior pallet is looked for in the scene's zone, a
+                    # recognised or delivered one around its estimate, the same radius (not at its first place).
+                    inputs_["far_zone"] = (far_live.setup_zone[0] if at_first_ else target_[:2], far_live.setup_zone[1])
+                    if args.live_test_far_zone_offset_m is not None and not far_live.test_offset_used:
+                        far_live.test_offset_used = True  # the session's first mission only (section 4's rejection)
+                        (cx_, cy_), r_ = inputs_["far_zone"]
+                        inputs_["far_zone"] = ((cx_ + args.live_test_far_zone_offset_m, cy_), r_)
+                        state.setdefault("live_test_injections", []).append(
+                            {"far_zone_offset_m": args.live_test_far_zone_offset_m, "mission_id": core.commands.mission_id})
                 core.prepare_request(t_, rear_, inputs_, payload_)
 
             def live_prepare_loaded(t_, rear_):
@@ -6872,6 +6973,12 @@ def drive(S, isaac) -> None:
                     live_perm._cache.clear()
                 if ready_ is not None:
                     install_docking_reference(ready_)
+                if far_live is not None:  # plan 2026-10-22-live-far-recognition task 7: the mission's own far state
+                    zone_c_, zone_r_ = inputs_.get("far_zone") or far_live.setup_zone
+                    mission_dir_ = args.output / "recognition_missions" / str(core.commands.mission_id)
+                    far_live.start_mission(core.commands.mission_id, zone_centre_xy=zone_c_, zone_radius_m=zone_r_,
+                                           out_dir=mission_dir_ / "recognition")
+                    far_live.mission_dir = mission_dir_
 
             core.options.observe_bounds = None  # the whole observation travel in the hall (D2, Codex P2-6)
             core.hooks.live_mission_ready, core.hooks.live_mission_start = live_mission_ready, live_mission_start
@@ -7322,7 +7429,9 @@ def drive(S, isaac) -> None:
                         if core.capture_live is not None:
                             core.capture_abandon()
                             live.capturing = False
-                        core.observation_live = None  # a pause or a cancel: the arrival captures again when running
+                        core.observation_drop(t, "paused")  # a pause or a cancel: the arrival captures again when running
+                        if far_live is not None:
+                            far_live.clear("paused")  # the far work waiting is dropped (plan 2026-10-22 T1 (A))
                     elif core.capture_live is not None:
                         plan_wait_ = True
                         if core.capture_live.raw is not None:
@@ -7958,6 +8067,13 @@ def drive(S, isaac) -> None:
                     stepped_ = core.capture_stepped(bool(live.stopped_in_tick))
                     if getattr(stepped_, "aborted", False) or core.capture_live is None or core.capture_live.raw is not None:
                         live.capturing = False
+                if far_live is not None:
+                    # Plan 2026-10-22-live-far-recognition T1 (A): what the far worker finished, taken in by tag, after
+                    # this tick's physics step (a failure is the mission's, the step not run again).
+                    # A STOP at this step is a boundary too: the status and generation change only at the next
+                    # tick's commands, so nothing is taken in on its tick (Codex impl round 1 P2).
+                    far_live.pump(core.commands.mission_gen,
+                                  active=core.commands.status == "running" and not live.stopped_in_tick)
                 if pocket_frames and step % 12 == 0:
                     read_pocket_frame()
                 if step % 12 == 0:
@@ -8012,6 +8128,8 @@ def drive(S, isaac) -> None:
             # The session's end decides the exit (plan D9): 0 ended, 3 a new scene; the supervisor reads it.
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
+            if far_live is not None:
+                far_live.close()  # after the last mission's far record is closed (Codex impl round 2 P2)
             live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
             live.settle_records()  # a records write failure on its result before the results are taken (U29)
             state.update({"success": True, "mission_results": live.results.message()["results"],
@@ -8300,6 +8418,8 @@ def drive(S, isaac) -> None:
                     state["async_plan_worker"]["restarts"] = core.jobs.restarts
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["async_plan_worker_close_error"] = repr(exc_)
+            if locals().get("far_live") is not None:
+                far_live.close()  # the far worker ends with the run, however it ends (idempotent)
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)

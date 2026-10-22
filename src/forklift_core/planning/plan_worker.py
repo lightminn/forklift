@@ -117,7 +117,7 @@ def _observe_ladder(pm, payload: dict) -> dict:
     kwargs["deadline"] = deadline
     start = world.start_rear
     candidates, result, selected, timed_out = [], None, None, False
-    for extended in (False, True):
+    for extended in tuple(payload.get("ladders", (False, True))):  # a re-observation: the near ladder only
         for index, coordinates in enumerate(payload["waypoints"]):
             if deadline is not None and time.monotonic() >= deadline:
                 timed_out = True
