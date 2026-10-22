@@ -138,6 +138,13 @@ export function reasonText(code) {
   return { text: head ? REASONS[head] : code, code };
 }
 
+// The table entry a reason code falls under (results summary plan D2: codes of one meaning are counted together);
+// a code with no entry is its own head.
+export function reasonHead(code) {
+  const head = HEADS.find((h) => code.startsWith(h));
+  return head ? { head, text: REASONS[head] } : { head: code, text: code };
+}
+
 // The results book of this session (contract 5.2): the seq counts within a session_epoch only. Every message carries
 // the vehicle's whole kept list (its newest 100) and how many are older; the page shows that list as it is -- a long
 // session does not grow it (Codex D13 impl round 2) -- and never goes back to an older message arriving late.

@@ -4,6 +4,7 @@
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { badge as alarmBadge } from "./health.js";
+import { summarize } from "./summary.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -394,6 +395,12 @@ function renderSession(m, stIn, lease, prof, monitor) {
   note.hidden = !note.textContent;
 
   const book = m.results;
+  // results summary plan D3: drawn with the list, and again when the targets (the pallets' kinds) change
+  const sumKey = `${book?.version}|${m.session.targets?.targets_revision ?? ""}`;
+  if (book && sumKey !== m.cache.summaryKey) {
+    m.cache.summaryKey = sumKey;
+    renderSummary(summarize(book, m.session.targets));
+  }
   if (book && book.version !== m.cache.resultsVersion) {
     m.cache.resultsVersion = book.version;
     const rows = book.rows();
@@ -405,7 +412,8 @@ function renderSession(m, stIn, lease, prof, monitor) {
       return `<li><span class="chip ${cls}">${esc(ko)}</span><span class="what">#${r.seq} ${esc(r.pallet_id ?? "?")} → ${esc(destinationLabel(r.destination_id ?? "?"))}</span><span class="when">${esc(wallTime(r.ended_unix))}${span}${r.map_id ? ` · <span class="mono" title="지도 ${esc(r.map_id)}">지도 ${esc(String(r.map_id).slice(0, 8))}</span>` : ""}</span>${why ? `<span class="why">${esc(why.text)}${why.text !== why.code ? ` <span class="mono">(${esc(why.code)})</span>` : ""}</span>` : ""}${advice ? `<span class="advice">${esc(advice)}</span>` : ""}${r.record_error ? `<span class="why">기록 파일을 쓰지 못함 · ${esc(r.record_error)}</span>` : ""}</li>`;
     }).join("") : '<li class="hint">아직 끝난 미션이 없습니다</li>';
     $("results-older").textContent = [
-      book.older ? `앞선 ${book.older}건은 기록 파일(missions/<id>/result.json)에만` : "",
+      // results summary plan D3 (Codex round 3): no promise that the files hold them -- writing is asynchronous
+      book.older ? `앞선 ${book.older}건은 현재 목록에 없습니다` : "",
       book.recordErrorsOlder ? `목록 밖 결과의 기록 실패 ${book.recordErrorsOlder}건(실행 로그에 있음)` : "",
     ].filter(Boolean).join(" · ");
   }
@@ -566,4 +574,37 @@ function renderHealth(m) {
     return `<li class="${live ? `open ${a.level}` : ""}"><span class="chip ${a.level}">${esc(LEVEL_KO[a.level])}</span><span class="what">${esc(a.label)} · ${esc(a.text)}${esc(peak)}</span><span class="when">${live ? `${esc(clock(a.opened_unix))} · ` : ""}${esc(span)}</span>${why}</li>`;
   };
   $("alarm-list").innerHTML = open.length || closed.length ? [...open, ...closed].map(item).join("") : '<li class="hint">경보 없음</li>';
+}
+
+// Results summary plan D3: one line over the results list and the details under it; the scope is always said.
+const pct = (r) => (r ? `${Math.round(r.rate * 100)} % (${r.of}건)` : "—");
+const secsOf = (d) => (d ? `중앙값 ${d.median.toFixed(0)} s · 최대 ${d.max.toFixed(0)} s (${d.n}건)` : "—");
+
+function renderSummary(s) {
+  const box = $("results-summary");
+  box.hidden = s.listed === 0;
+  if (s.listed === 0) return;
+  const c = s.counts;
+  const outcomes = [`완료 ${c.done}`, `실패 ${c.failed}`, `취소 ${c.cancelled}`, `복구 필요 ${c.recovery_required}`]
+    .concat(c.other ? [`그 밖 ${c.other}`] : []).join(" · ");
+  $("sum-line").textContent = `${outcomes} — 완료율 ${pct(s.doneRate)} · 취소 제외 ${pct(s.doneRateNoCancel)} · 완료 경과 ${s.durations.done ? `중앙값 ${s.durations.done.median.toFixed(0)} s` : "—"}`;
+  const scope = [
+    `이 세션(epoch ${s.epoch ?? "—"})만 · 결과 ${s.total}건${s.older ? ` 중 최근 ${s.listed}건 집계` : " 집계"}`,
+    "세션이 바뀌면 처음부터 셉니다(장면 초기화 포함) — 세션을 넘는 누적이 아닙니다",
+    s.older ? `앞선 ${s.older}건은 현재 목록에 없어 집계에서 제외됩니다` : "",
+  ].filter(Boolean);
+  const reasons = s.reasons.length
+    ? `<table class="sum-table"><thead><tr><th>설명(완료가 아닌 결과)</th><th>건수</th></tr></thead><tbody>${s.reasons.map((r) => `<tr><td>${esc(r.text)}${r.codes.length && !(r.codes.length === 1 && r.codes[0][0] === r.text) ? `<small class="mono">${r.codes.map(([code, n]) => `${esc(code)} ×${n}`).join(" · ")}</small>` : ""}</td><td class="mono">${r.count}</td></tr>`).join("")}</tbody></table>`
+    : '<p class="hint">완료가 아닌 결과가 없습니다</p>';
+  const pallets = `<table class="sum-table"><thead><tr><th>팔레트</th><th>완료 / 전체</th></tr></thead><tbody>${s.pallets.map((p) => `<tr><td>${esc(p.pallet_id ?? "모름")}${p.kind ? ` · ${esc(palletKindLabel(p.kind))}` : ""}</td><td class="mono">${p.done} / ${p.total}</td></tr>`).join("")}</tbody></table>`;
+  $("sum-detail").innerHTML = `
+    <p class="hint">완료율은 표시된 종료 결과 중 완료 비율입니다(취소·복구 필요·준비 중 일시정지로 끝난 실패 포함, 진행 중 미션과 거부된 요청 제외). 취소 제외는 운용자 취소를 분모에서 뺀 값입니다.</p>
+    <h4>설명별 건수</h4>${reasons}
+    <h4>팔레트별</h4>${pallets}
+    <h4>경과 시간</h4>
+    <p class="sum-dur">완료: ${esc(secsOf(s.durations.done))}<br>그 밖: ${esc(secsOf(s.durations.notDone))}${s.noDuration ? `<br>계산 불가 ${s.noDuration}건(시각 없음 또는 유효하지 않은 구간)` : ""}</p>
+    <p class="hint">제출 수락부터 끝날 때까지의 경과입니다(준비·계획 대기·일시정지 포함, 주행 시간이 아님). 차량 시계 기준이라 시뮬레이션 배속이 1보다 작으면 벽시계로는 더 깁니다.</p>
+    ${s.recordErrors || s.recordErrorsOlder ? `<p class="hint">기록 파일 실패: 목록 안 ${s.recordErrors}건 · 목록 밖 ${s.recordErrorsOlder}건</p>` : ""}
+`;
+  $("sum-scope").innerHTML = scope.map(esc).join("<br>"); // always shown, outside the folded details (Codex round 3)
 }
