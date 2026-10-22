@@ -13,6 +13,8 @@
   fork_spacing 보관에서 게이트 기록 폴더들은 `gdrive:forklift-archive/ws1-fork-spacing-20261019/_keep.tar.zst` 로 올리고 ws1 에 남겼다(드라이브 MD5
   `7ff6b99422fd1d886571c257bbe4d36b`). 그 목록 `_keep.files.tsv` 의 이 기록 `run/boundary` 일반 파일 178 개가 ws1 원본의 178 개와 상대 경로·크기까지 모두 같다
   (`find -type f -printf '%p\t%s'` 대조). 파일 내용의 해시는 대조하지 않았다(목록에 해시가 없고, 묶음을 받아 풀지 않았다). 이번에 다시 보관하지는 않았다.
+- **게이트 목록.** `test_runs/runs29.txt` 의 둘째 줄만 `f_p2b/...` 로 바꾸고, 바꾸기 전 목록을 `test_runs/runs29_2026-10-16_f_p2.txt` 로 남겼다
+  (옛 기록으로 되돌릴 때 이 목록을 쓴다).
 - 스크립트(ws1): `test_runs/replay_gate/rebuild_cli.py`(명령줄 재구성), `test_runs/replay_gate/rebase/rec_f_p2b.sbatch`(기록),
   `tools/boundary_diff.py`(저장소, 첫 차이) 와 `test_runs/replay_gate/rebase/after_diff2.py`(같은 규칙으로 그 뒤 차이 전부).
 
