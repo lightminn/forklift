@@ -87,9 +87,10 @@ def _leg(n=480):
 
 def _runtime(R, *, spacing=0.3725, **kw):
     epal = rs.known_spec("epal6")
+    # root: the repository's configuration -- a runtime loaded from tests/fixtures has a ROOT of its own
     return R.FarRuntime(fork_spacing=spacing, pallet_depth_m=epal.overall_depth_m, pallet_shape="epal6",
                         zone_centre_xy=PALLET[:2], zone_radius_m=0.6,
-                        camera_x_m=instance_rig.PERCEPTION_CAMERA.xyz_m[0], dt=DT, **kw)
+                        camera_x_m=instance_rig.PERCEPTION_CAMERA.xyz_m[0], dt=DT, root=ROOT, **kw)
 
 
 def _drive(R, run, xs, lag, model=None, ticks=None):

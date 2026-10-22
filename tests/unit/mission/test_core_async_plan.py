@@ -1042,7 +1042,7 @@ def test_a_live_observe_failure_with_no_reachable_candidate_ends_the_mission_by_
     core.observe_failed(60.0, REAR, {}, 2, Obs("no_pallet", "few"))
     core.jobs.answers[1] = (True, {"result": None, "selected": None, "timed_out": False, "wall_s": 0.1,
                                    "candidates": [{"candidate_index": 0, "pose": [7.0, 1.0, 0.0], "status": "no_path",
-                                                   "success": False}]})
+                                                   "success": False, "start_rear": list(REAR)}]})
     with pytest.raises(RuntimeError, match="^observe:all_candidates_exhausted:perception_no_pallet:few:no_path$"):
         core.job_hold(60.5, REAR, 0.0, False)
 
