@@ -1,4 +1,4 @@
-# 하역 직선의 이웃을 칸 기준으로 — 계획 (2026-10-22, 4판)
+# 하역 직선의 이웃을 칸 기준으로 — 계획 (2026-10-22, 5판)
 
 상위 계획: `docs/plans/2026-10-22-continuous-transport-ct1.md` PR ④(실제 대기열로 연속 실행). 앞 단계: PR ③ 검증 `docs/validation/2026-10-22-rigid-session-pallets.md` 의 random_m 세 번째 미션 실패. 브랜치 `feat/ct1-queue-run`.
 
@@ -92,9 +92,12 @@
   - sim 의 도킹 dry run 은 도킹이 한 번도 수용되지 않으면 `to_world` 가 항등이라, truth 이웃을 읽어도 궤적은 추정 자세다(core 5275–5285).
   - 하역 직선에는 LiDAR 허가가 적용되지 않는다(`permission_acting=False`, core 1047–1068). 지금 LiDAR 는 낮은 팔레트를 보지도 못한다(`pallet_permit.py` 3).
   - 변경 전 검사도 실제 거리를 증명하지 않았다(장면 좌표 직선과 다른 시점 추정의 이웃을 비교했다). 그러나 이 변경은 **전에는 거부하던 경로를 허용한다.** 그래서 "앵커로 허용된 미션 + 그 미션의 하역 도킹 전면 거부" 조합에서는 위험 노출이 늘 수 있다(Codex 3차 P2 — 합성 반례: P-5 추정만 D-3 쪽 0.20 m 이동이면 기존 `straight_collision` → 앵커 `success`, 트럭 실제 위치가 이웃 쪽으로 0.50 m 벗어나면 항등 dry run 끝점은 통과하지만 실제 끝점은 이웃과 겹친다).
-  - **그 조합에서는 기존 검사로 되돌린다.** core 의 하역 도킹이 끝까지 수용되지 않아 `fallback` 이 되는 자리(core 5243)에서 갈고리 `unaligned_delivery_refusal(t)` 를 부른다.
+  - **그 조합에서는 기존 검사로 되돌린다.** 하역 직선이 도킹 없이 달리게 되는 두 자리에서 갈고리 `unaligned_delivery_refusal()` 를 부른다.
+    - 하역 도킹이 끝까지 수용되지 않아 `fallback` 이 되는 자리(core 5243). D9b 응답·재접근 뒤·non-D7 도 여기를 지난다(Codex 4차 확인).
+    - 운반 경로에 하역 직선 앞 정지점이 없어 도킹을 무장하지 못하는 자리(`arm_docking` 의 `no_final_straight`, core 4838). 이때는 도착하면 바로 `lower` 로 가므로 도킹 함수에 들어가지 않는다(Codex 4차 P2 — 운반 전체가 직선 길이와 같은 경우).
     - 러너(세션 모드)는 이번 미션의 계획에 앵커가 쓰였으면 하역 직선을 **추정 단계 장애물**(`scenario_props(scenario, "search")`, 기존 검사와 같은 목록)로 다시 검사한다. 막히면 사유 `session_anchor_unaligned:<pid,…>` 를 돌려준다.
     - core 는 그 사유로 미션을 끝낸다(하역 직선에 들어가기 전). 앵커가 안 쓰였거나 다시 검사가 통과하면 지금처럼 진행한다.
+    - 사유 `session_anchor_unaligned:` 는 미션 실패(MISSION)로 분류한다(`failures.py`). 분류가 없으면 세션 실패로 처리돼 세션이 끝난다(Codex 4차 P3).
     - 즉 앵커가 허용한 경로는 도킹이 칸 기준을 다시 세울 때만 달린다. 도킹이 거부되면 기존 규칙의 판단을 따른다.
     - 갈고리가 없으면(세션이 아닌 실행) 아무것도 바뀌지 않는다.
 - 전제:
@@ -149,6 +152,8 @@
   - 증거는 payload 생성 전에 확정된다(호출 순서).
 - 기록: `session_slot_anchor_log` 가 MISSION_RESULT 에 남는다(baseline 복원 뒤에도).
 - 도킹 전면 거부(Codex 3차 P2): 앵커가 쓰인 미션에서 추정 단계 검사가 막히면 `session_anchor_unaligned` 로 하역 직선 전에 끝난다. 통과하면 진행한다. 앵커가 없으면 갈고리가 아무것도 하지 않는다. 갈고리가 없는 core 는 그대로다.
+  - `fallback` 자리와 `no_final_straight` 자리 둘 다(Codex 4차 P2).
+  - 사유는 미션 실패로 분류되고 세션은 이어진다(Codex 4차 P3).
 - 계획기별 반대 방향 충돌(Codex 3차 P3): `plan_transport_leg`·`plan_loaded_delivery` 도 `@slot` 만 막으면 `straight_collision`, `@search` 만이면 통과. 작업자 분기(`plan_worker` 의 `plan_transport`·`loaded_delivery`·`leg` 와 tight 재시도)를 payload pickle 로 실제로 돌려 같은 결과.
 - 재생 게이트 29/29, ws1 전체.
 
@@ -177,6 +182,13 @@
 - 1.3 의 표: factory·V3·D2 는 `docs/plans/2026-10-22-open-zone-docking.md` 6–7 절, 세션 값은 `ct1_report.py` 출력.
 
 ## 7. 검토 기록
+
+### 4판 → 5판
+
+- **② Codex 재검토(4차)**: 새 P1 없음, P2 하나·P3 하나 — 받아들였다.
+  - P2 `no_final_straight` 경로가 갈고리를 우회 → 그 자리에서도 부른다.
+  - P3 새 사유의 분류 → MISSION.
+  - `fallback` 자리(5243)가 도킹 함수에 들어가는 모든 경로에 맞다는 것은 Codex 가 확인했다.
 
 ### 3판 → 4판
 
