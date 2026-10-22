@@ -1077,6 +1077,7 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "live": False, "live_port_file": None, "live_host": "127.0.0.1", "live_factor": 1.0,
                               "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,
                               "live_test_stop_in_capture": False, "live_test_camera_freeze": None,
+                              "live_test_far_zone_offset_m": None,  # 2026-10-22: the live far rejection test
                               "live_test_marker": False, "live_camera_latency_bound_s": None,
                               "live_camera_pixel_lag_s": 0.2, "live_test_permit_compare": False, "live_test_no_pallet_permit": False,
                               "live_test_recovery_blocked": None, "live_test_return_correction_drops": 0,

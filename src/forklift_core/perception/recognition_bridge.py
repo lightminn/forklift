@@ -12,6 +12,7 @@ SDK-free: the runner supplies the scene, the instance ids, odom<-base and the in
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -105,6 +106,15 @@ def _candidate_record(c) -> dict:
             "pallet_centre_m": list(c.pallet_centre_m), "pickable": c.pickable}
 
 
+@dataclass(frozen=True)
+class FrameWork:
+    """``FarRecognition.compute``'s result: the frame's proposals, its scene fit and, for a proposer with ``run``,
+    what that call returned (taken in by the proposer's ``absorb`` when the frame is applied)."""
+    proposals: list
+    fit: SceneFit
+    proposer_result: dict | None = None
+
+
 class FarRecognition:
     """Frames of one observation leg, its target and the stop decision."""
 
@@ -127,12 +137,29 @@ class FarRecognition:
         self.selection_history: list = []
         self.frames: list = []
 
-    def _step(self, scene, instance_ids, odom_from_base, instruction):
-        proposals, extra = self.proposer(scene, instance_ids)
-        self.last_proposals = list(proposals)
+    def compute(self, scene, instance_ids) -> FrameWork:
+        """A frame's pure work -- the proposals and the scene fit -- touching no state of this object or of its
+        proposer, so a live run does it off the control thread (plan 2026-10-22-live-far-recognition, T1 (A)). A
+        proposer with ``run`` (LearnedSource) hands back what its call would have recorded; ``absorb`` takes it in
+        on the tick. The tracker, the target, the leg and the records are the tick's (``frame``/``stop``)."""
+        run = getattr(self.proposer, "run", None)
+        if run is not None:
+            got = run(scene)
+            proposals, extra = got["proposals"], got["failures"]
+        else:
+            got = None
+            proposals, extra = self.proposer(scene, instance_ids)
         fit = fit_scene(scene, proposals, specs=self.specs, setup=self.setup, load_for=self.load_for,
                         identity_threshold=self.identity_threshold)
-        fit = SceneFit(fit.candidates, tuple(fit.failures) + tuple(extra))
+        return FrameWork(list(proposals), SceneFit(fit.candidates, tuple(fit.failures) + tuple(extra)), got)
+
+    def _step(self, scene, instance_ids, odom_from_base, instruction, work=None):
+        if work is None:
+            work = self.compute(scene, instance_ids)
+        if work.proposer_result is not None:
+            self.proposer.absorb(work.proposer_result)
+        self.last_proposals = list(work.proposals)
+        fit = work.fit
         sel = decide(fit, instruction)
         report = self.tracker.update(Frame(scene.stamp_ns, self.clock_domain, 0, odom_from_base, fit.candidates))
         visible = {t.track_id: t for t in self.tracker.tracks(scene.stamp_ns, odom_from_base)}
@@ -149,9 +176,10 @@ class FarRecognition:
         self._chosen = track_id
         self.selection_history.append({"stamp_ns": int(stamp_ns), "track": track_id})
 
-    def frame(self, scene, instance_ids, odom_from_base, instruction) -> dict:
-        """A driving frame: tracked, and the leg's target chosen by the first decision a visible track took."""
-        _, _, visible, taken, record = self._step(scene, instance_ids, odom_from_base, instruction)
+    def frame(self, scene, instance_ids, odom_from_base, instruction, work=None) -> dict:
+        """A driving frame: tracked, and the leg's target chosen by the first decision a visible track took.
+        ``work``: the frame's ``compute`` done elsewhere (a live run's worker thread); done here when None."""
+        _, _, visible, taken, record = self._step(scene, instance_ids, odom_from_base, instruction, work)
         # The leg's target deleted (not merely stale) while driving: the caller ends this leg and starts a new
         # re-observation leg with the next frame (A', Codex) -- this frame stays in the ended leg.
         record["leg_lost"] = self._chosen is not None and self.tracker.selected is None
@@ -163,9 +191,9 @@ class FarRecognition:
         self.frames.append(record)
         return record
 
-    def stop(self, scene, instance_ids, odom_from_base, instruction, *, pallet_depth_m: float):
-        """The stop frame's decision: (PocketObservation, record)."""
-        fit, sel, visible, taken, record = self._step(scene, instance_ids, odom_from_base, instruction)
+    def stop(self, scene, instance_ids, odom_from_base, instruction, *, pallet_depth_m: float, work=None):
+        """The stop frame's decision: (PocketObservation, record). ``work`` as in ``frame``."""
+        fit, sel, visible, taken, record = self._step(scene, instance_ids, odom_from_base, instruction, work)
         self.frames.append(record)
         out = {"status": sel.status, "reasons": list(sel.reasons), "selection_history": list(self.selection_history),
                "frames": len(self.frames), "source": None, "selected_track": None, "observations": 0,
