@@ -4908,7 +4908,7 @@ class MissionCore:
         delivery goal more than 0.20 m from the first SLAM goal over all rounds -- a D7c re-approach seeds from the
         latest goal, so each round's own bound does not limit the sum. Measured as the goal positions' distance (a
         frame change of the whole path would mix in the yaw about the origin, Codex v4 P2)."""
-        if not result.accepted or result.reason != "ok:precision":
+        if not getattr(result, "accepted", False) or getattr(result, "reason", None) != "ok:precision":
             return result
         moved = math.hypot(result.goal_estimate[0] - delivery[0], result.goal_estimate[1] - delivery[1])
         record = dict(result.precision or {}, cumulative_m=moved)
@@ -5071,7 +5071,7 @@ class MissionCore:
                 "starts": docking["starts"],
                 "start_details": docking["start_details"],
                 # the D2 checks of this round (only with --docking-acceptance precision)
-                **({"precision": result.precision} if result.precision is not None else {}),
+                **({"precision": result.precision} if getattr(result, "precision", None) is not None else {}),
             }
         )
         if options.d7_docking:
