@@ -249,3 +249,161 @@ def test_the_runner_wires_the_session_records_to_its_truth():
     assert "far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])" in source
     assert 'state["session_neighbour_gap"] = session_gap.smallest' in source
     assert '**({} if session is None else {"pallet_id": pallet.current})' in source
+
+
+def test_a_session_mission_keeps_its_planning_scene_in_its_records():
+    """CT-1 PR 4: the scene a session mission plans in (the other pallets as the targets had them) is the mission's
+    record, so a failed plan (random_m m3's straight_collision, PR 3 validation) can be replayed."""
+    from forklift_core.mission.baseline import MISSION_KEYS
+
+    assert "mission_scenario" in MISSION_KEYS["state"]
+    source = SCRIPT.read_text()
+    assert 'state["mission_scenario"] = asdict(scenario)' in source
+    assert source.index('state["mission_scenario"] = asdict(scenario)') > source.index("def live_mission_start(")
+
+
+
+# --- slot anchors (docs/plans/2026-10-22-slot-anchored-neighbours.md 2.2-2.4) ----------------------------------------
+def _third_mission(anchor):
+    sys.path.insert(0, str(ROOT / "tests/unit/planning"))
+    from test_slot_stage_props import _random_m_third_mission
+
+    return _random_m_third_mission(anchor)
+
+
+def _refusal(planned, scenario, geometry, clearance):
+    (fn,) = _functions("unaligned_delivery_refusal_")
+    env = {"session_anchors_planned_": planned, "scenario": scenario, "geometry": geometry,
+           "planner_config": SimpleNamespace(clearance_m=clearance), "slam": None, "state": {},
+           "core": SimpleNamespace(commands=SimpleNamespace(mission_id="m3"))}
+    exec(compile(ast.Module([fn], []), str(SCRIPT), "exec"), env)
+    return env["unaligned_delivery_refusal_"](), env["state"]
+
+
+def test_an_unaligned_delivery_planned_with_anchors_is_checked_as_before_them():
+    """Plan 2.3 (Codex plan round 3 P2): no accepted docking -- with anchors in this mission's plan the straight is
+    checked against the estimates; random_m's third mission's P-5 blocks it, so the mission ends before it."""
+    scenario, geometry, clearance = _third_mission(anchor=True)
+    reason, state = _refusal({"P-5": (3.4, -8.469, 0.0)}, scenario, geometry, clearance)
+    assert reason == "P-5" and state["session_anchor_unaligned"][0]["old_check_clear"] is False
+    assert _refusal({}, scenario, geometry, clearance)[0] is None  # no anchor planned: as before, nothing checked
+    clear_scenario = type(scenario)(scenario.seed, scenario.start_rear, scenario.pickup, scenario.destination,
+                                    tuple(p for p in scenario.props if "P-5" not in p.asset.uri), scenario.bounds)
+    assert _refusal({"P-5": (3.4, -8.469, 0.0)}, clear_scenario, geometry, clearance)[0] is None
+
+
+def test_the_core_ends_the_mission_before_an_unaligned_straight_with_its_reason():
+    from forklift_core.mission.core import MissionCore
+    from forklift_core.mission.failures import MISSION, classify
+
+    seen = []
+    core = MissionCore.__new__(MissionCore)
+    core.hooks = SimpleNamespace(unaligned_delivery_refusal=lambda: "P-5",
+                                 require=lambda ok, reason: seen.append((ok, reason)))
+    core.unaligned_delivery_check()
+    assert seen == [(False, "session_anchor_unaligned:P-5")] and classify(seen[0][1]) == MISSION
+    core.hooks = SimpleNamespace(require=lambda ok, reason: seen.append((ok, reason)))  # no hook: nothing
+    core.unaligned_delivery_check()
+    assert len(seen) == 1
+    source = (ROOT / "src/forklift_core/mission/core.py").read_text()
+    # both places the straight is driven unaligned (Codex plan round 4 P2)
+    assert 'docking["status"] = "no_final_straight"\n            self.unaligned_delivery_check()' in source
+    assert 'if not docking.get("accepted_any"):\n            self.unaligned_delivery_check()' in source
+
+
+def test_the_anchors_are_decided_before_each_payload_and_again_at_the_adoption():
+    source = SCRIPT.read_text()
+    for start, end in (("def live_prepare(t_, rear_):", "core.prepare_request(t_, rear_, inputs_, payload_)\n"),
+                       ("def live_prepare_loaded(t_, rear_):", 'job="loaded_delivery")')):
+        body = source[source.index(start):source.index(end, source.index(start))]
+        assert body.index("session_anchor_decide_(t_)") < body.index("payload_ = ")
+        assert '"slot_anchors": anchors_' in body
+    (fn,) = _functions("live_mission_ready")
+    decided = []
+    env = {"session": object(), "slam": None, "session_anchor_decide_": decided.append,
+           "session_anchor_poses_": lambda did, goal, own: {"P-5": (3.4, -8.469, 0.0)}}
+    exec(compile(ast.Module([fn], []), str(SCRIPT), "exec"), env)
+    inputs = {"destination_id": "D-3", "pallet_id": "P-3", "scenario": SimpleNamespace(destination=None),
+              "slot_anchors": {"P-5": (3.4, -8.469, 0.0)}}
+    assert env["live_mission_ready"](5.0, inputs) is None and decided == [5.0]
+    with pytest.raises(RuntimeError, match="session_anchor_changed:P-4,P-5"):
+        env["live_mission_ready"](6.0, {**inputs, "slot_anchors": {"P-4": (3.4, -7.182, 0.0),
+                                                                    "P-5": (3.4, -8.369, 0.0)}})
+    assert "core.hooks.unaligned_delivery_refusal = unaligned_delivery_refusal_" in source
+    assert "core.hooks.far_recognition_mission_end = session_mission_end_" in source
+
+
+
+def _anchor_scope(docking_accepted=True, end_phase="home_settle", trace_valid=True, transitions=None):
+    """session_mission_end_ and session_anchor_decide_ on stand-ins: P-5's mission m2 to D-2 at its end."""
+    sys.modules.setdefault("session_pallets", S)
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    tb = TargetsBook()
+    tb.add_pallet("P-5", "epal6", Pose(1.0, -1.5, 0.0), depth_m=0.6, width_m=0.8)
+    tb.put_down("P-5", Pose(3.25, -8.54, 0.0), uncertainty_m=0.21)
+    results = []
+    far_ends = []
+    scope = {
+        "core": SimpleNamespace(commands=SimpleNamespace(mission=SimpleNamespace(pallet_id="P-5", destination_id="D-2"),
+                                                         mission_id="m2", adopted_id="m2"),
+                                targets=tb, ms=SimpleNamespace(phase=end_phase),
+                                hooks=SimpleNamespace(far_recognition_mission_end=far_ends.append)),
+        "slam": {"docking": {"accepted_any": docking_accepted}},
+        "state": {"transitions": transitions if transitions is not None else
+                  [{"from": "transport", "to": "lower"}, {"from": "lower", "to": "withdraw"}]},
+        "pallet": SimpleNamespace(current="P-5"), "trace_evidence": SimpleNamespace(valid=trace_valid),
+        "live": SimpleNamespace(results=SimpleNamespace(message=lambda: {"results": results})),
+        "session": object(), "session_anchor_": {}, "session_anchor_evidence_": [], "session_mission_from_": [0],
+        "session_decide_anchor": S.decide_anchor,
+    }
+    fns = _functions("session_mission_end_", "session_anchor_decide_")
+    exec(compile(ast.Module(fns, []), str(SCRIPT), "exec"), scope)
+    scope["far_end_"] = scope["core"].hooks.far_recognition_mission_end
+    scope["state"]["session_slot_anchor_log"] = []
+    return scope, results, far_ends
+
+
+def test_a_delivered_pallets_anchor_is_decided_once_its_result_is_in():
+    scope, results, far_ends = _anchor_scope()
+    scope["session_mission_end_"](300.0)
+    assert far_ends == [300.0]  # the far recognition's own end still runs
+    scope["session_anchor_decide_"](301.0)
+    assert scope["session_anchor_"] == {} and len(scope["session_anchor_evidence_"]) == 1  # no result yet
+    results.append({"mission_id": "m2", "outcome": "done", "reason": None})
+    scope["session_anchor_decide_"](302.0)
+    assert scope["session_anchor_"] == {"P-5": "D-2"}
+    assert scope["state"]["session_slot_anchor_log"][-1]["why"] == "anchored"
+    scope["trace_evidence"].valid = False  # moved after its end, before the switch (Codex plan round 2 P2-1)
+    scope["session_anchor_decide_"](303.0)
+    assert scope["session_anchor_"] == {} and scope["state"]["session_slot_anchor_log"][-1]["why"] == "trace_invalid_now"
+
+
+@pytest.mark.parametrize("kw, reason, why", [
+    ({"docking_accepted": False}, None, "docking_not_accepted"),
+    ({"end_phase": "recover_withdraw"}, None, "end_phase:recover_withdraw"),
+    ({"transitions": [{"from": "transport", "to": "lower"}]}, None, "not_lowered"),
+    ({}, "Pallet missed the green destination center", "delivery_verdict"),
+])
+def test_a_delivery_without_its_evidence_is_no_anchor(kw, reason, why):
+    scope, results, _ = _anchor_scope(**kw)
+    scope["session_mission_end_"](300.0)
+    results.append({"mission_id": "m2", "outcome": "failed" if reason else "done", "reason": reason})
+    scope["session_anchor_decide_"](301.0)
+    assert scope["session_anchor_"] == {} and scope["state"]["session_slot_anchor_log"][-1]["why"] == why
+
+
+
+def test_a_missions_own_pallet_is_never_its_anchor():
+    """Codex impl round 1 P3: a re-pick of an anchored pallet -- its own anchor is not an obstacle of its plan, so it is
+    neither planned with nor compared at the adoption."""
+    (fn,) = _functions("session_anchor_poses_")
+    env = {"session": object(), "session_anchor_": {"P-5": "D-2", "P-4": "D-1"},
+           "session_slots_": {"D-1": (3.4, -7.182, 0.0), "D-2": (3.4, -8.469, 0.0), "D-3": (3.4, -9.756, 0.0)},
+           "session_anchor_poses": S.anchor_poses}
+    exec(compile(ast.Module([fn], []), str(SCRIPT), "exec"), env)
+    goal = SimpleNamespace(x_m=3.4, y_m=-9.756, yaw_rad=0.0)
+    assert set(env["session_anchor_poses_"]("D-3", goal, "P-5")) == {"P-4"}
+    assert env["session_anchor_poses_"]("D-3", goal, "P-5") == {"P-4": pytest.approx((3.4, -7.182, 0.0))}
+    env["session_anchor_"] = {"P-5": "D-2"}
+    assert env["session_anchor_poses_"]("D-3", goal, "P-5") == {}

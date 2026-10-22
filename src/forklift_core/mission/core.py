@@ -4823,6 +4823,16 @@ class MissionCore:
         base_ = slam.get("transport_config", trackers["transport"].config)
         return replace(base_, position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
 
+    def unaligned_delivery_check(self) -> None:
+        """The delivery straight about to be driven with no accepted docking (docs/plans/2026-10-22-slot-anchored-
+        neighbours.md 2.3): the runner's hook re-checks it as it was checked before slot anchors -- None, or the
+        anchored pallets whose estimates block it, and the mission ends before the straight. No hook: nothing."""
+        refusal = getattr(self.hooks, "unaligned_delivery_refusal", None)
+        if refusal is None:
+            return
+        anchored = refusal()
+        self.hooks.require(anchored is None, f"session_anchor_unaligned:{anchored}")
+
     def arm_docking(self) -> None:
         """Drive transport only to where its delivery straight begins (v3.8)."""
         final_straight_prefix = self.hooks.final_straight_prefix
@@ -4838,6 +4848,7 @@ class MissionCore:
         prefix = final_straight_prefix(full, docking.get("keep_m", geometry.delivery_straight_m))
         if prefix is None:
             docking["status"] = "no_final_straight"
+            self.unaligned_delivery_check()  # the straight is driven without a docking (Codex CT-1 PR 4 plan r4 P2)
             return
         docking.update(
             status="armed",
@@ -5241,6 +5252,8 @@ class MissionCore:
         # A refused second round keeps the first round's valid correction
         # (Codex 5de6c3a P2): still "done", and its world map W is reused.
         docking["status"] = "done" if docking.get("accepted_any") else "fallback"
+        if not docking.get("accepted_any"):
+            self.unaligned_delivery_check()
         committed = False
         if options.d7_docking and result.accepted:
             # Plan D7c: commit the matched goal before the straight check, so a

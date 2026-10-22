@@ -36,6 +36,7 @@ MISSION_KEYS = {
         "loaded_lift_wait",  # plan D5 6c: a loaded start wait's record (Codex 6c impl round 1 P3)
         # plan 2026-10-22-live-far-recognition: the mission's far summary and its dropped far stops
         "recognition_mission", "recognition_discarded",
+        "mission_scenario",  # CT-1 PR 4: a session mission's planning scene (its other pallets as props)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",

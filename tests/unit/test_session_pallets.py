@@ -102,3 +102,47 @@ def test_a_tipped_or_lifted_pallet_counts_as_moved():
     (m, r), ok = w.check("P-3", (1.0, 2.008, 0.079), tipped)
     assert not ok and r == pytest.approx(0.2) and m > 0.07
     assert not w.check("P-3", (1.0, 2.0, 0.011), (1.0, 0.0, 0.0, 0.0))[1]  # lifted 11 mm
+
+
+
+# --- slot anchors (docs/plans/2026-10-22-slot-anchored-neighbours.md 2.2-2.3) ----------------------------------------
+def _evidence(**over):
+    ev = {"mission_id": "m2", "pallet_id": "P-5", "destination_id": "D-2", "docking_accepted": True, "lowered": True,
+          "delivered": True, "trace_valid": True, "end_phase": "home_settle"}
+    ev.update(over)
+    return ev
+
+
+def test_a_delivery_with_every_piece_of_evidence_is_anchored():
+    assert S.decide_anchor(_evidence(), reason=None, trace_valid_now=True) == (True, "anchored")
+    assert S.decide_anchor(_evidence(end_phase="return_home"), reason="Tracking timeout in return_home",
+                           trace_valid_now=True) == (True, "anchored")  # a failure after the delivery keeps it
+
+
+@pytest.mark.parametrize("over, reason, now, why", [
+    ({"docking_accepted": False}, None, True, "docking_not_accepted"),
+    ({"lowered": False}, None, True, "not_lowered"),
+    ({"delivered": False}, None, True, "not_delivered"),
+    ({"trace_valid": False}, None, True, "trace_invalid_at_end"),
+    ({"end_phase": "recover_withdraw"}, None, True, "end_phase:recover_withdraw"),
+    ({}, "Pallet missed the green destination center", True, "delivery_verdict"),
+    ({}, "Delivered pallet is not grounded", True, "delivery_verdict"),
+    ({}, "Fork still inside delivered pallet", True, "delivery_verdict"),
+    ({}, "Actual truck/load footprint overlap in withdraw", True, "scene_damage"),
+    ({}, None, False, "trace_invalid_now"),
+])
+def test_a_missing_piece_of_evidence_or_a_failed_verdict_is_not_anchored(over, reason, now, why):
+    assert S.decide_anchor(_evidence(**over), reason=reason, trace_valid_now=now) == (False, why)
+
+
+def test_the_anchors_are_put_in_the_goals_frame():
+    slots = {"D-1": (3.4, -7.182, 0.0), "D-2": (3.4, -8.469, 0.0), "D-3": (3.4, -9.756, 0.0)}
+    anchors = {"P-4": "D-1", "P-5": "D-2"}
+    same = S.anchor_poses(anchors, slots, "D-3", slots["D-3"])  # a slot not visited: the goal is its registered pose
+    assert same == {"P-4": pytest.approx(slots["D-1"]), "P-5": pytest.approx(slots["D-2"])}
+    moved = S.anchor_poses(anchors, slots, "D-3", (3.4, -9.556, 0.0))  # a revisit: the goal moved 0.20 m
+    assert moved["P-5"] == pytest.approx((3.4, -8.269, 0.0)) and moved["P-4"] == pytest.approx((3.4, -6.982, 0.0))
+    turned = S.anchor_poses({"P-5": "D-2"}, slots, "D-3", (3.4, -9.756, 0.1))  # turned about the goal
+    x, y, yaw = turned["P-5"]
+    assert yaw == pytest.approx(0.1) and math.hypot(x - 3.4, y + 9.756) == pytest.approx(1.287)
+    assert S.anchor_poses({}, slots, "D-3", slots["D-3"]) == {}

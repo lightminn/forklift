@@ -260,6 +260,21 @@ class TransportScenario:
     bounds: Bounds
 
 
+# Stage tags on a prop's asset uri (docs/plans/2026-10-22-slot-anchored-neighbours.md 2.4): a session's delivered
+# neighbour is two props -- SEARCH_TAG at its estimate for every search and straight, SLOT_TAG at its slot in the goal's
+# frame for the two straights inside the slot (the delivery straight and the withdraw). Untagged props are in both.
+SEARCH_TAG, SLOT_TAG = "@search", "@slot"
+
+
+def scenario_props(scenario: TransportScenario, stage: str = "search") -> list[Rectangle]:
+    """The obstacle rectangles of ``scenario`` a check at ``stage`` sees: "search" leaves out the slot-stage props,
+    "slot" (the delivery straight and the withdraw) the search-stage ones. A scene without tags gives one list."""
+    if stage not in ("search", "slot"):
+        raise ValueError(f"unknown stage {stage!r}")
+    drop = SLOT_TAG if stage == "search" else SEARCH_TAG
+    return [p.rectangle for p in scenario.props if not p.asset.uri.endswith(drop)]
+
+
 @dataclass(frozen=True)
 class SyntheticMissionGeometry:
     """Explicit provisional/synthetic geometry, never measured robot calibration.
@@ -969,7 +984,7 @@ def leg_obstacles(
     sweep against them (plan 2026-10-04-lidar-obstacle-map, obstacle recovery v4 E2 ①, cusp
     position stall v7)."""
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
-    props = [prop.rectangle for prop in scenario.props]
+    props = scenario_props(scenario)
     if kind == "observe":
         pallet = pickup_obstacle if pickup_obstacle is not None else Rectangle(
             scenario.pickup.x_m,
@@ -1036,7 +1051,7 @@ def plan_transport_leg(
         destination["predelivery"],
         destination["delivery"],
         1,
-        props,
+        scenario_props(scenario, "slot"),
         geometry.loaded_footprint,
         scenario.bounds,
         config.clearance_m,
@@ -1072,7 +1087,7 @@ def plan_docking_reapproach(
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
-    props = [prop.rectangle for prop in scenario.props]
+    props = scenario_props(scenario)
     result = _search(
         start_rear,
         line_start,
@@ -1140,7 +1155,7 @@ def redraw_docking(
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
-    props = [prop.rectangle for prop in scenario.props]
+    props = scenario_props(scenario)
     pickup = site_poses(target_pickup, geometry)
     pallet = (
         pickup_obstacle
@@ -1546,7 +1561,8 @@ def plan_loaded_delivery(
                           "gear_changes": int(np.count_nonzero(np.diff(directions))) if directions.size else 0})
         return result
 
-    props = [prop.rectangle for prop in scenario.props]
+    props = scenario_props(scenario)
+    slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     destination = site_poses(scenario.destination, geometry)
     grid = docking_occupancy if docking_occupancy is not None else occupancy
     transport = note("transport_search", _transport_search(start_rear, destination["predelivery"], props,
@@ -1560,13 +1576,13 @@ def plan_loaded_delivery(
                                                                      exit_prefix=exit_prefix))
     if not transport.success:
         return MissionPlan(False, f"transport:{transport.status}")
-    tail = note("transport_straight", _straight_plan(destination["predelivery"], destination["delivery"], 1, props,
-                                                     geometry.loaded_footprint, scenario.bounds, config.clearance_m,
-                                                     grid))
+    tail = note("transport_straight", _straight_plan(destination["predelivery"], destination["delivery"], 1,
+                                                     slot_props, geometry.loaded_footprint, scenario.bounds,
+                                                     config.clearance_m, grid))
     if not tail.success:
         return MissionPlan(False, f"transport:{tail.status}")
     transport = _append_straight(transport, tail)
-    withdraw = note("withdraw", _straight_plan(destination["delivery"], destination["withdrawn"], -1, props,
+    withdraw = note("withdraw", _straight_plan(destination["delivery"], destination["withdrawn"], -1, slot_props,
                                                geometry.unloaded_footprint, scenario.bounds, config.clearance_m, grid))
     if not withdraw.success:
         return MissionPlan(False, f"withdraw:{withdraw.status}")
@@ -1657,7 +1673,8 @@ def plan_transport(
             )
         return result
 
-    props = [prop.rectangle for prop in scenario.props]
+    props = scenario_props(scenario)
+    slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     pickup = site_poses(
         target_pickup if target_pickup is not None else scenario.pickup, geometry
     )
@@ -1783,7 +1800,7 @@ def plan_transport(
             destination["predelivery"],
             destination["delivery"],
             1,
-            props,
+            slot_props,
             geometry.loaded_footprint,
             scenario.bounds,
             config.clearance_m,
@@ -1799,7 +1816,7 @@ def plan_transport(
             destination["delivery"],
             destination["withdrawn"],
             -1,
-            props,
+            slot_props,
             geometry.unloaded_footprint,
             scenario.bounds,
             config.clearance_m,

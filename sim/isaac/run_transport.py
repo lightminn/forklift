@@ -6982,13 +6982,15 @@ def drive(S, isaac) -> None:
                 return live_preparation_obstacle(entry_, zone_, pose=pose_,
                                                  size=(geometry.pallet_depth_m, geometry.pallet_width_m))
 
-            def session_scenario_(exclude_id_, moved_=None, moved_ids_=()):
+            def session_scenario_(exclude_id_, moved_=None, moved_ids_=(), slot_anchors_=None):
                 """The session scene a preparation plans in (plan 2026-10-22-session-scene-pallet-props 2.6): the
                 static props and the other pallets by their basis (decision D1: a prior one at its drawn slot + 0.25
-                m). With P-1 alone there are no others: the scene's own props, as before."""
+                m). With P-1 alone there are no others: the scene's own props, as before. ``slot_anchors_``: the
+                delivered pallets anchored to their slots, in the goal's frame (plan 2026-10-22-slot-anchored-
+                neighbours 2.4)."""
                 others_ = live_session_pallet_props(core.targets, exclude_id=exclude_id_, nominal=live_session_["nominal"],
                                                     shape=live_session_["shape"], prior_grow_m=0.25, moved=moved_,
-                                                    moved_ids=moved_ids_)
+                                                    moved_ids=moved_ids_, slot_anchors=slot_anchors_)
                 base_ = live_session_["scenario"]
                 return base_ if not others_ else replace(base_, props=tuple(base_.props) + others_)
 
@@ -7007,6 +7009,103 @@ def drive(S, isaac) -> None:
             if session is not None:  # plan 2026-10-22-rigid-session-pallets 2.6: the near straight swept past them
                 core.options.near_capture_neighbour_sweep = True
                 core.hooks.session_neighbour_rects = session_extra_rects_
+
+            # Plan 2026-10-22-slot-anchored-neighbours 2.2-2.4: a delivered pallet anchored to its slot for the later
+            # missions' delivery straight and withdraw -- its mission's evidence kept at the end, decided before the
+            # next payload (and again at the adoption), the anchors this mission planned with kept for the hook.
+            session_anchor_ = {}  # pallet id -> destination id, decided
+            session_anchor_evidence_ = []  # the ended missions' evidence, waiting for their result
+            session_anchors_planned_ = {}  # pallet id -> pose: what this mission's plan anchored
+            session_mission_from_ = [0]  # the transitions index this mission started at
+            session_slots_ = ({} if session is None else
+                              {did_: (float(s_.x_m), float(s_.y_m), float(s_.yaw_rad)) for did_, s_ in session.destinations})
+            if session is not None:
+                from session_pallets import anchor_poses as session_anchor_poses, decide_anchor as session_decide_anchor
+
+                state["session_slot_anchor_log"] = []
+                far_end_ = getattr(core.hooks, "far_recognition_mission_end", None)
+
+                def session_mission_end_(t_):
+                    """The mission's evidence for its pallet's anchor (plan 2.2), at its end, before its result."""
+                    mission_ = core.commands.mission
+                    if mission_ is not None and core.commands.adopted_id == core.commands.mission_id:
+                        entry_ = core.targets.pallets.get(mission_.pallet_id)
+                        docking_ = ((slam or {}).get("docking") or {}) if slam is not None else {}
+                        session_anchor_evidence_.append({
+                            "mission_id": core.commands.mission_id, "pallet_id": mission_.pallet_id,
+                            "destination_id": mission_.destination_id, "t": float(t_),
+                            "docking_accepted": bool(docking_.get("accepted_any")),
+                            "lowered": any(tr_["from"] == "lower" and tr_["to"] == "withdraw"
+                                           for tr_ in state["transitions"][session_mission_from_[0]:]),
+                            "delivered": (entry_ is not None and entry_.state == "delivered"
+                                          and entry_.basis == "delivered" and entry_.pose is not None),
+                            "trace_valid": bool(pallet.current == mission_.pallet_id and trace_evidence.valid),
+                            "end_phase": core.ms.phase})
+                    if far_end_ is not None:
+                        far_end_(t_)
+
+                core.hooks.far_recognition_mission_end = session_mission_end_
+
+            def session_anchor_decide_(t_):
+                """Plan 2.2: the ended missions' evidence decided once their results are in; the last mission's pallet
+                (the mission's until the switch) refused when its trace evidence went invalid since."""
+                if session is None:
+                    return
+                results_ = {r_.get("mission_id"): r_ for r_ in live.results.message()["results"]}
+                for ev_ in list(session_anchor_evidence_):
+                    result_ = results_.get(ev_["mission_id"])
+                    if result_ is None:
+                        continue  # its result is not in yet: not anchored meanwhile
+                    session_anchor_evidence_.remove(ev_)
+                    now_ = bool(pallet.current != ev_["pallet_id"] or trace_evidence.valid)
+                    ok_, why_ = session_decide_anchor(ev_, reason=result_.get("reason"), trace_valid_now=now_)
+                    if ok_:
+                        session_anchor_[ev_["pallet_id"]] = ev_["destination_id"]
+                    else:
+                        session_anchor_.pop(ev_["pallet_id"], None)
+                    state["session_slot_anchor_log"].append({**ev_, "decided_t": float(t_), "anchored": ok_,
+                                                            "why": why_, "result_reason": result_.get("reason")})
+                if pallet.current in session_anchor_ and not trace_evidence.valid:
+                    session_anchor_.pop(pallet.current)
+                    state["session_slot_anchor_log"].append({"pallet_id": pallet.current, "decided_t": float(t_),
+                                                            "anchored": False, "why": "trace_invalid_now"})
+                # a pallet carried again is no anchor (its next mission's end decides it anew)
+                for pid_ in [p_ for p_ in session_anchor_ if core.targets.pallets[p_].state != "delivered"]:
+                    session_anchor_.pop(pid_)
+
+            def session_anchor_poses_(did_, goal_, own_id_):
+                """The anchors in the goal's frame for a mission to ``did_`` with goal ``goal_`` (plan 2.1) -- its
+                neighbours only: its own pallet is no obstacle of its plan (Codex impl round 1 P3)."""
+                kept_ = {p_: d_ for p_, d_ in session_anchor_.items() if p_ != own_id_}
+                if session is None or not kept_:
+                    return {}
+                return session_anchor_poses(kept_, session_slots_, did_,
+                                            (float(goal_.x_m), float(goal_.y_m), float(goal_.yaw_rad)))
+
+            def unaligned_delivery_refusal_():
+                """Plan 2.3: the delivery straight about to be driven with no accepted docking -- checked as before
+                the anchors (the search stage's props, the delivery straight and the withdraw); the anchored pallets
+                when it is blocked, None otherwise or when this mission planned with no anchor."""
+                if not session_anchors_planned_:
+                    return None
+                from forklift_core.planning.pallet_mission import _straight_plan as ua_straight
+                from forklift_core.planning.pallet_mission import scenario_props as ua_props
+                from forklift_core.planning.pallet_mission import site_poses as ua_sites
+
+                d_ = ua_sites(scenario.destination, geometry)
+                props_ = ua_props(scenario)
+                ok_ = (ua_straight(d_["predelivery"], d_["delivery"], 1, props_, geometry.loaded_footprint,
+                                   scenario.bounds, planner_config.clearance_m).success
+                       and ua_straight(d_["delivery"], d_["withdrawn"], -1, props_, geometry.unloaded_footprint,
+                                       scenario.bounds, planner_config.clearance_m).success)
+                state.setdefault("session_anchor_unaligned", []).append(
+                    {"mission_id": core.commands.mission_id, "anchors": sorted(session_anchors_planned_),
+                     "docking": ((slam or {}).get("docking") or {}).get("status") if slam is not None else None,
+                     "old_check_clear": bool(ok_)})
+                return None if ok_ else ",".join(sorted(session_anchors_planned_))
+
+            if session is not None:
+                core.hooks.unaligned_delivery_refusal = unaligned_delivery_refusal_
 
             prep_check_cache_ = {}
 
@@ -7088,7 +7187,9 @@ def drive(S, isaac) -> None:
                 if zone_ is None:
                     zone_ = Rectangle(target_[0], target_[1], geometry.pallet_depth_m + 0.6,
                                       geometry.pallet_width_m + 0.6, target_[2])
-                scenario_ = replace(session_scenario_(mission_.pallet_id),
+                session_anchor_decide_(t_)  # plan 2.2: before the payload (a later change does not reach it)
+                anchors_ = session_anchor_poses_(mission_.destination_id, dest_, mission_.pallet_id)
+                scenario_ = replace(session_scenario_(mission_.pallet_id, slot_anchors_=anchors_ or None),
                                     start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
                                     pickup=LiveSite(*target_),
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
@@ -7101,7 +7202,8 @@ def drive(S, isaac) -> None:
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
                            "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
-                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
+                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id,
+                           "slot_anchors": anchors_}
                 if far_live is not None:
                     # Plan 2026-10-22-live-far-recognition task 7: a prior pallet is looked for in the scene's zone, a
                     # recognised or delivered one around its estimate, the same radius (not at its first place).
@@ -7125,7 +7227,10 @@ def drive(S, isaac) -> None:
                 seat_ = LiveSite(x_ + geometry.inserted_offset_m * math.cos(yaw_),
                                  y_ + geometry.inserted_offset_m * math.sin(yaw_), yaw_)
                 start_ = LivePose(x_, y_, yaw_)
-                scenario_ = replace(session_scenario_(mission_.pallet_id), start_rear=start_, pickup=seat_,
+                session_anchor_decide_(t_)  # plan 2.2: before the payload
+                anchors_ = session_anchor_poses_(mission_.destination_id, dest_, mission_.pallet_id)
+                scenario_ = replace(session_scenario_(mission_.pallet_id, slot_anchors_=anchors_ or None),
+                                    start_rear=start_, pickup=seat_,
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
                 grid_ = grid_kwargs(None, loaded_as=True)  # the transport leg's grid, the carried pallet the truck's
                 payload_ = {"args": (grid_world(scenario_), start_),
@@ -7137,7 +7242,8 @@ def drive(S, isaac) -> None:
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
                            "pickup_bounds": None, "pickup_zone": None,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
-                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id, "loaded": True}
+                           "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id, "loaded": True,
+                           "slot_anchors": anchors_}
                 core.prepare_request(t_, rear_, inputs_, payload_, job="loaded_delivery")
 
             def live_loaded_pallet():
@@ -7155,7 +7261,18 @@ def drive(S, isaac) -> None:
 
             def live_mission_ready(t_, inputs_):
                 """What can fail in the adoption, made before anything changes (Codex stage 2 impl P2-6): the
-                docking reference scan cast at the new destination's truth."""
+                docking reference scan cast at the new destination's truth; a session's slot anchors decided again
+                (plan 2026-10-22-slot-anchored-neighbours 2.2: evidence gone invalid since the payload fails it)."""
+                if session is not None:
+                    session_anchor_decide_(t_)
+                    planned_ = inputs_.get("slot_anchors") or {}
+                    now_ = session_anchor_poses_(inputs_["destination_id"], inputs_["scenario"].destination,
+                                                 inputs_["pallet_id"])
+                    changed_ = sorted(p_ for p_ in set(planned_) | set(now_)
+                                      if p_ not in planned_ or p_ not in now_
+                                      or any(abs(a_ - b_) > 1e-9 for a_, b_ in zip(planned_[p_], now_[p_])))
+                    if changed_:
+                        raise RuntimeError("session_anchor_changed:" + ",".join(changed_))
                 if slam is None:
                     return None
                 return teach_docking_reference(inputs_["scenario"].destination, inputs_["truth_destination"],
@@ -7170,9 +7287,15 @@ def drive(S, isaac) -> None:
                 cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])
                 cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)
                 scenario, truth_destination = inputs_["scenario"], inputs_["truth_destination"]
+                if session is not None:  # CT-1 PR 4: the scene this mission plans in (its neighbours as the targets
+                    state["mission_scenario"] = asdict(scenario)  # had them), so a failed plan can be replayed
                 pickup_zone, pickup_bounds, return_to_pose = (inputs_["pickup_zone"], inputs_["pickup_bounds"],
                                                               inputs_["wait_pose"])
                 if session is not None:
+                    # Plan 2026-10-22-slot-anchored-neighbours 2.3: what this mission's plan anchored, for the hook
+                    session_anchors_planned_.clear()
+                    session_anchors_planned_.update(inputs_.get("slot_anchors") or {})
+                    session_mission_from_[0] = len(state["transitions"])
                     # Plan 2026-10-22-rigid-session-pallets 2.3: the switch is made at the next tick's head; what the
                     # adoption fixes reads the new pallet itself.
                     pallet.request(core.commands.mission.pallet_id)

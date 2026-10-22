@@ -36,6 +36,8 @@ PREFIXES = {
     "base scene built from another forklift URDF": SESSION, "pocket camera intrinsics differ": SESSION,
     "live video camera intrinsics differ": SESSION, "Perception display clipping range": SESSION,
     "Perception camera local pose differs": SESSION, "--odometry-wheel-radius-m": SESSION,
+    # the anchored neighbours block the unaligned delivery straight (plan 2026-10-22-slot-anchored-neighbours 2.3)
+    "session_anchor_unaligned:": MISSION,
     "Pallet missed the green destination center": SESSION, "Delivered pallet is not grounded": SESSION,
     "Fork still inside delivered pallet": SESSION,
     # a session's pallet nobody handles moved past its rest bound (plan 2026-10-22-rigid-session-pallets 2.4)
