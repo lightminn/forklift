@@ -1,12 +1,12 @@
 # 세션 장면·공통 팔레트 장애물·계획 포락선 대조 — 검증 (2026-10-22)
 
-계획: `docs/plans/2026-10-22-session-scene-pallet-props.md`(3판). 상위 계획: `docs/plans/2026-10-22-continuous-transport-ct1.md` PR ②. 브랜치 `feat/ct1-session-scene`.
+계획: `docs/plans/2026-10-22-session-scene-pallet-props.md`(4판). 상위 계획: `docs/plans/2026-10-22-continuous-transport-ct1.md` PR ②. 브랜치 `feat/ct1-session-scene`.
 
 ## 계획 포락선 대조 (UBAI, CPU)
 
-- 실행: UBAI 잡 1033975(gpu6 노드 CPU 4). 커밋 `ec17008` 의 `tools/riibotics_isaac_scenes.py --session line --session random` → `tools/session_plan_check.py`.
-  - 자세 사이는 원호 위에서 잰다.
-  - 그 전의 현 보간 실행(잡 1033953, `4c00834`)과 표의 값이 같다.
+- 실행: UBAI 잡 1033980(gpu6 노드 CPU 4). 커밋 `d188498` 의 `tools/riibotics_isaac_scenes.py --session line --session random` → `tools/session_plan_check.py`.
+  - 자세 사이는 계획기의 주행 방향으로 도는 원호 위에서 잰다.
+  - 앞선 두 실행과 표의 값이 같다: 현 보간(잡 1033953, `4c00834`), 방향 없는 원호(잡 1033975, `ec17008`).
 - 설정은 장면 계획 검사와 같다.
   - D1 0.25 m, 하역된 팔레트 0.21 m.
   - URDF `dls08_measured`, 여유 0.016 m, 정렬 직선 2.1·하역 1.5·후퇴 0.55 m.
@@ -24,7 +24,7 @@
 
 - 여섯 미션 모두 첫 관측 후보(index 0, 가까운 사다리)로 계획됐다.
 - 미션 팔레트 자신과의 최소 간격은 접근 끝 0.100 m(계획된 정지 거리)다.
-- 결과 파일: UBAI `~/forklift-ct1c/out/{line,random}_check.json`.
+- 결과 파일: UBAI `~/forklift-ct1d/out/{line,random}_check.json`.
 - 이 수치는 계획 포락선(차체 + 포크 사각형)과 이상적 추정·하역의 truth 사이 간격이다. SLAM 오차(0.14–0.16 m)와 실제 하역 오차(Isaac 0.02–0.10 m)는 들어 있지 않다. Isaac 에서 이웃과의 실제 최소 거리는 PR ④ 에서 기록한다.
 
 ## 시험

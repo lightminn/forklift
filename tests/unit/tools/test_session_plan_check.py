@@ -185,3 +185,19 @@ def test_the_withdraw_meets_the_others_and_the_return_meets_its_own_delivered_pa
     out = C.check_session(path, planner=_planners(legs_override=back))
     assert out["missions"][0]["outcome"] == "contact_observed"
     assert out["missions"][0]["stages"]["return_home"]["nearest"] == "P-1"
+
+
+def test_the_session_check_hands_the_planners_directions_to_the_arcs(tmp_path):
+    """Codex PR 2 implementation round 3 P3: a half-circle transport whose bottom passes P-2's place is a contact only
+    when check_session passes the leg's directions on (without them the half circle is refused)."""
+    path = _session(tmp_path, n=2)
+    r = 1 / 0.29
+
+    def half(sc):
+        if sc.pickup.y_m != 0.0:
+            return {}
+        return {"transport": _leg([(5.0 - r, 3.0 + r, -math.pi / 2), (5.0 + r, 3.0 + r, math.pi / 2)])}
+
+    out = C.check_session(path, planner=_planners(legs_override=half))
+    assert out["missions"][0]["outcome"] == "contact_observed"
+    assert out["missions"][0]["stages"]["transport"]["nearest"] == "P-2"
