@@ -184,6 +184,7 @@ class RearAxlePathTracker:
         # V5 cusp arrivals): the caller stamps and keeps them; control does not read them.
         self.leg_switches: list[dict] = []
         self._last_eval = None
+        self._braking_against_motion = False
 
     def _speed_profile(self) -> np.ndarray:
         """Largest speed on the segment arriving at each sample, braked ahead."""
@@ -226,6 +227,13 @@ class RearAxlePathTracker:
     # Cusp position stall (docs/plans/2026-10-04-lidar-obstacle-map.md, "cusp 위치 정체 복구
     # 설계 7판"): read-only views of the leg being driven, and a release of its cusp from the
     # measured pose. None of them changes how update() tracks or accepts.
+    @property
+    def braking_against_motion(self) -> bool:
+        """Whether the last update() reported ``braking`` because the measured speed ran against the leg's
+        direction (docs/plans/2026-10-22-cusp-latch-braking.md) -- not an endpoint, arrival or held-cusp brake.
+        A view only: it is not part of the result, whose fields the records and replays compare."""
+        return self._braking_against_motion
+
     @property
     def leg_index(self) -> int:
         """The leg being driven (0 first; it advances at each accepted cusp)."""
@@ -365,6 +373,7 @@ class RearAxlePathTracker:
             raise ValueError("signed_speed_mps must be finite")
         _positive("dt_s", dt_s)
         cfg = self.config
+        self._braking_against_motion = False
         endpoint = self._leg_ends[self._leg]
         goal = self._poses[endpoint]
         position_error = float(np.linalg.norm(goal[:2] - pose[:2]))
@@ -493,6 +502,7 @@ class RearAxlePathTracker:
             ):
                 target_speed = 0.0
                 status = "braking"
+                self._braking_against_motion = True
         delta_speed = cfg.max_acceleration_mps2 * dt_s
         # Slew the requested speed, not the measured actuator response. Rebasing
         # every tick on measured speed weakens braking by dt / actuator_tau.
