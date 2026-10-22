@@ -3445,6 +3445,13 @@ class MissionCore:
         self._bottom_deck_install(t, plan_, "stand", leg_["face"], leg_["captures"])
         return SimpleNamespace(stop=False, rear=rear, installed=True)
 
+    def _sweep_clear(self, trajectory, rectangles) -> bool:
+        """The empty outline swept along ``trajectory`` (rear-axle poses) meets none of ``rectangles``."""
+        from forklift_core.planning.geometry import Bounds, collision_free_path
+
+        return collision_free_path(np.asarray(trajectory, dtype=float), list(rectangles),
+                                   self.geometry.unloaded_footprint, Bounds(-1e6, 1e6, -1e6, 1e6))
+
     def near_leg_or_recapture(self, t: float, rear, base, yaw: float, observation, attempt_number: int, near_leg,
                               acquired=None) -> None:
         """After the mission plan: the first far observation under SLAM drives the near leg to the near capture
@@ -3538,6 +3545,17 @@ class MissionCore:
                     ):
                         refusal = f"near_capture_misaligned:dry_run:{asdict(dry)}"
                         straight = None
+                    elif getattr(options, "near_capture_neighbour_sweep", False):
+                        # Plan 2026-10-22-rigid-session-pallets 2.6: a session's default straight is driven past the
+                        # other pallets -- its dry run's empty outline swept against them (as planned: nominal + D1,
+                        # or the estimate + its uncertainty); a meeting is refused to the redraw, which checks its own.
+                        neighbours_ = list(hooks.session_neighbour_rects())
+                        clear_ = (not neighbours_ or not len(dry.trajectory) or self._sweep_clear(
+                            dry.trajectory, neighbours_))
+                        state["near_capture"]["neighbour_sweep"] = {"neighbours": len(neighbours_), "clear": clear_}
+                        if not clear_:
+                            refusal = "near_capture_misaligned:neighbour_sweep"
+                            straight = None
                 redraw_entry = None
                 if straight is None and self._near_capture_redraw_allowed():
                     # Plan D8 S4c-3 stage 1: the S4b re-draw acceptance at the near

@@ -18,7 +18,7 @@ RESTING_M, RESTING_RAD = 0.01, 0.01  # how far a pallet nobody handles may move 
 
 
 def prim_name(pallet_id: str) -> str:
-    if not _ID.match(pallet_id):
+    if not isinstance(pallet_id, str) or not _ID.fullmatch(pallet_id):
         raise ValueError(f"pallet id {pallet_id!r} cannot name a prim")
     return pallet_id.replace("-", "_")
 
@@ -91,14 +91,16 @@ class PalletSwitch:
         return old, target
 
 
-def _yaw_of(q) -> float:
-    w, x, y, z = (float(v) for v in q)
-    return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+def _rotation_between(q0, q1) -> float:
+    """The whole rotation angle from q0 to q1 (w, x, y, z): a tilt counts as a turn does."""
+    dot = abs(sum(float(a) * float(b) for a, b in zip(q0, q1)))
+    return 2 * math.acos(min(1.0, dot))
 
 
 class RestWatch:
     """Where the pallets nobody handles rest, and the largest move seen. ``rest(id, position, quaternion)`` fixes one;
-    ``check(id, position, quaternion)`` returns the move ((metres, radians), whether it passes the bounds)."""
+    ``check(id, position, quaternion)`` returns the move ((metres in 3D, radians of the whole rotation), whether it
+    passes the bounds) -- a pallet lifted or tipped on one edge moves as one slid or turned does (Codex round 3)."""
 
     def __init__(self, bound_m: float = RESTING_M, bound_rad: float = RESTING_RAD):
         self.bound_m, self.bound_rad = float(bound_m), float(bound_rad)
@@ -106,12 +108,12 @@ class RestWatch:
         self.largest: dict = {}  # id -> [metres, radians] the largest move seen
 
     def rest(self, pallet_id: str, position, quaternion) -> None:
-        self.poses[pallet_id] = (float(position[0]), float(position[1]), _yaw_of(quaternion))
+        self.poses[pallet_id] = (tuple(float(v) for v in position[:3]), tuple(float(v) for v in quaternion))
 
     def check(self, pallet_id: str, position, quaternion):
-        x, y, yaw = self.poses[pallet_id]
-        moved_m = math.hypot(float(position[0]) - x, float(position[1]) - y)
-        moved_rad = abs(math.remainder(_yaw_of(quaternion) - yaw, math.tau))
+        p0, q0 = self.poses[pallet_id]
+        moved_m = math.dist(p0, tuple(float(v) for v in position[:3]))
+        moved_rad = _rotation_between(q0, quaternion)
         seen = self.largest.setdefault(pallet_id, [0.0, 0.0])
         seen[0], seen[1] = max(seen[0], moved_m), max(seen[1], moved_rad)
         return (moved_m, moved_rad), (moved_m <= self.bound_m and moved_rad <= self.bound_rad)

@@ -19,6 +19,8 @@ def test_a_pallet_id_names_a_prim_without_its_dash():
         S.prim_name("1-P")
     with pytest.raises(ValueError, match="same prim"):
         S.check_prim_names(["P-1", "P_1"])
+    with pytest.raises(ValueError):
+        S.check_prim_names(["P-1", "P-1\n"])  # a trailing newline names no other prim (Codex round 3 P3)
     S.check_prim_names(["P-1", "P-2", "P-10"])
 
 
@@ -90,3 +92,13 @@ def test_a_resting_pallet_may_move_one_centimetre_and_one_hundredth_of_a_radian(
     assert w.largest["P-2"][0] == pytest.approx(0.011)
     w.rest("P-2", (8.0, 0.0, 0.0), _q(0.0))  # put down elsewhere: that is its rest now
     assert w.check("P-2", (8.0, 0.0, 0.0), _q(0.0))[1]
+
+
+def test_a_tipped_or_lifted_pallet_counts_as_moved():
+    """Codex round 3 P2: tipped 0.2 rad on an edge it moves 8 mm in plan but 79 mm in height; the bounds see both."""
+    w = S.RestWatch()
+    w.rest("P-3", (1.0, 2.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+    tipped = (math.cos(0.1), math.sin(0.1), 0.0, 0.0)  # 0.2 rad about x
+    (m, r), ok = w.check("P-3", (1.0, 2.008, 0.079), tipped)
+    assert not ok and r == pytest.approx(0.2) and m > 0.07
+    assert not w.check("P-3", (1.0, 2.0, 0.011), (1.0, 0.0, 0.0, 0.0))[1]  # lifted 11 mm
