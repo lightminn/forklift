@@ -1,5 +1,7 @@
 # 상시 운용 세션의 SLAM — 미리 만든 지도에서 위치 추정 (계획 v2.5)
 
+> **상태(2026-10-22): 기록으로 머지.** S2 조사 지도(r7)는 V2′ 0.10 m 미통과(0.152 m)라 배포 묶음이 아니다. V5 는 그 묶음 위의 진단 예외로만 쟀다 — 루프 폐쇄를 켠 J 설정으로 정확도·임무·하역은 통과했고, 처리 비용 한 항목씩 못 미쳤다(4 장 끝). 자이로 방향 검증은 실차 IMU 측정(G4) 대기로 보류. 재개하면 새 브랜치에서 한다.
+
 작성일: 2026-10-20 · 상위: [시뮬레이션 실시간화](2026-10-17-realtime-sim.md) D9(SLAM 비동기),
 [상시 운용 콘솔](2026-10-18-persistent-live-console.md) U16(2 h 연속 운용 미충족)·D9(감독 에폭),
 선행 설계: [SLAM 운용 조건](https://github.com/lightminn/forklift/blob/feat/fleet-five/docs/plans/2026-10-08-slam-operating-conditions.md)
