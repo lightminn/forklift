@@ -9,10 +9,10 @@
   #89 포함) 스냅숏 `ma1_rp_ec4bece` 로 Isaac 에서 한 번 돌렸다(ws1 잡 8252, 8 분 11 초). 명령줄은 옛 기록의 `result.json` `arguments` 에서 다시 만들었다
   (오늘 기본값과 다른 옵션만 내보내고, 기록 코드 스냅숏 경로와 출력 경로만 바꿈 — `--no-return-turnaround` 처럼 그 뒤 기본값이 바뀐 옵션은 옛 값으로 명시된다).
   새 기록: `artifacts/20261013_fork_spacing/f_p2b/seed_2_v0.055_plain_0/run`(명령줄 `command.txt`).
-- **옛 기록은 그대로 둔다.** `artifacts/20261013_fork_spacing/f_p2/seed_2_v0.055_plain_0`(387 MB)은 옮기거나 지우지 않았다. 보관본도 이미 있다 — 2026-10-19 의
-  fork_spacing 보관(`gdrive:forklift-archive/ws1-fork-spacing-20261019/_keep.tar.zst`, 목록 `_keep.files.tsv`)에 이 기록의 `run/boundary` 파일 178 개가 들어 있고
-  크기 합이 ws1 원본과 같다(목록 372 491 985 B 에서 디렉터리 항목 6 × 4 096 B 를 빼면 원본 372 467 409 B). 이번에 새로 보관하지는 않았다(지우지 않으므로 규칙상 필요 없음). 게이트 목록 `test_runs/runs29.txt` 의
-  둘째 줄만 `f_p2b/...` 로 바꾸고, 바꾸기 전 목록을 `test_runs/runs29_2026-10-16_f_p2.txt` 로 남겼다(옛 기록으로 되돌릴 때 이 목록을 쓴다).
+- **옛 기록은 그대로 둔다.** `artifacts/20261013_fork_spacing/f_p2/seed_2_v0.055_plain_0`(387 MB)은 옮기거나 지우지 않았다. 보관본도 있다 — 2026-10-19 의
+  fork_spacing 보관에서 게이트 기록 폴더들은 `gdrive:forklift-archive/ws1-fork-spacing-20261019/_keep.tar.zst` 로 올리고 ws1 에 남겼다(드라이브 MD5
+  `7ff6b99422fd1d886571c257bbe4d36b`). 그 목록 `_keep.files.tsv` 의 이 기록 `run/boundary` 일반 파일 178 개가 ws1 원본의 178 개와 상대 경로·크기까지 모두 같다
+  (`find -type f -printf '%p\t%s'` 대조). 파일 내용의 해시는 대조하지 않았다(목록에 해시가 없고, 묶음을 받아 풀지 않았다). 이번에 다시 보관하지는 않았다.
 - 스크립트(ws1): `test_runs/replay_gate/rebuild_cli.py`(명령줄 재구성), `test_runs/replay_gate/rebase/rec_f_p2b.sbatch`(기록),
   `tools/boundary_diff.py`(저장소, 첫 차이) 와 `test_runs/replay_gate/rebase/after_diff2.py`(같은 규칙으로 그 뒤 차이 전부).
 
@@ -35,9 +35,11 @@
     검출 결과 뒤의 출력은 같았다.
   - tick 1579·7950·18327·18948·20733·20852: 격자 준비(`Planner.grid_kwargs`)가 읽은 SLAM 지도 순번(`index`·`after_scan_id`)이 다르다 — 비동기로 도착하는 지도의
     알려진 외부 차이다. 7950·20852 에서는 그 응답과 다음 계획 요청의 `deadline`(프로세스 단조 시계 기준 절대값, 676 447 vs 1 187 701)도 다르다 — 시작 시각이
-    다른 두 프로세스의 같은 계획 예산이다(예산 자체는 이 비교로 따로 확인하지 않았다).
+    다른 두 프로세스의 절대 시각이다. 예산은 같다 — 두 기록 모두 그 `deadline` 에서 같은 tick 의 바로 앞 벽시계 읽기(각 tick 의 call 12·10)를 빼면
+    20.0 s 다(core 의 `clock + 20.0`).
   - tick 26 573: 끝의 결과 파일 쓰기(`Sink.write_text`) 내용이 다르다 — 위의 차이(래치 기록·벽시계 진단)를 담은 파일이다.
-- 그러니 확인한 것은 "첫 차이가 #89 의 의도한 변경과 부합하고, 그 뒤 출력 차이는 같은 유지의 8 tick 이며, 그 밖의 차이는 렌더·지도 도착·절대 시각의 알려진 외부 차이" 까지다.
+- 그러니 확인한 것은 "첫 차이가 #89 의 의도한 변경과 부합하고, 그 뒤 출력 차이는 같은 유지의 8 tick 이며, 그 밖의 차이는 기록 필드 추가(`Capture.state.instance_ids`)와, `boundary_diff` 가 알려진 외부 차이로 분류하는 렌더·지도 도착, 그리고 절대 시각" 까지다 —
+  그 분류는 비교기의 것이고 개별 차이의 원인을 따로 확정한 검사는 아니다.
   경계 기록이 다시 같아졌다는 것이 내부 상태 전체가 같다는 뜻은 아니다(래치 기록은 실제로 다르다).
 
 ## 게이트
