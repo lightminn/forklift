@@ -146,10 +146,12 @@ def test_a_snapshot_from_before_a_setup_name_binds_it_as_the_setup_does_with_its
     from types import SimpleNamespace
 
     values = {"args": SimpleNamespace(output="x")}  # a record from before the flag
-    assert sorted(H.bind_added_names(values, {"args": {}})) == ["far_intrinsics", "far_runtime", "frr", "slam_bundle_"]
+    assert sorted(H.bind_added_names(values, {"args": {}})) == ["far_intrinsics", "far_runtime", "frr", "slam_bundle_",
+                                                                 "transport_exit"]
     assert values["far_runtime"] is None and values["far_intrinsics"] is None and values["frr"] is None
     values = {"args": SimpleNamespace(recognition="off"), "far_runtime": "kept"}
-    assert H.bind_added_names(values, {"far_runtime": {}, "far_intrinsics": {}, "frr": {}, "slam_bundle_": {}}) == []
+    assert H.bind_added_names(values, {"far_runtime": {}, "far_intrinsics": {}, "frr": {}, "slam_bundle_": {},
+                                       "transport_exit": {}}) == []
     assert values["far_runtime"] == "kept"
     with pytest.raises(ReplayMismatch, match="no far_runtime although recognition='far'"):
         H.bind_added_names({"args": SimpleNamespace(recognition="far")}, {"args": {}})
@@ -159,6 +161,12 @@ def test_a_snapshot_from_before_a_setup_name_binds_it_as_the_setup_does_with_its
     assert values["slam_bundle_"] is None
     with pytest.raises(ReplayMismatch, match="no slam_bundle_ although slam_map_bundle='/b'"):
         H.bind_added_names({"args": SimpleNamespace(slam_map_bundle="/b")}, {"args": {}})
+    # trailer exit plan (2026-10-22): an older record planned with no exit prefix; one with it must have its own
+    values = {"args": SimpleNamespace(output="x")}
+    H.bind_added_names(values, {"args": {}})
+    assert values["transport_exit"] is None
+    with pytest.raises(ReplayMismatch, match="no transport_exit although exit_clearance_m=0.3"):
+        H.bind_added_names({"args": SimpleNamespace(exit_clearance_m=0.3)}, {"args": {}})
 
 
 def test_a_bottom_deck_check_on_record_is_refused_by_name_and_an_off_or_older_one_is_not():

@@ -3725,8 +3725,6 @@ def drive(S, isaac) -> None:
         tracker_book = _bound["tracker_book"]
     if "transport_exit" in _bound:
         transport_exit = _bound["transport_exit"]
-    else:  # a record set up before the exit prefix (docs/plans/2026-10-22-riibotics-trailer-exit.md)
-        transport_exit = None
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     if "truth_destination" in _bound:
