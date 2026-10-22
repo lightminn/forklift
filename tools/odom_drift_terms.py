@@ -16,6 +16,16 @@ base pose) and its ``result.json`` (the drive geometry, the rear-axle offset, th
 
    They sum to the recorded odometry's drift exactly. Forward, lateral (the window's start frame) and yaw.
 
+A team-spec run (meta.json ``encoder_model`` other than reported, plan 2026-10-22 joint-angle odometry) has no
+wheel-rate noise: its recorded odometry is ``update_increments`` over the MT6701 counted increments and the
+KTH7801 measured steering (regenerated and checked by ``encoder_odometry_inputs``). Its terms are ``noise`` (0),
+``quantize`` (recorded - joint-angle: the counting, its hysteresis and the steering quantisation) and
+``angle_truth``.
+
+Each run's window gets a class -- ``complete`` (the end phase was left), ``mid_failure`` (the start was reached,
+the end phase never left), ``no_window`` or ``reproduction_failure`` -- and only complete, reproduced windows
+enter ``summary``. ``--hold`` uses the hold window instead: the accepted near capture to the insert's end.
+
 The terms are a bookkeeping split, not a causal one: a term is where the difference appears, and the physics
 behind a large ``rate_angle`` or ``angle_truth`` (joint velocity reporting, tyre contact, steering lag) needs
 its own evidence.
@@ -34,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+from forklift_core.localization.encoders import encoder_odometry_inputs  # noqa: E402
 from forklift_core.localization.slam_pose import IncrementalWheelOdometry, OdometryNoise  # noqa: E402
 from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry  # noqa: E402
 
@@ -61,9 +72,10 @@ def base_from_rear(rear, offset_m: float):
     return (x - offset_m * math.cos(yaw), y - offset_m * math.sin(yaw), yaw)
 
 
-def trajectories(log: dict, result: dict) -> dict:
-    """The four rear-axle trajectories on the log's stamps: recorded (rebuilt with noise), noiseless,
-    joint-angle and truth."""
+def trajectories(log: dict, result: dict, meta: dict | None = None) -> dict:
+    """The four rear-axle trajectories on the log's stamps: recorded (rebuilt with noise, or from the counted
+    increments on a team-spec run), noiseless, joint-angle and truth. ``meta`` is the run's meta.json (None or
+    no ``encoder_model``: reported)."""
     args = result["arguments"]
     drive = args["drive_geometry"]
     radius = (float(args["odometry_wheel_radius_m"]) if args.get("odometry_wheel_radius_m") is not None
@@ -74,7 +86,9 @@ def trajectories(log: dict, result: dict) -> dict:
     seed = args.get("slam_noise_seed")
     if args.get("slam_noise_spec"):
         raise ValueError("a --slam-noise-spec run is not rebuilt here (its steering sigma differs)")
-    noise = OdometryNoise(seed=seed or 0, enabled=seed is not None)
+    inputs = encoder_odometry_inputs(log, meta or {})
+    counted = inputs["kind"] == "increments"
+    noise = OdometryNoise(seed=seed or 0, enabled=seed is not None and not counted)
     stamps = np.asarray(log["joint_stamps_s"], float)
     rates = np.asarray(log["wheel_rates_rad_s"])
     steer = np.asarray(log["steering_rad"], float)
@@ -85,14 +99,20 @@ def trajectories(log: dict, result: dict) -> dict:
     joint = IncrementalWheelOdometry(geometry, initial_pose=start)
     out = {k: np.empty((len(stamps), 3)) for k in ("recorded", "noiseless", "joint_angle", "truth")}
     for i, t in enumerate(stamps):
-        out["recorded"][i] = recorded.update(t, noise.wheel_rates(rates[i, 2:4]), noise.steering(steer[i]))
-        out["noiseless"][i] = clean.update(t, rates[i, 2:4], steer[i])
+        if counted:
+            out["recorded"][i] = recorded.update_increments(t, inputs["increments"][i], inputs["steering"][i])
+            out["noiseless"][i] = out["recorded"][i]
+        else:
+            out["recorded"][i] = recorded.update(t, noise.wheel_rates(rates[i, 2:4]), noise.steering(steer[i]))
+            out["noiseless"][i] = clean.update(t, rates[i, 2:4], steer[i])
         inc = angles[i, 2:4] - angles[i - 1, 2:4] if i else np.zeros(2)
         out["joint_angle"][i] = joint.update_increments(t, inc, steer[i])
         base = (poses[i, 0], poses[i, 1], yaw_of(poses[i, 3:7]))
         out["truth"][i] = rear_from_base(base, offset)
     out["stamps"] = stamps
     out["offset_m"] = offset
+    out["encoder_model"] = (meta or {}).get("encoder_model", {"name": "reported"})["name"]
+    out["input_term"] = "quantize" if counted else "rate_angle"
     # The rolled distances themselves (mean of the two rear wheels): the reported rates' trapezoid and the joint
     # angles' change, cumulative on the stamps; the truth rear axle's path length.
     rate_mean = rates[:, 2:4].astype(float).mean(axis=1) * radius
@@ -133,7 +153,7 @@ def terms(traj: dict, t0: float, t1: float) -> dict:
     i1 = min(i1, len(stamps) - 1)
     disp = {k: relative(traj[k][i0], traj[k][i1]) for k in ("recorded", "noiseless", "joint_angle", "truth")}
     split = {"noise": disp["recorded"] - disp["noiseless"],
-             "rate_angle": disp["noiseless"] - disp["joint_angle"],
+             traj.get("input_term", "rate_angle"): disp["noiseless"] - disp["joint_angle"],
              "angle_truth": disp["joint_angle"] - disp["truth"]}
     total = disp["recorded"] - disp["truth"]
     dist = {"reported_rate_m": float(traj["reported_rate_dist"][i1] - traj["reported_rate_dist"][i0]),
@@ -148,12 +168,12 @@ def terms(traj: dict, t0: float, t1: float) -> dict:
 
 
 def worst_window(traj: dict, t0: float, t1: float, width_s: float = 0.3) -> dict:
-    """The width_s window inside [t0, t1] with the largest forward rate_angle term."""
-    best = None
+    """The width_s window inside [t0, t1] with the largest forward input term (rate_angle or quantize)."""
+    best, key = None, traj.get("input_term", "rate_angle")
     for a in np.arange(t0, max(t0, t1 - width_s) + 1e-9, 0.05):
         w = terms(traj, a, a + width_s)
-        v = w["terms"]["rate_angle"]["forward_m"]
-        if best is None or abs(v) > abs(best["terms"]["rate_angle"]["forward_m"]):
+        v = w["terms"][key]["forward_m"]
+        if best is None or abs(v) > abs(best["terms"][key]["forward_m"]):
             best = w
     return best
 
@@ -167,14 +187,74 @@ def phase_window(result: dict, start_phase: str = "approach", end_phase: str = "
     return float(t0), float(t1)
 
 
+def near_capture_time(result: dict) -> float | None:
+    """The accepted near capture's control time (its observation attempt), None without one."""
+    near = result.get("near_capture") or {}
+    attempt = near.get("near_attempt")
+    attempts = result.get("observation_attempts") or []
+    if near.get("status") != "done" or not attempt or not 1 <= int(attempt) <= len(attempts):
+        return None
+    control = attempts[int(attempt) - 1].get("capture_control") or {}
+    return None if control.get("time_s") is None else float(control["time_s"])
+
+
+def window_status(result: dict, start_phase: str = "approach", end_phase: str = "insert",
+                  *, hold: bool = False) -> tuple[str, float | None, float | None]:
+    """(class, t0, t1). ``complete``: the start was reached and the end phase left; ``mid_failure``: the start was
+    reached but the end phase never left (phase_window would end it at the insert's start, plan 2026-10-22 P2);
+    ``no_window``: the start never came. ``hold``: the start is the accepted near capture instead."""
+    tr = result.get("transitions") or []
+    if hold:
+        t0 = near_capture_time(result)
+    else:
+        t0 = next((float(x["time_s"]) for x in tr if x["to"] == start_phase), None)
+    if t0 is None:
+        return "no_window", None, None
+    t1 = next((float(x["time_s"]) for x in tr if x["from"] == end_phase), None)
+    if t1 is None:
+        return "mid_failure", t0, None
+    return "complete", t0, t1
+
+
 def analyse(run_dir: Path, start_phase: str = "approach", end_phase: str = "insert") -> dict:
+    """The run's class, its approach-to-insert window and its hold window (each None unless complete)."""
     result = json.loads((run_dir / "result.json").read_text())
+    meta_path = run_dir / "meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else None
     log = dict(np.load(run_dir / "slam_log.npz", allow_pickle=False))
-    traj = trajectories(log, result)
+    row = {"run": str(run_dir), "encoder_model": (meta or {}).get("encoder_model", {"name": "reported"})["name"],
+           "window": None, "worst_0p3s": None, "hold": None}
+    status, t0, t1 = window_status(result, start_phase, end_phase)
+    hold_status, h0, h1 = window_status(result, start_phase, end_phase, hold=True)
+    row["hold_status"] = hold_status
+    if status == "no_window":
+        return {**row, "status": status, "reproduction": None}
+    traj = trajectories(log, result, meta)
     records = json.loads((run_dir / "slam_records.json").read_text())
-    t0, t1 = phase_window(result, start_phase, end_phase)
-    return {"run": str(run_dir), "reproduction": reproduction(traj, records),
-            "window": terms(traj, t0, t1), "worst_0p3s": worst_window(traj, t0, t1)}
+    row["reproduction"] = reproduction(traj, records)
+    if not row["reproduction"]["ok"]:
+        return {**row, "status": "reproduction_failure"}
+    if status == "complete":
+        row["window"], row["worst_0p3s"] = terms(traj, t0, t1), worst_window(traj, t0, t1)
+    if hold_status == "complete":
+        row["hold"] = terms(traj, h0, h1)
+    return {**row, "status": status}
+
+
+def summary(rows: list) -> dict:
+    """Per encoder model: the window classes counted, and over the complete, reproduced runs with a hold window the
+    hold forward drift's |median| and its largest magnitude (signed values would hide a negative worst case)."""
+    out = {}
+    for name in sorted({r["encoder_model"] for r in rows}):
+        group = [r for r in rows if r["encoder_model"] == name]
+        counts: dict = {}
+        for r in group:
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
+        drifts = [r["hold"]["drift"]["forward_m"] for r in group if r["status"] == "complete" and r.get("hold")]
+        out[name] = {"counts": counts, "valid": len(drifts),
+                     "hold_forward_abs_median_m": float(abs(np.median(drifts))) if drifts else None,
+                     "hold_forward_max_abs_m": float(max(abs(d) for d in drifts)) if drifts else None}
+    return out
 
 
 def main(argv=None) -> int:
@@ -186,25 +266,31 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     rows = []
     for run in args.runs:
+        name = run.parent.name if run.name == "run" else run.name
         try:
             row = analyse(run, args.start_phase, args.end_phase)
-        except (FileNotFoundError, StopIteration, KeyError, ValueError) as exc:
-            print(f"{run}: skipped ({type(exc).__name__}: {exc})")
-            continue
+        except (FileNotFoundError, KeyError, ValueError) as exc:
+            # A run whose record cannot be read or rebuilt counts as a reproduction failure, never as a pass.
+            row = {"run": str(run), "encoder_model": "unknown", "status": "reproduction_failure",
+                   "error": f"{type(exc).__name__}: {exc}", "window": None, "hold": None}
         rows.append(row)
-        w, k = row["window"], row["window"]["terms"]
-        rp, d = row["reproduction"], w["distance"]
-        print(f"{run.parent.name if run.name == 'run' else run.name:18s} repro={'ok' if rp['ok'] else 'FAILED'}"
-              f"({rp['compared']}/{rp['compared'] + rp['unmatched']}, {rp['max_position_m']:.1e} m) "
+        if row["status"] != "complete":
+            print(f"{name:18s} {row['status']} {row.get('error', '')}")
+            continue
+        w, rp, d = row["window"], row["reproduction"], row["window"]["distance"]
+        key = next(k for k in w["terms"] if k not in ("noise", "angle_truth"))
+        k = w["terms"]
+        hold = row["hold"]
+        print(f"{name:18s} {row['encoder_model']} repro=ok({rp['compared']}, {rp['max_position_m']:.1e} m) "
               f"rolled rate {(d['reported_rate_m'] - d['truth_path_m'])*1000:+6.1f} / angle "
               f"{(d['joint_angle_m'] - d['truth_path_m'])*1000:+6.1f} mm vs path | "
               f"truth={w['truth_forward_m']:.3f} m drift={w['drift']['forward_m']*1000:+6.1f} mm = "
-              f"noise {k['noise']['forward_m']*1000:+6.1f} + rate_angle {k['rate_angle']['forward_m']*1000:+6.1f} "
-              f"+ angle_truth {k['angle_truth']['forward_m']*1000:+6.1f} | worst 0.3 s rate_angle "
-              f"{row['worst_0p3s']['terms']['rate_angle']['forward_m']*1000:+6.1f} mm at "
-              f"{row['worst_0p3s']['window_s'][0]:.2f} s")
+              f"noise {k['noise']['forward_m']*1000:+6.1f} + {key} {k[key]['forward_m']*1000:+6.1f} "
+              f"+ angle_truth {k['angle_truth']['forward_m']*1000:+6.1f} | hold "
+              + (f"{hold['drift']['forward_m']*1000:+6.1f} mm" if hold else row["hold_status"]))
+    print(json.dumps(summary(rows), indent=1))
     if args.json is not None:
-        args.json.write_text(json.dumps(rows, indent=1))
+        args.json.write_text(json.dumps({"rows": rows, "summary": summary(rows)}, indent=1))
     return 0
 
 
