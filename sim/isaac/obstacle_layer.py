@@ -382,7 +382,7 @@ class ObstacleLayer:
                    measured_allowed_why=allowed[1][1], need_m=need)
         if check.blocked is not None:
             out["why"] = f"blocked:{check.blocked}"
-        elif check.verified_m + 1e-9 < need - float(self.permission.config.step_m):
+        elif check.verified_m + 1e-6 < need:
             out["why"] = "unverified"
         elif allowed[0][0] <= 0.0:
             out["why"] = f"start:{allowed[0][1]}"

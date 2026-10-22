@@ -732,4 +732,4 @@ def test_a_candidate_permit_needs_the_whole_lookahead_or_the_leg_verified_and_a_
     lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=short, loaded=False)
     leg = lay.candidate_permit(0.2, short, current_pose=pose, direction=-1, loaded=False, curvature_inv_m=0.0,
                                measured_curvature_inv_m=0.0, cap_mps=0.6)
-    assert leg["ok"] and leg["verified_m"] == pytest.approx(0.3, abs=0.06)  # a 0.3 m leg: its length is enough
+    assert leg["ok"] and leg["verified_m"] == pytest.approx(0.3, abs=1e-6)  # a 0.3 m leg: its whole length
