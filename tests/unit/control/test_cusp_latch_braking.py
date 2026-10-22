@@ -6,6 +6,7 @@ closed by any status other than ``tracking``, never reached its 5 s judgement. T
 brake -- and only that one."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -57,32 +58,62 @@ def burst_speeds(ticks, *, every=240, length=6, value=-0.03, first=150):
     return speeds
 
 
-def stand(monitor, tracker, speeds, *, phase="observe", pose=POSE, stop=None, close_at=None):
-    """The runner's chain on a standing truck: stop detector -> tracker_speed -> tracker -> monitor."""
-    stop = stop or StopDetector(tick_s=DT)
+def stand(monitor, tracker, speeds, *, phase="observe", pose=POSE, inject=None, ownership=None, replan_pending=None):
+    """The runner's chain on a standing truck: stop detector -> tracker_speed -> tracker -> monitor. ``inject(raw,
+    tracker, monitor)`` may return (raw, monitor keywords) for this tick. Returns one record per tick: raw, the
+    monitor's result, the against-motion flag of this raw, the latch's mode and observe hold after the tick, the stop
+    detector's verdict."""
+    stop = StopDetector(tick_s=DT)
     out = []
     for i, speed in enumerate(speeds):
         t = i * DT
         stop.update(commanded_speed=0.0, speed=float(speed), yaw_rate=0.0)
         raw = tracker.update(pose, stop.tracker_speed(0.012), DT)
-        if close_at is not None and i == close_at[0]:
-            raw = close_at[1](raw)
+        extra = {}
+        if inject is not None:
+            injected = inject(raw, tracker, monitor)
+            if injected is not None:
+                raw, extra = injected
 
         def judge_now(latch, raw=raw):
             return judge(tracker, pose, raw, latch.cache, end_recovered=lambda goal: False,
                          sweep_free=lambda trajectory: True, sensors=None, stall=monitor.stall)
 
+        kw = dict(excluded=None, retry_stand=False)
+        kw.update(extra)
+        flag = tracker.braking_against_motion
         result = monitor.tick(
-            t, phase, tracker, raw, raw, rear=pose, excluded=None, retry_stand=False,
+            t, phase, tracker, raw, raw, rear=pose,
             standing=lambda: stop.stopped, stopped=lambda: stop.stopped, alive=lambda: True,
-            ownership=lambda command: (True, {"owned": True}), judge_now=judge_now,
-            scan_id=lambda t=t: int(t * 10 + 1e-9), replan_pending=lambda: False,
-            prefix_occupied=lambda latch: False, release_update=lambda: tracker.update(pose, 0.0, DT),
+            ownership=ownership or (lambda command: (True, {"owned": True})), judge_now=judge_now,
+            scan_id=lambda t=t: int(t * 10 + 1e-9), replan_pending=replan_pending or (lambda: False),
+            prefix_occupied=lambda latch: False, release_update=lambda: tracker.update(pose, 0.0, DT), **kw,
         )  # fmt: skip
-        out.append((raw, result))
-        if result.end is not None:
+        latch = monitor.latch
+        out.append(SimpleNamespace(raw=raw, result=result, flag=flag, mode=latch.mode if latch else None,
+                                   held=monitor.holds_observe(), stopped=stop.stopped))
+        if result.end is not None or (inject is not None and extra and monitor.latch is None):
             break
     return out
+
+
+def braked_in(out, modes):
+    """Ticks that braked against motion while the latch was in one of these modes (the mode before the tick)."""
+    before = [None] + [o.mode for o in out[:-1]]
+    return [o for o, mode in zip(out, before, strict=True) if o.raw.status == "braking" and o.flag and mode in modes]
+
+
+def at_first_latched_brake(change):
+    """An injection at the first tick that brakes against motion while a stall is latched."""
+    done = {"v": False}
+
+    def inject(raw, tracker, monitor):
+        if done["v"] or monitor.latch is None or raw.status != "braking" or not tracker.braking_against_motion:
+            return None
+        done["v"] = True
+        return change(raw)
+
+    return inject, done
 
 
 # --- the tracker's flag -------------------------------------------------------------------------------------
@@ -112,30 +143,29 @@ def test_an_endpoint_brake_is_not_an_against_motion_brake():
 def test_the_noise_bursts_closed_the_latch_before_its_judgement_and_now_do_not():
     records = []
     monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    out = stand(monitor, tracker, burst_speeds(121 + 120 * 9))
-    assert any(raw.status == "braking" for raw, _ in out)  # the bursts did brake against motion
+    out = stand(monitor, stalled(), burst_speeds(121 + 120 * 9))
+    assert braked_in(out, ("brake", "judge"))  # the bursts braked against motion while it was being judged
     assert len(records) == 1 and "closed" not in records[0]
     events = [e["event"] for e in records[0]["events"]]
     assert "stop_confirmed" in events and records[0]["disposition"] == "observe_rule"
     assert monitor.latch is not None and monitor.latch.mode == "observe_rule"
+    assert braked_in(out, ("observe_rule",))  # and after the hand-over to the observe rule
     # Held at zero throughout, the bursts included.
-    assert all(r.tracking.speed_mps == 0.0 for _, r in out[121:])
+    assert all(o.result.tracking.speed_mps == 0.0 for o in out[121:])
 
 
-def test_the_latch_keeps_through_a_brake_in_every_mode():
-    # observe_rule above; brake / judge: bursts right after the latch; handed: below.
+def test_the_latch_keeps_through_a_brake_while_braking_and_judging():
     records = []
     monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    stand(monitor, tracker, burst_speeds(121 + 120 * 2, every=40, length=3, first=122), phase="transport")
+    # Bursts every 0.33 s from the latch on: through the brake (stop not yet confirmed) and the judgement.
+    out = stand(monitor, stalled(), burst_speeds(121 + 120 * 3, every=40, length=7, first=122), phase="transport")
+    assert braked_in(out, ("brake",)) and braked_in(out, ("judge",))
     assert len(records) == 1 and "closed" not in records[0]
-    handed_records = []
-    handed = CuspStallMonitor(handed_records)
-    tracker_h = stalled()
-    out = []
-    stop = StopDetector(tick_s=DT)
-    speeds = burst_speeds(121 + 120 * 3, every=60, length=6, first=200)
+
+
+def test_the_latch_keeps_through_a_brake_while_handed_to_the_obstacle_side():
+    records = []
+    monitor = CuspStallMonitor(records)
     owned = {"calls": 0}
 
     def ownership(command):
@@ -143,51 +173,59 @@ def test_the_latch_keeps_through_a_brake_in_every_mode():
         owned["calls"] += 1
         return (owned["calls"] == 1, {"owned": owned["calls"] == 1})
 
-    for i, speed in enumerate(speeds):
-        t = i * DT
-        stop.update(commanded_speed=0.0, speed=float(speed), yaw_rate=0.0)
-        raw = tracker_h.update(POSE, stop.tracker_speed(0.012), DT)
-        result = handed.tick(
-            t, "transport", tracker_h, raw, raw, rear=POSE, excluded=None, retry_stand=False,
-            standing=lambda: stop.stopped, stopped=lambda: stop.stopped, alive=lambda: True,
-            ownership=ownership, judge_now=None, scan_id=lambda t=t: int(t * 10),
-            replan_pending=lambda: True, prefix_occupied=lambda latch: False, release_update=None,
-        )  # fmt: skip
-        out.append((raw, result))
-    assert handed.latch is not None and handed.latch.mode == "handed"
-    assert any(raw.status == "braking" for raw, _ in out[200:])  # braked against motion while handed
-    assert len(handed_records) == 1 and "closed" not in handed_records[0]
-    assert sum(r.force_replan for _, r in out) == 1  # once per key, the brakes notwithstanding
+    out = stand(monitor, stalled(), burst_speeds(121 + 120 * 3, every=60, length=6, first=200), phase="transport",
+                ownership=ownership, replan_pending=lambda: True)
+    assert monitor.latch is not None and monitor.latch.mode == "handed"
+    assert braked_in(out, ("handed",))
+    assert len(records) == 1 and "closed" not in records[0]
+    assert sum(o.result.force_replan for o in out) == 1  # once per key, the brakes notwithstanding
 
 
-def observe_rule_ticks(out, stop_flags):
-    """core.py's observe stall counter over the monitor's output: status tracking, at the cusp, at zero, standing,
-    and the stall not held by the monitor -- reset otherwise. Returns the counter after each tick."""
+@pytest.mark.parametrize("why, change", [
+    ("status:failed", lambda raw: (replace(raw, status="failed", failure="endpoint_heading"), {})),
+    ("status:arrived", lambda raw: (replace(raw, status="arrived"), {})),
+    ("status:braking", lambda raw: (replace(raw, cusp_pending=True), {})),  # a held cusp's brake
+    ("excluded:d7_transport", lambda raw: (raw, {"excluded": "d7_transport"})),
+    ("excluded:retry_stand", lambda raw: (raw, {"retry_stand": True})),
+])
+def test_on_a_brake_against_motion_the_other_closes_still_close_the_latch(why, change):
+    records = []
+    monitor = CuspStallMonitor(records)
+    inject, done = at_first_latched_brake(change)
+    stand(monitor, stalled(), burst_speeds(121 + 120 * 4), phase="transport", inject=inject)
+    assert done["v"] and records[0]["closed"] == why
+
+
+def test_a_brake_the_tracker_did_not_mark_still_closes_the_latch():
+    # Standing still (no crossing, so the flag stays False): a braking status from anywhere else closes it.
+    records = []
+    monitor = CuspStallMonitor(records)
+    out = stand(monitor, stalled(), np.zeros(400), inject=lambda raw, tr, mon: (
+        None if mon.latch is None else (replace(raw, status="braking"), {})))
+    assert records[0]["closed"] == "status:braking" and not out[-1].flag
+
+
+def test_a_truck_that_keeps_moving_against_the_leg_still_ends_unconfirmed():
+    records = []
+    monitor = CuspStallMonitor(records)
+    speeds = np.r_[np.zeros(121), np.full(120 * 7, -0.02)]  # never standing again after the latch
+    out = stand(monitor, stalled(), speeds, phase="transport")
+    assert out[-1].result.end == "cusp_position_stall_unconfirmed" and "closed" not in records[0]
+    assert braked_in(out, ("brake",))
+
+
+# --- the observe rule after the hand-over (core.py's observe stall counter, emulated per tick) -----------------
+
+def observe_rule_counts(out):
+    """core.py ~2087: status tracking, at the cusp, at zero, standing and the stall not held by the monitor -- else
+    reset; from each tick's own returned command, stop verdict and holds_observe()."""
     counter, counts = 0, []
-    for (raw, result), (standing, held) in zip(out, stop_flags, strict=False):
-        ok = (result.tracking.status == "tracking" and result.tracking.at_cusp and result.tracking.speed_mps == 0.0
-              and standing and not held)
+    for o in out:
+        cmd = o.result.tracking
+        ok = cmd.status == "tracking" and cmd.at_cusp and cmd.speed_mps == 0.0 and o.stopped and not o.held
         counter = counter + 1 if ok else 0
         counts.append(counter)
     return counts
-
-
-def stand_recording(monitor, tracker, speeds):
-    """stand(), also recording the stop detector and the monitor's observe hold every tick."""
-    stop = StopDetector(tick_s=DT)
-    flags = []
-    real = stop.update
-
-    def update(**kw):
-        value = real(**kw)
-        flags.append([value, None])
-        return value
-
-    stop.update = update
-    out = stand(monitor, tracker, speeds, stop=stop)
-    for i in range(len(out)):
-        flags[i][1] = False  # filled below from the latch's mode after the run
-    return out, flags
 
 
 def test_after_the_hand_over_the_observe_rule_reaches_its_120_ticks_once_the_bursts_stop():
@@ -195,81 +233,25 @@ def test_after_the_hand_over_the_observe_rule_reaches_its_120_ticks_once_the_bur
     speeds[121 + 120 * 8:] = 0.0  # 4 s standing still after the last burst
     records = []
     monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    out, flags = stand_recording(monitor, tracker, speeds)
-    observe_from = next(i for i, (_, r) in enumerate(out) if monitor.latch is not None) if out else 0
-    rule_start = next(e["time_s"] for e in records[0]["events"] if e["event"] == "observe_rule")
-    held = [(i * DT) < rule_start for i in range(len(out))]
-    counts = observe_rule_ticks(out, [(f[0], h) for f, h in zip(flags, held, strict=False)])
-    assert observe_from >= 0 and max(counts) >= 120
+    out = stand(monitor, stalled(), speeds)
+    assert records[0]["disposition"] == "observe_rule" and "closed" not in records[0]
+    handed_at = next(i for i, o in enumerate(out) if o.mode == "observe_rule")
+    assert all(o.held for o in out[121:handed_at]) and not any(o.held for o in out[handed_at:])
+    counts = observe_rule_counts(out)
+    assert max(counts[:handed_at]) == 0 and max(counts[handed_at:]) >= 120
 
 
 def test_a_stop_broken_again_and_again_resets_the_observe_rules_count():
-    speeds = burst_speeds(121 + 120 * 12, every=90, length=6, first=150)  # a burst every 0.75 s, never ending
+    speeds = burst_speeds(121 + 120 * 12, every=90, length=7, first=150)  # a burst every 0.75 s, never ending
     records = []
     monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    out, flags = stand_recording(monitor, tracker, speeds)
-    rule = [e["time_s"] for e in records[0]["events"] if e["event"] == "observe_rule"]
-    held = [(i * DT) < (rule[0] if rule else 1e9) for i in range(len(out))]
-    counts = observe_rule_ticks(out, [(f[0], h) for f, h in zip(flags, held, strict=False)])
-    assert max(counts) < 120  # this change does not promise the observe replan under every noise sequence
-
-
-@pytest.mark.parametrize("why, change", [
-    ("status:failed", lambda raw: replace(raw, status="failed", failure="endpoint_heading")),
-    ("status:arrived", lambda raw: replace(raw, status="arrived")),
-])
-def test_a_failure_or_an_arrival_still_closes_the_latch_on_a_braking_tick(why, change):
-    records = []
-    monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    stand(monitor, tracker, burst_speeds(400), close_at=(300, change))
-    assert records[0]["closed"] == why
-
-
-def test_a_pending_or_endpoint_brake_still_closes_the_latch():
-    records = []
-    monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    # A braking result the tracker did not mark as against motion (the flag is False on a zero-speed update).
-    stand(monitor, tracker, np.zeros(400), close_at=(300, lambda raw: replace(raw, status="braking")))
-    assert records[0]["closed"] == "status:braking"
-
-
-def test_an_exclusion_or_a_retry_stand_still_closes_on_a_braking_tick():
-    for kw, why in ((dict(excluded="d7_transport"), "excluded:d7_transport"),
-                    (dict(retry_stand=True), "excluded:retry_stand")):
-        records = []
-        monitor = CuspStallMonitor(records)
-        tracker = stalled()
-        stop = StopDetector(tick_s=DT)
-        for i, speed in enumerate(burst_speeds(400, first=300)):
-            stop.update(commanded_speed=0.0, speed=float(speed), yaw_rate=0.0)
-            raw = tracker.update(POSE, stop.tracker_speed(0.012), DT)
-            args = dict(excluded=None, retry_stand=False)
-            if i >= 300:
-                args.update(kw)
-            monitor.tick(
-                i * DT, "transport", tracker, raw, raw, rear=POSE, standing=lambda: stop.stopped,
-                stopped=lambda: stop.stopped, alive=lambda: True, ownership=lambda command: (True, None),
-                judge_now=lambda latch, raw=raw: judge(tracker, POSE, raw, latch.cache, end_recovered=lambda g: False,
-                                                       sweep_free=lambda tr: True, sensors=None, stall=monitor.stall),
-                scan_id=lambda i=i: i // 12, replan_pending=lambda: False, prefix_occupied=lambda latch: False,
-                release_update=lambda: tracker.update(POSE, 0.0, DT), **args,
-            )  # fmt: skip
-            if i >= 300 and monitor.latch is None:
-                break
-        assert records[0]["closed"] == why
-
-
-def test_a_truck_that_keeps_moving_against_the_leg_still_ends_unconfirmed():
-    records = []
-    monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    speeds = np.r_[np.zeros(121), np.full(120 * 7, -0.02)]  # never standing again after the latch
-    out = stand(monitor, tracker, speeds, phase="transport")
-    assert out[-1][1].end == "cusp_position_stall_unconfirmed" and "closed" not in records[0]
+    out = stand(monitor, stalled(), speeds)
+    assert records[0]["disposition"] == "observe_rule" and "closed" not in records[0]
+    handed_at = next(i for i, o in enumerate(out) if o.mode == "observe_rule")
+    counts = observe_rule_counts(out)[handed_at:]
+    # It counts between the bursts and starts again after each: this change does not promise the observe replan
+    # under every noise sequence.
+    assert 0 < max(counts) < 120 and counts.count(0) > 1
 
 
 # --- the joint-angle odometry's discrete speeds ---------------------------------------------------------------
@@ -279,9 +261,8 @@ def test_single_count_ticks_of_the_joint_angle_odometry_never_brake():
     speeds[150::27] = -0.0115  # one count of one wheel now and then: the 12-tick mean stays far under 0.012
     records = []
     monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    out = stand(monitor, tracker, speeds)
-    assert not any(raw.status == "braking" for raw, _ in out)
+    out = stand(monitor, stalled(), speeds)
+    assert not any(o.raw.status == "braking" for o in out)
     assert len(records) == 1 and records[0]["disposition"] == "observe_rule"
 
 
@@ -290,7 +271,6 @@ def test_seven_two_count_ticks_running_cross_the_stop_speed_and_the_latch_keeps(
     speeds[300:307] = -0.023  # mean of 12 ticks -0.0134
     records = []
     monitor = CuspStallMonitor(records)
-    tracker = stalled()
-    out = stand(monitor, tracker, speeds)
-    assert any(raw.status == "braking" for raw, _ in out)
+    out = stand(monitor, stalled(), speeds)
+    assert braked_in(out, ("brake", "judge"))
     assert len(records) == 1 and "closed" not in records[0] and records[0]["disposition"] == "observe_rule"
