@@ -217,6 +217,31 @@ def test_colliding_goal_returns_invalid_goal():
     assert result.status == "invalid_goal"
 
 
+def test_coarse_shot_check_finds_the_same_paths(monkeypatch):
+    # A long rack-like hall where most analytic shots clip a shelf far from
+    # their start: the coarse pre-check only turns those down sooner.
+    from forklift_core.planning import hybrid_astar
+
+    rng = np.random.default_rng(7)
+    bounds = Bounds(0.0, 60.0, 0.0, 24.0)
+    obstacles = [Rectangle(x, y, 9.0, 1.2) for x in (12.0, 30.0, 48.0) for y in (6.0, 12.0, 18.0)]
+    obstacles += [Rectangle(*rng.uniform([3, 2], [57, 22]), *rng.uniform(0.2, 1.0, 2), rng.uniform(-3, 3)) for _ in range(12)]
+    config = PlannerConfig(max_expansions=3000, collision_step_m=0.06)
+    checker = FootprintCollisionChecker(obstacles, FOOTPRINT, bounds)
+    queries = []
+    while len(queries) < 6:
+        start, goal = (Pose2D(*rng.uniform([1, 1, -3], [59, 23, 3])) for _ in range(2))
+        if all(checker.free((p.x_m, p.y_m, p.yaw_rad)) for p in (start, goal)):
+            queries.append((start, goal))
+    found = [plan_hybrid_astar(s, g, obstacles, FOOTPRINT, bounds, config) for s, g in queries]
+    monkeypatch.setattr(hybrid_astar, "_shot_coarse_free", lambda *args: True)
+    for (start, goal), fast in zip(queries, found, strict=True):
+        slow = plan_hybrid_astar(start, goal, obstacles, FOOTPRINT, bounds, config)
+        assert (fast.status, fast.expanded_nodes) == (slow.status, slow.expanded_nodes)
+        np.testing.assert_array_equal(fast.poses, slow.poses)
+    assert sum(r.success for r in found) >= 3
+
+
 def test_fixed_seed_scene_is_deterministic():
     rng = np.random.default_rng(1729)
     obstacles = [

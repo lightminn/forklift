@@ -15,7 +15,7 @@ instantaneously; an adapter must account for steering rate and stop at cusps.
 import heapq
 from collections.abc import Sequence
 from dataclasses import dataclass
-from itertools import count
+from itertools import chain, count
 from math import acos, atan2, ceil, cos, hypot, isfinite, pi, sin, sqrt
 
 import numpy as np
@@ -24,6 +24,8 @@ from numpy.typing import NDArray
 from forklift_core._validation import _finite_scalar
 
 from .geometry import Bounds, Footprint, FootprintCollisionChecker, Pose2D, Rectangle
+
+_COARSE_STRIDE = 16  # an analytic shot is first checked at its first 16 midpoints and every 16th after
 
 
 @dataclass(frozen=True)
@@ -215,12 +217,32 @@ def _advance(pose, distance_m, curvature):
     )
 
 
-def _sample_arc(pose, length, direction, curvature, checker, config):
+def _arc_steps(length, curvature, checker, config):
+    """(samples, step, midpoint margin) of an arc, as _sample_arc checks it."""
     count_samples = max(1, ceil(length / config.collision_step_m))
     ds = length / count_samples
     # A body point travels at most ds * (1 + radius * |curvature|).
     # Midpoint inflation encloses the swept footprint for each half interval.
     margin = config.clearance_m + ds / 2 * (1 + checker.radius_m * abs(curvature))
+    return count_samples, ds, margin
+
+
+def _coarse_free(pose, length, direction, curvature, checker, config):
+    """Are the first _COARSE_STRIDE midpoints of _sample_arc's check and every
+    _COARSE_STRIDE-th after free? A False here is a midpoint the full check
+    would reject too, so a long arc that hits an obstacle far from its start
+    is turned down without walking it sample by sample; the outcome is the
+    same."""
+    count_samples, ds, margin = _arc_steps(length, curvature, checker, config)
+    head = range(min(_COARSE_STRIDE, count_samples))
+    for index in chain(head, range(2 * _COARSE_STRIDE - 1, count_samples, _COARSE_STRIDE)):
+        if not checker.free(_advance(pose, direction * ds * (index + 0.5), curvature), margin):
+            return False
+    return True
+
+
+def _sample_arc(pose, length, direction, curvature, checker, config):
+    count_samples, ds, margin = _arc_steps(length, curvature, checker, config)
     samples = []
     for index in range(count_samples):
         midpoint = _advance(pose, direction * ds * (index + 0.5), curvature)
@@ -278,6 +300,21 @@ def _dubins_words(start, goal, curvature):
     return candidates
 
 
+def _shot_coarse_free(pose, direction, word, lengths, checker, config):
+    """_coarse_free over every arc of a Dubins shot, each starting where
+    _sample_arc's last sample of the one before ends."""
+    current = pose
+    for turn, length in zip(word, lengths, strict=True):
+        if length < 1e-10:
+            continue
+        curvature = turn * direction * config.curvature_limit_inv_m
+        if not _coarse_free(current, length, direction, curvature, checker, config):
+            return False
+        count_samples, ds, _ = _arc_steps(length, curvature, checker, config)
+        current = _advance(current, direction * ds * count_samples, curvature)
+    return True
+
+
 def _connection(pose, goal, previous_direction, checker, config):
     if (
         hypot(pose[0] - goal[0], pose[1] - goal[1]) < 1e-12
@@ -301,6 +338,8 @@ def _connection(pose, goal, previous_direction, checker, config):
             candidates.append((cost, direction, word, lengths))
     candidates.sort(key=lambda candidate: candidate[0])
     for _, direction, word, lengths in candidates:
+        if not _shot_coarse_free(pose, direction, word, lengths, checker, config):
+            continue
         current = pose
         samples, directions, curvatures = [], [], []
         for turn, length in zip(word, lengths, strict=True):

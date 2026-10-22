@@ -138,7 +138,7 @@ class FootprintCollisionChecker:
         nonfinite pose is invalid and raises ValueError.
         """
         x, y, yaw = pose
-        if not all(isfinite(v) for v in (x, y, yaw, margin_m)) or margin_m < 0:
+        if not (isfinite(x) and isfinite(y) and isfinite(yaw) and isfinite(margin_m)) or margin_m < 0:
             raise ValueError("pose and margin must be finite; margin nonnegative")
         c, s = cos(yaw), sin(yaw)
         fp = self.footprint
@@ -156,17 +156,21 @@ class FootprintCollisionChecker:
             or cy + ey > b.y_max_m
         ):
             return False
-        candidates = self.obstacles
-        if self._buckets is not None:
-            i0, i1 = floor((cx - ex) / _BUCKET_M), floor((cx + ex) / _BUCKET_M)
-            j0, j1 = floor((cy - ey) / _BUCKET_M), floor((cy + ey) / _BUCKET_M)
-            buckets = self._buckets
-            candidates = [
-                o
-                for i in range(i0, i1 + 1)
-                for j in range(j0, j1 + 1)
-                for o in buckets.get((i, j), ())
-            ]
+        if self._buckets is None:
+            return self._clear(self.obstacles, c, s, cx, cy, ex, ey, half_length, half_width)
+        i0, i1 = floor((cx - ex) / _BUCKET_M), floor((cx + ex) / _BUCKET_M)
+        j0, j1 = floor((cy - ey) / _BUCKET_M), floor((cy + ey) / _BUCKET_M)
+        buckets = self._buckets
+        for i in range(i0, i1 + 1):
+            for j in range(j0, j1 + 1):
+                bucket = buckets.get((i, j))
+                if bucket and not self._clear(bucket, c, s, cx, cy, ex, ey, half_length, half_width):
+                    return False
+        return True
+
+    @staticmethod
+    def _clear(candidates, c, s, cx, cy, ex, ey, half_length, half_width) -> bool:
+        """No candidate obstacle overlaps the footprint box free() set up."""
         for ox, oy, ol, ow, oc, os in candidates:
             dx, dy = ox - cx, oy - cy
             # Cheap world-axis broad phase before the four exact SAT axes.
