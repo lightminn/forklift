@@ -56,6 +56,7 @@ def test_every_slot_boundary_gets_a_front_and_a_back_upright_in_props_and_visual
                     sorted(visuals, key=lambda v: (v["x_m"], v["y_m"]))):
         assert (p["rectangle"]["x_m"], p["rectangle"]["y_m"]) == pytest.approx((v["x_m"], v["y_m"]))
         assert v["kind"] == "wall" and v["height_m"] == pytest.approx(tool.RACK_H_M) and v["height_m"] > 1.05  # LiDAR plane
+        assert v["length_m"] == v["width_m"] == pytest.approx(tool.UPRIGHT_M)  # Isaac draws every post at its size
     assert rec["source"]["back_gap_m"] == pytest.approx(0.20) and rec["source"]["slot_gap_m"] == pytest.approx(0.58)
 
 
@@ -66,6 +67,30 @@ def test_the_back_upright_stands_against_the_back_frame_and_the_front_one_at_the
     assert xs[1] == pytest.approx(bound - tool.UPRIGHT_M / 2)
     nominal = rec["pickup_nominal"]["x_m"]
     assert xs[0] == pytest.approx(nominal - PALLET.overall_depth_m / 2 + tool.UPRIGHT_M / 2)
+
+
+def test_the_planner_keeps_out_of_every_post_but_the_working_slots_frames():
+    # the live obstacle layer reads a post as ~0.35-0.40 m of occupied cells; the planner's map widens all but the four
+    # posts of the pickup and drop slots' frames by RACK_KEEPOUT_M on each side
+    rec = record("aisle_rack")
+    sizes = sorted(round(p["rectangle"]["length_m"], 6) for p in uprights(rec))
+    plain, grown = tool.UPRIGHT_M, tool.UPRIGHT_M + 2 * tool.RACK_KEEPOUT_M
+    assert sizes == [pytest.approx(plain)] * 8 + [pytest.approx(grown)] * (len(sizes) - 8)  # 2 slots x 2 edges x front/back
+    lateral = lambda p: p["rectangle"]["y_m"]  # hall frame: along the aisle
+    work = [rec["pickup_nominal"]["y_m"], rec["scenario"]["destination"]["y_m"]]
+    pitch = PALLET.overall_width_m + tool.RACK_SLOT_GAP_M
+    for p in uprights(rec):
+        edge = any(abs(abs(lateral(p) - w) - pitch / 2) < 1e-6 for w in work)
+        assert (p["rectangle"]["length_m"] == pytest.approx(plain)) == edge
+
+
+def test_the_rack_copies_plan_their_whole_mission_with_the_keep_outs(tmp_path):
+    # the CPU check with the Isaac mission settings, as --plan runs it
+    for name in ("aisle_rack",):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(record(name)))
+        tool.plan_scene(path, tmp_path)
+        assert json.loads((tmp_path / f"{name}.plan.json").read_text())["outcome"] == "success"
 
 
 def test_the_plain_aisle_scenes_are_unchanged():

@@ -151,6 +151,13 @@ UPRIGHT_URI = "riibotics:rack_upright"
 UPRIGHT_M = round(0.10 * 1.46 / 2.8, 3)
 RACK_BACK_GAP_M = 0.20
 RACK_SLOT_GAP_M = 0.58
+# The live obstacle layer marks a LiDAR hit with its error radius (config/obstacle_layer_single.yaml; a 0.052 m post
+# reads as about 0.35-0.40 m of OCCUPIED cells -- ws1 riib_901632b3 runs), while the planner keeps 0.05-0.10 m from a
+# prop: paths hugging the rack face were stopped by the permission in every run. In the planner's map every post
+# but the frames of the mission's own two slots is therefore a keep-out RACK_KEEPOUT_M wider on each side; the
+# working frames stay their size (the truck enters those straight, and the straights need the room). Isaac draws
+# every post at its size.
+RACK_KEEPOUT_M = 0.20
 RACK_KINDS = ("aisle", "aisle_out")
 
 
@@ -205,22 +212,28 @@ def rack_uprights(slot_x: list[float], pitch: float, aisle: float, depth: float,
     return [Rectangle(x, y, UPRIGHT_M, UPRIGHT_M, 0.0) for x in edges for y in (front, back)]
 
 
-def aisle_scene(scale_name: str = "length", slot_gap: float = 0.20, back_gap: float = 0.15, uprights: bool = False):
+def aisle_scene(scale_name: str = "length", slot_gap: float = 0.20, back_gap: float = 0.15, uprights: bool = False,
+                keepout: float = 0.0):
     pallet = load_pallet_geometry(PALLETS[PALLET])
     scenario, info = aisle_case(SCALES[scale_name], pallet, "gap", "gap", slot_gap, back_gap)
     if uprights:
         pitch = info["pitch_m"]
         posts = rack_uprights([slot_gap / 2 + pitch * (i + 0.5) for i in range(SLOTS)], pitch, info["aisle_m"],
                               pallet.overall_depth_m, back_gap)
+        work = (scenario.pickup.x_m, scenario.destination.x_m)
+
+        def planned(r: Rectangle) -> Rectangle:
+            if any(abs(abs(r.x_m - w) - pitch / 2) < 1e-9 for w in work):
+                return r
+            return Rectangle(r.x_m, r.y_m, r.length_m + 2 * keepout, r.width_m + 2 * keepout, r.yaw_rad)
+
         asset = AssetSpec(UPRIGHT_URI, UPRIGHT_M, UPRIGHT_M, RACK_H_M)
-        scenario = replace(scenario, props=scenario.props + tuple(PlacedProp(asset, r) for r in posts))
-        info = {**info, "rack_uprights": len(posts), "upright_m": UPRIGHT_M}
+        scenario = replace(scenario, props=scenario.props + tuple(PlacedProp(asset, planned(r)) for r in posts))
+        info = {**info, "rack_uprights": len(posts), "upright_m": UPRIGHT_M, "upright_keepout_m": keepout}
     visuals = pallet_visuals(scenario)
-    for p in scenario.props:
-        if p.asset.uri == UPRIGHT_URI:
-            r = p.rectangle
-            visuals.append({**_visual("wall", r.x_m, r.y_m, r.length_m, r.width_m, 0.0, RACK_H_M, RACK_ORANGE),
-                            "role": "rack_upright"})
+    for r in posts if uprights else ():
+        visuals.append({**_visual("wall", r.x_m, r.y_m, r.length_m, r.width_m, 0.0, RACK_H_M, RACK_ORANGE),
+                        "role": "rack_upright"})
     b = scenario.bounds
     # The rack's back frame stands just past the planner's bound (the rack row is the bound).
     visuals.append(_visual("wall", (b.x_min_m + b.x_max_m) / 2, b.y_max_m + WALL_T_M / 2,
@@ -408,10 +421,10 @@ def with_slot_markers(kind: str, built):
     return replace(scenario, props=props), visuals + marks, {**info, "slot_markers": True}
 
 
-def rack_scene(slot_gap: float = RACK_SLOT_GAP_M, back_gap: float = RACK_BACK_GAP_M):
+def rack_scene(slot_gap: float = RACK_SLOT_GAP_M, back_gap: float = RACK_BACK_GAP_M, keepout: float = RACK_KEEPOUT_M):
     """The aisle with rack frames and the assumed 0.20 m back gap (RACK_* above); aisle and aisle_out stay as they
     were for regression."""
-    return aisle_scene(slot_gap=slot_gap, back_gap=back_gap, uprights=True)
+    return aisle_scene(slot_gap=slot_gap, back_gap=back_gap, uprights=True, keepout=keepout)
 
 
 def unloading_slots_hall(kind: str, built) -> list[PalletSite]:
