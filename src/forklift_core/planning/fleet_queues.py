@@ -217,7 +217,7 @@ class Queues(Windows):
         return sorted((m for m in self.members.values() if place[m.id] == place[member_id]), key=lambda m: (m.ticket, m.truck))
 
     # -- building ------------------------------------------------------------
-    def replace(self, name: str, groups: dict, trucks: dict, now: float, *, dry: bool = False) -> bool:
+    def _replace(self, name: str, groups: dict, trucks: dict, now: float, dry: bool) -> tuple[bool, dict, bool]:
         """As fleet_windows, with name's members joining their lines."""
         crossings = copy.deepcopy(self.crossings) if dry else self.crossings
         members = copy.deepcopy(self.members) if dry else self.members
@@ -227,11 +227,35 @@ class Queues(Windows):
         members.clear()
         members.update(new)
         self._conform(crossings, members, trucks, set(crossings) - set(fresh))
+        tickets = {mid: m.ticket for mid, m in members.items()}
         ok = self._settle(crossings, members, trucks, fresh) and not clash
+        if not ok and not clash and not dry:
+            ok = self._give_way_in_line(crossings, members, trucks, name, fresh, tickets)
         if not dry:
             self.last_feasible = ok
             self._seconds = None
-        return ok
+        return ok, crossings, clash
+
+    def _give_way_in_line(self, crossings, members, trucks, name, fresh, tickets) -> bool:
+        """fleet_windows' _give_way in the lines: the tickets before the
+        settling, name's members behind the other's at its open new crossings."""
+        tried = {mid: m.ticket for mid, m in members.items()}
+        for mid, ticket in tickets.items():
+            members[mid].ticket = ticket
+        index = self._index(members)
+        for cid in fresh:
+            c = crossings[cid]
+            if not c.entered:
+                ma, mb = self._pair(c, index)
+                mine, other = (ma, mb) if c.a == name else (mb, ma)
+                mine.ticket = max(mine.ticket, other.ticket + _EPS)
+        self._derive(crossings, members, trucks)
+        if not self._run(crossings, trucks)[1]:
+            return True
+        for mid, ticket in tried.items():
+            members[mid].ticket = ticket
+        self._derive(crossings, members, trucks)
+        return False
 
     def drop(self, name: str) -> None:
         super().drop(name)
@@ -304,7 +328,23 @@ class Queues(Windows):
         if not stuck:
             return
         before = {c.id: c.first for c in self.crossings.values()}
-        ok = self._settle(self.crossings, self.members, trucks, [])
+        index = self._index(self.members)
+
+        def turn(c):
+            """c turned over in the lines: the held member just ahead of its leader."""
+            ma, mb = self._pair(c, index)
+            held, leader = (mb, ma) if c.first == c.a else (ma, mb)
+            ticket = held.ticket
+            held.ticket = leader.ticket - _EPS
+            self._derive(self.crossings, self.members, trucks)
+
+            def back():
+                held.ticket = ticket
+                self._derive(self.crossings, self.members, trucks)
+
+            return back
+
+        ok = self._unlock(self.crossings, trucks, turn)
         turned = [c for c in self.crossings.values() if before.get(c.id, c.first) != c.first]
         self.counts["healed" if ok else "heal_failed"] += 1
         self.events.append({"t_s": round(now, 1), "kind": "orders_locked", "healed": ok,

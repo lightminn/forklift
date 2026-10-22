@@ -513,7 +513,10 @@ class TrafficManager:
 
     def trial_route(self, name: str, chunks) -> bool:
         """Windows mode: could name take this route (as set_route would give
-        it) with crossing orders that do not lock? Nothing changes."""
+        it) with crossing orders that do not lock? Where they lock already (a
+        heal that did not go through), a route that leaves name free and holds
+        no truck the orders do not hold now is a way out, not a new lock.
+        Nothing changes."""
         if self.windows is None:
             return True
         _, route = self._build(chunks)
@@ -522,7 +525,11 @@ class TrafficManager:
                        restart=route[5], stopcost=route[6], pose=truck.pose)
         trucks = {**self.trucks, name: trial}
         groups = {} if self.mode == "tiles" else self._groups(trial, trucks)
-        return self.windows.replace(name, groups, trucks, self.now, dry=True)
+        held = self.windows.held(self.trucks) if isinstance(self.windows, Windows) else set()
+        if not held:
+            return self.windows.replace(name, groups, trucks, self.now, dry=True)
+        after = self.windows.trial(name, groups, trucks, self.now)
+        return after is not None and name not in after and after <= held
 
     def set_footprint(self, name: str, footprint: Footprint) -> None:
         """The body the truck has now (loaded or not)."""

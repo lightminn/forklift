@@ -19,8 +19,12 @@ and replaces fixed ranks and safe stops with this:
   graph argument (``_run`` counts a truck held at a grant end as resting
   ``moving_m`` short, as real ones do). Orders are set and changed only while
   that holds -- and every ``period_s`` they are checked again and turned over
-  where they no longer do (``_heal``) -- except
-  where a truck is already in a crossing: it goes first. A truck that reaches
+  where they no longer do (``_heal``: on the cycles of held trucks, one turn at
+  a time while fewer stay held) -- except
+  where a truck is already in a crossing: it goes first. A lock no turn clears
+  (grants in all round a cycle) waits for a route change: fleet_traffic's
+  ``trial_route`` then takes one that frees its truck and holds no other truck
+  the orders do not hold already. A truck that reaches
   the end of its route parks and leaves the orders, as an idle truck does:
   its body is then the claims' to keep clear of (and TA's to go round);
   ``timed`` counts it gone ``park_s`` after it arrives (its next job).
@@ -220,13 +224,44 @@ class Windows:
         a truck already in goes first, otherwise first-come in free-flow time,
         then turned over where that is what makes the orders feasible. Returns
         whether they are; with dry, nothing is kept."""
+        return self._replace(name, groups, trucks, now, dry)[0]
+
+    def trial(self, name: str, groups: dict, trucks: dict, now: float) -> set[str] | None:
+        """The trucks the orders would hold short of their route ends after
+        replace (None: two trucks would both be in one crossing). Nothing changes."""
+        _, crossings, clash = self._replace(name, groups, trucks, now, True)
+        return None if clash else self.held(trucks, crossings)
+
+    def _replace(self, name: str, groups: dict, trucks: dict, now: float, dry: bool) -> tuple[bool, dict, bool]:
+        """replace -> (feasible, the crossings, whether two trucks are in one)."""
         crossings = copy.deepcopy(self.crossings) if dry else self.crossings
         fresh, clash = self._renew(crossings, name, groups, trucks)
+        firsts = {cid: c.first for cid, c in crossings.items()}
         ok = self._repair(crossings, trucks, fresh) and not clash
+        if not ok and not clash and not dry:
+            ok = self._give_way(crossings, trucks, name, fresh, firsts)
         if not dry:
             self.last_feasible = ok
             self._seconds = None
-        return ok
+        return ok, crossings, clash
+
+    def _give_way(self, crossings, trucks, name, fresh, firsts) -> bool:
+        """A route set_route takes whatever the orders (a re-plan round a spill)
+        that the repair found none for: the orders before the repair, name
+        second at its open new crossings -- kept if they do not lock (the other
+        trucks could all finish before; name has to leave those it is in)."""
+        tried = {cid: c.first for cid, c in crossings.items()}
+        for cid, first in firsts.items():
+            crossings[cid].first = first
+        for cid in fresh:
+            c = crossings[cid]
+            if not c.entered:
+                c.first = c.other(name)
+        if not self._run(crossings, trucks)[1]:
+            return True
+        for cid, first in tried.items():
+            crossings[cid].first = first
+        return False
 
     def _renew(self, crossings, name: str, groups: dict, trucks) -> tuple[list[int], bool]:
         """Replace name's crossings in crossings by groups' -> (the new ids,
@@ -362,6 +397,52 @@ class Windows:
         stuck = [cid for n, cid in holding.items() if cid is not None and pos[n] < trucks[n].g[-1] - _TOL]
         return pos, stuck
 
+    def held(self, trucks, crossings=None) -> set[str]:
+        """The trucks the orders hold short of their route ends (none: no lock)."""
+        crossings = self.crossings if crossings is None else crossings
+        return {crossings[cid].second for cid in self._run(crossings, trucks)[1]}
+
+    @staticmethod
+    def _cycles(crossings, hold: dict[str, int]) -> list[int]:
+        """The crossings on the cycles of held trucks: hold maps each to the
+        crossing holding it, whose first truck it waits for -- itself held, so
+        every chain of waits ends in a cycle."""
+        on, done = [], set()
+        for start in hold:
+            path, at = [], {}
+            n = start
+            while n in hold and n not in done and n not in at:
+                at[n] = len(path)
+                path.append(n)
+                n = crossings[hold[n]].first
+            if n in at:
+                on += [hold[m] for m in path[at[n] :]]
+            done.update(path)
+        return on
+
+    def _unlock(self, crossings, trucks, turn) -> bool:
+        """Heal's search: turn over the open crossing, on a cycle of held trucks,
+        that leaves the fewest trucks held; again while that number falls.
+        turn(c) turns c over and returns what turns it back. -> no lock left."""
+        stuck = self._run(crossings, trucks)[1]
+        while stuck:
+            hold = {crossings[cid].second: cid for cid in stuck}
+            best, pick = len(hold), None
+            for cid in self._cycles(crossings, hold):
+                c = crossings[cid]
+                if c.entered:
+                    continue
+                back = turn(c)
+                left = len(self._run(crossings, trucks)[1])
+                back()
+                if left < best:
+                    best, pick = left, c
+            if pick is None:
+                return False
+            turn(pick)
+            stuck = self._run(crossings, trucks)[1]
+        return True
+
     def timed(self, crossings, trucks, now: float) -> dict | None:
         """Waits the orders impose on free-flow times: {truck: (checkpoint arc
         lengths, delay from each on)} -- a crossing's start and end for its
@@ -475,13 +556,18 @@ class Windows:
 
     def _heal(self, now, trucks) -> None:
         """Orders that no longer let every truck finish (trucks resting short
-        of their grants, routes that changed): turn over open crossings
-        holding trucks until they do, as far as that goes."""
+        of their grants, routes that changed): turn over open crossings on the
+        cycles of held trucks until they do, as far as that goes (_unlock)."""
         stuck = self._run(self.crossings, trucks)[1]
         if not stuck:
             return
         before = {c.id: c.first for c in self.crossings.values()}
-        ok = self._repair(self.crossings, trucks, [])
+
+        def turn(c):
+            c.first = c.second
+            return lambda: setattr(c, "first", c.second)
+
+        ok = self._unlock(self.crossings, trucks, turn)
         turned = [c for c in self.crossings.values() if before.get(c.id, c.first) != c.first]
         self.counts["healed" if ok else "heal_failed"] += 1
         self.events.append({"t_s": round(now, 1), "kind": "orders_locked", "healed": ok,

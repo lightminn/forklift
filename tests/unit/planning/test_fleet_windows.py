@@ -13,6 +13,7 @@ from forklift_core.planning.fleet_traffic import (
     pose_at,
     rectangles_overlap,
 )
+from forklift_core.planning.fleet_queues import Queues
 from forklift_core.planning.fleet_windows import (
     Crossing,
     Windows,
@@ -205,6 +206,46 @@ def test_a_route_with_no_lock_free_order_is_seen_before_it_is_taken():
     assert not manager.trial_route("b", [(routes["b"], TRUCK)])
     assert manager.trial_route("b", [(_path((4, 0), (4, 3), (-6, 3)), TRUCK)])
     assert all("b" not in (c.a, c.b) for c in manager.windows.crossings.values())
+
+
+def test_a_way_out_of_orders_that_lock_already_is_taken_and_a_new_hold_is_not():
+    # r2x multi_802_C5_20 (Q3): after a spill the orders locked with both grants in, so no
+    # turn over helps; every route tried then was refused as the orders still locked.
+    # Here a starts in b's last crossing and b first; a goes first where b crosses later.
+    routes = {"a": _line(5, 0, 20, 0), "b": _path((15, -5), (15, 5), (5, 5), (5, -5))}
+    manager = _manager(routes)
+    w = manager.windows
+    early, late = sorted(w.crossings.values(), key=lambda c: c.interval("a")[0])
+    early.first, late.first = "b", "a"
+    early.entered = late.entered = True
+    assert w.held(manager.trucks) == {"a", "b"}
+    manager.add("c", 2, (0, 10, 0), TRUCK)
+    assert not w.replace("c", {}, manager.trucks, 0.0, dry=True)  # the old test: the orders lock
+    assert manager.trial_route("c", [(_line(0, 10, 10, 10), TRUCK)])  # clear of both
+    assert not manager.trial_route("c", [(_line(6, 8, 6, -8), TRUCK)])  # behind a, which cannot move
+    assert manager.trial_route("b", [(_path((15, -5), (25, -5), (25, 5)), TRUCK)])  # b out of the lock
+    assert all("c" not in (c.a, c.b) for c in w.crossings.values()) and w.held(manager.trucks) == {"a", "b"}
+
+
+@pytest.mark.parametrize("mode", ["windows", "queues"])
+def test_a_route_that_has_to_be_taken_gives_way_where_the_repair_finds_no_order(monkeypatch, mode):
+    # r2x rack_804_C5_20 (A): a route re-planned round a spill got no order from the
+    # repair, whose turns were left in place, and 19 trucks locked; from the orders
+    # before the repair, the truck second at its new crossings locked none.
+    routes = {"a": _line(0, 0, 14, 0), "b": _line(6, -3, 6, 7)}
+    manager = _manager({"a": routes["a"]}, mode=mode)
+    manager.add("b", 1, routes["b"][0], TRUCK)
+
+    def gives_up(self, crossings, *args):
+        for c in crossings.values():
+            c.first = c.second
+        return False
+
+    monkeypatch.setattr(Queues if mode == "queues" else Windows, "_settle" if mode == "queues" else "_repair", gives_up)
+    assert not manager.trial_route("b", [(routes["b"], TRUCK)])  # a trial does not give way
+    manager.set_route("b", [(routes["b"], TRUCK)])
+    (c,) = manager.windows.crossings.values()
+    assert manager.windows.last_feasible and c.first == "a"  # b, due first, gives way
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
