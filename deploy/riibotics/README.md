@@ -13,8 +13,8 @@ scene, the URDF and the interpreters as environment variables (see the script's 
 | `MARKERS` | `on` | `line_*` / `random_*` run their slot-marker copy `<scene>_m.json` (PR #99, `docs/plans/2026-10-22-open-zone-docking.md`) | `off`: the plain scene |
 | `RACK` | `on` | `aisle` / `aisle_out` run their rack copy `<scene>_rack.json` — rack uprights, 0.58 m slot gaps, 0.20 m back gap (`docs/plans/2026-10-22-riibotics-aisle.md` D-A, D-C) | `off`: the plain scene (0.15 m back gap, no uprights) |
 
-Scenes without unloading slots to mark (aisle, aisle_out, trailer, conveyor) run as they are. Write the scene files
-with the marker copies first:
+trailer and conveyor have no copy and run as they are; aisle and aisle_out run their rack copy unless `RACK=off`.
+Write the scene files with the marker and rack copies first:
 
     python tools/riibotics_isaac_scenes.py --output <scene dir> --slot-markers --rack
 

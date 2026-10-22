@@ -31,8 +31,9 @@ def straights(rec, pickup_shift=0.0, drop_shift=0.0):
     drop = site_poses(PalletSite(sc.destination.x_m, sc.destination.y_m + drop_shift, sc.destination.yaw_rad), GEOMETRY)
     c = tool.CLEARANCE_M
     return {
+        # the scene planning's insertion is checked at the full clearance (no grid: pallet_mission.py, insert)
         "insert": _straight_plan(pick["approach"], pick["inserted"], 1, rects, GEOMETRY.unloaded_footprint, sc.bounds,
-                                 min(c, GEOMETRY.approach_gap_m / 2)).status,
+                                 c).status,
         "extract": _straight_plan(pick["inserted"], pick["extracted"], -1, rects, GEOMETRY.loaded_footprint, sc.bounds,
                                   c).status,
         "deliver": _straight_plan(drop["predelivery"], drop["delivery"], 1, rects, GEOMETRY.loaded_footprint, sc.bounds,
