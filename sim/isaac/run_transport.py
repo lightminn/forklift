@@ -5250,6 +5250,9 @@ def drive(S, isaac) -> None:
                 "bottom_deck_spec": spec_from_geometry(args.pallet_geometry_loaded, entry_axes=KNOWN_ENTRY_AXES[shape_]),
                 "camera_mount_x_m": float(perception_mount.translation_m[0])}
 
+    # Plan 2026-10-22-session-scene-pallet-props 2.6: a live session's other pallets join the obstacles the docking
+    # correction's dry run checks (the list itself keeps what the run spawns and removes); None: no others.
+    session_extra_ = {"fn": None}
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
@@ -5302,7 +5305,8 @@ def drive(S, isaac) -> None:
             # M-a1 slice 6b: the docking's ports -- the loop's control and true pose, the world clock and stage,
             # the truth obstacles its dry run checks (SimTruth), the recorded planners and the LiDAR geometry.
             rear=lambda: rear, world=lambda: world, stage=lambda: stage,
-            truth_obstacles=lambda: obstacles, dock=lambda *a, **k: dock(*a, **k),
+            truth_obstacles=lambda: obstacles if session_extra_["fn"] is None else obstacles + session_extra_["fn"](),
+            dock=lambda *a, **k: dock(*a, **k),
             plan_docking_reapproach=lambda *a, **k: plan_docking_reapproach(*a, **k),
             add_path_display=lambda *a: isaac.add_path_display(*a),
             laser_mount=lambda: laser_mount, beam_angles=lambda: beam_angles,
@@ -6787,9 +6791,18 @@ def drive(S, isaac) -> None:
             from forklift_core.planning.pallet_mission import PalletSite as LiveSite
 
             live_session_ = {
-                "scenario": scenario, "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
-                "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
-                "zone": pickup_zone, "bounds": pickup_bounds, "wait": scenario.start_rear,
+                "scenario": scenario,
+                # Plan 2026-10-22-session-scene-pallet-props 2.4: what each pallet's preparation starts from -- its
+                # candidates, the pose they move with (registered; the truth pickup for a v1 or bay run, as before),
+                # its zone and bounds. One pallet here (P-1); a session scene (PR 3) gives each its own.
+                "pallets": {"P-1": {
+                    "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
+                    "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
+                    "zone": pickup_zone, "bounds": pickup_bounds}},
+                "nominal": {},  # a session's drawn slots, id -> (x, y, yaw); none for P-1 alone
+                "shape": (float(geometry.pallet_depth_m), float(geometry.pallet_width_m),
+                          float(args.pallet_geometry_loaded.overall_height_m)),
+                "wait": scenario.start_rear,
                 # the destinations' truth (simulation only): D-1 the scenario's, D-0 the first pallet's own place
                 "truth": {"D-1": truth_destination, "D-0": scenario.pickup},
                 "base_z": float(slam["docking"].get("reference_base_z_m")) if slam is not None
@@ -6797,11 +6810,33 @@ def drive(S, isaac) -> None:
             }
 
             from forklift_core.safety.pallet_permit import preparation_obstacle as live_preparation_obstacle
+            from forklift_core.safety.pallet_permit import session_pallet_props as live_session_pallet_props
 
             def prep_obstacle_of(entry_, at_first_, pose_=None):
                 """The pallet obstacle the next preparation's observation plan holds (plan D4b item 1)."""
-                return live_preparation_obstacle(entry_, live_session_["zone"] if at_first_ else None, pose=pose_,
+                zone_ = live_session_["pallets"][entry_.pallet_id]["zone"] if at_first_ else None
+                return live_preparation_obstacle(entry_, zone_, pose=pose_,
                                                  size=(geometry.pallet_depth_m, geometry.pallet_width_m))
+
+            def session_scenario_(exclude_id_, moved_=None, moved_ids_=()):
+                """The session scene a preparation plans in (plan 2026-10-22-session-scene-pallet-props 2.6): the
+                static props and the other pallets by their basis (decision D1: a prior one at its drawn slot + 0.25
+                m). With P-1 alone there are no others: the scene's own props, as before."""
+                others_ = live_session_pallet_props(core.targets, exclude_id=exclude_id_, nominal=live_session_["nominal"],
+                                                    shape=live_session_["shape"], prior_grow_m=0.25, moved=moved_,
+                                                    moved_ids=moved_ids_)
+                base_ = live_session_["scenario"]
+                return base_ if not others_ else replace(base_, props=tuple(base_.props) + others_)
+
+            def session_extra_rects_():
+                """The mission's other pallets for the docking dry run (the carried one is left out by itself)."""
+                mission_ = core.commands.mission
+                return [p_.rectangle for p_ in live_session_pallet_props(
+                    core.targets, exclude_id=None if mission_ is None else mission_.pallet_id,
+                    nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=0.25)]
+
+            if len(live_session_["pallets"]) > 1:  # P-1 alone: no others, the list as it was
+                session_extra_["fn"] = session_extra_rects_
 
             prep_check_cache_ = {}
 
@@ -6826,15 +6861,17 @@ def drive(S, isaac) -> None:
                 mission_ = core.commands.mission
                 entry_ = None if mission_ is None else core.targets.pallets.get(mission_.pallet_id)
                 pallet_obs_ = None
+                moved_ids_ = ()
                 if entry_ is not None and entry_.pose is not None:
                     at_first_ = (float(entry_.pose.x_m), float(entry_.pose.y_m),
-                                 float(entry_.pose.yaw_rad)) == live_session_["reference"]
+                                 float(entry_.pose.yaw_rad)) == live_session_["pallets"][entry_.pallet_id]["reference"]
                     carried_pose_ = None
                     if frame_ is not None:
                         pallet_held_, destination_held_ = core._held_estimates()
                         if destination_held_ if entry_.state == "delivered" else pallet_held_:
                             x_, y_, yaw_ = moved((entry_.pose.x_m, entry_.pose.y_m, entry_.pose.yaw_rad))
                             carried_pose_ = replace(entry_.pose, x_m=x_, y_m=y_, yaw_rad=yaw_)
+                            moved_ids_ = (entry_.pallet_id,)  # the release's own judgement, by id (2.6)
                     pallet_obs_ = prep_obstacle_of(entry_, at_first_ and carried_pose_ is None, carried_pose_)
                 occupancy_ = None
                 if grid_planning:
@@ -6858,8 +6895,9 @@ def drive(S, isaac) -> None:
                             scratch={"use_slam": use_slam_, "release_at": release_at_})["occupancy"])
                     occupancy_ = prep_check_cache_["occupancy"]
                 obstacles_, footprint_, bounds_ = prep_leg_obstacles(
-                    "observe", grid_world(live_session_["scenario"]), geometry, pickup_obstacle=pallet_obs_,
-                    pickup_bounds=None)
+                    "observe", grid_world(session_scenario_(None if mission_ is None else mission_.pallet_id,
+                                                            None if frame_ is None else moved, moved_ids_)),
+                    geometry, pickup_obstacle=pallet_obs_, pickup_bounds=None)
                 return bool(prep_make_checker(obstacles_, footprint_, bounds_, occupancy_).free(
                     pose_, planner_config.clearance_m + float(extra_m)))
 
@@ -6871,15 +6909,16 @@ def drive(S, isaac) -> None:
                 pallet_ = core.targets.pallets[mission_.pallet_id].pose
                 dest_ = core.targets.destinations[mission_.destination_id]
                 target_ = (float(pallet_.x_m), float(pallet_.y_m), float(pallet_.yaw_rad))
-                at_first_ = target_ == live_session_["reference"]
-                waypoints_ = relocate_waypoints(live_session_["template"], live_session_["reference"], target_)
+                own_ = live_session_["pallets"][mission_.pallet_id]  # plan 2026-10-22-session-scene 2.4
+                at_first_ = target_ == own_["reference"]
+                waypoints_ = relocate_waypoints(own_["template"], own_["reference"], target_)
                 # Plan D4b item 1: by the pallet's basis -- prior: the bay's zone (at its first place); recognised or
                 # delivered: the outline grown by its uncertainty (the start check below uses the same function).
                 zone_ = prep_obstacle_of(core.targets.pallets[mission_.pallet_id], at_first_)
                 if zone_ is None:
                     zone_ = Rectangle(target_[0], target_[1], geometry.pallet_depth_m + 0.6,
                                       geometry.pallet_width_m + 0.6, target_[2])
-                scenario_ = replace(live_session_["scenario"],
+                scenario_ = replace(session_scenario_(mission_.pallet_id),
                                     start_rear=LivePose(float(rear_[0]), float(rear_[1]), float(rear_[2])),
                                     pickup=LiveSite(*target_),
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
@@ -6890,7 +6929,7 @@ def drive(S, isaac) -> None:
                             "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
                             "deadline": time.monotonic() + 2 * len(waypoints_) * 20.0}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
-                           "pickup_bounds": live_session_["bounds"] if at_first_ else None, "pickup_zone": zone_,
+                           "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id}
                 if far_live is not None:
@@ -6915,7 +6954,7 @@ def drive(S, isaac) -> None:
                 seat_ = LiveSite(x_ + geometry.inserted_offset_m * math.cos(yaw_),
                                  y_ + geometry.inserted_offset_m * math.sin(yaw_), yaw_)
                 start_ = LivePose(x_, y_, yaw_)
-                scenario_ = replace(live_session_["scenario"], start_rear=start_, pickup=seat_,
+                scenario_ = replace(session_scenario_(mission_.pallet_id), start_rear=start_, pickup=seat_,
                                     destination=LiveSite(float(dest_.x_m), float(dest_.y_m), float(dest_.yaw_rad)))
                 grid_ = grid_kwargs(None, loaded_as=True)  # the transport leg's grid, the carried pallet the truck's
                 payload_ = {"args": (grid_world(scenario_), start_),
