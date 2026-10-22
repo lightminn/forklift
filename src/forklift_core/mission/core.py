@@ -3742,19 +3742,28 @@ class MissionCore:
                 "received_mono": received_mono, "applied_tick_s": float(t), "slam_wall_s": reply.slam_wall_s})
         if watch_:
             self.scene_correction_note(t, math.hypot(prev_[0] - rear0_[0], prev_[1] - rear0_[1]), reply_max_,
-                                       prev_[2] - rear0_[2])
+                                       math.remainder(prev_[2] - rear0_[2], math.tau))
         if obstacle is None or tracker.applied is None or tracker.applied is before:
             return
         applied_now = tuple(float(v) for v in tracker.applied[0])
         if applied_now != obstacle["applied"]:
             self._reproject(t, applied_now, hooks.slam_rear(t), loaded)
 
+    def _selected_candidate_index(self) -> int:
+        """The candidate the selected waypoint came from: the last one tried before the next, unless a scene observe
+        stall tried later ones that failed and fell back to the waypoint (Codex impl round 2 P3)."""
+        ms, selected = self.ms, list(self.state["observation_waypoint_selected"])
+        for index_ in range(min(ms.next_candidate_index, len(self.options.observation_waypoints or ())) - 1, -1, -1):
+            if list(self.options.observation_waypoints[index_]) == selected:
+                return index_
+        return ms.next_candidate_index - 1
+
     def _new_attempt(self, t: float, rear, step: int):
         """The observation attempt's record, appended (capture_and_detect's first statements)."""
         ms, state = self.ms, self.state
         attempt_number = len(state["observation_attempts"]) + 1
         attempt = {
-            "candidate_index": ms.next_candidate_index - 1,
+            "candidate_index": self._selected_candidate_index(),
             "waypoint": list(state["observation_waypoint_selected"]),
             "arrived_pose": rear.tolist(),
             "pocket_observation": None,

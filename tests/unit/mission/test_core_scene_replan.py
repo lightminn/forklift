@@ -3,6 +3,7 @@ the real leg planner on an open floor, the core's ports, the cusp latch's end tu
 early return, the worker's drops, the mission end."""
 
 from dataclasses import dataclass
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -381,3 +382,39 @@ def test_the_batch_leg_plan_does_not_pass_the_exit_prefix_twice():
     core2.scene_replan_raise(10.0, "cusp_pose", rear["pose"])
     core2.scene_replan_tick(10.0, rear["pose"], 0.0, DT)
     assert core2.jobs.submitted[-1][1]["kwargs"]["exit_prefix"] == "PREFIX"
+
+
+def test_an_attempt_after_failed_candidates_records_the_candidate_its_waypoint_came_from():
+    """Codex impl round 2 P3: failed later candidates advance next_candidate_index; the attempt names the waypoint's."""
+    core, ms, state, calls, rear, held = make()
+    _observe(core, ms, state, waypoints=[(-2.0, 1.0, 0.0), (-1.5, -1.5, 0.3), (-2.5, 2.0, 0.0)])
+    state["observation_waypoint_selected"] = [-2.0, 1.0, 0.0]
+    ms.next_candidate_index = 3  # candidates 1 and 2 tried and failed, the stall fell back to candidate 0
+    assert core._selected_candidate_index() == 0
+    state["observation_waypoint_selected"] = [-1.5, -1.5, 0.3]
+    assert core._selected_candidate_index() == 1
+    state["observation_waypoint_selected"] = [9.0, 9.0, 0.0]  # a waypoint not from the list: the old rule
+    assert core._selected_candidate_index() == 2
+
+
+def test_the_correction_yaw_contribution_wraps_at_pi():
+    """Codex impl round 2 P3: pi - 0.01 -> -pi + 0.01 is a 0.02 rad correction, not -2 pi + 0.02."""
+    core, ms, state, calls, rear, held = make()
+
+    class Tracker:
+        applied = ((0.0, 0.0, math.pi - 0.01), 1.0)
+        received = None
+        mode = "tracking"
+
+        def receive(self, scan_id, stamp_s, status, map_from_odom):
+            self.applied = (tuple(map_from_odom), stamp_s)
+
+    core.slam = {"tracker": Tracker(), "records": []}
+    core.hooks.slam_odom_base = lambda: (0.0, 0.0, 0.0)
+    core.hold_count = lambda: 0
+    seen = {}
+    core.scene_correction_note = lambda t, net, reply, yaw=0.0: seen.update(yaw=yaw)
+    reply = SimpleNamespace(scan_id=1, stamp_s=1.2, status="ok", map_from_odom=(0.0, 0.0, -math.pi + 0.01),
+                            slam_wall_s=0.0)
+    core.slam_replies(1.26, [(reply, {}, 0.0, 0.0)], loaded=False)
+    assert seen["yaw"] == pytest.approx(0.02)
