@@ -7170,6 +7170,8 @@ def drive(S, isaac) -> None:
                 cusp_monitor = CUSP_STALL.CuspStallMonitor(state["cusp_stalls"])
                 cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)
                 scenario, truth_destination = inputs_["scenario"], inputs_["truth_destination"]
+                if session is not None:  # CT-1 PR 4: the scene this mission plans in (its neighbours as the targets
+                    state["mission_scenario"] = asdict(scenario)  # had them), so a failed plan can be replayed
                 pickup_zone, pickup_bounds, return_to_pose = (inputs_["pickup_zone"], inputs_["pickup_bounds"],
                                                               inputs_["wait_pose"])
                 if session is not None:

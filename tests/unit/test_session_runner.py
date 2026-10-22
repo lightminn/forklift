@@ -249,3 +249,14 @@ def test_the_runner_wires_the_session_records_to_its_truth():
     assert "far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])" in source
     assert 'state["session_neighbour_gap"] = session_gap.smallest' in source
     assert '**({} if session is None else {"pallet_id": pallet.current})' in source
+
+
+def test_a_session_mission_keeps_its_planning_scene_in_its_records():
+    """CT-1 PR 4: the scene a session mission plans in (the other pallets as the targets had them) is the mission's
+    record, so a failed plan (random_m m3's straight_collision, PR 3 validation) can be replayed."""
+    from forklift_core.mission.baseline import MISSION_KEYS
+
+    assert "mission_scenario" in MISSION_KEYS["state"]
+    source = SCRIPT.read_text()
+    assert 'state["mission_scenario"] = asdict(scenario)' in source
+    assert source.index('state["mission_scenario"] = asdict(scenario)') > source.index("def live_mission_start(")
