@@ -280,6 +280,22 @@ test("one stale-feedback state while the queue's mission runs does not stop it (
   assert.match(q.stopReason, /피드백/);
 });
 
+test("a loss that outlasts 0.5 s stops even when the next state already says recovered (Codex ops round 1)", () => {
+  for (const viaTick of [true, false]) {
+    const q = running([item("P-1", "D-1"), item("P-2", "D-0")]);
+    ack(q, submitOnce(q, 10_000), "M-1");
+    feed(q, 10_100, 11_000, { ...READY, mode: "AUTO", stop_kind: "none", mission: { mission_id: "M-1", status: "running" } });
+    q.onResult({ seq: 1, mission_id: "M-1", outcome: "done" }, 11_200);
+    for (let t = 11_250; t <= 11_650; t += 100) q.onState({ ...READY, feedback_ok: false, stopped_confirmed: false }, t);
+    assert.equal(q.run, "running", "0.4 s so far");
+    if (viaTick) q.tick(11_800);
+    q.onState({ ...READY, stopped_confirmed: false }, 12_000); // recovered, not yet standing
+    q.onState(READY, 12_250);
+    assert.equal(q.run, "stopped", viaTick ? "the timer" : "the recovered state");
+    assert.equal(q.next(ctx(), 12_300, newId), null);
+  }
+});
+
 test("a foreign active mission stops the queue; our own mission seen before the ack does not", () => {
   const q = running();
   q.onState({ ...READY, mode: "AUTO", mission: { mission_id: "M-7", status: "running", pallet_id: "P-2", destination_id: "D-0" } }, 10_000);

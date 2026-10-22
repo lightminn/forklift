@@ -163,17 +163,19 @@ export class MissionQueue {
       out = this.stop("상태 수신 끊김"); // decided before the late state refreshes the clock (plan D3)
     }
     this.lastStateAt = nowMs;
+    // a loss that already lasted 0.5 s counts even if this state says recovered: it was not seen to end sooner
+    // (Codex ops round 1)
+    const lost = this.#feedbackLost(nowMs);
     if (state?.feedback_ok === false) this.feedbackLostSince ??= nowMs;
     else this.feedbackLostSince = null;
+    if (this.run === "running" && lost) return this.stop("차량 피드백 없음");
     if (this.run !== "running" || !state) return out;
     if (state.mode === "STOPPED") return this.stop("정지됨(STOP)");
     if (state.mode === "TELEOP") return this.stop("수동 조종");
     if (PREEMPT.has(state.stop_kind)) return this.stop("안전 선점 정지");
     // the arbiter does not preempt a lost feedback in PAUSED: waiting would submit once it recovers (plan D4) --
     // a loss that lasts, not one late state
-    if (this.feedbackLostSince !== null && nowMs - this.feedbackLostSince >= FEEDBACK_LOST_MS) {
-      return this.stop("차량 피드백 없음");
-    }
+    if (this.#feedbackLost(nowMs)) return this.stop("차량 피드백 없음");
     const mi = state.mission;
     if (mi && ACTIVE.includes(mi.status)) {
       if (!this.#isOurs(mi)) return this.stop("대기열이 내지 않은 미션");
@@ -225,6 +227,7 @@ export class MissionQueue {
   tick(nowMs) {
     const ref = this.lastStateAt ?? this.waitSince;
     if (this.run === "running" && ref !== null && nowMs - ref > SILENCE_MS) return this.stop("상태 수신 끊김");
+    if (this.run === "running" && this.#feedbackLost(nowMs)) return this.stop("차량 피드백 없음");
     return {};
   }
 
@@ -287,6 +290,10 @@ export class MissionQueue {
   }
 
   // ---------------------------------------------------------------- internals
+  #feedbackLost(nowMs) {
+    return this.feedbackLostSince !== null && nowMs - this.feedbackLostSince >= FEEDBACK_LOST_MS;
+  }
+
   #isCurrent(itemId) {
     return Boolean(this.current && this.current.item_id === itemId);
   }
