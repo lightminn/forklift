@@ -147,7 +147,20 @@ test("with the link down and no standby answer the session is unknown, not fine 
   // between a runner's failure and the next session's welcome the standby's answer can be gone: closing the session
   // alarm as recovered then was wrong
   assert.equal(lv({ link: { up: false, mediaUp: false }, welcomeAt: null, standby: null }, "session"), "unknown");
+  // the socket open again but no welcome yet: still nothing says it is fine (Codex ops round 3)
+  assert.equal(lv({ link: { up: true, mediaUp: true }, welcomeAt: null, standby: null }, "session"), "unknown");
   assert.equal(lv({}, "session"), "ok");
+});
+
+test("a session alarm stays open while the socket is open again but the welcome has not come (Codex ops round 3)", () => {
+  const failed = { standby: true, phase: "backoff", retry: true, next_epoch: 2,
+                   last_exit: { exit_code: 1, stage: "run", reason: "slam_link_failed" } };
+  const b = new AlarmBook();
+  const at = (t, over) => b.update(healthRows(input({ nowMs: t, ...over })), t, t / 1000, { epoch: 1, viewing: true });
+  for (let t = W; t <= W + 700; t += 100) at(t, { link: { up: false, mediaUp: false }, welcomeAt: null, standby: failed });
+  assert.ok(b.alarms.some((a) => a.key === "session" && a.cleared_unix === null));
+  for (let t = W + 800; t <= W + 2_500; t += 100) at(t, { link: { up: true, mediaUp: true }, welcomeAt: null, standby: null });
+  assert.ok(b.alarms.some((a) => a.key === "session" && a.cleared_unix === null), "not closed as recovered");
 });
 
 test("a queue stop reason reads in words, its code kept beside it (Isaac live run 2026-10-22)", () => {

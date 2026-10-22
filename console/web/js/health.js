@@ -64,7 +64,7 @@ function sessionRow(inp) {
   if (inp.sessionEnding === "sim_reset") return r("session", "off", "장면 초기화 중");
   if (s && s.standby === true) return r("session", "off", standbyText(s) ?? "세션 기동 중");
   // no link and no standby answer: nothing says the session is fine (Isaac live run 2026-10-22)
-  if (!inp.link.up) return r("session", "unknown", "모름 · 연결 기다리는 중");
+  if (!inp.link.up || inp.welcomeAt === null) return r("session", "unknown", "모름 · 연결 기다리는 중"); // no welcome yet either (Codex ops round 3)
   const notes = Array.isArray(inp.state?.notes) && inp.state.notes.length ? inp.state.notes.join(" · ") : "";
   return r("session", "ok", notes || "이상 없음");
 }
