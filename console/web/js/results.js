@@ -56,6 +56,7 @@ export const REASONS = {
   "Fork still inside delivered pallet": "내려놓은 뒤에도 포크가 팔레트 안에 남았습니다",
   "Session pallet displaced": "작업하지 않는 팔레트가 밀렸습니다(장면 손상)",
   // the mission's own work
+  "session_anchor_unaligned:": "하역 칸 정합 없이 옆 팔레트에 막혀 하역 직선 전에 멈췄습니다",
   "Tracking timeout": "경로 추종 시간이 지났습니다",
   "Tracking failed": "경로 추종에 실패했습니다",
   "obstacle_": "장애물 때문에 멈췄습니다",
