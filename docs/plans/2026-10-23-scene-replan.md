@@ -1,4 +1,4 @@
-# 장면 모드 재계획 장치와 다리 끝 cusp 정체 복구 — 계획 (2026-10-23, 1판)
+# 장면 모드 재계획 장치와 다리 끝 cusp 정체 복구 — 계획 (2026-10-23, 2판)
 
 사용자 결정(2026-10-23, 총괄 세션 경유): 다리 끝 정체 복구 A·B 를 진행한다.
 
@@ -62,67 +62,101 @@
 
 ### 2.1 공통 장치 — 장면 모드 재계획 (A·P6 공통, 이 세션)
 
-- 진입점 `core.scene_replan_request(t, trigger, *, extra_obstacles=(), clearance_m=None, detail=None)`. 인터페이스는 "v-g2" 세션과 맞췄다(2026-10-23 회신).
+**인터페이스**("v-g2" 세션과 맞춤, 2판에서 추가 장애물을 콜백으로 바꿈):
+
+- `core.scene_replan_request(t, trigger, *, extra_obstacles_fn=None, clearance_m=None, detail=None)`.
   - `trigger`: `"cusp_pose"`(A) · `"cusp_handed"`(래치의 장애물 인계, 장면 모드) · `"permit_stop"`(P6, 그 세션).
-  - `extra_obstacles`: 계획 프레임 Rectangle 들. P6 은 막힌 칸들을 칸 정사각형으로 만들고 이웃끼리 합쳐 넘긴다. 격자 스냅숏을 계획기에 넘기지는 않는다.
-  - `clearance_m`: 이번 재계획의 계획 여유 덮어쓰기(None 이면 평소 값). P6 은 그 자리에서만 평소 + 0.10 m 로 키운다(최종 값은 그쪽 계획서 v4).
+  - `extra_obstacles_fn()`: **계획하는 그 순간**(해제·재투영 뒤)에 불러 계획 프레임 Rectangle 들을 받는다. P6 은 그때의 격자에서 막힌 칸을 다시 뽑는다(Codex 1차 P2-4: 해제 전 스냅숏에서 만든 사각형은 해제 뒤 프레임이 다르다).
+  - `clearance_m`: 이번 재계획의 계획 여유 덮어쓰기(None 이면 평소 값).
   - `detail`: 기록용.
-- 적용 조건: 격자 계획 꺼짐(`--layout scene`), live·배치 모두, 단계 `transport`·`return_home`.
-  - 제외(지금 규칙 유지):
-    - D7 도킹 수용 뒤·재접근 중이면 지금처럼 `transport_recovery_after_docking`/도킹 재시도로 간다.
-    - near·bottom-deck·held realign·backoff/escape 진행 중은 그 규칙을 따른다.
-- 순서:
-  1. 정지 확인(`stop_now`, 없으면 truth 속도)까지 0 명령. 래치가 이미 정지를 인정했으면 바로 간다.
-  2. hold 중이면 기존 해제(`release_and_carry`)로 풀고 재투영한다.
-  3. 정지 자세에서 그 단계의 다리를 계획한다.
-     - transport → `plan_transport_leg`(transport_scenario, 출구 접두 포함).
-     - return_home → `plan_return_leg`(return_scenario).
-     - 장애물 = 계획기가 장면에서 만드는 장애물 + `extra_obstacles`. 장치는 장애물 집합을 따로 만들지 않는다. 그쪽 P1c(탐색 장애물 키움)가 계획기에 들어오면 자동으로 같은 규칙을 탄다.
-     - live 는 작업자(`leg` 작업, 새 site `scene_replan`), 배치는 동기다.
-  4. `invalid_start` 면 탈출 접두(직진 후진, 기존 escape 예산 단위)를 한 번 넣고 그 끝에서 다시 계획한다. 접두 자체도 5 의 허가 검사를 첫 틱부터 통과해야 한다(그쪽 Codex 반례: 끝점 이격만 맞춘 접두가 출발 틱에 허가 0).
-  5. 설치 전 허가 검사(장치 안에서 구현, 기준은 그쪽 P6):
-     - 그 틱의 실제 격자 스냅숏(지금 허가가 든 `GridSnapshot`)을 쓴다.
-     - 새 경로(접두가 있으면 접두부터)로 `check_path` 를 돌린다. 검증 거리가 `min(lookahead, 경로 길이)` 에 닿고 `blocked` 가 None 이어야 한다.
-     - 추종기 첫 명령(곡률·방향·속도 상한)으로 `check_arc`·`allowed_speed` 가 0 보다 커야 한다.
-     - 둘 다 통과한 계획만 `_live_leg_finish` 와 같은 경로로 설치한다(운반이면 `arm_docking`). 계획기 자신의 충돌 검사는 계획 단계에서 이미 한다.
-     - 기록: `verified_m`·`blocked`·첫 틱 허용 속도·이유.
-- **예산**: 미션 전체 합산 4 회, 트리거별 상한 3 회(2.4). 새 경로·tracker·단계 시작에 초기화하지 않는다. 같은 자리 반복(직전 발동과 정지 자세가 0.10 m 안이고 같은 트리거)도 묶지 않고 그대로 센다.
-  - 소진되면 `scene_replan_exhausted:<trigger>` 로 끝낸다.
-  - 재계획·탈출이 실패하면 `scene_replan_failed:<trigger>:<status>` 로 끝낸다.
-  - 허가 검사에 떨어지면 `scene_replan_refused:<trigger>:<why>` 로 끝낸다.
-  - 셋 다 MISSION 분류다. 시간 초과까지 서 있지 않는다.
-- **기록**: 발동마다 `state["scene_replans"]` 에 한 줄을 남긴다(미션 기록 키 — baseline `MISSION_KEYS`). 넣는 것:
-  - 미션 id·단계·tracker·다리·트리거.
-  - 정지 자세(제어·truth).
-  - cusp 이면 위치/방향 이탈.
-  - **직전 SLAM 보정 튐**: 마지막 다리 시작 이후 가장 큰 한 tick 제어−truth 변화와 그 시각. live 는 보정 적용 기록의 이동량을 쓰고, truth 가 없는 실차에서는 보정 적용량만 쓴다.
-  - 계획 결과·tight·탈출 여부·허가 검사·설치 여부·남은 예산.
+- 요청은 **플래그만 세운다**(`self.scene_replan` 에 요청 한 건). 그 tick 은 0 명령·조향 유지로 끝난다.
+  - 이미 요청이 있으면 새 요청은 무시하고 기록만 한다(한 번에 한 건).
+  - 요청 자리(래치 끝, 래치 인계, P6 트리거)는 그 tick 의 나머지 추종·정체·도착 처리를 건너뛴다(Codex 1차 P2-1: `cusp_tick` 다음의 `follow()` 가 같은 tick 에 hold 를 다시 걸어 요청을 무효로 만든다).
+
+**적용 조건**:
+
+- 장면 모드(core 에 `scene` 여부를 명시적으로 넘긴다 — `grid_planning` 꺼짐과 같지 않다, Codex 1차 P2-8).
+- live·배치 모두. 단계 `transport`·`return_home`.
+- 제외(지금 규칙 유지): D7 도킹 수용 뒤·재접근 중(`transport_recovery_after_docking`·도킹 재시도), near·bottom-deck·held realign.
+
+**진행**: 요청이 있는 동안, tick 의 추종 단계 **앞**에서 상태 기계 `scene_replan_step(t, rear)` 를 돈다. 그 tick 은 0 명령이고 추종·정체·도착 처리를 하지 않는다.
+
+1. `wait_stop`: 정지 확인(`stop_now`, 없으면 truth 속도)까지 기다린다.
+2. `wait_jobs`: 다른 계획 작업·보류 중인 SLAM 해제가 있으면 끝날 때까지 기다린다(기존 `live_leg` 의 D8b 가드와 같은 조건, core 602–617).
+3. `release`: hold 중이면 해제·재투영(`release_and_carry`)하고, 그 tick 의 제어 자세를 해제 뒤 자세로 갱신한다(`set_rear`·`slam["control"]`, Codex 1차 P2-1).
+4. `plan`: 그 단계의 다리를 계획한다.
+   - transport → `plan_transport_leg`(transport_scenario, 출구 접두 포함).
+   - return_home → `plan_return_leg`(return_scenario).
+   - 장애물 = 계획기가 장면에서 만드는 장애물 + `extra_obstacles_fn()`. 장치는 장애물 집합을 따로 만들지 않는다(P1c 자동 적용).
+   - **tight 재시도는 하지 않는다**. 기존 `_leg_payload` 의 여유 0 재시도는 `invalid_start` 를 지우고 `clearance_m` 덮어쓰기를 취소한다(Codex 1차 P2-6). 장치 전용 payload 를 쓴다.
+   - live 는 작업자에 보낸다(새 site `scene_replan`, 요청 id, 20 s 기한). 배치는 동기다.
+   - 응답이 `superseded`·`moving`·`correction` 으로 버려지면 같은 요청으로 `plan` 을 다시 보낸다(예산을 다시 세지 않는다, Codex 1차 P2-2). 일시 정지·STOP 뒤 재개도 같은 요청을 이어 간다.
+5. `escape`: 결과가 `invalid_start` 면 탈출 접두를 만든다.
+   - 기존 `escape.evaluate/straight/choose` 를 장면 장애물 + 추가 장애물 + 이번 여유로 부른다. 격자 래퍼 `find_escape` 는 장면 모드의 `grid_kwargs` 에 점유 격자가 없어 쓸 수 없다(Codex 1차 P2-5).
+   - 접두는 6 의 허가 검사를 첫 틱부터 받는다.
+   - 접두를 주행하고 정지하면 같은 요청의 `plan` 으로 돌아간다. 탈출은 요청당 1 회다.
+   - 접두가 없거나 허가에 떨어지면 `scene_replan_failed:<trigger>:invalid_start` 로 끝낸다.
+6. `check`: 설치 전 허가 검사(장치 안에서 구현, 기준은 그쪽 P6):
+   - 그 tick 의 실제 격자 스냅숏을 쓴다.
+   - **후보 전용 허가 문맥**에서 검사한다. 기존 허가 객체의 `path_check`·`_driven_since_m` 를 읽으면 옛 경로 상태가 섞인다(Codex 1차 P2-3: 새 경로 `verified_m` 3.0·`blocked` None 인데 허용 0 인 반례).
+   - 대상은 후보 tracker 의 **첫 기어 다리**다(`leg_ahead`). 검증 거리가 `min(lookahead, 다리 길이)` 에 닿고 `blocked` 가 None 이어야 한다.
+   - 출발 허가: 후보 tracker 의 첫 명령(곡률·방향·속도 상한)으로 `check_arc`·`allowed_speed` > 0 이어야 한다.
+   - 지금 바퀴의 **측정 조향 곡률**(runtime 이 쓰는 held curvature, run_transport 8057)로 정지 호 검사도 통과해야 한다(포화 조향에서 반대로 재출발하는 경우 포함).
+   - 기록: `verified_m`·`blocked`·첫 틱 허용 속도·두 곡률·이유.
+7. `install`: `_live_leg_finish` 의 설치 부분(경로·tracker·운반 도킹 정지점 재무장·새 다리 허가 갱신)을 쓴다. 실패 처리(`live_replanned` 재시도 예약)는 쓰지 않는다 — 장면 모드에는 그 재시도 경로가 없다(Codex 1차 P2-2).
+8. `presteer`: 설치 뒤 0 명령으로 첫 명령 곡률까지 조향을 맞춘다(측정 조향이 허용 안에 들거나 1.0 s 가 지나면 끝, agy 지적 — 조향 변화율 1 rad/s 로 출발 초기 오차가 생긴다). 그다음 요청을 닫고 추종을 재개한다.
+
+**종료**(모두 MISSION 분류):
+
+- 예산이 소진되면 `scene_replan_exhausted:<trigger>`.
+- 계획 실패면 `scene_replan_failed:<trigger>:<status>`.
+- 허가 거부면 `scene_replan_refused:<trigger>:<why>`.
+- 시간 초과까지 서 있지 않는다.
+
+**기록**: 요청마다 `state["scene_replans"]` 한 줄(미션 기록 키 `MISSION_KEYS`). 넣는 것:
+
+- 미션 id·단계·tracker 일련번호·다리·트리거.
+- 정지 자세(제어·truth). cusp 이면 위치/방향 이탈.
+- **직전 SLAM 보정 기여**(2.4).
+- 각 단계 시각·계획 결과·탈출 여부·허가 검사·설치 여부·남은 예산.
 
 ### 2.2 A — 운반·복귀의 cusp 자세 거부
 
-- 래치(`cusp_stall`)가 `ended`(`cusp_position_stall`)를 내는 자리(core 4796–4798)를 바꾼다. 장면 모드이고 단계가 transport·return_home 이면, 끝내는 대신 `scene_replan_request(t, "cusp_pose", detail={이탈})` 을 부른다.
-  - 대상은 `far` 만이 아니라 **정지 확인 뒤 자세 조건으로 거부된 정체**다(Codex: L 운반은 `far` 가 아니었다).
+- 래치가 `ended`(`cusp_position_stall`)를 내는 자리(core 4796–4798)를 바꾼다. 장면 모드이고 단계가 transport·return_home 이면, 끝내는 대신 `scene_replan_request(t, "cusp_pose", detail={이탈})` 을 세운다.
+  - 대상은 정지 확인 뒤 자세 조건으로 거부된 정체다(`far` 든 아니든, Codex: L 운반은 `far` 가 아니었다).
   - `cusp_position_stall_unconfirmed`(정지 미확인)는 지금처럼 끝낸다.
+  - 요청 뒤 래치는 닫는다(키는 새 tracker 로 바뀐다).
 - 래치의 장애물 인계(`force_replan`)도 장면 모드에서 건너뛰지 않는다. `scene_replan_request(t, "cusp_handed")` 로 보낸다.
-- 격자 계획 실행(factory 등)은 바뀌지 않는다. 그쪽은 지금의 장애물 재계획·종료 규칙 그대로다.
-- 설계 7판 개정 문장: "자세 범위 밖이면 종료 → 장면 모드의 운반·복귀에서는 공통 재계획 장치(예산 유한)로 다리를 다시 계획하고, 예산 소진·실패면 명시 종료한다. 격자 계획 실행은 그대로다."
+- 격자 계획 실행(factory 등)은 바뀌지 않는다.
+- 설계 7판 개정 문장(그 설계 문서에 덧붙인다): "자세 범위 밖이면 종료 → 장면 모드의 운반·복귀에서는 공통 재계획 장치(유한 예산)로 다리를 다시 계획하고, 예산 소진·실패·허가 거부면 명시 종료한다. 격자 계획 실행은 그대로다."
 
-### 2.3 B — 최초 원거리 관측의 정체
+### 2.3 B — 최초 원거리 관측의 정체 (장면 모드만)
 
-- 대상: 최초 원거리 관측 이동(인식 전, `pickup_estimate is None`) 중의 cusp 자세 거부·관측 재계획 예산 소진.
-  - near capture·재정렬·bottom-deck 측면 관측·backoff/escape 는 제외한다(Codex: 그쪽은 자기 복구 규칙이 있다).
-- 순서(같은 관측점 재계획보다 먼저):
-  1. **다른 관측 후보**로 넘긴다 — 인식 전 후보 전환(core 1422 의 규칙)과 같은 경로, 남은 후보가 있을 때.
-  2. 후보가 없으면 **같은 관측점 재계획**(지금 규칙, 예산 2).
-  3. 그것도 끝나면 **명시 종료** `observe:stall_exhausted`(MISSION). 지금처럼 명령 0 으로 시간 초과까지 서지 않는다.
-- "선 자리에서 관측"(즉석 관측점)은 이번에 넣지 않는다. 시야·거리·가림 판정이 별도 관측점 선택이라 범위가 커진다(Codex). 후보 전환·종료로 시간 초과를 없애는 것까지만 한다.
-- 관측 단계의 재계획은 2.1 장치를 쓰지 않는다(관측 다리 계획기는 따로다). 예산·기록 형식은 2.1 과 맞춘다(`scene_replans` 에 trigger `observe_stall` 로 함께 남긴다).
+- 대상: 장면 모드에서 최초 원거리 관측 이동(인식 전, `pickup_estimate is None`) 중의 정체.
+  - 래치의 `observe_rule` 인계와 기존 `observe_miss`(끝점 방향 실패·진척 없음)가 대상이다.
+  - near capture·재정렬·bottom-deck 측면 관측·backoff/escape 는 제외한다.
+  - 격자 실행에서는 지금 규칙 그대로다(scene 조건을 명시, Codex 1차 P2-8).
+- 순서는 같은 관측점 재계획보다 먼저 후보부터 본다(Codex 1차 P2-7: 1422 분기는 같은 목표 계획이 실패해야만 열리므로 호출만으로는 안 된다):
+  1. 정지 → 다른 작업 대기 → hold 면 해제·재투영(인식 전 후보는 지도 좌표라 옮기지 않는다).
+  2. **남은 관측 후보**가 있으면 `next_candidate_index` 의 다음 후보로 관측 다리를 계획한다(live 는 작업자, 배치는 동기).
+     - 성공하면 설치하고 `observation_waypoint_selected`·`observe_replan_leg`(새 serial·start)를 갱신한다.
+     - 실패하면 다음 후보로 간다.
+  3. 후보가 없거나 다 실패하면 **같은 관측점 재계획**(지금 규칙, 예산 2).
+  4. 그 예산도 끝나면 **명시 종료** `observe:stall_exhausted`(MISSION). 지금처럼 명령 0 으로 시간 초과까지 서지 않는다(기존 `observe_miss` 의 예산 조건 밖에 종료 분기를 둔다).
+- "선 자리에서 관측"(즉석 관측점)은 이번에 넣지 않는다(시야·거리·가림 판정이 별도 관측점 선택이라 범위가 커진다).
+- 기록은 같은 `scene_replans` 에 trigger `observe_stall` 로 남기되, 예산은 2.1 과 따로 센다(2.4).
 
-### 2.4 예산
+### 2.4 예산과 기록 정의
 
-- 미션 전체 합산 4 회, 트리거별 상한 3 회("v-g2" 세션 제안 — 한 트리거가 다 쓰지 않게). 관측(B)은 지금 예산(같은 관측점 2)을 그대로 쓰고 2.1 예산과 별도다.
-- 근거: 이번 실패는 미션당 1 건(운반)과 3 건(관측)이었다. 같은 다리를 세 번 넘게 다시 계획해도 안 되면 원인이 다른 데 있다(예: 보정 튐 반복).
-- 같은 자리 반복도 센다. 반복은 소진으로 끝나야 한다(묶으면 무한히 이어질 수 있다).
+- **공통 장치(2.1)**: 요청 한 건이 수락될 때 1 을 센다. 미션 합산 4 회, 트리거별 3 회다.
+  - 같은 요청의 작업자 재제출·탈출 뒤 재계획·presteer 는 세지 않는다.
+  - 같은 자리 반복도 센다(묶으면 무한히 이어질 수 있다).
+  - 새 tracker·단계 시작·일시 정지(`mission_gen`)에 초기화하지 않는다. 미션 끝(`end_reset`)에만 초기화한다. 저장 자리는 core 속성이고 `CORE_FIELDS` 초기화에 넣는다(Codex 1차 P3).
+- **B**: 후보 전환은 남은 후보 수만큼, 같은 관측점 재계획은 지금 예산 2 다. 2.1 예산과 따로다.
+- **기존 카운터**(`cusp_replans`·`stall_replans`·`live_plans`)와는 독립이다. 4/3 은 미션 전체 재계획 상한이 아니라 이 장치의 상한이다.
+- **SLAM 보정 기여**(Codex 1차 P3): 같은 오도메트리 자세에 적용 전·후 보정을 합성한 차이를 쓴다(`SlamPoseTracker.release` 와 같은 정의, slam_pose.py 261).
+  - 지금 tracker(기어 다리) 시작 이후 tick 별 순변화의 최대와 그 시각을 남긴다. 그 tick 안 개별 응답의 최대도 따로 남긴다.
+  - sim 에서는 제어−truth 차의 한 tick 변화도 함께 남긴다(실차에는 없다).
 
 ### 2.5 하지 않는 것
 
@@ -139,6 +173,12 @@
 ## 3. 시험 (먼저)
 
 - 공통 장치(core, 가짜 계획기·허가):
+  - 요청 tick 은 추종·정체·도착을 건너뛴다. 같은 tick 의 hold 가 요청을 무효로 만들지 않는다(실제 `follow()` 로).
+  - 해제 뒤 제어 자세가 갱신되고, `extra_obstacles_fn` 은 해제 뒤에 불린다.
+  - 작업자 응답이 버려지면(superseded·moving·correction) 같은 요청을 다시 보내고 예산은 그대로다. 일시 정지 뒤 이어진다.
+  - tight 재시도 없음. `invalid_start` → 탈출 접두(장면 장애물·추가·여유로) → 주행·정지 → 같은 요청 재계획.
+  - 허가 검사는 후보 전용 문맥이다(옛 경로 상태를 읽지 않음). 첫 기어 다리, 측정 조향 정지 호를 본다.
+  - presteer 는 조향이 맞거나 1 s 뒤 끝난다.
   - 허가 검사: 검증 거리 부족·blocked·첫 틱 허용 0 이면 설치하지 않는다(사유별). 접두도 첫 틱부터 검사한다.
   - `clearance_m` 덮어쓰기가 작업자 payload·동기 호출 둘 다에 간다. `extra_obstacles` 가 장면 장애물에 더해진다.
   - 예산: 합산 4·트리거별 3, 같은 자리 반복도 센다.
@@ -153,11 +193,12 @@
   - 미확인 정지는 그대로 종료한다. 격자 계획은 그대로 종료한다.
   - 장면 모드 `force_replan` 인계 → 요청.
 - B:
-  - 인식 전 관측 정체 → 다른 후보 → 같은 관측점 재계획 → `observe:stall_exhausted`.
-  - near·bottom-deck·재정렬은 바뀌지 않는다.
+  - 장면 모드 인식 전 관측 정체 → 다른 후보(hold 해제, 관측 선택·serial 갱신) → 같은 관측점 재계획 → `observe:stall_exhausted`.
+  - 격자 실행·near·bottom-deck·재정렬은 바뀌지 않는다.
 - 기록: `scene_replans` 줄의 필드, 보정 튐 계산(가짜 제어/truth 열).
 - 분류: 새 사유 넷이 MISSION 이다. 콘솔 사유 문구.
-- 재생 게이트 29/29(격자 계획 기록이라 동작이 바뀌지 않아야 한다), ws1 전체.
+- 재생 게이트 29/29(격자 계획 기록이라 동작이 바뀌지 않아야 한다 — 기존 동작 보존용이고 새 장치의 검증은 아니다), ws1 전체.
+- 새 장치의 CPU 통합 시험(Codex 1차 P2-8): 장면 모드 v1 live·배치에서 return_home, hold 해제, 탈출 완료, correction 버림, 미션 2 회 연속(예산 초기화)을 본다.
 
 ## 4. 검증 (Isaac, ws1)
 
@@ -181,4 +222,26 @@
 
 ## 7. 검토 기록
 
-(검토 뒤 채운다.)
+### 1판 → 2판
+
+- **① 직접 재계산**: 1.1 의 래치 한계(위치 2×0.03 = 0.06 m·방향 0.05 rad, `far` +0.03 m·+0.03 rad, `cusp_stall.py` 66–89)와 네 건의 판정을 다시 대조했다.
+  - L 운반 74.6 mm 는 한계 밖·`far` 아님이다.
+  - R 관측 1 은 49 mm(위치 안)·62.5 mrad(방향 밖)다.
+  - `OBSERVE_REPLANS_PER_LEG` = 2, `OBSERVE_ARRIVAL_M` 0.10(run_transport 49·63).
+- **② Codex 적대 검토(1차)**: 새 P1 없음, P2 여덟·P3 둘 — 모두 받아들였다.
+  - P2-1 요청 tick 의 hold 무효화 → 요청은 플래그, tick 앞 상태 기계, 해제 뒤 자세 갱신.
+  - P2-2 작업자 폐기·재요청·실패 처리 → 요청 id·버림 재제출·장면 전용 실패 처리.
+  - P2-3 허가 검사가 옛 경로 상태를 읽음 → 후보 전용 문맥·첫 기어 다리·측정 조향 정지 호.
+  - P2-4 해제 전 추가 장애물의 프레임 → 콜백으로 해제 뒤 생성(인터페이스 변경, "v-g2" 에 알림).
+  - P2-5 격자 탈출 래퍼 사용 불가 → `escape.*` 직접, 주행 뒤 같은 요청 이어 가기, 요청당 1 회.
+  - P2-6 tight 재시도가 탈출·여유를 깨뜨림 → 재시도 없음, 장치 전용 payload, 20 s 기한.
+  - P2-7 B 를 1422 분기 호출로 못 함 → 후보 선택·hold·예산을 분리, 소진 종료를 예산 조건 밖에.
+  - P2-8 scene ≠ grid 꺼짐, 검증 범위 → 명시 scene 조건, CPU 통합 시험 추가.
+  - P3 예산 세는 단위·초기화 자리, 보정 기여 정의 → 2.4.
+- **③ 다른 관점의 독립 검토(agy, Gemini 3.8 Flash — `agy-quota-ok --pick`, ② 결론 비공개)**:
+  - 받아들임: 재계획 출발 자세의 안정(정지·해제·보정 대기 뒤 계획 — 2.1 의 1–3), 정지 상태 조향 맞추기(presteer), 반복·예산 소진·결함 가림 위험(5 절·기록으로 보이게).
+  - 받아들이지 않음:
+    - 중간 cusp 허용치 완화(fly-by) — 기존 cusp 쓸림 검증을 벗어난다(Codex 진단). 래치의 해제(범위 안 수렴) 경로는 이미 있다.
+    - 경로 생성에 조향 변화율 반영(클로소이드) — 계획기 전체 변경이라 범위 밖, 원인 분리 뒤 판단.
+    - 관측 느슨한 도착 확장 — cusp 까지 오차와 관측점까지 거리가 달라 단순 확장 불가(Codex).
+  - 보류: 다리 끝 근처 보정 보류(C) — 사용자 결정대로 원인 분리 뒤 따로.
