@@ -233,3 +233,48 @@ def test_the_correction_contribution_is_kept_per_gear_leg():
     core.scene_replan_raise(2.1, "cusp_pose", rear["pose"])
     jump = state["scene_replans"][-1]["correction_jump"]["slam"]
     assert jump["net_max_m"] == pytest.approx(0.001) and "key" not in jump
+
+
+# --- B: the first far observation's stall (plan 2.3) -----------------------------------------------------------------
+def _observe(core, ms, state, *, waypoints, next_index=1, scene=True):
+    from forklift_core.planning.pallet_mission import plan_observation_leg
+
+    core.options.pickup_prior = scene
+    core.options.observation_waypoints = waypoints
+    core.options.observe_bounds = None
+    core.options.pickup_bounds = None
+    core.hooks.plan_observation_leg = plan_observation_leg
+    core.hooks.grid_kwargs = lambda *a, **k: {}
+    core.realign_active = lambda: False
+    ms.phase = "observe"
+    ms.next_candidate_index = next_index
+    core.trackers["observe"] = core.trackers["transport"]
+    state.update(observation_candidates=[], observe_replans=[], observe_replan_leg={"serial": 3, "start": 0})
+
+
+def test_a_far_observation_stall_takes_the_next_candidate_with_its_own_budget():
+    core, ms, state, calls, rear, held = make()
+    _observe(core, ms, state, waypoints=[(-2.0, 1.0, 0.0), (-1.5, -1.5, 0.3), (-2.5, 2.0, 0.0)])
+    assert core.scene_far_observe()
+    old = core.trackers["observe"]
+    pose = core.scene_observe_candidate(5.0, np.array([-2.2, 0.2, 0.0]))
+    assert pose is not None and core.trackers["observe"] is not old and ms.next_candidate_index == 2
+    assert state["observation_waypoint_selected"] == [-1.5, -1.5, 0.3]
+    assert state["observe_replan_leg"] == {"serial": 4, "start": 0}
+    rec = state["scene_replans"][-1]
+    assert rec["trigger"] == "observe_stall" and rec["outcome"] == "installed"
+    ms.next_candidate_index = 3
+    assert core.scene_observe_candidate(6.0, np.array([-2.2, 0.2, 0.0])) is None  # none left
+
+
+def test_the_far_observation_rule_is_a_scene_s_before_recognition_only():
+    core, ms, state, calls, rear, held = make()
+    _observe(core, ms, state, waypoints=[(-2.0, 1.0, 0.0)], scene=False)
+    assert not core.scene_far_observe()
+    core.options.pickup_prior = True
+    assert core.scene_far_observe()
+    core.pocket["planning_pickup"] = "recognised"
+    assert not core.scene_far_observe()
+    core.pocket["planning_pickup"] = None
+    core.near_active = lambda: True
+    assert not core.scene_far_observe()

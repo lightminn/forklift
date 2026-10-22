@@ -2166,7 +2166,7 @@ class MissionCore:
                 if out_.installed and ms.phase == "observe":
                     tracking = trackers["observe"].update(rear, signed_speed, dt)  # the new leg's, not the old one
                     ms.last_tracking = tracking
-        observe_miss = (
+        observe_stall_ = (
             slam is not None
             and ms.phase == "observe"
             and (
@@ -2177,9 +2177,28 @@ class MissionCore:
                 )
                 or ms.observe_stall_ticks >= 120
             )
+        )
+        if observe_stall_ and slam["stop_now"] and self.scene_far_observe():
+            # Scene-mode replan plan 2.3 (B): the first far observation's stall tries the remaining observation
+            # candidates before the same waypoint is planned again.
+            took_ = self.scene_observe_candidate(t, rear)
+            if took_ is not None:
+                ms.observe_stall_ticks = 0
+                rear = took_
+                tracking = trackers["observe"].update(rear, signed_speed, dt)
+                ms.last_tracking = tracking
+                return SimpleNamespace(tracking=tracking, rear=rear)
+        observe_miss = (
+            observe_stall_
             and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
             < OBSERVE_REPLANS_PER_LEG
         )
+        if observe_stall_ and not observe_miss and slam["stop_now"] and self.scene_far_observe():
+            # B: no candidate left and the waypoint's own budget spent -- end it, rather than stand to the timeout.
+            self.state.setdefault("scene_replans", []).append(
+                {"time_s": float(t), "trigger": "observe_stall", "phase": "observe", "outcome": "exhausted",
+                 "rear": [float(v) for v in rear], "candidate_index": ms.next_candidate_index})
+            require(False, "observe:stall_exhausted")
         if observe_miss:
             ms.observe_stall_ticks = 0
             tracking = replace(tracking, status="braking", speed_mps=0.0)
@@ -6124,6 +6143,64 @@ class MissionCore:
         if self.near_active() or self.bottom_deck_leg_active():
             return False
         return True
+
+    def scene_far_observe(self) -> bool:
+        """Plan 2.3 (B): the first far observation in a scene layout -- before recognition, and none of the near
+        capture, its realignment, the bottom-deck legs or a backoff."""
+        ms, obstacle = self.ms, self.obstacle
+        if not getattr(self.options, "pickup_prior", False) or ms.phase != "observe":
+            return False
+        if obstacle is not None and (obstacle.get("pickup_estimate") is not None
+                                     or obstacle.get("backoff", {}).get("phase") == "observe"):
+            return False
+        if self.pocket.get("planning_pickup") is not None:
+            return False
+        return not (self.near_active() or self.realign_active() or self.bottom_deck_leg_active())
+
+    def scene_observe_candidate(self, t: float, rear):
+        """Plan 2.3 (B): from the stop -- the hold released first (the candidates are map poses) -- the next
+        observation candidates in turn; the first that plans is installed with its own replan budget. Returns the
+        control pose when one is installed, else None (none left or none planned)."""
+        ms, state, slam, hooks, options = self.ms, self.state, self.slam, self.hooks, self.options
+        paths, trackers, geometry = self.paths, self.trackers, self.geometry
+        if ms.next_candidate_index >= len(options.observation_waypoints or ()):
+            return None
+        rear_ = np.asarray(rear, dtype=float)
+        if slam is not None and slam["tracker"].mode == "holding":
+            out_ = self.release_and_carry(t)
+            if out_.get("released"):
+                rear_ = np.asarray(out_["rear"], dtype=float)
+                hooks.set_rear(rear_)
+                if slam.get("control"):
+                    slam["control"][-1][1:4] = rear_.tolist()
+        start_ = PlanningPose(float(rear_[0]), float(rear_[1]), float(rear_[2]))
+        while ms.next_candidate_index < len(options.observation_waypoints):
+            index_ = ms.next_candidate_index
+            ms.next_candidate_index += 1
+            coordinates_ = options.observation_waypoints[index_]
+            plan_ = hooks.plan_observation_leg(
+                hooks.grid_world(options.scenario), PlanningPose(*(float(v) for v in coordinates_)),
+                options.planner_config, geometry=geometry, start_rear=start_, pickup_bounds=self.observe_bounds(),
+                extended=False, **hooks.grid_kwargs("observe"))
+            state["observation_candidates"].append(
+                {"candidate_index": index_, "pose": list(coordinates_), "start_rear": [float(v) for v in rear_],
+                 "success": plan_.success, "status": plan_.status, "after": "scene_observe_stall"})
+            state.setdefault("scene_replans", []).append(
+                {"time_s": float(t), "trigger": "observe_stall", "phase": "observe", "candidate_index": index_,
+                 "rear": [float(v) for v in rear_], "status": plan_.status,
+                 "outcome": "installed" if plan_.success else "failed"})
+            if plan_.success:
+                state["observation_waypoint_selected"] = list(coordinates_)
+                state["observe_replan_leg"] = {"serial": state["observe_replan_leg"]["serial"] + 1,
+                                               "start": len(state["observe_replans"])}
+                paths["observe"] = plan_
+                state.setdefault("paths", {})["observe"] = hooks.path_record(plan_)
+                hooks.write_paths()
+                trackers["observe"] = RearAxlePathTracker(plan_.poses, plan_.directions, plan_.curvatures_inv_m,
+                                                          trackers["observe"].config)
+                ms.phase_started = t
+                return rear_
+        return None
 
     def scene_correction_note(self, t: float, net_m: float, reply_max_m: float, net_yaw_rad: float = 0.0) -> None:
         """Plan 2.4: the largest correction contribution since the current gear leg began (its tracker and leg)."""
