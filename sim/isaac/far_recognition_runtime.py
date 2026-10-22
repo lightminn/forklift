@@ -48,20 +48,36 @@ class LearnedSource:
         self.times_ms: list = []  # the model's wall time per call, failures included (design §6 budget)
         self.last: dict | None = None
 
-    def __call__(self, scene, _instance_ids):
+    def run(self, scene) -> dict:
+        """One frame's proposals without touching this object's records (a live run calls it on its worker
+        thread): the proposals, the failures, which source made them, why it fell back and the model's time."""
         t0 = time.perf_counter()
         try:
             try:
                 props, failures, source, reason = list(self.model.propose(scene)), (), "learned", None
             finally:
-                self.times_ms.append(1e3 * (time.perf_counter() - t0))
+                ms = 1e3 * (time.perf_counter() - t0)
         except Exception as exc:  # noqa: BLE001 -- any model failure falls back
             reason = f"{type(exc).__name__}: {exc}"
             got = self.geometric(scene)
             props, failures, source = list(got.proposals), tuple(got.failures), "geometric_fallback"
-            self.fallbacks.append(reason)
-        self.last = {"source": source, "reason": reason, "proposals": props, "failures": failures}
-        return props, failures
+        return {"source": source, "reason": reason, "proposals": props, "failures": failures, "ms": ms}
+
+    def absorb(self, got: dict) -> None:
+        """A frame's ``run`` taken into the records (on the tick that applies the frame)."""
+        self.times_ms.append(got["ms"])
+        if got["source"] == "geometric_fallback":
+            self.fallbacks.append(got["reason"])
+        self.last = {k: got[k] for k in ("source", "reason", "proposals", "failures")}
+
+    def reset_stats(self) -> None:
+        """New lists for a new live mission (a list handed to an earlier mission's record is not cleared)."""
+        self.fallbacks, self.times_ms, self.last = [], [], None
+
+    def __call__(self, scene, _instance_ids):
+        got = self.run(scene)
+        self.absorb(got)
+        return got["proposals"], got["failures"]
 
     def timing(self) -> dict:
         t = np.asarray(self.times_ms, float)
@@ -230,19 +246,46 @@ class FarRuntime:
     def drive_frame(self, tick: int, t_meta_s: float, rgb, depth_m, instance_ids, intrinsics, base_from_optical,
                     map_from_odom=(0.0, 0.0, 0.0)) -> dict:
         """One driving frame: pose at the pixels' time, the decision and the tracker. Returns its record."""
+        job = self.drive_submit(tick, t_meta_s, rgb, depth_m, instance_ids, intrinsics, base_from_optical,
+                                map_from_odom)
+        return self.drive_apply(job, self.compute(job))
+
+    def drive_submit(self, tick: int, t_meta_s: float, rgb, depth_m, instance_ids, intrinsics, base_from_optical,
+                     map_from_odom=(0.0, 0.0, 0.0)) -> dict:
+        """A driving frame's part before its work, on the tick it was rendered: the pose at the pixels' time (taken
+        now: the step log is short), the scene and the instruction from this leg's zone. A frame without a pose or
+        ready pixels is a job without a scene (no work, recorded as skipped when applied)."""
         pixel_t = float(t_meta_s) - self.lag_steps * self.dt
         row = self.pose_at(pixel_t)
         record = {"leg": self.leg, "kind": "drive", "tick": int(tick), "t_meta_s": float(t_meta_s), "pixel_t_s": pixel_t}
+        job = {"kind": "drive", "leg": self.leg, "record": record, "scene": None}
         if row is None or instance_ids is None or depth_m is None:
             record["skipped"] = ("no_pose" if row is None else "depth_not_ready" if depth_m is None
                                  else "semantic_not_ready")
-            self.frame_records.append(record)
-            return record
+            return job
         scene = SceneInput(np.asarray(rgb, dtype=np.uint8), np.asarray(depth_m, dtype=float), intrinsics,
                            base_from_optical, int(round(row[1] * 1e9)), "synthetic", "synthetic")
         odom = row[2]
+        job.update(scene=scene, ids=instance_ids, row=row, odom=odom, depth_m=depth_m, intrinsics=intrinsics,
+                   base_from_optical=base_from_optical, map_from_odom=map_from_odom,
+                   instruction=self.instruction(compose(map_from_odom, odom)))
+        return job
+
+    def compute(self, job):
+        """A job's pure work (any thread): the proposals and the scene fit; None for a job without a scene."""
+        return None if job.get("scene") is None else self.far.compute(job["scene"], job["ids"])
+
+    def drive_apply(self, job, work) -> dict:
+        """A driving frame's work taken in, on the tick: the tracker, the leg's target, the records and files."""
+        record = job["record"]
+        if job["scene"] is None:
+            self.frame_records.append(record)
+            return record
+        scene, row, odom, instance_ids, depth_m = job["scene"], job["row"], job["odom"], job["ids"], job["depth_m"]
+        intrinsics, base_from_optical, map_from_odom = job["intrinsics"], job["base_from_optical"], job["map_from_odom"]
+        tick = record["tick"]
         history = list(self.far.selection_history)
-        rec = self.far.frame(scene, instance_ids, planar(*odom), self.instruction(compose(map_from_odom, odom)))
+        rec = self.far.frame(scene, instance_ids, planar(*odom), job["instruction"], work=work)
         record.update(pose_t_s=row[1], odom=list(odom), **{k: rec[k] for k in ("decision", "taken_by", "visible",
                                                                               "untracked", "held", "new")})
         # evaluation only (the lag fit): the proposal that best covers truth instance 0, by IoU >= 0.5 -- never the
@@ -295,13 +338,31 @@ class FarRuntime:
     def stop(self, scene_input, instance_ids, *, initial_time_s: float, control_base, odom_base, truth_base,
              truth_pallet, detector_observation=None):
         """The stop capture's decision: (PocketObservation for the mission, record). Starts the next leg."""
+        job = self.stop_submit(scene_input, instance_ids, initial_time_s=initial_time_s, control_base=control_base,
+                               odom_base=odom_base, truth_base=truth_base, truth_pallet=truth_pallet,
+                               detector_observation=detector_observation)
+        return self.stop_apply(job, self.compute(job))
+
+    def stop_submit(self, scene_input, instance_ids, *, initial_time_s: float, control_base, odom_base, truth_base,
+                    truth_pallet, detector_observation=None) -> dict:
+        """The stop capture's part before its work: everything it rests on, fixed at the capture."""
         rel_ns = int(scene_input.stamp_ns) - int(round(initial_time_s * 1e9))
         scene = replace(scene_input, stamp_ns=rel_ns)
         ids = instance_ids if instance_ids is not None else np.full(np.asarray(scene.depth_m).shape, -1)
+        return {"kind": "stop", "leg": self.leg, "scene": scene, "ids": ids, "scene_input": scene_input,
+                "rel_ns": rel_ns, "control_base": control_base, "odom_base": odom_base, "truth_base": truth_base,
+                "truth_pallet": truth_pallet, "detector_observation": detector_observation,
+                "instruction": self.instruction(control_base)}
+
+    def stop_apply(self, job, work):
+        """The stop's work taken in, on the tick: the decision, the records and files, and the next leg."""
+        scene, ids, rel_ns, scene_input = job["scene"], job["ids"], job["rel_ns"], job["scene_input"]
+        odom_base, control_base = job["odom_base"], job["control_base"]
+        truth_base, truth_pallet, detector_observation = job["truth_base"], job["truth_pallet"], job["detector_observation"]
         self.frame_records.append({"leg": self.leg, "kind": "stop", "stamp_ns": rel_ns})
         name = f"frame_{len(self.frame_records):04d}.npz"
-        obs, rec = self.far.stop(scene, ids, planar(*odom_base), self.instruction(control_base),
-                                 pallet_depth_m=self.pallet_depth_m)
+        obs, rec = self.far.stop(scene, ids, planar(*odom_base), job["instruction"],
+                                 pallet_depth_m=self.pallet_depth_m, work=work)
         self._save(name, kind="stop", leg=self.leg,
                    depth_m=np.asarray(scene.depth_m, dtype=float), instance_ids=np.asarray(ids, dtype=np.int16),
                    stamp_ns=rel_ns, odom=np.asarray(odom_base, float), control_base=np.asarray(control_base, float),
