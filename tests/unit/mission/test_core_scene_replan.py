@@ -278,3 +278,56 @@ def test_the_far_observation_rule_is_a_scene_s_before_recognition_only():
     core.pocket["planning_pickup"] = None
     core.near_active = lambda: True
     assert not core.scene_far_observe()
+
+
+# --- the escape prefix on a real obstacle layer (plan 2.1 step 5) ----------------------------------------------------
+def _real_layer():
+    import importlib.util
+    import json
+    import sys
+    from pathlib import Path
+
+    from forklift_core.perception.obstacle_grid import AgeErrorTable
+    from forklift_core.planning.geometry import Footprint
+
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location("obstacle_layer", root / "sim/isaac/obstacle_layer.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["obstacle_layer"] = module
+    spec.loader.exec_module(module)
+    config = module.load_layer_config(root / "config/obstacle_layer.yaml")
+    age = json.loads((root / "config/obstacle_odometry_age.json").read_text())
+    table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))
+    layer = module.ObstacleLayer(config, hall=Bounds(-6, 10, -5, 5), error_table=table,
+                                 unloaded=Footprint(1.29, 0.17, 0.36), loaded=Footprint(1.53, 0.17, 0.40),
+                                 body_front_m=0.884, rear_axle_x_in_base_m=-0.34, noise_seed=1)
+    return layer, config
+
+
+def test_an_escape_prefix_is_found_checked_installed_under_the_escape_ownership_and_cleared():
+    core, ms, state, calls, rear, held = make()
+    layer, config = _real_layer()
+    pose = (2.0, 0.3, 0.05)
+    n = len(layer.beam_angles)
+    open_ = {s_.name: (np.full(n, 4.0), np.ones(n, bool), np.zeros(n, bool)) for s_ in config["sensors"]}
+    for k in range(3):
+        layer.add_scans(0.1 * k, open_, odom_rear=pose, loaded=True)
+    path = np.array([pose, (2.5, 0.3, 0.05)])
+    layer.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=True)
+    core.obstacle = {"layer": layer, "applied": (0.0, 0.0, 0.0), "version": 0}
+    ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
+    chosen = ports.escape_plan((), None)
+    assert chosen is not None and state["scene_escape_candidates"][-1]["permit"]["ok"]
+    poses, direction, leg_dir = chosen
+    config0 = core.trackers["transport"].config
+    ports.escape_install(chosen)
+    assert core.obstacle["backoff"]["scene"] and core.obstacle["backoff"]["phase"] == "transport"
+    assert core.permission_acting()[1] is False  # never the delivery straight: the permission acts on it
+    assert core.trackers["transport"].config.cruise_speed_mps == core.options.backoff_speed_mps
+    assert ports.escape_state() == "running"
+    ports.escape_clear()
+    assert "backoff" not in core.obstacle
+    # the normal path installed after it gets the leg's own settings back (Codex plan round 4 P3)
+    result = plan_transport_leg(_scene(), Pose2D(*pose), core.options.planner_config, geometry=core.geometry)
+    ports.install(result)
+    assert core.trackers["transport"].config == config0
