@@ -28,7 +28,7 @@ ws1 Isaac, `deploy/riibotics/riib_scene.sbatch` 새 기본값(MODE=slam, NEAR=on
 | riib_ec227121 (+ 계획기 금지 구역, PR #105 전) | aisle_rack | 인식 + SLAM s0 (8837) | 하역까지 완료 — 정합 `ok`, 칸 중심에서 0.8 cm, `transport:occupied` 집계 7 285 틱(허가 적용 전에 세는 카운터, `core.py` 1233 행). 복귀에서 cusp 멈춤 → 시간 초과 |
 | riib_707998dd (+ main 의 PR #105) | aisle_rack · aisle_out_rack | 정답 1 회씩 (8900·8901) | 둘 다 접근 (2.93, −2.40) 에서 `occupied` 약 13 000 틱 → 시간 초과 |
 | riib_707998dd | aisle_rack | 인식 + SLAM s0·s1 (8902·8903) | 둘 다 꺼내기 직후 운반 첫 회전 (2.2–2.4, −4.0) 에서 `occupied` 2.5 만 틱 → 시간 초과 |
-| riib_707998dd | aisle_rack s2 · aisle_out_rack s0 | 인식 + SLAM (8904·8905) | 이 문서 작성 시점에 실행 중. aisle_out_rack s1·s2(8906·8907)는 결론이 선 뒤 취소했다 |
+| riib_707998dd | aisle_rack s2 · aisle_out_rack s0 | 인식 + SLAM (8904·8905) | 둘 다 집기·꺼내기 뒤 운반에서 실패 — s2 는 (2.12, −3.89) 에서 `transport:occupied` 22 713 틱 → 시간 초과, aisle_out_rack s0 는 (1.83, −4.05) 에서 `cusp_position_stall`(`transport:occupied` 6 151 틱). 막힌 셀은 대조하지 않았다. aisle_out_rack s1·s2(8906·8907)는 결론이 선 뒤 취소했다 |
 
 ws1 경로: `test_runs/riibotics/{ai_*, rk_*, rk2_*, rk3_*, rk3t_*}`, 장면 `scenes_riib_<스냅숏>`.
 
@@ -62,7 +62,7 @@ ws1 경로: `test_runs/riibotics/{ai_*, rk_*, rk2_*, rk3_*, rk3t_*}`, 장면 `sc
 ## 다음
 
 - 계획 여유와 장애물 층 표시 반경 불일치 — 원인 분석과 설계안 계획서(사례: 이 장면, 트레일러 입구 벽, 기록에서 같은 계열), 독립 검토 3 회 → 방향은 사용자 결정(사용자 결정 2026-10-22).
-- 그 결정 뒤 aisle_rack·aisle_out_rack 을 seed 0–2 로 다시 잰다. 실행 중이던 8904·8905 의 결과는 그때 함께 적는다.
+- 그 결정 뒤 aisle_rack·aisle_out_rack 을 seed 0–2 로 다시 잰다.
 
 ## 검증
 
