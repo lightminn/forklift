@@ -224,3 +224,28 @@ def test_a_sessions_first_mission_is_the_runners_setup_scene(sessions):
     z = scene.pickup_zone
     assert (z.x_min_m, z.x_max_m, z.yaw_max_rad) == (p4.zone.x_min_m, p4.zone.x_max_m, p4.zone.yaw_half_rad)
     assert session_as_scene(s, 2).scenario.pickup == s.pallet_by_id("P-3").truth
+
+
+@pytest.mark.parametrize("kind", ["line", "random"])
+def test_a_marked_session_has_the_marked_v1_scenes_plates_as_props_and_walls(kind, tmp_path):
+    """The slot markers of PR #99 (plan 2026-10-22 open-zone docking D3) in a session scene: the same plates the marked
+    v1 scenes carry, in the planner's static props and as walls Isaac draws; the plain session is unchanged."""
+    plain = tool.session_record(kind)
+    marked = tool.session_record(kind, markers=True)
+    assert plain == tool.session_record(kind) and plain["static_props"] == []
+    assert marked["name"] == f"{kind}_m" and marked["source"]["slot_markers"] is True
+    for key in ("pallets", "destinations", "sequence", "start_rear", "bounds"):
+        assert marked[key] == plain[key], key
+    v1 = tool.scene_record(f"{kind}_1_m", tool.with_slot_markers(kind, tool.scenes()[f"{kind}_1"]))
+    want = sorted((round(p["rectangle"]["x_m"], 9), round(p["rectangle"]["y_m"], 9))
+                  for p in v1["scenario"]["props"] if p["asset"]["uri"] == tool.MARKER_URI)
+    props = sorted((round(p["rectangle"]["x_m"], 9), round(p["rectangle"]["y_m"], 9)) for p in marked["static_props"])
+    walls = sorted((round(v["x_m"], 9), round(v["y_m"], 9)) for v in marked["visuals"] if v.get("role") == "slot_marker")
+    assert props == walls == want and len(want) >= len(plain["destinations"])  # (a column of slots shares plates)
+    assert all(p["asset"]["uri"] == tool.MARKER_URI for p in marked["static_props"])
+    path = tmp_path / f"{kind}_m_session.json"
+    path.write_text(json.dumps(marked))
+    session = load_session(path)
+    assert len(session.static_props) == len(want)
+    assert sum(v.kind == "wall" for v in session.visuals) - sum(
+        v["kind"] == "wall" for v in plain["visuals"]) == len(want)
