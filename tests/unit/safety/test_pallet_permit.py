@@ -152,3 +152,62 @@ def test_the_preparations_pallet_obstacle_follows_the_basis():
     assert (r.x_m, r.length_m) == pytest.approx((-5.1, 1.2 + 2 * RECOGNISED_MARGIN_M))
     tb.carried("P-1")
     assert preparation_obstacle(tb.pallets["P-1"], zone) is None
+
+
+# --- sessions (plan 2026-10-22-session-scene-pallet-props 2.5, 2.6) ---------------------------------------------------
+def _session_book():
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    tb = TargetsBook()
+    for i, (x, y, yaw) in enumerate([(1.0, 0.0, 0.0), (1.0, 2.0, 0.1), (1.0, 4.0, -0.1), (8.0, 0.0, 0.0)], start=1):
+        tb.add_pallet(f"P-{i}", "epal6", Pose(x, y, yaw), depth_m=0.6, width_m=0.8)
+    return tb
+
+
+def test_a_sessions_other_pallets_are_props_by_their_basis():
+    from forklift_core.mission.targets import Pose
+    from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M, session_pallet_props
+
+    tb = _session_book()
+    nominal = {"P-1": (1.0, 0.0, 0.0), "P-2": (1.02, 1.97, 0.12), "P-3": (1.0, 4.0, -0.1), "P-4": (8.0, 0.0, 0.0)}
+    tb.carried("P-3")
+    tb.put_down("P-4", Pose(8.05, 0.02, 0.01), uncertainty_m=0.15)
+    props = session_pallet_props(tb, exclude_id="P-1", nominal=nominal, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25)
+    by_id = {p.asset.uri.rsplit(":", 1)[1]: p.rectangle for p in props}
+    assert sorted(by_id) == ["P-2", "P-4"]  # the mission's own and the carried one left out
+    r2 = by_id["P-2"]  # prior: its drawn slot (not its registered pose) grown by D1
+    assert (r2.x_m, r2.y_m, r2.yaw_rad, r2.length_m, r2.width_m) == pytest.approx((1.02, 1.97, 0.12, 1.1, 1.3))
+    r4 = by_id["P-4"]  # delivered: where it was put down, grown by its own uncertainty
+    assert (r4.x_m, r4.y_m, r4.length_m, r4.width_m) == pytest.approx((8.05, 0.02, 0.9, 1.1))
+    tb.update_pose("P-2", Pose(1.05, 1.95, 0.11), basis="recognised")  # no uncertainty given: the recognised margin
+    props = session_pallet_props(tb, exclude_id="P-1", nominal=nominal, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25)
+    r2 = {p.asset.uri.rsplit(":", 1)[1]: p.rectangle for p in props}["P-2"]
+    assert (r2.x_m, r2.length_m) == pytest.approx((1.05, 0.6 + 2 * RECOGNISED_MARGIN_M))
+    assert all(p.asset.height_m == 0.144 for p in props)
+
+
+def test_only_the_estimates_the_hold_found_take_the_frame_change():
+    from forklift_core.mission.targets import Pose
+    from forklift_core.safety.pallet_permit import session_pallet_props
+
+    tb = _session_book()
+    tb.put_down("P-2", Pose(1.0, 2.0, 0.1), uncertainty_m=0.21)
+    tb.put_down("P-4", Pose(8.0, 0.0, 0.0), uncertainty_m=0.21)
+    shift = lambda p: (p[0] + 0.3, p[1], p[2])  # noqa: E731
+    props = session_pallet_props(tb, exclude_id="P-1", nominal={}, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25,
+                                 moved=shift, moved_ids=("P-4",))
+    by_id = {p.asset.uri.rsplit(":", 1)[1]: p.rectangle for p in props}
+    assert by_id["P-4"].x_m == pytest.approx(8.3) and by_id["P-2"].x_m == pytest.approx(1.0)  # by id, not by basis
+    assert by_id["P-3"].x_m == pytest.approx(1.0)  # a prior one without a drawn slot: where it is registered
+
+
+def test_each_prior_pallet_keeps_out_of_its_own_zone():
+    from forklift_core.planning.geometry import Rectangle
+    from forklift_core.safety.pallet_permit import ENVELOPE_M, PRIOR_POSE_MARGIN_M, zones_from
+
+    tb = _session_book()
+    zones = {"P-1": Rectangle(1.0, 0.0, 1.5, 1.5, 0.0), "P-2": Rectangle(1.0, 2.0, 1.5, 1.5, 0.0)}
+    out = {z.zone_id: z for z in zones_from(tb, zones)}
+    assert sorted(out) == ["P-1", "P-2"]  # no zone given: none drawn (P-3, P-4)
+    assert (out["P-2"].x_m, out["P-2"].y_m) == (1.0, 2.0)
+    assert out["P-2"].length_m == pytest.approx(1.5 + 2 * (PRIOR_POSE_MARGIN_M + ENVELOPE_M))
