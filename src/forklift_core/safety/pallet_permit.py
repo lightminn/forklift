@@ -34,17 +34,20 @@ ENVELOPE_M = 0.01
 
 def zones_from(targets, pickup_zone) -> list:
     """The keep-out zones of a targets book: every pallet on the floor; a prior one is the whole pickup zone (its
-    registered place is the scene's, plan D10), the others their outline grown by their uncertainty."""
+    registered place is the scene's, plan D10), the others their outline grown by their uncertainty. ``pickup_zone``
+    is one zone rectangle for every prior pallet, or a {pallet_id: zone rectangle} map (a session, plan
+    2026-10-22-session-scene-pallet-props 2.5: each prior pallet its own)."""
     out = []
     for pallet in targets.pallets.values():
         if pallet.state == "carried" or pallet.pose is None:
             continue
         if pallet.basis == "prior":
-            if pickup_zone is None:
+            zone = pickup_zone.get(pallet.pallet_id) if isinstance(pickup_zone, dict) else pickup_zone
+            if zone is None:
                 continue
             grow = PRIOR_POSE_MARGIN_M + ENVELOPE_M
-            out.append(Zone(pallet.pallet_id, pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m + 2 * grow,
-                            pickup_zone.width_m + 2 * grow, pickup_zone.yaw_rad))
+            out.append(Zone(pallet.pallet_id, zone.x_m, zone.y_m, zone.length_m + 2 * grow,
+                            zone.width_m + 2 * grow, zone.yaw_rad))
         elif pallet.depth_m is not None and pallet.width_m is not None:
             grow = (RECOGNISED_MARGIN_M if pallet.uncertainty_m is None else pallet.uncertainty_m) + ENVELOPE_M
             out.append(Zone(pallet.pallet_id, pallet.pose.x_m, pallet.pose.y_m, pallet.depth_m + 2 * grow,
@@ -71,6 +74,40 @@ def preparation_obstacle(pallet, pickup_zone, *, pose=None, size=None):
                     else size)
     return Rectangle(float(pose.x_m), float(pose.y_m), float(depth) + 2 * grow, float(width) + 2 * grow,
                      float(pose.yaw_rad))
+
+
+def session_pallet_props(targets, *, exclude_id, nominal: dict, shape, prior_grow_m: float, moved=None,
+                         moved_ids=()) -> tuple:
+    """The other pallets of a session as planning props (plan 2026-10-22-session-scene-pallet-props 2.6; one function
+    for the live preparation's scene, its start check, the post-release preview and the worker's input). A prior
+    pallet is its drawn slot (``nominal``: id -> (x, y, yaw)) grown by ``prior_grow_m`` (decision D1); a recognised or
+    delivered one its outline where the targets list has it, grown by its uncertainty (the recognised margin when
+    none). The mission's own pallet (``exclude_id``), a carried one and one without a pose are left out.
+    ``shape`` = (depth, width, height). ``moved`` (x, y, yaw) -> (x, y, yaw) applies to the ids in ``moved_ids`` only:
+    the estimates the hold found, as the release itself judges them -- never by basis."""
+    from forklift_core.planning.geometry import Rectangle
+    from forklift_core.planning.pallet_mission import AssetSpec, PlacedProp
+
+    depth0, width0, height = (float(v) for v in shape)
+    out = []
+    for pallet_id in sorted(targets.pallets):
+        pallet = targets.pallets[pallet_id]
+        if pallet_id == exclude_id or pallet.state == "carried" or pallet.pose is None:
+            continue
+        depth = float(pallet.depth_m) if pallet.depth_m is not None else depth0
+        width = float(pallet.width_m) if pallet.width_m is not None else width0
+        if pallet.basis == "prior":  # its drawn slot (a pallet without one: where it is registered)
+            pose = nominal.get(pallet_id, (pallet.pose.x_m, pallet.pose.y_m, pallet.pose.yaw_rad))
+            x, y, yaw = (float(v) for v in pose)
+            grow = float(prior_grow_m)
+        else:
+            x, y, yaw = float(pallet.pose.x_m), float(pallet.pose.y_m), float(pallet.pose.yaw_rad)
+            if moved is not None and pallet_id in moved_ids:
+                x, y, yaw = (float(v) for v in moved((x, y, yaw)))
+            grow = RECOGNISED_MARGIN_M if pallet.uncertainty_m is None else float(pallet.uncertainty_m)
+        out.append(PlacedProp(AssetSpec(f"session:pallet:{pallet_id}", depth + 2 * grow, width + 2 * grow, height),
+                              Rectangle(x, y, depth + 2 * grow, width + 2 * grow, yaw)))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
