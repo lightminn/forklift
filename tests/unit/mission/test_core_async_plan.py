@@ -881,3 +881,179 @@ def test_an_end_release_after_a_new_hold_keeps_the_put_back_pallet():
     core.restore_pallet_target()
     core.end_reset(20.0)
     assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.0)
+
+
+# --- the live far recognition's stop decision (docs/plans/2026-10-22-live-far-recognition.md T1 (A), tasks 4, 10) ---
+def far_core():
+    """A capture core whose far stop is handed over: ``answers`` is what the poll gives, in turn."""
+    core, state, slam, calls = capture_core(FakeSession())
+    answers, cancels, ends = [], [], []
+
+    def poll(handle):
+        got = answers.pop(0)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+    core.hooks.far_recognition_poll = poll
+    core.hooks.far_recognition_cancel = cancels.append
+    core.hooks.far_recognition_mission_end = ends.append
+    return core, state, slam, answers, cancels, ends
+
+
+def far_captured():
+    return SimpleNamespace(far_pending="HANDLE", attempt={"observation_source": "pending"}, observation="DETECTOR")
+
+
+@dataclass
+class Obs:
+    status: str
+    reason: str | None = None
+
+
+def test_a_far_stop_is_waited_for_with_the_work_clocks_standing_and_taken_with_its_decision():
+    core, state, slam, answers, cancels, ends = far_core()
+    captured = far_captured()
+    core.observation_freeze(50.3, captured)
+    assert core.commands.waits[-1] == [50.3, None]  # the wait opens with the freeze
+    answers.append(SimpleNamespace(state="waiting"))
+    assert core.observation_take(50.4) is None and core.observation_live is not None  # still frozen
+    answers.append(SimpleNamespace(state="done", observation=Obs("valid"), record={"source": "fused", "leg": 0}))
+    taken = core.observation_take(50.5)
+    assert taken is captured and taken.observation == Obs("valid")
+    assert taken.attempt["observation_source"] == "fused" and taken.attempt["recognition"]["leg"] == 0
+    assert taken.attempt["pocket_observation"] == {"status": "valid", "reason": None}
+    assert core.commands.waits[-1] == [50.3, 50.5] and core.observation_live is None
+    assert core.capture_acquired_s == 50.25  # the frozen acquisition, not the decision's time
+
+
+def test_a_far_decision_is_dropped_when_the_correction_changed_while_it_was_worked_on():
+    core, state, slam, answers, cancels, ends = far_core()
+    core.observation_freeze(50.3, far_captured())
+    slam["tracker"].applied = ((0.4, 0.0, 0.0), 0)  # a correction while the worker decides
+    answers.append(SimpleNamespace(state="done", observation=Obs("valid"), record={"source": "fused"}))
+    assert core.observation_take(50.5) is None
+    assert state["observation_drops"][-1]["why"] == "correction" and core.commands.waits[-1][1] == 50.5
+
+
+def test_a_leg_ended_before_the_decision_captures_again_once_then_fails_the_observation():
+    core, state, slam, answers, cancels, ends = far_core()
+    core.observation_freeze(50.3, far_captured())
+    answers.append(SimpleNamespace(state="invalid", why="leg", observation=Obs("no_pallet", "far_leg")))
+    assert core.observation_take(50.5) is None and core.observation_live is None  # the arrival captures again
+    assert state["recognition_discarded"][-1]["why"] == "leg" and core.far_leg_recaptures == 1
+    core.observation_freeze(51.0, far_captured())
+    answers.append(SimpleNamespace(state="invalid", why="leg", observation=Obs("no_pallet", "far_leg")))
+    failed = core.observation_take(51.2)
+    assert failed.observation == Obs("no_pallet", "far_leg") and failed.attempt["recognition"]["status"] == "invalid"
+    assert core.far_leg_recaptures == 0 and core.commands.waits[-1] == [51.0, 51.2]
+
+
+def test_a_decision_done_resets_the_recapture_count():
+    core, state, slam, answers, cancels, ends = far_core()
+    core.observation_freeze(50.3, far_captured())
+    answers.append(SimpleNamespace(state="invalid", why="leg", observation=Obs("no_pallet", "far_leg")))
+    core.observation_take(50.5)
+    core.observation_freeze(51.0, far_captured())
+    answers.append(SimpleNamespace(state="done", observation=Obs("valid"), record={"source": "single"}))
+    assert core.observation_take(51.2) is not None and core.far_leg_recaptures == 0
+
+
+def test_a_timeout_raises_and_the_missions_end_closes_the_wait_and_drops_the_far_work():
+    core, state, slam, answers, cancels, ends = far_core()
+    core.observation_freeze(50.3, far_captured())
+    answers.append(RuntimeError("recognition_timeout"))
+    with pytest.raises(RuntimeError, match="recognition_timeout"):
+        core.observation_take(80.4)
+    core.abandon_jobs(80.5)
+    assert core.observation_live is None and core.commands.waits[-1] == [50.3, 80.5]
+    assert cancels == ["mission_end"] and ends == [80.5]
+    assert state["recognition_discarded"][-1]["why"] == "mission_end"
+
+
+def test_a_pause_drops_the_frozen_far_observation_and_its_work():
+    core, state, slam, answers, cancels, ends = far_core()
+    core.observation_freeze(50.3, far_captured())
+    core.observation_drop(50.6, "paused")
+    assert core.observation_live is None and cancels == ["paused"] and core.commands.waits[-1] == [50.3, 50.6]
+    core.observation_drop(50.7, "paused")  # nothing left: nothing happens
+    assert cancels == ["paused"]
+
+
+def test_a_far_wait_does_not_open_a_second_wait_over_one_already_open():
+    core, state, slam, answers, cancels, ends = far_core()
+    core.commands.begin_wait(50.0)
+    core.observation_freeze(50.3, far_captured())
+    answers.append(SimpleNamespace(state="done", observation=Obs("valid"), record={"source": "fused"}))
+    core.observation_take(50.5)
+    assert core.commands.waits == [[50.0, None]]  # not its wait to close
+
+
+@dataclass(frozen=True)
+class Sc:
+    start_rear: object = None
+
+
+def observe_failed_core(waypoints=((5.0, 1.0, 0.0), (6.0, 1.0, 0.0), (7.0, 1.0, 0.0))):
+    core, state, slam, calls = capture_core(FakeSession())
+    core.options.observation_waypoints = [list(w) for w in waypoints]
+    core.options.repeat_captures = 0
+    core.options.scenario = Sc()
+    core.options.planner_config = Config()
+    core.options.observe_bounds = None
+    core.options.pickup_bounds = "B"
+    core.options.speeds, core.options.cusp_heading_hold_rad = {"observe": 0.35}, 0.08
+    core.hooks.set_inset = lambda *a: None
+    core.hooks.plan_observation_leg = lambda *a, **k: pytest.fail("a live run plans on the worker, not in the tick")
+    installed = []
+    core.observe_tracker = lambda plan: ("TRACKER", plan.status)
+    core.apply_tracker_profile = lambda: installed.append("profile")
+    core.realign_install = lambda why: installed.append(why)
+    core.record_tracker_configs = lambda: installed.append("configs")
+    state.update(observation_candidates=[], planning_wall_s=0.0)
+    return core, state, slam, installed
+
+
+def test_a_live_observe_failure_asks_the_worker_for_the_remaining_candidates_and_installs_the_first():
+    core, state, slam, installed = observe_failed_core()
+    core.ms.next_candidate_index = 1
+    attempt = {}
+    assert core.observe_failed(60.0, REAR, attempt, 2, Obs("no_pallet", "far_leg")) is False
+    name, payload = core.jobs.submitted[-1]
+    assert name == "observe_ladder" and payload["waypoints"] == [(6.0, 1.0, 0.0), (7.0, 1.0, 0.0)]
+    assert payload["ladders"] == (False,) and payload["pickup_bounds"] is None  # a live run: the whole hall (D2)
+    assert (payload["world"][1].start_rear.x_m, payload["world"][1].start_rear.yaw_rad) == (1.0, 0.5)
+    assert core.commands.waits[-1] == [60.0, None]
+    cand = lambda i, ok: {"candidate_index": i, "pose": [6.0 + i, 1.0, 0.0], "success": ok,
+                          "status": "success" if ok else "no_path", "start_rear": list(REAR)}
+    core.jobs.answers[1] = (True, {"result": Plan("success"), "selected": 1, "timed_out": False, "wall_s": 0.3,
+                                   "candidates": [cand(0, False), cand(1, True)]})
+    assert core.job_hold(60.5, REAR, 0.0, False).hold is True
+    assert [c["candidate_index"] for c in state["observation_candidates"]] == [1, 2]
+    assert core.ms.next_candidate_index == 3 and core.trackers["observe"] == ("TRACKER", "success")
+    assert state["observation_waypoint_selected"] == [7.0, 1.0, 0.0] and installed[-2] == "observe_candidate"
+    assert core.ms.phase_started == 60.5 and core.commands.waits[-1] == [60.0, 60.5]
+
+
+def test_a_live_observe_failure_with_no_reachable_candidate_ends_the_mission_by_name():
+    core, state, slam, installed = observe_failed_core()
+    core.ms.next_candidate_index = 2
+    core.observe_failed(60.0, REAR, {}, 2, Obs("no_pallet", "few"))
+    core.jobs.answers[1] = (True, {"result": None, "selected": None, "timed_out": False, "wall_s": 0.1,
+                                   "candidates": [{"candidate_index": 0, "pose": [7.0, 1.0, 0.0], "status": "no_path",
+                                                   "success": False}]})
+    with pytest.raises(RuntimeError, match="^observe:all_candidates_exhausted:perception_no_pallet:few:no_path$"):
+        core.job_hold(60.5, REAR, 0.0, False)
+
+
+def test_a_dropped_re_observation_plan_is_asked_again_from_where_the_truck_stands():
+    core, state, slam, installed = observe_failed_core()
+    core.ms.next_candidate_index = 1
+    core.observe_failed(60.0, REAR, {}, 2, Obs("no_pallet", "few"))
+    slam["tracker"].applied = ((0.3, 0.0, 0.0), 0)  # a correction while it was planned
+    core.jobs.answers[1] = (True, {"result": Plan("success"), "selected": 0, "timed_out": False, "candidates": []})
+    core.job_hold(60.5, REAR, 0.0, False)
+    assert core.observe_failed_needed == {"first": 1, "retry_reason": "perception_no_pallet:few"}
+    core.job_hold(60.6, REAR, 0.0, False)
+    assert len(core.jobs.submitted) == 2 and core.observe_failed_needed is None
+    assert core.jobs.submitted[-1][1]["waypoints"] == [(6.0, 1.0, 0.0), (7.0, 1.0, 0.0)]

@@ -34,6 +34,8 @@ MISSION_KEYS = {
         "pocket_check", "forbidden_pocket_contacts", "pocket_geometry_checks", "repeat_capture", "phase",
         "lateral_clearance_min_m", "live_first_replans", "return_correction_drops",
         "loaded_lift_wait",  # plan D5 6c: a loaded start wait's record (Codex 6c impl round 1 P3)
+        # plan 2026-10-22-live-far-recognition: the mission's far summary and its dropped far stops
+        "recognition_mission", "recognition_discarded",
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
@@ -77,7 +79,8 @@ SESSION_KEYS = {
 }
 MS_FIELDS = ("observe_stall_ticks", "slam_stall_ticks", "dock_stop_ticks", "cusp_stop_ticks", "next_candidate_index",
              "last_tracking")
-CORE_FIELDS = ("release_replan_needed", "fresh_depth_wait", "last_permission",
+CORE_FIELDS = ("release_replan_needed", "observe_failed_needed", "far_leg_recaptures", "fresh_depth_wait",
+               "last_permission",
                "return_correction_drops",  # plan D11: a mission's own count
                "loaded_wait")  # plan D5 6c: a loaded mission's start wait
 

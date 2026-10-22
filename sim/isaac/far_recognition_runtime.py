@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 import math
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -205,6 +207,8 @@ class FarRuntime:
         self.frame_every, self.lag_steps, self.drive_frames = int(frame_every), int(lag_steps), bool(drive_frames)
         self.out_dir = out_dir
         self.paused = False  # set while a stationary capture steps the world
+        self.stop_pending = False  # a live stop decision waits for its work: no driving frame meanwhile
+        self.writer = None  # a live run's file writer, writer(path, arrays) (the control thread never writes)
         self.steps: deque = deque(maxlen=max(8 * (self.lag_steps + 1), 256))
         self.leg_steps: list = []   # the observe leg's per-step truth and odom (the pixel-lag fit's input)
         self.leg_frames: list = []  # the leg's driving frames (time, measured pallet centre in base)
@@ -218,7 +222,8 @@ class FarRuntime:
 
     # --- the observe leg's steps and frames ---------------------------------------------------------------
     def due(self, tick: int, *, observing: bool) -> bool:
-        return bool(self.drive_frames and observing and not self.paused and tick % self.frame_every == 0)
+        return bool(self.drive_frames and observing and not self.paused and not self.stop_pending
+                    and tick % self.frame_every == 0)
 
     def record_step(self, tick: int, stamp_s: float, odom_base, truth_base, truth_pallet) -> None:
         row = (int(tick), float(stamp_s), tuple(map(float, odom_base)), tuple(map(float, truth_base)),
@@ -232,6 +237,22 @@ class FarRuntime:
         if best is None or abs(best[1] - t_s) > 0.5 * self.dt + 1e-9:
             return None
         return best
+
+    def reset_for_mission(self, *, zone_centre_xy, zone_radius_m: float, out_dir: Path | None) -> None:
+        """A live mission's start (plan 2026-10-22-live-far-recognition task 7): a new first leg (no track, target
+        or selection of an earlier mission), the mission's own zone as the initial one, its own record directory
+        and records, fresh learned statistics -- new lists, the earlier mission's record keeps its own."""
+        self.far.start_leg()
+        self.leg = 0
+        self.leg_steps, self.leg_frames = [], []
+        self.frame_records, self.attempts, self.leg_endings, self.zone_changes = [], [], [], []
+        self.zone_centre_xy, self.zone_radius_m = tuple(float(v) for v in zone_centre_xy), float(zone_radius_m)
+        self.zone_initial = {"centre_xy": list(self.zone_centre_xy), "radius_m": self.zone_radius_m}
+        self.out_dir = out_dir
+        self.paused = self.stop_pending = False
+        self.steps.clear()
+        if self.source is not None:
+            self.source.reset_stats()
 
     def set_zone(self, centre_xy, radius_m: float) -> None:
         """The instruction's zone from the current leg on (the bottom-deck re-observation: the pallet judged, not the
@@ -437,6 +458,9 @@ class FarRuntime:
     def _save(self, name: str, **arrays) -> None:
         if self.out_dir is None:
             return
+        if self.writer is not None:
+            self.writer(self.out_dir / name, arrays)
+            return
         self.out_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(self.out_dir / name, **arrays)
 
@@ -450,6 +474,325 @@ class FarRuntime:
                 "proposer": {**(self.proposer_record or {"kind": "oracle"}),
                              **({"fallbacks": len(self.source.fallbacks), "fallback_reasons": self.source.fallbacks[:5],
                                  "model_ms": self.source.timing()} if self.source is not None else {})}}
+
+
+
+# --- the live run (docs/plans/2026-10-22-live-far-recognition.md, decision T1 (A)) ---------------------------------
+STOP_WAIT_S = 30.0  # a stop decision's whole wait, monotonic wall time from its hand-over (frames before it included)
+QUEUE_CAP = 4  # driving frames waiting or being worked on: 4 x 24 steps = 0.8 sim s, about 2 wall s at factor 0.4
+
+
+def live_observing(status: str, observing: bool, stopped_in_tick: bool) -> bool:
+    """The live gate on the driving frames and the step log (task 6): a running mission in its observe leg, and no
+    STOP at this physics step. An idle, paused, cancelling or ended session records nothing."""
+    return status == "running" and bool(observing) and not stopped_in_tick
+
+
+class FarWorker:
+    """One thread doing the far frames' pure work (``compute(job)``) in hand-over order. At most ``cap`` driving
+    frames wait or run: a new one beyond that drops the oldest one still waiting (``queue_full``); a stop is never
+    dropped for room. ``poll`` hands back ``(job, status, payload)`` -- ``done`` with the work, ``error`` with the
+    exception, ``dropped`` with why -- in the order they finished or were dropped."""
+
+    def __init__(self, compute, *, cap: int = QUEUE_CAP, name: str = "far-recognition"):
+        self.compute, self.cap = compute, int(cap)
+        self._cond = threading.Condition()
+        self._waiting: deque = deque()
+        self._running = None
+        self._done: deque = deque()
+        self._closing = False
+        self._thread = threading.Thread(target=self._loop, name=name, daemon=True)
+        self._thread.start()
+
+    def _drives(self) -> int:  # under the lock
+        running = self._running is not None and self._running["kind"] == "drive"
+        return sum(1 for j in self._waiting if j["kind"] == "drive") + int(running)
+
+    def submit(self, job: dict) -> None:
+        with self._cond:
+            if job["kind"] == "drive":
+                while self._drives() >= self.cap:
+                    old = next((j for j in self._waiting if j["kind"] == "drive"), None)
+                    if old is None:
+                        break
+                    self._waiting.remove(old)
+                    self._done.append((old, "dropped", "queue_full"))
+            self._waiting.append(job)
+            self._cond.notify_all()
+
+    def clear(self, why: str) -> None:
+        """Every job not started yet is dropped (a STOP, a cancel, a generation or a mission change)."""
+        with self._cond:
+            while self._waiting:
+                self._done.append((self._waiting.popleft(), "dropped", why))
+
+    def poll(self) -> list:
+        with self._cond:
+            out = list(self._done)
+            self._done.clear()
+            return out
+
+    def idle(self) -> bool:
+        with self._cond:
+            return not self._waiting and self._running is None
+
+    def close(self, timeout_s: float = 1.0) -> None:
+        """Ends the thread once the job it is on returns (one stuck in a model call is a daemon left behind)."""
+        with self._cond:
+            self._closing = True
+            self._waiting.clear()
+            self._cond.notify_all()
+        self._thread.join(timeout_s)
+
+    def _loop(self) -> None:
+        while True:
+            with self._cond:
+                while not self._waiting:
+                    if self._closing:
+                        return
+                    self._cond.wait()
+                job = self._waiting.popleft()
+                self._running = job
+            try:
+                out = ("done", self.compute(job))
+            except Exception as exc:  # noqa: BLE001 -- the tick turns it into the mission's failure
+                out = ("error", exc)
+            with self._cond:
+                self._running = None
+                self._done.append((job, *out))
+                self._cond.notify_all()
+
+
+class LiveFar:
+    """The tick's side of the live far recognition. Frames and stops are handed to the worker tagged with the
+    mission generation, their leg and a sequence number; ``pump`` takes the finished ones in on the tick, in order,
+    and drops (records, does not apply) those of another generation, an inactive session or an ended leg. The
+    tracker, the target, the legs, the records and the learned statistics change only here, on the control thread.
+
+    A stop is a pending decision (``stop`` -> handle): it waits for the leg's earlier frames, the truck standing;
+    ``stop_state`` is ``waiting``, ``done`` (``take`` gives the observation and record), or ``invalid`` (``why``:
+    the leg ended before it, a STOP or cancel cleared it); waiting past ``STOP_WAIT_S`` raises
+    ``recognition_timeout``. A worker failure, or a driving frame's read that raised inside the physics step
+    (``read_frame``), raises ``recognition_error:<type>`` from the next ``pump``."""
+
+    def __init__(self, runtime, *, worker=None, clock=time.monotonic, stop_wait_s: float = STOP_WAIT_S, io=None):
+        self.rt = runtime
+        self.worker = worker if worker is not None else FarWorker(runtime.compute)
+        self.clock, self.stop_wait_s, self.io = clock, float(stop_wait_s), io
+        self.seq = 0
+        self.handle = None
+        self.error = None
+        self.mission_id = None
+        self.mission_dir: Path | None = None  # the runner's: the mission's directory (its result.json)
+        self.setup_zone = None  # the runner's: the scene's zone, for a prior pallet at its first place
+        self.log: list = []  # this mission's jobs: applied (with their order) or dropped (with why)
+        self.record_errors: list = []
+        self.applied = 0
+        if io is not None:
+            runtime.writer = self._write
+
+    # --- hand-over -----------------------------------------------------------------------------------------------
+    def _tag(self, job: dict, gen) -> dict:
+        self.seq += 1
+        job.update(seq=self.seq, gen=gen, submitted=float(self.clock()))
+        return job
+
+    def drive(self, gen, *args, **kw) -> None:
+        """A driving frame (``FarRuntime.drive_submit``'s arguments): its pose and instruction taken now."""
+        self.worker.submit(self._tag(self.rt.drive_submit(*args, **kw), gen))
+
+    def read_frame(self, read) -> None:
+        """Runs a driving frame's read (decode and hand-over) inside the physics step: an exception is kept for the
+        tick, so the step's other sensors and records still run (task 9)."""
+        try:
+            read()
+        except Exception as exc:  # noqa: BLE001 -- raised by the next pump as the mission's failure
+            if self.error is None:
+                self.error = exc
+
+    def stop(self, gen, **kw):
+        """The stop capture's decision handed over (``FarRuntime.stop_submit``'s arguments, fixed at the capture)."""
+        job = self._tag(self.rt.stop_submit(**kw), gen)
+        if self.handle is not None and self.handle.state == "waiting":
+            self._end("superseded")
+        scene = kw["scene_input"]
+        self.handle = SimpleNamespace(seq=job["seq"], gen=gen, leg=job["leg"], submitted=job["submitted"],
+                                      state="waiting", why=None, result=None, stamp_ns=int(scene.stamp_ns),
+                                      clock_domain=scene.clock_domain)
+        self.rt.stop_pending = True
+        self.worker.submit(job)
+        return self.handle
+
+    # --- the tick ----------------------------------------------------------------------------------------------------
+    def _note(self, job: dict, status: str, why=None) -> None:
+        entry = {"seq": job["seq"], "kind": job["kind"], "leg": job["leg"], "gen": job["gen"], "status": status,
+                 "why": why, "wall_s": float(self.clock()) - job["submitted"]}
+        if job["kind"] == "drive":
+            entry["tick"] = job["record"]["tick"]
+        if status == "applied":
+            self.applied += 1
+            entry["order"] = self.applied
+        self.log.append(entry)
+
+    def _end(self, why: str) -> None:
+        h = self.handle
+        if h is not None and h.state == "waiting":
+            h.state, h.why = "invalid", why
+        self.rt.stop_pending = False
+
+    def pump(self, gen, *, active: bool) -> None:
+        """Takes in what the worker finished, in order (every tick)."""
+        failure = None
+        if self.error is not None:
+            failure, self.error = self.error, None
+        for job, status, payload in self.worker.poll():
+            mine = self.handle is not None and job["seq"] == self.handle.seq
+            if status == "dropped":
+                why = payload
+            elif job["gen"] != gen:
+                why = "generation"
+            elif not active:
+                why = "inactive"
+            elif job["kind"] == "stop" and not mine:
+                why = "superseded"
+            elif job["leg"] != self.rt.leg:
+                why = "leg"
+            elif status == "error":
+                self._note(job, "error", f"{type(payload).__name__}: {payload}")
+                if mine:
+                    self._end("error")
+                failure = failure or payload
+                continue
+            else:
+                why = None
+            if why is not None:
+                self._note(job, "dropped", why)
+                if mine:
+                    self._end(why)
+                continue
+            if job["kind"] == "drive":
+                self.rt.drive_apply(job, payload)
+                self._note(job, "applied")
+            else:
+                obs, rec = self.rt.stop_apply(job, payload)
+                self._note(job, "applied")
+                self.handle.state, self.handle.result = "done", (obs, rec)
+                self.rt.stop_pending = False
+        if failure is not None:
+            raise RuntimeError(f"recognition_error:{type(failure).__name__}")
+
+    def stop_state(self, handle) -> str:
+        if handle is not self.handle:
+            return "invalid" if handle.state == "waiting" else handle.state
+        if handle.state == "waiting":
+            if handle.leg != self.rt.leg:
+                self._end("leg")
+            elif float(self.clock()) - handle.submitted > self.stop_wait_s:
+                self._end("timeout")
+                raise RuntimeError("recognition_timeout")
+        return handle.state
+
+    def take(self, handle):
+        """A done stop's (observation, record); the handle is spent."""
+        if self.handle is handle:
+            self.handle = None
+        return handle.result
+
+    def clear(self, why: str) -> None:
+        """A STOP, a cancel or a mission end: the waiting work and the pending stop are dropped."""
+        self.worker.clear(why)
+        self._end(why)
+
+    # --- the mission -----------------------------------------------------------------------------------------------
+    def start_mission(self, mission_id, *, zone_centre_xy, zone_radius_m: float, out_dir: Path | None) -> None:
+        self.clear("mission")
+        for job, status, payload in self.worker.poll():  # an earlier mission's: noted nowhere, dropped
+            pass
+        self.handle, self.error, self.mission_id = None, None, mission_id
+        self.log, self.record_errors, self.applied = [], [], 0
+        self.rt.reset_for_mission(zone_centre_xy=zone_centre_xy, zone_radius_m=zone_radius_m, out_dir=out_dir)
+
+    def _write(self, path: Path, arrays: dict) -> None:
+        """A frame file on the session's writer thread; a refusal or a failure is this mission's record error."""
+        errors = self.record_errors  # the mission's own list: a late write never lands in the next one's
+
+        def job():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(path, **arrays)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+
+        nbytes = sum(np.asarray(v).nbytes for v in arrays.values())
+        if not self.io.put_line(job, nbytes):
+            errors.append(f"{path.name}: refused")
+
+    def write_json(self, path: Path, record: dict) -> None:
+        """A mission's JSON record on the session's writer (directly without one)."""
+        text = dumps(record)
+        errors = self.record_errors
+
+        def job():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+
+        if self.io is None:
+            job()
+        elif not self.io.put_line(job, len(text)):
+            errors.append(f"{path.name}: refused")
+
+    def summary(self) -> dict:
+        counts: dict = {}
+        for j in self.log:
+            key = j["status"] if j["status"] != "dropped" else f"dropped:{j['why']}"
+            counts[key] = counts.get(key, 0) + 1
+        return {**self.rt.summary(), "live": {"mission_id": self.mission_id, "jobs": list(self.log), "counts": counts,
+                                              "record_errors": list(self.record_errors)}}
+
+    def close(self) -> None:
+        self.worker.close()
+
+
+class GuardedSession:
+    """A live capture session that keeps the far driving frames off while it is open (task 5): ``paused`` from its
+    making until it ends -- a result, a failure, or a close (a STOP, a pause, a cancel, a mission end)."""
+
+    def __init__(self, session, runtime):
+        self._session, self._runtime = session, runtime
+        runtime.paused = True
+
+    @property
+    def result(self):
+        return self._session.result
+
+    @property
+    def done(self):
+        return self._session.done
+
+    def _run(self, fn):
+        try:
+            ended = fn()
+        except BaseException:
+            self._runtime.paused = False
+            raise
+        if ended:
+            self._runtime.paused = False
+        return ended
+
+    def start(self) -> bool:
+        return self._run(self._session.start)
+
+    def stepped(self, error=None) -> bool:
+        return self._run(lambda: self._session.stepped(error))
+
+    def close(self) -> None:
+        try:
+            self._session.close()
+        finally:
+            self._runtime.paused = False
 
 
 class _P:

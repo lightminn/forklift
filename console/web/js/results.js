@@ -88,6 +88,8 @@ export const REASONS = {
   "return_home:": "복귀 경로를 계획하지 못했습니다",
   "cusp_position_stall": "방향을 바꾸는 자리에서 멈췄습니다",
   "not_pickable:": "포크 간격이 이 팔레트의 구멍에 맞지 않아 집지 않았습니다",
+  "recognition_error:": "팔레트 인식 처리 중 오류가 났습니다",
+  "recognition_timeout": "팔레트 인식 판단이 제때 끝나지 않았습니다",
   // the preparation (the first leg, planned when the mission is submitted)
   "prepare:all_candidates_failed": "첫 구간을 계획하지 못했습니다",
   "prepare:timeout": "첫 구간 계획 시간이 지났습니다",
