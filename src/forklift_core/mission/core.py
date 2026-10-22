@@ -2512,7 +2512,11 @@ class MissionCore:
         ms, state, options = self.ms, self.state, self.options
         first = p.ctx["first"]
         for c in value["candidates"]:
-            state["observation_candidates"].append({**c, "candidate_index": first + int(c["candidate_index"])})
+            state["observation_candidates"].append(
+                {"candidate_index": first + int(c["candidate_index"]), "pose": c["pose"], "start_rear": c["start_rear"],
+                 "success": c["success"], "status": c["status"],
+                 "analytic_expansion_interval": c.get("analytic_expansion_interval"),
+                 "search_attempts": c.get("search_attempts", []), "extended_ladder": c.get("extended_ladder", False)})
         state["planning_wall_s"] += float(value.get("wall_s", 0.0))
         if value["result"] is None:
             ms.next_candidate_index = len(options.observation_waypoints)

@@ -414,8 +414,9 @@ def test_every_observation_candidate_record_keeps_its_search_attempts():
         ):
             (record,) = call.args
             records.append({key.value for key in record.keys})
-    # Two observation branches plus the priority-5 obstacle-block fallback and the bottom-deck re-observation's retry.
-    assert len(records) == 4
+    # Two observation branches plus the priority-5 obstacle-block fallback, the bottom-deck re-observation's retry and
+    # a live observe failure's worker answer (plan 2026-10-22-live-far-recognition task 10).
+    assert len(records) == 5
     for keys in records:
         assert {"search_attempts", "start_rear", "status"} <= keys
 

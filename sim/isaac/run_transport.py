@@ -2928,6 +2928,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     for extra_camera in extra_cameras.values():
         extra_camera.initialize()
     far_runtime = far_intrinsics = frr = None  # the far recognition (--recognition far)
+    far_live = None  # a live run's far worker (plan 2026-10-22-live-far-recognition), made with the live session
     if args.recognition == "far":
         import far_recognition_runtime as frr
 
@@ -3566,7 +3567,10 @@ def drive(S, isaac) -> None:
         far_intrinsics = _bound["far_intrinsics"]
     if "frr" in _bound:
         frr = _bound["frr"]
-    far_live = None  # a live run's far recognition worker (frr.LiveFar), set with the live session
+    if "far_live" not in _bound:  # a setup recorded before the live far recognition (2026-10-22)
+        _bound["far_live"] = None
+    if "far_live" in _bound:
+        far_live = _bound["far_live"]
     if "ARC_POSES" in _bound:
         ARC_POSES = _bound["ARC_POSES"]
     if "CUSP_STALL" in _bound:

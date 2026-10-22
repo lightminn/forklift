@@ -4,10 +4,13 @@ Splitting the far recognition's per-frame work from its tracker update (so a liv
 control thread) must leave the batch run's results and records as they were. ``run_all`` drives the CPU rig's
 scenarios -- an oracle leg, a leg ended by a loss and the leg after it, a learned leg falling back to the geometric
 proposals, a zone narrowed for a later leg, a stop the forks do not fit -- through ``FarRuntime``'s public calls
-and returns every observation, record, summary and saved array (as hashes). The fixture next to the test was made
-with the code of ec4bece, before the split:
+and returns every observation, record, summary and saved array (as hashes). The test runs it twice on the same
+machine -- the CPU rig's renders differ between hosts' libraries -- with this checkout's code and with ec4bece's
+(tests/fixtures/far_ec4bece/, the two files as they were before the split):
 
-    python tools/far_batch_golden.py --out tests/fixtures/far_batch_golden_ec4bece.json
+    python tools/far_batch_golden.py --out now.json
+    python tools/far_batch_golden.py --out then.json --runtime tests/fixtures/far_ec4bece/far_recognition_runtime.py \
+        --bridge tests/fixtures/far_ec4bece/recognition_bridge.py
 
 The model's wall times are not compared (they are measured, not computed); their count is.
 """
@@ -36,10 +39,19 @@ DT = 1 / 120
 PALLET = (4.2, 0.05, 0.02)
 
 
-def load_runtime(root: Path = ROOT):
-    spec = importlib.util.spec_from_file_location("far_recognition_runtime", root / "sim/isaac/far_recognition_runtime.py")
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def load_runtime(runtime: Path = ROOT / "sim/isaac/far_recognition_runtime.py", bridge: Path | None = None):
+    """A far_recognition_runtime module; with ``bridge``, running on that recognition_bridge instead of the
+    package's (the runtime reads it as its global ``B``)."""
+    module = _load(f"far_recognition_runtime_{abs(hash(str(runtime)))}", runtime)
+    if bridge is not None:
+        module.B = _load(f"recognition_bridge_{abs(hash(str(bridge)))}", bridge)
     return module
 
 
@@ -211,10 +223,11 @@ def run_all(R) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--root", type=Path, default=ROOT, help="the checkout whose sim/isaac/far_recognition_runtime.py runs")
+    ap.add_argument("--runtime", type=Path, default=ROOT / "sim/isaac/far_recognition_runtime.py")
+    ap.add_argument("--bridge", type=Path, default=None, help="a recognition_bridge.py to run it on")
     args = ap.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(run_all(load_runtime(args.root)), indent=1, sort_keys=True) + "\n")
+    args.out.write_text(json.dumps(run_all(load_runtime(args.runtime, args.bridge)), indent=1, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":
