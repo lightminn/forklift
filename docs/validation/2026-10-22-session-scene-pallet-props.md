@@ -41,7 +41,9 @@
   - 단계표(접근은 자기 팔레트 포함, 삽입은 제외 — 접근 끝 1 cm 침범을 잡는다), `prior_failed`, 하역 칸 반영.
 - `tests/unit/safety/test_pallet_permit.py`: `session_pallet_props` 의 기저별 크기·제외, `moved_ids` 로만 옮김, 팔레트별 teleop 구역.
 - ws1 전체(`~/bin/forklift-ws1-pytest`, `97457a3`): 5884 통과, 실패 10 건. 10 건은 모두 알려진 ws1 전용이다(mujoco 없음 6, evaluate_cli·remote_model_jobs 2, diagnose 게이트 2).
-- 리플레이 게이트(M-a1 29 건, 스냅숏 `ct1_4c00834`): 29/29 가 갈라짐 없이 재생됐다. 그 뒤 러너는 바뀌지 않았다.
+- 리플레이 게이트(M-a1 29 건): 29/29 가 갈라짐 없이 재생됐다.
+  - 스냅숏 `ct1_4c00834` 에서 한 번, main(#99·#100·#101) 위로 다시 얹은 `9f4710b` 에서 한 번 돌렸다(`ct1_9f4710b`).
+  - 다시 얹은 뒤 관련 시험 묶음(도구·안전·장애물 층·러너 분리·live·미션·CLI)도 돌렸다. 실패는 알려진 diagnose 2 건뿐이다.
 
 ## 교차검증
 
