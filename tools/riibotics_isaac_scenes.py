@@ -72,7 +72,7 @@ from riibotics_scenario_paths import (  # noqa: E402
     trailer_case,
 )
 
-from scene_file import FORMAT, scenario_from_record  # noqa: E402
+from scene_file import FORMAT, SESSION_FORMAT, scenario_from_record  # noqa: E402
 
 from forklift_core.perception.pallet_geometry import load_pallet_geometry  # noqa: E402
 from forklift_core.planning import Pose2D  # noqa: E402
@@ -260,21 +260,20 @@ def random_unloading() -> list[PalletSite]:
     return [_site(px, 48) for px in (1125, 1268, 1411)]
 
 
-def line_scene(k: int):
+def line_defs():
     """Scenario 3: three pallets in a column, the unloading column 8.9 m to the right; the
     deepest unloading slot is filled first. Drawn: pallets at y 95 / 215 / 333 px, columns at
-    x 124 and 1118 px, fork tips at y 605 px."""
+    x 124 and 1118 px, fork tips at y 605 px. (loading, unloading, order, start, zones, margin)"""
     loading = [_site(124, py) for py in (333, 215, 95)]          # front first
     unloading = line_unloading()
     tip_x, tip_y = _drawing(124, 605)
     start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
     zones = [((25 * PX_M, 223 * PX_M, -600 * PX_M, -15 * PX_M), ZONE_GREY),
              ((1020 * PX_M, 1217 * PX_M, -600 * PX_M, 0.0), UNLOAD_BLUE)]
-    scenario, visuals, info = _sequence_scene(loading, unloading, [(0, 0), (1, 1), (2, 2)], k, start, zones, 1.6)
-    return scenario, visuals, {"sequence_index": k, **info}
+    return loading, unloading, [(0, 0), (1, 1), (2, 2)], start, zones, 1.6
 
 
-def random_scene(k: int):
+def random_defs():
     """Scenario 4: five pallets in the loading area, three carried to the unloading row.
     Drawn centres (px) and tilts; the drawing's tilts are capped at the scenario's 10 deg."""
     loading = [_site(121, 68), _site(127, 189), _site(343, 213, -8.0), _site(185, 356, 10.0),
@@ -284,7 +283,19 @@ def random_scene(k: int):
     start = Pose2D(tip_x, tip_y - TRUCK_FRONT_M, UP)
     zones = [((28 * PX_M, 670 * PX_M, -485 * PX_M, 0.5), ZONE_GREY),
              ((1043 * PX_M, 1684 * PX_M, -485 * PX_M, 0.5), UNLOAD_BLUE)]
-    scenario, visuals, info = _sequence_scene(loading, unloading, [(3, 0), (4, 1), (2, 2)], k, start, zones, 1.2)
+    return loading, unloading, [(3, 0), (4, 1), (2, 2)], start, zones, 1.2
+
+
+SEQUENCES = {"line": line_defs, "random": random_defs}
+
+
+def line_scene(k: int):
+    scenario, visuals, info = _sequence_scene(*line_defs()[:3], k, *line_defs()[3:])
+    return scenario, visuals, {"sequence_index": k, **info}
+
+
+def random_scene(k: int):
+    scenario, visuals, info = _sequence_scene(*random_defs()[:3], k, *random_defs()[3:])
     return scenario, visuals, {"sequence_index": k, **info}
 
 
@@ -479,6 +490,50 @@ def scene_record(name: str, built) -> dict:
             "visuals": visuals, "views": views(hall), "source": {**info, "placement": placement}}
 
 
+# Pallets a session never carries still stand off their slot (component <= 0.08 m, as the carried ones' errors).
+SESSION_EXTRA_ERRORS = {"random": {0: (0.04, -0.03, 1.0), 1: (-0.03, 0.04, -1.0)}}
+
+
+def session_record(kind: str) -> dict:
+    """One session scene (docs/plans/2026-10-22-session-scene-pallet-props.md 2.1-2.2): every pallet of the sequence
+    scenario with its nominal slot (the drawing's site and tilt, in the hall), its truth (nominal + its own error -- the
+    carried ones keep the error their v1 scene k gave them) and the zone and candidates made from its nominal; the
+    unloading slots as destinations D-1..; the drawing's order. Its pallets are not visuals: Isaac makes them from
+    pallets[].truth (PR 3)."""
+    loading, unloading, order, start, zones, margin = SEQUENCES[kind]()
+    pallet = load_pallet_geometry(PALLETS[PALLET])
+    # The hall placement is the v1 scenes' (their bounds come from every site and the start, the same for each k).
+    probe = [pallet_prop(f"site_{i}", s.x_m, s.y_m, pallet, s.yaw_rad) for i, s in enumerate(loading + unloading)]
+    xs = [s.x_m for s in loading + unloading] + [start.x_m]
+    ys = [s.y_m for s in loading + unloading] + [start.y_m]
+    bounds = Bounds(min(xs) - margin, max(xs) + margin, start.y_m - 2.0, max(ys) + margin)
+    scenario = TransportScenario(seed=0, start_rear=start, pickup=loading[order[0][0]],
+                                 destination=unloading[order[0][1]], props=tuple(probe), bounds=bounds)
+    visuals = [_visual("floor", (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0.0, 0.0, colour)
+               for (x0, x1, y0, y1), colour in zones]
+    hall, visuals, placement = to_hall(scenario, visuals)
+    sites = [PalletSite(p.rectangle.x_m, p.rectangle.y_m, p.rectangle.yaw_rad) for p in hall.props]
+    nominal, slots = sites[:len(loading)], sites[len(loading):]
+    errors = {li: PICKUP_ERRORS[f"{kind}_{k + 1}"] for k, (li, _) in enumerate(order)}
+    errors.update(SESSION_EXTRA_ERRORS.get(kind, {}))
+    pallets = []
+    for i, n in enumerate(nominal):
+        dx, dy, dyaw = errors[i]
+        pallets.append({
+            "pallet_id": f"P-{i + 1}", "nominal": asdict(n),
+            "truth": asdict(PalletSite(n.x_m + dx, n.y_m + dy, n.yaw_rad + math.radians(dyaw))),
+            "zone": {"x_min_m": n.x_m - ZONE_GROW_M, "x_max_m": n.x_m + ZONE_GROW_M, "y_min_m": n.y_m - ZONE_GROW_M,
+                     "y_max_m": n.y_m + ZONE_GROW_M, "yaw_centre_rad": n.yaw_rad, "yaw_half_rad": ZONE_YAW_RAD},
+            "observation_waypoints": observation_waypoints(n)})
+    first = replace(hall, props=())
+    return {"format": SESSION_FORMAT, "name": kind, "pallet": PALLET,
+            "start_rear": asdict(hall.start_rear), "bounds": asdict(hall.bounds), "static_props": [],
+            "pallets": pallets,
+            "destinations": [{"destination_id": f"D-{j + 1}", **asdict(s)} for j, s in enumerate(slots)],
+            "sequence": [[f"P-{li + 1}", f"D-{ui + 1}"] for li, ui in order],
+            "visuals": visuals, "views": views(first), "source": {"placement": placement, "errors": errors}}
+
+
 # ---- CPU planning check with the Isaac mission settings ----
 
 def grown_pallets(scenario: TransportScenario, grow_m: float) -> TransportScenario:
@@ -571,8 +626,14 @@ def main() -> None:
     parser.add_argument("--grow-pallets", default="0", help="comma-separated keep-outs (m) around neighbour pallets")
     parser.add_argument("--slot-markers", action="store_true",
                         help="also write <name>_m.json with slot markers for the line / random scenes (plan 2026-10-22)")
+    parser.add_argument("--session", choices=tuple(SEQUENCES), action="append", default=[],
+                        help="also write this sequence as one session scene (<name>_session.json)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    for kind in args.session:
+        path = args.output / f"{kind}_session.json"
+        path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
+        print("session", path)
     only = set(args.only.split(",")) if args.only else None
     paths = []
     built_scenes = scenes()
