@@ -173,3 +173,33 @@ def test_a_session_registers_every_pallet_with_its_size_at_its_drawn_slot(sessio
         entry = tb.pallets[p.pallet_id]
         assert (entry.pose.x_m, entry.pose.y_m, entry.pose.yaw_rad) == (p.nominal.x_m, p.nominal.y_m, p.nominal.yaw_rad)
         assert (entry.depth_m, entry.width_m, entry.basis, entry.at) == (1.2, 0.8, "prior", None)
+
+
+def test_a_tilted_zone_has_no_runner_pickup_zone(sessions):
+    loaded, _ = sessions
+    with pytest.raises(ValueError, match="centred at 0"):
+        loaded["random"].pallet_by_id("P-4").zone.centre_zone()
+
+
+@pytest.mark.parametrize("name", ["line_1", "line_2", "line_3", "random_1", "random_2", "random_3"])
+def test_the_adapter_gives_the_runners_own_preparation_inputs_for_every_v1_scene(v1, name):
+    """Plan 2.4 / 2.1 (3판 amendment): what run_transport builds for P-1 -- the truth pickup as the reference, the scene's
+    candidates as the template, its zone grown into the pickup prior -- is what the v1 session adapter gives, so PR 3
+    can build the inputs from the session without changing a v1 run."""
+    from forklift_core.planning.observation_viewpoints import PickupZone  # noqa: F401
+
+    scene = v1[name]
+    s = scene.scenario
+    depth, width = 0.6, 0.8
+    z = scene.pickup_zone
+    grow = math.hypot(depth, width) / 2  # run_transport 3468-3475
+    runner = {"reference": (float(s.pickup.x_m), float(s.pickup.y_m), float(s.pickup.yaw_rad)),
+              "template": [tuple(float(v) for v in w) for w in scene.observation_waypoints],
+              "zone": ((z.x_min_m + z.x_max_m) / 2, (z.y_min_m + z.y_max_m) / 2, z.x_max_m - z.x_min_m + 2 * grow,
+                       z.y_max_m - z.y_min_m + 2 * grow, 0.0)}
+    p1 = session_from_scene(scene).pallet_by_id("P-1")
+    r = zone_rect(p1.zone, depth, width)
+    adapter = {"reference": (float(p1.registered.x_m), float(p1.registered.y_m), float(p1.registered.yaw_rad)),
+               "template": [tuple(float(v) for v in w) for w in p1.observation_waypoints],
+               "zone": (r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad)}
+    assert adapter == runner

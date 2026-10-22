@@ -107,7 +107,10 @@ class SessionZone:
     yaw_half_rad: float
 
     def centre_zone(self) -> PickupZone:
-        """The runner's PickupZone (its yaw bound is absolute about 0: v1's zones are centred there)."""
+        """The runner's PickupZone, whose yaw bound is absolute about 0 -- only for a zone centred there (v1's): a
+        tilted zone's heading range has no PickupZone (Codex PR 2 implementation round 1 P3)."""
+        if self.yaw_centre_rad != 0.0:
+            raise ValueError("a PickupZone's yaw range is centred at 0; this zone's is not")
         return PickupZone(self.x_min_m, self.x_max_m, self.y_min_m, self.y_max_m, self.yaw_half_rad)
 
 

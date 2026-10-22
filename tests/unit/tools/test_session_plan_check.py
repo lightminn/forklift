@@ -22,24 +22,44 @@ def test_the_gap_between_an_outline_and_a_box_is_exact_and_zero_when_they_overla
 
 def test_a_contact_between_two_clear_poses_is_caught():
     rect = {"P-2": Rectangle(0.0, 0.55, 0.1, 0.1, 0.0)}  # the outline's side passes through it half way
-    out = C.leg_clearance([(-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)], None, FP, rect)["P-2"]
+    out = C.leg_clearance([(-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)], FP, rect)["P-2"]
     assert out["status"] == "contact_observed" and out["min_m"] == 0.0
 
 
 def test_a_millimetre_parallel_gap_is_proven_clear_at_the_fine_step():
     rect = {"P-2": Rectangle(0.0, 0.5 + 0.001 + 0.05, 4.0, 0.1, 0.0)}
-    out = C.leg_clearance([(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0)], None, FP, rect)["P-2"]
-    assert out["min_m"] == pytest.approx(0.001) and out["status"] == "clear" and out["bound_m"] > 0
+    out = C.leg_clearance([(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0)], FP, rect)["P-2"]
+    assert out["min_m"] == pytest.approx(0.001) and out["status"] == "clear"
+    assert out["bound_m"] == pytest.approx(0.001 - C.FINE_STEP_M / 2)
 
 
-def test_a_turn_counts_the_outlines_far_corner_and_the_arcs_sagitta():
-    rect = {"P-2": Rectangle(0.0, 0.5 + 0.003 + 0.05, 4.0, 0.1, 0.0)}
-    straight = C.leg_clearance([(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0)], None, FP, rect)["P-2"]
-    curved = C.leg_clearance([(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0)], [0.0, 0.3], FP, rect)["P-2"]
-    assert straight["status"] == "clear" and straight["bound_m"] == pytest.approx(0.003 - C.STEP_M / 2)
-    # the arc's 37.5 mm sagitta is not covered by 3 mm, even sampled again at the fine step
-    assert curved["bound_m"] == pytest.approx(0.003 - C.FINE_STEP_M / 2 - 0.3 * 1.0 / 8)
-    assert curved["status"] == "clearance_unproven"
+def test_a_turn_is_sampled_on_its_arc_not_its_chord():
+    """Codex PR 2 implementation round 1 P2: a half circle of radius 1/0.29 from (-R, R, -pi/2) to (R, R, pi/2) passes
+    the box at its bottom; the chord between the two poses does not."""
+    r = 1 / 0.29
+    a, b = (-r, r, -math.pi / 2), (r, r, math.pi / 2)
+    pose_at, length = C.arc(a, b)
+    assert length == pytest.approx(math.pi * r)
+    assert pose_at(0.5)[:2] == pytest.approx((0.0, 0.0), abs=1e-9)
+    rect = {"P-9": Rectangle(0.0, -0.759, 0.6, 0.8, 0.0)}
+    out = C.leg_clearance([a, b], Footprint(1.29, 0.17, 0.36), rect)["P-9"]
+    assert out["status"] == "contact_observed"
+
+
+def test_a_reversing_turn_is_sampled_on_its_arc():
+    """Backwards a quarter circle about the origin: (R, 0) heading +y, reversing clockwise to (0, -R) heading +x."""
+    r = 2.0
+    a, b = (r, 0.0, math.pi / 2), (0.0, -r, 0.0)
+    pose_at, length = C.arc(a, b)
+    assert length == pytest.approx(math.pi / 2 * r)
+    assert pose_at(0.5)[:2] == pytest.approx((r / math.sqrt(2), -r / math.sqrt(2)), abs=1e-9)
+    assert pose_at(1.0)[:2] == pytest.approx(b[:2], abs=1e-9)
+
+
+def test_an_arc_ends_where_the_next_pose_is():
+    a, b = (0.0, 0.0, 0.0), (1.0, 0.3, 0.6)
+    pose_at, _ = C.arc(a, b)
+    assert pose_at(1.0)[:2] == pytest.approx(b[:2], abs=1e-9) and pose_at(1.0)[2] == pytest.approx(0.6)
 
 
 # --- the stage table and the order, with stand-in planners -----------------------------------------------------------
@@ -71,7 +91,7 @@ def _leg(poses, status="success"):
                            curvatures_inv_m=np.zeros(len(poses)))
 
 
-def _planners(approach_end_x=None, insert_into=True, fail_first=False):
+def _planners(approach_end_x=None, insert_into=True, fail_first=False, legs_override=None):
     calls = {"n": 0}
 
     def observe(scenario, waypoint, config, **kw):
@@ -91,6 +111,7 @@ def _planners(approach_end_x=None, insert_into=True, fail_first=False):
                 "transport": _leg([(end - 0.3, y, 0.0), (12.0, scenario.destination.y_m, 0.0)]),
                 "withdraw": _leg([(12.0, scenario.destination.y_m, 0.0), (11.5, scenario.destination.y_m, 0.0)]),
                 "return_home": _leg([(11.5, scenario.destination.y_m, 0.0), (0.0, 0.0, 0.0)])}
+        legs.update((legs_override or {})(scenario) if legs_override else {})
         return SimpleNamespace(success=True, status="success", **legs)
 
     return observe, transport
@@ -118,3 +139,32 @@ def test_a_failed_mission_stops_the_order_and_a_passed_one_delivers_its_pallet(t
     second = out["missions"][1]["stages"]["observe"]["all"]["P-1"]
     assert second["min_m"] > 5.0
     assert out["settings"]["kappa"] == C.KAPPA and out["prior_grow_m"] == 0.25
+
+
+def test_a_loaded_leg_is_judged_with_the_loaded_outline(tmp_path):
+    """A box the empty outline clears by 2 cm, the loaded (wider) one overlaps: transport catches it, observe would not."""
+    path = _session(tmp_path, n=2)
+    geometry = C.mission_geometry(C.URDF, C.load_pallet_geometry(C.PALLETS["epal6"]), C.RESERVE_M, **C.STRAIGHTS)
+    empty, loaded = geometry.unloaded_footprint.half_width_m, geometry.loaded_footprint.half_width_m
+    assert loaded > empty + 0.02
+    # P-2 truth stands at (5, 3); a transport passing 0.4 m (the pallet's half width) + empty + 0.02 below its centre
+    y = 3.0 - 0.4 - empty - 0.02
+    over = lambda sc: {"transport": _leg([(2.0, y, 0.0), (8.0, y, 0.0)])} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
+    out = C.check_session(path, planner=_planners(legs_override=over))
+    first = out["missions"][0]
+    assert first["outcome"] == "contact_observed" and first["stages"]["transport"]["nearest"] == "P-2"
+    assert [m["outcome"] for m in out["missions"]] == ["contact_observed", "prior_failed"]
+
+
+def test_the_withdraw_meets_the_others_and_the_return_meets_its_own_delivered_pallet(tmp_path):
+    path = _session(tmp_path, n=2)
+    # the withdraw backs through P-2's place (5, 3)
+    through = lambda sc: {"withdraw": _leg([(3.5, 3.0, 0.0), (4.5, 3.0, 0.0)])} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
+    out = C.check_session(path, planner=_planners(legs_override=through))
+    assert out["missions"][0]["outcome"] == "contact_observed"
+    assert out["missions"][0]["stages"]["withdraw"]["nearest"] == "P-2"
+    # the return drives back over the slot it just filled (15, 0)
+    back = lambda sc: {"return_home": _leg([(13.0, 0.0, 0.0), (15.5, 0.0, 0.0)])} if sc.pickup.y_m == 0.0 else {}  # noqa: E731
+    out = C.check_session(path, planner=_planners(legs_override=back))
+    assert out["missions"][0]["outcome"] == "contact_observed"
+    assert out["missions"][0]["stages"]["return_home"]["nearest"] == "P-1"

@@ -17,8 +17,10 @@ pallet's zone, the rest on its truth (as tools/riibotics_isaac_scenes.plan_scene
     withdraw    empty     left out (the forks leave its pockets)
     return_home empty     its slot
 
-A mission is contact_observed when a sampled pose overlaps a truth outline, clearance_unproven when only the
-continuous lower bound (sampled minimum - half the 5 mm sampling step - the arc's sagitta) reaches 0 even at 0.5 mm.
+Between two planned poses the truck is sampled on the circular arc through them (tangent to the first pose's heading,
+turning by the heading change; a straight when the heading does not change), so each step moves no outline point more
+than h (5 mm). A mission is contact_observed when a sampled pose overlaps a truth outline, clearance_unproven when only
+the continuous lower bound (sampled minimum - h/2) reaches 0 even with h = 0.5 mm.
 A mission runs only if every earlier one planned and passed (else prior_failed): "the file's order, full returns,
 ideal deliveries" -- not a run's outcome.
 
@@ -116,12 +118,11 @@ def _reach(fp) -> float:
     return math.hypot(max(fp.front_m, fp.rear_m), fp.half_width_m)
 
 
-def leg_clearance(poses, curvatures, fp, outlines: dict) -> dict:
-    """The leg's smallest gap to each outline: sampled at the planned poses and between them (each step moving no
-    outline point more than STEP_M), with the continuous lower bound; a segment whose bound reaches 0 is sampled again
-    at FINE_STEP_M. ``outlines`` id -> Rectangle. Returns per id {min_m, bound_m, status}."""
+def leg_clearance(poses, fp, outlines: dict) -> dict:
+    """The leg's smallest gap to each outline: sampled at the planned poses and on the arcs between them (each step
+    moving no outline point more than STEP_M), with the continuous lower bound; a segment whose bound reaches 0 is
+    sampled again at FINE_STEP_M. ``outlines`` id -> Rectangle. Returns per id {min_m, bound_m, status}."""
     poses = np.asarray(poses, dtype=float)
-    curvatures = np.zeros(len(poses)) if curvatures is None else np.abs(np.asarray(curvatures, dtype=float))
     out = {}
     reach = _reach(fp)
     for oid, rect in outlines.items():
@@ -131,14 +132,11 @@ def leg_clearance(poses, curvatures, fp, outlines: dict) -> dict:
             sampled = min(sampled, distance(footprint_corners(poses[i], fp), corners))
         for i in range(1, len(poses)):
             a, b = poses[i - 1], poses[i]
-            ds = float(math.hypot(b[0] - a[0], b[1] - a[1]))
-            dyaw = abs(math.remainder(float(b[2] - a[2]), math.tau))
-            sag = float(curvatures[i]) * ds * ds / 8
-            seg = _segment(a, b, ds, dyaw, reach, corners, fp, STEP_M)
-            lower = seg[0] - seg[1] / 2 - sag
+            seg = _segment(a, b, reach, corners, fp, STEP_M)
+            lower = seg[0] - seg[1] / 2
             if lower <= 0 < seg[0]:
-                seg = _segment(a, b, ds, dyaw, reach, corners, fp, FINE_STEP_M)
-                lower = seg[0] - seg[1] / 2 - sag
+                seg = _segment(a, b, reach, corners, fp, FINE_STEP_M)
+                lower = seg[0] - seg[1] / 2
             sampled, bound = min(sampled, seg[0]), min(bound, lower)
         if len(poses) == 1:
             bound = sampled
@@ -147,16 +145,42 @@ def leg_clearance(poses, curvatures, fp, outlines: dict) -> dict:
     return out
 
 
-def _segment(a, b, ds, dyaw, reach, corners, fp, step):
-    """(the smallest sampled gap along a -> b, the largest outline-point move between samples)."""
-    move = ds + dyaw * reach
+def arc(a, b):
+    """The motion a -> b as (pose_at(t) for t in [0, 1], its length): the circular arc tangent to a's heading
+    (driven forwards or backwards) through b -- a straight when b lies on a's heading line. The position sweeps the
+    angle between the radii (on the side the heading change turns, when that is ambiguous); the heading goes from a's
+    to b's evenly."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    dyaw = math.remainder(float(b[2] - a[2]), math.tau)
+    chord = b[:2] - a[:2]
+    normal = np.array([-math.sin(a[2]), math.cos(a[2])])
+    across = float(chord @ normal)
+    if abs(across) < 1e-12:
+        length = float(np.linalg.norm(chord))
+        return (lambda t: (a[0] + t * chord[0], a[1] + t * chord[1], a[2] + t * dyaw)), length
+    rho = float(chord @ chord) / (2 * across)  # signed radius along a's normal
+    centre = a[:2] + rho * normal
+    r0, r1 = a[:2] - centre, b[:2] - centre
+    sweep = math.atan2(r0[0] * r1[1] - r0[1] * r1[0], float(r0 @ r1))
+    if dyaw != 0 and sweep * dyaw < 0:
+        sweep += math.copysign(math.tau, dyaw)  # the other way round, as the heading turns
+
+    def pose_at(t):
+        c, s_ = math.cos(t * sweep), math.sin(t * sweep)
+        x, y = centre + np.array([c * r0[0] - s_ * r0[1], s_ * r0[0] + c * r0[1]])
+        return float(x), float(y), float(a[2] + t * dyaw)
+
+    return pose_at, abs(rho * sweep)
+
+
+def _segment(a, b, reach, corners, fp, step):
+    """(the smallest sampled gap along the arc a -> b, the largest outline-point move between samples)."""
+    pose_at, length = arc(a, b)
+    move = length + abs(math.remainder(float(b[2] - a[2]), math.tau)) * reach
     n = max(1, int(math.ceil(move / step)))
     best = math.inf
     for k in range(n + 1):
-        t = k / n
-        pose = (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]),
-                a[2] + t * math.remainder(float(b[2] - a[2]), math.tau))
-        best = min(best, distance(footprint_corners(pose, fp), corners))
+        best = min(best, distance(footprint_corners(pose_at(k / n), fp), corners))
     return best, move / n
 
 
@@ -243,7 +267,7 @@ def check_session(path: Path, *, prior_grow_m: float = 0.25, planner=None) -> di
             elif name in OWN_SLOT:
                 outlines[pid] = _rect(dest, pallet)
             fp = geometry.loaded_footprint if name in LOADED else geometry.unloaded_footprint
-            clear = leg_clearance(leg.poses, getattr(leg, "curvatures_inv_m", None), fp, outlines)
+            clear = leg_clearance(leg.poses, fp, outlines)
             nearest = min(clear, key=lambda oid: clear[oid]["bound_m"]) if clear else None
             entry["stages"][name] = {"nearest": nearest, **({} if nearest is None else clear[nearest]),
                                      "all": clear}
