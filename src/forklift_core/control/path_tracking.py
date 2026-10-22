@@ -14,6 +14,21 @@ from numpy.typing import ArrayLike
 from forklift_core._validation import _finite_scalar
 
 
+# The leg end the 1.5 x remaining creep cannot finish (docs/plans/2026-10-22-leg-end-missed-stop.md). That cap only
+# approaches zero, and every receiver of a stop outside tolerance (the stall replan, the docking stop, the cusp stall,
+# observe's loose arrival) waits for the remaining length to reach zero; odometry noise or an overshoot used to get it
+# there. In the last LEG_END_SLACK_M of a leg whose end a straight run crosses beyond the tolerance (plus a margin),
+# or whose pose has fallen more than LEG_END_BEHIND_M behind the progress on the last segment, with the heading within
+# about 45 degrees of the end's, the speed cap is at least LEG_END_MIN_SPEED_MPS (within the cruise and path caps and
+# the speed that brakes in LEG_END_BEHIND_M). Provisional values: 10 mm/s is above the 0.05 rad/s (6 mm/s) under
+# which the engine's reported wheel rates were wrong; the real truck's deadband is not measured.
+LEG_END_SLACK_M = 0.004
+LEG_END_MIN_SPEED_MPS = 0.010
+LEG_END_ACROSS_MARGIN_M = 0.0005
+LEG_END_BEHIND_M = 0.001
+LEG_END_ALIGNED_COS = 0.7
+
+
 def _positive(name: str, value: float) -> None:
     if _finite_scalar(value, name) <= 0:
         raise ValueError(f"{name} must be finite and positive")
@@ -370,6 +385,34 @@ class RearAxlePathTracker:
         across = abs(float(np.dot(offset, [-heading[1], heading[0]])))
         return across <= tolerance and 0.0 <= along <= limit
 
+    def _leg_end_floor(
+        self, pose: np.ndarray, goal: np.ndarray, endpoint: int, remaining: float, position_tolerance: float
+    ) -> float:
+        """The speed floor for a leg end the 1.5 x remaining creep cannot finish (LEG_END_SLACK_M above), or 0.
+
+        (a) A straight run on the present heading crosses the end's normal more than the tolerance plus
+        LEG_END_ACROSS_MARGIN_M across it: an end a straight run brings inside keeps the old creep, so a floor that
+        switched off near the circle cannot carry an arrival past it. (b) The pose more than LEG_END_BEHIND_M behind
+        the progress, measured on the progress's own axis -- the leg's last segment, and only while the progress is
+        on it."""
+        heading = np.array([cos(goal[2]), sin(goal[2])])
+        offset = pose[:2] - goal[:2]
+        turn = _angle(float(pose[2] - goal[2]))
+        if cos(turn) < LEG_END_ALIGNED_COS:
+            return 0.0  # a floor would only move the truck, not the progress
+        direction = float(self._directions[endpoint])
+        to_normal = max(0.0, -direction * float(np.dot(offset, heading)))
+        across_end = abs(float(np.dot(offset, [-heading[1], heading[0]])) + direction * to_normal * tan(turn))
+        behind = 0.0
+        if self._segment == endpoint - 1:
+            axis = self._vectors[endpoint - 1] / self._lengths[endpoint - 1]
+            behind = float(np.dot(-offset, axis)) - remaining
+        if across_end <= position_tolerance + LEG_END_ACROSS_MARGIN_M and behind <= LEG_END_BEHIND_M:
+            return 0.0
+        cfg = self.config
+        return min(LEG_END_MIN_SPEED_MPS, cfg.cruise_speed_mps, float(self._speed_cap[self._segment + 1]),
+                   sqrt(2 * cfg.max_acceleration_mps2 * LEG_END_BEHIND_M))
+
     def update(
         self, pose_rear_axle: ArrayLike, signed_speed_mps: float, dt_s: float
     ) -> TrackingCommand:
@@ -379,6 +422,9 @@ class RearAxlePathTracker:
         A cusp is released only after a zero command and measured stopping speed.
         Failure latches on excessive deviation or endpoint heading mismatch; no
         elapsed-time heuristic converts stalled motion to success or failure.
+        A leg end the 1.5 x remaining creep cannot finish gets a speed floor in its
+        last LEG_END_SLACK_M (``_leg_end_floor``), so the remaining length reaches zero
+        and the caller's stop-outside-tolerance rules take it.
         """
         pose = np.asarray(pose_rear_axle, dtype=float)
         if pose.shape != (3,) or not np.isfinite(pose).all():
@@ -509,6 +555,8 @@ class RearAxlePathTracker:
                 1.5 * remaining,
                 float(self._speed_cap[self._segment + 1]),
             )
+            if 0.0 < remaining <= LEG_END_SLACK_M:
+                speed_limit = max(speed_limit, self._leg_end_floor(pose, goal, endpoint, remaining, position_tolerance))
             target_speed = float(direction * speed_limit)
             if (
                 target_speed * signed_speed_mps < 0
