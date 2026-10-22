@@ -25,6 +25,8 @@
 set -u
 OUT=${1:?the run directory}
 : "${SNAP:?the code checkout to run}" "${SCENE_DIR:?the scene files}" "${SCENE:?the scene name}"
+# Every path absolute before the cd into SNAP below (a relative one would name another directory there).
+OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
 MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}
@@ -39,6 +41,10 @@ esac
 SCENE_FILE=$SCENE_DIR/$NAME.json
 [ -f "$SCENE_FILE" ] || { echo "no scene file $SCENE_FILE (tools/riibotics_isaac_scenes.py --slot-markers writes the _m copies)"; exit 2; }
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2
+# A run directory is used once: an earlier run's bridge_ready would pass for this bridge's, its records would mix.
+if [ "${DRY_RUN:-0}" != 1 ] && { [ -e "$OUT/run" ] || [ -e "$OUT/bridge/bridge_ready" ]; }; then
+  echo "refusing: $OUT holds an earlier run"; exit 2
+fi
 mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
@@ -62,8 +68,10 @@ else
   CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   docker run -d --name "$NAME_B" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 -u "$(id -u):$(id -g)" \
     -e HOME=/tmp -v "$SNAP":/workspace:ro -v "$OUT/bridge":/out -v "$OUT/sock":/run/slam \
-    "${BRIDGE_IMAGE:-forklift/ros2-dev:jazzy}" bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" >/dev/null
-  trap 'docker rm -f "$NAME_B" >/dev/null 2>&1' EXIT
+    "${BRIDGE_IMAGE:-forklift/ros2-dev:jazzy}" bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" >/dev/null \
+    || { echo "bridge container did not start"; exit 1; }
+  # The bridge saves its records after the runner disconnects: stop it with time to do so before removing it.
+  trap 'docker stop -t "${BRIDGE_STOP_S:-60}" "$NAME_B" >/dev/null 2>&1; docker rm -f "$NAME_B" >/dev/null 2>&1' EXIT
   for i in $(seq 1 120); do [ -f "$OUT/bridge/bridge_ready" ] && break; sleep 1; done
   [ -f "$OUT/bridge/bridge_ready" ] || { echo "bridge not ready"; exit 1; }
   fi
@@ -88,5 +96,11 @@ fi
 # shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
 timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \
   --output "$OUT/run" > "$OUT/run.log" 2>&1
-echo "runner exit $? $(date -Is)"
-grep -c OUT_OF_DEVICE "$OUT/run.log" || true
+rc=$?
+echo "runner exit $rc $(date -Is)"
+echo "OUT_OF_DEVICE lines: $(grep -c OUT_OF_DEVICE "$OUT/run.log")"
+# The runner also records its own result code (Isaac can leave the process with 0 after a failure).
+if [ "$rc" -eq 0 ] && [ -f "$OUT/run/exit_code" ] && [ "$(tr -d '[:space:]' < "$OUT/run/exit_code")" != 0 ]; then
+  rc=$(tr -d '[:space:]' < "$OUT/run/exit_code"); echo "runner recorded exit code $rc"
+fi
+exit "$rc"

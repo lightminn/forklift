@@ -94,7 +94,43 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     finally:
         sys.argv = argv
         os.chdir(cwd)
-    assert parsed.layout == "scene"
+    assert parsed.layout == "scene" and parsed.kit_arguments == []  # every argument is the runner's own
+    # the settings every Riibotics run had before the defaults (the earlier riib.sbatch / riib_truth.sbatch)
+    assert (parsed.fps, parsed.max_sim_seconds, parsed.delivery_straight_m, parsed.alignment_straight_m,
+            parsed.withdrawal_m, parsed.insertion_reserve_m) == (60, 1500.0, 1.5, 2.1, 0.55, 0.016)
+    assert parsed.record_slam and parsed.return_home and parsed.obstacle_act and parsed.d7_planner
+    assert str(parsed.obstacle_layer).endswith("config/obstacle_layer_single.yaml")
+    if env.get("MODE") == "truth":
+        assert not parsed.use_perception and not parsed.d7_docking and parsed.recognition == "off"
+    else:
+        assert parsed.use_perception and parsed.d7_docking and parsed.planning_target == "perception"
+        assert (parsed.recognition, parsed.recognition_proposals) == ("far", "learned")
+        assert parsed.perception_mount == "carriage_low_measured"
     if not env:
         assert parsed.near_capture_expected == "on" and parsed.near_capture_lower == "waive_far_confirmed"
         assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(0.10)
+    else:
+        assert parsed.near_capture_expected == "off" and parsed.near_capture_lower == "gate"
+
+
+def test_paths_are_made_absolute_before_the_cd(tmp_path):
+    out = dry_run(tmp_path, SCENE_DIR=os.path.relpath(tmp_path / "scenes"))
+    assert out.returncode == 0, out.stderr
+    args = args_of(out)
+    assert Path(args[args.index("--scene-file") + 1]).is_absolute()
+
+
+def test_a_used_run_directory_is_refused(tmp_path):
+    (tmp_path / "out/run").mkdir(parents=True)
+    env = {"DRY_RUN": "0", "MODE": "truth"}
+    out = dry_run(tmp_path, **env)
+    assert out.returncode == 2 and "earlier run" in out.stdout
+
+
+def test_the_runner_exit_code_is_the_jobs(tmp_path):
+    # a fake runner that fails: the launcher must not report success
+    fake = tmp_path / "fakepy"
+    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\nexit 7\n")
+    fake.chmod(0o755)
+    out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(fake))
+    assert out.returncode == 7, (out.returncode, out.stdout, out.stderr)

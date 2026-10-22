@@ -19,6 +19,8 @@ before that fix.
 | 1 | complete, 1.15 cm, ok ×2 | complete, 1.91 cm, ok ×2 |
 | 2 | complete, 1.21 cm, ok ×3 | transport tracking timeout (leg-end creep, the fix's target) |
 
-The seed 0 near capture that failed without the near options passes with them. Seed 2's creep did not recur here; with
+The seed 0 near capture that failed without the near options passes with them. The two columns come from different
+snapshots (riib_3f68edf vs riib_395ec642, main moved in between), so this is an observed difference, not proof that
+the near options alone made it. Seed 2's creep did not recur here; with
 the fix not yet merged that is one run's outcome, not evidence about the creep. After `fix/leg-end-creep` merges,
 the same three seeds on the merged code are the comparison to make.
