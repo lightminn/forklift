@@ -88,4 +88,6 @@
   - 구현은 3 회차에서 수렴했다(새 P1/P2 없음). 메모리 반경의 셀 양자화가 2 회차 P2 였다.
   - Isaac 해석은 교차검증에서 새 P1 없이 P2 1 건(도킹 기준 호환성, 위 CPU 반례)이 나왔고, 선택지 (다)에 동의했다.
 - 시험: `tests/unit/perception/test_a2_range_bound.py`, `tests/unit/test_isaac_obstacle_layer_a2.py`, `tests/unit/tools/test_riib_scene_launcher.py`.
+- ws1 재실행(953eeadf, 격리 수정 뒤): `test_far_live_worker.py`·`test_isaac_obstacle_layer.py`·`test_isaac_obstacle_layer_a2.py` 61 passed.
+  전체 실행의 새 실패 3 건이 모두 해소됐다(남은 것은 알려진 ws1 전용 10 건).
 - ws1 경로: `test_runs/replay_gate/p3a_907f12ed`, `test_runs/riibotics/p3a_{a2,const}_*`, 스냅숏 `snapshots/p3a_907f12ed`.
