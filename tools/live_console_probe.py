@@ -52,6 +52,16 @@ class Probe:
         self.save_frames = None  # (directory, how many) for the marker scenario
         self.queue = None  # the queue scenario's tools/mission_queue.MissionQueue: fed every state and result
         self.queue_has_lease = False  # the lease as console/web/js/protocol.js holds it (a state may take it away)
+        self.queue_asking = None  # {key, entry} of the submit out: its answer goes to the queue as it is received
+        self.queue_forgotten: set = set()  # request ids the queue dropped (D6 forget): never sent again
+
+    def queue_apply(self, out) -> None:
+        """queuewire apply(): a stop that forgets the submit out ends its resending at once (Codex PR 4 r3 P2-1)."""
+        if out and out.get("forget") is not None:
+            self.queue_forgotten.add(out["forget"])
+            if self.queue_asking is not None and self.queue_asking["key"]["request_id"] == out["forget"]:
+                self.queue_asking["entry"]["submit"] = {"t": "forgotten"}
+                self.queue_asking = None
 
     def event(self, name, **fields):
         self.report.setdefault("events", []).append({"mono": time.monotonic(), "event": name, **fields})
@@ -103,11 +113,12 @@ class Probe:
                         had_ = self.queue_has_lease
                         if msg.get("lease") and msg["lease"].get("holder") != self.client_id:
                             self.queue_has_lease = False  # protocol.js: the holder is not this client
-                        self.queue.on_state(msg, now_ms_)
+                        out_ = self.queue.on_state(msg, now_ms_)
                         if had_ and not self.queue_has_lease:
-                            self.queue.on_lease_lost()
+                            self.queue_apply(self.queue.on_lease_lost())
                         if msg.get("last_result"):
                             self.queue.on_result(msg["last_result"], now_ms_)
+                        self.queue_apply(out_)
                     self.states.append({"mono": time.monotonic(), "mode": msg.get("mode"),
                                         "stop_kind": msg.get("stop_kind"), "armed": msg.get("armed"),
                                         "applied": msg.get("applied"), "speed": msg.get("rear_axle_speed_mps"),
@@ -124,6 +135,13 @@ class Probe:
                             self.queue.on_result(r_, time.monotonic() * 1000.0)
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
+                    asking_ = self.queue_asking
+                    if self.queue is not None and asking_ is not None and \
+                            msg.get("request_id") == asking_["key"]["request_id"]:
+                        # the answer into the queue in the order it came, among the states (Codex PR 4 r3 P2-2)
+                        asking_["entry"]["submit"] = msg
+                        self.queue_asking = None
+                        self.queue_apply(self.queue.on_answer(asking_["key"], msg, time.monotonic() * 1000.0))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -203,10 +221,10 @@ class Probe:
         msg.setdefault("control_gen", self.control_gen)
         raw = json.dumps(msg)
         sent = time.monotonic()
-        while self.closed_code is None:
+        while self.closed_code is None and request_id not in self.queue_forgotten:
             await self.ws.send(raw)
             end = time.monotonic() + retry_s
-            while time.monotonic() < end:
+            while time.monotonic() < end and request_id not in self.queue_forgotten:
                 if request_id in self.replies:
                     at, reply = self.replies[request_id]
                     self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
@@ -1098,7 +1116,7 @@ async def queue_scenario(p: Probe, args):
     q = p.queue = mission_queue.MissionQueue()
     p.queue_has_lease = p.lease_id is not None
     q.on_welcome(p.epoch)
-    asking = None  # (key, task) of the submit out
+    resend = None  # the resend task of the submit out
     ids = {"n": 0}
 
     def new_id():
@@ -1115,8 +1133,8 @@ async def queue_scenario(p: Probe, args):
         now_ms = time.monotonic() * 1000.0
         if p.closed_code is not None and not closed_seen:
             closed_seen = True
-            q.on_disconnect()
-        q.tick(now_ms)
+            p.queue_apply(q.on_disconnect())
+        p.queue_apply(q.tick(now_ms))
         for entry in p.report["missions_run"]:  # each submission's result, as the queue applied it
             if "result" not in entry and (entry.get("submit") or {}).get("t") == "ack":
                 mid_ = entry["submit"].get("mission_id")
@@ -1124,20 +1142,10 @@ async def queue_scenario(p: Probe, args):
                 if got_ is not None:
                     entry["result"] = {"mission_id": mid_, "outcome": got_["outcome"], "reason": got_["reason"]}
                     entry["ended_mono"] = time.monotonic()
-        if q.run != "running" and q.current is None and asking is None:
+        if q.run != "running" and q.current is None and p.queue_asking is None:
             break  # stopped, nothing out: the queue's end here
         if q.run != "running" and q.phase == "in_mission" and closed_seen:
             break  # its result can no longer come
-        if asking is not None and asking[1].done():
-            key_, task_, entry_ = asking
-            entry_["submit"] = task_.result()
-            if entry_["submit"] is not None:
-                q.on_answer(key_, entry_["submit"], time.monotonic() * 1000.0)  # a late one is ignored by the queue
-            asking = None
-        if asking is not None and q.run != "running" and q.current is None:
-            asking[1].cancel()  # the queue stopped while it was out (it forgot the request, D6): no answer needed
-            asking[2]["submit"] = {"t": "unanswered"}
-            asking = None
         ctx = {"connected": p.closed_code is None, "welcomed": p.closed_code is None, "has_lease": p.queue_has_lease,
                "state": p.state, "targets": p.targets}
         n = q.next(ctx, now_ms, new_id)
@@ -1147,14 +1155,14 @@ async def queue_scenario(p: Probe, args):
             entry = {"pallet_id": s_["pallet_id"], "destination_id": s_["destination_id"], "item_id": s_["item_id"],
                      "submitted_mono": time.monotonic()}
             p.report["missions_run"].append(entry)
-            task = asyncio.ensure_future(p.request_resent(
+            p.queue_asking = {"key": key, "entry": entry}  # answered through _read
+            resend = asyncio.ensure_future(p.request_resent(
                 "mission_submit", s_["request_id"], pallet_id=s_["pallet_id"], destination_id=s_["destination_id"],
                 targets_revision=s_["targets_revision"]))
-            asking = (key, task, entry)
         await p.echo()
         await asyncio.sleep(0.25)
-    if asking is not None:
-        asking[1].cancel()
+    if resend is not None and not resend.done():
+        resend.cancel()
     for entry in p.report["missions_run"]:
         if "result" not in entry:
             entry["result_not_this_mission"] = True  # the queue never applied a result for it
