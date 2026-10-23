@@ -125,14 +125,94 @@
   - (c) seed 를 늘려 조건 2 의 실패율을 더 정확히 재는 것. 다만 seed 를 늘려도 기존 `on_s2` 가 조건 3 을 막는 것은 그대로다.
   - 조건이나 허용값을 바꾸는 것은 별도 결정이다.
 
+## 4. seed 확대(2026-10-23–24, 선택지 c)
+
+사용자 결정(총괄 경유): seed 를 늘려 조건 2 의 실패율을 다시 잰다. 근거리 대조 초과가 얼마나 드문지와 새 실패 유형이 있는지 본다.
+- (a) 근거리 대조를 팔레트 기준으로 바꾸는 것은 D5 v11 재개 때 한다.
+- (b) hold yaw 드리프트는 보류한다.
+- 기본값은 reported 그대로다.
+
+### 실행
+
+- seed 6–11 을 두 팔 × 검사 끔·켬으로 24 회 더 돌렸다. 스냅숏 `jao2_8c80683a` 와 인자는 3 절과 같다.
+  - 출력은 ws1 `test_runs/jao3/jao3_{rp,tq}_{off,on}_s<seed>` 다. 성공한 실행은 `recognition/frame_*.npz` 를 실행 직후 지웠다. 판정은 `result.json`·`slam_log.npz`·`slam_records.json` 만 읽는다.
+  - 이 24 회는 reported 를 먼저(06:26–08:46), team-spec 을 나중(08:47–09:18)에 돌렸다. 시간대가 갈려 전체 실패율 비교에 교란으로 남는다.
+- Isaac 실행은 같은 코드·seed 에서도 갈라질 수 있다(V-G2 세션 확인). 그래서 실패 쌍 on_s2·on_s7 을 두 팔 교대로 3 번씩 반복했다(`jao3r{1,2,3}_{rp,tq}_on_s{2,7}`).
+  - 12 회 시도 중 유효는 8 회다. 1 회차 4 개는 환경 오염으로 뺐다. 시작할 때 GPU0 VRAM 이 이미 13.5/16.3 GB 차 있었고, 1 분 안에 segfault 2·`acquisition_outside_capture` 2 로 끝났다. 개별 원인은 확정하지 않았다.
+  - 반복은 아래 n=12 에 더하지 않는다.
+- 분석: ws1 `test_runs/jao3/jao_ext.py`(실패 유형, 근거리 대조 거리 = `near_check.target` 대 `record.centre_xy`)와 `jao2_avail.py jao3 6,…,11`.
+
+### 사이클(seed 0–11, 각 12 회)
+
+| 조건 | reported | team-spec |
+|---|---|---|
+| 검사 끔 | 10/12. s5 운반 `cusp_position_stall`, s6 observe `near_capture_failed:…:no_opening_pattern` | 11/12. s9 observe `near_capture_failed:…:no_opening_pattern` |
+| 검사 켬 | 11/12. s8 lift `Excessive body tilt` | 10/12. s2 `bottom_deck_target_mismatch`, s7 return_home `obstacle_no_progress` |
+
+- 조건 2 는 seed 0–11 에서도 불충족이다. 검사 끔은 실패 2 → 1 이지만, 검사 켬은 1 → 2 이고 team-spec 의 두 유형이 같은 조건의 reported 에 없다.
+- `no_opening_pattern` 은 두 팔에 모두 있어 team-spec 의 새 유형이 아니다.
+- 조건 2 는 미리 정한 횟수·유형 기준이라 통계적 유의성과는 별개다.
+
+### 근거리 대조 거리(검사 켬, 허용 0.15 m)
+
+| | 실행 | 범위 | 중앙값 | 0.15 m 초과 |
+|---|---|---|---|---|
+| reported | 12 | 0.018–0.103 m | 0.053 m | 0 |
+| team-spec | 12 | 0.006–0.158 m | 0.042 m | 1(s2) |
+
+- team-spec 에서는 s7 0.122 m, s9 0.124 m 도 크다.
+- 축 오차는 모두 0.034 rad 이하다(허용 0.262).
+- 단측 95 % Clopper–Pearson 상한은 team-spec 1/12 → 33.9 %, reported 0/12 → 22.1 % 다. 독립·동일분포를 가정한 참고값이고, 1/12 대 0/12 로는 두 팔의 차이도 동등성도 보이지 못한다.
+
+### 반복(유효 8 회)
+
+| 실행 | 결과 | slam_log.npz SHA-256 |
+|---|---|---|
+| tq_on_s2 | 2/2 같은 실패(0.1576 m) | `f2d7d53f…`. 첫 판정·3 절 실행과 같다 |
+| tq_on_s7 | 2/2 같은 실패 | `47bb15d5…`. 본 실행과 같다 |
+| rp_on_s7 | 2/2 성공(0.0962 m) | `021e67ac…`. 본 실행과 같다 |
+| rp_on_s2 | 2/2 성공(0.0478, 0.0246 m) | 매번 다르다(`734db45a…`, `887c09f3…`; 3 절 `990842eb…`) |
+
+- team-spec 의 두 실패는 유효 반복에서 같은 기록 궤적으로 재현됐다. 일회성 흔들림으로 보기는 어렵다. 다만 이것으로 비결정성의 가능성을 배제하지는 못한다.
+- reported on_s2 는 실행마다 궤적이 갈라지지만 3/3 통과했다.
+
+### 새 실패: tq_on_s7 다리 끝 교착(#105 의 남은 결함)
+
+- **멈춘 상태.** return_home 마지막 다리(후진, 끝 (−2.34, 0, 0))의 끝에서 섰다.
+  - 남은 길이 0.024 mm, 위치 오차 8.35 mm(허용 8 mm), yaw 오차 0.057 rad.
+  - 명령 −3.6×10⁻⁵ m/s, 진행도는 약 53 s 동안 고정.
+  - 60 s 진행 감시(마지막 1 m 진행 갱신부터 셈)가 `obstacle_no_progress` 를 냈다. 장애물이 원인이라는 증거는 아니다.
+- **하한이 꺼진 이유.** `_leg_end_floor` 의 입력은 across_end 8.32 mm 가 허용+여유(8 + 0.5 mm) 안이고, behind 0.29 mm 가 1 mm 안이다. 그래서 하한이 0 이다.
+- **도착 판정도 안 된다.** 위치 오차 8.35 mm 가 허용 8 mm 를 넘는다. 여유 0.5 mm 띠에서는 하한도 도착 판정도 받지 않는다.
+- Codex 가 이 상태를 추종기에 넣어 기록 명령을 그대로 재현했다. 1000 회 갱신해도 `tracking` 그대로였다.
+- **다른 수신자도 받지 않는다.** 정체 재계획은 명령 0 과 남은 길이 ≤ 1 µm 를 요구한다. cusp 처리는 최종 목표에 적용되지 않는다. 장애물 차단 복구는 occupied 차단을 요구한다.
+- **오도메트리 조합과의 관계.** 제어 자세는 네 값 사이에서만 움직였고 진행도는 고정됐다. 정지 중 계수가 고정되는 team-spec 이라 이 띠에서 빠져나오지 못했다. 같은 seed 의 reported 는 다른 궤적으로 완주했다.
+- **수정 방향(구현 안 함).** 도착 허용을 늘리는 것은 답이 아니다(yaw 오차 0.057 rad 도 허용 0.03 rad 를 넘는다). 0.5 mm 여유를 그냥 지우는 것도 정상 경계 도착 보호와 부딪치니 재검증이 필요하다. 작은 양의 남은 길이와 미소 명령에서 멈춘 최종 목표를 복구 경로(정체 재계획 등)가 받게 하는 쪽이 맞다. 기존 경계 시험은 데드밴드 0 이다.
+
+### 가용성(seed 6–11, A1–A4)
+
+- A1 은 8 쌍 0.966, A2 는 0.0 대 5.19 s, A3 는 3 대 16, A4 는 0 대 0 이다. 모두 통과다.
+
+### 정리
+
+- 조건 2·3 은 여전히 불충족이다.
+  - team-spec 검사 켬의 실패 둘은 유효 반복에서 같은 기록 궤적으로 재현된 실패다.
+  - on_s2 는 근거리 대조 허용 문제다((a), D5 v11 때).
+  - on_s7 은 #105 다리 끝 하한의 0.5 mm 띠 교착이다(별건 수정 필요).
+- 근거리 초과는 12 회 중 1 회라, 이 표본으로 드물다/잦다를 가르지 못한다.
+- 기본값은 reported 그대로다.
+
 ## 재현
 
 - ws1 `test_runs/bd_isaac/bd.sbatch`, 스냅숏 `jao2_8c80683a`
   - `TAG=jao2_{rp,tq}_{off,on}_s<seed> SEED=<seed> MAX_SIM=1500 ENCODER_MODEL={reported,team_spec_quantized} EXTRA_ARGS="--bottom-deck-check {off,on} --near-capture-redraw always"`
 - 측정: ws1 `test_runs/bd_isaac/jao2_measure.sbatch jao2_8c80683a`(표 SHA, `age_use.py`, `odom_drift_terms.py`, `jao_compare.py`, `jao2_avail.py`, `standstill_noise.py`). 로그 `jao2_meas-<job>.log`, 결과 `jao2_age_use_{tq,rp}.txt`, `jao2_drift.json`.
 - on_s2 분해: ws1 `test_runs/bd_isaac/slam_split.py`.
+- seed 확대(4 절): ws1 `test_runs/jao3/bd.sbatch`(bd_isaac 판에서 출력 폴더만 바꾸고, 성공 실행의 인식 프레임을 지운다), `TAG=jao3_{rp,tq}_{off,on}_s<6–11>` 와 반복 `jao3r<k>_{rp,tq}_on_s{2,7}`. 분석은 `jao3/jao_ext.py`, `jao3/jao2_avail.py jao3 6,7,8,9,10,11`.
 
 ## 검토 기록
+
+- 4 절(Codex 새 스레드): s7 진단과 조건 2 불충족에 동의했다. s7 상태를 추종기에 넣어 명령을 재현했다. 보정을 반영했다: 정체 53 s 와 감시 기준, 다른 수신자가 받지 않는 이유, yaw 허용, 수정 방향, 중앙값 계산(스크립트의 상위 중앙 순서통계량 대신 통상 중앙값), "결정성 증명" 대신 "유효 반복에서 재현", 1 회차는 원인 미확정 환경 오염.
 
 - 나이 표 계획: 계획서 6 절(Codex 5 회 수렴, agy 독립 검토, 직접 재계산).
 - 이 문서와 판정(Codex 새 스레드): ws1 접속이 중간에 막혀 원자료를 로컬로 복사해 넘겼다. 24 회를 독립 재계산해 판정표 수치가 반올림 안에서 맞음을 확인했고, "새 P1/P2 없음, 승격 보류 결론 타당" 이었다. P3 3 건을 반영했다: 근거리 거리 0.1576 m 표기, 2 절 분포가 첫 판정 실행임을 명시(이번 실행 값 추가), "엔코더 모형과 무관" 을 "이 궤적에서 양자화 단독 결함으로 설명되지 않음" 으로 좁힘. 조건 3 해석과 seed 확대의 한계, reported 궤적 분기(10.74 s, #105 하한)도 Codex 의 확인을 반영했다.
