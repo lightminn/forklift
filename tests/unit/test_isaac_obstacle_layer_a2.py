@@ -14,10 +14,14 @@ from forklift_core.perception.obstacle_grid import AgeErrorTable, a2_spec_cut_m
 from forklift_core.planning.geometry import Bounds, Footprint
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("obstacle_layer", ROOT / "sim/isaac/obstacle_layer.py")
-MODULE = importlib.util.module_from_spec(SPEC)
-sys.modules["obstacle_layer"] = MODULE
-SPEC.loader.exec_module(MODULE)
+# one module object per session: test_isaac_obstacle_layer.py pickles its classes, so a second copy registered under the
+# same name breaks it (ws1 pytest 2026-10-23)
+MODULE = sys.modules.get("obstacle_layer")
+if MODULE is None:
+    SPEC = importlib.util.spec_from_file_location("obstacle_layer", ROOT / "sim/isaac/obstacle_layer.py")
+    MODULE = importlib.util.module_from_spec(SPEC)
+    sys.modules["obstacle_layer"] = MODULE
+    SPEC.loader.exec_module(MODULE)
 AGE = json.loads((ROOT / "config/obstacle_odometry_age.json").read_text())
 TABLE = AgeErrorTable(tuple(AGE["ages_s"]), tuple(AGE["cumulative_position_m"]), tuple(AGE["cumulative_yaw_rad"]))
 
