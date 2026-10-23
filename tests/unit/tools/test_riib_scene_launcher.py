@@ -47,8 +47,8 @@ def test_the_defaults_turn_the_near_options_and_the_marker_copy_on(tmp_path):
     assert contains(args, NEAR)
     assert args[args.index("--scene-file") + 1].endswith("line_2_m.json")
     assert contains(args, ["--recognition", "far"]) and contains(args, ["--d7-docking"])
-    assert (tmp_path / "out/riib_defaults.txt").read_text().startswith("MODE=slam NEAR=on MARKERS=on RACK=on KEEPOUT=0.15")
-    assert contains(args, ["--lidar-keepout-m", "0.15"])
+    assert (tmp_path / "out/riib_defaults.txt").read_text().startswith("MODE=slam NEAR=on MARKERS=on RACK=on KEEPOUT=0 ")
+    assert contains(args, ["--lidar-keepout-m", "0"])  # P1c off by default until P6 (user decision 2026-10-23)
 
 
 def test_the_older_combinations_are_chosen_explicitly(tmp_path):
@@ -73,8 +73,8 @@ def test_the_aisle_runs_its_rack_copy_by_default_and_the_plain_scene_with_rack_o
     assert plain[plain.index("--scene-file") + 1].endswith("aisle.json")
 
 
-def test_the_keepout_can_be_set_or_turned_off(tmp_path):
-    assert contains(args_of(dry_run(tmp_path, KEEPOUT="0")), ["--lidar-keepout-m", "0"])
+def test_the_keepout_can_be_turned_on(tmp_path):
+    assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.15")), ["--lidar-keepout-m", "0.15"])
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
 
 
