@@ -1117,7 +1117,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-22 open-zone docking D2: the sim-only weak-direction docking acceptance; off before.
                               "docking_acceptance": "information",
                               # 2026-10-23 scene replan plan 4: the diagnostic control-pose shift at a cusp; off before.
-                              "inject_cusp_offset_m": None}
+                              "inject_cusp_offset_m": None,
+                              # 2026-10-24 P6: the permission-stop replan; a scene layout's only, so on reproduces
+                              # every earlier (bay layout) measurement run.
+                              "permit_stop_replan": "on"}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
