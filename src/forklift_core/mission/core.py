@@ -2178,9 +2178,15 @@ class MissionCore:
                 or ms.observe_stall_ticks >= 120
             )
         )
-        if observe_stall_ and slam["stop_now"] and self.scene_far_observe():
-            # Scene-mode replan plan 2.3 (B): the first far observation's stall tries the remaining observation
-            # candidates before the same waypoint is planned again.
+        observe_miss = (
+            observe_stall_
+            and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
+            < OBSERVE_REPLANS_PER_LEG
+        )
+        if observe_stall_ and not observe_miss and slam["stop_now"] and self.scene_far_observe():
+            # Scene-mode replan plan 2.3 (B, 6판): the waypoint's own replans are spent -- the first far observation
+            # takes the remaining observation candidates, one per tick, instead of standing to the timeout; with
+            # none left it ends. Called only here, so nothing (not even the release) happens while that budget lasts.
             took_ = self.scene_observe_candidate(t, rear)
             rear = took_.rear  # released or not, the pose every later plan of this tick starts from
             if took_.installed:
@@ -2190,13 +2196,6 @@ class MissionCore:
                 return SimpleNamespace(tracking=tracking, rear=rear)
             if took_.tried:  # one candidate planned this tick (live keeps its tick short): the next on the next
                 return SimpleNamespace(tracking=replace(tracking, status="braking", speed_mps=0.0), rear=rear)
-        observe_miss = (
-            observe_stall_
-            and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
-            < OBSERVE_REPLANS_PER_LEG
-        )
-        if observe_stall_ and not observe_miss and slam["stop_now"] and self.scene_far_observe():
-            # B: no candidate left and the waypoint's own budget spent -- end it, rather than stand to the timeout.
             self.state.setdefault("scene_replans", []).append(
                 {"time_s": float(t), "trigger": "observe_stall", "phase": "observe", "outcome": "exhausted",
                  "rear": [float(v) for v in rear], "candidate_index": ms.next_candidate_index})

@@ -431,3 +431,18 @@ def test_a_correction_before_the_phase_has_a_tracker_starts_its_own_record():
     core.scene_correction_note(0.5, 0.005, 0.02)
     assert core.scene_correction["net_max_m"] == pytest.approx(0.01)
     assert core.scene_correction["reply_max_m"] == pytest.approx(0.02)
+
+
+def test_the_far_observation_takes_other_candidates_only_after_the_waypoint_s_own_replans():
+    """Plan 2.3 (6판, Isaac sr_0f88b91): B before the same-waypoint replan lost two first missions the baseline completed;
+    it runs only once that budget is spent, and the whole call (its release too) waits for it."""
+    import inspect
+
+    from forklift_core.mission.core import MissionCore
+
+    body = inspect.getsource(MissionCore.cusp_and_observe_recovery)
+    miss = body.index("observe_miss = (")
+    gate = body.index("if observe_stall_ and not observe_miss and slam[\"stop_now\"] and self.scene_far_observe():")
+    assert body.count("self.scene_observe_candidate(") == 1
+    assert miss < gate < body.index("self.scene_observe_candidate(") < body.index('require(False, "observe:stall_exhausted")')
+    assert body.index("self.scene_observe_candidate(") > body.index("observe_miss = (")
