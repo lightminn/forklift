@@ -244,6 +244,8 @@ class MissionCore:
         self.scene_mail = None  # the device's plan answer: ("ok", result) | ("ok_fail", status) | ("dropped", why)
         self.scene_raised = False  # a request raised in this tick's follower: the rest of the tick stands
         self.permit_stop_since = None  # P6: the held zero limit's stretch {since_s, last_s, key} or None
+        self.permit_stop_raised_key = None  # P6: the (phase, tracker) a request was raised on
+        self.permit_stop_spent = False  # P6: the trigger's budget spent this mission
         self.scene_escape: dict | None = None  # the escape prefix driven for a request
         self.scene_correction: dict = {}  # the largest SLAM correction contribution on the current gear leg
 
@@ -1300,16 +1302,19 @@ class MissionCore:
                                                        current_blocked_rectangles)
 
         options, obstacle = self.options, self.obstacle
+        tracker_ = self.trackers.get(self.ms.phase)
+        key_ = (self.ms.phase, id(tracker_))
         watching = (
             getattr(options, "permit_stop_replan", "off") == "on" and not getattr(options, "grid_planning", False)
             and getattr(options, "obstacle_act", False) and acting and allowed == 0.0 and why == "occupied"
             and obstacle is not None and not self.scene_replan.active() and self.scene_replan_allowed()
+            # one request per leg and tracker: a request handed back standing leaves the leg to the permission as
+            # without the trigger (a replan that installed starts a new tracker); none after a spent budget
+            and key_ != self.permit_stop_raised_key and not self.permit_stop_spent
         )
         if not watching:
             self.permit_stop_since = None
             return
-        tracker_ = self.trackers.get(self.ms.phase)
-        key_ = (self.ms.phase, id(tracker_))
         last_ = self.permit_stop_since
         if last_ is None or last_["key"] != key_ or t - last_["last_s"] > PERMIT_STOP_GAP_S:
             # A new stretch: the first tick, another leg or tracker (a replan installed one), or a gap in the watch's
@@ -1334,12 +1339,17 @@ class MissionCore:
                 kappa=float(hooks_.held_kappa()),
                 speed_cap_mps=float(tr_.config.cruise_speed_mps) if tr_ is not None else 0.18)
 
+        self.permit_stop_raised_key = key_
         why_ = self.scene_replan_request(
             t, "permit_stop", rear=rear,
             extra_obstacles_fn=obstacles_,
             clearance_m=float(options.planner_config.clearance_m) + PERMIT_STOP_CLEARANCE_ADD_M,
             detail={"why": why, "since_s": float(since_), "held_s": float(held_)})
-        self.hooks.require(why_ is None, why_ or "")
+        if why_ is not None:
+            # A spent budget (the device recorded it): the truck stands under the permission as without the trigger
+            # for the rest of the mission -- a stop that may clear never ends the mission (Isaac p6_24f83a14).
+            self.permit_stop_spent = True
+            self.scene_raised = False
 
     def blocked_replan(self, t: float, rear, kappa: float, requested_speed: float) -> SimpleNamespace:
         """Stop, replan, resume (plan D4) once the truck has stood blocked for a second or a replan is forced:
@@ -6669,6 +6679,7 @@ class MissionCore:
         self.scene_replan.reset()  # a mission's budget (never a tracker's or a pause's)
         self.scene_mail, self.scene_raised, self.scene_escape, self.scene_correction = None, False, None, {}
         self.permit_stop_since = None  # P6: a new mission starts its own watch
+        self.permit_stop_raised_key, self.permit_stop_spent = None, False
         return records
 
     def hold_slam(self, t: float, *, held_frame_pallet: bool) -> None:

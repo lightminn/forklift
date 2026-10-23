@@ -226,13 +226,29 @@ def test_nothing_is_raised_off_outside_a_scene_on_a_grid_plan_or_while_the_devic
     assert state["scene_replans"][0]["ignored"] == []  # not even noted: the watch waits for the device
 
 
-def test_a_spent_budget_ends_the_mission_with_the_device_s_reason():
+def test_a_spent_budget_stops_the_watch_for_the_mission_without_ending_it():
     core, ms, state, *_ = make()
     with_layer(core, Layer(snapshot(set())))
     core.scene_replan.used_by_trigger["permit_stop"] = core.scene_replan.config.budget_per_trigger
-    with pytest.raises(RuntimeError, match="scene_replan_exhausted:permit_stop"):
-        hold(core, 10.0, PERMIT_STOP_S + 0.2)
-    assert classify("scene_replan_exhausted:permit_stop") == MISSION
+    hold(core, 10.0, PERMIT_STOP_S + 0.2)  # no RuntimeError: the mission goes on standing
+    assert state["scene_replans"][-1]["outcome"] == "exhausted" and core.permit_stop_spent
+    core.trackers["transport"] = Straight()  # even on another leg
+    hold(core, 20.0, PERMIT_STOP_S + 1.0)
+    assert len(state["scene_replans"]) == 1
+    assert classify("scene_replan_exhausted:permit_stop") == MISSION  # the reason is still a mission's, if raised
+
+
+def test_one_request_per_leg_a_request_handed_back_leaves_the_leg_to_the_permission():
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    hold(core, 10.0, PERMIT_STOP_S + 0.1)
+    assert len(state["scene_replans"]) == 1
+    core.scene_replan.abort("handed_back")  # as a standing-safe end: the same tracker, nothing installed
+    hold(core, 20.0, 2 * PERMIT_STOP_S)
+    assert len(state["scene_replans"]) == 1
+    core.trackers["transport"] = Straight()  # a replan installed a new tracker: watched again
+    hold(core, 30.0, PERMIT_STOP_S + 0.1)
+    assert len(state["scene_replans"]) == 2
 
 
 def test_an_old_record_s_options_without_the_switch_keep_it_off():

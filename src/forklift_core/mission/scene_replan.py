@@ -41,6 +41,10 @@ class SceneReplanConfig:
     represteers_per_request: int = 2
     escapes_per_request: int = 1
     permit_wait_s: float = 3.0  # 7판: a candidate the permission does not pass yet is re-checked standing this long
+    # P6 (permission-clearance plan, Isaac p6_24f83a14): a trigger whose stop may clear on its own -- a request of it
+    # that ends before anything was installed hands the tick back standing instead of ending the mission, and gives
+    # its share of the mission's total back (the follower's own trigger budget is not spent on it).
+    standing_safe_triggers: tuple = ("permit_stop",)
 
 
 @dataclass
@@ -116,7 +120,7 @@ class SceneReplan:
         self.request_ = {"t0": float(t), "paused_s": 0.0, "trigger": trigger, "extra_fn": extra_obstacles_fn,
                          "clearance_m": clearance_m, "released": False, "escapes": 0, "extra": (),
                          "target": None, "presteer_since": None, "permit_since": None, "resume_since": None,
-                         "result": None, "seen": None, "stretch": 0, "record": line}
+                         "result": None, "seen": None, "stretch": 0, "record": line, "changed": False}
         self._go("wait_stop", t)
         return None
 
@@ -127,7 +131,17 @@ class SceneReplan:
             self.request_["record"]["states"].append([state, float(t)])
 
     def _end(self, outcome: str, reason: str | None) -> StepResult:
-        self.request_["record"]["outcome"] = outcome
+        r = self.request_
+        r["record"]["outcome"] = outcome
+        if r["trigger"] in self.config.standing_safe_triggers and not r["changed"]:
+            # Nothing installed or driven: the follower's own tracker and path stand as before the request, so the
+            # truck goes back to standing under the permission (a stop that clears goes on) -- never worse than
+            # without the trigger. The mission's total is given back.
+            r["record"].update(mission_end=False, reason=reason)
+            self.used_total = max(0, self.used_total - 1)
+            self.request_, self.state = None, None
+            return StepResult(owned=False)
+        r["record"]["mission_end"] = True
         self.request_, self.state = None, None
         return StepResult(owned=True, output="hold", end=reason)
 
@@ -200,6 +214,7 @@ class SceneReplan:
                         if path is None:
                             return self._end("failed", f"scene_replan_failed:{trigger}:invalid_start")
                         r["escapes"] += 1
+                        r["changed"] = True
                         ports.escape_install(path)
                         r["record"]["escape"] = "running"
                         self._go("escape", t)
@@ -229,6 +244,7 @@ class SceneReplan:
                     out = self._drop(t, "wait_jobs")
                     return out or hold
                 if status in ("arrived", "cusp_pending"):
+                    r["changed"] = True
                     ports.install(value)  # its own rule takes it from here (arrival, the cusp heading hold)
                     return self._hand_back()
                 if not candidate.get("ok"):
@@ -237,6 +253,7 @@ class SceneReplan:
                         self._note_wait(t, "candidate", candidate.get("why"))
                         return hold
                     return self._end("refused", f"scene_replan_refused:{trigger}:{candidate.get('why')}")
+                r["changed"] = True
                 ports.install(value)
                 r["target"], r["presteer_since"] = candidate.get("steer"), float(t)
                 self._go("presteer", t)

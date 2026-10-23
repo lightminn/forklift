@@ -142,8 +142,73 @@ def test_the_extra_obstacles_are_read_after_the_release_and_an_error_ends_the_at
 
     _ask(dev2, trigger="permit_stop", extra_obstacles_fn=broken)
     steps = _run(dev2, Ports())
-    assert steps[-1].end == "scene_replan_failed:permit_stop:obstacles_error"
-    assert records2[-1]["outcome"] == "failed"
+    # P6: a permit_stop request ending before any install hands the tick back standing (the mission goes on)
+    assert steps[-1].owned is False and steps[-1].end is None
+    assert records2[-1]["outcome"] == "failed" and records2[-1]["mission_end"] is False
+    assert records2[-1]["reason"] == "scene_replan_failed:permit_stop:obstacles_error"
+
+
+# ---- P6 (permission-clearance plan, Isaac p6_24f83a14): a standing-safe trigger's failure before an install ----
+
+def _permit(dev, **kw):
+    return _ask(dev, trigger="permit_stop", extra_obstacles_fn=lambda: ["box"], clearance_m=0.2, **kw)
+
+
+def test_a_permit_stop_plan_failing_before_an_install_hands_back_standing_and_gives_the_total_back():
+    dev, records = _device()
+    ports = Ports(plans=[("ok_fail", "invalid_start")], escape=None)  # no escape either
+    assert _permit(dev) is None
+    steps = _run(dev, ports)
+    assert [s.output for s in steps[:-1]] == ["hold"] * (len(steps) - 1)  # held while it worked
+    assert steps[-1] == type(steps[-1])(owned=False)  # the tick handed straight back, nothing to end
+    assert dev.request_ is None and dev.state is None
+    rec = records[-1]
+    assert rec["outcome"] == "failed" and rec["mission_end"] is False
+    assert rec["reason"] == "scene_replan_failed:permit_stop:invalid_start"
+    assert dev.used_total == 0 and dev.used_by_trigger["permit_stop"] == 1  # the total back, its own count kept
+    assert not any(isinstance(x, tuple) and x[0] in ("install", "escape_install") for x in ports.log)
+
+
+def test_a_permit_stop_candidate_refused_before_an_install_hands_back():
+    dev, records = _device()
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "blocked:occupied", "steer": 0.1}])
+    _permit(dev)
+    steps = _run(dev, ports, n=80)
+    assert steps[-1].owned is False and steps[-1].end is None
+    assert records[-1]["outcome"] == "refused" and records[-1]["mission_end"] is False
+    assert records[-1]["reason"] == "scene_replan_refused:permit_stop:blocked:occupied"
+
+
+def test_a_permit_stop_failing_after_its_install_ends_the_mission():
+    # installed, then the resume check never passes: dropped and planned again (the follower's tracker is the new
+    # one now), and that plan's failure is the device's end as for any trigger
+    dev, records = _device(drops_per_request=1)
+    ports = Ports(plans=[("ok", "path-1"), ("ok_fail", "no_path")],
+                  previews=[{"status": "tracking", "ok": False, "why": "blocked:occupied", "steer": 0.2}],
+                  steer=[0.0])
+    _permit(dev)
+    steps = _run(dev, ports, n=120)
+    assert ("install", "path-1") in ports.log
+    assert steps[-1].end == "scene_replan_failed:permit_stop:no_path"
+    assert records[-1]["mission_end"] is True
+
+
+def test_a_permit_stop_escape_that_stops_ends_the_mission():
+    dev, records = _device()
+    ports = Ports(plans=[("ok_fail", "invalid_start")], escape="escape-path")
+    ports.escape_state = lambda: "stopped"
+    _permit(dev)
+    steps = _run(dev, ports)
+    assert ("escape_install", "escape-path") in ports.log
+    assert steps[-1].end == "scene_replan_failed:permit_stop:escape_stopped" and records[-1]["mission_end"] is True
+
+
+def test_the_follower_s_triggers_still_end_the_mission_before_an_install():
+    dev, records = _device()
+    _ask(dev)
+    steps = _run(dev, Ports(plans=[("ok_fail", "invalid_start")], escape=None))
+    assert steps[-1].end == "scene_replan_failed:cusp_pose:invalid_start" and records[-1]["mission_end"] is True
+    assert dev.used_total == 1
 
 
 @pytest.mark.parametrize("why, back_to", [("moving", "wait_stop"), ("superseded", "wait_jobs"),
