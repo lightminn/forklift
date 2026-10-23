@@ -5959,10 +5959,6 @@ def drive(S, isaac) -> None:
                 session_rest.rest(old_, pos_, q_)
                 state.setdefault("session_switches", []).append(
                     {"step": int(step_), "t": float(t_), "from": old_, "to": new_})
-                if slam is not None and slam.pop("cusp_injection_m", None) is not None:
-                    # --inject-cusp-offset-m lasts until the session moves on to its next pallet
-                    state.setdefault("cusp_injections", []).append(
-                        {"time_s": float(t_), "event": "released", "from": old_, "to": new_})
                 if far_runtime is not None:
                     far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(new_)
                 if trace_evidence is not None:
@@ -7864,11 +7860,17 @@ def drive(S, isaac) -> None:
                 # tick it owns stands (the steering held), steers the wheels standing or drives its escape prefix --
                 # no follower, stall, recovery or arrival; the permission, the links and the commands go on.
                 inject_ = getattr(args, "inject_cusp_offset_m", None)
+                if (slam is not None and slam.get("cusp_injection_m") is not None
+                        and getattr(pallet, "current", None) != cusp_injection_.get("pallet")):
+                    # --inject-cusp-offset-m lasts until the session moves on to its next pallet
+                    slam.pop("cusp_injection_m")
+                    state.setdefault("cusp_injections", []).append(
+                        {"time_s": float(t), "event": "released", "pallet": getattr(pallet, "current", None)})
                 if (inject_ is not None and slam is not None and not cusp_injection_["done"] and ms.phase == "transport"
                         and ms.phase in trackers and ms.last_tracking is not None and ms.last_tracking.at_cusp
                         and trackers[ms.phase].leg_remaining_m() <= 0.05):
                     # Diagnostic (scene replan plan 4): the control pose shifted from the next tick on.
-                    cusp_injection_["done"] = True
+                    cusp_injection_["done"], cusp_injection_["pallet"] = True, getattr(pallet, "current", None)
                     slam["cusp_injection_m"] = (-float(inject_) * math.sin(float(rear[2])),
                                                 float(inject_) * math.cos(float(rear[2])))
                     state.setdefault("cusp_injections", []).append(
