@@ -29,9 +29,12 @@ class ScriptedVehicle:
     """PAUSED and standing; a submit acked (or refused) and run for ``run_s``, its result in a state, then standing
     again after ``settle_s``. ``events``: {time_s: state overrides} the vehicle shows at that time."""
 
-    def __init__(self, clock, outcomes, *, refuse=(), run_s=3.0, settle_s=0.4, events=None):
+    def __init__(self, clock, outcomes, *, refuse=(), run_s=3.0, settle_s=0.4, events=None, answer_after_s=0.0,
+                 silent=()):
         self.clock, self.outcomes, self.refuse = clock, list(outcomes), set(refuse)
         self.run_s, self.settle_s, self.events = run_s, settle_s, dict(events or {})
+        self.answer_after_s, self.silent = answer_after_s, silent  # (from, to) s: no states then
+        self.client_id, self.queue_has_lease = "probe", False
         self.report, self.missions, self.closed_code, self.epoch, self.lease_id = {}, None, None, 1, None
         self.targets, self.queue, self.submitted, self.seq = TARGETS, None, [], 0
         self.mission = None  # (mission_id, pallet, destination, start time)
@@ -82,6 +85,12 @@ class ScriptedVehicle:
     async def request_until_standing(self, kind, **kw):
         return {"t": "ack"}
 
+    async def request_resent(self, kind, request_id, **kw):
+        t0 = self.clock.t
+        while self.clock.t - t0 < self.answer_after_s:  # the answer comes late (the queue's timer runs meanwhile)
+            await asyncio.sleep(0.1)
+        return await self._request(kind, request_id=request_id, **kw)
+
     async def _request(self, kind, request_id=None, **kw):
         n = len(self.submitted) + 1
         self.submitted.append((kw["pallet_id"], kw["destination_id"], round(self.clock.t - 1000.0, 2)))
@@ -95,8 +104,15 @@ class ScriptedVehicle:
 
     def tick_vehicle(self):
         self.state = self._state()
-        if self.queue is not None:  # as Probe._read feeds it
+        if self.silent and self.silent[0] <= self.clock.t - 1000.0 < self.silent[1]:
+            return  # no state arrives
+        if self.queue is not None:  # as Probe._read feeds it: state, the lease it shows, its result
+            had = self.queue_has_lease
+            if self.state.get("lease") and self.state["lease"].get("holder") != self.client_id:
+                self.queue_has_lease = False
             self.queue.on_state(self.state, self.clock.t * 1000.0)
+            if had and not self.queue_has_lease:
+                self.queue.on_lease_lost()
             if self.state.get("last_result"):
                 self.queue.on_result(self.state["last_result"], self.clock.t * 1000.0)
 
@@ -154,3 +170,26 @@ def test_a_feedback_loss_that_lasts_stops_even_when_it_recovers():
     # 0.6 s of false states from 1.0 s, then true: the loss lasted 0.5 s -- the mission out runs to its end
     assert len(v.submitted) == 1 and v.report["queue"]["stop_reason"] == "차량 피드백 없음"
     assert v.report["missions_run"][0]["result"]["outcome"] == "done"
+
+
+def test_a_state_that_shows_another_holder_takes_the_lease_and_stops_the_queue():
+    """Codex PR 4 re-review P2-1: protocol.js drops the lease on a state whose holder is not this client."""
+    clock = Clock()
+    v = _run(ScriptedVehicle(clock, ["done", "done", "done"], events={3.3: {"lease": {"holder": "other"}}}), clock)
+    assert len(v.submitted) == 1 and v.report["queue"]["stop_reason"] == "조종 권한 상실"
+
+
+def test_the_queue_timer_runs_while_a_submit_waits_for_its_answer():
+    """Codex PR 4 re-review P2-2: states stop for 3 s while the answer is out -- the queue stops for the silence
+    and the item is left uncertain; the late ack is not taken for a mission of the queue."""
+    clock = Clock()
+    v = _run(ScriptedVehicle(clock, ["done", "done", "done"], answer_after_s=3.0, silent=(0.5, 3.6)), clock)
+    q = v.report["queue"]
+    assert q["stop_reason"] == "상태 수신 끊김" and len(q["uncertain"]) == 1 and q["counts"]["done"] == 0
+
+
+def test_an_answer_that_is_slow_keeps_the_queue_waiting_not_refused():
+    """Codex PR 4 re-review P2-3: no made-up reject -- the states keep coming, the answer comes after 6 s."""
+    clock = Clock()
+    v = _run(ScriptedVehicle(clock, ["done", "done", "done"], answer_after_s=6.0), clock)
+    assert v.report["queue"]["stop_reason"] == "완료" and v.report["queue"]["counts"]["done"] == 3

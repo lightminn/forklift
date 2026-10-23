@@ -34,8 +34,9 @@ for (const e of events) {
   else if (e.op === "next") { const r = q.next(e.ctx, e.now, newId); if (r) { submit = r.submit; last = { epoch: q.epoch, item_id: r.submit.item_id, request_id: r.submit.request_id }; } }
   else if (e.op === "disconnect") q.onDisconnect();
   else if (e.op === "lease_lost") q.onLeaseLost();
-  out.push({ run: q.run, reason: q.stopReason, phase: q.phase, mission: q.current?.mission_id ?? null,
-             items: q.items.length, uncertain: q.items.filter((x) => x.uncertain).length, submit });
+  out.push({ run: q.run, reason: q.stopReason, phase: q.phase, current: q.current ? { ...q.current } : null,
+             items: q.items.map((x) => [x.item_id, Boolean(x.uncertain), x.maybe ? { ...x.maybe } : null]), counts: { ...q.counts },
+             finished: q.finished.map((f) => [f.mission_id, f.outcome, f.reason]), submit });
 }
 console.log(JSON.stringify(out));
 """
@@ -80,9 +81,10 @@ def run_py(events):
             q.on_disconnect()
         elif op == "lease_lost":
             q.on_lease_lost()
-        out.append({"run": q.run, "reason": q.stop_reason, "phase": q.phase,
-                    "mission": (q.current or {}).get("mission_id"), "items": len(q.items),
-                    "uncertain": sum(1 for x in q.items if x.get("uncertain")), "submit": submit})
+        out.append({"run": q.run, "reason": q.stop_reason, "phase": q.phase, "current": dict(q.current) if q.current else None,
+                    "items": [[x["item_id"], bool(x.get("uncertain")), dict(x["maybe"]) if x.get("maybe") else None] for x in q.items],
+                    "counts": dict(q.counts), "finished": [[f["mission_id"], f["outcome"], f["reason"]]
+                                                           for f in q.finished], "submit": submit})
     return out
 
 
