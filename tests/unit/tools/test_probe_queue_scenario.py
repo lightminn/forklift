@@ -247,6 +247,67 @@ def test_the_answer_reaches_the_queue_before_a_later_stop():
     assert q["stop_reason"] == "정지됨(STOP)" and q["uncertain"] == [] and q["counts"]["done"] == 1
 
 
+def _gen_request(kind):
+    """A vehicle whose generation moved before the probe saw a state with it; ``kind`` is checked against it."""
+    clock = Clock()
+    v = FakeVehicle(clock, ["done"])
+    v.control_gen, v.asked = 1, []
+    state_ = v._state
+
+    def state_with_gen(now):
+        s = state_(now)
+        s["control_gen"] = v.control_gen
+        return s
+
+    v._state = state_with_gen
+    real = v.on_message
+
+    def on_message(msg):
+        if msg.get("t") == kind:
+            ok = msg.get("control_gen") == v.control_gen
+            v.asked.append(msg.get("control_gen"))
+            v.outbox.append((clock.rel(), {"t": "ack" if ok else "reject", "request_id": msg["request_id"],
+                                           **({} if ok else {"reason": "stale_control"})}))
+            return
+        real(msg)
+
+    v.on_message = on_message
+    real_mono = lcp.time.monotonic
+
+    async def fake_sleep(s):
+        for _ in range(max(1, int(round(s / 0.01)))):
+            clock.t += min(s, 0.01)
+            await REAL_SLEEP(0)
+
+    lcp.asyncio.sleep, lcp.time.monotonic = fake_sleep, clock.monotonic
+    probe = WiredProbe(v)
+    try:
+        async def go():
+            await probe.open()
+            probe.control_gen = 0  # sent before the first state brings generation 1
+            reply = await probe.request_until_standing(kind)
+            probe._reader.cancel()
+            return reply
+
+        return asyncio.run(go()), v
+    finally:
+        lcp.asyncio.sleep, lcp.time.monotonic = REAL_SLEEP, real_mono
+
+
+def test_a_session_end_refused_for_a_moved_generation_is_asked_again_with_the_states_generation():
+    """CT-1 PR 4 q2: three session_ends refused stale_control, the runner's result.json never written; asked again
+    with the generation the next state carries, it ends."""
+    reply, v = _gen_request("session_end")
+    assert v.asked[0] == 0 and reply["t"] == "ack" and v.asked[-1] == 1
+
+
+def test_a_rearm_refused_for_a_moved_generation_is_returned_not_retried():
+    """Codex PR 4 doc review P2: a rearm (or resume) made before a later STOP must not go through after it -- the
+    stale_control goes back to the caller, asked once."""
+    reply, v = _gen_request("rearm")
+    assert v.asked == [0] and reply["t"] == "reject" and reply["reason"] == "stale_control"
+
+
 def test_an_answer_at_a_resend_boundary_is_not_followed_by_another_send():
     """Codex PR 4 review round 4 P2: a refusal arriving as the 0.5 s resend comes due -- nothing is sent after it."""
     clock = Clock()

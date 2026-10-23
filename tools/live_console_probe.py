@@ -242,11 +242,16 @@ class Probe:
         return reply
 
     async def request_until_standing(self, kind, tries=20, **fields):
-        """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again."""
+        """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again. For
+        session_end alone a stale_control is asked again too, with the generation the next state carries (_read):
+        CT-1 PR 4 q2 had three session_ends refused so and the runner's result.json never written. Any other
+        request returns it -- a rearm or resume made before a later STOP must not go through after it (the
+        arbiter's boundary; Codex PR 4 doc review P2)."""
+        retry = ("not_stopped", "no_feedback:rear_axle_speed") + (("stale_control",) if kind == "session_end" else ())
         reply = None
         for _ in range(tries):
             reply = await self.request(kind, **fields)
-            if reply is None or reply.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed"):
+            if reply is None or reply.get("reason") not in retry:
                 return reply
             await asyncio.sleep(0.5)
         return reply
