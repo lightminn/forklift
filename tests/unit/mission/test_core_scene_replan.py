@@ -541,3 +541,15 @@ def test_the_candidate_permit_is_strict_where_the_permission_stops_acting():
     assert not core._scene_permit_strict(tracker, on, full)
     ms.phase = "return_home"
     assert not core._scene_permit_strict(tracker, leg)
+
+
+def test_the_delivery_docking_keeps_its_transport_but_not_the_return():
+    """Isaac sr_d163dd3 random_m s2 m3: the docking's accepted mark stays set after the delivery; it must not keep the
+    return's cusp stall from the device."""
+    core, ms, state, *_ = make()
+    core.near_active = lambda: False
+    core.bottom_deck_leg_active = lambda: False
+    core.slam = {"docking": {"accepted_any": True}}
+    assert not core.scene_replan_allowed()
+    ms.phase = "return_home"
+    assert core.scene_replan_allowed()

@@ -78,7 +78,7 @@
 
 - 장면 모드(core 에 `scene` 여부를 명시적으로 넘긴다 — `grid_planning` 꺼짐과 같지 않다, Codex 1차 P2-8).
 - live·배치 모두. 단계 `transport`·`return_home`.
-- 제외(지금 규칙 유지): D7 도킹 수용 뒤·재접근 중(`transport_recovery_after_docking`·도킹 재시도), near·bottom-deck·held realign.
+- 제외(지금 규칙 유지): 운반의 D7 도킹 수용 뒤·재접근 중(`transport_recovery_after_docking`·도킹 재시도), near·bottom-deck·held realign. 도킹 제외는 운반에만 둔다. 수용 표시가 하역 뒤에도 남아 복귀의 cusp 정체까지 막았기 때문이다(7판, Isaac `sr_d163dd3` random_m s2 m3).
 
 **tick 안 자리와 명령 소유**(Codex 2차 P2-1):
 

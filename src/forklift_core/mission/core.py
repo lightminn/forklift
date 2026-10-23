@@ -6156,7 +6156,10 @@ class MissionCore:
         ms, slam, obstacle = self.ms, self.slam, self.obstacle
         if not getattr(self.options, "pickup_prior", False) or ms.phase not in self.SCENE_PHASES:
             return False
-        if slam is not None and (slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
+        if ms.phase == "transport" and slam is not None and (
+                slam["docking"].get("accepted_any") or slam["docking"].get("reapproach")):
+            # The delivery docking's own (Isaac sr_d163dd3 random_m s2 m3: its mark stays set after the delivery and
+            # kept the return's stall from the device).
             return False
         if obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase:
             return False
