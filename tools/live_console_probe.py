@@ -221,7 +221,7 @@ class Probe:
         msg.setdefault("control_gen", self.control_gen)
         raw = json.dumps(msg)
         sent = time.monotonic()
-        while self.closed_code is None and request_id not in self.queue_forgotten:
+        while self.closed_code is None and request_id not in self.queue_forgotten and request_id not in self.replies:
             await self.ws.send(raw)
             end = time.monotonic() + retry_s
             while time.monotonic() < end and request_id not in self.queue_forgotten:
@@ -233,7 +233,8 @@ class Probe:
                         self.control_gen = reply["control_gen"]
                     return reply
                 await asyncio.sleep(0.01)
-        return None
+        # answered at a resend's boundary (Codex PR 4 r4 P2: never sent again once answered), or forgotten / closed
+        return self.replies[request_id][1] if request_id in self.replies else None
 
     async def request_until_standing(self, kind, tries=20, **fields):
         """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again."""

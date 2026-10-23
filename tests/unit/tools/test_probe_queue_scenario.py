@@ -245,3 +245,21 @@ def test_the_answer_reaches_the_queue_before_a_later_stop():
     p = _run(v, clock)
     q = p.report["queue"]
     assert q["stop_reason"] == "정지됨(STOP)" and q["uncertain"] == [] and q["counts"]["done"] == 1
+
+
+def test_an_answer_at_a_resend_boundary_is_not_followed_by_another_send():
+    """Codex PR 4 review round 4 P2: a refusal arriving as the 0.5 s resend comes due -- nothing is sent after it."""
+    clock = Clock()
+    v = FakeVehicle(clock, ["done", "done", "done"], refuse={1}, ack_s=0.5)
+    real = v.on_message
+    answered = {}
+
+    def on_message(msg):
+        real(msg)
+        if msg.get("t") == "mission_submit" and "t" not in answered:
+            answered["t"] = clock.rel() + v.ack_s
+
+    v.on_message = on_message
+    p = _run(v, clock)
+    assert p.report["queue"]["stop_reason"] == "거부: not_stopped"
+    assert all(t < answered["t"] + 1e-9 for t, _, _ in v.submits)
