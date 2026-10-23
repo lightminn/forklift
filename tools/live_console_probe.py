@@ -234,7 +234,12 @@ class Probe:
                     return reply
                 await asyncio.sleep(0.01)
         # answered at a resend's boundary (Codex PR 4 r4 P2: never sent again once answered), or forgotten / closed
-        return self.replies[request_id][1] if request_id in self.replies else None
+        if request_id not in self.replies:
+            return None
+        at, reply = self.replies[request_id]
+        self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
+                   detail=reply.get("detail"), rtt_s=at - sent)  # logged as any answer (Codex r5 P3)
+        return reply
 
     async def request_until_standing(self, kind, tries=20, **fields):
         """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again."""
