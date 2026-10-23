@@ -281,3 +281,31 @@ def test_the_core_hands_back_only_when_its_own_tracker_still_follows_from_the_po
     with pytest.raises(RuntimeError, match="scene_replan_failed:permit_stop:invalid_start"):
         _drive(core, rear, held)
     assert state["scene_replans"][-1]["not_resumable"] is True
+
+
+def test_a_request_ended_with_its_plan_still_out_leaves_no_job_or_answer_behind():
+    # PR #116 review P2 (the device's author): the request's time limit in wait_plan handed back, the worker's late
+    # answer must not reach the mission's next request
+    from test_core_scene_replan import Jobs
+
+    class Recording(Jobs):
+        def __init__(self):
+            super().__init__()
+            self.discarded = []
+
+        def discard(self, job):
+            self.discarded.append(job)
+
+    core, ms, state, calls, rear, held = make(jobs=Recording())
+    state["async_plans"] = []
+    core.commands.begin_wait = lambda *a, **k: None
+    core.commands.end_wait = lambda *a, **k: None
+    rear["pose"] = np.array(core.trackers["transport"].leg_ahead()[0][0], dtype=float)
+    assert core.scene_replan_raise(10.0, "permit_stop", rear["pose"]) is None
+    core.scene_replan_tick(10.0, rear["pose"], 0.0, 1 / 120)
+    assert core.pending is not None and core.pending.site == "scene_replan"
+    job = core.pending.job
+    out = core.scene_replan_tick(10.0 + core.scene_replan.config.request_limit_s + 1.0, rear["pose"], 0.0, 1 / 120)
+    assert out.owned is False and state["scene_replans"][-1]["reason"] == "scene_replan_failed:permit_stop:timeout"
+    assert core.pending is None and core.jobs.discarded == [job] and core.scene_mail is None
+    assert state["async_plans"][-1]["dropped"] == "scene_replan_ended"

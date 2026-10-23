@@ -21,6 +21,9 @@
 - **장치 계약 변경**(`SceneReplanConfig.standing_safe_triggers`, 기본 `("permit_stop",)`):
   - 이 목록에 든 트리거의 요청이 설치·탈출 없이 끝나면, 원래 추적기가 hold 해제 뒤 자세에서도 따라갈 수 있을 때(`resumable()` 포트, Codex 3 회차 P2)만 미션을 끝내지 않고 틱을 돌려준다.
   - 해당하는 끝: 계획 실패·탈출 없는 invalid_start·설치 전 refused·timeout·drop 초과·콜백 예외.
+    작업자 예외(`async_plan_failed`, 계획기 코드의 예외)는 `_end` 를 거치지 않으므로 permit_stop 이어도 지금처럼 미션을 끝낸다.
+  - 모든 끝에서 아직 돌아오지 않은 그 요청의 작업자 계획과 답(`scene_mail`)을 버린다(`abandon()` 포트).
+    예를 들어 wait_plan 에서 요청 시간 한도(60 s)로 넘겨준 뒤, 늦게 온 답이 같은 미션의 다음 요청에 쓰이지 않게 한다(장치 작성 세션 리뷰 P2).
   - 기록에는 `mission_end: false` 와 `reason` 이 남고, 미션 합산 예산은 되돌린다.
   - 설치·탈출 뒤의 실패와, 다른 트리거(cusp_pose·cusp_handed)의 끝은 지금처럼 미션을 끝낸다.
   - 모든 기록 줄에 `mission_end` 가 붙는다.
@@ -57,6 +60,9 @@
   - 그 뒤 운반·하역을 지나 복귀에서 예산이 소진(`exhausted`)됐다. 이때 미션은 끝나지 않고 서 있다가 복귀 시간 초과로 끝났다.
 - **aisle_rack s2**: 운반에서 두 번, 복귀에서 한 번 넘겨졌다. 서 있는 동안 표시가 걷혀 운반을 지났다.
 - 끔은 rack 세 seed 가 모두 운반에서 멈췄고, 켬은 두 seed 가 하역까지 갔다. 완주 수는 둘 다 0 이다.
+- 켬 실행 전체(trailer 5, rack 3, line_2 3)의 permit_stop 기록은 다음과 같다.
+  - 넘겨줌(`failed`, `mission_end: false`) 7 건, 설치 2 건, 예산 소진 1 건이다.
+  - 해제 뒤 원래 추적기로 돌아갈 수 없어 치명으로 끝난 경우(`not_resumable`)는 0 건이다. 해제 뒤 재계획이 필요한지는 이 사례가 생기면 다시 본다.
 
 ## 한계
 
@@ -78,6 +84,7 @@
 ## 검증
 
 - Codex: 구현 4 회차에서 수렴했다(15e0d271, 새 P1/P2 없음). 반영한 지적은 1 회차 P2(저장된 막힌 칸)·P3(감시 시계), 3 회차 P2(hold 해제 뒤 복귀 가능성)다.
+  장치 작성 세션 리뷰(PR #116)의 P2(끝난 요청의 작업자 계획을 버림)도 반영했다(장치 경로만 바뀌어 Isaac 결과에는 영향이 없다).
 - 시험:
   - `tests/unit/mission/test_permit_stop.py`
   - `tests/unit/mission/test_scene_replan.py`(standing-safe 경계 7 건 추가)

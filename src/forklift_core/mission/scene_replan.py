@@ -24,7 +24,8 @@ the budget and the records only:
 - ``steering_error(target)`` -> the largest wheel's gap to it (rad); ``steer_gap(a, b)`` -> the largest wheel's
   gap between two targets;
 - ``resumable()`` (optional) -> whether the follower's own tracker still follows from the pose after the release (a
-  standing-safe request ending before an install hands back only then).
+  standing-safe request ending before an install hands back only then);
+- ``abandon()`` (optional) -> drops the request's plan still out and its answer, at every end.
 """
 
 from __future__ import annotations
@@ -136,6 +137,9 @@ class SceneReplan:
     def _end(self, outcome: str, reason: str | None) -> StepResult:
         r = self.request_
         r["record"]["outcome"] = outcome
+        abandon_ = getattr(self._ports, "abandon", None)
+        if abandon_ is not None:
+            abandon_()  # a plan still out (the time limit in wait_plan) never answers a later request
         resumable_ = getattr(self._ports, "resumable", None)
         if r["trigger"] in self.config.standing_safe_triggers and not r["changed"] and (
                 resumable_ is None or resumable_()):

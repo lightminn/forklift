@@ -6609,6 +6609,13 @@ class MissionCore:
             pv_ = copy.deepcopy(trackers[ms.phase]).update(np.asarray(box.rear, dtype=float), 0.0, dt)
             return pv_.status != "failed" and not getattr(pv_, "off_path", False)
 
+        def abandon():
+            # P6 (the device author's PR #116 review P2): a request that ends with its plan still out -- the request's
+            # time limit in wait_plan -- leaves no job and no answer behind for the mission's next request.
+            if core.pending is not None and core.pending.site == "scene_replan":
+                core._drop(core.pending, t, "scene_replan_ended", count=False)
+            core.scene_mail = None
+
         def snapshot_id():  # a new processed snapshot: a standing re-check has something new to see (round 5 P3)
             layer_ = (obstacle or {}).get("layer")
             snap_ = getattr(layer_, "snapshot", None)
@@ -6619,7 +6626,7 @@ class MissionCore:
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box,
-                               resumable=resumable)
+                               resumable=resumable, abandon=abandon)
 
     def scene_replan_tick(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's tick ahead of the follower (plan 2.1): owned or not, what the wheels and steering get, the
