@@ -50,6 +50,18 @@ class Probe:
         self.closed_code = None
         self.last_teleop = None
         self.save_frames = None  # (directory, how many) for the marker scenario
+        self.queue = None  # the queue scenario's tools/mission_queue.MissionQueue: fed every state and result
+        self.queue_has_lease = False  # the lease as console/web/js/protocol.js holds it (a state may take it away)
+        self.queue_asking = None  # {key, entry} of the submit out: its answer goes to the queue as it is received
+        self.queue_forgotten: set = set()  # request ids the queue dropped (D6 forget): never sent again
+
+    def queue_apply(self, out) -> None:
+        """queuewire apply(): a stop that forgets the submit out ends its resending at once (Codex PR 4 r3 P2-1)."""
+        if out and out.get("forget") is not None:
+            self.queue_forgotten.add(out["forget"])
+            if self.queue_asking is not None and self.queue_asking["key"]["request_id"] == out["forget"]:
+                self.queue_asking["entry"]["submit"] = {"t": "forgotten"}
+                self.queue_asking = None
 
     def event(self, name, **fields):
         self.report.setdefault("events", []).append({"mono": time.monotonic(), "event": name, **fields})
@@ -96,6 +108,17 @@ class Probe:
                 elif t == "state":
                     self.state = msg
                     self.control_gen = msg.get("control_gen", self.control_gen)
+                    if self.queue is not None:  # as console/web/js/queuewire.js onState: state, lease, result
+                        now_ms_ = time.monotonic() * 1000.0
+                        had_ = self.queue_has_lease
+                        if msg.get("lease") and msg["lease"].get("holder") != self.client_id:
+                            self.queue_has_lease = False  # protocol.js: the holder is not this client
+                        out_ = self.queue.on_state(msg, now_ms_)
+                        if had_ and not self.queue_has_lease:
+                            self.queue_apply(self.queue.on_lease_lost())
+                        if msg.get("last_result"):
+                            self.queue.on_result(msg["last_result"], now_ms_)
+                        self.queue_apply(out_)
                     self.states.append({"mono": time.monotonic(), "mode": msg.get("mode"),
                                         "stop_kind": msg.get("stop_kind"), "armed": msg.get("armed"),
                                         "applied": msg.get("applied"), "speed": msg.get("rear_axle_speed_mps"),
@@ -107,8 +130,18 @@ class Probe:
                     self.targets = msg
                 elif t == "missions":
                     self.missions = msg
+                    if self.queue is not None:  # queuewire onResults: oldest first
+                        for r_ in sorted(msg.get("results") or [], key=lambda r: r.get("seq") or 0):
+                            self.queue.on_result(r_, time.monotonic() * 1000.0)
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
+                    asking_ = self.queue_asking
+                    if self.queue is not None and asking_ is not None and \
+                            msg.get("request_id") == asking_["key"]["request_id"]:
+                        # the answer into the queue in the order it came, among the states (Codex PR 4 r3 P2-2)
+                        asking_["entry"]["submit"] = msg
+                        self.queue_asking = None
+                        self.queue_apply(self.queue.on_answer(asking_["key"], msg, time.monotonic() * 1000.0))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -152,9 +185,9 @@ class Probe:
                 reply = await self._request(kind, timeout, **fields)
         return reply
 
-    async def _request(self, kind, timeout=5.0, **fields):
+    async def _request(self, kind, timeout=5.0, request_id=None, **fields):
         self.n += 1
-        rid = f"r{self.n}"
+        rid = request_id or f"r{self.n}"
         msg = {"t": kind, "request_id": rid, "session_epoch": self.epoch, **fields}
         if kind != "stop" and getattr(self, "request_token", None) is not None:
             self.request_seq += 1
@@ -177,12 +210,48 @@ class Probe:
         self.event("reply_timeout", kind=kind, request_id=rid)
         return None
 
+    async def request_resent(self, kind, request_id, retry_s=0.5, **fields):
+        """protocol.js request() + pump(): the same message resent every retry_s until it is answered (no timeout --
+        the caller stops waiting when it no longer needs the answer)."""
+        msg = {"t": kind, "request_id": request_id, "session_epoch": self.epoch, **fields}
+        if getattr(self, "request_token", None) is not None:
+            self.request_seq += 1
+            msg.update(request_token=self.request_token, request_seq=self.request_seq)  # a resend is this message
+        msg.setdefault("lease_id", self.lease_id)
+        msg.setdefault("control_gen", self.control_gen)
+        raw = json.dumps(msg)
+        sent = time.monotonic()
+        while self.closed_code is None and request_id not in self.queue_forgotten and request_id not in self.replies:
+            await self.ws.send(raw)
+            end = time.monotonic() + retry_s
+            while time.monotonic() < end and request_id not in self.queue_forgotten:
+                if request_id in self.replies:
+                    at, reply = self.replies[request_id]
+                    self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
+                               detail=reply.get("detail"), rtt_s=at - sent)
+                    if reply.get("control_gen") is not None:
+                        self.control_gen = reply["control_gen"]
+                    return reply
+                await asyncio.sleep(0.01)
+        # answered at a resend's boundary (Codex PR 4 r4 P2: never sent again once answered), or forgotten / closed
+        if request_id not in self.replies:
+            return None
+        at, reply = self.replies[request_id]
+        self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
+                   detail=reply.get("detail"), rtt_s=at - sent)  # logged as any answer (Codex r5 P3)
+        return reply
+
     async def request_until_standing(self, kind, tries=20, **fields):
-        """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again."""
+        """A request the vehicle refuses until its own detector confirms standing (not_stopped): asked again. For
+        session_end alone a stale_control is asked again too, with the generation the next state carries (_read):
+        CT-1 PR 4 q2 had three session_ends refused so and the runner's result.json never written. Any other
+        request returns it -- a rearm or resume made before a later STOP must not go through after it (the
+        arbiter's boundary; Codex PR 4 doc review P2)."""
+        retry = ("not_stopped", "no_feedback:rear_axle_speed") + (("stale_control",) if kind == "session_end" else ())
         reply = None
         for _ in range(tries):
             reply = await self.request(kind, **fields)
-            if reply is None or reply.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed"):
+            if reply is None or reply.get("reason") not in retry:
                 return reply
             await asyncio.sleep(0.5)
         return reply
@@ -1041,6 +1110,86 @@ async def cycle_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def queue_scenario(p: Probe, args):
+    """CT-1 PR 4 (docs/plans/2026-10-22-continuous-transport-ct1.md): the --cycle legs run by the console's own mission
+    queue (tools/mission_queue.py, a port of console/web/js/queue.js) -- fed every state, result, welcome and close as
+    the page feeds it, asked every 250 ms whether to submit, the operator's resume given once at the start. Any stop
+    of the queue is final here: nothing more is submitted, a mission already out runs to its end and is recorded."""
+    import mission_queue
+
+    await p.open()
+    await p.open_media()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    q = p.queue = mission_queue.MissionQueue()
+    p.queue_has_lease = p.lease_id is not None
+    q.on_welcome(p.epoch)
+    resend = None  # the resend task of the submit out
+    ids = {"n": 0}
+
+    def new_id():
+        ids["n"] += 1
+        return f"q{ids['n']}"
+
+    for leg in [leg for leg in args.cycle.split(",") if leg]:
+        pallet_id, destination_id = leg.split(":")
+        q.add(mission_queue.new_item(pallet_id, destination_id, new_id()))
+    p.report["missions_run"] = []
+    q.resume(time.monotonic() * 1000.0)
+    closed_seen, deadline = False, time.monotonic() + args.mission_timeout_s * max(1, len(q.items) + 1)
+    while time.monotonic() < deadline:
+        now_ms = time.monotonic() * 1000.0
+        if p.closed_code is not None and not closed_seen:
+            closed_seen = True
+            p.queue_apply(q.on_disconnect())
+        p.queue_apply(q.tick(now_ms))
+        for entry in p.report["missions_run"]:  # each submission's result, as the queue applied it
+            if "result" not in entry and (entry.get("submit") or {}).get("t") == "ack":
+                mid_ = entry["submit"].get("mission_id")
+                got_ = next((f for f in q.finished if f["mission_id"] == mid_), None)
+                if got_ is not None:
+                    entry["result"] = {"mission_id": mid_, "outcome": got_["outcome"], "reason": got_["reason"]}
+                    entry["ended_mono"] = time.monotonic()
+        if q.run != "running" and q.current is None and p.queue_asking is None:
+            break  # stopped, nothing out: the queue's end here
+        if q.run != "running" and q.phase == "in_mission" and closed_seen:
+            break  # its result can no longer come
+        ctx = {"connected": p.closed_code is None, "welcomed": p.closed_code is None, "has_lease": p.queue_has_lease,
+               "state": p.state, "targets": p.targets}
+        n = q.next(ctx, now_ms, new_id)
+        if n:
+            s_ = n["submit"]
+            key = {"epoch": q.epoch, "item_id": s_["item_id"], "request_id": s_["request_id"]}
+            entry = {"pallet_id": s_["pallet_id"], "destination_id": s_["destination_id"], "item_id": s_["item_id"],
+                     "submitted_mono": time.monotonic()}
+            p.report["missions_run"].append(entry)
+            p.queue_asking = {"key": key, "entry": entry}  # answered through _read
+            resend = asyncio.ensure_future(p.request_resent(
+                "mission_submit", s_["request_id"], pallet_id=s_["pallet_id"], destination_id=s_["destination_id"],
+                targets_revision=s_["targets_revision"]))
+        await p.echo()
+        await asyncio.sleep(0.25)
+    if resend is not None and not resend.done():
+        resend.cancel()
+    for entry in p.report["missions_run"]:
+        if "result" not in entry:
+            entry["result_not_this_mission"] = True  # the queue never applied a result for it
+    p.report["queue"] = {"stop_reason": q.stop_reason, "stops": q.stops, "counts": q.counts,
+                         "items_left": [f"{it['pallet_id']}:{it['destination_id']}" for it in q.items],
+                         "uncertain": [it["item_id"] for it in q.items if it.get("uncertain")]}
+    p.report["missions_message"] = p.missions
+    if args.end_session and p.closed_code is None:
+        await p.until(p.standing, 30, label="standing_before_end")
+        p.report["session_end"] = await p.request_until_standing("session_end")
+        end = time.monotonic() + 120
+        while p.closed_code is None and time.monotonic() < end:
+            await asyncio.sleep(0.1)
+    p.report["close_code"] = p.closed_code
+
+
 async def restart_scenario(p: Probe, args):
     """Persistent console plan U15/U24: the runner killed (SIGKILL) while the console holds the lease and stands;
     main() then follows the supervisor's next session, resends the old session's request there (its epoch, token
@@ -1275,7 +1424,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset",
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "queue", "lift", "reset",
                                            "restart", "tour"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
@@ -1354,6 +1503,7 @@ def main():
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
+                    "queue": queue_scenario,
                     "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
                     "tour": tour_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
