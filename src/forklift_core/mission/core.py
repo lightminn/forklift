@@ -243,7 +243,7 @@ class MissionCore:
         self.scene_replan = SceneReplan(None)
         self.scene_mail = None  # the device's plan answer: ("ok", result) | ("ok_fail", status) | ("dropped", why)
         self.scene_raised = False  # a request raised in this tick's follower: the rest of the tick stands
-        self.permit_stop_since = None  # P6: (start, phase) of the zero limit for an occupied cell being held
+        self.permit_stop_since = None  # P6: the held zero limit's stretch {since_s, last_s, key} or None
         self.scene_escape: dict | None = None  # the escape prefix driven for a request
         self.scene_correction: dict = {}  # the largest SLAM correction contribution on the current gear leg
 
@@ -1296,8 +1296,8 @@ class MissionCore:
         clearance ``PERMIT_STOP_CLEARANCE_ADD_M`` wider. Not while the device runs a request; a spent budget ends
         the mission with the device's reason. ``--permit-stop-replan off`` (and a record from before the option)
         leaves it out."""
-        from forklift_core.mission.permit_stop import (PERMIT_STOP_CLEARANCE_ADD_M, PERMIT_STOP_S,
-                                                       permission_blocked_rectangles)
+        from forklift_core.mission.permit_stop import (PERMIT_STOP_CLEARANCE_ADD_M, PERMIT_STOP_GAP_S, PERMIT_STOP_S,
+                                                       current_blocked_rectangles)
 
         options, obstacle = self.options, self.obstacle
         watching = (
@@ -1308,21 +1308,35 @@ class MissionCore:
         if not watching:
             self.permit_stop_since = None
             return
-        if self.permit_stop_since is None:
-            self.permit_stop_since = (t, self.ms.phase)
+        tracker_ = self.trackers.get(self.ms.phase)
+        key_ = (self.ms.phase, id(tracker_))
+        last_ = self.permit_stop_since
+        if last_ is None or last_["key"] != key_ or t - last_["last_s"] > PERMIT_STOP_GAP_S:
+            # A new stretch: the first tick, another leg or tracker (a replan installed one), or a gap in the watch's
+            # ticks -- the device owning them, a pause (Codex implementation review P3).
+            self.permit_stop_since = {"since_s": t, "last_s": t, "key": key_}
             return
-        since_, phase_ = self.permit_stop_since
-        if phase_ != self.ms.phase:
-            self.permit_stop_since = (t, self.ms.phase)
-            return
+        last_["last_s"] = t
+        since_ = last_["since_s"]
         held_ = self.commands.work_elapsed(since_, t)
         if held_ < PERMIT_STOP_S - 1e-9:
             return
         self.permit_stop_since = None
-        layer_ = obstacle["layer"]
+        layer_, hooks_, phase_ = obstacle["layer"], self.hooks, self.ms.phase
+
+        def obstacles_():
+            # Read when the device plans (after its release and re-projection): the leg ahead and the stop arc
+            # checked again on the snapshot of that moment (Codex implementation review P2).
+            tr_ = self.trackers.get(phase_)
+            leg_, dir_ = tr_.leg_ahead() if tr_ is not None else (np.zeros((0, 3)), -1)
+            return current_blocked_rectangles(
+                layer_, rear=hooks_.rear(), leg=leg_, direction=int(dir_) or -1, loaded=bool(hooks_.loaded()),
+                kappa=float(hooks_.held_kappa()),
+                speed_cap_mps=float(tr_.config.cruise_speed_mps) if tr_ is not None else 0.18)
+
         why_ = self.scene_replan_request(
             t, "permit_stop", rear=rear,
-            extra_obstacles_fn=lambda: permission_blocked_rectangles(layer_.permission),
+            extra_obstacles_fn=obstacles_,
             clearance_m=float(options.planner_config.clearance_m) + PERMIT_STOP_CLEARANCE_ADD_M,
             detail={"why": why, "since_s": float(since_), "held_s": float(held_)})
         self.hooks.require(why_ is None, why_ or "")

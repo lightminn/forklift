@@ -20,6 +20,7 @@ from forklift_core.planning import Rectangle
 PERMIT_STOP_S = 3.0  # the zero limit for an occupied cell, held this long (work time), raises the request
 PERMIT_STOP_CLEARANCE_ADD_M = 0.10  # the replan's clearance over the leg's (the lower end of the measured need)
 PERMIT_STOP_GROW_M = 0.5  # a blocked cell stands for the occupied cells connected to it within this distance
+PERMIT_STOP_GAP_S = 0.25  # a watch tick this long after the last one (another owner's ticks, a pause) starts again
 
 
 def blocked_rectangles(snapshot, seeds, *, grow_m: float = PERMIT_STOP_GROW_M) -> list:
@@ -78,17 +79,28 @@ def blocked_rectangles(snapshot, seeds, *, grow_m: float = PERMIT_STOP_GROW_M) -
     return rects
 
 
-def permission_blocked_rectangles(permission, *, grow_m: float = PERMIT_STOP_GROW_M) -> list:
-    """The rectangles of what ``permission`` (a DrivePermission) blocks on now: its path check's blocked cells, else
-    its emergency-stop arc's, on its current snapshot; none without a snapshot."""
-    snap = getattr(permission, "snapshot", None)
+def current_blocked_rectangles(layer, *, rear, leg, direction: int, loaded: bool, kappa: float, speed_cap_mps: float,
+                               grow_m: float = PERMIT_STOP_GROW_M) -> list:
+    """The rectangles of what the permission blocks on now: the leg ahead ``leg`` and the emergency-stop arc at
+    ``kappa`` checked again from ``rear`` on the permission's current snapshot -- never its stored checks, which a
+    hold release (re-projected, its own pose only re-checked) leaves from the snapshot before (Codex implementation
+    review P2). Only their OCCUPIED cells are seeds; none without a snapshot."""
+    permission = layer.permission
+    snap = permission.snapshot
     if snap is None:
         return []
-    cells = tuple(getattr(getattr(permission, "path_check", None), "blocked_cells", ()) or ())
-    if not cells:
-        cells = tuple(getattr(getattr(permission, "last_estop", None), "blocked_cells", ()) or ())
-    return blocked_rectangles(snap, cells, grow_m=grow_m)
+    footprint, own = layer.footprints(loaded, direction)
+    pose = tuple(float(v) for v in rear)
+    cells = []
+    if len(leg):
+        cells += list(permission.check_path(snap, leg, footprint, own, current_pose=pose, direction=direction).blocked_cells)
+    cells += list(permission.check_arc(snap, pose, kappa, direction, footprint, own, speed_cap_mps).blocked_cells)
+    state = np.asarray(snap.state)
+    nx, ny = state.shape
+    seeds = [c for c in dict.fromkeys(tuple(int(v) for v in c) for c in cells)
+             if 0 <= c[0] < nx and 0 <= c[1] < ny and state[c] == OCCUPIED]
+    return blocked_rectangles(snap, seeds, grow_m=grow_m)
 
 
-__all__ = ["PERMIT_STOP_CLEARANCE_ADD_M", "PERMIT_STOP_GROW_M", "PERMIT_STOP_S", "blocked_rectangles",
-           "permission_blocked_rectangles"]
+__all__ = ["PERMIT_STOP_CLEARANCE_ADD_M", "PERMIT_STOP_GAP_S", "PERMIT_STOP_GROW_M", "PERMIT_STOP_S", "blocked_rectangles",
+           "current_blocked_rectangles"]

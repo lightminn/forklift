@@ -9,6 +9,11 @@ import numpy as np
 import pytest
 from test_core_scene_replan import make  # the device's core fixtures
 
+from forklift_core.control.drive_permission import (
+    DrivePermission,
+    PermissionConfig,
+    StoppingModel,
+)
 from forklift_core.mission.failures import MISSION, classify
 from forklift_core.mission.permit_stop import (
     PERMIT_STOP_CLEARANCE_ADD_M,
@@ -16,6 +21,7 @@ from forklift_core.mission.permit_stop import (
     blocked_rectangles,
 )
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
+from forklift_core.planning import Footprint
 
 
 def snapshot(occupied_cells, shape=(40, 40), origin=(-1.0, -1.0), res=0.05):
@@ -66,9 +72,41 @@ def test_no_blocked_cells_give_no_obstacles_and_unoccupied_seeds_are_kept_as_cel
 
 
 class Layer:
-    def __init__(self, snap, path_cells=(), estop_cells=()):
-        self.permission = SimpleNamespace(snapshot=snap, path_check=SimpleNamespace(blocked_cells=tuple(path_cells)),
-                                          last_estop=SimpleNamespace(blocked_cells=tuple(estop_cells)))
+    """A real DrivePermission on a hand-made snapshot; the loaded outline for both directions."""
+
+    FOOT = Footprint(1.56, 0.17, 0.40)
+
+    def __init__(self, snap):
+        self.permission = DrivePermission(PermissionConfig(StoppingModel(0.1, 0.5, 0.05), 0.01, 1e9))
+        self.permission.snapshot = snap
+
+    def footprints(self, loaded, direction=0):
+        return self.FOOT, self.FOOT
+
+
+REAR = np.array([2.0, 0.3, 0.0])
+
+
+class Straight:
+    """The core's tracker in these tests: the leg ahead runs straight on from REAR."""
+
+    config = SimpleNamespace(cruise_speed_mps=0.18)
+    leg_index = 0
+
+    def leg_ahead(self):
+        xs = np.linspace(REAR[0], REAR[0] + 3.0, 61)
+        return np.column_stack([xs, np.full_like(xs, REAR[1]), np.zeros_like(xs)]), 1
+
+
+def grid(cells):
+    """160 x 60 cells of 0.05 m from (0, -1): x 0-8, y -1-2."""
+    return snapshot(cells, shape=(160, 60), origin=(0.0, -1.0))
+
+
+def box(x0, x1, y0, y1):
+    """The cells whose centres lie in [x0, x1] x [y0, y1] on grid()."""
+    return {(i, j) for i in range(160) for j in range(60)
+            if x0 <= (i + 0.5) * 0.05 <= x1 and y0 <= -1.0 + (j + 0.5) * 0.05 <= y1}
 
 
 def with_layer(core, layer, *, on="on"):
@@ -76,6 +114,8 @@ def with_layer(core, layer, *, on="on"):
     core.options.permit_stop_replan = on
     core.options.grid_planning = False
     core.options.obstacle_act = True
+    core.trackers["transport"] = Straight()
+    core.hooks.rear = lambda: REAR
     return core
 
 
@@ -87,10 +127,14 @@ def hold(core, t0, seconds, *, allowed=0.0, why="occupied", acting=True, step=0.
     return t
 
 
+AHEAD = box(4.0, 4.1, 0.2, 0.4)  # on the leg, past the outline's front (3.56)
+LATER = box(4.5, 4.6, 0.2, 0.4)
+
+
 def test_three_seconds_of_an_occupied_stop_raise_one_request_with_the_cells_and_a_wider_clearance():
     core, ms, state, calls, rear, held = make()
-    snap = snapshot({(20, 20), (21, 20)})
-    with_layer(core, Layer(snap, path_cells=[(20, 20)]))
+    snap = grid(AHEAD)
+    with_layer(core, Layer(snap))
     hold(core, 10.0, PERMIT_STOP_S - 0.2)
     assert not state.get("scene_replans")
     hold(core, 10.0 + PERMIT_STOP_S - 0.1, 0.2)
@@ -99,19 +143,55 @@ def test_three_seconds_of_an_occupied_stop_raise_one_request_with_the_cells_and_
     assert rec["clearance_m"] == pytest.approx(core.options.planner_config.clearance_m + PERMIT_STOP_CLEARANCE_ADD_M)
     assert rec["detail"]["why"] == "occupied" and rec["detail"]["held_s"] >= PERMIT_STOP_S - 1e-9
     extra = core.scene_replan.request_["extra_fn"]()
-    assert cells_of(extra, snap) == {(20, 20), (21, 20)}
+    assert cells_of(extra, snap) == AHEAD
 
 
-def test_the_callback_reads_the_permission_when_it_is_called():
+def test_the_callback_checks_again_on_the_snapshot_of_its_call_never_the_stored_checks():
+    # Codex implementation review P2: a hold release re-projects and re-checks only the truck's own pose, so the
+    # stored path check and e-stop arc still name the cells of the snapshot before
     core, ms, state, calls, rear, held = make()
-    layer = Layer(snapshot({(20, 20)}), path_cells=[(20, 20)])
+    layer = Layer(grid(AHEAD))
     with_layer(core, layer)
+    perm = layer.permission
+    leg, direction = Straight().leg_ahead()
+    perm.path_check = perm.check_path(perm.snapshot, leg, Layer.FOOT, Layer.FOOT, current_pose=tuple(REAR),
+                                      direction=direction)
+    assert perm.path_check.blocked == "occupied"  # the stored check: the cells of AHEAD
     hold(core, 10.0, PERMIT_STOP_S + 0.1)
     fn = core.scene_replan.request_["extra_fn"]
-    later = snapshot({(5, 5)})  # re-projected before the plan: other cells, the estop's only
-    layer.permission = SimpleNamespace(snapshot=later, path_check=SimpleNamespace(blocked_cells=()),
-                                       last_estop=SimpleNamespace(blocked_cells=((5, 5),)))
-    assert cells_of(fn(), later) == {(5, 5)}
+    later = grid(LATER)
+    perm.snapshot = later  # the release's re-projection; path_check left from before
+    assert cells_of(fn(), later) == LATER
+
+
+def test_a_clear_snapshot_at_the_call_gives_no_obstacles():
+    core, ms, state, *_ = make()
+    layer = Layer(grid(AHEAD))
+    with_layer(core, layer)
+    hold(core, 10.0, PERMIT_STOP_S + 0.1)
+    layer.permission.snapshot = grid(set())
+    assert core.scene_replan.request_["extra_fn"]() == []
+
+
+def test_two_blocked_regions_are_both_kept():
+    wall_a, wall_b = {(i, 10) for i in range(5, 15)}, {(i, 30) for i in range(5, 15)}
+    snap = snapshot(wall_a | wall_b)
+    assert cells_of(blocked_rectangles(snap, [(7, 10), (12, 30)], grow_m=1.0), snap) == wall_a | wall_b
+
+
+def test_a_gap_in_the_watch_or_a_new_tracker_starts_the_three_seconds_again():
+    # Codex implementation review P3: the device owning ticks (permission() not called) left the clock running
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    hold(core, 10.0, 2.0)
+    hold(core, 14.0, PERMIT_STOP_S - 0.5)  # after a 2 s gap: a new stretch
+    assert not state.get("scene_replans")
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    t = hold(core, 10.0, 2.0)
+    core.trackers["transport"] = Straight()  # a replan installed another tracker
+    hold(core, t, PERMIT_STOP_S - 0.5)
+    assert not state.get("scene_replans")
 
 
 def test_any_break_restarts_the_three_seconds():
