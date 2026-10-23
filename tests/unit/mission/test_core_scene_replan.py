@@ -446,3 +446,58 @@ def test_the_far_observation_takes_other_candidates_only_after_the_waypoint_s_ow
     assert body.count("self.scene_observe_candidate(") == 1
     assert miss < gate < body.index("self.scene_observe_candidate(") < body.index('require(False, "observe:stall_exhausted")')
     assert body.index("self.scene_observe_candidate(") > body.index("observe_miss = (")
+
+
+def test_the_far_observation_budget_runs_replans_then_candidates_then_ends():
+    """Codex impl round 3 P3: the order by behaviour -- two same-waypoint replans (no release, no candidate), then the
+    next candidate (released first) with a fresh budget of two, then the end once no candidate is left."""
+    from dataclasses import replace as dc_replace
+
+    from forklift_core.control.path_tracking import TrackingCommand
+    from forklift_core.planning.pallet_mission import plan_observation_leg
+
+    core, ms, state, calls, rear, held = make()
+    waypoints = [(-2.0, 1.0, 0.0), (-1.5, -1.5, 0.3)]
+    _observe(core, ms, state, waypoints=waypoints)
+    first = plan_observation_leg(_scene(), Pose2D(*waypoints[0]), core.options.planner_config,
+                                 geometry=core.geometry, start_rear=Pose2D(-3.0, 0.0, 0.0), extended=False)
+    assert first.success
+    core.paths["observe"] = first
+    core.trackers["observe"] = RearAxlePathTracker(first.poses, first.directions, first.curvatures_inv_m,
+                                                   config_tracker())
+    state["observation_waypoint_selected"] = list(waypoints[0])
+    core.slam = {"stop_now": True, "tracker": SimpleNamespace(mode="holding")}
+    releases = []
+    core.release_and_carry = lambda t: (releases.append(t), {"released": False})[1]
+    for name, value in dict(max_cusp_replans=2, cusp_stop_needed=True, cusp_stop_yaw_rate_radps=0.05,
+                            cusp_heading_hold_position_m=0.05, cusp_heading_hold_rad=0.08,
+                            observe_replans_per_leg=2).items():
+        setattr(core.options, name, value)
+    core.hooks.cusp_holds = lambda: None
+    core.hooks.cusp_monitor = lambda: SimpleNamespace(holds_observe=lambda: False)
+    core.hooks.cusp_heading_motion = lambda *a: {}
+    core.hooks.slam_rear = lambda t: rear["pose"]
+    core.hooks.show_path = lambda *a: None
+    core.realign_install = lambda reason: None
+    core.bottom_deck_leg_active = lambda: False
+    core.observe_bounds = lambda: None
+    miss = TrackingCommand(0.0, 0.0, "failed", 1.0, 0, 0.02, 0.09, failure="endpoint_heading")
+    ms.last_tracking = miss
+    here = np.array([-2.3, 0.4, 0.0])
+
+    def tick(k):
+        return core.cusp_and_observe_recovery(10.0 + k, here, dc_replace(miss), 0.0, DT, None, False, 0)
+
+    tick(0)
+    tick(1)
+    assert len(state["observe_replans"]) == 2 and not releases and "scene_replans" not in state  # the waypoint's own
+    tick(2)  # its budget spent: the next candidate, released first
+    assert releases == [12.0] and state["scene_replans"][-1]["outcome"] == "installed"
+    assert state["observation_waypoint_selected"] == list(waypoints[1]) and ms.next_candidate_index == 2
+    assert state["observe_replan_leg"] == {"serial": 4, "start": 2}
+    tick(3)
+    tick(4)
+    assert len(state["observe_replans"]) == 4 and releases == [12.0]  # the new leg's own two
+    with pytest.raises(RuntimeError, match="observe:stall_exhausted"):
+        tick(5)  # spent again, no candidate left
+    assert state["scene_replans"][-1]["outcome"] == "exhausted" and releases == [12.0, 15.0]

@@ -1113,7 +1113,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-22 trailer exit: the transport exit prefix; off in every earlier run.
                               "exit_clearance_m": None,
                               # 2026-10-22 open-zone docking D2: the sim-only weak-direction docking acceptance; off before.
-                              "docking_acceptance": "information"}
+                              "docking_acceptance": "information",
+                              # 2026-10-23 scene replan plan 4: the diagnostic control-pose shift at a cusp; off before.
+                              "inject_cusp_offset_m": None}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

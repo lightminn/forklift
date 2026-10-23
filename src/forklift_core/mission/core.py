@@ -6174,10 +6174,10 @@ class MissionCore:
         return not (self.near_active() or self.realign_active() or self.bottom_deck_leg_active())
 
     def scene_observe_candidate(self, t: float, rear):
-        """Plan 2.3 (B): from the stop -- the hold released first, whatever follows (the candidates are map poses,
-        and the same waypoint's replan after them starts from the released pose too, Codex impl round 1 P2-3) -- the
-        next observation candidate, one per call (the tick stays short live as the waypoint's own replan does,
-        P2-2); installed with its own replan budget when it plans. Returns (installed, tried, rear)."""
+        """Plan 2.3 (B, 6판): once the waypoint's own replans are spent, from the stop -- the hold released first
+        (the candidates are map poses, Codex impl round 1 P2-3) -- the next observation candidate, one per call (the
+        tick stays short live as the waypoint's own replan does, P2-2); installed with its own replan budget when it
+        plans, the mission ended by the caller when none is left. Returns (installed, tried, rear)."""
         ms, state, slam, hooks, options = self.ms, self.state, self.slam, self.hooks, self.options
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg

@@ -474,6 +474,16 @@ def arguments() -> argparse.Namespace:
         "(m, > 0) from the scene's walls tall enough for the obstacle layer's band; none within the cap (or a "
         "blocked straight) plans as before and is recorded. Off: plans as every earlier run.",
     )
+    parser.add_argument(
+        "--inject-cusp-offset-m",
+        type=float,
+        default=None,
+        help="Diagnostic only, never a result (docs/plans/2026-10-23-scene-replan.md 4): with --slam, once per run, "
+        "when a transport leg ending at a gear cusp comes within 0.05 m of its end, the control pose is shifted this "
+        "far to its left (m, signed) for the rest of that mission -- a SLAM correction step standing in for the "
+        "recorded line_m seed 1 mission 3 one, so the cusp latch refuses the stall and the scene replan device takes "
+        "it. The obstacle grid is not shifted with it. Off: every earlier run.",
+    )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
@@ -4992,9 +5002,14 @@ def drive(S, isaac) -> None:
             slam.setdefault("silence_dead_reckoning_s", float(now_s))
             est = compose(slam["tracker"].applied[0], slam_odom_base())
         offset = abs(args.rear_axle_offset_m)
-        return np.array(
+        out_ = np.array(
             [est[0] - offset * math.cos(est[2]), est[1] - offset * math.sin(est[2]), est[2]]
         )
+        shift_ = slam.get("cusp_injection_m")
+        if shift_:  # --inject-cusp-offset-m (diagnostic): the control pose shifted to its left
+            out_[0] -= shift_ * math.sin(out_[2])
+            out_[1] += shift_ * math.cos(out_[2])
+        return out_
     if args.robot_camera:
         import video_frames as video_frames_module
     speeds = {
@@ -5923,6 +5938,7 @@ def drive(S, isaac) -> None:
 
         session_truth_rects_ = []  # the other session pallets' outlines where they stand now (plan 2.4)
         session_truth_ids_ = []  # their ids, in the same order
+        cusp_injection_ = {"done": False}  # --inject-cusp-offset-m: once per run
         if session is not None:
             from session_pallets import NeighbourGap
 
@@ -5942,6 +5958,8 @@ def drive(S, isaac) -> None:
                 session_rest.rest(old_, pos_, q_)
                 state.setdefault("session_switches", []).append(
                     {"step": int(step_), "t": float(t_), "from": old_, "to": new_})
+                if slam is not None:
+                    slam.pop("cusp_injection_m", None)  # --inject-cusp-offset-m lasts the mission it was put in
                 if far_runtime is not None:
                     far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(new_)
                 if trace_evidence is not None:
@@ -7842,6 +7860,17 @@ def drive(S, isaac) -> None:
                 # The scene-mode replan device (docs/plans/2026-10-23-scene-replan.md 2.1): ahead of the follower. A
                 # tick it owns stands (the steering held), steers the wheels standing or drives its escape prefix --
                 # no follower, stall, recovery or arrival; the permission, the links and the commands go on.
+                inject_ = getattr(args, "inject_cusp_offset_m", None)
+                if (inject_ is not None and slam is not None and not cusp_injection_["done"] and ms.phase == "transport"
+                        and ms.phase in trackers and ms.last_tracking is not None and ms.last_tracking.at_cusp
+                        and trackers[ms.phase].leg_remaining_m() <= 0.05):
+                    # Diagnostic (scene replan plan 4): the control pose shifted from the next tick on.
+                    cusp_injection_["done"] = True
+                    slam["cusp_injection_m"] = float(inject_)
+                    state.setdefault("cusp_injections", []).append(
+                        {"time_s": float(t), "offset_m": float(inject_), "rear": [float(v) for v in rear],
+                         "leg_index": int(trackers[ms.phase].leg_index),
+                         "leg_remaining_m": float(trackers[ms.phase].leg_remaining_m())})
                 scene_owned_, scene_presteer_ = False, None
                 if not paused_ and not releasing and not warming and core.scene_replan.active():
                     scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)
