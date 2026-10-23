@@ -243,6 +243,7 @@ class MissionCore:
         self.scene_replan = SceneReplan(None)
         self.scene_mail = None  # the device's plan answer: ("ok", result) | ("ok_fail", status) | ("dropped", why)
         self.scene_raised = False  # a request raised in this tick's follower: the rest of the tick stands
+        self.permit_stop_since = None  # P6: (start, phase) of the zero limit for an occupied cell being held
         self.scene_escape: dict | None = None  # the escape prefix driven for a request
         self.scene_correction: dict = {}  # the largest SLAM correction contribution on the current gear leg
 
@@ -1284,8 +1285,47 @@ class MissionCore:
             not (options.grid_planning and acting and self.commands.work_elapsed(watch["since_s"], t) > 60.0),
             f"obstacle_no_progress in {ms.phase}",
         )
+        self.permit_stop_tick(t, rear, allowed, why, acting)
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
+
+    def permit_stop_tick(self, t: float, rear, allowed: float, why: str, acting: bool) -> None:
+        """P6 (docs/plans/2026-10-23-planner-permission-clearance.md 3 P6): a scene layout's travel leg the acting
+        permission holds at zero for an occupied cell ``PERMIT_STOP_S`` (work time) raises the scene-mode replan
+        device's ``permit_stop`` request -- the cells it blocks on, read when the device plans, as obstacles and the
+        clearance ``PERMIT_STOP_CLEARANCE_ADD_M`` wider. Not while the device runs a request; a spent budget ends
+        the mission with the device's reason. ``--permit-stop-replan off`` (and a record from before the option)
+        leaves it out."""
+        from forklift_core.mission.permit_stop import (PERMIT_STOP_CLEARANCE_ADD_M, PERMIT_STOP_S,
+                                                       permission_blocked_rectangles)
+
+        options, obstacle = self.options, self.obstacle
+        watching = (
+            getattr(options, "permit_stop_replan", "off") == "on" and not getattr(options, "grid_planning", False)
+            and getattr(options, "obstacle_act", False) and acting and allowed == 0.0 and why == "occupied"
+            and obstacle is not None and not self.scene_replan.active() and self.scene_replan_allowed()
+        )
+        if not watching:
+            self.permit_stop_since = None
+            return
+        if self.permit_stop_since is None:
+            self.permit_stop_since = (t, self.ms.phase)
+            return
+        since_, phase_ = self.permit_stop_since
+        if phase_ != self.ms.phase:
+            self.permit_stop_since = (t, self.ms.phase)
+            return
+        held_ = self.commands.work_elapsed(since_, t)
+        if held_ < PERMIT_STOP_S - 1e-9:
+            return
+        self.permit_stop_since = None
+        layer_ = obstacle["layer"]
+        why_ = self.scene_replan_request(
+            t, "permit_stop", rear=rear,
+            extra_obstacles_fn=lambda: permission_blocked_rectangles(layer_.permission),
+            clearance_m=float(options.planner_config.clearance_m) + PERMIT_STOP_CLEARANCE_ADD_M,
+            detail={"why": why, "since_s": float(since_), "held_s": float(held_)})
+        self.hooks.require(why_ is None, why_ or "")
 
     def blocked_replan(self, t: float, rear, kappa: float, requested_speed: float) -> SimpleNamespace:
         """Stop, replan, resume (plan D4) once the truck has stood blocked for a second or a replan is forced:
@@ -6614,6 +6654,7 @@ class MissionCore:
         self.restore_wall_s = time.perf_counter() - began  # plan U29: holds the records' handover (top-level copies)
         self.scene_replan.reset()  # a mission's budget (never a tracker's or a pause's)
         self.scene_mail, self.scene_raised, self.scene_escape, self.scene_correction = None, False, None, {}
+        self.permit_stop_since = None  # P6: a new mission starts its own watch
         return records
 
     def hold_slam(self, t: float, *, held_frame_pallet: bool) -> None:
