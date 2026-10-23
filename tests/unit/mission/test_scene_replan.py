@@ -22,6 +22,13 @@ class Ports:
         self.log = []
         self.pending = None
         self.escape_running = False
+        self.snapshots = 0  # a new snapshot on every ask unless a test freezes it
+        self.frozen = False
+
+    def snapshot_id(self):
+        if not self.frozen:
+            self.snapshots += 1
+        return self.snapshots
 
     def stopped(self):
         return self.stopped_
@@ -337,3 +344,38 @@ def test_an_abort_closes_the_record():
     _ask(dev)
     dev.abort("async_plan_failed")
     assert not dev.active() and records[-1]["outcome"] == "failed" and records[-1]["reason"] == "async_plan_failed"
+
+
+def test_a_standing_recheck_waits_for_a_new_snapshot_keeps_the_stop_and_restarts_after_a_replan():
+    """Codex impl round 5: P3 -- no new snapshot, no new check (only the time runs); P2-2 -- the stop lost while the
+    candidate waits goes back to the stop, nothing installed or steered; P2-3 -- a replan ends the start check's wait,
+    the new leg's wait starts again."""
+    dev, records = _device()
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}])
+    _ask(dev)
+    _run(dev, ports, n=3)
+    asked = ports.log.count(("candidate", "path-1"))
+    ports.frozen = True
+    _run(dev, ports, t0=10.3, n=5)
+    assert ports.log.count(("candidate", "path-1")) == asked  # the same snapshot is not checked again
+    steps = _run(dev, ports, t0=10.8, n=40)
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:start:unknown"  # the time still runs out
+    dev, records = _device()
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 3
+                  + [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+    _ask(dev)
+    _run(dev, ports, n=3)  # waiting: the next answer would pass
+    ports.stopped_ = False
+    step = dev.step(10.3, ports)
+    assert step.output == "hold" and dev.state == "wait_stop" and ("install", "path-1") not in ports.log
+    dev, records = _device()
+    ports = Ports(plans=[("ok", "p1"), ("ok", "p2")],
+                  previews=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 2
+                  + [{"status": "failed", "ok": False, "why": "failed:endpoint_heading"}]
+                  + [{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 3
+                  + [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+    _ask(dev)
+    steps = _run(dev, ports, n=80)
+    assert ("install", "p2") in ports.log and steps[-1].owned is False and records[-1]["drops"] == 1
+    waits = records[-1]["permit_waits"]
+    assert [w["where"] for w in waits] == ["resume", "resume"]  # two stretches, not one across the replan

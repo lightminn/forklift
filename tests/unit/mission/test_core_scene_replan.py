@@ -524,11 +524,20 @@ def test_the_candidate_permit_is_strict_where_the_permission_stops_acting():
     assert core._scene_permit_strict(tracker, leg)
     short_leg = np.asarray(leg)[: max(2, len(leg) // 3)]  # a first leg ending well before the zone
     assert not core._scene_permit_strict(tracker, short_leg)
-    core.slam = {"docking": {"status": "armed", "keep_m": 0.4}}  # the zone grows by keep while docking is armed
-    cut = whole - straight - 0.2
-    on = np.asarray(leg)[np.cumsum(np.r_[0.0, np.hypot(*np.diff(np.asarray(leg)[:, :2], axis=0).T)]) <= cut]
-    assert core._scene_permit_strict(tracker, on)
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    # docking armed: the candidate's uncut plan widens the zone by what arm_docking will cut (Codex impl round 5 P2-1)
+    core.hooks.final_straight_prefix = final_straight_prefix
+    core.slam = {"docking": {"status": "armed", "keep_m": 0.4}}
+    full = core.paths["transport"]
+    cut_m = float(np.sum(np.hypot(*np.diff(np.asarray(full.poses)[:, :2], axis=0).T))) - float(np.sum(np.hypot(
+        *np.diff(np.asarray(final_straight_prefix(full, 0.4).poses)[:, :2], axis=0).T)))
+    assert cut_m > 0.3
+    reach = whole - straight - cut_m / 2  # the leg ends inside the widened zone only
+    on = np.asarray(leg)[np.cumsum(np.r_[0.0, np.hypot(*np.diff(np.asarray(leg)[:, :2], axis=0).T)]) <= reach]
+    assert core._scene_permit_strict(tracker, on, full)
+    assert not core._scene_permit_strict(tracker, on)  # an installed (already cut) tracker: keep not added again
     core.slam = None
-    assert not core._scene_permit_strict(tracker, on)
+    assert not core._scene_permit_strict(tracker, on, full)
     ms.phase = "return_home"
     assert not core._scene_permit_strict(tracker, leg)

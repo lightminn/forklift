@@ -6289,7 +6289,7 @@ class MissionCore:
         result = value["result"]
         self.scene_mail = ("ok", result) if result.success else ("ok_fail", result.status)
 
-    def _scene_preview(self, tracker, t: float, rear, dt: float) -> dict:
+    def _scene_preview(self, tracker, t: float, rear, dt: float, uncut=None) -> dict:
         """Plan 2.1 steps 6 and 9: a tracker copy's first command from the stop pose -- its status branched first; a
         failure-free braking (a cusp switch) previewed one tick further -- and the permission's candidate check on
         the leg it starts, at that command's curvature and at the wheels' measured one."""
@@ -6318,7 +6318,7 @@ class MissionCore:
         if obstacle is None:
             out.update(ok=True, why="no_layer")
             return out
-        strict_ = self._scene_permit_strict(tracker, leg_)
+        strict_ = self._scene_permit_strict(tracker, leg_, uncut)
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
@@ -6326,20 +6326,28 @@ class MissionCore:
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         return out
 
-    def _scene_permit_strict(self, tracker, leg) -> bool:
-        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the candidate's first gear leg reaches where the
-        permission stops acting -- a transport's last keep + delivery straight (permission_acting's docking straight
-        on the tracker arm_docking cuts back by keep) -- so its unknown cells must be verified before it is installed.
-        Measured on the candidate's whole path, the leg's end against that zone; a return always has the permission."""
+    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
+        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
+        acting -- the transport's docking straight, the last delivery straight of the tracker permission_acting reads
+        -- so its unknown cells must be verified before it is installed. ``uncut``: the candidate's plan before
+        install's arm_docking, which cuts the tracker back to where the final straight keeps keep_m; the length it
+        cuts (measured, not the nominal keep -- the cut falls on a sample, Codex impl round 5 P2-1) widens the zone.
+        None: the tracker is the installed one, already cut. A return always has the permission."""
         if self.ms.phase != "transport":
             return False
-        poses_ = np.asarray(leg, dtype=float)
-        leg_m_ = float(np.sum(np.hypot(np.diff(poses_[:, 0]), np.diff(poses_[:, 1])))) if len(poses_) > 1 else 0.0
+
+        def length(poses):
+            poses = np.asarray(poses, dtype=float)
+            return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+
+        cut_ = 0.0
         docking_ = (self.slam or {}).get("docking") or {}
-        keep_ = float(docking_.get("keep_m", self.geometry.delivery_straight_m)) if docking_.get("status") in (
-            "pending", "armed") else 0.0
-        zone_ = keep_ + float(self.geometry.delivery_straight_m)
-        return float(tracker.remaining_to_goal_m()) - leg_m_ <= zone_ + 1e-6
+        if uncut is not None and docking_.get("status") in ("pending", "armed"):
+            prefix_ = self.hooks.final_straight_prefix(uncut, docking_.get("keep_m", self.geometry.delivery_straight_m))
+            if prefix_ is not None:
+                cut_ = length(uncut.poses) - length(prefix_.poses)
+        zone_ = cut_ + float(self.geometry.delivery_straight_m)
+        return float(tracker.remaining_to_goal_m()) - length(leg) <= zone_ + 1e-6
 
     def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's world this tick (plan 2.1)."""
@@ -6415,7 +6423,7 @@ class MissionCore:
         def candidate(result):
             tracker_ = RearAxlePathTracker(result.poses, result.directions, result.curvatures_inv_m,
                                            trackers[ms.phase].config)
-            return core._scene_preview(tracker_, t, box.rear, dt)
+            return core._scene_preview(tracker_, t, box.rear, dt, uncut=result)
 
         def install(result):
             paths[ms.phase] = result
@@ -6513,7 +6521,13 @@ class MissionCore:
         def preview():
             return core._scene_preview(copy.deepcopy(trackers[ms.phase]), t, box.rear, dt)
 
+        def snapshot_id():  # a new processed snapshot: a standing re-check has something new to see (round 5 P3)
+            layer_ = (obstacle or {}).get("layer")
+            snap_ = getattr(layer_, "snapshot", None)
+            return None if snap_ is None else (id(snap_), snap_.stamp_s)
+
         return SimpleNamespace(stopped=stopped, busy=busy, release_hold=release_hold, submit=submit, poll=poll,
+                               snapshot_id=snapshot_id,
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box)

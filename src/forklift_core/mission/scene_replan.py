@@ -11,7 +11,7 @@ gets one straight escape prefix, driven under the permission, and the same reque
 The world is behind ports (a namespace the core builds each tick), so this module holds the state, the limits,
 the budget and the records only:
 
-- ``stopped()``, ``busy()``, ``release_hold()``;
+- ``stopped()``, ``busy()``, ``release_hold()``, ``snapshot_id()`` (changes with each new processed snapshot);
 - ``submit(extra, clearance_m)`` / ``poll()`` -> None (waiting) | ("ok", result) | ("ok_fail", status) |
   ("dropped", why);
 - ``candidate(result)`` / ``preview()`` -> {"status", "ok", "why", "steer", ...} (re-asked every tick while the
@@ -116,7 +116,7 @@ class SceneReplan:
         self.request_ = {"t0": float(t), "paused_s": 0.0, "trigger": trigger, "extra_fn": extra_obstacles_fn,
                          "clearance_m": clearance_m, "released": False, "escapes": 0, "extra": (),
                          "target": None, "presteer_since": None, "permit_since": None, "resume_since": None,
-                         "result": None, "record": line}
+                         "result": None, "seen": None, "stretch": 0, "record": line}
         self._go("wait_stop", t)
         return None
 
@@ -138,11 +138,11 @@ class SceneReplan:
 
     def _note_wait(self, t: float, where: str, why) -> None:
         """A standing re-check's record: one entry per stretch and reason (its first and last tick)."""
-        waits_ = self.request_["record"]["permit_waits"]
-        if waits_ and waits_[-1]["where"] == where and waits_[-1]["why"] == why:
-            waits_[-1]["until_s"] = float(t)
+        waits_, stretch_ = self.request_["record"]["permit_waits"], self.request_["stretch"]
+        if waits_ and waits_[-1]["stretch"] == stretch_ and waits_[-1]["why"] == why:
+            waits_[-1]["until_s"] = float(t)  # the same stretch, not one after a replan (round 5 P3)
         else:
-            waits_.append({"where": where, "why": why, "since_s": float(t), "until_s": float(t)})
+            waits_.append({"where": where, "why": why, "since_s": float(t), "until_s": float(t), "stretch": stretch_})
 
     def _drop(self, t: float, back_to: str) -> StepResult | None:
         r = self.request_
@@ -205,10 +205,21 @@ class SceneReplan:
                         self._go("escape", t)
                         return StepResult(owned=True, output="escape")
                     return self._end("failed", f"scene_replan_failed:{trigger}:{value}")
-                r["result"], r["permit_since"] = value, float(t)
+                r["result"], r["permit_since"], r["seen"] = value, float(t), None
+                r["stretch"] += 1
                 self._go("candidate", t)
             elif state == "candidate":
+                if not ports.stopped():  # the stop lost while it waits: nothing installed or steered (round 5 P2-2)
+                    self._go("wait_stop", t)
+                    return hold
                 value = r["result"]
+                seen_ = ports.snapshot_id()
+                if r["seen"] is not None and seen_ == r["seen"]:
+                    # no new snapshot since the last check (round 5 P3): only the time
+                    if t - r["permit_since"] < self.config.permit_wait_s:
+                        return hold
+                    return self._end("refused", f"scene_replan_refused:{trigger}:{r['record']['candidate'].get('why')}")
+                r["seen"] = seen_
                 candidate = ports.candidate(value)
                 r["record"]["candidate"] = candidate
                 status = candidate.get("status")
@@ -250,17 +261,27 @@ class SceneReplan:
                 self._go("resume_check", t)
             elif state == "resume_check":
                 if not ports.stopped():
+                    r["resume_since"] = None  # a wait ends with the state it waited in (round 5 P2-3)
                     self._go("wait_stop", t)
                     return hold
+                if r["resume_since"] is not None and ports.snapshot_id() == r["seen"]:
+                    if t - r["resume_since"] < self.config.permit_wait_s:
+                        return hold  # no new snapshot: only the time (round 5 P3)
+                    r["resume_since"] = None
+                    out = self._drop(t, "wait_jobs")
+                    return out or hold
+                r["seen"] = ports.snapshot_id()
                 preview = ports.preview()
                 r["record"]["preview"] = preview
                 if preview.get("status") in REPLAN_STATUSES:
+                    r["resume_since"] = None
                     out = self._drop(t, "wait_jobs")
                     return out or hold
                 if not preview.get("ok"):
                     # 7판 (Codex Isaac round 2): the same standing re-check as the candidate's, then planned again.
                     if r["resume_since"] is None:
                         r["resume_since"] = float(t)
+                        r["stretch"] += 1
                     if t - r["resume_since"] < self.config.permit_wait_s:
                         self._note_wait(t, "resume", preview.get("why"))
                         return hold
@@ -271,6 +292,7 @@ class SceneReplan:
                 steer = preview.get("steer")
                 if steer is not None and ports.steer_gap(steer, r["target"]) > self.config.presteer_tolerance_rad:
                     if r["record"]["represteers"] >= self.config.represteers_per_request:
+                        r["resume_since"] = None
                         out = self._drop(t, "wait_jobs")
                         return out or hold
                     r["record"]["represteers"] += 1
