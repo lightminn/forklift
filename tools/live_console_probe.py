@@ -50,6 +50,31 @@ class Probe:
         self.closed_code = None
         self.last_teleop = None
         self.save_frames = None  # (directory, how many) for the marker scenario
+        # The console queue's stop events (docs/plans/2026-10-22-console-mission-queue.md D4-D6), as they happen:
+        # a feedback loss lasting 0.5 s, STOPPED / TELEOP, a safety preempt (CT-1 PR 4's stop-on-anomaly cycle).
+        self.anomalies: list = []
+        self._feedback_lost_since = None
+
+    def _watch_anomalies(self, msg) -> None:
+        """The queue's stop events in this state (D4): kept with their time, the first of each run only."""
+        now = time.monotonic()
+        if msg.get("feedback_ok") is False:
+            if self._feedback_lost_since is None:
+                self._feedback_lost_since = now
+            elif now - self._feedback_lost_since >= 0.5 and not (
+                    self.anomalies and self.anomalies[-1]["kind"] == "feedback_lost"
+                    and self.anomalies[-1]["since_mono"] == self._feedback_lost_since):
+                self.anomalies.append({"kind": "feedback_lost", "since_mono": self._feedback_lost_since, "mono": now})
+        else:
+            self._feedback_lost_since = None
+        mode_ = msg.get("mode")
+        kind_ = ("mode:" + mode_) if mode_ in ("STOPPED", "TELEOP") else (
+            "preempt" if msg.get("stop_kind") in ("preempt", "safety_preempt") else None)
+        if kind_ is not None and not (self.anomalies and self.anomalies[-1]["kind"] == kind_
+                                      and now - self.anomalies[-1]["mono"] < 1.0):
+            self.anomalies.append({"kind": kind_, "mono": now})
+        elif kind_ is not None:
+            self.anomalies[-1]["mono"] = now  # the same event going on
 
     def event(self, name, **fields):
         self.report.setdefault("events", []).append({"mono": time.monotonic(), "event": name, **fields})
@@ -96,6 +121,7 @@ class Probe:
                 elif t == "state":
                     self.state = msg
                     self.control_gen = msg.get("control_gen", self.control_gen)
+                    self._watch_anomalies(msg)
                     self.states.append({"mono": time.monotonic(), "mode": msg.get("mode"),
                                         "stop_kind": msg.get("stop_kind"), "armed": msg.get("armed"),
                                         "applied": msg.get("applied"), "speed": msg.get("rear_axle_speed_mps"),
@@ -782,9 +808,12 @@ async def cycle_scenario(p: Probe, args):
     p.report["missions_run"] = []
     legs = [leg for leg in args.cycle.split(",") if leg]  # empty: only the teleop (plan U11)
     leg_index, backoffs = 0, 0
+    if args.stop_on_anomaly:
+        p.report["queue"] = {"policy": "stop_on_anomaly", "stopped": None}
     while leg_index < len(legs):
         leg = legs[leg_index]
         pallet_id, destination_id = leg.split(":")
+        anomalies_seen_ = len(p.anomalies)
         await p.until(p.standing, 30, label="standing_before_submit")
         await asyncio.sleep(1.0)
         seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
@@ -816,6 +845,9 @@ async def cycle_scenario(p: Probe, args):
                  "submitted_mono": time.monotonic()}
         p.report["missions_run"].append(entry)
         if not submit or submit.get("t") != "ack":
+            if args.stop_on_anomaly:  # the queue stops on any refusal (D5); nothing more is submitted
+                p.report["queue"]["stopped"] = {"why": f"refused:{(submit or {}).get('reason')}", "leg": leg_index}
+                break
             leg_index += 1  # refused: the next leg (Codex D14 impl round 4 P2-4 -- it asked the same one forever)
             continue
         if args.stop_wait_at and not p.report.get("stop_wait_done"):
@@ -1017,7 +1049,20 @@ async def cycle_scenario(p: Probe, args):
                                                                "advice": advice_ or None, "target_m": target_,
                                                                "moved_m": moved_})
             continue
+        if args.stop_on_anomaly:
+            # CT-1 PR 4: the console queue's policy -- a result other than done, or any stop event while the mission
+            # ran (it went on; the queue does not submit the next one)
+            outcome_ = (entry["result"] or {}).get("outcome")
+            events_ = p.anomalies[anomalies_seen_:]
+            entry["anomalies"] = events_
+            if entry.get("result_not_this_mission") or outcome_ != "done" or events_:
+                why_ = ("no_result" if entry.get("result_not_this_mission") else
+                        f"outcome:{outcome_}" if outcome_ != "done" else f"event:{events_[0]['kind']}")
+                p.report["queue"]["stopped"] = {"why": why_, "leg": leg_index}
+                break
         leg_index += 1
+    if args.stop_on_anomaly and p.report["queue"]["stopped"] is None:
+        p.report["queue"]["stopped"] = {"why": "completed", "leg": len(legs)}
     p.report["missions_message"] = p.missions
     if args.reconnect_at_end and p.closed_code is None:
         # Plan U2: a page that connects after the missions gets the results book and the last result
@@ -1294,6 +1339,10 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
+    ap.add_argument("--stop-on-anomaly", action="store_true",
+                    help="cycle scenario (CT-1 PR 4): the console queue's policy -- no next submit after a result "
+                    "other than done, a refusal, or a stop event while the mission ran (STOPPED / TELEOP, a safety "
+                    "preempt, feedback lost 0.5 s); the reason is kept in the report's queue entry")
     ap.add_argument("--reconnect-at-end", action="store_true",
                     help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
     ap.add_argument("--cancel-pause-s", type=float, default=0.0,
