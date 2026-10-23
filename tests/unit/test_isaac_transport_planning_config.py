@@ -189,8 +189,10 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # calls: the mission replanned from where the truck stands after recognition
     # when that leg stays blocked, and its zero-clearance retry. Plan 2026-10-19 task 4 adds
     # the bottom-deck side leg (to its stand, a retake's retreat point or the return to the far stand)
-    # and its zero-clearance retry; the mission is planned after the re-observation, as always.
+    # and its zero-clearance retry; the mission is planned after the re-observation, as always. The scene replan
+    # plan 2.3 adds a scene's first far observation stall taking the next candidate.
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",

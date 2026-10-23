@@ -3753,8 +3753,9 @@ class MissionCore:
         """The candidate the selected waypoint came from: the last one tried before the next, unless a scene observe
         stall tried later ones that failed and fell back to the waypoint (Codex impl round 2 P3)."""
         ms, selected = self.ms, list(self.state["observation_waypoint_selected"])
-        for index_ in range(min(ms.next_candidate_index, len(self.options.observation_waypoints or ())) - 1, -1, -1):
-            if list(self.options.observation_waypoints[index_]) == selected:
+        waypoints_ = getattr(self.options, "observation_waypoints", None) or ()
+        for index_ in range(min(ms.next_candidate_index, len(waypoints_)) - 1, -1, -1):
+            if list(waypoints_[index_]) == selected:
                 return index_
         return ms.next_candidate_index - 1
 
@@ -6181,6 +6182,7 @@ class MissionCore:
         ms, state, slam, hooks, options = self.ms, self.state, self.slam, self.hooks, self.options
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
         grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
+        scenario, planner_config = options.scenario, options.planner_config  # the names the plan audit evaluates
         rear_ = np.asarray(rear, dtype=float)
         if slam is not None and slam["tracker"].mode == "holding":
             out_ = self.release_and_carry(t)
@@ -6191,17 +6193,17 @@ class MissionCore:
                     slam["control"][-1][1:4] = rear_.tolist()
         if ms.next_candidate_index >= len(options.observation_waypoints or ()):
             return SimpleNamespace(installed=False, tried=False, rear=rear_)
-        start_ = PlanningPose(float(rear_[0]), float(rear_[1]), float(rear_[2]))
+        start = PlanningPose(float(rear_[0]), float(rear_[1]), float(rear_[2]))
         if ms.next_candidate_index < len(options.observation_waypoints):
             index_ = ms.next_candidate_index
             ms.next_candidate_index += 1
-            coordinates_ = options.observation_waypoints[index_]
+            coordinates = options.observation_waypoints[index_]
             plan_ = plan_observation_leg(
-                grid_world(options.scenario), PlanningPose(*(float(v) for v in coordinates_)),
-                options.planner_config, geometry=geometry, start_rear=start_, pickup_bounds=self.observe_bounds(),
+                grid_world(scenario), PlanningPose(*(float(v) for v in coordinates)),
+                planner_config, geometry=geometry, start_rear=start, pickup_bounds=self.observe_bounds(),
                 extended=False, **grid_kwargs("observe"))
             state["observation_candidates"].append(
-                {"candidate_index": index_, "pose": list(coordinates_), "start_rear": [float(v) for v in rear_],
+                {"candidate_index": index_, "pose": list(coordinates), "start_rear": [float(v) for v in rear_],
                  "success": plan_.success, "status": plan_.status, "after": "scene_observe_stall",
                  "analytic_expansion_interval": plan_.analytic_expansion_interval,
                  "search_attempts": [list(entry) for entry in plan_.search_attempts]})
@@ -6210,7 +6212,7 @@ class MissionCore:
                  "rear": [float(v) for v in rear_], "status": plan_.status,
                  "outcome": "installed" if plan_.success else "failed"})
             if plan_.success:
-                state["observation_waypoint_selected"] = list(coordinates_)
+                state["observation_waypoint_selected"] = list(coordinates)
                 state["observe_replan_leg"] = {"serial": state["observe_replan_leg"]["serial"] + 1,
                                                "start": len(state["observe_replans"])}
                 paths["observe"] = plan_
