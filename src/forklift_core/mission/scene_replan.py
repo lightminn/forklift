@@ -216,9 +216,11 @@ class SceneReplan:
                 seen_ = ports.snapshot_id()
                 if r["seen"] is not None and seen_ == r["seen"]:
                     # no new snapshot since the last check (round 5 P3): only the time
+                    why_ = r["record"]["candidate"].get("why")
+                    self._note_wait(t, "candidate", why_)  # the wait's record runs on (Codex impl round 6 P3)
                     if t - r["permit_since"] < self.config.permit_wait_s:
                         return hold
-                    return self._end("refused", f"scene_replan_refused:{trigger}:{r['record']['candidate'].get('why')}")
+                    return self._end("refused", f"scene_replan_refused:{trigger}:{why_}")
                 r["seen"] = seen_
                 candidate = ports.candidate(value)
                 r["record"]["candidate"] = candidate
@@ -265,6 +267,7 @@ class SceneReplan:
                     self._go("wait_stop", t)
                     return hold
                 if r["resume_since"] is not None and ports.snapshot_id() == r["seen"]:
+                    self._note_wait(t, "resume", (r["record"]["preview"] or {}).get("why"))
                     if t - r["resume_since"] < self.config.permit_wait_s:
                         return hold  # no new snapshot: only the time (round 5 P3)
                     r["resume_since"] = None

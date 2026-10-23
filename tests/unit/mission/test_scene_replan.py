@@ -379,3 +379,41 @@ def test_a_standing_recheck_waits_for_a_new_snapshot_keeps_the_stop_and_restarts
     assert ("install", "p2") in ports.log and steps[-1].owned is False and records[-1]["drops"] == 1
     waits = records[-1]["permit_waits"]
     assert [w["where"] for w in waits] == ["resume", "resume"]  # two stretches, not one across the replan
+
+
+def test_a_replan_starts_the_start_check_s_wait_again_and_a_cached_wait_is_recorded_to_its_end():
+    """Codex impl round 6 P3: the old timer would let the new leg's first start check -- after a long replan --
+    drop at once; and the ticks a frozen snapshot answers keep the wait's record running."""
+    dev, records = _device()
+    ports = Ports(plans=[("ok", "p1"), ("ok", "p2"), ("ok", "p3")],
+                  previews=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 2
+                  + [{"status": "failed", "ok": False, "why": "failed:endpoint_heading"}]
+                  + [{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 3
+                  + [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+    _ask(dev)
+    t, k = 10.0, 0
+    while records[-1]["drops"] == 0:
+        dev.step(t, ports)
+        t, k = t + 0.1, k + 1
+        assert k < 50
+    ports.busy_ = True  # a long replan: the new leg's first start check comes 4.5 s later
+    for _ in range(45):
+        dev.step(t, ports)
+        t += 0.1
+    ports.busy_ = False
+    for _ in range(60):
+        out = dev.step(t, ports)
+        t += 0.1
+        if not out.owned:
+            break
+    assert not out.owned and ("install", "p2") in ports.log and ("install", "p3") not in ports.log
+    assert records[-1]["drops"] == 1  # the new leg waited its own 3 s, not dropped at once
+    dev, records = _device()
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}])
+    _ask(dev)
+    _run(dev, ports, n=2)
+    ports.frozen = True
+    steps = _run(dev, ports, t0=10.2, n=40)
+    wait = records[-1]["permit_waits"][-1]
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:start:unknown"
+    assert wait["until_s"] - wait["since_s"] == pytest.approx(3.0, abs=0.11)
