@@ -495,6 +495,15 @@ def arguments() -> argparse.Namespace:
         "grown band backs out straight first unless --exit-clearance-m sets that prefix. 0 (default): as every earlier "
         "run. Not with --grid-planning, whose world has no props to grow.",
     )
+    parser.add_argument(
+        "--permit-stop-replan",
+        choices=("on", "off"),
+        default="on",
+        help="docs/plans/2026-10-23-planner-permission-clearance.md P6: in --layout scene, a transport or return leg "
+        "the permission holds at zero for an occupied cell for 3 s is replanned from where it stands by the scene "
+        "replan device, with the blocked cells as obstacles and the clearance 0.10 m wider. Off: the stop stands until "
+        "the tracking timeout, as every earlier run (a record without this option replays off). No effect elsewhere.",
+    )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
@@ -5502,6 +5511,8 @@ def drive(S, isaac) -> None:
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
+                                # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
+                                permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,
