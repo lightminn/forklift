@@ -6180,6 +6180,7 @@ class MissionCore:
         P2-2); installed with its own replan budget when it plans. Returns (installed, tried, rear)."""
         ms, state, slam, hooks, options = self.ms, self.state, self.slam, self.hooks, self.options
         paths, trackers, geometry = self.paths, self.trackers, self.geometry
+        grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
         rear_ = np.asarray(rear, dtype=float)
         if slam is not None and slam["tracker"].mode == "holding":
             out_ = self.release_and_carry(t)
@@ -6195,13 +6196,15 @@ class MissionCore:
             index_ = ms.next_candidate_index
             ms.next_candidate_index += 1
             coordinates_ = options.observation_waypoints[index_]
-            plan_ = hooks.plan_observation_leg(
-                hooks.grid_world(options.scenario), PlanningPose(*(float(v) for v in coordinates_)),
+            plan_ = plan_observation_leg(
+                grid_world(options.scenario), PlanningPose(*(float(v) for v in coordinates_)),
                 options.planner_config, geometry=geometry, start_rear=start_, pickup_bounds=self.observe_bounds(),
-                extended=False, **hooks.grid_kwargs("observe"))
+                extended=False, **grid_kwargs("observe"))
             state["observation_candidates"].append(
                 {"candidate_index": index_, "pose": list(coordinates_), "start_rear": [float(v) for v in rear_],
-                 "success": plan_.success, "status": plan_.status, "after": "scene_observe_stall"})
+                 "success": plan_.success, "status": plan_.status, "after": "scene_observe_stall",
+                 "analytic_expansion_interval": plan_.analytic_expansion_interval,
+                 "search_attempts": [list(entry) for entry in plan_.search_attempts]})
             state.setdefault("scene_replans", []).append(
                 {"time_s": float(t), "trigger": "observe_stall", "phase": "observe", "candidate_index": index_,
                  "rear": [float(v) for v in rear_], "status": plan_.status,
@@ -6337,7 +6340,7 @@ class MissionCore:
             pending_ = core.pending is not None and core.pending.site != "scene_replan"
             return pending_ or (slam is not None and slam.get("pending_release") is not None)
 
-        def release():
+        def release_hold():
             if slam is None or slam["tracker"].mode != "holding":
                 return
             out_ = core.release_and_carry(t)
@@ -6364,21 +6367,24 @@ class MissionCore:
             if clearance_m is not None:
                 cfg_ = replace(cfg_, clearance_m=float(clearance_m))
                 travel_ = replace(travel_, clearance_m=float(clearance_m)) if travel_ is not None else None
-            sc_ = hooks.grid_world(scenario_now(extra))
+            world_, grid_world = scenario_now(extra), hooks.grid_world
             start_ = PlanningPose(float(box.rear[0]), float(box.rear[1]), float(box.rear[2]))
-            if ms.phase == "transport":
-                kind_, args_, extra_kw_ = "transport", (sc_, start_, cfg_), core._exit_prefix_kwargs()
-            else:
-                kind_, args_, extra_kw_ = "return", (sc_, start_, options.return_to_pose, cfg_), {}
             kwargs_ = dict(geometry=geometry, travel_config=travel_)
             if core.jobs is not None:
+                if ms.phase == "transport":
+                    kind_, args_, extra_kw_ = "transport", (grid_world(world_), start_, cfg_), core._exit_prefix_kwargs()
+                else:
+                    kind_, args_, extra_kw_ = "return", (grid_world(world_), start_, options.return_to_pose, cfg_), {}
                 worker_kw_ = {**kwargs_, **extra_kw_}  # the worker's planner is unbound: the exit prefix goes along
                 payload_ = {"kind": kind_, "args": args_, "kwargs": {**worker_kw_, "deadline": time.monotonic() + 20.0},
                             "retry_on": (), "tight_args": args_, "tight_kwargs": worker_kw_}
                 core._request("scene_replan", "leg", payload_, t, box.rear, core._applied_now(), ctx={})
                 return
-            planner_ = hooks.plan_transport_leg if kind_ == "transport" else hooks.plan_return_leg
-            result_ = planner_(*args_, **kwargs_)
+            # the batch hooks bind the exit prefix themselves; called by name so the plan audit sees them
+            if ms.phase == "transport":
+                result_ = hooks.plan_transport_leg(grid_world(world_), start_, cfg_, **kwargs_)
+            else:
+                result_ = hooks.plan_return_leg(grid_world(world_), start_, options.return_to_pose, cfg_, **kwargs_)
             core.scene_mail = ("ok", result_) if result_.success else ("ok_fail", result_.status)
 
         def poll():
@@ -6486,7 +6492,7 @@ class MissionCore:
         def preview():
             return core._scene_preview(copy.deepcopy(trackers[ms.phase]), t, box.rear, dt)
 
-        return SimpleNamespace(stopped=stopped, busy=busy, release=release, submit=submit, poll=poll,
+        return SimpleNamespace(stopped=stopped, busy=busy, release_hold=release_hold, submit=submit, poll=poll,
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box)

@@ -11,7 +11,7 @@ gets one straight escape prefix, driven under the permission, and the same reque
 The world is behind ports (a namespace the core builds each tick), so this module holds the state, the limits,
 the budget and the records only:
 
-- ``stopped()``, ``busy()``, ``release()``;
+- ``stopped()``, ``busy()``, ``release_hold()``;
 - ``submit(extra, clearance_m)`` / ``poll()`` -> None (waiting) | ("ok", result) | ("ok_fail", status) |
   ("dropped", why);
 - ``candidate(result)`` / ``preview()`` -> {"status", "ok", "why", "steer", ...} (a copy's preview: a
@@ -161,7 +161,7 @@ class SceneReplan:
                 if ports.busy():
                     return hold
                 if not r["released"]:
-                    ports.release()
+                    ports.release_hold()
                     r["released"] = True
                 self._go("plan", t)
             elif state == "plan":

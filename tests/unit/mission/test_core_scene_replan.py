@@ -296,10 +296,12 @@ def _real_layer():
     from forklift_core.planning.geometry import Footprint
 
     root = Path(__file__).resolve().parents[3]
-    spec = importlib.util.spec_from_file_location("obstacle_layer", root / "sim/isaac/obstacle_layer.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["obstacle_layer"] = module
-    spec.loader.exec_module(module)
+    module = sys.modules.get("obstacle_layer")  # another test's module, kept: its classes must stay the pickled ones
+    if module is None:
+        spec = importlib.util.spec_from_file_location("obstacle_layer", root / "sim/isaac/obstacle_layer.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["obstacle_layer"] = module
+        spec.loader.exec_module(module)
     config = module.load_layer_config(root / "config/obstacle_layer.yaml")
     age = json.loads((root / "config/obstacle_odometry_age.json").read_text())
     table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))

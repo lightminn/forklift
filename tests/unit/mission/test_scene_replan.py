@@ -29,7 +29,7 @@ class Ports:
     def busy(self):
         return self.busy_
 
-    def release(self):
+    def release_hold(self):
         self.log.append("release")
 
     def submit(self, extra, clearance_m):

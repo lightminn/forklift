@@ -415,8 +415,9 @@ def test_every_observation_candidate_record_keeps_its_search_attempts():
             (record,) = call.args
             records.append({key.value for key in record.keys})
     # Two observation branches plus the priority-5 obstacle-block fallback, the bottom-deck re-observation's retry and
-    # a live observe failure's worker answer (plan 2026-10-22-live-far-recognition task 10).
-    assert len(records) == 5
+    # a live observe failure's worker answer (plan 2026-10-22-live-far-recognition task 10), and a scene's first far
+    # observation stall (scene replan plan 2.3).
+    assert len(records) == 6
     for keys in records:
         assert {"search_attempts", "start_rear", "status"} <= keys
 
@@ -750,7 +751,7 @@ def test_a_failed_replan_backs_off_a_bounded_distance_then_replans():
     moved = CORE.read_text()  # the backoff end moved to the mission core (M-a1 slice 4a-iv)
     j = moved.index("# The end of a backoff is not the leg's arrival")
     assert source.index("command_ = core.command(") < source.index(
-        'if tracking.status == "arrived":\n                        if args.use_perception and ms.phase == "observe":')  # the tick body sits one level in (D6)
+        'if tracking.status == "arrived":\n                            if args.use_perception and ms.phase == "observe":')  # the tick body sits one level in (D6), and one more under the scene replan's guard
     assert 'obstacle["force_replan"] = ms.phase' in moved[j : j + 2500]
     assert 'obstacle.pop("force_replan", None) == ms.phase' in source
     # Codex checkpoint 8: a backoff always acts under the permission, a forced
@@ -1236,7 +1237,10 @@ def test_the_observe_replan_budget_is_per_leg_and_each_near_leg_opens_its_own():
     # ... and a bottom-deck side leg opens its own (plan 2026-10-19 task 4), where it is installed.
     side = moved.index("    def _bottom_deck_install(self, ")
     assert 'state["observe_replan_leg"] = {' in moved[side : moved.index("\n    def ", side + 10)]
-    assert source.count('state["observe_replan_leg"] = {') + moved.count('state["observe_replan_leg"] = {') == 3
+    # ... and a scene's far observation candidate taken after a stall opens its own (scene replan plan 2.3).
+    scene = moved.index("    def scene_observe_candidate(self, ")
+    assert 'state["observe_replan_leg"] = {' in moved[scene : moved.index("\n    def ", scene + 10)]
+    assert source.count('state["observe_replan_leg"] = {') + moved.count('state["observe_replan_leg"] = {') == 4
 
 
 def test_the_steering_probe_runs_after_the_spawn_checks_and_ends_the_run():
