@@ -1499,7 +1499,7 @@ def single_command(args) -> dict:
             hits = np.isfinite(dist)
             own = d_self < d_ext
             limit = OL.beam_limits(origin, directions, band_top_m=layer.band_top_m, band_bottom_m=layer.band_bottom_m)
-            ranges = layer.ranges_from(dist, hits, layer.beam_noise(len(dist)))
+            ranges = layer.ranges_from(dist, hits, layer.beam_noise(len(dist), dist))
             odom_rear, correction = scan_inputs(ts, js)
             layer.add_scans(float(ts), {sensor.name: (dist, hits, own, limit, ranges)}, odom_rear=odom_rear,
                             loaded=carried)

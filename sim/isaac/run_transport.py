@@ -6194,7 +6194,7 @@ def drive(S, isaac) -> None:
                 distances, hits, own_ = planar_lidar.cast_scan_flags(
                     origin, directions, scan_pattern.range_max_m, own_prefixes=prefixes_
                 )
-                noise_ = layer_.beam_noise(len(distances))
+                noise_ = layer_.beam_noise(len(distances), distances)  # P3a: the A2 model needs the true ranges
                 shared_raw = {
                     sensor_.name: (
                         distances, hits, own_,

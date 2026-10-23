@@ -21,11 +21,14 @@ import yaml
 from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
 from forklift_core.control.shadow_memory import ShadowMemory
 from forklift_core.perception.obstacle_grid import (
+    A2_SPEC_MEASURED_FACTOR,
     FREE,
     AgeErrorTable,
     GridConfig,
     ObstacleGrid,
     ObstacleScan,
+    a2_spec_cut_m,
+    a2_spec_sigma_m,
     snapshot_to_occupancy,
 )
 from forklift_core.planning.geometry import Footprint
@@ -107,6 +110,15 @@ class ObstacleLayer:
         self.range_max_m = float(config["range_max_m"])
         self.noise_std_m = float(config["noise_std_m"])
         self.noise_cut_m = float(config["noise_cut_m"])
+        # P3a (docs/plans/2026-10-23-planner-permission-clearance.md): range_noise.model "a2_spec" draws each beam's
+        # noise with sigma = acc / 2 cut at max(0.02, 1.5 acc) of its true range (Slamtec's A2 spec rows, read as
+        # +-2 sigma -- an assumption) and gives the grid the same model; absent: the constant sigma / cut above.
+        self.range_noise_model = str((config.get("range_noise") or {}).get("model", "const"))
+        if self.range_noise_model not in ("const", "a2_spec"):
+            raise ValueError(f"unknown range_noise model {self.range_noise_model!r}")
+        if self.range_noise_model == "a2_spec":
+            # the widest bound the grid can use (a hit at max_mark_m): what a caller that needs one bound takes
+            self.noise_cut_m = float(a2_spec_cut_m(np.array(A2_SPEC_MEASURED_FACTOR * float(config["grid"]["max_mark_m"]))))
         self.band_top_m = float(config["band_top_m"])  # h_det: a beam above it no longer clears
         # Plan v10: the brief's one LiDAR feeds SLAM and this layer from one raw scan.
         self.shared_with_slam = bool(config.get("shared_with_slam", False))
@@ -122,6 +134,7 @@ class ObstacleLayer:
             free_rho_m=float(g["free_rho_m"]), close_gap_m=float(g.get("close_gap_m", 0.0)),
             free_min_width_m=float(g.get("free_min_width_m", 0.0)),
             taper_m=float(g.get("taper_m", 0.0)),
+            range_bound_model=self.range_noise_model,
         )
         self.grid = ObstacleGrid(self.grid_config)
         self.error_table = error_table
@@ -185,9 +198,15 @@ class ObstacleLayer:
         if g.get("planning_memory", False):
             from forklift_core.perception.planning_memory import PlanningMemory
 
+            hit_radius_ = float(g.get("memory_hit_radius_m", 0.1))
+            if self.range_noise_model == "a2_spec":
+                # an endpoint marks a fixed disk of cells: at least the widest range bound it can need (Codex P3a
+                # review P2 -- 0.1 m left a hit read 0.135 m short at 4.5 m outside the memory once its scan expired),
+                # plus the quantization (round 2 P2): the endpoint's cell and the memory cell under the planning grid
+                # cell holding the truth sit < bound/res + 1.5 cells apart on each axis, so 1.5 sqrt(2) res more
+                hit_radius_ = max(hit_radius_, self.noise_cut_m + 1.5 * math.sqrt(2.0) * float(g["resolution_m"]))
             self.memory = PlanningMemory(hall.x_min_m, hall.y_min_m, hall.x_max_m, hall.y_max_m,
-                                         float(g["resolution_m"]),
-                                         hit_radius_m=float(g.get("memory_hit_radius_m", 0.1)))
+                                         float(g["resolution_m"]), hit_radius_m=hit_radius_)
 
     def _memory_hits(self, now_s: float, correction) -> None:
         """Every raw scan not yet taken, once, with its own stamp (never a
@@ -227,19 +246,36 @@ class ObstacleLayer:
             return self.parts_shape, self.parts_shape
         return self.unloaded_shape, self.body
 
+    def _sigma_cut(self, true_m: np.ndarray):
+        """Per beam (sigma, cut) at its true range: constant, or P3a's A2 spec model."""
+        if self.range_noise_model == "const":
+            return self.noise_std_m, self.noise_cut_m
+        d = np.where(np.isfinite(true_m), true_m, 0.0)
+        return a2_spec_sigma_m(d), a2_spec_cut_m(d)
+
+    def _draw(self, true_m: np.ndarray) -> np.ndarray:
+        # one normal draw per beam either way, so a run's random stream stays the same length
+        sigma, cut = self._sigma_cut(true_m)
+        return np.clip(self.rng.normal(0, sigma, len(true_m)), -cut, cut)
+
     def ranges(self, distances, hits) -> np.ndarray:
         """REP-117 ranges with the truncated noise contract."""
         out = np.where(hits, np.asarray(distances, dtype=float), np.inf)
         finite = np.isfinite(out)
-        noise = np.clip(self.rng.normal(0, self.noise_std_m, int(finite.sum())), -self.noise_cut_m, self.noise_cut_m)
+        noise = self._draw(out[finite])
         out[finite] = out[finite] + noise
         out[finite & (out > self.range_max_m)] = np.inf
         out[finite & (out < self.range_min_m)] = -np.inf
         return out
 
-    def beam_noise(self, count: int) -> np.ndarray:
-        """One truncated noise draw per beam, for a scan shared with SLAM (plan v10, one raw scan)."""
-        return np.clip(self.rng.normal(0, self.noise_std_m, int(count)), -self.noise_cut_m, self.noise_cut_m)
+    def beam_noise(self, count: int, distances=None) -> np.ndarray:
+        """One truncated noise draw per beam, for a scan shared with SLAM (plan v10, one raw scan). ``distances``: the
+        beams' true ranges (inf for no return), which the A2 spec model needs; the constant model ignores them."""
+        if self.range_noise_model == "const":
+            return np.clip(self.rng.normal(0, self.noise_std_m, int(count)), -self.noise_cut_m, self.noise_cut_m)
+        if distances is None or len(distances) != count:
+            raise ValueError("the A2 spec range noise needs every beam's true range")
+        return self._draw(np.asarray(distances, dtype=float))
 
     def ranges_from(self, distances, hits, noise) -> np.ndarray:
         """REP-117 ranges from a given per-beam noise draw (the shared scan's)."""

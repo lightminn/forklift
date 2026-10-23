@@ -74,6 +74,32 @@ class AgeErrorTable:
         return None
 
 
+# P3a (docs/plans/2026-10-23-planner-permission-clearance.md, user decision 2026-10-23): the LiDAR range accuracy rows
+# of Slamtec's A2 spec page (http://www.slamtec.com/en/lidar/a2spec, read 2026-10-23; the A2M12 datasheet v1.1 has no
+# accuracy row) -- 1 % of the range up to 3 m, 2 % to 5 m, 2.5 % beyond -- read as +-2 sigma, which is this plan's
+# design assumption (the source gives no statistic): sigma = acc / 2, cut = max(floor, 1.5 acc) at the true range.
+A2_SPEC_FLOOR_M = 0.02
+A2_SPEC_CUT_PER_ACC = 1.5
+A2_SPEC_SIGMA_PER_ACC = 0.5
+# A measurement d_m can come from a true range up to d_m / (1 - 1.5 x 2.5 %) < 1.04 d_m (at the floor the bound is the
+# floor anyway): the grid reads the cut there, so the bound covers the truth across the 3 m and 5 m steps (Codex v4 P1).
+A2_SPEC_MEASURED_FACTOR = 1.04
+
+
+def a2_spec_accuracy_m(range_m: np.ndarray) -> np.ndarray:
+    d = np.asarray(range_m, dtype=float)
+    return np.where(d <= 3.0, 0.01 * d, np.where(d <= 5.0, 0.02 * d, 0.025 * d))
+
+
+def a2_spec_cut_m(range_m: np.ndarray) -> np.ndarray:
+    """The noise cut at a TRUE range (the simulated noise's truncation)."""
+    return np.maximum(A2_SPEC_FLOOR_M, A2_SPEC_CUT_PER_ACC * a2_spec_accuracy_m(range_m))
+
+
+def a2_spec_sigma_m(range_m: np.ndarray) -> np.ndarray:
+    return A2_SPEC_SIGMA_PER_ACC * a2_spec_accuracy_m(range_m)
+
+
 @dataclass(frozen=True)
 class GridConfig:
     x_min_m: float
@@ -94,6 +120,20 @@ class GridConfig:
     close_gap_m: float = 0.0  # fill gaps in the occupied cells narrower than twice this (0: off)
     free_min_width_m: float = 0.0  # FREE only where a disk this wide fits in free space or the truck (0: off)
     taper_m: float = 0.0  # no FREE within this of an OCCUPIED cell: an object wider below the plane (0: off)
+    # the range error bound: "const" -- sensor_bound_m for every range (as every earlier run); "a2_spec" -- P3a's,
+    # read from the measured range (sensor_bound_at)
+    range_bound_model: str = "const"
+
+    def __post_init__(self) -> None:
+        if self.range_bound_model not in ("const", "a2_spec"):
+            raise ValueError(f"unknown range bound model {self.range_bound_model!r}")
+
+    def sensor_bound_at(self, measured_m) -> np.ndarray:
+        """The range error bound of a hit measured at ``measured_m``: what the truth may lie off it along its beam."""
+        d = np.asarray(measured_m, dtype=float)
+        if self.range_bound_model == "const":
+            return np.full(d.shape, self.sensor_bound_m)
+        return a2_spec_cut_m(A2_SPEC_MEASURED_FACTOR * d)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -477,6 +517,7 @@ class ObstacleGrid:
         r_occ = self.radius_m(age, 0.0)
         if r_occ is None:
             return None
+        r_odo = self.radius_m(age, 0.0, sensor=False)  # without the range bound, added per hit below
         xs, ys, rs = [], [], []
         hit = (
             usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
@@ -487,14 +528,17 @@ class ObstacleGrid:
             py = laser[1] + ranges[hit] * sin_a[hit]
             rho = np.hypot(px - rear_map[0], py - rear_map[1])
             _, psi = cfg.error.at(age)
-            xs.append(px), ys.append(py), rs.append(r_occ + 2 * rho * np.sin(psi / 2))
+            bound = cfg.sensor_bound_at(ranges[hit])  # const: sensor_bound_m, so r_odo + bound == r_occ as before
+            xs.append(px), ys.append(py), rs.append(r_odo + bound + 2 * rho * np.sin(psi / 2))
         near = usable & ((ranges == -np.inf) | (np.isfinite(ranges) & (ranges < cfg.range_min_m)))
         if near.any():
             res = cfg.resolution_m
             steps = np.linspace(0.0, cfg.range_min_m, max(2, int(ceil(cfg.range_min_m / (res / 2))) + 1))
             px = (laser[0] + np.outer(cos_a[near], steps)).ravel()
             py = (laser[1] + np.outer(sin_a[near], steps)).ravel()
-            xs.append(px), ys.append(py), rs.append(np.full(px.shape, r_occ))
+            # a hit nearer than range_min: the bound at range_min (const: r_occ as before)
+            near_r = r_odo + float(cfg.sensor_bound_at(np.array(cfg.range_min_m)))
+            xs.append(px), ys.append(py), rs.append(np.full(px.shape, near_r))
         if not xs:
             return None
         return np.concatenate(xs), np.concatenate(ys), np.concatenate(rs)
@@ -512,7 +556,8 @@ class ObstacleGrid:
             clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
             # Hit beams stop short of the hit by the range error bound and a
             # cell: a beam that reads long must not clear the surface it hit.
-            clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - cfg.sensor_bound_m - res, clear_to)
+            bound = cfg.sensor_bound_at(np.where(finite, ranges, 0.0))
+            clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - bound - res, clear_to)
             raw |= self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
         if not raw.any():
             return
