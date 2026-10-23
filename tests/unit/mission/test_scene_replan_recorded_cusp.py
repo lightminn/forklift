@@ -59,10 +59,13 @@ def _fixture():
 
 
 def _layer(scenario):
-    """A real obstacle layer fed with scans cast in the recorded scene: every prop a box as tall as recorded (the
-    1.05 m plane sees the 1.3 m slot markers, not the 0.144 m pallets), the hall bounds as walls."""
+    """A real obstacle layer, the run's own configuration (obstacle_layer_single.yaml), fed with scans cast in the
+    recorded scene: every prop a box as tall as recorded (the 1.05 m plane sees the 1.3 m slot markers, not the 0.144 m
+    pallets), the hall bounds as walls. A synthetic scene: no beam is the truck's own and the carried pallet is not
+    cast, so the permit passing here says the code path works on this geometry, not what Isaac's scans would allow
+    (Codex impl round 4 P3)."""
     module = _sim_module("obstacle_layer")
-    config = module.load_layer_config(ROOT / "config/obstacle_layer.yaml")
+    config = module.load_layer_config(ROOT / "config/obstacle_layer_single.yaml")
     age = json.loads((ROOT / "config/obstacle_odometry_age.json").read_text())
     table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))
     layer = module.ObstacleLayer(config, hall=scenario.bounds, error_table=table,
@@ -173,6 +176,11 @@ def test_the_recorded_transport_cusp_stall_is_replanned_from_the_stop_and_the_ne
     latch_record = state["cusp_stalls"][-1]
     assert latch_record["disposition"] == "ended" and latch_record["position_error_m"] == pytest.approx(
         f["stall"]["position_error_m"], abs=0.01)
+    assert latch_record["yaw_error_rad"] == pytest.approx(f["stall"]["yaw_error_rad"], abs=0.01)
+    # The recorded branch, not another one (Codex impl round 4 P3): out of bounds, not far, ended after the 5 s wait.
+    assert all(not s_["bounds_ok"] and not s_["far"] for s_ in latch_record["scans"])
+    confirmed = next(e["time_s"] for e in latch_record["events"] if e["event"] == "stop_confirmed")
+    assert raised - confirmed == pytest.approx(5.0, abs=0.11)
     request = state["scene_replans"][-1]
     assert request["trigger"] == "cusp_pose" and request["phase"] == "transport"
     assert request["deviation"]["position_m"] == pytest.approx(latch_record["position_error_m"])
@@ -197,7 +205,7 @@ def test_the_recorded_transport_cusp_stall_is_replanned_from_the_stop_and_the_ne
     assert out is not None and not out.owned, record
     assert record["outcome"] == "installed", record
     assert record["candidate"]["status"] == "tracking" and record["candidate"]["ok"], record["candidate"]
-    assert record["preview"]["ok"] and record["presteer"] in ("aligned", "timeout")
+    assert record["preview"]["ok"] and record["presteer"] == "aligned"
     assert ("plan_transport_leg",) in calls
     new_tracker = core.trackers["transport"]
     assert new_tracker is not old_tracker

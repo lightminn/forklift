@@ -479,10 +479,11 @@ def arguments() -> argparse.Namespace:
         type=float,
         default=None,
         help="Diagnostic only, never a result (docs/plans/2026-10-23-scene-replan.md 4): with --slam, once per run, "
-        "when a transport leg ending at a gear cusp comes within 0.05 m of its end, the control pose is shifted this "
-        "far to its left (m, signed) for the rest of that mission -- a SLAM correction step standing in for the "
-        "recorded line_m seed 1 mission 3 one, so the cusp latch refuses the stall and the scene replan device takes "
-        "it. The obstacle grid is not shifted with it. Off: every earlier run.",
+        "when a transport leg ending at a gear cusp comes within 0.05 m of its end, the control pose is translated "
+        "this far to the truck's left at that moment (m, signed; a fixed map-frame step) until the session moves on "
+        "to its next pallet -- a SLAM correction step standing in for the recorded line_m seed 1 mission 3 one, so "
+        "the cusp latch refuses the stall and the scene replan device takes it. The obstacle grid is not shifted "
+        "with it. Off: every earlier run.",
     )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
@@ -5006,9 +5007,9 @@ def drive(S, isaac) -> None:
             [est[0] - offset * math.cos(est[2]), est[1] - offset * math.sin(est[2]), est[2]]
         )
         shift_ = slam.get("cusp_injection_m")
-        if shift_:  # --inject-cusp-offset-m (diagnostic): the control pose shifted to its left
-            out_[0] -= shift_ * math.sin(out_[2])
-            out_[1] += shift_ * math.cos(out_[2])
+        if shift_ is not None:  # --inject-cusp-offset-m (diagnostic): a fixed map-frame translation step
+            out_[0] += shift_[0]
+            out_[1] += shift_[1]
         return out_
     if args.robot_camera:
         import video_frames as video_frames_module
@@ -5958,8 +5959,10 @@ def drive(S, isaac) -> None:
                 session_rest.rest(old_, pos_, q_)
                 state.setdefault("session_switches", []).append(
                     {"step": int(step_), "t": float(t_), "from": old_, "to": new_})
-                if slam is not None:
-                    slam.pop("cusp_injection_m", None)  # --inject-cusp-offset-m lasts the mission it was put in
+                if slam is not None and slam.pop("cusp_injection_m", None) is not None:
+                    # --inject-cusp-offset-m lasts until the session moves on to its next pallet
+                    state.setdefault("cusp_injections", []).append(
+                        {"time_s": float(t_), "event": "released", "from": old_, "to": new_})
                 if far_runtime is not None:
                     far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(new_)
                 if trace_evidence is not None:
@@ -7866,9 +7869,12 @@ def drive(S, isaac) -> None:
                         and trackers[ms.phase].leg_remaining_m() <= 0.05):
                     # Diagnostic (scene replan plan 4): the control pose shifted from the next tick on.
                     cusp_injection_["done"] = True
-                    slam["cusp_injection_m"] = float(inject_)
+                    slam["cusp_injection_m"] = (-float(inject_) * math.sin(float(rear[2])),
+                                                float(inject_) * math.cos(float(rear[2])))
                     state.setdefault("cusp_injections", []).append(
-                        {"time_s": float(t), "offset_m": float(inject_), "rear": [float(v) for v in rear],
+                        {"time_s": float(t), "event": "injected", "offset_m": float(inject_),
+                         "map_step_m": list(slam["cusp_injection_m"]), "rear": [float(v) for v in rear],
+                         "pallet": getattr(pallet, "current", None),
                          "leg_index": int(trackers[ms.phase].leg_index),
                          "leg_remaining_m": float(trackers[ms.phase].leg_remaining_m())})
                 scene_owned_, scene_presteer_ = False, None
