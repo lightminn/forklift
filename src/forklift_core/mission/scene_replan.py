@@ -22,7 +22,9 @@ the budget and the records only:
 - ``escape_plan(extra, clearance_m)`` -> path | None, ``escape_install(path)``, ``escape_state()`` ->
   "running" | "done" | "stopped", ``escape_clear()``;
 - ``steering_error(target)`` -> the largest wheel's gap to it (rad); ``steer_gap(a, b)`` -> the largest wheel's
-  gap between two targets.
+  gap between two targets;
+- ``resumable()`` (optional) -> whether the follower's own tracker still follows from the pose after the release (a
+  standing-safe request ending before an install hands back only then).
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ class SceneReplan:
         self.used_by_trigger: dict = {}
         self.request_: dict | None = None
         self.state: str | None = None
+        self._ports = None
 
     # --- the mission's bookkeeping -------------------------------------------------------------------------------
     def reset(self) -> None:
@@ -133,7 +136,9 @@ class SceneReplan:
     def _end(self, outcome: str, reason: str | None) -> StepResult:
         r = self.request_
         r["record"]["outcome"] = outcome
-        if r["trigger"] in self.config.standing_safe_triggers and not r["changed"]:
+        resumable_ = getattr(self._ports, "resumable", None)
+        if r["trigger"] in self.config.standing_safe_triggers and not r["changed"] and (
+                resumable_ is None or resumable_()):
             # Nothing installed or driven: the follower's own tracker and path stand as before the request, so the
             # truck goes back to standing under the permission (a stop that clears goes on) -- never worse than
             # without the trigger. The mission's total is given back.
@@ -141,6 +146,9 @@ class SceneReplan:
             self.used_total = max(0, self.used_total - 1)
             self.request_, self.state = None, None
             return StepResult(owned=False)
+        if r["trigger"] in self.config.standing_safe_triggers and not r["changed"]:
+            # nothing installed, but the hold release moved the pose beyond what the follower's tracker can follow
+            r["record"]["not_resumable"] = True
         r["record"]["mission_end"] = True
         self.request_, self.state = None, None
         return StepResult(owned=True, output="hold", end=reason)
@@ -167,6 +175,7 @@ class SceneReplan:
         return None
 
     def step(self, t: float, ports) -> StepResult:
+        self._ports = ports  # the end of a standing-safe request asks whether the follower can resume
         r = self.request_
         if r is None:
             return StepResult(owned=False)

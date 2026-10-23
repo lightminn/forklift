@@ -482,3 +482,19 @@ def test_a_replan_starts_the_start_check_s_wait_again_and_a_cached_wait_is_recor
     wait = records[-1]["permit_waits"][-1]
     assert steps[-1].end == "scene_replan_refused:cusp_pose:start:unknown"
     assert wait["until_s"] - wait["since_s"] == pytest.approx(3.0, abs=0.11)
+
+
+def test_a_permit_stop_the_follower_cannot_resume_after_the_release_ends_the_mission():
+    # Codex P6 round 3 P2: nothing installed, but the hold release moved the pose past what the old tracker follows
+    dev, records = _device()
+    ports = Ports(plans=[("ok_fail", "invalid_start")], escape=None)
+    ports.resumable = lambda: False
+    _permit(dev)
+    steps = _run(dev, ports)
+    assert steps[-1].end == "scene_replan_failed:permit_stop:invalid_start"
+    assert records[-1]["mission_end"] is True and records[-1]["not_resumable"] is True
+    ports2 = Ports(plans=[("ok_fail", "invalid_start")], escape=None)
+    ports2.resumable = lambda: True
+    dev2, records2 = _device()
+    _permit(dev2)
+    assert _run(dev2, ports2)[-1].owned is False and records2[-1]["mission_end"] is False

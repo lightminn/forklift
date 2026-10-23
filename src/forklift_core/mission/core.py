@@ -6601,6 +6601,14 @@ class MissionCore:
         def preview():
             return core._scene_preview(copy.deepcopy(trackers[ms.phase]), t, box.rear, dt)
 
+        def resumable():
+            # P6 (Codex round 3 P2): a standing-safe request handed back without an install leaves the follower's own
+            # tracker -- from the pose after the hold release it must still follow (no failure, not off its path).
+            if ms.phase not in trackers:
+                return False
+            pv_ = copy.deepcopy(trackers[ms.phase]).update(np.asarray(box.rear, dtype=float), 0.0, dt)
+            return pv_.status != "failed" and not getattr(pv_, "off_path", False)
+
         def snapshot_id():  # a new processed snapshot: a standing re-check has something new to see (round 5 P3)
             layer_ = (obstacle or {}).get("layer")
             snap_ = getattr(layer_, "snapshot", None)
@@ -6610,7 +6618,8 @@ class MissionCore:
                                snapshot_id=snapshot_id,
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
-                               steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box)
+                               steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box,
+                               resumable=resumable)
 
     def scene_replan_tick(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's tick ahead of the follower (plan 2.1): owned or not, what the wheels and steering get, the

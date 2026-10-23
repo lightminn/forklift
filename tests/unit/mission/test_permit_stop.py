@@ -257,3 +257,27 @@ def test_an_old_record_s_options_without_the_switch_keep_it_off():
     del core.options.permit_stop_replan
     hold(core, 10.0, PERMIT_STOP_S + 1.0)
     assert not state.get("scene_replans")
+
+
+def _failing_plans(core):
+    core.hooks.plan_transport_leg = lambda *a, **k: SimpleNamespace(success=False, status="invalid_start")
+
+
+def test_the_core_hands_back_only_when_its_own_tracker_still_follows_from_the_pose():
+    from test_core_scene_replan import _drive
+
+    # on its path: the old tracker follows, the request ends standing and the mission goes on
+    core, ms, state, calls, rear, held = make()
+    _failing_plans(core)
+    rear["pose"] = np.array(core.trackers["transport"].leg_ahead()[0][0], dtype=float)  # standing on its path
+    assert core.scene_replan_raise(10.0, "permit_stop", rear["pose"]) is None
+    outs = _drive(core, rear, held)
+    assert outs[-1].owned is False and state["scene_replans"][-1]["mission_end"] is False
+    # 1 m off it (what a hold release can leave): the old tracker fails, so the device's end stands
+    core, ms, state, calls, rear, held = make()
+    _failing_plans(core)
+    rear["pose"] = np.array(core.trackers["transport"].leg_ahead()[0][0], dtype=float) + np.array([0.0, 1.0, 0.0])
+    assert core.scene_replan_raise(10.0, "permit_stop", rear["pose"]) is None
+    with pytest.raises(RuntimeError, match="scene_replan_failed:permit_stop:invalid_start"):
+        _drive(core, rear, held)
+    assert state["scene_replans"][-1]["not_resumable"] is True
