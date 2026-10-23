@@ -78,13 +78,13 @@ def test_the_keepout_can_be_turned_on(tmp_path):
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
 
 
-def test_the_obstacle_layer_draws_the_a2_spec_noise_by_default(tmp_path):
-    # P3a (user decision 2026-10-23): the range noise and the grid's range bound from Slamtec's A2 spec rows
+def test_the_obstacle_layer_keeps_the_constant_noise_and_draws_the_a2_spec_on_request(tmp_path):
+    # P3a: const by default (user decision 2026-10-24 -- the A2 scan also feeds SLAM and the scan docking), a2 on request
     out = dry_run(tmp_path)
-    assert contains(args_of(out), ["--obstacle-layer", "config/obstacle_layer_single_a2.yaml"])
-    assert " NOISE=a2 " in (tmp_path / "out/riib_defaults.txt").read_text()
-    const = args_of(dry_run(tmp_path, NOISE="const"))
-    assert contains(const, ["--obstacle-layer", "config/obstacle_layer_single.yaml"])
+    assert contains(args_of(out), ["--obstacle-layer", "config/obstacle_layer_single.yaml"])
+    assert " NOISE=const " in (tmp_path / "out/riib_defaults.txt").read_text()
+    a2 = args_of(dry_run(tmp_path, NOISE="a2"))
+    assert contains(a2, ["--obstacle-layer", "config/obstacle_layer_single_a2.yaml"])
 
 
 @pytest.mark.parametrize("env", [{"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
@@ -95,7 +95,7 @@ def test_bad_choices_are_refused(tmp_path, env):
     assert out.returncode != 0
 
 
-@pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "const"}])
+@pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -122,7 +122,7 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     assert (parsed.fps, parsed.max_sim_seconds, parsed.delivery_straight_m, parsed.alignment_straight_m,
             parsed.withdrawal_m, parsed.insertion_reserve_m) == (60, 1500.0, 1.5, 2.1, 0.55, 0.016)
     assert parsed.record_slam and parsed.return_home and parsed.obstacle_act and parsed.d7_planner
-    layer = "config/obstacle_layer_single.yaml" if env.get("NOISE") == "const" else "config/obstacle_layer_single_a2.yaml"
+    layer = "config/obstacle_layer_single_a2.yaml" if env.get("NOISE") == "a2" else "config/obstacle_layer_single.yaml"
     assert str(parsed.obstacle_layer).endswith(layer)
     if env.get("MODE") == "truth":
         assert not parsed.use_perception and not parsed.d7_docking and parsed.recognition == "off"

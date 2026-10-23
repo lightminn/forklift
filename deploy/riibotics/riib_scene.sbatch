@@ -18,19 +18,19 @@
 #                  docs/plans/2026-10-23-planner-permission-clearance.md); 0 plans as before. Off by default until P6
 #                  (user decision 2026-10-23: no gain shown in Isaac, docs/validation/2026-10-23-p1c-search-keepout.md);
 #                  KEEPOUT=0.15 turns it on
-#   NOISE=a2       the obstacle layer config/obstacle_layer_single_a2.yaml: LiDAR range noise and the grid's range bound
-#                  from Slamtec's A2 spec rows (P3a, user decision 2026-10-23, same plan); const keeps
-#                  config/obstacle_layer_single.yaml (sigma 0.02, cut 0.06 at every range)
+#   NOISE=const    the obstacle layer config/obstacle_layer_single.yaml (sigma 0.02, cut 0.06 at every range). NOISE=a2
+#                  runs config/obstacle_layer_single_a2.yaml: LiDAR range noise and the grid's range bound from Slamtec's A2
+#                  spec rows (P3a, same plan). It also feeds SLAM and the scan docking (shared scan), whose acceptance under
+#                  it is not settled -- const by default (user decision 2026-10-24, docs/validation/2026-10-24-p3a-a2-range-bound.md)
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
-# no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0, NOISE=const. Anything else goes through
-# EXTRA_ARGS.
+# no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
 # for one with sbatch --gres=shard:1. DRY_RUN=1 prints the runner's arguments, one per line, and starts nothing.
 #
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=a2|const] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -39,7 +39,7 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; KEEPOUT=${KEEPOUT:-0}; NOISE=${NOISE:-a2}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; KEEPOUT=${KEEPOUT:-0}; NOISE=${NOISE:-const}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
