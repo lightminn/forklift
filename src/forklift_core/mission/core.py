@@ -2183,10 +2183,14 @@ class MissionCore:
             and len(state["observe_replans"]) - state["observe_replan_leg"]["start"]
             < OBSERVE_REPLANS_PER_LEG
         )
-        if observe_stall_ and not observe_miss and slam["stop_now"] and self.scene_far_observe():
+        if observe_stall_ and not observe_miss and self.scene_far_observe():
             # Scene-mode replan plan 2.3 (B, 6판): the waypoint's own replans are spent -- the first far observation
             # takes the remaining observation candidates, one per tick, instead of standing to the timeout; with
             # none left it ends. Called only here, so nothing (not even the release) happens while that budget lasts.
+            if not slam["stop_now"]:
+                # 7판 (Isaac sr_c582669 random_m s0 m1): a miss while still moving brakes to the stop first, as the
+                # waypoint's own replan does, instead of the failed tracking ending the mission.
+                return SimpleNamespace(tracking=replace(tracking, status="braking", speed_mps=0.0), rear=rear)
             took_ = self.scene_observe_candidate(t, rear)
             rear = took_.rear  # released or not, the pose every later plan of this tick starts from
             if took_.installed:
@@ -6314,12 +6318,28 @@ class MissionCore:
         if obstacle is None:
             out.update(ok=True, why="no_layer")
             return out
+        strict_ = self._scene_permit_strict(tracker, leg_)
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
-            cap_mps=float(tracker.config.cruise_speed_mps))
+            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_)
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         return out
+
+    def _scene_permit_strict(self, tracker, leg) -> bool:
+        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the candidate's first gear leg reaches where the
+        permission stops acting -- a transport's last keep + delivery straight (permission_acting's docking straight
+        on the tracker arm_docking cuts back by keep) -- so its unknown cells must be verified before it is installed.
+        Measured on the candidate's whole path, the leg's end against that zone; a return always has the permission."""
+        if self.ms.phase != "transport":
+            return False
+        poses_ = np.asarray(leg, dtype=float)
+        leg_m_ = float(np.sum(np.hypot(np.diff(poses_[:, 0]), np.diff(poses_[:, 1])))) if len(poses_) > 1 else 0.0
+        docking_ = (self.slam or {}).get("docking") or {}
+        keep_ = float(docking_.get("keep_m", self.geometry.delivery_straight_m)) if docking_.get("status") in (
+            "pending", "armed") else 0.0
+        zone_ = keep_ + float(self.geometry.delivery_straight_m)
+        return float(tracker.remaining_to_goal_m()) - leg_m_ <= zone_ + 1e-6
 
     def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's world this tick (plan 2.1)."""

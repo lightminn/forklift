@@ -14,7 +14,8 @@ the budget and the records only:
 - ``stopped()``, ``busy()``, ``release_hold()``;
 - ``submit(extra, clearance_m)`` / ``poll()`` -> None (waiting) | ("ok", result) | ("ok_fail", status) |
   ("dropped", why);
-- ``candidate(result)`` / ``preview()`` -> {"status", "ok", "why", "steer", ...} (a copy's preview: a
+- ``candidate(result)`` / ``preview()`` -> {"status", "ok", "why", "steer", ...} (re-asked every tick while the
+  permission does not pass it yet, up to ``permit_wait_s``; a copy's preview: a
   failure-free braking previewed one tick further, the leg actually started; ``steer`` the first command's steering
   target, opaque here);
 - ``install(result)``;
@@ -39,6 +40,7 @@ class SceneReplanConfig:
     presteer_timeout_s: float = 1.0
     represteers_per_request: int = 2
     escapes_per_request: int = 1
+    permit_wait_s: float = 3.0  # 7판: a candidate the permission does not pass yet is re-checked standing this long
 
 
 @dataclass
@@ -71,8 +73,9 @@ class SceneReplan:
         """A pause of ``length_s`` ended: the request's clock does not count it."""
         if self.request_ is not None:
             self.request_["paused_s"] += float(length_s)
-            if self.request_.get("presteer_since") is not None:
-                self.request_["presteer_since"] += float(length_s)
+            for key_ in ("presteer_since", "permit_since", "resume_since"):
+                if self.request_.get(key_) is not None:
+                    self.request_[key_] += float(length_s)
 
     def active(self) -> bool:
         return self.request_ is not None
@@ -98,7 +101,7 @@ class SceneReplan:
         line = {"time_s": float(t), "trigger": trigger, "phase": phase, "tracker_serial": tracker_serial, "leg": leg,
                 "rear": [float(v) for v in rear], "truth_rear": None if truth_rear is None else [float(v) for v in truth_rear],
                 "deviation": deviation, "correction_jump": correction_jump, "clearance_m": clearance_m,
-                "detail": detail, "outcome": None, "drops": 0, "escape": None, "presteer": None,
+                "detail": detail, "outcome": None, "drops": 0, "escape": None, "presteer": None, "permit_waits": [],
                 "presteer_error_rad": None, "represteers": 0, "candidate": None, "preview": None, "ignored": [],
                 "states": []}
         if (self.used_total >= self.config.budget_total
@@ -112,7 +115,8 @@ class SceneReplan:
         self.records.append(line)
         self.request_ = {"t0": float(t), "paused_s": 0.0, "trigger": trigger, "extra_fn": extra_obstacles_fn,
                          "clearance_m": clearance_m, "released": False, "escapes": 0, "extra": (),
-                         "target": None, "presteer_since": None, "record": line}
+                         "target": None, "presteer_since": None, "permit_since": None, "resume_since": None,
+                         "result": None, "record": line}
         self._go("wait_stop", t)
         return None
 
@@ -131,6 +135,14 @@ class SceneReplan:
         self.request_["record"]["outcome"] = "installed"
         self.request_, self.state = None, None
         return StepResult(owned=False)
+
+    def _note_wait(self, t: float, where: str, why) -> None:
+        """A standing re-check's record: one entry per stretch and reason (its first and last tick)."""
+        waits_ = self.request_["record"]["permit_waits"]
+        if waits_ and waits_[-1]["where"] == where and waits_[-1]["why"] == why:
+            waits_[-1]["until_s"] = float(t)
+        else:
+            waits_.append({"where": where, "why": why, "since_s": float(t), "until_s": float(t)})
 
     def _drop(self, t: float, back_to: str) -> StepResult | None:
         r = self.request_
@@ -193,6 +205,10 @@ class SceneReplan:
                         self._go("escape", t)
                         return StepResult(owned=True, output="escape")
                     return self._end("failed", f"scene_replan_failed:{trigger}:{value}")
+                r["result"], r["permit_since"] = value, float(t)
+                self._go("candidate", t)
+            elif state == "candidate":
+                value = r["result"]
                 candidate = ports.candidate(value)
                 r["record"]["candidate"] = candidate
                 status = candidate.get("status")
@@ -203,6 +219,10 @@ class SceneReplan:
                     ports.install(value)  # its own rule takes it from here (arrival, the cusp heading hold)
                     return self._hand_back()
                 if not candidate.get("ok"):
+                    # 7판: re-checked standing on every tick (new scans fill the grid in) for permit_wait_s, then refused.
+                    if t - r["permit_since"] < self.config.permit_wait_s:
+                        self._note_wait(t, "candidate", candidate.get("why"))
+                        return hold
                     return self._end("refused", f"scene_replan_refused:{trigger}:{candidate.get('why')}")
                 ports.install(value)
                 r["target"], r["presteer_since"] = candidate.get("steer"), float(t)
@@ -234,9 +254,20 @@ class SceneReplan:
                     return hold
                 preview = ports.preview()
                 r["record"]["preview"] = preview
-                if preview.get("status") in REPLAN_STATUSES or not preview.get("ok"):
+                if preview.get("status") in REPLAN_STATUSES:
                     out = self._drop(t, "wait_jobs")
                     return out or hold
+                if not preview.get("ok"):
+                    # 7판 (Codex Isaac round 2): the same standing re-check as the candidate's, then planned again.
+                    if r["resume_since"] is None:
+                        r["resume_since"] = float(t)
+                    if t - r["resume_since"] < self.config.permit_wait_s:
+                        self._note_wait(t, "resume", preview.get("why"))
+                        return hold
+                    r["resume_since"] = None
+                    out = self._drop(t, "wait_jobs")
+                    return out or hold
+                r["resume_since"] = None
                 steer = preview.get("steer")
                 if steer is not None and ports.steer_gap(steer, r["target"]) > self.config.presteer_tolerance_rad:
                     if r["record"]["represteers"] >= self.config.represteers_per_request:

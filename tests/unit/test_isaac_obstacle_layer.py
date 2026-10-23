@@ -733,3 +733,43 @@ def test_a_candidate_permit_needs_the_whole_lookahead_or_the_leg_verified_and_a_
     leg = lay.candidate_permit(0.2, short, current_pose=pose, direction=-1, loaded=False, curvature_inv_m=0.0,
                                measured_curvature_inv_m=0.0, cap_mps=0.6)
     assert leg["ok"] and leg["verified_m"] == pytest.approx(0.3, abs=1e-6)  # a 0.3 m leg: its whole length
+
+
+def test_a_candidate_permit_leaves_an_unknown_beyond_the_verified_distance_to_the_permission_unless_strict():
+    """Scene replan plan 7판 (Isaac sri_b907b91 s0: verified 2.42 of 3.0 m, start allowed 0.354 m/s, refused): an
+    unknown ahead is the driving permission's, as on any path -- unless the leg reaches where the permission does not
+    act (strict). An occupied cell behind the unknown is still found (walked past it, Codex Isaac round 2)."""
+    from dataclasses import replace as dc_replace
+
+    from forklift_core.perception.obstacle_grid import OCCUPIED, UNKNOWN
+
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _open_raw(lay, reach=9.0), odom_rear=pose, loaded=False)  # no wall within the walk
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    snap = lay.snapshot
+
+    def band(state, x0, x1, value):
+        out = state.copy()
+        i0 = int(round((x0 - snap.origin_x_m) / snap.resolution_m))
+        i1 = int(round((x1 - snap.origin_x_m) / snap.resolution_m))
+        out[i0:i1, :] = value
+        return out
+
+    kw = dict(current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0, measured_curvature_inv_m=0.0,
+              cap_mps=0.6)
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 3.4, 3.6, UNKNOWN))
+    strict = lay.candidate_permit(0.2, path, strict=True, **kw)
+    relaxed = lay.candidate_permit(0.2, path, strict=False, **kw)
+    assert not strict["ok"] and strict["why"] == "blocked:unknown" and strict["allowed_mps"] > 0
+    assert relaxed["ok"] and relaxed["blocked"] == "unknown" and relaxed["verified_m"] < relaxed["need_m"]
+    assert relaxed["strict"] is False and relaxed["occupied_ahead"] is False
+    behind = band(band(snap.state, 3.4, 3.6, UNKNOWN), 3.75, 3.85, OCCUPIED)
+    lay.snapshot = dc_replace(snap, state=behind)
+    past = lay.candidate_permit(0.2, path, strict=False, **kw)
+    assert not past["ok"] and past["why"] == "blocked:occupied" and past["occupied_ahead"] is True
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 0.9, 1.1, UNKNOWN))
+    start = lay.candidate_permit(0.2, path, strict=False, **kw)  # unknown inside the stopping distance: no start
+    assert not start["ok"] and start["why"].startswith("start:")

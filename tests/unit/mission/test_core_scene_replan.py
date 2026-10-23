@@ -442,10 +442,12 @@ def test_the_far_observation_takes_other_candidates_only_after_the_waypoint_s_ow
 
     body = inspect.getsource(MissionCore.cusp_and_observe_recovery)
     miss = body.index("observe_miss = (")
-    gate = body.index("if observe_stall_ and not observe_miss and slam[\"stop_now\"] and self.scene_far_observe():")
+    gate = body.index("if observe_stall_ and not observe_miss and self.scene_far_observe():")
     assert body.count("self.scene_observe_candidate(") == 1
     assert miss < gate < body.index("self.scene_observe_candidate(") < body.index('require(False, "observe:stall_exhausted")')
     assert body.index("self.scene_observe_candidate(") > body.index("observe_miss = (")
+    # 7판: still moving, it brakes to the stop first (the failed tracking does not end the mission)
+    assert gate < body.index('if not slam["stop_now"]:', gate) < body.index("self.scene_observe_candidate(")
 
 
 def test_the_far_observation_budget_runs_replans_then_candidates_then_ends():
@@ -491,13 +493,42 @@ def test_the_far_observation_budget_runs_replans_then_candidates_then_ends():
     tick(0)
     tick(1)
     assert len(state["observe_replans"]) == 2 and not releases and "scene_replans" not in state  # the waypoint's own
-    tick(2)  # its budget spent: the next candidate, released first
-    assert releases == [12.0] and state["scene_replans"][-1]["outcome"] == "installed"
+    core.slam["stop_now"] = False  # 7판: its budget spent while still moving -- brakes, nothing taken yet
+    out = tick(2)
+    assert out.tracking.status == "braking" and out.tracking.speed_mps == 0.0
+    assert not releases and "scene_replans" not in state and ms.next_candidate_index == 1
+    core.slam["stop_now"] = True
+    tick(3)  # stopped: the next candidate, released first
+    assert releases == [13.0] and state["scene_replans"][-1]["outcome"] == "installed"
     assert state["observation_waypoint_selected"] == list(waypoints[1]) and ms.next_candidate_index == 2
     assert state["observe_replan_leg"] == {"serial": 4, "start": 2}
-    tick(3)
     tick(4)
-    assert len(state["observe_replans"]) == 4 and releases == [12.0]  # the new leg's own two
+    tick(5)
+    assert len(state["observe_replans"]) == 4 and releases == [13.0]  # the new leg's own two
     with pytest.raises(RuntimeError, match="observe:stall_exhausted"):
-        tick(5)  # spent again, no candidate left
-    assert state["scene_replans"][-1]["outcome"] == "exhausted" and releases == [12.0, 15.0]
+        tick(6)  # spent again, no candidate left
+    assert state["scene_replans"][-1]["outcome"] == "exhausted" and releases == [13.0, 16.0]
+
+
+def test_the_candidate_permit_is_strict_where_the_permission_stops_acting():
+    """7판 (Codex Isaac round 2 P2): a transport's first gear leg ending within keep + the delivery straight of its
+    goal -- the docking straight permission_acting turns the permission off on (after arm_docking cut it back by
+    keep) -- keeps the strict check; elsewhere, and on a return, an unknown beyond the verified distance is allowed."""
+    core, ms, state, calls, rear, held = make()
+    tracker = core.trackers["transport"]
+    leg, _ = tracker.leg_ahead()
+    straight = core.geometry.delivery_straight_m
+    whole = float(tracker.remaining_to_goal_m())
+    leg_m = float(np.sum(np.hypot(*np.diff(np.asarray(leg)[:, :2], axis=0).T)))
+    assert whole - leg_m <= straight  # the open floor's single forward leg runs to the goal
+    assert core._scene_permit_strict(tracker, leg)
+    short_leg = np.asarray(leg)[: max(2, len(leg) // 3)]  # a first leg ending well before the zone
+    assert not core._scene_permit_strict(tracker, short_leg)
+    core.slam = {"docking": {"status": "armed", "keep_m": 0.4}}  # the zone grows by keep while docking is armed
+    cut = whole - straight - 0.2
+    on = np.asarray(leg)[np.cumsum(np.r_[0.0, np.hypot(*np.diff(np.asarray(leg)[:, :2], axis=0).T)]) <= cut]
+    assert core._scene_permit_strict(tracker, on)
+    core.slam = None
+    assert not core._scene_permit_strict(tracker, on)
+    ms.phase = "return_home"
+    assert not core._scene_permit_strict(tracker, leg)

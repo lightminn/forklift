@@ -239,13 +239,47 @@ def test_the_resume_check_sends_a_moved_start_back_to_presteer_and_a_lost_permit
     rec = records[-1]
     assert rec["represteers"] == 1 and rec["outcome"] == "installed"
     assert [s for s, _ in rec["states"]].count("presteer") == 2  # the first target, then the moved start's
+    # 7판: a permit lost at the start is re-checked standing; back within permit_wait_s it goes on with the same leg
     dev, records = _device()
     ports = Ports(plans=[("ok", "p1"), ("ok", "p2")],
-                  previews=[{"status": "tracking", "ok": False, "why": "start:limit", "steer": 0.2},
-                            {"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+                  previews=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 5
+                  + [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
     _ask(dev)
-    _run(dev, ports, n=80)
-    assert ("install", "p2") in ports.log
+    steps = _run(dev, ports, n=80)
+    assert steps[-1].owned is False and ("install", "p2") not in ports.log
+    assert records[-1]["permit_waits"][0]["where"] == "resume" and records[-1]["drops"] == 0
+    # ... and lost for longer it is planned again
+    dev, records = _device()
+    ports = Ports(plans=[("ok", "p1"), ("ok", "p2")],
+                  previews=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 40
+                  + [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+    _ask(dev)
+    _run(dev, ports, n=120)
+    assert ("install", "p2") in ports.log and records[-1]["drops"] == 1
+
+
+def test_a_candidate_the_permit_does_not_pass_yet_is_rechecked_standing_then_refused():
+    """7판 (Isaac sri_b907b91: blocked:unknown refused at once): the same candidate re-asked every tick."""
+    dev, records = _device()
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}] * 10
+                  + [{"status": "tracking", "ok": True, "why": "ok", "steer": 0.2}])
+    _ask(dev)
+    steps = _run(dev, ports, n=60)
+    assert steps[-1].owned is False and records[-1]["outcome"] == "installed"
+    assert ports.log.count(("install", "path-1")) == 1 and ports.log.count(("candidate", "path-1")) == 11
+    dev, records = _device()
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "blocked:occupied", "steer": 0.2}])
+    _ask(dev)
+    steps = _run(dev, ports, n=60)
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:blocked:occupied"
+    wait = records[-1]["permit_waits"][0]
+    assert wait["where"] == "candidate" and wait["until_s"] - wait["since_s"] == pytest.approx(2.9, abs=0.11)
+    dev, records = _device()  # a pause does not count in that wait
+    ports = Ports(candidates=[{"status": "tracking", "ok": False, "why": "start:unknown", "steer": 0.2}])
+    _ask(dev)
+    _run(dev, ports, n=20)
+    dev.shift_time(5.0)
+    assert dev.step(10.0 + 7.0, ports).end is None
 
 
 def test_presteer_times_out_and_goes_on():

@@ -356,12 +356,17 @@ class ObstacleLayer:
                                   callback_spec or {"kind": "turnaround_arc"})
 
     def candidate_permit(self, now_s: float, path_ahead, *, current_pose, direction: int, loaded: bool,
-                         curvature_inv_m: float, measured_curvature_inv_m: float, cap_mps: float) -> dict:
+                         curvature_inv_m: float, measured_curvature_inv_m: float, cap_mps: float,
+                         strict: bool = True) -> dict:
         """The scene-mode replan's check before a candidate is installed (docs/plans/2026-10-23-scene-replan.md
-        2.1 step 6): ``path_ahead`` -- the candidate tracker's first gear leg -- on the processed snapshot, in a fresh
-        DrivePermission so the layer's own (its path check, the distance driven since, its last stop arc) is neither
-        read nor changed. ok: the walk verified min(lookahead, the leg's length) with nothing blocked, and the start
-        allowed above zero both at the first command's curvature and at the wheels' measured one."""
+        2.1 step 6, 7판): ``path_ahead`` -- the candidate tracker's first gear leg -- on the processed snapshot, in a
+        fresh DrivePermission so the layer's own (its path check, the distance driven since, its last stop arc) is
+        neither read nor changed. Always: no occupied cell within the lookahead, walked past unknown cells (an
+        occupied one behind an unknown is still found), and the start allowed above zero both at the first command's
+        curvature and at the wheels' measured one -- the driving permission's own start rule. strict (the leg reaches
+        where the permission does not act, Codex Isaac round 2 P2): also verified min(lookahead, the leg's length)
+        with nothing blocked; otherwise an unknown beyond the verified distance is the driving permission's, as on
+        any path."""
         poses = np.asarray(path_ahead, dtype=float)
         out = {"ok": False, "verified_m": 0.0, "blocked": None, "allowed_mps": 0.0, "measured_allowed_mps": 0.0,
                "why": None}
@@ -377,12 +382,17 @@ class ObstacleLayer:
                                            direction=direction, footprint=footprint, own_footprint=own,
                                            speed_cap_mps=cap_mps)
                    for k in (curvature_inv_m, measured_curvature_inv_m)]
+        ahead = candidate.check_path(self.snapshot, poses, footprint, own, current_pose=current_pose,
+                                     direction=direction, unknown_passes=True)
         out.update(verified_m=float(check.verified_m), blocked=check.blocked, allowed_mps=float(allowed[0][0]),
                    measured_allowed_mps=float(allowed[1][0]), allowed_why=allowed[0][1],
-                   measured_allowed_why=allowed[1][1], need_m=need)
-        if check.blocked is not None:
+                   measured_allowed_why=allowed[1][1], need_m=need, strict=bool(strict),
+                   occupied_ahead=ahead.blocked == "occupied")
+        if check.blocked == "occupied" or ahead.blocked == "occupied":
+            out["why"] = "blocked:occupied"
+        elif strict and check.blocked is not None:
             out["why"] = f"blocked:{check.blocked}"
-        elif check.verified_m + 1e-6 < need:
+        elif strict and check.verified_m + 1e-6 < need:
             out["why"] = "unverified"
         elif allowed[0][0] <= 0.0:
             out["why"] = f"start:{allowed[0][1]}"
