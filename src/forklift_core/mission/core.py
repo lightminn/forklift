@@ -6224,7 +6224,7 @@ class MissionCore:
         ms, trackers = self.ms, self.trackers
         key_ = (id(trackers[ms.phase]), trackers[ms.phase].leg_index) if ms.phase in trackers else None
         c_ = self.scene_correction
-        if c_.get("key") != key_:
+        if "key" not in c_ or c_["key"] != key_:  # no tracker yet (key None) starts a record too
             c_.clear()
             c_.update(key=key_, since_s=float(t), net_max_m=0.0, net_at_s=None, reply_max_m=0.0, net_yaw_rad=0.0)
         if net_m > c_["net_max_m"]:

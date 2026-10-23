@@ -418,3 +418,14 @@ def test_the_correction_yaw_contribution_wraps_at_pi():
                             slam_wall_s=0.0)
     core.slam_replies(1.26, [(reply, {}, 0.0, 0.0)], loaded=False)
     assert seen["yaw"] == pytest.approx(0.02)
+
+
+def test_a_correction_before_the_phase_has_a_tracker_starts_its_own_record():
+    """ws1 sr_a22ec45: a reply at 0.4 s, before the phase's tracker exists, found the empty record under key None."""
+    core, ms, state, calls, rear, held = make()
+    ms.phase = "init"
+    core.scene_correction_note(0.4, 0.01, 0.01)
+    assert core.scene_correction["key"] is None and core.scene_correction["net_max_m"] == pytest.approx(0.01)
+    core.scene_correction_note(0.5, 0.005, 0.02)
+    assert core.scene_correction["net_max_m"] == pytest.approx(0.01)
+    assert core.scene_correction["reply_max_m"] == pytest.approx(0.02)
