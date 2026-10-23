@@ -14,15 +14,19 @@
 #   MARKERS=on     line_* / random_* run their slot-marker copy <scene>_m.json (PR #99); the other scenes have none
 #   RACK=on        aisle / aisle_out run their rack copy <scene>_rack.json: rack uprights, wider slot gaps and the
 #                  0.20 m back gap (user decision 2026-10-22, docs/plans/2026-10-22-riibotics-aisle.md D-A, D-C)
+#   KEEPOUT=0      --lidar-keepout-m: the planner's searches keep the LiDAR-visible props this much wider (P1c,
+#                  docs/plans/2026-10-23-planner-permission-clearance.md); 0 plans as before. Off by default until P6
+#                  (user decision 2026-10-23: no gain shown in Isaac, docs/validation/2026-10-23-p1c-search-keepout.md);
+#                  KEEPOUT=0.15 turns it on
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
-# no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off. Anything else goes through EXTRA_ARGS.
+# no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
 # for one with sbatch --gres=shard:1. DRY_RUN=1 prints the runner's arguments, one per line, and starts nothing.
 #
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -31,11 +35,12 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; KEEPOUT=${KEEPOUT:-0}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
 case "$RACK" in on|off) ;; *) echo "RACK must be on or off"; exit 2;; esac
+[[ "$KEEPOUT" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "KEEPOUT must be a non-negative number of metres"; exit 2; }
 NAME=$SCENE
 case "$SCENE" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
@@ -53,8 +58,8 @@ fi
 mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
-echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s SCENE_FILE=%s\n' "$MODE" "$NEAR" "$MARKERS" "$RACK" "$SCENE_FILE" > "$OUT/riib_defaults.txt"
+echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT $(date -Is)"
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s SCENE_FILE=%s\n' "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 read QE QT < <("$VENV_PY" -c "import json,sys;v=json.load(open(sys.argv[1]))['views'];print(','.join(map(str,v['quarter_eye'])),','.join(map(str,v['quarter_target'])))" "$SCENE_FILE")
 COMMON=(--base-scene "$BASE_SCENE"
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml
@@ -62,6 +67,7 @@ COMMON=(--base-scene "$BASE_SCENE"
   --delivery-straight-m 1.5 --alignment-straight-m 2.1 --withdrawal-m 0.55 --insertion-reserve-m 0.016
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
   --record-slam --return-home --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --seed "${SEED:-0}"
+  --lidar-keepout-m "$KEEPOUT"
   --video --extra-views quarter,chase --quarter-eye="$QE" --quarter-target="$QT")
 if [ "$MODE" = truth ]; then
   MODE_ARGS=(--d7-planner)

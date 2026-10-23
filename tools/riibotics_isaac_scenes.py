@@ -153,11 +153,11 @@ RACK_BACK_GAP_M = 0.20
 RACK_SLOT_GAP_M = 0.58
 # The live obstacle layer marks a LiDAR hit with its error radius (config/obstacle_layer_single.yaml; a 0.052 m post
 # reads as about 0.35-0.40 m of OCCUPIED cells -- ws1 riib_901632b3 runs), while the planner keeps 0.05-0.10 m from a
-# prop: paths hugging the rack face were stopped by the permission in every run. In the planner's map every post
-# but the frames of the mission's own two slots is therefore a keep-out RACK_KEEPOUT_M wider on each side; the
-# working frames stay their size (the truck enters those straight, and the straights need the room). Isaac draws
-# every post at its size.
-RACK_KEEPOUT_M = 0.20
+# prop. PR #106 widened every post but the working slots' frames in the scene file (a scene-only device the real
+# truck does not have); the planner's own LiDAR keepout (P1c, --lidar-keepout-m, docs/plans/2026-10-23-planner-
+# permission-clearance.md) replaces it, so the posts are their size by default. ``keepout`` > 0 still builds the
+# PR #106 copy for comparison.
+RACK_KEEPOUT_M = 0.0
 RACK_KINDS = ("aisle", "aisle_out")
 
 
@@ -611,15 +611,16 @@ def grown_pallets(scenario: TransportScenario, grow_m: float) -> TransportScenar
     return replace(scenario, props=tuple(grow(p) for p in scenario.props))
 
 
-def plan_scene(path: Path, out: Path, grow_m: float = 0.0) -> None:
+def plan_scene(path: Path, out: Path, grow_m: float = 0.0, keepout_m: float = 0.0) -> None:
+    """keepout_m: the runner's --lidar-keepout-m (P1c, docs/plans/2026-10-23-planner-permission-clearance.md)."""
     record = json.loads(path.read_text())
     scenario = grown_pallets(scenario_from_record(record["scenario"]), grow_m)
     pallet = load_pallet_geometry(PALLETS[record["pallet"]])
-    geometry = mission_geometry(URDF, pallet, RESERVE_M, **STRAIGHTS)
+    geometry = replace(mission_geometry(URDF, pallet, RESERVE_M, **STRAIGHTS), lidar_keepout_m=keepout_m)
     config = make_transport_planner_config(curvature_limit_inv_m=KAPPA, clearance_m=CLEARANCE_M,
                                            max_expansions=30000, **D7_PLANNER_OPTIONS)
     result = {"scene": record["name"], "scene_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-              "grow_pallets_m": grow_m, "candidates": []}
+              "grow_pallets_m": grow_m, "lidar_keepout_m": keepout_m, "candidates": []}
     started = time.monotonic()
     # As the runner plans a scene: the zone grown by the pallet's half diagonal before recognition, the
     # (here: true) pallet as the estimate after it -- never scenario.pickup by default.
@@ -653,19 +654,20 @@ def plan_scene(path: Path, out: Path, grow_m: float = 0.0) -> None:
                       wall_s=round(time.monotonic() - started, 1),
                       lengths_m={n: round(float(getattr(plan, n).length_m), 2)
                                  for n in STAGES if getattr(plan, n, None) is not None})
-    (out / _result_name(record["name"], grow_m)).write_text(json.dumps(result, indent=1, default=str))
+    (out / _result_name(record["name"], grow_m, keepout_m)).write_text(json.dumps(result, indent=1, default=str))
 
 
-def _result_name(name: str, grow_m: float) -> str:
-    return f"{name}.plan.json" if grow_m == 0 else f"{name}.grow{grow_m:.2f}.plan.json"
+def _result_name(name: str, grow_m: float, keepout_m: float = 0.0) -> str:
+    keep = "" if keepout_m == 0 else f".keep{keepout_m!r}"  # exact: two values never share a file (Codex P2)
+    return f"{name}{keep}.plan.json" if grow_m == 0 else f"{name}.grow{grow_m:.2f}{keep}.plan.json"
 
 
 def _plan_worker(args):
     """A result counts only when this run's child wrote it for this scene file (Codex 2026-10-20 P2)."""
-    path, out, timeout, grow_m = args
-    result = out / _result_name(path.stem, grow_m)
+    path, out, timeout, grow_m, keepout_m = (*args, 0.0) if len(args) == 4 else args
+    result = out / _result_name(path.stem, grow_m, keepout_m)
     result.unlink(missing_ok=True)
-    proc = multiprocessing.get_context("spawn").Process(target=plan_scene, args=(path, out, grow_m))
+    proc = multiprocessing.get_context("spawn").Process(target=plan_scene, args=(path, out, grow_m, keepout_m))
     proc.start()
     proc.join(timeout)
     if proc.is_alive():
@@ -676,6 +678,8 @@ def _plan_worker(args):
         return result.name, f"crash {proc.exitcode}"
     record = json.loads(result.read_text())
     if record.get("scene_sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+        return result.name, "stale_result"
+    if record.get("lidar_keepout_m", 0.0) != keepout_m:
         return result.name, "stale_result"
     return result.name, record["outcome"]
 
@@ -688,6 +692,8 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--timeout-s", type=float, default=1200)
     parser.add_argument("--grow-pallets", default="0", help="comma-separated keep-outs (m) around neighbour pallets")
+    parser.add_argument("--lidar-keepout", default="0",
+                        help="comma-separated --lidar-keepout-m values (m) to plan with (P1c, plan 2026-10-23)")
     parser.add_argument("--slot-markers", action="store_true",
                         help="also write <name>_m.json with slot markers for the line / random scenes (plan 2026-10-22)")
     parser.add_argument("--rack", action="store_true",
@@ -725,7 +731,8 @@ def main() -> None:
     if args.plan:
         with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
             grows = [float(g) for g in args.grow_pallets.split(",")]
-            jobs = [(p, args.output, args.timeout_s, g) for p in paths for g in grows]
+            keeps = [float(k) for k in args.lidar_keepout.split(",")]
+            jobs = [(p, args.output, args.timeout_s, g, k) for p in paths for g in grows for k in keeps]
             for name, outcome in pool.map(_plan_worker, jobs):
                 print("plan", name, outcome, flush=True)
 

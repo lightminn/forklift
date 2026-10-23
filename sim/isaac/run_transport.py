@@ -485,6 +485,16 @@ def arguments() -> argparse.Namespace:
         "the cusp latch refuses the stall and the scene replan device takes it. The obstacle grid is not shifted "
         "with it. Off: every earlier run.",
     )
+    parser.add_argument(
+        "--lidar-keepout-m",
+        type=float,
+        default=0.0,
+        help="docs/plans/2026-10-23-planner-permission-clearance.md P1c: the planner's searches keep every prop taller "
+        "than the LiDAR plane (1.05 m) this much (m, >= 0) wider on each side -- the obstacle layer paints its hits wider "
+        "than the prop; the fixed straights keep the props at their size, and a loaded transport starting inside the "
+        "grown band backs out straight first unless --exit-clearance-m sets that prefix. 0 (default): as every earlier "
+        "run. Not with --grid-planning, whose world has no props to grow.",
+    )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
@@ -977,6 +987,10 @@ def arguments() -> argparse.Namespace:
             parser.error("--exit-clearance-m needs --layout scene")
         if not (math.isfinite(args.exit_clearance_m) and args.exit_clearance_m > 0):
             parser.error("--exit-clearance-m must be a positive number of metres")
+    if not (math.isfinite(args.lidar_keepout_m) and args.lidar_keepout_m >= 0):
+        parser.error("--lidar-keepout-m must be a finite non-negative number of metres")
+    if args.lidar_keepout_m > 0 and getattr(args, "grid_planning", False):
+        parser.error("--lidar-keepout-m grows the scene's props, which --grid-planning plans without")
     if args.layout == "scene":
         if args.min_obstacle_height_m is not None or args.prism_colliders:
             # The scene's low pallets are part of the scenario and its boxes are their own colliders.
@@ -2551,6 +2565,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         delivery_straight_m=args.delivery_straight_m,
         alignment_straight_m=args.alignment_straight_m,
         withdrawal_m=args.withdrawal_m,
+        lidar_keepout_m=args.lidar_keepout_m,
     )
     state["insertion_reserve_m"] = args.insertion_reserve_m
     # The truck unloaded is its body and two fork blades, not their hull (D4).
@@ -2701,7 +2716,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # The pose the mission began at, or None when no return leg was requested.
     return_to_pose = scenario.start_rear if args.return_home else None
     state["scenario"] = asdict(scenario)
-    state["geometry"] = asdict(geometry)
+    # the fields a record keeps (P1c's keepout fields only when set), so a run with it off records as before
+    from forklift_core.mission.replay_codec import recorded_fields
+
+    kept_ = {f.name for f in recorded_fields(geometry)}
+    state["geometry"] = {k: v for k, v in asdict(geometry).items() if k in kept_}
     state["pallet_geometry_source"] = str(args.pallet_geometry)
     state["pallet_geometry_sha256"] = hashlib.sha256(
         args.pallet_geometry.read_bytes()
@@ -3414,6 +3433,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["exit_prefix"] = {"clearance_m": transport_exit.clearance_m, "step_m": transport_exit.step_m,
                                 "cap_m": transport_exit.cap_m, "band_bottom_m": band_bottom_,
                                 "walls": [asdict(r) for r in exit_walls_]}
+    if geometry.lidar_keepout_m > 0:
+        # P1c (docs/plans/2026-10-23-planner-permission-clearance.md): every transport plan backs a loaded transport that
+        # starts inside the grown band out first, building its prefix at that call's clearance (a clearance-0 replan
+        # needs a shorter one -- Codex P1c review round 2 P2); the core reads the adopted prefix from the installed
+        # path's exit_prefix record (MissionCore.exit_prefix_m), so the permission acts on it.
+        from forklift_core.planning.pallet_mission import keepout_exit_prefix
+
+        search_clearance_ = (travel_config if travel_config is not None else planner_config).clearance_m
+        auto_ = keepout_exit_prefix(scenario, geometry, search_clearance_)
+        if transport_exit is not None and auto_ is not None and transport_exit.clearance_m < auto_.clearance_m:
+            # the search would start inside its own band again (trailer, G 0.15 with 0.30: invalid_start)
+            raise SystemExit(f"--exit-clearance-m {transport_exit.clearance_m} is below the {auto_.clearance_m:.3f} m "
+                             "the --lidar-keepout-m search needs; leave it out (the keepout builds its own prefix)")
+        if transport_exit is None and auto_ is not None:
+            state["exit_prefix"] = {"source": "lidar_keepout", "lidar_keepout_m": geometry.lidar_keepout_m,
+                                    "clearance_m_at_search_clearance": auto_.clearance_m, "step_m": auto_.step_m,
+                                    "cap_m": auto_.cap_m, "walls": [asdict(r) for r in auto_.obstacles]}
 
     grid_planning = bool(args.grid_planning)
     if obstacle is not None and obstacle["layer"].known_enabled and not grid_planning:
@@ -8958,6 +8994,8 @@ def main() -> None:
             and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
             # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
             and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
+            # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
+            and (k != "lidar_keepout_m" or v != 0.0)
             # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
             and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
             and (

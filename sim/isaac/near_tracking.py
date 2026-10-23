@@ -1112,6 +1112,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "near_capture_lower": "gate",
                               # 2026-10-22 trailer exit: the transport exit prefix; off in every earlier run.
                               "exit_clearance_m": None,
+                              # 2026-10-23 P1c: the searches' LiDAR keepout; 0 in every earlier run.
+                              "lidar_keepout_m": 0.0,
                               # 2026-10-22 open-zone docking D2: the sim-only weak-direction docking acceptance; off before.
                               "docking_acceptance": "information",
                               # 2026-10-23 scene replan plan 4: the diagnostic control-pose shift at a cusp; off before.
