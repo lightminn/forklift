@@ -27,6 +27,11 @@ LEG_END_MIN_SPEED_MPS = 0.010
 LEG_END_ACROSS_MARGIN_M = 0.0005
 LEG_END_BEHIND_M = 0.001
 LEG_END_ALIGNED_COS = 0.7
+# The leg end filter (docs/plans/2026-10-24-goal-creep-stall.md G1): leg_end_out_of_reach() allows the curvature cap
+# to bend the run back over the travel left -- the pose's distance to the end normal, the overshoot allowance and a
+# braking margin -- and asks a margin above the tolerance on top. A filter for the core's own observation, not a proof.
+OUT_OF_REACH_BRAKE_M = 1e-4
+OUT_OF_REACH_MARGIN_M = 1e-5
 
 
 def _positive(name: str, value: float) -> None:
@@ -273,6 +278,38 @@ class RearAxlePathTracker:
         """The path sample the current leg ends at (a cusp, or the goal)."""
         return int(self._leg_ends[self._leg])
 
+    def leg_end_out_of_reach(self) -> bool:
+        """The leg end filter (docs/plans/2026-10-24-goal-creep-stall.md G1), from the last update()'s pose and
+        progress: a final goal not yet reached, 0 < remaining <= LEG_END_SLACK_M, the floor off, and the end -- on
+        the present heading -- across the tolerance by more than the curvature cap bends back over the travel left
+        (the pose's distance to the end normal, the overshoot allowance, OUT_OF_REACH_BRAKE_M), plus
+        OUT_OF_REACH_MARGIN_M. A filter for the core's observation of a truck that does not move, not a proof that
+        it cannot arrive."""
+        endpoint = int(self._leg_ends[self._leg])
+        if (self._last_eval is None or endpoint != len(self._poses) - 1
+                or self._pending or self._failed or self._arrived):
+            return False
+        remaining = max(0.0, float(self._distance[endpoint] - self._progress))
+        if not 0.0 < remaining <= LEG_END_SLACK_M:
+            return False
+        cfg = self.config
+        pose, goal = np.asarray(self._last_eval[0], dtype=float), self._poses[endpoint]
+        if self._leg_end_floor(pose, goal, endpoint, remaining, cfg.position_tolerance_m) != 0.0:
+            return False
+        _, to_normal, across_end, _ = self._leg_end_geometry(pose, goal, endpoint, remaining)
+        travel = to_normal + (cfg.overshoot_tolerance_m or 0.0) + OUT_OF_REACH_BRAKE_M
+        bent = cfg.max_curvature_inv_m * travel**2 / 2
+        return across_end - bent - OUT_OF_REACH_MARGIN_M > cfg.position_tolerance_m
+
+    def distance_to_end_normal_m(self) -> float:
+        """How far the last update()'s pose stands short of the current leg end's normal (0 at or past it)."""
+        if self._last_eval is None:
+            return 0.0
+        endpoint = int(self._leg_ends[self._leg])
+        pose, goal = np.asarray(self._last_eval[0], dtype=float), self._poses[endpoint]
+        heading = np.array([cos(goal[2]), sin(goal[2])])
+        return max(0.0, -float(self._directions[endpoint]) * float(np.dot(pose[:2] - goal[:2], heading)))
+
     def leg_remaining_m(self) -> float:
         """Path length still to drive to the end of the current leg, from current progress."""
         return max(0.0, float(self._distance[self._leg_ends[self._leg]] - self._progress))
@@ -385,6 +422,21 @@ class RearAxlePathTracker:
         across = abs(float(np.dot(offset, [-heading[1], heading[0]])))
         return across <= tolerance and 0.0 <= along <= limit
 
+    def _leg_end_geometry(self, pose: np.ndarray, goal: np.ndarray, endpoint: int, remaining: float):
+        """The leg end as the floor reads it: (turn, distance to the end normal, the end's offset across it on the
+        present heading, how far the pose stands behind the progress on the last segment)."""
+        heading = np.array([cos(goal[2]), sin(goal[2])])
+        offset = pose[:2] - goal[:2]
+        turn = _angle(float(pose[2] - goal[2]))
+        direction = float(self._directions[endpoint])
+        to_normal = max(0.0, -direction * float(np.dot(offset, heading)))
+        across_end = abs(float(np.dot(offset, [-heading[1], heading[0]])) + direction * to_normal * tan(turn))
+        behind = 0.0
+        if self._segment == endpoint - 1:
+            axis = self._vectors[endpoint - 1] / self._lengths[endpoint - 1]
+            behind = float(np.dot(-offset, axis)) - remaining
+        return turn, to_normal, across_end, behind
+
     def _leg_end_floor(
         self, pose: np.ndarray, goal: np.ndarray, endpoint: int, remaining: float, position_tolerance: float
     ) -> float:
@@ -395,18 +447,9 @@ class RearAxlePathTracker:
         switched off near the circle cannot carry an arrival past it. (b) The pose more than LEG_END_BEHIND_M behind
         the progress, measured on the progress's own axis -- the leg's last segment, and only while the progress is
         on it."""
-        heading = np.array([cos(goal[2]), sin(goal[2])])
-        offset = pose[:2] - goal[:2]
-        turn = _angle(float(pose[2] - goal[2]))
+        turn, _, across_end, behind = self._leg_end_geometry(pose, goal, endpoint, remaining)
         if cos(turn) < LEG_END_ALIGNED_COS:
             return 0.0  # a floor would only move the truck, not the progress
-        direction = float(self._directions[endpoint])
-        to_normal = max(0.0, -direction * float(np.dot(offset, heading)))
-        across_end = abs(float(np.dot(offset, [-heading[1], heading[0]])) + direction * to_normal * tan(turn))
-        behind = 0.0
-        if self._segment == endpoint - 1:
-            axis = self._vectors[endpoint - 1] / self._lengths[endpoint - 1]
-            behind = float(np.dot(-offset, axis)) - remaining
         if across_end <= position_tolerance + LEG_END_ACROSS_MARGIN_M and behind <= LEG_END_BEHIND_M:
             return 0.0
         cfg = self.config
