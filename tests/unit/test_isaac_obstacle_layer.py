@@ -689,3 +689,87 @@ def test_the_turnaround_arc_check_is_one_function_frozen_and_picklable():
     lay.snapshot = None  # the layer moves on; the frozen checker does not
     assert {name: checker(poses) for name, poses in arcs.items()} == expected
     assert layer().turnaround_arc_check()(arcs["straight"]) == "no_snapshot"
+
+
+
+def test_a_candidate_permit_is_judged_in_its_own_context_leaving_the_layer_alone():
+    """Scene-mode replan plan (docs/plans/2026-10-23-scene-replan.md 2.1 step 6): a candidate's first gear leg on the
+    processed snapshot, in a fresh DrivePermission -- verified distance, blocked, the start allowance at the command's
+    curvature and at the measured one. The layer's permission (its path check, snapshot and last stop arc) stays as it
+    is, and a candidate is allowed where the installed path has the truck held at 0 (Codex plan round 2 P3)."""
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _wall_raw(lay, 1.62), odom_rear=pose, loaded=False)
+    installed = lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    held, why = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
+    snap, estop = lay.snapshot, lay.permission.last_estop
+    assert installed.blocked == "occupied"
+    back = np.column_stack((np.linspace(0, -1.0, 51), np.zeros(51), np.zeros(51)))
+    ok = lay.candidate_permit(0.2, back, current_pose=pose, direction=-1, loaded=False, curvature_inv_m=0.0,
+                              measured_curvature_inv_m=0.05, cap_mps=0.6)
+    assert ok["ok"] and ok["blocked"] is None and ok["allowed_mps"] > 0 and ok["measured_allowed_mps"] > 0
+    assert ok["verified_m"] >= min(lay.permission.config.lookahead_m, 1.0) - 1e-9
+    ahead = lay.candidate_permit(0.2, path, current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0,
+                                 measured_curvature_inv_m=0.0, cap_mps=0.6)
+    assert not ahead["ok"] and ahead["blocked"] == "occupied" and ahead["why"] == "blocked:occupied"
+    # the layer's own permission untouched
+    assert lay.snapshot is snap and lay.permission.path_check is installed and lay.permission.last_estop is estop
+    assert lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False,
+                     cap_mps=0.6) == (held, why)
+
+
+def test_a_candidate_permit_needs_the_whole_lookahead_or_the_leg_verified_and_a_snapshot():
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    short = np.column_stack((np.linspace(0, -0.3, 16), np.zeros(16), np.zeros(16)))
+    none = lay.candidate_permit(0.0, short, current_pose=pose, direction=-1, loaded=False, curvature_inv_m=0.0,
+                                measured_curvature_inv_m=0.0, cap_mps=0.6)
+    assert not none["ok"] and none["why"] == "no_snapshot"
+    for k in range(3):
+        lay.add_scans(0.1 * k, _open_raw(lay), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=short, loaded=False)
+    leg = lay.candidate_permit(0.2, short, current_pose=pose, direction=-1, loaded=False, curvature_inv_m=0.0,
+                               measured_curvature_inv_m=0.0, cap_mps=0.6)
+    assert leg["ok"] and leg["verified_m"] == pytest.approx(0.3, abs=1e-6)  # a 0.3 m leg: its whole length
+
+
+def test_a_candidate_permit_leaves_an_unknown_beyond_the_verified_distance_to_the_permission_unless_strict():
+    """Scene replan plan 7판 (Isaac sri_b907b91 s0: verified 2.42 of 3.0 m, start allowed 0.354 m/s, refused): an
+    unknown ahead is the driving permission's, as on any path -- unless the leg reaches where the permission does not
+    act (strict). An occupied cell behind the unknown is still found (walked past it, Codex Isaac round 2)."""
+    from dataclasses import replace as dc_replace
+
+    from forklift_core.perception.obstacle_grid import OCCUPIED, UNKNOWN
+
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _open_raw(lay, reach=9.0), odom_rear=pose, loaded=False)  # no wall within the walk
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    snap = lay.snapshot
+
+    def band(state, x0, x1, value):
+        out = state.copy()
+        i0 = int(round((x0 - snap.origin_x_m) / snap.resolution_m))
+        i1 = int(round((x1 - snap.origin_x_m) / snap.resolution_m))
+        out[i0:i1, :] = value
+        return out
+
+    kw = dict(current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0, measured_curvature_inv_m=0.0,
+              cap_mps=0.6)
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 3.4, 3.6, UNKNOWN))
+    strict = lay.candidate_permit(0.2, path, strict=True, **kw)
+    relaxed = lay.candidate_permit(0.2, path, strict=False, **kw)
+    assert not strict["ok"] and strict["why"] == "blocked:unknown" and strict["allowed_mps"] > 0
+    assert relaxed["ok"] and relaxed["blocked"] == "unknown" and relaxed["verified_m"] < relaxed["need_m"]
+    assert relaxed["strict"] is False and relaxed["occupied_ahead"] is False
+    behind = band(band(snap.state, 3.4, 3.6, UNKNOWN), 3.75, 3.85, OCCUPIED)
+    lay.snapshot = dc_replace(snap, state=behind)
+    past = lay.candidate_permit(0.2, path, strict=False, **kw)
+    assert not past["ok"] and past["why"] == "blocked:occupied" and past["occupied_ahead"] is True
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 0.9, 1.1, UNKNOWN))
+    start = lay.candidate_permit(0.2, path, strict=False, **kw)  # unknown inside the stopping distance: no start
+    assert not start["ok"] and start["why"].startswith("start:")

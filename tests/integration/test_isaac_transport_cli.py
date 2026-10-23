@@ -468,9 +468,9 @@ def test_slam_release_replans_both_travel_legs_and_gates_on_a_stop() -> None:
     assert "if slam[\"stop_now\"]:\n                slam_release(t)" in gate
     assert "rear = slam_rear(t)  # the released estimate" in gate
     # (M-a3: nor while paused, resuming or cancelling, plan E3; real-time plan D8: nor while a plan is waited for;
-    # persistent console plan D5 6c: nor in a loaded start wait)
+    # persistent console plan D5 6c: nor in a loaded start wait; scene replan plan 2.1: nor on a tick the device owns)
     assert ("if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_\n"
-            "                        and not loaded_wait_):" in source)
+            "                        and not loaded_wait_ and not scene_owned_):" in source)
 
 
 def test_slam_runs_see_the_pallet_again_before_the_final_straight() -> None:
@@ -522,8 +522,9 @@ def test_slam_runs_dock_on_a_scan_before_the_delivery_straight() -> None:
     # (the obstacle replan and the live leg moved to the mission core, M-a1 slices 3a/3c)
     # Real-time plan D8: the worker's requests look them up as their synchronous paths do -- the live
     # transport and return legs and the release's return scenario add three.
+    # Scene replan plan 2.1: the device's leg plan (transport and return) adds two.
     assert source.count('slam.get("transport_scenario", scenario)') + CORE.read_text().count(
-        'slam.get("transport_scenario", scenario)') == 15
+        'slam.get("transport_scenario", scenario)') == 17
 
 
 def test_d8b_recording_options_validate_before_startup(tmp_path) -> None:
@@ -754,7 +755,7 @@ def test_s4_near_tracking_runs_only_behind_the_flag_and_before_the_arrival() -> 
         "        if check is None:\n            pocket[\"frames_read\"] += 1")
     # S4a-1 ends at the approach's arrival, and the loop end lets that phase return.
     assert "transition(\"near_tracking_stopped\", t)\n                return SimpleNamespace(stop=True, rear=rear)" in core
-    assert "if arrival_.stop:\n                                break" in source
+    assert "if arrival_.stop:\n                                    break" in source  # under the scene replan's guard
     assert "\"repeat_target_not_reached\", \"near_tracking_stopped\", \"bottom_deck_refused\"):\n            return" in source
     # The bottom-deck refusal (plan 2026-10-19 task 3) also ends at the approach's arrival.
     assert "transition(\"bottom_deck_refused\", t)\n                    return SimpleNamespace(stop=True, rear=rear)" in core

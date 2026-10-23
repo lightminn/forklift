@@ -38,6 +38,8 @@ PREFIXES = {
     "Perception camera local pose differs": SESSION, "--odometry-wheel-radius-m": SESSION,
     # the anchored neighbours block the unaligned delivery straight (plan 2026-10-22-slot-anchored-neighbours 2.3)
     "session_anchor_unaligned:": MISSION,
+    # the scene-mode replan device ends a mission it could not recover (docs/plans/2026-10-23-scene-replan.md 2.1)
+    "scene_replan_exhausted:": MISSION, "scene_replan_failed:": MISSION, "scene_replan_refused:": MISSION,
     "Pallet missed the green destination center": SESSION, "Delivered pallet is not grounded": SESSION,
     "Fork still inside delivered pallet": SESSION,
     # a session's pallet nobody handles moved past its rest bound (plan 2026-10-22-rigid-session-pallets 2.4)
@@ -75,6 +77,9 @@ DYNAMIC_SITES = {
     ("src/forklift_core/mission/core.py", "reason_"): MISSION,  # "near_field_retry_no_detection", "near_capture_*"
     ("src/forklift_core/mission/core.py", "refusal"): MISSION,  # "near_capture_realign_short:*" and the like
     ("src/forklift_core/mission/core.py", "'near_field_contract:' + '; '.join(tracker_problems)"): SESSION,
+    # the scene-mode replan device (docs/plans/2026-10-23-scene-replan.md 2.1): "scene_replan_{exhausted,failed,refused}:*"
+    ("src/forklift_core/mission/core.py", "why_ or ''"): MISSION,
+    ("src/forklift_core/mission/core.py", "out_.end or ''"): MISSION,
 }
 
 
