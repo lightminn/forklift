@@ -1027,15 +1027,28 @@ class MissionCore:
         exit prefix. Cached per tracker."""
         exit_ = getattr(self.hooks, "exit_prefix", None)
         tracker = self.trackers.get("transport")
-        if exit_ is None or tracker is None:
+        if tracker is None:
             return 0.0
         cached = getattr(self, "_exit_prefix_cache", None)
         if cached is not None and cached[0] is tracker:
             return cached[1]
-        from forklift_core.planning.pallet_mission import exit_prefix_length_m
+        if exit_ is not None:
+            from forklift_core.planning.pallet_mission import exit_prefix_length_m
 
-        start = PlanningPose(*(float(v) for v in tracker._poses[0]))
-        delta = exit_prefix_length_m(start, self.geometry.loaded_footprint, exit_) or 0.0
+            start = PlanningPose(*(float(v) for v in tracker._poses[0]))
+            delta = exit_prefix_length_m(start, self.geometry.loaded_footprint, exit_) or 0.0
+        else:
+            # P1c's keepout prefix (docs/plans/2026-10-23-planner-permission-clearance.md): built by each plan at its
+            # own clearance, so read from the installed path's record -- held only while the tracker starts where that
+            # path does (an arm_docking split keeps the start, a replan installs its own path and record)
+            path = getattr(self, "paths", {}).get("transport")
+            record = getattr(path, "exit_prefix", None) or {}
+            if record.get("status") != "prefix":
+                delta = 0.0  # no prefix on this path: nothing else is read from it (Codex round 3 P2)
+            else:
+                poses = getattr(path, "poses", None)
+                same_start = poses is not None and len(poses) and np.allclose(poses[0], tracker._poses[0])
+                delta = float(record.get("length_m", 0.0)) if same_start else 0.0
         value = delta if delta > 0 and tracker.leading_reverse_straight_m() >= delta - 1e-6 else 0.0
         self._exit_prefix_cache = (tracker, value)
         return value
