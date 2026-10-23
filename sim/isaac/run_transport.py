@@ -475,6 +475,17 @@ def arguments() -> argparse.Namespace:
         "blocked straight) plans as before and is recorded. Off: plans as every earlier run.",
     )
     parser.add_argument(
+        "--inject-cusp-offset-m",
+        type=float,
+        default=None,
+        help="Diagnostic only, never a result (docs/plans/2026-10-23-scene-replan.md 4): with --slam, once per run, "
+        "when a transport leg ending at a gear cusp comes within 0.05 m of its end, the control pose is translated "
+        "this far to the truck's left at that moment (m, signed; a fixed map-frame step) until the session moves on "
+        "to its next pallet -- a SLAM correction step standing in for the recorded line_m seed 1 mission 3 one, so "
+        "the cusp latch refuses the stall and the scene replan device takes it. The obstacle grid is not shifted "
+        "with it. Off: every earlier run.",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -5028,9 +5039,14 @@ def drive(S, isaac) -> None:
             slam.setdefault("silence_dead_reckoning_s", float(now_s))
             est = compose(slam["tracker"].applied[0], slam_odom_base())
         offset = abs(args.rear_axle_offset_m)
-        return np.array(
+        out_ = np.array(
             [est[0] - offset * math.cos(est[2]), est[1] - offset * math.sin(est[2]), est[2]]
         )
+        shift_ = slam.get("cusp_injection_m")
+        if shift_ is not None:  # --inject-cusp-offset-m (diagnostic): a fixed map-frame translation step
+            out_[0] += shift_[0]
+            out_[1] += shift_[1]
+        return out_
     if args.robot_camera:
         import video_frames as video_frames_module
     speeds = {
@@ -5409,6 +5425,8 @@ def drive(S, isaac) -> None:
             # M-a1 slice 6a: the cusp rules' ports -- the loop's load state and control speed (read when
             # called), the held steering and the standing test (Vehicle reads; truth without SLAM).
             loaded=lambda: loaded, signed_speed=lambda: signed_speed, held_kappa=lambda: held_kappa(),
+            # the scene-mode replan's presteer: each front wheel's measured steering (FL, FR)
+            steering_actual=lambda: np.asarray(robot.get_joint_positions()[steers], dtype=float),
             cusp_standing=lambda: cusp_standing(),
             # M-a1 slice 6b: the docking's ports -- the loop's control and true pose, the world clock and stage,
             # the truth obstacles its dry run checks (SimTruth), the recorded planners and the LiDAR geometry.
@@ -5957,6 +5975,7 @@ def drive(S, isaac) -> None:
 
         session_truth_rects_ = []  # the other session pallets' outlines where they stand now (plan 2.4)
         session_truth_ids_ = []  # their ids, in the same order
+        cusp_injection_ = {"done": False}  # --inject-cusp-offset-m: once per run
         if session is not None:
             from session_pallets import NeighbourGap
 
@@ -7873,211 +7892,250 @@ def drive(S, isaac) -> None:
                 # height, the first live leg taken, the docking armed): no follower, arrival, cusp or stall counts, no
                 # wheel command; the lift ramp, the live leg and the permission watch run.
                 loaded_wait_ = live is not None and not paused_ and core.loaded_start_wait(t)
+                # The scene-mode replan device (docs/plans/2026-10-23-scene-replan.md 2.1): ahead of the follower. A
+                # tick it owns stands (the steering held), steers the wheels standing or drives its escape prefix --
+                # no follower, stall, recovery or arrival; the permission, the links and the commands go on.
+                inject_ = getattr(args, "inject_cusp_offset_m", None)
+                if (slam is not None and slam.get("cusp_injection_m") is not None
+                        and getattr(pallet, "current", None) != cusp_injection_.get("pallet")):
+                    # --inject-cusp-offset-m lasts until the session moves on to its next pallet
+                    slam.pop("cusp_injection_m")
+                    state.setdefault("cusp_injections", []).append(
+                        {"time_s": float(t), "event": "released", "pallet": getattr(pallet, "current", None)})
+                if (inject_ is not None and slam is not None and not cusp_injection_["done"] and ms.phase == "transport"
+                        and ms.phase in trackers and ms.last_tracking is not None and ms.last_tracking.at_cusp
+                        and trackers[ms.phase].leg_remaining_m() <= 0.05):
+                    # Diagnostic (scene replan plan 4): the control pose shifted from the next tick on.
+                    cusp_injection_["done"], cusp_injection_["pallet"] = True, getattr(pallet, "current", None)
+                    slam["cusp_injection_m"] = (-float(inject_) * math.sin(float(rear[2])),
+                                                float(inject_) * math.cos(float(rear[2])))
+                    state.setdefault("cusp_injections", []).append(
+                        {"time_s": float(t), "event": "injected", "offset_m": float(inject_),
+                         "map_step_m": list(slam["cusp_injection_m"]), "rear": [float(v) for v in rear],
+                         "pallet": getattr(pallet, "current", None),
+                         "leg_index": int(trackers[ms.phase].leg_index),
+                         "leg_remaining_m": float(trackers[ms.phase].leg_remaining_m())})
+                scene_owned_, scene_presteer_ = False, None
+                if not paused_ and not releasing and not warming and core.scene_replan.active():
+                    scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)
+                    rear = scene_.rear
+                    if scene_.owned:
+                        scene_owned_ = True
+                        if scene_.output == "presteer":
+                            scene_presteer_ = scene_.curvature
+                        elif scene_.output == "escape":
+                            requested_speed, curvature = scene_.requested_speed, scene_.curvature
+                        else:
+                            plan_wait_ = True
                 if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_
-                        and not loaded_wait_):
+                        and not loaded_wait_ and not scene_owned_):
                     # Three times the path time at the tracker's own speed caps
                     # (length / cruise when there are none), plus 10 s.
                     # M-a1 slice 4a-i: the follower's tick and the rules that rewrite its result are the core's.
                     follow_ = core.follow(t, rear, signed_speed, dt)
                     tracking, cusp_hold = follow_.tracking, follow_.cusp_hold
-                    # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
-                    stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
-                    tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
-                    # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
-                    recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
-                    tracking, rear = recover_.tracking, recover_.rear
-                    if ms.phase == "bottom_deck_refused":
-                        break  # plan 2026-10-19 task 4: a side recovery ended the mission (no command after it)
-                    # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
-                    command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
-                                            safety_hold)
-                    requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
-                                                                  command_.tracking, command_.rear)
-                    dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
-                    if tracking.status == "arrived":
-                        if args.use_perception and ms.phase == "observe":
-                            if core.bottom_deck_side_leg():
-                                # Plan 2026-10-19 task 4: a side leg\'s arrival is the side capture (or a retake\'s
-                                # retreat end), not the far recognition or the detector.
-                                deck_tick_ = core.bottom_deck_capture(t, rear, step)
-                                rear = deck_tick_.rear
-                                if deck_tick_.stop or ms.phase == "bottom_deck_refused":
-                                    break
-                            elif live is not None and core.jobs is not None:
-                                # Real-time plan D9c: the capture opens here and runs over the next ticks.
-                                begun_ = core.capture_begin(t, rear, step)
-                                live.capturing = core.capture_live is not None
-                                live_abort_ = bool(getattr(begun_, "aborted", False))
-                                plan_wait_ = True
-                            else:
-                                # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
-                                if live is not None:
-                                    live.capturing = True
-                                try:
-                                    captured_ = core.capture_and_detect(t, rear, step)
-                                finally:
+                    scene_raised_ = getattr(follow_, "scene_raised", False)
+                    if scene_raised_:
+                        plan_wait_ = True  # the device's request: this tick stands (scene replan plan 2.1)
+                    if not scene_raised_:
+                        # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
+                        stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
+                        tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
+                        # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
+                        recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
+                        tracking, rear = recover_.tracking, recover_.rear
+                        if ms.phase == "bottom_deck_refused":
+                            break  # plan 2026-10-19 task 4: a side recovery ended the mission (no command after it)
+                        # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
+                        command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
+                                                safety_hold)
+                        requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
+                                                                      command_.tracking, command_.rear)
+                        dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
+                        if tracking.status == "arrived":
+                            if args.use_perception and ms.phase == "observe":
+                                if core.bottom_deck_side_leg():
+                                    # Plan 2026-10-19 task 4: a side leg\'s arrival is the side capture (or a retake\'s
+                                    # retreat end), not the far recognition or the detector.
+                                    deck_tick_ = core.bottom_deck_capture(t, rear, step)
+                                    rear = deck_tick_.rear
+                                    if deck_tick_.stop or ms.phase == "bottom_deck_refused":
+                                        break
+                                elif live is not None and core.jobs is not None:
+                                    # Real-time plan D9c: the capture opens here and runs over the next ticks.
+                                    begun_ = core.capture_begin(t, rear, step)
+                                    live.capturing = core.capture_live is not None
+                                    live_abort_ = bool(getattr(begun_, "aborted", False))
+                                    plan_wait_ = True
+                                else:
+                                    # M-a1 slice 4b-i: the capture and the detection are the core's (the capture itself a port).
                                     if live is not None:
-                                        live.capturing = False
-                                # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
-                                # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
-                                # no observation handling, no transitions; the next tick pauses the mission.
-                                live_abort_ = bool(getattr(captured_, "aborted", False))
-                                if getattr(captured_, "refused", False):
-                                    break  # plan 2026-10-19: the re-observation after the side legs could not be captured (refused by name)
-                                if not live_abort_:
-                                    attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
-                                    frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                                    capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
-                                    forward, rear = captured_.forward, captured_.rear
-                                    if captured_.rear_stamp is not None:
-                                        rear_stamp = captured_.rear_stamp
-                                    prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
-                                if live_abort_:
-                                    pass
-                                elif (
-                                    args.repeat_captures
-                                    and (
-                                        attempt_number == args.repeat_at_attempt
-                                        if args.repeat_at_attempt is not None
-                                        else state.get("near_capture", {}).get("status") == "pending"
-                                    )
-                                ):
-                                    # G2r: the original capture above is G2's; hold the
-                                    # wheels, capture again, then stop whatever is seen.
-                                    robot.apply_action(
-                                        isaac.action(
-                                            joint_velocities=np.zeros(len(wheels)),
-                                            joint_indices=wheels,
+                                        live.capturing = True
+                                    try:
+                                        captured_ = core.capture_and_detect(t, rear, step)
+                                    finally:
+                                        if live is not None:
+                                            live.capturing = False
+                                    # M-c (plan C2): a STOP or an expiry at a physics step inside the capture ends this tick's
+                                    # mission work right after the raw capture (the core returns ``aborted``) -- no SLAM release,
+                                    # no observation handling, no transitions; the next tick pauses the mission.
+                                    live_abort_ = bool(getattr(captured_, "aborted", False))
+                                    if getattr(captured_, "refused", False):
+                                        break  # plan 2026-10-19: the re-observation after the side legs could not be captured (refused by name)
+                                    if not live_abort_:
+                                        attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
+                                        frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
+                                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                                        forward, rear = captured_.forward, captured_.rear
+                                        if captured_.rear_stamp is not None:
+                                            rear_stamp = captured_.rear_stamp
+                                        prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
+                                    if live_abort_:
+                                        pass
+                                    elif (
+                                        args.repeat_captures
+                                        and (
+                                            attempt_number == args.repeat_at_attempt
+                                            if args.repeat_at_attempt is not None
+                                            else state.get("near_capture", {}).get("status") == "pending"
                                         )
-                                    )
-                                    first_pose = [
-                                        np.asarray(v, dtype=float).tolist()
-                                        for v in capture_diagnostics.accepted_pose
-                                    ]
-
-                                    def observed(result) -> dict:
-                                        obs, diag = result.observation, result.diagnostics
-                                        valid = obs.status == "valid"
-                                        return {
-                                            "status": obs.status,
-                                            "reason": obs.reason,
-                                            "left_center_m": list(obs.left.center_m)
-                                            if valid
-                                            else None,
-                                            "right_center_m": list(obs.right.center_m)
-                                            if valid
-                                            else None,
-                                            "insertion_yaw_rad": obs.insertion_yaw_rad,
-                                            # Fork spacing plan (B): the lower-deck evidence per
-                                            # capture, to see how much it moves in place.
-                                            "selected_lower": diag.selected_lower,
-                                            "rejected_lower": [
-                                                p.lower for p in diag.rejected_patterns
-                                            ],
-                                        }
-
-                                    def valid_fraction(depth) -> float:
-                                        depth = np.asarray(depth, dtype=float)
-                                        return float((np.isfinite(depth) & (depth > 0)).mean())
-
-                                    captures = [
-                                        {
-                                            "index": 0,
-                                            "accepted_pose": first_pose,
-                                            "drift": G2.drift(first_pose, first_pose),
-                                            "depth_sha256": attempt["depth_sha256"],
-                                            "valid_fraction": valid_fraction(
-                                                scene_input.depth_m
-                                            ),
-                                            **observed(detection),
-                                        }
-                                    ]
-                                    for index in range(1, args.repeat_captures + 1):
-                                        record = {"index": index}
-                                        try:
-                                            repeat_input, _, repeat_attempts = (
-                                                perception_capture.capture(
-                                                    max_attempts=args.perception_max_attempts,
-                                                )
+                                    ):
+                                        # G2r: the original capture above is G2's; hold the
+                                        # wheels, capture again, then stop whatever is seen.
+                                        robot.apply_action(
+                                            isaac.action(
+                                                joint_velocities=np.zeros(len(wheels)),
+                                                joint_indices=wheels,
                                             )
-                                        except adapter.CaptureFailure as exc:
-                                            record["capture_failure"] = exc.reason
-                                            record["capture_diagnostics"] = asdict(
-                                                exc.diagnostics
+                                        )
+                                        first_pose = [
+                                            np.asarray(v, dtype=float).tolist()
+                                            for v in capture_diagnostics.accepted_pose
+                                        ]
+
+                                        def observed(result) -> dict:
+                                            obs, diag = result.observation, result.diagnostics
+                                            valid = obs.status == "valid"
+                                            return {
+                                                "status": obs.status,
+                                                "reason": obs.reason,
+                                                "left_center_m": list(obs.left.center_m)
+                                                if valid
+                                                else None,
+                                                "right_center_m": list(obs.right.center_m)
+                                                if valid
+                                                else None,
+                                                "insertion_yaw_rad": obs.insertion_yaw_rad,
+                                                # Fork spacing plan (B): the lower-deck evidence per
+                                                # capture, to see how much it moves in place.
+                                                "selected_lower": diag.selected_lower,
+                                                "rejected_lower": [
+                                                    p.lower for p in diag.rejected_patterns
+                                                ],
+                                            }
+
+                                        def valid_fraction(depth) -> float:
+                                            depth = np.asarray(depth, dtype=float)
+                                            return float((np.isfinite(depth) & (depth > 0)).mean())
+
+                                        captures = [
+                                            {
+                                                "index": 0,
+                                                "accepted_pose": first_pose,
+                                                "drift": G2.drift(first_pose, first_pose),
+                                                "depth_sha256": attempt["depth_sha256"],
+                                                "valid_fraction": valid_fraction(
+                                                    scene_input.depth_m
+                                                ),
+                                                **observed(detection),
+                                            }
+                                        ]
+                                        for index in range(1, args.repeat_captures + 1):
+                                            record = {"index": index}
+                                            try:
+                                                repeat_input, _, repeat_attempts = (
+                                                    perception_capture.capture(
+                                                        max_attempts=args.perception_max_attempts,
+                                                    )
+                                                )
+                                            except adapter.CaptureFailure as exc:
+                                                record["capture_failure"] = exc.reason
+                                                record["capture_diagnostics"] = asdict(
+                                                    exc.diagnostics
+                                                )
+                                                captures.append(record)
+                                                break
+                                            repeat_diagnostics = asdict(
+                                                perception_capture.state.diagnostics
+                                            )
+                                            pose = [
+                                                np.asarray(v, dtype=float).tolist()
+                                                for v in perception_capture.state.diagnostics.accepted_pose
+                                            ]
+                                            record.update(
+                                                {
+                                                    "capture_diagnostics": repeat_diagnostics,
+                                                    "capture_attempts": repeat_attempts,
+                                                    "accepted_pose": pose,
+                                                    "drift": G2.drift(first_pose, pose),
+                                                    "depth_sha256": G2.depth_sha256(
+                                                        repeat_input.depth_m
+                                                    ),
+                                                    "depth_change": G2.depth_change(
+                                                        scene_input.depth_m, repeat_input.depth_m
+                                                    ),
+                                                    "valid_fraction": valid_fraction(
+                                                        repeat_input.depth_m
+                                                    ),
+                                                    **observed(
+                                                        detect_pockets(
+                                                            adapter.detector_input(
+                                                                repeat_input, args.depth_quantize_mm
+                                                            ),
+                                                            prior,
+                                                            params,
+                                                        )
+                                                    ),
+                                                }
                                             )
                                             captures.append(record)
+                                        state["repeat_capture"] = {
+                                            "status": "repeat_capture_done",
+                                            "attempt_number": attempt_number,
+                                            "candidate_index": attempt["candidate_index"],
+                                            "wheels_held": True,
+                                            "captures": captures,
+                                            "summary": G2.repeat_summary(captures),
+                                        }
+                                        transition("repeat_capture_done", t)
+                                        break
+                                    if live_abort_:
+                                        pass
+                                    elif observation.status != "valid":
+                                        # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
+                                        if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                             break
-                                        repeat_diagnostics = asdict(
-                                            perception_capture.state.diagnostics
-                                        )
-                                        pose = [
-                                            np.asarray(v, dtype=float).tolist()
-                                            for v in perception_capture.state.diagnostics.accepted_pose
-                                        ]
-                                        record.update(
-                                            {
-                                                "capture_diagnostics": repeat_diagnostics,
-                                                "capture_attempts": repeat_attempts,
-                                                "accepted_pose": pose,
-                                                "drift": G2.drift(first_pose, pose),
-                                                "depth_sha256": G2.depth_sha256(
-                                                    repeat_input.depth_m
-                                                ),
-                                                "depth_change": G2.depth_change(
-                                                    scene_input.depth_m, repeat_input.depth_m
-                                                ),
-                                                "valid_fraction": valid_fraction(
-                                                    repeat_input.depth_m
-                                                ),
-                                                **observed(
-                                                    detect_pockets(
-                                                        adapter.detector_input(
-                                                            repeat_input, args.depth_quantize_mm
-                                                        ),
-                                                        prior,
-                                                        params,
-                                                    )
-                                                ),
-                                            }
-                                        )
-                                        captures.append(record)
-                                    state["repeat_capture"] = {
-                                        "status": "repeat_capture_done",
-                                        "attempt_number": attempt_number,
-                                        "candidate_index": attempt["candidate_index"],
-                                        "wheels_held": True,
-                                        "captures": captures,
-                                        "summary": G2.repeat_summary(captures),
-                                    }
-                                    transition("repeat_capture_done", t)
-                                    break
-                                if live_abort_:
-                                    pass
-                                elif observation.status != "valid":
-                                    # M-a1 slice 4b-iii: an observation without a detection goes to the next candidate (the core's).
-                                    if core.observe_failed(t, rear, attempt, attempt_number, observation):
-                                        break
-                                else:
-                                    # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
-                                    succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
-                                                                        capture_diagnostics, step)
-                                    if succeeded_.stop:
-                                        break
-                                    observation, near_leg = succeeded_.observation, succeeded_.near_leg
-                                    if getattr(succeeded_, "pending", False):
-                                        plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
-                                    elif getattr(succeeded_, "handled", False):
-                                        pass  # plan 2026-10-19 task 4: the first side leg is installed instead
                                     else:
-                                        # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
-                                        core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
-                        else:
-                            # M-a1 slice 2: every other arrival is the core's.
-                            arrival_ = core.arrive(t, tracking)
-                            if arrival_.rear is not None:
-                                rear = arrival_.rear
-                            if arrival_.stop:
-                                break
+                                        # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
+                                        succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
+                                                                            capture_diagnostics, step)
+                                        if succeeded_.stop:
+                                            break
+                                        observation, near_leg = succeeded_.observation, succeeded_.near_leg
+                                        if getattr(succeeded_, "pending", False):
+                                            plan_wait_ = True  # real-time plan D8b: the mission plan is asked; this tick stands
+                                        elif getattr(succeeded_, "handled", False):
+                                            pass  # plan 2026-10-19 task 4: the first side leg is installed instead
+                                        else:
+                                            # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
+                                            core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                            else:
+                                # M-a1 slice 2: every other arrival is the core's.
+                                arrival_ = core.arrive(t, tracking)
+                                if arrival_.rear is not None:
+                                    rear = arrival_.rear
+                                if arrival_.stop:
+                                    break
                 if core.jobs is not None and not plan_wait_ and core.job_pending():
                     plan_wait_ = True  # real-time plan D9b: the delivery docking match was just asked; this tick stands
                 if live_abort_:
@@ -8176,6 +8234,9 @@ def drive(S, isaac) -> None:
                             live.end_mission(t, "recovery_required", core.commands.end_reason)
                         else:
                             live.end_mission(t, "cancelled", "operator")
+                elif scene_presteer_ is not None:  # scene replan 2.1 step 8: standing, the wheels to the new leg's
+                    requested_speed, curvature = 0.0, scene_presteer_  # first command (the steering not held)
+                    dwell_hold = False
                 elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
                     requested_speed, curvature = 0.0, 0.0
                     dwell_hold = True
