@@ -241,6 +241,8 @@ class MissionCore:
         # follower; its records are the mission's (state["scene_replans"], made at the first request -- a run without
         # one keeps its state as it was), its budget reset at each mission's end.
         self.scene_replan = SceneReplan(None)
+        # Plan 2026-10-24-goal-creep-stall G2: the final goal's creep watch (a mission's own: CORE_FIELDS).
+        self.goal_creep_watch = {"key": None, "last_t": None, "window": [], "latched": False}
         self.scene_mail = None  # the device's plan answer: ("ok", result) | ("ok_fail", status) | ("dropped", why)
         self.scene_raised = False  # a request raised in this tick's follower: the rest of the tick stands
         self.scene_escape: dict | None = None  # the escape prefix driven for a request
@@ -1750,6 +1752,67 @@ class MissionCore:
             )
         return SimpleNamespace(tracking=tracking, cusp_hold=cusp_hold, scene_raised=False)
 
+    # The final goal's creep stall (docs/plans/2026-10-24-goal-creep-stall.md G2).
+    GOAL_CREEP_R1_REMAINING_M = 1e-6  # the "remaining 0" rules' own zero
+    GOAL_CREEP_R1_NORMAL_M = 1e-5  # the pose at the progress point
+    GOAL_CREEP_WINDOW_M = 8e-4  # commanded travel; team-spec counts with hysteresis read >= 0.599 of it (worst case)
+    GOAL_CREEP_WINDOW_TICKS = 120
+    GOAL_CREEP_RATIO = 0.25
+
+    def goal_creep(self, t: float, tracking, dt: float) -> str | None:
+        """Plan 2026-10-24-goal-creep-stall G2, before the docking stop and stall rules read ``tracking``:
+        "r1" -- 0 < remaining <= 1 um, the tracker's leg end filter true, the pose at the progress point, its output
+        and the last applied wheel speed at the creep's level; "r2" -- 1 um < remaining, the filter true and, over the
+        last GOAL_CREEP_WINDOW_M of applied wheel travel (at least GOAL_CREEP_WINDOW_TICKS ticks, each with a nonzero
+        applied speed), odometry travel under GOAL_CREEP_RATIO of it: latched until the filter turns false or the
+        tracker, leg or phase changes; None otherwise. Reads slam["applied_speed"] (the wheel speed the last physics
+        step ran on) and slam["odom_speed"] (the odometry over that step); without the former (an older record) or
+        the tracker's views it does nothing."""
+        ms, slam = self.ms, self.slam
+        st = self.goal_creep_watch
+        tracker = self.trackers.get(ms.phase)
+        out_of_reach = getattr(tracker, "leg_end_out_of_reach", None)
+        applied = None if slam is None else slam.get("applied_speed")
+        # Bound to the tracker by its address: the watch is the core's (CORE_FIELDS), never in the replayed state.
+        key = [ms.phase, id(tracker), getattr(tracker, "leg_index", None)]
+        if st["key"] != key:
+            st.update(key=key, last_t=None, window=[], latched=False)
+        if (out_of_reach is None or applied is None or ms.phase not in ("transport", "return_home")
+                or tracking.status not in ("tracking", "braking") or tracking.at_cusp or tracking.off_path
+                or not out_of_reach()):
+            st.update(last_t=None, window=[], latched=False)
+            return None
+        if st["latched"]:
+            return "r2"
+        remaining = tracker.remaining_to_goal_m()
+        gap = st["last_t"] is None or t - st["last_t"] > 1.5 * dt
+        st["last_t"] = t
+        if remaining <= self.GOAL_CREEP_R1_REMAINING_M:
+            st["window"] = []
+            creep = 1.5 * remaining + 1e-12
+            if (tracking.status == "tracking" and tracker.distance_to_end_normal_m() <= self.GOAL_CREEP_R1_NORMAL_M
+                    and abs(tracking.speed_mps) <= creep and abs(applied) <= 1.5 * self.GOAL_CREEP_R1_REMAINING_M + 1e-12):
+                return "r1"
+            return None
+        if gap or applied == 0.0:
+            st["window"] = []
+            if applied == 0.0:
+                return None
+        window = st["window"]
+        window.append((abs(float(applied)) * dt, abs(float(slam.get("odom_speed", 0.0))) * dt))
+        while (len(window) > self.GOAL_CREEP_WINDOW_TICKS
+               and sum(a for a, _ in window) - window[0][0] >= self.GOAL_CREEP_WINDOW_M):
+            window.pop(0)
+        commanded, moved = sum(a for a, _ in window), sum(b for _, b in window)
+        if (len(window) >= self.GOAL_CREEP_WINDOW_TICKS and commanded >= self.GOAL_CREEP_WINDOW_M
+                and moved < self.GOAL_CREEP_RATIO * commanded):
+            st["latched"] = True
+            self.state.setdefault("goal_creep_stalls", []).append(
+                {"phase": ms.phase, "time_s": float(t), "remaining_m": float(remaining),
+                 "commanded_m": float(commanded), "odometry_m": float(moved), "ticks": len(window)})
+            return "r2"
+        return None
+
     def docking_and_stall(self, t: float, rear, tracking, signed_speed: float, dt: float, loaded: bool) -> SimpleNamespace:
         """After the follower's rules: the D7c docking stop at the delivery straight (a), the final goal
         missed in heading under SLAM, and the stall at a path end -- a docking retry (c)/(d) when D7 owns
@@ -1774,6 +1837,11 @@ class MissionCore:
         d7_owned = ms.phase == "transport" and bool(
             d7_docking_.get("accepted_any") or d7_docking_.get("reapproach")
         )
+        creep_ = self.goal_creep(t, tracking, dt) if slam is not None else None
+        if creep_ == "r1":
+            # Plan 2026-10-24-goal-creep-stall R1: the creep at the "remaining 0" rules' own zero -- a zero command
+            # (status kept) lets the stop detector see the stop and those rules take it.
+            tracking = replace(tracking, speed_mps=0.0)
         dock_stop = (
             ms.phase == "transport"
             and d7_docking_.get("status") == "armed"
@@ -1783,6 +1851,8 @@ class MissionCore:
             and (
                 (tracking.status == "failed" and tracking.failure == "endpoint_heading")
                 or (tracking.status == "tracking" and trackers[ms.phase].remaining_to_goal_m() <= 1e-6)
+                # R2 at the docking stop: standing outside its tolerance, as the stop above (Codex plan round 1 P2).
+                or creep_ == "r2"
             )
         )
         if dock_stop:
@@ -1822,6 +1892,16 @@ class MissionCore:
             # (S3 rerun: 6.6 mm left at -0.008 m/s): command zero and
             # wait for the stop detector.
             tracking = replace(tracking, status="braking", speed_mps=0.0)
+        # Plan 2026-10-24-goal-creep-stall R2: a creep the truck does not follow at a final goal it cannot reach --
+        # command zero and take it as a stop at the path end (the same budget as the heading miss above).
+        creep_band = (
+            creep_ == "r2"
+            and not dock_stop
+            and ms.phase in ("transport", "return_home")
+            and (len(state["stall_replans"]) < 2 or d7_owned)
+        )
+        if creep_band:
+            tracking = replace(tracking, status="braking", speed_mps=0.0)
         stalled = (
             slam is not None
             and ms.phase in ("transport", "return_home")
@@ -1829,6 +1909,7 @@ class MissionCore:
             and slam["stop_now"]
             and (
                 goal_heading_miss
+                or creep_band
                 or (
                     tracking.status == "tracking"
                     and trackers[ms.phase].remaining_to_goal_m() <= 1e-6

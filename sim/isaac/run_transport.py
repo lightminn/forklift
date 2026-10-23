@@ -2126,6 +2126,10 @@ def install_output_observers(args) -> None:
 PROJECTION_CONTAINERS = ("state", "near", "pocket", "obstacle", "slam", "paths", "new_obstacles")
 # Result keys only the recorded run has (written by run() after the setup snapshot was taken): never compared.
 PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
+# Container keys the runner derives from what each tick's recorded outputs already carry, added after format 2 records
+# were made: never compared, so a record without them still matches (plan 2026-10-24-goal-creep-stall: the wheel speed
+# the last physics step ran on; Codex implementation round 2 P2).
+PROJECTION_NOT_COMPARED = {"slam": ("applied_speed",)}
 # Objects a container holds for a service, which the service changes inside its recorded calls (the physics step
 # runs the SLAM bridge's odometry, stop detector and noise): a replay never runs them, so they are compared by
 # their logical id only -- their effects on the mission reach it through the watched keys (Codex P2).
@@ -2302,6 +2306,8 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
         digests = {}
         for key, value in container.items():
             if name == "state" and key in PROJECTION_RECORDED_ONLY:
+                continue
+            if key in PROJECTION_NOT_COMPARED.get(name, ()):
                 continue
             if key in PROJECTION_SERVICE_OWNED.get(name, {}):
                 continue  # a port's own object: never compared (a replay may not even hold it)
@@ -6055,6 +6061,7 @@ def drive(S, isaac) -> None:
                 state["preempt_seen_s"] = float(world.current_time - initial_time)
                 if slam is not None:
                     slam["last_command"] = 0.0
+                    slam["applied_speed"] = 0.0
             # The far recognition's driving frames: every frame_every steps of a far observe leg (not the near
             # capture's leg, not inside a stationary capture), rendered here and read after the odometry below.
             far_due = far_runtime is not None and far_runtime.due(
@@ -6122,6 +6129,7 @@ def drive(S, isaac) -> None:
                         state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
                         state["command_speed"] = 0.0
                         slam["last_command"] = 0.0
+                        slam["applied_speed"] = 0.0
                         state["gyro_heading"] = gm_.heading_summary(slam["gyro"])
                         raise SessionFailure(reason_)
                     if slam["gyro"]["updates"] != updates_before_:
@@ -6357,6 +6365,7 @@ def drive(S, isaac) -> None:
                 state["command_speed"] = 0.0
                 if slam is not None:
                     slam["last_command"] = 0.0
+                    slam["applied_speed"] = 0.0
 
             def live_hold_lift(position: float) -> None:
                 robot.apply_action(isaac.action(joint_positions=np.array([position]), joint_indices=lift_index))
@@ -6870,7 +6879,8 @@ def drive(S, isaac) -> None:
                  **({"state": state} if early_ports else {})},
                 keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
                                "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records",
-                               "last_command"],  # M-a3 (plan E9): a preempt sets it inside the step
+                               "last_command",  # M-a3 (plan E9): a preempt sets it inside the step
+                               "applied_speed"],  # plan 2026-10-24-goal-creep-stall: and the applied wheel speed
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
                       **({"slam_log": list(slam_log)} if watched_log_ else {}),
                       # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
@@ -8473,6 +8483,10 @@ def drive(S, isaac) -> None:
                         joint_indices=wheels,
                     )
                 )
+                if slam is not None:
+                    # Plan 2026-10-24-goal-creep-stall: the wheel speed the next physics step runs on (live: the
+                    # arbiter's, as applied), read by the core's goal creep watch at the next tick.
+                    slam["applied_speed"] = float(drive.speed_mps)
                 robot.apply_action(
                     isaac.action(
                         joint_positions=steering_command, joint_indices=steers

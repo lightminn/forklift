@@ -39,6 +39,7 @@ MISSION_KEYS = {
         "mission_scenario",  # CT-1 PR 4: a session mission's planning scene (its other pallets as props)
         "scene_replans", "scene_escape_candidates",  # the scene-mode replan device (plan 2026-10-23-scene-replan 2.1)
         "cusp_injections",  # its diagnostic --inject-cusp-offset-m (plan 4)
+        "goal_creep_stalls",  # the final goal's creep stall latches (plan 2026-10-24-goal-creep-stall G2)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
@@ -85,7 +86,8 @@ MS_FIELDS = ("observe_stall_ticks", "slam_stall_ticks", "dock_stop_ticks", "cusp
 CORE_FIELDS = ("release_replan_needed", "observe_failed_needed", "far_leg_recaptures", "fresh_depth_wait",
                "last_permission",
                "return_correction_drops",  # plan D11: a mission's own count
-               "loaded_wait")  # plan D5 6c: a loaded mission's start wait
+               "loaded_wait",  # plan D5 6c: a loaded mission's start wait
+               "goal_creep_watch")  # plan 2026-10-24-goal-creep-stall G2: the watch's window and latch
 
 
 def _plain(value, where: str):
