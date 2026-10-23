@@ -50,31 +50,7 @@ class Probe:
         self.closed_code = None
         self.last_teleop = None
         self.save_frames = None  # (directory, how many) for the marker scenario
-        # The console queue's stop events (docs/plans/2026-10-22-console-mission-queue.md D4-D6), as they happen:
-        # a feedback loss lasting 0.5 s, STOPPED / TELEOP, a safety preempt (CT-1 PR 4's stop-on-anomaly cycle).
-        self.anomalies: list = []
-        self._feedback_lost_since = None
-
-    def _watch_anomalies(self, msg) -> None:
-        """The queue's stop events in this state (D4): kept with their time, the first of each run only."""
-        now = time.monotonic()
-        if msg.get("feedback_ok") is False:
-            if self._feedback_lost_since is None:
-                self._feedback_lost_since = now
-            elif now - self._feedback_lost_since >= 0.5 and not (
-                    self.anomalies and self.anomalies[-1]["kind"] == "feedback_lost"
-                    and self.anomalies[-1]["since_mono"] == self._feedback_lost_since):
-                self.anomalies.append({"kind": "feedback_lost", "since_mono": self._feedback_lost_since, "mono": now})
-        else:
-            self._feedback_lost_since = None
-        mode_ = msg.get("mode")
-        kind_ = ("mode:" + mode_) if mode_ in ("STOPPED", "TELEOP") else (
-            "preempt" if msg.get("stop_kind") in ("preempt", "safety_preempt") else None)
-        if kind_ is not None and not (self.anomalies and self.anomalies[-1]["kind"] == kind_
-                                      and now - self.anomalies[-1]["mono"] < 1.0):
-            self.anomalies.append({"kind": kind_, "mono": now})
-        elif kind_ is not None:
-            self.anomalies[-1]["mono"] = now  # the same event going on
+        self.queue = None  # the queue scenario's tools/mission_queue.MissionQueue: fed every state and result
 
     def event(self, name, **fields):
         self.report.setdefault("events", []).append({"mono": time.monotonic(), "event": name, **fields})
@@ -121,7 +97,11 @@ class Probe:
                 elif t == "state":
                     self.state = msg
                     self.control_gen = msg.get("control_gen", self.control_gen)
-                    self._watch_anomalies(msg)
+                    if self.queue is not None:  # as console/web/js/queuewire.js onState
+                        now_ms_ = time.monotonic() * 1000.0
+                        self.queue.on_state(msg, now_ms_)
+                        if msg.get("last_result"):
+                            self.queue.on_result(msg["last_result"], now_ms_)
                     self.states.append({"mono": time.monotonic(), "mode": msg.get("mode"),
                                         "stop_kind": msg.get("stop_kind"), "armed": msg.get("armed"),
                                         "applied": msg.get("applied"), "speed": msg.get("rear_axle_speed_mps"),
@@ -133,6 +113,9 @@ class Probe:
                     self.targets = msg
                 elif t == "missions":
                     self.missions = msg
+                    if self.queue is not None:  # queuewire onResults: oldest first
+                        for r_ in sorted(msg.get("results") or [], key=lambda r: r.get("seq") or 0):
+                            self.queue.on_result(r_, time.monotonic() * 1000.0)
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
         except asyncio.CancelledError:
@@ -178,9 +161,9 @@ class Probe:
                 reply = await self._request(kind, timeout, **fields)
         return reply
 
-    async def _request(self, kind, timeout=5.0, **fields):
+    async def _request(self, kind, timeout=5.0, request_id=None, **fields):
         self.n += 1
-        rid = f"r{self.n}"
+        rid = request_id or f"r{self.n}"
         msg = {"t": kind, "request_id": rid, "session_epoch": self.epoch, **fields}
         if kind != "stop" and getattr(self, "request_token", None) is not None:
             self.request_seq += 1
@@ -808,12 +791,9 @@ async def cycle_scenario(p: Probe, args):
     p.report["missions_run"] = []
     legs = [leg for leg in args.cycle.split(",") if leg]  # empty: only the teleop (plan U11)
     leg_index, backoffs = 0, 0
-    if args.stop_on_anomaly:
-        p.report["queue"] = {"policy": "stop_on_anomaly", "stopped": None}
     while leg_index < len(legs):
         leg = legs[leg_index]
         pallet_id, destination_id = leg.split(":")
-        anomalies_seen_ = len(p.anomalies)
         await p.until(p.standing, 30, label="standing_before_submit")
         await asyncio.sleep(1.0)
         seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
@@ -845,9 +825,6 @@ async def cycle_scenario(p: Probe, args):
                  "submitted_mono": time.monotonic()}
         p.report["missions_run"].append(entry)
         if not submit or submit.get("t") != "ack":
-            if args.stop_on_anomaly:  # the queue stops on any refusal (D5); nothing more is submitted
-                p.report["queue"]["stopped"] = {"why": f"refused:{(submit or {}).get('reason')}", "leg": leg_index}
-                break
             leg_index += 1  # refused: the next leg (Codex D14 impl round 4 P2-4 -- it asked the same one forever)
             continue
         if args.stop_wait_at and not p.report.get("stop_wait_done"):
@@ -1049,20 +1026,7 @@ async def cycle_scenario(p: Probe, args):
                                                                "advice": advice_ or None, "target_m": target_,
                                                                "moved_m": moved_})
             continue
-        if args.stop_on_anomaly:
-            # CT-1 PR 4: the console queue's policy -- a result other than done, or any stop event while the mission
-            # ran (it went on; the queue does not submit the next one)
-            outcome_ = (entry["result"] or {}).get("outcome")
-            events_ = p.anomalies[anomalies_seen_:]
-            entry["anomalies"] = events_
-            if entry.get("result_not_this_mission") or outcome_ != "done" or events_:
-                why_ = ("no_result" if entry.get("result_not_this_mission") else
-                        f"outcome:{outcome_}" if outcome_ != "done" else f"event:{events_[0]['kind']}")
-                p.report["queue"]["stopped"] = {"why": why_, "leg": leg_index}
-                break
         leg_index += 1
-    if args.stop_on_anomaly and p.report["queue"]["stopped"] is None:
-        p.report["queue"]["stopped"] = {"why": "completed", "leg": len(legs)}
     p.report["missions_message"] = p.missions
     if args.reconnect_at_end and p.closed_code is None:
         # Plan U2: a page that connects after the missions gets the results book and the last result
@@ -1078,6 +1042,86 @@ async def cycle_scenario(p: Probe, args):
                                        "last_result": (p.state or {}).get("last_result")}
     if args.end_session and p.closed_code is None:
         # Persistent console plan D7: the session ends on request (the runner exits 0), not at a sim time limit.
+        await p.until(p.standing, 30, label="standing_before_end")
+        p.report["session_end"] = await p.request_until_standing("session_end")
+        end = time.monotonic() + 120
+        while p.closed_code is None and time.monotonic() < end:
+            await asyncio.sleep(0.1)
+    p.report["close_code"] = p.closed_code
+
+
+async def queue_scenario(p: Probe, args):
+    """CT-1 PR 4 (docs/plans/2026-10-22-continuous-transport-ct1.md): the --cycle legs run by the console's own mission
+    queue (tools/mission_queue.py, a port of console/web/js/queue.js) -- fed every state, result, welcome and close as
+    the page feeds it, asked every 250 ms whether to submit, the operator's resume given once at the start. Any stop
+    of the queue is final here: nothing more is submitted, a mission already out runs to its end and is recorded."""
+    import mission_queue
+
+    await p.open()
+    await p.open_media()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    q = p.queue = mission_queue.MissionQueue()
+    q.on_welcome(p.epoch)
+    ids = {"n": 0}
+
+    def new_id():
+        ids["n"] += 1
+        return f"q{ids['n']}"
+
+    for leg in [leg for leg in args.cycle.split(",") if leg]:
+        pallet_id, destination_id = leg.split(":")
+        q.add(mission_queue.new_item(pallet_id, destination_id, new_id()))
+    p.report["missions_run"] = []
+    q.resume(time.monotonic() * 1000.0)
+    closed_seen, deadline = False, time.monotonic() + args.mission_timeout_s * max(1, len(q.items) + 1)
+    while time.monotonic() < deadline:
+        now_ms = time.monotonic() * 1000.0
+        if p.closed_code is not None and not closed_seen:
+            closed_seen = True
+            q.on_disconnect()
+        q.tick(now_ms)
+        for entry in p.report["missions_run"]:  # each submission's result, as the queue applied it
+            if "result" not in entry and (entry.get("submit") or {}).get("t") == "ack":
+                mid_ = entry["submit"].get("mission_id")
+                got_ = next((f for f in q.finished if f["mission_id"] == mid_), None)
+                if got_ is not None:
+                    entry["result"] = {"mission_id": mid_, "outcome": got_["outcome"], "reason": got_["reason"]}
+                    entry["ended_mono"] = time.monotonic()
+        if q.run != "running" and q.current is None:
+            break  # stopped, nothing out: the queue's end here
+        if q.run != "running" and q.phase == "in_mission" and closed_seen:
+            break  # its result can no longer come
+        ctx = {"connected": p.closed_code is None, "welcomed": p.closed_code is None, "has_lease": p.lease_id is not None,
+               "state": p.state, "targets": p.targets}
+        n = q.next(ctx, now_ms, new_id)
+        if n:
+            s_ = n["submit"]
+            key = {"epoch": q.epoch, "item_id": s_["item_id"], "request_id": s_["request_id"]}
+            entry = {"pallet_id": s_["pallet_id"], "destination_id": s_["destination_id"], "item_id": s_["item_id"],
+                     "submitted_mono": time.monotonic()}
+            p.report["missions_run"].append(entry)
+            reply = await p._request("mission_submit", request_id=s_["request_id"], pallet_id=s_["pallet_id"],
+                                     destination_id=s_["destination_id"], targets_revision=s_["targets_revision"])
+            entry["submit"] = reply
+            if reply is not None and reply.get("reason") in ("no_lease", "stale_lease"):
+                q.on_lease_lost()  # the page loses its lease: the queue stops (queuewire checkLease)
+                p.lease_id = None
+            q.on_answer(key, reply if reply is not None else {"t": "reject", "reason": "timeout"},
+                        time.monotonic() * 1000.0)
+        await p.echo()
+        await asyncio.sleep(0.25)
+    for entry in p.report["missions_run"]:
+        if "result" not in entry:
+            entry["result_not_this_mission"] = True  # the queue never applied a result for it
+    p.report["queue"] = {"stop_reason": q.stop_reason, "stops": q.stops, "counts": q.counts,
+                         "items_left": [f"{it['pallet_id']}:{it['destination_id']}" for it in q.items],
+                         "uncertain": [it["item_id"] for it in q.items if it.get("uncertain")]}
+    p.report["missions_message"] = p.missions
+    if args.end_session and p.closed_code is None:
         await p.until(p.standing, 30, label="standing_before_end")
         p.report["session_end"] = await p.request_until_standing("session_end")
         end = time.monotonic() + 120
@@ -1320,7 +1364,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
-    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "lift", "reset",
+    ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "queue", "lift", "reset",
                                            "restart", "tour"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
@@ -1339,10 +1383,6 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
-    ap.add_argument("--stop-on-anomaly", action="store_true",
-                    help="cycle scenario (CT-1 PR 4): the console queue's policy -- no next submit after a result "
-                    "other than done, a refusal, or a stop event while the mission ran (STOPPED / TELEOP, a safety "
-                    "preempt, feedback lost 0.5 s); the reason is kept in the report's queue entry")
     ap.add_argument("--reconnect-at-end", action="store_true",
                     help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
     ap.add_argument("--cancel-pause-s", type=float, default=0.0,
@@ -1403,6 +1443,7 @@ def main():
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
+                    "queue": queue_scenario,
                     "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
                     "tour": tour_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
