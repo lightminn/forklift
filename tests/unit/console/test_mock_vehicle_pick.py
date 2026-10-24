@@ -78,6 +78,31 @@ def test_injections_change_the_next_pick_once(v):
     assert ask(v, "p5", "c5")[1][0]["targets_revision"] == v.targets_revision - 1
 
 
+def test_a_resend_that_gets_the_stored_ack_gets_a_newly_computed_pick(v):
+    """Contract 5.3 (Codex CT-2 r1 P2): the stored ack goes back and the pick is computed again."""
+    v.connect("a", "c1")
+    msg = {"t": "pick_request", "request_id": "p1", "session_epoch": v.session_epoch}
+    first = v.handle("a", dict(msg), conn_id="c1")
+    assert len(v.take_picks("c1")) == 1
+    v.targets_revision += 1
+    again = v.handle("a", dict(msg), conn_id="c1")
+    assert again == first
+    picks = v.take_picks("c1")
+    assert len(picks) == 1 and picks[0]["targets_revision"] == v.targets_revision
+
+
+def test_a_resend_through_the_request_ledger_gets_a_pick_too():
+    tokens = (f"tok{i}" for i in itertools.count())
+    v = MockVehicle(Clock(), lambda: next(tokens), Config(request_tokens=True))
+    w = v.connect("a", "c1")
+    msg = {"t": "pick_request", "request_id": "p1", "session_epoch": v.session_epoch,
+           "request_token": w["request_token"], "request_seq": 1}
+    assert v.handle("a", dict(msg), conn_id="c1")["t"] == "ack"
+    assert len(v.take_picks("c1")) == 1
+    assert v.handle("a", dict(msg), conn_id="c1")["t"] == "ack"
+    assert len(v.take_picks("c1")) == 1
+
+
 def test_refused_while_a_mission_runs(v):
     v.connect("a", "c1")
     v.mission = {"mission_id": "M-0001", "status": "running"}

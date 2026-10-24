@@ -533,6 +533,15 @@ class MockVehicle:
     def handle(
         self, client_id: str, msg: dict, conn_id: str | None = None
     ) -> dict | None:
+        result = self._handle(client_id, msg, conn_id)
+        # CT-2 contract 5.3: every ack of a pick_request -- a stored one sent again too -- is followed by a pick
+        # computed now (Codex CT-2 r1)
+        if isinstance(msg, dict) and msg.get("t") == "pick_request" and isinstance(result, dict) \
+                and result.get("t") == "ack":
+            self._enqueue_pick(msg["request_id"], conn_id)
+        return result
+
+    def _handle(self, client_id: str, msg: dict, conn_id) -> dict | None:
         reason = _valid(msg)
         t = msg.get("t") if isinstance(msg, dict) else None
         if reason is not None:
@@ -901,14 +910,17 @@ class MockVehicle:
                        "pick_stale_revision")
 
     def _pick_request(self, msg: dict, conn_id) -> dict:
-        """An ack, then a pick for that connection (contract D3) -- a TOY rule, not next_pick.recommend: the first
-        available pallet with a pose and the first destination no pallet is verified at, by id."""
+        """The ack (contract D3); handle() then queues the pick for that connection."""
         if self.mission is not None and self.mission["status"] in self.ACTIVE:
             return self._reply(msg, reason="mission_active")
-        mode, self._pick_override = getattr(self, "_pick_override", None), None
-        if mode != "pick_silent":
-            self._picks.setdefault(conn_id, []).append(self._pick_message(msg["request_id"], mode))
         return self._reply(msg)
+
+    def _enqueue_pick(self, request_id: str, conn_id) -> None:
+        """A pick by a TOY rule, not next_pick.recommend: the first available pallet with a pose and the first
+        destination no pallet is verified at, by id; an injection changes the next one (pick_silent: none)."""
+        mode, self._pick_override = self._pick_override, None
+        if mode != "pick_silent":
+            self._picks.setdefault(conn_id, []).append(self._pick_message(request_id, mode))
 
     def _pick_message(self, request_id: str, mode: str | None) -> dict:
         pallets = sorted(p.pallet_id for p in self.world.pallets if p.state == "available" and p.pose is not None)

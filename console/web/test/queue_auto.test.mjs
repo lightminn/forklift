@@ -33,11 +33,14 @@ function running(items, t = 10_000) {
 function feed(q, from, to, st = READY) {
   for (let t = from; t <= to; t += 1000) q.onState(st, t);
 }
-function ask(q, t, c = ctx()) {
+// asks for a pick and (by default) has the vehicle ack it -- the contract's usual order
+function ask(q, t, c = ctx(), { ack = true } = {}) {
   q.onState(c.state, t);
   const n = q.next(c, t, newId);
   assert.ok(n && n.pick_request, `expected a pick_request, got ${JSON.stringify(n)}`);
-  return { epoch: q.epoch, item_id: n.pick_request.item_id, request_id: n.pick_request.request_id };
+  const key = { epoch: q.epoch, item_id: n.pick_request.item_id, request_id: n.pick_request.request_id };
+  if (ack) q.onAnswer(key, { t: "ack", request_id: key.request_id });
+  return key;
 }
 const pick = (key, pallet, dest, over = {}) => ({ t: "pick", request_id: key.request_id, targets_revision: 7,
   pick: pallet ? { pallet_id: pallet, destination_id: dest } : null, reason: pallet ? "ok" : "none_remaining",
@@ -119,7 +122,7 @@ test("no free destination, all blocked and a computation error stop with the aut
 
 test("a refused pick_request stops, nothing uncertain", () => {
   const q = running([auto()]);
-  const key = ask(q, 10_000);
+  const key = ask(q, 10_000, ctx(), { ack: false });
   q.onAnswer(key, { t: "reject", request_id: key.request_id, reason: "mission_active" });
   assert.equal(q.run, "stopped");
   assert.equal(q.stopReason, "자동 선택 거부: mission_active");
@@ -171,13 +174,94 @@ test("a stop while a pick is held drops it", () => {
   assert.ok(q.next(ctx(), 11_100, newId).pick_request, "asks again after a resume");
 });
 
-test("a pick that comes before its ack is taken; the ack after it changes nothing", () => {
+test("a pick that comes before its ack is held, and submitted only once the ack has come (Codex CT-2 r1)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  q.onPick(key, pick(key, "P-1", "D-1"), 10_100, 7);
+  assert.equal(q.phase, "picked");
+  q.onState(READY, 10_200);
+  assert.equal(q.next(ctx(), 10_200, newId), null, "not before the ack");
+  q.onAnswer(key, { t: "ack", request_id: key.request_id });
+  q.onState(READY, 10_300);
+  assert.ok(q.next(ctx(), 10_300, newId).submit);
+});
+
+test("a refusal after the pick stops the queue and nothing is submitted (Codex CT-2 r1)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  q.onPick(key, pick(key, "P-1", "D-1"), 10_100, 7);
+  q.onAnswer(key, { t: "reject", request_id: key.request_id, reason: "busy" });
+  assert.equal(q.run, "stopped");
+  assert.equal(q.stopReason, "자동 선택 거부: busy");
+  q.onState(READY, 10_300);
+  assert.equal(q.next(ctx(), 10_300, newId), null);
+  assert.ok(!q.items[0].uncertain);
+});
+
+test("a held pick whose ack does not come within the deadline stops and the request is forgotten (Codex CT-2 r1)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  q.onPick(key, pick(key, "P-1", "D-1"), 10_100, 7);
+  feed(q, 11_000, 15_000);
+  q.tick(15_100);
+  assert.equal(q.stopReason, "자동 선택 응답 없음");
+  assert.ok(q.drainForget().includes(key.request_id));
+});
+
+test("a stop while a pick is held before its ack, and a re-ask, forget the unacked request (Codex CT-2 r1)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  q.onPick(key, pick(key, "P-1", "D-1"), 10_100, 7);
+  q.operatorAction("stop");
+  assert.deepEqual(q.drainForget(), [key.request_id]);
+  const r = running([auto()]);
+  const k1 = ask(r, 10_000, ctx(), { ack: false });
+  r.onPick(k1, pick(k1, "P-1", "D-1", { targets_revision: 6 }), 10_100, 7);
+  assert.deepEqual(r.drainForget(), [k1.request_id], "the re-ask lets the first request go");
+});
+
+test("a pick that arrives after the deadline is not taken (Codex CT-2 r1)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000);
+  feed(q, 11_000, 15_000);
+  q.onPick(key, pick(key, "P-1", "D-1"), 15_100, 7);
+  assert.equal(q.run, "stopped");
+  assert.equal(q.stopReason, "자동 선택 응답 없음");
+  q.onState(READY, 15_250);
+  assert.equal(q.next(ctx(), 15_250, newId), null);
+});
+
+test("a busy refusal of an auto submit keeps the pallet and destination on the uncertain mark (Codex CT-2 r1)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000);
+  q.onPick(key, pick(key, "P-2", "D-1"), 10_100, 7);
+  q.onState(READY, 10_200);
+  const s = q.next(ctx(), 10_200, newId).submit;
+  q.onAnswer({ epoch: 3, item_id: s.item_id, request_id: s.request_id }, { t: "reject", reason: "busy" });
+  assert.equal(q.items[0].uncertain, true);
+  assert.deepEqual([q.items[0].uncertain_pallet_id, q.items[0].uncertain_destination_id], ["P-2", "D-1"]);
+  const stored = JSON.parse(JSON.stringify(q.toStorage())).items[0];
+  assert.deepEqual([stored.uncertain_pallet_id, stored.uncertain_destination_id], ["P-2", "D-1"]);
+});
+
+test("removing the auto item lets go of its last pick; a done counts on the item (Codex CT-2 r1, agy)", () => {
   const q = running([auto()]);
   const key = ask(q, 10_000);
   q.onPick(key, pick(key, "P-1", "D-1"), 10_100, 7);
-  q.onAnswer(key, { t: "ack", request_id: key.request_id });
-  assert.equal(q.phase, "picked");
-  assert.equal(q.run, "running");
+  q.operatorAction("stop");
+  q.remove(q.items[0].item_id);
+  assert.equal(q.lastPick, null);
+  q.add(auto());
+  assert.equal(q.lastPick, null);
+  const r = running([auto()]);
+  const k = ask(r, 10_000);
+  r.onPick(k, pick(k, "P-2", "D-1"), 10_100, 7);
+  r.onState(READY, 10_200);
+  const s = r.next(ctx(), 10_200, newId).submit;
+  r.onAnswer({ epoch: 3, item_id: s.item_id, request_id: s.request_id }, { t: "ack", mission_id: "M-1" });
+  feed(r, 11_000, 20_000, AUTO_ST("M-1"));
+  r.onResult({ seq: 1, mission_id: "M-1", outcome: "done" }, 20_000);
+  assert.equal(r.items[0].moved, 1);
 });
 
 test("a done auto mission is recorded with its pallet and destination and the auto item stays for the next pick", () => {
@@ -273,7 +357,7 @@ test("a vehicle without the feature stops the auto item at once", () => {
 
 test("removing the auto item while it waits for a pick forgets the request", () => {
   const q = running([auto(), fixed("P-1", "D-2")]);
-  const key = ask(q, 10_000);
+  const key = ask(q, 10_000, ctx(), { ack: false }); // still resending: an acked request has nothing to forget
   assert.equal(q.remove(q.items[0].item_id), true);
   assert.deepEqual(q.drainForget(), [key.request_id]);
   assert.deepEqual(q.drainForget(), []);

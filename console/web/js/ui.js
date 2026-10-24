@@ -491,6 +491,8 @@ function renderQueue(m, st, control) {
   }
   $("q-resume").title = running ? "" : `멈춘 이유: ${q.stopReason ?? "—"}`; // the code itself, for the record
   $("q-stop").disabled = !running;
+  // the queue stops; a mission on its way goes on to its end and nothing more goes out (agy CT-2: say so)
+  $("q-stop").title = "대기열만 멈춥니다 · 진행 중인 미션은 끝까지 가고 다음 미션은 내지 않습니다";
 
   const mi = st?.mission && MISSION_ACTIVE.includes(st.mission.status) ? st.mission : null;
   const key = [w.version, m.session.targets?.targets_revision, st?.load?.state, st?.load?.pallet_id, control,
@@ -517,7 +519,11 @@ function renderQueue(m, st, control) {
       state = `불확실 — 냈지만 결과를 모릅니다${which}${it.maybe ? ` (미션 ${it.maybe.mission_id})` : ""}${vehicleNow}`;
     } else if (isAuto && front && q.phase === "picking") state = "자동 선택 중";
     else if (isAuto && front && q.phase === "picked") state = `자동 선택: ${q.held?.pallet_id} → ${q.held?.destination_id}`;
-    else if (isAuto && q.lastPick?.plan?.length) state = `대기 · 마지막 추천의 남은 계획 ${q.lastPick.plan.length}건`;
+    else if (isAuto) {
+      const parts = [`옮긴 ${it.moved ?? 0}건`];
+      if (q.lastPick?.plan?.length) parts.push(`마지막 추천의 남은 계획 ${q.lastPick.plan.length}건`);
+      state = `대기 · ${parts.join(" · ")}`;
+    }
     const id = esc(it.item_id);
     // an auto item's uncertain mark is on one submit: "확인하고 계속" clears it, the item goes on (CT-2 C4)
     const acts = cur || (isAuto && front && (q.phase === "picking" || q.phase === "picked")) ? "" : it.uncertain
