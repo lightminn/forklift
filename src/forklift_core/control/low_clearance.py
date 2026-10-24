@@ -5,8 +5,9 @@ clearance keeps the truck off them, and a tracking deviation (a heading error on
 use it up. The guard watches those props along the permission's stop arc from the estimated pose. Each check is held
 to the planned clearance the same distance ahead on the leg -- ``min(margin, max(0, c - deviation))`` -- so a plan that
 passes close on purpose is not stopped while it is followed, and contact is always a violation. The speed is capped
-so the truck stops before the first violation; the arc ends at the leg end plus the tracker's end allowance (the
-tracker stops there), and interval midpoints with half the motion between samples taken off keep the sweep between
+so the truck stops before the first violation; past the leg end the arc runs only as far as the truck can overrun it
+(the end allowance or the physical braking distance) with the planned clearance carried on less the overrun, and
+interval midpoints with half the motion between samples taken off keep the sweep between
 samples (as the permission's walk does)."""
 
 from __future__ import annotations
@@ -119,11 +120,20 @@ class GuardCap:
 def guard_cap(pose, curvature_inv_m: float, direction: int, speed_cap_mps: float, shape, leg: LegClearance, *,
               progress_m: float, leg_remaining_m: float, end_allowance_m: float, stopping: StoppingModel,
               config: LowClearanceConfig) -> GuardCap:
-    """The speed cap of one control tick (plan D3): the stop arc at the held curvature, cut at the leg end plus
-    ``end_allowance_m``; the first sample, then each interval midpoint with half the motion between samples taken off,
-    against ``min(margin, max(0, c(progress + s) - deviation))`` -- a lower bound at or below 0 always violates."""
+    """The speed cap of one control tick (plan D3): the stop arc at the held curvature; the first sample, then each
+    interval midpoint with half the motion between samples taken off, against
+    ``min(margin, max(0, c(progress + s) - deviation))`` -- a lower bound at or below 0 always violates.
+
+    Past the leg end (the tracker stops there) the arc runs to the farther of the end plus ``end_allowance_m`` and the
+    physical braking distance at this speed (latency and deceleration, without the permission's fixed stopping margin):
+    the truck can overrun the end that far, never the margin. There the planned clearance is carried on from the end,
+    less the distance past it (as if the end were driven straight on into the prop)."""
     step = config.step_m
-    length = min(stopping.distance_m(speed_cap_mps) + step, max(0.0, leg_remaining_m) + max(0.0, end_allowance_m))
+    remaining = max(0.0, float(leg_remaining_m))
+    v = abs(float(speed_cap_mps))
+    braking = v * stopping.latency_s + v * v / (2.0 * stopping.decel_mps2)
+    length = min(stopping.distance_m(speed_cap_mps) + step,
+                 max(remaining + max(0.0, end_allowance_m), braking + step))
     samples, arc = arc_poses(tuple(float(v) for v in pose), float(curvature_inv_m), 1 if direction >= 0 else -1,
                              length, step)
     radius = shape_radius(shape)
@@ -134,10 +144,11 @@ def guard_cap(pose, curvature_inv_m: float, direction: int, speed_cap_mps: float
         motion = float(np.hypot(b[0] - a[0], b[1] - a[1])) + radius * abs(dyaw)
         mid = np.array([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2] + dyaw / 2])
         checks.append((mid, (float(arc[i - 1]) + float(arc[i])) / 2, motion / 2, float(arc[i - 1])))
+    end_along = progress_m + remaining
     for check_pose, s_check, pad, s_from in checks:
-        along = progress_m + s_check
+        along = min(progress_m + s_check, end_along)
         lower = shape_clearance(check_pose, shape, leg.props_at(along)) - pad
-        planned = leg.at(along)
+        planned = leg.at(along) - max(0.0, s_check - remaining)
         threshold = min(config.margin_m, max(0.0, planned - config.deviation_m))
         if lower <= 0.0 or lower < threshold:
             return GuardCap(stopping.speed_for(s_from) if s_from > 0.0 else 0.0, s_from, lower, threshold, length)

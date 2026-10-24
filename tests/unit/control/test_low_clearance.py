@@ -140,6 +140,26 @@ def test_contact_between_two_samples_is_caught():
     assert out.allowed_mps < 0.02
 
 
+def test_a_tight_plan_is_not_capped_before_its_end_with_the_extract_allowance():
+    # Codex round 3: the extract tracker accepts a 0.03 m overrun; 16 mm before the goal of a straight ending 0.04 m
+    # from a block, followed exactly at the end creep
+    block = Rectangle(-1.0 - 0.17 - 0.04 - 0.5, 0.0, 1.0, 1.0, 0.0)
+    leg = leg_along(straight(0.0, -1.0), block)
+    out = cap((-0.984, 0.0, 0.0), leg, progress=0.984, remaining=0.016, direction=-1, speed=0.024, end_allowance=0.03)
+    assert math.isinf(out.allowed_mps)
+
+
+def test_past_the_leg_end_the_arc_keeps_the_physical_braking_distance():
+    # Codex round 3: unloaded, reversing at 0.6 m/s 0.01 m before the end, a prop 0.11 m behind: the end allowance
+    # (0.03) must not cut away the 0.21 m the truck needs to stop
+    unloaded = Footprint(1.29, 0.17, 0.36)
+    prop_ = Rectangle(-0.17 - 0.11 - 0.5, 0.0, 1.0, 1.0, 0.0)
+    leg = lc.LegClearance(straight(1.0, 0.0), unloaded, search_props=[prop_], slot_props=[prop_])
+    out = cap((0.0, 0.0, 0.0), leg, progress=0.99, remaining=0.01, direction=-1, speed=0.6, end_allowance=0.03,
+              shape=unloaded)
+    assert out.allowed_mps < 0.6 and out.arc_m >= 0.6 * 0.15 + 0.6 ** 2 / 3.0
+
+
 def test_the_arc_ends_at_the_leg_end_plus_its_allowance():
     # a block just past the goal along the heading: beyond the leg end + allowance it is not looked at
     block = Rectangle(1.56 + 0.05 + 0.5, 0.0, 1.0, 1.0, 0.0)  # 5 cm ahead of the front at the goal x = 0
