@@ -1098,6 +1098,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "recognition_providers": "CPUExecutionProvider",
                               "recognition_timeout_s": 10.0, "recognition_threads": 4,
                               "recognition_device_id": 0,
+                              # 2026-10-24: the far target's occupancy exclusion (a far run only, refused with near
+                              # tracking; docs/plans/2026-10-24-far-target-occupancy.md)
+                              "recognition_occupancy_margin_m": 0.05,
                               # 2026-10-20: the bottom-deck side evidence (docs/plans/2026-10-19-bottom-deck-side-
                               # evidence.md); off reproduces every earlier record, on is a condition of its own.
                               "bottom_deck_check": "off",

@@ -83,6 +83,17 @@ def test_an_unresolved_object_in_the_radius_asks_to_look_again():
     assert B.decide(fit, INSTR).status == "reobserve"
 
 
+def test_the_floor_contract_excludes_an_unfitted_object_behind_the_pallet():
+    """plan 2026-10-24-far-target-occupancy O1: the decision passes the margin to select_target, on a real fit."""
+    scene, ids = _render([(EPAL, rt.Placement(2.8, 0.0, 0.0, 0.0))])
+    fit = _fit(scene, ids)
+    fit = SceneFit(fit.candidates, (FitFailure("i9", "no_face", (3.9, 0.0), 0.2),))
+    instr = {"present": True, "x_m": 2.8, "y_m": 0.0, "radius_m": 0.2}
+    assert B.decide(fit, instr).status == "reobserve"
+    sel = B.decide(fit, instr, occupancy_margin_m=0.05)
+    assert sel.status == "selected" and "occupancy_excluded" in sel.reasons and sel.detail["excluded"] == ["i9"]
+
+
 def test_an_ambiguous_reading_beside_the_target_asks_to_look_again():
     # Codex: tracks alone drop the uncounted candidate -- the frame's whole fit decides
     scene, ids = _render([(EPAL, rt.Placement(2.8, 0.0, 0.0, 0.0))])
