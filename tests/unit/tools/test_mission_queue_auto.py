@@ -69,12 +69,15 @@ def test_ask_hold_then_submit_when_the_conditions_hold():
 def test_a_done_mission_keeps_the_auto_item_and_none_remaining_ends_it():
     q, ids = started()
     q.next(ctx(), 20, lambda: next(ids))
-    q.on_pick(key(q, "r1"), pick_msg("r1"), 30, 1)
+    q.on_pick(key(q, "r1"), pick_msg("r1"), 30, 1)  # the pick before its ack
+    assert q.next(ctx(), 35, lambda: next(ids)) is None  # held, not submitted until the ack
+    q.on_answer(key(q, "r1"), {"t": "ack"}, 36)
     sub = q.next(ctx(), 41, lambda: next(ids))["submit"]
     q.on_answer({"epoch": q.epoch, "item_id": "A", "request_id": sub["request_id"]}, {"t": "ack", "mission_id": "M-1"})
     q.on_result({"mission_id": "M-1", "outcome": "done"}, 100)
     assert [it["item_id"] for it in q.items] == ["A"] and q.run == "running"
     assert q.finished[0]["pallet_id"] == "P-1" and q.finished[0]["destination_id"] == "D-1"
+    assert q.items[0]["moved"] == 1
     q.on_state(STAND, 1200)
     out = q.next(ctx(revision=2), 1200, lambda: next(ids))
     rid = out["pick_request"]["request_id"]
@@ -130,3 +133,41 @@ def test_a_vehicle_without_the_capability_stops():
     q, ids = started()
     assert q.next(ctx(next_pick=False), 20, lambda: next(ids)) is None
     assert q.stop_reason == "차량이 자동 선택을 지원하지 않습니다"
+
+
+def test_a_refusal_after_the_pick_still_stops():
+    # Codex CT-2 r1: the request is tracked through the pick held until its ack
+    q, ids = started()
+    q.next(ctx(), 20, lambda: next(ids))
+    q.on_pick(key(q, "r1"), pick_msg("r1"), 30, 1)
+    q.on_answer(key(q, "r1"), {"t": "reject", "reason": "busy"}, 31)
+    assert q.stop_reason == "자동 선택 거부: busy" and q.phase == "waiting" and not q.items[0].get("uncertain")
+
+
+def test_an_unacked_pick_held_past_the_deadline_stops_and_is_forgotten():
+    q, ids = started()
+    q.next(ctx(), 20, lambda: next(ids))
+    q.on_pick(key(q, "r1"), pick_msg("r1"), 30, 1)
+    for t in range(1000, 20 + mq.PICK_DEADLINE_MS + 1, 1000):
+        q.on_state(STAND, t)
+    q.on_state(STAND, 21 + mq.PICK_DEADLINE_MS)
+    q.tick(21 + mq.PICK_DEADLINE_MS)
+    assert q.stop_reason == "자동 선택 응답 없음" and q.drain_forget() == ["r1"]
+
+
+def test_a_pick_after_the_deadline_is_not_taken():
+    q, ids = started()
+    q.next(ctx(), 20, lambda: next(ids))
+    q.on_pick(key(q, "r1"), pick_msg("r1"), 21 + mq.PICK_DEADLINE_MS, 1)
+    assert q.stop_reason == "자동 선택 응답 없음" and q.held is None
+
+
+def test_a_busy_auto_submit_keeps_what_may_have_gone_out():
+    q, ids = started()
+    q.next(ctx(), 20, lambda: next(ids))
+    q.on_answer(key(q, "r1"), {"t": "ack"}, 21)
+    q.on_pick(key(q, "r1"), pick_msg("r1"), 30, 1)
+    sub = q.next(ctx(), 41, lambda: next(ids))["submit"]
+    q.on_answer({"epoch": q.epoch, "item_id": "A", "request_id": sub["request_id"]}, {"t": "reject", "reason": "busy"})
+    it = q.items[0]
+    assert it["uncertain"] and it["uncertain_pallet_id"] == "P-1" and it["uncertain_destination_id"] == "D-1"

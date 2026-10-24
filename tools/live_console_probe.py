@@ -54,7 +54,8 @@ class Probe:
         self.queue_has_lease = False  # the lease as console/web/js/protocol.js holds it (a state may take it away)
         self.queue_asking = None  # {key, entry} of the submit out: its answer goes to the queue as it is received
         self.queue_forgotten: set = set()  # request ids the queue dropped (D6 forget): never sent again
-        self.queue_picking = None  # CT-2: {key} of the pick_request out; its ack / reject and its pick go to the queue
+        self.queue_picking = None  # CT-2: {key} of the pick_request whose pick is awaited (cleared by the pick)
+        self.queue_pick_answer = None  # CT-2: {key} of the pick_request whose ack / reject is awaited (either order)
         self.capabilities: dict = {}
 
     def queue_apply(self, out) -> None:
@@ -137,7 +138,7 @@ class Probe:
                                plan=msg.get("plan"), targets_revision=msg.get("targets_revision"))
                     if self.queue is not None and picking_ is not None and \
                             msg.get("request_id") == picking_["key"]["request_id"]:
-                        self.queue_picking = None
+                        self.queue_picking = None  # its ack may still be due (queue_pick_answer)
                         held_ = (self.targets or {}).get("targets_revision")
                         self.queue_apply(self.queue.on_pick(picking_["key"], msg, time.monotonic() * 1000.0, held_))
                 elif t == "missions":
@@ -147,12 +148,13 @@ class Probe:
                             self.queue.on_result(r_, time.monotonic() * 1000.0)
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
-                    picking_ = self.queue_picking
-                    if self.queue is not None and picking_ is not None and \
-                            msg.get("request_id") == picking_["key"]["request_id"]:
+                    answer_ = self.queue_pick_answer
+                    if self.queue is not None and answer_ is not None and \
+                            msg.get("request_id") == answer_["key"]["request_id"]:
+                        self.queue_pick_answer = None
                         if t == "reject":
                             self.queue_picking = None  # no pick follows a refusal
-                        self.queue_apply(self.queue.on_answer(picking_["key"], msg, time.monotonic() * 1000.0))
+                        self.queue_apply(self.queue.on_answer(answer_["key"], msg, time.monotonic() * 1000.0))
                     asking_ = self.queue_asking
                     if self.queue is not None and asking_ is not None and \
                             msg.get("request_id") == asking_["key"]["request_id"]:
@@ -1191,6 +1193,7 @@ async def queue_scenario(p: Probe, args):
         if n and "pick_request" in n:
             r_ = n["pick_request"]
             p.queue_picking = {"key": {"epoch": q.epoch, "item_id": r_["item_id"], "request_id": r_["request_id"]}}
+            p.queue_pick_answer = {"key": dict(p.queue_picking["key"])}
             pick_resend = asyncio.ensure_future(p.request_resent("pick_request", r_["request_id"]))
             n = None
         if n:
