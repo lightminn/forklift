@@ -100,11 +100,11 @@ INFRA_PATTERNS = re.compile(
 # GPU's 16,303 MiB with the device check's margin.
 KINDS = {
     # live console sessions (isaac_live / ct1_queue), paced at 0.4: anon <= 5.48 GiB, 1.0-1.2 cores, 3,886-3,915 MiB
-    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4},
+    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
-    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3},
+    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500},
     # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
-    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4},
+    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500},
 }
 BRIDGE_CORE_CPUS = 2  # one physical core (its two hyperthreads) for the SLAM bridges, apart from the Isaac sessions
 SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
@@ -193,15 +193,21 @@ def job_gpu_index(env) -> int | None:
 
 
 def sbatch_sizes(kind, slots=None) -> dict:
-    """The job's resources for `slots` sessions of `kind` (default its max per GPU): shard per session, cores per
-    session, RAM = slots x session + the shared file pages + a margin, rounded up to a GiB."""
+    """The job's resources for `slots` sessions of `kind` (default its max per GPU): shards for the sessions' GPU
+    memory (a riib session with its video holds 4.47 GB, more than a 4,076 MiB shard, so 3 of them take 4 shards --
+    the shards are what other jobs on the GPU rely on), 2 cores per session + the bridge core, RAM = slots x session +
+    the shared file pages + a margin, rounded up to a GiB. `export` carries the slot count and the session's GPU
+    memory to the runner (its defaults read them), since the shards no longer equal the sessions."""
     k = KINDS[kind]
     slots = slots or k["max_slots"]
     if not 1 <= slots <= k["max_slots"]:
         raise ValueError(f"{kind}: 1-{k['max_slots']} sessions per GPU, not {slots}")
+    shards = -(-slots * k["vram_mib"] // SHARD_MIB)
+    if shards > 4:
+        raise ValueError(f"{kind}: {slots} sessions need {shards} shards, more than a GPU's 4")
     mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
-    return {"slots": slots, "gres": f"shard:{slots}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
-            "mem_gib": int(mem)}
+    return {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
+            "mem_gib": int(mem), "export": f"ALL,BUNDLE_SLOTS={slots},BUNDLE_SESSION_VRAM_MIB={k['vram_mib']}"}
 
 
 def _siblings(cpu):
@@ -974,15 +980,18 @@ def main(argv=None) -> int:
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2
-        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G")
+        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G --export={z['export']}")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", required=True, help="the run list (JSON lines)")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--slots", type=int, help="runs at once (default: the shards)")
+    env_slots = os.environ.get("BUNDLE_SLOTS", "")
+    ap.add_argument("--slots", type=int, default=int(env_slots) if env_slots.isdigit() else None,
+                    help="runs at once (default: BUNDLE_SLOTS, set by `sizes`, else the shards)")
     ap.add_argument("--shards", type=int, help="the job's shards (default: SLURM_SHARDS_ON_NODE)")
     ap.add_argument("--stagger-s", type=float, default=60.0)
-    ap.add_argument("--session-vram-mib", type=int, default=SESSION_VRAM_MIB)
+    env_vram = os.environ.get("BUNDLE_SESSION_VRAM_MIB", "")
+    ap.add_argument("--session-vram-mib", type=int, default=int(env_vram) if env_vram.isdigit() else SESSION_VRAM_MIB)
     ap.add_argument("--shard-mib", type=int, default=SHARD_MIB)
     ap.add_argument("--vram-period-s", type=float, default=1.0)
     ap.add_argument("--vram-unreadable-s", type=float, default=120.0)

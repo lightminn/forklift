@@ -625,13 +625,16 @@ def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
     "kind, slots, args",
     [
         ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 10, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
-        ("riib", 3, {"slots": 3, "gres": "shard:3", "cpus": 8, "mem_gib": 20}),  # 3 x 6.0 + 2 = 20
-        ("riib", None, {"slots": 3, "gres": "shard:3", "cpus": 8, "mem_gib": 20}),
+        ("riib", 3, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 20}),  # 3 x 4,500 MiB > 3 shards
+        ("riib", None, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 20}),
+        ("riib", 1, {"slots": 1, "gres": "shard:2", "cpus": 4, "mem_gib": 8}),  # one riib run is over a shard
         ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 6, "mem_gib": 12}),
     ],
 )
 def test_sizes_grow_with_the_bundle(kind, slots, args):
-    assert ib.sbatch_sizes(kind, slots) == args
+    got = ib.sbatch_sizes(kind, slots)
+    assert {k: v for k, v in got.items() if k != "export"} == args
+    assert got["export"] == f"ALL,BUNDLE_SLOTS={args['slots']},BUNDLE_SESSION_VRAM_MIB={ib.KINDS[kind]['vram_mib']}"
 
 
 def test_more_sessions_than_a_gpu_holds_are_refused():
@@ -641,7 +644,8 @@ def test_more_sessions_than_a_gpu_holds_are_refused():
 
 def test_the_sizes_command_prints_sbatch_options(capsys):
     assert ib.main(["sizes", "live"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=10 --mem=24G"
+    assert capsys.readouterr().out.strip() == ("--gres=shard:4 --cpus-per-task=10 --mem=24G "
+                                               "--export=ALL,BUNDLE_SLOTS=4,BUNDLE_SESSION_VRAM_MIB=3950")
 
 
 def test_a_start_waits_for_the_node_s_memory(tmp_path):
@@ -797,3 +801,22 @@ def test_a_reservation_that_cannot_be_given_back_leaves_the_run_recorded(tmp_pat
                      node_ledger_dir=tmp_path / "ledger", cleanup=lambda sid: seen.append(sid) or [])
     assert results(tmp_path)["a"]["status"] == "ended" and seen == ["77s0"]
     assert summary["errors"] and summary["exit_code"] == 1
+
+
+def test_the_runner_takes_its_slots_and_session_memory_from_sizes(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(runs, out, **k):
+        seen.update(k)
+        return {"exit_code": 0}
+
+    monkeypatch.setattr(ib, "run_bundle", fake)
+    monkeypatch.setenv("BUNDLE_SLOTS", "3")
+    monkeypatch.setenv("BUNDLE_SESSION_VRAM_MIB", "4500")
+    monkeypatch.setenv("SLURM_SHARDS_ON_NODE", "4")
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
+    assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
