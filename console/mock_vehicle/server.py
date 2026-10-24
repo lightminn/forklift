@@ -149,6 +149,8 @@ class Handle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
                 reply = self.vehicle.handle(client_id, msg, conn_id=conn_id)
                 if reply is not None:
                     self._send_control(conn_id, reply)
+                for pick in self.vehicle.take_picks(conn_id):  # CT-2: the pick goes out after its ack
+                    self._send_control(conn_id, pick)
                 if self.vehicle.session_request is not None:
                     asyncio.create_task(self._end_session(self.vehicle.session_request))
         except ConnectionClosed:

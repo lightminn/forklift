@@ -12,6 +12,9 @@ const SETTLE_MS = 1000; // after a result, before the next submit (plan D3; the 
 // its alarm after the same 0.5 s. A submit still needs the feedback valid at that moment (next()).
 const FEEDBACK_LOST_MS = 500;
 const FINISHED_KEEP = 50;
+// CT-2 (docs/plans/2026-10-24-ct2-console-auto-item.md): the vehicle's bound from a pick_request to its pick, wall
+// clock; the vehicle announces it in welcome capabilities.next_pick_deadline_ms (5000 when it does not)
+export const PICK_DEADLINE_MS = 5000;
 const PREEMPT = new Set(["preempt", "safety_preempt"]); // live arbiter, fake vehicle
 const UNSURE_REJECTS = new Set(["busy", "stale"]); // the request may still run (plan D5)
 const KINDS = new Set(["fixed", "auto"]);
@@ -32,7 +35,8 @@ function check(palletId, destinationId, targets, state) {
   return null;
 }
 
-// Only "fixed" runs now; "auto" (decide at submit time) is reserved for the continuous-transport work (plan D1).
+// A fixed item's pallet and destination, checked against the newest targets; an auto item is resolved by the
+// vehicle's pick instead (CT-2), so here it is unsupported.
 export function resolveItem(item, targets, state) {
   if (item?.kind !== "fixed") return { ok: false, reason: "unsupported_kind" };
   const why = check(item.pallet_id, item.destination_id, targets, state);
@@ -54,9 +58,20 @@ export class MissionQueue {
     this.items = [];
     this.run = "stopped";
     this.stopReason = "시작 전";
-    this.phase = "waiting"; // of the front item: waiting | submitting | in_mission
+    this.phase = "waiting"; // of the front item: waiting | picking | picked (an auto item) | submitting | in_mission
     this.current = null; // {item_id, request_id, mission_id, epoch, pallet_id, destination_id}
-    this.finished = []; // newest first: {item, outcome, reason, mission_id}
+    this.finished = []; // newest first: {item, outcome, reason, mission_id, pallet_id, destination_id}
+    // CT-2: the auto item's pick_request ({item_id, request_id, epoch, sentAt, acked, none}) -- kept until it is acked or
+    // let go, through a pick held, so a refusal after the pick still stops and an unacked request is forgotten
+    // (Codex CT-2 r1) -- and the pick held ({pallet_id, destination_id, targets_revision, plan, missions}); asks
+    // counts the requests of one pick (one re-ask allowed)
+    this.pick = null;
+    this.held = null;
+    this.pickAsks = 0;
+    this.pickDeadlineMs = PICK_DEADLINE_MS;
+    this.lastPick = null; // the last pick taken (the screen shows its plan)
+    this.lastPickBlocked = null; // what blocked the last failed pick (the screen explains it)
+    this.toForget = []; // request ids the session should stop resending (drainForget)
     this.counts = { done: 0, failed: 0, cancelled: 0 };
     this.epoch = null;
     this.lastStateAt = null; // when the last state was received -- only a received state sets it (Codex r5)
@@ -71,13 +86,17 @@ export class MissionQueue {
   // ---------------------------------------------------------------- operator
   add(item) {
     if (!item || !KINDS.has(item.kind)) return false;
+    if (item.kind === "auto" && this.items.some((it) => it.kind === "auto")) return false; // one is all of them
+    if (item.kind === "auto") this.#forgetLastPick(); // a new auto item has had no pick yet
     this.items.push({ ...item });
     return this.#changed();
   }
 
   remove(itemId) {
     if (this.#isCurrent(itemId)) return false;
+    if (this.pick?.item_id === itemId || (this.held && this.items[0]?.item_id === itemId)) this.#dropPick();
     const n = this.items.length;
+    if (this.items.find((it) => it.item_id === itemId)?.kind === "auto") this.#forgetLastPick();
     this.items = this.items.filter((it) => it.item_id !== itemId);
     return this.items.length !== n && this.#changed();
   }
@@ -87,12 +106,14 @@ export class MissionQueue {
     const j = i + delta;
     if (i < 0 || j < 0 || j >= this.items.length || this.#isCurrent(itemId)) return false;
     if (this.current && this.items[j].item_id === this.current.item_id) return false; // nothing in front of it
+    if ((this.phase === "picking" || this.phase === "picked") && (i === 0 || j === 0)) return false; // nor of a pick
     if (this.items[i].uncertain || this.items[j].uncertain) return false; // nor across an uncertain one (Codex r4)
     [this.items[i], this.items[j]] = [this.items[j], this.items[i]];
     return this.#changed();
   }
 
   clear() {
+    this.#dropPick();
     this.items = this.items.filter((it) => this.#isCurrent(it.item_id));
     return this.#changed();
   }
@@ -106,8 +127,18 @@ export class MissionQueue {
   }
 
   stop(reason) {
-    const forget = this.phase === "submitting" ? this.current?.request_id : undefined;
-    if (forget !== undefined) this.#dropCurrentAsUncertain();
+    // a pick asked or held is let go -- nothing was submitted, so nothing is uncertain (CT-2)
+    let forget;
+    if (this.phase === "picking") {
+      forget = this.pick?.request_id;
+      this.#dropPick(false);
+    } else if (this.phase === "picked") {
+      this.#dropPick(true); // an unacked request still resending goes to the forget list
+    }
+    if (this.phase === "submitting") {
+      forget = this.current?.request_id;
+      this.#dropCurrentAsUncertain();
+    }
     if (this.run === "running") {
       this.run = "stopped";
       this.stopReason = reason;
@@ -124,9 +155,10 @@ export class MissionQueue {
     const it = this.items.find((x) => x.item_id === itemId);
     if (!it || !it.uncertain) return false;
     if (action === "drop") this.items = this.items.filter((x) => x.item_id !== itemId);
-    else if (action === "resubmit") {
-      it.uncertain = false;
-      delete it.maybe; // a later result of that mission is no longer this item's
+    else if (action === "resubmit" || action === "clear") {
+      // fixed: submit it again; auto ("clear"): the uncertain mark was on one submit, the item goes on -- its next
+      // pick is worked out from the vehicle's own list, so the same pallet is not moved twice (CT-2 C4)
+      this.#clearUncertain(it);
     }
     else return false;
     return this.#changed();
@@ -141,6 +173,8 @@ export class MissionQueue {
       this.applied.clear();
       this.early.clear();
       this.lastResultAt = null;
+      this.lastPick = null; // another session's pick and its blockers say nothing about this one (CT-2)
+      this.lastPickBlocked = null;
     }
     this.epoch = epoch;
     this.lastStateAt = null; // a new connection: silence is counted from its first state
@@ -189,14 +223,26 @@ export class MissionQueue {
     if (!id || this.applied.has(id)) return;
     const maybe = this.items.find((x) => x.uncertain && x.maybe?.mission_id === id && x.maybe.epoch === this.epoch);
     if (maybe) {
-      this.#record(maybe.item_id, result); // recorded and out of the queue; the queue stays as it is
+      this.#record(maybe.item_id, result); // recorded (a fixed item out of the queue); the queue stays as it is
       return;
     }
     if (this.current && this.current.mission_id === id) this.#finish(result, nowMs);
     else if (this.current && this.phase === "submitting") this.early.set(id, { result, nowMs });
   }
 
-  onAnswer(key, answer) {
+  // nowMs: when the answer came -- a pick_request's ack is judged against its deadline too (Codex CT-2 r2)
+  onAnswer(key, answer, nowMs) {
+    const pk = this.pick;
+    if (pk && key.epoch === pk.epoch && key.item_id === pk.item_id && key.request_id === pk.request_id) {
+      if (answer?.t === "ack") { // the pick comes as its own message; a held pick may now be submitted
+        if (nowMs !== undefined && nowMs - pk.sentAt > this.pickDeadlineMs) return this.stop("자동 선택 응답 없음");
+        pk.acked = true;
+        if (pk.none) return this.#endAuto(pk.item_id); // none remaining came first, waiting for this ack
+        this.#changed();
+        return {};
+      }
+      return this.stop(`자동 선택 거부: ${answer?.reason ?? "unknown"}`);
+    }
     const c = this.current;
     if (!c || this.phase !== "submitting" || key.epoch !== c.epoch || key.item_id !== c.item_id
         || key.request_id !== c.request_id) {
@@ -217,14 +263,64 @@ export class MissionQueue {
     }
     const reason = answer?.reason ?? "unknown";
     const item = this.items.find((x) => x.item_id === c.item_id);
-    if (item && UNSURE_REJECTS.has(reason)) item.uncertain = true;
+    if (item && UNSURE_REJECTS.has(reason)) {
+      item.uncertain = true;
+      if (item.kind === "auto") { // what may have gone out, kept on the mark (Codex CT-2 r1)
+        item.uncertain_pallet_id = c.pallet_id;
+        item.uncertain_destination_id = c.destination_id;
+      }
+    }
     this.current = null;
     this.phase = "waiting";
     this.early.clear();
     return this.stop(`거부: ${reason}`);
   }
 
+  // CT-2: the vehicle's answer to a pick_request (contract D3), matched by its key; targetsRevision is the list the
+  // page holds now
+  onPick(key, msg, nowMs, targetsRevision) {
+    const pk = this.pick;
+    if (!pk || this.phase !== "picking" || key.epoch !== pk.epoch || key.item_id !== pk.item_id
+        || key.request_id !== pk.request_id || msg?.request_id !== pk.request_id) {
+      return {};
+    }
+    // the deadline counts from the request, whether the timer or the pick comes first (Codex CT-2 r1)
+    if (nowMs - pk.sentAt > this.pickDeadlineMs) return this.stop("자동 선택 응답 없음");
+    const reason = msg.reason ?? "unknown";
+    if (reason === "ok" && msg.pick) {
+      if (msg.targets_revision !== targetsRevision) return this.#reAsk();
+      this.held = { pallet_id: msg.pick.pallet_id, destination_id: msg.pick.destination_id,
+                    targets_revision: msg.targets_revision, plan: msg.plan ?? null, missions: msg.missions ?? null };
+      this.lastPick = { ...this.held };
+      this.lastPickBlocked = null;
+      pk.none = false; // a pick computed again for a resend supersedes an earlier one
+      this.phase = "picked"; // the request stays tracked until its ack
+      this.#changed();
+      return {};
+    }
+    if (reason === "none_remaining") {
+      if (pk.acked) return this.#endAuto(pk.item_id);
+      pk.none = true; // a refusal may still come: the auto item ends with the ack (Codex CT-2 r2)
+      this.#changed();
+      return {};
+    }
+    this.lastPickBlocked = msg.blocked ?? null;
+    this.lastPick = null; // its plan no longer stands
+    return this.stop(`자동 선택 실패: ${reason}`);
+  }
+
+  // request ids the session should stop resending (a pick let go by a removal or a clear)
+  drainForget() {
+    const out = this.toForget;
+    this.toForget = [];
+    return out;
+  }
+
   tick(nowMs) {
+    const waitingAck = this.phase === "picking" || (this.phase === "picked" && !this.pick?.acked);
+    if (this.run === "running" && waitingAck && nowMs - this.pick.sentAt > this.pickDeadlineMs) {
+      return this.stop("자동 선택 응답 없음");
+    }
     const ref = this.lastStateAt ?? this.waitSince;
     if (this.run === "running" && ref !== null && nowMs - ref > SILENCE_MS) return this.stop("상태 수신 끊김");
     if (this.run === "running" && this.#feedbackLost(nowMs)) return this.stop("차량 피드백 없음");
@@ -232,7 +328,7 @@ export class MissionQueue {
   }
 
   next(ctx, nowMs, newId) {
-    if (this.run !== "running" || this.current) return null;
+    if (this.run !== "running" || this.current || this.phase === "picking") return null;
     const front = this.items[0];
     if (!front || front.uncertain) return null;
     const st = ctx.state;
@@ -241,24 +337,96 @@ export class MissionQueue {
     if (st.mode !== "PAUSED" || st.stopped_confirmed !== true || st.feedback_ok === false) return null;
     if (st.mission && ACTIVE.includes(st.mission.status)) return null;
     if (this.lastResultAt !== null && nowMs - this.lastResultAt < SETTLE_MS) return null;
+    if (front.kind === "auto") return this.#nextAuto(front, ctx, nowMs, newId);
     const r = resolveItem(front, ctx.targets, st);
     if (!r.ok) {
       this.stop(r.reason === "unsupported_kind" ? "아직 실행할 수 없는 항목(자동 선택)" : `대상 확인 실패: ${r.reason}`);
       return null;
     }
-    const submit = { item_id: front.item_id, request_id: newId(), pallet_id: r.pallet_id,
-                     destination_id: r.destination_id, targets_revision: ctx.targets.targets_revision };
+    return this.#submit(front, r.pallet_id, r.destination_id, ctx, newId);
+  }
+
+  #submit(front, palletId, destinationId, ctx, newId) {
+    const submit = { item_id: front.item_id, request_id: newId(), pallet_id: palletId,
+                     destination_id: destinationId, targets_revision: ctx.targets.targets_revision };
     this.current = { item_id: front.item_id, request_id: submit.request_id, mission_id: null, epoch: this.epoch,
-                     pallet_id: r.pallet_id, destination_id: r.destination_id };
+                     pallet_id: palletId, destination_id: destinationId };
     this.phase = "submitting";
     this.early.clear();
     this.#changed();
     return { submit };
   }
 
+  // the auto item (CT-2 C2): ask for a pick, or submit the pick held -- the submit conditions were just checked again
+  #nextAuto(front, ctx, nowMs, newId) {
+    if (ctx.nextPick !== true) {
+      this.stop("차량이 자동 선택을 지원하지 않습니다");
+      return null;
+    }
+    if (this.phase === "picked") {
+      if (!this.pick?.acked) return null; // a refusal may still come for this request (Codex CT-2 r1)
+      const h = this.held;
+      if (h.targets_revision === ctx.targets.targets_revision) {
+        const r = resolveItem({ kind: "fixed", pallet_id: h.pallet_id, destination_id: h.destination_id }, ctx.targets, ctx.state);
+        if (!r.ok) {
+          this.stop(`대상 확인 실패: ${r.reason}`);
+          return null;
+        }
+        this.held = null;
+        this.pick = null;
+        this.pickAsks = 0;
+        return this.#submit(front, r.pallet_id, r.destination_id, ctx, newId);
+      }
+      if (this.pickAsks >= 2) {
+        this.stop("대상 목록이 계속 바뀜");
+        return null;
+      }
+      this.held = null; // the list changed under the pick: the one re-ask
+      this.pick = null; // acked: nothing to forget
+    }
+    const request_id = newId();
+    this.pick = { item_id: front.item_id, request_id, epoch: this.epoch, sentAt: nowMs };
+    this.pickAsks += 1;
+    this.phase = "picking";
+    this.#changed();
+    return { pick_request: { item_id: front.item_id, request_id } };
+  }
+
+  // none remaining, acked: the auto item is done; the next item goes on, or the queue is done
+  #endAuto(autoId) {
+    this.#dropPick(false);
+    this.items = this.items.filter((x) => x.item_id !== autoId);
+    this.lastPickBlocked = null;
+    this.lastPick = null;
+    if (!this.items.length && this.run === "running") return this.stop("완료");
+    this.#changed();
+    return {};
+  }
+
+  #reAsk() {
+    if (this.pickAsks >= 2) return this.stop("대상 목록이 계속 바뀜");
+    if (this.pick && !this.pick.acked) this.toForget.push(this.pick.request_id); // the old one stops resending
+    this.pick = null;
+    this.held = null;
+    this.phase = "waiting";
+    this.#changed();
+    return {};
+  }
+
+  // a pick asked or held let go; a request out goes to the list to forget unless the caller returns it itself
+  #dropPick(queueForget = true) {
+    if (queueForget && this.pick && !this.pick.acked) this.toForget.push(this.pick.request_id);
+    if (this.phase === "picking" || this.phase === "picked") this.phase = "waiting";
+    this.pick = null;
+    this.held = null;
+    this.pickAsks = 0;
+  }
+
   // ---------------------------------------------------------------- storage (plan D7)
   toStorage() {
-    return { v: 1, epoch: this.epoch, items: this.items, current: this.current, phase: this.phase,
+    // a pick asked or held is not kept: a reopened page asks again (CT-2 C5)
+    const phase = this.phase === "picking" || this.phase === "picked" ? "waiting" : this.phase;
+    return { v: 1, epoch: this.epoch, items: this.items, current: this.current, phase,
              finished: this.finished, counts: this.counts };
   }
 
@@ -282,6 +450,10 @@ export class MissionQueue {
       } else {
         it.uncertain = true; // submitted, result unknown: the operator decides (plan D6, D7)
         if (c.mission_id) it.maybe = { mission_id: c.mission_id, epoch: obj.epoch };
+        if (it.kind === "auto") {
+          it.uncertain_pallet_id = c.pallet_id ?? null;
+          it.uncertain_destination_id = c.destination_id ?? null;
+        }
       }
     }
     q.current = null;
@@ -315,19 +487,44 @@ export class MissionQueue {
     if (item) {
       item.uncertain = true;
       if (this.current.mission_id) item.maybe = { mission_id: this.current.mission_id, epoch: this.current.epoch };
+      if (item.kind === "auto") { // the mark is on this one submit (CT-2 C4)
+        item.uncertain_pallet_id = this.current.pallet_id;
+        item.uncertain_destination_id = this.current.destination_id;
+      }
     }
     this.current = null;
     this.phase = "waiting";
     this.early.clear();
   }
 
-  // a result into the finished list and the counts, its item out of the queue
+  #forgetLastPick() {
+    this.lastPick = null;
+    this.lastPickBlocked = null;
+  }
+
+  #clearUncertain(it) {
+    it.uncertain = false;
+    delete it.maybe; // a later result of that mission is no longer this item's
+    delete it.uncertain_pallet_id;
+    delete it.uncertain_destination_id;
+  }
+
+  // a result into the finished list and the counts with the pallet and destination it moved; a fixed item leaves the
+  // queue, an auto item stays for the next pick (CT-2 C3) with any uncertain mark on that submit cleared
   #record(itemId, result) {
     this.applied.add(result.mission_id);
     const item = this.items.find((x) => x.item_id === itemId) ?? null;
-    this.items = this.items.filter((x) => x.item_id !== itemId);
+    const cur = this.current?.item_id === itemId ? this.current : null;
+    const palletId = cur?.pallet_id ?? item?.uncertain_pallet_id ?? item?.pallet_id ?? result.pallet_id ?? null;
+    const destinationId = cur?.destination_id ?? item?.uncertain_destination_id ?? item?.destination_id
+      ?? result.destination_id ?? null;
     const outcome = result.outcome;
-    this.finished.unshift({ item, outcome, reason: result.reason ?? null, mission_id: result.mission_id });
+    if (item?.kind === "auto") {
+      this.#clearUncertain(item);
+      if (outcome === "done") item.moved = (item.moved ?? 0) + 1; // the progress shown on the row (agy CT-2)
+    } else this.items = this.items.filter((x) => x.item_id !== itemId);
+    this.finished.unshift({ item: item ? { ...item } : null, outcome, reason: result.reason ?? null,
+                            mission_id: result.mission_id, pallet_id: palletId, destination_id: destinationId });
     this.finished = this.finished.slice(0, FINISHED_KEEP);
     if (outcome === "done") this.counts.done += 1;
     else if (outcome === "cancelled") this.counts.cancelled += 1;
