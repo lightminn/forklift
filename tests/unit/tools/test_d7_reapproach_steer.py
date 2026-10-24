@@ -67,6 +67,34 @@ def test_the_isaac_stop_is_judged_on_the_nearest_leg_end():
     assert isaac_offsets({"path": case["path"], "stop_pose": None}) is None
 
 
+def test_the_control_error_is_taken_in_the_control_frame_aligned_at_the_attempt_start():
+    """Codex plan round 9 P2: the runner's tracker reads the SLAM control pose. The series is control minus the truth
+    carried by the transform that makes them agree at the first row -- a frame offset alone is no error."""
+    from d7_reapproach_steer import control_error_series
+
+    rot = math.pi / 2
+    rows = []
+    for t, (tx, ty), extra in ((10.0, (1.0, 0.0), (0.0, 0.0)), (11.0, (2.0, 0.0), (0.0, 0.0)),
+                               (12.0, (3.0, 0.0), (0.0, 0.02))):
+        # control = truth rotated by 90 deg and shifted (5, 5), plus an estimate error at the last row
+        cx, cy = 5.0 + math.cos(rot) * tx - math.sin(rot) * ty, 5.0 + math.sin(rot) * tx + math.cos(rot) * ty
+        rows.append([t, cx + extra[0], cy + extra[1], rot, tx, ty, 0.0])
+    series = control_error_series(rows, 10.0, 12.0)
+    assert [r[0] for r in series] == [0.0, 1.0, 2.0]
+    np.testing.assert_allclose(np.asarray(series)[:, 1:], [[0, 0, 0], [0, 0, 0], [0, 0.02, 0]], atol=1e-12)
+
+
+def test_a_fed_lateral_error_moves_the_truck_the_other_way():
+    poses = np.column_stack((np.linspace(0, 2, 201), np.zeros(201), np.zeros(201)))
+    dirs, curv = np.ones(201, np.int8), np.zeros(201)
+    free = simulate(poses, dirs, curv, CONFIG, poses[0], GEOMETRY, CONSTANTS)
+    fed = simulate(poses, dirs, curv, CONFIG, poses[0], GEOMETRY, CONSTANTS,
+                   control_error=[[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.02, 0.0], [99.0, 0.0, 0.02, 0.0]])
+    assert free["status"] == "arrived" and fed["status"] == "arrived"
+    # the reported pose is the estimate's (on the path); the truck itself ended about 2 cm to the right
+    assert abs(fed["pose"][1]) < 0.01
+
+
 def _mission(tmp_path, run, mission, retries, rounds, outcome, reason, ended_s=200.0):
     import json
 
@@ -79,7 +107,7 @@ def _mission(tmp_path, run, mission, retries, rounds, outcome, reason, ended_s=2
              "delivery_docking": {"rounds": [{"time_s": t} for t in rounds]}, "mission_scenario": {"x": 1}}
     (md / "records.json").write_text(json.dumps({"state": state}))
     (md / "result.json").write_text(json.dumps({"result": {"outcome": outcome, "reason": reason, "ended_s": ended_s}}))
-    for name, rows in (("slam.control", [[150.0, 0.9, 0.0, 0.07]]),
+    for name, rows in (("slam.control", [[150.0, 0.9, 0.0, 0.07, 0.9, 0.0, 0.07]]),
                        ("state.samples", [{"time_s": 99.9, "steering_actual_rad": [0.1, 0.1]},
                                           {"time_s": 100.05, "steering_actual_rad": [0.2, 0.2]}])):
         (base / "spool" / name).mkdir(parents=True, exist_ok=True)

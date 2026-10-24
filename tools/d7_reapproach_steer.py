@@ -16,6 +16,7 @@ A stall is what raises trigger d in the runner: standing with the tracker at a c
 
     python tools/d7_reapproach_steer.py extract RUN_DIR... --out cases.json
     python tools/d7_reapproach_steer.py check cases.json --out v2.json
+    python tools/d7_reapproach_steer.py diagnose cases.json --out feed.json   # the recorded control error fed in
 """
 
 from __future__ import annotations
@@ -89,9 +90,22 @@ def leg_offsets(poses, start_i: int, end_i: int, pose) -> tuple[float, float]:
     return frac, math.atan2(math.sin(pose[2] - end_yaw), math.cos(pose[2] - end_yaw))
 
 
+def _error_at(series, tau):
+    """The recorded control-minus-truth error (dx, dy, dyaw) at tau seconds into the attempt, interpolated; held
+    at its ends."""
+    times = series[:, 0]
+    return np.array([np.interp(tau, times, series[:, j]) for j in (1, 2, 3)])
+
+
 def simulate(poses, directions, curvatures, config, start, geometry, constants, *, steering0=(0.0, 0.0),
-             command0=None, delay_s=DELAY_S, response=RESPONSE, max_time_s=90.0) -> dict:
+             command0=None, delay_s=DELAY_S, response=RESPONSE, max_time_s=90.0, control_error=None,
+             feed_yaw=False) -> dict:
+    """``control_error`` (diagnostic, Codex plan round 9 P2): the attempt's recorded control-minus-truth error,
+    rows (tau, dx, dy, dyaw), added to the pose the tracker reads -- the runner feeds the tracker the SLAM control
+    pose, not the truth; its position only unless ``feed_yaw``. The reported pose and offsets are then the estimate's,
+    as the Isaac stop's are the control pose's. It forces a recorded error from outside, so it is no causal proof."""
     poses = np.asarray(poses, float)
+    series = None if control_error is None or len(control_error) == 0 else np.asarray(control_error, float)
     tracker = RearAxlePathTracker(poses, np.asarray(directions, np.int8), np.asarray(curvatures, float), config)
     pose = np.asarray(start, float).copy()
     speed = 0.0
@@ -106,10 +120,11 @@ def simulate(poses, directions, curvatures, config, start, geometry, constants, 
     for k in range(int(max_time_s / DT_S)):
         joint = history[0]
         leg_before = tracker.leg_index
-        command = tracker.update(pose, speed, DT_S)
+        seen = pose if series is None else pose + _error_at(series, k * DT_S) * np.array([1.0, 1.0, float(feed_yaw)])
+        command = tracker.update(seen, speed, DT_S)
         if tracker.leg_index != leg_before:
             end_yaw = float(poses[leg_bounds(tracker, leg_before)[1], 2])
-            leg_end_headings.append(math.atan2(math.sin(pose[2] - end_yaw), math.cos(pose[2] - end_yaw)))
+            leg_end_headings.append(math.atan2(math.sin(seen[2] - end_yaw), math.cos(seen[2] - end_yaw)))
         if command.status == "arrived":
             leg_end_headings.append(float(command.yaw_error_rad))
             out = {"status": "arrived"}
@@ -142,9 +157,12 @@ def simulate(poses, directions, curvatures, config, start, geometry, constants, 
             break
     leg = int(tracker.leg_index)
     a, b = leg_bounds(tracker, leg)
-    frac, heading_err = leg_offsets(poses, a, b, pose)
+    seen = pose if series is None else pose + _error_at(series, k * DT_S) * np.array([1.0, 1.0, float(feed_yaw)])
+    frac, heading_err = leg_offsets(poses, a, b, seen)
+    end_ = poses[b]
     out.update(leg=leg, legs=len(tracker._leg_ends), progress_fraction=frac, heading_error_rad=heading_err,
-               pose=[float(v) for v in pose], time_s=k * DT_S, saturated_fraction=saturated / max(moving, 1),
+               position_error_m=float(math.hypot(seen[0] - end_[0], seen[1] - end_[1])),
+               pose=[float(v) for v in seen], time_s=k * DT_S, saturated_fraction=saturated / max(moving, 1),
                leg_end_heading_rad=leg_end_headings)
     return out
 
@@ -242,8 +260,28 @@ def extract(run_dirs) -> list:
                     if row.get("end_s") is not None and control:
                         stand = [c for c in control if c[0] < float(row["end_s"]) - 1e-6]
                         row["stop_pose"] = stand[-1][1:4] if stand else None
+                    row["control_error"] = control_error_series(control, ev["time_s"], window_end)
                 cases.append(row)
     return cases
+
+
+def control_error_series(control, t0, t1) -> list:
+    """Rows (tau, dx, dy, dyaw): the control pose minus the truth carried into the control frame by the transform
+    that makes them agree at the attempt's first row (slam.control rows: t, control x, y, yaw, truth x, y, yaw)."""
+    rows = [c for c in control or [] if len(c) >= 7 and c[0] >= t0 - 1e-9 and (t1 is None or c[0] <= float(t1) + 1e-9)]
+    if not rows:  # no row in the window, or a record without the truth columns
+        return []
+    c0, r0 = np.asarray(rows[0][1:4], float), np.asarray(rows[0][4:7], float)
+    rot = c0[2] - r0[2]
+    cos_, sin_ = math.cos(rot), math.sin(rot)
+    out = []
+    for c in rows:
+        ctl, tru = np.asarray(c[1:4], float), np.asarray(c[4:7], float)
+        d = tru[:2] - r0[:2]
+        carried = c0[:2] + np.array([cos_ * d[0] - sin_ * d[1], sin_ * d[0] + cos_ * d[1]])
+        dyaw = math.atan2(math.sin(ctl[2] - (tru[2] + rot)), math.cos(ctl[2] - (tru[2] + rot)))
+        out.append([float(c[0] - t0), float(ctl[0] - carried[0]), float(ctl[1] - carried[1]), dyaw])
+    return out
 
 
 def isaac_offsets(case) -> dict | None:
@@ -358,6 +396,37 @@ def grid(cases, geometry, constants, planner) -> list:
     return points
 
 
+def diagnose(cases, geometry, constants) -> dict:
+    """Each usable case driven twice more with its recorded control-minus-truth error fed to the tracker -- position
+    only, then position and yaw (Codex plan round 9 P2) -- against the Isaac outcome. A diagnostic: the error is forced
+    from the record, so a match locates the mechanism without proving its cause."""
+    from curvature_audit import tracker_config  # noqa: E402
+
+    rows = []
+    for c in cases:
+        if "excluded" in c or c.get("config") is None or not c.get("control_error"):
+            continue
+        cfg = dataclasses.replace(tracker_config(c["config"]), position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
+        row = {k: c[k] for k in ("run", "mission", "retry", "trigger", "isaac")}
+        row["isaac_stop"] = isaac_offsets(c) if c["isaac"] == "stall" else None
+        err = np.asarray(c["control_error"], float)
+        row["error_span_m"] = float(np.max(np.hypot(err[:, 1], err[:, 2])))
+        for name, kw in (("none", {}), ("position", {"control_error": err}),
+                         ("position_yaw", {"control_error": err, "feed_yaw": True})):
+            sim = simulate(c["path"]["poses"], c["path"]["directions"], c["path"]["curvatures_inv_m"], cfg,
+                           c["start"], geometry, constants, steering0=c["steering0"], command0=c["command0"], **kw)
+            row[name] = {k: sim[k] for k in ("status", "leg", "heading_error_rad", "position_error_m", "time_s")}
+        rows.append(row)
+    summary = {}
+    for name in ("none", "position", "position_yaw"):
+        summary[name] = {
+            "stall_reproduced": sum(1 for r in rows if r["isaac"] == "stall" and r[name]["status"] == "stall"),
+            "stalls": sum(1 for r in rows if r["isaac"] == "stall"),
+            "control_arrived": sum(1 for r in rows if r["isaac"] == "arrived" and r[name]["status"] == "arrived"),
+            "controls": sum(1 for r in rows if r["isaac"] == "arrived")}
+    return {"summary": summary, "rows": rows}
+
+
 def make_planner():
     from bay_planning_sweep import mission_geometry  # noqa: E402
     from riibotics_scenario_paths import PALLETS  # noqa: E402
@@ -393,6 +462,11 @@ def main(argv=None) -> int:
     ck.add_argument("--out", type=Path, required=True)
     ck.add_argument("--settings", type=Path, default=ROOT / "config/isaac_transport_measured.yaml")
     ck.add_argument("--layer", type=Path, default=ROOT / "config/obstacle_layer_single.yaml")
+    dg = sub.add_parser("diagnose")
+    dg.add_argument("cases", type=Path)
+    dg.add_argument("--out", type=Path, required=True)
+    dg.add_argument("--settings", type=Path, default=ROOT / "config/isaac_transport_measured.yaml")
+    dg.add_argument("--layer", type=Path, default=ROOT / "config/obstacle_layer_single.yaml")
     args = ap.parse_args(argv)
     if args.cmd == "extract":
         cases = extract(args.runs)
@@ -406,6 +480,16 @@ def main(argv=None) -> int:
     constants = plant_constants(args.settings, args.layer)
     planner, urdf = make_planner()
     geometry = read_drive_geometry_m(urdf, constants["max_wheel_rate_rad_s"])
+    if args.cmd == "diagnose":
+        result = diagnose(json.loads(args.cases.read_text()), geometry, constants)
+        args.out.write_text(json.dumps(result, indent=1, default=float))
+        print(json.dumps(result["summary"]))
+        for r in result["rows"]:
+            if r["isaac"] == "stall":
+                print(r["run"], r["mission"], r["retry"], r["isaac_stop"] and round(r["isaac_stop"]["heading_error_rad"], 4),
+                      {k: (r[k]["status"], round(r[k]["heading_error_rad"], 4), round(r[k]["position_error_m"], 3))
+                       for k in ("none", "position", "position_yaw")}, round(r["error_span_m"], 3))
+        return 0
     result = check(json.loads(args.cases.read_text()), geometry, constants, planner=planner)
     result["constants"] = {**constants, "delay_s": DELAY_S, "response": dataclasses.asdict(RESPONSE)}
     args.out.write_text(json.dumps(result, indent=1, default=float))
