@@ -329,6 +329,8 @@ def check_session(path: Path, *, prior_grow_m: float = SESSION_PRIOR_GROW_M, pla
                                             pid, did, nominal=ctx["nominal"], shape=ctx["shape"],
                                             prior_grow_m=prior_grow_m, observe_planner=observe_planner,
                                             transport_planner=transport_planner)}
+        if entry["outcome"] == "passed" and entry["submit_check"] is not None:
+            entry["outcome"] = "submit_refused"  # the vehicle would refuse it before planning (Codex CT-2 impl r1 P3)
         result["missions"].append(entry)
         if entry["outcome"] != "passed":
             failed = True

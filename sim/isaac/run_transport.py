@@ -7475,6 +7475,10 @@ def drive(S, isaac) -> None:
 
                 rear_ = live_state.get("rear")
                 wait_ = live_session_["wait"]
+                # the ended missions' anchor evidence decided first, as a preparation does before its payload (plan
+                # 2026-10-22-slot-anchored-neighbours 2.2; Codex CT-2 impl r1 P2): else the last delivered pallet's
+                # slot anchor is missing from the pick
+                session_anchor_decide_(live_state.get("t", 0.0))
                 anchors_ = {did_: session_anchor_poses_(did_, pose_, None) or {}
                             for did_, pose_ in core.targets.destinations.items()}
                 return PickSnapshot(pick_copy.deepcopy(core.targets), None if rear_ is None else tuple(rear_),
@@ -8456,6 +8460,7 @@ def drive(S, isaac) -> None:
                     # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
                     # a preempt: zero wheels, steering held. The applied command is written back for the core.
                     live_state["rear"] = tuple(float(v) for v in rear)
+                    live_state["t"] = float(t)  # the tick's sim time (CT-2: the anchors decided at a pick's snapshot)
                     speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
                     # The sim distance driven since the last tick, for the installed arcs: the odometry's own motion
                     # (Codex M-c round 10 P2: the end speed times dt missed a braking interval's travel).
