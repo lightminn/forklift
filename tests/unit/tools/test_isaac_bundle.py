@@ -833,3 +833,50 @@ def test_sessions_that_do_not_fit_the_shards_are_refused(tmp_path, monkeypatch, 
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
     assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", *extra]) == 2
     assert "refusing" in capsys.readouterr().err
+
+
+# --- the check before a submission ------------------------------------------------------------------------------------
+
+RUNNER_SRC = 'ap.add_argument("--seed")\nap.add_argument("--scene-file")\n'
+LAUNCHER = 'if [ "$DRY_RUN" = 1 ]; then echo RUNNER_ARGS; printf "%s\\n" --seed "$SEED" $EXTRA; exit 0; fi; exit 9\n'
+
+
+def check_case(tmp_path, extra, out_exists=False):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    out = tmp_path / "out_a"
+    if out_exists:
+        out.mkdir()
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh")], env={"SEED": "1", "EXTRA": extra},
+                 retry_move=[str(out)])
+    return ib.check_runs([run], tmp_path / "runner.py")
+
+
+def test_a_list_whose_flags_the_runner_defines_passes(tmp_path):
+    assert check_case(tmp_path, "--scene-file x") == []
+
+
+def test_a_flag_the_snapshot_lacks_is_caught(tmp_path):
+    (problem,) = check_case(tmp_path, "--queue-resume-not-stopped")
+    assert "--queue-resume-not-stopped" in problem
+
+
+def test_an_existing_output_is_caught(tmp_path):
+    assert any("exists" in p for p in check_case(tmp_path, "", out_exists=True))
+
+
+def test_a_launcher_without_dry_run_output_is_caught(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    run = ib.Run(name="a", argv=["bash", "-c", "exit 0"])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "RUNNER_ARGS" in problem
+
+
+def test_the_check_command_exits_1_on_a_problem(tmp_path, capsys):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["bash", str(tmp_path / "launch.sh")],
+                                "env": {"SEED": "1", "EXTRA": "--nope"}}) + "\n")
+    assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 1
+    assert "--nope" in capsys.readouterr().out

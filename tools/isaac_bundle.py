@@ -1,6 +1,7 @@
 """Several Isaac runs in one Slurm job (docs/plans/2026-10-24-ws1-isaac-bundle.md): a run list, N slots, staggered starts.
 
-    sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) deploy/slurm/isaac_bundle.sbatch RUNS OUT
+    python3 tools/isaac_bundle.py check --list RUNS.jsonl --runner SNAP/sim/isaac/run_transport.py
+    sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) deploy/slurm/isaac_bundle.sbatch RUNS OUT KIND
     python3 tools/isaac_bundle.py --list RUNS.jsonl --out OUT [--slots N] [--shards N] [--stagger-s 60]
         [--session-vram-mib 3950] [--run-timeout-s S] [--grace-s 110] [--retries 1] [--pace-floor R]
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
@@ -183,6 +184,39 @@ def load_runs(path) -> list[Run]:
             raise ValueError(f"line {n}: pace_log must be a string")
         runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, **lists))
     return runs
+
+
+def defined_flags(script) -> set:
+    """The --flags a Python script defines (argparse add_argument("--x", ...) and the like, read from its source)."""
+    return set(re.findall(r"""["'](--[A-Za-z0-9][A-Za-z0-9_-]*)["']""", Path(script).read_text()))
+
+
+def check_runs(runs, runner) -> list[str]:
+    """Problems found before a submission: a run whose output (retry_move) already exists, a launcher whose DRY_RUN
+    fails or prints no runner arguments, and runner arguments whose --flags `runner` does not define (an option the
+    snapshot's code does not have fails only once the job runs). Each launcher is run with DRY_RUN=1 in its cwd."""
+    known = defined_flags(runner)
+    problems = []
+    for run in runs:
+        r = run.at(1)
+        for path in r.retry_move:
+            if os.path.lexists(path):
+                problems.append(f"{r.name}: {path} exists")
+        env = {**os.environ, **r.env, "DRY_RUN": "1"}
+        try:
+            p = subprocess.run(r.argv, cwd=r.cwd, env=env, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as exc:
+            problems.append(f"{r.name}: DRY_RUN did not run ({exc})")
+            continue
+        if p.returncode != 0 or "RUNNER_ARGS" not in p.stdout:
+            problems.append(f"{r.name}: DRY_RUN exit {p.returncode}, no RUNNER_ARGS line (the launcher must print "
+                            "its runner's arguments after RUNNER_ARGS, as deploy/riibotics/riib_scene.sbatch does)")
+            continue
+        args = p.stdout.split("RUNNER_ARGS", 1)[1].split()
+        unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
+        if unknown:
+            problems.append(f"{r.name}: {runner} does not define {unknown}")
+    return problems
 
 
 def job_gpu_index(env) -> int | None:
@@ -977,6 +1011,17 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["check"]:
+        cp = argparse.ArgumentParser(prog="isaac_bundle.py check",
+                                     description="check a run list before submitting it (see check_runs)")
+        cp.add_argument("--list", required=True)
+        cp.add_argument("--runner", required=True, help="the snapshot's runner, e.g. SNAP/sim/isaac/run_transport.py")
+        a = cp.parse_args(argv[1:])
+        problems = check_runs(load_runs(a.list), a.runner)
+        for line in problems:
+            print(line)
+        print(f"{len(problems)} problems")
+        return 1 if problems else 0
     if argv[:1] == ["sizes"]:
         sp = argparse.ArgumentParser(prog="isaac_bundle.py sizes",
                                      description="sbatch options for a bundle of measured session kinds")
