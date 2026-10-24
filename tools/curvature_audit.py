@@ -100,6 +100,9 @@ def audit(runs, response: CurvatureResponse) -> dict:
                        # the installed straight's own leg: it ended in the insertion (measured) or before it
                        "leg_good": bool(st.get("insertion_measured")), "leg_end": (
                            "insertion" if st.get("insertion_measured") else f"stopped in {tf_phase or outcome}")}
+                # the record's own acceptance needs no replay: judged first so an unverified leg still counts in N
+                row["recorded_ok"] = (dry.get("status") == "arrived" and dry.get("position_error_m", 1) <= 0.006
+                                      and abs(dry.get("yaw_error_rad", 1)) <= 0.015)
                 approach = (st.get("paths") or {}).get("approach")
                 traj = dry.get("trajectory") or []
                 if "approach" not in configs:
@@ -109,8 +112,6 @@ def audit(runs, response: CurvatureResponse) -> dict:
                 else:
                     cfg, start, arrays = tracker_config(configs["approach"]), np.asarray(traj[0], float), path_arrays(approach)
                     ideal = bicycle_rollout(*arrays, cfg, start)
-                    row["recorded_ok"] = (dry.get("status") == "arrived" and dry.get("position_error_m", 1) <= 0.006
-                                          and abs(dry.get("yaw_error_rad", 1)) <= 0.015)
                     if not same(ideal, dry):
                         row["why"] = "r = 1 does not reproduce the record"
                     else:

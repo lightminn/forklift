@@ -229,9 +229,11 @@ def test_a_mixed_gear_path_takes_each_legs_factor():
     curvatures = np.concatenate((fwd[2], rev[2][1:]))
     ideal = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0))
     forward_only = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0),
-                                   curvature_response=CurvatureResponse(0.9, 1.0))
+                                   curvature_response=CurvatureResponse(0.95, 1.0))
     reverse_only = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0),
-                                   curvature_response=CurvatureResponse(1.0, 0.9))
+                                   curvature_response=CurvatureResponse(1.0, 0.95))
+    # both factors small enough that every rollout drives both legs to the end of the path
+    assert ideal.status == forward_only.status == reverse_only.status == "arrived"
     assert ideal.trajectory != forward_only.trajectory and ideal.trajectory != reverse_only.trajectory
     assert forward_only.trajectory != reverse_only.trajectory
 
