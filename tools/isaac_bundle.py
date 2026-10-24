@@ -64,11 +64,13 @@ configuration.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -208,6 +210,37 @@ def node_available_mib():
     except (OSError, ValueError):
         return None
     return None
+
+
+class NodeLedger:
+    """Node-wide RAM reservations for starts that have not grown into their memory yet, shared by every bundle job on
+    the node through a directory under a file lock: a start is admitted while MemAvailable minus the live
+    reservations still holds one more session, and its reservation lasts hold_s (a session's memory grows over its
+    first minute)."""
+
+    def __init__(self, directory, hold_s=120.0):
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.hold_s = hold_s
+
+    def admit(self, key, need_mib, available) -> bool:
+        with open(self.dir / ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            now, reserved = time.time(), 0
+            for f in self.dir.glob("r-*"):
+                try:
+                    mib, until = (float(x) for x in f.read_text().split())
+                except (OSError, ValueError):
+                    continue
+                if until > now:
+                    reserved += mib
+                else:
+                    f.unlink(missing_ok=True)
+            avail = available()
+            if avail is not None and avail - reserved < need_mib:
+                return False
+            (self.dir / f"r-{key}").write_text(f"{need_mib} {now + self.hold_s}\n")
+            return True
 
 
 def visible_gpus(env) -> list[str]:
@@ -456,11 +489,12 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
-               node_ram=node_available_mib, claim_dir=None):
+               node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if claim_dir is not None:
         Path(claim_dir).mkdir(parents=True, exist_ok=True)
+    ledger = NodeLedger(node_ledger_dir or Path(out) / "node_ledger") if node_ram_min_mib is not None else None
     if (out / "results.jsonl").exists() or (out / "summary.json").exists():
         raise FileExistsError(f"{out} holds an earlier bundle")
     if slots < 1:
@@ -492,6 +526,24 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         records.append(rec)
         with results_path.open("a") as f:
             f.write(json.dumps(rec) + "\n")
+
+    def claimed_elsewhere(run, attempt):
+        """A first attempt another job has claimed (a retry belongs to the job that ran the first)."""
+        if claim_dir is None or attempt != 1:
+            return False
+        try:
+            return Path(claim_dir, run.name, "by").read_text().strip() != job_id
+        except OSError:
+            return os.path.isdir(os.path.join(claim_dir, run.name))  # claimed, owner not written yet
+
+    def drop_unstarted(status):
+        while queue:
+            index, run, attempt = queue.popleft()
+            if claimed_elsewhere(run, attempt):
+                st["claimed_elsewhere"] += 1
+                continue
+            record({"name": run.name, "index": index, "slot": None, "attempt": attempt, "status": status,
+                    "rc": None, "signal": None, "retried": False})
 
     def note_error(where, exc):
         st["errors"].append({"t": round(time.time(), 1), "where": where,
@@ -730,10 +782,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             if stop.is_set() and not stopping:
                 stopping = True
                 end_all(now)
-                while queue:
-                    index, run, attempt = queue.popleft()
-                    record({"name": run.name, "index": index, "slot": None, "attempt": attempt,
-                            "status": "not_started", "rc": None, "signal": None, "retried": False})
+                drop_unstarted("not_started")
             for r in live.values():
                 if r.exited is not None:
                     continue
@@ -749,28 +798,41 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             if pace_on and now >= st["pace_next"]:
                 st["pace_next"] = now + pace_period_s
                 evaluate_pace(now)
+            while queue and claimed_elsewhere(queue[0][1], queue[0][2]):  # before any wait: nothing to wait for
+                queue.popleft()
+                st["claimed_elsewhere"] += 1
             if (not stopping and queue and len(live) < min(slots, st["cap"])
                     and (st["last_start"] is None or now - st["last_start"] >= stagger_s)):
                 v = verdict(now)
-                if v in ("ok", "unreadable_go") and node_ram_min_mib is not None:
+                index, run, attempt = queue[0]
+                if v in ("ok", "unreadable_go") and ledger is not None:
                     # the node's own memory: Slurm reserves the cgroups, not the bridge containers or what others
-                    # run outside Slurm
-                    avail = node_ram()
-                    if avail is not None and avail < node_ram_min_mib:
+                    # run outside Slurm; the ledger keeps two jobs from both spending the same free memory
+                    if not ledger.admit(f"{job_id}-{index}-{attempt}-{nonce}", node_ram_min_mib, node_ram):
                         v = "node_ram"
                 if v in ("ok", "unreadable_go"):
                     st["waiting"] = None
                     if v == "unreadable_go":
                         st["unreadable_starts"] += 1
-                    index, run, attempt = queue.popleft()
-                    if attempt == 1 and claim_dir is not None:
-                        try:  # several bundle jobs share one list: the first to claim a run runs it
-                            os.mkdir(os.path.join(claim_dir, run.name))
-                        except FileExistsError:
-                            st["claimed_elsewhere"] += 1
-                            continue
-                        Path(claim_dir, run.name, "by").write_text(job_id + "\n")
-                    start(index, run, attempt)
+                    queue.popleft()
+                    mine = None
+                    try:
+                        if attempt == 1 and claim_dir is not None:
+                            try:  # several bundle jobs share one list: the first to claim a run runs it
+                                os.mkdir(os.path.join(claim_dir, run.name))
+                            except FileExistsError:
+                                st["claimed_elsewhere"] += 1
+                                continue
+                            mine = os.path.join(claim_dir, run.name)
+                            Path(mine, "by").write_text(job_id + "\n")
+                        start(index, run, attempt)
+                    except Exception as exc:  # noqa: BLE001 -- recorded; the claim goes back for another job
+                        note_error(f"start {run.name}", exc)
+                        if mine is not None:
+                            shutil.rmtree(mine, ignore_errors=True)
+                        record({"name": run.name, "index": index, "slot": None, "attempt": attempt,
+                                "status": "start_failed", "error": repr(exc), "rc": None, "signal": None,
+                                "retried": False})
                     continue
                 if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
                     st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1
@@ -809,10 +871,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             record({"name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
                     "status": "aborted", "rc": None, "signal": None, "retried": False,
                     "containers_removed": removed, "cleanup_error": cleanup_error})
-        for index, run, attempt in queue:
-            record({"name": run.name, "index": index, "slot": None, "attempt": attempt, "status": "not_started",
-                    "rc": None, "signal": None, "retried": False})
-        queue.clear()
+        drop_unstarted("not_started")
 
     final = [r for r in records if not r.get("retried")]  # the last attempt of each run
     failed = sum(1 for r in final if r["status"] == "infra_failed" or (r["status"] == "ended" and r["rc"] != 0))
@@ -865,6 +924,8 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=240.0)
     ap.add_argument("--pace-period-s", type=float, default=60.0)
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
+                    help="node-wide RAM reservations shared by this user's bundle jobs")
     ap.add_argument("--claim-dir", help="share the list with other bundle jobs: a run goes to the first to claim it")
     ap.add_argument("--node-ram-min-mib", type=int, default=KINDS["riib"]["session_gib"] * 1024 + BRIDGE_MIB,
                     help="start only while the node's MemAvailable is at least this (0: off)")
@@ -908,6 +969,7 @@ def main(argv=None) -> int:
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
+        node_ledger_dir=a.node_ledger_dir,
     )
     print(json.dumps(summary))
     return summary["exit_code"]

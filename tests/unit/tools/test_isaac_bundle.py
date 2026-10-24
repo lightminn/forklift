@@ -673,3 +673,54 @@ def test_bundles_sharing_a_claim_dir_run_each_run_once(tmp_path):
     assert outs["j1"]["runs"] + outs["j2"]["runs"] == 6
     assert outs["j1"]["exit_code"] == 0 and outs["j2"]["exit_code"] == 0
     assert {(claim / n / "by").read_text().strip() for n in names} <= {"j1", "j2"}
+
+
+# --- Codex round 6 counterexamples -------------------------------------------------------------------------------------
+
+
+def test_the_node_ledger_does_not_admit_the_same_free_memory_twice(tmp_path):
+    a = ib.NodeLedger(tmp_path / "ledger")
+    b = ib.NodeLedger(tmp_path / "ledger")  # another job on the node
+    assert a.admit("j1-0", 6344, lambda: 7000) is True
+    assert b.admit("j2-0", 6344, lambda: 7000) is False  # 7,000 - 6,344 reserved < 6,344
+    assert b.admit("j2-0", 6344, lambda: 14000) is True
+
+
+def test_a_reservation_expires(tmp_path):
+    led = ib.NodeLedger(tmp_path / "ledger", hold_s=0.1)
+    assert led.admit("x", 6000, lambda: 7000)
+    time.sleep(0.15)
+    assert led.admit("y", 6000, lambda: 7000)
+
+
+def test_a_claimed_run_that_cannot_start_is_recorded(tmp_path):
+    claim = tmp_path / "claims"
+    bad = ib.Run(name="a", argv=[str(tmp_path / "no_such_program")])
+    summary = bundle(tmp_path, [bad], claim_dir=claim)
+    r = results(tmp_path)["a"]
+    assert r["status"] == "start_failed" and summary["not_started"] == 1 and summary["exit_code"] == 1
+
+
+def test_a_stop_does_not_count_runs_another_job_claimed(tmp_path):
+    claim = tmp_path / "claims"
+    (claim / "b").mkdir(parents=True)
+    (claim / "b" / "by").write_text("other\n")
+    stop = threading.Event()
+    threading.Timer(0.2, stop.set).start()
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 2.0), stamp_run("b", tmp_path, 0.05),
+                                stamp_run("c", tmp_path, 0.05)], slots=1, claim_dir=claim, stop=stop)
+    r = results(tmp_path)
+    assert "b" not in r and r["c"]["status"] == "not_started"
+    assert summary["claimed_elsewhere"] == 1 and summary["not_started"] == 1
+
+
+def test_runs_claimed_elsewhere_are_skipped_before_any_wait(tmp_path):
+    claim = tmp_path / "claims"
+    for n in ("a", "b"):
+        (claim / n).mkdir(parents=True)
+        (claim / n / "by").write_text("other\n")
+    t0 = time.monotonic()
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.05)], slots=1,
+                     claim_dir=claim, node_ram_min_mib=6344, node_ram=lambda: 100)  # the node is full
+    assert summary["claimed_elsewhere"] == 2 and summary["runs"] == 0 and summary["exit_code"] == 0
+    assert time.monotonic() - t0 < 2
