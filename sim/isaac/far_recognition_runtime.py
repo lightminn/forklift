@@ -391,7 +391,10 @@ class FarRuntime:
                    stamp_ns=rel_ns, odom=np.asarray(odom_base, float), control_base=np.asarray(control_base, float),
                    **self._intrinsics_arrays(scene.intrinsics, scene.base_from_optical), **self._learned_arrays(scene))
         obs = replace(obs, stamp_ns=int(scene_input.stamp_ns), clock_domain=scene_input.clock_domain)
+        occupancy = ((rec.get("stop") or {}).get("decision") or {}).get("occupancy")
         rec = {k: v for k, v in rec.items() if k != "stop"}
+        if occupancy is not None:  # what the occupancy exclusion removed and its inequality (plan O1 record)
+            rec["occupancy"] = occupancy
         rec["leg"], rec["drive_frames"] = self.leg, sum(1 for r in self.frame_records if r["leg"] == self.leg
                                                         and "skipped" not in r and r.get("kind") != "stop")
         used_yaw = rec["used"]["insertion_yaw_rad"] if rec.get("used") else 0.0

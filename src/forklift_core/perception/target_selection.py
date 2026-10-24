@@ -116,6 +116,15 @@ def _could_be_inside(c, target, radius) -> bool:
     return np.linalg.norm(np.asarray(c.observed_centre_xy) - target) - c.observed_extent_m <= radius + MAX_HALF_DIAGONAL_M
 
 
+def check_occupancy_margin(margin_m) -> float:
+    """A margin is finite and not negative: a negative one loosens the inequality and NaN passes its comparison
+    (Codex implementation review 2026-10-24 P2)."""
+    m = float(margin_m)
+    if not math.isfinite(m) or m < 0:
+        raise ValueError(f"occupancy margin must be finite and not negative, got {margin_m!r}")
+    return m
+
+
 def _unresolved_inside(f, target, radius) -> bool:
     """An unfitted object's centre could lie inside: its nearest visible point within radius + the largest
     half-diagonal, or its position unknown."""
@@ -164,6 +173,8 @@ def select_target(candidates, instruction, *, reachable=None, unresolved=(), occ
     so the robot looks again (Codex 2026-10-16). Uncertain candidates are treated the same way and
     the layer filter applies to confirmed fits only: an uncertain candidate can sit on any layer.
     occupancy_margin_m: the floor contract's occupancy exclusion (_occupied) with this centre margin; None is off."""
+    if occupancy_margin_m is not None:
+        check_occupancy_margin(occupancy_margin_m)
     if instruction.get("present") and occupancy_margin_m is not None:
         first = select_target(candidates, instruction, reachable=reachable, unresolved=unresolved)
         if first.status != "reobserve":

@@ -20,7 +20,7 @@ from forklift_core.perception.candidate_tracking import CandidateTracker, Frame
 from forklift_core.perception.instance_fit import SceneFit, fit_scene
 from forklift_core.perception.instance_proposals import InstanceProposal
 from forklift_core.perception.pocket_observation import Pocket, PocketObservation
-from forklift_core.perception.target_selection import select_target
+from forklift_core.perception.target_selection import check_occupancy_margin, select_target
 
 PROVENANCE = "synthetic"  # an Isaac render, as the detector's observations are
 
@@ -128,7 +128,8 @@ class FarRecognition:
         self.clock_domain = clock_domain
         self.proposer = proposer or (lambda scene, ids: (proposals_from_ids(ids), ()))
         self.identity_threshold = identity_threshold
-        self.occupancy_margin_m = occupancy_margin_m  # None: the floor contract's exclusion is off
+        # None: the floor contract's exclusion is off; a given margin is checked at construction
+        self.occupancy_margin_m = None if occupancy_margin_m is None else check_occupancy_margin(occupancy_margin_m)
         self.last_proposals: list = []
         self.start_leg()
 

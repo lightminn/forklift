@@ -283,3 +283,11 @@ def test_two_identified_fits_behind_an_unfitted_object_are_not_resolved_by_occup
     s = select_target([_c("a", 3.0, 0.0), _c("b", 3.0, 0.1)], _instr(3.0, 0.05, r=0.1), unresolved=unfitted,
                       occupancy_margin_m=0.05)
     assert s.status == "reobserve" and "unresolved_in_radius" in s.reasons
+
+
+@pytest.mark.parametrize("margin", [-0.2, float("nan"), float("inf")])
+def test_an_occupancy_margin_must_be_finite_and_not_negative(margin):
+    """Codex implementation review 2026-10-24 P2: a negative or NaN margin loosened the inequality (NaN passes
+    slack <= 0) and selected an ambiguous instruction."""
+    with pytest.raises(ValueError):
+        select_target([_c("a", 3.0, 0.0), _neighbour_behind()], _instr(3.0, 0.0, r=0.354), occupancy_margin_m=margin)

@@ -160,6 +160,28 @@ def test_the_recompute_closes_every_saved_frame(tmp_path, monkeypatch):
     assert opened and all(z.fid is None for z in opened)
 
 
+def test_a_stop_decided_by_occupancy_keeps_its_detail_in_the_attempt(monkeypatch):
+    """Codex implementation review 2026-10-24 P3: the attempt record dropped the stop block and with it what the
+    exclusion removed and its inequality."""
+    from forklift_core.perception import recognition_bridge as B
+    from forklift_core.perception.target_selection import Selection
+
+    orig = B.select_target
+
+    def occupied(*a, **kw):
+        s = orig(*a, **kw)
+        return Selection(s.status, s.candidate_id, s.reasons + ("occupancy_excluded",), {"excluded": ["l2"], "slack_m": 0.01})
+
+    monkeypatch.setattr(B, "select_target", occupied)
+    xs = _leg()
+    run = _runtime(lag_steps=11, occupancy_margin_m=0.05)
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    attempt = run.attempts[-1]
+    assert "occupancy_excluded" in attempt["reasons"] and attempt["occupancy"] == {"excluded": ["l2"], "slack_m": 0.01}
+    assert "stop" not in attempt
+
+
 def test_a_frame_before_the_cameras_first_render_is_skipped():
     run = _runtime()
     run.record_step(24, 24 * DT, (0, 0, 0), (0, 0, 0), PALLET)
