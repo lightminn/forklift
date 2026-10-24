@@ -197,7 +197,10 @@ def extract(run_dirs) -> list:
                     continue
                 later = [e for e in retries[k + 1:]]
                 nxt = next((e for e in later if e.get("counted")), None)
-                between = [e for e in later if not e.get("counted") and (nxt is None or e["time_s"] < nxt["time_s"])]
+                # only an obstacle replan changes the path on the way; an "a" is a stand at the docking stop that
+                # docks there (core D7c (a)), an arrival (Codex plan round 7 P2)
+                between = [e for e in later if not e.get("counted") and e.get("trigger") == "obstacle_replan"
+                           and (nxt is None or e["time_s"] < nxt["time_s"])]
                 after = [x for x in replaced if x["time_s"] > ev["time_s"] + 1e-9]
                 path = after[0]["path"] if after else (st.get("paths") or {}).get("transport")
                 by = after[0]["by"] if after else None
