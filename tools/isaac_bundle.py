@@ -51,6 +51,10 @@ percentile tick gap. When the median of those ratios falls below --pace-floor, o
 (running - 1) run -- one step back -- and waits a window before it steps back again. OUT/pace.jsonl keeps every
 evaluation, runs it could not measure included.
 
+Several bundle jobs can share one list (--claim-dir): each run is claimed with an atomic mkdir before its first
+attempt, so a job with a free slot takes the next unclaimed run and the jobs' last waves end together instead of one
+job holding its GPU for a single straggler.
+
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
 with the code of what it ran. Exit 0 when every run's last attempt exited 0, 1 otherwise, 2 for a refused
@@ -452,9 +456,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
-               node_ram=node_available_mib):
+               node_ram=node_available_mib, claim_dir=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
+    if claim_dir is not None:
+        Path(claim_dir).mkdir(parents=True, exist_ok=True)
     if (out / "results.jsonl").exists() or (out / "summary.json").exists():
         raise FileExistsError(f"{out} holds an earlier bundle")
     if slots < 1:
@@ -477,7 +483,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
-          "node_ram_waits": 0}
+          "node_ram_waits": 0, "claimed_elsewhere": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
     results_path, vram_path, pace_path = out / "results.jsonl", out / "vram.jsonl", out / "pace.jsonl"
@@ -757,6 +763,13 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                     if v == "unreadable_go":
                         st["unreadable_starts"] += 1
                     index, run, attempt = queue.popleft()
+                    if attempt == 1 and claim_dir is not None:
+                        try:  # several bundle jobs share one list: the first to claim a run runs it
+                            os.mkdir(os.path.join(claim_dir, run.name))
+                        except FileExistsError:
+                            st["claimed_elsewhere"] += 1
+                            continue
+                        Path(claim_dir, run.name, "by").write_text(job_id + "\n")
                     start(index, run, attempt)
                     continue
                 if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
@@ -805,10 +818,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     failed = sum(1 for r in final if r["status"] == "infra_failed" or (r["status"] == "ended" and r["rc"] != 0))
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted"))
     summary = {
-        "runs": len(runs), "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
+        "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
-        "node_ram_waits": st["node_ram_waits"],
+        "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"],
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
         "cpus": cpus, "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
@@ -852,6 +865,7 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=240.0)
     ap.add_argument("--pace-period-s", type=float, default=60.0)
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    ap.add_argument("--claim-dir", help="share the list with other bundle jobs: a run goes to the first to claim it")
     ap.add_argument("--node-ram-min-mib", type=int, default=KINDS["riib"]["session_gib"] * 1024 + BRIDGE_MIB,
                     help="start only while the node's MemAvailable is at least this (0: off)")
     ap.add_argument("--no-vram", action="store_true", help="no GPU memory samples and no memory gate (slots only)")
@@ -893,7 +907,7 @@ def main(argv=None) -> int:
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
-        gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None,
+        gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
     )
     print(json.dumps(summary))
     return summary["exit_code"]

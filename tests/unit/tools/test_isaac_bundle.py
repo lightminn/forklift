@@ -649,3 +649,27 @@ def test_a_start_waits_for_the_node_s_memory(tmp_path):
     summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, node_ram_min_mib=6344,
                      node_ram=lambda: next(avail))
     assert summary["node_ram_waits"] == 1 and summary["failed"] == 0
+
+
+def test_bundles_sharing_a_claim_dir_run_each_run_once(tmp_path):
+    names = [f"r{i}" for i in range(6)]
+    claim = tmp_path / "claims"
+    outs = {}
+
+    def one(tag):
+        runs = [stamp_run(n, tmp_path, 0.2) for n in names]
+        outs[tag] = ib.run_bundle(runs, tmp_path / f"out_{tag}", slots=2, stagger_s=0.0, grace_s=1.0, poll_s=0.02,
+                                  job_id=tag, cpus=[0], cleanup=lambda sid: [], leftover_grace_s=1.0,
+                                  oom_counter=None, claim_dir=claim)
+
+    threads = [threading.Thread(target=one, args=(t,)) for t in ("j1", "j2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    ran = [json.loads(x)["name"] for t in ("j1", "j2")
+           for x in (tmp_path / f"out_{t}" / "results.jsonl").read_text().splitlines()]
+    assert sorted(ran) == names  # every run once, across the two jobs
+    assert outs["j1"]["runs"] + outs["j2"]["runs"] == 6
+    assert outs["j1"]["exit_code"] == 0 and outs["j2"]["exit_code"] == 0
+    assert {(claim / n / "by").read_text().strip() for n in names} <= {"j1", "j2"}
