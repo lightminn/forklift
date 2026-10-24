@@ -136,7 +136,7 @@
 
 - 크기는 `python3 tools/isaac_bundle.py sizes <live|riib|bd> [--slots N]` 가 계산해 sbatch 옵션으로 찍는다(세션 수에 비례: 세션 수 × 세션 RAM + 공유 파일 1.5 GiB + 여유 0.5 GiB, 코어 2/세션, shard 1/세션).
 - RAM 은 cgroup 의 anon 기준이다. `memory.peak`·sacct MaxRSS(이 노드는 `jobacct_gather/cgroup` 이라 cgroup 값과 같다)에는 회수되는 파일 캐시가 들어 있다. riib 3 세션 묶음은 peak 20.0–20.5 GiB 중 anon 이 17.8 GiB 였다.
-- SLAM 브리지 컨테이너(세션당 123–133 MiB)는 Slurm 밖이다. 실행기는 새 세션을 시작하기 전에 노드의 MemAvailable 이 세션 하나 + 브리지(기본 6,344 MiB) 이상인지 본다(`--node-ram-min-mib`). Slurm 예약을 줄여 잡이 늘어도 노드 실메모리가 넘치지 않게 하려는 것이다.
+- SLAM 브리지 컨테이너는 Slurm 밖이다. 세션당 0.12–0.74 GiB 이고, 시범 16 개 중 최대가 0.74 GiB 였다. 실행기는 새 세션을 시작하기 전에 노드의 MemAvailable 이 세션 하나 + 브리지(기본 6 GiB + 760 MiB = 6,904 MiB) 이상인지 본다(`--node-ram-min-mib`). Slurm 예약을 줄여 잡이 늘어도 노드 실메모리가 넘치지 않게 하려는 것이다.
 - 같은 cgroup 안 세션들은 Isaac 라이브러리 페이지 캐시를 한 번만 센다. 그래서 4 × MaxRSS 는 실제 묶음 최대보다 크다(시범이 묶음 `memory.peak` 로 확인한다).
 - 노드로 보면 live 묶음 2 개 = CPU 16·shard 8·mem 48G 로 **8 세션**이다. 지금은 4 세션이 CPU 16·shard 8·mem 32G 를 쓴다.
 - 묶음 둘이 돌면 노드 예약이 거의 찬다(남는 것 CPU 4·mem 8,848 MiB ≈ 8.6 GiB). 팀원 잡이나 큰 메모리 잡이 대기 중이면 묶음 하나만 내고 나머지는 단독으로 둔다.

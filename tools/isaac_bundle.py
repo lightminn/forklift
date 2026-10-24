@@ -106,7 +106,7 @@ KINDS = {
 }
 SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
 MARGIN_GIB = 0.5
-BRIDGE_MIB = 200  # a SLAM bridge container, outside the job's cgroup: 123-133 MiB measured
+BRIDGE_MIB = 760  # a SLAM bridge container, outside the job's cgroup: 0.12-0.74 GiB measured (se* pilot, 16 bridges)
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 
