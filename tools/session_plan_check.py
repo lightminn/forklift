@@ -4,7 +4,7 @@
 A session scene (tools/riibotics_isaac_scenes.py --session) is planned mission after mission in its file's order, as an
 Isaac run would plan it with ideal estimates and deliveries: each mission starts from the session's start and returns
 there; the pallets carried before stand delivered at their slots (uncertainty 0.21 m); the others are prior pallets the
-planner holds at their drawn slots + D1 (0.25 m, session_pallet_props). The observation leg plans on the mission
+planner holds at their drawn slots + D1 (SESSION_PRIOR_GROW_M, session_pallet_props). The observation leg plans on the mission
 pallet's zone, the rest on its truth (as tools/riibotics_isaac_scenes.plan_scene). Then every planned pose's outline
 (the planner's footprint, empty or loaded by stage) is measured against the pallets' truth outlines, between poses too:
 
@@ -24,7 +24,7 @@ the continuous lower bound (sampled minimum - h/2) reaches 0 even with h = 0.5 m
 A mission runs only if every earlier one planned and passed (else prior_failed): "the file's order, full returns,
 ideal deliveries" -- not a run's outcome.
 
-    python tools/session_plan_check.py SESSION.json --out RESULT.json [--prior-grow-m 0.25]
+    python tools/session_plan_check.py SESSION.json --out RESULT.json [--prior-grow-m D1]
 """
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ from forklift_core.planning.pallet_mission import (  # noqa: E402
     plan_observation_leg,
     plan_transport,
 )
-from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M, session_pallet_props  # noqa: E402
+from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M, SESSION_PRIOR_GROW_M, session_pallet_props  # noqa: E402
 
 URDF = ROOT / "sim/models/dls08_measured/forklift.urdf"
 STRAIGHTS = {"alignment_straight_m": 2.1, "delivery_straight_m": 1.5, "withdrawal_m": 0.55}
@@ -204,13 +204,13 @@ def _rect(site, pallet) -> Rectangle:
                      float(site.yaw_rad))
 
 
-def check_session(path: Path, *, prior_grow_m: float = 0.25, planner=None) -> dict:
+def check_session(path: Path, *, prior_grow_m: float = SESSION_PRIOR_GROW_M, planner=None, kappa: float = KAPPA) -> dict:
     """``planner``: (plan_observation_leg, plan_transport) stand-ins for tests."""
     observe_planner, transport_planner = planner or (plan_observation_leg, plan_transport)
     session = load_session(path)
     pallet = load_pallet_geometry(PALLETS[session.pallet])
     geometry = mission_geometry(URDF, pallet, RESERVE_M, **STRAIGHTS)
-    config = make_transport_planner_config(curvature_limit_inv_m=KAPPA, clearance_m=CLEARANCE_M,
+    config = make_transport_planner_config(curvature_limit_inv_m=kappa, clearance_m=CLEARANCE_M,
                                            max_expansions=MAX_EXPANSIONS, **D7_PLANNER_OPTIONS)
     targets = TargetsBook()
     register_session(targets, session, kind=session.pallet, depth_m=pallet.overall_depth_m,
@@ -218,7 +218,7 @@ def check_session(path: Path, *, prior_grow_m: float = 0.25, planner=None) -> di
     nominal = {p.pallet_id: (p.nominal.x_m, p.nominal.y_m, p.nominal.yaw_rad) for p in session.pallets}
     shape = (pallet.overall_depth_m, pallet.overall_width_m, pallet.overall_height_m)
     result = {"session": session.name, "session_sha256": session.sha256, "prior_grow_m": prior_grow_m,
-              "settings": {"urdf": str(URDF.relative_to(ROOT)), "reserve_m": RESERVE_M, **STRAIGHTS, "kappa": KAPPA,
+              "settings": {"urdf": str(URDF.relative_to(ROOT)), "reserve_m": RESERVE_M, **STRAIGHTS, "kappa": kappa,
                            "clearance_m": CLEARANCE_M, "max_expansions": MAX_EXPANSIONS,
                            "d7_options": {k: v for k, v in D7_PLANNER_OPTIONS.items()},
                            "step_m": STEP_M, "fine_step_m": FINE_STEP_M},
@@ -305,9 +305,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("session", type=Path)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--prior-grow-m", type=float, default=0.25)
+    ap.add_argument("--prior-grow-m", type=float, default=SESSION_PRIOR_GROW_M)
+    ap.add_argument("--kappa", type=float, default=KAPPA, help="the planner curvature limit (1/m)")
     args = ap.parse_args(argv)
-    result = check_session(args.session, prior_grow_m=args.prior_grow_m)
+    result = check_session(args.session, prior_grow_m=args.prior_grow_m, kappa=args.kappa)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1, default=float) + "\n")
     for m in result["missions"]:

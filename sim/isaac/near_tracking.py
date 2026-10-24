@@ -1098,6 +1098,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "recognition_providers": "CPUExecutionProvider",
                               "recognition_timeout_s": 10.0, "recognition_threads": 4,
                               "recognition_device_id": 0,
+                              # 2026-10-24: the far target's occupancy exclusion (a far run only, refused with near
+                              # tracking; docs/plans/2026-10-24-far-target-occupancy.md)
+                              "recognition_occupancy_margin_m": 0.05,
                               # 2026-10-20: the bottom-deck side evidence (docs/plans/2026-10-19-bottom-deck-side-
                               # evidence.md); off reproduces every earlier record, on is a condition of its own.
                               "bottom_deck_check": "off",
@@ -1118,6 +1121,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "docking_acceptance": "information",
                               # 2026-10-23 scene replan plan 4: the diagnostic control-pose shift at a cusp; off before.
                               "inject_cusp_offset_m": None,
+                              # 2026-10-24 leg-end plan 3: the diagnostic observe-end shift and return stall budget.
+                              "inject_observe_end_offset_m": None, "diag_return_stall_budget": None,
                               # 2026-10-24 P6: the permission-stop replan; a scene layout's only, so on reproduces
                               # every earlier (bay layout) measurement run.
                               "permit_stop_replan": "on",

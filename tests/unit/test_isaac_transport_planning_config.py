@@ -190,8 +190,11 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # when that leg stays blocked, and its zero-clearance retry. Plan 2026-10-19 task 4 adds
     # the bottom-deck side leg (to its stand, a retake's retreat point or the return to the far stand)
     # and its zero-clearance retry; the mission is planned after the re-observation, as always. The scene replan
-    # plan 2.3 adds a scene's first far observation stall taking the next candidate.
+    # plan 2.3 adds a scene's first far observation stall taking the next candidate. The leg-end plan's O1
+    # (docs/plans/2026-10-24-leg-end-budget-stands.md) adds the first far observation's final-goal stand, planned again
+    # to the same target as the observe replan.
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",

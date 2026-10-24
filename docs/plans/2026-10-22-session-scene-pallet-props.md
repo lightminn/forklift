@@ -1,6 +1,6 @@
 # 세션 장면 형식·공통 팔레트 장애물·계획 포락선 대조 — 연속 이송 CT-1 PR ② (4판)
 
-브랜치 `feat/ct1-session-scene`(origin/main `cbe2d8b` = PR #97·#98 머지 뒤). 상위 계획 `docs/plans/2026-10-22-continuous-transport-ct1.md` 3절 PR ②. 사용자 결정 D1 = (가): 아직 인식하지 않은 이웃 팔레트는 공칭 외곽 + 0.25 m 다. 이 값은 경로 존재 상한일 뿐이고, 실차 SLAM 오차를 실측한 뒤 다시 정하는 임시값이다.
+브랜치 `feat/ct1-session-scene`(origin/main `cbe2d8b` = PR #97·#98 머지 뒤). 상위 계획 `docs/plans/2026-10-22-continuous-transport-ct1.md` 3절 PR ②. 사용자 결정 D1 = (가): 아직 인식하지 않은 이웃 팔레트는 공칭 외곽 + 0.25 m 다(작성 당시. 2026-10-24 에 0.20 m 로 개정 — CT-1 계획 D1 개정, 아래의 0.25 는 이 계획을 쓸 때의 값이다). 이 값은 경로 존재 상한일 뿐이고, 실차 SLAM 오차를 실측한 뒤 다시 정하는 임시값이다.
 
 ## 1. 사실 (소스)
 
@@ -106,7 +106,7 @@
 순수 함수이고 위치는 `pallet_permit.py` 옆이다.
 
 - 이웃 팔레트를 계획 소품(PlacedProp, 높이 = 팔레트 높이)으로 돌려준다.
-  - 사전: 그 팔레트 `nominal` 외곽 + `prior_grow_m`(D1 0.25).
+  - 사전: 그 팔레트 `nominal` 외곽 + `prior_grow_m`(D1, 작성 당시 0.25; 2026-10-24 부터 0.20 — CT-1 계획 D1 개정).
   - 인식·하역: targets 자세 외곽 + 불확실도(없으면 0.21).
   - 운반 중·자세 없음과 `exclude_id` 는 뺀다.
 - `moved`·`moved_ids`: 프레임 변경은 `moved_ids` 에 든 id 만 받는다.
@@ -133,7 +133,7 @@ CPU 에서 돈다.
   - 결과 이름은 "지정 순서·완전 복귀·이상적 하역의 미션 열" 이다.
 - **미션 k 의 상태**: 앞 팔레트는 칸 자세에 delivered(불확실도 0.21), 나머지는 prior 다.
   - 관측의 미션 팔레트는 구역 충돌 사각형이고, 그 뒤 계획의 추정은 truth 다(지금 `plan_scene` 과 같음).
-  - 소품 = static + `session_pallet_props`(D1 0.25).
+  - 소품 = static + `session_pallet_props`(D1, 작성 당시 0.25; 지금 0.20).
 - **단계표**:
 
 | 단계 | 외곽 | 미션 팔레트 | 이웃 |

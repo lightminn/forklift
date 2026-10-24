@@ -183,7 +183,11 @@ def run_cases() -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", default=None)
+    parser.add_argument("--kappa", type=float, default=None,
+                        help="the measured chassis planner's curvature limit (1/m; default 0.29; arm B of the curvature plan)")
     args = parser.parse_args(argv)
+    if args.kappa is not None:
+        PLANNER_CURVATURE["M"] = args.kappa
     rows = run_cases()
     print(
         f"{'def':>10} {'basis':>5} {'case':>4} {'plan':>4} {'goal x':>7} {'status':>16} "

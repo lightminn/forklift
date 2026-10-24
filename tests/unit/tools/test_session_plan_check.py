@@ -155,7 +155,7 @@ def test_a_failed_mission_stops_the_order_and_a_passed_one_delivers_its_pallet(t
     # the second mission sees the first pallet at its slot (15, 0), not where it stood
     second = out["missions"][1]["stages"]["observe"]["all"]["P-1"]
     assert second["min_m"] > 5.0
-    assert out["settings"]["kappa"] == C.KAPPA and out["prior_grow_m"] == 0.25
+    assert out["settings"]["kappa"] == C.KAPPA and out["prior_grow_m"] == C.SESSION_PRIOR_GROW_M == 0.20
 
 
 def test_a_loaded_leg_is_judged_with_the_loaded_outline(tmp_path):

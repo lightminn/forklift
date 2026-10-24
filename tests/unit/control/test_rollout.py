@@ -167,3 +167,84 @@ def test_a_slow_reverse_leg_still_approaching_at_the_budgets_end_is_not_a_goal_s
     out = leg_prefix_rollout(*path, slow, start, start_leg=2, prefix_m=3.0)
     assert out.status == "arrived"
     assert GOAL_STALL_REMAINING_M == 1e-4
+
+
+# --- the curvature response (docs/plans/2026-10-24-curvature-response.md arm A) ----------------------------------
+
+def _arc(radius=3.0, angle=0.6, step=0.02, direction=1):
+    n = int(round(radius * angle / step)) + 1
+    th = np.linspace(0.0, angle, n)
+    poses = np.column_stack((radius * np.sin(th), radius * (1 - np.cos(th)), th))
+    return poses, np.full(n, direction, np.int8), np.full(n, 1.0 / radius)
+
+
+ARC_CONFIG = TrackerConfig(cruise_speed_mps=0.3, max_curvature_inv_m=0.36, max_acceleration_mps2=0.3,
+                           lookahead_m=0.28, position_tolerance_m=0.008, yaw_tolerance_rad=0.02, stop_speed_mps=0.012)
+
+
+def test_without_a_response_the_rollout_is_the_ideal_one_bit_for_bit():
+    from forklift_core.control.rollout import CurvatureResponse
+
+    ideal = bicycle_rollout(*_arc(), ARC_CONFIG, (0.0, 0.0, 0.0))
+    for unit in (None, CurvatureResponse(1.0, 1.0)):
+        again = bicycle_rollout(*_arc(), ARC_CONFIG, (0.0, 0.0, 0.0), curvature_response=unit)
+        assert again == ideal
+
+
+def test_a_forward_shortfall_realises_less_turn_and_the_tracker_compensates_up_to_its_cap():
+    from forklift_core.control.rollout import CurvatureResponse
+
+    ideal = bicycle_rollout(*_arc(), ARC_CONFIG, (0.0, 0.0, 0.0))
+    short = bicycle_rollout(*_arc(), ARC_CONFIG, (0.0, 0.0, 0.0), curvature_response=CurvatureResponse(0.88, 1.0))
+    # the arc's 1/3 needs 0.379 commanded at 0.88: above the 0.36 cap, so it cannot be held
+    assert ideal.status == "arrived"
+    assert short.status != "arrived" or abs(short.yaw_error_rad) > abs(ideal.yaw_error_rad)
+
+
+def _reverse_arc():
+    # the forward arc traversed backwards: the rear axle moves against its heading, the heading unwinding
+    poses, _, curvatures = _arc()
+    poses = poses[::-1].copy()
+    return poses, np.full(len(poses), -1, np.int8), curvatures[::-1].copy()
+
+
+def test_the_response_is_chosen_by_the_gear_of_each_step():
+    from forklift_core.control.rollout import CurvatureResponse
+
+    path = _reverse_arc()
+    start = tuple(path[0][0])
+    ideal = bicycle_rollout(*path, ARC_CONFIG, start)
+    assert ideal.status == "arrived"  # a real reverse leg, driven to its end
+    # the forward factor never touches a reverse step; the reverse factor does
+    assert bicycle_rollout(*path, ARC_CONFIG, start, curvature_response=CurvatureResponse(0.5, 1.0)) == ideal
+    assert bicycle_rollout(*path, ARC_CONFIG, start, curvature_response=CurvatureResponse(1.0, 0.8)) != ideal
+
+
+def test_a_mixed_gear_path_takes_each_legs_factor():
+    from forklift_core.control.rollout import CurvatureResponse
+
+    fwd, rev = _arc(), _reverse_arc()
+    poses = np.vstack((fwd[0], rev[0][1:]))
+    directions = np.concatenate((fwd[1], rev[1][1:]))
+    curvatures = np.concatenate((fwd[2], rev[2][1:]))
+    ideal = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0))
+    forward_only = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0),
+                                   curvature_response=CurvatureResponse(0.95, 1.0))
+    reverse_only = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0),
+                                   curvature_response=CurvatureResponse(1.0, 0.95))
+    # both factors small enough that every rollout drives both legs to the end of the path
+    assert ideal.status == forward_only.status == reverse_only.status == "arrived"
+    assert ideal.trajectory != forward_only.trajectory and ideal.trajectory != reverse_only.trajectory
+    assert forward_only.trajectory != reverse_only.trajectory
+
+
+def test_the_prefix_rollout_takes_the_same_response():
+    from forklift_core.control.rollout import CurvatureResponse, leg_prefix_rollout
+
+    path = _arc()
+    ideal = leg_prefix_rollout(*path, ARC_CONFIG, (0.0, 0.0, 0.0), start_leg=0, prefix_m=0.8)
+    same = leg_prefix_rollout(*path, ARC_CONFIG, (0.0, 0.0, 0.0), start_leg=0, prefix_m=0.8,
+                              curvature_response=CurvatureResponse(1.0, 1.0))
+    short = leg_prefix_rollout(*path, ARC_CONFIG, (0.0, 0.0, 0.0), start_leg=0, prefix_m=0.8,
+                               curvature_response=CurvatureResponse(0.88, 1.0))
+    assert same == ideal and abs(short.lateral_m) > abs(ideal.lateral_m)
