@@ -16,8 +16,8 @@
 #                  0.20 m back gap (user decision 2026-10-22, docs/plans/2026-10-22-riibotics-aisle.md D-A, D-C)
 #   KEEPOUT=0      --lidar-keepout-m: the planner's searches keep the LiDAR-visible props this much wider (P1c,
 #                  docs/plans/2026-10-23-planner-permission-clearance.md); 0 plans as before. 0.15 by default for the
-#                  aisle's rack copy only (aisle_rack: 0/5 transports passed at 0 against 3 of 7 completions at 0.15 in
-#                  the same window, docs/validation/2026-10-24-start-band-release.md); every other scene 0 (trailer:
+#                  aisle's rack copy only (aisle_rack, release off, within the same batches: transports passed 0/9 at 0
+#                  against 7/14 at 0.15, docs/validation/2026-10-24-start-band-release.md); every other scene 0 (trailer:
 #                  no gain shown). KEEPOUT=<metres> overrides it for any scene
 #   NOISE=const    the obstacle layer config/obstacle_layer_single.yaml (sigma 0.02, cut 0.06 at every range). NOISE=a2
 #                  runs config/obstacle_layer_single_a2.yaml: LiDAR range noise and the grid's range bound from Slamtec's A2
