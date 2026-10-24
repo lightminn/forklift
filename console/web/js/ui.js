@@ -3,7 +3,7 @@
 
 import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
-import { badge as alarmBadge, queueStopText } from "./health.js";
+import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
@@ -462,9 +462,17 @@ function renderQueue(m, st, control) {
   const uncertain = q.items.some((it) => it.uncertain);
   chip($("q-run"), running ? "acc" : q.items.length ? "warn" : "", running ? "실행 중" : "멈춤");
   $("queue").dataset.stopped = String(!running && q.items.length > 0);
+  const blocked = !running && /^자동 선택 실패/.test(q.stopReason ?? "") ? blockedText(q.lastPickBlocked) : "";
   $("q-why").textContent = running
-    ? (q.phase === "submitting" ? "제출 중" : q.phase === "in_mission" ? `진행 중 ${q.current?.mission_id ?? ""}` : "다음 항목 조건 기다리는 중")
-    : `멈춤 — ${queueStopText(q.stopReason)}${uncertain ? " · 불확실 항목을 먼저 정리하세요" : ""}`;
+    ? (q.phase === "submitting" ? "제출 중" : q.phase === "in_mission" ? `진행 중 ${q.current?.mission_id ?? ""}`
+      : q.phase === "picking" ? "자동 선택 중 · 차량에 다음 팔레트를 묻는 중"
+      : q.phase === "picked" ? `자동 선택: ${q.held?.pallet_id} → ${destinationLabel(q.held?.destination_id ?? "?")} · 제출 조건 기다리는 중`
+      : "다음 항목 조건 기다리는 중")
+    : `멈춤 — ${queueStopText(q.stopReason)}${blocked ? ` (${blocked})` : ""}${uncertain ? " · 불확실 항목을 먼저 정리하세요" : ""}`;
+  // CT-2: the one auto item, when the vehicle can pick
+  const autoBtn = $("q-auto");
+  autoBtn.hidden = !w.canAuto;
+  autoBtn.disabled = q.items.some((it) => it.kind === "auto");
   const save = $("q-save");
   save.hidden = !w.saveNote;
   save.textContent = w.saveNote ?? "";
@@ -486,7 +494,7 @@ function renderQueue(m, st, control) {
 
   const mi = st?.mission && MISSION_ACTIVE.includes(st.mission.status) ? st.mission : null;
   const key = [w.version, m.session.targets?.targets_revision, st?.load?.state, st?.load?.pallet_id, control,
-               mi?.mission_id, mi?.status].join("|");
+               mi?.mission_id, mi?.status, q.phase].join("|");
   // the saved transports are drawn again only when they or their usability change: a queue change does not take
   // a button away from under the pointer
   const presetKey = w.presets.map((p) => `${p.preset_id}:${w.presetStatus(p).usable}`).join(",") + `|${control}`;
@@ -500,14 +508,25 @@ function renderQueue(m, st, control) {
   const vehicleNow = mi ? ` · 차량 진행 중: ${mi.mission_id} ${STATUS[mi.status]?.[1] ?? mi.status}` : "";
   const items = q.items.length ? q.items.map((it, i) => {
     const cur = q.current && q.current.item_id === it.item_id;
+    const isAuto = it.kind === "auto";
+    const front = i === 0;
     let state = "대기";
-    if (cur) state = q.phase === "submitting" ? "제출 중" : `진행 중 ${q.current.mission_id ?? ""}${mi && mi.mission_id === q.current.mission_id ? ` · ${STATUS[mi.status]?.[1] ?? mi.status}` : ""}`;
-    else if (it.uncertain) state = `불확실 — 냈지만 결과를 모릅니다${it.maybe ? ` (미션 ${it.maybe.mission_id})` : ""}${vehicleNow}`;
+    if (cur) state = q.phase === "submitting" ? `제출 중 · ${q.current.pallet_id} → ${q.current.destination_id}` : `진행 중 ${q.current.mission_id ?? ""}${isAuto ? ` · ${q.current.pallet_id} → ${q.current.destination_id}` : ""}${mi && mi.mission_id === q.current.mission_id ? ` · ${STATUS[mi.status]?.[1] ?? mi.status}` : ""}`;
+    else if (it.uncertain) {
+      const which = isAuto && it.uncertain_pallet_id ? ` · ${it.uncertain_pallet_id} → ${it.uncertain_destination_id}` : "";
+      state = `불확실 — 냈지만 결과를 모릅니다${which}${it.maybe ? ` (미션 ${it.maybe.mission_id})` : ""}${vehicleNow}`;
+    } else if (isAuto && front && q.phase === "picking") state = "자동 선택 중";
+    else if (isAuto && front && q.phase === "picked") state = `자동 선택: ${q.held?.pallet_id} → ${q.held?.destination_id}`;
+    else if (isAuto && q.lastPick?.plan?.length) state = `대기 · 마지막 추천의 남은 계획 ${q.lastPick.plan.length}건`;
     const id = esc(it.item_id);
-    const acts = cur ? "" : it.uncertain
-      ? `<button type="button" data-act="drop" data-id="${id}">지우기</button><button type="button" data-act="resubmit" data-id="${id}">다시 내기</button>`
+    // an auto item's uncertain mark is on one submit: "확인하고 계속" clears it, the item goes on (CT-2 C4)
+    const acts = cur || (isAuto && front && (q.phase === "picking" || q.phase === "picked")) ? "" : it.uncertain
+      ? (isAuto
+        ? `<button type="button" data-act="drop" data-id="${id}">자동 항목 지우기</button><button type="button" data-act="clear" data-id="${id}">확인하고 계속</button>`
+        : `<button type="button" data-act="drop" data-id="${id}">지우기</button><button type="button" data-act="resubmit" data-id="${id}">다시 내기</button>`)
       : `<button type="button" data-act="up" data-id="${id}" aria-label="위로" ${i === 0 ? "disabled" : ""}>↑</button><button type="button" data-act="down" data-id="${id}" aria-label="아래로" ${i === q.items.length - 1 ? "disabled" : ""}>↓</button><button type="button" data-act="del" data-id="${id}" aria-label="지우기">✕</button>`;
-    return `<li class="${it.uncertain ? "uncertain" : ""}"><span class="n">${i + 1}</span><span class="what mono">${esc(it.pallet_id ?? "?")} → ${esc(destinationLabel(it.destination_id ?? "?"))}</span><span class="acts">${acts}</span><span class="st">${esc(state)}</span></li>`;
+    const what = isAuto ? esc(it.label ?? "남은 팔레트 전부") : `${esc(it.pallet_id ?? "?")} → ${esc(destinationLabel(it.destination_id ?? "?"))}`;
+    return `<li class="${it.uncertain ? "uncertain" : ""}${isAuto ? " auto" : ""}"><span class="n">${i + 1}</span><span class="what${isAuto ? "" : " mono"}">${what}</span><span class="acts">${acts}</span><span class="st">${esc(state)}</span></li>`;
   }).join("") : '<li class="hint">비어 있음 · 저장된 운반을 누르거나 작업 지정 창에서 넣으세요</li>';
   // the same list is not drawn again: its buttons keep their focus and a click in progress
   if (items !== m.cache.queueItems) {
@@ -519,7 +538,7 @@ function renderQueue(m, st, control) {
   const recent = q.finished.slice(0, 3).map((f) => {
     const [, ko] = OUTCOME[f.outcome] ?? ["", f.outcome];
     const why = f.reason ? ` (${reasonText(f.reason).text})` : "";
-    return `${f.item?.pallet_id ?? "?"} → ${f.item?.destination_id ?? "?"} ${ko}${why}`;
+    return `${f.pallet_id ?? f.item?.pallet_id ?? "?"} → ${f.destination_id ?? f.item?.destination_id ?? "?"} ${ko}${why}`;
   });
   $("q-done").textContent = c.done + c.failed + c.cancelled
     ? `끝낸 항목: 완료 ${c.done} · 실패 ${c.failed} · 취소 ${c.cancelled}${recent.length ? ` — 최근 ${recent.join(", ")}` : ""}`

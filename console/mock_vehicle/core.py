@@ -57,7 +57,7 @@ LEASE_REQUIRED = {
     "session_end",  # persistent console plan D7/D13: as the live runner
     "sim_reset",
 }
-RELIABLE = LEASE_REQUIRED | {"stop", "lease_request", "targets_request"}
+RELIABLE = LEASE_REQUIRED | {"stop", "lease_request", "targets_request", "pick_request"}
 LATEST_ONLY = {"echo", "teleop", "input_state"}
 STOPPED_ALLOWED = {
     "stop",
@@ -68,6 +68,7 @@ STOPPED_ALLOWED = {
     "mission_cancel",
     "mission_pause",
     "targets_request",
+    "pick_request",  # CT-2: observe-level, like targets_request
     "session_end",  # the arbiter takes them in STOPPED too (stand, feedback, no mission)
     "sim_reset",
 }
@@ -216,6 +217,8 @@ class MockVehicle:
         self._permit_override = None
         self._booked = None
         self.at: dict[str, str] = {}  # plan D3: where each pallet is verified to stand (set at a delivery here)
+        self._picks: dict = {}  # CT-2: conn_id -> pick messages waiting to go out after the reply
+        self._pick_override = None
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -334,6 +337,9 @@ class MockVehicle:
             },
             "provisional_limits": True,
             "sim_reset": True,  # a scene reset starts a new session (D13; the live runner's when supervised)
+            # CT-2 (contract D3): pick_request answered with a toy rule, for the console's screen tests only
+            "next_pick": True,
+            "next_pick_deadline_ms": 5000,
         }
         welcome = {
             "t": "welcome",
@@ -597,6 +603,8 @@ class MockVehicle:
             return self._lease_request(client_id, msg, conn_id)
         if t == "targets_request":
             return self._reply(msg, targets=self.make_targets())
+        if t == "pick_request":
+            return self._pick_request(msg, conn_id)
         # LEASE_REQUIRED (contract 1, rule 2)
         if self.lease is None or self.lease["client_id"] != client_id:
             return self._reply(msg, reason="no_lease")
@@ -888,9 +896,52 @@ class MockVehicle:
         """The scene back to its start under a new session epoch (the live runner's supervisor restarts it)."""
         self.__init__(self.clock, self.token, self.cfg)
 
+    # ------------------------------------------------- CT-2 pick_request (the console's screen tests)
+    PICK_INJECTIONS = ("pick_all_blocked", "pick_no_free_destination", "pick_error", "pick_silent",
+                       "pick_stale_revision")
+
+    def _pick_request(self, msg: dict, conn_id) -> dict:
+        """An ack, then a pick for that connection (contract D3) -- a TOY rule, not next_pick.recommend: the first
+        available pallet with a pose and the first destination no pallet is verified at, by id."""
+        if self.mission is not None and self.mission["status"] in self.ACTIVE:
+            return self._reply(msg, reason="mission_active")
+        mode, self._pick_override = getattr(self, "_pick_override", None), None
+        if mode != "pick_silent":
+            self._picks.setdefault(conn_id, []).append(self._pick_message(msg["request_id"], mode))
+        return self._reply(msg)
+
+    def _pick_message(self, request_id: str, mode: str | None) -> dict:
+        pallets = sorted(p.pallet_id for p in self.world.pallets if p.state == "available" and p.pose is not None)
+        taken = set(self.at.values())
+        free = [d for d in sorted(self.world.destinations) if d not in taken]
+        out = {"t": "pick", "request_id": request_id, "targets_revision": self.targets_revision, "pick": None,
+               "plan": [], "missions": 0, "estimate_total_m": 0.0, "home_assumed": True, "blocked": {}, "pose": None}
+        if mode == "pick_stale_revision":
+            out["targets_revision"] = self.targets_revision - 1
+        if mode == "pick_error":
+            return {**out, "reason": "error:InjectedError"}
+        if mode in ("pick_all_blocked", "pick_no_free_destination"):
+            reason = mode.removeprefix("pick_")
+            blocked = {p: [f"pickup:{q}" for q in pallets if q != p][:1] or ["props"] for p in pallets}
+            return {**out, "reason": reason, "blocked": blocked if reason == "all_blocked" else {}}
+        if not pallets:
+            return {**out, "reason": "none_remaining"}
+        if not free:
+            return {**out, "reason": "no_free_destination"}
+        plan = [[p, d] for p, d in zip(pallets, free)]
+        return {**out, "reason": "ok", "pick": {"pallet_id": plan[0][0], "destination_id": plan[0][1]},
+                "plan": plan, "missions": len(plan)}
+
+    def take_picks(self, conn_id) -> list[dict]:
+        """The picks to send on that connection, after the reply (the server's loop)."""
+        return self._picks.pop(conn_id, [])
+
     def inject(self, kind: str) -> None:
         """The screen's D13 cases without driving into them (fake vehicle only, for the page's tests)."""
         now = self._now()
+        if kind in self.PICK_INJECTIONS:
+            self._pick_override = kind  # the next pick only (CT-2 console plan C7)
+            return
         if kind == "scene_damage":
             if self.scene["damaged"] is None:
                 self.scene["damaged"] = {"reason": "Forbidden fork/pallet contact", "t": now, "unix": time.time()}

@@ -71,8 +71,35 @@ function sessionRow(inp) {
 
 // The queue's stop reason in words: a mission failure through the results table, a refusal through the reject
 // table (the queue keeps the codes; Isaac live run 2026-10-22 showed them raw)
+// CT-2: the vehicle's pick reasons (contract D3's fixed vocabulary) and what blocked a pick, in words
+const PICK_REASONS = { no_free_destination: "빈 하역 칸이 없습니다", all_blocked: "남은 팔레트와 칸이 모두 막혔습니다" };
+function pickReasonText(code) {
+  if (PICK_REASONS[code]) return PICK_REASONS[code];
+  if (code.startsWith("error:")) return `차량이 추천을 계산하지 못했습니다(${code.slice(6)})`;
+  return code;
+}
+
+function blockedOne(why) {
+  const [kind, id] = String(why).split(/:(.*)/s, 2);
+  if (kind === "pickup" && id) return `${id} 때문에 집을 수 없음`;
+  if (kind === "delivery" && id) return `${id} 때문에 내려놓을 수 없음`;
+  if (kind === "occupied" && id) return `${id} 가 차지함`;
+  return { props: "고정 장애물에 막힘", no_pose: "자세 모름", no_size: "크기 모름" }[why] ?? String(why);
+}
+
+// {pallet or destination id: [reasons]} -> "P-2: P-1 때문에 집을 수 없음 · D-1: ..." ("" without it)
+export function blockedText(blocked) {
+  if (!blocked || typeof blocked !== "object") return "";
+  return Object.entries(blocked).map(([id, whys]) => `${id}: ${(Array.isArray(whys) ? whys : [whys]).map(blockedOne).join(", ")}`)
+    .join(" · ");
+}
+
 export function queueStopText(reason) {
   if (!reason) return "—";
+  const pickFailed = /^자동 선택 실패: (.+)$/.exec(reason);
+  if (pickFailed) return `자동 선택 실패: ${pickReasonText(pickFailed[1])}`;
+  const pickRefused = /^자동 선택 거부: (.+)$/.exec(reason);
+  if (pickRefused) return `자동 선택 거부: ${rejectText(pickRefused[1])}`;
   const failed = /^실패: (.+)$/.exec(reason);
   if (failed) return `실패: ${reasonText(failed[1]).text}`;
   const refused = /^거부: (.+)$/.exec(reason);
@@ -81,14 +108,15 @@ export function queueStopText(reason) {
 }
 
 // the code behind a stop reason, when the words above replaced it
-const stopCode = (reason) => /^(?:실패|거부): (.+)$/.exec(reason ?? "")?.[1] ?? "";
+const stopCode = (reason) => /^(?:실패|거부|자동 선택 실패|자동 선택 거부): (.+)$/.exec(reason ?? "")?.[1] ?? "";
 
 function queueRow(q) {
   if (!q) return r("queue", "off", "—");
   if (q.run === "running") return r("queue", "ok", "실행 중");
   const text = queueStopText(q.stopReason);
   if (q.items > 0 && !CALM_REASONS.includes(q.stopReason)) {
-    return r("queue", "warn", `대기열 멈춤: ${text}`, stopCode(q.stopReason));
+    const blocked = blockedText(q.blocked);
+    return r("queue", "warn", `대기열 멈춤: ${text}`, [stopCode(q.stopReason), blocked].filter(Boolean).join(" · "));
   }
   return r("queue", "off", q.items > 0 ? `멈춤 · ${text}` : "비어 있음");
 }
