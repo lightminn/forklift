@@ -4910,11 +4910,17 @@ class MissionCore:
                 # end (arm_docking's prefix stops before it; Codex round 4 P2-2), never a backoff or an escape
                 # (Codex round 5 P2) nor a docking re-approach (planned on the search props, Codex round 6 P2), which
                 # replace paths["transport"] too
+                # A tracker on the planned transport path, or on its start (arm_docking's prefix, D7's second-round
+                # prefix of the delivery straight): the slot boundary of that path, in its own length (Codex round 7
+                # P2: the second-round prefix lies wholly on the straight).
                 full_ = self.paths.get("transport")
                 full_poses_ = None if full_ is None else np.asarray(getattr(full_, "poses", full_), dtype=float)
-                if full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_) and np.allclose(
-                        full_poses_[-1], poses[-1], atol=1e-6):
-                    slot_from = max(0.0, length - float(geometry.delivery_straight_m))
+                if full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_):
+                    full_length_ = float(np.sum(np.hypot(np.diff(full_poses_[:, 0]), np.diff(full_poses_[:, 1]))))
+                    if np.allclose(full_poses_[0], poses[0], atol=1e-6):
+                        slot_from = max(0.0, full_length_ - float(geometry.delivery_straight_m))
+                    elif np.allclose(full_poses_[-1], poses[-1], atol=1e-6):
+                        slot_from = max(0.0, length - float(geometry.delivery_straight_m))
             plane = float(getattr(geometry, "lidar_plane_m", 1.05))
             leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
                                slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)

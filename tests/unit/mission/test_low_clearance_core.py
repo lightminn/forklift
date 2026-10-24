@@ -150,7 +150,8 @@ def test_a_prefix_tracker_short_of_the_delivery_straight_keeps_the_search_props(
     core, state = make(rects=[estimate], uris=["session:p@search"], trackers={"transport": tracker(-2.0, 2.5)},
                        paths={"transport": full})
     core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)
-    assert state["low_clearance"]["legs"][0]["slot_from_m"] is None
+    leg_ = state["low_clearance"]["legs"][0]
+    assert leg_["slot_from_m"] >= leg_["length_m"] - 1e-9  # the straight starts where the prefix ends
     assert core._low_clearance_cap == (10.0, 0.0)
     core, state = make(rects=[estimate], uris=["session:p@search"], trackers={"transport": tracker(-2.0, 4.0)},
                        paths={"transport": full})
@@ -198,3 +199,17 @@ def test_a_docking_reapproach_keeps_the_search_props():
     core.slam = {"docking": {"reapproach": True}}
     core.low_clearance_tick(10.0, (-0.5, 0.0, 0.0), 0.0, 0.15, True)
     assert state["low_clearance"]["legs"][0]["slot_from_m"] is None and core._low_clearance_cap == (10.0, 0.0)
+
+
+def test_the_second_round_prefix_of_the_delivery_straight_is_the_slot_stage():
+    # Codex round 7: after the first match, D7 drives the start of the delivery straight again; it lies on the straight
+    estimate = Rectangle(-0.5, 0.4 - 0.02 + 0.5, 3.0, 1.0, 0.0)  # a stale search estimate over the straight
+    slot_copy = Rectangle(-0.5, 0.4 + 0.10 + 0.5, 3.0, 1.0, 0.0)
+    straight_ = tracker(-1.5, 0.0)  # the 1.5 m delivery straight
+    prefix = tracker(-1.5, -0.6)  # its start, 0.6 m kept
+    core, state = make(rects=[estimate, slot_copy], uris=["session:p@search", "session:p@slot"],
+                       trackers={"transport": prefix},
+                       paths={"transport": SimpleNamespace(poses=straight_.path_arrays()[0])})
+    core.low_clearance_tick(10.0, (-1.2, 0.0, 0.0), 0.0, 0.15, True)
+    assert state["low_clearance"]["legs"][0]["slot_from_m"] == pytest.approx(0.0)
+    assert core._low_clearance_cap is None
