@@ -174,7 +174,9 @@ class MissionQueue:
         if state is not None and (state.get("mission") or {}).get("status") in ACTIVE:
             self.mission_seen_this_epoch = True
         gen = (state or {}).get("control_gen")
-        gen = gen if isinstance(gen, int) and not isinstance(gen, bool) else None  # JS Number.isInteger
+        # JS Number.isInteger: an integral float (5.0) counts, a bool does not (Codex port round 2 P3)
+        gen = gen if (isinstance(gen, int) and not isinstance(gen, bool)) or (
+            isinstance(gen, float) and gen.is_integer()) else None
         if gen is not None:
             self.last_control_gen = gen
         lost = self._feedback_lost(now_ms)
