@@ -224,7 +224,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 ```
 
 - 지원하는 차량은 `welcome.capabilities` 에 `next_pick: true` 와 `next_pick_deadline_ms`(요청부터 `pick` 까지 지키려는 상한, 정수 ms)를 싣는다. 없으면 지원하지 않는 것으로 보고, 기한은 5000 으로 본다.
-- `pick_request` 는 신뢰 요청이다(1 절의 원장 규칙). `ack` 는 재전송을 끝낼 뿐이고 내용은 따로 오는 `pick` 이다. 같은 요청의 재전송이 저장된 `ack` 를 받아도 차량은 그때 새로 계산한 `pick` 을 보낸다. 클라이언트는 기다리는 `request_id` 와 맞는 첫 `pick` 만 쓰고, `pick` 이 `ack` 보다 먼저 와도 받는다.
+- `pick_request` 는 신뢰 요청이다(1 절의 원장 규칙). `ack` 는 재전송을 끝낼 뿐이고 내용은 따로 오는 `pick` 이다. 같은 요청의 재전송이 저장된 `ack` 를 받아도 차량은 그때 새로 계산한 `pick` 을 보낸다. 클라이언트는 기다리는 `request_id` 와 맞는 첫 `pick` 만 쓰고, `pick` 이 `ack` 보다 먼저 와도 받는다. 예외는 `ack` 전에 온 `none_remaining` 이다. 확정이 아니므로, 같은 요청에 다시 계산된 `ok` 가 그 뒤에 오면 그 `ok` 를 쓴다(콘솔 계획 C2, Codex CT-2 콘솔 2 차).
 - `targets_revision` 은 계산에 쓴 대상 목록의 revision 이다. 추천은 권고다. 제출은 지금처럼 `check_submit`·허가·준비 계획을 다시 거친다.
 - `reason` 은 다섯 가지로 고정이다.
   - `ok`
