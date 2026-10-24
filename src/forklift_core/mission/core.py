@@ -6611,35 +6611,44 @@ class MissionCore:
             out.update(ok=True, why="no_layer")
             return out
         strict_ = self._scene_permit_strict(tracker, leg_, uncut)
+        # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
+        zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
-            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_)
+            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
+            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         return out
 
-    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
-        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
-        acting -- the transport's docking straight, the last delivery straight of the tracker permission_acting reads
-        -- so its unknown cells must be verified before it is installed. ``uncut``: the candidate's plan before
-        install's arm_docking, which cuts the tracker back to where the final straight keeps keep_m; the length it
-        cuts (measured, not the nominal keep -- the cut falls on a sample, Codex impl round 5 P2-1) widens the zone.
-        None: the tracker is the installed one, already cut. A return always has the permission."""
+    @staticmethod
+    def _poses_length(poses) -> float:
+        poses = np.asarray(poses, dtype=float)
+        return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+
+    def _scene_zone_start_m(self, tracker, uncut=None) -> float | None:
+        """Leg-failures plan A1 (docs/plans/2026-10-25-leg-failures.md): how far along the candidate tracker the zone
+        the permission does not act on begins -- the transport's docking straight, the last delivery straight of the
+        tracker permission_acting reads. ``uncut``: the candidate's plan before install's arm_docking, which cuts the
+        tracker back to where the final straight keeps keep_m; the length it cuts (measured, not the nominal keep --
+        the cut falls on a sample, Codex impl round 5 P2-1) widens the zone. None: the tracker is the installed one,
+        already cut. A return has no such zone (None)."""
         if self.ms.phase != "transport":
-            return False
-
-        def length(poses):
-            poses = np.asarray(poses, dtype=float)
-            return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
-
+            return None
         cut_ = 0.0
         docking_ = (self.slam or {}).get("docking") or {}
         if uncut is not None and docking_.get("status") in ("pending", "armed"):
             prefix_ = self.hooks.final_straight_prefix(uncut, docking_.get("keep_m", self.geometry.delivery_straight_m))
             if prefix_ is not None:
-                cut_ = length(uncut.poses) - length(prefix_.poses)
-        zone_ = cut_ + float(self.geometry.delivery_straight_m)
-        return float(tracker.remaining_to_goal_m()) - length(leg) <= zone_ + 1e-6
+                cut_ = self._poses_length(uncut.poses) - self._poses_length(prefix_.poses)
+        return float(tracker.remaining_to_goal_m()) - (cut_ + float(self.geometry.delivery_straight_m))
+
+    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
+        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
+        acting, so its cells there must be verified before it is installed -- the leg's length reaching the zone start
+        (``_scene_zone_start_m``). A return always has the permission."""
+        zone_ = self._scene_zone_start_m(tracker, uncut)
+        return zone_ is not None and self._poses_length(leg) >= zone_ - 1e-6
 
     def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's world this tick (plan 2.1)."""

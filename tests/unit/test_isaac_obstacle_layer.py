@@ -782,6 +782,54 @@ def test_a_candidate_permit_needs_the_whole_lookahead_or_the_leg_verified_and_a_
     assert leg["ok"] and leg["verified_m"] == pytest.approx(0.3, abs=1e-6)  # a 0.3 m leg: its whole length
 
 
+def test_a_strict_candidate_check_covers_only_the_permission_off_zone_within_the_lookahead():
+    """Leg-failures plan A1 (2026-10-25; Isaac ct2_07ca86aa random_m s1, ct2_41a2a7e8 line_m s2: verified 2.4 of 3.0 m,
+    the zone 9-11 m ahead, refused for 60 s): strict verifies [max(0, zone start), min(lookahead, leg)] only -- an
+    unknown before the zone is the driving permission's; the zone beyond the lookahead leaves nothing to verify; the
+    zone's own walk is not lengthened to a whole lookahead. (A 2.5 m leg: the test layer's ground is known to ~4 m.)"""
+    from dataclasses import replace as dc_replace
+
+    from forklift_core.perception.obstacle_grid import OCCUPIED, UNKNOWN
+
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 2.5, 51), np.zeros(51), np.zeros(51)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _open_raw(lay, reach=9.0), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    snap = lay.snapshot
+
+    def band(state, x0, x1, value):
+        out = state.copy()
+        i0 = int(round((x0 - snap.origin_x_m) / snap.resolution_m))
+        i1 = int(round((x1 - snap.origin_x_m) / snap.resolution_m))
+        out[i0:i1, :] = value
+        return out
+
+    kw = dict(current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0, measured_curvature_inv_m=0.0,
+              cap_mps=0.6, strict=True)
+    assert lay.candidate_permit(0.2, path, strict_from_m=2.0, **kw)["ok"]  # all known: the zone's part passes
+    # the recorded case: an unknown ahead of the truck, the zone far beyond the lookahead
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 2.4, 2.6, UNKNOWN))
+    assert not lay.candidate_permit(0.2, path, **kw)["ok"]  # the old rule (zone start 0): refused
+    far = lay.candidate_permit(0.2, path, strict_from_m=9.25, **kw)
+    assert far["ok"] and far["strict_checked_m"] == 0.0  # nothing of the zone within the lookahead
+    # the zone starting inside the lookahead: [2.0, 2.5] verified, an unknown before it left to the permission
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 1.6, 1.75, UNKNOWN))
+    before = lay.candidate_permit(0.2, path, strict_from_m=2.0, **kw)
+    assert before["ok"] and before["strict_checked_m"] == pytest.approx(0.5, abs=1e-6)
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 2.4, 2.6, UNKNOWN))
+    inside = lay.candidate_permit(0.2, path, strict_from_m=2.0, **kw)
+    assert not inside["ok"] and inside["why"] == "blocked:unknown"
+    # past the zone's own sweep (its last pose's nose at 3.79 m): a whole lookahead from 2.0 would reach it
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 3.85, 3.95, UNKNOWN))
+    assert lay.candidate_permit(0.2, path, strict_from_m=2.0, **kw)["ok"]
+    # an occupied cell is refused wherever it is within the lookahead, strict or not
+    lay.snapshot = dc_replace(snap, state=band(snap.state, 1.6, 1.75, OCCUPIED))
+    occupied = lay.candidate_permit(0.2, path, strict_from_m=9.25, **kw)
+    assert not occupied["ok"] and occupied["why"] == "blocked:occupied"
+
+
 def test_a_candidate_permit_leaves_an_unknown_beyond_the_verified_distance_to_the_permission_unless_strict():
     """Scene replan plan 7판 (Isaac sri_b907b91 s0: verified 2.42 of 3.0 m, start allowed 0.354 m/s, refused): an
     unknown ahead is the driving permission's, as on any path -- unless the leg reaches where the permission does not

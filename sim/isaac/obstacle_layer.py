@@ -34,6 +34,23 @@ from forklift_core.perception.obstacle_grid import (
 from forklift_core.planning.geometry import Footprint
 
 
+def _arc_slice(poses, start_m: float, end_m: float):
+    """The stretch of a pose array between two arc lengths, its end points interpolated (leg-failures plan A1)."""
+    poses = np.asarray(poses, dtype=float)
+    seg = np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1]))
+    cum = np.concatenate(([0.0], np.cumsum(seg)))
+
+    def at(s_):
+        i = int(np.clip(np.searchsorted(cum, s_, side="right") - 1, 0, len(poses) - 2))
+        f = 0.0 if seg[i] <= 0 else (s_ - cum[i]) / seg[i]
+        a_, b_ = poses[i], poses[i + 1]
+        dyaw = float(np.arctan2(np.sin(b_[2] - a_[2]), np.cos(b_[2] - a_[2])))
+        return np.array([a_[0] + f * (b_[0] - a_[0]), a_[1] + f * (b_[1] - a_[1]), a_[2] + f * dyaw])
+
+    inner = poses[(cum > start_m) & (cum < end_m)]
+    return np.vstack([at(start_m)] + ([inner] if len(inner) else []) + [at(end_m)])
+
+
 @dataclass(frozen=True)
 class ObstacleSensor:
     name: str
@@ -393,7 +410,7 @@ class ObstacleLayer:
 
     def candidate_permit(self, now_s: float, path_ahead, *, current_pose, direction: int, loaded: bool,
                          curvature_inv_m: float, measured_curvature_inv_m: float, cap_mps: float,
-                         strict: bool = True) -> dict:
+                         strict: bool = True, strict_from_m: float = 0.0) -> dict:
         """The scene-mode replan's check before a candidate is installed (docs/plans/2026-10-23-scene-replan.md
         2.1 step 6, 7판): ``path_ahead`` -- the candidate tracker's first gear leg -- on the processed snapshot, in a
         fresh DrivePermission so the layer's own (its path check, the distance driven since, its last stop arc) is
@@ -402,7 +419,9 @@ class ObstacleLayer:
         curvature and at the wheels' measured one -- the driving permission's own start rule. strict (the leg reaches
         where the permission does not act, Codex Isaac round 2 P2): also verified min(lookahead, the leg's length)
         with nothing blocked; otherwise an unknown beyond the verified distance is the driving permission's, as on
-        any path."""
+        any path. ``strict_from_m`` (leg-failures plan A1): where along the leg the zone the permission does not act on
+        begins -- strict then verifies [strict_from_m, min(lookahead, the leg's length)] only (empty when reversed),
+        the unknown before it being the driving permission's; 0 is the whole stretch from the truck, as before."""
         poses = np.asarray(path_ahead, dtype=float)
         out = {"ok": False, "verified_m": 0.0, "blocked": None, "allowed_mps": 0.0, "measured_allowed_mps": 0.0,
                "why": None}
@@ -420,21 +439,31 @@ class ObstacleLayer:
         check = candidate.update(self.snapshot, poses, footprint, own, current_pose=current_pose, direction=direction)
         length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
         need = min(float(self.permission.config.lookahead_m), length)
+        zone_from = max(0.0, float(strict_from_m))
+        zone_len = max(0.0, need - zone_from) if strict else 0.0
         allowed = [candidate.allowed_speed(now_s, self.last_scan_s, current_pose=current_pose, curvature_inv_m=k,
                                            direction=direction, footprint=footprint, own_footprint=own,
                                            speed_cap_mps=cap_mps)
                    for k in (curvature_inv_m, measured_curvature_inv_m)]
         ahead = candidate.check_path(self.snapshot, poses, footprint, own, current_pose=current_pose,
                                      direction=direction, unknown_passes=True)
+        if zone_len > 0.0 and zone_from > 0.0:
+            # the zone's part of the leg alone, its own walk over just that stretch (no lookahead re-applied past it)
+            zone_check = candidate.check_path(self.snapshot, _arc_slice(poses, zone_from, need), footprint, own,
+                                              current_pose=current_pose, direction=direction, lookahead_m=zone_len)
+            zone_verified = float(zone_check.verified_m)
+        else:
+            zone_check, zone_verified = check, float(check.verified_m)  # from the truck: the walk above, as before
         out.update(verified_m=float(check.verified_m), blocked=check.blocked, allowed_mps=float(allowed[0][0]),
                    measured_allowed_mps=float(allowed[1][0]), allowed_why=allowed[0][1],
                    measured_allowed_why=allowed[1][1], need_m=need, strict=bool(strict),
-                   occupied_ahead=ahead.blocked == "occupied")
+                   strict_from_m=zone_from, strict_checked_m=zone_len, occupied_ahead=ahead.blocked == "occupied")
+        need_zone = zone_len if zone_from > 0.0 else need
         if check.blocked == "occupied" or ahead.blocked == "occupied":
             out["why"] = "blocked:occupied"
-        elif strict and check.blocked is not None:
-            out["why"] = f"blocked:{check.blocked}"
-        elif strict and check.verified_m + 1e-6 < need:
+        elif zone_len > 0.0 and zone_check.blocked is not None:
+            out["why"] = f"blocked:{zone_check.blocked}"
+        elif zone_len > 0.0 and zone_verified + 1e-6 < need_zone:
             out["why"] = "unverified"
         elif allowed[0][0] <= 0.0:
             out["why"] = f"start:{allowed[0][1]}"
