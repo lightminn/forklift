@@ -140,6 +140,26 @@ def test_the_occupancy_margin_is_recorded_and_the_recompute_uses_it(tmp_path):
     assert runtime.far.occupancy_margin_m is None
 
 
+def test_the_recompute_closes_every_saved_frame(tmp_path, monkeypatch):
+    """ws1 full suite 2026-10-24: an unclosed frame file surfaced as a ResourceWarning (an error under -W error)
+    whenever the garbage collector happened to run inside another test."""
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition")
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    opened, load = [], np.load
+
+    def spy(*a, **kw):
+        opened.append(load(*a, **kw))
+        return opened[-1]
+
+    monkeypatch.setattr(RC.np, "load", spy)
+    RC.recompute(tmp_path, recognition=run.summary())
+    assert opened and all(z.fid is None for z in opened)
+
+
 def test_a_frame_before_the_cameras_first_render_is_skipped():
     run = _runtime()
     run.record_step(24, 24 * DT, (0, 0, 0), (0, 0, 0), PALLET)
