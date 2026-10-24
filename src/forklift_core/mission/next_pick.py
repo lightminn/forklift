@@ -58,7 +58,9 @@ def _props_by_pallet(props) -> dict:
     return out
 
 
-def recommend(snap: PickSnapshot) -> dict:
+def recommend(snap: PickSnapshot, *, open_pairs: bool = False) -> dict:
+    """The pick (module docstring). ``open_pairs``: also every pair open now, under ``"open"`` (CT-2 V2's
+    criterion 4 compares them with the planner); not part of the pick message."""
     from forklift_core.planning.geometry import Rectangle
     from forklift_core.planning.pallet_mission import (
         AssetSpec, PalletSite, PlacedProp, _straight_plan, scenario_props, site_poses)
@@ -232,7 +234,11 @@ def recommend(snap: PickSnapshot) -> dict:
         blocked.setdefault(d, []).extend(f"occupied:{q}" for q in holders)
         blocked[d].extend(f"delivery:{q}" for q in floor if DB[(d, q)])
     if plan:
-        return result("ok", plan, missions, total)
-    if not any(not any(pallets[q].at == d for q in floor) for d in destinations):
-        return result("no_free_destination")
-    return result("all_blocked")
+        out = result("ok", plan, missions, total)
+    elif not any(not any(pallets[q].at == d for q in floor) for d in destinations):
+        out = result("no_free_destination")
+    else:
+        out = result("all_blocked")
+    if open_pairs:
+        out["open"] = [[p, d] for p in candidates for d in destinations if is_open(p, d, frozenset(), frozenset())]
+    return out
