@@ -183,6 +183,21 @@ CASES.update({
         NOT_STOPPED, standing(100), standing(400, mode="STOPPED"), nxt(1500, standing(1500))),
     "start_retry_teleop_while_waiting_stops": scenario_base(
         NOT_STOPPED, standing(100, mode="TELEOP"), nxt(1500, standing(1500))),
+    # queue.js f850942d (Codex start-retry r1): narrower -- not after any mission seen in this session, not when the
+    # submit's own mission was seen before the answer; cancelled by a new control generation
+    "start_retry_not_after_a_mission_seen_in_the_session": [
+        {"op": "welcome", "epoch": 7}, {"op": "add", "pallet_id": "P-1", "destination_id": "D-1"},
+        standing(0, last_result={"mission_id": "m0", "outcome": "done"}), {"op": "resume", "now": 10},
+        nxt(1100, standing(1100)), NOT_STOPPED],
+    "start_retry_not_when_its_mission_was_seen": scenario_base(running(100, "m1"), NOT_STOPPED),
+    "start_retry_control_generation_changed": [
+        {"op": "welcome", "epoch": 7}, {"op": "add", "pallet_id": "P-1", "destination_id": "D-1"},
+        standing(0, control_gen=4), {"op": "resume", "now": 10}, nxt(20, standing(20, control_gen=4)), NOT_STOPPED,
+        standing(100, control_gen=4), standing(300, control_gen=5), nxt(1500, standing(1500, control_gen=5))],
+    "start_retry_same_generation_goes": [
+        {"op": "welcome", "epoch": 7}, {"op": "add", "pallet_id": "P-1", "destination_id": "D-1"},
+        standing(0, control_gen=4), {"op": "resume", "now": 10}, nxt(20, standing(20, control_gen=4)), NOT_STOPPED,
+        standing(100, control_gen=4), nxt(1200, standing(1200, control_gen=4))],
 })
 
 
