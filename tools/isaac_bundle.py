@@ -242,6 +242,12 @@ class NodeLedger:
             (self.dir / f"r-{key}").write_text(f"{need_mib} {now + self.hold_s}\n")
             return True
 
+    def release(self, key):
+        """Give back a reservation whose session did not start."""
+        with open(self.dir / ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            (self.dir / f"r-{key}").unlink(missing_ok=True)
+
 
 def visible_gpus(env) -> list[str]:
     """The GPUs the job sees: CUDA_VISIBLE_DEVICES, else SLURM_JOB_GPUS."""
@@ -635,12 +641,13 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             log.close()
             record({"name": run.name, "index": index, "slot": slot, "attempt": attempt, "status": "start_failed",
                     "error": str(exc), "start": time.time(), "rc": None, "signal": None, "retried": False})
-            return
+            return False
         now = time.monotonic()
         live[proc.pid] = _Live(run, index, slot, proc, now, time.time(), env, log, log_path, attempt=attempt,
                                oom_at_start=oom_counter() if oom_counter else None,
                                pace=_Pace(pace_window_s) if run.pace_log else None)
         st["last_start"] = now
+        return True
 
     def sample_vram(now):
         leaders = [pid for pid, _ in sorted(live.items(), key=lambda kv: kv[1].slot)]
@@ -805,17 +812,18 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                     and (st["last_start"] is None or now - st["last_start"] >= stagger_s)):
                 v = verdict(now)
                 index, run, attempt = queue[0]
+                key = f"{job_id}-{index}-{attempt}-{nonce}"
                 if v in ("ok", "unreadable_go") and ledger is not None:
                     # the node's own memory: Slurm reserves the cgroups, not the bridge containers or what others
                     # run outside Slurm; the ledger keeps two jobs from both spending the same free memory
-                    if not ledger.admit(f"{job_id}-{index}-{attempt}-{nonce}", node_ram_min_mib, node_ram):
+                    if not ledger.admit(key, node_ram_min_mib, node_ram):
                         v = "node_ram"
                 if v in ("ok", "unreadable_go"):
                     st["waiting"] = None
                     if v == "unreadable_go":
                         st["unreadable_starts"] += 1
                     queue.popleft()
-                    mine = None
+                    mine, started = None, False
                     try:
                         if attempt == 1 and claim_dir is not None:
                             try:  # several bundle jobs share one list: the first to claim a run runs it
@@ -825,7 +833,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 continue
                             mine = os.path.join(claim_dir, run.name)
                             Path(mine, "by").write_text(job_id + "\n")
-                        start(index, run, attempt)
+                        started = start(index, run, attempt)
                     except Exception as exc:  # noqa: BLE001 -- recorded; the claim goes back for another job
                         note_error(f"start {run.name}", exc)
                         if mine is not None:
@@ -833,6 +841,9 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                         record({"name": run.name, "index": index, "slot": None, "attempt": attempt,
                                 "status": "start_failed", "error": repr(exc), "rc": None, "signal": None,
                                 "retried": False})
+                    finally:
+                        if not started and ledger is not None:
+                            ledger.release(key)  # nothing started: the memory was not taken
                     continue
                 if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
                     st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1

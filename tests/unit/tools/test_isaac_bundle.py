@@ -724,3 +724,21 @@ def test_runs_claimed_elsewhere_are_skipped_before_any_wait(tmp_path):
                      claim_dir=claim, node_ram_min_mib=6344, node_ram=lambda: 100)  # the node is full
     assert summary["claimed_elsewhere"] == 2 and summary["runs"] == 0 and summary["exit_code"] == 0
     assert time.monotonic() - t0 < 2
+
+
+def test_a_reservation_is_given_back_when_nothing_starts(tmp_path):
+    led = tmp_path / "ledger"
+    claim = tmp_path / "claims"
+    (claim / "a").mkdir(parents=True)
+    (claim / "a" / "by").write_text("77\n")  # our own claim from before: not skipped, but mkdir loses
+    bundle(tmp_path, [ib.Run(name="a", argv=[str(tmp_path / "no_such_program")])], claim_dir=claim,
+           node_ram_min_mib=6344, node_ram=lambda: 7000, node_ledger_dir=led)
+    assert list(led.glob("r-*")) == []
+    assert ib.NodeLedger(led).admit("next", 6344, lambda: 7000)
+
+
+def test_a_failed_start_gives_its_reservation_back(tmp_path):
+    led = tmp_path / "ledger"
+    bundle(tmp_path, [ib.Run(name="a", argv=[str(tmp_path / "no_such_program")])], node_ram_min_mib=6344,
+           node_ram=lambda: 7000, node_ledger_dir=led)
+    assert results(tmp_path)["a"]["status"] == "start_failed" and list(led.glob("r-*")) == []
