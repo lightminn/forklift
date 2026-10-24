@@ -380,3 +380,18 @@ def test_an_epoch_limit_after_a_scene_reset_lingers_too(tmp_path):
                            backoff_s=0.0, max_epochs=1, standby_port=port, web_root=web, standby_linger_s=30.0)
     thread.join(5.0)
     assert result["end"] == "epoch_limit" and seen.get("state", {}).get("end") == "epoch_limit"
+
+
+def test_the_live_runner_takes_the_encoder_model_with_its_own_age_table():
+    """Plan 2026-10-24-insertion-depth-margin 5: ENCODER_MODEL (default reported) picks the SLAM odometry's encoders,
+    and a team-spec model the team-spec obstacle-layer age table -- the runner refuses the reported table for it."""
+    from pathlib import Path
+
+    live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "printf 'ENCODER_MODEL=%q\\n' \"${ENCODER_MODEL:-reported}\"" in live
+    runner = live[live.index('cat > "$OUT/runner.sh"'):]
+    runner = runner[: runner.index("EOT\n")]
+    assert ('LAYER=config/obstacle_layer_single.yaml\n'
+            '[ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml') in runner
+    assert '--obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act' in runner
+    assert "--obstacle-layer config/obstacle_layer_single.yaml" not in runner
