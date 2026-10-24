@@ -21,31 +21,35 @@ LOADED = Footprint(1.56, 0.17, 0.4)
 UNLOADED = Footprint(1.29, 0.17, 0.36)
 
 
-def scenario(*rects):
-    props = tuple(PlacedProp(AssetSpec("riibotics:block", r.length_m, r.width_m, 0.144), r) for r in rects)
+def scenario(*rects, uris=None):
+    uris = uris or ["riibotics:block"] * len(rects)
+    props = tuple(PlacedProp(AssetSpec(u, r.length_m, r.width_m, 0.144), r) for r, u in zip(rects, uris))
     return TransportScenario(0, Pose2D(0.0, 0.0, 0.0), PalletSite(9.0, 0.0, 0.0), PalletSite(-9.0, 0.0, 0.0), props,
                              Bounds(-20.0, 20.0, -20.0, 20.0))
 
 
-def tracker(x0=-2.0, x1=4.0):
+def tracker(x0=-2.0, x1=4.0, direction=1):
     xs = np.linspace(x0, x1, 61)
     poses = np.column_stack((xs, np.zeros_like(xs), np.zeros_like(xs)))
-    return RearAxlePathTracker(poses, np.ones(len(xs)), np.zeros(len(xs)),
+    return RearAxlePathTracker(poses, np.full(len(xs), float(direction)), np.zeros(len(xs)),
                                TrackerConfig(position_tolerance_m=0.008, overshoot_tolerance_m=0.03))
 
 
-def make(*, guard="on", obstacle=None, act=True, block_gap=0.08, phase="transport", trackers=None):
+def make(*, guard="on", obstacle=None, act=True, block_gap=0.08, phase="transport", trackers=None, rects=None,
+         uris=None, truth_speed=0.0, paths=None):
     block = Rectangle(1.0, 0.4 + block_gap + 0.5, 3.0, 1.0, 0.0)  # beside the loaded outline's left side
+    rects = [block] if rects is None else rects
     state = {"transitions": []}
     options = SimpleNamespace(drive_geometry=GEOMETRY, command_accel_mps2=0.8, obstacle_act=act,
-                              scenario=scenario(block), low_clearance_margin_m=0.05, low_clearance_deviation_m=0.02,
+                              scenario=scenario(*rects, uris=uris), low_clearance_margin_m=0.05, low_clearance_deviation_m=0.02,
                               low_clearance_unloaded_shape=UNLOADED)
     if guard is not None:
         options.low_clearance_guard = guard
     geometry = SimpleNamespace(loaded_footprint=LOADED, delivery_straight_m=1.5, lidar_plane_m=1.05)
-    hooks = SimpleNamespace(require=lambda ok, reason: None, steering_position=lambda: np.zeros(2))
+    hooks = SimpleNamespace(require=lambda ok, reason: None, steering_position=lambda: np.zeros(2),
+                            truth_speed=lambda: truth_speed)
     core = MissionCore(MissionState(phase=phase, phase_started=0.0), state=state, obstacle=obstacle, slam=None,
-                       pocket={"check": None}, paths={}, trackers=trackers if trackers is not None else {phase: tracker()},
+                       pocket={"check": None}, paths=paths or {}, trackers=trackers if trackers is not None else {phase: tracker()},
                        geometry=geometry, settings={"steering_command_rate_rad_s": 1.2}, pallet_geometry=None,
                        hooks=hooks, near=None, options=options)
     return core, state
@@ -121,3 +125,49 @@ def test_phases_that_do_not_move_along_a_path_are_not_watched():
     core, state = make(phase="lift", trackers={"lift": tracker()})
     core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.36, 0.3, True)
     assert core._low_clearance_cap is None and "low_clearance" not in state
+
+
+AHEAD = Rectangle(1.56 + 0.06 + 0.5, 0.0, 1.0, 1.0, 0.0)  # 6 cm ahead of the loaded front at x = 0
+BEHIND = Rectangle(-0.17 - 0.06 - 0.5, 0.0, 1.0, 1.0, 0.0)  # 6 cm behind its rear
+
+
+def test_the_arc_follows_the_motion_not_the_next_leg():
+    # Codex round 4: rolling forward at +0.30 with a reverse leg asked next and nothing requested: the forward arc
+    core, state = make(rects=[AHEAD], trackers={"transport": tracker(4.0, -2.0, direction=-1)}, truth_speed=0.3)
+    state["command_speed"] = 0.30
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.0, True)
+    assert core._low_clearance_cap is not None and core._low_clearance_cap[1] < 0.3
+    # moving backwards at 0.6 measured with nothing commanded or requested: the reverse arc at 0.6
+    core, state = make(rects=[BEHIND], trackers={"transport": tracker(4.0, -2.0, direction=-1)}, truth_speed=-0.6)
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.0, True)
+    assert core._low_clearance_cap is not None and core._low_clearance_cap[1] < 0.6
+
+
+def test_a_prefix_tracker_short_of_the_delivery_straight_keeps_the_search_props():
+    # Codex round 4: arm_docking's prefix ends before the straight; its end is not the slot stage's
+    estimate = Rectangle(1.0, 0.4 - 0.02 + 0.5, 3.0, 1.0, 0.0)  # a stale search-stage estimate over the outline
+    full = SimpleNamespace(poses=np.column_stack((np.linspace(-2.0, 4.0, 61), np.zeros(61), np.zeros(61))))
+    core, state = make(rects=[estimate], uris=["session:p@search"], trackers={"transport": tracker(-2.0, 2.5)},
+                       paths={"transport": full})
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)
+    assert state["low_clearance"]["legs"][0]["slot_from_m"] is None
+    assert core._low_clearance_cap == (10.0, 0.0)
+    core, state = make(rects=[estimate], uris=["session:p@search"], trackers={"transport": tracker(-2.0, 4.0)},
+                       paths={"transport": full})
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)
+    assert state["low_clearance"]["legs"][0]["slot_from_m"] == pytest.approx(4.5)
+
+
+def test_a_zero_cap_holds_the_steering():
+    core, state = make(obstacle=slewing_obstacle())
+    state["command_speed"] = 0.0
+    core._low_clearance_cap = (10.0, 0.0)
+    steering = np.zeros(2)
+    out = core.assemble_command(10.0, 0.01, 0.2, 0.2, 0.0, steering, False, False, False, False, False)
+    assert out.drive.speed_mps == 0.0 and np.all(out.steering_command == 0.0)
+
+
+def test_without_low_props_the_record_stays_strict_json():
+    core, state = make(rects=[])
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)
+    json.dumps(state, allow_nan=False)

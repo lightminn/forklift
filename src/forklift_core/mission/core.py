@@ -179,6 +179,14 @@ NOT_STOPPED_S = 10.0
 LIFT_RESUME_TOL_M = 0.01
 
 
+def _finite_or_none(value):
+    """A record value: None for a missing or infinite one (the run record is strict JSON)."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
                  paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
@@ -4892,23 +4900,44 @@ class MissionCore:
         if leg is None:
             poses = tracker_.path_arrays()[0]
             length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
-            slot_from = (max(0.0, length - float(geometry.delivery_straight_m)) if ms.phase == "transport"
-                         else 0.0 if ms.phase == "withdraw" else None)
+            slot_from = None
+            if ms.phase == "withdraw":
+                slot_from = 0.0
+            elif ms.phase == "transport":
+                # the delivery straight is the slot stage's -- only on a tracker that runs to the planned transport's
+                # end (arm_docking's prefix stops before it, an escape is elsewhere; Codex round 4 P2-2)
+                full_ = self.paths.get("transport")
+                full_poses_ = None if full_ is None else np.asarray(getattr(full_, "poses", full_), dtype=float)
+                if full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_) and np.allclose(
+                        full_poses_[-1], poses[-1], atol=1e-6):
+                    slot_from = max(0.0, length - float(geometry.delivery_straight_m))
             plane = float(getattr(geometry, "lidar_plane_m", 1.05))
             leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
                                slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)
             cache.clear()  # one leg at a time: the tracker being followed
             cache[key] = leg
-            guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m,
-                                  "min_planned_m": float(np.min(leg.c)) if len(leg.c) else None})
+            guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m, "slot_from_m": slot_from,
+                                  "min_planned_m": _finite_or_none(float(np.min(leg.c)) if len(leg.c) else None)})
         cfg = LowClearanceConfig(margin_m=float(options.low_clearance_margin_m),
                                  deviation_m=float(options.low_clearance_deviation_m))
         stopping = (obstacle["layer"].permission.config.stopping if obstacle is not None
                     else StoppingModel(0.15, 1.5, 0.05))
         tcfg = tracker_.config
         end_allowance = tcfg.overshoot_tolerance_m if tcfg.overshoot_tolerance_m is not None else tcfg.position_tolerance_m
-        speed_cap = max(abs(float(requested_speed)), abs(float(state.get("command_speed", 0.0))))
-        direction = (1 if requested_speed > 0 else -1) if requested_speed != 0.0 else int(tracker_.leg_ahead()[1]) or 1
+        # The arc of the motion the truck has (Codex round 4 P2-1): a truck still rolling stops the way it rolls, at
+        # the largest of the speeds it has or is asked for.
+        truth_speed_fn = getattr(self.hooks, "truth_speed", None)
+        moving = float(truth_speed_fn()) if truth_speed_fn is not None else 0.0
+        commanded = float(state.get("command_speed", 0.0))
+        speed_cap = max(abs(float(requested_speed)), abs(commanded), abs(moving))
+        if abs(moving) > 0.01:
+            direction = 1 if moving > 0 else -1
+        elif abs(commanded) > 1e-6:
+            direction = 1 if commanded > 0 else -1
+        elif requested_speed != 0.0:
+            direction = 1 if requested_speed > 0 else -1
+        else:
+            direction = int(tracker_.leg_ahead()[1]) or 1
         out = guard_cap(tuple(float(v) for v in rear), float(kappa), direction, speed_cap, shape, leg,
                         progress_m=tracker_.progress_m(), leg_remaining_m=tracker_.leg_remaining_m(),
                         end_allowance_m=float(end_allowance), stopping=stopping, config=cfg)
@@ -4916,7 +4945,8 @@ class MissionCore:
 
         now_ = shape_clearance(tuple(float(v) for v in rear), shape, leg.props_at(tracker_.progress_m()))
         low_ = guard["min_clearance_m"]
-        low_[ms.phase] = min(low_.get(ms.phase, float("inf")), float(now_))
+        if math.isfinite(now_):
+            low_[ms.phase] = min(low_.get(ms.phase, float(now_)), float(now_))
         if math.isfinite(out.allowed_mps):
             self._low_clearance_cap = (t, float(out.allowed_mps))
             if out.allowed_mps < speed_cap:
@@ -4927,8 +4957,9 @@ class MissionCore:
                 if not holds or holds[-1]["phase"] != ms.phase or t - holds[-1]["last_s"] > 0.5:
                     if len(holds) < 50:
                         holds.append({"since_s": float(t), "last_s": float(t), "phase": ms.phase,
-                                      "lower_bound_m": float(out.lower_bound_m), "threshold_m": float(out.threshold_m),
-                                      "clearance_now_m": float(now_)})
+                                      "lower_bound_m": _finite_or_none(out.lower_bound_m),
+                                      "threshold_m": _finite_or_none(out.threshold_m),
+                                      "clearance_now_m": _finite_or_none(now_)})
                 else:
                     holds[-1]["last_s"] = float(t)
 
@@ -4944,6 +4975,10 @@ class MissionCore:
         state, obstacle, settings, hooks, options, near = (self.state, self.obstacle, self.settings, self.hooks,
                                                            self.options, self.near)
         drive_geometry, COMMAND_ACCEL_MPS2 = options.drive_geometry, options.command_accel_mps2
+        if getattr(options, "low_clearance_guard", "off") == "on":
+            cap_ = getattr(self, "_low_clearance_cap", None)
+            # the guard's zero cap is a hold: wheels to zero, steering held (Codex round 4 P2-3)
+            obstacle_hold = obstacle_hold or (cap_ is not None and cap_[0] == t and cap_[1] == 0.0)
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
             requested_speed = 0.0
