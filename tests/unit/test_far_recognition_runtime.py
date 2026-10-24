@@ -120,6 +120,26 @@ def test_the_saved_frames_recompute_every_stop_exactly(tmp_path):
     assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
 
 
+def test_the_occupancy_margin_is_recorded_and_the_recompute_uses_it(tmp_path):
+    """plan 2026-10-24-far-target-occupancy: the run's margin is in its record (None: off, every earlier record),
+    each decision's exclusion detail is in the frame record, and the recompute replays with the recorded margin."""
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition", occupancy_margin_m=0.05)
+    assert run.far.occupancy_margin_m == 0.05
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    summary = run.summary()
+    assert summary["occupancy_margin_m"] == 0.05
+    pairs = RC.recompute(tmp_path, recognition=summary)
+    assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
+    assert _runtime().summary()["occupancy_margin_m"] is None
+    old = {k: v for k, v in summary.items() if k != "occupancy_margin_m"}
+    runtime = RC.runtime_for(old)
+    assert runtime.far.occupancy_margin_m is None
+
+
 def test_a_frame_before_the_cameras_first_render_is_skipped():
     run = _runtime()
     run.record_step(24, 24 * DT, (0, 0, 0), (0, 0, 0), PALLET)

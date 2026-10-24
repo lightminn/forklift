@@ -1155,6 +1155,24 @@ def test_the_learned_worker_has_a_deadline_and_is_closed_at_exit():
     assert 'atexit.register(far_learned["worker"].close)' in block
 
 
+def test_the_far_occupancy_margin_reaches_the_runtime_and_is_part_of_the_contract():
+    """Plan 2026-10-24-far-target-occupancy: --recognition-occupancy-margin-m (0.05 in Isaac, 'none' off) goes to the
+    far runtime, which records it; a near-tracking run (recognition off) carries the default."""
+    import sys
+
+    sys.path.insert(0, str(SCRIPT.parent))
+    import near_tracking
+
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["recognition_occupancy_margin_m"] == 0.05
+    source = SCRIPT.read_text()
+    arg = source[source.index('"--recognition-occupancy-margin-m"'):]
+    arg = arg[: arg.index("parser.add_argument")]
+    assert 'None if v.lower() == "none" else float(v)' in arg and "default=0.05" in arg
+    block = source[source.index("far_runtime = frr.FarRuntime("):]
+    block = block[: block.index(")\n            if session is not None")]
+    assert "occupancy_margin_m=args.recognition_occupancy_margin_m" in block
+
+
 def test_the_far_zone_change_is_saved_into_the_run_state_when_it_is_made():
     """Codex ecf4be5 P2: a run that ends after the zone is narrowed but before the next stop still records the
     change (the state's recognition summary is refreshed by the zone hook, not only by a stop)."""

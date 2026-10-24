@@ -189,14 +189,15 @@ class FarRuntime:
     def __init__(self, *, fork_spacing: float, pallet_depth_m: float, pallet_shape: str, zone_centre_xy,
                  zone_radius_m: float, camera_x_m: float, dt: float, frame_every: int = 24, lag_steps: int = 0,
                  drive_frames: bool = True, out_dir: Path | None = None, root: Path = ROOT, proposer=None,
-                 identity_threshold=None, proposer_record=None):
+                 identity_threshold=None, proposer_record=None, occupancy_margin_m=None):
         self.specs = known_specs(root, run_shape=pallet_shape)
         site = load_site_defaults(root / "config/site_load_defaults.yaml", self.specs)
         self.site = {self.specs[k].name: v for k, v in site.items()}
         self.setup = ForkSetup(float(fork_spacing))
         self.bounds = TrackBounds.load(root / "config/recognition_track_bounds.yaml")
         self.far = B.FarRecognition(self.bounds, specs=self.specs, setup=self.setup, load_for=self._load_for,
-                                    proposer=proposer, identity_threshold=identity_threshold)
+                                    proposer=proposer, identity_threshold=identity_threshold,
+                                    occupancy_margin_m=occupancy_margin_m)
         self.proposer_record = proposer_record
         self.source = proposer if isinstance(proposer, LearnedSource) else None  # saves rgb and proposals
         self.pallet_depth_m, self.pallet_shape = float(pallet_depth_m), pallet_shape
@@ -472,6 +473,7 @@ class FarRuntime:
                 "zone": dict(self.zone_initial), "zone_changes": list(self.zone_changes),
                 "camera_x_m": self.camera_x_m, "fork_spacing_m": self.setup.spacing_m,
                 "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape,
+                "occupancy_margin_m": self.far.occupancy_margin_m,
                 "proposer": {**(self.proposer_record or {"kind": "oracle"}),
                              **({"fallbacks": len(self.source.fallbacks), "fallback_reasons": self.source.fallbacks[:5],
                                  "model_ms": self.source.timing()} if self.source is not None else {})}}

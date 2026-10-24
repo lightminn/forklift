@@ -44,9 +44,10 @@ def instruction_from_zone(centre_xy, radius_m: float, map_from_base) -> dict:
     return {"present": True, "x_m": c * dx + s * dy, "y_m": -s * dx + c * dy, "radius_m": float(radius_m)}
 
 
-def decide(fit, instruction):
-    """The single-frame decision over the frame's whole fit (2B evaluation semantics)."""
-    return select_target(fit.candidates, instruction, unresolved=fit.failures)
+def decide(fit, instruction, occupancy_margin_m=None):
+    """The single-frame decision over the frame's whole fit (2B evaluation semantics). occupancy_margin_m: the
+    floor contract's occupancy exclusion (target_selection._occupied), None is off."""
+    return select_target(fit.candidates, instruction, unresolved=fit.failures, occupancy_margin_m=occupancy_margin_m)
 
 
 def face_distance(face, camera_x_m: float) -> float:
@@ -119,7 +120,7 @@ class FarRecognition:
     """Frames of one observation leg, its target and the stop decision."""
 
     def __init__(self, bounds, *, specs: dict, setup, load_for, clock_domain: str = "ros_sim", proposer=None,
-                 identity_threshold=None):
+                 identity_threshold=None, occupancy_margin_m=None):
         """``proposer(scene, instance_ids) -> (proposals, extra failures)``: the oracle instance masks by default,
         the learned proposer (with its geometric fallback) in stage 3; ``identity_threshold`` is tau on the learned
         score (instance_fit._identity). The instance ids are the evaluation truth -- only the oracle reads them."""
@@ -127,6 +128,7 @@ class FarRecognition:
         self.clock_domain = clock_domain
         self.proposer = proposer or (lambda scene, ids: (proposals_from_ids(ids), ()))
         self.identity_threshold = identity_threshold
+        self.occupancy_margin_m = occupancy_margin_m  # None: the floor contract's exclusion is off
         self.last_proposals: list = []
         self.start_leg()
 
@@ -160,13 +162,14 @@ class FarRecognition:
             self.proposer.absorb(work.proposer_result)
         self.last_proposals = list(work.proposals)
         fit = work.fit
-        sel = decide(fit, instruction)
+        sel = decide(fit, instruction, self.occupancy_margin_m)
         report = self.tracker.update(Frame(scene.stamp_ns, self.clock_domain, 0, odom_from_base, fit.candidates))
         visible = {t.track_id: t for t in self.tracker.tracks(scene.stamp_ns, odom_from_base)}
         taken = report.accepted.get(sel.candidate_id) if sel.status == "selected" else None
         record = {"stamp_ns": int(scene.stamp_ns), "candidates": [_candidate_record(c) for c in fit.candidates],
                   "failures": [{"proposal_id": f.proposal_id, "reason": f.reason} for f in fit.failures],
-                  "decision": {"status": sel.status, "candidate_id": sel.candidate_id, "reasons": list(sel.reasons)},
+                  "decision": {"status": sel.status, "candidate_id": sel.candidate_id, "reasons": list(sel.reasons),
+                               **({"occupancy": sel.detail} if sel.detail is not None else {})},
                   "taken_by": taken, "visible": sorted(visible), "untracked": report.untracked, "held": report.held,
                   "new": report.new, "suppressed": report.suppressed}
         return fit, sel, visible, taken, record

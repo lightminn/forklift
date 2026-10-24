@@ -80,6 +80,18 @@ class _Replay:
         return saved_proposals(self.frame)
 
 
+def runtime_for(rec: dict, replay=None):
+    """A FarRuntime as the recorded run had it. A record without an occupancy margin (every one before
+    plan 2026-10-24-far-target-occupancy) ran with the exclusion off."""
+    R = _runtime_module()
+    proposer = rec.get("proposer") or {"kind": "oracle"}
+    return R.FarRuntime(fork_spacing=rec["fork_spacing_m"], pallet_depth_m=rec["pallet_depth_m"],
+                        pallet_shape=rec["pallet_shape"], zone_centre_xy=rec["zone"]["centre_xy"],
+                        zone_radius_m=rec["zone"]["radius_m"], camera_x_m=rec["camera_x_m"], dt=1 / 120,
+                        proposer=replay, identity_threshold=proposer.get("tau"),
+                        occupancy_margin_m=rec.get("occupancy_margin_m"))
+
+
 def recompute(run_dir: Path, *, recognition: dict | None = None, model=None) -> list:
     """[(recorded attempt, recomputed record)] per stop, in order. ``model``: a learned run's model, rerun."""
     R = _runtime_module()
@@ -88,10 +100,7 @@ def recompute(run_dir: Path, *, recognition: dict | None = None, model=None) -> 
     if model is not None and proposer["kind"] != "learned":
         raise ValueError("a model rerun needs a learned run")
     replay = _Replay(model) if proposer["kind"] == "learned" else None
-    runtime = R.FarRuntime(fork_spacing=rec["fork_spacing_m"], pallet_depth_m=rec["pallet_depth_m"],
-                           pallet_shape=rec["pallet_shape"], zone_centre_xy=rec["zone"]["centre_xy"],
-                           zone_radius_m=rec["zone"]["radius_m"], camera_x_m=rec["camera_x_m"], dt=1 / 120,
-                           proposer=replay, identity_threshold=proposer.get("tau"))
+    runtime = runtime_for(rec, replay)
     far = runtime.far
     far.start_leg()
     out, attempts, leg = [], iter(rec["attempts"]), 0

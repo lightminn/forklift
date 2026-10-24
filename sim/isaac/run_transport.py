@@ -558,6 +558,15 @@ def arguments() -> argparse.Namespace:
                         "ONNX in a worker process on --recognition-learned-python, the geometric fallback on a model "
                         "failure) instead of the oracle instance masks; identity is confirmed at score >= "
                         "--recognition-tau (docs/plans/2026-10-19-recognition-stage3-learned-proposals.md, task 6).")
+    parser.add_argument("--recognition-occupancy-margin-m", type=lambda v: None if v.lower() == "none" else float(v),
+                        default=0.05,
+                        help="The far target's occupancy exclusion under the floor contract (every pallet of the "
+                        "run on the floor, none overlapping -- the layout's placement check): with one confirmed "
+                        "known-shape fit on the floor in the zone and its centre within this margin of its fit, "
+                        "what else could be in the zone is not another pallet centred there "
+                        "(docs/plans/2026-10-24-far-target-occupancy.md O1). 0.05 is an empirical Isaac value, not "
+                        "a measured bound; 'none' turns it off (every run before it, and the real D435i until its far "
+                        "error is measured).")
     parser.add_argument("--recognition-onnx", type=Path, default=None, help="The learned proposer's ONNX model.")
     parser.add_argument("--recognition-tau", type=float, default=None, help="The learned identity threshold.")
     parser.add_argument("--recognition-conf", type=float, default=0.05,
@@ -3272,6 +3281,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 proposer=far_learned.get("source"),
                 identity_threshold=args.recognition_tau if far_learned else None,
                 proposer_record=far_learned.get("record"),
+                occupancy_margin_m=args.recognition_occupancy_margin_m,
             )
             if session is not None:  # the first mission's pallet (later ones set at their switch)
                 far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])
