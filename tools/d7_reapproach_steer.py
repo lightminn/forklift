@@ -295,12 +295,18 @@ def check(cases, geometry, constants, *, planner=None) -> dict:
     # every counted re-approach of the named missions, in or out of the rows (an excluded one is a missing one)
     named = [c for c in cases if (c["run"], c["mission"]) in REQUIRED_STALL_MISSIONS]
     complete = (len(named) == REQUIRED_STALLS and len(required) == REQUIRED_STALLS
-                and all(r["criteria"] is not None for r in stalls) and not incomplete)
+                and all(r["criteria"] is not None for r in required) and not incomplete)
+    # the pre-registered criteria are the named four's; the other stalls (a b re-approach that stood, then a d one
+    # that arrived) are reported, not judged
+    others = [r for r in stalls if (r["run"], r["mission"]) not in REQUIRED_STALL_MISSIONS]
     reproduced = (complete and bool(controls)
-                  and all(all(r["criteria"].values()) for r in stalls)
+                  and all(all(r["criteria"].values()) for r in required)
                   and all(r["criteria"]["arrives"] for r in controls))
     out = {"rows": rows, "stall_cases": len(stalls), "control_cases": len(controls), "required_stalls": len(required),
-           "named_attempts": len(named), "incomplete": incomplete, "complete": complete, "reproduced": reproduced}
+           "named_attempts": len(named), "incomplete": incomplete, "complete": complete, "reproduced": reproduced,
+           "other_stalls": len(others),
+           "other_stalls_reproduced": sum(1 for r in others if r["criteria"] and all(r["criteria"].values())),
+           "controls_arrived": sum(1 for r in controls if r["criteria"]["arrives"])}
     if reproduced and planner is not None:
         out["grid"] = grid(cases, geometry, constants, planner)
         # the grid runs on exactly the checked cases, every one planned or counted as no plan (never an empty set)
