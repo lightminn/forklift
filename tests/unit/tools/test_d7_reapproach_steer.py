@@ -95,6 +95,25 @@ def test_a_fed_lateral_error_moves_the_truck_the_other_way():
     assert abs(fed["pose"][1]) < 0.01
 
 
+def test_a_model_stall_at_another_cusp_is_not_the_same_failure():
+    """Codex plan round 10 P2 (ct2_07ca86aa_fixed_random_m_s2 m3 retry 1: Isaac at the first cusp, the fed model at
+    the second): counted as a stall, not as one at the same leg end."""
+    from d7_reapproach_steer import feed_summary
+
+    def mode(status, leg):
+        return {"status": status, "leg": leg}
+
+    rows = [{"isaac": "stall", "isaac_stop": {"leg": 0}, "none": mode("arrived", 1), "position": mode("stall", 0),
+             "position_yaw": mode("stall", 0)},
+            {"isaac": "stall", "isaac_stop": {"leg": 0}, "none": mode("arrived", 1), "position": mode("stall", 1),
+             "position_yaw": mode("stall", 1)},
+            {"isaac": "arrived", "isaac_stop": None, "none": mode("arrived", 1), "position": mode("stall", 0),
+             "position_yaw": mode("arrived", 1)}]
+    out = feed_summary(rows)
+    assert out["position"] == {"stalls": 2, "stall_any": 2, "stall_same_leg": 1, "controls": 1, "control_arrived": 0}
+    assert out["none"]["stall_any"] == 0 and out["position_yaw"]["control_arrived"] == 1
+
+
 def _mission(tmp_path, run, mission, retries, rounds, outcome, reason, ended_s=200.0):
     import json
 

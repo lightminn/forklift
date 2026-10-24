@@ -260,7 +260,9 @@ def extract(run_dirs) -> list:
                     if row.get("end_s") is not None and control:
                         stand = [c for c in control if c[0] < float(row["end_s"]) - 1e-6]
                         row["stop_pose"] = stand[-1][1:4] if stand else None
-                    row["control_error"] = control_error_series(control, ev["time_s"], window_end)
+                    # up to the first docking round (the re-approach's end), not the unloading after (Codex round 10 P3)
+                    row["control_error"] = control_error_series(control, ev["time_s"],
+                                                                min(matched) if matched else window_end)
                 cases.append(row)
     return cases
 
@@ -417,14 +419,23 @@ def diagnose(cases, geometry, constants) -> dict:
                            c["start"], geometry, constants, steering0=c["steering0"], command0=c["command0"], **kw)
             row[name] = {k: sim[k] for k in ("status", "leg", "heading_error_rad", "position_error_m", "time_s")}
         rows.append(row)
+    return {"summary": feed_summary(rows), "rows": rows}
+
+
+def feed_summary(rows) -> dict:
+    """Per feed mode: Isaac stalls the model also stalls, and of those at the same leg end (cusp) as Isaac's -- a
+    stall elsewhere is not the same failure (Codex plan round 10 P2); controls that arrive."""
     summary = {}
     for name in ("none", "position", "position_yaw"):
+        stalls = [r for r in rows if r["isaac"] == "stall"]
         summary[name] = {
-            "stall_reproduced": sum(1 for r in rows if r["isaac"] == "stall" and r[name]["status"] == "stall"),
-            "stalls": sum(1 for r in rows if r["isaac"] == "stall"),
-            "control_arrived": sum(1 for r in rows if r["isaac"] == "arrived" and r[name]["status"] == "arrived"),
-            "controls": sum(1 for r in rows if r["isaac"] == "arrived")}
-    return {"summary": summary, "rows": rows}
+            "stalls": len(stalls),
+            "stall_any": sum(1 for r in stalls if r[name]["status"] == "stall"),
+            "stall_same_leg": sum(1 for r in stalls if r[name]["status"] == "stall" and r["isaac_stop"] is not None
+                                  and r[name]["leg"] == r["isaac_stop"]["leg"]),
+            "controls": sum(1 for r in rows if r["isaac"] == "arrived"),
+            "control_arrived": sum(1 for r in rows if r["isaac"] == "arrived" and r[name]["status"] == "arrived")}
+    return summary
 
 
 def make_planner():
