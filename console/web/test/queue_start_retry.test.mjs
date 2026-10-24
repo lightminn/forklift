@@ -234,3 +234,43 @@ test("a STOP and rearm between two states (control_gen moved) stops the wait", (
   assert.equal(q.run, "stopped");
   assert.equal(q.stopReason, "시작 직후 재제출 취소: 제어 세대가 바뀜");
 });
+
+// ---- Codex round 2 ------------------------------------------------------------------------------------------------
+test("a mission's result arriving while it waits ends 'just after the start': no resubmit, it stops", () => {
+  const q = running();
+  refuse(q, submit(q, 10_000));
+  q.onResult({ mission_id: "M-7", outcome: "done" }, 10_200);
+  assert.equal(q.run, "stopped");
+  assert.equal(q.stopReason, "시작 직후 재제출 취소: 미션이 보임");
+  assert.deepEqual(standFor(q, 10_300, 12_000), []);
+});
+
+test("seeing a mission is a change the storage keeps, a stopped queue too", () => {
+  const q = new MissionQueue();
+  q.onWelcome(3);
+  const v0 = q.version;
+  q.onResult({ mission_id: "M-1", outcome: "done" }, 1_000);
+  assert.ok(q.version > v0);
+  assert.equal(q.toStorage().mission_seen_this_epoch, true);
+  const r = new MissionQueue();
+  r.onWelcome(3);
+  const v1 = r.version;
+  r.onState({ ...READY, mode: "AUTO", stop_kind: "none", mission: { mission_id: "M-2", status: "running" } }, 1_000);
+  assert.ok(r.version > v1);
+});
+
+test("an older stored queue without the session's counts is restored as if the resubmit were spent", () => {
+  const q = running();
+  submit(q, 10_000);
+  const old = q.toStorage();
+  delete old.submits_this_epoch;
+  delete old.start_retry_used;
+  delete old.mission_seen_this_epoch;
+  const r = MissionQueue.fromStorage(old, { epoch: 3, results: [] });
+  r.onWelcome(3);
+  r.resolveUncertain(r.items[0].item_id, "resubmit");
+  r.onState(READY, 20_000);
+  r.resume(20_000);
+  refuse(r, submit(r, 20_000));
+  assert.equal(r.stopReason, "거부: not_stopped");
+});
