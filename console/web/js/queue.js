@@ -61,7 +61,7 @@ export class MissionQueue {
     this.phase = "waiting"; // of the front item: waiting | picking | picked (an auto item) | submitting | in_mission
     this.current = null; // {item_id, request_id, mission_id, epoch, pallet_id, destination_id}
     this.finished = []; // newest first: {item, outcome, reason, mission_id, pallet_id, destination_id}
-    // CT-2: the auto item's pick_request ({item_id, request_id, epoch, sentAt, acked}) -- kept until it is acked or
+    // CT-2: the auto item's pick_request ({item_id, request_id, epoch, sentAt, acked, none}) -- kept until it is acked or
     // let go, through a pick held, so a refusal after the pick still stops and an unacked request is forgotten
     // (Codex CT-2 r1) -- and the pick held ({pallet_id, destination_id, targets_revision, plan, missions}); asks
     // counts the requests of one pick (one re-ask allowed)
@@ -230,11 +230,14 @@ export class MissionQueue {
     else if (this.current && this.phase === "submitting") this.early.set(id, { result, nowMs });
   }
 
-  onAnswer(key, answer) {
+  // nowMs: when the answer came -- a pick_request's ack is judged against its deadline too (Codex CT-2 r2)
+  onAnswer(key, answer, nowMs) {
     const pk = this.pick;
     if (pk && key.epoch === pk.epoch && key.item_id === pk.item_id && key.request_id === pk.request_id) {
       if (answer?.t === "ack") { // the pick comes as its own message; a held pick may now be submitted
+        if (nowMs !== undefined && nowMs - pk.sentAt > this.pickDeadlineMs) return this.stop("자동 선택 응답 없음");
         pk.acked = true;
+        if (pk.none) return this.#endAuto(pk.item_id); // none remaining came first, waiting for this ack
         this.#changed();
         return {};
       }
@@ -290,17 +293,14 @@ export class MissionQueue {
                     targets_revision: msg.targets_revision, plan: msg.plan ?? null, missions: msg.missions ?? null };
       this.lastPick = { ...this.held };
       this.lastPickBlocked = null;
+      pk.none = false; // a pick computed again for a resend supersedes an earlier one
       this.phase = "picked"; // the request stays tracked until its ack
       this.#changed();
       return {};
     }
     if (reason === "none_remaining") {
-      const autoId = pk.item_id;
-      this.#dropPick(false);
-      this.items = this.items.filter((x) => x.item_id !== autoId);
-      this.lastPickBlocked = null;
-      this.lastPick = null;
-      if (!this.items.length && this.run === "running") return this.stop("완료");
+      if (pk.acked) return this.#endAuto(pk.item_id);
+      pk.none = true; // a refusal may still come: the auto item ends with the ack (Codex CT-2 r2)
       this.#changed();
       return {};
     }
@@ -390,6 +390,17 @@ export class MissionQueue {
     this.phase = "picking";
     this.#changed();
     return { pick_request: { item_id: front.item_id, request_id } };
+  }
+
+  // none remaining, acked: the auto item is done; the next item goes on, or the queue is done
+  #endAuto(autoId) {
+    this.#dropPick(false);
+    this.items = this.items.filter((x) => x.item_id !== autoId);
+    this.lastPickBlocked = null;
+    this.lastPick = null;
+    if (!this.items.length && this.run === "running") return this.stop("완료");
+    this.#changed();
+    return {};
   }
 
   #reAsk() {

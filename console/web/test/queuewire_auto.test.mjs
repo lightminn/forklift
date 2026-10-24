@@ -39,6 +39,7 @@ function harness(caps = CAPS) {
       w.onWelcome(session.welcome);
     },
     state(st) { session.state = st; w.onState(st); },
+    wait(ms) { t += ms; },
     run(ms, st = session.state) { for (let k = 0; k < ms; k += 250) { t += 250; h.state(st); w.tick(); } },
     sent: (type) => session.sent.filter((m) => m.t === type),
     async answer(msg, extra) {
@@ -80,6 +81,7 @@ test("all remaining pallets: two picks moved, then none remaining -- three asks 
     h.run(1250, READY); // the settle time
   }
   const last = h.sent("pick_request").at(-1);
+  await h.answer(last, { t: "ack" });
   h.pick(last, null, null);
   h.run(3000, READY);
   assert.equal(h.sent("pick_request").length, 3);
@@ -141,4 +143,30 @@ test("a disconnect while picking forgets it and nothing is uncertain; a refusal 
   assert.equal(r.w.queue.stopReason, "자동 선택 거부: unsupported");
   assert.equal(r.sent("pick_request").length, 1);
   assert.equal(r.sent("mission_submit").length, 0);
+});
+
+test("an ack past the deadline stops through the wiring; none remaining waits for its ack (Codex CT-2 r2)", async () => {
+  const h = harness();
+  await startAuto(h);
+  h.run(250, READY);
+  const ask = h.sent("pick_request").at(-1);
+  h.pick(ask, "P-1", "D-1");
+  h.run(5000, READY); // the tick at the boundary itself is still in time
+  h.wait(100); // the ack then comes before the next tick
+  await h.answer(ask, { t: "ack" });
+  h.run(500, READY);
+  assert.equal(h.w.queue.stopReason, "자동 선택 응답 없음");
+  assert.equal(h.sent("mission_submit").length, 0);
+
+  const g = harness();
+  await startAuto(g);
+  assert.equal(g.w.add({ pallet_id: "P-2", destination_id: "D-1" }), true);
+  g.run(250, READY);
+  const req = g.sent("pick_request").at(-1);
+  g.pick(req, null, null);
+  g.run(500, READY);
+  await g.answer(req, { t: "reject", reason: "busy" });
+  g.run(500, READY);
+  assert.equal(g.w.queue.stopReason, "자동 선택 거부: busy");
+  assert.equal(g.sent("mission_submit").length, 0, "the fixed item behind it is not submitted");
 });

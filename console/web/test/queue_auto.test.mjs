@@ -231,6 +231,57 @@ test("a pick that arrives after the deadline is not taken (Codex CT-2 r1)", () =
   assert.equal(q.next(ctx(), 15_250, newId), null);
 });
 
+test("none remaining before its ack waits for the ack; a refusal then stops and the next item is not submitted (Codex CT-2 r2)", () => {
+  const q = running([auto(), fixed("P-2", "D-1")]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  q.onPick(key, pick(key, null), 10_100, 7);
+  assert.equal(q.items[0].kind, "auto", "kept until the ack");
+  q.onState(READY, 10_200);
+  assert.equal(q.next(ctx(), 10_200, newId), null, "nothing submitted before the ack");
+  q.onAnswer(key, { t: "reject", request_id: key.request_id, reason: "busy" }, 10_300);
+  assert.equal(q.stopReason, "자동 선택 거부: busy");
+  q.onState(READY, 10_400);
+  assert.equal(q.next(ctx(), 10_400, newId), null);
+
+  const r = running([auto(), fixed("P-2", "D-1")]);
+  const k = ask(r, 10_000, ctx(), { ack: false });
+  r.onPick(k, pick(k, null), 10_100, 7);
+  r.onAnswer(k, { t: "ack", request_id: k.request_id }, 10_200);
+  assert.deepEqual(r.items.map((x) => x.kind), ["fixed"], "the ack ends the auto item");
+  r.onState(READY, 10_300);
+  assert.equal(r.next(ctx(), 10_300, newId).submit.pallet_id, "P-2");
+
+  const s = running([auto()]);
+  const ks = ask(s, 10_000, ctx(), { ack: false });
+  s.onPick(ks, pick(ks, null), 10_100, 7);
+  assert.equal(s.run, "running", "not done before the ack");
+  feed(s, 11_000, 15_000);
+  const out = s.tick(15_100);
+  assert.equal(s.stopReason, "자동 선택 응답 없음");
+  assert.deepEqual([out.forget, ...s.drainForget()], [ks.request_id], "the unacked request stops resending");
+});
+
+test("an ack that comes after the deadline stops; the held pick is not submitted (Codex CT-2 r2)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  q.onPick(key, pick(key, "P-1", "D-1"), 10_100, 7);
+  feed(q, 11_000, 15_000);
+  q.tick(15_000);
+  assert.equal(q.run, "running", "the boundary itself is still in time");
+  q.onAnswer(key, { t: "ack", request_id: key.request_id }, 15_100);
+  assert.equal(q.stopReason, "자동 선택 응답 없음");
+  q.onState(READY, 15_250);
+  assert.equal(q.next(ctx(), 15_250, newId), null);
+});
+
+test("a failed pick before its ack stops and lets the unacked request go (Codex CT-2 r2)", () => {
+  const q = running([auto()]);
+  const key = ask(q, 10_000, ctx(), { ack: false });
+  const out = q.onPick(key, pick(key, null, null, { reason: "all_blocked" }), 10_100, 7);
+  assert.equal(q.stopReason, "자동 선택 실패: all_blocked");
+  assert.deepEqual([out.forget, ...q.drainForget()], [key.request_id]);
+});
+
 test("a busy refusal of an auto submit keeps the pallet and destination on the uncertain mark (Codex CT-2 r1)", () => {
   const q = running([auto()]);
   const key = ask(q, 10_000);

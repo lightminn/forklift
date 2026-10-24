@@ -90,7 +90,7 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
     const key = { epoch: queue.epoch, item_id: r.item_id, request_id: r.request_id };
     pickKey = key;
     session.request("pick_request", {}, { requestId: r.request_id })
-      .then((answer) => apply(queue.onAnswer(key, answer)));
+      .then((answer) => apply(queue.onAnswer(key, answer, nowMs())));
   }
 
   function submit(s) {
@@ -99,7 +99,7 @@ export function createQueueWire({ session, tabStore, sharedStore, clientId, nowM
     save(); // the submit is recorded before it goes out (plan D6)
     session.request("mission_submit", { pallet_id: s.pallet_id, destination_id: s.destination_id,
                                         targets_revision: s.targets_revision }, { requestId: s.request_id })
-      .then((answer) => apply(queue.onAnswer(key, answer)));
+      .then((answer) => apply(queue.onAnswer(key, answer, nowMs())));
   }
 
   return {
