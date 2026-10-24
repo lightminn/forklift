@@ -4903,9 +4903,11 @@ class MissionCore:
             slot_from = None
             if ms.phase == "withdraw":
                 slot_from = 0.0
-            elif ms.phase == "transport":
+            elif ms.phase == "transport" and not (obstacle is not None
+                                                  and obstacle.get("backoff", {}).get("phase") == "transport"):
                 # the delivery straight is the slot stage's -- only on a tracker that runs to the planned transport's
-                # end (arm_docking's prefix stops before it, an escape is elsewhere; Codex round 4 P2-2)
+                # end (arm_docking's prefix stops before it; Codex round 4 P2-2), never a backoff or an escape, which
+                # replace paths["transport"] too (Codex round 5 P2)
                 full_ = self.paths.get("transport")
                 full_poses_ = None if full_ is None else np.asarray(getattr(full_, "poses", full_), dtype=float)
                 if full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_) and np.allclose(

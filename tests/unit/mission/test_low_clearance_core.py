@@ -171,3 +171,19 @@ def test_without_low_props_the_record_stays_strict_json():
     core, state = make(rects=[])
     core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)
     json.dumps(state, allow_nan=False)
+
+
+def test_a_backoff_or_escape_keeps_the_search_props_although_it_replaced_the_planned_path():
+    # Codex round 5: escapes and backoffs replace paths["transport"] with themselves, so the end comparison holds
+    estimate = Rectangle(1.0, 0.4 - 0.02 + 0.5, 3.0, 1.0, 0.0)
+    escape = tracker(0.3, 0.0, direction=-1)
+    path = SimpleNamespace(poses=escape.path_arrays()[0])
+    from forklift_core.control.drive_permission import StoppingModel
+
+    stopping = StoppingModel(0.15, 1.5, 0.05)
+    obstacle = {"layer": SimpleNamespace(permission=SimpleNamespace(config=SimpleNamespace(stopping=stopping))),
+                "permission_cap": None, "backoff": {"phase": "transport"}}
+    core, state = make(rects=[estimate], uris=["session:p@search"], trackers={"transport": escape},
+                       paths={"transport": path}, obstacle=obstacle)
+    core.low_clearance_tick(10.0, (0.3, 0.0, 0.0), 0.0, -0.15, True)
+    assert state["low_clearance"]["legs"][0]["slot_from_m"] is None and core._low_clearance_cap == (10.0, 0.0)
