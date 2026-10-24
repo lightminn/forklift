@@ -627,7 +627,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         """Every process of the run has ended: classify, clean up, record, retry; the slot frees."""
         r = live.pop(pid)
         if ledger is not None and r.ram_key is not None:
-            ledger.release(r.ram_key)  # its memory is free again, however soon it ended (taskset exec failures too)
+            try:  # its memory is free again, however soon it ended (taskset exec failures too)
+                ledger.release(r.ram_key)
+            except Exception as exc:  # noqa: BLE001 -- the run is still cleaned up and recorded
+                note_error(f"release {r.run.name}", exc)
         x = r.exited
         signs = infra_signs([r.log_path, *(p for g in r.run.scan for p in sorted(glob.glob(g)))])
         killed = x["signal"] == signal.SIGKILL or x["rc"] in (137, -9)
@@ -896,7 +899,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 "retried": False})
                     finally:
                         if not started and ledger is not None:
-                            ledger.release(key)  # nothing started: the memory was not taken
+                            try:  # nothing started: the memory was not taken
+                                ledger.release(key)
+                            except Exception as exc:  # noqa: BLE001
+                                note_error(f"release {run.name}", exc)
                     continue
                 if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
                     st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1

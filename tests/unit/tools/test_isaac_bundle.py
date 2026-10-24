@@ -784,3 +784,16 @@ def test_a_run_that_ends_at_once_gives_its_reservation_back(tmp_path):
     bundle(tmp_path, [stamp_run("a", tmp_path, 0.05, code=127)], node_ram_min_mib=6904, node_ram=lambda: 7000,
            node_ledger_dir=led)
     assert results(tmp_path)["a"]["rc"] == 127 and list(led.glob("r-*")) == []
+
+
+def test_a_reservation_that_cannot_be_given_back_leaves_the_run_recorded(tmp_path, monkeypatch):
+    seen = []
+
+    def broken(self, key):
+        raise OSError("ledger gone")
+
+    monkeypatch.setattr(ib.NodeLedger, "release", broken)
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], node_ram_min_mib=100, node_ram=lambda: 7000,
+                     node_ledger_dir=tmp_path / "ledger", cleanup=lambda sid: seen.append(sid) or [])
+    assert results(tmp_path)["a"]["status"] == "ended" and seen == ["77s0"]
+    assert summary["errors"] and summary["exit_code"] == 1
