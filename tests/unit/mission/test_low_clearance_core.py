@@ -187,3 +187,14 @@ def test_a_backoff_or_escape_keeps_the_search_props_although_it_replaced_the_pla
                        paths={"transport": path}, obstacle=obstacle)
     core.low_clearance_tick(10.0, (0.3, 0.0, 0.0), 0.0, -0.15, True)
     assert state["low_clearance"]["legs"][0]["slot_from_m"] is None and core._low_clearance_cap == (10.0, 0.0)
+
+
+def test_a_docking_reapproach_keeps_the_search_props():
+    # Codex round 6: install_reapproach replaces paths["transport"] too; it was planned on the search props
+    estimate = Rectangle(1.0, 0.4 - 0.02 + 0.5, 3.0, 1.0, 0.0)
+    again = tracker(-1.0, 0.0)
+    core, state = make(rects=[estimate], uris=["session:p@search"], trackers={"transport": again},
+                       paths={"transport": SimpleNamespace(poses=again.path_arrays()[0])})
+    core.slam = {"docking": {"reapproach": True}}
+    core.low_clearance_tick(10.0, (-0.5, 0.0, 0.0), 0.0, 0.15, True)
+    assert state["low_clearance"]["legs"][0]["slot_from_m"] is None and core._low_clearance_cap == (10.0, 0.0)

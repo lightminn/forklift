@@ -4903,11 +4903,13 @@ class MissionCore:
             slot_from = None
             if ms.phase == "withdraw":
                 slot_from = 0.0
-            elif ms.phase == "transport" and not (obstacle is not None
-                                                  and obstacle.get("backoff", {}).get("phase") == "transport"):
+            elif ms.phase == "transport" and not (
+                    (obstacle is not None and obstacle.get("backoff", {}).get("phase") == "transport")
+                    or (self.slam is not None and self.slam.get("docking", {}).get("reapproach"))):
                 # the delivery straight is the slot stage's -- only on a tracker that runs to the planned transport's
-                # end (arm_docking's prefix stops before it; Codex round 4 P2-2), never a backoff or an escape, which
-                # replace paths["transport"] too (Codex round 5 P2)
+                # end (arm_docking's prefix stops before it; Codex round 4 P2-2), never a backoff or an escape
+                # (Codex round 5 P2) nor a docking re-approach (planned on the search props, Codex round 6 P2), which
+                # replace paths["transport"] too
                 full_ = self.paths.get("transport")
                 full_poses_ = None if full_ is None else np.asarray(getattr(full_, "poses", full_), dtype=float)
                 if full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_) and np.allclose(
