@@ -776,3 +776,11 @@ def test_sessions_run_on_the_cpus_the_bridges_do_not_have(tmp_path):
 @pytest.mark.parametrize("n_cpus, slots, n", [(10, 4, 2), (8, 4, 0), (8, 3, 2), (4, 1, 2), (2, 1, 0)])
 def test_auto_sets_a_core_apart_only_when_the_job_has_one_to_spare(n_cpus, slots, n):
     assert ib.auto_bridge_cpus(n_cpus, slots) == n
+
+
+def test_a_run_that_ends_at_once_gives_its_reservation_back(tmp_path):
+    # wrapped in taskset the start succeeds even when the program is missing; the run's end returns the memory
+    led = tmp_path / "ledger"
+    bundle(tmp_path, [stamp_run("a", tmp_path, 0.05, code=127)], node_ram_min_mib=6904, node_ram=lambda: 7000,
+           node_ledger_dir=led)
+    assert results(tmp_path)["a"]["rc"] == 127 and list(led.glob("r-*")) == []

@@ -528,6 +528,7 @@ class _Live:
     exited: dict | None = None
     leftover_kill_at: float | None = None
     empty_since: float | None = None  # the first of the empty token scans that settle the run
+    ram_key: str | None = None  # its node-ledger reservation, given back when the run is over
 
 
 def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s=None, shards=None,
@@ -625,6 +626,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     def settle(pid):
         """Every process of the run has ended: classify, clean up, record, retry; the slot frees."""
         r = live.pop(pid)
+        if ledger is not None and r.ram_key is not None:
+            ledger.release(r.ram_key)  # its memory is free again, however soon it ended (taskset exec failures too)
         x = r.exited
         signs = infra_signs([r.log_path, *(p for g in r.run.scan for p in sorted(glob.glob(g)))])
         killed = x["signal"] == signal.SIGKILL or x["rc"] in (137, -9)
@@ -666,7 +669,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         if retry:
             queue.appendleft((r.index, runs[r.index], r.attempt + 1))
 
-    def start(index, template, attempt):
+    def start(index, template, attempt, ram_key=None):
         run = template.at(attempt)
         slot = min(set(range(slots)) - {r.slot for r in live.values()})
         env = dict(base_env)
@@ -695,6 +698,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         live[proc.pid] = _Live(run, index, slot, proc, now, time.time(), env, log, log_path, attempt=attempt,
                                oom_at_start=oom_counter() if oom_counter else None,
                                pace=_Pace(pace_window_s) if run.pace_log else None)
+        live[proc.pid].ram_key = ram_key
         st["last_start"] = now
         return True
 
@@ -882,7 +886,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 continue
                             mine = os.path.join(claim_dir, run.name)
                             Path(mine, "by").write_text(job_id + "\n")
-                        started = start(index, run, attempt)
+                        started = start(index, run, attempt, key if ledger is not None else None)
                     except Exception as exc:  # noqa: BLE001 -- recorded; the claim goes back for another job
                         note_error(f"start {run.name}", exc)
                         if mine is not None:
