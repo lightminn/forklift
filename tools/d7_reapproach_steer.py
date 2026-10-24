@@ -52,6 +52,10 @@ GRID_CRUISE = (0.30, 0.20, 0.15)
 FIRST_CANDIDATE = (0.24, 0.15)
 MODEL_HEADING_RAD = 0.03  # the reproduction tolerance, kept as the selection's margin
 PROGRESS_FRACTION = 0.10
+# The two failures the plan names (section 0 B): every counted re-approach of these missions must be a stall case,
+# complete (path, stop pose, config, scene) -- none may be missing for V2 to stand (Codex plan round 6 P2).
+REQUIRED_STALL_MISSIONS = (("ct2_41a2a7e8_fixed_random_m_s2", "m1"), ("ct2_41a2a7e8_auto_random_m_s2", "m2"))
+REQUIRED_STALLS = 4
 
 
 def plant_constants(settings_path: Path, layer_path: Path) -> dict:
@@ -147,6 +151,11 @@ def simulate(poses, directions, curvatures, config, start, geometry, constants, 
 
 # --- the recorded cases ---------------------------------------------------------------------------------------------
 
+def _json(path):
+    with open(path) as handle:
+        return json.load(handle)
+
+
 def _jsonl(pattern):
     rows = []
     for f in sorted(glob.glob(pattern)):
@@ -157,23 +166,28 @@ def _jsonl(pattern):
 
 def extract(run_dirs) -> list:
     """Every counted docking retry's re-approach in the runs: its path, start, the steering at its start, and what the
-    Isaac run did with it -- stalled (the next counted retry is d, or the mission ended on
-    transport_recovery_after_docking) with the control pose it stood at, or arrived (the docking matched again)."""
+    Isaac run did with it. Stalled: the next counted retry is d (or the mission ended on
+    transport_recovery_after_docking) with no docking round in between, stood at the control pose just before. Arrived:
+    a docking round (the retry match, made only once the re-approach stands at the line start) inside the attempt's
+    window. Anything else -- a mission that stopped on the way, a lost link -- is excluded, not a control (Codex plan
+    round 6 P2)."""
     cases = []
     for run in run_dirs:
         name = run.rstrip("/").split("/")[-4] if run.rstrip("/").endswith("epoch_1/run") else os.path.basename(run)
         try:
-            configs = json.load(open(f"{run}/result.json")).get("tracker_configs") or {}
+            configs = _json(f"{run}/result.json").get("tracker_configs") or {}
         except (OSError, ValueError):
             configs = {}
         control = samples = None
         for md in sorted(glob.glob(f"{run}/missions/m*")):
             try:
-                st = json.load(open(f"{md}/records.json"))["state"]
-                res = json.load(open(f"{md}/result.json")).get("result") or {}
+                st = _json(f"{md}/records.json")["state"]
+                res = _json(f"{md}/result.json").get("result") or {}
             except (OSError, ValueError, KeyError):
                 continue
             retries = st.get("docking_retries") or []
+            rounds = [float(r_["time_s"]) for r_ in (st.get("delivery_docking") or {}).get("rounds") or []
+                      if r_.get("time_s") is not None]
             replaced = sorted((x for x in st.get("paths_replaced") or [] if x.get("leg") == "transport"),
                               key=lambda x: x["time_s"])
             for k, ev in enumerate(retries):
@@ -192,24 +206,34 @@ def extract(run_dirs) -> list:
                        "plan_length_m": ev["plan"]["length_m"], "next": None if nxt is None else nxt.get("trigger"),
                        "mission_outcome": res.get("outcome"), "mission_reason": res.get("reason"),
                        "config": configs.get("transport"), "scenario": st.get("mission_scenario")}
+                window_end = nxt["time_s"] if nxt is not None else res.get("ended_s")
+                matched = [t_ for t_ in rounds if t_ > ev["time_s"] + 1e-9
+                           and (window_end is None or t_ <= float(window_end) + 1e-9)]
+                row["rounds_in_window"] = len(matched)
                 if between:
                     row["excluded"] = "replanned_on_the_way"
                 elif path is None or abs(float(path["length_m"]) - float(ev["plan"]["length_m"])) > 1e-6:
                     row["excluded"] = f"path_not_found:{by}"
+                elif matched:
+                    row["isaac"] = "arrived"
                 elif nxt is not None and nxt.get("trigger") == "d":
                     row["isaac"], row["end_s"] = "stall", nxt["time_s"]
                 elif nxt is None and res.get("reason") == "transport_recovery_after_docking":
                     row["isaac"], row["end_s"] = "stall", res.get("ended_s")
-                elif nxt is None or nxt.get("trigger") in ("a", "b"):
-                    row["isaac"] = "arrived"
                 else:
-                    row["excluded"] = f"next:{nxt.get('trigger')}"
+                    nxt_ = None if nxt is None else nxt.get("trigger")
+                    row["excluded"] = f"no_arrival_evidence:{nxt_}:{res.get('reason')}"
                 if "excluded" not in row:
                     row["path"] = {k_: path[k_] for k_ in ("poses", "directions", "curvatures_inv_m")}
                     if control is None:
                         control = _jsonl(f"{run}/spool/slam.control/*.jsonl")
                         samples = _jsonl(f"{run}/spool/state.samples/*.jsonl")
-                    s0 = min(samples, key=lambda q: abs(q["time_s"] - ev["time_s"])) if samples else {}
+                    # the last sample at or before the retry (never a later one); which one, and any zero fallback
+                    before = [q for q in samples or [] if q["time_s"] <= ev["time_s"] + 1e-9]
+                    s0 = before[-1] if before else {}
+                    row["steering0_sample_s"] = s0.get("time_s")
+                    row["steering0_lag_s"] = None if not s0 else float(ev["time_s"]) - float(s0["time_s"])
+                    row["steering0_fallback"] = not s0.get("steering_actual_rad")
                     row["steering0"] = s0.get("steering_actual_rad") or [0.0, 0.0]
                     row["command0"] = s0.get("steering_command_rad") or row["steering0"]
                     if row.get("end_s") is not None and control:
@@ -238,8 +262,12 @@ def check(cases, geometry, constants, *, planner=None) -> dict:
     from curvature_audit import tracker_config  # noqa: E402
 
     rows = []
+    incomplete = []
     for c in cases:
-        if "excluded" in c or c.get("config") is None:
+        if "excluded" in c:
+            continue
+        if c.get("config") is None or not c.get("scenario"):
+            incomplete.append([c["run"], c["mission"], c["retry"]])
             continue
         cfg = dataclasses.replace(tracker_config(c["config"]), position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
         sim = simulate(c["path"]["poses"], c["path"]["directions"], c["path"]["curvatures_inv_m"], cfg, c["start"],
@@ -263,13 +291,23 @@ def check(cases, geometry, constants, *, planner=None) -> dict:
         rows.append(row)
     stalls = [r for r in rows if r["isaac"] == "stall"]
     controls = [r for r in rows if r["isaac"] == "arrived"]
-    reproduced = (bool(stalls) and bool(controls)
-                  and all(r["criteria"] is not None and all(r["criteria"].values()) for r in stalls)
+    required = [r for r in stalls if (r["run"], r["mission"]) in REQUIRED_STALL_MISSIONS]
+    # every counted re-approach of the named missions, in or out of the rows (an excluded one is a missing one)
+    named = [c for c in cases if (c["run"], c["mission"]) in REQUIRED_STALL_MISSIONS]
+    complete = (len(named) == REQUIRED_STALLS and len(required) == REQUIRED_STALLS
+                and all(r["criteria"] is not None for r in stalls) and not incomplete)
+    reproduced = (complete and bool(controls)
+                  and all(all(r["criteria"].values()) for r in stalls)
                   and all(r["criteria"]["arrives"] for r in controls))
-    out = {"rows": rows, "stall_cases": len(stalls), "control_cases": len(controls), "reproduced": reproduced}
+    out = {"rows": rows, "stall_cases": len(stalls), "control_cases": len(controls), "required_stalls": len(required),
+           "named_attempts": len(named), "incomplete": incomplete, "complete": complete, "reproduced": reproduced}
     if reproduced and planner is not None:
         out["grid"] = grid(cases, geometry, constants, planner)
-        ok = [g for g in out["grid"] if g["all_arrive_with_margin"]]
+        # the grid runs on exactly the checked cases, every one planned or counted as no plan (never an empty set)
+        expected = sorted([r["run"], r["mission"], r["retry"]] for r in rows)
+        for g in out["grid"]:
+            g["same_cases"] = bool(expected) and sorted(x["case"] for x in g["results"]) == expected
+        ok = [g for g in out["grid"] if g["all_arrive_with_margin"] and g["same_cases"]]
         best = max(ok, key=lambda g: (g["kappa"], g["cruise"])) if ok else None
         out["pick"] = (best["kappa"], best["cruise"]) if best else FIRST_CANDIDATE
         out["pick_rule"] = "largest kappa, then highest cruise, with every case arriving inside tolerance - 0.03 rad"

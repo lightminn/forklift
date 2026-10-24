@@ -65,3 +65,54 @@ def test_the_isaac_stop_is_judged_on_the_nearest_leg_end():
     assert out["leg"] == 0 and out["legs"] == 2 and out["heading_error_rad"] == pytest.approx(-0.06)
     assert out["progress_fraction"] == pytest.approx(1.0)
     assert isaac_offsets({"path": case["path"], "stop_pose": None}) is None
+
+
+def _mission(tmp_path, run, mission, retries, rounds, outcome, reason, ended_s=200.0):
+    import json
+
+    base = tmp_path / run / "live/epoch_1/run"
+    md = base / "missions" / mission
+    md.mkdir(parents=True, exist_ok=True)
+    (base / "result.json").write_text(json.dumps({"tracker_configs": {"transport": {"cruise_speed_mps": 0.3}}}))
+    path = {"poses": [[0, 0, 0], [1, 0, 0]], "directions": [1, 1], "curvatures_inv_m": [0, 0], "length_m": 1.0}
+    state = {"docking_retries": retries, "paths_replaced": [], "paths": {"transport": path},
+             "delivery_docking": {"rounds": [{"time_s": t} for t in rounds]}, "mission_scenario": {"x": 1}}
+    (md / "records.json").write_text(json.dumps({"state": state}))
+    (md / "result.json").write_text(json.dumps({"result": {"outcome": outcome, "reason": reason, "ended_s": ended_s}}))
+    for name, rows in (("slam.control", [[150.0, 0.9, 0.0, 0.07]]),
+                       ("state.samples", [{"time_s": 99.9, "steering_actual_rad": [0.1, 0.1]},
+                                          {"time_s": 100.05, "steering_actual_rad": [0.2, 0.2]}])):
+        (base / "spool" / name).mkdir(parents=True, exist_ok=True)
+        (base / "spool" / name / "000001.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    return str(base)
+
+
+def test_an_arrival_needs_a_docking_round_inside_the_attempt_and_a_stop_without_one_is_excluded(tmp_path):
+    """Codex plan round 6 P2: no next retry is not an arrival; P3: the start steering is the last sample before."""
+    from d7_reapproach_steer import extract
+
+    ev = {"trigger": "b", "time_s": 100.0, "counted": True, "start": [0, 0, 0], "line_start": [1, 0, 0],
+          "plan": {"length_m": 1.0}}
+    arrived = _mission(tmp_path, "r1", "m1", [ev], [120.0], "done", None)
+    lost = _mission(tmp_path, "r2", "m1", [ev], [], "failed", "slam_link_failed")
+    stalled = _mission(tmp_path, "r3", "m1", [ev], [], "failed", "transport_recovery_after_docking")
+    (a,), (b,), (c,) = extract([arrived]), extract([lost]), extract([stalled])
+    assert a["isaac"] == "arrived" and a["rounds_in_window"] == 1
+    assert "isaac" not in b and b["excluded"].startswith("no_arrival_evidence")
+    assert c["isaac"] == "stall" and c["stop_pose"] == [0.9, 0.0, 0.07]
+    assert a["steering0"] == [0.1, 0.1] and a["steering0_lag_s"] == pytest.approx(0.1) and not a["steering0_fallback"]
+
+
+def test_v2_does_not_stand_without_the_four_named_failure_attempts():
+    from d7_reapproach_steer import FIRST_CANDIDATE, check
+
+    poses, dirs, curv = s_path()
+    path = {"poses": poses.tolist(), "directions": dirs.tolist(), "curvatures_inv_m": curv.tolist()}
+    base = {"path": path, "start": poses[0].tolist(), "steering0": [0.0, 0.0], "command0": [0.0, 0.0],
+            "config": CONFIG.__dict__, "scenario": {"x": 1}, "trigger": "b"}
+    one_stall = dict(base, run="ct2_41a2a7e8_fixed_random_m_s2", mission="m1", retry=0, isaac="stall",
+                     stop_pose=poses[-1].tolist())
+    control = dict(base, run="other", mission="m1", retry=0, isaac="arrived")
+    called = []
+    out = check([one_stall, control], GEOMETRY, CONSTANTS, planner=lambda c, k: called.append(k))
+    assert not out["complete"] and not out["reproduced"] and out["pick"] == FIRST_CANDIDATE and called == []
