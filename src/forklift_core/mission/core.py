@@ -4861,6 +4861,77 @@ class MissionCore:
         warming = slam is not None and not slam_may_drive(slam)
         return SimpleNamespace(releasing=releasing, warming=warming, rear=rear)
 
+    LOW_CLEARANCE_PHASES = ("observe", "approach", "insert", "extract", "transport", "withdraw", "return_home",
+                            "recover_withdraw", "clear_out")
+
+    def low_clearance_tick(self, t: float, rear, kappa: float, requested_speed: float, loaded: bool) -> None:
+        """The low-clearance guard (docs/plans/2026-10-25-low-clearance-guard.md, stage 1): the props below the LiDAR
+        plane along the stop arc of the estimated pose, each check held to the leg's planned clearance the same distance
+        ahead; the cap is applied after the wheel-speed slew in assemble_command. Off (and a record from before the
+        option): nothing is read and no cap is set."""
+        options, state = self.options, self.state
+        if getattr(options, "low_clearance_guard", "off") != "on":
+            return
+        from forklift_core.control.drive_permission import StoppingModel
+        from forklift_core.control.low_clearance import LegClearance, LowClearanceConfig, guard_cap, low_props
+
+        ms, trackers, geometry, obstacle = self.ms, self.trackers, self.geometry, self.obstacle
+        self._low_clearance_cap = None  # (t, cap) -- not in state: state is the run record
+        tracker_ = trackers.get(ms.phase)
+        if ms.phase not in self.LOW_CLEARANCE_PHASES or tracker_ is None:
+            return
+        guard = state.setdefault("low_clearance", {
+            "config": {"margin_m": float(options.low_clearance_margin_m),
+                       "deviation_m": float(options.low_clearance_deviation_m)},
+            "capped_ticks": {}, "zero_ticks": {}, "min_clearance_m": {}, "holds": [], "legs": [],
+        })
+        cache = self.__dict__.setdefault("_low_clearance_legs", {})
+        shape = geometry.loaded_footprint if loaded else options.low_clearance_unloaded_shape
+        key = (id(tracker_), bool(loaded))
+        leg = cache.get(key)
+        if leg is None:
+            poses = tracker_.path_arrays()[0]
+            length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+            slot_from = (max(0.0, length - float(geometry.delivery_straight_m)) if ms.phase == "transport"
+                         else 0.0 if ms.phase == "withdraw" else None)
+            plane = float(getattr(geometry, "lidar_plane_m", 1.05))
+            leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
+                               slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)
+            cache.clear()  # one leg at a time: the tracker being followed
+            cache[key] = leg
+            guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m,
+                                  "min_planned_m": float(np.min(leg.c)) if len(leg.c) else None})
+        cfg = LowClearanceConfig(margin_m=float(options.low_clearance_margin_m),
+                                 deviation_m=float(options.low_clearance_deviation_m))
+        stopping = (obstacle["layer"].permission.config.stopping if obstacle is not None
+                    else StoppingModel(0.15, 1.5, 0.05))
+        tcfg = tracker_.config
+        end_allowance = tcfg.overshoot_tolerance_m if tcfg.overshoot_tolerance_m is not None else tcfg.position_tolerance_m
+        speed_cap = max(abs(float(requested_speed)), abs(float(state.get("command_speed", 0.0))))
+        direction = (1 if requested_speed > 0 else -1) if requested_speed != 0.0 else int(tracker_.leg_ahead()[1]) or 1
+        out = guard_cap(tuple(float(v) for v in rear), float(kappa), direction, speed_cap, shape, leg,
+                        progress_m=tracker_.progress_m(), leg_remaining_m=tracker_.leg_remaining_m(),
+                        end_allowance_m=float(end_allowance), stopping=stopping, config=cfg)
+        from forklift_core.control.low_clearance import shape_clearance
+
+        now_ = shape_clearance(tuple(float(v) for v in rear), shape, leg.props_at(tracker_.progress_m()))
+        low_ = guard["min_clearance_m"]
+        low_[ms.phase] = min(low_.get(ms.phase, float("inf")), float(now_))
+        if math.isfinite(out.allowed_mps):
+            self._low_clearance_cap = (t, float(out.allowed_mps))
+            if out.allowed_mps < speed_cap:
+                guard["capped_ticks"][ms.phase] = guard["capped_ticks"].get(ms.phase, 0) + 1
+            if out.allowed_mps == 0.0:
+                guard["zero_ticks"][ms.phase] = guard["zero_ticks"].get(ms.phase, 0) + 1
+                holds = guard["holds"]
+                if not holds or holds[-1]["phase"] != ms.phase or t - holds[-1]["last_s"] > 0.5:
+                    if len(holds) < 50:
+                        holds.append({"since_s": float(t), "last_s": float(t), "phase": ms.phase,
+                                      "lower_bound_m": float(out.lower_bound_m), "threshold_m": float(out.threshold_m),
+                                      "clearance_now_m": float(now_)})
+                else:
+                    holds[-1]["last_s"] = float(t)
+
     def assemble_command(self, t: float, dt: float, requested_speed: float, curvature: float, kappa: float,
                          steering_command, estop_holding: bool, obstacle_hold: bool, dwell_hold: bool,
                          cusp_hold: bool, safety_hold: bool) -> SimpleNamespace:
@@ -4907,9 +4978,14 @@ class MissionCore:
             cap = obstacle.get("permission_cap")
             if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
                 wheel_speed = math.copysign(cap[1], wheel_speed)
+            if getattr(options, "low_clearance_guard", "off") == "on":
+                wheel_speed = self._low_clearance_capped(t, wheel_speed)
             if estop_holding or safety_hold:
                 wheel_speed = 0.0
             state["command_speed"] = wheel_speed
+        elif getattr(options, "low_clearance_guard", "off") == "on":
+            # no slew without the obstacle layer: the guard's cap as a step (plan D4)
+            wheel_speed = self._low_clearance_capped(t, wheel_speed)
         drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
         rate = settings["steering_command_rate_rad_s"] * dt
         steering_command += np.clip(target_steering - steering_command, -rate, rate)
@@ -4920,6 +4996,13 @@ class MissionCore:
             near["commands"].add(t + dt, drive.speed_mps)  # the interval [t, t + dt]
         return SimpleNamespace(drive=drive, steering_command=steering_command, actual_steering=actual_steering,
                                requested_speed=requested_speed)
+
+    def _low_clearance_capped(self, t: float, wheel_speed: float) -> float:
+        """The wheel speed under this tick's low-clearance cap (sign kept; plan D4)."""
+        cap = getattr(self, "_low_clearance_cap", None)
+        if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
+            return math.copysign(cap[1], wheel_speed)
+        return wheel_speed
 
     # --- M-a1 slice 6a: closures moved from run(), statement for statement ---
     def cusp_excluded(self, phase_) -> str | None:
