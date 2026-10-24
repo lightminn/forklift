@@ -62,6 +62,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from forklift_core import determinism
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.baseline import start_digest
@@ -614,7 +615,7 @@ class MissionCore:
                         path_ahead=leg_now, loaded=loaded, direction=leg_dir_now,
                     )
             start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
-            obstacle["deadline"] = hooks.wall() + 20.0
+            obstacle["deadline"] = hooks.wall() + determinism.budget(20.0)  # the cap in a deterministic run (D6)
             if self.jobs is not None and (self.pending is not None or (slam is not None
                                                                        and slam.get("pending_release") is not None)):
                 # Real-time plan D8b: one plan waited for at a time; a pending SLAM release goes first (its own
@@ -2811,7 +2812,7 @@ class MissionCore:
                                          start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))))
         payload = {"world": world, "waypoints": waypoints, "config": options.planner_config,
                    "geometry": self.geometry, "pickup_bounds": self.observe_bounds(), "grid_kwargs": grid,
-                   "ladders": (False,), "deadline": time.monotonic() + max(1, len(waypoints)) * 20.0}
+                   "ladders": (False,), "deadline": determinism.deadline(max(1, len(waypoints)) * 20.0)}
         self._request("observe_failed", "observe_ladder", payload, t, rear, self._applied_now(), dict(ctx))
 
     def _observe_failed_finish(self, p, value, t: float, rear) -> None:
@@ -5243,7 +5244,7 @@ class MissionCore:
             config if config is not None else planner_config,
             geometry=geometry,
             keep_m=geometry.delivery_straight_m,
-            deadline=deadline_ if deadline_ is not None else SearchBudget(20.0),
+            deadline=deadline_ if deadline_ is not None else SearchBudget(determinism.budget(20.0)),
             **({"occupancy": grid_["occupancy"]} if "occupancy" in grid_ else {}),
         )
         record["planning_wall_s"] = time.monotonic() - planned_at
@@ -6678,7 +6679,7 @@ class MissionCore:
                 else:
                     kind_, args_, extra_kw_ = "return", (grid_world(world_), start_, options.return_to_pose, cfg_), {}
                 worker_kw_ = {**kwargs_, **extra_kw_}  # the worker's planner is unbound: the exit prefix goes along
-                payload_ = {"kind": kind_, "args": args_, "kwargs": {**worker_kw_, "deadline": time.monotonic() + 20.0},
+                payload_ = {"kind": kind_, "args": args_, "kwargs": {**worker_kw_, "deadline": determinism.deadline(20.0)},
                             "retry_on": (), "tight_args": args_, "tight_kwargs": worker_kw_}
                 core._request("scene_replan", "leg", payload_, t, box.rear, core._applied_now(), ctx={})
                 return

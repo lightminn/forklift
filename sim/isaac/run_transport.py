@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core import determinism
+
 EXIT_CLEARANCE_M = 0.08
 
 
@@ -7309,7 +7311,7 @@ def drive(S, isaac) -> None:
                 grid_.pop("deadline", None)
                 payload_ = {"world": grid_world(scenario_), "waypoints": waypoints_, "config": planner_config,
                             "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
-                            "deadline": time.monotonic() + 2 * len(waypoints_) * 20.0}
+                            "deadline": determinism.deadline(2 * len(waypoints_) * 20.0)}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
                            "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
@@ -7347,7 +7349,7 @@ def drive(S, isaac) -> None:
                 payload_ = {"args": (grid_world(scenario_), start_),
                             "kwargs": {"config": planner_config, "geometry": geometry,
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
-                                       "occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0,
+                                       "occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0),
                                        **({} if transport_exit is None else {"exit_prefix": transport_exit})},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],

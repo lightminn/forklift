@@ -37,6 +37,8 @@ import time
 import traceback
 from multiprocessing.connection import Connection, wait
 
+from forklift_core import determinism
+
 
 def worker_env(mode: str) -> dict:
     """The environment for a worker that runs the kernels ``mode`` (persistent console plan D11)."""
@@ -120,6 +122,7 @@ def _observe_ladder(pm, payload: dict) -> dict:
     for extended in tuple(payload.get("ladders", (False, True))):  # a re-observation: the near ladder only
         for index, coordinates in enumerate(payload["waypoints"]):
             if deadline is not None and time.monotonic() >= deadline:
+                determinism.timed_out("observe_ladder")
                 timed_out = True
                 break
             waypoint = Pose2D(*coordinates)
