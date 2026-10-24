@@ -41,6 +41,25 @@ def test_the_judgement_rules():
     assert out["verdict"] == "fail" and out["usable_pairs"] == 8 and out["p"] >= 0.05
 
 
+def test_a_session_counts_its_counted_reapproaches_by_the_docking_round_in_each_window(tmp_path):
+    import json
+
+    from leg_failures_pairs import session_counts
+
+    md = tmp_path / "run" / "live/epoch_1/run/missions/m1"
+    md.mkdir(parents=True)
+    retries = [{"trigger": "a", "time_s": 90.0, "counted": False},
+               {"trigger": "b", "time_s": 100.0, "counted": True, "plan": {"length_m": 2.0}},  # stood: no round
+               {"trigger": "obstacle_replan", "time_s": 105.0, "counted": False, "plan": {"length_m": 2.0}},
+               {"trigger": "d", "time_s": 110.0, "counted": True, "plan": {"length_m": 2.0}},  # arrived: round 120
+               {"trigger": "b", "time_s": 130.0, "counted": True, "plan": {"refused": "dry_run"}}]
+    (md / "records.json").write_text(json.dumps({"state": {"docking_retries": retries, "delivery_docking": {
+        "rounds": [{"time_s": 95.0}, {"time_s": 120.0}]}}}))
+    (md / "result.json").write_text(json.dumps({"result": {"ended_s": 140.0}}))
+    assert session_counts(str(tmp_path / "run")) == [1, 3, 1]
+    assert session_counts(str(tmp_path / "missing")) == [0, 0, 0]
+
+
 def test_rates_from_counts_stay_exact_so_ties_hold():
     """Codex plan round 5 P2: 3/3 - 2/3 and 0/3 - 1/3 are the same size; in floats they were not (p 0.015625, pass)."""
     rows = [{"seed": k, "main": [2, 3, 0], "fix": [3, 3, 0]} for k in range(6)]

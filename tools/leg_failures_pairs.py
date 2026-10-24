@@ -79,13 +79,62 @@ def pairs_from_rows(rows) -> list:
     return [(rate(r["main"]), rate(r["fix"]), r["main"][2], r["fix"][2]) for r in rows]
 
 
+def _json(path):
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def session_counts(run_dir) -> list:
+    """[completed, attempted, refusals] over a session's counted D7 re-approaches (every epoch's missions). An attempt
+    is a counted docking retry; it is completed when a docking round falls inside its window (up to the next counted
+    retry or the mission's end -- the retry match is made only where the re-approach stands, as V2's extract); it is a
+    refusal when its plan was refused (box, length, dry run) or not planned."""
+    import glob
+
+    completed = attempted = refusals = 0
+    for md in sorted(glob.glob(f"{run_dir}/live/epoch_*/run/missions/m*")):
+        try:
+            st = _json(f"{md}/records.json")["state"]
+            res = _json(f"{md}/result.json").get("result") or {}
+        except (OSError, ValueError, KeyError):
+            continue
+        counted = [e for e in st.get("docking_retries") or [] if e.get("counted")]
+        rounds = [float(r["time_s"]) for r in (st.get("delivery_docking") or {}).get("rounds") or []
+                  if r.get("time_s") is not None]
+        for k, ev in enumerate(counted):
+            attempted += 1
+            plan = ev.get("plan") or {}
+            if plan.get("refused") or plan.get("length_m") is None:
+                refusals += 1
+                continue
+            end = counted[k + 1]["time_s"] if k + 1 < len(counted) else res.get("ended_s")
+            if any(t > ev["time_s"] + 1e-9 and (end is None or t <= float(end) + 1e-9) for t in rounds):
+                completed += 1
+    return [completed, attempted, refusals]
+
+
+def collect(live_dir, prefix, scene, seeds) -> list:
+    """The pairs file's rows from the V4 run folders <live_dir>/<prefix>_{main,fix}_<scene>_s<seed>."""
+    return [{"seed": s, "main": session_counts(f"{live_dir}/{prefix}_main_{scene}_s{s}"),
+             "fix": session_counts(f"{live_dir}/{prefix}_fix_{scene}_s{s}")} for s in seeds]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("pairs", help="JSON list of {seed, main: [completed, attempted, refusals], fix: [...]}")
+    parser.add_argument("pairs", nargs="?", help="JSON list of {seed, main: [completed, attempted, refusals], fix}")
+    parser.add_argument("--collect", nargs=3, metavar=("LIVE_DIR", "PREFIX", "SCENE"),
+                        help="build the rows from the V4 run folders instead (seeds 0-9)")
+    parser.add_argument("--out", help="write the collected rows here")
     args = parser.parse_args()
-    with open(args.pairs) as handle:
-        rows = json.load(handle)
-    print(json.dumps(judge(pairs_from_rows(rows)), indent=2, default=float))
+    if args.collect:
+        rows = collect(*args.collect, range(10))
+        if args.out:
+            with open(args.out, "w") as handle:
+                json.dump(rows, handle, indent=1)
+    else:
+        with open(args.pairs) as handle:
+            rows = json.load(handle)
+    print(json.dumps({"rows": rows, "judgement": judge(pairs_from_rows(rows))}, indent=2, default=float))
 
 
 if __name__ == "__main__":
