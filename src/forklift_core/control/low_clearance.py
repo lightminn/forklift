@@ -94,21 +94,24 @@ class LegClearance:
     def props_at(self, s: float) -> list:
         return self.slot_props if self.slot_from_m is not None and s >= self.slot_from_m else self.search_props
 
-    def at(self, s: float) -> float:
-        """c at path length ``s`` (clamped to the path), linear between path poses; inf where no prop is near."""
+    def pose_at(self, s: float) -> np.ndarray:
+        """The planned pose at path length ``s`` (clamped), between path poses along their chord and turn."""
         s = min(max(float(s), 0.0), self.length_m)
         if len(self.s) == 1:
-            return float(self.c[0])
+            return self.poses[0].copy()
         k = int(np.clip(np.searchsorted(self.s, s, side="right") - 1, 0, len(self.s) - 2))
-        a, b = float(self.c[k]), float(self.c[k + 1])
-        if self.slot_from_m is not None and (self.s[k] >= self.slot_from_m) != (self.s[k + 1] >= self.slot_from_m):
-            # the two poses belong to different stages: the side s is on, never a blend of the two (Codex round 8 P2)
-            return a if (s >= self.slot_from_m) == (self.s[k] >= self.slot_from_m) else b
-        if not (math.isfinite(a) and math.isfinite(b)):
-            return min(a, b)
         span = float(self.s[k + 1] - self.s[k])
         t = 0.0 if span <= 0.0 else (s - float(self.s[k])) / span
-        return a + t * (b - a)
+        a, b = self.poses[k], self.poses[k + 1]
+        dyaw = float(np.arctan2(np.sin(b[2] - a[2]), np.cos(b[2] - a[2])))
+        return np.array([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * dyaw])
+
+    def at(self, s: float) -> float:
+        """c at path length ``s`` (clamped to the path): the shape at the planned pose there against the props of the
+        stage that planned it -- computed, never blended between poses or across the stage boundary (Codex rounds 8,
+        9); inf where no prop is near."""
+        s = min(max(float(s), 0.0), self.length_m)
+        return shape_clearance(self.pose_at(s), self.shape, self.props_at(s))
 
 
 @dataclass(frozen=True)

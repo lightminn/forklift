@@ -192,3 +192,13 @@ def test_the_planned_clearance_is_not_blended_across_the_stage_boundary():
                           slot_from_m=4.505)
     assert leg.at(4.50) == pytest.approx(0.04, abs=1e-6)
     assert leg.at(4.51) == pytest.approx(0.30, abs=1e-6)
+
+
+def test_the_planned_clearance_follows_the_path_between_its_poses():
+    # Codex round 9: the clearance changes between two poses of one stage (a block whose corner the path passes);
+    # c at a point between them is that point's own, not either end's
+    corner = Rectangle(4.6, 0.4 + 0.02 + 0.5, 0.2, 1.0, 0.0)  # its left end at x = 4.5
+    leg = lc.LegClearance(np.array([[2.48, 0.0, 0.0], [2.98, 0.0, 0.0]]), Footprint(1.56, 0.0, 0.4),
+                          search_props=[corner], slot_props=[corner])
+    for x in (2.6, 2.75, 2.9):
+        assert leg.at(x - 2.48) == pytest.approx(lc.shape_clearance((x, 0.0, 0.0), Footprint(1.56, 0.0, 0.4), [corner]))
