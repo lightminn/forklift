@@ -56,8 +56,8 @@ def test_every_camera_read_is_synced_before_its_pixels():
 
 def test_deterministic_planning_does_not_read_the_slam_map():
     block = SOURCE[SOURCE.index('latest = args.slam_map_dir / "latest_map.npz"') - 400:]
-    assert re.search(r"elif layer_\.memory is not None and args\.slam_map_dir is not None and not determinism\.enabled\(\):",
-                     block)
+    assert re.search(r"elif layer_\.memory is not None and args\.slam_map_dir is not None and "
+                     r"not getattr\(args, \"deterministic\", False\):", block)
     assert '"slam_static_layer": "off_deterministic"' in SOURCE
 
 
