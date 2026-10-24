@@ -27,7 +27,7 @@ from .validate import problem
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
           "mission_cancel", "recovery", "session_end", "sim_reset")
-RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request")
+RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request", "pick_request")
 # the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
 AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
@@ -135,6 +135,7 @@ class Arbiter:
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
         self.session_request: str | None = None  # "end" / "reset": the runner leaves its loop (console plan D7/D9)
         self.sim_reset_allowed = False  # a simulation back end resets its scene on request (welcome sim_reset)
+        self.next_pick_allowed = False  # CT-2: the runner answers pick_request (welcome capabilities.next_pick)
         self.provisional_auto = False
         self._context_gen = 0
         self._handling_conn: str | None = None
@@ -358,6 +359,15 @@ class Arbiter:
 
     def _on_targets_request(self, client_id, request_id, msg, now_mono):
         return self._reply("targets_request", request_id)  # the runner sends the list itself
+
+    def _on_pick_request(self, client_id, request_id, msg, now_mono):
+        """CT-2 D3 (docs/plans/2026-10-24-ct2-next-pick.md): acked here, the recommendation computed by the runner
+        and sent as a separate ``pick`` -- never while a mission is on (its plan would be stale by its end)."""
+        if not self.next_pick_allowed:
+            return self._reply("pick_request", request_id, "unsupported")
+        if self.mission is not None and self.mission.status in ACTIVE:
+            return self._reply("pick_request", request_id, "mission_active")
+        return self._reply("pick_request", request_id)
 
     def _on_session_end(self, client_id, request_id, msg, now_mono):
         return self._session_request("session_end", request_id, now_mono)

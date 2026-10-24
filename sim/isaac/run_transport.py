@@ -7208,6 +7208,38 @@ def drive(S, isaac) -> None:
                 return session_anchor_poses(kept_, session_slots_, did_,
                                             (float(goal_.x_m), float(goal_.y_m), float(goal_.yaw_rad)))
 
+            # CT-2 D5 (docs/plans/2026-10-24-ct2-next-pick.md): pick_request answered from a snapshot of the asking
+            # tick (the targets, the truck, home = the wait pose, the scene, the planner's neighbour arguments and each
+            # destination's slot anchors), computed on the planning worker
+            from forklift_core.live.pick import PICK_DEADLINE_MS, PickService
+            from forklift_core.mission.next_pick import PickSnapshot
+
+            def next_pick_snapshot_():
+                import copy as pick_copy
+
+                rear_ = live_state.get("rear")
+                wait_ = live_session_["wait"]
+                # the ended missions' anchor evidence decided first, as a preparation does before its payload (plan
+                # 2026-10-22-slot-anchored-neighbours 2.2; Codex CT-2 impl r1 P2): else the last delivered pallet's
+                # slot anchor is missing from the pick
+                session_anchor_decide_(live_state.get("t", 0.0))
+                anchors_ = {did_: session_anchor_poses_(did_, pose_, None) or {}
+                            for did_, pose_ in core.targets.destinations.items()}
+                return PickSnapshot(pick_copy.deepcopy(core.targets), None if rear_ is None else tuple(rear_),
+                                    (float(wait_.x_m), float(wait_.y_m), float(wait_.yaw_rad)),
+                                    live_session_["scenario"], geometry, float(planner_config.clearance_m),
+                                    dict(live_session_["nominal"]), tuple(live_session_["shape"]),
+                                    float(SESSION_PRIOR_GROW_M), slot_anchors=anchors_)
+
+            def next_pick_pose_():
+                rear_ = live_state.get("rear")
+                return None if rear_ is None else {
+                    "x_m": float(rear_[0]), "y_m": float(rear_[1]), "yaw_rad": float(rear_[2]),
+                    "correction_version": None if obstacle is None else int(obstacle["version"])}
+
+            live.enable_next_pick(PickService(next_pick_snapshot_, worker=core.jobs, pose=next_pick_pose_),
+                                  PICK_DEADLINE_MS)
+
             def unaligned_delivery_refusal_():
                 """Plan 2.3: the delivery straight about to be driven with no accepted docking -- checked as before
                 the anchors (the search stage's props, the delivery straight and the withdraw); the anchored pallets
@@ -8455,6 +8487,7 @@ def drive(S, isaac) -> None:
                     # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
                     # a preempt: zero wheels, steering held. The applied command is written back for the core.
                     live_state["rear"] = tuple(float(v) for v in rear)
+                    live_state["t"] = float(t)  # the tick's sim time (CT-2: the anchors decided at a pick's snapshot)
                     speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
                     # The sim distance driven since the last tick, for the installed arcs: the odometry's own motion
                     # (Codex M-c round 10 P2: the end speed times dt missed a braking interval's travel).

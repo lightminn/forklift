@@ -204,100 +204,138 @@ def _rect(site, pallet) -> Rectangle:
                      float(site.yaw_rad))
 
 
-def check_session(path: Path, *, prior_grow_m: float = SESSION_PRIOR_GROW_M, planner=None, kappa: float = KAPPA) -> dict:
-    """``planner``: (plan_observation_leg, plan_transport) stand-ins for tests."""
-    observe_planner, transport_planner = planner or (plan_observation_leg, plan_transport)
+def plan_mission(session, pallet, geometry, config, targets, slots: dict, pid: str, did: str, *, nominal, shape,
+                 prior_grow_m: float, observe_planner, transport_planner) -> dict:
+    """One mission of a session planned and measured as check_session does, in the state ``targets`` / ``slots`` (the
+    pallets delivered before it at their slots): its candidates, plan status, outcome by the truth outlines, the
+    submit check's verdict and the planned length of each stage (CT-2 V2, docs/plans/2026-10-24-ct2-next-pick.md)."""
+    entry = {"pallet_id": pid, "destination_id": did,
+             "submit_check": targets.check_submit(pid, did, targets.revision)}
+    started = time.monotonic()
+    own, dest = session.pallet_by_id(pid), session.destination(did)
+    props = tuple(session.static_props) + session_pallet_props(
+        targets, exclude_id=pid, nominal=nominal, shape=shape, prior_grow_m=prior_grow_m)
+    scenario = TransportScenario(seed=0, start_rear=session.start_rear, pickup=own.truth, destination=dest,
+                                 props=props, bounds=session.bounds)
+    observe = None
+    zone = zone_rect(own.zone, pallet.overall_depth_m, pallet.overall_width_m)
+    entry["candidates"] = []
+    for extended in (False, True):
+        for index, w in enumerate(own.observation_waypoints):
+            leg = observe_planner(scenario, Pose2D(*w), config, geometry=geometry, extended=extended,
+                                  pickup_obstacle=zone)
+            entry["candidates"].append({"index": index, "extended": extended, "status": leg.status})
+            if leg.success:
+                observe = leg
+                break
+        if observe is not None:
+            break
+    if observe is None:
+        entry["outcome"] = "observe_failed"
+        entry["wall_s"] = round(time.monotonic() - started, 1)
+        return entry
+    end = observe.poses[-1]
+    plan = transport_planner(scenario, config, geometry=geometry, target_pickup=own.truth,
+                             start_rear=Pose2D(float(end[0]), float(end[1]), float(end[2])),
+                             return_to=session.start_rear, pickup_obstacle=_rect(own.truth, pallet))
+    entry["plan_status"] = plan.status
+    if not plan.success:
+        entry["outcome"] = "plan_failed"
+        entry["wall_s"] = round(time.monotonic() - started, 1)
+        return entry
+    others = {}
+    for q in session.pallets:
+        if q.pallet_id == pid:
+            continue
+        others[q.pallet_id] = _rect(slots[q.pallet_id], pallet) if q.pallet_id in slots else _rect(q.truth, pallet)
+    legs = [("observe", observe)] + [(name, getattr(plan, name, None)) for name in STAGES]
+    entry["stages"] = {}
+    entry["lengths_m"] = {}
+    worst = "clear"
+    for name, leg in legs:
+        if leg is None or len(leg.poses) == 0:
+            continue
+        entry["lengths_m"][name] = float(getattr(leg, "length_m", 0.0))
+        outlines = dict(others)
+        if name in OWN_TRUTH:
+            outlines[pid] = _rect(own.truth, pallet)
+        elif name in OWN_SLOT:
+            outlines[pid] = _rect(dest, pallet)
+        fp = geometry.loaded_footprint if name in LOADED else geometry.unloaded_footprint
+        clear = leg_clearance(leg.poses, fp, outlines, getattr(leg, "directions", None))
+        nearest = min(clear, key=lambda oid: clear[oid]["bound_m"]) if clear else None
+        entry["stages"][name] = {"nearest": nearest, **({} if nearest is None else clear[nearest]), "all": clear}
+        for c in clear.values():
+            if c["status"] == "contact_observed" or (c["status"] == "clearance_unproven" and worst == "clear"):
+                worst = c["status"]
+    entry["length_m"] = sum(entry["lengths_m"].values())
+    entry["outcome"] = "passed" if worst == "clear" else worst
+    entry["wall_s"] = round(time.monotonic() - started, 1)
+    return entry
+
+
+def session_context(path: Path, *, kappa: float = KAPPA) -> dict:
+    """The fixed inputs of a session's planning (its file, pallet, geometry, planner config, drawn slots, shape)."""
     session = load_session(path)
     pallet = load_pallet_geometry(PALLETS[session.pallet])
     geometry = mission_geometry(URDF, pallet, RESERVE_M, **STRAIGHTS)
     config = make_transport_planner_config(curvature_limit_inv_m=kappa, clearance_m=CLEARANCE_M,
                                            max_expansions=MAX_EXPANSIONS, **D7_PLANNER_OPTIONS)
-    targets = TargetsBook()
-    register_session(targets, session, kind=session.pallet, depth_m=pallet.overall_depth_m,
-                     width_m=pallet.overall_width_m, live=False)
     nominal = {p.pallet_id: (p.nominal.x_m, p.nominal.y_m, p.nominal.yaw_rad) for p in session.pallets}
     shape = (pallet.overall_depth_m, pallet.overall_width_m, pallet.overall_height_m)
+    return {"session": session, "pallet": pallet, "geometry": geometry, "config": config, "nominal": nominal,
+            "shape": shape}
+
+
+def fresh_targets(ctx: dict) -> TargetsBook:
+    targets = TargetsBook()
+    register_session(targets, ctx["session"], kind=ctx["session"].pallet, depth_m=ctx["pallet"].overall_depth_m,
+                     width_m=ctx["pallet"].overall_width_m, live=False)
+    return targets
+
+
+def ideal_delivery(targets: TargetsBook, slots: dict, session, pid: str, did: str) -> None:
+    """The pallet stands at its slot, a delivered estimate verified there (check_session's ideal delivery)."""
+    dest = session.destination(did)
+    targets.carried(pid)
+    targets.put_down(pid, Pose(float(dest.x_m), float(dest.y_m), float(dest.yaw_rad)),
+                     uncertainty_m=RECOGNISED_MARGIN_M)
+    targets.verify_at(pid, did)
+    slots[pid] = dest
+
+
+def check_session(path: Path, *, prior_grow_m: float = SESSION_PRIOR_GROW_M, planner=None, kappa: float = KAPPA,
+                  sequence=None) -> dict:
+    """``planner``: (plan_observation_leg, plan_transport) stand-ins for tests. ``sequence``: [(pallet, destination)]
+    in place of the file's order (CT-2 V2)."""
+    observe_planner, transport_planner = planner or (plan_observation_leg, plan_transport)
+    ctx = session_context(path, kappa=kappa)
+    session = ctx["session"]
+    targets = fresh_targets(ctx)
     result = {"session": session.name, "session_sha256": session.sha256, "prior_grow_m": prior_grow_m,
               "settings": {"urdf": str(URDF.relative_to(ROOT)), "reserve_m": RESERVE_M, **STRAIGHTS, "kappa": kappa,
                            "clearance_m": CLEARANCE_M, "max_expansions": MAX_EXPANSIONS,
                            "d7_options": {k: v for k, v in D7_PLANNER_OPTIONS.items()},
                            "step_m": STEP_M, "fine_step_m": FINE_STEP_M},
+              "sequence": [list(x) for x in (session.sequence if sequence is None else sequence)],
               "missions": []}
     slots: dict = {}  # pallet id -> the slot it was delivered to
     failed = False
-    for k, (pid, did) in enumerate(session.sequence):
-        entry = {"index": k, "pallet_id": pid, "destination_id": did}
-        result["missions"].append(entry)
+    for k, (pid, did) in enumerate(session.sequence if sequence is None else sequence):
         if failed:
-            entry["outcome"] = "prior_failed"
+            result["missions"].append({"index": k, "pallet_id": pid, "destination_id": did, "outcome": "prior_failed"})
             continue
-        started = time.monotonic()
-        own, dest = session.pallet_by_id(pid), session.destination(did)
-        props = tuple(session.static_props) + session_pallet_props(
-            targets, exclude_id=pid, nominal=nominal, shape=shape, prior_grow_m=prior_grow_m)
-        scenario = TransportScenario(seed=0, start_rear=session.start_rear, pickup=own.truth, destination=dest,
-                                     props=props, bounds=session.bounds)
-        observe = None
-        zone = zone_rect(own.zone, pallet.overall_depth_m, pallet.overall_width_m)
-        entry["candidates"] = []
-        for extended in (False, True):
-            for index, w in enumerate(own.observation_waypoints):
-                leg = observe_planner(scenario, Pose2D(*w), config, geometry=geometry, extended=extended,
-                                      pickup_obstacle=zone)
-                entry["candidates"].append({"index": index, "extended": extended, "status": leg.status})
-                if leg.success:
-                    observe = leg
-                    break
-            if observe is not None:
-                break
-        if observe is None:
-            entry["outcome"], failed = "observe_failed", True
-            entry["wall_s"] = round(time.monotonic() - started, 1)
-            continue
-        end = observe.poses[-1]
-        plan = transport_planner(scenario, config, geometry=geometry, target_pickup=own.truth,
-                                 start_rear=Pose2D(float(end[0]), float(end[1]), float(end[2])),
-                                 return_to=session.start_rear, pickup_obstacle=_rect(own.truth, pallet))
-        entry["plan_status"] = plan.status
-        if not plan.success:
-            entry["outcome"], failed = "plan_failed", True
-            entry["wall_s"] = round(time.monotonic() - started, 1)
-            continue
-        # the truth outlines by stage
-        others = {}
-        for q in session.pallets:
-            if q.pallet_id == pid:
-                continue
-            others[q.pallet_id] = _rect(slots[q.pallet_id], pallet) if q.pallet_id in slots else _rect(q.truth, pallet)
-        legs = [("observe", observe)] + [(name, getattr(plan, name, None)) for name in STAGES]
-        entry["stages"] = {}
-        worst = "clear"
-        for name, leg in legs:
-            if leg is None or len(leg.poses) == 0:
-                continue
-            outlines = dict(others)
-            if name in OWN_TRUTH:
-                outlines[pid] = _rect(own.truth, pallet)
-            elif name in OWN_SLOT:
-                outlines[pid] = _rect(dest, pallet)
-            fp = geometry.loaded_footprint if name in LOADED else geometry.unloaded_footprint
-            clear = leg_clearance(leg.poses, fp, outlines, getattr(leg, "directions", None))
-            nearest = min(clear, key=lambda oid: clear[oid]["bound_m"]) if clear else None
-            entry["stages"][name] = {"nearest": nearest, **({} if nearest is None else clear[nearest]),
-                                     "all": clear}
-            for c in clear.values():
-                if c["status"] == "contact_observed" or (c["status"] == "clearance_unproven" and worst == "clear"):
-                    worst = c["status"]
-        entry["outcome"] = "passed" if worst == "clear" else worst
-        entry["wall_s"] = round(time.monotonic() - started, 1)
-        if worst != "clear":
+        entry = {"index": k, **plan_mission(session, ctx["pallet"], ctx["geometry"], ctx["config"], targets, slots,
+                                            pid, did, nominal=ctx["nominal"], shape=ctx["shape"],
+                                            prior_grow_m=prior_grow_m, observe_planner=observe_planner,
+                                            transport_planner=transport_planner)}
+        if entry["outcome"] == "passed" and entry["submit_check"] is not None:
+            entry["outcome"] = "submit_refused"  # the vehicle would refuse it before planning (Codex CT-2 impl r1 P3)
+        result["missions"].append(entry)
+        if entry["outcome"] != "passed":
             failed = True
             continue
-        # an ideal delivery: the pallet stands at its slot, a delivered estimate
-        targets.carried(pid)
-        targets.put_down(pid, Pose(float(dest.x_m), float(dest.y_m), float(dest.yaw_rad)),
-                         uncertainty_m=RECOGNISED_MARGIN_M)
-        slots[pid] = dest
+        ideal_delivery(targets, slots, session, pid, did)
     return result
 
 

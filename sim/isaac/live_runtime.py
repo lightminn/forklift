@@ -141,6 +141,14 @@ class LiveRuntime:
         self.trace_saved: dict | None = None
         self._next_status = 0.0
 
+    def enable_next_pick(self, service, deadline_ms: int = 5000) -> None:
+        """CT-2 D3/D5: answer pick_request with ``service`` (a PickService) and say so in the welcome, with the
+        deadline a client waits for the pick (call before start())."""
+        self.link.pick = service
+        self.arbiter.next_pick_allowed = True
+        self.welcome["capabilities"]["next_pick"] = True
+        self.welcome["capabilities"]["next_pick_deadline_ms"] = int(deadline_ms)
+
     # --- lifecycle -------------------------------------------------------------------------------------------------
     def start(self) -> int:
         port = self.server.start()
