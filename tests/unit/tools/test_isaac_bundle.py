@@ -838,7 +838,8 @@ def test_sessions_that_do_not_fit_the_shards_are_refused(tmp_path, monkeypatch, 
 # --- the check before a submission ------------------------------------------------------------------------------------
 
 RUNNER_SRC = 'ap.add_argument("--seed")\nap.add_argument("--scene-file")\n'
-LAUNCHER = 'if [ "$DRY_RUN" = 1 ]; then echo RUNNER_ARGS; printf "%s\\n" --seed "$SEED" $EXTRA; exit 0; fi; exit 9\n'
+LAUNCHER = ('mkdir -p "$1"; echo touched > "$1/defaults.txt"\n'
+            'if [ "$DRY_RUN" = 1 ]; then echo RUNNER_ARGS; printf "%s\\n" --seed "$SEED" $EXTRA; exit 0; fi; exit 9\n')
 
 
 def check_case(tmp_path, extra, out_exists=False):
@@ -847,7 +848,7 @@ def check_case(tmp_path, extra, out_exists=False):
     out = tmp_path / "out_a"
     if out_exists:
         out.mkdir()
-    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh")], env={"SEED": "1", "EXTRA": extra},
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(out)], env={"SEED": "1", "EXTRA": extra},
                  retry_move=[str(out)])
     return ib.check_runs([run], tmp_path / "runner.py")
 
@@ -861,15 +862,50 @@ def test_a_flag_the_snapshot_lacks_is_caught(tmp_path):
     assert "--queue-resume-not-stopped" in problem
 
 
-def test_an_existing_output_is_caught(tmp_path):
+def test_an_existing_output_is_caught_and_left_alone(tmp_path):
     assert any("exists" in p for p in check_case(tmp_path, "", out_exists=True))
+    assert not (tmp_path / "out_a" / "defaults.txt").exists()  # the launcher was not run on it
+
+
+def test_the_dry_run_writes_to_a_scratch_output(tmp_path):
+    assert check_case(tmp_path, "") == []
+    assert not (tmp_path / "out_a").exists()
+
+
+def test_a_launcher_without_a_dry_run_mode_is_not_run(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "live.sbatch").write_text('touch "$0.ran"\n')
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "live.sbatch")])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "DRY_RUN mode" in problem and not (tmp_path / "live.sbatch.ran").exists()
+
+
+def test_a_marker_inside_another_word_does_not_count(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "l.sh").write_text('# DRY_RUN RUNNER_ARGS\necho NO_RUNNER_ARGS\n')
+    (problem,) = ib.check_runs([ib.Run(name="a", argv=["bash", str(tmp_path / "l.sh")])], tmp_path / "runner.py")
+    assert "no RUNNER_ARGS line" in problem
+
+
+def test_a_dry_run_that_hangs_is_killed(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "h.sh").write_text('# DRY_RUN RUNNER_ARGS\nsleep 30 & echo $! > "$0.pid"; wait\n')
+    t0 = time.monotonic()
+    (problem,) = ib.check_runs([ib.Run(name="a", argv=["bash", str(tmp_path / "h.sh")])], tmp_path / "runner.py",
+                               timeout_s=0.3)
+    assert "killed" in problem and time.monotonic() - t0 < 5
+    pid = int((tmp_path / "h.sh.pid").read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and ib.alive(pid):
+        time.sleep(0.05)
+    assert not ib.alive(pid)
 
 
 def test_a_launcher_without_dry_run_output_is_caught(tmp_path):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
     run = ib.Run(name="a", argv=["bash", "-c", "exit 0"])
     (problem,) = ib.check_runs([run], tmp_path / "runner.py")
-    assert "RUNNER_ARGS" in problem
+    assert "DRY_RUN mode" in problem
 
 
 def test_the_check_command_exits_1_on_a_problem(tmp_path, capsys):

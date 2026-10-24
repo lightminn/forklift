@@ -191,28 +191,60 @@ def defined_flags(script) -> set:
     return set(re.findall(r"""["'](--[A-Za-z0-9][A-Za-z0-9_-]*)["']""", Path(script).read_text()))
 
 
-def check_runs(runs, runner) -> list[str]:
-    """Problems found before a submission: a run whose output (retry_move) already exists, a launcher whose DRY_RUN
-    fails or prints no runner arguments, and runner arguments whose --flags `runner` does not define (an option the
-    snapshot's code does not have fails only once the job runs). Each launcher is run with DRY_RUN=1 in its cwd."""
+def _dry_run_launcher(argv):
+    """The launcher script in argv that has a DRY_RUN mode printing RUNNER_ARGS, or None (then nothing is run: a
+    launcher without it, such as isaac_live.sbatch, would start Isaac for real)."""
+    for a in argv:
+        if a.endswith((".sbatch", ".sh")) and os.path.isfile(a):
+            text = Path(a).read_text(errors="replace")
+            return a if "DRY_RUN" in text and "RUNNER_ARGS" in text else None
+    return None
+
+
+def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
+    """Problems found before a submission: a run whose output (retry_move) already exists (it is not run), a launcher
+    without a DRY_RUN mode (not run either), a DRY_RUN that fails or prints no RUNNER_ARGS line, and runner arguments
+    whose --flags `runner` does not define (an option the snapshot's code lacks fails only once the job runs). The
+    DRY_RUN goes to a scratch output (the run's retry_move paths in its argv replaced), never to the real one."""
+    import tempfile
+
     known = defined_flags(runner)
     problems = []
     for run in runs:
         r = run.at(1)
-        for path in r.retry_move:
-            if os.path.lexists(path):
-                problems.append(f"{r.name}: {path} exists")
-        env = {**os.environ, **r.env, "DRY_RUN": "1"}
-        try:
-            p = subprocess.run(r.argv, cwd=r.cwd, env=env, capture_output=True, text=True, timeout=120)
-        except (OSError, subprocess.SubprocessError) as exc:
-            problems.append(f"{r.name}: DRY_RUN did not run ({exc})")
+        existing = [path for path in r.retry_move if os.path.lexists(path)]
+        if existing:
+            problems.append(f"{r.name}: {', '.join(existing)} exists (not run)")
             continue
-        if p.returncode != 0 or "RUNNER_ARGS" not in p.stdout:
-            problems.append(f"{r.name}: DRY_RUN exit {p.returncode}, no RUNNER_ARGS line (the launcher must print "
-                            "its runner's arguments after RUNNER_ARGS, as deploy/riibotics/riib_scene.sbatch does)")
+        if _dry_run_launcher(r.argv) is None:
+            problems.append(f"{r.name}: no launcher with a DRY_RUN mode printing RUNNER_ARGS (not run)")
             continue
-        args = p.stdout.split("RUNNER_ARGS", 1)[1].split()
+        with tempfile.TemporaryDirectory(prefix="bundle_check_") as scratch:
+            argv = list(r.argv)
+            for k, path in enumerate(r.retry_move):
+                argv = [a.replace(path, os.path.join(scratch, f"out{k}")) for a in argv]
+            env = {**os.environ, **r.env, "DRY_RUN": "1"}
+            try:
+                p = subprocess.Popen(argv, cwd=r.cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, start_new_session=True)
+            except OSError as exc:
+                problems.append(f"{r.name}: DRY_RUN did not start ({exc})")
+                continue
+            try:
+                out, _ = p.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)  # the launcher's whole group: what it started too
+                except ProcessLookupError:
+                    pass
+                p.communicate()
+                problems.append(f"{r.name}: DRY_RUN did not end in {timeout_s} s (killed)")
+                continue
+        lines = out.splitlines()
+        if p.returncode != 0 or "RUNNER_ARGS" not in lines:
+            problems.append(f"{r.name}: DRY_RUN exit {p.returncode}, no RUNNER_ARGS line")
+            continue
+        args = " ".join(lines[lines.index("RUNNER_ARGS") + 1:]).split()
         unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
