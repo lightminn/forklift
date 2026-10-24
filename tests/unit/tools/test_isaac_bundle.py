@@ -632,9 +632,7 @@ def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
     ],
 )
 def test_sizes_grow_with_the_bundle(kind, slots, args):
-    got = ib.sbatch_sizes(kind, slots)
-    assert {k: v for k, v in got.items() if k != "export"} == args
-    assert got["export"] == f"ALL,BUNDLE_SLOTS={args['slots']},BUNDLE_SESSION_VRAM_MIB={ib.KINDS[kind]['vram_mib']}"
+    assert ib.sbatch_sizes(kind, slots) == args
 
 
 def test_more_sessions_than_a_gpu_holds_are_refused():
@@ -644,8 +642,7 @@ def test_more_sessions_than_a_gpu_holds_are_refused():
 
 def test_the_sizes_command_prints_sbatch_options(capsys):
     assert ib.main(["sizes", "live"]) == 0
-    assert capsys.readouterr().out.strip() == ("--gres=shard:4 --cpus-per-task=10 --mem=24G "
-                                               "--export=ALL,BUNDLE_SLOTS=4,BUNDLE_SESSION_VRAM_MIB=3950")
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=10 --mem=24G"
 
 
 def test_a_start_waits_for_the_node_s_memory(tmp_path):
@@ -803,7 +800,7 @@ def test_a_reservation_that_cannot_be_given_back_leaves_the_run_recorded(tmp_pat
     assert summary["errors"] and summary["exit_code"] == 1
 
 
-def test_the_runner_takes_its_slots_and_session_memory_from_sizes(tmp_path, monkeypatch):
+def test_the_runner_takes_its_slots_and_session_memory_from_the_kind(tmp_path, monkeypatch):
     seen = {}
 
     def fake(runs, out, **k):
@@ -811,12 +808,15 @@ def test_the_runner_takes_its_slots_and_session_memory_from_sizes(tmp_path, monk
         return {"exit_code": 0}
 
     monkeypatch.setattr(ib, "run_bundle", fake)
-    monkeypatch.setenv("BUNDLE_SLOTS", "3")
-    monkeypatch.setenv("BUNDLE_SESSION_VRAM_MIB", "4500")
     monkeypatch.setenv("SLURM_SHARDS_ON_NODE", "4")
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", "--kind", "riib"]) == 0
     assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
+
+
+@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("live", 4, 4), ("bd", 4, 4)])
+def test_the_kind_s_slots_follow_the_shards(kind, shards, slots):
+    assert ib.kind_slots(kind, shards) == slots

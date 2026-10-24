@@ -12,7 +12,8 @@
 # BRIDGE_CPU and PORT (deploy/console/isaac_live.sbatch and deploy/riibotics/riib_scene.sbatch name their bridge
 # container and pin it with them), the list's env overriding.
 #
-#   sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) --time=T deploy/slurm/isaac_bundle.sbatch RUNS.jsonl OUT
+#   sbatch $(python3 tools/isaac_bundle.py sizes KIND [--slots N]) --time=T deploy/slurm/isaac_bundle.sbatch RUNS.jsonl OUT KIND
+#   (KIND = live|riib|bd: the runner takes the slots and the session GPU memory from it; without it, slots = shards)
 #   (sizes prints --gres/--cpus-per-task/--mem from the measured per-session RAM, cores and GPU memory, in proportion
 #   to the sessions; riib holds 3 per GPU -- 4.15-4.37 GB each with its video)
 #   optional: BUNDLE_PY (python3; the runner needs only the standard library), BUNDLE_ARGS (more tools/isaac_bundle.py
@@ -31,13 +32,15 @@
 set -u
 LIST=$(realpath "${1:?the run list (JSON lines)}")
 OUT=$(realpath -m "${2:?the output directory}")
+KIND_ARGS=()
+[ -n "${3:-}" ] && KIND_ARGS=(--kind "$3")
 ROOT=$(pwd)
 mkdir -p "$OUT"
 echo "host=$(hostname) job=${SLURM_JOB_ID:-} shards=${SLURM_SHARDS_ON_NODE:-?} gpus=${CUDA_VISIBLE_DEVICES:-unset}" \
   "cpus=$(taskset -cp $$ | awk -F': ' '{print $2}') list=$LIST out=$OUT $(date -Is)"
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv 2>/dev/null
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design
-"${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" --list "$LIST" --out "$OUT" ${BUNDLE_ARGS:-} &
+"${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" --list "$LIST" --out "$OUT" "${KIND_ARGS[@]}" ${BUNDLE_ARGS:-} &
 RUNNER=$!
 trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # Slurm's TERM: the runner ends its runs
 wait "$RUNNER"

@@ -136,7 +136,7 @@
 
 - 크기는 `python3 tools/isaac_bundle.py sizes <live|riib|bd> [--slots N]` 가 계산해 sbatch 옵션으로 찍는다.
   - 세션 수에 비례한다: RAM 은 세션 수 × 세션 RAM + 공유 파일 1.5 GiB + 여유 0.5 GiB, CPU 는 2/세션 + SLAM 브리지 전용 한 코어(2), shard 는 세션 수 × 세션 VRAM(live 3,950·riib 4,500·bd 3,500 MiB) ÷ 4,076 의 올림이다.
-  - shard 가 세션 수와 다를 수 있어 `sizes` 는 `--export=ALL,BUNDLE_SLOTS=…,BUNDLE_SESSION_VRAM_MIB=…` 도 찍고, 실행기의 기본값이 그것을 읽는다.
+  - shard 가 세션 수와 다를 수 있어, sbatch 의 셋째 인자로 종류(`live|riib|bd`)를 넘긴다. 실행기(`--kind`)는 그 종류의 세션 VRAM 과 shard 가 담는 슬롯 수를 쓴다. `--export` 로 넘기지 않는 것은, Slurm 23.11 이 반복된 `--export` 를 마지막 값으로 덮어써 호출자의 `--export` 와 충돌하기 때문이다(Codex 12회차).
   - **브리지 전용 코어(2026-10-25, 콘솔 세션 조사).** CT-2 V3 의 slam_link_failed 7 건은 slam_toolbox 키프레임 응답이 그래프 크기에 비례해 늘어(스캔 0–999 중앙 0.03 s → 4,500 이후 0.5 s·p95 0.9 s) 러너의 1.0 s 기한을 넘은 것이다. 그런데 브리지 컨테이너는 Isaac 과 공유하는 CPU 하나에 묶여 있었다.
   - 실행기는 잡에 세션 몫(2/세션) 밖의 코어가 있으면(`--bridge-cpus auto`) 그 코어의 시블링 둘을 모든 브리지에 주고(`BRIDGE_CPU="a,b"`), 세션들은 `taskset` 으로 나머지 CPU 에 묶는다.
   - 근본 원인(그래프 크기)은 콘솔 세션의 별건 계획이 맡는다. 이 분리는 실패 시점을 늦추는 완화다.

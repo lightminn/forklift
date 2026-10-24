@@ -196,8 +196,8 @@ def sbatch_sizes(kind, slots=None) -> dict:
     """The job's resources for `slots` sessions of `kind` (default its max per GPU): shards for the sessions' GPU
     memory (a riib session with its video holds 4.47 GB, more than a 4,076 MiB shard, so 3 of them take 4 shards --
     the shards are what other jobs on the GPU rely on), 2 cores per session + the bridge core, RAM = slots x session +
-    the shared file pages + a margin, rounded up to a GiB. `export` carries the slot count and the session's GPU
-    memory to the runner (its defaults read them), since the shards no longer equal the sessions."""
+    the shared file pages + a margin, rounded up to a GiB. The runner is told the kind (deploy/slurm/
+    isaac_bundle.sbatch's third argument, --kind) and takes the slots and the session's GPU memory from it."""
     k = KINDS[kind]
     slots = slots or k["max_slots"]
     if not 1 <= slots <= k["max_slots"]:
@@ -207,7 +207,13 @@ def sbatch_sizes(kind, slots=None) -> dict:
         raise ValueError(f"{kind}: {slots} sessions need {shards} shards, more than a GPU's 4")
     mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
     return {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
-            "mem_gib": int(mem), "export": f"ALL,BUNDLE_SLOTS={slots},BUNDLE_SESSION_VRAM_MIB={k['vram_mib']}"}
+            "mem_gib": int(mem)}
+
+
+def kind_slots(kind, shards) -> int:
+    """How many sessions of `kind` the job's shards hold (at most the kind's per-GPU limit)."""
+    k = KINDS[kind]
+    return max(1, min(k["max_slots"], shards * SHARD_MIB // k["vram_mib"]))
 
 
 def _siblings(cpu):
@@ -980,18 +986,18 @@ def main(argv=None) -> int:
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2
-        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G --export={z['export']}")
+        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G")
+        print(f"(then: deploy/slurm/isaac_bundle.sbatch RUNS OUT {a.kind})", file=sys.stderr)
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", required=True, help="the run list (JSON lines)")
     ap.add_argument("--out", required=True)
-    env_slots = os.environ.get("BUNDLE_SLOTS", "")
-    ap.add_argument("--slots", type=int, default=int(env_slots) if env_slots.isdigit() else None,
-                    help="runs at once (default: BUNDLE_SLOTS, set by `sizes`, else the shards)")
+    ap.add_argument("--kind", choices=sorted(KINDS),
+                    help="the sessions' kind: its measured GPU memory per session and the slots the shards hold")
+    ap.add_argument("--slots", type=int, help="runs at once (default: what the shards hold for --kind, else shards)")
     ap.add_argument("--shards", type=int, help="the job's shards (default: SLURM_SHARDS_ON_NODE)")
     ap.add_argument("--stagger-s", type=float, default=60.0)
-    env_vram = os.environ.get("BUNDLE_SESSION_VRAM_MIB", "")
-    ap.add_argument("--session-vram-mib", type=int, default=int(env_vram) if env_vram.isdigit() else SESSION_VRAM_MIB)
+    ap.add_argument("--session-vram-mib", type=int, help=f"default: --kind's, else {SESSION_VRAM_MIB}")
     ap.add_argument("--shard-mib", type=int, default=SHARD_MIB)
     ap.add_argument("--vram-period-s", type=float, default=1.0)
     ap.add_argument("--vram-unreadable-s", type=float, default=120.0)
@@ -1023,7 +1029,9 @@ def main(argv=None) -> int:
         return 2
     env_shards = os.environ.get("SLURM_SHARDS_ON_NODE", "")
     shards = a.shards or (int(env_shards) if env_shards.isdigit() else None)
-    slots = a.slots or shards
+    if a.session_vram_mib is None:
+        a.session_vram_mib = KINDS[a.kind]["vram_mib"] if a.kind else SESSION_VRAM_MIB
+    slots = a.slots or (kind_slots(a.kind, shards) if a.kind and shards else shards)
     if not slots:
         print("refusing: no --slots and no shard count (--shards or SLURM_SHARDS_ON_NODE)", file=sys.stderr)
         return 2
