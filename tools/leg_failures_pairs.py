@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+from fractions import Fraction
 
 ALPHA = 0.05
 MIN_PAIRS = 6
@@ -38,14 +39,15 @@ def _average_ranks(values):
 
 def signed_rank_p(differences) -> float:
     """P(W+ >= observed) under the null, over every sign combination of the average ranks (zeros dropped)."""
-    nonzero = [float(d) for d in differences if d != 0]
+    # exact values (rates as Fractions): a float difference would split a tie (Codex plan round 5 P2)
+    nonzero = [d for d in differences if d != 0]
     if not nonzero:
         return 1.0
     ranks = _average_ranks([abs(d) for d in nonzero])
     observed = sum(r for r, d in zip(ranks, nonzero) if d > 0)
     hits = 0
     for signs in itertools.product((0, 1), repeat=len(ranks)):
-        if sum(r for r, s in zip(ranks, signs) if s) >= observed - 1e-9:
+        if sum(r for r, s in zip(ranks, signs) if s) >= observed:
             hits += 1
     return hits / 2 ** len(ranks)
 
@@ -67,19 +69,23 @@ def judge(pairs) -> dict:
     return out
 
 
+def pairs_from_rows(rows) -> list:
+    """The judge's pairs from the counts: each rate an exact Fraction (None with no attempt)."""
+
+    def rate(arm):
+        completed, attempted, _ = arm
+        return None if attempted == 0 else Fraction(int(completed), int(attempted))
+
+    return [(rate(r["main"]), rate(r["fix"]), r["main"][2], r["fix"][2]) for r in rows]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("pairs", help="JSON list of {seed, main: [completed, attempted, refusals], fix: [...]}")
     args = parser.parse_args()
     with open(args.pairs) as handle:
         rows = json.load(handle)
-
-    def rate(arm):
-        completed, attempted, _ = arm
-        return None if attempted == 0 else completed / attempted
-
-    pairs = [(rate(r["main"]), rate(r["fix"]), r["main"][2], r["fix"][2]) for r in rows]
-    print(json.dumps(judge(pairs), indent=2))
+    print(json.dumps(judge(pairs_from_rows(rows)), indent=2, default=float))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from leg_failures_pairs import judge, signed_rank_p  # noqa: E402
+from leg_failures_pairs import judge, pairs_from_rows, signed_rank_p  # noqa: E402
 
 
 def test_ties_take_average_ranks_over_every_sign_combination():
@@ -39,3 +39,12 @@ def test_the_judgement_rules():
     assert judge([(0.5, 1.0, 0, 0)] * 2 + [(0.5, 0.5, 0, 0)] * 6)["verdict"] == "fail"
     out = judge([(0.0, 1.0, 0, 0)] * 3 + [(1.0, 0.5, 0, 0)] * 2 + [(0.5, 0.5, 0, 0)] * 3)
     assert out["verdict"] == "fail" and out["usable_pairs"] == 8 and out["p"] >= 0.05
+
+
+def test_rates_from_counts_stay_exact_so_ties_hold():
+    """Codex plan round 5 P2: 3/3 - 2/3 and 0/3 - 1/3 are the same size; in floats they were not (p 0.015625, pass)."""
+    rows = [{"seed": k, "main": [2, 3, 0], "fix": [3, 3, 0]} for k in range(6)]
+    rows.append({"seed": 6, "main": [1, 3, 0], "fix": [0, 3, 0]})
+    out = judge(pairs_from_rows(rows))
+    assert out["p"] == pytest.approx(8 / 128) and out["verdict"] == "fail"
+    assert pairs_from_rows([{"seed": 0, "main": [0, 0, 1], "fix": [1, 2, 0]}])[0][:2] == (None, 0.5)
