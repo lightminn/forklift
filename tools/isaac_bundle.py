@@ -261,13 +261,14 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
             problems.append(f"{r.name}: no launcher with a DRY_RUN mode printing RUNNER_ARGS (not run)")
             continue
         with tempfile.TemporaryDirectory(prefix="bundle_check_") as scratch:
-            argv = _scratch_argv(r.argv, r.env, r.cwd, r.retry_move, scratch)
+            merged = {**os.environ, **r.env}  # what the launcher will see: the inherited environment too
+            argv = _scratch_argv(r.argv, merged, r.cwd, r.retry_move, scratch)
             if argv is None:
                 problems.append(f"{r.name}: its outputs {r.retry_move} are not each a whole argument of its argv, or "
                                 "appear elsewhere in its argv or env (not run)")
                 continue
             token = f"check-{os.getpid()}-{n}-{secrets.token_hex(4)}"
-            env = {**os.environ, **r.env, "DRY_RUN": "1", "BUNDLE_TOKEN": token}
+            env = {**merged, "DRY_RUN": "1", "BUNDLE_TOKEN": token}
             out_path = os.path.join(scratch, "stdout.txt")
             with open(out_path, "w") as out_file:  # a file, not a pipe: a straggler cannot hold the read open
                 try:
@@ -276,7 +277,7 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
                 except OSError as exc:
                     problems.append(f"{r.name}: DRY_RUN did not start ({exc})")
                     continue
-                hung = False
+                hung, ended = False, False
                 try:
                     p.wait(timeout=timeout_s)
                 except subprocess.TimeoutExpired:
@@ -284,11 +285,14 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
                 finally:  # a timeout, an interrupt or a clean end: nothing it started may outlive the check
                     if p.poll() is None:
                         _kill([p.pid], signal.SIGKILL)
-                    _end_token(token)
+                    ended = _end_token(token)
                     try:
                         p.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         pass
+            if not ended:
+                problems.append(f"{r.name}: processes of its DRY_RUN survive SIGKILL (check stopped)")
+                return problems  # do not start another launcher beside them
             if hung:
                 problems.append(f"{r.name}: DRY_RUN did not end in {timeout_s} s (killed)")
                 continue

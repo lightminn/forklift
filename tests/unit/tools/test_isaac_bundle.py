@@ -979,3 +979,24 @@ def test_a_child_forked_at_the_end_is_ended(tmp_path):
     assert ib.check_runs([run], tmp_path / "runner.py") == []
     pids = [int((tmp_path / f"f.sh.{x}").read_text()) for x in ("pid", "grand") if (tmp_path / f"f.sh.{x}").exists()]
     assert pids and not any(ib.alive(p) for p in pids)  # the child is gone, and so is a grandchild it managed
+
+
+
+def test_an_output_in_the_inherited_environment_is_refused(tmp_path, monkeypatch):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    a = str(tmp_path / "a")
+    monkeypatch.setenv("OUT2", a)
+    run = ib.Run(name="x", argv=["bash", str(tmp_path / "launch.sh"), a], env={"SEED": "1"}, retry_move=[a])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "elsewhere" in problem
+
+
+def test_processes_that_survive_stop_the_check(tmp_path, monkeypatch):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    monkeypatch.setattr(ib, "_end_token", lambda token: False)
+    runs = [ib.Run(name=n, argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / n)], env={"SEED": "1"},
+                   retry_move=[str(tmp_path / n)]) for n in ("a", "b")]
+    problems = ib.check_runs(runs, tmp_path / "runner.py")
+    assert len(problems) == 1 and "survive" in problems[0]  # b was not run
