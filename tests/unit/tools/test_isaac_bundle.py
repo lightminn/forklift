@@ -37,6 +37,8 @@ def bundle(tmp_path, runs, **k):
     k.setdefault("job_id", "77")
     k.setdefault("cpus", [4, 5, 16, 17])
     k.setdefault("cleanup", lambda session_id: [])
+    k.setdefault("leftover_grace_s", 1.0)
+    k.setdefault("oom_counter", None)
     return ib.run_bundle(runs, tmp_path / "out", **k)
 
 
@@ -116,7 +118,7 @@ def test_a_failed_run_does_not_stop_the_others(tmp_path):
     r = results(tmp_path)
     assert (r["ok1"]["rc"], r["bad"]["rc"], r["ok2"]["rc"]) == (0, 3, 0)
     assert summary["failed"] == 1 and summary["exit_code"] == 1
-    assert (tmp_path / "out" / "runs" / "bad.log").exists()
+    assert (tmp_path / "out" / "runs" / "bad.1.log").exists()
 
 
 def test_each_run_gets_its_own_session_bridge_cpu_and_port(tmp_path):
@@ -183,7 +185,7 @@ def test_processes_left_by_a_finished_run_are_ended(tmp_path):
     while time.monotonic() < deadline and ib.alive(pid):
         time.sleep(0.05)
     assert not ib.alive(pid)
-    assert results(tmp_path)["o"]["leftover_ended"] is True
+    assert results(tmp_path)["o"]["leftover"] == 1
 
 
 def test_a_stop_terms_running_runs_and_starts_no_more(tmp_path):
@@ -303,7 +305,7 @@ def test_a_child_in_its_own_process_group_is_killed_by_its_token(tmp_path):
     pidfile = tmp_path / "child.pid"
     child = ("import os,signal,sys,time; open(sys.argv[1],'w').write(str(os.getpid()));"
              "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)")
-    run = ib.Run(name="t", argv=["bash", "-c", f'timeout 60 {PY} -c "$C" "{pidfile}"'], env={"C": child})
+    run = ib.Run(name="t", argv=["bash", "-c", f'timeout 60 {PY} -c "$C" "{pidfile}"; echo "timeout rc $?"'], env={"C": child})
     t0 = time.monotonic()
     bundle(tmp_path, [run], run_timeout_s=0.5, grace_s=0.5)
     pid = int(pidfile.read_text())
@@ -335,8 +337,8 @@ def test_an_unreadable_gpu_holds_starts_then_goes_on_by_the_slots(tmp_path):
     summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.6) for n in names], slots=2, shards=2,
                      vram_probe=lambda leaders: None, vram_period_s=0.05, vram_unreadable_s=0.3)
     s = stamps(tmp_path, names)
-    assert s["b"]["t0"] - s["a"]["t0"] >= 0.25
-    assert summary["unreadable_starts"] == 1 and summary["failed"] == 0
+    assert s["a"]["t0"] - summary["start"] >= 0.25  # held, then on by the slots
+    assert summary["unreadable_starts"] == 2 and summary["failed"] == 0
 
 
 # --- infrastructure failures and retries -------------------------------------------------------------------------------
@@ -432,3 +434,111 @@ def test_the_run_list_takes_scan_retry_move_and_pace_log(tmp_path):
     (run,) = ib.load_runs(path)
     assert run.scan == ["/x/*.log"] and run.retry_move == ["/x"] and run.pace_log == "/x/live_log.jsonl"
     assert run.retryable
+
+
+# --- Codex round 2 counterexamples -------------------------------------------------------------------------------------
+
+
+def test_a_summary_line_naming_out_of_device_is_not_a_failure(tmp_path):
+    # riib_scene prints "OUT_OF_DEVICE lines: 0" at every normal end
+    run = ib.Run(name="n", argv=["bash", "-c", "echo 'runner exit 0'; echo 'OUT_OF_DEVICE lines: 0'"],
+                 retry_move=[str(tmp_path / "nothing")])
+    summary = bundle(tmp_path, [run])
+    r = results(tmp_path)["n"]
+    assert r["status"] == "ended" and r["retried"] is False and summary["infra_failed_attempts"] == 0
+
+
+def test_each_attempt_is_judged_on_its_own_log(tmp_path):
+    out = tmp_path / "f"
+    code = ("import sys; print('bfc_arena.cc:360 void* onnxruntime::BFCArena::AllocateRaw failed') "
+            "if sys.argv[1]=='1' else print('fine'); sys.exit(1 if sys.argv[1]=='1' else 0)")
+    run = ib.Run(name="f", argv=py(code, "{attempt}"), retry_move=[str(out)])
+    summary = bundle(tmp_path, [run], retries=2)
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [(x["attempt"], x["status"]) for x in lines] == [(1, "infra_failed"), (2, "ended")]
+    assert summary["exit_code"] == 0
+    assert (tmp_path / "out" / "runs" / "f.1.log").exists() and (tmp_path / "out" / "runs" / "f.2.log").exists()
+
+
+def test_a_run_holds_its_slot_until_what_it_left_has_ended(tmp_path):
+    # the top process ends at once, its child ignores TERM for a while: the next run waits for the child
+    marker = tmp_path / "child_end"
+    child = f"import time,pathlib; time.sleep(0.8); pathlib.Path('{marker}').write_text(str(time.time()))"
+    first = ib.Run(name="first", argv=["bash", "-c", f'(trap "" TERM; exec {PY} -c "$C") & exit 0'], env={"C": child})
+    second = stamp_run("second", tmp_path, 0.05)
+    bundle(tmp_path, [first, second], slots=1, leftover_grace_s=5.0)
+    assert stamps(tmp_path, ["second"])["second"]["t0"] >= float(marker.read_text()) - 0.05
+    assert results(tmp_path)["first"]["leftover"] == 1
+
+
+def test_a_retry_waits_for_the_old_attempts_processes(tmp_path):
+    out = tmp_path / "o"
+    marker = tmp_path / "old_child_end"
+    code = (
+        "import os,sys,time,signal,subprocess,pathlib; a=sys.argv[1]; d=pathlib.Path(sys.argv[2]);"
+        "d.mkdir(parents=True, exist_ok=True);"
+        f"c=\"import time,pathlib; time.sleep(0.8); pathlib.Path('{marker}').write_text(str(time.time()))\";"
+        "subprocess.Popen(['bash','-c','trap \\'\\' TERM; exec \"$0\" -c \"$1\"',sys.executable,c]) if a=='1' else None;"
+        "(d/'mark').write_text(str(time.time()));"
+        "print('CUDA out of memory') if a=='1' else None; sys.exit(1 if a=='1' else 0)"
+    )
+    run = ib.Run(name="o", argv=py(code, "{attempt}", str(out)), retry_move=[str(out)])
+    bundle(tmp_path, [run], leftover_grace_s=5.0)
+    assert float((out / "mark").read_text()) >= float(marker.read_text()) - 0.05  # attempt 2 started after
+    assert (tmp_path / "o.attempt1" / "mark").exists()
+
+
+def test_a_cleanup_that_fails_is_recorded_and_the_others_go_on(tmp_path):
+    def cleanup(sid):
+        raise TimeoutError("docker rm took too long")
+
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.3)], cleanup=cleanup)
+    r = results(tmp_path)
+    assert "docker rm" in r["a"]["cleanup_error"] and r["b"]["status"] == "ended"
+    assert summary["runs"] == 2 and summary["failed"] == 0
+
+
+def test_a_move_that_cannot_happen_stops_the_retry_and_is_recorded(tmp_path):
+    out = tmp_path / "m"
+    out.mkdir()
+    (tmp_path / "m.attempt1").mkdir()  # the destination is taken
+    code = "import sys; print('CUDA out of memory'); sys.exit(1)"
+    summary = bundle(tmp_path, [ib.Run(name="m", argv=py(code), retry_move=[str(out)])])
+    r = results(tmp_path)["m"]
+    assert r["retried"] is False and "attempt1" in r["move_error"] and summary["failed"] == 1
+
+
+def test_an_oom_is_blamed_only_on_a_killed_run(tmp_path):
+    counts = iter([0, 0, 1, 1])  # a's start, b's start, a's end, b's end
+    runs = [stamp_run("other_failure", tmp_path, 0.2, code=7), stamp_run("killed", tmp_path, 0.3, code=137)]
+    bundle(tmp_path, runs, slots=2, oom_counter=lambda: next(counts), retries=0)
+    r = results(tmp_path)
+    assert r["killed"]["status"] == "infra_failed" and "oom_kill" in r["killed"]["infra"][0]
+    assert r["other_failure"]["status"] == "ended" and r["other_failure"]["oom_kills_during"] == 1
+
+
+def test_a_run_whose_attempt_is_only_in_its_argv_is_retried(tmp_path):
+    code = "import sys; print('CUDA_ERROR_OUT_OF_MEMORY') if sys.argv[1]=='1' else None; sys.exit(int(sys.argv[1]=='1'))"
+    summary = bundle(tmp_path, [ib.Run(name="p", argv=py(code, "{attempt}"))])
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [x["status"] for x in lines] == ["infra_failed", "ended"] and summary["exit_code"] == 0
+
+
+def test_stopped_ticks_step_the_bundle_back(tmp_path):
+    # ticks for 0.4 s at pace, then silence while the run lives on
+    log = tmp_path / "stall_live_log.jsonl"
+    code = PACED.replace("time.monotonic()+float(sys.argv[3])", "time.monotonic()+0.4") + "\ntime.sleep(1.5)"
+    runs = [ib.Run(name="stall", argv=py(code, str(log), "0.4", "0"), pace_log=str(log)),
+            ib.Run(name="ok", argv=py(PACED, str(tmp_path / "ok_log.jsonl"), "0.4", "2.0"),
+                   pace_log=str(tmp_path / "ok_log.jsonl")),
+            stamp_run("later", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.1, pace_window_s=0.5, pace_warmup_s=0.3,
+                     pace_period_s=0.1, pace_stall_s=0.4)
+    assert summary["backoffs"] and "no tick" in summary["backoffs"][0]["reason"]
+
+
+def test_the_first_run_waits_for_free_gpu_memory(tmp_path):
+    frees = iter([1000, 1000, 1000] + [16000] * 1000)
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1,
+                     vram_probe=lambda leaders: ([], {0: next(frees)}), vram_period_s=0.05)
+    assert summary["gpu_full_waits"] == 1 and summary["failed"] == 0

@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=isaac_bundle
 #SBATCH --partition=compute
-#SBATCH --gres=shard:3
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=25G
+#SBATCH --gres=shard:4
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=27G
 #SBATCH --time=02:00:00
 #SBATCH --signal=B:TERM@120
 # Several Isaac runs in one job (tools/isaac_bundle.py, docs/plans/2026-10-24-ws1-isaac-bundle.md): a run list of
@@ -17,10 +17,13 @@
 #   options, split on spaces: --stagger-s, --run-timeout-s, --slots, --session-vram-mib ...)
 #
 # Sizes per kind of run, from ws1 measurements (2026-10-24, the plan's section 1 and 2.4): shard = runs at once,
-#   live session with learned proposals  3 runs: shard:3, 6 CPUs, 25G (1.0-1.2 cores, <= 6.51 GiB, 3.9 GB GPU each)
-#   batch riib_scene-like run            3 runs: shard:3, 10 CPUs, 25G (3.1 cores of 4, <= 6.5 GiB)
+#   live session with learned proposals  4 runs: shard:4, 8 CPUs, 27G (1.0-1.2 cores, <= 6.51 GiB, 3.9 GB GPU each);
+#                                        BUNDLE_ARGS="--pace-floor 0.345 --pace-gap-p99-s 0.12" with a pace_log per run
+#   batch riib_scene-like run            4 runs: shard:4, 8 CPUs, 28G (3.1 cores of 4 alone -- slower at 2, <= 6.8 GiB)
+# Four sessions fill a GPU (4 x 3,915 MiB of 16,303); the runner's device free-memory check holds a start that would
+# not fit. Long operator sessions (isaac_live.sbatch's 8 h) stay single jobs: the memory figures cover runs up to 70 min.
 # --time: the list's runs in waves of N slots plus a minute of stagger per run, with room. The batch shell gets TERM
-# 120 s before the limit and passes it to the runner, which TERMs every run and KILLs what is left after 100 s.
+# 120 s before the limit and passes it to the runner, which TERMs every run and KILLs what is left after 110 s.
 #
 # Run from the repository root.
 set -u

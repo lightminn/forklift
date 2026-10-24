@@ -5,47 +5,53 @@
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
-"pace_log": glob} (all but name and argv optional). Runs start in
-list order whenever
+"pace_log": glob} (all but name and argv optional). Runs start in list order whenever
 
 - a slot is free: at most --slots runs at once, and never more slots than the job's shards (the rule: as many shards
-  as Isaac sessions running in the job);
+  as Isaac sessions running in the job). A run holds its slot until every process it started has ended, not only its
+  top process;
 - the previous start is at least --stagger-s old (a live session reaches its steady GPU memory 31-40 s after it
   starts, measured on ws1);
 - the GPU memory allows one more session, on a sample taken after the latest start: the job's runs, each counted at
   least --session-vram-mib (a run still warming up holds its whole share), plus one more fit in --shards x
-  --shard-mib, and the GPU's free memory, less what the job's warming runs will still take, holds one more session.
-  Shards are a scheduling count, not a partition: the second check keeps a start from landing on a GPU that other
-  jobs have filled. When nvidia-smi cannot be read the start waits, for at most --vram-unreadable-s, then goes on by
-  the slots alone and says so. A run alone always starts.
+  --shard-mib, and the GPU's free memory, less what the job's warming runs will still take, holds one more session
+  (checked for the first run too). Shards are a scheduling count, not a partition: the second check keeps a start
+  from landing on a GPU that other jobs have filled. When nvidia-smi cannot be read the start waits, for at most
+  --vram-unreadable-s, then goes on by the slots alone and says so.
 
-Each run gets SESSION_ID=<job>s<index> (the launchers name their docker containers with it), BRIDGE_CPU (a CPU of the
-job, a different one per slot, for the SLAM bridge container), PORT (a free port, 9000-9499, from an offset by job),
-BUNDLE_SLOT, BUNDLE_JOB, BUNDLE_RUN and BUNDLE_TOKEN. The list may set PORT (each value once) but none of the others.
-Each run is its own process group with its log in OUT/runs/<name>.log; one that fails leaves the others running.
+Each run gets SESSION_ID=<job>s<index>[r<attempt>] (the launchers name their docker containers with it), BRIDGE_CPU
+(a CPU of the job, a different one per slot, for the SLAM bridge container), PORT (a free port, 9000-9499, from an
+offset by job), BUNDLE_SLOT, BUNDLE_JOB, BUNDLE_RUN and BUNDLE_TOKEN. The list may set PORT (each value once) but none
+of the others. Each run is its own process group with its log in OUT/runs/<name>.<attempt>.log; one that fails leaves
+the others running.
 
 A run past --run-timeout-s, and every run when the bundle gets TERM/INT, is ended like Slurm's --signal=B:TERM: TERM
 to its top process only (the launchers end their supervisor, runner and bridge in that order), then KILL after
 --grace-s to every process carrying its BUNDLE_TOKEN -- found through /proc/<pid>/environ, because `timeout` and
 similar tools move their child into a process group of its own. Processes a finished run left behind get TERM, then
-KILL. Docker containers named slam_bridge_<SESSION_ID>_* (outside the run's processes and the job's cgroup) are
-removed.
+KILL after --leftover-grace-s. Docker containers named slam_bridge_<SESSION_ID>_* (outside the run's processes and
+the job's cgroup) are removed. A failing cleanup step is recorded and does not stop the other runs.
 
-A run that failed for the infrastructure -- an OOM kill in the job's cgroup while it ran (and it did not exit 0),
-or a GPU allocation failure in its log or in the files its "scan" globs name (`bfc_arena`, `OUT_OF_DEVICE`, CUDA out
-of memory) -- is recorded as status "infra_failed" and, with --retries left, run again: the paths in its
-"retry_move" are first renamed to <path>.attempt<n> (so the launcher's output folder keeps its name), and "{attempt}"
-in its argv, env, scan and pace_log is the attempt number. A failure of the run itself is never retried.
+A run failed for the infrastructure when its own attempt log, or a file its "scan" globs name, has a GPU allocation
+failure (ONNX Runtime's BFCArena, Vulkan's ERROR_OUT_OF_DEVICE_MEMORY, CUDA out of memory), or when it was killed
+(SIGKILL, or exit 137 from its launcher) while the job cgroup's oom_kill count rose. An oom_kill while a run failed
+otherwise is recorded beside it, not blamed on it. An infrastructure failure is recorded as status "infra_failed" and,
+with --retries left, the run goes again once all its processes have ended: the paths in its "retry_move" are renamed
+to <path>.attempt<n> first (so the launcher's output folder keeps its name), and "{attempt}" in its argv, env, scan and
+pace_log is the attempt number. A failure of the run itself is never retried.
 
 Real-time back-off (live runs): a run's "pace_log" glob names its live_log.jsonl (the newest match is read). Every
 --pace-period-s the bundle takes, for each run older than --pace-warmup-s, simulated over wall time across the last
---pace-window-s of tick records and the 99th percentile tick gap. When the median of those ratios falls below
---pace-floor, or a run's gap p99 exceeds --pace-gap-p99-s, the bundle starts no new run until fewer than (slots - 1)
-run -- one step back -- and waits a window before it steps back again. OUT/pace.jsonl keeps every evaluation.
+--pace-window-s of tick records up to now (a run whose ticks stopped counts its silence as a gap) and the 99th
+percentile tick gap. When the median of those ratios falls below --pace-floor, or a run's gap p99 exceeds
+--pace-gap-p99-s, or a run has written no tick for --pace-stall-s, the bundle starts no new run until fewer than
+(running - 1) run -- one step back -- and waits a window before it steps back again. OUT/pace.jsonl keeps every
+evaluation, runs it could not measure included.
 
-Records: OUT/results.jsonl (a line per run), OUT/vram.jsonl (the job's GPU memory, per run, every --vram-period-s),
-OUT/summary.json. A run's exit code is its top process's: the launcher has to end with the code of what it ran.
-Exit 0 when every run exited 0, 1 otherwise, 2 for a refused configuration.
+Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
+--vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
+with the code of what it ran. Exit 0 when every run's last attempt exited 0, 1 otherwise, 2 for a refused
+configuration.
 """
 
 from __future__ import annotations
@@ -62,6 +68,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import zlib
 from collections import deque
 from dataclasses import dataclass, field
@@ -71,7 +78,11 @@ SHARD_MIB = 4076  # 16,303 MiB / 4 shards per GPU on ws1 (gres.conf)
 SESSION_VRAM_MIB = 3950  # a live session with the learned worker: 3,886-3,915 MiB measured, + ~40 MiB driver share
 PORTS = (9000, 9500)
 RESERVED_ENV = ("SESSION_ID", "BRIDGE_CPU", "BUNDLE_SLOT", "BUNDLE_JOB", "BUNDLE_RUN", "BUNDLE_TOKEN")
-INFRA_PATTERNS = re.compile(rb"bfc_arena|BFCArena|OUT_OF_DEVICE|CUDA out of memory|CUDA_ERROR_OUT_OF_MEMORY")
+# The failures themselves, not summary lines such as riib_scene's "OUT_OF_DEVICE lines: 0".
+INFRA_PATTERNS = re.compile(
+    rb"BFCArena::Allocate|bfc_arena\.cc:\d+|ERROR_OUT_OF_DEVICE_MEMORY|CUDA out of memory|CUDA_ERROR_OUT_OF_MEMORY"
+    rb"|cudaErrorMemoryAllocation"
+)
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 
@@ -94,6 +105,7 @@ class Run:
 
     @property
     def retryable(self) -> bool:
+        """A run can go again when its outputs move aside or depend on the attempt (judged on the list's entry)."""
         texts = [*self.argv, *self.env.values(), *self.scan, self.pace_log or ""]
         return bool(self.retry_move) or any("{attempt}" in t for t in texts)
 
@@ -168,22 +180,20 @@ def alive(pid) -> bool:
     return st is not None and st[0] != "Z"
 
 
-def _pids():
-    return [int(d) for d in os.listdir("/proc") if d.isdigit()]
-
-
 def token_pids(token) -> list[int]:
     """Live processes whose environment carries BUNDLE_TOKEN=<token> (the run's whole tree, whatever its groups)."""
     needle = f"BUNDLE_TOKEN={token}".encode()
     found = []
-    for pid in _pids():
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
         try:
-            with open(f"/proc/{pid}/environ", "rb") as f:
+            with open(f"/proc/{d}/environ", "rb") as f:
                 env = f.read()
         except OSError:
             continue
-        if needle in env.split(b"\0") and alive(pid):
-            found.append(pid)
+        if needle in env.split(b"\0") and alive(int(d)):
+            found.append(int(d))
     return found
 
 
@@ -234,16 +244,13 @@ def nvidia_smi_probe(leaders=None):
 
 
 def docker_cleanup(session_id):
-    """Remove the docker containers named slam_bridge_<session_id>_*; return their names."""
-    try:
-        names = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name=^slam_bridge_{session_id}_", "--format", "{{.Names}}"],
-            capture_output=True, text=True, timeout=30, check=True,
-        ).stdout.split()
-    except (OSError, subprocess.SubprocessError):
-        return []
+    """Remove the docker containers named slam_bridge_<session_id>_*; return their names (raises on a failure)."""
+    names = subprocess.run(
+        ["docker", "ps", "-a", "--filter", f"name=^slam_bridge_{session_id}_", "--format", "{{.Names}}"],
+        capture_output=True, text=True, timeout=30, check=True,
+    ).stdout.split()
     for name in names:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60, check=False)
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30, check=True)
     return names
 
 
@@ -284,7 +291,7 @@ def job_oom_kills():
 
 
 class _Pace:
-    """Tick records ({tick_t, mono}) of one live log, the last window of them."""
+    """Tick records ({tick_t, mono}) of one live log, the last window of them (mono is CLOCK_MONOTONIC, like ours)."""
 
     def __init__(self, window_s):
         self.window_s = window_s
@@ -315,16 +322,22 @@ class _Pace:
                 self.ticks.append((float(e["mono"]), float(e["tick_t"])))
             except (ValueError, KeyError, TypeError):
                 continue
-        while self.ticks and self.ticks[-1][0] - self.ticks[0][0] > self.window_s:
-            self.ticks.popleft()
 
-    def measure(self):
-        """(sim over wall, tick gap p99) across the window, or None until it spans 80 % of the window."""
-        if len(self.ticks) < 3 or self.ticks[-1][0] - self.ticks[0][0] < 0.8 * self.window_s:
+    def measure(self, now):
+        """(sim over wall up to now, tick gap p99 counting the silence since the last tick, silence s) over the window
+        ending now; None when no tick was ever read. A window that the log does not cover yet gives ratio None."""
+        while len(self.ticks) > 1 and now - self.ticks[1][0] >= self.window_s:
+            self.ticks.popleft()
+        if not self.ticks:
             return None
-        (w0, s0), (w1, s1) = self.ticks[0], self.ticks[-1]
-        gaps = sorted(b[0] - a[0] for a, b in zip(self.ticks, list(self.ticks)[1:], strict=False))
-        return (s1 - s0) / (w1 - w0), gaps[min(len(gaps) - 1, int(0.99 * len(gaps)))]
+        silence = max(0.0, now - self.ticks[-1][0])
+        start = self.ticks[0][0]
+        covered = now - start >= 0.8 * self.window_s
+        w0 = max(start, now - self.window_s)
+        ratio = (self.ticks[-1][1] - self.ticks[0][1]) / (now - w0) if covered and now > w0 else None
+        gaps = [b[0] - a[0] for a, b in zip(self.ticks, list(self.ticks)[1:], strict=False)] + [silence]
+        gaps.sort()
+        return ratio, gaps[min(len(gaps) - 1, int(0.99 * len(gaps)))], silence
 
 
 def _free_port(job_id, taken):
@@ -351,7 +364,7 @@ def admits(current_mib, unattributed_mib, *, budget_mib, session_mib, free_mib=N
     session_mib, and the device must still give it the difference. unattributed_mib: the job's GPU memory no run owns.
     """
     used = sum(max(c, session_mib) for c in current_mib) + unattributed_mib
-    if used + session_mib > budget_mib:
+    if current_mib and used + session_mib > budget_mib:  # a run alone always fits the job's own count
         return "over"
     if free_mib is not None and free_mib - sum(max(0, session_mib - c) for c in current_mib) < session_mib:
         return "gpu_full"
@@ -368,23 +381,28 @@ class _Live:
     start_wall: float
     env: dict
     log: object
+    log_path: Path
+    attempt: int = 1
     timeout: bool = False
     term_at: float | None = None
     killed: bool = False
     vram_max: int = 0
     vram_now: int = 0
     gpus: set = field(default_factory=set)
-    attempt: int = 1
     oom_at_start: int | None = None
     pace: _Pace | None = None
     pace_min: float | None = None
+    # set when the top process has ended; the slot is held until the run's other processes are gone
+    exited: dict | None = None
+    leftover_kill_at: float | None = None
 
 
 def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s=None, shards=None,
                shard_mib=SHARD_MIB, session_vram_mib=SESSION_VRAM_MIB, vram_probe=None, vram_period_s=1.0,
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
-               pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0):
+               pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
+               leftover_grace_s=10.0):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if (out / "results.jsonl").exists() or (out / "summary.json").exists():
@@ -400,63 +418,86 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     stop = stop or threading.Event()
     budget = shards * shard_mib if shards else None
     gate_on = vram_probe is not None and budget is not None
+    pace_on = pace_floor is not None or pace_gap_p99_s is not None
     nonce = secrets.token_hex(4)
 
-    queue = deque((i, r, 1) for i, r in enumerate(runs))  # (index, run, attempt)
-    pace_on = pace_floor is not None or pace_gap_p99_s is not None
-    pace_path = out / "pace.jsonl"
-    live: dict[int, _Live] = {}  # top pid -> run
-    leftovers = []  # (token, kill_at)
+    queue = deque((i, r, 1) for i, r in enumerate(runs))  # (index, list entry, attempt)
+    live: dict[int, _Live] = {}  # top pid -> run (until all its processes have ended)
     records = []
-    st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "job_total": None, "unattributed": 0,
-          "free": None, "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0,
-          "waiting": None, "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0}
+    st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
+          "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
+          "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": []}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
-    results_path, vram_path = out / "results.jsonl", out / "vram.jsonl"
+    results_path, vram_path, pace_path = out / "results.jsonl", out / "vram.jsonl", out / "pace.jsonl"
 
     def record(rec):
         records.append(rec)
         with results_path.open("a") as f:
             f.write(json.dumps(rec) + "\n")
 
-    def finish(pid, status, rusage):
-        r = live.pop(pid)
+    def note_error(where, exc):
+        st["errors"].append({"t": round(time.time(), 1), "where": where, "error": repr(exc)})
+
+    def top_exited(pid, status, rusage):
+        """The run's top process ended: note it, end what it left behind; the slot stays held."""
+        r = live[pid]
         r.log.close()
         rc = os.waitstatus_to_exitcode(status) if os.WIFEXITED(status) else None
         sig = os.WTERMSIG(status) if os.WIFSIGNALED(status) else None
         r.proc.returncode = rc if rc is not None else -(sig or 0)
-        token = r.env["BUNDLE_TOKEN"]
-        left = token_pids(token)
+        oom_now = oom_counter() if oom_counter else None
+        r.exited = {
+            "rc": rc, "signal": sig, "end": time.time(), "wall_s": round(time.monotonic() - r.start, 3),
+            "cpu_s": round(rusage.ru_utime + rusage.ru_stime, 2) if rusage else None,
+            "maxrss_kib": rusage.ru_maxrss if rusage else None,
+            "ooms": (oom_now - r.oom_at_start) if (oom_now is not None and r.oom_at_start is not None) else 0,
+        }
+        left = token_pids(r.env["BUNDLE_TOKEN"])
+        r.exited["leftover"] = len(left)
         if left:
             _kill(left, signal.SIGTERM)
-            leftovers.append((token, time.monotonic() + min(grace_s, 10.0)))
-        oom_now = oom_counter() if oom_counter else None
-        ooms = (oom_now - r.oom_at_start) if (oom_now is not None and r.oom_at_start is not None) else 0
-        signs = infra_signs([out / "runs" / f"{r.run.name}.log",
-                             *(p for g in r.run.scan for p in sorted(glob.glob(g)))])
-        if ooms and (rc != 0):
-            signs.insert(0, f"oom_kill +{ooms} in the job cgroup while it ran")
+            r.leftover_kill_at = time.monotonic() + leftover_grace_s
+
+    def settle(pid):
+        """Every process of the run has ended: classify, clean up, record, retry; the slot frees."""
+        r = live.pop(pid)
+        x = r.exited
+        signs = infra_signs([r.log_path, *(p for g in r.run.scan for p in sorted(glob.glob(g)))])
+        killed = x["signal"] == signal.SIGKILL or x["rc"] in (137, -9)
+        if x["ooms"] and killed:
+            signs.insert(0, f"oom_kill +{x['ooms']} in the job cgroup and the run was killed")
         infra = bool(signs)
-        retry = infra and r.run.retryable and r.attempt <= retries and not stopping
+        removed, cleanup_error = [], None
+        try:
+            removed = list(cleanup(r.env["SESSION_ID"]) or [])
+        except Exception as exc:  # noqa: BLE001 -- a cleanup failure must not stop the other runs
+            cleanup_error = repr(exc)
+        retry = infra and runs[r.index].retryable and r.attempt <= retries and not stopping
+        moved, move_error = [], None
+        if retry:
+            try:
+                for path in r.run.retry_move:
+                    if os.path.lexists(path):
+                        dest = f"{path}.attempt{r.attempt}"
+                        if os.path.lexists(dest):
+                            raise FileExistsError(dest)
+                        os.rename(path, dest)
+                        moved.append(dest)
+            except OSError as exc:
+                move_error, retry = repr(exc), False
         record({
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": "infra_failed" if infra else "ended", "infra": signs, "retried": retry,
-            "oom_kills_during": ooms, "pace_min": r.pace_min,
-            "start": r.start_wall, "end": time.time(), "wall_s": round(time.monotonic() - r.start, 3),
-            "rc": rc, "signal": sig, "timeout": r.timeout, "killed": r.killed,
-            "session_id": r.env["SESSION_ID"], "bridge_cpu": r.env["BRIDGE_CPU"], "port": r.env["PORT"],
-            "cpu_s": round(rusage.ru_utime + rusage.ru_stime, 2) if rusage else None,
-            "maxrss_kib": rusage.ru_maxrss if rusage else None,
-            "vram_max_mib": r.vram_max, "gpus": sorted(g for g in r.gpus if g is not None),
-            "leftover_ended": bool(left), "containers_removed": list(cleanup(r.env["SESSION_ID"]) or []),
+            "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
+            "timeout": r.timeout, "killed": r.killed, "session_id": r.env["SESSION_ID"],
+            "bridge_cpu": r.env["BRIDGE_CPU"], "port": r.env["PORT"], "vram_max_mib": r.vram_max,
+            "gpus": sorted(g for g in r.gpus if g is not None), "log": str(r.log_path),
+            "containers_removed": removed, "cleanup_error": cleanup_error, "moved": moved, "move_error": move_error,
         })
         if infra:
             st["infra"] += 1
         if retry:
-            for path in r.run.retry_move:
-                if os.path.lexists(path):
-                    os.rename(path, f"{path}.attempt{r.attempt}")
             queue.appendleft((r.index, runs[r.index], r.attempt + 1))
 
     def start(index, template, attempt):
@@ -466,25 +507,24 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         taken = {int(r.env["PORT"]) for r in live.values() if r.env["PORT"].isdigit()}
         taken |= {int(x.env["PORT"]) for _, x, _ in queue if "PORT" in x.env}
         env.update({
-            "SESSION_ID": f"{job_id}s{index}" + (f"r{attempt}" if attempt > 1 else ""), "BRIDGE_CPU": str(cpus[slot % len(cpus)]),
-            "PORT": str(_free_port(job_id, taken)), "BUNDLE_SLOT": str(slot), "BUNDLE_JOB": job_id,
-            "BUNDLE_RUN": run.name, "BUNDLE_TOKEN": f"{job_id}-{index}-{attempt}-{nonce}",
+            "SESSION_ID": f"{job_id}s{index}" + (f"r{attempt}" if attempt > 1 else ""),
+            "BRIDGE_CPU": str(cpus[slot % len(cpus)]), "PORT": str(_free_port(job_id, taken)),
+            "BUNDLE_SLOT": str(slot), "BUNDLE_JOB": job_id, "BUNDLE_RUN": run.name,
+            "BUNDLE_TOKEN": f"{job_id}-{index}-{attempt}-{nonce}",
         })
         env.update(run.env)
-        log = (out / "runs" / f"{run.name}.log").open("ab")
-        log.write(f"=== bundle attempt {attempt} {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n".encode())
-        log.flush()
+        log_path = out / "runs" / f"{run.name}.{attempt}.log"
+        log = log_path.open("ab")
         try:
             proc = subprocess.Popen(run.argv, cwd=run.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, start_new_session=True)
         except OSError as exc:
             log.close()
             record({"name": run.name, "index": index, "slot": slot, "attempt": attempt, "status": "start_failed",
-                    "error": str(exc),
-                    "start": time.time(), "rc": None, "signal": None})
+                    "error": str(exc), "start": time.time(), "rc": None, "signal": None, "retried": False})
             return
         now = time.monotonic()
-        live[proc.pid] = _Live(run, index, slot, proc, now, time.time(), env, log, attempt=attempt,
+        live[proc.pid] = _Live(run, index, slot, proc, now, time.time(), env, log, log_path, attempt=attempt,
                                oom_at_start=oom_counter() if oom_counter else None,
                                pace=_Pace(pace_window_s) if run.pace_log else None)
         st["last_start"] = now
@@ -493,7 +533,6 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         leaders = [pid for pid, _ in sorted(live.items(), key=lambda kv: kv[1].slot)]
         got = vram_probe(leaders)
         if got is None:
-            st["job_total"] = None
             if st["unreadable_since"] is None:
                 st["unreadable_since"] = now
             return
@@ -515,10 +554,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         for pid, mib in per.items():
             live[pid].vram_now = mib
             live[pid].vram_max = max(live[pid].vram_max, mib)
-        st["job_total"], st["unattributed"] = job_total, max(0, job_total - sum(per.values()))
-        mine = [g for g in job_gpus if g is not None]
-        st["free"] = min(free[g] for g in mine if g in free) if any(g in free for g in mine) else (
-            min(free.values()) if len(free) == 1 else None)
+        st["unattributed"] = max(0, job_total - sum(per.values()))
+        mine = [g for g in job_gpus if g is not None and g in free]
+        # the job's GPU: the one its processes use; before any, the only one it can see (ConstrainDevices)
+        st["free"] = min(free[g] for g in mine) if mine else (min(free.values()) if len(free) == 1 else None)
         st["job_vram_max"] = max(st["job_vram_max"], job_total)
         st["sampled_at"] = now
         with vram_path.open("a") as f:
@@ -526,117 +565,159 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 "runs": {live[p].run.name: m for p, m in per.items()}}) + "\n")
 
     def verdict(now):
-        if not gate_on or not live:
+        if not gate_on:
             return "ok"
         if st["unreadable_since"] is not None:
-            if now - st["unreadable_since"] >= vram_unreadable_s:
-                return "unreadable_go"
-            return "stale"
-        if st["sampled_at"] is None or st["sampled_at"] <= st["last_start"]:
+            return "unreadable_go" if now - st["unreadable_since"] >= vram_unreadable_s else "stale"
+        if st["sampled_at"] is None or (st["last_start"] is not None and st["sampled_at"] <= st["last_start"]):
             return "stale"  # judge only on a sample taken after the latest start
-        return admits([r.vram_now for r in live.values()], st["unattributed"], budget_mib=budget,
-                      session_mib=session_vram_mib, free_mib=st["free"])
+        return admits([r.vram_now for r in live.values() if r.exited is None], st["unattributed"],
+                      budget_mib=budget, session_mib=session_vram_mib, free_mib=st["free"])
 
     def evaluate_pace(now):
-        rows = {}
+        rows, unmeasured = {}, []
         for r in live.values():
-            if r.pace is None:
+            if r.pace is None or r.exited is not None or now - r.start < pace_warmup_s:
                 continue
             r.pace.read(r.run.pace_log)
-            got = r.pace.measure() if now - r.start >= pace_warmup_s else None
-            if got is not None:
-                rows[r.run.name] = {"ratio": round(got[0], 4), "gap_p99_s": round(got[1], 4)}
-                r.pace_min = round(min(got[0], r.pace_min if r.pace_min is not None else got[0]), 4)
+            got = r.pace.measure(now)
+            if got is None:
+                unmeasured.append(r.run.name)
+                continue
+            ratio, gap99, silence = got
+            rows[r.run.name] = {"ratio": None if ratio is None else round(ratio, 4), "gap_p99_s": round(gap99, 4),
+                                "silence_s": round(silence, 1)}
+            if ratio is not None:
+                r.pace_min = round(min(ratio, r.pace_min if r.pace_min is not None else ratio), 4)
         reason = None
-        if rows:
-            ratios = sorted(v["ratio"] for v in rows.values())
-            median = ratios[len(ratios) // 2] if len(ratios) % 2 else (ratios[len(ratios) // 2 - 1]
-                                                                          + ratios[len(ratios) // 2]) / 2
-            worst_gap = max(v["gap_p99_s"] for v in rows.values())
+        ratios = sorted(v["ratio"] for v in rows.values() if v["ratio"] is not None)
+        if ratios:
+            k = len(ratios) // 2
+            median = ratios[k] if len(ratios) % 2 else (ratios[k - 1] + ratios[k]) / 2
             if pace_floor is not None and median < pace_floor:
                 reason = f"median sim/wall {median:.4f} < {pace_floor}"
-            elif pace_gap_p99_s is not None and worst_gap > pace_gap_p99_s:
-                reason = f"tick gap p99 {worst_gap:.3f} s > {pace_gap_p99_s}"
+        if reason is None and rows:
+            worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
+            if worst[1]["silence_s"] >= pace_stall_s:
+                reason = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
+            elif pace_gap_p99_s is not None:
+                worst = max(rows.items(), key=lambda kv: kv[1]["gap_p99_s"])
+                if worst[1]["gap_p99_s"] > pace_gap_p99_s:
+                    reason = f"{worst[0]} tick gap p99 {worst[1]['gap_p99_s']} s > {pace_gap_p99_s}"
         cooled = st["backoff_at"] is None or now - st["backoff_at"] >= pace_window_s
+        running = sum(1 for r in live.values() if r.exited is None)
         stepped = False
         if reason and cooled and st["cap"] > 1:
-            st["cap"] = min(st["cap"], len(live)) - 1 if len(live) > 1 else 1
-            st["cap"] = max(1, st["cap"])
+            st["cap"] = max(1, min(st["cap"], running) - 1)
             st["backoff_at"] = now
             st["backoffs"].append({"t": round(time.time(), 1), "reason": reason, "cap": st["cap"]})
             stepped = True
         with pace_path.open("a") as f:
-            f.write(json.dumps({"t": round(time.time(), 1), "runs": rows, "cap": st["cap"], "reason": reason,
-                                "stepped_back": stepped}) + "\n")
+            f.write(json.dumps({"t": round(time.time(), 1), "runs": rows, "unmeasured": unmeasured, "cap": st["cap"],
+                                "reason": reason, "stepped_back": stepped}) + "\n")
 
-    vram_next = 0.0
-    while queue or live or leftovers:
-        now = time.monotonic()
-        for pid in list(live):
-            try:
-                got, status, rusage = os.wait4(pid, os.WNOHANG)
-            except ChildProcessError:
-                got, status, rusage = pid, 0, None
-            if got == pid:
-                finish(pid, status, rusage)
-        for item in list(leftovers):
-            token, kill_at = item
-            left = token_pids(token)
-            if not left:
-                leftovers.remove(item)
-            elif now >= kill_at:
-                _kill(left, signal.SIGKILL)
-                leftovers.remove(item)
-        if stop.is_set() and not stopping:
-            stopping = True
-            for r in live.values():
-                if r.term_at is None:
-                    _kill([r.proc.pid], signal.SIGTERM)
-                    r.term_at = now
-            while queue:
-                index, run, attempt = queue.popleft()
-                record({"name": run.name, "index": index, "slot": None, "attempt": attempt, "status": "not_started",
-                        "rc": None, "signal": None})
+    def end_all(now):
         for r in live.values():
-            if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
-                r.timeout, r.term_at = True, now
+            if r.exited is None and r.term_at is None:
                 _kill([r.proc.pid], signal.SIGTERM)
-            if r.term_at is not None and not r.killed and now - r.term_at > grace_s:
-                r.killed = True
-                _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
-        if vram_probe is not None and now >= vram_next:
-            vram_next = now + vram_period_s
-            sample_vram(now)
-        if pace_on and now >= st["pace_next"]:
-            st["pace_next"] = now + pace_period_s
-            evaluate_pace(now)
-        if (not stopping and queue and len(live) < min(slots, st["cap"])
-                and (st["last_start"] is None or now - st["last_start"] >= stagger_s)):
-            v = verdict(now)
-            if v in ("ok", "unreadable_go"):
-                st["waiting"] = None
-                if v == "unreadable_go":
-                    st["unreadable_starts"] += 1
-                index, run, attempt = queue.popleft()
-                start(index, run, attempt)
-                continue
-            if v in ("over", "gpu_full") and st["waiting"] != v:
-                st["vram_waits" if v == "over" else "gpu_full_waits"] += 1
-                st["waiting"] = v
-        time.sleep(poll_s)
+                r.term_at = now
+
+    def loop():
+        nonlocal stopping
+        vram_next = 0.0
+        while queue or live:
+            now = time.monotonic()
+            for pid, r in list(live.items()):
+                if r.exited is None:
+                    try:
+                        got, status, rusage = os.wait4(pid, os.WNOHANG)
+                    except ChildProcessError:
+                        got, status, rusage = pid, 0, None
+                    if got == pid:
+                        top_exited(pid, status, rusage)
+                if r.exited is not None:
+                    left = token_pids(r.env["BUNDLE_TOKEN"]) if r.exited["leftover"] else []
+                    if not left:
+                        settle(pid)
+                    elif r.leftover_kill_at is not None and now >= r.leftover_kill_at:
+                        _kill(left, signal.SIGKILL)
+                        r.leftover_kill_at = None
+            if stop.is_set() and not stopping:
+                stopping = True
+                end_all(now)
+                while queue:
+                    index, run, attempt = queue.popleft()
+                    record({"name": run.name, "index": index, "slot": None, "attempt": attempt,
+                            "status": "not_started", "rc": None, "signal": None, "retried": False})
+            for r in live.values():
+                if r.exited is not None:
+                    continue
+                if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
+                    r.timeout, r.term_at = True, now
+                    _kill([r.proc.pid], signal.SIGTERM)
+                if r.term_at is not None and not r.killed and now - r.term_at > grace_s:
+                    r.killed = True
+                    _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
+            if vram_probe is not None and now >= vram_next:
+                vram_next = now + vram_period_s
+                sample_vram(now)
+            if pace_on and now >= st["pace_next"]:
+                st["pace_next"] = now + pace_period_s
+                evaluate_pace(now)
+            if (not stopping and queue and len(live) < min(slots, st["cap"])
+                    and (st["last_start"] is None or now - st["last_start"] >= stagger_s)):
+                v = verdict(now)
+                if v in ("ok", "unreadable_go"):
+                    st["waiting"] = None
+                    if v == "unreadable_go":
+                        st["unreadable_starts"] += 1
+                    index, run, attempt = queue.popleft()
+                    start(index, run, attempt)
+                    continue
+                if v in ("over", "gpu_full") and st["waiting"] != v:
+                    st["vram_waits" if v == "over" else "gpu_full_waits"] += 1
+                    st["waiting"] = v
+            time.sleep(poll_s)
+
+    try:
+        loop()
+    except BaseException as exc:
+        # an error of the bundle itself: end every run (TERM, then KILL by token after the grace) before leaving
+        note_error("loop", exc)
+        traceback.print_exc()
+        stop.set()
+        now = time.monotonic()
+        end_all(now)
+        deadline = now + grace_s
+        while any(alive(r.proc.pid) or token_pids(r.env["BUNDLE_TOKEN"]) for r in live.values()):
+            if time.monotonic() > deadline:
+                for r in live.values():
+                    _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
+                break
+            time.sleep(poll_s)
+        for r in live.values():
+            try:
+                os.waitpid(r.proc.pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            record({"name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
+                    "status": "aborted", "rc": None, "signal": None, "retried": False})
+        for index, run, attempt in queue:
+            record({"name": run.name, "index": index, "slot": None, "attempt": attempt, "status": "not_started",
+                    "rc": None, "signal": None, "retried": False})
+        queue.clear()
 
     final = [r for r in records if not r.get("retried")]  # the last attempt of each run
-    failed = sum(1 for r in final if r["status"] in ("ended", "infra_failed") and (r["rc"] != 0 or r["status"] ==
-                                                                                    "infra_failed"))
-    not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed"))
+    failed = sum(1 for r in final if r["status"] == "infra_failed" or (r["status"] == "ended" and r["rc"] != 0))
+    not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted"))
     summary = {
         "runs": len(runs), "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"],
-        "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id, "cpus": cpus,
-        "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
-        "exit_code": 0 if failed == 0 and not_started == 0 else 1,
+        "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
+        "cpus": cpus, "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
+        "exit_code": 0 if failed == 0 and not_started == 0 and not st["errors"] else 1,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     return summary
@@ -661,6 +742,7 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-window-s", type=float, default=300.0)
     ap.add_argument("--pace-warmup-s", type=float, default=240.0)
     ap.add_argument("--pace-period-s", type=float, default=60.0)
+    ap.add_argument("--pace-stall-s", type=float, default=30.0)
     ap.add_argument("--no-vram", action="store_true", help="no GPU memory samples and no memory gate (slots only)")
     ap.add_argument("--no-cleanup", action="store_true", help="do not look for leftover bridge containers")
     ap.add_argument("--allow-multi-gpu", action="store_true")
@@ -699,7 +781,7 @@ def main(argv=None) -> int:
         vram_period_s=a.vram_period_s, vram_unreadable_s=a.vram_unreadable_s,
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
-        pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s,
+        pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
     )
     print(json.dumps(summary))
     return summary["exit_code"]
