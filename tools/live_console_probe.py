@@ -1134,6 +1134,18 @@ async def cycle_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def wait_steady_states(p: Probe, n: int = 20, gap_s: float = 0.5, timeout_s: float = 120.0) -> bool:
+    """True once the last n + 1 states came at most gap_s apart and the newest is fresh (about 2 s of steady flow)."""
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        st = [s_["mono"] for s_ in p.states[-(n + 1):]]
+        if len(st) == n + 1 and max(b_ - a_ for a_, b_ in zip(st, st[1:])) <= gap_s \
+                and time.monotonic() - st[-1] <= gap_s:
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
 async def queue_scenario(p: Probe, args):
     """CT-1 PR 4 (docs/plans/2026-10-22-continuous-transport-ct1.md): the --cycle legs run by the console's own mission
     queue (tools/mission_queue.py, a port of console/web/js/queue.js) -- fed every state, result, welcome and close as
@@ -1171,6 +1183,11 @@ async def queue_scenario(p: Probe, args):
         expected = len(q.items)
     p.report["missions_run"] = []
     pick_resend = None
+    # The operator resumes once the screen is live: states arriving steadily, not inside the runner's start-up pause
+    # (2.5-2.9 s without a state just after the session starts, ws1 2026-10-24 CT-2 V3, which stopped the queue on its
+    # 2 s silence rule before anything was sent -- in either arm, by timing alone; the PR 4 note).
+    started_wait = time.monotonic()
+    p.report["start_steady"] = {"ok": await wait_steady_states(p), "waited_s": round(time.monotonic() - started_wait, 2)}
     q.resume(time.monotonic() * 1000.0)
     closed_seen, deadline = False, time.monotonic() + args.mission_timeout_s * max(1, expected + 1)
     while time.monotonic() < deadline:

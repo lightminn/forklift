@@ -209,7 +209,7 @@ def test_a_teleop_between_missions_stops_before_the_next_submit():
 
 def test_a_feedback_loss_that_lasts_stops_even_when_it_recovers_and_the_mission_out_ends():
     clock = Clock()
-    v = FakeVehicle(clock, ["done", "done", "done"], events={1.0: {"feedback_ok": False}})
+    v = FakeVehicle(clock, ["done", "done", "done"], events={3.0: {"feedback_ok": False}})
     p = _run(v, clock)
     assert len(v.seen) == 1 and p.report["queue"]["stop_reason"] == "차량 피드백 없음"
     assert p.report["missions_run"][0]["result"]["outcome"] == "done"
@@ -233,7 +233,7 @@ def test_a_slow_answer_is_resent_and_waited_for_not_refused():
 def test_a_stop_while_the_answer_is_out_ends_the_resending_at_once():
     """Codex PR 4 review round 3 P2-1: the queue stops (and forgets the submit) -- no resend after it."""
     clock = Clock()
-    v = FakeVehicle(clock, ["done", "done", "done"], ack_s=5.0, events={1.0: {"mode": "STOPPED"}})
+    v = FakeVehicle(clock, ["done", "done", "done"], ack_s=5.0, events={3.0: {"mode": "STOPPED"}})
     p = _run(v, clock)
     stop_at = next(ms for _, ms in p.queue.stops) / 1000.0 - 1000.0
     assert p.report["queue"]["stop_reason"] == "정지됨(STOP)" and len(p.report["queue"]["uncertain"]) == 1
@@ -400,3 +400,13 @@ def test_a_recomputed_ok_after_a_none_remaining_before_the_ack_is_taken():
     probe.ws = feed
     asyncio.run(probe._read(feed))
     assert q.phase == "picked" and q.held["pallet_id"] == "P-1" and q.pick["acked"] and q.items
+
+
+def test_a_start_up_pause_in_the_states_does_not_stop_the_queue():
+    # ws1 CT-2 V3: 2.5-2.9 s without a state just after the session starts; the queue is resumed only once the states
+    # flow steadily, as an operator resumes once the screen is live
+    clock = Clock()
+    v = FakeVehicle(clock, ["done", "done", "done"], silent=(0.15, 2.9))
+    p = _run(v, clock)
+    assert p.report["start_steady"]["ok"] and p.report["queue"]["stop_reason"] == "완료"
+    assert p.report["queue"]["counts"]["done"] == 3
