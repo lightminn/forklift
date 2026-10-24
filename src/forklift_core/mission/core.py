@@ -4915,7 +4915,11 @@ class MissionCore:
                 # P2: the second-round prefix lies wholly on the straight).
                 full_ = self.paths.get("transport")
                 full_poses_ = None if full_ is None else np.asarray(getattr(full_, "poses", full_), dtype=float)
-                if full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_):
+                if full_ is not None and full_ is getattr(self, "_delivery_straight_path", None):
+                    # D7's delivery straight and its second-round prefix: all of it the slot stage, whatever length the
+                    # corrected goal gave it (Codex round 8 P2)
+                    slot_from = 0.0
+                elif full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_):
                     full_length_ = float(np.sum(np.hypot(np.diff(full_poses_[:, 0]), np.diff(full_poses_[:, 1]))))
                     if np.allclose(full_poses_[0], poses[0], atol=1e-6):
                         slot_from = max(0.0, full_length_ - float(geometry.delivery_straight_m))
@@ -5863,6 +5867,7 @@ class MissionCore:
         state.setdefault("paths_replaced", []).append(
             {"leg": "transport", "time_s": t, "by": "delivery_straight", "path": state["paths"].get("transport")})
         paths["transport"] = path
+        self._delivery_straight_path = path  # the low-clearance guard's slot stage, whatever its length (no other use)
         state["paths"]["transport"] = path_record(path)
         trackers["transport"] = RearAxlePathTracker(
             path.poses, path.directions, path.curvatures_inv_m, slam.get("transport_config", trackers["transport"].config)

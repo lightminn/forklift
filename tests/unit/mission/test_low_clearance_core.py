@@ -213,3 +213,16 @@ def test_the_second_round_prefix_of_the_delivery_straight_is_the_slot_stage():
     core.low_clearance_tick(10.0, (-1.2, 0.0, 0.0), 0.0, 0.15, True)
     assert state["low_clearance"]["legs"][0]["slot_from_m"] == pytest.approx(0.0)
     assert core._low_clearance_cap is None
+
+
+def test_the_d7_delivery_straight_is_the_slot_stage_whatever_its_length():
+    # Codex round 8: a corrected goal made the straight 1.65 m; all of it stays the slot stage
+    estimate = Rectangle(-0.5, 0.4 - 0.02 + 0.5, 3.0, 1.0, 0.0)
+    slot_copy = Rectangle(-0.5, 0.4 + 0.11 + 0.5, 3.0, 1.0, 0.0)
+    straight_ = tracker(-1.65, 0.0)
+    path = SimpleNamespace(poses=straight_.path_arrays()[0])
+    core, state = make(rects=[estimate, slot_copy], uris=["session:p@search", "session:p@slot"],
+                       trackers={"transport": straight_}, paths={"transport": path})
+    core._delivery_straight_path = path
+    core.low_clearance_tick(10.0, (-1.6, 0.0, 0.0), 0.0, 0.15, True)
+    assert state["low_clearance"]["legs"][0]["slot_from_m"] == 0.0 and core._low_clearance_cap is None

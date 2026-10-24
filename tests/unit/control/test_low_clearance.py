@@ -182,3 +182,13 @@ def test_the_planned_clearance_is_read_by_progress_along_the_leg():
     leg = leg_along(straight(-2.0, 4.0), block)
     assert leg.at(2.0) == pytest.approx(0.144, abs=1e-6)
     assert leg.at(-1.0) == leg.at(0.0) and leg.at(99.0) == leg.at(leg.length_m)
+
+
+def test_the_planned_clearance_is_not_blended_across_the_stage_boundary():
+    # Codex round 8: search 4 cm, slot 30 cm, the boundary inside a 2 cm interval -- the search side keeps its 4 cm
+    near_search = Rectangle(4.5, 0.4 + 0.04 + 0.5, 3.0, 1.0, 0.0)  # beside the outline around x = 4.5
+    far_slot = Rectangle(4.5, 0.4 + 0.30 + 0.5, 3.0, 1.0, 0.0)
+    leg = lc.LegClearance(straight(0.0, 6.0, n=301), LOADED, search_props=[near_search], slot_props=[far_slot],
+                          slot_from_m=4.505)
+    assert leg.at(4.50) == pytest.approx(0.04, abs=1e-6)
+    assert leg.at(4.51) == pytest.approx(0.30, abs=1e-6)

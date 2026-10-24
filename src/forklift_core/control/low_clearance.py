@@ -101,6 +101,9 @@ class LegClearance:
             return float(self.c[0])
         k = int(np.clip(np.searchsorted(self.s, s, side="right") - 1, 0, len(self.s) - 2))
         a, b = float(self.c[k]), float(self.c[k + 1])
+        if self.slot_from_m is not None and (self.s[k] >= self.slot_from_m) != (self.s[k + 1] >= self.slot_from_m):
+            # the two poses belong to different stages: the side s is on, never a blend of the two (Codex round 8 P2)
+            return a if (s >= self.slot_from_m) == (self.s[k] >= self.slot_from_m) else b
         if not (math.isfinite(a) and math.isfinite(b)):
             return min(a, b)
         span = float(self.s[k + 1] - self.s[k])
