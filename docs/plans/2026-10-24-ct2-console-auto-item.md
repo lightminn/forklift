@@ -47,7 +47,8 @@
 1. [x] `queue.js` — C1–C5, 시험 `console/web/test/queue_auto.test.mjs`(20).
 2. [x] `queuewire.js` — 요청·수신·잊기·기한, 시험 `queuewire_auto.test.mjs`(5, 보낸 요청 수를 셈). `protocol.js` 는 그대로(`pick` 은 구독자에게 그대로 전달된다).
 3. [x] 화면 C6(`index.html`·`ui.js`·`main.js`·`app.css`, 문구표 `health.js` `queueStopText`·`blockedText`), 가짜 차량 C7 + `tests/unit/console/test_mock_vehicle_pick.py`(5), Playwright(가짜 차량: 정상 2 건 → 완료, 모두 막힘, 응답 없음, 추천 중 끊김).
-4. [ ] 맞춤 시험 C8(두 브랜치를 합친 트리에서 33/33 — 자동 19·기존 14, 포트 f0997ca9), ws1 pytest, Codex 수렴, 차량 쪽 커밋 위 Isaac live 확인(line_m 세션), PR.
+4. [x] 맞춤 시험 C8(두 브랜치를 합친 트리에서 33/33 — 자동 19·기존 14, 포트 f0997ca9), ws1 pytest(`tests/unit/console tests/integration/console` + C8: 163 통과·20 건너뜀 — C8 19 는 이 브랜치에 포트가 없어 건너뜀), Codex 수렴(3회차), Isaac live 확인(5 절).
+5. [ ] PR.
 
 ## 4. 자체 검토
 
@@ -60,3 +61,13 @@
 **② Codex 3회차(같은 스레드).** 수렴 — 새 P1/P2 없음. 2회차 반례 재실행에서 거부·늦은 `ack` 뒤 제출 0 건, `ack` 전 멈춤·삭제·비우기·끊김·권한 상실·새 epoch 에서 재전송 중단·늦은 응답 무시·불확실 없음 확인. P3 1(문구): '첫 `pick` 만 쓴다'에 `ack` 전 `none_remaining` 예외를 적음 → C2 에 반영, 공유 계약 문구는 차량 쪽 세션에 전달.
 
 **③ agy 독립 검토(Gemini 3.8 Flash — `agy-quota-ok --pick`, Argon 한도 보류; ①·② 결론은 보여주지 않고 "적히지 않은 전제"를 물음).** 5 건 중 2 반영: '이번 미션까지만 하고 멈춤'이 안 보임 → '멈춤' 버튼에 그 뜻을 적음(지금 동작이 그렇다) / 진척이 안 보임 → 자동 항목 줄에 '옮긴 n건'. 반영 안 함: 여러 탭 경합(조종 권한을 쥔 탭만 제출하므로 이미 막힘), 추천과 제출 사이 환경 변화(차량이 제출을 다시 검사하고 revision 이 바뀌면 다시 물음), 적재 상태 기반 수습 안내(최소안 밖), 제출 전 카운트다운(정책상 이상이 없으면 내는 것이 대기열의 뜻이고, 운용자는 언제든 멈춤·취소 가능).
+
+## 5. Isaac live 확인 (2026-10-24)
+
+ws1 잡 10499(`console_ops.sbatch`, `shard:2`), 장면 `scenes_ct1_a770031/line_m_session.json`(팔레트 P-1–P-3 한 줄, 하역 칸 D-1–D-3), 트리 = 콘솔 6ba22d94 + 차량 32d12a03 병합(1e4f5eb3, 스냅숏의 `SNAPSHOT_COMMIT`). 터널 + Playwright(1600 px).
+
+- welcome 의 `next_pick` 으로 '남은 팔레트 전부 옮기기' 버튼이 보였고, 넣은 뒤 비활성. 재개(2단계) 직후 추천 P-1 → D-1, 0.21 s 뒤 제출.
+- m1 `done` → 1.2 s 뒤 추천 P-2 → D-2 → 제출(m2). m3: P-3 → D-3. 네 번째 추천 `none_remaining` → 자동 항목이 빠지고 '완료'. 끝낸 목록 3 건 모두 실제 팔레트·칸으로 적힘, 줄의 '옮긴 n건' 1→2→3.
+- 차량 기록(`live_log.jsonl`): `pick_request` 4 건 모두 `ack`(재전송 없음), `mission_submit` 3 건.
+- 둘째 미션 중 15:59:14.4–15:59:26.7 에 콘솔→차량 메시지가 12.3 s 끊기고(echo 간격) 그동안 화면도 상태를 받지 못했다. 제어 틱은 1 s 넘는 틈이 없었고 연결은 하나로 유지됐다(재접속 없음). ws1 부하 28–39(20 CPU). 원인이 실행기의 연결 처리인지 터널·네트워크인지는 이 기록으로 가를 수 없다. 대기열은 '상태 수신 끊김'으로 멈췄고, 조종 권한은 3 초 뒤 만료, m2 는 끝까지 가서 완료로 기록됐다 — 고정 항목과 같은 멈춤 정책대로. 권한을 다시 받아 재개하자 m3 를 이어 냈다.
+- 증거: ws1 `test_runs/live/console_ops/ct2_line_m/`(실행 기록·화면 `screens/`), 요약 스크립트 `cycle_gap.py`·`gap_scan.py`.
