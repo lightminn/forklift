@@ -202,19 +202,40 @@ def _dry_run_launcher(argv, cwd):
     return None
 
 
-def _scratch_argv(argv, cwd, outputs, scratch):
+def _scratch_argv(argv, env, cwd, outputs, scratch):
     """argv with every argument naming one of the outputs (compared as real paths, relative ones resolved in cwd)
-    replaced by a scratch path; None when no argument names an output (the DRY_RUN could then write the real one)."""
+    replaced by a scratch path; None unless every output was replaced and no output path is left anywhere else in
+    argv or env (inside an --opt=PATH, say), since the DRY_RUN could then write that real output."""
     real = {os.path.realpath(o): k for k, o in enumerate(outputs)}
-    out, hit = [], False
+    out, hit = [], set()
     for a in argv:
         k = real.get(os.path.realpath(os.path.join(cwd or ".", a))) if a else None
         if k is not None:
             out.append(os.path.join(scratch, f"out{k}"))
-            hit = True
+            hit.add(k)
         else:
             out.append(a)
-    return out if hit else None
+    if len(hit) != len(outputs):
+        return None
+    left = [o for o in {*outputs, *real} for text in (*out, *env.values()) if o and o in text]
+    return None if left else out
+
+
+def _end_token(token, quiet_s=0.5, limit_s=10.0):
+    """KILL every process carrying the token until two scans quiet_s apart find none (a process may fork between a
+    scan's listing and its reads), for at most limit_s."""
+    deadline, empty_since = time.monotonic() + limit_s, None
+    while time.monotonic() < deadline:
+        left = token_pids(token)
+        if left:
+            _kill(left, signal.SIGKILL)
+            empty_since = None
+        elif empty_since is None:
+            empty_since = time.monotonic()
+        elif time.monotonic() - empty_since >= quiet_s:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
@@ -240,9 +261,10 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
             problems.append(f"{r.name}: no launcher with a DRY_RUN mode printing RUNNER_ARGS (not run)")
             continue
         with tempfile.TemporaryDirectory(prefix="bundle_check_") as scratch:
-            argv = _scratch_argv(r.argv, r.cwd, r.retry_move, scratch)
+            argv = _scratch_argv(r.argv, r.env, r.cwd, r.retry_move, scratch)
             if argv is None:
-                problems.append(f"{r.name}: its argv does not name its output {r.retry_move} (not run)")
+                problems.append(f"{r.name}: its outputs {r.retry_move} are not each a whole argument of its argv, or "
+                                "appear elsewhere in its argv or env (not run)")
                 continue
             token = f"check-{os.getpid()}-{n}-{secrets.token_hex(4)}"
             env = {**os.environ, **r.env, "DRY_RUN": "1", "BUNDLE_TOKEN": token}
@@ -254,14 +276,19 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
                 except OSError as exc:
                     problems.append(f"{r.name}: DRY_RUN did not start ({exc})")
                     continue
+                hung = False
                 try:
                     p.wait(timeout=timeout_s)
-                    hung = False
                 except subprocess.TimeoutExpired:
                     hung = True
-                    _kill(set(token_pids(token)) | {p.pid}, signal.SIGKILL)
-                    p.wait(timeout=10)
-                _kill(token_pids(token), signal.SIGKILL)  # anything it left behind, in any process group
+                finally:  # a timeout, an interrupt or a clean end: nothing it started may outlive the check
+                    if p.poll() is None:
+                        _kill([p.pid], signal.SIGKILL)
+                    _end_token(token)
+                    try:
+                        p.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
             if hung:
                 problems.append(f"{r.name}: DRY_RUN did not end in {timeout_s} s (killed)")
                 continue

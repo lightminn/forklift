@@ -937,7 +937,7 @@ def test_a_run_without_its_output_in_argv_is_not_run(tmp_path):
     run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / "elsewhere")],
                  env={"SEED": "1", "EXTRA": ""}, retry_move=[str(tmp_path / "out_a")])
     (problem,) = ib.check_runs([run], tmp_path / "runner.py")
-    assert "does not name its output" in problem and not (tmp_path / "elsewhere").exists()
+    assert "not each a whole argument" in problem and not (tmp_path / "elsewhere").exists()
 
 
 def test_a_run_without_an_output_is_not_run(tmp_path):
@@ -946,3 +946,36 @@ def test_a_run_without_an_output_is_not_run(tmp_path):
     run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / "x")], env={"SEED": "1"})
     (problem,) = ib.check_runs([run], tmp_path / "runner.py")
     assert "no retry_move" in problem and not (tmp_path / "x").exists()
+
+
+
+def test_every_output_must_be_sent_to_scratch(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    a, b = str(tmp_path / "a"), str(tmp_path / "b")
+    run = ib.Run(name="x", argv=["bash", str(tmp_path / "launch.sh"), a, f"--aux={b}"], env={"SEED": "1"},
+                 retry_move=[a, b])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "not each a whole argument" in problem and not (tmp_path / "a").exists()
+
+
+def test_an_output_named_in_the_env_is_refused(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    a = str(tmp_path / "a")
+    run = ib.Run(name="x", argv=["bash", str(tmp_path / "launch.sh"), a], env={"SEED": "1", "OUT2": a},
+                 retry_move=[a])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "elsewhere" in problem
+
+
+def test_a_child_forked_at_the_end_is_ended(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    # the launcher ends at once, leaving a child that would fork a grandchild in its own session a moment later
+    script = ('# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\n'
+              '(echo $BASHPID > "$0.pid"; sleep 0.3; setsid sleep 30 & echo $! > "$0.grand"; wait) &\nexit 0\n')
+    (tmp_path / "f.sh").write_text(script)
+    run = ib.Run(name="x", argv=["bash", str(tmp_path / "f.sh"), str(tmp_path / "o")], retry_move=[str(tmp_path / "o")])
+    assert ib.check_runs([run], tmp_path / "runner.py") == []
+    pids = [int((tmp_path / f"f.sh.{x}").read_text()) for x in ("pid", "grand") if (tmp_path / f"f.sh.{x}").exists()]
+    assert pids and not any(ib.alive(p) for p in pids)  # the child is gone, and so is a grandchild it managed
