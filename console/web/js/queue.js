@@ -222,7 +222,7 @@ export class MissionQueue {
       out = this.stop("상태 수신 끊김"); // decided before the late state refreshes the clock (plan D3)
     }
     this.lastStateAt = nowMs;
-    if (state?.mission && ACTIVE.includes(state.mission.status)) this.missionSeenThisEpoch = true;
+    if (state?.mission && ACTIVE.includes(state.mission.status)) this.#missionSeen();
     const gen = Number.isInteger(state?.control_gen) ? state.control_gen : null;
     if (gen !== null) this.lastControlGen = gen;
     // a loss that already lasted 0.5 s counts even if this state says recovered: it was not seen to end sooner
@@ -258,7 +258,7 @@ export class MissionQueue {
 
   onResult(result, nowMs) {
     const id = result?.mission_id;
-    if (id) this.missionSeenThisEpoch = true; // the results book is this session's (contract 5.2)
+    if (id) this.#missionSeen(); // the results book is this session's (contract 5.2)
     if (!id || this.applied.has(id)) return;
     const maybe = this.items.find((x) => x.uncertain && x.maybe?.mission_id === id && x.maybe.epoch === this.epoch);
     if (maybe) {
@@ -514,7 +514,8 @@ export class MissionQueue {
     if (obj.counts && typeof obj.counts === "object") q.counts = { done: 0, failed: 0, cancelled: 0, ...obj.counts };
     if (obj.epoch === epoch && epoch != null) { // the same session: its first submit and its one resubmit stay spent
       q.submitsThisEpoch = Number.isInteger(obj.submits_this_epoch) ? obj.submits_this_epoch : 0;
-      q.startRetryUsed = obj.start_retry_used === true;
+      // an older record without the counts says nothing of what this session already did: spent (Codex r2)
+      q.startRetryUsed = obj.start_retry_used === true || !("start_retry_used" in obj);
       q.missionSeenThisEpoch = obj.mission_seen_this_epoch === true;
     }
     const c = obj.current;
@@ -574,6 +575,15 @@ export class MissionQueue {
     this.current = null;
     this.phase = "waiting";
     this.early.clear();
+  }
+
+  // a mission seen in this session: stored (a stopped queue too -- Codex start-retry r2), and a resubmit waiting
+  // for 'just after the start' is over
+  #missionSeen() {
+    if (this.missionSeenThisEpoch) return;
+    this.missionSeenThisEpoch = true;
+    if (this.phase === "start_retry") this.stop("시작 직후 재제출 취소: 미션이 보임");
+    this.#changed();
   }
 
   // the resubmit is for the item that was refused: the front changing under it cancels it at once (Codex r1 P3)

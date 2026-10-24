@@ -198,6 +198,12 @@ CASES.update({
         {"op": "welcome", "epoch": 7}, {"op": "add", "pallet_id": "P-1", "destination_id": "D-1"},
         standing(0, control_gen=4), {"op": "resume", "now": 10}, nxt(20, standing(20, control_gen=4)), NOT_STOPPED,
         standing(100, control_gen=4), standing(300, control_gen=5.0), nxt(1500, standing(1500, control_gen=5.0))],
+    # queue.js e6d8b7fd (Codex start-retry r2): a mission seen while it waits ends 'just after the start'
+    "start_retry_a_result_while_waiting_stops": scenario_base(
+        NOT_STOPPED, standing(100), standing(300, last_result={"mission_id": "m0", "outcome": "done"}),
+        nxt(1500, standing(1500))),
+    "start_retry_a_running_mission_while_waiting_stops": scenario_base(
+        NOT_STOPPED, standing(100), running(300, "m9"), nxt(1500, standing(1500))),
     "start_retry_same_generation_goes": [
         {"op": "welcome", "epoch": 7}, {"op": "add", "pallet_id": "P-1", "destination_id": "D-1"},
         standing(0, control_gen=4), {"op": "resume", "now": 10}, nxt(20, standing(20, control_gen=4)), NOT_STOPPED,

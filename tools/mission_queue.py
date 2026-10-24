@@ -4,7 +4,7 @@ line port of the decisions the probe needs: fixed items and the CT-2 auto item (
 picked), resume/stop, the welcome, disconnect and lease events, the
 states (silence, feedback loss, STOPPED / TELEOP, a safety preempt, a mission not ours, paused / cancelling), the
 results, the submit answers, the timer and the next submit. Plan D5's one exception is ported too (the session's first submit refused not_stopped goes out once more after a
-1 s stand: user decision 2026-10-25, feat/queue-start-resubmit 55b3ab81 and f850942d; the port has no item
+1 s stand: user decision 2026-10-25, feat/queue-start-resubmit 55b3ab81, f850942d and e6d8b7fd; the port has no item
 remove / move / clear, so queue.js's #retryFront has no caller here -- next() checks the front as the JS does). Times are milliseconds, as in the JS; the stop reasons
 are the JS strings, so tests/unit/tools/test_mission_queue_port.py can run both on the same events."""
 
@@ -172,7 +172,7 @@ class MissionQueue:
             out = self.stop("상태 수신 끊김", now_ms)
         self.last_state_at = now_ms
         if state is not None and (state.get("mission") or {}).get("status") in ACTIVE:
-            self.mission_seen_this_epoch = True
+            self._mission_seen(now_ms)
         gen = (state or {}).get("control_gen")
         # JS Number.isInteger: an integral float (5.0) counts, a bool does not (Codex port round 2 P3)
         gen = gen if (isinstance(gen, int) and not isinstance(gen, bool)) or (
@@ -216,7 +216,7 @@ class MissionQueue:
     def on_result(self, result, now_ms) -> None:
         mid = (result or {}).get("mission_id")
         if mid:
-            self.mission_seen_this_epoch = True  # the results book is this session's (contract 5.2)
+            self._mission_seen(now_ms)  # the results book is this session's (contract 5.2)
         if not mid or mid in self.applied:
             return
         maybe = next((x for x in self.items if x.get("uncertain") and (x.get("maybe") or {}).get("mission_id") == mid
@@ -434,6 +434,15 @@ class MissionQueue:
         self.pick, self.held, self.pick_asks = None, None, 0
 
     # --- internals --------------------------------------------------------------------------------------------
+    def _mission_seen(self, now_ms=None) -> None:
+        """A mission seen in this session (queue.js #missionSeen, e6d8b7fd): a resubmit waiting for 'just after the
+        start' is over."""
+        if self.mission_seen_this_epoch:
+            return
+        self.mission_seen_this_epoch = True
+        if self.phase == "start_retry":
+            self.stop("시작 직후 재제출 취소: 미션이 보임", now_ms)
+
     def _feedback_lost(self, now_ms) -> bool:
         return self.feedback_lost_since is not None and now_ms - self.feedback_lost_since >= FEEDBACK_LOST_MS
 
