@@ -817,6 +817,19 @@ def test_the_runner_takes_its_slots_and_session_memory_from_the_kind(tmp_path, m
     assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
 
 
-@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("live", 4, 4), ("bd", 4, 4)])
+@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("riib", 1, 0), ("live", 4, 4),
+                                                ("bd", 4, 4)])
 def test_the_kind_s_slots_follow_the_shards(kind, shards, slots):
     assert ib.kind_slots(kind, shards) == slots
+
+
+@pytest.mark.parametrize("extra", [["--kind", "riib"], ["--kind", "riib", "--slots", "1"], ["--slots", "1",
+                                                                                        "--session-vram-mib", "4500"]])
+def test_sessions_that_do_not_fit_the_shards_are_refused(tmp_path, monkeypatch, capsys, extra):
+    monkeypatch.setenv("SLURM_SHARDS_ON_NODE", "1")
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", *extra]) == 2
+    assert "refusing" in capsys.readouterr().err

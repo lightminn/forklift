@@ -213,7 +213,7 @@ def sbatch_sizes(kind, slots=None) -> dict:
 def kind_slots(kind, shards) -> int:
     """How many sessions of `kind` the job's shards hold (at most the kind's per-GPU limit)."""
     k = KINDS[kind]
-    return max(1, min(k["max_slots"], shards * SHARD_MIB // k["vram_mib"]))
+    return min(k["max_slots"], shards * SHARD_MIB // k["vram_mib"])  # 0: not even one session fits
 
 
 def _siblings(cpu):
@@ -1033,10 +1033,16 @@ def main(argv=None) -> int:
         a.session_vram_mib = KINDS[a.kind]["vram_mib"] if a.kind else SESSION_VRAM_MIB
     slots = a.slots or (kind_slots(a.kind, shards) if a.kind and shards else shards)
     if not slots:
-        print("refusing: no --slots and no shard count (--shards or SLURM_SHARDS_ON_NODE)", file=sys.stderr)
+        print("refusing: no --slots and no shard count (--shards or SLURM_SHARDS_ON_NODE), or the shards hold no "
+              "session of --kind", file=sys.stderr)
         return 2
     if shards is not None and slots > shards:
         print(f"refusing: {slots} slots but {shards} shards (a shard per Isaac session)", file=sys.stderr)
+        return 2
+    if shards is not None and slots * a.session_vram_mib > shards * a.shard_mib:
+        need = -(-slots * a.session_vram_mib // a.shard_mib)
+        print(f"refusing: {slots} sessions of {a.session_vram_mib} MiB need {need} shards, the job has {shards}",
+              file=sys.stderr)
         return 2
     try:
         runs = load_runs(a.list)
