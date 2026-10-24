@@ -291,4 +291,6 @@ Slurm shard 분할 질문에 대한 Codex 의 소스 근거는 1 절에 옮겼�
 
 시험은 65 개다. 첫 시범(10793/10794)은 978d124a 로 돈다. 3회차의 반례는 모두 드문 경계(검사 중 fork, docker 정리 실패, 실행기 예외, GPU 식별 실패)라 시범을 끊지 않았다. 다음 제출부터 새 판을 쓴다.
 
-**Codex 4회차**: (결과를 적는다.)
+**Codex 4회차(83e1cae0).** 3회차 반례 다섯은 모두 해결로 확인됐다. 새 P2 1 건: 장치 여유를 볼 GPU 번호를 `CUDA_VISIBLE_DEVICES`(ConstrainDevices 아래에서는 어느 GPU 든 0)에서 읽어 nvidia-smi 의 전역 번호와 섞는다. ws1 잡 10674 가 실제로 `SLURM_JOB_GPUS=1`·`CUDA_VISIBLE_DEVICES=0` 이었다. → `SLURM_JOB_GPUS` 만 쓴다(`job_gpu_index`).
+
+**Codex 5회차(8995e57e): 수렴 — 새 P1/P2 없음.** 4회차 반례를 다시 돌려 GPU 1 선택·대기·시작을 확인했다.
