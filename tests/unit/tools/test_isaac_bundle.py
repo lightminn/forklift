@@ -1,0 +1,434 @@
+"""The Isaac bundle runner (docs/plans/2026-10-24-ws1-isaac-bundle.md): several runs in one Slurm job, by slots."""
+
+import json
+import os
+import signal
+import sys
+import threading
+import time
+
+import pytest
+
+from tools import isaac_bundle as ib
+
+PY = sys.executable
+
+
+def py(code, *args):
+    return [PY, "-c", code, *args]
+
+
+def stamp_run(name, tmp_path, sleep_s=0.3, code=0, **extra):
+    """A run that writes its start/end times and bundle env to <tmp>/<name>.json, sleeps, and exits with code."""
+    body = (
+        "import json,os,sys,time; t0=time.time(); time.sleep(float(sys.argv[2]));"
+        "keys=['SESSION_ID','BRIDGE_CPU','PORT','BUNDLE_SLOT','BUNDLE_JOB','BUNDLE_RUN','MARK'];"
+        "json.dump({'t0':t0,'t1':time.time(),'env':{k:os.environ.get(k) for k in keys}},open(sys.argv[1],'w'));"
+        "sys.exit(int(sys.argv[3]))"
+    )
+    return ib.Run(name=name, argv=py(body, str(tmp_path / f"{name}.json"), str(sleep_s), str(code)), **extra)
+
+
+def bundle(tmp_path, runs, **k):
+    k.setdefault("slots", 2)
+    k.setdefault("stagger_s", 0.0)
+    k.setdefault("grace_s", 1.0)
+    k.setdefault("poll_s", 0.02)
+    k.setdefault("job_id", "77")
+    k.setdefault("cpus", [4, 5, 16, 17])
+    k.setdefault("cleanup", lambda session_id: [])
+    return ib.run_bundle(runs, tmp_path / "out", **k)
+
+
+def stamps(tmp_path, names):
+    return {n: json.loads((tmp_path / f"{n}.json").read_text()) for n in names}
+
+
+def results(tmp_path):
+    return {r["name"]: r for r in map(json.loads, (tmp_path / "out" / "results.jsonl").read_text().splitlines())}
+
+
+# --- the run list ---------------------------------------------------------------------------------------------------
+
+
+def test_a_run_list_is_read_from_json_lines(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(
+        json.dumps({"name": "a", "argv": ["true"], "env": {"SEED": "1"}, "cwd": str(tmp_path)})
+        + "\n\n"
+        + json.dumps({"name": "b.2", "argv": ["false"]})
+        + "\n"
+    )
+    runs = ib.load_runs(path)
+    assert [r.name for r in runs] == ["a", "b.2"]
+    assert runs[0].env == {"SEED": "1"} and runs[0].cwd == str(tmp_path)
+    assert runs[1].env == {} and runs[1].cwd is None
+
+
+@pytest.mark.parametrize(
+    "lines, word",
+    [
+        ([{"name": "a", "argv": ["true"]}, {"name": "a", "argv": ["true"]}], "twice"),
+        ([{"name": "a/b", "argv": ["true"]}], "name"),
+        ([{"name": "a", "argv": []}], "argv"),
+        ([{"name": "a", "argv": "true"}], "argv"),
+        ([{"name": "a", "argv": ["true"], "env": {"X": 1}}], "env"),
+        ([{"name": "a", "argv": ["true"], "extra": 1}], "unknown"),
+        ([{"name": "a", "argv": ["true"], "env": {"SESSION_ID": "x"}}], "sets"),
+        ([{"name": "a", "argv": ["true"], "env": {"BUNDLE_TOKEN": "x"}}], "sets"),
+        ([{"name": "a", "argv": ["true"], "env": {"PORT": "9001"}},
+          {"name": "b", "argv": ["true"], "env": {"PORT": "9001"}}], "PORT"),
+    ],
+)
+def test_a_bad_run_list_is_refused(tmp_path, lines, word):
+    path = tmp_path / "runs.jsonl"
+    path.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    with pytest.raises(ValueError, match=word):
+        ib.load_runs(path)
+
+
+# --- slots, stagger, isolation ----------------------------------------------------------------------------------------
+
+
+def test_no_more_runs_than_slots_run_at_once(tmp_path):
+    names = [f"r{i}" for i in range(5)]
+    summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.3) for n in names], slots=2)
+    s = stamps(tmp_path, names)
+    edges = sorted([(v["t0"], 1) for v in s.values()] + [(v["t1"], -1) for v in s.values()])
+    level = peak = 0
+    for _, d in edges:
+        level += d
+        peak = max(peak, level)
+    assert peak == 2
+    assert summary["runs"] == 5 and summary["failed"] == 0 and summary["exit_code"] == 0
+
+
+def test_starts_are_staggered(tmp_path):
+    names = ["a", "b", "c"]
+    bundle(tmp_path, [stamp_run(n, tmp_path, 1.0) for n in names], slots=3, stagger_s=0.3)
+    starts = sorted(results(tmp_path)[n]["start"] for n in names)
+    assert all(b - a >= 0.29 for a, b in zip(starts, starts[1:], strict=False))
+
+
+def test_a_failed_run_does_not_stop_the_others(tmp_path):
+    runs = [stamp_run("ok1", tmp_path, 0.2), stamp_run("bad", tmp_path, 0.05, code=3), stamp_run("ok2", tmp_path, 0.2)]
+    summary = bundle(tmp_path, runs, slots=1)
+    r = results(tmp_path)
+    assert (r["ok1"]["rc"], r["bad"]["rc"], r["ok2"]["rc"]) == (0, 3, 0)
+    assert summary["failed"] == 1 and summary["exit_code"] == 1
+    assert (tmp_path / "out" / "runs" / "bad.log").exists()
+
+
+def test_each_run_gets_its_own_session_bridge_cpu_and_port(tmp_path):
+    names = ["a", "b", "c"]
+    runs = [stamp_run(n, tmp_path, 0.5) for n in names]
+    runs[2] = stamp_run("c", tmp_path, 0.5, env={"MARK": "x", "PORT": "9999"})
+    bundle(tmp_path, runs, slots=3, cpus=[3, 6, 15, 18])
+    env = {n: v["env"] for n, v in stamps(tmp_path, names).items()}
+    assert [env[n]["SESSION_ID"] for n in names] == ["77s0", "77s1", "77s2"]
+    assert [env[n]["BUNDLE_SLOT"] for n in names] == ["0", "1", "2"]
+    assert [env[n]["BRIDGE_CPU"] for n in names] == ["3", "6", "15"]
+    assert env["a"]["PORT"] != env["b"]["PORT"]
+    assert env["c"]["PORT"] == "9999" and env["c"]["MARK"] == "x"  # the list's env wins
+    assert env["a"]["BUNDLE_JOB"] == "77" and env["b"]["BUNDLE_RUN"] == "b"
+
+
+def test_a_free_slot_takes_the_lowest_slot_number(tmp_path):
+    runs = [stamp_run("long", tmp_path, 0.8), stamp_run("short", tmp_path, 0.1), stamp_run("next", tmp_path, 0.1)]
+    bundle(tmp_path, runs, slots=2)
+    r = results(tmp_path)
+    assert (r["long"]["slot"], r["short"]["slot"], r["next"]["slot"]) == (0, 1, 1)
+
+
+# --- ending runs --------------------------------------------------------------------------------------------------------
+
+TERM_CHILD = (
+    "import signal,sys,time,pathlib; d=pathlib.Path(sys.argv[1]);"
+    "signal.signal(signal.SIGTERM, lambda *a: (d.joinpath('child_term').write_text('1'), sys.exit(0)));"
+    "signal.signal(signal.SIGUSR1, lambda *a: (d.joinpath('child_usr1').write_text('1'), sys.exit(0)));"
+    "time.sleep(30)"
+)
+
+
+def test_a_timeout_terms_only_the_top_process(tmp_path):
+    # the top process (bash) forwards its own way (USR1 here); the child must not get the TERM directly
+    script = (
+        f'{PY} -c "$CHILD" "$D" & c=$!\n'
+        'trap \'touch "$D/leader_term"; kill -USR1 $c; wait $c; exit 5\' TERM\n'
+        "wait $c\n"
+    )
+    run = ib.Run(name="t", argv=["bash", "-c", script], env={"CHILD": TERM_CHILD, "D": str(tmp_path)})
+    bundle(tmp_path, [run], run_timeout_s=0.5)
+    r = results(tmp_path)["t"]
+    assert r["timeout"] is True and r["rc"] == 5
+    assert (tmp_path / "leader_term").exists() and (tmp_path / "child_usr1").exists()
+    assert not (tmp_path / "child_term").exists()
+
+
+def test_a_run_that_ignores_term_is_killed_after_the_grace(tmp_path):
+    code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+    t0 = time.monotonic()
+    bundle(tmp_path, [ib.Run(name="stubborn", argv=py(code))], run_timeout_s=0.3, grace_s=0.4)
+    r = results(tmp_path)["stubborn"]
+    assert r["timeout"] is True and r["signal"] == signal.SIGKILL
+    assert time.monotonic() - t0 < 5
+
+
+def test_processes_left_by_a_finished_run_are_ended(tmp_path):
+    pidfile = tmp_path / "orphan.pid"
+    script = f'sleep 30 & echo $! > "{pidfile}"; exit 0'
+    bundle(tmp_path, [ib.Run(name="o", argv=["bash", "-c", script])], grace_s=0.5)
+    pid = int(pidfile.read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and ib.alive(pid):
+        time.sleep(0.05)
+    assert not ib.alive(pid)
+    assert results(tmp_path)["o"]["leftover_ended"] is True
+
+
+def test_a_stop_terms_running_runs_and_starts_no_more(tmp_path):
+    stop = threading.Event()
+    threading.Timer(0.4, stop.set).start()
+    runs = [stamp_run("a", tmp_path, 5.0), stamp_run("b", tmp_path, 5.0), stamp_run("c", tmp_path, 0.1)]
+    t0 = time.monotonic()
+    summary = bundle(tmp_path, runs, slots=2, stop=stop)
+    r = results(tmp_path)
+    assert r["a"]["signal"] == signal.SIGTERM and r["b"]["signal"] == signal.SIGTERM
+    assert r["c"]["status"] == "not_started"
+    assert summary["not_started"] == 1 and summary["exit_code"] == 1
+    assert time.monotonic() - t0 < 4
+
+
+def test_leftover_bridge_containers_are_removed_per_session(tmp_path):
+    seen = []
+    bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.05)], slots=2,
+           cleanup=lambda sid: seen.append(sid) or (["slam_bridge_77s1_e1"] if sid == "77s1" else []))
+    assert sorted(seen) == ["77s0", "77s1"]
+    r = results(tmp_path)
+    assert r["a"]["containers_removed"] == [] and r["b"]["containers_removed"] == ["slam_bridge_77s1_e1"]
+
+
+# --- the GPU ------------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "env, gpus",
+    [
+        ({"CUDA_VISIBLE_DEVICES": "0"}, ["0"]),
+        ({"CUDA_VISIBLE_DEVICES": "0,1"}, ["0", "1"]),
+        ({"SLURM_JOB_GPUS": "1"}, ["1"]),
+        ({}, []),
+    ],
+)
+def test_visible_gpus(env, gpus):
+    assert ib.visible_gpus(env) == gpus
+
+
+def test_two_visible_gpus_are_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--no-vram"]) == 2
+    assert "GPU" in capsys.readouterr().err
+
+
+def test_the_vram_budget_holds_the_next_start(tmp_path):
+    # the first run reads 9,000 MiB: 9,000 + 3,950 > 3 x 4,076, so the second waits for the first to end
+    def probe(leaders):
+        return ([(leaders[0], 9000, 0)] if leaders else []), {0: 16000}
+
+    runs = [stamp_run("big", tmp_path, 0.6), stamp_run("next", tmp_path, 0.1)]
+    summary = bundle(tmp_path, runs, slots=3, shards=3, vram_probe=probe, vram_period_s=0.05)
+    s = stamps(tmp_path, ["big", "next"])
+    assert s["next"]["t0"] >= s["big"]["t1"] - 0.05
+    assert summary["vram_waits"] >= 1
+    assert results(tmp_path)["big"]["vram_max_mib"] == 9000 and results(tmp_path)["big"]["gpus"] == [0]
+
+
+def test_vram_within_the_budget_does_not_hold_starts(tmp_path):
+    def probe(leaders):
+        return [(pid, 3900, 0) for pid in leaders], {0: 16000}
+
+    names = ["a", "b", "c"]
+    summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.5) for n in names], slots=3, shards=3, vram_probe=probe,
+                     vram_period_s=0.05)
+    s = stamps(tmp_path, names)
+    assert max(v["t0"] for v in s.values()) < min(v["t1"] for v in s.values())  # all three overlapped
+    assert summary["vram_waits"] == 0
+    assert summary["vram_job_max_mib"] <= 3 * 3900
+
+
+def test_a_run_alone_starts_even_over_the_budget(tmp_path):
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.1)], slots=1, shards=1, session_vram_mib=5000,
+                     vram_probe=lambda leaders: ([], {0: 16000}), vram_period_s=0.05)
+    assert summary["failed"] == 0
+
+
+def test_a_summary_is_written(tmp_path):
+    bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1)
+    s = json.loads((tmp_path / "out" / "summary.json").read_text())
+    assert s["runs"] == 1 and s["exit_code"] == 0 and s["slots"] == 1 and "wall_s" in s
+
+
+def test_an_existing_output_is_refused(tmp_path):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "results.jsonl").write_text("")
+    with pytest.raises(FileExistsError):
+        bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1)
+
+
+def test_main_runs_a_list(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": py("pass")}) + "\n")
+    env = {k: v for k, v in os.environ.items() if k not in ("CUDA_VISIBLE_DEVICES", "SLURM_JOB_GPUS")}
+    old = os.environ.copy()
+    os.environ.clear()
+    os.environ.update(env)
+    try:
+        rc = ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+                      "--no-vram", "--no-cleanup"])
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+    assert rc == 0
+
+
+def test_more_slots_than_shards_are_refused(tmp_path):
+    with pytest.raises(ValueError, match="shard"):
+        bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=4, shards=3)
+
+
+def test_a_child_in_its_own_process_group_is_killed_by_its_token(tmp_path):
+    # GNU timeout puts its child in a process group of its own: the run's group KILL would miss it
+    pidfile = tmp_path / "child.pid"
+    child = ("import os,signal,sys,time; open(sys.argv[1],'w').write(str(os.getpid()));"
+             "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)")
+    run = ib.Run(name="t", argv=["bash", "-c", f'timeout 60 {PY} -c "$C" "{pidfile}"'], env={"C": child})
+    t0 = time.monotonic()
+    bundle(tmp_path, [run], run_timeout_s=0.5, grace_s=0.5)
+    pid = int(pidfile.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and ib.alive(pid):
+        time.sleep(0.05)
+    assert not ib.alive(pid)
+    assert time.monotonic() - t0 < 15
+
+
+@pytest.mark.parametrize(
+    "current, unattributed, free, verdict",
+    [
+        ([3900, 3900], 0, 8000, "ok"),  # 3 x 3,950 = 11,850 <= 12,228
+        ([3900, 3900, 3900], 0, 4000, "over"),  # a fourth session over three shards
+        ([3900, 4500], 0, 8000, "over"),  # one run above its share eats the margin
+        ([3900, 3900], 600, 8000, "over"),  # job memory no run owns counts
+        ([1000, 3900], 0, 6000, "gpu_full"),  # the warming run will still take 2,950 of the 6,000 free
+        ([1000, 3900], 0, 7000, "ok"),
+        ([], 0, None, "ok"),
+    ],
+)
+def test_admits(current, unattributed, free, verdict):
+    assert ib.admits(current, unattributed, budget_mib=3 * 4076, session_mib=3950, free_mib=free) == verdict
+
+
+def test_an_unreadable_gpu_holds_starts_then_goes_on_by_the_slots(tmp_path):
+    names = ["a", "b"]
+    summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.6) for n in names], slots=2, shards=2,
+                     vram_probe=lambda leaders: None, vram_period_s=0.05, vram_unreadable_s=0.3)
+    s = stamps(tmp_path, names)
+    assert s["b"]["t0"] - s["a"]["t0"] >= 0.25
+    assert summary["unreadable_starts"] == 1 and summary["failed"] == 0
+
+
+# --- infrastructure failures and retries -------------------------------------------------------------------------------
+
+FLAKY = (
+    "import pathlib,sys; d=pathlib.Path(sys.argv[1]); d.mkdir(parents=True);"
+    "(d/'run.log').write_text('BFCArena::AllocateRawInternal bfc_arena failed\\n' if sys.argv[2]=='1' else 'ok\\n');"
+    "sys.exit(1 if sys.argv[2]=='1' else 0)"
+)
+
+
+def test_a_gpu_allocation_failure_is_retried_into_the_same_folder(tmp_path):
+    out = tmp_path / "sbr_s0"
+    run = ib.Run(name="s0", argv=py(FLAKY, str(out), "{attempt}"), scan=[str(out / "run.log")],
+                 retry_move=[str(out)])
+    summary = bundle(tmp_path, [run])
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [(x["attempt"], x["status"], x["retried"]) for x in lines] == [(1, "infra_failed", True), (2, "ended", False)]
+    assert "bfc_arena" in lines[0]["infra"][0]
+    assert (out / "run.log").read_text() == "ok\n"  # the final attempt keeps the folder name
+    assert "bfc_arena" in (tmp_path / "sbr_s0.attempt1" / "run.log").read_text()
+    assert summary["exit_code"] == 0 and summary["failed"] == 0 and summary["infra_failed_attempts"] == 1
+
+
+def test_a_run_that_cannot_be_redone_is_recorded_as_an_infrastructure_failure(tmp_path):
+    out = tmp_path / "x"
+    run = ib.Run(name="x", argv=py(FLAKY, str(out), "1"), scan=[str(out / "run.log")])  # no retry_move, no {attempt}
+    summary = bundle(tmp_path, [run])
+    r = results(tmp_path)["x"]
+    assert r["status"] == "infra_failed" and r["retried"] is False
+    assert summary["failed"] == 1 and summary["exit_code"] == 1
+
+
+def test_a_run_failing_on_its_own_is_not_retried(tmp_path):
+    run = stamp_run("own", tmp_path, 0.05, code=4, retry_move=[str(tmp_path / "nothing")])
+    summary = bundle(tmp_path, [run])
+    r = results(tmp_path)["own"]
+    assert r["status"] == "ended" and r["rc"] == 4 and r["retried"] is False and summary["infra_failed_attempts"] == 0
+
+
+def test_an_oom_kill_during_a_failed_run_counts_as_infrastructure(tmp_path):
+    counts = iter([0, 1, 1, 1])
+    run = stamp_run("o", tmp_path, 0.05, code=137)
+    bundle(tmp_path, [run], oom_counter=lambda: next(counts), retries=0)
+    r = results(tmp_path)["o"]
+    assert r["status"] == "infra_failed" and r["oom_kills_during"] == 1 and "oom_kill" in r["infra"][0]
+
+
+def test_an_oom_kill_beside_a_run_that_exited_0_does_not_fail_it(tmp_path):
+    counts = iter([0, 1])
+    bundle(tmp_path, [stamp_run("fine", tmp_path, 0.05)], oom_counter=lambda: next(counts))
+    r = results(tmp_path)["fine"]
+    assert r["status"] == "ended" and r["oom_kills_during"] == 1
+
+
+# --- real-time back-off -----------------------------------------------------------------------------------------------
+
+PACED = (
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; end=time.monotonic()+float(sys.argv[3])\n"
+    "while time.monotonic()<end:\n"
+    "    t+=0.02*float(sys.argv[2]); f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n');"
+    " f.flush(); time.sleep(0.02)"
+)
+
+
+def paced_run(name, tmp_path, ratio, duration_s):
+    log = tmp_path / f"{name}_live_log.jsonl"
+    return ib.Run(name=name, argv=py(PACED, str(log), str(ratio), str(duration_s)), pace_log=str(log))
+
+
+def test_slow_live_runs_step_the_bundle_back(tmp_path):
+    runs = [paced_run("a", tmp_path, 0.25, 1.5), paced_run("b", tmp_path, 0.25, 1.5), stamp_run("c", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.4, pace_warmup_s=0.3,
+                     pace_period_s=0.1)
+    assert summary["backoffs"] and summary["final_cap"] == 1
+    r = results(tmp_path)
+    assert r["c"]["start"] >= min(r["a"]["end"], r["b"]["end"]) - 0.05  # c waited for the cap
+    assert r["a"]["pace_min"] < 0.345
+    assert (tmp_path / "out" / "pace.jsonl").exists()
+
+
+def test_live_runs_at_pace_do_not_step_back(tmp_path):
+    runs = [paced_run("a", tmp_path, 0.4, 1.0), paced_run("b", tmp_path, 0.4, 1.0)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.4, pace_warmup_s=0.3,
+                     pace_period_s=0.1)
+    assert summary["backoffs"] == [] and summary["final_cap"] == 2
+
+
+def test_the_run_list_takes_scan_retry_move_and_pace_log(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"], "scan": ["/x/*.log"], "retry_move": ["/x"],
+                                "pace_log": "/x/live_log.jsonl"}) + "\n")
+    (run,) = ib.load_runs(path)
+    assert run.scan == ["/x/*.log"] and run.retry_move == ["/x"] and run.pace_log == "/x/live_log.jsonl"
+    assert run.retryable

@@ -1,0 +1,230 @@
+# ws1 Isaac 묶음 제출 — 한 잡에 세션 여러 개 (2판)
+
+브랜치 `feat/ws1-isaac-bundle`(origin/main `fa3d7218`). 총괄 지시(2026-10-24): ws1 의 Slurm 할당은 CPU 20/20·shard 8/8 로 차 있는데 실제 RAM·VRAM·CPU 는 남는다. 잡마다 넣은 여유를 줄이고 한 잡에 여러 세션을 묶어, 동시 세션을 4 개에서 6 개 이상으로 늘린다.
+
+2판: Codex 적대 검토 1회차(P1 3·P2 5·P3 2)와 agy 독립 검토(7 건)를 반영했다(6 절).
+
+## 1. 사실 (2026-10-24 22:54–23:40 실측, 남의 잡은 읽기만)
+
+원자료: ws1 `test_runs/live/batch_eff/`.
+- `gpu_node_1.jsonl`: 노드 전체 `nvidia-smi --query-compute-apps` 0.5 s 표본. 프로세스는 `/proc/<pid>/cgroup` 으로 잡에 붙였다.
+- `jobs_1.jsonl`: 잡 cgroup 의 `cpu.stat`·`memory.stat`·`memory.peak`·`cpu.pressure` 10 s 표본.
+- `sacct_all.txt`: 2026-10-20 이후 `sacct -o JobID,JobName,AllocTRES,Elapsed,TotalCPU,MaxRSS,State --units=G`.
+
+**노드.**
+- `CfgTRES=cpu=20,mem=58000M,gres/gpu=2,gres/shard=8`. `gres.conf` 는 GPU 마다 shard 4 개다. shard 하나는 16,303/4 = 4,076 MiB 다.
+- QOS normal·admin 모두 잡당 `gres/shard=4` 이고, 사용자당 shard 한도는 없다. 우선순위 가중치(`PriorityWeight*`)는 전부 0 이라 대기 잡은 제출 순서대로 시작한다.
+- Slurm 23.11.4, `cgroup.conf` `ConstrainDevices=yes`·`ConstrainCores=yes`·`ConstrainRAMSpace=yes`, `JobContainerType` 없음(`/tmp` 는 모든 잡이 같이 쓴다).
+- **한 잡의 shard 는 한 GPU 에서 나온다.** Codex 가 23.11.4 소스로 확인했다(`gres_select_filter.c` 1157–1164: `MULTIPLE_SHARING_GRES_PJ` 가 꺼져 있으면 나누지 않는다. ws1 은 `SelectTypeParameters=CR_Core_Memory` 뿐이다). 나뉘면 `CUDA_VISIBLE_DEVICES` 에 항목이 둘 생긴다(`gres_common.c` 240).
+- **잡의 Isaac 은 받은 GPU 에서만 돈다.** `ConstrainDevices=yes` 라 잡은 자기 GPU 장치 파일만 연다. 실측에서 잡 8 개(10673–10681)의 Isaac·작업자 프로세스가 모두 한 GPU 에만 있었고, 그 GPU 는 잡의 `SLURM_JOB_GPUS` 와 맞았다. 세션 2 개가 도는 GPU 의 총계는 프로세스 합보다 80–97 MiB 많을 뿐이었다. Vulkan 렌더러가 다른 GPU 를 쓴다면 그 GPU 총계에 나타났을 것이다.
+
+**live 세션**(`isaac_live.sbatch` 와 그것을 부르는 ws1 `ct1_queue.sbatch`, `--cpus-per-task=4 --mem=8G --gres=shard:2`. 배속 0.4 로 맞춰 도는 세션이다):
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| VRAM 정상 상태 | 잡당 3,886–3,915 MiB(Isaac 3,372–3,401 + 학습 작업자 514) | 잡 5 개(10673·10674·10676·10677·10678) |
+| warm-up | 잡 10678 을 시작부터 잼. 0–6 s 0.3–0.6 GB, 6.5 s 순간 2,570 MiB 뒤 1,396, 18.5 s 3.2 GB, 21.5 s 작업자 514 MiB, 31 s 3.89 GB. **정상 상태를 넘는 순간치는 없었다**(0.5 s 표본, 시작 1 회 + 중간부터 1 회) | `gpu_node_1.jsonl` |
+| CPU | 잡 cgroup 0.94–0.98 코어(중앙), 시작 직후 2.0–2.15 코어. PSI some 16–18 % | 10 s 표본 |
+| CPU(sacct) | live 계열 20–30 잡 TotalCPU/Elapsed 중앙 1.01–1.24 코어. 일찍 끝난 잡은 2.0 코어(시작 구간 비중이 큼) | `ct2v`·`q*`·`mnc*`·`newtq*`·`oldrp*` |
+| RAM | 잡 cgroup anon 최대 5.48 GiB, `memory.peak` 최대 5.87 GiB. sacct MaxRSS 중앙 5.7–6.2 GiB, 최대 6.51 GiB(`ct2v` 20 잡, 최장 70 분 실행) | |
+| 배속 | 세션별 실시간 배율 중앙 0.365–0.368(`docs/validation/2026-10-24-ws1-live-cpu-contention.md`). Pacer 하한은 0.4 × 0.9 = 0.36 이다(`src/forklift_core/live/pacing.py`). **기존 방식도 하한에 붙어 있다** | |
+| 잡 밖 | SLAM 브리지 docker 컨테이너 세션당 약 0.13 GiB·0.05–0.25 코어. 잡의 첫 CPU 에 묶이고(`--cpuset-cpus "$CPU0"`), Slurm cgroup 밖이다 | `docker stats` |
+
+**배치 실행**(`--live` 없이 끝까지 최대 속도로 도는 Isaac 실행):
+
+| 런처 | 예약 | 사용 코어 중앙(최대) | MaxRSS 중앙(최대) | n |
+|---|---|---|---|---|
+| `riib_scene`·`riib`·`sb*`·`sc*`·`bs91`·`mix` | 4 CPU·8G·shard 1–2 | 2.8–3.2(3.3) | 6.2–6.5 GiB(7.41) | 70 남짓 |
+| `bd_isaac`·`jao`(학습 제안 없음) | 6 CPU·9G·shard 1 | 1.8(2.2) | 4.8–4.9 GiB(5.82) | 145 |
+
+- 배치 실행은 받은 CPU 를 거의 다 쓴다. live 와 달리 CPU 가 처리 속도를 정한다. 4 개를 받으면 3.1 개를 쓰고, 더 적게 받았을 때 얼마나 느려지는지는 재지 않았다.
+- 노드 CPU 한도는 20 이다. 그래서 배치 실행은 묶어도 CPU 때문에 동시 6 개에 가까이 가지 못할 수 있다. 이 계획의 처리량 목표는 live 세션에 둔다. 배치는 같은 도구로 묶되, CPU 를 줄인 효과를 재서 기본값을 정한다.
+
+**왜 지금 4 세션인가.**
+- live 세션 하나가 `shard:2` 를 잡는다. PR #98 에서 shard 4,076 MiB 에 세션이 3,886 MiB 라 여유가 5 % 였고, 다른 잡이 GPU 0 에 12.0 GB 를 쓰던 때 작업자 warm-up 이 `bfc_arena` 할당에 실패했다.
+- 그래서 shard 8 개에 4 세션이 상한이다.
+- CPU 는 예약 16 개 중 약 4 개만 써서 약 12 개가 논다.
+
+**모르는 것.** 세션 3 개가 CPU 6 개를 나눠 쓸 때 live 배속·틱 지연이 나빠지는지 모른다. Isaac 스레드 풀은 호스트 CPU 24 개 기준이다(`tbb.worker` 24–28, `carb.tasking` 약 24).
+
+## 2. 설계
+
+### 2.1 묶음 실행기 `tools/isaac_bundle.py` (표준 라이브러리만)
+
+한 Slurm 잡 안에서 실행 목록을 슬롯 N 개로 돌린다. 입력은 JSON Lines 실행 목록이다. 한 줄이 실행 하나다.
+```
+{"name": "fixed_line_m_s0", "argv": ["bash", "/path/ct1_queue.sbatch", "/path/out/fixed_line_m_s0"],
+ "env": {"SCENE_FILE": "...", "SEED": "0"}, "cwd": "/path/snapshot"}
+```
+- **동시 실행 수 = 규칙.** `--slots`(기본: 잡의 shard 수 `SLURM_SHARDS_ON_NODE`)를 넘겨 돌리지 않는다. **슬롯이 shard 보다 많으면 시작하지 않는다**(exit 2). 전역 규칙("shard 는 잡 안에서 동시에 도는 Isaac 수만큼")을 지키는 것은 이 개수 상한이다. 아래 메모리 검사는 그 위에 더한 안전장치다. 목록이 N 보다 길면 끝난 슬롯에 다음 실행을 넣는다(작업 풀).
+- **시차 시작.** 앞 실행을 시작한 지 `--stagger-s`(기본 60 s) 안에는 다음 실행을 시작하지 않는다. 실측 warm-up 은 31–40 s 에 정상 상태에 닿는다. 감독기가 epoch 를 다시 띄우는 것(실패 뒤 재시작)은 시차 밖이다. 대신 아래 예약이 그 세션의 몫을 계속 잡고 있다.
+- **메모리 검사.** 1 s 마다 `nvidia-smi` 로 잰다. 프로세스는 조상으로 실행에 붙인다. 새 실행은 **시작 뒤에 잰 표본으로만** 판단하고, 다음 두 조건을 모두 만족해야 시작한다.
+  1. 잡 몫: Σ 실행마다 max(지금 사용량, 3,950 MiB) + 실행에 안 붙는 잡 사용량 + 3,950 ≤ shard 수 × 4,076 MiB. warm-up 중인 실행도 자기 몫 전체를 예약한다.
+  2. 장치 여유: GPU 의 실제 여유 − Σ warm-up 실행이 더 가져갈 양 ≥ 3,950 MiB. shard 는 장부일 뿐 칸막이가 아니다(Slurm 문서). 다른 잡이 자기 몫을 넘겨 GPU 를 채웠으면 시작하지 않고 기다린다.
+  - 시작 때 `nvidia-smi` 를 못 읽으면 실행을 거부한다(`--no-vram` 을 명시하면 슬롯만으로 간다). 도중에 못 읽으면 시작을 멈추고, `--vram-unreadable-s`(120 s) 뒤 슬롯만으로 이어 가며 그 횟수를 남긴다.
+  - 실행마다 쓴 GPU 번호를 기록한다. 둘 이상이거나 잡 GPU 와 다르면 검증에서 실패로 센다.
+- **GPU 검사.** `CUDA_VISIBLE_DEVICES`(또는 `SLURM_JOB_GPUS`)에 GPU 가 둘 이상이면 시작하지 않는다(exit 2). 위 사실에 따라 ws1 설정에서는 생기지 않는 경우이고, 설정이 바뀌었을 때의 방어다.
+- **세션별 환경.** 실행기가 각 실행에 다음을 준다. 목록은 `PORT` 만 정할 수 있다(값마다 한 번). 나머지 이름을 목록이 정하면 거부한다. 같은 `SESSION_ID` 가 두 실행에 가면 한쪽 EXIT trap(`docker ps --filter name=slam_bridge_${JOB}_e`)이 다른 쪽 브리지를 지운다.
+  - `SESSION_ID=<잡 ID>s<순번>`: 런처의 docker 이름에 쓴다.
+  - `BRIDGE_CPU=<잡 cpuset 의 (슬롯 mod 개수)번째 CPU>`: 브리지 컨테이너를 슬롯마다 다른 CPU 에 묶는다.
+  - `PORT`: 9000–9499 중 bind 로 비어 있음을 확인한 포트. 잡 ID 로 시작점을 흩어 다른 묶음 잡과 같은 포트를 먼저 고르는 일을 줄인다. 확인과 실제 bind 사이 경쟁은 남는다. 그때 감독기가 그 epoch 를 실패로 다시 띄운다(판정 1 에서 센다).
+  - `BUNDLE_SLOT`·`BUNDLE_JOB`·`BUNDLE_RUN`·`BUNDLE_TOKEN`(실행마다 다른 값).
+- **격리와 종료.** 실행마다 새 프로세스 그룹으로 띄우고 로그는 `<out>/runs/<name>.log` 에 쓴다. 한 실행이 실패해도 나머지는 계속 돈다.
+  - 시간 초과(`--run-timeout-s`)와 묶음 종료 때는 **맨 위 프로세스에만** TERM 을 보낸다(Slurm `--signal=B:TERM` 과 같은 뜻 — 런처가 감독기 → 러너 → 브리지 순서로 끝낸다).
+  - `--grace-s`(기본 110 s) 뒤에는 **`BUNDLE_TOKEN` 을 환경에 가진 모든 프로세스**에 KILL 을 보낸다(`/proc/<pid>/environ` 으로 찾는다). 프로세스 그룹 KILL 로는 `timeout` 이 따로 만든 그룹의 자식(riib_scene·bd 의 Isaac)이 살아남는다 — Codex 가 재현했고, 시험 `test_a_child_in_its_own_process_group_is_killed_by_its_token` 이 막는다.
+  - grace 110 s 는 감독기의 러너 grace 60 s + 브리지 대기 45 s = 105 s 보다 길다. Slurm 은 한도 120 s 전에 TERM 을 준다.
+  - 실행이 끝났는데 같은 토큰의 프로세스가 남았으면 TERM, 10 s 뒤 KILL 한다. 이름이 `slam_bridge_<SESSION_ID>_` 로 시작하는 docker 컨테이너가 남았으면 지운다.
+- **종료 코드.** 실행의 종료 코드는 맨 위 프로세스의 것이다. 런처가 자기가 돌린 것의 코드로 끝나야 한다(2.3). `results.jsonl` 에 실행마다 다음을 남긴다.
+  - 이름·슬롯·시작/끝·코드나 시그널, 시간 초과·KILL 여부
+  - `SESSION_ID`·`BRIDGE_CPU`·`PORT`
+  - rusage(CPU s, 가장 큰 프로세스의 최대 RSS)
+  - VRAM 최대·GPU 번호
+  - 남은 프로세스·지운 컨테이너
+
+  `summary.json` 에는 실행 수·실패·미시작·메모리 대기 횟수·잡 VRAM 최대·벽시계를 남긴다. 실행기는 전부 0 이면 0, 아니면 1, 설정 거부는 2 로 끝난다.
+
+### 2.2 `deploy/slurm/isaac_bundle.sbatch`
+
+`tools/isaac_bundle.py` 를 백그라운드로 띄우고 `trap 'kill -TERM' TERM` + `wait` 로 Slurm 의 TERM 을 넘기는 얇은 sbatch 다(`isaac_live.sbatch` 와 같은 꼴). 기본값은 live 3 세션이다(`--gres=shard:3 --cpus-per-task=6 --mem=25G --signal=B:TERM@120`). `--time` 은 호출자가 목록 길이에 맞춰 준다. 머리말에 종류별 권장값을 적는다.
+
+### 2.3 런처 (기본값 불변)
+
+- `deploy/console/isaac_live.sbatch`: `JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}`, `CPU0=${BRIDGE_CPU:-<지금 식>}`. 종료 코드는 이미 감독기의 것이다.
+- `deploy/riibotics/riib_scene.sbatch`: 브리지 이름과 `CPU0` 를 같은 방식으로 바꾼다. 러너를 `timeout` 으로 전경에서 돌리므로 TERM 이 브리지 정리까지 닿지 않는다. 그래서 러너를 백그라운드 + `wait` + TERM 전달로 바꾼다. 종료 코드는 이미 러너의 것이다.
+  - v-g2 세션의 `feat/escape-relaxation` 이 이 파일을 고치고 있어, 그 머지 뒤 main 위에서 고친다(그 세션 요청). 그 전의 배치 검증은 스냅숏 안의 사본만 고쳐 쓴다.
+- ws1 쪽(저장소 밖) `test_runs/live/ct1_queue.sbatch`·`ct1_far.sbatch`. 각 파일을 쓰는 세션에 먼저 알리고 고친다.
+  - 탐침을 백그라운드 + `wait` 로 돌린다. 지금은 전경이라 TERM trap 이 탐침이 끝날 때까지(최대 2,400 s) 미뤄진다.
+  - 마지막을 `tail` 대신 `exit`(탐침 코드가 0 이 아니면 그것, 아니면 live 코드)로 바꾼다. 지금은 실패해도 0 으로 끝난다.
+- ws1 쪽 `test_runs/bd_isaac/bd.sbatch`. 쓰는 세션에 먼저 알리고 고친다.
+  - 브리지 이름 `slam_bridge_${SESSION_ID:-$SLURM_JOB_ID}_recog`, `CPU0=${BRIDGE_CPU:-…}`.
+  - 러너를 백그라운드 + `wait` + TERM 전달로 돌린다.
+  - 마지막을 `grep … || true` 대신 러너 코드로 끝낸다.
+  - 묶음에서는 `TAG` 를 목록 이름으로 넘긴다(기본 `OUT` 이 잡 ID 라 겹친다).
+
+### 2.4 종류별 권장값 (검증 전 잠정 — 3 절에서 확정)
+
+| 종류 | 세션/잡 | shard | CPU | mem | 근거 |
+|---|---|---|---|---|---|
+| live(학습 제안) | 3 | 3 | 6 | 25G | 1.1 코어 × 3 + warm-up 1 + 여유 2 ≈ 6.3. 코어 단위(논리 2) 할당이라 6. mem = 6.51 GiB × 3 × 1.25 = 24.4 |
+| 배치 riib_scene 류 | 3 | 3 | 10 | 28G | 3.1 코어 × 3 = 9.3 → 10. mem = 실측 최대 7.41 GiB × 3 × 1.25 = 27.8 |
+| 배치 bd 류(작업자 없음) | 3 | 3 | 6–8 | 22G | 1.8–2.2 × 3 = 6.6(3 절에서 결정). mem = 5.82 × 3 × 1.25 = 21.8 |
+
+- 노드로 보면 live 묶음 2 개 = CPU 12·shard 6·mem 50G 로 **6 세션**이다. 지금은 4 세션이 CPU 16·shard 8·mem 32G 를 쓴다.
+- 묶음 둘이 돌 때 남는 예약은 CPU 8·shard 2·mem 6,800 MiB(6.64 GiB)다. 그래서 8G 잡은 그동안 못 들어간다. 세션당 예약은 8G → 8.3G 로 거의 같다.
+- 세션 4 개 묶음(`shard:4`, GPU 한 장 전체)은 VRAM 으로는 4 × 3,950 = 15,800 ≤ 16,303 MiB 다. 하지만 여유가 GPU 전체에서 0.5 GB 뿐이라 이 계획의 기본값에 넣지 않는다. 3 개 묶음이 깨끗이 통과한 뒤 따로 잰다.
+- **실행 길이 범위.** RAM 실측은 70 분까지의 실행이다. 8 시간짜리 운용 콘솔 세션(`isaac_live.sbatch` 기본 `--time=08:00:00`)은 이 표 밖이다. 그 세션은 지금처럼 단독 잡으로 낸다.
+
+## 3. 검증
+
+과거 기준선만으로는 노드 부하·GPU 배치가 달라 차이를 묶음 탓으로 돌릴 수 없다(Codex). 그래서 **같은 시간대에 묶음과 단독을 나란히** 돌리는 회차를 둔다. 묶음 사이에 그 반대 배치 회차를 끼운다.
+
+**live** — 스냅숏 `bundle_07ca86aa` = `git archive 07ca86aa`(CT-2 V3 의 코드) + 2.3 의 `isaac_live.sbatch` 덮어쓰기 두 줄. 러너 코드는 V3 와 같다. `ct1_queue.sbatch` `SCENARIO=queue`, `CYCLE=P-1:D-1,P-2:D-2,P-3:D-3`, 장면 `scenes_ct1_a770031/line_m_session.json`. V3 의 `ct2_07ca86aa_fixed_line_m_s*` 와 같은 인자다.
+
+| 회차 | 묶음 | 단독(기존 `ct1_queue`, 4 CPU·shard 2·8G) | 노드 예약 |
+|---|---|---|---|
+| L1 | seed 0,1,2(6 CPU·shard 3·25G) | seed 0, 1 | CPU 14·shard 7·41G |
+| L2 | seed 0,1,2 와 3,4,5 두 묶음(6 세션 동시) | — | CPU 12·shard 6·50G |
+| L3 | seed 3,4,5 | seed 2, 3 | CPU 14·shard 7·41G |
+
+- 묶음 9 세션 대 같은 시간대 단독 4 세션이다. 과거 단독 V3 5 세션(`fixed_line_m_s0–s4`)도 같이 놓는다.
+- L2 는 6 세션 동시의 기반 실패·노드 처리량을 본다.
+
+**배치** — `riib_scene.sbatch` `MODE=slam`, 장면 `line_m`, 같은 스냅숏 규칙(main + 이 브랜치 + 스냅숏 안 `riib_scene` 사본 수정).
+
+| 회차 | 묶음 | 단독 |
+|---|---|---|
+| B1 | seed 0,1,2(10 CPU·shard 3·28G) | seed 0, 1(4 CPU·shard 2·8G) |
+
+**판정.**
+1. 기반 실패 0 이어야 한다. 다음을 센다.
+   - 잡 cgroup `memory.events` 의 oom_kill
+   - 브리지 컨테이너의 메모리 최대(`docker stats` 표본) — 잡 cgroup 밖이라 따로 본다
+   - 학습 작업자 할당 실패(`bfc_arena`·`OUT_OF_DEVICE`)
+   - 브리지 미준비, 포트 충돌
+   - 감독기 epoch 재시작
+   - 남은 프로세스·컨테이너
+   - 실행 하나가 GPU 두 장을 쓴 경우
+2. 잡 VRAM 최대 ≤ shard 수 × 4,076 MiB 여야 한다. 실행기 표본과 노드 표본(0.5 s) 둘 다로 본다.
+3. live 실시간성. 세션마다 시작 60 s 를 뺀 구간에서 다음을 잰다(`live_log.jsonl`).
+   - 전체 Δsim/Δwall
+   - `pacing.ok` 가 거짓인 시간 비율과 최장 연속 시간
+   - 틱 간격 p99·최대와 1 s 넘는 틈 수
+   - 실시간 배율 중앙
+
+   같은 회차의 단독 세션과 비교해 다음을 모두 만족해야 한다. 기존 방식도 하한(0.36)에 붙어 있으므로, 절대 하한 대신 단독 대비 악화를 본다.
+   - 전체 Δsim/Δwall 이 단독 중앙의 97 % 이상이다.
+   - `pacing.ok` 거짓 비율이 단독 최대보다 5 %p 넘게 크지 않다.
+   - 틱 간격 p99 가 단독 최대의 1.2 배를 넘지 않는다.
+4. 미션 결과. seed 별 done/failed/멈춤 사유를 단독(같은 시간대·과거)과 나란히 둔다. Isaac 은 비결정적이고 n 이 작아(9 대 9) 성공률 차이를 통계로 가를 힘은 없다.
+   - 그래서 3 의 기계적 지표를 주 근거로 쓴다.
+   - 결과 표는 새 실패 유형과 같은 유형의 빈도 증가를 본다. 묶음 쪽에서 같은 유형이 단독보다 2 건 이상 많으면 원인을 가리기 전에는 통과로 보지 않는다.
+5. 처리량.
+   - live 는 공통 측정 구간에서 노드 전체 ΣΔsim/Δwall 이다. L2(6 세션) 대 과거 V3 의 단독 4 세션이 같이 돈 구간으로 잰다.
+   - 배치는 실행당 벽시계(묶음 대 같은 회차 단독)와 노드 CPU 당 처리량이다.
+   - 배치에서 실행당 벽시계가 단독보다 10 % 넘게 길면 맞바꿈을 적고, CPU 당 처리량이 큰 쪽을 기본값으로 정한다.
+
+**운용 규칙(검증 뒤 문서화).** 한 비교 실험의 두 팔은 같은 방식(둘 다 묶음, 또는 둘 다 단독)으로 돌린다. 묶음과 단독이 섞이면 실시간성 차이가 팔 차이에 섞인다(agy).
+
+## 4. 이행
+
+1. 실행기·sbatch·시험을 테스트 먼저 쓴다. 시험은 가짜 명령으로 다음을 본다.
+   - 슬롯 상한·shard 초과 거부
+   - 시차
+   - 실패 격리
+   - 환경 주입과 예약 이름 거부
+   - 맨 위 TERM, 토큰 KILL(`timeout` 자식), 남은 프로세스 회수
+   - 시간 초과, 묶음 종료
+   - GPU 검사, 메모리 예산 대기, 장치 여유 대기, 측정 불가 대기
+2. 런처(2.3)를 고친다. 고치기 전에 관련 세션에 한 줄 알린다.
+3. 3 절 검증을 한다. 기본값 전환은 검증 뒤에 한다.
+   - `isaac_live.sbatch`·`riib_scene.sbatch` 머리말에 묶음 사용법을 적는다.
+   - `~/ENV.md` ws1 잡 기준을 새 실측으로 갱신한다.
+4. 검증 문서 `docs/validation/2026-10-2x-ws1-isaac-bundle.md` 와 PR 을 낸다. 끝난 실행 폴더는 "ws1-디스크-정리" 에 인계한다.
+
+## 5. 위험
+
+- **CPU 경합.** 세션 3 개의 스레드 풀(각 50 개 남짓)이 CPU 6 개를 나눈다. 메인 스레드가 기다리면 배속이 떨어진다. 3 절 판정 3 이 이것을 잰다. 떨어지면 다음 순서로 본다(셋째가 처리량을 가장 많이 잃는다).
+  1. CPU 8 개
+  2. 세션별 cpuset 나눔(`taskset`)
+  3. 묶음 2 세션
+- **VRAM 순간치.** 0.5 s 표본보다 짧은 순간치는 못 봤다. 개수 상한·시차·예약·장치 여유 검사가 방어선이다. 작업자가 실패하면 감독기가 epoch 를 다시 띄우고, 판정 1 에서 실패로 센다.
+- **잡 밖 자원.** 브리지 컨테이너는 Slurm 밖이다. 세션 6 개면 0.8 GiB·최대 1.5 코어가 예약 밖에 생겨, 지금 4 세션보다 2 개 늘어난다.
+  - 노드 실제 RAM 61 GiB 와 Slurm 몫 56.6 GiB 의 차 4.4 GiB 안에 든다.
+  - CPU 는 그 세션의 잡 CPU 를 같이 쓴다(묶음 안에서 슬롯마다 다른 CPU).
+- **같이 쓰는 파일.** Isaac 의 `~/.cache/ov`(잠금 파일 있음)와 `/tmp/carb.*`(이름이 무작위)는 지금도 4 잡이 같이 쓴다. 묶음이 새로 만드는 공유는 없다.
+- **비정상 종료.** 묶음 잡이 KILL(시간 한도·`scancel -s KILL`)되면 실행기와 런처의 정리가 못 돈다. 브리지 컨테이너가 남는다. 지금 단독 잡과 같은 성질인데, 남는 수만 세션 수만큼 많다. 실행기는 시작할 때 자기 `SESSION_ID` 접두의 컨테이너가 없음을 전제한다(잡 ID 가 새것이라 겹치지 않는다). 남은 컨테이너 정리는 지금처럼 수동이다.
+- **한 잡 실패의 범위.** 묶음 잡이 시간 한도·노드 문제로 죽으면 세션 3 개가 같이 끝난다. `--time` 을 목록 길이에 맞추고 `results.jsonl` 의 `not_started` 로 다시 낼 목록을 만든다.
+
+## 6. 자체 검토
+
+**① 원자료 재계산(Claude).** 1 절의 수치를 원자료에서 다시 뽑았다. 어긋난 수치는 없었다.
+- 계산: shard 16,303/4 = 4,075.75, mem 6.51 × 3 × 1.25 = 24.4·7.41 × 3 × 1.25 = 27.8·5.82 × 3 × 1.25 = 21.8, 4 × 3,950 = 15,800, 3 × 3,950 = 11,850 ≤ 12,228.
+- 다시 읽은 원자료: warm-up 곡선(`warm.py`), 잡 CPU·메모리(`jobs_1.jsonl`), sacct 요약(`sacct_sum.py`).
+- 1판의 "남는 예약 메모리 8G 미만"은 6,800 MiB 로 구체화했다(Codex P3 도 같은 값).
+
+**② Codex 적대 검토 1회차(새 스레드).** 반영한 지적:
+- P1 종료가 하위를 못 정리 → 토큰 KILL, 런처 TERM 전달, grace 110 s(105 s 보다 김).
+- P1 실패를 성공으로 기록 → ct1_queue·ct1_far·bd 의 종료 코드 수정.
+- P1 메모리 검사가 개수 규칙을 보장하지 않음 → 슬롯 ≤ shard 강제, 시작 중 실행도 예약, 측정 불가는 대기 뒤 슬롯만.
+- P2 장치 여유·실제 GPU → 장치 여유 검사와 실행별 GPU 기록. 렌더러 장치는 `ConstrainDevices=yes` 와 실측(잡 8 개 모두 받은 GPU 한 장)으로 답했다.
+- P2 95 % 판정이 하한 아래를 통과시킴 → 판정 3 을 Δsim/Δwall·`pacing.ok`·틱 p99 로 바꿈.
+- P2 검증 설계 → 같은 시간대 나란히 돌리기, 같은 유형 빈도.
+- P2 RAM → riib 28G, 실행 길이 범위, 브리지 컨테이너 메모리 수집.
+- P2 유일성 → 예약 이름 거부, PORT 중복 거부, 포트 시작점 분산. 검증 스냅숏에 런처 수정을 넣는다고 명시.
+- P3 둘 → 수치 정정.
+
+Slurm shard 분할 질문에 대한 Codex 의 소스 근거는 1 절에 옮겼다.
+
+**③ agy 독립 검토(Gemini 3.8 Flash — `agy-quota-ok --pick`, Argon 은 주간 한도 보류. ①·② 결론은 보여주지 않고 "적히지 않은 전제"를 물음).** 7 건 가운데 반영한 것:
+- 측정 대표성 → 실행 길이 범위를 적고 8 시간 콘솔 세션은 제외.
+- 꼬리 지연 → 판정 3 에 틱 p99.
+- 검정력 → 판정 4 에 n 의 한계와 빈도 기준.
+- 섞인 팔 → 운용 규칙.
+
+반영하지 않은 것:
+- 캐시·임시 파일 공유: 지금도 같은 조건이다(5 절).
+- 시차 없는 동시 기동 스트레스 시험: 설계가 시차를 두므로 대상이 아니다.
+- 노드 RAM 88 %: Slurm 이 예약을 넘겨 배치하지 않는다. 예약 밖은 브리지 0.8 GiB 뿐이다.
+- KILL 뒤 고아 컨테이너: 지금 단독 잡과 같은 성질이다(5 절).
+
+**Codex 재검토**: (2회차 결과를 적는다.)
