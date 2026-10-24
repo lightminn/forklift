@@ -486,6 +486,25 @@ def arguments() -> argparse.Namespace:
         "with it. Off: every earlier run.",
     )
     parser.add_argument(
+        "--inject-observe-end-offset-m",
+        type=float,
+        default=None,
+        help="Diagnostic only, never a result (docs/plans/2026-10-24-leg-end-budget-stands.md 3): with --slam, once "
+        "per run, when the first far observation leg comes within its brake window of its final goal (not a cusp, "
+        "before the arrival), the control pose is translated this far to the truck's left (m, signed; a fixed "
+        "map-frame step, as --inject-cusp-offset-m) until the session moves on to its next pallet, so the leg stands "
+        "at its end outside the loose arrival bounds and O1 takes it. The obstacle grid is not shifted with it. Off: "
+        "every earlier run.",
+    )
+    parser.add_argument(
+        "--diag-return-stall-budget",
+        type=int,
+        default=None,
+        help="Diagnostic only, never a result (docs/plans/2026-10-24-leg-end-budget-stands.md 3): the return's stall "
+        "replans (default 2, shared with the transport's count) set to this many, so a stand at the return's end "
+        "reaches R1 without its replans. The pose is not changed. Off: every earlier run.",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -5497,6 +5516,9 @@ def drive(S, isaac) -> None:
                                 cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
+                                # a recorded run's arguments may predate the diagnostic (the replay gate)
+                                **({} if getattr(args, "diag_return_stall_budget", None) is None
+                                   else {"return_stall_budget": int(args.diag_return_stall_budget)}),
                                 speeds=speeds, repeat_captures=args.repeat_captures,
                                 repeat_at_attempt=args.repeat_at_attempt, extra_views=args.extra_views,
                                 near_inject=args.near_inject, near_inject_lateral_m=args.near_inject_lateral_m,
@@ -5993,6 +6015,7 @@ def drive(S, isaac) -> None:
         session_truth_rects_ = []  # the other session pallets' outlines where they stand now (plan 2.4)
         session_truth_ids_ = []  # their ids, in the same order
         cusp_injection_ = {"done": False}  # --inject-cusp-offset-m: once per run
+        observe_end_injection_ = {"done": False}  # --inject-observe-end-offset-m: once per run
         if session is not None:
             from session_pallets import NeighbourGap
 
@@ -7050,6 +7073,7 @@ def drive(S, isaac) -> None:
                 live_session_["truth"] = {d_: site_ for d_, site_ in session.destinations}
 
             from forklift_core.safety.pallet_permit import preparation_obstacle as live_preparation_obstacle
+            from forklift_core.safety.pallet_permit import SESSION_PRIOR_GROW_M
             from forklift_core.safety.pallet_permit import session_pallet_props as live_session_pallet_props
 
             def prep_obstacle_of(entry_, at_first_, pose_=None):
@@ -7060,12 +7084,12 @@ def drive(S, isaac) -> None:
 
             def session_scenario_(exclude_id_, moved_=None, moved_ids_=(), slot_anchors_=None):
                 """The session scene a preparation plans in (plan 2026-10-22-session-scene-pallet-props 2.6): the
-                static props and the other pallets by their basis (decision D1: a prior one at its drawn slot + 0.25
-                m). With P-1 alone there are no others: the scene's own props, as before. ``slot_anchors_``: the
+                static props and the other pallets by their basis (decision D1: a prior one at its drawn slot +
+                SESSION_PRIOR_GROW_M). With P-1 alone there are no others: the scene's own props, as before. ``slot_anchors_``: the
                 delivered pallets anchored to their slots, in the goal's frame (plan 2026-10-22-slot-anchored-
                 neighbours 2.4)."""
                 others_ = live_session_pallet_props(core.targets, exclude_id=exclude_id_, nominal=live_session_["nominal"],
-                                                    shape=live_session_["shape"], prior_grow_m=0.25, moved=moved_,
+                                                    shape=live_session_["shape"], prior_grow_m=SESSION_PRIOR_GROW_M, moved=moved_,
                                                     moved_ids=moved_ids_, slot_anchors=slot_anchors_)
                 base_ = live_session_["scenario"]
                 return base_ if not others_ else replace(base_, props=tuple(base_.props) + others_)
@@ -7076,7 +7100,7 @@ def drive(S, isaac) -> None:
                 mission_ = core.commands.mission
                 return [p_.rectangle for p_ in live_session_pallet_props(
                     core.targets, exclude_id=None if mission_ is None else mission_.pallet_id,
-                    nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=0.25)]
+                    nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=SESSION_PRIOR_GROW_M)]
 
             if len(live_session_["pallets"]) > 1:  # P-1 alone: no others, the list as it was
                 # The docking dry run's obstacles are the world's truth (its poses are moved into the truth frame):
@@ -7185,12 +7209,15 @@ def drive(S, isaac) -> None:
 
             prep_check_cache_ = {}
 
-            def prepare_start_ok(rear_, *, extra_m=0.0, preview=True, t=None):
+            def prepare_start_ok(rear_, *, extra_m=0.0, preview=True, t=None, target_id=None):
                 """Plan D4b: whether the next preparation's observation plan would accept this start -- the planner's
                 own check (hybrid_astar: the unloaded outline against the leg's obstacles and grid at the planning
                 clearance, here plus ``extra_m``) with the inputs it would have after the end release (``preview``):
                 the received correction applied to the pose and the grid, the SLAM map in the grid, the mission's
-                pallet carried with the frame change iff the hold found it (the release's own decision)."""
+                pallet carried with the frame change iff the hold found it (the release's own decision).
+                ``target_id`` (plan 2026-10-24-leg-end-budget-stands R1): the next preparation's pallet when it is not
+                this mission's -- its pickup zone as live_prepare draws it, the others (this mission's moved by the
+                release's own judgement as above) its neighbours."""
                 from forklift_core.planning.grid_collision import make_checker as prep_make_checker
                 from forklift_core.planning.pallet_mission import leg_obstacles as prep_leg_obstacles
 
@@ -7218,6 +7245,15 @@ def drive(S, isaac) -> None:
                             carried_pose_ = replace(entry_.pose, x_m=x_, y_m=y_, yaw_rad=yaw_)
                             moved_ids_ = (entry_.pallet_id,)  # the release's own judgement, by id (2.6)
                     pallet_obs_ = prep_obstacle_of(entry_, at_first_ and carried_pose_ is None, carried_pose_)
+                scene_id_ = None if mission_ is None else mission_.pallet_id
+                if target_id is not None and target_id != scene_id_:
+                    scene_id_ = target_id
+                    next_ = core.targets.pallets[target_id]
+                    next_pose_ = (float(next_.pose.x_m), float(next_.pose.y_m), float(next_.pose.yaw_rad))
+                    pallet_obs_ = prep_obstacle_of(next_, next_pose_ == live_session_["pallets"][target_id]["reference"])
+                    if pallet_obs_ is None:  # as live_prepare's zone_
+                        pallet_obs_ = Rectangle(next_pose_[0], next_pose_[1], geometry.pallet_depth_m + 0.6,
+                                                geometry.pallet_width_m + 0.6, next_pose_[2])
                 occupancy_ = None
                 if grid_planning:
                     try:
@@ -7240,8 +7276,7 @@ def drive(S, isaac) -> None:
                             scratch={"use_slam": use_slam_, "release_at": release_at_})["occupancy"])
                     occupancy_ = prep_check_cache_["occupancy"]
                 obstacles_, footprint_, bounds_ = prep_leg_obstacles(
-                    "observe", grid_world(session_scenario_(None if mission_ is None else mission_.pallet_id,
-                                                            None if frame_ is None else moved, moved_ids_)),
+                    "observe", grid_world(session_scenario_(scene_id_, None if frame_ is None else moved, moved_ids_)),
                     geometry, pickup_obstacle=pallet_obs_, pickup_bounds=None)
                 return bool(prep_make_checker(obstacles_, footprint_, bounds_, occupancy_).free(
                     pose_, planner_config.clearance_m + float(extra_m)))
@@ -7936,6 +7971,22 @@ def drive(S, isaac) -> None:
                          "pallet": getattr(pallet, "current", None),
                          "leg_index": int(trackers[ms.phase].leg_index),
                          "leg_remaining_m": float(trackers[ms.phase].leg_remaining_m())})
+                inject_o_ = getattr(args, "inject_observe_end_offset_m", None)
+                if (inject_o_ is not None and slam is not None and not observe_end_injection_["done"]
+                        and ms.phase == "observe" and "observe" in trackers and ms.last_tracking is not None
+                        # braking too: the follower brakes on the update that enters its window (Codex impl review P2-2)
+                        and not ms.last_tracking.at_cusp and ms.last_tracking.status in ("tracking", "braking")
+                        and core.scene_far_observe()
+                        and trackers["observe"].remaining_to_goal_m() <= trackers["observe"].config.position_tolerance_m):
+                    # Diagnostic (leg-end plan 3): the control pose shifted from the next tick on, before the arrival.
+                    observe_end_injection_["done"], cusp_injection_["pallet"] = True, getattr(pallet, "current", None)
+                    slam["cusp_injection_m"] = (-float(inject_o_) * math.sin(float(rear[2])),
+                                                float(inject_o_) * math.cos(float(rear[2])))
+                    state.setdefault("cusp_injections", []).append(
+                        {"time_s": float(t), "event": "injected", "kind": "observe_end", "offset_m": float(inject_o_),
+                         "map_step_m": list(slam["cusp_injection_m"]), "rear": [float(v) for v in rear],
+                         "pallet": getattr(pallet, "current", None),
+                         "remaining_m": float(trackers["observe"].remaining_to_goal_m())})
                 scene_owned_, scene_presteer_ = False, None
                 if not paused_ and not releasing and not warming and core.scene_replan.active():
                     scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)

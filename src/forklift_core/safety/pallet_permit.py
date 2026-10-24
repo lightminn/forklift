@@ -76,6 +76,13 @@ def preparation_obstacle(pallet, pickup_zone, *, pose=None, size=None):
                      float(pose.yaw_rad))
 
 
+# Decision D1 (docs/plans/2026-10-22-continuous-transport-ct1.md 2, revised 2026-10-24): an unrecognised neighbour is
+# planned as its nominal outline grown by this much. The fixed straights add the planning clearance (0.10) on top, so
+# their effective gap is nominal + D1 + 0.10. A provisional value, decided again once the real truck's SLAM error is
+# measured.
+SESSION_PRIOR_GROW_M = 0.20
+
+
 def session_pallet_props(targets, *, exclude_id, nominal: dict, shape, prior_grow_m: float, moved=None,
                          moved_ids=(), slot_anchors=None) -> tuple:
     """The other pallets of a session as planning props (plan 2026-10-22-session-scene-pallet-props 2.6; one function

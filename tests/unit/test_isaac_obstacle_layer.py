@@ -471,7 +471,7 @@ def _start_check_harness(lay, tracker, pallet_pose, held=(False, False)):
     from forklift_core.localization.slam_pose import compose, invert
     from forklift_core.mission.targets import Pose, TargetsBook
     from forklift_core.planning.geometry import Rectangle
-    from forklift_core.safety.pallet_permit import preparation_obstacle, session_pallet_props
+    from forklift_core.safety.pallet_permit import SESSION_PRIOR_GROW_M, preparation_obstacle, session_pallet_props
 
     script = ROOT / "sim/isaac/run_transport.py"
     tree = ast.parse(script.read_text())
@@ -498,6 +498,7 @@ def _start_check_harness(lay, tracker, pallet_pose, held=(False, False)):
         "live_session_": {"pallets": {"P-1": {"zone": None, "reference": (99.0, 99.0, 0.0)}}, "scenario": scenario,
                           "nominal": {}, "shape": (1.2, 0.8, 0.144)},
         "live_preparation_obstacle": preparation_obstacle, "live_session_pallet_props": session_pallet_props,
+        "SESSION_PRIOR_GROW_M": SESSION_PRIOR_GROW_M,
         "prep_check_cache_": {}, "rear": np.zeros(3),
         "loaded": False,  # grid_kwargs masks the truck's own cells only inside the drive loop (Codex round 2)
     }
@@ -569,6 +570,52 @@ def test_the_start_check_previews_the_release_exactly_and_leaves_the_layer_alone
         seen.add(preview)
     assert seen == {True, False}  # the sweep crosses the wall's clearance
     assert pickle.dumps(lay.__dict__) == before  # the shared layer untouched
+
+
+def test_the_start_check_for_another_target_is_that_preparations_own_check():
+    """Plan 2026-10-24-leg-end-budget-stands R1: with ``target_id`` the start check is the one the next preparation of
+    that pallet runs -- its pickup zone as live_prepare draws it (a prior pallet at its first place: the bay's zone),
+    the others (this mission's delivered one among them) as its neighbours -- and it differs from the check for this
+    mission's pallet where the zone and the neighbour outline differ."""
+    from dataclasses import dataclass
+    from types import SimpleNamespace
+
+    from forklift_core.mission.targets import Pose
+    from forklift_core.planning.geometry import Rectangle
+    from forklift_core.planning.grid_collision import make_checker
+    from forklift_core.planning.pallet_mission import leg_obstacles
+
+    tracker = SimpleNamespace(mode="tracking", applied=((0.0, 0.0, 0.0), 0.0, 0), received=None)
+    scope, _ = _start_check_harness(layer(), tracker, (-3.0, 0.0, 0.0))
+    tb = scope["core"].targets
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(-3.0, 0.0, 0.0), uncertainty_m=0.21)  # this mission's, delivered
+    second = (3.0, 0.0, 0.0)
+    tb.add_pallet("P-2", "epal6", Pose(*second), depth_m=1.2, width_m=0.8)
+    scope["live_session_"]["pallets"]["P-2"] = {"zone": Rectangle(3.0, 0.0, 2.6, 2.0, 0.0), "reference": second}
+    scope["live_session_"]["nominal"] = {"P-1": (-3.0, 0.0, 0.0), "P-2": second}
+
+    @dataclass(frozen=True)
+    class Scene:  # session_scenario_ adds the other pallets with dataclasses.replace
+        props: tuple
+        bounds: object
+        pickup: object
+
+    base = scope["live_session_"]["scenario"]
+    scope["live_session_"]["scenario"] = Scene((), base.bounds, base.pickup)
+    geometry = scope["geometry"]
+    seen = set()
+    for x in np.arange(0.0, 2.01, 0.05):
+        pose = np.array([x, 0.0, 0.0])
+        scope["rear"] = pose
+        occupancy = scope["grid_kwargs"]("observe")["occupancy"]
+        obstacles, footprint, bounds = leg_obstacles(
+            "observe", scope["session_scenario_"]("P-2"), geometry,
+            pickup_obstacle=scope["prep_obstacle_of"](tb.pallets["P-2"], True), pickup_bounds=None)
+        own = bool(make_checker(obstacles, footprint, bounds, occupancy).free(tuple(pose), 0.1))
+        assert scope["prepare_start_ok"](pose, target_id="P-2") == own, x
+        seen.add((own, scope["prepare_start_ok"](pose)))
+    assert (False, True) in seen  # P-2's zone refuses where P-2 as a neighbour still lets this mission's check pass
 
 
 def test_the_start_check_carries_the_pallet_only_when_the_hold_found_it():

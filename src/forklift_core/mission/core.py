@@ -93,6 +93,8 @@ def rollout_callback_spec(config, start) -> dict:
     return {"kind": "bicycle_rollout", "config": asdict(config), "start": [float(v) for v in np.ravel(start)]}
 
 
+OBSERVE_END_STAND_S = 3.0  # plan 2026-10-24-leg-end-budget-stands O1: a final-goal stand outside the loose bounds
+STALL_REPLANS = 2  # the stall replans per mission (transport and return; #117's R2 band reads the same count)
 CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
 CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
@@ -2002,7 +2004,9 @@ class MissionCore:
             slam["control"][-1][1:4] = rear.tolist()
             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
             ms.last_tracking = tracking
-        elif ms.slam_stall_ticks >= 120 and len(state["stall_replans"]) < 2:
+        elif ms.slam_stall_ticks >= 120 and len(state["stall_replans"]) < (
+                getattr(options, "return_stall_budget", STALL_REPLANS) if ms.phase == "return_home" else STALL_REPLANS):
+            # (--diag-return-stall-budget: the return's budget, a diagnostic; plan 2026-10-24-leg-end-budget-stands 3)
             # Stopped at the end of the path but outside the goal
             # tolerance (an estimate shift before the hold): plan the
             # leg again from here, in the held frame (Codex v3.5 P2).
@@ -2101,7 +2105,41 @@ class MissionCore:
             ms.phase_started = t
             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
             ms.last_tracking = tracking
+        elif (
+            ms.slam_stall_ticks >= 120 and ms.slam_stall_ticks % 120 == 0
+            and ms.phase == "return_home"
+            and not (obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase)
+            and trackers[ms.phase].remaining_to_goal_m() <= 1e-6
+            and tracking.position_error_m <= options.observe_arrival_m
+            and abs(tracking.yaw_error_rad) <= options.observe_arrival_yaw_rad
+        ):
+            # Plan 2026-10-24-leg-end-budget-stands R1: the stall budget spent, a stand at the return's final goal
+            # within the observe's loose bounds is an arrival -- only where the next preparation's start check passes
+            # for every pallet a submit could name next (asked once a second; each answer recorded).
+            gate_ = self.next_start_ok(t, rear)
+            check_ = {"time_s": float(t), "position_error_m": float(tracking.position_error_m),
+                      "yaw_error_rad": float(tracking.yaw_error_rad), "rear_pose": [float(v) for v in rear],
+                      "start_checks": dict(gate_.results), "ok": bool(gate_.ok)}
+            state.setdefault("return_loose_checks", []).append(check_)
+            if gate_.ok:
+                state.setdefault("return_loose_arrivals", []).append(check_)
+                tracking = replace(tracking, status="arrived", speed_mps=0.0)
+                ms.last_tracking = tracking
         return SimpleNamespace(tracking=tracking, rear=rear, d7_docking_=d7_docking_, d7_owned=d7_owned)
+
+    def next_start_ok(self, t: float, rear) -> SimpleNamespace:
+        """Plan 2026-10-24-leg-end-budget-stands R1: the next preparation's start check (``prepare_start_ok``) for every
+        pallet a submit could name next -- every available or delivered one, all passing. Not narrowed by check_submit:
+        the end release still moves this mission's estimates, and a destination it frees opens a submit the list before
+        it refuses (Codex implementation review P2-1). With no candidate or no check (a batch run), the end gate."""
+        check = getattr(self.hooks, "prepare_start_ok", None)
+        candidates = [pid for pid, entry in getattr(self.targets, "pallets", {}).items()
+                      if entry.state in ("available", "delivered")]
+        if check is None or self.baseline is None or not candidates:
+            return SimpleNamespace(ok=self.end_gate(t, rear), results={})
+        pose = tuple(float(v) for v in rear)
+        results = {pid: bool(check(pose, extra_m=0.0, preview=True, t=t, target_id=pid)) for pid in candidates}
+        return SimpleNamespace(ok=all(results.values()), results=results)
 
     def cusp_and_observe_recovery(self, t: float, rear, tracking, signed_speed: float, dt: float, d7_docking_,
                                   d7_owned: bool, step: int) -> SimpleNamespace:
@@ -2413,7 +2451,81 @@ class MissionCore:
                 realign_install("observe_replan")  # Plan D8 S4c-3 stage 2
                 tracking = trackers["observe"].update(rear, signed_speed, dt)
                 ms.last_tracking = tracking
+        if slam is not None and ms.phase == "observe":
+            tracking = self.observe_end_stand(t, rear, tracking, signed_speed, dt)
         return SimpleNamespace(tracking=tracking, rear=rear)
+
+    def observe_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
+        """Plan 2026-10-24-leg-end-budget-stands O1: on the first far observation, a stop at the final goal without
+        an arrival (remaining 0, tracking, not at a cusp, a zero command) whose zero command lasts OBSERVE_END_STAND_S
+        (a stop detector judgement at the end, not 3 s of continuous standing), and on the
+        tick it is judged stands (stop_now) outside the loose arrival bounds, is planned again to the same target --
+        once per observe leg serial, within the leg's replan budget. The stop is timed through the stop detector's
+        flicker and whatever the bounds say on the way (Isaac ler_1451714_random_m_s1 m2: 14 s at 0.055 m / 0.103-0.115
+        rad, outside throughout, never fired -- the same stand's earlier cusp latch logged stop_lost / stop_confirmed
+        seven times in 5 s); inside the bounds on the tick, the loose arrival's own count is left to finish. A failed
+        attempt is recorded only here (no budget spent) and the truck keeps standing, so the loose arrival or the
+        timeout follow as before; an installed one counts in observe_replans. Returns the tracking for this tick."""
+        ms, state, slam, hooks, options, paths, trackers = (self.ms, self.state, self.slam, self.hooks, self.options,
+                                                            self.paths, self.trackers)
+        leg_ = state["observe_replan_leg"]
+        tried_ = any(r.get("leg_serial") == leg_["serial"] for r in state.get("observe_end_stands", ()))
+        standing_ = (
+            not tried_
+            and self.scene_far_observe()
+            and tracking.status == "tracking"
+            and not tracking.at_cusp
+            and abs(tracking.speed_mps) < 1e-12
+            and trackers["observe"].remaining_to_goal_m() <= 1e-9
+            and not hooks.cusp_monitor().holds_observe()
+        )
+        if not standing_:
+            state.pop("observe_end_stand", None)
+            return tracking
+        pending_ = state.setdefault("observe_end_stand", {"since_s": float(t)})
+        stood_ = self.commands.work_elapsed(pending_["since_s"], t)
+        outside_ = (tracking.position_error_m > options.observe_arrival_m
+                    or abs(tracking.yaw_error_rad) > options.observe_arrival_yaw_rad)
+        if stood_ < OBSERVE_END_STAND_S or not outside_ or not slam["stop_now"]:
+            return tracking
+        state.pop("observe_end_stand", None)
+        record = {"time_s": float(t), "leg_serial": leg_["serial"], "zero_command_s": float(stood_),
+                  "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
+                  "rear_pose": [float(v) for v in rear]}
+        records_ = state.setdefault("observe_end_stands", [])
+        if len(state["observe_replans"]) - leg_["start"] >= options.observe_replans_per_leg:
+            records_.append({**record, "outcome": "no_budget"})
+            return tracking
+        grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
+        planner_config, scenario, geometry = options.planner_config, options.scenario, self.geometry
+        target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
+        replan_start = hooks.wall()
+        replanned = plan_observation_leg(  # the observe_miss replan's call, its names (the planning config audit)
+            grid_world(scenario), target, planner_config, geometry=geometry,
+            start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+            pickup_bounds=self.observe_bounds(), extended=False, **grid_kwargs("observe"),
+        )
+        record["planning_wall_s"] = hooks.wall() - replan_start
+        if not replanned.success:
+            records_.append({**record, "outcome": f"failed:{replanned.status}"})
+            return tracking
+        records_.append({**record, "outcome": "installed"})
+        state["observe_replans"].append(
+            {"time_s": t, "rear_pose": [float(v) for v in rear], "yaw_error_rad": ms.last_tracking.yaw_error_rad,
+             "status": replanned.status, "planning_wall_s": record["planning_wall_s"], "leg_serial": leg_["serial"],
+             "budget_left": options.observe_replans_per_leg - (len(state["observe_replans"]) + 1 - leg_["start"]),
+             "trigger": "observe_end_stand"})
+        paths["observe"] = replanned
+        state.setdefault("paths", {})["observe"] = hooks.path_record(replanned)
+        hooks.write_paths()
+        hooks.show_path(replanned, "Observe", (0.2, 0.8, 0.8))
+        trackers["observe"] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
+                                                  trackers["observe"].config)
+        ms.phase_started = t
+        self.realign_install("observe_replan")
+        tracking = trackers["observe"].update(rear, signed_speed, dt)
+        ms.last_tracking = tracking
+        return tracking
 
     def command(self, t: float, rear, rear_stamp: float, tracking, signed_speed: float, dwell_hold: bool,
                 dwell_standing: bool, safety_hold: bool) -> SimpleNamespace:

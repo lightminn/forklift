@@ -74,6 +74,19 @@ def test_the_last_missions_records_are_handed_over():
     assert "async_plans" not in core.state
 
 
+def test_the_leg_end_records_go_with_their_mission_and_the_next_starts_empty():
+    """Plan 2026-10-24-leg-end-budget-stands (Codex plan round 1 P2-3): O1's and R1's records are the mission's."""
+    core = fake_core()
+    base = MissionBaseline.capture(core)
+    made = {"observe_end_stand": {"since_s": 1.0}, "observe_end_stands": [{"outcome": "installed"}],
+            "return_loose_checks": [{"ok": False}], "return_loose_arrivals": [{"ok": True}]}
+    core.state.update(made)
+    records = base.restore(core)
+    assert {k: records["state"][k] for k in made} == made
+    assert not set(made) & set(core.state)
+    assert base.restore(core)["state"].keys().isdisjoint(made)  # the next mission's hand-over has none of them
+
+
 def test_a_mission_value_that_is_not_plain_data_is_refused_at_capture():
     core = fake_core()
     core.pocket["planning_pickup"] = object()
