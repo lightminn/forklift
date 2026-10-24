@@ -178,3 +178,116 @@ def test_the_layer_filter_never_removes_an_uncertain_candidate():
 
 def test_no_candidates_is_none():
     assert select_target([], NONE).status == "none"
+
+
+# --- the floor contract's occupancy exclusion (docs/plans/2026-10-24-far-target-occupancy.md O1) -------------
+
+def _neighbour_behind():
+    """P-2 behind P-4 in the CT-1 queue scene: seen in part, never fitted -- an uncertain candidate whose
+    visible points come within 0.85 m of the radius."""
+    return _c("n", 4.6, 0.0, geometry="ambiguous", seen=(4.2, 0.0))
+
+
+def test_an_uncertain_neighbour_behind_a_floor_pallet_is_excluded_by_occupancy():
+    cands, instr = [_c("a", 3.0, 0.0), _neighbour_behind()], _instr(3.0, 0.0, r=0.354)
+    assert select_target(cands, instr).status == "reobserve"
+    s = select_target(cands, instr, occupancy_margin_m=0.05)
+    assert (s.status, s.candidate_id) == ("selected", "a") and "occupancy_excluded" in s.reasons
+    assert s.detail["excluded"] == ["n"] and s.detail["slack_m"] == pytest.approx(0.55 - 0.354 - 0.05)
+
+
+def test_an_unfitted_object_behind_a_floor_pallet_is_excluded_by_occupancy():
+    from forklift_core.perception.instance_fit import FitFailure
+    behind = FitFailure("l2", "no_face", (4.2, 0.0), 0.3)
+    cands, instr = [_c("a", 3.0, 0.0)], _instr(3.0, 0.0, r=0.354)
+    assert select_target(cands, instr, unresolved=(behind,)).status == "reobserve"
+    s = select_target(cands, instr, unresolved=(behind,), occupancy_margin_m=0.05)
+    assert (s.status, s.candidate_id) == ("selected", "a") and s.detail["excluded"] == ["l2"]
+
+
+def test_without_a_margin_the_occupancy_exclusion_is_off():
+    s = select_target([_c("a", 3.0, 0.0), _neighbour_behind()], _instr(3.0, 0.0, r=0.354), occupancy_margin_m=None)
+    assert s.status == "reobserve" and "uncertain_in_radius" in s.reasons
+
+
+def test_an_unpickable_floor_pallet_stays_unpickable_after_the_exclusion():
+    """Codex review 2026-10-24 (2nd edition): the exclusion went past _decide's refusal."""
+    s = select_target([_c("a", 3.0, 0.0, pickable=False), _neighbour_behind()], _instr(3.0, 0.0, r=0.354),
+                      occupancy_margin_m=0.05)
+    assert (s.status, s.candidate_id) == ("not_pickable", "a")
+    assert "fork_spacing_adjust" in s.reasons and "occupancy_excluded" in s.reasons
+
+
+def test_a_pallet_not_seen_on_the_floor_excludes_nothing():
+    s = select_target([_c("a", 3.0, 0.0, state="uncertain"), _neighbour_behind()], _instr(3.0, 0.0, r=0.354),
+                      occupancy_margin_m=0.05)
+    assert s.status == "reobserve"
+
+
+def test_a_non_standard_fit_excludes_nothing():
+    """Codex review 2026-10-24: a non-standard fit's depth is unseen, its centre moves up to 0.175 m."""
+    a = _c("a", 3.0, 0.0)
+    a = replace(a, shape=replace(a.shape, spec=None))
+    s = select_target([a, _neighbour_behind()], _instr(3.0, 0.0, r=0.354), occupancy_margin_m=0.05)
+    assert s.status == "reobserve"
+
+
+def test_a_fit_with_competing_centres_or_a_depth_segment_excludes_nothing():
+    alt = _c("a", 3.0, 0.0, alt=((3.0, 0.05),))
+    seg = replace(_c("a", 3.0, 0.0), centre_segment_m=((2.9, 0.0, 0.0), (3.1, 0.0, 0.0)))
+    for a in (alt, seg):
+        s = select_target([a, _neighbour_behind()], _instr(3.0, 0.0, r=0.354), occupancy_margin_m=0.05)
+        assert s.status == "reobserve"
+
+
+@pytest.mark.parametrize("offset, status", [(0.199, "selected"), (0.201, "reobserve")])
+def test_the_occupancy_inequality_has_a_sharp_boundary(offset, status):
+    """|c_H - t| + r + m < h_H + h_min: 0.30 + 0.25 - 0.30 - 0.05 = 0.20 m from the instructed centre."""
+    cands = [_c("a", 3.0, 0.0), _c("n", 4.6, 0.0, geometry="ambiguous", seen=(4.2, 0.0))]
+    s = select_target(cands, _instr(3.0, offset, r=0.30), occupancy_margin_m=0.05)
+    assert s.status == status
+
+
+def test_a_non_standard_minimum_pallet_can_sit_beside_a_t11():
+    """Codex review 2026-10-24: a T11 at x 3.000 and a 0.50 x 0.60 non-standard pallet at x 3.581, both centres
+    within 0.354 m of 3.230 and 1 mm apart: 0.230 + 0.354 + 0.05 = 0.634 >= 0.33 + 0.25, no exclusion."""
+    from forklift_core.perception.instance_fit import FitFailure
+    t11 = rs.known_spec("t11_06")
+    a = _c("a", 3.0, 0.0)
+    a = replace(a, shape=ObservedPalletShape(t11, face_layout(t11, "x"), (("face", "known_shape"),)))
+    beside = FitFailure("u", "no_face", (3.581, 0.0), 0.0)
+    s = select_target([a], _instr(3.230, 0.0, r=0.354), unresolved=(beside,), occupancy_margin_m=0.05)
+    assert s.status == "reobserve"
+
+
+def test_two_identified_fits_still_ask_the_operator_with_the_exclusion_on():
+    s = select_target([_c("a", 3.0, 0.0), _c("b", 3.0, 0.5), _neighbour_behind()], _instr(3.0, 0.25, r=0.5),
+                      occupancy_margin_m=0.05)
+    assert s.status == "ask_operator"
+
+
+def test_a_layer_instruction_keeps_the_layer_path():
+    """Codex review 2026-10-24 (3rd edition): a layer-1 instruction picked the floor pallet."""
+    from forklift_core.perception.instance_fit import FitFailure
+    s = select_target([_c("a", 3.0, 0.0)], _instr(3.0, 0.0, r=0.30, layer=1),
+                      unresolved=(FitFailure("u", "no_face", (3.7, 0.0), 0.0),), occupancy_margin_m=0.05)
+    assert s.status == "reobserve" and "unresolved_in_radius" in s.reasons
+
+
+def test_two_identified_fits_behind_an_unfitted_object_are_not_resolved_by_occupancy():
+    """The unfitted object sends the robot to look again before the count of identified fits is read; the
+    exclusion must not then pick one of two fits in the radius -- here two overlapping readings 0.1 m apart, where
+    the inequality alone (0.05 + 0.1 + 0.05 < 0.55) would hold."""
+    from forklift_core.perception.instance_fit import FitFailure
+    unfitted = (FitFailure("u", "no_face", (4.2, 0.0), 0.3),)
+    s = select_target([_c("a", 3.0, 0.0), _c("b", 3.0, 0.1)], _instr(3.0, 0.05, r=0.1), unresolved=unfitted,
+                      occupancy_margin_m=0.05)
+    assert s.status == "reobserve" and "unresolved_in_radius" in s.reasons
+
+
+@pytest.mark.parametrize("margin", [-0.2, float("nan"), float("inf")])
+def test_an_occupancy_margin_must_be_finite_and_not_negative(margin):
+    """Codex implementation review 2026-10-24 P2: a negative or NaN margin loosened the inequality (NaN passes
+    slack <= 0) and selected an ambiguous instruction."""
+    with pytest.raises(ValueError):
+        select_target([_c("a", 3.0, 0.0), _neighbour_behind()], _instr(3.0, 0.0, r=0.354), occupancy_margin_m=margin)
