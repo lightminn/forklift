@@ -2496,13 +2496,14 @@ class MissionCore:
         if len(state["observe_replans"]) - leg_["start"] >= options.observe_replans_per_leg:
             records_.append({**record, "outcome": "no_budget"})
             return tracking
-        grid_world, plan_observation_leg = hooks.grid_world, hooks.plan_observation_leg
+        grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
+        planner_config, scenario, geometry = options.planner_config, options.scenario, self.geometry
         target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
         replan_start = hooks.wall()
-        replanned = plan_observation_leg(
-            grid_world(options.scenario), target, options.planner_config, geometry=self.geometry,
+        replanned = plan_observation_leg(  # the observe_miss replan's call, its names (the planning config audit)
+            grid_world(scenario), target, planner_config, geometry=geometry,
             start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
-            pickup_bounds=self.observe_bounds(), extended=False, **hooks.grid_kwargs("observe"),
+            pickup_bounds=self.observe_bounds(), extended=False, **grid_kwargs("observe"),
         )
         record["planning_wall_s"] = hooks.wall() - replan_start
         if not replanned.success:
