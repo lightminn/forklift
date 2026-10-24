@@ -82,6 +82,8 @@ def test_a_done_mission_keeps_the_auto_item_and_none_remaining_ends_it():
     out = q.next(ctx(revision=2), 1200, lambda: next(ids))
     rid = out["pick_request"]["request_id"]
     q.on_pick(key(q, rid), pick_msg(rid, 2, "none_remaining", None), 1300, 2)
+    assert q.items and q.phase == "picking"  # none remaining before the ack: it ends with the ack (Codex CT-2 r2)
+    q.on_answer(key(q, rid), {"t": "ack"}, 1301)
     assert q.items == [] and q.run == "stopped" and q.stop_reason == "완료"
 
 
@@ -171,3 +173,18 @@ def test_a_busy_auto_submit_keeps_what_may_have_gone_out():
     q.on_answer({"epoch": q.epoch, "item_id": "A", "request_id": sub["request_id"]}, {"t": "reject", "reason": "busy"})
     it = q.items[0]
     assert it["uncertain"] and it["uncertain_pallet_id"] == "P-1" and it["uncertain_destination_id"] == "D-1"
+
+
+def test_none_remaining_then_a_refusal_stops_without_ending_the_item():
+    q, ids = started()
+    q.next(ctx(), 20, lambda: next(ids))
+    q.on_pick(key(q, "r1"), pick_msg("r1", reason="none_remaining", pick=None), 30, 1)
+    q.on_answer(key(q, "r1"), {"t": "reject", "reason": "stale"}, 31)
+    assert q.stop_reason == "자동 선택 거부: stale" and [it["item_id"] for it in q.items] == ["A"]
+
+
+def test_a_late_ack_stops_on_the_deadline():
+    q, ids = started()
+    q.next(ctx(), 20, lambda: next(ids))
+    q.on_answer(key(q, "r1"), {"t": "ack"}, 21 + mq.PICK_DEADLINE_MS)
+    assert q.stop_reason == "자동 선택 응답 없음"

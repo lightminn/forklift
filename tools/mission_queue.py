@@ -79,7 +79,7 @@ class MissionQueue:
         self.early: dict = {}
         self.stops: list = []  # (reason, now_ms): every stop, for the probe's report
         # CT-2: the auto item's pick_request (kept until acked or let go, through a pick held) and the pick held
-        # (queue.js pick / held / pickAsks, feat/ct2-console 3cecb0c7)
+        # (queue.js pick / held / pickAsks, feat/ct2-console 2a4c64c3)
         self.pick: dict | None = None
         self.held: dict | None = None
         self.pick_asks = 0
@@ -195,7 +195,12 @@ class MissionQueue:
         if pk and key["epoch"] == pk["epoch"] and key["item_id"] == pk["item_id"] \
                 and key["request_id"] == pk["request_id"]:
             if (answer or {}).get("t") == "ack":  # the pick comes as its own message; a held pick may now go
+                # an ack is judged against the deadline too when its time is given (Codex CT-2 r2)
+                if now_ms is not None and now_ms - pk["sent_at"] > self.pick_deadline_ms:
+                    return self.stop("자동 선택 응답 없음", now_ms)
                 pk["acked"] = True
+                if pk.get("none"):
+                    return self._end_auto(pk["item_id"], now_ms)  # none remaining came first, waiting for this ack
                 return {}
             return self.stop(f"자동 선택 거부: {(answer or {}).get('reason') or 'unknown'}", now_ms)
         c = self.current
@@ -245,15 +250,13 @@ class MissionQueue:
                          "targets_revision": msg["targets_revision"], "plan": msg.get("plan"),
                          "missions": msg.get("missions")}
             self.last_pick, self.last_pick_blocked = dict(self.held), None
+            pk["none"] = False  # a pick computed again for a resend supersedes an earlier one
             self.phase = "picked"  # the request stays tracked until its ack
             return {}
         if reason == "none_remaining":
-            auto_id = pk["item_id"]
-            self._drop_pick(False)
-            self.items = [x for x in self.items if x["item_id"] != auto_id]
-            self.last_pick_blocked, self.last_pick = None, None
-            if not self.items and self.run == "running":
-                return self.stop("완료", now_ms)
+            if pk.get("acked"):
+                return self._end_auto(pk["item_id"], now_ms)
+            pk["none"] = True  # a refusal may still come: the auto item ends with the ack (Codex CT-2 r2)
             return {}
         self.last_pick_blocked, self.last_pick = msg.get("blocked"), None
         return self.stop(f"자동 선택 실패: {reason}", now_ms)
@@ -336,6 +339,15 @@ class MissionQueue:
         self.pick_asks += 1
         self.phase = "picking"
         return {"pick_request": {"item_id": front["item_id"], "request_id": request_id}}
+
+    def _end_auto(self, auto_id, now_ms=None) -> dict:
+        """None remaining, acked: the auto item is done; the next item goes on, or the queue is done."""
+        self._drop_pick(False)
+        self.items = [x for x in self.items if x["item_id"] != auto_id]
+        self.last_pick_blocked, self.last_pick = None, None
+        if not self.items and self.run == "running":
+            return self.stop("완료", now_ms)
+        return {}
 
     def _re_ask(self, now_ms=None) -> dict:
         if self.pick_asks >= 2:
