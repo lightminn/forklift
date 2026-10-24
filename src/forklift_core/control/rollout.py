@@ -20,6 +20,28 @@ from .path_tracking import RearAxlePathTracker, TrackerConfig
 
 
 @dataclass(frozen=True)
+class CurvatureResponse:
+    """The realised over the commanded curvature, by gear (docs/plans/2026-10-24-curvature-response.md arm A): a
+    settings value -- 1 for the real truck until it is measured; the Isaac plant's step-0 values for a scene layout
+    (forward 0.88, reverse 1.0). Applied to the curvature each step integrates, chosen by that step's gear; the
+    tracker's own feedback runs as before."""
+
+    forward: float = 1.0
+    reverse: float = 1.0
+
+    def identity(self) -> bool:
+        return self.forward == 1.0 and self.reverse == 1.0
+
+    def factor(self, speed: float) -> float:
+        return self.forward if speed >= 0.0 else self.reverse
+
+
+def _response(curvature_response):
+    # None and an all-ones response are the ideal bicycle exactly (the replay gate's recorded calls pass neither)
+    return None if curvature_response is None or curvature_response.identity() else curvature_response
+
+
+@dataclass(frozen=True)
 class RolloutResult:
     status: str  # "arrived", "failed" or "timeout"
     position_error_m: float
@@ -40,9 +62,11 @@ def bicycle_rollout(
     *,
     dt_s: float = 1.0 / 120.0,
     max_time_s: float = 60.0,
+    curvature_response: CurvatureResponse | None = None,
 ) -> RolloutResult:
     # A rollout judges with the tracker's own cusp rule, without the caller's hold (fix A).
     tracker = RearAxlePathTracker(poses, directions, curvatures, replace(config, cusp_heading_pending_rad=None))
+    response = _response(curvature_response)
     pose = np.asarray(start_pose, dtype=float).copy()
     speed = 0.0
     steps = int(max_time_s / dt_s)
@@ -60,7 +84,7 @@ def bicycle_rollout(
                 tuple(visited),
             )
         speed = command.speed_mps
-        change = speed * command.curvature_inv_m * dt_s
+        change = speed * command.curvature_inv_m * dt_s * (1.0 if response is None else response.factor(speed))
         heading = pose[2] + change / 2
         pose[:2] += speed * dt_s * np.array([cos(heading), sin(heading)])
         pose[2] += change
@@ -95,6 +119,7 @@ def leg_prefix_rollout(
     start_leg: int,
     prefix_m: float,
     dt_s: float = 1.0 / 120.0,
+    curvature_response: CurvatureResponse | None = None,
 ) -> PrefixResult:
     """Drive leg ``start_leg`` of the whole path from ``start_pose`` on an ideal bicycle, as
     bicycle_rollout does, until it has gone ``prefix_m`` along that leg or the leg ends.
@@ -107,6 +132,7 @@ def leg_prefix_rollout(
     # A rollout judges with the tracker's own cusp rule, without the caller's hold (fix A).
     tracker = RearAxlePathTracker(poses, directions, curvatures, replace(config, cusp_heading_pending_rad=None))
     tracker.skip_legs(start_leg)
+    response = _response(curvature_response)
     path = np.asarray(poses, dtype=float)
     start = float(tracker._progress)
     leg_end = tracker._leg_ends[start_leg]
@@ -156,7 +182,7 @@ def leg_prefix_rollout(
             return PrefixResult("prefix", prefix_m, lateral, heading, None, goal, tuple(visited))
         previous = (progress, pose.copy())
         speed = command.speed_mps
-        change = speed * command.curvature_inv_m * dt_s
+        change = speed * command.curvature_inv_m * dt_s * (1.0 if response is None else response.factor(speed))
         heading = pose[2] + change / 2
         pose[:2] += speed * dt_s * np.array([cos(heading), sin(heading)])
         pose[2] += change
@@ -179,4 +205,5 @@ def leg_prefix_rollout(
     return PrefixResult(status, progress - start, lateral, heading_error, failure, goal, tuple(visited))
 
 
-__all__ = ["GOAL_STALL_REMAINING_M", "PrefixResult", "RolloutResult", "bicycle_rollout", "leg_prefix_rollout"]
+__all__ = ["GOAL_STALL_REMAINING_M", "CurvatureResponse", "PrefixResult", "RolloutResult", "bicycle_rollout",
+           "leg_prefix_rollout"]
