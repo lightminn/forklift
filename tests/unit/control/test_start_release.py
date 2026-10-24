@@ -237,3 +237,48 @@ def test_the_escape_sweep_passes_moving_away_and_not_toward():
     # away then back toward (Codex P2-3: never nearer than reached, not only than the start)
     out_and_in = np.vstack([straight((0.0, 0.0, 0.0), -1, 0.03), straight((-0.03, 0.0, 0.0), 1, 0.02)[1:]])
     assert not rectangles_sweep_free(base, out_and_in, [near], FOOT)
+
+
+# ---- Codex v2 review ----
+
+def shifted(cells, di):
+    """The same physical cells on a grid whose origin moved di cells along x (a rolling grid)."""
+    state = np.full((120, 80), FREE, dtype=np.uint8)
+    for i, j in cells:
+        state[i - di, j] = OCCUPIED
+    return GridSnapshot(state, np.full((120, 80), 9.0), 10.0, (0.0, 0.0, 0.0), 0, 1, {},
+                        ORIGIN[0] + di * RES, ORIGIN[1], RES)
+
+
+def test_a_cell_keeps_its_history_when_the_rolling_grid_moves():
+    p = perm(True)
+    away = (0.0, -0.018, 0.0)
+    assert p.check_path(grid(SIDE), path(-1, start=away), FOOT, FOOT, current_pose=away, direction=-1).blocked is None
+    back_in = (0.0, -0.016, 0.0)
+    c = p.check_path(shifted(SIDE, 1), path(-1, start=back_in), FOOT, FOOT, current_pose=back_in, direction=-1)
+    assert c.blocked == "occupied" and c.verified_m == 0.0  # the 0.018 reached is remembered across the move
+
+
+PARTS = [(Footprint(0.3, 0.2, 0.3), 0.0, 0.0), (Footprint(0.7, 0.0, 0.05), 0.25, 0.3),
+         (Footprint(0.7, 0.0, 0.05), -0.25, 0.3)]
+
+
+def test_switching_between_shapes_keeps_their_histories_apart():
+    snap = grid(SIDE)
+    p = perm(True)
+    p.check_path(snap, path(-1), PARTS, PARTS, current_pose=P0, direction=-1)  # body + blades reversing
+    c = p.check_path(snap, path(1), FOOT, FOOT, current_pose=P0, direction=1)  # the hull forward: no shape clash
+    assert c.blocked in (None, "occupied")
+    assert {k[0] for k in p.release_anchor["best"]} == {sr.history_keys(snap, [(0, 0)], PARTS)[0][0],
+                                                         sr.history_keys(snap, [(0, 0)], FOOT)[0][0]}
+
+
+def test_a_standing_truck_re_latches_after_a_correction_dropped_its_anchor():
+    p = perm(True)
+    assert p.check_path(grid(SIDE), path(-1), FOOT, FOOT, current_pose=P0, direction=-1).blocked is None
+    assert p.check_path(grid(SIDE, version=1), path(-1), FOOT, FOOT, current_pose=P0, direction=-1).verified_m == 0.0
+    assert p.release_anchor is None
+    p.note_standing(True, P0, 1)  # still standing, the scene replan's release raised the version
+    assert p.release_anchor is not None and p.release_anchor["version"] == 1
+    back = p.check_path(grid(SIDE, version=1), path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
+    assert back.blocked is None

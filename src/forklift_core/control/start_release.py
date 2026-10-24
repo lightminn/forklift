@@ -148,6 +148,16 @@ def start_band_cells(snapshot, anchor_pose, shape, band_m: float):
     return cells[keep], d0[keep]
 
 
+def history_keys(snapshot, cells, shape) -> list:
+    """Each start-band cell's history key: the checked shape's parts and the cell's world index (the grid origin over
+    the resolution, plus the cell's index), so a rolling grid's origin moving keeps a cell's history."""
+    res = float(snapshot.resolution_m)
+    oi, oj = int(round(snapshot.origin_x_m / res)), int(round(snapshot.origin_y_m / res))
+    sig = tuple((float(fp.front_m), float(fp.rear_m), float(fp.half_width_m), float(lat), float(lon))
+                for fp, lat, lon in _parts(shape))
+    return [(sig, round(res, 6), oi + int(i), oj + int(j)) for i, j in np.asarray(cells, dtype=int).reshape(-1, 2)]
+
+
 def dense_poses(samples, arc):
     """Poses along the walk's samples no more than DENSE_STEP_M / DENSE_YAW_RAD apart, with their arc lengths."""
     samples = np.asarray(samples, dtype=float)
@@ -238,5 +248,5 @@ def sweep_keeps_away(poses, footprint, rect) -> bool:
 
 
 __all__ = ["DENSE_STEP_M", "DENSE_YAW_RAD", "cell_distances", "dense_error_m", "dense_poses", "footprint_rect_distance",
-           "min_d0_m", "part_distances", "release_length", "released", "shape_radius", "start_band_cells",
+           "history_keys", "min_d0_m", "part_distances", "release_length", "released", "shape_radius", "start_band_cells",
            "sweep_keeps_away"]

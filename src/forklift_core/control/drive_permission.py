@@ -348,7 +348,9 @@ class DrivePermission:
         """The truck stands (or moves) at pose: the first standing tick latches the start-band release's anchor."""
         if self.config.start_band_m <= 0.0:
             return
-        if standing and not self._standing:
+        if standing and (not self._standing or self.release_anchor is None):
+            # a new standing, or still standing after the anchor was dropped (a correction re-projected the grid
+            # under it -- the scene replan's release raises the version before its escape is checked, Codex v2 P2-3)
             self.release_anchor = {"pose": tuple(float(v) for v in pose), "version": int(correction_version),
                                    "best": {}}
         self._standing = bool(standing)
@@ -790,8 +792,10 @@ class DrivePermission:
             return snapshot, samples, arc, None
         pose = tuple(float(v) for v in current_pose)
         now = sr.part_distances(snapshot, cells, [pose], footprint)[0]  # (m, P)
-        best = np.array([np.maximum(anchor["best"].get(tuple(c), d), d0_c)
-                         for c, d, d0_c in zip(map(tuple, cells.tolist()), now, d0)])
+        # each cell's history under a key that survives the rolling grid's origin moving (its world cell index) and
+        # apart for each checked shape (hull forward, body and blades reversing -- Codex v2 P2-1, P2-2)
+        keys = sr.history_keys(snapshot, cells, footprint)
+        best = np.array([np.maximum(anchor["best"].get(k, d), d0_c) for k, d, d0_c in zip(keys, now, d0)])
         if np.all(best.min(axis=1) > band):
             self.release_anchor = None  # moved away from every start-band cell: the walk's own rule from here
             return snapshot, samples, arc, None
@@ -799,8 +803,8 @@ class DrivePermission:
         # stopping margin (the walk's own lateral and stopping inflation, never more than its best so far)
         cap = np.where(d0 > band, band + float(self.config.stopping.margin_m), band)
         first, hit = sr.release_length(snapshot, cells, np.minimum(best, cap), cap, samples, arc, footprint)
-        for c, d in zip(map(tuple, cells.tolist()), np.maximum(best, now)):
-            anchor["best"][c] = d
+        for k, d in zip(keys, np.maximum(best, now)):
+            anchor["best"][k] = d
         walked = sr.released(snapshot, cells)
         if not np.isfinite(first):
             return walked, samples, arc, None
