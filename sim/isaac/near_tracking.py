@@ -1127,7 +1127,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # every earlier (bay layout) measurement run.
                               "permit_stop_replan": "on",
                               # 2026-10-24: the start-band release; off in every earlier run.
-                              "start_band_release": "off"}
+                              "start_band_release": "off",
+                              # 2026-10-25 leg-failures B1/B2: the D7 re-approach's curvature and cruise caps; unset
+                              # in every earlier run.
+                              "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

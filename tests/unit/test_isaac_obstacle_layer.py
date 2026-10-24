@@ -830,6 +830,58 @@ def test_a_strict_candidate_check_covers_only_the_permission_off_zone_within_the
     assert not occupied["ok"] and occupied["why"] == "blocked:occupied"
 
 
+def test_the_strict_zone_check_judges_its_own_evidence_age_and_takes_the_full_envelope(monkeypatch):
+    """Leg-failures plan A1, Codex plan round 4: (P2) the zone's FREE evidence must be no older than the permission's
+    evidence_max_age_s at the judgement -- the driving permission's own age rule covers only its prefix and stop arc,
+    so a zone seen free long ago would pass; (P3) the zone's walk starts its arc at 0, so with a positive
+    envelope_ramp_m it walks with the full envelope (the original path's, or wider) instead of re-ramping."""
+    from dataclasses import replace as dc_replace
+
+    from forklift_core.perception.obstacle_grid import UNKNOWN
+
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 2.5, 51), np.zeros(51), np.zeros(51)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _open_raw(lay, reach=9.0), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    snap = lay.snapshot
+    max_age = lay.permission.config.evidence_max_age_s
+
+    def cells(x0, x1):
+        return (slice(int(round((x0 - snap.origin_x_m) / snap.resolution_m)),
+                      int(round((x1 - snap.origin_x_m) / snap.resolution_m))), slice(None))
+
+    state = snap.state.copy()
+    state[cells(1.6, 1.75)] = UNKNOWN  # the driving permission's prefix ends here
+    stamp = snap.free_stamp.copy()
+    kw = dict(current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0, measured_curvature_inv_m=0.0,
+              cap_mps=0.6, strict=True, strict_from_m=2.0)
+    lay.snapshot = dc_replace(snap, state=state, free_stamp=stamp)
+    now = 0.25
+    assert lay.candidate_permit(now, path, **kw)["ok"]  # fresh evidence everywhere
+    old = stamp.copy()
+    old[cells(1.95, 3.0)] = now - max_age - 0.03  # the zone seen free 0.23 s before the judgement
+    lay.snapshot = dc_replace(snap, state=state, free_stamp=old)
+    stale = lay.candidate_permit(now, path, **kw)
+    assert not stale["ok"] and stale["why"] == "zone_evidence_stale"
+    # P3: the zone's own walk runs on a permission whose envelope does not ramp
+    seen = []
+    real = MODULE.DrivePermission
+
+    class Spy(real):
+        def check_path(self, *a, **k):
+            if k.get("lookahead_m") is not None:
+                seen.append(self.config.envelope_ramp_m)
+            return super().check_path(*a, **k)
+
+    monkeypatch.setattr(MODULE, "DrivePermission", Spy)
+    lay.permission.config = dc_replace(lay.permission.config, envelope_ramp_m=0.2)
+    lay.snapshot = dc_replace(snap, state=state, free_stamp=stamp)
+    lay.candidate_permit(now, path, **kw)
+    assert seen == [0.0]
+
+
 def test_a_candidate_permit_leaves_an_unknown_beyond_the_verified_distance_to_the_permission_unless_strict():
     """Scene replan plan 7판 (Isaac sri_b907b91 s0: verified 2.42 of 3.0 m, start allowed 0.354 m/s, refused): an
     unknown ahead is the driving permission's, as on any path -- unless the leg reaches where the permission does not

@@ -505,6 +505,22 @@ def arguments() -> argparse.Namespace:
         "reaches R1 without its replans. The pose is not changed. Off: every earlier run.",
     )
     parser.add_argument(
+        "--d7-reapproach-curvature-inv-m",
+        type=float,
+        default=None,
+        help="docs/plans/2026-10-25-leg-failures.md B1: the D7 re-approach (and an obstacle replan of it) plans with "
+        "its curvature limit capped at this value (1/m) -- a gentler S whose curvature reversal the steering rate "
+        "follows. Set by the scene batch launchers; unset (None): the planner's own limit, every earlier run.",
+    )
+    parser.add_argument(
+        "--d7-reapproach-cruise-mps",
+        type=float,
+        default=None,
+        help="docs/plans/2026-10-25-leg-failures.md B2: the D7 re-approach's dry run and tracker cruise capped at this "
+        "speed (m/s); the round-two stop and every other leg keep theirs. Set by the scene batch launchers; unset "
+        "(None): the transport's cruise, every earlier run.",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -5561,6 +5577,9 @@ def drive(S, isaac) -> None:
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
                                 start_band_release=getattr(args, "start_band_release", "off"),
+                                # leg-failures B1/B2: a record from before the options ran without the caps
+                                d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
+                                d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,

@@ -448,12 +448,19 @@ class ObstacleLayer:
         ahead = candidate.check_path(self.snapshot, poses, footprint, own, current_pose=current_pose,
                                      direction=direction, unknown_passes=True)
         if zone_len > 0.0 and zone_from > 0.0:
-            # the zone's part of the leg alone, its own walk over just that stretch (no lookahead re-applied past it)
-            zone_check = candidate.check_path(self.snapshot, _arc_slice(poses, zone_from, need), footprint, own,
-                                              current_pose=current_pose, direction=direction, lookahead_m=zone_len)
+            # the zone's part of the leg alone, its own walk over just that stretch (no lookahead re-applied past it);
+            # its arc starts at 0, so it walks with the full envelope rather than re-ramping it (Codex plan round 4 P3)
+            zone_permission = DrivePermission(replace(self.permission.config, envelope_ramp_m=0.0))
+            zone_permission.release_anchor = candidate.release_anchor
+            zone_check = zone_permission.check_path(self.snapshot, _arc_slice(poses, zone_from, need), footprint, own,
+                                                    current_pose=current_pose, direction=direction,
+                                                    lookahead_m=zone_len)
             zone_verified = float(zone_check.verified_m)
+            # the driving permission ages only its own prefix and stop arc: the zone's evidence is aged here (P2)
+            zone_stale = now_s - float(zone_check.oldest_free_s) > float(self.permission.config.evidence_max_age_s)
         else:
             zone_check, zone_verified = check, float(check.verified_m)  # from the truck: the walk above, as before
+            zone_stale = False  # its age is allowed_speed's (the candidate's own path check)
         out.update(verified_m=float(check.verified_m), blocked=check.blocked, allowed_mps=float(allowed[0][0]),
                    measured_allowed_mps=float(allowed[1][0]), allowed_why=allowed[0][1],
                    measured_allowed_why=allowed[1][1], need_m=need, strict=bool(strict),
@@ -465,6 +472,8 @@ class ObstacleLayer:
             out["why"] = f"blocked:{zone_check.blocked}"
         elif zone_len > 0.0 and zone_verified + 1e-6 < need_zone:
             out["why"] = "unverified"
+        elif zone_stale:
+            out["why"] = "zone_evidence_stale"
         elif allowed[0][0] <= 0.0:
             out["why"] = f"start:{allowed[0][1]}"
         elif allowed[1][0] <= 0.0:
