@@ -91,11 +91,15 @@ def audit(runs, response: CurvatureResponse) -> dict:
                 continue
             outcome = mission_outcome(run, md)
             base = {"run": name, "mission": os.path.basename(md), "outcome": outcome}
+            tf_phase = (st.get("tracking_failure") or {}).get("phase")
             # near capture default straight
             nc = st.get("near_capture") or {}
             dry = nc.get("dry_run")
             if dry is not None:
-                row = {**base, "site": "near", "recorded_ok": None, "verified": False, "why": None}
+                row = {**base, "site": "near", "recorded_ok": None, "verified": False, "why": None,
+                       # the installed straight's own leg: it ended in the insertion (measured) or before it
+                       "leg_good": bool(st.get("insertion_measured")), "leg_end": (
+                           "insertion" if st.get("insertion_measured") else f"stopped in {tf_phase or outcome}")}
                 approach = (st.get("paths") or {}).get("approach")
                 traj = dry.get("trajectory") or []
                 if "approach" not in configs:
@@ -124,8 +128,20 @@ def audit(runs, response: CurvatureResponse) -> dict:
             held.append((st.get("paths") or {}).get("transport"))
             held = [h for h in held if h and "poses" in h]
             for k, r in enumerate(retries):
+                nxt = retries[k + 1].get("trigger") if k + 1 < len(retries) else None
+                if nxt is not None:
+                    leg_good, leg_end = nxt != "d", f"next retry {nxt}"
+                else:
+                    reason = ""
+                    try:
+                        reason = str((json.load(open(f"{md}/result.json")).get("result") or {}).get("reason"))
+                    except Exception:
+                        pass
+                    # the last re-approach went wrong when the mission ended on the docking (its retries, its recovery)
+                    leg_good = not (outcome != "done" and ("docking" in reason or "transport_recovery" in reason))
+                    leg_end = "mission " + outcome + ("" if outcome == "done" else f" ({reason[:40]})")
                 row = {**base, "site": "d7", "retry": k, "trigger": r.get("trigger"), "recorded_ok": None,
-                       "verified": False, "why": None, "later_retry": k + 1 < len(retries)}
+                       "verified": False, "why": None, "leg_good": leg_good, "leg_end": leg_end}
                 dry_d = r["plan"]["dry_run"]
                 row["recorded_ok"] = (dry_d.get("status") == "arrived" and dry_d.get("position_error_m", 1) <= 0.03
                                       and abs(dry_d.get("yaw_error_rad", 1)) <= 0.05)
@@ -153,8 +169,10 @@ def audit(runs, response: CurvatureResponse) -> dict:
     for site in ("near", "d7"):
         sel = [r for r in rows if r["site"] == site]
         ver = [r for r in sel if r["verified"]]
-        good_later = [r for r in ver if r["recorded_ok"] and r["outcome"] == "done" and not r.get("later_retry")]
-        bad_later = [r for r in ver if r["recorded_ok"] and (r["outcome"] != "done" or r.get("later_retry"))]
+        good_later = [r for r in ver if r["recorded_ok"] and r["leg_good"]]
+        bad_later = [r for r in ver if r["recorded_ok"] and not r["leg_good"]]
+        good_all = [r for r in sel if r["recorded_ok"] and r["leg_good"]]
+        unverified_good = [r for r in good_all if not r["verified"] or r.get("sweep_unverified")]
         summary[site] = {
             "calls": len(sel), "verified": len(ver), "unverified": len(sel) - len(ver),
             "unverified_why": sorted({str(r["why"]) for r in sel if not r["verified"]}),
@@ -165,6 +183,10 @@ def audit(runs, response: CurvatureResponse) -> dict:
             "later_bad_refused_now": sum(1 for r in bad_later if not r["new_ok"]),
             "later_bad": len(bad_later),
             "sweep_unverified": sum(1 for r in ver if r.get("sweep_unverified")),
+            # the plan's worst case over the legs that went well: E new refusals + U unverified (or sweep-unverified) / N
+            "worst_case_new_refusal_of_good_legs": (
+                (sum(1 for r in good_all if r["verified"] and not r["new_ok"]) + len(unverified_good)) / len(good_all)
+                if good_all else None),
         }
     return {"response": dataclasses.asdict(response), "summary": summary, "rows": rows,
             "not_covered": ["cusp stall judgement (cells' FREE times not recorded)",

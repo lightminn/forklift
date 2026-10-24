@@ -201,16 +201,39 @@ def test_a_forward_shortfall_realises_less_turn_and_the_tracker_compensates_up_t
     assert short.status != "arrived" or abs(short.yaw_error_rad) > abs(ideal.yaw_error_rad)
 
 
+def _reverse_arc():
+    # the forward arc traversed backwards: the rear axle moves against its heading, the heading unwinding
+    poses, _, curvatures = _arc()
+    poses = poses[::-1].copy()
+    return poses, np.full(len(poses), -1, np.int8), curvatures[::-1].copy()
+
+
 def test_the_response_is_chosen_by_the_gear_of_each_step():
     from forklift_core.control.rollout import CurvatureResponse
 
-    reverse = _arc(direction=-1)
-    poses = reverse[0].copy()
-    # a reverse arc driven backwards from its end pose: the forward factor must not touch it
-    start = tuple(poses[0])
-    a = bicycle_rollout(*reverse, ARC_CONFIG, start, curvature_response=CurvatureResponse(0.5, 1.0))
-    b = bicycle_rollout(*reverse, ARC_CONFIG, start)
-    assert a == b
+    path = _reverse_arc()
+    start = tuple(path[0][0])
+    ideal = bicycle_rollout(*path, ARC_CONFIG, start)
+    assert ideal.status == "arrived"  # a real reverse leg, driven to its end
+    # the forward factor never touches a reverse step; the reverse factor does
+    assert bicycle_rollout(*path, ARC_CONFIG, start, curvature_response=CurvatureResponse(0.5, 1.0)) == ideal
+    assert bicycle_rollout(*path, ARC_CONFIG, start, curvature_response=CurvatureResponse(1.0, 0.8)) != ideal
+
+
+def test_a_mixed_gear_path_takes_each_legs_factor():
+    from forklift_core.control.rollout import CurvatureResponse
+
+    fwd, rev = _arc(), _reverse_arc()
+    poses = np.vstack((fwd[0], rev[0][1:]))
+    directions = np.concatenate((fwd[1], rev[1][1:]))
+    curvatures = np.concatenate((fwd[2], rev[2][1:]))
+    ideal = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0))
+    forward_only = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0),
+                                   curvature_response=CurvatureResponse(0.9, 1.0))
+    reverse_only = bicycle_rollout(poses, directions, curvatures, ARC_CONFIG, (0.0, 0.0, 0.0),
+                                   curvature_response=CurvatureResponse(1.0, 0.9))
+    assert ideal.trajectory != forward_only.trajectory and ideal.trajectory != reverse_only.trajectory
+    assert forward_only.trajectory != reverse_only.trajectory
 
 
 def test_the_prefix_rollout_takes_the_same_response():
