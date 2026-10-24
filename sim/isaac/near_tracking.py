@@ -1118,6 +1118,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "docking_acceptance": "information",
                               # 2026-10-23 scene replan plan 4: the diagnostic control-pose shift at a cusp; off before.
                               "inject_cusp_offset_m": None,
+                              # 2026-10-24 leg-end plan 3: the diagnostic observe-end shift and return stall budget.
+                              "inject_observe_end_offset_m": None, "diag_return_stall_budget": None,
                               # 2026-10-24 P6: the permission-stop replan; a scene layout's only, so on reproduces
                               # every earlier (bay layout) measurement run.
                               "permit_stop_replan": "on"}
