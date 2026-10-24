@@ -80,8 +80,12 @@ export class MissionQueue {
     this.counts = { done: 0, failed: 0, cancelled: 0 };
     this.epoch = null;
     this.submitsThisEpoch = 0; // the queue's own submits in this session (the first one may be resubmitted once)
-    this.startRetry = null; // {item_id, standSince}: the one resubmit waiting for its stand (plan D5 exception)
+    // {item_id, pallet_id, destination_id, standSince, controlGen}: the one resubmit waiting for its stand (plan D5
+    // exception) -- the refused submit's own pallet and destination, so an auto item does not ask for a new pick
+    this.startRetry = null;
     this.startRetryUsed = false; // spent for this session
+    this.missionSeenThisEpoch = false; // a mission (any, a manual one too) seen in this session: past 'the start'
+    this.lastControlGen = null;
     this.lastStateAt = null; // when the last state was received -- only a received state sets it (Codex r5)
     this.waitSince = null; // resumed with no state since the welcome: the first one is due by SILENCE_MS
     this.feedbackLostSince = null; // the first of the states with feedback_ok false that came in a row
@@ -106,6 +110,7 @@ export class MissionQueue {
     const n = this.items.length;
     if (this.items.find((it) => it.item_id === itemId)?.kind === "auto") this.#forgetLastPick();
     this.items = this.items.filter((it) => it.item_id !== itemId);
+    this.#retryFront();
     return this.items.length !== n && this.#changed();
   }
 
@@ -117,12 +122,14 @@ export class MissionQueue {
     if ((this.phase === "picking" || this.phase === "picked") && (i === 0 || j === 0)) return false; // nor of a pick
     if (this.items[i].uncertain || this.items[j].uncertain) return false; // nor across an uncertain one (Codex r4)
     [this.items[i], this.items[j]] = [this.items[j], this.items[i]];
+    this.#retryFront();
     return this.#changed();
   }
 
   clear() {
     this.#dropPick();
     this.items = this.items.filter((it) => this.#isCurrent(it.item_id));
+    this.#retryFront();
     return this.#changed();
   }
 
@@ -191,6 +198,8 @@ export class MissionQueue {
     if (epoch !== this.epoch) { // a session of its own: its first submit may be resubmitted once again
       this.submitsThisEpoch = 0;
       this.startRetryUsed = false;
+      this.missionSeenThisEpoch = false;
+      this.lastControlGen = null;
     }
     this.epoch = epoch;
     this.lastStateAt = null; // a new connection: silence is counted from its first state
@@ -213,6 +222,9 @@ export class MissionQueue {
       out = this.stop("상태 수신 끊김"); // decided before the late state refreshes the clock (plan D3)
     }
     this.lastStateAt = nowMs;
+    if (state?.mission && ACTIVE.includes(state.mission.status)) this.missionSeenThisEpoch = true;
+    const gen = Number.isInteger(state?.control_gen) ? state.control_gen : null;
+    if (gen !== null) this.lastControlGen = gen;
     // a loss that already lasted 0.5 s counts even if this state says recovered: it was not seen to end sooner
     // (Codex ops round 1)
     const lost = this.#feedbackLost(nowMs);
@@ -227,6 +239,10 @@ export class MissionQueue {
     // a loss that lasts, not one late state
     if (this.#feedbackLost(nowMs)) return this.stop("차량 피드백 없음");
     if (this.phase === "start_retry") { // the stand counted in a row; a break starts it over
+      // a STOP and a rearm between two states shows only as a new control generation (Codex start-retry r1)
+      if (gen !== null && this.startRetry.controlGen !== null && gen !== this.startRetry.controlGen) {
+        return this.stop("시작 직후 재제출 취소: 제어 세대가 바뀜");
+      }
       const standing = state.mode === "PAUSED" && state.stopped_confirmed === true && state.feedback_ok !== false;
       const since = standing ? (this.startRetry.standSince ?? nowMs) : null;
       if ((since === null) !== (this.startRetry.standSince === null)) this.#changed(); // the screen says which
@@ -242,6 +258,7 @@ export class MissionQueue {
 
   onResult(result, nowMs) {
     const id = result?.mission_id;
+    if (id) this.missionSeenThisEpoch = true; // the results book is this session's (contract 5.2)
     if (!id || this.applied.has(id)) return;
     const maybe = this.items.find((x) => x.uncertain && x.maybe?.mission_id === id && x.maybe.epoch === this.epoch);
     if (maybe) {
@@ -285,10 +302,13 @@ export class MissionQueue {
     }
     const reason = answer?.reason ?? "unknown";
     const item = this.items.find((x) => x.item_id === c.item_id);
-    if (reason === "not_stopped" && this.submitsThisEpoch === 1 && !this.startRetryUsed && item) {
-      // Plan D5's one exception: the truck was still settling after the start; the same item once more after a stand
+    if (reason === "not_stopped" && this.submitsThisEpoch === 1 && !this.startRetryUsed && item
+        && c.seen === undefined && !this.missionSeenThisEpoch) {
+      // Plan D5's one exception: the truck was still settling right after the start (no mission seen in this session,
+      // none taken for this submit before the answer); the same pallet and destination once more after a stand
       this.startRetryUsed = true;
-      this.startRetry = { item_id: c.item_id, standSince: null };
+      this.startRetry = { item_id: c.item_id, pallet_id: c.pallet_id, destination_id: c.destination_id,
+                          standSince: null, controlGen: this.lastControlGen };
       this.current = null;
       this.phase = "start_retry";
       this.early.clear();
@@ -376,8 +396,16 @@ export class MissionQueue {
       }
       const since = this.startRetry.standSince;
       if (since === null || nowMs - since < START_RETRY_STAND_MS) return null;
+      const again = this.startRetry;
       this.phase = "waiting";
       this.startRetry = null;
+      const r = resolveItem({ kind: "fixed", pallet_id: again.pallet_id, destination_id: again.destination_id },
+                            ctx.targets, st);
+      if (!r.ok) {
+        this.stop(`대상 확인 실패: ${r.reason}`);
+        return null;
+      }
+      return this.#submit(front, r.pallet_id, r.destination_id, ctx, newId); // an auto item too: no new pick
     }
     if (front.kind === "auto") return this.#nextAuto(front, ctx, nowMs, newId);
     const r = resolveItem(front, ctx.targets, st);
@@ -470,7 +498,10 @@ export class MissionQueue {
     // a pick asked or held is not kept: a reopened page asks again (CT-2 C5)
     const phase = ["picking", "picked", "start_retry"].includes(this.phase) ? "waiting" : this.phase;
     return { v: 1, epoch: this.epoch, items: this.items, current: this.current, phase,
-             finished: this.finished, counts: this.counts };
+             finished: this.finished, counts: this.counts,
+             // plan D5's exception: once per session, a reopen included (Codex review of the port)
+             submits_this_epoch: this.submitsThisEpoch, start_retry_used: this.startRetryUsed,
+             mission_seen_this_epoch: this.missionSeenThisEpoch };
   }
 
   static fromStorage(obj, { epoch, results = [] } = {}) {
@@ -481,6 +512,11 @@ export class MissionQueue {
     q.items = obj.items.filter((it) => it && typeof it.item_id === "string" && KINDS.has(it.kind)).map((it) => ({ ...it }));
     if (Array.isArray(obj.finished)) q.finished = obj.finished.slice(0, FINISHED_KEEP);
     if (obj.counts && typeof obj.counts === "object") q.counts = { done: 0, failed: 0, cancelled: 0, ...obj.counts };
+    if (obj.epoch === epoch && epoch != null) { // the same session: its first submit and its one resubmit stay spent
+      q.submitsThisEpoch = Number.isInteger(obj.submits_this_epoch) ? obj.submits_this_epoch : 0;
+      q.startRetryUsed = obj.start_retry_used === true;
+      q.missionSeenThisEpoch = obj.mission_seen_this_epoch === true;
+    }
     const c = obj.current;
     const it = c && q.items.find((x) => x.item_id === c.item_id);
     if (it) {
@@ -538,6 +574,13 @@ export class MissionQueue {
     this.current = null;
     this.phase = "waiting";
     this.early.clear();
+  }
+
+  // the resubmit is for the item that was refused: the front changing under it cancels it at once (Codex r1 P3)
+  #retryFront() {
+    if (this.phase === "start_retry" && this.items[0]?.item_id !== this.startRetry.item_id) {
+      this.stop("시작 직후 재제출 취소: 맨 앞 항목이 바뀜");
+    }
   }
 
   #forgetLastPick() {
