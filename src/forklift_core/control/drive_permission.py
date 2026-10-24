@@ -343,6 +343,9 @@ class DrivePermission:
         # tick, its correction version and each start-band cell's best (largest) part distances since.
         self.release_anchor: dict | None = None
         self._standing = False
+        # how often a walk ran with start-band cells released: the whole walk kept away ("passed") or it was cut where
+        # the outline comes nearer to one of them ("capped") -- diagnostics only, never read by the checks
+        self.release_stats = {"checks": 0, "passed": 0, "capped": 0}
 
     def note_standing(self, standing: bool, pose, correction_version: int) -> None:
         """The truck stands (or moves) at pose: the first standing tick latches the start-band release's anchor."""
@@ -807,8 +810,11 @@ class DrivePermission:
         for k, d in zip(keys, np.maximum(best, now)):
             anchor["best"][k] = d
         walked = sr.released(snapshot, cells)
+        self.release_stats["checks"] += 1
         if not np.isfinite(first):
+            self.release_stats["passed"] += 1
             return walked, samples, arc, None
+        self.release_stats["capped"] += 1
         keep = np.asarray(arc) <= first + 1e-12
         keep[0] = True
         return walked, np.asarray(samples)[keep], np.asarray(arc)[keep], (first, tuple(map(tuple, hit[:20].tolist())))

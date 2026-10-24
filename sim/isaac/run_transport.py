@@ -8793,6 +8793,8 @@ def drive(S, isaac) -> None:
                         "mission_replans": obstacle.get("mission_replans", []),
                         "silence_trace": obstacle.get("silence_trace"),
                         "backoff_records": obstacle.get("backoff_records", []),
+                        **({"start_band_release": dict(obstacle["layer"].permission.release_stats)}
+                           if getattr(args, "start_band_release", "off") == "on" else {}),
                         "shadow_memory": None if obstacle["layer"].shadow is None else {
                             **obstacle["layer"].shadow.stats,
                             "band_m": obstacle["layer"].shadow.band_m,

@@ -282,3 +282,13 @@ def test_a_standing_truck_re_latches_after_a_correction_dropped_its_anchor():
     assert p.release_anchor is not None and p.release_anchor["version"] == 1
     back = p.check_path(grid(SIDE, version=1), path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
     assert back.blocked is None
+
+
+def test_the_release_counts_the_walks_it_passed_and_the_ones_it_cut():
+    snap = grid(SIDE)
+    on, off = perm(True), perm(False)
+    on.check_path(snap, path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
+    on.check_path(snap, path(1, 0.6, kappa=0.5), FOOT, FOOT, current_pose=P0, direction=1)  # turns toward: cut
+    off.check_path(snap, path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
+    assert on.release_stats == {"checks": 2, "passed": 1, "capped": 1}
+    assert off.release_stats == {"checks": 0, "passed": 0, "capped": 0}
