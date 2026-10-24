@@ -204,6 +204,8 @@ m.session.subscribe((msg) => {
       renderPallets(msg, () => {}, m.session.state?.load);
       if (m.wz.open) refreshWizard();
     }
+  } else if (msg.t === "pick") {
+    m.queue.onPick(msg); // CT-2: the vehicle's next pallet and destination for the queue's auto item
   } else if (msg.t === "missions") {
     m.results.update(msg); // plan D13: the results book (contract 5.2)
     m.queue.onResults(msg.results ?? []);
@@ -552,7 +554,7 @@ $("q-items").addEventListener("click", (e) => {
   const act = b.dataset.act;
   if (act === "up" || act === "down") m.queue.move(id, act === "up" ? -1 : 1);
   else if (act === "del") m.queue.remove(id);
-  else m.queue.resolveUncertain(id, act); // drop | resubmit
+  else m.queue.resolveUncertain(id, act); // drop | resubmit | clear (an auto item's one submit)
 });
 $("q-presets").addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -561,6 +563,9 @@ $("q-presets").addEventListener("click", (e) => {
     if (m.queue.queuePreset(b.dataset.preset)) log(`대기열에 넣음 · ${b.textContent}`);
   } else if (b.dataset.unpreset) m.queue.removePreset(b.dataset.unpreset);
 });
+$("q-auto").onclick = () => {
+  if (m.queue.addAuto()) log("대기열에 넣음 · 남은 팔레트 전부");
+};
 $("q-add").onclick = () => {
   const sel = wizardSelection();
   if (!sel.pallet || !sel.destination) return;
@@ -904,7 +909,7 @@ function healthTick() {
     monitor: stopIsRefused(m.linkWelcome), hasLease: m.session.hasLease, clientId, state: m.session.state, stateAt: m.stateAt,
     cameraAt: m.camera.lastAt, scanAt: m.scan?.at ?? null, scanReceivedAt: m.scan?.receivedAt ?? null,
     grid: { present: Boolean(m.grid), withdrawnReason: m.gridWithdrawn }, standby: m.standby,
-    queue: { run: q.run, stopReason: q.stopReason, items: q.items.length },
+    queue: { run: q.run, stopReason: q.stopReason, items: q.items.length, blocked: q.lastPickBlocked },
   });
   const viewing = !$("v-health").hidden && !document.hidden;
   m.alarms.update(m.health.rows, performance.now(), Date.now() / 1000, { epoch: m.session.epoch, viewing });

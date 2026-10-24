@@ -414,3 +414,5 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .sum-table td { padding: 3px 4px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
 .sum-table td:last-child, .sum-table th:last-child { text-align: right; white-space: nowrap; }
 .sum-table small { display: block; color: var(--dim); font-size: 10.5px; }
+/* CT-2: the queue's auto item */
+.queue-items li.auto .what { font-weight: 600; }

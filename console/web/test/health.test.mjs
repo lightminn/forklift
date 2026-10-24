@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AlarmBook, badge, healthRows, queueStopText } from "../js/health.js";
+import { AlarmBook, badge, blockedText, healthRows, queueStopText } from "../js/health.js";
 import { CALM_REASONS } from "../js/queue.js";
 
 // ---- fixtures: a connected fake vehicle a little after its welcome -------------------------------------------------
@@ -338,4 +338,24 @@ test("the badge counts open alarms, takes the worst level, and shows a dot for a
   for (let t = 0; t <= 600; t += 100) d.update([R("camera", "warn"), R("feedback", "crit")], t, t / 1000, { epoch: 1, viewing: false });
   for (let t = 700; t <= 1_800; t += 100) d.update([R("camera", "warn"), R("feedback", "ok")], t, t / 1000, { epoch: 1, viewing: false });
   assert.deepEqual(badge(d), { count: 1, level: "warn", dot: true });
+});
+
+test("the auto item's stop reasons and what blocked it read in words (CT-2)", () => {
+  assert.equal(queueStopText("자동 선택 실패: no_free_destination"), "자동 선택 실패: 빈 하역 칸이 없습니다");
+  assert.equal(queueStopText("자동 선택 실패: all_blocked"), "자동 선택 실패: 남은 팔레트와 칸이 모두 막혔습니다");
+  assert.match(queueStopText("자동 선택 실패: error:ValueError"), /추천을 계산하지 못했습니다.*ValueError/);
+  assert.equal(queueStopText("자동 선택 실패: brand_new"), "자동 선택 실패: brand_new");
+  assert.match(queueStopText("자동 선택 거부: mission_active"), /^자동 선택 거부: /);
+  assert.equal(queueStopText("자동 선택 응답 없음"), "자동 선택 응답 없음");
+  const text = blockedText({ "P-2": ["pickup:P-1"], "D-1": ["delivery:D-2", "occupied:P-3"], "P-4": ["no_pose"],
+                             "D-3": ["props"], "P-5": ["no_size"], "P-6": ["mystery"] });
+  for (const part of ["P-2: P-1 때문에 집을 수 없음", "D-1: D-2 때문에 내려놓을 수 없음", "P-3 가 차지함",
+                      "P-4: 자세 모름", "D-3: 고정 장애물에 막힘", "P-5: 크기 모름", "P-6: mystery"]) {
+    assert.ok(text.includes(part), `${part} in ${text}`);
+  }
+  assert.equal(blockedText(null), "");
+  const r = row(healthRows(input({ queue: { run: "stopped", stopReason: "자동 선택 실패: all_blocked", items: 1,
+                                            blocked: { "P-2": ["pickup:P-1"] } } })), "queue");
+  assert.equal(r.level, "warn");
+  assert.match(r.detail, /P-1 때문에 집을 수 없음/);
 });
