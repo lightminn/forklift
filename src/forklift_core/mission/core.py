@@ -4310,8 +4310,8 @@ class MissionCore:
         candidate checks (Codex round 3 P2: the device's ticks run the watch, not the driving tick). A no-op with the
         release off or a permission without it."""
         obstacle, slam, hooks = self.obstacle, self.slam, self.hooks
-        if obstacle is None:
-            return
+        if obstacle is None or getattr(self.options, "start_band_release", "off") != "on":
+            return  # off: not even a read of the permission (a replay records every port read)
         perm = obstacle["layer"].permission
         note = getattr(perm, "note_standing", None)
         if note is None or getattr(perm.config, "start_band_m", 0.0) <= 0.0:
