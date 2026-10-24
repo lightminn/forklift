@@ -185,3 +185,12 @@ def test_the_runners_recorded_code_counts_when_the_process_ended_with_zero(tmp_p
     fake.chmod(0o755)
     out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(fake))
     assert out.returncode == expected, (out.returncode, out.stdout, out.stderr)
+
+
+def test_a_bundle_names_and_pins_each_run_s_bridge():
+    # several runs share one Slurm job in a bundle (tools/isaac_bundle.py): the bridge container takes its name from
+    # SESSION_ID and its cpuset from BRIDGE_CPU, the job ID and the job's first CPU otherwise
+    text = LAUNCHER.read_text()
+    assert "NAME_B=slam_bridge_${SESSION_ID:-${SLURM_JOB_ID:-$$}}_riib" in text
+    assert "CPU0=${BRIDGE_CPU:-$(taskset -cp $$" in text
+    assert 'trap \'kill -TERM "$RUNNER" 2>/dev/null\' TERM INT' in text

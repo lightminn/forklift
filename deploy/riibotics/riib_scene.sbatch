@@ -30,7 +30,11 @@
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
-# for one with sbatch --gres=shard:1. DRY_RUN=1 prints the runner's arguments, one per line, and starts nothing.
+# for one with sbatch --gres=shard:1.
+# Several runs in one job (deploy/slurm/isaac_bundle.sbatch, docs/plans/2026-10-24-ws1-isaac-bundle.md): the bundle runner
+# sets SESSION_ID (this run's bridge container name) and BRIDGE_CPU (its cpuset); sizes riib = 3 runs per GPU (a run
+# with its video holds 4.15-4.47 GB). The runner goes in the background so that a TERM reaches the trap at once.
+# DRY_RUN=1 prints the runner's arguments, one per line, and starts nothing.
 #
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
@@ -91,8 +95,8 @@ if [ "$MODE" = truth ]; then
 else
   : "${ONNX:?the learned proposal weights (MODE=slam)}" "${LEARNED_PY:?the python with onnxruntime (MODE=slam)}"
   if [ "${DRY_RUN:-0}" != 1 ]; then
-  NAME_B=slam_bridge_${SLURM_JOB_ID:-$$}_riib
-  CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
+  NAME_B=slam_bridge_${SESSION_ID:-${SLURM_JOB_ID:-$$}}_riib
+  CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)}
   docker run -d --name "$NAME_B" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 -u "$(id -u):$(id -g)" \
     -e HOME=/tmp -v "$SNAP":/workspace:ro -v "$OUT/bridge":/out -v "$OUT/sock":/run/slam \
     "${BRIDGE_IMAGE:-forklift/ros2-dev:jazzy}" bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" >/dev/null \
@@ -122,8 +126,12 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
 fi
 # shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
 timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \
-  --output "$OUT/run" > "$OUT/run.log" 2>&1
+  --output "$OUT/run" > "$OUT/run.log" 2>&1 &
+RUNNER=$!
+trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # timeout passes the TERM on to the runner
+wait "$RUNNER"
 rc=$?
+while kill -0 "$RUNNER" 2>/dev/null; do wait "$RUNNER"; rc=$?; done  # a trapped TERM cut the wait
 echo "runner exit $rc $(date -Is)"
 echo "OUT_OF_DEVICE lines: $(grep -c OUT_OF_DEVICE "$OUT/run.log")"
 # The runner also records its own result code as JSON {"code": .., "reason": ..} (Isaac can leave the process with 0
