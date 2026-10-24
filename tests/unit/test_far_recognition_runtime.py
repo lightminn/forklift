@@ -134,7 +134,7 @@ def test_the_occupancy_margin_is_recorded_and_the_recompute_uses_it(tmp_path):
     assert summary["occupancy_margin_m"] == 0.05
     pairs = RC.recompute(tmp_path, recognition=summary)
     assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
-    assert _runtime().summary()["occupancy_margin_m"] is None
+    assert "occupancy_margin_m" not in _runtime().summary()  # off: the earlier records' form (ec4bece golden)
     old = {k: v for k, v in summary.items() if k != "occupancy_margin_m"}
     runtime = RC.runtime_for(old)
     assert runtime.far.occupancy_margin_m is None

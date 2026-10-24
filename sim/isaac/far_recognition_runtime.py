@@ -473,7 +473,9 @@ class FarRuntime:
                 "zone": dict(self.zone_initial), "zone_changes": list(self.zone_changes),
                 "camera_x_m": self.camera_x_m, "fork_spacing_m": self.setup.spacing_m,
                 "pallet_depth_m": self.pallet_depth_m, "pallet_shape": self.pallet_shape,
-                "occupancy_margin_m": self.far.occupancy_margin_m,
+                # the occupancy exclusion's margin, only when on: a run with it off keeps the earlier records' form
+                **({"occupancy_margin_m": self.far.occupancy_margin_m} if self.far.occupancy_margin_m is not None
+                   else {}),
                 "proposer": {**(self.proposer_record or {"kind": "oracle"}),
                              **({"fallbacks": len(self.source.fallbacks), "fallback_reasons": self.source.fallbacks[:5],
                                  "model_ms": self.source.timing()} if self.source is not None else {})}}
