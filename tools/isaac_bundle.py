@@ -195,7 +195,7 @@ def job_gpu_index(env) -> int | None:
 def sbatch_sizes(kind, slots=None) -> dict:
     """The job's resources for `slots` sessions of `kind` (default its max per GPU): shards for the sessions' GPU
     memory (a riib session with its video holds 4.47 GB, more than a 4,076 MiB shard, so 3 of them take 4 shards --
-    the shards are what other jobs on the GPU rely on), 2 cores per session + the bridge core, RAM = slots x session +
+    the shards are what other jobs on the GPU rely on), 2 cores per session, RAM = slots x session +
     the shared file pages + a margin, rounded up to a GiB. The runner is told the kind (deploy/slurm/
     isaac_bundle.sbatch's third argument, --kind) and takes the slots and the session's GPU memory from it."""
     k = KINDS[kind]
@@ -206,8 +206,10 @@ def sbatch_sizes(kind, slots=None) -> dict:
     if shards > 4:
         raise ValueError(f"{kind}: {slots} sessions need {shards} shards, more than a GPU's 4")
     mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
-    return {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
-            "mem_gib": int(mem)}
+    # no core for the SLAM bridges by default: set apart (P2c) they answered keyframes on the same curve as on a shared
+    # CPU (scans 4,500-4,999: median 0.32 s, p95 0.77-0.82 s -- the graph's size sets it, not contention), so the two
+    # CPUs go to more sessions; --bridge-cpus N with a bigger --cpus-per-task still sets one apart
+    return {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
 
 
 def kind_slots(kind, shards) -> int:

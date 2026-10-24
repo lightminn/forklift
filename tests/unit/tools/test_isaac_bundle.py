@@ -624,11 +624,11 @@ def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
 @pytest.mark.parametrize(
     "kind, slots, args",
     [
-        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 10, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
-        ("riib", 3, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 20}),  # 3 x 4,500 MiB > 3 shards
-        ("riib", None, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 20}),
-        ("riib", 1, {"slots": 1, "gres": "shard:2", "cpus": 4, "mem_gib": 8}),  # one riib run is over a shard
-        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 6, "mem_gib": 12}),
+        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 8, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
+        ("riib", 3, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 20}),  # 3 x 4,500 MiB > 3 shards
+        ("riib", None, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 20}),
+        ("riib", 1, {"slots": 1, "gres": "shard:2", "cpus": 2, "mem_gib": 8}),  # one riib run is over a shard
+        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 4, "mem_gib": 12}),
     ],
 )
 def test_sizes_grow_with_the_bundle(kind, slots, args):
@@ -642,7 +642,7 @@ def test_more_sessions_than_a_gpu_holds_are_refused():
 
 def test_the_sizes_command_prints_sbatch_options(capsys):
     assert ib.main(["sizes", "live"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=10 --mem=24G"
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G"
 
 
 def test_a_start_waits_for_the_node_s_memory(tmp_path):
