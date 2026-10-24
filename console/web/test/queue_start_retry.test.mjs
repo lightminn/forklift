@@ -151,3 +151,86 @@ test("a page reopened in the wait does not keep it", () => {
   assert.equal(r.phase, "waiting");
   assert.equal(r.run, "stopped");
 });
+
+test("once per session survives a reopen: the session's count and the spent resubmit are kept for that session only", () => {
+  const q = running();
+  refuse(q, submit(q, 10_000));
+  q.operatorAction("stop"); // the resubmit spent, the queue stopped
+  const same = MissionQueue.fromStorage(q.toStorage(), { epoch: 3, results: [] });
+  same.onWelcome(3);
+  same.onState(READY, 20_000);
+  same.resume(20_000);
+  refuse(same, submit(same, 20_000));
+  assert.equal(same.stopReason, "거부: not_stopped", "the same session: no second resubmit after a reopen");
+  const other = MissionQueue.fromStorage(q.toStorage(), { epoch: 4, results: [] });
+  other.onWelcome(4);
+  other.onState(READY, 20_000);
+  other.resume(20_000);
+  refuse(other, submit(other, 20_000));
+  assert.equal(other.phase, "start_retry", "a new session has its own");
+});
+
+// ---- Codex round 1 ------------------------------------------------------------------------------------------------
+test("an auto item's refused submit goes out again with the same pallet and destination, no new pick", () => {
+  const q = running([newItem({ kind: "auto", label: "남은 팔레트 전부" }, 1000, newId)]);
+  const c = { ...ctx(READY), nextPick: true };
+  q.onState(READY, 10_000);
+  const ask = q.next(c, 10_000, newId).pick_request;
+  const k = { epoch: q.epoch, item_id: ask.item_id, request_id: ask.request_id };
+  q.onAnswer(k, { t: "ack" }, 10_050);
+  q.onPick(k, { t: "pick", request_id: ask.request_id, targets_revision: 7, reason: "ok",
+                pick: { pallet_id: "P-1", destination_id: "D-1" }, plan: [["P-1", "D-1"]], missions: 1 }, 10_100, 7);
+  q.onState(READY, 10_150);
+  const s1 = q.next(c, 10_150, newId).submit;
+  refuse(q, s1);
+  assert.equal(q.phase, "start_retry");
+  let got = null;
+  for (let t = 10_200; t <= 11_500 && !got; t += 100) {
+    q.onState(READY, t);
+    got = q.next(c, t, newId);
+  }
+  assert.ok(got?.submit, `expected a submit, got ${JSON.stringify(got)}`);
+  assert.deepEqual([got.submit.pallet_id, got.submit.destination_id], ["P-1", "D-1"]);
+});
+
+test("a mission of the same pallet and destination seen before the refusal: no resubmit, it stops", () => {
+  const q = running();
+  const s1 = submit(q, 10_000);
+  q.onState({ ...READY, mode: "AUTO", stop_kind: "none",
+              mission: { mission_id: "M-9", status: "running", pallet_id: "P-1", destination_id: "D-1" } }, 10_050);
+  refuse(q, s1);
+  assert.equal(q.run, "stopped");
+  assert.equal(q.stopReason, "거부: not_stopped");
+});
+
+test("a mission seen earlier in the session (a manual one): the queue's first submit is not 'just after the start'", () => {
+  const q = running();
+  q.onResult({ mission_id: "M-1", outcome: "done" }, 9_000);
+  refuse(q, submit(q, 10_100));
+  assert.equal(q.stopReason, "거부: not_stopped");
+});
+
+test("the front item removed or moved while it waits stops at once", () => {
+  const q = running();
+  const s1 = submit(q, 10_000);
+  refuse(q, s1);
+  q.remove(s1.item_id);
+  assert.equal(q.run, "stopped");
+  assert.equal(q.phase, "waiting");
+  assert.equal(q.stopReason, "시작 직후 재제출 취소: 맨 앞 항목이 바뀜");
+  const r = running([item(), item("P-4")]);
+  const s2 = submit(r, 10_000);
+  refuse(r, s2);
+  r.move(s2.item_id, 1);
+  assert.equal(r.stopReason, "시작 직후 재제출 취소: 맨 앞 항목이 바뀜");
+});
+
+test("a STOP and rearm between two states (control_gen moved) stops the wait", () => {
+  const q = running();
+  q.onState({ ...READY, control_gen: 1 }, 10_000);
+  const n = q.next(ctx({ ...READY, control_gen: 1 }), 10_000, newId);
+  refuse(q, n.submit);
+  q.onState({ ...READY, control_gen: 3 }, 10_200);
+  assert.equal(q.run, "stopped");
+  assert.equal(q.stopReason, "시작 직후 재제출 취소: 제어 세대가 바뀜");
+});
