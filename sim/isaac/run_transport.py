@@ -7073,6 +7073,7 @@ def drive(S, isaac) -> None:
                 live_session_["truth"] = {d_: site_ for d_, site_ in session.destinations}
 
             from forklift_core.safety.pallet_permit import preparation_obstacle as live_preparation_obstacle
+            from forklift_core.safety.pallet_permit import SESSION_PRIOR_GROW_M
             from forklift_core.safety.pallet_permit import session_pallet_props as live_session_pallet_props
 
             def prep_obstacle_of(entry_, at_first_, pose_=None):
@@ -7083,12 +7084,12 @@ def drive(S, isaac) -> None:
 
             def session_scenario_(exclude_id_, moved_=None, moved_ids_=(), slot_anchors_=None):
                 """The session scene a preparation plans in (plan 2026-10-22-session-scene-pallet-props 2.6): the
-                static props and the other pallets by their basis (decision D1: a prior one at its drawn slot + 0.25
-                m). With P-1 alone there are no others: the scene's own props, as before. ``slot_anchors_``: the
+                static props and the other pallets by their basis (decision D1: a prior one at its drawn slot +
+                SESSION_PRIOR_GROW_M). With P-1 alone there are no others: the scene's own props, as before. ``slot_anchors_``: the
                 delivered pallets anchored to their slots, in the goal's frame (plan 2026-10-22-slot-anchored-
                 neighbours 2.4)."""
                 others_ = live_session_pallet_props(core.targets, exclude_id=exclude_id_, nominal=live_session_["nominal"],
-                                                    shape=live_session_["shape"], prior_grow_m=0.25, moved=moved_,
+                                                    shape=live_session_["shape"], prior_grow_m=SESSION_PRIOR_GROW_M, moved=moved_,
                                                     moved_ids=moved_ids_, slot_anchors=slot_anchors_)
                 base_ = live_session_["scenario"]
                 return base_ if not others_ else replace(base_, props=tuple(base_.props) + others_)
@@ -7099,7 +7100,7 @@ def drive(S, isaac) -> None:
                 mission_ = core.commands.mission
                 return [p_.rectangle for p_ in live_session_pallet_props(
                     core.targets, exclude_id=None if mission_ is None else mission_.pallet_id,
-                    nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=0.25)]
+                    nominal=live_session_["nominal"], shape=live_session_["shape"], prior_grow_m=SESSION_PRIOR_GROW_M)]
 
             if len(live_session_["pallets"]) > 1:  # P-1 alone: no others, the list as it was
                 # The docking dry run's obstacles are the world's truth (its poses are moved into the truth frame):

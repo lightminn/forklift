@@ -471,7 +471,7 @@ def _start_check_harness(lay, tracker, pallet_pose, held=(False, False)):
     from forklift_core.localization.slam_pose import compose, invert
     from forklift_core.mission.targets import Pose, TargetsBook
     from forklift_core.planning.geometry import Rectangle
-    from forklift_core.safety.pallet_permit import preparation_obstacle, session_pallet_props
+    from forklift_core.safety.pallet_permit import SESSION_PRIOR_GROW_M, preparation_obstacle, session_pallet_props
 
     script = ROOT / "sim/isaac/run_transport.py"
     tree = ast.parse(script.read_text())
@@ -498,6 +498,7 @@ def _start_check_harness(lay, tracker, pallet_pose, held=(False, False)):
         "live_session_": {"pallets": {"P-1": {"zone": None, "reference": (99.0, 99.0, 0.0)}}, "scenario": scenario,
                           "nominal": {}, "shape": (1.2, 0.8, 0.144)},
         "live_preparation_obstacle": preparation_obstacle, "live_session_pallet_props": session_pallet_props,
+        "SESSION_PRIOR_GROW_M": SESSION_PRIOR_GROW_M,
         "prep_check_cache_": {}, "rear": np.zeros(3),
         "loaded": False,  # grid_kwargs masks the truck's own cells only inside the drive loop (Codex round 2)
     }
