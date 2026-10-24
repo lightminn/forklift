@@ -14,11 +14,11 @@
 
 **C2 단계.** 맨 앞 항목의 단계에 둘을 더한다: `waiting` → **`picking`**(요청이 나감) → **`picked`**(추천을 받음) → `submitting` → `in_mission`.
 - `next()` 는 맨 앞이 `auto` 이고 지금의 제출 조건 1–5 가 참이면 `{pick_request: {item_id, request_id}}` 를 돌려주고 `picking` 으로 간다. 열쇠는 `{epoch, item_id, request_id}`.
-- 요청을 보낸 뒤 기한(계약의 값, 지금 2 s, 벽시계) 안에 열쇠가 맞는 `pick` 이 없으면 멈춘다("자동 선택 응답 없음").
+- 요청을 보낸 뒤 기한(`PICK_DEADLINE_MS`, 기본 5 s, 벽시계 — 차량 쪽 V1·V3 측정으로 다시 정함) 안에 열쇠가 맞는 `pick` 이 없으면 멈춘다("자동 선택 응답 없음").
 - `ack` 는 재전송만 끝낸다(단계는 그대로). `reject` 는 멈춘다("자동 선택 거부: 사유"). `pick` 이 `ack` 보다 먼저 와도 받는다.
 - `pick` 의 `reason` 이 `ok` 이고 `targets_revision` 이 지금 목록과 같으면 `picked` 로 둔다. 제출은 다음 `next()` 에서 **제출 조건 1–5 를 다시 확인한 뒤** 낸다(조건이 거짓이면 고정 항목처럼 기다린다). `picked` 동안 목록 revision 이 바뀌거나, 받은 revision 이 처음부터 다르면 한 번 다시 묻는다. 두 번째도 다르면 멈춘다("대상 목록이 계속 바뀜").
 - `none_remaining`: 자동 항목을 '완료'로 빼고 다음 항목으로. 대기열이 비면 멈춤 사유 '완료'.
-- `no_free_destination`·`all_blocked`·`error:*`: 멈춘다("자동 선택 실패: 사유"), 항목은 맨 앞.
+- `no_free_destination`·`all_blocked`·`error:<예외 종류>`(`pick` 은 null): 멈춘다("자동 선택 실패: 사유"), 항목은 맨 앞. 사유 어휘는 계약이 고정한 다섯(`ok`·`none_remaining`·`no_free_destination`·`all_blocked`·`error:*`)이고, 모르는 사유도 멈춤이다.
 - 멈춤(STOP·끊김·권한 상실·새 epoch·운용자 멈춤·항목 삭제·피드백 상실 등)은 `picking`·`picked` 에서 요청을 잊고(`session.forget`) `waiting` 으로 돌아간다. **불확실 표시를 만들지 않는다**(아직 낸 것이 없다).
 - `submitting` 부터는 고정 항목과 같다: `current` 에 추천받은 팔레트·칸, `#isOurs`, 결과 처리, 불확실 규칙.
 
@@ -28,7 +28,7 @@
 
 **C5 저장(D7).** `picking`·`picked` 는 저장하지 않는다(다시 열면 추천부터). 진행 중 미션은 고정 항목처럼 C4 의 불확실로 되살린다.
 
-**C6 화면.** 대기열 칸에 '남은 팔레트 전부' 버튼(차량이 기능을 알릴 때만, 하나만). 항목 줄은 라벨 + 지금 추천(`P-2 → D-1`)·남은 계획 수(`plan` 길이). 단계 문구 '자동 선택 중'·'자동 선택: P-2 → D-1'. 멈춘 이유는 `queueStopText` 에 자동 선택 사유 문구표를 더해 한국어로, `blocked` 는 상태 행 설명란에 요약.
+**C6 화면.** 대기열 칸에 '남은 팔레트 전부' 버튼(welcome `capabilities.next_pick === true` 일 때만, 하나만). 항목 줄은 라벨 + 지금 추천(`P-2 → D-1`)·남은 계획 수(`plan` 길이). 단계 문구 '자동 선택 중'·'자동 선택: P-2 → D-1'. 멈춘 이유는 `queueStopText` 에 자동 선택 사유 문구표를 더해 한국어로, `blocked`(`{팔레트·칸 ID: ["pickup:<id>"·"delivery:<id>"·"occupied:<id>"·"props"·"no_pose"·"no_size"…]}`)는 한국어로 풀어 상태 행 설명란과 대기열 칸에 요약.
 
 **C7 가짜 차량.** 화면 시험용 `pick_request`: 첫 `available` 팔레트와 확인된 자리가 아닌 첫 칸을 고르는 **장난감 규칙**(실제 규칙이 아님), 주입 `/mock/inject/pick_<사유>` 로 다음 한 번의 추천 사유를 바꿀 수 있다.
 
@@ -36,7 +36,7 @@
 
 ## 2. 열린 점(인터페이스 확정 때 정함)
 
-- 차량 기능 표시(welcome `capabilities`), 계산 실패의 `pick` 사유, 사유 어휘·`blocked` 형식, 기한 값 — 연속 이송 세션에 제안함(2026-10-24).
+- 연속 이송 세션이 제안 1–6 을 반영(2026-10-24): 제출 전 조건 재확인(`picked`), 계산 실패도 `pick`(`error:*`), 사유 어휘·`blocked` 형식 고정, 기한 `PICK_DEADLINE_MS`(기본 5 s), `capabilities.next_pick`, `pick` 이 `ack` 보다 먼저 와도 받음. 그 계획의 Codex 재검토 수렴 뒤 최종 인터페이스를 받아 맞춘다.
 
 ## 3. Task (인터페이스 확정 뒤)
 
