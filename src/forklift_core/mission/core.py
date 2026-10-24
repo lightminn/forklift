@@ -6616,9 +6616,17 @@ class MissionCore:
                 (options.travel_config or options.planner_config).clearance_m)
             cell_ = float(layer_.snapshot.resolution_m) if layer_.snapshot is not None else 0.05
             kappa_now_ = float(hooks.held_kappa())
+            if getattr(options, "start_band_release", "off") == "on":
+                # start-band release (docs/plans/2026-10-24-start-band-release.md): the trigger's rectangles the stop
+                # already comes within the sweep pad of pass the sweep while it stays as far from them; the end's
+                # clearance still counts every rectangle
+                near_, far_ = esc.start_band_rectangles(list(extra), footprint_, pose_)
+                sweep_checker_ = FootprintCollisionChecker(list(rects_) + far_, footprint_, bounds_)
+            else:
+                near_, sweep_checker_ = [], checker_
             candidates_ = esc.evaluate(
                 pose_,
-                sweep_free=lambda poses_, d_: esc.rectangles_sweep_free(checker_, poses_),
+                sweep_free=lambda poses_, d_: esc.rectangles_sweep_free(sweep_checker_, poses_, near_, footprint_),
                 path_blocked=lambda poses_, d_, x_, r_: layer_.check_candidate(
                     poses_, current_pose=pose_, direction=d_, loaded=loaded_, extra_margin_m=x_, extra_ramp_m=r_).blocked,
                 arc_blocked=lambda k_, d_: layer_.check_arc_candidate(

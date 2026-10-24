@@ -496,6 +496,15 @@ def arguments() -> argparse.Namespace:
         "run. Not with --grid-planning, whose world has no props to grow.",
     )
     parser.add_argument(
+        "--start-band-release",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-24-start-band-release.md: an occupied cell the stopped truck's outline is already within "
+        "the permission's own start inflation of (envelope + half a sample step) does not block a motion whose swept "
+        "outline stays as far from it -- in the drive permission (path and stop arc) and in the scene replan's escape "
+        "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
+    )
+    parser.add_argument(
         "--permit-stop-replan",
         choices=("on", "off"),
         default="on",
@@ -3417,6 +3426,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "unpermitted": [],
             "min_allowed": {},
         }
+        if getattr(args, "start_band_release", "off") == "on":
+            # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the
+            # envelope plus half a sample step); the candidate and teleop permissions copy this config
+            pconf_ = obstacle["layer"].permission.config
+            obstacle["layer"].permission.config = replace(
+                pconf_, start_band_m=float(pconf_.envelope_offset_m) + float(pconf_.step_m) / 2.0)
         if slam_bundle_ is not None and obstacle["layer"].memory is not None:
             # SLAM localization plan L3: occupancy dated 1 s before the run's first stamp (0), so every live clear
             # may remove it; set into the layer's own memory before any plan (a scratch copy inherits it)
@@ -5513,6 +5528,7 @@ def drive(S, isaac) -> None:
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
+                                start_band_release=getattr(args, "start_band_release", "off"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,

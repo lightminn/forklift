@@ -67,6 +67,9 @@ class PermissionConfig:
     lookahead_m: float = 3.0
     end_creep_mps: float = 0.02
     shadow_band_m: float = 0.0  # RETAINED passes only inside the outline grown by this (D4 delta)
+    # Start-band release (docs/plans/2026-10-24-start-band-release.md): an occupied cell outside the outline at the
+    # start but within this distance of it does not block while the swept outline stays as far from it; 0: off.
+    start_band_m: float = 0.0
 
 
 @dataclass
@@ -733,9 +736,11 @@ class DrivePermission:
         limit = self.config.lookahead_m if lookahead_m is None else float(lookahead_m)
         samples, arc, total = resample_path(poses, self.config.step_m, limit)
         own = None if kernels.mode() == "numba" else self._own_cells(snapshot, current_pose, own_footprint)
-        return self._walk(snapshot, samples, arc, footprint, own, full_path_m=total, direction=direction,
-                          own_pose=current_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
-                          extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
+        walked, cap = self._start_release(snapshot, samples, arc, footprint, current_pose)
+        return self._capped(self._walk(walked, samples, arc, footprint, own, full_path_m=total, direction=direction,
+                                       own_pose=current_pose, own_footprint=own_footprint,
+                                       extra_margin_m=extra_margin_m, extra_ramp_m=extra_ramp_m,
+                                       unknown_passes=unknown_passes), cap)
 
     @dumped("check_arc", pure=True, strata=lambda self_, a, k, r: (
         a[3] >= 0, bucket(a[2]), shape_kind(a[4]), self_.config.step_m, r.blocked, r.verified_m > 0))
@@ -747,8 +752,37 @@ class DrivePermission:
         length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
         samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
         own = None if kernels.mode() == "numba" else self._own_cells(snapshot, current_pose, own_footprint)
-        return self._walk(snapshot, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
-                          own_pose=current_pose, own_footprint=own_footprint)
+        walked, cap = self._start_release(snapshot, samples, arc, footprint, current_pose)
+        return self._capped(self._walk(walked, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
+                                       own_pose=current_pose, own_footprint=own_footprint), cap)
+
+    def _start_release(self, snapshot, samples, arc, footprint, current_pose):
+        """(the snapshot the walk reads, the cap) of the start-band release: the band's occupied cells read as free,
+        and the cap -- (arc length, cells) where the swept outline first comes nearer to one of them than at the start
+        -- or (snapshot, None) with the release off or nothing in the band."""
+        band = float(self.config.start_band_m)
+        if band <= 0.0 or current_pose is None or snapshot is None:
+            return snapshot, None
+        from forklift_core.control import start_release as sr
+
+        pose = tuple(float(v) for v in current_pose)
+        cells, d0 = sr.start_band_cells(snapshot, pose, footprint, band)
+        if not len(cells):
+            return snapshot, None
+        reach = sr.release_lengths(snapshot, cells, d0, samples, arc, footprint)
+        first = float(reach.min())
+        hit = tuple(map(tuple, cells[reach <= first + 1e-12][:20].tolist())) if np.isfinite(first) else ()
+        return sr.released(snapshot, cells), (first, hit)
+
+    @staticmethod
+    def _capped(check: Check, cap) -> Check:
+        """The walk on the released snapshot, stopped where a start-band cell is first approached."""
+        if cap is None or not np.isfinite(cap[0]):
+            return check
+        first, hit = cap
+        if check.blocked is not None and check.verified_m <= first:
+            return check  # stopped before by something else
+        return Check(min(check.verified_m, first), "occupied", check.oldest_free_s, False, hit, check.first_unknown_m)
 
     def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
                current_pose, direction: int = 0, lookahead_m: float | None = None) -> Check:

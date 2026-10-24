@@ -202,12 +202,31 @@ def grid_sweep_blocked(occupancy, footprint, pose, direction: int, poses) -> str
     ).blocked
 
 
-def rectangles_sweep_free(rect_checker, poses) -> bool:
+def rectangles_sweep_free(rect_checker, poses, released=(), footprint=None) -> bool:
     """① on the leg's rectangles and bounds: every sample free with half a step of sweep pad (the
-    search's own pad for a straight), the start included."""
-    return all(
-        rect_checker.free(tuple(float(v) for v in p), STEP_M / 2.0) for p in poses
-    )
+    search's own pad for a straight), the start included. ``released`` (start-band release,
+    docs/plans/2026-10-24-start-band-release.md): rectangles the start already comes within that pad of, kept out
+    of ``rect_checker`` -- each passes only while ``footprint`` swept along poses stays as far from it as at the
+    start (never one the start overlaps)."""
+    if not all(rect_checker.free(tuple(float(v) for v in p), STEP_M / 2.0) for p in poses):
+        return False
+    if not released:
+        return True
+    from forklift_core.control.start_release import sweep_keeps_away
+
+    return all(sweep_keeps_away(poses, footprint, r) for r in released)
+
+
+def start_band_rectangles(rects, footprint, pose):
+    """(near, far): the rectangles the start pose comes within the sweep pad of (but does not overlap), and the rest
+    -- the start-band release's split of a trigger's extra obstacles."""
+    from forklift_core.control.start_release import footprint_rect_distance
+
+    near, far = [], []
+    for r in rects:
+        d = footprint_rect_distance(tuple(float(v) for v in pose), footprint, r)
+        (near if 0.0 < d <= STEP_M / 2.0 else far).append(r)
+    return near, far
 
 
 def clearance_m(
