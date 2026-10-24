@@ -90,6 +90,25 @@ def test_a_real_transport_plan_and_its_objects_go_both_ways(worker):
     assert ok and value["result"].version == 3 and np.array_equal(value["result"].occupied, grid.occupied)
 
 
+def test_a_next_pick_job_answers_what_the_rule_gives(worker):
+    # CT-2 D2/D5: the snapshot goes through the pipe and the worker calls the module-level rule
+    from forklift_core.mission.next_pick import PickSnapshot, recommend
+    from forklift_core.mission.targets import Pose, TargetsBook
+    from forklift_core.planning import Pose2D
+    from forklift_core.planning.geometry import Bounds
+    from forklift_core.planning.pallet_mission import PalletSite, SyntheticMissionGeometry, TransportScenario
+
+    tb = TargetsBook()
+    tb.add_pallet("P-1", "epal6", Pose(0.8, 0.0, 0.0), depth_m=0.6, width_m=0.8)
+    tb.add_destination("D-1", Pose(3.0, -9.0, 0.0))
+    sc = TransportScenario(seed=0, start_rear=Pose2D(-3.0, 0.0, 0.0), pickup=PalletSite(0, 0, 0),
+                           destination=PalletSite(0, 0, 0), props=(), bounds=Bounds(-6, 6, -12, 6))
+    snap = PickSnapshot(tb, (-3.0, 0.0, 0.0), (-3.0, 0.0, 0.0), sc, SyntheticMissionGeometry(), 0.10, {},
+                        (0.6, 0.8, 0.144), 0.20)
+    ok, value = wait_for(worker, worker.submit("next_pick", {"snapshot": snap}))
+    assert ok and value["result"] == recommend(snap) and value["wall_s"] >= 0.0
+
+
 def test_a_failing_job_comes_back_as_text(worker):
     ok, value = wait_for(worker, worker.submit("echo", {"raise": "no path"}))
     assert not ok and "ValueError: no path" in value
