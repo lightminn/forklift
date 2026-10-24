@@ -3,7 +3,8 @@ re-approach planned again at the planner curvature limits given, from the record
 line start, in the mission's own recorded planning scene (state.mission_scenario: its props and bounds) -- without the
 live obstacle grid, which the records do not keep (an approximation, so a plan at the run's own limit that does not
 reproduce the recorded length is marked unreproduced). Reports per limit the outcome (success, no_path, leaves_box,
-too_long, dry_run refusal), the length and the gear changes.
+too_long), the length, the gear changes and the runtime's pre-install dry run (the ideal bicycle with the run's own
+transport tracker at the D7 tolerances 0.03 m / 0.05 rad; unverified when the run kept no tracker config).
 
     python tools/d7_reapproach_kappa.py RUN_DIR... --kappa 0.29 0.27 --out RESULT.json
 """
@@ -11,6 +12,7 @@ too_long, dry_run refusal), the length and the gear changes.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import glob
 import json
 import os
@@ -25,10 +27,12 @@ for p_ in (ROOT / "src", ROOT / "tools", ROOT / "sim/isaac", ROOT):
         sys.path.insert(0, str(p_))
 
 from bay_planning_sweep import mission_geometry  # noqa: E402
+from curvature_audit import d7_ok, tracker_config  # noqa: E402
 from riibotics_scenario_paths import PALLETS  # noqa: E402
 from scene_file import scenario_from_record  # noqa: E402
 from session_plan_check import RESERVE_M, STRAIGHTS, URDF  # noqa: E402
 
+from forklift_core.control.rollout import bicycle_rollout  # noqa: E402
 from forklift_core.perception.pallet_geometry import load_pallet_geometry  # noqa: E402
 from forklift_core.planning import Pose2D  # noqa: E402
 from forklift_core.planning.pallet_mission import (  # noqa: E402
@@ -50,6 +54,12 @@ def run(runs, kappas, pallet_kind="epal6") -> dict:
     rows = []
     for run_dir in runs:
         name = run_dir.rstrip("/").split("/")[-4]
+        try:
+            configs = json.load(open(f"{run_dir}/result.json")).get("tracker_configs") or {}
+        except Exception:
+            configs = {}
+        dry_cfg = None if "transport" not in configs else dataclasses.replace(
+            tracker_config(configs["transport"]), position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
         for md in sorted(glob.glob(f"{run_dir}/missions/m*")):
             try:
                 st = json.load(open(f"{md}/records.json"))["state"]
@@ -75,10 +85,14 @@ def run(runs, kappas, pallet_kind="epal6") -> dict:
                     path, record = plan_docking_reapproach(
                         scenario, Pose2D(*retry["start"]), Pose2D(*retry["line_start"]), config, geometry=geometry,
                         keep_m=geometry.delivery_straight_m, deadline=SearchBudget(20.0))
+                    # the runtime's dry run on the accepted plan: None = not run (no plan) or unverified (no config)
+                    dry = None if path is None or dry_cfg is None else d7_ok(bicycle_rollout(
+                        np.asarray(path.poses, float), np.asarray(path.directions, np.int8),
+                        np.asarray(path.curvatures_inv_m, float), dry_cfg, np.asarray(retry["start"], float)))
                     row["by_kappa"][str(kappa)] = {
                         "status": record.get("status"), "refused": record.get("refused"),
                         "length_m": None if path is None else float(path.length_m),
-                        "gear_changes": None if path is None else gear_changes(path)}
+                        "gear_changes": None if path is None else gear_changes(path), "dry_run_ok": dry}
                 # the self-check: at the run's own limit (the first one given) the recorded plan comes back
                 own = row["by_kappa"][str(kappas[0])]
                 rec_len = plan.get("length_m")
@@ -92,7 +106,10 @@ def run(runs, kappas, pallet_kind="epal6") -> dict:
         summary[str(kappa)] = {"plans": len(sel), "planned": sum(1 for s in sel if s["length_m"] is not None),
                                "refused": {why: sum(1 for s in sel if s["length_m"] is None and (s["refused"] or s["status"]) == why)
                                            for why in sorted({str(s["refused"] or s["status"]) for s in sel if s["length_m"] is None})},
-                               "gear_changes_total": sum(s["gear_changes"] or 0 for s in sel if s["length_m"] is not None)}
+                               "gear_changes_total": sum(s["gear_changes"] or 0 for s in sel if s["length_m"] is not None),
+                               "dry_run_refused": sum(1 for s in sel if s.get("dry_run_ok") is False),
+                               "dry_run_unverified": sum(1 for s in sel if s["length_m"] is not None
+                                                         and s.get("dry_run_ok") is None)}
     return {"kappas": kappas, "summary": summary, "rows": rows}
 
 
