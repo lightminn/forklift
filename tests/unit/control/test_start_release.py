@@ -1,6 +1,7 @@
-"""Start-band release (docs/plans/2026-10-24-start-band-release.md): an occupied cell the stopped truck's outline is
-already within the walk's own start inflation of does not block a motion whose swept outline stays as far from it;
-every other cell keeps the walk's full margin; off, the walk is unchanged."""
+"""Start-band release (docs/plans/2026-10-24-start-band-release.md): the permission latches an anchor where the truck
+first stands; an occupied cell the anchor's outline is within the band of does not block a motion whose swept outline
+never comes nearer to it than it has been since; every other cell keeps the walk's full margin; off, the walk is
+unchanged."""
 
 import dataclasses
 import math
@@ -11,7 +12,7 @@ import pytest
 from forklift_core.control import start_release as sr
 from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
 from forklift_core.control.escape import rectangles_sweep_free, start_band_rectangles, straight
-from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot
+from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, UNKNOWN, GridSnapshot
 from forklift_core.planning import Bounds, Footprint, Rectangle
 from forklift_core.planning.geometry import FootprintCollisionChecker
 
@@ -20,11 +21,13 @@ RES = 0.05
 ORIGIN = (-2.0, -2.0)
 
 
-def grid(cells, shape=(120, 80)):
+def grid(cells, shape=(120, 80), *, stamp=9.0, version=0, unknown=()):
     state = np.full(shape, FREE, dtype=np.uint8)
+    for i, j in unknown:
+        state[i, j] = UNKNOWN
     for i, j in cells:
         state[i, j] = OCCUPIED
-    return GridSnapshot(state, np.full(shape, 9.0), 10.0, (0.0, 0.0, 0.0), 0, 1, {}, ORIGIN[0], ORIGIN[1], RES)
+    return GridSnapshot(state, np.full(shape, stamp), 10.0, (0.0, 0.0, 0.0), version, 1, {}, ORIGIN[0], ORIGIN[1], RES)
 
 
 def cell_at(x, y):
@@ -32,7 +35,6 @@ def cell_at(x, y):
 
 
 def brute_cell_distance(cell, pose, fp, n=60):
-    """Sampled distance between a cell and the footprint (for the exact one's check)."""
     x0, y0 = ORIGIN[0] + cell[0] * RES, ORIGIN[1] + cell[1] * RES
     g = np.linspace(0, RES, n)
     px, py = (a.ravel() for a in np.meshgrid(x0 + g, y0 + g, indexing="ij"))
@@ -49,37 +51,44 @@ def test_the_cell_distance_is_the_exact_one(pose):
 
 
 def test_the_footprint_to_rectangle_distance_is_exact_and_zero_on_overlap():
-    r = Rectangle(0.5, 0.4, 0.2, 0.1, 0.0)  # y 0.35-0.45, the side at 0.3: 0.05 apart
+    r = Rectangle(0.5, 0.4, 0.2, 0.1, 0.0)
     assert sr.footprint_rect_distance((0.0, 0.0, 0.0), FOOT, r) == pytest.approx(0.05)
     assert sr.footprint_rect_distance((0.0, 0.1, 0.0), FOOT, r) == 0.0
-    rot = Rectangle(1.2, 0.0, 0.2, 0.2, math.pi / 4)  # its corner toward the front face at 1.0
+    rot = Rectangle(1.2, 0.0, 0.2, 0.2, math.pi / 4)
     assert sr.footprint_rect_distance((0.0, 0.0, 0.0), FOOT, rot) == pytest.approx(1.2 - 0.1 * math.sqrt(2) - 1.0)
 
 
-# The truck stands 0.015 m right of the grid line y = 0.30: a short wall of cells from that line beside the front half
+# The truck stands 0.015 m right of the grid line y = 0.30; a short wall of cells from that line beside the front half
 # of its outline is 0.015 m off its side (within the 0.02 band)
 P0 = (0.0, -0.015, 0.0)
 SIDE = {cell_at(x, 0.32) for x in np.arange(0.5, 1.0, RES)}
 
 
-def perm(on: bool):
+def perm(on: bool, *, standing_at=P0, version=0):
     cfg = PermissionConfig(StoppingModel(0.15, 1.5, 0.05), envelope_offset_m=0.01, evidence_max_age_s=5.0,
                            envelope_ramp_m=0.0)
-    return DrivePermission(dataclasses.replace(cfg, start_band_m=0.02 if on else 0.0))
+    p = DrivePermission(dataclasses.replace(cfg, start_band_m=0.02 if on else 0.0))
+    if standing_at is not None:
+        p.note_standing(True, standing_at, version)
+    return p
 
 
-def path(direction, length=0.6, kappa=0.0):
+def path(direction, length=0.6, kappa=0.0, start=P0):
     s = np.linspace(0.0, length, 31)
     if kappa == 0.0:
-        return np.column_stack((direction * s, np.full_like(s, P0[1]), np.zeros_like(s)))
+        return np.column_stack((start[0] + direction * s, np.full_like(s, start[1]), np.zeros_like(s)))
     yaw = direction * s * kappa
-    return np.column_stack((np.sin(yaw) / kappa, P0[1] + (1 - np.cos(yaw)) / kappa, yaw))
+    return np.column_stack((start[0] + np.sin(yaw) / kappa, start[1] + (1 - np.cos(yaw)) / kappa, yaw))
 
 
-def test_the_band_holds_the_cells_within_the_start_inflation_only():
-    snap = grid(SIDE | {cell_at(0.5, 0.37)})  # one more, 0.065 m off: not in the band
+def test_the_band_holds_the_cells_within_it_and_no_nearer_than_the_discretisation_floor():
+    snap = grid(SIDE | {cell_at(0.5, 0.37)})
     cells, d0 = sr.start_band_cells(snap, P0, FOOT, 0.02)
-    assert {tuple(c) for c in cells} == SIDE and np.all((d0 > 0) & (d0 <= 0.02))
+    assert {tuple(c) for c in cells} == SIDE and np.all(d0.min(axis=1) <= 0.02)
+    # Codex counterexample: a start distance of half a micrometre is never released
+    tiny = (0.0, 0.3 - 0.3 - 5e-7, 0.0)  # the side at 0.2999995
+    assert not len(sr.start_band_cells(grid(SIDE), tiny, FOOT, 0.02)[0])
+    assert sr.min_d0_m(FOOT) == pytest.approx(2 * sr.dense_error_m(sr.shape_radius(FOOT)))
 
 
 def test_off_the_stopped_truck_is_held_in_both_directions_and_on_it_backs_away():
@@ -89,11 +98,46 @@ def test_off_the_stopped_truck_is_held_in_both_directions_and_on_it_backs_away()
         assert off.check_path(snap, path(d), FOOT, FOOT, current_pose=P0, direction=d).verified_m == 0.0
     back = on.check_path(snap, path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
     assert back.blocked is None and back.verified_m == pytest.approx(0.6)
-    arc = on.check_arc(snap, P0, 0.0, -1, FOOT, FOOT, 0.15)
-    assert arc.blocked is None  # the stop arc too: the same band rule, the same stopping model
+    assert on.check_arc(snap, P0, 0.0, -1, FOOT, FOOT, 0.15).blocked is None  # the stop arc's walk too
 
 
-def test_a_turn_toward_the_cells_is_stopped_where_the_outline_first_comes_nearer():
+def test_without_a_standing_anchor_nothing_is_released():
+    # a moving truck meeting a mark within the band: the walk's own rule (the release is for a truck that stood)
+    snap = grid(SIDE)
+    moving = perm(True, standing_at=None)
+    assert moving.check_path(snap, path(-1), FOOT, FOOT, current_pose=P0, direction=-1).verified_m == 0.0
+
+
+def test_a_drift_toward_the_cells_since_the_anchor_is_held_at_once():
+    # agy, Codex P2-3: the start distance is the anchor's, never the current pose's -- no ratchet
+    snap = grid(SIDE)
+    p = perm(True)
+    nearer = (0.0, -0.012, 0.0)  # 3 mm toward the wall since it stood
+    c = p.check_path(snap, path(-1, start=nearer), FOOT, FOOT, current_pose=nearer, direction=-1)
+    assert c.blocked == "occupied" and c.verified_m == 0.0
+
+
+def test_the_floor_rises_with_the_distance_reached_and_never_comes_down():
+    snap = grid(SIDE)
+    p = perm(True)
+    away = (0.0, -0.018, 0.0)  # 3 mm farther: the best rises to 0.018 (still within the band, the anchor stays)
+    assert p.check_path(snap, path(-1, start=away), FOOT, FOOT, current_pose=away, direction=-1).blocked is None
+    assert p.release_anchor is not None
+    back_in = (0.0, -0.016, 0.0)  # nearer than the best again (but farther than the anchor's 0.015)
+    c = p.check_path(snap, path(-1, start=back_in), FOOT, FOOT, current_pose=back_in, direction=-1)
+    assert c.blocked == "occupied" and c.verified_m == 0.0 and p.release_anchor is not None
+
+
+def test_along_the_sweep_away_then_toward_is_cut_where_it_turns_back():
+    snap = grid(SIDE)
+    s = np.linspace(0.0, 0.2, 41)
+    y = P0[1] - 0.004 * np.sin(s / 0.2 * math.pi)  # 4 mm away, then back
+    wiggle = np.column_stack((-s, y, np.zeros_like(s)))
+    c = perm(True).check_path(snap, wiggle, FOOT, FOOT, current_pose=P0, direction=-1)
+    assert c.blocked == "occupied" and 0.0 < c.verified_m < 0.15
+
+
+def test_a_turn_toward_the_cells_is_cut_where_the_outline_first_comes_nearer():
     snap = grid(SIDE)
     toward = perm(True).check_path(snap, path(1, 0.6, kappa=0.5), FOOT, FOOT, current_pose=P0, direction=1)
     assert toward.blocked == "occupied" and toward.verified_m < 0.05
@@ -102,8 +146,7 @@ def test_a_turn_toward_the_cells_is_stopped_where_the_outline_first_comes_nearer
 
 
 def test_a_cell_outside_the_band_keeps_the_full_margin():
-    far = {cell_at(x, 0.37) for x in np.arange(0.5, 1.0, RES)}  # 0.065 m off: beyond the band
-    snap = grid(far)
+    snap = grid({cell_at(x, 0.37) for x in np.arange(0.5, 1.0, RES)})
     for d in (-1, 1):
         a = perm(False).check_path(snap, path(d), FOOT, FOOT, current_pose=P0, direction=d)
         b = perm(True).check_path(snap, path(d), FOOT, FOOT, current_pose=P0, direction=d)
@@ -111,10 +154,42 @@ def test_a_cell_outside_the_band_keeps_the_full_margin():
 
 
 def test_a_new_cell_met_on_the_way_still_blocks_with_its_margin():
-    ahead = cell_at(-0.6, 0.0)  # behind the rear face, met reversing
+    ahead = cell_at(-0.6, -0.015)
     snap = grid(SIDE | {ahead})
     back = perm(True).check_path(snap, path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
     assert back.blocked == "occupied" and ahead in back.blocked_cells and 0.0 < back.verified_m < 0.4
+
+
+def test_a_correction_change_or_moving_away_drops_the_anchor():
+    p = perm(True)
+    c = p.check_path(grid(SIDE, version=1), path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
+    assert c.verified_m == 0.0 and p.release_anchor is None
+    p = perm(True)
+    far = (-0.5, -0.06, 0.0)  # every start-band cell beyond the band now
+    p.check_path(grid(SIDE), path(-1, start=far), FOOT, FOOT, current_pose=far, direction=-1)
+    assert p.release_anchor is None
+
+
+def test_a_new_standing_latches_a_new_anchor_only_after_moving():
+    p = perm(True)
+    p.note_standing(True, (0.3, 0.0, 0.0), 0)  # still standing: the first anchor stays
+    assert p.release_anchor["pose"] == P0
+    p.note_standing(False, (0.3, 0.0, 0.0), 0)
+    p.note_standing(True, (0.3, 0.0, 0.0), 0)
+    assert p.release_anchor["pose"] == (0.3, 0.0, 0.0)
+
+
+def test_the_cut_walk_keeps_only_the_evidence_and_the_unknowns_of_what_it_walked():
+    # Codex P2-4: an old FREE beyond the cut does not make the cut walk stale; the cut is the walk's own end
+    snap = grid(SIDE)
+    stamp = np.array(snap.free_stamp, copy=True)
+    for i in range(cell_at(2.0, 0)[0], snap.state.shape[0]):
+        stamp[i, :] = 0.0  # old evidence at x >= 2 m only
+    snap = dataclasses.replace(snap, free_stamp=stamp)
+    toward = perm(True).check_path(snap, path(1, 1.5, kappa=0.5), FOOT, FOOT, current_pose=P0, direction=1)
+    assert toward.blocked == "occupied" and toward.oldest_free_s > 0.0
+    # the released cells are never evidence
+    assert np.isinf(sr.released(grid(SIDE), np.array(sorted(SIDE))).free_stamp[sorted(SIDE)[0]])
 
 
 def test_off_the_walk_is_the_one_before():
@@ -126,40 +201,39 @@ def test_off_the_walk_is_the_one_before():
         assert x == y
 
 
-def test_the_release_lengths_follow_the_continuous_sweep_corners_included():
-    # rotating in place toward a cell off the front corner: the corner sweeps nearer at once
-    corner = cell_at(1.02, 0.32)  # [1.00, 1.05] x [0.30, 0.35]; the front-left corner at (0.985, 0.285)
+def test_the_dense_error_bound_and_the_corner_sweep_in_rotation():
+    assert sr.dense_error_m(1.6) == pytest.approx(0.001 + 1.6 * 0.0005 + sr.SAGITTA_M)
+    corner = cell_at(1.02, 0.32)
     snap = grid({corner})
     pose = (-0.015, -0.015, 0.0)
     cells, d0 = sr.start_band_cells(snap, pose, FOOT, 0.03)
-    assert len(cells) == 1 and d0[0] == pytest.approx(math.hypot(0.015, 0.015))
+    assert len(cells) == 1 and d0.min() == pytest.approx(math.hypot(0.015, 0.015))
     turn = np.column_stack((np.full(21, pose[0]), np.full(21, pose[1]), np.linspace(0.0, 0.2, 21)))
-    arc = np.r_[0.0, np.cumsum(np.abs(np.diff(turn[:, 2])) * 1.0)]
-    s_star = sr.release_lengths(snap, cells, d0, turn, arc, FOOT)
-    assert np.isfinite(s_star[0]) and s_star[0] < 0.01
-
-
-def test_the_dense_error_bound():
-    assert sr.dense_error_m(1.6) == pytest.approx(0.001 + 1.6 * 0.0005)
+    arc = np.r_[0.0, np.cumsum(np.abs(np.diff(turn[:, 2])))]
+    first, hit = sr.release_length(snap, cells, d0, np.full_like(d0, 0.03), turn, arc, FOOT)
+    assert np.isfinite(first) and first < 0.01 and len(hit) == 1
 
 
 # ---- the escape's rectangles ----
 
-def test_the_escape_releases_only_a_trigger_rectangle_the_start_nearly_touches():
-    near = Rectangle(0.75, 0.33, 0.5, 0.05, 0.0)  # y 0.305-0.355: 0.005 m off the side
+def test_the_escape_releases_only_a_trigger_rectangle_the_start_pad_meets_but_does_not_overlap():
+    near = Rectangle(0.75, 0.33, 0.5, 0.05, 0.0)  # 0.005 m off the side
     far = Rectangle(0.75, 0.6, 0.5, 0.05, 0.0)
-    over = Rectangle(0.75, 0.29, 0.5, 0.05, 0.0)  # overlaps the outline
-    n, f = start_band_rectangles([near, far, over], FOOT, (0.0, 0.0, 0.0))
-    assert n == [near] and f == [far, over]
+    over = Rectangle(0.75, 0.29, 0.5, 0.05, 0.0)
+    corner = Rectangle(1.0 + 0.009 + 0.025, 0.3 + 0.009 + 0.025, 0.05, 0.05, 0.0)  # 9 mm per axis off the corner
+    n, f = start_band_rectangles([near, far, over, corner], FOOT, (0.0, 0.0, 0.0))
+    assert n == [near, corner] and f == [far, over]  # Codex P3: the pad's own per-axis test, not a Euclidean one
 
 
 def test_the_escape_sweep_passes_moving_away_and_not_toward():
-    near = Rectangle(1.25, 0.0, 0.1, 1.0, 0.0)  # 0.2 m wide band 0.005 m ahead of the front face
     near = Rectangle(1.055, 0.0, 0.1, 1.0, 0.0)
     bounds = Bounds(-5, 5, -5, 5)
     base = FootprintCollisionChecker([], FOOT, bounds)
     whole = FootprintCollisionChecker([near], FOOT, bounds)
     back, fwd = straight((0.0, 0.0, 0.0), -1, 0.4), straight((0.0, 0.0, 0.0), 1, 0.4)
-    assert not rectangles_sweep_free(whole, back)  # without the release: the start sample itself
+    assert not rectangles_sweep_free(whole, back)
     assert rectangles_sweep_free(base, back, [near], FOOT)
     assert not rectangles_sweep_free(base, fwd, [near], FOOT)
+    # away then back toward (Codex P2-3: never nearer than reached, not only than the start)
+    out_and_in = np.vstack([straight((0.0, 0.0, 0.0), -1, 0.03), straight((-0.03, 0.0, 0.0), 1, 0.02)[1:]])
+    assert not rectangles_sweep_free(base, out_and_in, [near], FOOT)

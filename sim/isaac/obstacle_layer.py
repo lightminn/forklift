@@ -411,6 +411,12 @@ class ObstacleLayer:
             return out
         footprint, own = self.footprints(loaded, direction)
         candidate = DrivePermission(self.permission.config)
+        if self.permission.release_anchor is not None:
+            # the start-band release's anchor (docs/plans/2026-10-24-start-band-release.md): the same truck standing at
+            # the same place; a copy, so the candidate's checks never move the driving permission's best distances
+            import copy as _copy
+
+            candidate.release_anchor = _copy.deepcopy(self.permission.release_anchor)
         check = candidate.update(self.snapshot, poses, footprint, own, current_pose=current_pose, direction=direction)
         length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
         need = min(float(self.permission.config.lookahead_m), length)

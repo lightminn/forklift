@@ -1124,6 +1124,11 @@ class MissionCore:
             direction = cusp_handed_.hand_direction
         else:
             direction = 1 if truth_speed > 0 else -1
+        # The start-band release's anchor: latched by the permission at the first standing tick (a no-op with it off)
+        note_ = getattr(obstacle["layer"].permission, "note_standing", None)
+        if note_ is not None and getattr(obstacle["layer"].permission.config, "start_band_m", 0.0) > 0.0:
+            standing_ = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
+            note_(bool(standing_), tuple(float(v) for v in rear), obstacle["version"])
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),

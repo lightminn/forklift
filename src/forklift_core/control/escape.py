@@ -218,14 +218,17 @@ def rectangles_sweep_free(rect_checker, poses, released=(), footprint=None) -> b
 
 
 def start_band_rectangles(rects, footprint, pose):
-    """(near, far): the rectangles the start pose comes within the sweep pad of (but does not overlap), and the rest
-    -- the start-band release's split of a trigger's extra obstacles."""
+    """(near, far): the rectangles the start sample's own pad test refuses (the checker's per-axis inflation by half a
+    step) but the footprint does not overlap -- the start-band release's split of a trigger's extra obstacles."""
     from forklift_core.control.start_release import footprint_rect_distance
+    from forklift_core.planning.geometry import Bounds, FootprintCollisionChecker
 
+    pose = tuple(float(v) for v in pose)
+    huge = Bounds(-1e9, 1e9, -1e9, 1e9)
     near, far = [], []
     for r in rects:
-        d = footprint_rect_distance(tuple(float(v) for v in pose), footprint, r)
-        (near if 0.0 < d <= STEP_M / 2.0 else far).append(r)
+        refused = not FootprintCollisionChecker([r], footprint, huge).free(pose, STEP_M / 2.0)
+        (near if refused and footprint_rect_distance(pose, footprint, r) > 0.0 else far).append(r)
     return near, far
 
 
