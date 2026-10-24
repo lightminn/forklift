@@ -4416,11 +4416,11 @@ def drive(S, isaac) -> None:
                 # SLAM localization plan L3: the survey grid, set into the layer's memory when it was made, is the
                 # only static SLAM layer; the bridge's latest_map.npz is not read.
                 use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
-            elif layer_.memory is not None and args.slam_map_dir is not None and determinism.enabled():
+            elif layer_.memory is not None and args.slam_map_dir is not None and getattr(args, "deterministic", False):
                 # Deterministic-run plan D4: slam_toolbox has no barrier between a scan and its map, so a
                 # deterministic run plans without the SLAM static layer (the pose corrections stay).
                 map_note = {"slam_static_layer": "off_deterministic"}
-            elif layer_.memory is not None and args.slam_map_dir is not None and not determinism.enabled():
+            elif layer_.memory is not None and args.slam_map_dir is not None and not getattr(args, "deterministic", False):
                 latest = args.slam_map_dir / "latest_map.npz"
                 if latest.exists():
                     # One open file: its fstat and its contents go together (the
