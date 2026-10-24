@@ -17,6 +17,7 @@
 #   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
 #   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
 #   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
+#   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -34,10 +35,12 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
-JOB=${SLURM_JOB_ID:-local$$}
+# In a bundle (deploy/slurm/isaac_bundle.sbatch) several sessions share one Slurm job: SESSION_ID names this one's
+# bridge containers and BRIDGE_CPU pins its bridge to a CPU of its own; alone, the job ID and the job's first CPU.
+JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
-CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
+CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)}
 # Every value the epoch scripts use, quoted for the shell once here; the scripts below expand nothing at writing.
 {
   printf 'ROOT=%q\nBASE_SCENE=%q\nFORKLIFT_URDF=%q\nVENV_PY=%q\nJOB=%q\nCPU0=%q\n' \
