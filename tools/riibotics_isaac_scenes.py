@@ -54,6 +54,7 @@ import hashlib
 import json
 import math
 import multiprocessing
+import os
 import sys
 import time
 from dataclasses import asdict, replace
@@ -98,7 +99,9 @@ URDF = ROOT / "sim/models/dls08_measured/forklift.urdf"
 PALLET = "epal6"
 # The mission settings of the Isaac runs (test_runs/recog/recog.sbatch on ws1, 2026-10-19)
 STRAIGHTS = {"alignment_straight_m": 2.1, "delivery_straight_m": 1.5, "withdrawal_m": 0.55}
-RESERVE_M, KAPPA, CLEARANCE_M = 0.016, 0.29, 0.10
+# KAPPA: the planner curvature limit; --kappa sets it through the environment, so the spawned planners see it too
+# (docs/plans/2026-10-24-curvature-response.md arm B)
+RESERVE_M, KAPPA, CLEARANCE_M = 0.016, float(os.environ.get("FORKLIFT_PLAN_KAPPA", "0.29")), 0.10
 REAR_TO_CAMERA_M = 0.34 + 0.619   # rear axle -> base_link, base_link -> carriage_low_measured
 # Placement in the south hall
 EAST_EDGE_M = 4.6
@@ -620,7 +623,7 @@ def plan_scene(path: Path, out: Path, grow_m: float = 0.0, keepout_m: float = 0.
     config = make_transport_planner_config(curvature_limit_inv_m=KAPPA, clearance_m=CLEARANCE_M,
                                            max_expansions=30000, **D7_PLANNER_OPTIONS)
     result = {"scene": record["name"], "scene_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-              "grow_pallets_m": grow_m, "lidar_keepout_m": keepout_m, "candidates": []}
+              "grow_pallets_m": grow_m, "lidar_keepout_m": keepout_m, "kappa": KAPPA, "candidates": []}
     started = time.monotonic()
     # As the runner plans a scene: the zone grown by the pallet's half diagonal before recognition, the
     # (here: true) pallet as the estimate after it -- never scenario.pickup by default.
@@ -690,6 +693,7 @@ def main() -> None:
     parser.add_argument("--plan", action="store_true", help="also plan every scene on the CPU")
     parser.add_argument("--only", help="comma-separated scene names")
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--kappa", type=float, default=None, help="the planner curvature limit (1/m; default 0.29)")
     parser.add_argument("--timeout-s", type=float, default=1200)
     parser.add_argument("--grow-pallets", default="0", help="comma-separated keep-outs (m) around neighbour pallets")
     parser.add_argument("--lidar-keepout", default="0",
@@ -701,6 +705,10 @@ def main() -> None:
     parser.add_argument("--session", choices=tuple(SEQUENCES), action="append", default=[],
                         help="also write this sequence as one session scene (<name>_session.json)")
     args = parser.parse_args()
+    if args.kappa is not None:
+        global KAPPA
+        KAPPA = float(args.kappa)
+        os.environ["FORKLIFT_PLAN_KAPPA"] = repr(KAPPA)  # the spawned planners import it from here
     args.output.mkdir(parents=True, exist_ok=True)
     for kind in args.session:
         path = args.output / f"{kind}_session.json"
