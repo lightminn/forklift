@@ -1,6 +1,6 @@
 # 세션 장면 형식·공통 팔레트 장애물·계획 포락선 대조 — 연속 이송 CT-1 PR ② (4판)
 
-브랜치 `feat/ct1-session-scene`(origin/main `cbe2d8b` = PR #97·#98 머지 뒤). 상위 계획 `docs/plans/2026-10-22-continuous-transport-ct1.md` 3절 PR ②. 사용자 결정 D1 = (가): 아직 인식하지 않은 이웃 팔레트는 공칭 외곽 + 0.25 m 다. 이 값은 경로 존재 상한일 뿐이고, 실차 SLAM 오차를 실측한 뒤 다시 정하는 임시값이다.
+브랜치 `feat/ct1-session-scene`(origin/main `cbe2d8b` = PR #97·#98 머지 뒤). 상위 계획 `docs/plans/2026-10-22-continuous-transport-ct1.md` 3절 PR ②. 사용자 결정 D1 = (가): 아직 인식하지 않은 이웃 팔레트는 공칭 외곽 + 0.25 m 다(작성 당시. 2026-10-24 에 0.20 m 로 개정 — CT-1 계획 D1 개정, 아래의 0.25 는 이 계획을 쓸 때의 값이다). 이 값은 경로 존재 상한일 뿐이고, 실차 SLAM 오차를 실측한 뒤 다시 정하는 임시값이다.
 
 ## 1. 사실 (소스)
 
