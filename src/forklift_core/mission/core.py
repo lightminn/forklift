@@ -1124,11 +1124,7 @@ class MissionCore:
             direction = cusp_handed_.hand_direction
         else:
             direction = 1 if truth_speed > 0 else -1
-        # The start-band release's anchor: latched by the permission at the first standing tick (a no-op with it off)
-        note_ = getattr(obstacle["layer"].permission, "note_standing", None)
-        if note_ is not None and getattr(obstacle["layer"].permission.config, "start_band_m", 0.0) > 0.0:
-            standing_ = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
-            note_(bool(standing_), tuple(float(v) for v in rear), obstacle["version"])
+        self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
@@ -4307,6 +4303,23 @@ class MissionCore:
             "used", "decided")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
 
     # --- M-a3: the paused tick and the resume (docs/plans/2026-10-16-m-a3-mission-commands.md E3-E6) ---
+    def _note_release_standing(self, rear, standing=None) -> None:
+        """The start-band release's anchor (docs/plans/2026-10-24-start-band-release.md): the permission latches it at
+        the first standing tick, and again while standing once a correction dropped it. Every tick that reads the
+        permission tells it -- the driving tick, the watch while a plan is waited for, the scene replan's escape and
+        candidate checks (Codex round 3 P2: the device's ticks run the watch, not the driving tick). A no-op with the
+        release off or a permission without it."""
+        obstacle, slam, hooks = self.obstacle, self.slam, self.hooks
+        if obstacle is None:
+            return
+        perm = obstacle["layer"].permission
+        note = getattr(perm, "note_standing", None)
+        if note is None or getattr(perm.config, "start_band_m", 0.0) <= 0.0:
+            return
+        if standing is None:
+            standing = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
+        note(bool(standing), tuple(float(v) for v in rear), obstacle["version"])
+
     def permission_watch(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
         """The permission while paused (E3): the grid re-projected after a correction change, the layer's limit
         with its emergency stop and sensor silence, and the cap the command assembly steps to -- every tick,
@@ -4327,6 +4340,7 @@ class MissionCore:
                 leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
             obstacle["layer"].refresh(t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
                                       path_ahead=leg_now, loaded=loaded, direction=leg_dir_now)
+        self._note_release_standing(rear)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
@@ -6587,6 +6601,7 @@ class MissionCore:
             return mail_
 
         def candidate(result):
+            core._note_release_standing(box.rear, stopped())  # the device plans standing (after its release)
             tracker_ = RearAxlePathTracker(result.poses, result.directions, result.curvatures_inv_m,
                                            trackers[ms.phase].config)
             return core._scene_preview(tracker_, t, box.rear, dt, uncut=result)
@@ -6608,6 +6623,7 @@ class MissionCore:
         def escape_plan(extra, clearance_m):
             if obstacle is None:
                 return None
+            core._note_release_standing(box.rear, stopped())  # re-latched after the release's correction, if any
             _, _, _, (rects_, footprint_, bounds_) = core.escape_leg(ms.phase)
             checker_ = FootprintCollisionChecker(list(rects_) + list(extra), footprint_, bounds_)
             layer_ = obstacle["layer"]

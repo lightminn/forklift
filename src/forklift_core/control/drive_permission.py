@@ -348,7 +348,8 @@ class DrivePermission:
         """The truck stands (or moves) at pose: the first standing tick latches the start-band release's anchor."""
         if self.config.start_band_m <= 0.0:
             return
-        if standing and (not self._standing or self.release_anchor is None):
+        if standing and (not self._standing or self.release_anchor is None
+                         or self.release_anchor["version"] != int(correction_version)):
             # a new standing, or still standing after the anchor was dropped (a correction re-projected the grid
             # under it -- the scene replan's release raises the version before its escape is checked, Codex v2 P2-3)
             self.release_anchor = {"pose": tuple(float(v) for v in pose), "version": int(correction_version),
