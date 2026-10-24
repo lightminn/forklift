@@ -138,9 +138,13 @@ class Probe:
                                plan=msg.get("plan"), targets_revision=msg.get("targets_revision"))
                     if self.queue is not None and picking_ is not None and \
                             msg.get("request_id") == picking_["key"]["request_id"]:
-                        self.queue_picking = None  # its ack may still be due (queue_pick_answer)
                         held_ = (self.targets or {}).get("targets_revision")
                         self.queue_apply(self.queue.on_pick(picking_["key"], msg, time.monotonic() * 1000.0, held_))
+                        # kept while the queue still waits on this request (a none_remaining before its ack may be
+                        # followed by a re-computed ok, contract 5.3; Codex CT-2 impl r2 P3); its ack is queue_pick_answer
+                        if not (self.queue.phase == "picking"
+                                and (self.queue.pick or {}).get("request_id") == picking_["key"]["request_id"]):
+                            self.queue_picking = None
                 elif t == "missions":
                     self.missions = msg
                     if self.queue is not None:  # queuewire onResults: oldest first

@@ -360,3 +360,43 @@ def test_the_auto_item_stops_when_no_destination_is_free():
     q = probe.report["queue"]
     assert q["stop_reason"] == "자동 선택 실패: no_free_destination" and q["items_left"] == ["auto"]
     assert q["counts"]["done"] == 1 and not q["uncertain"]
+
+
+def test_a_recomputed_ok_after_a_none_remaining_before_the_ack_is_taken():
+    # contract 5.3: a none_remaining before the ack is not final; the same request's re-computed ok after it is used
+    import mission_queue as mq
+
+    probe = WiredProbe(None)
+    q = probe.queue = mq.MissionQueue()
+    q.on_welcome(1)
+    q.add({"item_id": "A", "kind": "auto", "scope": "remaining", "pallet_id": None, "destination_id": None,
+           "label": "", "added_unix": 0.0})
+    now = lcp.time.monotonic() * 1000.0  # _read stamps what it hands the queue with the real clock
+    q.resume(now)
+    q.on_state({"mode": "PAUSED", "stopped_confirmed": True, "feedback_ok": True, "mission": None}, now)
+    probe.targets = dict(TARGETS)
+    ctx = {"connected": True, "welcomed": True, "has_lease": True, "targets": TARGETS, "next_pick": True,
+           "state": {"mode": "PAUSED", "stopped_confirmed": True, "feedback_ok": True, "mission": None}}
+    rid = q.next(ctx, now, lambda: "k1")["pick_request"]["request_id"]
+    key = {"epoch": 1, "item_id": "A", "request_id": rid}
+    probe.queue_picking, probe.queue_pick_answer = {"key": dict(key)}, {"key": dict(key)}
+    msgs = [{"t": "pick", "request_id": rid, "targets_revision": 1, "reason": "none_remaining", "pick": None},
+            {"t": "pick", "request_id": rid, "targets_revision": 1, "reason": "ok",
+             "pick": {"pallet_id": "P-1", "destination_id": "D-1"}, "plan": [["P-1", "D-1"]], "missions": 1},
+            {"t": "ack", "of": "pick_request", "request_id": rid}]
+
+    class Feed:
+        close_code = None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not msgs:
+                raise StopAsyncIteration
+            return json.dumps(msgs.pop(0))
+
+    feed = Feed()
+    probe.ws = feed
+    asyncio.run(probe._read(feed))
+    assert q.phase == "picked" and q.held["pallet_id"] == "P-1" and q.pick["acked"] and q.items
