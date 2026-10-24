@@ -158,6 +158,13 @@ def load_runs(path) -> list[Run]:
     return runs
 
 
+def job_gpu_index(env) -> int | None:
+    """The job's GPU as nvidia-smi numbers it: SLURM_JOB_GPUS is the node-wide index; CUDA_VISIBLE_DEVICES is the
+    job's own numbering under ConstrainDevices (0 for whichever GPU it got) and is not used. None unless exactly one."""
+    gpus = [g.strip() for g in (env.get("SLURM_JOB_GPUS") or "").split(",") if g.strip()]
+    return int(gpus[0]) if len(gpus) == 1 and gpus[0].isdigit() else None
+
+
 def visible_gpus(env) -> list[str]:
     """The GPUs the job sees: CUDA_VISIBLE_DEVICES, else SLURM_JOB_GPUS."""
     value = env.get("CUDA_VISIBLE_DEVICES") or env.get("SLURM_JOB_GPUS") or ""
@@ -820,7 +827,7 @@ def main(argv=None) -> int:
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
-        gpu_index=int(gpus[0]) if len(gpus) == 1 and gpus[0].isdigit() else None,
+        gpu_index=job_gpu_index(os.environ),
     )
     print(json.dumps(summary))
     return summary["exit_code"]

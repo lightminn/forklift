@@ -603,3 +603,16 @@ def test_the_slurm_gpu_index_picks_the_device(tmp_path):
     summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1, gpu_index=1,
                      vram_probe=lambda leaders: ([], next(frees)), vram_period_s=0.05)
     assert summary["gpu_full_waits"] == 1 and summary["failed"] == 0
+
+
+@pytest.mark.parametrize(
+    "env, index",
+    [
+        ({"CUDA_VISIBLE_DEVICES": "0", "SLURM_JOB_GPUS": "1"}, 1),  # ConstrainDevices renumbers CUDA's view to 0
+        ({"CUDA_VISIBLE_DEVICES": "0"}, None),
+        ({"SLURM_JOB_GPUS": "0,1"}, None),
+        ({}, None),
+    ],
+)
+def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
+    assert ib.job_gpu_index(env) == index
