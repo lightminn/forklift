@@ -70,14 +70,15 @@
   - `BRIDGE_CPU=<잡 cpuset 의 (슬롯 mod 개수)번째 CPU>`: 브리지 컨테이너를 슬롯마다 다른 CPU 에 묶는다.
   - `PORT`: 9000–9499 중 bind 로 비어 있음을 확인한 포트. 잡 ID 로 시작점을 흩어 다른 묶음 잡과 같은 포트를 먼저 고르는 일을 줄인다. 확인과 실제 bind 사이 경쟁은 남는다. 그때 감독기가 그 epoch 를 실패로 다시 띄운다(판정 1 에서 센다).
   - `BUNDLE_SLOT`·`BUNDLE_JOB`·`BUNDLE_RUN`·`BUNDLE_TOKEN`(실행마다 다른 값).
-- **격리와 종료.** 실행마다 새 프로세스 그룹으로 띄우고 로그는 `<out>/runs/<name>.log` 에 쓴다. 한 실행이 실패해도 나머지는 계속 돈다.
+- **격리와 종료.** 실행마다 새 프로세스 그룹으로 띄우고 로그는 시도마다 `<out>/runs/<name>.<시도>.log` 에 쓴다. 한 실행이 실패해도 나머지는 계속 돈다.
   - 시간 초과(`--run-timeout-s`)와 묶음 종료 때는 **맨 위 프로세스에만** TERM 을 보낸다(Slurm `--signal=B:TERM` 과 같은 뜻 — 런처가 감독기 → 러너 → 브리지 순서로 끝낸다).
   - `--grace-s`(기본 110 s) 뒤에는 **`BUNDLE_TOKEN` 을 환경에 가진 모든 프로세스**에 KILL 을 보낸다(`/proc/<pid>/environ` 으로 찾는다). 프로세스 그룹 KILL 로는 `timeout` 이 따로 만든 그룹의 자식(riib_scene·bd 의 Isaac)이 살아남는다 — Codex 가 재현했고, 시험 `test_a_child_in_its_own_process_group_is_killed_by_its_token` 이 막는다.
   - grace 110 s 는 감독기의 러너 grace 60 s + 브리지 대기 45 s = 105 s 보다 길다. Slurm 은 한도 120 s 전에 TERM 을 준다.
-  - 실행이 끝났는데 같은 토큰의 프로세스가 남았으면 TERM, 10 s 뒤 KILL 한다. 이름이 `slam_bridge_<SESSION_ID>_` 로 시작하는 docker 컨테이너가 남았으면 지운다.
+  - 맨 위 프로세스가 끝나도 실행은 슬롯을 쥔다. 같은 토큰의 프로세스가 남았으면 TERM 을 보내고, 10 s 뒤 KILL 한다. 토큰 검사가 1 s 이상 떨어져 두 번 연속 비었을 때 실행이 끝난 것으로 본다(검사 사이의 fork 경쟁 — Codex 3회차).
+  - 그 뒤 이름이 `slam_bridge_<SESSION_ID>_` 로 시작하는 docker 컨테이너가 남았으면 지운다. 정리가 실패하면 기록하고, 그 실행은 다시 돌리지 않고, 묶음은 1 로 끝난다.
 - **기반 실패의 재시도(사용자 지시 2).** 다음을 실행의 잘못이 아닌 기반 실패로 본다. 그 시도는 `infra_failed` 로 기록하고, `--retries`(기본 1)가 남았으면 다시 돌린다.
-  - 실행이 0 이 아닌 코드로 끝났고, 그동안 잡 cgroup `memory.events` 의 oom_kill 이 늘었다.
-  - 실행 로그나 목록의 `scan` 글롭 파일에 `bfc_arena`·`OUT_OF_DEVICE`·CUDA out of memory 가 있다.
+  - 실행이 SIGKILL 이나 코드 137 로 끝났고, 그동안 잡 cgroup `memory.events` 의 oom_kill 이 늘었다. 다른 실패 곁의 oom_kill 은 기록만 한다.
+  - 그 시도의 로그나 목록의 `scan` 글롭 파일에 실제 할당 실패 줄(`BFCArena::Allocate`·`bfc_arena.cc:<줄>`·`ERROR_OUT_OF_DEVICE_MEMORY`·CUDA out of memory)이 있다.
 
   다시 돌리기 전에 목록의 `retry_move` 경로를 `<경로>.attempt<n>` 으로 옮긴다. 그래서 런처의 출력 폴더 이름은 마지막 시도가 갖고, 깨진 시도는 결과에 섞이지 않는다. 목록 값의 `{attempt}` 는 시도 번호로 채운다. 실행 자신의 실패(그 밖의 0 이 아닌 코드)는 다시 돌리지 않는다. 다시 돌릴 수 없는 실행(`retry_move` 도 `{attempt}` 도 없음)의 기반 실패는 실패로 센다.
 - **배속 물러남(사용자 지시 3, live 실행).** 목록의 `pace_log` 글롭이 실행의 `live_log.jsonl` 을 가리킨다(가장 새 epoch). `--pace-period-s`(60 s)마다, 시작한 지 `--pace-warmup-s`(240 s)가 지난 실행마다 다음 둘을 잰다.
@@ -107,7 +108,7 @@
 
 ### 2.2 `deploy/slurm/isaac_bundle.sbatch`
 
-`tools/isaac_bundle.py` 를 백그라운드로 띄우고 `trap 'kill -TERM' TERM` + `wait` 로 Slurm 의 TERM 을 넘기는 얇은 sbatch 다(`isaac_live.sbatch` 와 같은 꼴). 기본값은 live 3 세션이다(`--gres=shard:3 --cpus-per-task=6 --mem=25G --signal=B:TERM@120`). `--time` 은 호출자가 목록 길이에 맞춰 준다. 머리말에 종류별 권장값을 적는다.
+`tools/isaac_bundle.py` 를 백그라운드로 띄우고 `trap 'kill -TERM' TERM` + `wait` 로 Slurm 의 TERM 을 넘기는 얇은 sbatch 다(`isaac_live.sbatch` 와 같은 꼴). 기본값은 live 4 세션이다(`--gres=shard:4 --cpus-per-task=8 --mem=27G --signal=B:TERM@120`). `--time` 은 호출자가 목록 길이에 맞춰 준다. 머리말에 종류별 권장값을 적는다.
 
 ### 2.3 런처 (기본값 불변)
 
@@ -280,4 +281,14 @@ Slurm shard 분할 질문에 대한 Codex 의 소스 근거는 1 절에 옮겼�
 
 시험은 59 개다. Codex 반례마다 시험이 하나씩 있다.
 
-**Codex 재검토 3회차**: (결과를 적는다.)
+**Codex 3회차(같은 스레드, 978d124a).** P1 1·P2 4·P3 1. 모두 재현을 확인했고 다음처럼 고쳤다.
+- P1 첫 토큰 검사가 0 개면 종료를 바로 확정한다(검사 중 fork 경쟁) → 1 s 이상 떨어진 두 번 연속 빈 검사로 확정한다. 그 사이 새로 보이는 프로세스는 TERM/KILL 대상이 된다.
+- P2 정리 실패 뒤에도 재시도하고 최종 성공으로 집계한다 → 정리 실패는 재시도를 막고, `errors` 에 남기고, 묶음 종료 코드를 1 로 한다.
+- P2 실행기 예외 경로에서 컨테이너를 정리하지 않는다 → 정리한다.
+- P2 틱을 한 번도 쓰지 않은 실행은 정지로 보지 않는다 → warm-up + 정지 기한이 지나면 정지로 보고 물러난다.
+- P2 두 GPU 가 보이고 자기 프로세스가 없으면 장치 여유를 건너뛴다 → Slurm 이 준 GPU 번호를 쓴다. 그래도 모르면 측정 불가처럼 기다린다.
+- P3 계획 본문의 옛 로그 이름·OOM 조건·3 세션 기본값 → 고쳤다.
+
+시험은 65 개다. 첫 시범(10793/10794)은 978d124a 로 돈다. 3회차의 반례는 모두 드문 경계(검사 중 fork, docker 정리 실패, 실행기 예외, GPU 식별 실패)라 시범을 끊지 않았다. 다음 제출부터 새 판을 쓴다.
+
+**Codex 4회차**: (결과를 적는다.)

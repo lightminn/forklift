@@ -29,7 +29,7 @@ A run past --run-timeout-s, and every run when the bundle gets TERM/INT, is ende
 to its top process only (the launchers end their supervisor, runner and bridge in that order), then KILL after
 --grace-s to every process carrying its BUNDLE_TOKEN -- found through /proc/<pid>/environ, because `timeout` and
 similar tools move their child into a process group of its own. Processes a finished run left behind get TERM, then
-KILL after --leftover-grace-s. Docker containers named slam_bridge_<SESSION_ID>_* (outside the run's processes and
+KILL after --leftover-grace-s; a run is over when two scans 1 s apart find none of its processes. Docker containers named slam_bridge_<SESSION_ID>_* (outside the run's processes and
 the job's cgroup) are removed. A failing cleanup step is recorded and does not stop the other runs.
 
 A run failed for the infrastructure when its own attempt log, or a file its "scan" globs name, has a GPU allocation
@@ -395,6 +395,7 @@ class _Live:
     # set when the top process has ended; the slot is held until the run's other processes are gone
     exited: dict | None = None
     leftover_kill_at: float | None = None
+    empty_since: float | None = None  # the first of the empty token scans that settle the run
 
 
 def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s=None, shards=None,
@@ -402,7 +403,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
-               leftover_grace_s=10.0):
+               leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if (out / "results.jsonl").exists() or (out / "summary.json").exists():
@@ -437,7 +438,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             f.write(json.dumps(rec) + "\n")
 
     def note_error(where, exc):
-        st["errors"].append({"t": round(time.time(), 1), "where": where, "error": repr(exc)})
+        st["errors"].append({"t": round(time.time(), 1), "where": where,
+                             "error": exc if isinstance(exc, str) else repr(exc)})
 
     def top_exited(pid, status, rusage):
         """The run's top process ended: note it, end what it left behind; the slot stays held."""
@@ -473,7 +475,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             removed = list(cleanup(r.env["SESSION_ID"]) or [])
         except Exception as exc:  # noqa: BLE001 -- a cleanup failure must not stop the other runs
             cleanup_error = repr(exc)
-        retry = infra and runs[r.index].retryable and r.attempt <= retries and not stopping
+        retry = (infra and runs[r.index].retryable and r.attempt <= retries and not stopping
+                 and cleanup_error is None)  # a bridge that could not be removed may still hold the run's state
         moved, move_error = [], None
         if retry:
             try:
@@ -497,6 +500,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         })
         if infra:
             st["infra"] += 1
+        if cleanup_error or move_error:
+            note_error(f"settle {r.run.name} attempt {r.attempt}", cleanup_error or move_error)
         if retry:
             queue.appendleft((r.index, runs[r.index], r.attempt + 1))
 
@@ -536,7 +541,6 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             if st["unreadable_since"] is None:
                 st["unreadable_since"] = now
             return
-        st["unreadable_since"] = None
         apps, free = got
         per = dict.fromkeys(live, 0)
         job_total, job_gpus = 0, set()
@@ -556,8 +560,20 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             live[pid].vram_max = max(live[pid].vram_max, mib)
         st["unattributed"] = max(0, job_total - sum(per.values()))
         mine = [g for g in job_gpus if g is not None and g in free]
-        # the job's GPU: the one its processes use; before any, the only one it can see (ConstrainDevices)
-        st["free"] = min(free[g] for g in mine) if mine else (min(free.values()) if len(free) == 1 else None)
+        # the job's GPU: the one its processes use; before any, the only one it can see (ConstrainDevices), else
+        # the one Slurm names; a GPU that cannot be told is treated as an unreadable sample (the start waits)
+        if mine:
+            st["free"] = min(free[g] for g in mine)
+        elif len(free) == 1:
+            st["free"] = next(iter(free.values()))
+        elif gpu_index is not None and gpu_index in free:
+            st["free"] = free[gpu_index]
+        else:
+            st["free"] = None
+            if gate_on and st["unreadable_since"] is None:
+                st["unreadable_since"] = now
+            return
+        st["unreadable_since"] = None
         st["job_vram_max"] = max(st["job_vram_max"], job_total)
         st["sampled_at"] = now
         with vram_path.open("a") as f:
@@ -583,6 +599,9 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             got = r.pace.measure(now)
             if got is None:
                 unmeasured.append(r.run.name)
+                if now - r.start >= pace_warmup_s + pace_stall_s:
+                    rows[r.run.name] = {"ratio": None, "gap_p99_s": None, "silence_s": round(now - r.start, 1),
+                                        "no_tick": True}
                 continue
             ratio, gap99, silence = got
             rows[r.run.name] = {"ratio": None if ratio is None else round(ratio, 4), "gap_p99_s": round(gap99, 4),
@@ -600,8 +619,9 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
             if worst[1]["silence_s"] >= pace_stall_s:
                 reason = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
-            elif pace_gap_p99_s is not None:
-                worst = max(rows.items(), key=lambda kv: kv[1]["gap_p99_s"])
+            elif pace_gap_p99_s is not None and any(v["gap_p99_s"] is not None for v in rows.values()):
+                worst = max(((k, v) for k, v in rows.items() if v["gap_p99_s"] is not None),
+                            key=lambda kv: kv[1]["gap_p99_s"])
                 if worst[1]["gap_p99_s"] > pace_gap_p99_s:
                     reason = f"{worst[0]} tick gap p99 {worst[1]['gap_p99_s']} s > {pace_gap_p99_s}"
         cooled = st["backoff_at"] is None or now - st["backoff_at"] >= pace_window_s
@@ -636,12 +656,21 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                     if got == pid:
                         top_exited(pid, status, rusage)
                 if r.exited is not None:
-                    left = token_pids(r.env["BUNDLE_TOKEN"]) if r.exited["leftover"] else []
-                    if not left:
+                    # a process can fork between a scan's listing and its reads: one empty scan settles nothing,
+                    # two at least settle_quiet_s apart do
+                    left = token_pids(r.env["BUNDLE_TOKEN"])
+                    if left:
+                        r.empty_since = None
+                        r.exited["leftover"] = max(r.exited["leftover"], len(left))
+                        if r.leftover_kill_at is None:
+                            _kill(left, signal.SIGTERM)
+                            r.leftover_kill_at = now + leftover_grace_s
+                        elif now >= r.leftover_kill_at:
+                            _kill(left, signal.SIGKILL)
+                    elif r.empty_since is None:
+                        r.empty_since = now
+                    elif now - r.empty_since >= settle_quiet_s:
                         settle(pid)
-                    elif r.leftover_kill_at is not None and now >= r.leftover_kill_at:
-                        _kill(left, signal.SIGKILL)
-                        r.leftover_kill_at = None
             if stop.is_set() and not stopping:
                 stopping = True
                 end_all(now)
@@ -697,11 +726,20 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             time.sleep(poll_s)
         for r in live.values():
             try:
-                os.waitpid(r.proc.pid, os.WNOHANG)
+                got, status = os.waitpid(r.proc.pid, 0 if not alive(r.proc.pid) else os.WNOHANG)
+                if got == r.proc.pid:
+                    r.proc.returncode = os.waitstatus_to_exitcode(status)
             except ChildProcessError:
-                pass
+                r.proc.returncode = r.proc.returncode if r.proc.returncode is not None else -1
+            r.log.close()
+            removed, cleanup_error = [], None
+            try:
+                removed = list(cleanup(r.env["SESSION_ID"]) or [])
+            except Exception as cexc:  # noqa: BLE001
+                cleanup_error = repr(cexc)
             record({"name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
-                    "status": "aborted", "rc": None, "signal": None, "retried": False})
+                    "status": "aborted", "rc": None, "signal": None, "retried": False,
+                    "containers_removed": removed, "cleanup_error": cleanup_error})
         for index, run, attempt in queue:
             record({"name": run.name, "index": index, "slot": None, "attempt": attempt, "status": "not_started",
                     "rc": None, "signal": None, "retried": False})
@@ -782,6 +820,7 @@ def main(argv=None) -> int:
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
+        gpu_index=int(gpus[0]) if len(gpus) == 1 and gpus[0].isdigit() else None,
     )
     print(json.dumps(summary))
     return summary["exit_code"]

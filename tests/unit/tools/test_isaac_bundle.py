@@ -542,3 +542,64 @@ def test_the_first_run_waits_for_free_gpu_memory(tmp_path):
     summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1,
                      vram_probe=lambda leaders: ([], {0: next(frees)}), vram_period_s=0.05)
     assert summary["gpu_full_waits"] == 1 and summary["failed"] == 0
+
+
+# --- Codex round 3 counterexamples -------------------------------------------------------------------------------------
+
+
+def test_a_child_forked_after_the_first_scan_still_holds_the_slot(tmp_path):
+    # the top process leaves a child that soon forks a grandchild and exits: no scan may settle the run early
+    marker = tmp_path / "grandchild_end"
+    grand = f"import time,pathlib; time.sleep(0.6); pathlib.Path('{marker}').write_text(str(time.time()))"
+    child = f"import subprocess,sys,time; time.sleep(0.05); subprocess.Popen([sys.executable,'-c',{grand!r}])"
+    first = ib.Run(name="first", argv=["bash", "-c", f'(trap "" TERM; exec {PY} -c "$C") & exit 0'], env={"C": child})
+    second = stamp_run("second", tmp_path, 0.05)
+    bundle(tmp_path, [first, second], slots=1, leftover_grace_s=5.0, settle_quiet_s=0.3)
+    assert stamps(tmp_path, ["second"])["second"]["t0"] >= float(marker.read_text()) - 0.05
+
+
+def test_a_cleanup_failure_stops_the_retry_and_fails_the_bundle(tmp_path):
+    def cleanup(sid):
+        raise TimeoutError("docker rm took too long")
+
+    code = "import sys; print('CUDA out of memory'); sys.exit(1)"
+    summary = bundle(tmp_path, [ib.Run(name="c", argv=py(code), retry_move=[str(tmp_path / "c")])], cleanup=cleanup)
+    r = results(tmp_path)["c"]
+    assert r["retried"] is False and "docker rm" in r["cleanup_error"]
+    assert summary["errors"] and summary["exit_code"] == 1
+
+
+def test_the_exception_path_removes_the_bridges(tmp_path):
+    seen = []
+
+    def probe(leaders):
+        if leaders:
+            raise RuntimeError("probe broke")
+        return [], {0: 16000}
+
+    runs = [stamp_run("a", tmp_path, 3.0)]
+    summary = bundle(tmp_path, runs, slots=1, shards=1, vram_probe=probe, vram_period_s=0.05, grace_s=0.5,
+                     cleanup=lambda sid: seen.append(sid) or [])
+    assert seen == ["77s0"] and results(tmp_path)["a"]["status"] == "aborted" and summary["exit_code"] == 1
+
+
+def test_a_live_run_that_never_ticks_steps_the_bundle_back(tmp_path):
+    runs = [ib.Run(name=n, argv=py("import time; time.sleep(1.5)"), pace_log=str(tmp_path / f"{n}.jsonl"))
+            for n in ("a", "b")] + [stamp_run("c", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.1, pace_window_s=0.5, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_stall_s=0.3)
+    assert summary["backoffs"] and "no tick" in summary["backoffs"][0]["reason"]
+
+
+def test_an_unidentified_gpu_holds_the_first_start(tmp_path):
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1,
+                     vram_probe=lambda leaders: ([], {0: 1000, 1: 1000}), vram_period_s=0.05, vram_unreadable_s=0.3)
+    s = stamps(tmp_path, ["a"])
+    assert s["a"]["t0"] - summary["start"] >= 0.25 and summary["unreadable_starts"] == 1
+
+
+def test_the_slurm_gpu_index_picks_the_device(tmp_path):
+    frees = iter([{0: 16000, 1: 1000}] * 3 + [{0: 16000, 1: 16000}] * 1000)
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1, gpu_index=1,
+                     vram_probe=lambda leaders: ([], next(frees)), vram_period_s=0.05)
+    assert summary["gpu_full_waits"] == 1 and summary["failed"] == 0
