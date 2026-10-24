@@ -1,6 +1,7 @@
 // The mission queue (docs/plans/2026-10-22-console-mission-queue.md): saved transports run one after another, and
 // any anomaly stops the queue until the operator resumes it -- the page never submits the next mission on its own
-// after one (user decision 2026-10-22). Pure module: no DOM, no sockets, no storage; times come in as arguments.
+// after one (user decision 2026-10-22) -- with one exception, the session's first submit refused not_stopped (plan
+// D5, user decision 2026-10-25). Pure module: no DOM, no sockets, no storage; times come in as arguments.
 
 import { ACTIVE } from "./results.js";
 import { selectable } from "./wizard.js";
@@ -17,6 +18,10 @@ const FINISHED_KEEP = 50;
 export const PICK_DEADLINE_MS = 5000;
 const PREEMPT = new Set(["preempt", "safety_preempt"]); // live arbiter, fake vehicle
 const UNSURE_REJECTS = new Set(["busy", "stale"]); // the request may still run (plan D5)
+// Plan D5's one exception (user decision 2026-10-25): the session's first queue submit refused with not_stopped (a
+// truck still settling right after the start) is submitted again once, the same item, after the truck has stood this
+// long in a row -- PAUSED, stop confirmed, feedback valid, on this page's clock like the other waits.
+export const START_RETRY_STAND_MS = 1000;
 const KINDS = new Set(["fixed", "auto"]);
 
 export function newItem({ kind = "fixed", pallet_id, destination_id, label }, nowUnix, newId) {
@@ -58,7 +63,7 @@ export class MissionQueue {
     this.items = [];
     this.run = "stopped";
     this.stopReason = "시작 전";
-    this.phase = "waiting"; // of the front item: waiting | picking | picked (an auto item) | submitting | in_mission
+    this.phase = "waiting"; // of the front item: waiting | picking | picked (an auto item) | start_retry | submitting | in_mission
     this.current = null; // {item_id, request_id, mission_id, epoch, pallet_id, destination_id}
     this.finished = []; // newest first: {item, outcome, reason, mission_id, pallet_id, destination_id}
     // CT-2: the auto item's pick_request ({item_id, request_id, epoch, sentAt, acked, none}) -- kept until it is acked or
@@ -74,6 +79,9 @@ export class MissionQueue {
     this.toForget = []; // request ids the session should stop resending (drainForget)
     this.counts = { done: 0, failed: 0, cancelled: 0 };
     this.epoch = null;
+    this.submitsThisEpoch = 0; // the queue's own submits in this session (the first one may be resubmitted once)
+    this.startRetry = null; // {item_id, standSince}: the one resubmit waiting for its stand (plan D5 exception)
+    this.startRetryUsed = false; // spent for this session
     this.lastStateAt = null; // when the last state was received -- only a received state sets it (Codex r5)
     this.waitSince = null; // resumed with no state since the welcome: the first one is due by SILENCE_MS
     this.feedbackLostSince = null; // the first of the states with feedback_ok false that came in a row
@@ -139,6 +147,10 @@ export class MissionQueue {
       forget = this.current?.request_id;
       this.#dropCurrentAsUncertain();
     }
+    if (this.phase === "start_retry") { // the resubmit is not made: nothing went out
+      this.phase = "waiting";
+      this.startRetry = null;
+    }
     if (this.run === "running") {
       this.run = "stopped";
       this.stopReason = reason;
@@ -176,6 +188,10 @@ export class MissionQueue {
       this.lastPick = null; // another session's pick and its blockers say nothing about this one (CT-2)
       this.lastPickBlocked = null;
     }
+    if (epoch !== this.epoch) { // a session of its own: its first submit may be resubmitted once again
+      this.submitsThisEpoch = 0;
+      this.startRetryUsed = false;
+    }
     this.epoch = epoch;
     this.lastStateAt = null; // a new connection: silence is counted from its first state
     this.#changed();
@@ -210,6 +226,12 @@ export class MissionQueue {
     // the arbiter does not preempt a lost feedback in PAUSED: waiting would submit once it recovers (plan D4) --
     // a loss that lasts, not one late state
     if (this.#feedbackLost(nowMs)) return this.stop("차량 피드백 없음");
+    if (this.phase === "start_retry") { // the stand counted in a row; a break starts it over
+      const standing = state.mode === "PAUSED" && state.stopped_confirmed === true && state.feedback_ok !== false;
+      const since = standing ? (this.startRetry.standSince ?? nowMs) : null;
+      if ((since === null) !== (this.startRetry.standSince === null)) this.#changed(); // the screen says which
+      this.startRetry.standSince = since;
+    }
     const mi = state.mission;
     if (mi && ACTIVE.includes(mi.status)) {
       if (!this.#isOurs(mi)) return this.stop("대기열이 내지 않은 미션");
@@ -263,6 +285,16 @@ export class MissionQueue {
     }
     const reason = answer?.reason ?? "unknown";
     const item = this.items.find((x) => x.item_id === c.item_id);
+    if (reason === "not_stopped" && this.submitsThisEpoch === 1 && !this.startRetryUsed && item) {
+      // Plan D5's one exception: the truck was still settling after the start; the same item once more after a stand
+      this.startRetryUsed = true;
+      this.startRetry = { item_id: c.item_id, standSince: null };
+      this.current = null;
+      this.phase = "start_retry";
+      this.early.clear();
+      this.#changed();
+      return {};
+    }
     if (item && UNSURE_REJECTS.has(reason)) {
       item.uncertain = true;
       if (item.kind === "auto") { // what may have gone out, kept on the mark (Codex CT-2 r1)
@@ -337,6 +369,16 @@ export class MissionQueue {
     if (st.mode !== "PAUSED" || st.stopped_confirmed !== true || st.feedback_ok === false) return null;
     if (st.mission && ACTIVE.includes(st.mission.status)) return null;
     if (this.lastResultAt !== null && nowMs - this.lastResultAt < SETTLE_MS) return null;
+    if (this.phase === "start_retry") {
+      if (front.item_id !== this.startRetry.item_id) {
+        this.stop("시작 직후 재제출 취소: 맨 앞 항목이 바뀜");
+        return null;
+      }
+      const since = this.startRetry.standSince;
+      if (since === null || nowMs - since < START_RETRY_STAND_MS) return null;
+      this.phase = "waiting";
+      this.startRetry = null;
+    }
     if (front.kind === "auto") return this.#nextAuto(front, ctx, nowMs, newId);
     const r = resolveItem(front, ctx.targets, st);
     if (!r.ok) {
@@ -353,6 +395,7 @@ export class MissionQueue {
                      pallet_id: palletId, destination_id: destinationId };
     this.phase = "submitting";
     this.early.clear();
+    this.submitsThisEpoch += 1;
     this.#changed();
     return { submit };
   }
@@ -425,7 +468,7 @@ export class MissionQueue {
   // ---------------------------------------------------------------- storage (plan D7)
   toStorage() {
     // a pick asked or held is not kept: a reopened page asks again (CT-2 C5)
-    const phase = this.phase === "picking" || this.phase === "picked" ? "waiting" : this.phase;
+    const phase = ["picking", "picked", "start_retry"].includes(this.phase) ? "waiting" : this.phase;
     return { v: 1, epoch: this.epoch, items: this.items, current: this.current, phase,
              finished: this.finished, counts: this.counts };
   }

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-작성일: 2026-10-22 · 상태: 구현됨(계획 4판, PR feat/console-mission-queue) · 근거: [상용 FMS 사례 조사](../design/2026-10-22-fms-case-survey.md) 4절 1순위(최소안), 사용자 결정 2026-10-22(총괄 경유)
+작성일: 2026-10-22 · 상태: 구현됨(계획 4판, PR feat/console-mission-queue; 2026-10-25 D5 예외 개정, feat/queue-start-resubmit) · 근거: [상용 FMS 사례 조사](../design/2026-10-22-fms-case-survey.md) 4절 1순위(최소안), 사용자 결정 2026-10-22(총괄 경유)
 
 **Goal:** 자주 하는 운반을 버튼 하나로 대기열에 넣고, 대기열의 운반을 차례로 내되 **어떤 이상이 있어도 다음 미션을 자동으로 내지 않는** 콘솔 기능을 만든다.
 
@@ -57,6 +57,12 @@
 **D5 제출 응답.**
 - `ack` → `in_mission`(받은 `mission_id`).
 - **모든 `reject` → `stopped("거부: <설명>")`**, 항목은 맨 앞에 그대로. 거부가 "이 요청은 실행되지 않았다"를 보장하는 경우만 `uncertain` 을 붙이지 않는다. live 의 채널 포화 `busy` 는 요청 원장에 닿기 전에 돌아오므로 먼저 들어간 같은 요청이 뒤에 받아들여질 수 있고(Codex 가 `Channels`·`Link`·중재기로 재현), 원장이 요청을 잊은 `stale` 도 실행 여부를 모른다 — 이 둘(가짜 차량의 `busy` 포함)은 **`uncertain`** 으로 남긴다. 자동으로 다시 내지 않는다(계약 1절: 거부 뒤 새 요청을 자동으로 만들지 않고 운용자에게 다시 묻는다). 일시적일 수 있는 `not_stopped`·`stale_targets` 는 D3 의 4·5 조건(정지 확인, 결과 뒤 1 s)으로 대부분 피한다. 남은 경우는 운용자가 한 번 더 재개한다.
+- **유일한 예외(사용자 결정 2026-10-25).** 이번 세션(`session_epoch`)에서 대기열이 낸 **첫 제출**이 `not_stopped` 로 거부되면 멈추지 않고 `start_retry` 로 둔다. 시작 직후 아직 흔들리며 서는 차 때문이다.
+  - 그 뒤 상태가 PAUSED·`stopped_confirmed`·피드백 정상으로 이 화면의 시계 기준 1 s 이상 끊김 없이 이어지면, **같은 항목을 한 번만** 새 `request_id` 로 다시 낸다.
+  - 화면에는 "시작 직후 서 있음 확인 뒤 1회 재제출"을 보인다.
+  - 다음은 모두 지금처럼 멈춤이다: 두 번째 `not_stopped`, 다른 거부 사유, 세션의 두 번째 이후 제출의 거부, 기다리는 동안의 STOP·텔레옵·선점·피드백 상실·상태 끊김, 맨 앞 항목이 바뀜(`시작 직후 재제출 취소: 맨 앞 항목이 바뀜`).
+  - 재제출은 세션마다 한 번이다. 멈췄다 재개해도 다시 생기지 않고, 새 세션에서만 다시 생긴다. 화면을 다시 열면 기다림은 남지 않는다(D7).
+  - 차량 쪽 파이썬 포트(`tools/mission_queue.py`)도 같은 규칙을 따른다.
 
 **D6 끊김·권한·세션·요청 정리.**
 - 제어 연결이 닫히거나 2 s 동안 상태가 오지 않으면 → `stopped("연결 끊김")`. 차량의 진행 중 미션은 그대로 둔다.
