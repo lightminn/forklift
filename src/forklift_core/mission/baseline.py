@@ -40,6 +40,8 @@ MISSION_KEYS = {
         "scene_replans", "scene_escape_candidates",  # the scene-mode replan device (plan 2026-10-23-scene-replan 2.1)
         "cusp_injections",  # its diagnostic --inject-cusp-offset-m (plan 4)
         "goal_creep_stalls",  # the final goal's creep stall latches (plan 2026-10-24-goal-creep-stall G2)
+        # plan 2026-10-24-leg-end-budget-stands: O1's pending stand and its attempts, R1's checks and arrivals
+        "observe_end_stand", "observe_end_stands", "return_loose_checks", "return_loose_arrivals",
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
