@@ -92,7 +92,58 @@
   - line_m 다섯 번 모두 규칙 순서 (P-1, D-1)(P-2, D-2)(P-3, D-3) 이었다. 끝난 두 번은 `none_remaining` → "완료" 다.
   - random_m s1 은 (P-4, D-2) 로 시작했다. 규칙 순서의 첫 쌍이다.
 
-### 2 차 묶음 (스냅숏 `ct2_07ca86aa` = CT-2 + main `fa3d7218`(P-4 점유 배제 #127), ws1 잡 10670–10689, replay gate 10669)
+### 2 차 묶음 — 판정 묶음
 
-- 탐침의 시작 대기 수정이 들어간 트리다. 고정 팔은 8 주차 목표 재판정(PR ④ 방식)을 겸한다.
-- (실행 중)
+- 실행 트리
+  - seed 0·1·3·4: 스냅숏 `ct2_07ca86aa` 다. CT-2 에 main `fa3d7218`(P-4 점유 배제 #127)을 병합하고, 탐침의 시작 대기를 넣은 트리다. ws1 잡 10670–10689(seed 2 포함 20 실행), replay gate 10669 는 29/29 통과다.
+  - seed 2: 스냅숏 `ct2_41a2a7e8` 이다(ws1 잡 10796–10799).
+    - 07ca86aa 묶음의 seed 2 는 자동 팔 두 건이 첫 제출에서 `reject(not_stopped)` 로 멈췄다. 시작 직후 차가 자리 잡는 동안 속도가 ±0.03 m/s 로 흔들려 서 있음 판정이 깜박인다. 추천 왕복만큼 늦은 제출이 그 순간에 걸렸다.
+    - 대기열 계획 D5 는 이 경우 "운용자가 한 번 더 재개한다"로 정해 두었다. 그래서 탐침에 `--queue-resume-not-stopped`(서 있음이 1 s 확인되면 한 번 더 재개)를 더했다. seed 2 쌍 넷을 두 팔 모두 다시 돌렸다.
+    - 다시 돌린 넷 중 셋(고정 둘, 자동 하나)이 이 거부를 만났고, 모두 한 번의 재개로 이어 갔다. 이 거부는 자동 팔만의 일이 아니다.
+    - seed 0·1·3·4 의 실행은 이 거부를 만나지 않았으므로 옵션과 관계없다.
+- 세션 하나는 대기열 하나다.
+  - 고정 팔은 손 순서 셋을 넣는다.
+  - 자동 팔은 "남은 팔레트 전부" 하나를 넣는다. 완주는 line_m 이 `none_remaining` → "완료", random_m 이 세 미션 뒤 `no_free_destination` 이다.
+
+| 장면 | seed | 고정(손 순서) | 자동 |
+|---|---|---|---|
+| line_m | 0 | done · done · done | done · done · done → 완료 |
+| line_m | 1 | done · done · done | done · done · done → 완료 |
+| line_m | 2 | (재개 1) done · done · `slam_link_failed` | done · `scene_replan_failed:cusp_pose:timeout` |
+| line_m | 3 | done · `Excessive body tilt in transport` | done · done · done → 완료 |
+| line_m | 4 | done · `Tracking failed in return_home` | done · done · `Tracking failed in return_home` |
+| random_m | 0 | done · done · `docking_retry_match_refused` | (P-4, D-2) · (P-3, D-1) · (P-5, D-3) done → `no_free_destination` |
+| random_m | 1 | done · `scene_replan_failed:cusp_pose:timeout` | (P-5, D-3) · (P-4, D-2) · (P-3, D-1) done → `no_free_destination` |
+| random_m | 2 | (재개 1) `transport_recovery_after_docking` | (재개 1) done · `transport_recovery_after_docking` |
+| random_m | 3 | done · done · `slam_link_failed` | done · done · `slam_link_failed` |
+| random_m | 4 | done · done · done | done · done · `slam_link_failed` |
+
+| | 완료 미션 / 낸 미션 | 완주 세션 | 금지 접촉 |
+|---|---|---|---|
+| 고정 | 18 / 23 | 3 / 10 | 0 |
+| 자동 | 23 / 26 | 5 / 10 | 0 |
+
+- 사전 기준 판정
+  - 자동 팔의 완료 미션 수가 고정 팔보다 2 건 넘게 적지 않다: **통과**(23 대 18).
+  - 금지 접촉 0: **통과**(두 팔 모두 0, 미션 기록의 `forbidden_pocket_contacts`).
+  - random_m 의 자동 팔이 3 미션을 마치면 `no_free_destination` 으로 멈춘다: **통과**(3 미션을 마친 s0·s1 둘 다).
+  - 추천 응답이 기한(5 s)을 넘긴 실행이 없다: **통과**. 추천 34 번의 응답 시간은 중앙값 57 ms, 최대 1.27 s 다. 최대는 random_m s2 에서 재개 뒤 다시 물은 것이다.
+- 자동 팔의 추천
+  - line_m: 다섯 번 모두 V2 규칙 순서다.
+  - random_m: s0 은 V2 규칙 순서(P-4, D-2)로 시작했고, s1–s4 는 (P-5, D-3)으로 시작했다. 두 순서는 V2 에서 미션 수가 같고 추정 합이 가까운 후보다. 실행마다 들어오는 차 자세 추정·보정 버전이 달라 앞뒤가 바뀐 것으로 본다(seed 별 원인은 따로 확인하지 않았다).
+- 두 팔의 차이(5 미션)를 규칙의 이득으로 읽지 않는다. 같은 차량 코드로 돌았고, 실패 부류(SLAM 연결 시간 초과, 하역 복구, 장면 재계획 시간 초과, 복귀 추종)는 두 팔에 섞여 있다. 계획 V3 대로, 이 비교는 자동 항목이 고정 순서만큼 돈다는 확인일 뿐이다.
+- `slam_link_failed`(`no reply within 1.00 s`)
+  - 이 묶음에서 4 실행이다(고정 line_m s2·random_m s3, 자동 random_m s3·s4).
+  - 1 차 묶음의 3 실행과 합치면 7 이다. 모두 세션 끝 무렵, scan 4 800 개를 넘긴 뒤에 났다.
+  - 원인 조사는 총괄 결정으로 콘솔 세션이 맡았다. 실행 폴더는 보존한다.
+
+## 8 주차 목표 재판정 (PR ④ 방식, 고정 팔)
+
+- 같은 방식(대기열 고정 순서, line_m·random_m × seed 0–4)으로 돌렸다. 트리는 main `fa3d7218`(P-4 점유 배제 #127) + CT-2 브랜치다. 고정 팔은 CT-2 코드를 쓰지 않는다. 차이는 탐침의 재개 조건과, seed 2 의 not_stopped 재개 1 회다.
+- 결과: 완주 세션 3 / 10, 완료 미션 18 / 23(78 %), 금지 접촉 0.
+- PR ④ q2_0136fc5 는 완주 세션 5 / 10, 완료 미션 17 / 21(81 %), 금지 접촉 0 이었다.
+- 바뀐 것
+  - P-4 원거리 인식 실패(`observe:stall_exhausted`)가 이 묶음에서는 두 팔 모두 0 이다. PR ④ 에서는 2 실행, 1 차 묶음에서도 2 실행이었다.
+  - 대신 세션을 끝낸 주된 실패가 새로 드러났다: SLAM 연결 시간 초과 4 실행(두 팔 합), 하역 복구 실패 2, 장면 재계획 시간 초과 2, 복귀 추종 실패 2.
+  - 두 팔을 합치면(차량 코드는 같다) 완주 세션 8 / 20, 완료 미션 41 / 49(84 %)다.
+- 그래서 8 주차 목표(연속 이송 완주)는 아직 충족되지 않았다. 남은 주된 원인은 세션 끝 무렵의 SLAM 연결 시간 초과(콘솔 세션 조사 중)와 하역 복구·재계획 시간 초과다.
