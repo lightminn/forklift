@@ -5516,7 +5516,8 @@ def drive(S, isaac) -> None:
                                 cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
-                                **({} if args.diag_return_stall_budget is None
+                                # a recorded run's arguments may predate the diagnostic (the replay gate)
+                                **({} if getattr(args, "diag_return_stall_budget", None) is None
                                    else {"return_stall_budget": int(args.diag_return_stall_budget)}),
                                 speeds=speeds, repeat_captures=args.repeat_captures,
                                 repeat_at_attempt=args.repeat_at_attempt, extra_views=args.extra_views,

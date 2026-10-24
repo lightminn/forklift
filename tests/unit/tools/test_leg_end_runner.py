@@ -27,5 +27,7 @@ def test_the_near_field_contract_knows_both():
 
 def test_the_return_budget_reaches_the_core_only_when_given():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
-    assert ('**({} if args.diag_return_stall_budget is None\n'
+    # read with getattr: a recorded run's arguments (the replay gate's) may predate the diagnostic
+    assert ('**({} if getattr(args, "diag_return_stall_budget", None) is None\n'
             '                                   else {"return_stall_budget": int(args.diag_return_stall_budget)}),') in source
+    assert "args.diag_return_stall_budget is None" not in source
