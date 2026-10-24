@@ -152,7 +152,7 @@ class WiredProbe(lcp.Probe):
         pass
 
 
-def _run(vehicle, clock, cycle="P-1:D-1,P-2:D-2,P-3:D-3"):
+def _run(vehicle, clock, cycle="P-1:D-1,P-2:D-2,P-3:D-3", resume_not_stopped=False):
     real_mono = lcp.time.monotonic
 
     async def fake_sleep(s):
@@ -164,7 +164,8 @@ def _run(vehicle, clock, cycle="P-1:D-1,P-2:D-2,P-3:D-3"):
     lcp.asyncio.sleep, lcp.time.monotonic = fake_sleep, clock.monotonic
     probe = WiredProbe(vehicle)
     try:
-        args = SimpleNamespace(cycle=cycle, mission_timeout_s=60.0, end_session=False)
+        args = SimpleNamespace(cycle=cycle, mission_timeout_s=60.0, end_session=False,
+                               queue_resume_not_stopped=resume_not_stopped)
 
         async def go():
             await lcp.queue_scenario(probe, args)
@@ -410,3 +411,19 @@ def test_a_start_up_pause_in_the_states_does_not_stop_the_queue():
     p = _run(v, clock)
     assert p.report["start_steady"]["ok"] and p.report["queue"]["stop_reason"] == "완료"
     assert p.report["queue"]["counts"]["done"] == 3
+
+
+def test_a_not_stopped_refusal_is_resumed_once_after_the_truck_stands():
+    # the queue plan's D5: the operator resumes once more after a not_stopped refusal (ws1 CT-2 V3 seed 2)
+    clock = Clock()
+    v = FakeVehicle(clock, ["refused", "done", "done", "done"], refuse={1})  # the refused submit takes a number
+    p = _run(v, clock, resume_not_stopped=True)
+    assert p.report["operator_resumes"] == [{"after": "거부: not_stopped", "stood": True}]
+    assert p.report["queue"]["stop_reason"] == "완료" and p.report["queue"]["counts"]["done"] == 3
+
+
+def test_a_second_not_stopped_refusal_ends_the_run():
+    clock = Clock()
+    v = FakeVehicle(clock, ["done", "done", "done"], refuse={1, 2})
+    p = _run(v, clock, resume_not_stopped=True)
+    assert len(p.report["operator_resumes"]) == 1 and p.report["queue"]["stop_reason"] == "거부: not_stopped"
