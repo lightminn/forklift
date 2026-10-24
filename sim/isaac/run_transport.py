@@ -7464,6 +7464,33 @@ def drive(S, isaac) -> None:
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
                        "overlay": overlay}
                 if encoder is not None else None)
+            # CT-2 D5 (docs/plans/2026-10-24-ct2-next-pick.md): pick_request answered from a snapshot of the asking
+            # tick (the targets, the truck, home = the wait pose, the scene, the planner's neighbour arguments and each
+            # destination's slot anchors), computed on the planning worker
+            from forklift_core.live.pick import PICK_DEADLINE_MS, PickService
+            from forklift_core.mission.next_pick import PickSnapshot
+
+            def next_pick_snapshot_():
+                import copy as pick_copy
+
+                rear_ = live_state.get("rear")
+                wait_ = live_session_["wait"]
+                anchors_ = {did_: session_anchor_poses_(did_, pose_, None) or {}
+                            for did_, pose_ in core.targets.destinations.items()}
+                return PickSnapshot(pick_copy.deepcopy(core.targets), None if rear_ is None else tuple(rear_),
+                                    (float(wait_.x_m), float(wait_.y_m), float(wait_.yaw_rad)),
+                                    live_session_["scenario"], geometry, float(planner_config.clearance_m),
+                                    dict(live_session_["nominal"]), tuple(live_session_["shape"]),
+                                    float(SESSION_PRIOR_GROW_M), slot_anchors=anchors_)
+
+            def next_pick_pose_():
+                rear_ = live_state.get("rear")
+                return None if rear_ is None else {
+                    "x_m": float(rear_[0]), "y_m": float(rear_[1]), "yaw_rad": float(rear_[2]),
+                    "correction_version": None if obstacle is None else int(obstacle["version"])}
+
+            live.enable_next_pick(PickService(next_pick_snapshot_, worker=core.jobs, pose=next_pick_pose_),
+                                  PICK_DEADLINE_MS)
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         def scene_require(t_, ok_, reason_, cargo=False):

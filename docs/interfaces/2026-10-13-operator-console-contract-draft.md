@@ -169,6 +169,7 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 | `mode_request` | lease | `request_id`, `lease_id`, `control_gen`, `to: TELEOP \| PAUSED` | `STOPPED`에서는 모두 `reject(stopped_locked)`(나가는 길은 `rearm`뿐). 그 밖에서는 `to: PAUSED`를 어느 작업 단계에서나 받고, `to: TELEOP`만 상태 조건(설계 4.5)을 검사해 아니면 `reject(state_forbids_teleop)` |
 | `arm` / `disarm` | lease | `request_id`, `lease_id`, `control_gen` | TELEOP에서만. `arm`은 새 `arm_gen`을 돌려준다 |
 | `targets_request` | 관찰 이상 | `request_id` | 현재 작업 대상 목록(5.1)을 보낸다 |
+| `pick_request` | 관찰 이상 | `request_id` | 2026-10-24(CT-2, [계획](../plans/2026-10-24-ct2-next-pick.md) D3). 다음 팔레트·칸 추천을 계산해 `ack` 뒤 따로 `pick`(5.3)을 보낸다. 지원하지 않으면 `reject(unsupported)`, 진행 중 미션이 있으면 `reject(mission_active)` |
 | `mission_submit` | lease | `request_id`, `lease_id`, `control_gen`, `pallet_id`, `destination_id`, `targets_revision` | 대상 목록의 revision이 다르면 `reject(stale_targets)`. 수락하면 `mission_id`를 발급한다. 같은 `request_id`의 재전송은 1절의 처리 순서에 따라 저장된 결과(같은 `mission_id`)를 돌려받는다 |
 | `mission_pause` / `mission_resume` / `mission_cancel` | lease | `request_id`, `lease_id`, `control_gen`, `mission_id` | 재개는 재개 절차(설계 4.3)를 시작하고, 각 단계 결과를 상태로 보낸다 |
 | `recovery` | lease | `request_id`, `lease_id`, `control_gen`, `action: withdraw_straight` | 상태별로 허용된 복구 동작만 받는다. 나머지는 거부한다 |
@@ -211,6 +212,34 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - `outcome`: `done`, `failed`, `cancelled`, `recovery_required`. `reason` 은 사유 코드(설명은 화면 쪽 표). `started_s`·`ended_s` 는 시뮬 시각, `ended_unix` 는 결과를 만든 순간의 벽시계(Unix) 시각이다(한 번 찍고 재전송·재생에서 바꾸지 않는다). `record_error` 는 기록 파일을 못 쓴 경우에만 있다. 실패를 안 다음 틱에 같은 `missions_seq` 로 다시 발행되며, 형식은 `result.json: …`·`records.json: …`(쓰기 실패), `result.json, records.json: dropped (…)`(쓰기 스레드가 가득 참), `files unsettled after N s`(세션 끝 대기 한도에 못 씀)다. `record_errors_older`(있을 때만)는 이미 목록 밖으로 밀려난 결과의 기록 실패 건수다(내용은 실행 로그에 있다).
 - `map_id`(2026-10-21 추가, SLAM 위치추정 계획 L6): 그 미션이 돈 조사 지도 묶음의 식별자(64 자리 16 진수). 온라인 mapping 세션은 `null`. 결과 기록부가 에폭마다 새로 시작하므로, 에폭을 넘어 같은 좌표계에서 돈 결과인지는 이 값으로 잇는다(같은 `map_id` 는 좌표계가 같다는 뜻일 뿐 상태가 이어진다는 뜻이 아니다). 미션 폴더의 `result.json` 에도 같은 값이 있다.
 - `advice`(준비의 모든 후보가 출발 자세에서 막힌 실패에만): 실패를 낸 준비 작업이 **같은 입력**(제출 때 고정한 격자·팔레트 대상·설정)과 계획기 자신의 출발 검사로, 그때 자세(`from_rear`)에서 곧게 뒤로 0.05 m 씩 1.0 m 까지 본 결과다. `backoff_m`–`backoff_max_m` 은 출발 검사가 이어서 통과하는 거리(그 사이 자세는 몸체가 지나가는 자리로 여유 0 에서 비어 있음). 찾지 못하면 `{"backoff_m": null, "within_m": 1.0, …}`, 가는 길이 막히면 `{"backoff_m": null, "blocked_at_m": d, …}`, 준비 시간을 다 쓰면 `{"skipped": "deadline"}`. **안내일 뿐 허가가 아니다** — 조종은 텔레옵 허가를 그대로 받는다. 상태의 자세는 지도 좌표라 이후 SLAM 보정이 움직이지 않은 차를 옮겨 보일 수 있으므로, 안내는 "실패 때 자세 기준" 으로만 쓴다.
+
+### 5.3 다음 팔레트 추천 (2026-10-24, CT-2 계획 D2·D3)
+
+```json
+{"t": "pick", "request_id": "r-17", "targets_revision": 23,
+ "pick": {"pallet_id": "P-4", "destination_id": "D-2"}, "reason": "ok",
+ "plan": [["P-4", "D-2"], ["P-3", "D-1"], ["P-5", "D-3"]], "missions": 3, "estimate_total_m": 56.186,
+ "home_assumed": false, "blocked": {"P-1": ["pickup:P-2", "pickup:P-4"]},
+ "pose": {"x_m": -2.09, "y_m": 0.0, "yaw_rad": 0.0, "correction_version": 4}}
+```
+
+- 지원하는 차량은 `welcome.capabilities` 에 `next_pick: true` 와 `next_pick_deadline_ms`(요청부터 `pick` 까지 지키려는 상한, 정수 ms)를 싣는다. 없으면 지원하지 않는 것으로 보고, 기한은 5000 으로 본다.
+- `pick_request` 는 신뢰 요청이다(1 절의 원장 규칙). `ack` 는 재전송을 끝낼 뿐이고 내용은 따로 오는 `pick` 이다. 같은 요청의 재전송이 저장된 `ack` 를 받아도 차량은 그때 새로 계산한 `pick` 을 보낸다. 클라이언트는 기다리는 `request_id` 와 맞는 첫 `pick` 만 쓰고, `pick` 이 `ack` 보다 먼저 와도 받는다.
+- `targets_revision` 은 계산에 쓴 대상 목록의 revision 이다. 추천은 권고다. 제출은 지금처럼 `check_submit`·허가·준비 계획을 다시 거친다.
+- `reason` 은 다섯 가지로 고정이다.
+  - `ok`
+  - `none_remaining`: `available` 팔레트가 하나도 없음
+  - `no_free_destination`
+  - `all_blocked`: 자세 없는 `available` 팔레트가 남은 경우 포함
+  - `error:<예외 종류>`(이때 `pick` 은 `null`)
+- `blocked` 는 `{팔레트 또는 칸 ID: [사유…]}` 다. 사유는 다음 여섯 가지다.
+  - `pickup:<id>`·`delivery:<id>`: 그 팔레트·칸의 고정 직선을 막는 것
+  - `occupied:<id>`: 그 칸을 확인된 자리로 가진 팔레트
+  - `props`: 장면 고정 장애물만으로 막힘
+  - `no_pose`
+  - `no_size`
+- 판정 규칙(차량 쪽, `forklift_core/mission/next_pick.py`): 미션 계획과 같은 이웃 외곽과 고정 직선 다섯으로 쌍을 판정한다. 가능한 순서를 모두 찾아, 미션 수가 가장 많은 순서를 고른다. 동률이면 거리 추정 합(mm 정수)이 가장 짧은 순서, 그다음은 사전순이다. 그 순서의 첫 쌍이 `pick` 이다.
+- **구현 상태(2026-10-24).** Isaac live 실행기가 계획 작업자에서 계산한다(`forklift_core/live/pick.py`). 배치 실행기는 이 요청을 받지 않는다. 가짜 차량은 화면 시험용 장난감 규칙으로 답한다(콘솔 세션 구현).
 
 ## 6. 상태 메시지
 
