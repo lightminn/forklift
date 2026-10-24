@@ -6639,6 +6639,12 @@ class MissionCore:
             state.setdefault("scene_escape_candidates", []).append(
                 {"time_s": float(t), "candidates": [c_.record() for c_ in candidates_],
                  "chosen": None if choice_ is None else choice_.record()})
+            if near_:
+                # the start-band release's rectangles (the device's author: a pass by the moving-away rule is told
+                # apart in the record); the key is absent with the release off or nothing released
+                state["scene_escape_candidates"][-1]["released"] = [
+                    {"x_m": float(r_.x_m), "y_m": float(r_.y_m), "length_m": float(r_.length_m),
+                     "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
             if choice_ is None:
                 return None
             poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
