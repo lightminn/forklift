@@ -23,7 +23,9 @@ A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan
   reserved by Slurm, but the SLAM bridges and other users' containers are not.
 
 Each run gets SESSION_ID=<job>s<index>[r<attempt>] (the launchers name their docker containers with it), BRIDGE_CPU
-(a CPU of the job, a different one per slot, for the SLAM bridge container), PORT (a free port, 9000-9499, from an
+(the SLAM bridge container's cpuset: with --bridge-cpus a core set apart for every run's bridge while the sessions are
+pinned to the other CPUs with taskset -- the bridge's keyframe replies slow down as its graph grows and must not
+queue behind Isaac's thread pools -- else a CPU of the job per slot, shared), PORT (a free port, 9000-9499, from an
 offset by job), BUNDLE_SLOT, BUNDLE_JOB, BUNDLE_RUN and BUNDLE_TOKEN. The list may set PORT (each value once) but none
 of the others. Each run is its own process group with its log in OUT/runs/<name>.<attempt>.log; one that fails leaves
 the others running.
@@ -104,6 +106,7 @@ KINDS = {
     # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
     "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4},
 }
+BRIDGE_CORE_CPUS = 2  # one physical core (its two hyperthreads) for the SLAM bridges, apart from the Isaac sessions
 SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
 MARGIN_GIB = 0.5
 BRIDGE_MIB = 760  # a SLAM bridge container, outside the job's cgroup: 0.12-0.74 GiB measured (se* pilot, 16 bridges)
@@ -197,7 +200,45 @@ def sbatch_sizes(kind, slots=None) -> dict:
     if not 1 <= slots <= k["max_slots"]:
         raise ValueError(f"{kind}: 1-{k['max_slots']} sessions per GPU, not {slots}")
     mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
-    return {"slots": slots, "gres": f"shard:{slots}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
+    return {"slots": slots, "gres": f"shard:{slots}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
+            "mem_gib": int(mem)}
+
+
+def _siblings(cpu):
+    try:
+        text = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list").read_text().strip()
+    except OSError:
+        return (cpu,)
+    out = set()
+    for part in text.split(","):
+        a, _, b = part.partition("-")
+        out.update(range(int(a), int(b or a) + 1))
+    return tuple(sorted(out))
+
+
+def auto_bridge_cpus(n_cpus, slots) -> int:
+    """A core for the bridges when the job has one beyond 2 CPUs per session (what `sizes` asks for), else none."""
+    return BRIDGE_CORE_CPUS if n_cpus >= 2 * slots + BRIDGE_CORE_CPUS else 0
+
+
+def split_bridge_cpus(cpus, n, siblings=_siblings):
+    """(bridge CPUs, session CPUs): whole cores from the end of the job's CPUs until at least n CPUs are set apart for
+    the SLAM bridge containers; the sessions keep the rest. ([], cpus) when n is 0 or nothing would be left."""
+    cpus = sorted(cpus)
+    if n <= 0:
+        return [], cpus
+    cores, seen = [], set()
+    for c in cpus:
+        if c in seen:
+            continue
+        group = [x for x in siblings(c) if x in cpus] or [c]
+        seen.update(group)
+        cores.append(group)
+    bridge = []
+    while cores and len(bridge) < n:
+        bridge = sorted(bridge + cores.pop())
+    rest = sorted(c for core in cores for c in core)
+    return (bridge, rest) if rest else ([], cpus)
 
 
 def node_available_mib():
@@ -495,7 +536,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
-               node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None):
+               node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
+               siblings=_siblings):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if claim_dir is not None:
@@ -510,6 +552,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     (out / "runs").mkdir(parents=True, exist_ok=True)
     job_id = str(job_id or os.environ.get("SLURM_JOB_ID") or f"local{os.getpid()}")
     cpus = sorted(cpus if cpus is not None else os.sched_getaffinity(0))
+    # bridge_cpus: a whole core (or more) for every run's SLAM bridge, the sessions pinned to the other CPUs; "auto"
+    # does so when the job has a core beyond 2 CPUs per slot (isaac_bundle.py sizes asks for it), else bridges share
+    if bridge_cpus == "auto":
+        bridge_cpus = auto_bridge_cpus(len(cpus), slots)
+    bridge_set, session_cpus = split_bridge_cpus(cpus, int(bridge_cpus), siblings)
     base_env = dict(os.environ if base_env is None else base_env)
     stop = stop or threading.Event()
     budget = shards * shard_mib if shards else None
@@ -627,15 +674,17 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         taken |= {int(x.env["PORT"]) for _, x, _ in queue if "PORT" in x.env}
         env.update({
             "SESSION_ID": f"{job_id}s{index}" + (f"r{attempt}" if attempt > 1 else ""),
-            "BRIDGE_CPU": str(cpus[slot % len(cpus)]), "PORT": str(_free_port(job_id, taken)),
+            "BRIDGE_CPU": ",".join(map(str, bridge_set)) if bridge_set else str(cpus[slot % len(cpus)]),
+            "PORT": str(_free_port(job_id, taken)),
             "BUNDLE_SLOT": str(slot), "BUNDLE_JOB": job_id, "BUNDLE_RUN": run.name,
             "BUNDLE_TOKEN": f"{job_id}-{index}-{attempt}-{nonce}",
         })
         env.update(run.env)
         log_path = out / "runs" / f"{run.name}.{attempt}.log"
         log = log_path.open("ab")
+        argv = (["taskset", "-c", ",".join(map(str, session_cpus))] + run.argv) if bridge_set else run.argv
         try:
-            proc = subprocess.Popen(run.argv, cwd=run.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
+            proc = subprocess.Popen(argv, cwd=run.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, start_new_session=True)
         except OSError as exc:
             log.close()
@@ -894,7 +943,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"],
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
-        "cpus": cpus, "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
+        "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
+        "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
         "exit_code": 0 if failed == 0 and not_started == 0 and not st["errors"] else 1,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
@@ -937,6 +987,9 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
                     help="node-wide RAM reservations shared by this user's bundle jobs")
+    ap.add_argument("--bridge-cpus", default="auto",
+                    help="CPUs set apart for the SLAM bridges, the sessions pinned to the rest (auto: a core when the "
+                         "job has one beyond 2 CPUs per slot; 0: bridges share)")
     ap.add_argument("--claim-dir", help="share the list with other bundle jobs: a run goes to the first to claim it")
     ap.add_argument("--node-ram-min-mib", type=int, default=KINDS["riib"]["session_gib"] * 1024 + BRIDGE_MIB,
                     help="start only while the node's MemAvailable is at least this (0: off)")
@@ -981,6 +1034,7 @@ def main(argv=None) -> int:
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
+        bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
     )
     print(json.dumps(summary))
     return summary["exit_code"]

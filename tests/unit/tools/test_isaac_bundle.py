@@ -624,10 +624,10 @@ def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
 @pytest.mark.parametrize(
     "kind, slots, args",
     [
-        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 8, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
-        ("riib", 3, {"slots": 3, "gres": "shard:3", "cpus": 6, "mem_gib": 20}),  # 3 x 6.0 + 2 = 20
-        ("riib", None, {"slots": 3, "gres": "shard:3", "cpus": 6, "mem_gib": 20}),
-        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 4, "mem_gib": 12}),
+        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 10, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
+        ("riib", 3, {"slots": 3, "gres": "shard:3", "cpus": 8, "mem_gib": 20}),  # 3 x 6.0 + 2 = 20
+        ("riib", None, {"slots": 3, "gres": "shard:3", "cpus": 8, "mem_gib": 20}),
+        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 6, "mem_gib": 12}),
     ],
 )
 def test_sizes_grow_with_the_bundle(kind, slots, args):
@@ -641,7 +641,7 @@ def test_more_sessions_than_a_gpu_holds_are_refused():
 
 def test_the_sizes_command_prints_sbatch_options(capsys):
     assert ib.main(["sizes", "live"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G"
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=10 --mem=24G"
 
 
 def test_a_start_waits_for_the_node_s_memory(tmp_path):
@@ -742,3 +742,37 @@ def test_a_failed_start_gives_its_reservation_back(tmp_path):
     bundle(tmp_path, [ib.Run(name="a", argv=[str(tmp_path / "no_such_program")])], node_ram_min_mib=6344,
            node_ram=lambda: 7000, node_ledger_dir=led)
     assert results(tmp_path)["a"]["status"] == "start_failed" and list(led.glob("r-*")) == []
+
+
+# --- a core for the SLAM bridges --------------------------------------------------------------------------------------
+
+WS1_SIBLINGS = {0: (0, 12), 12: (0, 12), 1: (1, 13), 13: (1, 13), 4: (4, 16), 16: (4, 16), 5: (5, 17), 17: (5, 17),
+                6: (6, 18), 18: (6, 18)}
+
+
+def test_a_whole_core_is_set_apart_for_the_bridges():
+    bridge, rest = ib.split_bridge_cpus([0, 1, 4, 5, 6, 12, 13, 16, 17, 18], 2, lambda c: WS1_SIBLINGS[c])
+    assert bridge == [6, 18] and rest == [0, 1, 4, 5, 12, 13, 16, 17]
+
+
+def test_no_core_is_set_apart_when_nothing_would_be_left():
+    assert ib.split_bridge_cpus([0, 12], 2, lambda c: WS1_SIBLINGS[c]) == ([], [0, 12])
+    assert ib.split_bridge_cpus([0, 1, 12, 13], 0, lambda c: WS1_SIBLINGS[c]) == ([], [0, 1, 12, 13])
+
+
+def test_sessions_run_on_the_cpus_the_bridges_do_not_have(tmp_path):
+    cpus = sorted(os.sched_getaffinity(0))
+    if len(cpus) < 3:
+        pytest.skip("needs 3 CPUs")
+    code = "import json,os,sys; json.dump(sorted(os.sched_getaffinity(0)), open(sys.argv[1],'w'))"
+    run = ib.Run(name="a", argv=py(code, str(tmp_path / "aff.json")), env={"MARK": "x"})
+    summary = bundle(tmp_path, [run], slots=1, cpus=cpus, bridge_cpus=1, siblings=lambda c: (c,))
+    aff = json.loads((tmp_path / "aff.json").read_text())
+    assert summary["bridge_cpus"] == [cpus[-1]] and aff == cpus[:-1]
+    env_bridge = results(tmp_path)["a"]["bridge_cpu"]
+    assert env_bridge == str(cpus[-1])
+
+
+@pytest.mark.parametrize("n_cpus, slots, n", [(10, 4, 2), (8, 4, 0), (8, 3, 2), (4, 1, 2), (2, 1, 0)])
+def test_auto_sets_a_core_apart_only_when_the_job_has_one_to_spare(n_cpus, slots, n):
+    assert ib.auto_bridge_cpus(n_cpus, slots) == n

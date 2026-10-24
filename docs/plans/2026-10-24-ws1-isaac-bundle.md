@@ -134,7 +134,12 @@
 | 배치 riib_scene 류 | **3** | 3 | 6 | 20G | **GPU 당 3 이 상한**: 영상 기록까지 하는 세션이 4,145–4,366 MiB 라 넷이면 GPU 를 넘는다(시범 10793·10794 에서 장치 여유 검사가 넷째를 막았다). RAM 은 3 세션 묶음 anon 최대 17.8 GiB(세션당 5.93) → 6.0 × 3 + 2 |
 | 배치 bd 류(작업자 없음) | 4 | 4 | 8 | 22G | 단독 cgroup peak ≤ 5.82 GiB → 5.0 × 4 + 2(묶음 실측 전 잠정) |
 
-- 크기는 `python3 tools/isaac_bundle.py sizes <live|riib|bd> [--slots N]` 가 계산해 sbatch 옵션으로 찍는다(세션 수에 비례: 세션 수 × 세션 RAM + 공유 파일 1.5 GiB + 여유 0.5 GiB, 코어 2/세션, shard 1/세션).
+- 크기는 `python3 tools/isaac_bundle.py sizes <live|riib|bd> [--slots N]` 가 계산해 sbatch 옵션으로 찍는다.
+  - 세션 수에 비례한다: RAM 은 세션 수 × 세션 RAM + 공유 파일 1.5 GiB + 여유 0.5 GiB, CPU 는 2/세션 + SLAM 브리지 전용 한 코어(2), shard 는 1/세션이다.
+  - **브리지 전용 코어(2026-10-25, 콘솔 세션 조사).** CT-2 V3 의 slam_link_failed 7 건은 slam_toolbox 키프레임 응답이 그래프 크기에 비례해 늘어(스캔 0–999 중앙 0.03 s → 4,500 이후 0.5 s·p95 0.9 s) 러너의 1.0 s 기한을 넘은 것이다. 그런데 브리지 컨테이너는 Isaac 과 공유하는 CPU 하나에 묶여 있었다.
+  - 실행기는 잡에 세션 몫(2/세션) 밖의 코어가 있으면(`--bridge-cpus auto`) 그 코어의 시블링 둘을 모든 브리지에 주고(`BRIDGE_CPU="a,b"`), 세션들은 `taskset` 으로 나머지 CPU 에 묶는다.
+  - 근본 원인(그래프 크기)은 콘솔 세션의 별건 계획이 맡는다. 이 분리는 실패 시점을 늦추는 완화다.
+  - 단독 잡 런처(`isaac_live.sbatch` 의 CPU0)는 P2 결과를 보고 정한다(콘솔 세션과 합의).
 - RAM 은 cgroup 의 anon 기준이다. `memory.peak`·sacct MaxRSS(이 노드는 `jobacct_gather/cgroup` 이라 cgroup 값과 같다)에는 회수되는 파일 캐시가 들어 있다. riib 3 세션 묶음은 peak 20.0–20.5 GiB 중 anon 이 17.8 GiB 였다.
 - SLAM 브리지 컨테이너는 Slurm 밖이다. 세션당 0.12–0.74 GiB 이고, 시범 16 개 중 최대가 0.74 GiB 였다. 실행기는 새 세션을 시작하기 전에 노드의 MemAvailable 이 세션 하나 + 브리지(기본 6 GiB + 760 MiB = 6,904 MiB) 이상인지 본다(`--node-ram-min-mib`). Slurm 예약을 줄여 잡이 늘어도 노드 실메모리가 넘치지 않게 하려는 것이다.
 - 같은 cgroup 안 세션들은 Isaac 라이브러리 페이지 캐시를 한 번만 센다. 그래서 4 × MaxRSS 는 실제 묶음 최대보다 크다(시범이 묶음 `memory.peak` 로 확인한다).
