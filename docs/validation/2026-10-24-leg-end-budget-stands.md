@@ -17,7 +17,9 @@
   - `test_isaac_obstacle_layer.py` 의 대상 교체 시작 검사 동등성.
   - `test_baseline.py` 의 기록 인계.
   - `tests/unit/tools/test_leg_end_runner.py`.
-- ws1 전체: 6453 passed, 11 failed. 1 건은 감사 시험(계획 호출의 첫 인자 이름 규칙)이라 고쳤다(ec25a22). 10 건은 알려진 ws1 전용이다.
+- ws1 전체
+  - 처음: 6453 passed, 11 failed. 1 건은 감사 시험(계획 호출의 첫 인자 이름 규칙)이라 고쳤다(ec25a22). 10 건은 알려진 ws1 전용이다.
+  - main(D1 0.20) 병합 뒤: 6452 passed, 16 failed. 6 건은 계획 설정 감사(`test_all_runner_planning_calls_use_the_recorded_config`)다. O1 의 호출을 지역 이름으로 바꾸자 감사가 그 호출을 새로 셌다. 호출을 `observe_miss` 와 같은 이름으로 묶고, 감사의 기대 목록에 더했다(3af6b52). 그 뒤 해당 묶음(계획 설정·truth 감사·mission 전체·장애물 층·러너 진단) 1120 개가 ws1 에서 통과했다. 나머지 10 건은 알려진 ws1 전용이다.
 - 재생 게이트 29 건
   - `le_1451714` 는 29/29 실패했다. 기록된 인자에 새 진단 인자가 없어서다(AttributeError). `getattr` 로 고쳤다(2fa8fdd).
   - `le_2fa8fdd` 는 29/29 통과했다.
