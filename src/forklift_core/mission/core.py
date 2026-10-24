@@ -2456,12 +2456,16 @@ class MissionCore:
         return SimpleNamespace(tracking=tracking, rear=rear)
 
     def observe_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
-        """Plan 2026-10-24-leg-end-budget-stands O1: on the first far observation, a stand at the final goal outside
-        the loose arrival bounds (remaining 0, tracking, not at a cusp, a zero command, standing) that lasts
-        OBSERVE_END_STAND_S is planned again to the same target -- once per observe leg serial, within the leg's
-        replan budget. A failed attempt is recorded only here (no budget spent) and the truck keeps standing, so the
-        loose arrival or the timeout follow as before; an installed one counts in observe_replans. Returns the
-        tracking for this tick."""
+        """Plan 2026-10-24-leg-end-budget-stands O1: on the first far observation, a stop at the final goal without
+        an arrival (remaining 0, tracking, not at a cusp, a zero command) whose zero command lasts OBSERVE_END_STAND_S
+        (a stop detector judgement at the end, not 3 s of continuous standing), and on the
+        tick it is judged stands (stop_now) outside the loose arrival bounds, is planned again to the same target --
+        once per observe leg serial, within the leg's replan budget. The stop is timed through the stop detector's
+        flicker and whatever the bounds say on the way (Isaac ler_1451714_random_m_s1 m2: 14 s at 0.055 m / 0.103-0.115
+        rad, outside throughout, never fired -- the same stand's earlier cusp latch logged stop_lost / stop_confirmed
+        seven times in 5 s); inside the bounds on the tick, the loose arrival's own count is left to finish. A failed
+        attempt is recorded only here (no budget spent) and the truck keeps standing, so the loose arrival or the
+        timeout follow as before; an installed one counts in observe_replans. Returns the tracking for this tick."""
         ms, state, slam, hooks, options, paths, trackers = (self.ms, self.state, self.slam, self.hooks, self.options,
                                                             self.paths, self.trackers)
         leg_ = state["observe_replan_leg"]
@@ -2472,21 +2476,20 @@ class MissionCore:
             and tracking.status == "tracking"
             and not tracking.at_cusp
             and abs(tracking.speed_mps) < 1e-12
-            and bool(slam["stop_now"])
             and trackers["observe"].remaining_to_goal_m() <= 1e-9
             and not hooks.cusp_monitor().holds_observe()
-            and (tracking.position_error_m > options.observe_arrival_m
-                 or abs(tracking.yaw_error_rad) > options.observe_arrival_yaw_rad)
         )
         if not standing_:
             state.pop("observe_end_stand", None)
             return tracking
         pending_ = state.setdefault("observe_end_stand", {"since_s": float(t)})
         stood_ = self.commands.work_elapsed(pending_["since_s"], t)
-        if stood_ < OBSERVE_END_STAND_S:
+        outside_ = (tracking.position_error_m > options.observe_arrival_m
+                    or abs(tracking.yaw_error_rad) > options.observe_arrival_yaw_rad)
+        if stood_ < OBSERVE_END_STAND_S or not outside_ or not slam["stop_now"]:
             return tracking
         state.pop("observe_end_stand", None)
-        record = {"time_s": float(t), "leg_serial": leg_["serial"], "stood_s": float(stood_),
+        record = {"time_s": float(t), "leg_serial": leg_["serial"], "zero_command_s": float(stood_),
                   "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
                   "rear_pose": [float(v) for v in rear]}
         records_ = state.setdefault("observe_end_stands", [])

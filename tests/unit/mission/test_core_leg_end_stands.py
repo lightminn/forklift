@@ -58,11 +58,41 @@ def test_o1_inside_the_loose_bounds_is_left_to_the_loose_arrival():
     assert w.names() == [] and "observe_end_stands" not in w.state
 
 
-def test_o1_a_stand_that_enters_the_bounds_before_3_s_restarts_nothing():
+def test_o1_a_stand_that_settles_inside_the_bounds_is_left_to_the_loose_arrival():
+    w = o_world()
+    stand_for(w, 2.5)
+    stand_for(w, 3.0, replace(STAND, yaw_error_rad=0.099), t0=12.5)  # inside on every tick from 2.5 s: never judged
+    assert w.names() == []
+
+
+def test_o1_a_stand_flickering_across_the_bound_is_timed_through_and_judged_on_an_outside_tick():
+    # a synthetic heading on the bound, in and out (not the Isaac case: that one stayed outside, see the next test)
+    w = o_world(plans=[co.plan()])
+    t, k = 10.0, 0
+    while t < 13.5:
+        w.tick(replace(STAND, position_error_m=0.055, yaw_error_rad=(-0.101 if (k // 30) % 2 else -0.099)), t=t)
+        t, k = t + DT, k + 1
+    (rec,) = w.state["observe_end_stands"]
+    assert rec["outcome"] == "installed" and rec["zero_command_s"] >= 3.0 and abs(rec["yaw_error_rad"]) > 0.10
+
+
+def test_o1_the_stop_detectors_flicker_does_not_restart_the_count_and_the_judged_tick_must_stand():
+    # Isaac ler_1451714_random_m_s1 m2: stop_lost / stop_confirmed every 0.1-1.3 s at a stand with a zero command
+    w = o_world(plans=[co.plan()])
+    t, k = 10.0, 0
+    while t < 13.0 + 0.6 and "observe_end_stands" not in w.state:
+        w.slam["stop_now"] = (k // 48) % 2 == 0  # 0.4 s standing, 0.4 s lost, ...
+        w.tick(STAND, t=t)
+        t, k = t + DT, k + 1
+    (rec,) = w.state["observe_end_stands"]
+    assert rec["outcome"] == "installed" and rec["zero_command_s"] >= 3.0 and w.slam["stop_now"]
+
+
+def test_o1_leaving_the_final_goal_stand_restarts_the_count():
     w = o_world()
     stand_for(w, 2.9)
-    stand_for(w, 0.5, replace(STAND, yaw_error_rad=0.099), t0=12.9)
-    stand_for(w, 2.9, t0=13.4)  # out again: the 3 s count starts over
+    w.tick(replace(STAND, speed_mps=0.01), t=12.95)  # commanded again: not a stand
+    stand_for(w, 2.9, t0=13.0)
     assert w.names() == []
 
 
@@ -106,7 +136,7 @@ def test_o1_a_new_leg_serial_arms_again():
 
 def test_o1_only_on_the_first_far_observation_and_only_standing_at_the_final_goal():
     for kw, tracking in (({"far": False}, STAND), ({"remaining": 0.02}, STAND), ({"holds_observe": True}, STAND),
-                         ({"stop_now": False}, STAND), ({}, replace(STAND, speed_mps=0.01))):
+                         ({"stop_now": False}, STAND), ({}, replace(STAND, speed_mps=0.01))):  # never standing: no judgement
         w = o_world(**kw)
         stand_for(w, 4.0, tracking)
         assert "plan_observation_leg" not in w.names() and "observe_end_stands" not in w.state, kw
