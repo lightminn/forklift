@@ -1,5 +1,6 @@
 """Several Isaac runs in one Slurm job (docs/plans/2026-10-24-ws1-isaac-bundle.md): a run list, N slots, staggered starts.
 
+    sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) deploy/slurm/isaac_bundle.sbatch RUNS OUT
     python3 tools/isaac_bundle.py --list RUNS.jsonl --out OUT [--slots N] [--shards N] [--stagger-s 60]
         [--session-vram-mib 3950] [--run-timeout-s S] [--grace-s 110] [--retries 1] [--pace-floor R]
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
@@ -17,7 +18,9 @@ A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan
   --shard-mib, and the GPU's free memory, less what the job's warming runs will still take, holds one more session
   (checked for the first run too). Shards are a scheduling count, not a partition: the second check keeps a start
   from landing on a GPU that other jobs have filled. When nvidia-smi cannot be read the start waits, for at most
-  --vram-unreadable-s, then goes on by the slots alone and says so.
+  --vram-unreadable-s, then goes on by the slots alone and says so;
+- the node's MemAvailable is at least --node-ram-min-mib (a session and its bridge container): the job's cgroup is
+  reserved by Slurm, but the SLAM bridges and other users' containers are not.
 
 Each run gets SESSION_ID=<job>s<index>[r<attempt>] (the launchers name their docker containers with it), BRIDGE_CPU
 (a CPU of the job, a different one per slot, for the SLAM bridge container), PORT (a free port, 9000-9499, from an
@@ -83,6 +86,21 @@ INFRA_PATTERNS = re.compile(
     rb"BFCArena::Allocate|bfc_arena\.cc:\d+|ERROR_OUT_OF_DEVICE_MEMORY|CUDA out of memory|CUDA_ERROR_OUT_OF_MEMORY"
     rb"|cudaErrorMemoryAllocation"
 )
+# Per-session sizes measured on ws1 (2026-10-24/25, docs/plans/2026-10-24-ws1-isaac-bundle.md 1 and 2.4). RAM is the
+# job cgroup's anon memory (the page cache of Isaac's libraries is shared by a bundle's sessions and reclaimable, so
+# it is counted once, SHARED_FILE_GIB); VRAM is per session with its learned worker; max_slots is how many fit one
+# GPU's 16,303 MiB with the device check's margin.
+KINDS = {
+    # live console sessions (isaac_live / ct1_queue), paced at 0.4: anon <= 5.48 GiB, 1.0-1.2 cores, 3,886-3,915 MiB
+    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4},
+    # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
+    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3},
+    # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
+    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4},
+}
+SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
+MARGIN_GIB = 0.5
+BRIDGE_MIB = 200  # a SLAM bridge container, outside the job's cgroup: 123-133 MiB measured
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 
@@ -163,6 +181,29 @@ def job_gpu_index(env) -> int | None:
     job's own numbering under ConstrainDevices (0 for whichever GPU it got) and is not used. None unless exactly one."""
     gpus = [g.strip() for g in (env.get("SLURM_JOB_GPUS") or "").split(",") if g.strip()]
     return int(gpus[0]) if len(gpus) == 1 and gpus[0].isdigit() else None
+
+
+def sbatch_sizes(kind, slots=None) -> dict:
+    """The job's resources for `slots` sessions of `kind` (default its max per GPU): shard per session, cores per
+    session, RAM = slots x session + the shared file pages + a margin, rounded up to a GiB."""
+    k = KINDS[kind]
+    slots = slots or k["max_slots"]
+    if not 1 <= slots <= k["max_slots"]:
+        raise ValueError(f"{kind}: 1-{k['max_slots']} sessions per GPU, not {slots}")
+    mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
+    return {"slots": slots, "gres": f"shard:{slots}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
+
+
+def node_available_mib():
+    """MemAvailable of the node in MiB (the bridges and other jobs' containers live outside Slurm's accounting)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError):
+        return None
+    return None
 
 
 def visible_gpus(env) -> list[str]:
@@ -410,7 +451,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
-               leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None):
+               leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
+               node_ram=node_available_mib):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if (out / "results.jsonl").exists() or (out / "summary.json").exists():
@@ -434,7 +476,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     records = []
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
-          "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": []}
+          "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
+          "node_ram_waits": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
     results_path, vram_path, pace_path = out / "results.jsonl", out / "vram.jsonl", out / "pace.jsonl"
@@ -703,6 +746,12 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             if (not stopping and queue and len(live) < min(slots, st["cap"])
                     and (st["last_start"] is None or now - st["last_start"] >= stagger_s)):
                 v = verdict(now)
+                if v in ("ok", "unreadable_go") and node_ram_min_mib is not None:
+                    # the node's own memory: Slurm reserves the cgroups, not the bridge containers or what others
+                    # run outside Slurm
+                    avail = node_ram()
+                    if avail is not None and avail < node_ram_min_mib:
+                        v = "node_ram"
                 if v in ("ok", "unreadable_go"):
                     st["waiting"] = None
                     if v == "unreadable_go":
@@ -710,8 +759,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                     index, run, attempt = queue.popleft()
                     start(index, run, attempt)
                     continue
-                if v in ("over", "gpu_full") and st["waiting"] != v:
-                    st["vram_waits" if v == "over" else "gpu_full_waits"] += 1
+                if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
+                    st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1
                     st["waiting"] = v
             time.sleep(poll_s)
 
@@ -759,6 +808,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "runs": len(runs), "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
+        "node_ram_waits": st["node_ram_waits"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"],
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
         "cpus": cpus, "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
@@ -769,6 +819,20 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["sizes"]:
+        sp = argparse.ArgumentParser(prog="isaac_bundle.py sizes",
+                                     description="sbatch options for a bundle of measured session kinds")
+        sp.add_argument("kind", choices=sorted(KINDS))
+        sp.add_argument("--slots", type=int)
+        a = sp.parse_args(argv[1:])
+        try:
+            z = sbatch_sizes(a.kind, a.slots)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G")
+        return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", required=True, help="the run list (JSON lines)")
     ap.add_argument("--out", required=True)
@@ -788,6 +852,8 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=240.0)
     ap.add_argument("--pace-period-s", type=float, default=60.0)
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    ap.add_argument("--node-ram-min-mib", type=int, default=KINDS["riib"]["session_gib"] * 1024 + BRIDGE_MIB,
+                    help="start only while the node's MemAvailable is at least this (0: off)")
     ap.add_argument("--no-vram", action="store_true", help="no GPU memory samples and no memory gate (slots only)")
     ap.add_argument("--no-cleanup", action="store_true", help="do not look for leftover bridge containers")
     ap.add_argument("--allow-multi-gpu", action="store_true")
@@ -827,7 +893,7 @@ def main(argv=None) -> int:
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
-        gpu_index=job_gpu_index(os.environ),
+        gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None,
     )
     print(json.dumps(summary))
     return summary["exit_code"]

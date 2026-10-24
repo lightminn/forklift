@@ -12,7 +12,9 @@
 # BRIDGE_CPU and PORT (deploy/console/isaac_live.sbatch and deploy/riibotics/riib_scene.sbatch name their bridge
 # container and pin it with them), the list's env overriding.
 #
-#   sbatch [--gres=shard:N --cpus-per-task=C --mem=M --time=T] deploy/slurm/isaac_bundle.sbatch RUNS.jsonl OUT
+#   sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) --time=T deploy/slurm/isaac_bundle.sbatch RUNS.jsonl OUT
+#   (sizes prints --gres/--cpus-per-task/--mem from the measured per-session RAM, cores and GPU memory, in proportion
+#   to the sessions; riib holds 3 per GPU -- 4.15-4.37 GB each with its video)
 #   optional: BUNDLE_PY (python3; the runner needs only the standard library), BUNDLE_ARGS (more tools/isaac_bundle.py
 #   options, split on spaces: --stagger-s, --run-timeout-s, --slots, --session-vram-mib ...)
 #

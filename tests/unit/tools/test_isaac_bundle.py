@@ -288,7 +288,7 @@ def test_main_runs_a_list(tmp_path):
     os.environ.update(env)
     try:
         rc = ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
-                      "--no-vram", "--no-cleanup"])
+                      "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0"])
     finally:
         os.environ.clear()
         os.environ.update(old)
@@ -616,3 +616,36 @@ def test_the_slurm_gpu_index_picks_the_device(tmp_path):
 )
 def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
     assert ib.job_gpu_index(env) == index
+
+
+# --- sizes and the node's memory ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kind, slots, args",
+    [
+        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 8, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
+        ("riib", 3, {"slots": 3, "gres": "shard:3", "cpus": 6, "mem_gib": 20}),  # 3 x 6.0 + 2 = 20
+        ("riib", None, {"slots": 3, "gres": "shard:3", "cpus": 6, "mem_gib": 20}),
+        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 4, "mem_gib": 12}),
+    ],
+)
+def test_sizes_grow_with_the_bundle(kind, slots, args):
+    assert ib.sbatch_sizes(kind, slots) == args
+
+
+def test_more_sessions_than_a_gpu_holds_are_refused():
+    with pytest.raises(ValueError, match="riib"):
+        ib.sbatch_sizes("riib", 4)
+
+
+def test_the_sizes_command_prints_sbatch_options(capsys):
+    assert ib.main(["sizes", "live"]) == 0
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G"
+
+
+def test_a_start_waits_for_the_node_s_memory(tmp_path):
+    avail = iter([3000, 3000, 3000] + [20000] * 1000)
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, node_ram_min_mib=6344,
+                     node_ram=lambda: next(avail))
+    assert summary["node_ram_waits"] == 1 and summary["failed"] == 0
