@@ -280,6 +280,24 @@ test("removing the auto item while it waits for a pick forgets the request", () 
   assert.equal(q.phase, "waiting");
 });
 
+test("the last pick shown is let go by a failed pick and by a new session", () => {
+  const q = running([auto()]);
+  const k1 = ask(q, 10_000);
+  q.onPick(k1, pick(k1, "P-1", "D-1"), 10_100, 7);
+  assert.equal(q.lastPick.pallet_id, "P-1");
+  q.operatorAction("stop");
+  q.resume(11_000);
+  const k2 = ask(q, 11_100);
+  q.onPick(k2, { ...pick(k2, null, null), reason: "all_blocked" }, 11_200, 7);
+  assert.equal(q.lastPick, null);
+  const r = running([auto()]);
+  const k3 = ask(r, 10_000);
+  r.onPick(k3, pick(k3, "P-1", "D-1"), 10_100, 7);
+  r.onWelcome(4);
+  assert.equal(r.lastPick, null);
+  assert.equal(r.lastPickBlocked, null);
+});
+
 test("only one auto item; nothing moves in front of it while it picks", () => {
   const q = new MissionQueue();
   assert.equal(q.add(auto()), true);

@@ -164,6 +164,8 @@ export class MissionQueue {
       this.applied.clear();
       this.early.clear();
       this.lastResultAt = null;
+      this.lastPick = null; // another session's pick and its blockers say nothing about this one (CT-2)
+      this.lastPickBlocked = null;
     }
     this.epoch = epoch;
     this.lastStateAt = null; // a new connection: silence is counted from its first state
@@ -277,11 +279,13 @@ export class MissionQueue {
       this.#dropPick(false);
       this.items = this.items.filter((x) => x.item_id !== autoId);
       this.lastPickBlocked = null;
+      this.lastPick = null;
       if (!this.items.length && this.run === "running") return this.stop("완료");
       this.#changed();
       return {};
     }
     this.lastPickBlocked = msg.blocked ?? null;
+    this.lastPick = null; // its plan no longer stands
     return this.stop(`자동 선택 실패: ${reason}`);
   }
 
