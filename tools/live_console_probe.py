@@ -1146,20 +1146,6 @@ async def wait_steady_states(p: Probe, n: int = 20, gap_s: float = 0.5, timeout_
     return False
 
 
-async def wait_stood(p: Probe, hold_s: float = 1.0, timeout_s: float = 60.0) -> bool:
-    """True once every state for hold_s has said stopped_confirmed (the truck settled), within timeout_s."""
-    end, since = time.monotonic() + timeout_s, None
-    while time.monotonic() < end and p.closed_code is None:
-        if (p.state or {}).get("stopped_confirmed") is True:
-            since = since if since is not None else time.monotonic()
-            if time.monotonic() - since >= hold_s:
-                return True
-        else:
-            since = None
-        await asyncio.sleep(0.05)
-    return False
-
-
 async def queue_scenario(p: Probe, args):
     """CT-1 PR 4 (docs/plans/2026-10-22-continuous-transport-ct1.md): the --cycle legs run by the console's own mission
     queue (tools/mission_queue.py, a port of console/web/js/queue.js) -- fed every state, result, welcome and close as
@@ -1197,7 +1183,6 @@ async def queue_scenario(p: Probe, args):
         expected = len(q.items)
     p.report["missions_run"] = []
     pick_resend = None
-    operator_resumes = 0
     # The operator resumes once the screen is live: states arriving steadily, not inside the runner's start-up pause
     # (2.5-2.9 s without a state just after the session starts, ws1 2026-10-24 CT-2 V3, which stopped the queue on its
     # 2 s silence rule before anything was sent -- in either arm, by timing alone; the PR 4 note).
@@ -1219,17 +1204,8 @@ async def queue_scenario(p: Probe, args):
                     entry["result"] = {"mission_id": mid_, "outcome": got_["outcome"], "reason": got_["reason"]}
                     entry["ended_mono"] = time.monotonic()
         p.queue_forgotten.update(q.drain_forget())
-        if (getattr(args, "queue_resume_not_stopped", False) and q.run != "running" and q.current is None
-                and p.queue_asking is None and q.stop_reason == "거부: not_stopped" and operator_resumes < 1
-                and p.closed_code is None):
-            # The queue plan's D5: a not_stopped refusal the submit conditions did not prevent (the stand detector
-            # flickering in the start-up settling, ws1 CT-2 V3 seed 2) is resumed once more by the operator -- here
-            # once, after the truck has stood confirmed for 1 s, in either arm
-            operator_resumes += 1
-            steady_ = await wait_stood(p)
-            p.report.setdefault("operator_resumes", []).append({"after": q.stop_reason, "stood": steady_})
-            if steady_:
-                q.resume(time.monotonic() * 1000.0)
+        # (a not_stopped refusal of the session's first submit is the queue's own one resubmit now: plan D5's
+        # exception, tools/mission_queue.py -- the probe's operator resume it replaces is refused in main())
         if q.run != "running" and q.current is None and p.queue_asking is None:
             break  # stopped, nothing out: the queue's end here
         if q.run != "running" and q.phase == "in_mission" and closed_seen:
@@ -1530,8 +1506,10 @@ def main():
     ap.add_argument("--no-sigstop", action="store_true",
                     help="lift scenario: skip the runner SIGSTOP part (until main's SLAM link stall fix)")
     ap.add_argument("--queue-resume-not-stopped", action="store_true",
-                    help="queue scenario: resume once more after a not_stopped refusal, once the truck stood 1 s "
-                         "(the queue plan's D5 operator step)")
+                    help="superseded and refused: the queue itself now submits the session's first item once more "
+                         "after a not_stopped refusal and a 1 s stand (plan D5 exception, user decision 2026-10-25); "
+                         "the runs that used this operator resume (CT-2 V3 seed 2 reruns, leg-failures V4) ran "
+                         "snapshots from before it")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle / queue scenario: pallet:destination,...; queue: \"auto\" for one all-remaining-pallets item (CT-2)")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
@@ -1580,6 +1558,9 @@ def main():
     ap.add_argument("--tour-pacing-wait-s", type=float, default=900.0,
                     help="tour scenario: no progress this long while teleop is forbidden for pacing (wall s)")
     args = ap.parse_args()
+    if args.queue_resume_not_stopped:
+        # both would resubmit after the same refusal
+        ap.error("--queue-resume-not-stopped is superseded by the queue's own start resubmit (plan D5 exception)")
     # The job's timeout ends a stuck probe with SIGTERM: leave through the finally below, so the report is written.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
     end = time.monotonic() + args.wait_port_s
