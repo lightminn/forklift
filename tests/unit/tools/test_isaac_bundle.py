@@ -875,7 +875,8 @@ def test_the_dry_run_writes_to_a_scratch_output(tmp_path):
 def test_a_launcher_without_a_dry_run_mode_is_not_run(tmp_path):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
     (tmp_path / "live.sbatch").write_text('touch "$0.ran"\n')
-    run = ib.Run(name="a", argv=["bash", str(tmp_path / "live.sbatch")])
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "live.sbatch"), str(tmp_path / "o")],
+                 retry_move=[str(tmp_path / "o")])
     (problem,) = ib.check_runs([run], tmp_path / "runner.py")
     assert "DRY_RUN mode" in problem and not (tmp_path / "live.sbatch.ran").exists()
 
@@ -883,16 +884,18 @@ def test_a_launcher_without_a_dry_run_mode_is_not_run(tmp_path):
 def test_a_marker_inside_another_word_does_not_count(tmp_path):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
     (tmp_path / "l.sh").write_text('# DRY_RUN RUNNER_ARGS\necho NO_RUNNER_ARGS\n')
-    (problem,) = ib.check_runs([ib.Run(name="a", argv=["bash", str(tmp_path / "l.sh")])], tmp_path / "runner.py")
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "l.sh"), str(tmp_path / "o")], retry_move=[str(tmp_path / "o")])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
     assert "no RUNNER_ARGS line" in problem
 
 
 def test_a_dry_run_that_hangs_is_killed(tmp_path):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
-    (tmp_path / "h.sh").write_text('# DRY_RUN RUNNER_ARGS\nsleep 30 & echo $! > "$0.pid"; wait\n')
+    # the child sits in a process group of its own (as GNU timeout makes one): the token still finds it
+    (tmp_path / "h.sh").write_text('# DRY_RUN RUNNER_ARGS\nsetsid sleep 30 & echo $! > "$0.pid"; wait\n')
     t0 = time.monotonic()
-    (problem,) = ib.check_runs([ib.Run(name="a", argv=["bash", str(tmp_path / "h.sh")])], tmp_path / "runner.py",
-                               timeout_s=0.3)
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "h.sh"), str(tmp_path / "o")], retry_move=[str(tmp_path / "o")])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py", timeout_s=0.3)
     assert "killed" in problem and time.monotonic() - t0 < 5
     pid = int((tmp_path / "h.sh.pid").read_text())
     deadline = time.monotonic() + 3
@@ -903,7 +906,7 @@ def test_a_dry_run_that_hangs_is_killed(tmp_path):
 
 def test_a_launcher_without_dry_run_output_is_caught(tmp_path):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
-    run = ib.Run(name="a", argv=["bash", "-c", "exit 0"])
+    run = ib.Run(name="a", argv=["bash", "-c", "exit 0"], retry_move=[str(tmp_path / "o")])
     (problem,) = ib.check_runs([run], tmp_path / "runner.py")
     assert "DRY_RUN mode" in problem
 
@@ -912,7 +915,34 @@ def test_the_check_command_exits_1_on_a_problem(tmp_path, capsys):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
     (tmp_path / "launch.sh").write_text(LAUNCHER)
     path = tmp_path / "runs.jsonl"
-    path.write_text(json.dumps({"name": "a", "argv": ["bash", str(tmp_path / "launch.sh")],
-                                "env": {"SEED": "1", "EXTRA": "--nope"}}) + "\n")
+    path.write_text(json.dumps({"name": "a", "argv": ["bash", str(tmp_path / "launch.sh"), str(tmp_path / "o")],
+                                "env": {"SEED": "1", "EXTRA": "--nope"}, "retry_move": [str(tmp_path / "o")]}) + "\n")
     assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 1
     assert "--nope" in capsys.readouterr().out
+
+
+
+def test_a_relative_output_is_still_sent_to_scratch(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    run = ib.Run(name="a", argv=["bash", "launch.sh", "out_a"], cwd=str(tmp_path), env={"SEED": "1", "EXTRA": ""},
+                 retry_move=[str(tmp_path / "out_a")])
+    assert ib.check_runs([run], tmp_path / "runner.py") == []
+    assert not (tmp_path / "out_a").exists()
+
+
+def test_a_run_without_its_output_in_argv_is_not_run(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / "elsewhere")],
+                 env={"SEED": "1", "EXTRA": ""}, retry_move=[str(tmp_path / "out_a")])
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "does not name its output" in problem and not (tmp_path / "elsewhere").exists()
+
+
+def test_a_run_without_an_output_is_not_run(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / "x")], env={"SEED": "1"})
+    (problem,) = ib.check_runs([run], tmp_path / "runner.py")
+    assert "no retry_move" in problem and not (tmp_path / "x").exists()

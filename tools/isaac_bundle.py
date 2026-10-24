@@ -191,56 +191,81 @@ def defined_flags(script) -> set:
     return set(re.findall(r"""["'](--[A-Za-z0-9][A-Za-z0-9_-]*)["']""", Path(script).read_text()))
 
 
-def _dry_run_launcher(argv):
-    """The launcher script in argv that has a DRY_RUN mode printing RUNNER_ARGS, or None (then nothing is run: a
-    launcher without it, such as isaac_live.sbatch, would start Isaac for real)."""
+def _dry_run_launcher(argv, cwd):
+    """The launcher script in argv (resolved in the run's cwd) that has a DRY_RUN mode printing RUNNER_ARGS, or None
+    (then nothing is run: a launcher without it, such as isaac_live.sbatch, would start Isaac for real)."""
     for a in argv:
-        if a.endswith((".sbatch", ".sh")) and os.path.isfile(a):
-            text = Path(a).read_text(errors="replace")
-            return a if "DRY_RUN" in text and "RUNNER_ARGS" in text else None
+        path = os.path.join(cwd or ".", a)
+        if a.endswith((".sbatch", ".sh")) and os.path.isfile(path):
+            text = Path(path).read_text(errors="replace")
+            return path if "DRY_RUN" in text and "RUNNER_ARGS" in text else None
     return None
 
 
+def _scratch_argv(argv, cwd, outputs, scratch):
+    """argv with every argument naming one of the outputs (compared as real paths, relative ones resolved in cwd)
+    replaced by a scratch path; None when no argument names an output (the DRY_RUN could then write the real one)."""
+    real = {os.path.realpath(o): k for k, o in enumerate(outputs)}
+    out, hit = [], False
+    for a in argv:
+        k = real.get(os.path.realpath(os.path.join(cwd or ".", a))) if a else None
+        if k is not None:
+            out.append(os.path.join(scratch, f"out{k}"))
+            hit = True
+        else:
+            out.append(a)
+    return out if hit else None
+
+
 def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
-    """Problems found before a submission: a run whose output (retry_move) already exists (it is not run), a launcher
-    without a DRY_RUN mode (not run either), a DRY_RUN that fails or prints no RUNNER_ARGS line, and runner arguments
-    whose --flags `runner` does not define (an option the snapshot's code lacks fails only once the job runs). The
-    DRY_RUN goes to a scratch output (the run's retry_move paths in its argv replaced), never to the real one."""
+    """Problems found before a submission: a run whose output (retry_move) already exists, has no output named, or
+    whose argv does not name it (none of these is run), a launcher without a DRY_RUN mode (not run either), a DRY_RUN
+    that fails, hangs or prints no RUNNER_ARGS line, and runner arguments whose --flags `runner` does not define (an
+    option the snapshot's code lacks fails only once the job runs). The DRY_RUN writes to a scratch copy of the
+    output; on a timeout every process carrying its token is killed, whatever its process group."""
     import tempfile
 
     known = defined_flags(runner)
     problems = []
-    for run in runs:
+    for n, run in enumerate(runs):
         r = run.at(1)
+        if not r.retry_move:
+            problems.append(f"{r.name}: no retry_move output named (not run: its DRY_RUN could write a real output)")
+            continue
         existing = [path for path in r.retry_move if os.path.lexists(path)]
         if existing:
             problems.append(f"{r.name}: {', '.join(existing)} exists (not run)")
             continue
-        if _dry_run_launcher(r.argv) is None:
+        if _dry_run_launcher(r.argv, r.cwd) is None:
             problems.append(f"{r.name}: no launcher with a DRY_RUN mode printing RUNNER_ARGS (not run)")
             continue
         with tempfile.TemporaryDirectory(prefix="bundle_check_") as scratch:
-            argv = list(r.argv)
-            for k, path in enumerate(r.retry_move):
-                argv = [a.replace(path, os.path.join(scratch, f"out{k}")) for a in argv]
-            env = {**os.environ, **r.env, "DRY_RUN": "1"}
-            try:
-                p = subprocess.Popen(argv, cwd=r.cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     text=True, start_new_session=True)
-            except OSError as exc:
-                problems.append(f"{r.name}: DRY_RUN did not start ({exc})")
+            argv = _scratch_argv(r.argv, r.cwd, r.retry_move, scratch)
+            if argv is None:
+                problems.append(f"{r.name}: its argv does not name its output {r.retry_move} (not run)")
                 continue
-            try:
-                out, _ = p.communicate(timeout=timeout_s)
-            except subprocess.TimeoutExpired:
+            token = f"check-{os.getpid()}-{n}-{secrets.token_hex(4)}"
+            env = {**os.environ, **r.env, "DRY_RUN": "1", "BUNDLE_TOKEN": token}
+            out_path = os.path.join(scratch, "stdout.txt")
+            with open(out_path, "w") as out_file:  # a file, not a pipe: a straggler cannot hold the read open
                 try:
-                    os.killpg(p.pid, signal.SIGKILL)  # the launcher's whole group: what it started too
-                except ProcessLookupError:
-                    pass
-                p.communicate()
+                    p = subprocess.Popen(argv, cwd=r.cwd, env=env, stdout=out_file, stderr=subprocess.DEVNULL,
+                                         stdin=subprocess.DEVNULL, start_new_session=True)
+                except OSError as exc:
+                    problems.append(f"{r.name}: DRY_RUN did not start ({exc})")
+                    continue
+                try:
+                    p.wait(timeout=timeout_s)
+                    hung = False
+                except subprocess.TimeoutExpired:
+                    hung = True
+                    _kill(set(token_pids(token)) | {p.pid}, signal.SIGKILL)
+                    p.wait(timeout=10)
+                _kill(token_pids(token), signal.SIGKILL)  # anything it left behind, in any process group
+            if hung:
                 problems.append(f"{r.name}: DRY_RUN did not end in {timeout_s} s (killed)")
                 continue
-        lines = out.splitlines()
+            lines = Path(out_path).read_text(errors="replace").splitlines()
         if p.returncode != 0 or "RUNNER_ARGS" not in lines:
             problems.append(f"{r.name}: DRY_RUN exit {p.returncode}, no RUNNER_ARGS line")
             continue
