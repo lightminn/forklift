@@ -1,11 +1,11 @@
 """D1 + planning clearance overlap (CT-1 follow-up, line_m seed 0 m1 extract:straight_collision): for each mission of a
 session, the recognition error along the mission pallet's own axis at which its transport plan stops planning --
 bisected on the real planner from tools/session_plan_check.py's setup, the earlier missions delivered ideally to
-their slots. Variants: the current rule (prior neighbours = nominal + D1, every fixed straight keeps the planning
+their slots. Variants: the rule at the analysis (baseline_025) (prior neighbours = nominal + D1, every fixed straight keeps the planning
 clearance on top), the fixed straights at zero clearance (an upper bound of "no clearance on top of D1"), and smaller
 D1. The thresholds are read against the recorded error distribution separately.
 
-    python tools/d1_overlap_sweep.py SESSION.json --out RESULT.json [--variants current,straights0,d1_020,d1_015]
+    python tools/d1_overlap_sweep.py SESSION.json --out RESULT.json [--variants baseline_025,straights0,d1_020,d1_015]
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ from forklift_core.planning import Pose2D  # noqa: E402
 from forklift_core.planning import pallet_mission as pm  # noqa: E402
 from forklift_core.planning.pallet_mission import PalletSite, TransportScenario  # noqa: E402
 
-VARIANTS = {"current": (0.25, False), "straights0": (0.25, True), "d1_020": (0.20, False), "d1_015": (0.15, False)}
+# the analysis of docs/validation/2026-10-24-d1-clearance-overlap.md ran at D1 0.25 ("baseline_025"); D1 is 0.20 since
+VARIANTS = {"baseline_025": (0.25, False), "straights0": (0.25, True), "d1_020": (0.20, False), "d1_015": (0.15, False)}
 
 
 def _shifted(site, along_m: float) -> PalletSite:
@@ -43,6 +44,7 @@ def sweep(path: Path, variants, *, limit_m: float = 0.15, tol_m: float = 0.0025)
     nominal = {p.pallet_id: (p.nominal.x_m, p.nominal.y_m, p.nominal.yaw_rad) for p in session.pallets}
     shape = (pallet.overall_depth_m, pallet.overall_width_m, pallet.overall_height_m)
     out = {"session": session.name, "settings": {"clearance_m": spc.CLEARANCE_M, "kappa": spc.KAPPA,
+                                                 "grow_m": {n: VARIANTS[n][0] for n in variants},
                                                  "limit_m": limit_m, "tol_m": tol_m}, "variants": {}}
     real_straight = pm._straight_plan
     for name in variants:
@@ -105,7 +107,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("session", type=Path)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--variants", default="current,straights0,d1_020,d1_015")
+    ap.add_argument("--variants", default="baseline_025,straights0,d1_020,d1_015")
     ap.add_argument("--limit-m", type=float, default=0.15)
     args = ap.parse_args(argv)
     result = sweep(args.session, args.variants.split(","), limit_m=args.limit_m)

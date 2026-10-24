@@ -106,7 +106,7 @@
 순수 함수이고 위치는 `pallet_permit.py` 옆이다.
 
 - 이웃 팔레트를 계획 소품(PlacedProp, 높이 = 팔레트 높이)으로 돌려준다.
-  - 사전: 그 팔레트 `nominal` 외곽 + `prior_grow_m`(D1 0.25).
+  - 사전: 그 팔레트 `nominal` 외곽 + `prior_grow_m`(D1, 작성 당시 0.25; 2026-10-24 부터 0.20 — CT-1 계획 D1 개정).
   - 인식·하역: targets 자세 외곽 + 불확실도(없으면 0.21).
   - 운반 중·자세 없음과 `exclude_id` 는 뺀다.
 - `moved`·`moved_ids`: 프레임 변경은 `moved_ids` 에 든 id 만 받는다.
@@ -133,7 +133,7 @@ CPU 에서 돈다.
   - 결과 이름은 "지정 순서·완전 복귀·이상적 하역의 미션 열" 이다.
 - **미션 k 의 상태**: 앞 팔레트는 칸 자세에 delivered(불확실도 0.21), 나머지는 prior 다.
   - 관측의 미션 팔레트는 구역 충돌 사각형이고, 그 뒤 계획의 추정은 truth 다(지금 `plan_scene` 과 같음).
-  - 소품 = static + `session_pallet_props`(D1 0.25).
+  - 소품 = static + `session_pallet_props`(D1, 작성 당시 0.25; 지금 0.20).
 - **단계표**:
 
 | 단계 | 외곽 | 미션 팔레트 | 이웃 |

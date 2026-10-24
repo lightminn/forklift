@@ -4,5 +4,5 @@
 
 | 항목 | 내용 | 근거 | 실차에서 확인할 것 |
 |---|---|---|---|
-| 꺼내기 단계의 실시간 장애물 허가 | 꺼내기(`extract`)에는 실시간 장애물 허가가 작동하지 않는다. `permission_acting` 의 작동 단계는 observe·approach·transport·return_home·recover_withdraw·clear_out 이고, withdraw 는 D5 통로가 켜졌을 때뿐이다. 꺼내기 직선의 여유는 계획 단계의 것뿐이다 | `docs/validation/2026-10-24-d1-clearance-overlap.md` 3 절 | 꺼내기 중 이웃 팔레트·사람이 들어올 때의 정지 수단. 허가를 꺼내기로 넓힐지, 계획 여유로 둘지 |
-| D1(미인식 이웃의 계획 크기) | 공칭 외곽 + 0.20 m. 고정 직선은 그 위에 계획 여유 0.10 을 얹어, 실효 간격이 공칭 + 0.30 이다. 경로 존재와 시뮬 인식 오차로 정한 임시값이다 | `docs/plans/2026-10-22-continuous-transport-ct1.md` 2 절 D1(2026-10-24 개정) | 실차 SLAM 오차 실측 뒤 다시 정한다 |
+| 꺼내기 단계의 실시간 장애물 허가 | 꺼내기(`extract`)에는 실시간 장애물 허가가 작동하지 않는다. `permission_acting` 의 작동 단계는 observe·approach·transport·return_home·recover_withdraw·clear_out 이고, withdraw 는 D5 통로가 켜졌을 때뿐이다. approach·transport 도 도킹 직선 구간(정렬 직선, 하역 직선)에서는 허가가 빠진다. 꺼내기 직선의 여유는 계획 단계의 것뿐이다 | `docs/validation/2026-10-24-d1-clearance-overlap.md` 3 절 | 꺼내기 중 이웃 팔레트·사람이 들어올 때의 정지 수단. 허가를 꺼내기로 넓힐지, 계획 여유로 둘지 |
+| D1(미인식 이웃의 계획 크기) | 공칭 외곽 + 0.20 m. 고정 직선은 그 위에 계획 여유 0.10 을 얹어, 실효 간격이 공칭 + 약 0.30 이다(회전한 외곽이라 등방이 아니다. 상대 yaw 3° 에서 축 방향 약 0.305 m). 경로 존재와 시뮬 인식 오차로 정한 임시값이다 | `docs/plans/2026-10-22-continuous-transport-ct1.md` 2 절 D1(2026-10-24 개정) | 실차 SLAM 오차 실측 뒤 다시 정한다 |
