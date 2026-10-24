@@ -22,10 +22,13 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
+from frame_sync import FrameSync
 
 from forklift_core import determinism
 
 EXIT_CLEARANCE_M = 0.08
+# Deterministic-run plan D1: every camera read brought to its step's time (a no-op unless --deterministic).
+frame_sync = FrameSync()
 
 
 # Braking into the mid-approach standing frame (a planned stop).
@@ -569,6 +572,8 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--recognition-frame-every", type=int, default=24,
                         help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Isaac test-only deterministic run (docs/plans/2026-10-25-deterministic-sim-mode.md): camera reads synced to the step, the SLAM static layer kept out of planning, wall budgets at the cap; the same code, seed and inputs give the same records. Off by default.")
     parser.add_argument("--recognition-pixel-lag-steps", type=int, default=0,
                         help="Physics steps the driving frames' pixels trail their render metadata (measured "
                         "per render cadence; the smoke run records what fits it).")
@@ -1295,6 +1300,12 @@ def arguments() -> argparse.Namespace:
     args.pallet_geometry_loaded = pallet_geometry
     # Kit's --portable-root and related application arguments are consumed by Kit.
     args.kit_arguments = unknown
+    # Deterministic-run plan D1: a synced frame does not trail its step, so the far driving frames' pixel lag is 0;
+    # what was asked is kept in the run's record.
+    args.deterministic_overrides = {}
+    if args.deterministic and args.recognition_pixel_lag_steps:
+        args.deterministic_overrides["recognition_pixel_lag_steps"] = args.recognition_pixel_lag_steps
+        args.recognition_pixel_lag_steps = 0
     return args
 
 
@@ -3243,7 +3254,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_mount,
             # Every physics step, capture included, goes through step_world
             # (SLAM plan: odometry, scans and the lockstep must see them all).
-            step_fn=lambda: cells.stepper["fn"](True),
+            step_fn=lambda: (cells.stepper["fn"](True),  # then, in a deterministic run, the frame at that step (D1)
+                             frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time)),
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
@@ -4246,6 +4258,7 @@ def drive(S, isaac) -> None:
             # runs out on its own (plan D6).
             pocket["silenced_frames"] = pocket.get("silenced_frames", 0) + 1
             return
+        frame_sync.sync(pocket_camera, world.render, world.current_time)  # deterministic run only (D1)
         raw = pocket_camera.get_depth()
         if recorder is not None:
             # Plan D8b: every read, labelled, before anything below can drop it; its
@@ -4403,7 +4416,11 @@ def drive(S, isaac) -> None:
                 # SLAM localization plan L3: the survey grid, set into the layer's memory when it was made, is the
                 # only static SLAM layer; the bridge's latest_map.npz is not read.
                 use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
-            elif layer_.memory is not None and args.slam_map_dir is not None:
+            elif layer_.memory is not None and args.slam_map_dir is not None and determinism.enabled():
+                # Deterministic-run plan D4: slam_toolbox has no barrier between a scan and its map, so a
+                # deterministic run plans without the SLAM static layer (the pose corrections stay).
+                map_note = {"slam_static_layer": "off_deterministic"}
+            elif layer_.memory is not None and args.slam_map_dir is not None and not determinism.enabled():
                 latest = args.slam_map_dir / "latest_map.npz"
                 if latest.exists():
                     # One open file: its fstat and its contents go together (the
@@ -5768,6 +5785,7 @@ def drive(S, isaac) -> None:
         def write_video_frame(stamp: float) -> None:
             """One video frame per fps tick of physics, capture steps included
             (SLAM plan v3.1: frames match the run length)."""
+            frame_sync.sync(camera, world.render, world.current_time)  # deterministic run only (D1)
             frame = camera.get_current_frame()
             rgba = camera.get_rgba()
             # get_rgba reads the RGB annotator directly. The SDK's cached
@@ -5987,6 +6005,7 @@ def drive(S, isaac) -> None:
             """One driving frame for the far recognition: render-metadata time, pixels and instance ids. A live run
             hands its work to the far worker; a failure of its read is raised by the tick, after this step's other
             sensors (plan 2026-10-22-live-far-recognition task 9)."""
+            frame_sync.sync(perception_camera, world.render, world.current_time)  # deterministic run only (D1)
             frame_ = perception_camera.get_current_frame()
             # the sensor's own contract (its metadata): a session failure, as before (task 9; Codex impl round 1 P2)
             rendering_s_ = float(frame_["rendering_time"]) - initial_time
@@ -8998,6 +9017,7 @@ def drive(S, isaac) -> None:
 
 def main() -> None:
     args = arguments()
+    determinism.configure(getattr(args, "deterministic", False))
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     import yaml
@@ -9058,6 +9078,8 @@ def main() -> None:
             "axle_to_fork_tip_m": args.axle_to_fork_tip_m,
         },
         "python": sys.version,
+        **({"deterministic": {"enabled": True, "broken": [], "overrides": dict(args.deterministic_overrides),
+                              "diagnostics": {}}} if args.deterministic else {}),
         "arguments": {
             k: (
                 asdict(v)
@@ -9137,6 +9159,9 @@ def main() -> None:
             state["render_mode"]["at_end"] = carb.settings.get_settings().get(
                 "/rtx/rendermode"
             )
+        if "deterministic" in state:  # plan D0: why it stopped being deterministic, and the diagnostics
+            state["deterministic"]["broken"] = determinism.broken()
+            state["deterministic"]["diagnostics"]["frame_sync"] = frame_sync.summary()
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 
