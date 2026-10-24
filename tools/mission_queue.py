@@ -1,6 +1,7 @@
 """The console's mission queue (console/web/js/queue.js, docs/plans/2026-10-22-console-mission-queue.md D1-D6) in
 Python, for the live probe (CT-1 PR 4: continuous runs under the queue's own policy -- ws1 has no Node). A line for
-line port of the decisions the probe needs: fixed items, resume/stop, the welcome, disconnect and lease events, the
+line port of the decisions the probe needs: fixed items and the CT-2 auto item (its pick_request / pick, picking and
+picked), resume/stop, the welcome, disconnect and lease events, the
 states (silence, feedback loss, STOPPED / TELEOP, a safety preempt, a mission not ours, paused / cancelling), the
 results, the submit answers, the timer and the next submit. Times are milliseconds, as in the JS; the stop reasons
 are the JS strings, so tests/unit/tools/test_mission_queue_port.py can run both on the same events."""
@@ -11,6 +12,9 @@ SILENCE_MS = 2000
 SETTLE_MS = 1000
 FEEDBACK_LOST_MS = 500
 FINISHED_KEEP = 50
+# CT-2 (console/web/js/queue.js PICK_DEADLINE_MS): the vehicle's bound from a pick_request to its pick, wall clock;
+# the vehicle announces it in welcome capabilities.next_pick_deadline_ms (5000 when it does not)
+PICK_DEADLINE_MS = 5000
 PREEMPT = {"preempt", "safety_preempt"}
 UNSURE_REJECTS = {"busy", "stale"}
 KINDS = {"fixed", "auto"}
@@ -74,11 +78,22 @@ class MissionQueue:
         self.applied: set = set()
         self.early: dict = {}
         self.stops: list = []  # (reason, now_ms): every stop, for the probe's report
+        # CT-2: the auto item's pick_request out and the pick held (queue.js pick / held / pickAsks)
+        self.pick: dict | None = None
+        self.held: dict | None = None
+        self.pick_asks = 0
+        self.pick_deadline_ms = PICK_DEADLINE_MS
+        self.last_pick: dict | None = None
+        self.last_pick_blocked = None
+        self.to_forget: list = []
+        self.picks: list = []  # every pick answer taken (the probe's report)
 
     # --- operator ---------------------------------------------------------------------------------------------
     def add(self, item) -> bool:
         if not item or item.get("kind") not in KINDS:
             return False
+        if item.get("kind") == "auto" and any(it.get("kind") == "auto" for it in self.items):
+            return False  # one is all of them
         self.items.append(dict(item))
         return True
 
@@ -89,8 +104,12 @@ class MissionQueue:
         return True
 
     def stop(self, reason, now_ms=None) -> dict:
-        forget = self.current.get("request_id") if self.phase == "submitting" and self.current else None
-        if forget is not None:
+        # a pick asked or held is let go -- nothing was submitted, so nothing is uncertain (CT-2)
+        forget = (self.pick or {}).get("request_id") if self.phase == "picking" else None
+        if self.phase in ("picking", "picked"):
+            self._drop_pick(False)
+        if self.phase == "submitting":
+            forget = (self.current or {}).get("request_id")
             self._drop_current_as_uncertain()
         if self.run == "running":
             self.run, self.stop_reason = "stopped", reason
@@ -107,6 +126,8 @@ class MissionQueue:
             self.applied.clear()
             self.early.clear()
             self.last_result_at = None
+            self.last_pick = None
+            self.last_pick_blocked = None
         self.epoch = epoch
         self.last_state_at = None
         return out
@@ -164,6 +185,12 @@ class MissionQueue:
             self.early[mid] = (result, now_ms)
 
     def on_answer(self, key, answer, now_ms=None) -> dict:
+        pk = self.pick
+        if pk and key["epoch"] == pk["epoch"] and key["item_id"] == pk["item_id"] \
+                and key["request_id"] == pk["request_id"]:
+            if (answer or {}).get("t") == "ack":
+                return {}  # the pick comes as its own message
+            return self.stop(f"자동 선택 거부: {(answer or {}).get('reason') or 'unknown'}", now_ms)
         c = self.current
         if (not c or self.phase != "submitting" or key["epoch"] != c["epoch"] or key["item_id"] != c["item_id"]
                 or key["request_id"] != c["request_id"]):
@@ -188,7 +215,43 @@ class MissionQueue:
         self.early.clear()
         return self.stop(f"거부: {reason}", now_ms)
 
+    def on_pick(self, key, msg, now_ms, targets_revision) -> dict:
+        """CT-2: the vehicle's answer to a pick_request, matched by its key (queue.js onPick)."""
+        pk = self.pick
+        if (not pk or self.phase != "picking" or key["epoch"] != pk["epoch"] or key["item_id"] != pk["item_id"]
+                or key["request_id"] != pk["request_id"] or (msg or {}).get("request_id") != pk["request_id"]):
+            return {}
+        reason = msg.get("reason") or "unknown"
+        self.picks.append({"now_ms": now_ms, "request_id": pk["request_id"], "reason": reason, "pick": msg.get("pick"),
+                           "targets_revision": msg.get("targets_revision"), "plan": msg.get("plan"),
+                           "asked_ms": now_ms - pk["sent_at"]})
+        if reason == "ok" and msg.get("pick"):
+            if msg.get("targets_revision") != targets_revision:
+                return self._re_ask(now_ms)
+            self.held = {"pallet_id": msg["pick"]["pallet_id"], "destination_id": msg["pick"]["destination_id"],
+                         "targets_revision": msg["targets_revision"], "plan": msg.get("plan"),
+                         "missions": msg.get("missions")}
+            self.last_pick, self.last_pick_blocked = dict(self.held), None
+            self.pick, self.phase = None, "picked"
+            return {}
+        if reason == "none_remaining":
+            auto_id = pk["item_id"]
+            self._drop_pick(False)
+            self.items = [x for x in self.items if x["item_id"] != auto_id]
+            self.last_pick_blocked, self.last_pick = None, None
+            if not self.items and self.run == "running":
+                return self.stop("완료", now_ms)
+            return {}
+        self.last_pick_blocked, self.last_pick = msg.get("blocked"), None
+        return self.stop(f"자동 선택 실패: {reason}", now_ms)
+
+    def drain_forget(self) -> list:
+        out, self.to_forget = self.to_forget, []
+        return out
+
     def tick(self, now_ms) -> dict:
+        if self.run == "running" and self.phase == "picking" and now_ms - self.pick["sent_at"] > self.pick_deadline_ms:
+            return self.stop("자동 선택 응답 없음", now_ms)
         ref = self.last_state_at if self.last_state_at is not None else self.wait_since
         if self.run == "running" and ref is not None and now_ms - ref > SILENCE_MS:
             return self.stop("상태 수신 끊김", now_ms)
@@ -197,7 +260,7 @@ class MissionQueue:
         return {}
 
     def next(self, ctx, now_ms, new_id):
-        if self.run != "running" or self.current:
+        if self.run != "running" or self.current or self.phase == "picking":
             return None
         front = self.items[0] if self.items else None
         if not front or front.get("uncertain"):
@@ -214,18 +277,61 @@ class MissionQueue:
             return None
         if self.last_result_at is not None and now_ms - self.last_result_at < SETTLE_MS:
             return None
+        if front.get("kind") == "auto":
+            return self._next_auto(front, ctx, now_ms, new_id)
         r = resolve_item(front, ctx["targets"], st)
         if not r["ok"]:
             self.stop("아직 실행할 수 없는 항목(자동 선택)" if r["reason"] == "unsupported_kind"
                       else f"대상 확인 실패: {r['reason']}", now_ms)
             return None
-        submit = {"item_id": front["item_id"], "request_id": new_id(), "pallet_id": r["pallet_id"],
-                  "destination_id": r["destination_id"], "targets_revision": ctx["targets"]["targets_revision"]}
+        return self._submit(front, r["pallet_id"], r["destination_id"], ctx, new_id)
+
+    def _submit(self, front, pallet_id, destination_id, ctx, new_id):
+        submit = {"item_id": front["item_id"], "request_id": new_id(), "pallet_id": pallet_id,
+                  "destination_id": destination_id, "targets_revision": ctx["targets"]["targets_revision"]}
         self.current = {"item_id": front["item_id"], "request_id": submit["request_id"], "mission_id": None,
-                        "epoch": self.epoch, "pallet_id": r["pallet_id"], "destination_id": r["destination_id"]}
+                        "epoch": self.epoch, "pallet_id": pallet_id, "destination_id": destination_id}
         self.phase = "submitting"
         self.early.clear()
         return {"submit": submit}
+
+    def _next_auto(self, front, ctx, now_ms, new_id):
+        """The auto item (CT-2): ask for a pick, or submit the pick held -- the submit conditions were just checked."""
+        if ctx.get("next_pick") is not True:
+            self.stop("차량이 자동 선택을 지원하지 않습니다", now_ms)
+            return None
+        if self.phase == "picked":
+            h = self.held
+            if h["targets_revision"] == ctx["targets"]["targets_revision"]:
+                r = resolve_item({"kind": "fixed", "pallet_id": h["pallet_id"], "destination_id": h["destination_id"]},
+                                 ctx["targets"], ctx.get("state"))
+                if not r["ok"]:
+                    self.stop(f"대상 확인 실패: {r['reason']}", now_ms)
+                    return None
+                self.held, self.pick_asks = None, 0
+                return self._submit(front, r["pallet_id"], r["destination_id"], ctx, new_id)
+            if self.pick_asks >= 2:
+                self.stop("대상 목록이 계속 바뀜", now_ms)
+                return None
+            self.held = None  # the list changed under the pick: the one re-ask
+        request_id = new_id()
+        self.pick = {"item_id": front["item_id"], "request_id": request_id, "epoch": self.epoch, "sent_at": now_ms}
+        self.pick_asks += 1
+        self.phase = "picking"
+        return {"pick_request": {"item_id": front["item_id"], "request_id": request_id}}
+
+    def _re_ask(self, now_ms=None) -> dict:
+        if self.pick_asks >= 2:
+            return self.stop("대상 목록이 계속 바뀜", now_ms)
+        self.pick, self.held, self.phase = None, None, "waiting"
+        return {}
+
+    def _drop_pick(self, queue_forget=True) -> None:
+        if queue_forget and self.phase == "picking" and self.pick:
+            self.to_forget.append(self.pick["request_id"])
+        if self.phase in ("picking", "picked"):
+            self.phase = "waiting"
+        self.pick, self.held, self.pick_asks = None, None, 0
 
     # --- internals --------------------------------------------------------------------------------------------
     def _feedback_lost(self, now_ms) -> bool:
@@ -249,16 +355,40 @@ class MissionQueue:
             item["uncertain"] = True
             if self.current.get("mission_id"):
                 item["maybe"] = {"mission_id": self.current["mission_id"], "epoch": self.current["epoch"]}
+            if item.get("kind") == "auto":  # the mark is on this one submit (CT-2 C4)
+                item["uncertain_pallet_id"] = self.current.get("pallet_id")
+                item["uncertain_destination_id"] = self.current.get("destination_id")
         self.current, self.phase = None, "waiting"
         self.early.clear()
 
+    @staticmethod
+    def _clear_uncertain(it) -> None:
+        it["uncertain"] = False
+        for key in ("maybe", "uncertain_pallet_id", "uncertain_destination_id"):
+            it.pop(key, None)
+
     def _record(self, item_id, result) -> None:
+        """A result into the finished list with the pallet and destination it moved; a fixed item leaves the queue,
+        an auto item stays for the next pick with any uncertain mark on that submit cleared (CT-2 C3)."""
         self.applied.add(result["mission_id"])
         item = next((x for x in self.items if x["item_id"] == item_id), None)
-        self.items = [x for x in self.items if x["item_id"] != item_id]
+        cur = self.current if (self.current or {}).get("item_id") == item_id else None
+
+        def first(*values):
+            return next((v for v in values if v is not None), None)
+
+        pallet_id = first((cur or {}).get("pallet_id"), (item or {}).get("uncertain_pallet_id"),
+                          (item or {}).get("pallet_id"), result.get("pallet_id"))
+        destination_id = first((cur or {}).get("destination_id"), (item or {}).get("uncertain_destination_id"),
+                               (item or {}).get("destination_id"), result.get("destination_id"))
+        if item is not None and item.get("kind") == "auto":
+            self._clear_uncertain(item)
+        else:
+            self.items = [x for x in self.items if x["item_id"] != item_id]
         outcome = result.get("outcome")
-        self.finished.insert(0, {"item": item, "outcome": outcome, "reason": result.get("reason"),
-                                 "mission_id": result["mission_id"]})
+        self.finished.insert(0, {"item": None if item is None else dict(item), "outcome": outcome,
+                                 "reason": result.get("reason"), "mission_id": result["mission_id"],
+                                 "pallet_id": pallet_id, "destination_id": destination_id})
         self.finished = self.finished[:FINISHED_KEEP]
         if outcome == "done":
             self.counts["done"] += 1
@@ -284,4 +414,4 @@ class MissionQueue:
                 self.stop(str(outcome), now_ms)
 
 
-__all__ = ["MissionQueue", "new_item", "resolve_item"]
+__all__ = ["MissionQueue", "PICK_DEADLINE_MS", "new_item", "resolve_item"]
