@@ -3988,8 +3988,6 @@ class MissionCore:
         obstacle["version"] += 1
         obstacle["applied"] = applied_now
         obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
-        if getattr(self.options, "escape_start_release", "off") == "on":
-            self._escape_guard_reexpress(compose(tuple(float(v) for v in applied_now), invert(old)))
         if ms.phase in trackers:
             leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
         else:  # a phase without a follower (lift, lower, settle): the truck's own place
@@ -6972,7 +6970,8 @@ class MissionCore:
                           # the stop ahead of each watched pose (the escape's own speed), and what a correction
                           # change re-expresses: the trigger's rectangles come from the grid (Codex re-review P2-2)
                           "direction": int(choice_.direction), "stop_m": float(stop_len_),
-                          "scene": list(rects_), "extra": list(extra), "bounds": bounds_}
+                          "scene": list(rects_), "extra": list(extra), "bounds": bounds_,
+                          "applied": tuple(float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0)))}
             return poses_, int(choice_.direction), int(leg_dir_), guard_
 
         def escape_install(chosen):
@@ -7055,19 +7054,41 @@ class MissionCore:
         rec_[key] = rec_.get(key, 0) + 1
 
     @staticmethod
-    def _escape_guard_breached(guard, rear) -> bool:
-        """Whether the outline at rear, or anywhere on the straight ahead of it in the escape's direction for its
-        stop length, comes nearer a released rectangle than half its start gap."""
-        from forklift_core.control import escape as esc
+    def _escape_guard_breached(guard, rear, kappa: float = 0.0) -> bool:
+        """Whether the outline at rear, or anywhere ahead of it for the escape's stop length in its direction --
+        on the straight and on the arc of the held steering ``kappa`` (a stop keeps the steering; Codex re-review 3
+        P2-2) -- comes nearer a released rectangle than half its start gap."""
         from forklift_core.control.start_release import footprint_rect_distance
 
-        ahead = esc.straight(tuple(float(v) for v in rear), guard["direction"], guard["stop_m"], step_m=0.005)
-        return any(footprint_rect_distance(tuple(p), guard["footprint"], r) < d0 / 2.0
-                   for p in ahead for r, d0 in zip(guard["rects"], guard["d0"]))
+        x0, y0, yaw0 = (float(v) for v in rear)
+        d = 1.0 if guard["direction"] >= 0 else -1.0
+        n = max(1, int(math.ceil(guard["stop_m"] / 0.005)))
+        poses = [(x0, y0, yaw0)]
+        for k in {0.0, float(kappa)}:
+            for i in range(1, n + 1):
+                s_ = d * guard["stop_m"] * i / n
+                if abs(k) < 1e-9:
+                    poses.append((x0 + s_ * math.cos(yaw0), y0 + s_ * math.sin(yaw0), yaw0))
+                else:
+                    yaw_ = yaw0 + k * s_
+                    poses.append((x0 + (math.sin(yaw_) - math.sin(yaw0)) / k,
+                                  y0 - (math.cos(yaw_) - math.cos(yaw0)) / k, yaw_))
+        return any(footprint_rect_distance(p, guard["footprint"], r) < d0 / 2.0
+                   for p in poses for r, d0 in zip(guard["rects"], guard["d0"]))
+
+    def _escape_guard_sync(self) -> None:
+        """The guard's rectangles, found on the grid under the correction it was planned with, re-expressed under
+        the correction applied now (the grid and the control pose moved together)."""
+        guard = (self.scene_escape or {}).get("guard")
+        if guard is None:
+            return
+        now = tuple(float(v) for v in (self.obstacle.get("applied") or (0.0, 0.0, 0.0)))
+        if now != guard["applied"]:
+            self._escape_guard_reexpress(compose(now, invert(guard["applied"])))
+            guard["applied"] = now
 
     def _escape_guard_reexpress(self, delta) -> None:
-        """A correction change re-expressed the grid and the control pose by ``delta``: the guard's rectangles,
-        found on the grid, move with them (the scene's props stay)."""
+        """Move the guard's grid rectangles by ``delta`` (the scene's props stay) and rebuild its end checker."""
         from forklift_core.planning import Rectangle
         from forklift_core.planning.geometry import FootprintCollisionChecker
 
@@ -7113,7 +7134,11 @@ class MissionCore:
             ms.last_tracking = tracking
             standing_ = ports.stopped()
             guard_ = self.scene_escape.get("guard")
-            if guard_ is not None and self._escape_guard_breached(guard_, ports.box.rear):
+            if guard_ is not None:
+                self._escape_guard_sync()  # every correction path (the reprojection, the watch, the scan) changes
+                # obstacle["applied"]; the guard follows it here, before it judges (Codex re-review 3 P2-3)
+            if guard_ is not None and self._escape_guard_breached(guard_, ports.box.rear,
+                                                                  float(self.hooks.held_kappa())):
                 # nearer a released rectangle than half its start gap, now or within the stop ahead: the wheels to
                 # zero on this tick, steering held (Codex re-review P2-1)
                 self.scene_escape["status"] = "stopped"
@@ -7123,8 +7148,10 @@ class MissionCore:
                     standing_ and (tracking.status == "failed" or tracker_.remaining_to_goal_m() <= 1e-6)):
                 if guard_ is not None and not self._escape_guard_end_ok(guard_, ports.box.rear):
                     # the end region was checked for the planned end; the escape may end elsewhere (Codex plan
-                    # review P2-2): its own end pose must keep the same criterion
+                    # review P2-2): its own end pose must keep the same criterion -- a stop as the approach's
+                    # (Codex re-review 3 P2-1)
                     self.scene_escape["status"] = "stopped"
+                    self._escape_guard_stop_t = float(t)
                     self._escape_release_count("stopped_end")
                 else:
                     self.scene_escape["status"] = "done"
