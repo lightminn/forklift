@@ -319,3 +319,18 @@ def test_the_guard_looks_along_the_held_steering_s_stop_arc():
     assert not MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0), 0.0)
     swung = [k for k in (-0.29, 0.29) if MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0), k)]
     assert len(swung) == 1  # the arc that swings the front toward it, not the other
+
+
+def test_the_guard_judges_the_continuous_sweep_between_its_samples():
+    # Codex re-review 4 P2: 5 mm samples showed 2.363 mm where the arc came to 1.300 mm (limit 1.780), and missed
+    # an overlap at -0.62 m^-1
+    from forklift_core.control.start_release import footprint_rect_distance
+    from forklift_core.mission.core import MissionCore
+    from forklift_core.planning import Footprint
+
+    foot = Footprint(1.29, 0.17, 0.36)
+    rect = Rectangle(1.3126687064457947, 0.3873625281256853, 0.05, 0.05, 0.0)
+    d0 = footprint_rect_distance((0.0, -0.0011967627314477128, 0.0), foot, rect)
+    guard = {"rects": [rect], "d0": [d0], "footprint": foot, "direction": -1, "stop_m": 0.1}
+    assert MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0), -0.36)
+    assert MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0), -0.62)

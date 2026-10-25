@@ -7057,14 +7057,17 @@ class MissionCore:
     def _escape_guard_breached(guard, rear, kappa: float = 0.0) -> bool:
         """Whether the outline at rear, or anywhere ahead of it for the escape's stop length in its direction --
         on the straight and on the arc of the held steering ``kappa`` (a stop keeps the steering; Codex re-review 3
-        P2-2) -- comes nearer a released rectangle than half its start gap."""
-        from forklift_core.control.start_release import footprint_rect_distance
+        P2-2), swept continuously -- comes nearer a released rectangle than half its start gap."""
+        from forklift_core.control import start_release as sr
 
         x0, y0, yaw0 = (float(v) for v in rear)
         d = 1.0 if guard["direction"] >= 0 else -1.0
-        n = max(1, int(math.ceil(guard["stop_m"] / 0.005)))
         poses = [(x0, y0, yaw0)]
         for k in {0.0, float(kappa)}:
+            # the walk's dense spacing, and its bound on how much nearer the continuous sweep can come between the
+            # samples taken off every distance (Codex re-review 4 P2: 5 mm samples missed an overlap at -0.62 m^-1)
+            n = max(1, int(math.ceil(max(guard["stop_m"] / sr.DENSE_STEP_M,
+                                         abs(k) * guard["stop_m"] / sr.DENSE_YAW_RAD))))
             for i in range(1, n + 1):
                 s_ = d * guard["stop_m"] * i / n
                 if abs(k) < 1e-9:
@@ -7073,7 +7076,8 @@ class MissionCore:
                     yaw_ = yaw0 + k * s_
                     poses.append((x0 + (math.sin(yaw_) - math.sin(yaw0)) / k,
                                   y0 - (math.cos(yaw_) - math.cos(yaw0)) / k, yaw_))
-        return any(footprint_rect_distance(p, guard["footprint"], r) < d0 / 2.0
+        err = sr.dense_error_m(sr.shape_radius(guard["footprint"]))
+        return any(sr.footprint_rect_distance(p, guard["footprint"], r) - err < d0 / 2.0
                    for p in poses for r, d0 in zip(guard["rects"], guard["d0"]))
 
     def _escape_guard_sync(self) -> None:
