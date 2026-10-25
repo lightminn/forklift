@@ -9183,6 +9183,37 @@ def drive(S, isaac) -> None:
                 close_boundary_record(state, sys.exc_info()[1], final_state=projection_)
 
 
+def recorded_arguments(args: argparse.Namespace) -> dict:
+    """The run's arguments as result.json records them -- each one the near-field contract compares (an argument
+    added later is left out at the value every earlier record ran with)."""
+    return {
+        k: (
+            asdict(v)
+            if k in {"pallet_geometry_loaded", "drive_geometry"}
+            else str(v)
+            if isinstance(v, Path)
+            else v
+        )
+        for k, v in vars(args).items()
+        if (k != "extra_views" or v)
+        # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
+        and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
+        # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
+        and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
+        # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
+        and (k != "lidar_keepout_m" or v != 0.0)
+        # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
+        and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
+        # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
+        # among the arguments (an off run would otherwise record a field no earlier record has -- Codex PR 1 review)
+        and k != "deterministic_overrides"
+        and (
+            k not in {"quarter_eye", "quarter_target", "quarter_focal"}
+            or (v is not None and (k != "quarter_focal" or v != 2.5))
+        )
+    }
+
+
 def main() -> None:
     args = arguments()
     determinism.configure(getattr(args, "deterministic", False))
@@ -9248,29 +9279,7 @@ def main() -> None:
         "python": sys.version,
         **({"deterministic": {"enabled": True, "broken": [], "overrides": dict(args.deterministic_overrides),
                               "diagnostics": {}}} if args.deterministic else {}),
-        "arguments": {
-            k: (
-                asdict(v)
-                if k in {"pallet_geometry_loaded", "drive_geometry"}
-                else str(v)
-                if isinstance(v, Path)
-                else v
-            )
-            for k, v in vars(args).items()
-            if (k != "extra_views" or v)
-            # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
-            and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
-            # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
-            and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
-            # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
-            and (k != "lidar_keepout_m" or v != 0.0)
-            # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
-            and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
-            and (
-                k not in {"quarter_eye", "quarter_target", "quarter_focal"}
-                or (v is not None and (k != "quarter_focal" or v != 2.5))
-            )
-        },
+        "arguments": recorded_arguments(args),
     }
     scene_root = Path(args.base_scene).resolve().parent
     state["scene_sha256"] = {

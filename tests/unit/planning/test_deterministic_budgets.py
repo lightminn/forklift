@@ -98,6 +98,8 @@ def test_no_planning_wall_budget_is_a_bare_literal_any_more():
     for rel in ("src/forklift_core/mission/core.py", "sim/isaac/run_transport.py"):
         text = (ROOT / rel).read_text()
         assert not re.search(r"(time\.monotonic\(\)|hooks\.wall\(\))\s*\+\s*(?=\S)(?!determinism)[^\n]*20\.0", text), rel
+        # the obstacle replan's shared budget: the core's wall() alias and its replan_start (Codex PR 1 review P2)
+        assert not re.search(r"(monotonic\(\)|wall\(\)|replan_start)\s*\+\s*[0-9]", text), rel
         assert "SearchBudget(20.0)" not in text, rel
     assert "time.monotonic() + RETURN_TURNAROUND_MAX_S" not in (ROOT / "src/forklift_core/planning/pallet_mission.py").read_text()
     assert math.isclose(determinism.budget(20.0), 20.0)
