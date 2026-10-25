@@ -1706,6 +1706,8 @@ class MissionCore:
             obstacle["replans"][-1]["same_path"] = True
             obstacle.setdefault("replan_wait", {}).pop(ms.phase, None)
             requested_speed = 0.0
+            if ms.phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
+                self.hold_reapproach(t, paths["transport"].length_m)  # re-approach hold plan H1 (Codex round 1 P2-1)
         else:
             # D4: a replan may rightly be longer (a detour), so the
             # no-progress watch restarts on the new path; the
@@ -1735,6 +1737,8 @@ class MissionCore:
                 realign_install("obstacle_replan")  # Plan D8 S4c-3 stage 2
             if ms.phase == "transport" and slam is not None and not slam["docking"].get("reapproach"):
                 arm_docking()
+            if ms.phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
+                self.hold_reapproach(t, replanned.length_m)  # re-approach hold plan H1 (Codex round 1 P2-1)
             ms.phase_started = t
             requested_speed = 0.0
         return SimpleNamespace(rear=rear, requested_speed=requested_speed)
@@ -1917,6 +1921,20 @@ class MissionCore:
             # Plan 2026-10-24-goal-creep-stall R1: the creep at the "remaining 0" rules' own zero -- a zero command
             # (status kept) lets the stop detector see the stop and those rules take it.
             tracking = replace(tracking, speed_mps=0.0)
+        # Re-approach hold plan E1: an exit due brakes the truck (unless it arrived); standing, the exit runs before
+        # the docking stop and the stall rules below (a stall needs a tracking status, which braking is not)
+        hold_exit_ = self.reapproach_hold_exit_due(t) if d7_owned else None
+        if hold_exit_ is not None and tracking.status != "arrived":
+            if slam["stop_now"]:
+                self.reapproach_hold_exit(t, hold_exit_)
+                rear = slam_rear(t)
+                hooks.set_rear(rear)  # the runner's closures read its rear (Codex slice-3 P2)
+                slam["control"][-1][1:4] = rear.tolist()
+                tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+                ms.last_tracking = tracking
+                ms.slam_stall_ticks = 0
+            else:
+                tracking = replace(tracking, status="braking", speed_mps=0.0)
         dock_stop = (
             ms.phase == "transport"
             and d7_docking_.get("status") == "armed"
@@ -5454,12 +5472,84 @@ class MissionCore:
             status="armed", round=1, keep_m=geometry.delivery_straight_m, reapproach=True,
             await_retry_match=True, retry_seed_goal=[float(v) for v in goal],
         )
+        self.hold_reapproach(t, path.length_m)  # re-approach hold plan H1 (off: nothing)
         if obstacle is not None:
             if obstacle.get("backoff", {}).get("phase") == "transport":
                 obstacle.pop("backoff")
             obstacle.setdefault("replan_wait", {}).pop("transport", None)
             obstacle.setdefault("progress", {}).clear()
         ms.phase_started = t
+
+    # Re-approach hold plan (docs/plans/2026-10-25-reapproach-slam-hold.md) E1 exits
+    REAPPROACH_HOLD_GAP_M = 0.12  # the delivery straight's lateral box (straight_from_pose max_lateral_m)
+    REAPPROACH_HOLD_GAP_RAD = 0.08  # and its yaw box (max_yaw_rad)
+    REAPPROACH_HOLD_TIME_S = 40.0  # work time; recorded re-approaches took 2.2-23.6 s
+
+    def hold_reapproach(self, t: float, length_m: float) -> None:
+        """Plan H1: hold the SLAM correction through a D7 re-approach (``--d7-reapproach-hold on``), from its install to
+        the retry match at the line start -- the correction steps it would otherwise follow stall it at a cusp. Not
+        once its docking spent the exits (``reapproach_hold_spent``), nor when the tracker is not tracking."""
+        slam = self.slam
+        if getattr(self.options, "d7_reapproach_hold", "off") != "on" or slam is None:
+            return
+        docking = slam["docking"]
+        if docking.get("reapproach_hold_spent") or slam["tracker"].mode != "tracking":
+            return
+        self.hold_slam(t, held_frame_pallet=False)
+        docking["reapproach_hold"] = {"since_s": float(t), "length_m": float(length_m)}
+        slam["holds"].append({"phase": self.ms.phase, "time_s": t, "event": "hold_reapproach",
+                              "length_m": float(length_m)})
+
+    def reapproach_hold_exit_due(self, t: float) -> str | None:
+        """Plan E1: why the re-approach hold must end now -- the received correction off the applied one by more than
+        the docking straight's box at this odometry (``correction_gap``), the hold's travel past max(2L, L + 2 m)
+        (``hold_travel``) or its work time past 40 s (``hold_time``); None while it may go on, or without one."""
+        slam = self.slam
+        if slam is None or self.ms.phase != "transport":
+            return None
+        docking = slam["docking"]
+        hold = docking.get("reapproach_hold")
+        tracker = slam["tracker"]
+        if hold is None or not docking.get("reapproach") or tracker.mode != "holding":
+            return None
+        if tracker.received is not None and tracker.applied is not None:
+            # both on the same present odometry, as release() applies it; the received stamp is a liveness time
+            odom = self.hooks.slam_odom_base()
+            got, now = compose(tracker.received[0], odom), compose(tracker.applied[0], odom)
+            gap_m = math.hypot(got[0] - now[0], got[1] - now[1])
+            gap_rad = abs(math.atan2(math.sin(got[2] - now[2]), math.cos(got[2] - now[2])))
+            if gap_m > self.REAPPROACH_HOLD_GAP_M or gap_rad > self.REAPPROACH_HOLD_GAP_RAD:
+                return "correction_gap"
+        length = hold["length_m"]
+        if tracker.hold_travel_m > max(2.0 * length, length + 2.0):
+            return "hold_travel"
+        if self.commands.work_elapsed(hold["since_s"], t) > self.REAPPROACH_HOLD_TIME_S:
+            return "hold_time"
+        return None
+
+    def reapproach_hold_exit(self, t: float, reason: str) -> None:
+        """Plan E1, the truck standing: release the hold (the goal and withdraw carried), then -- the docking's first
+        exit -- re-plan the re-approach from here and hold again, uncounted; a second exit leaves the hold and its
+        watch off until this docking ends (the end-of-leg hold as on main)."""
+        slam, state, geometry = self.slam, self.state, self.geometry
+        docking = slam["docking"]
+        used = int(docking.get("reapproach_hold_exits", 0))
+        docking["reapproach_hold_exits"] = used + 1
+        docking.pop("reapproach_hold", None)
+        event = {"trigger": "h", "time_s": t, "counted": False, "exit": reason, "exit_number": used + 1}
+        state.setdefault("docking_retries", []).append(event)
+        event["release"] = self.release_and_carry(t)
+        if used >= 1:
+            docking["reapproach_hold_spent"] = True
+            event["spent"] = True
+            return
+        goal = tuple(docking["previous_goal"])
+        line = self.options.DOCKING_RETRY.line_start(goal, geometry.delivery_straight_m)
+        start_now = self.hooks.slam_rear(t)
+        path, record = self.reapproach_plan(start_now, line)
+        event.update(goal=list(goal), line_start=list(line), start=[float(v) for v in start_now], plan=record)
+        self.hooks.require(path is not None, f"docking_retry_no_plan:{record.get('refused')}:{record.get('status')}")
+        self.install_reapproach(t, path, goal)
 
     def release_and_carry(self, t: float) -> dict:
         """Plan D7c: release a held correction; a goal still in the held frame moves
@@ -5881,6 +5971,7 @@ class MissionCore:
             return
         require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
         docking.pop("reapproach", None)  # plan D7c: a straight ends the re-approach
+        docking.pop("reapproach_hold", None)  # and the re-approach hold's watch (the hold stays the docking's)
         # The path being replaced, kept (paths.json holds only the latest): the transport search
         # path's cusps are judged from it (fork spacing plan, V5 cusp arrivals).
         state.setdefault("paths_replaced", []).append(

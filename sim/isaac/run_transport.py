@@ -521,6 +521,14 @@ def arguments() -> argparse.Namespace:
         "(None): the transport's cruise, every earlier run.",
     )
     parser.add_argument(
+        "--d7-reapproach-hold",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-25-reapproach-slam-hold.md H1/E1: hold the SLAM correction through a D7 re-approach, "
+        "from its install to the retry match at the line start, with the exits (correction gap 0.12 m / 0.08 rad, hold "
+        "travel max(2L, L + 2 m), 40 s) releasing, re-planning and holding again once. Off: every earlier run.",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -5596,6 +5604,8 @@ def drive(S, isaac) -> None:
                                 # leg-failures B1/B2: a record from before the options ran without the caps
                                 d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
+                                # re-approach hold plan H1: a record from before the option ran without the hold
+                                d7_reapproach_hold=getattr(args, "d7_reapproach_hold", "off"),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
                                 low_clearance_margin_m=getattr(args, "low_clearance_margin_m", 0.05),

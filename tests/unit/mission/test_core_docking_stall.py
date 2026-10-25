@@ -98,6 +98,36 @@ class World:
         return self.core.docking_and_stall(t, np.array([1.0, 2.0, 0.0]), tracking, speed, 1 / 120, True)
 
 
+def test_a_reapproach_hold_exit_due_brakes_then_runs_on_the_stand():
+    """Re-approach hold plan E1 (Codex plan round 2: the order against arrival and the stall rules): moving, an exit
+    due brakes to zero with no stall counted; standing, the exit runs before the docking stop and the stall rules;
+    an arrival goes on to the docking as before."""
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=False, remaining=1.0)
+    w.core.reapproach_hold_exit_due = lambda t: "correction_gap"
+    w.core.reapproach_hold_exit = lambda t, reason: w.calls.append(("hold_exit", (reason,), {}))
+    out = w.tick(Tracking(status="tracking", speed_mps=0.2), speed=0.2)
+    assert (out.tracking.status, out.tracking.speed_mps) == ("braking", 0.0) and "hold_exit" not in w.names()
+    assert w.ms.slam_stall_ticks == 0
+    w.slam["stop_now"] = True
+    w.tick(Tracking(status="tracking", at_cusp=True))
+    assert w.names()[:3] == ["hold_exit", "slam_rear", "update"]
+    assert "start_docking_retry" not in w.names() and w.ms.slam_stall_ticks == 0
+    assert w.slam["control"][-1][1:4] == [3.0, 4.0, 0.1]
+    # an arrival is not stopped for an exit
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=True)
+    w.core.reapproach_hold_exit_due = lambda t: "hold_time"
+    w.core.reapproach_hold_exit = lambda t, reason: w.calls.append(("hold_exit", (reason,), {}))
+    out = w.tick(Tracking(status="arrived"))
+    assert "hold_exit" not in w.names() and out.tracking.status == "arrived"
+
+
+def test_no_reapproach_hold_exit_leaves_the_tick_as_it_was():
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=False, remaining=1.0)
+    w.core.reapproach_hold_exit_due = lambda t: None
+    out = w.tick(Tracking(status="tracking", speed_mps=0.2), speed=0.2)
+    assert out.tracking.status == "tracking" and out.tracking.speed_mps == 0.2
+
+
 MISS = Tracking(status="failed", failure="endpoint_heading")
 
 

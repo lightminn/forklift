@@ -29,3 +29,14 @@ def test_the_core_reads_both_with_getattr():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
     assert 'd7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None)' in source
     assert 'd7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None)' in source
+
+
+def test_the_reapproach_hold_is_off_for_a_new_run_and_a_record_without_it():
+    """docs/plans/2026-10-25-reapproach-slam-hold.md H1: --d7-reapproach-hold on|off, off by default, registered off."""
+    import near_tracking
+
+    assert _runner_args([]).d7_reapproach_hold == "off"
+    assert _runner_args(["--d7-reapproach-hold", "on"]).d7_reapproach_hold == "on"
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["d7_reapproach_hold"] == "off"
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert 'd7_reapproach_hold=getattr(args, "d7_reapproach_hold", "off")' in source
