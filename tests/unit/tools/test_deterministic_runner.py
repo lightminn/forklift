@@ -54,6 +54,8 @@ def test_a_deterministic_run_takes_the_oracle_masks_instead_of_the_learned_propo
     bare = _runner_args(["--recognition", "far", "--slam-feedback", "slam.sock", "--recognition-proposals", "learned",
                          "--deterministic"])
     assert bare.recognition_proposals == "oracle" and bare.deterministic_overrides == {"recognition_proposals": "learned"}
+    # no new args field: each is a near-field contract condition, and an old record without it would refuse (Codex)
+    assert "deterministic_learned_replaced" not in vars(bare) and "deterministic_learned_replaced" not in vars(oracle)
 
 
 def test_a_deterministic_run_refuses_a_boundary_record():
