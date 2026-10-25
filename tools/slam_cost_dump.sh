@@ -1,5 +1,6 @@
 #!/bin/bash
-# Inside a running cost-replay container (docker exec, after the driver): the node's effective parameters, then, with
+# Inside a cost-replay container after the bridge has returned (tools/slam_cost_container.sh): the node's effective
+# parameters, then, with
 # a second argument "graph", the serialized pose graph dumped by tools/slam_graph_dump.cpp (nodes, edges, grid) for
 # the slam-bounded-graph plan's connectivity check.
 #   slam_cost_dump.sh <out> [graph]

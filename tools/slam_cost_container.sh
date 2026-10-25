@@ -5,7 +5,9 @@
 # (deploy/console/isaac_live.sbatch): maps written as they come, not kept in memory; the sbatch stops the container.
 # A fourth argument picks the node: sync (default, online_sync_launch.py) or lifelong (tools/slam_cost_launch.py with
 # lifelong_slam_toolbox_node, slam-bounded-graph plan candidate B).
-#   slam_cost_container.sh <socket> <out> <params> [sync|lifelong]
+# A fifth argument "graph" also serializes and dumps the final graph (tools/slam_cost_dump.sh). The bridge serves one
+# connection and returns when the driver closes it; the dump runs then, before slam_toolbox is stopped.
+#   slam_cost_container.sh <socket> <out> <params> [sync|lifelong] [graph]
 set +u
 source /opt/ros/jazzy/setup.bash
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
@@ -23,5 +25,7 @@ python3 -m forklift_ros.isaac_slam_bridge --ros-args \
   -p socket_path:="$SOCKET" -p output_dir:="$OUT" -p "laser_xyz_yaw:=[-0.12,0.0,1.05,0.0]" -p persistent:=true \
   > "$OUT/bridge.log" 2>&1
 STATUS=$?
+bash /workspace/tools/slam_cost_dump.sh "$OUT" "${5:-}" > "$OUT/dump_run.log" 2>&1
+echo "dump exit $?" >> "$OUT/dump_run.log"
 kill $SLAM 2>/dev/null; wait $SLAM 2>/dev/null
 exit $STATUS

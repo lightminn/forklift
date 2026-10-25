@@ -60,7 +60,7 @@ trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
 docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
   -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
-  "${SLAM_NODE:-sync}" >/dev/null
+  "${SLAM_NODE:-sync}" "$([ "${DUMP_GRAPH:-0}" = 1 ] && echo graph)" >/dev/null
 CID=$(docker inspect -f '{{.Id}}' "$NAME" 2>/dev/null)
 LEFT=$(squeue -h -j "$JOB" -o %L 2>/dev/null)
 secs() { local d=0 h=0 m=0 s=0 t=$1; [[ $t == *-* ]] && { d=${t%%-*}; t=${t#*-}; }
@@ -75,11 +75,9 @@ DRV=$?
   echo "load_end=$(cut -d' ' -f1-3 /proc/loadavg) end=$(date -Is)"
   echo "cpu_pressure=$(cat /sys/fs/cgroup/system.slice/docker-$CID.scope/cpu.pressure 2>/dev/null | tr '\n' ' ')"
 } >> "$OUT/env.txt"
-docker exec "$NAME" bash /workspace/tools/slam_cost_dump.sh /out "$([ "${DUMP_GRAPH:-0}" = 1 ] && echo graph)" \
-  > "$OUT/dump_exec.log" 2>&1
-echo "dump exit $?" >> "$OUT/dump_exec.log"
-docker stop -t 20 "$NAME" >/dev/null 2>&1
-CON=$(timeout 60 docker wait "$NAME")
+# the container ends by itself once the bridge returns and the dump is written (up to 10 min with a graph dump)
+CON=$(timeout 600 docker wait "$NAME")
+[ -n "$CON" ] || { docker stop -t 20 "$NAME" >/dev/null 2>&1; CON=$(timeout 60 docker wait "$NAME"); }
 docker logs "$NAME" > "$OUT/container.log" 2>&1
 SUMMARY_ARGS=()
 [ -n "${LIVE_EPOCH:-}" ] && SUMMARY_ARGS+=(--live-epoch "$LIVE_EPOCH")
