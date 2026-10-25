@@ -1,7 +1,9 @@
 """Progress watchdog for a single Isaac job (deploy/console/isaac_live.sbatch starts it beside its supervisor).
 
-While --term-pid lives, every --period-s: the silence is now minus the newest mtime of the --glob matches (the job's
-start while none exists yet). Once it reaches --stall-min, for the descendants of --term-pid whose command line holds
+While --term-pid lives, every --period-s, and only while a runner (a Python process under --term-pid running
+--stack-match) exists: the silence is now minus the newest of the --glob matches' mtimes and the runner's start (no
+runner -- between epochs, while the supervisor serves the port alone -- that silence is not judged; only no runner
+for --no-runner-min, default 15, is a stall too: the supervisor stuck starting or stopping a bridge). Once it reaches --stall-min, for the descendants of --term-pid whose command line holds
 --stack-match: capture_diagnostics (py-spy --native, threads' state/times/wchan, /proc status, nvidia-smi) to
 --diagnostics, then SIGUSR1 (sim/isaac/run_transport.py dumps every thread's Python stack on it), --stack-wait-s later
 SIGTERM to
@@ -174,6 +176,23 @@ def identity(pid):
         return None
 
 
+def started_wall(pid):
+    """The process's start as wall-clock time (boot time + its start in clock ticks), or None."""
+    try:
+        with open("/proc/stat") as f:
+            btime = next(int(x.split()[1]) for x in f if x.startswith("btime "))
+        with open(f"/proc/{pid}/stat") as f:
+            ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+        return btime + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def runners(pids, match):
+    """The Python interpreters among pids that run `match` (the session's runner)."""
+    return [p for p in pids if match and match in cmdline(p) and is_python(p)]
+
+
 def kill_left(identities, sig):
     """Signal the captured processes that still run as the same process."""
     for ident in identities:
@@ -193,12 +212,28 @@ def signal_all(pids, sig):
 
 
 def watch(patterns, stall_s, term_pid, *, stack_match="run_transport.py", stack_wait_s=3.0, grace_s=110.0,
-          period_s=30.0, marker=None, diag_path=None, start=None, now=time.time, sleep=time.sleep):
+          period_s=30.0, marker=None, diag_path=None, start=None, now=time.time, sleep=time.sleep,
+          no_runner_s=900.0):
     """Returns "ended" when term_pid went away by itself, "stalled" after ending it."""
     start = now() if start is None else start
+    no_runner_since = None
     while alive(term_pid):
-        silence = now() - newest_mtime(patterns, start)
-        if silence >= stall_s:
+        # judged only while a runner runs, from its own start: between epochs the supervisor serves the port alone
+        # (a failed epoch's backoff plus up to 300 s of standby) and a new runner starts up before its first record
+        running = runners(descendants(term_pid), stack_match)
+        if running:
+            no_runner_since = None
+            base = max([start] + [t for t in map(started_wall, running) if t is not None])
+            silence = now() - newest_mtime(patterns, base)
+            stalled = silence >= stall_s
+        else:
+            # no runner: the supervisor between epochs (backoff 10 s, bridge start up to 120 s, standby up to 300 s
+            # after a failure -- about 7 min at most) is not a stall, but one stuck there (a bridge start or stop that
+            # never returns) is, after no_runner_s
+            no_runner_since = now() if no_runner_since is None else no_runner_since
+            silence = now() - no_runner_since
+            stalled = bool(no_runner_s) and silence >= no_runner_s
+        if stalled:
             tree = descendants(term_pid)
             owned = [identity(p) for p in [term_pid, *tree]]  # the tree now: what is left of it is killed at the end
             matched = [p for p in tree if stack_match and stack_match in cmdline(p)]
@@ -213,7 +248,7 @@ def watch(patterns, stall_s, term_pid, *, stack_match="run_transport.py", stack_
             if marker:
                 try:  # a marker that cannot be written must not keep the stalled session alive
                     with open(marker, "a") as f:
-                        f.write(json.dumps({"wall": round(now(), 1), "event": "stalled",
+                        f.write(json.dumps({"wall": round(now(), 1), "event": "stalled", "runner": bool(running),
                                             "silence_s": round(silence, 1), "globs": list(patterns),
                                             "stack_pids": stacked, "diagnostics": diag}) + "\n")
                 except OSError:
@@ -240,6 +275,8 @@ def main(argv=None) -> int:
     ap.add_argument("--stack-wait-s", type=float, default=3.0)
     ap.add_argument("--grace-s", type=float, default=110.0)
     ap.add_argument("--period-s", type=float, default=30.0)
+    ap.add_argument("--no-runner-min", type=float, default=15.0,
+                    help="no runner under --term-pid for this long is a stall too (0: off)")
     ap.add_argument("--marker")
     ap.add_argument("--diagnostics", help="where capture_diagnostics writes (default: stall_diagnostics.txt beside "
                                           "--marker)")
@@ -247,7 +284,7 @@ def main(argv=None) -> int:
     if a.stall_min <= 0:
         return 0
     result = watch(a.glob, 60 * a.stall_min, a.term_pid, stack_match=a.stack_match, stack_wait_s=a.stack_wait_s,
-                   grace_s=a.grace_s, period_s=a.period_s, marker=a.marker,
+                   grace_s=a.grace_s, period_s=a.period_s, marker=a.marker, no_runner_s=60 * a.no_runner_min,
                    diag_path=a.diagnostics or (os.path.join(os.path.dirname(a.marker), "stall_diagnostics.txt")
                                                if a.marker else None))
     print(f"stall_watch: {result}", file=sys.stderr)

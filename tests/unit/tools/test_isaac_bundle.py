@@ -1294,7 +1294,7 @@ def test_a_run_whose_progress_stops_is_ended_as_stalled_and_not_retried(tmp_path
     hung = writer("hung", tmp_path, 0.3, 30, retry_move=[str(tmp_path / "hung_out")])
     fine = writer("fine", tmp_path, 1.5, 0)
     t0 = time.monotonic()
-    summary = bundle(tmp_path, [hung, fine], stall_s=0.6, stall_check_s=0.1, grace_s=1.0)
+    summary = bundle(tmp_path, [hung, fine], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, stack_match=None)
     r = results(tmp_path)
     assert r["hung"]["status"] == "stalled" and r["hung"]["retried"] is False and r["hung"]["silence_max_s"] >= 0.6
     assert r["fine"]["status"] == "ended" and r["fine"]["rc"] == 0
@@ -1303,7 +1303,7 @@ def test_a_run_whose_progress_stops_is_ended_as_stalled_and_not_retried(tmp_path
 
 def test_silence_counts_from_the_start_until_a_progress_file_exists(tmp_path):
     never = ib.Run(name="never", argv=py("import time; time.sleep(30)"), watch=[str(tmp_path / "none.jsonl")])
-    bundle(tmp_path, [never], stall_s=0.5, stall_check_s=0.1, grace_s=1.0)
+    bundle(tmp_path, [never], stall_s=0.5, stall_check_s=0.1, grace_s=1.0, stack_match=None)
     assert results(tmp_path)["never"]["status"] == "stalled"
 
 
@@ -1319,7 +1319,8 @@ def test_the_kind_s_progress_file_under_the_output_is_watched(tmp_path):
            "(d/'frames.jsonl').write_text('{}\\n'); time.sleep(30)"
     run = ib.Run(name="riib_s0", argv=py(code, str(out)), retry_move=[str(out)])
     assert ib.watch_globs(run, "run/frames.jsonl") == [str(out / "run" / "frames.jsonl")]
-    bundle(tmp_path, [run], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, watch_rel="run/frames.jsonl")
+    bundle(tmp_path, [run], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, watch_rel="run/frames.jsonl",
+           stack_match=None)
     assert results(tmp_path)["riib_s0"]["status"] == "stalled"
 
 
@@ -1361,3 +1362,16 @@ def test_a_stalled_run_leaves_its_stack_and_diagnostics_before_it_is_ended(tmp_p
     assert "stuck_in_render" in (out / "run.stall_stack.txt").read_text()
     assert r["stall_diagnostics"] == str(out / "stall_diagnostics.txt")
     assert "threads: tid comm state" in (out / "stall_diagnostics.txt").read_text()
+
+
+def test_a_run_whose_runner_is_not_running_is_not_judged(tmp_path):
+    # between a live session's epochs only the supervisor runs (backoff + up to 300 s of standby): no record is due
+    quiet = writer("between_epochs", tmp_path, 0.1, 1.5)  # python -c, not run_transport.py
+    summary = bundle(tmp_path, [quiet], stall_s=0.3, stall_check_s=0.1)
+    assert results(tmp_path)["between_epochs"]["status"] == "ended" and summary["stalled"] == 0
+
+
+def test_a_run_without_a_runner_for_too_long_is_a_stall(tmp_path):
+    stuck = writer("stuck_between_epochs", tmp_path, 0.1, 30)  # never a run_transport.py process
+    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6)
+    assert results(tmp_path)["stuck_between_epochs"]["status"] == "stalled" and summary["stalled"] == 1
