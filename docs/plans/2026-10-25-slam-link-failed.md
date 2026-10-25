@@ -136,7 +136,7 @@ E1 결과를 보기 전에 고정한다. 목표 운용 시간은 상위 계획 1
 1. **E0 재생 도구(4b2e82aa 와 그 뒤).** `tools/slam_remap_drive.py` 에 응답 없는 꼬리 허용(`--allow-unanswered-tail`), 페이싱 재생(`--pace-live`, `sent_mono`), 이어 붙이기(`--splice-to-sim-s`)를 더했다. `tools/slam_cost_summary.py` 가 비용(단위별 평균·최대와 sim 8 h 외삽)·정확도·타당성을 계산하고, `deploy/slurm/slam_cost_replay.sbatch` 가 변형 하나를 돌린다(그래프 직렬화 없는 `tools/slam_cost_container.sh`). 시험을 먼저 썼다.
 2. **E1.** ws1 CPU 잡으로 R0–R6(반복·순서는 3 장). 결과를 이 계획의 6 장에 적는다.
 3. **구현.** 고른 변경을 `slam_toolbox_isaac_online.yaml` 에 넣고, 같은 값을 쓰는 설정(survey 등)은 따로 판단해 적는다. 매개변수를 고정하는 시험(`test_isaac_slam_bridge_rules.py`)을 고친다. R2 를 고르면 브리지의 구독 방식과 계획 정적 층의 갱신 시점을 따로 설계해 이 계획에 덧붙인다.
-4. **Isaac 확인.** 실패 9 건 가운데 장면·모드가 다른 넷을 같은 seed 로 다시 돌린다: `ct2_624d0616_auto_line_m_s1`, `ct2_624d0616_fixed_line_m_s3`, `ct2_07ca86aa_auto_random_m_s3`, `ct2_07ca86aa_fixed_random_m_s3`. 각 seed 를 두 번, 실패한 시각의 두 배(sim 약 1,000–1,200 s)까지 돌린다. 묶음 잡으로 낸다.
+4. **Isaac 확인.** 실패 9 건 가운데 장면·모드가 다른 넷을 같은 seed 로 다시 돌린다: `ct2_41a2a7e8_fixed_line_m_s2`, `ct2_624d0616_fixed_line_m_s3`, `ct2_07ca86aa_auto_random_m_s3`, `ct2_07ca86aa_fixed_random_m_s3`. 각 seed 를 두 번, 실패한 시각의 두 배(sim 약 1,000–1,200 s)까지 돌린다. 묶음 잡으로 낸다.
    - 통과: `slam_link_failed` 없음, keyframe 최대 ≤ 0.5 s.
    - 임무 결과는 앞선 실행의 같은 sim 구간과 비교한다. 완료 수가 2 이상 적거나, 하역 오차 중앙값이 1 cm 넘게 커지면 원인을 조사한다. 원인이 바꾼 설정이면 탈락이다.
    - 이것이 이어 붙인 재생의 과적합(같은 궤적 반복)을 보완하는 새 폐루프 주행의 증거다. 재생 입력과 같은 실행(`ct2_624d0616_auto_line_m_s1`)은 선택에 쓰였으므로 확인용에서 빼고 `ct2_41a2a7e8_fixed_line_m_s2` 로 바꾼다. 이 결과를 보고 설정을 다시 고치면 새 확인 자료가 필요하다.
