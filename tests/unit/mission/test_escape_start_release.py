@@ -334,3 +334,23 @@ def test_the_guard_judges_the_continuous_sweep_between_its_samples():
     guard = {"rects": [rect], "d0": [d0], "footprint": foot, "direction": -1, "stop_m": 0.1}
     assert MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0), -0.36)
     assert MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0), -0.62)
+
+
+def test_a_start_gap_at_the_floor_is_not_stopped_by_rounding():
+    # Codex re-review 5 P3: d0 = min_d0 on a parallel back-off at yaw 0.05 stopped by -1.7e-17 m
+    import math
+
+    from forklift_core.control.start_release import footprint_rect_distance, min_d0_m
+    from forklift_core.mission.core import MissionCore
+    from forklift_core.planning import Footprint
+
+    foot = Footprint(1.29, 0.17, 0.36)
+    yaw = 0.05
+    floor = min_d0_m(foot)
+    c, s = math.cos(yaw), math.sin(yaw)
+    lat = foot.half_width_m + floor + 0.025
+    rect = Rectangle(0.6 * c - lat * s, 0.6 * s + lat * c, 0.05, 0.05, yaw)
+    d0 = footprint_rect_distance((0.0, 0.0, yaw), foot, rect)
+    assert d0 == pytest.approx(floor, abs=1e-12)
+    guard = {"rects": [rect], "d0": [d0], "footprint": foot, "direction": -1, "stop_m": 0.1}
+    assert not MissionCore._escape_guard_breached(guard, (0.0, 0.0, yaw), 0.0)

@@ -7077,7 +7077,8 @@ class MissionCore:
                     poses.append((x0 + (math.sin(yaw_) - math.sin(yaw0)) / k,
                                   y0 - (math.cos(yaw_) - math.cos(yaw0)) / k, yaw_))
         err = sr.dense_error_m(sr.shape_radius(guard["footprint"]))
-        return any(sr.footprint_rect_distance(p, guard["footprint"], r) - err < d0 / 2.0
+        # 1e-9: the rounding sweep_keeps_away allows (Codex re-review 5 P3: d0 at min_d0 stopped by 1.7e-17 m)
+        return any(sr.footprint_rect_distance(p, guard["footprint"], r) - err < d0 / 2.0 - 1e-9
                    for p in poses for r, d0 in zip(guard["rects"], guard["d0"]))
 
     def _escape_guard_sync(self) -> None:
