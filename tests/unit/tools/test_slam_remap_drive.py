@@ -11,23 +11,24 @@ import pytest
 from tools import slam_remap_drive as rd
 
 
-def test_pace_offsets_interpolate_map_arrivals_by_scan_id():
-    rows = [{"index": 0, "after_scan_id": 0, "received_wall_s": 100.0},
-            {"index": 1, "after_scan_id": 10, "received_wall_s": 101.0},
-            {"repeat_of": 1, "repeats": 2, "last_index": 3, "last_after_scan_id": 30, "last_received_wall_s": 104.0}]
-    off = rd.pace_offsets(rows, 31)
-    assert off[0] == 0.0 and off[10] == pytest.approx(1.0) and off[30] == pytest.approx(4.0)
-    assert off[5] == pytest.approx(0.5) and off[20] == pytest.approx(2.5)
+def test_pace_offsets_are_the_records_own_send_times():
+    recs = [{"scan_id": i, "stamp_s": 0.1 * i, "sent_mono": 100.0 + 0.25 * i} for i in range(6)]
+    off, estimated = rd.pace_offsets(recs)
+    assert off == pytest.approx([0.0, 0.25, 0.5, 0.75, 1.0, 1.25]) and estimated == 0
+
+
+def test_pace_offsets_fill_scans_without_a_send_time_by_stamp_and_count_them():
+    # the start-up scans go through the synchronous link and carry no sent_mono
+    recs = [{"scan_id": i, "stamp_s": 0.1 * i} for i in range(3)]
+    recs += [{"scan_id": i, "stamp_s": 0.1 * i, "sent_mono": 50.0 + 0.5 * (i - 3)} for i in range(3, 6)]
+    recs.insert(4, {"scan_id": 99, "stamp_s": 0.35})  # a gap inside the timed part, filled between its neighbours
+    off, estimated = rd.pace_offsets(recs)
+    assert estimated == 4
+    assert off[:3] == pytest.approx([0.0, 0.0, 0.0])  # held at the first timed scan
+    assert off[4] == pytest.approx(0.25)  # halfway in stamp between 0.3 (0.0) and 0.4 (0.5)
     assert np.all(np.diff(off) >= 0)
-
-
-def test_pace_offsets_hold_flat_past_the_last_map_and_refuse_too_few():
-    rows = [{"index": 0, "after_scan_id": 2, "received_wall_s": 10.0},
-            {"index": 1, "after_scan_id": 4, "received_wall_s": 12.0}]
-    off = rd.pace_offsets(rows, 8)
-    assert off[0] == 0.0 and off[2] == 0.0 and off[4] == pytest.approx(2.0) and off[7] == pytest.approx(2.0)
     with pytest.raises(SystemExit):
-        rd.pace_offsets(rows[:1], 8)
+        rd.pace_offsets([{"scan_id": 0, "stamp_s": 0.0}])
 
 
 def _loop_truth(n=200):

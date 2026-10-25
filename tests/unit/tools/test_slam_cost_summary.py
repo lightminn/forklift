@@ -59,3 +59,22 @@ def test_validity_needs_the_live_keyframes_and_a_close_cost_curve():
     assert not cs.validity(missing, live)["same_keyframes"]
     slow = [row(t, 2 * (0.1 + t / 1000)) for t in range(0, 500, 10)]
     assert not cs.validity(slow, live)["ok"]
+
+
+def test_one_slow_keyframe_per_pass_fails_the_unit_max_extrapolation():
+    # Codex round 2 counterexample: 15 of 16 keyframes per 83 s pass at 0.02 s, one at 0.02 + 0.01 x pass; the mean
+    # line stays low at 8 h, the slowest keyframe passes 1 s near pass 99 -- the per-unit maximum line catches it
+    rows, unit_s = [], 6 * 83.0
+    for p in range(18):
+        for k in range(16):
+            t_ = p * 83.0 + k * 5.0
+            rows.append(row(t_, 0.02 + (0.01 * p if k == 8 else 0.0), unit=int(t_ // unit_s)))
+    s = cs.cost_summary(rows)
+    assert s["at_8h_s"] < 0.5
+    assert s["unit_max_s"] == pytest.approx([0.07, 0.13, 0.19])
+    assert s["max_at_8h_s"] > 1.0
+
+
+def test_unit_lines_need_three_units():
+    rows = [row(t, 0.03, unit=t // 500) for t in range(0, 1000, 10)]
+    assert cs.cost_summary(rows)["max_at_8h_s"] is None

@@ -10,15 +10,16 @@ gyro_heading_offline.py), checked against the record: same run, a hash over the 
 own KeyframeGate picks keyframes, as live. Prints ``config {...}`` (what this replay used) and ``sent N scans`` -- N is checked against the record by the summary.
 
 slam_link_failed plan E0 (docs/plans/2026-10-25-slam-link-failed.md 3): ``--allow-unanswered-tail N`` replays a failed
-run whose last scans were sent without a record; ``--pace-from BRIDGE_DIR`` sends each scan no earlier than its live
-wall offset, rebuilt from that bridge's /map arrivals (``maps.jsonl``: wall time and the scan id each map follows), so
-slam_toolbox's wall-clock map regeneration overlaps keyframes as live (lockstep otherwise); ``--splice-to-sim-s T``
+run whose last scans were sent without a record; ``--pace-live`` sends each scan no earlier than its live wall offset,
+the record's own send time (``sent_mono``, kept for every scan of the asynchronous link; the synchronous start-up
+scans without one are filled by stamp and counted), so slam_toolbox's wall-clock map regeneration overlaps keyframes as
+live (lockstep otherwise); ``--splice-to-sim-s T``
 repeats the record from scan 0 to the last scan back at the start pose until sim T, stamps continued, odometry
 continued by the record's own increments and the truth repeated. Each processed reply's line carries its unit, the
 odometry sent and the truth for the accuracy summary.
 
     python tools/slam_remap_drive.py RUN_DIR SOCKET OUT_JSONL [--noise-seed S] [--odom-file F] [--ranges-bin B]
-        [--allow-unanswered-tail N] [--pace-from BRIDGE_DIR] [--splice-to-sim-s T]
+        [--allow-unanswered-tail N] [--pace-live] [--splice-to-sim-s T]
 """
 
 from __future__ import annotations
@@ -67,21 +68,18 @@ def answered_length(records: int, scans: int, *, allow_tail: int) -> int:
     return records
 
 
-def pace_offsets(rows: list, n: int) -> np.ndarray:
-    """Live wall offset of scans 0..n-1 from the bridge's /map rows: (after_scan_id, wall) points, a run of repeats
-    contributing its last arrival, interpolated by scan id and held flat beyond the ends; relative to scan 0."""
-    pts = []
-    for row in rows:
-        if "received_wall_s" in row:
-            pts.append((float(row["after_scan_id"]), float(row["received_wall_s"])))
-        elif "last_received_wall_s" in row:
-            pts.append((float(row["last_after_scan_id"]), float(row["last_received_wall_s"])))
-    if len(pts) < 2:
-        raise SystemExit("pacing needs at least two /map arrivals")
-    pts.sort()
-    ids, walls = np.array([p[0] for p in pts]), np.maximum.accumulate(np.array([p[1] for p in pts]))
-    wall = np.interp(np.arange(n, dtype=float), ids, walls)
-    return wall - wall[0]
+def pace_offsets(records: list) -> tuple:
+    """Each scan's live wall offset from scan 0 and how many were estimated: the record's ``sent_mono`` where kept,
+    otherwise interpolated by stamp between the timed scans and held flat beyond them."""
+    stamps = np.array([float(r["stamp_s"]) for r in records])
+    timed = [i for i, r in enumerate(records) if r.get("sent_mono") is not None]
+    if len(timed) < 2:
+        raise SystemExit("pacing needs at least two scans with a recorded send time")
+    mono = np.maximum.accumulate(np.array([float(records[i]["sent_mono"]) for i in timed]))
+    wall = np.interp(stamps, stamps[timed], mono)
+    wall[timed] = mono
+    wall = np.maximum.accumulate(wall)
+    return wall - wall[0], len(records) - len(timed)
 
 
 def relative(a, b) -> tuple:
@@ -164,7 +162,7 @@ def main(argv=None) -> int:
     ap.add_argument("--odom-file", type=Path, default=None)
     ap.add_argument("--ranges-bin", type=Path, default=None)
     ap.add_argument("--allow-unanswered-tail", type=int, default=0)
-    ap.add_argument("--pace-from", type=Path, default=None, help="a live bridge folder (maps.jsonl) to pace by")
+    ap.add_argument("--pace-live", action="store_true", help="send at the record's own send times")
     ap.add_argument("--splice-to-sim-s", type=float, default=None)
     a = ap.parse_args(argv)
     records = load_list(a.run / "spool", "slam.records")
@@ -190,16 +188,15 @@ def main(argv=None) -> int:
     truth = [tuple(r["truth_base"]) for r in records]
     end = splice_end(truth) if a.splice_to_sim_s is not None else None
     plan = splice_plan(stamps, src_odom, truth, end=end, until_sim_s=a.splice_to_sim_s)
-    pace = None
-    if a.pace_from is not None:
-        rows = [json.loads(line) for line in (a.pace_from / "maps.jsonl").read_text().splitlines() if line.strip()]
-        pace = pace_offsets(rows, n)
+    pace, estimated = None, None
+    if a.pace_live:
+        pace, estimated = pace_offsets(records[:n])
         unit_wall = float(pace[end]) if end is not None else 0.0
     print("config " + json.dumps({"run": str(a.run.resolve()), "noise_seed": a.noise_seed,
                                   "odom_file": str(a.odom_file) if a.odom_file else None,
                                   "ranges_bin": str(a.ranges_bin) if a.ranges_bin else None,
                                   "unanswered_tail": len(log["scan_stamps_s"]) - n,
-                                  "pace_from": str(a.pace_from) if a.pace_from else None,
+                                  "pace_live": a.pace_live, "pace_estimated": estimated,
                                   "splice_end": end, "splice_to_sim_s": a.splice_to_sim_s, "planned": len(plan)}),
           flush=True)
     given = read_ranges_bin(a.ranges_bin) if a.ranges_bin else {}

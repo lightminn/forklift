@@ -2,9 +2,11 @@
 """Summarise a SLAM cost replay (tools/slam_remap_drive.py output) for the slam_link_failed plan
 (docs/plans/2026-10-25-slam-link-failed.md 3-4).
 
-Cost: keyframe slam_wall_s per spliced unit, its maximum, the mean of the last 10 % of keyframes, and a least-squares
-line against sim time extrapolated to sim 8 h (the plan's 350 passes at the measured 83 s pass period) -- a change
-that only flattens the finite window still shows its slope there. Accuracy: the SLAM pose (the reply's map<-odom
+Cost: keyframe slam_wall_s per spliced unit (mean and maximum), the maximum, the mean of the last 10 % of keyframes,
+and least-squares lines against sim time extrapolated to sim 8 h (the plan's 350 passes at the measured 83 s pass
+period): one through every keyframe, and, with three units or more, one through the per-unit means and one through
+the per-unit maxima at the units' mid times -- a change that only flattens the finite window, or leaves one slow
+keyframe per pass growing, still shows its slope there. Accuracy: the SLAM pose (the reply's map<-odom
 composed with the odometry sent) against the record's truth, no alignment, position and heading, per unit and its
 growth. Validity (an R0 replay against the live run): the same keyframe stamps as the live bridge processed, and the
 replay's mean cost per tenth of the run within 0.7-1.4 of the live one.
@@ -37,10 +39,19 @@ def cost_summary(rows: list) -> dict:
     a, b = _fit(t, w)
     units = sorted({int(r.get("unit", 0)) for r in rows})
     tail = w[-max(1, len(w) // 10):]
-    return {"keyframes": len(rows), "max_s": max(w), "last_tenth_mean_s": statistics.fmean(tail),
-            "unit_mean_s": [statistics.fmean(float(r["slam_wall_s"]) for r in rows if int(r.get("unit", 0)) == u)
-                            for u in units],
-            "slope_s_per_s": b, "intercept_s": a, "at_8h_s": a + b * EIGHT_HOURS_S}
+    by = {u: [r for r in rows if int(r.get("unit", 0)) == u] for u in units}
+    mid = [statistics.fmean(float(r["stamp_s"]) for r in by[u]) for u in units]
+    means = [statistics.fmean(float(r["slam_wall_s"]) for r in by[u]) for u in units]
+    maxes = [max(float(r["slam_wall_s"]) for r in by[u]) for u in units]
+    out = {"keyframes": len(rows), "max_s": max(w), "last_tenth_mean_s": statistics.fmean(tail),
+           "unit_mean_s": means, "unit_max_s": maxes,
+           "slope_s_per_s": b, "intercept_s": a, "at_8h_s": a + b * EIGHT_HOURS_S,
+           "mean_at_8h_s": None, "max_at_8h_s": None}
+    if len(units) >= 3:
+        am, bm = _fit(mid, means)
+        ax, bx = _fit(mid, maxes)
+        out.update(mean_at_8h_s=am + bm * EIGHT_HOURS_S, max_at_8h_s=ax + bx * EIGHT_HOURS_S)
+    return out
 
 
 def slam_pose(r) -> tuple:

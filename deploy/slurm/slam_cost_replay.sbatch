@@ -9,7 +9,7 @@
 # on the other, then tools/slam_cost_summary.py. Records the CPU state (the SLAM CPU's SMT siblings, node load, the
 # container's cpu.pressure) beside the result.
 #   sbatch deploy/slurm/slam_cost_replay.sbatch OUT RUN_DIR "key=value ..." [driver args, e.g. --noise-seed 1
-#       --allow-unanswered-tail 8 --pace-from LIVE_BRIDGE --splice-to-sim-s 1500]
+#       --allow-unanswered-tail 8 --pace-live --splice-to-sim-s 1500]
 #   LIVE_BRIDGE (environment): the live run's bridge folder, for the summary's validity check
 # Run from the repository root (a snapshot); docker image forklift/ros2-dev:jazzy.
 set -u
