@@ -190,6 +190,17 @@ E1 결과를 보기 전에 고정한다. 목표 운용 시간은 상위 계획 1
 - R9(문턱 완화)는 두 번 모두 무응답으로 끝났고, 비용도 R0 와 비슷하게 커졌다. 응답성 기준으로 탈락이다.
 - 직선 외삽이 맞는지 보려고 R4 + R5 와 R4 + R5 + R7 을 sim 5,000 s 까지 이어 붙인 재생을 따로 돌린다(`m4`). 이 결과로 기준을 바꾸지는 않는다.
 
+### 6.3 임시 완화 채택 (2026-10-25, 총괄 결정)
+
+4 장의 기준대로라면 R4 + R5 + R7 은 "1,500 s 까지의 완화"라 채택하지 않는다. 총괄이 다음과 같이 정했다: **임시 완화로 기본값에 넣되, Isaac 확인을 통과한 뒤에.** 시연 세션(팔레트 3–5 개, sim 수백 초)은 이것으로 버틸 것으로 본다.
+
+- **근본 해결이 아니다.** keyframe 비용의 증가율이 운용 설정의 약 1/8 로 줄었을 뿐 계속 커진다. sim 수천 초 이상 같은 길을 되풀이하는 운용은 미해결이다. 근본 해결(그래프 크기를 묶는 위치 추정 모드·lifelong 모드 비교)은 sim 5,000 s 재생(`m4`) 결과를 본 뒤 별도 계획으로 한다.
+- **바꾼 값**(`slam_toolbox_isaac_online.yaml`, 각 줄에 이 절을 가리키는 주석): `loop_search_maximum_distance` 3.0 → 1.5, `loop_search_space_dimension` 8.0 → 4.0, `loop_search_space_resolution` 0.05 → 0.10, `loop_search_space_smear_deviation` 0.03 → 0.05. 시험 `test_online_loop_search_is_the_slam_link_mitigation` 이 값을 고정한다.
+- **Isaac 확인(5 장 4 그대로, 확인 전용 실행):** `ct2_41a2a7e8_fixed_line_m_s2`, `ct2_624d0616_fixed_line_m_s3`, `ct2_07ca86aa_auto_random_m_s3`, `ct2_07ca86aa_fixed_random_m_s3` 를 같은 장면·seed·순서로 각 두 번, 묶음으로 돌린다. 원래 세션 길이가 실패 시각의 두 배보다 짧으면 세션 끝까지를 보고 그렇게 적는다.
+  - 통과: `slam_link_failed` 없음, keyframe 최대 ≤ 0.5 s.
+  - 함께 적는다: keyframe 처리 시간 추이, SLAM 정확도(`slam.records` 의 참값 대비), 임무 결과(완료 수·하역 오차, 앞선 실행과 같은 sim 구간 비교), /pose 무응답 발생 수(이 완화로 줄어드는지).
+- 확인을 통과하지 못하면 기본값을 되돌리고 이 절에 결과를 적는다.
+
 ## 7. 이 계획이 말하지 않는 것
 
 - 응답 기한(1.0 s), keyframe 규칙(KeyframeGate), CPU 배치는 바꾸지 않는다.
