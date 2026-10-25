@@ -1178,3 +1178,22 @@ def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
         other.kill()
         other.wait()
     assert rc == 2 and not (tmp_path / "out" / "results.jsonl").exists()
+
+
+def test_a_half_empty_last_wave_is_warned():
+    # rcq (2026-10-25): 20 runs on 2 live jobs of 4 slots end with a wave of 4 of 8 slots
+    w = ib.wave_warning(20, "live", 2)
+    assert w and "4 of 8" in w and "16 or 24" in w and "longest runs first" in w
+    assert ib.wave_warning(16, "live", 2) is None and ib.wave_warning(21, "live", 2) is None
+    assert "1 of 6" in ib.wave_warning(13, "riib", 2)
+    assert "4 runs on 1 job" in ib.wave_warning(4, "live", 2)  # fewer jobs fill the wave
+    assert ib.wave_warning(3, "live", 1) is None
+
+
+def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
+    path = tmp_path / "runs.jsonl"
+    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(5)))
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner: [])
+    rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "1 of 4" in out and "0 problems" in out

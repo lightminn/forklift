@@ -340,6 +340,24 @@ def sbatch_sizes(kind, slots=None) -> dict:
     return {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
 
 
+def wave_warning(n_runs, kind, jobs=1):
+    """A warning when the list's last wave leaves half or more of the slots empty, else None. N runs on `jobs` bundle
+    jobs of `kind` (its slots per GPU) run in waves of jobs x slots; a last wave of half of them or fewer keeps the
+    others' GPUs held and idle for about one run length (rcq: 20 runs on 2 x 4 slots, a last wave of 4 of 8)."""
+    per = KINDS[kind]["max_slots"]
+    total = per * jobs
+    if n_runs < 1 or jobs < 1:
+        return None
+    last = n_runs - (-(-n_runs // total) - 1) * total
+    if last * 2 > total:
+        return None
+    sizes = [n for n in (n_runs - last, n_runs - last + total) if n > 0]
+    fewer = f", or {n_runs} runs on {-(-n_runs // per)} job(s)" if -(-n_runs // per) < jobs else ""
+    return (f"warning: {n_runs} runs on {jobs} {kind} job(s) of {per} slots: the last wave runs {last} of {total} "
+            f"slots, the rest idle for about a run -- make it {' or '.join(map(str, sizes))} runs{fewer}, and put "
+            "the longest runs first")
+
+
 def kind_slots(kind, shards) -> int:
     """How many sessions of `kind` the job's shards hold (at most the kind's per-GPU limit)."""
     k = KINDS[kind]
@@ -1210,10 +1228,16 @@ def main(argv=None) -> int:
                                      description="check a run list before submitting it (see check_runs)")
         cp.add_argument("--list", required=True)
         cp.add_argument("--runner", required=True, help="the snapshot's runner, e.g. SNAP/sim/isaac/run_transport.py")
+        cp.add_argument("--kind", choices=sorted(KINDS), help="with --jobs: warn when the last wave is half empty")
+        cp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list (--claim-dir)")
         a = cp.parse_args(argv[1:])
-        problems = check_runs(load_runs(a.list), a.runner)
+        runs = load_runs(a.list)
+        problems = check_runs(runs, a.runner)
         for line in problems:
             print(line)
+        warning = wave_warning(len(runs), a.kind, a.jobs) if a.kind else None
+        if warning:
+            print(warning)
         print(f"{len(problems)} problems")
         return 1 if problems else 0
     if argv[:1] == ["sizes"]:

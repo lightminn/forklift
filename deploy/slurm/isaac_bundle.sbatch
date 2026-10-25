@@ -19,6 +19,12 @@
 #   optional: BUNDLE_PY (python3; the runner needs only the standard library), BUNDLE_ARGS (more tools/isaac_bundle.py
 #   options, split on spaces: --stagger-s, --run-timeout-s, --slots, --session-vram-mib ...)
 #
+# The list (before submitting): python3 tools/isaac_bundle.py check --list RUNS --runner SNAP/sim/isaac/run_transport.py
+#   --kind KIND --jobs J. Two or more jobs on one list share BUNDLE_ARGS="--claim-dir OUT/claims" (the runner refuses
+#   a second job on a list without the same claim dir). Put the longest runs first, and make the number of runs a
+#   multiple of J x the kind's slots (live 4, riib 3 per job; the node holds 8 live or 6 riib): a last wave of half the
+#   slots or fewer holds the other GPUs idle for about a run, and check warns about it.
+#
 # Sizes per kind of run, from ws1 measurements (2026-10-24, the plan's section 1 and 2.4): shard = runs at once,
 #   live session with learned proposals  4 runs: shard:4, 8 CPUs, 24G (1.0-1.2 cores, anon ~5.45 GiB, 3.9 GB GPU each);
 #                                        BUNDLE_ARGS="--pace-floor 0.335 --pace-gap-p99-s 0.12" with a pace_log per run
