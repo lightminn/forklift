@@ -134,13 +134,17 @@ def _session(run_dir):
                 pass
             else:
                 ambiguous = True
+        # without the probe's count a failed run record cannot settle how many missions were cut, retries or not
+        # (Codex V5 9th review P2: a first docking round with no retry marks a separate mission too)
+        ambiguous = ambiguous or top.get("success") is False
         if top.get("success") is False and last != "unknown" and (
                 last is None or retries != (last.get("docking_retries") or [])):
             out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {},
                          "forbidden_pocket_contacts": top.get("forbidden_pocket_contacts") or [],
                          "slam": top.get("slam") or {}},
                         {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}))
-    # an unsettled run record matters only without the probe's count; with it, a separate cut mission is filled below
+    # an unsettled run record matters only without the probe's count; with it, a separate cut mission is filled below.
+    # A killed session leaves no run record and is only padded to the schedule (session_v5).
     inconsistent = (ambiguous and acked is None) or (acked is not None and len(out) > acked)
     for _ in range(max(0, acked - len(out)) if acked is not None else 0):
         out.append((None, None))

@@ -274,14 +274,21 @@ def test_after_a_folder_with_no_records_the_run_record_is_told_apart_by_time(tmp
         (run / "result.json").write_text(json.dumps({"success": False, "failure_reason": "x", "docking_retries": [
             {"trigger": "b", "time_s": t, "counted": True, "plan": {"length_m": 2.0}}]}))
 
+    # without the probe's report any failed run record leaves the cut count unsettled (Codex V5 9th review P2: a
+    # record with no retry but a docking round after m3 is a fourth mission too)
+    (run / "result.json").write_text(json.dumps({"success": False, "failure_reason": "x", "docking_retries": [],
+                                                 "delivery_docking": {"rounds": [{"time_s": 40.0}]}}))
+    assert session_v5(str(session))["inconsistent"] is True
+    # with three acked submits the count is settled; the retries' times tell a separate mission from m3's own
+    (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 3}))
     record(40.0)
-    assert session_v5(str(session))["inconsistent"] is True  # four missions over three scheduled
+    assert session_v5(str(session))["inconsistent"] is True  # a fourth mission over three acked
     record(20.0)
     out = session_v5(str(session))
     assert (out["inconsistent"], out["unknown"]) == (False, 1)
     (run / "missions/m3/result.json").unlink()
     (run / "missions/m3/result.json").write_text(json.dumps({"result": {"outcome": "done"}}))
-    assert session_v5(str(session))["inconsistent"] is True
+    assert session_v5(str(session))["inconsistent"] is False  # no end time: not added, the acked count holds
 
 
 def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
