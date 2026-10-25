@@ -37,11 +37,14 @@ SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt
 # off the decision path (the oracle masks replace the learned proposer), so array members holding RGB are left out.
 RGB_MEMBERS = {"rgb", "rgba"}
 WALL_KEY = re.compile(r"(^|_)(wall|mono)(_s)?$|_wall_s$|^wall_s_|^wall_time_s$|^elapsed_s$|^model_ms$|_mono$")
-IDENTITY_KEYS = {"pid", "session_epoch", "token", "request_token", "submitted", "decided", "port", "started",
+# wall stamps only as numbers: "decided" is also the recognition's candidate record and the cusp hold's motion state
+STAMP_KEYS = {"submitted", "decided", "started"}
+IDENTITY_KEYS = {"pid", "session_epoch", "token", "request_token", "port",
                  # the Kit render frame number (the frame sync takes a varying number of renders, dv3 V1) and the
                  # scene-replan tracker label id(tracker) % 10**6
                  "sensor_frame_id", "tracker_serial"}
-HOLD_LISTS = {"cusp_heading_holds", "cusp_heading_hold"}  # key / cancelled_by = [phase, id(tracker), leg]
+# key / cancelled_by = [phase, id(tracker), leg]; the watch's tracker = id(tracker)
+HOLD_LISTS = {"cusp_heading_holds", "cusp_heading_hold", "cusp_heading_watch"}
 SNAPSHOT = re.compile(r"/snapshots/[^/]+/")
 CONSOLE_TRAFFIC = {"cycle", "gate"}
 
@@ -52,33 +55,49 @@ def _norm_str(value: str, roots: tuple) -> str:
     return SNAPSHOT.sub("/snapshots/<SNAP>/", value)
 
 
-def _tracker_ordinals(holds):
-    """Cusp heading-hold records with id(tracker) replaced by its first-seen ordinal, so "the same tracker" still
-    compares (as ``run_transport._identity_free`` does for boundary records)."""
+def _tracker_ordinals(state: dict) -> dict:
+    """A container holding the cusp heading records with id(tracker) replaced by its first-seen ordinal -- one table
+    for the closed holds, the open hold and the watch, so "the same tracker" still compares across them (as
+    ``run_transport._identity_free`` does for boundary records)."""
     ordinals: dict = {}
-    many = isinstance(holds, list)
-    out = []
-    for hold in holds if many else [holds]:
-        if isinstance(hold, dict):
-            hold = dict(hold)
-            for field in ("key", "cancelled_by"):
-                v = hold.get(field)
-                if isinstance(v, list) and len(v) == 3:
-                    hold[field] = [v[0], f"<tracker {ordinals.setdefault(v[1], len(ordinals))}>", v[2]]
-        out.append(hold)
-    return out if many else out[0]
+
+    def ordinal(tid):
+        return f"<tracker {ordinals.setdefault(tid, len(ordinals))}>"
+
+    def hold_(hold):
+        if not isinstance(hold, dict):
+            return hold
+        hold = dict(hold)
+        for field in ("key", "cancelled_by"):
+            v = hold.get(field)
+            if isinstance(v, list) and len(v) == 3:
+                hold[field] = [v[0], ordinal(v[1]), v[2]]
+        return hold
+
+    state = dict(state)
+    if isinstance(state.get("cusp_heading_holds"), list):
+        state["cusp_heading_holds"] = [hold_(h) for h in state["cusp_heading_holds"]]
+    if isinstance(state.get("cusp_heading_hold"), dict):
+        state["cusp_heading_hold"] = hold_(state["cusp_heading_hold"])
+    watch = state.get("cusp_heading_watch")
+    if isinstance(watch, dict) and "tracker" in watch:
+        state["cusp_heading_watch"] = {**watch, "tracker": ordinal(watch["tracker"])}
+    return state
 
 
 def normalise(value, roots: tuple, path: str = ""):
     """The comparable form of a JSON value: excluded keys dropped, run paths and snapshot names replaced."""
     if isinstance(value, dict):
+        if HOLD_LISTS & set(value):
+            value = _tracker_ordinals(value)
         out = {}
         for key, sub in value.items():
             k = str(key)
             here = f"{path}.{k}" if path else k
-            if WALL_KEY.search(k) or k in IDENTITY_KEYS or here == "deterministic.diagnostics":
+            stamp = k in STAMP_KEYS and isinstance(sub, (int, float)) and not isinstance(sub, bool)
+            if WALL_KEY.search(k) or k in IDENTITY_KEYS or stamp or here == "deterministic.diagnostics":
                 continue
-            out[k] = normalise(_tracker_ordinals(sub) if k in HOLD_LISTS else sub, roots, here)
+            out[k] = normalise(sub, roots, here)
         return out
     if isinstance(value, list):
         return [normalise(v, roots, path) for v in value]
@@ -123,6 +142,8 @@ def _items(run: Path) -> dict:
         if path.suffix in SKIP_SUFFIXES:
             continue
         parts = rel.split("/")
+        if path.name == "manifest.json" and len(parts) >= 2 and parts[-2] == "spool":
+            continue  # chunk counts follow the wall-clock cut interval: checked by _invalid, not compared
         if "spool" in parts and path.suffix == ".jsonl" and parts.index("spool") == len(parts) - 3:
             stream = "/".join(parts[:-1])
             spools.setdefault(stream, []).append(path)
@@ -217,7 +238,42 @@ def _broken(items: dict) -> list:
     return out
 
 
+def _record_errors(value, path=""):
+    if isinstance(value, dict):
+        for k, sub in value.items():
+            if k == "record_errors" and sub:
+                yield f"{path}.{k}"
+            else:
+                yield from _record_errors(sub, f"{path}.{k}")
+    elif isinstance(value, list):
+        for i, sub in enumerate(value):
+            yield from _record_errors(sub, f"{path}[{i}]")
+
+
+def _invalid(run: Path) -> list:
+    """Why ``run`` is not a whole deterministic record: a missing folder or result, a result without the deterministic
+    block, a spool without a complete manifest, recorded write errors. An ordinary mission failure is valid."""
+    if not run.is_dir():
+        return [f"{run}: no such folder"]
+    results = sorted(run.rglob("result.json"))
+    problems = [] if results else [f"{run}: no result.json"]
+    for path in results:
+        result = json.loads(path.read_text())
+        if not (isinstance(result, dict) and (result.get("deterministic") or {}).get("enabled") is True):
+            problems.append(f"{path.relative_to(run)}: no deterministic block (not a deterministic run)")
+        problems += [f"{path.relative_to(run)}: {where} not empty" for where in _record_errors(result)]
+    for spool in sorted(p for p in run.rglob("spool") if p.is_dir()):
+        manifest = spool / "manifest.json"
+        if not manifest.exists() or json.loads(manifest.read_text()).get("complete") is not True:
+            problems.append(f"{spool.relative_to(run)}: the spooled record is incomplete (manifest)")
+    return problems
+
+
 def compare(run_a: Path, run_b: Path) -> dict:
+    invalid = {"A": _invalid(Path(run_a)), "B": _invalid(Path(run_b))}
+    if invalid["A"] or invalid["B"]:
+        return {"equal": False, "invalid": invalid, "differences": [], "broken": {"A": [], "B": []},
+                "hashes": {"A": {}, "B": {}}}
     ia, ib = _items(Path(run_a)), _items(Path(run_b))
     differences = []
     for name in sorted(set(ia) | set(ib)):
@@ -226,7 +282,8 @@ def compare(run_a: Path, run_b: Path) -> dict:
         elif _hash(ia[name]) != _hash(ib[name]):
             differences.append(_difference(name, ia[name], ib[name]))
     broken = {"A": _broken(ia), "B": _broken(ib)}
-    return {"equal": not differences and not broken["A"] and not broken["B"], "differences": differences,
+    return {"equal": not differences and not broken["A"] and not broken["B"], "invalid": invalid,
+            "differences": differences,
             "broken": broken, "hashes": {"A": {k: _hash(v) for k, v in ia.items()},
                                          "B": {k: _hash(v) for k, v in ib.items()}}}
 
@@ -241,6 +298,9 @@ def main(argv=None) -> int:
     if args.json is not None:
         args.json.write_text(json.dumps(out, indent=1) + "\n")
     print("EQUAL" if out["equal"] else "DIFFERENT", f"{len(out['differences'])} differences", "broken", out["broken"])
+    for side in ("A", "B"):
+        for problem in out["invalid"][side]:
+            print(f"  invalid {side}:", problem)
     for d in out["differences"][:40]:
         print(" ", d)
     return 0 if out["equal"] else 1
