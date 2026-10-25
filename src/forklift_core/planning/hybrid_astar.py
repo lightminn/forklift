@@ -22,6 +22,7 @@ from math import acos, atan2, ceil, cos, hypot, isfinite, pi, sin, sqrt
 import numpy as np
 from numpy.typing import NDArray
 
+from forklift_core import determinism
 from forklift_core._validation import _finite_scalar
 
 from .geometry import Bounds, Footprint, FootprintCollisionChecker, Pose2D, Rectangle
@@ -605,6 +606,7 @@ def plan_hybrid_astar(
 
     while queue and expanded < config.max_expansions:
         if deadline is not None and expanded % 256 == 0 and time.monotonic() > deadline:
+            determinism.timed_out("hybrid_astar")  # a deterministic run ends here (plan D6)
             return fallback("timeout")
         if passed_over is not None and expanded - passed_over[3] >= config.shot_cap_patience:
             return fallback("expansion_limit")
