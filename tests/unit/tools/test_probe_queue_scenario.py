@@ -37,7 +37,8 @@ class FakeVehicle:
     confirmed after ``settle_s``. ``events``: {time: overrides of the states from then on for 0.6 s} and
     ``silent``: (from, to) with no states."""
 
-    def __init__(self, clock, outcomes, *, refuse=(), ack_s=0.02, run_s=3.0, settle_s=0.4, events=None, silent=None):
+    def __init__(self, clock, outcomes, *, refuse=(), ack_s=0.02, run_s=3.0, settle_s=0.4, events=None, silent=None,
+                 picks=None):
         self.clock, self.outcomes, self.refuse = clock, list(outcomes), set(refuse)
         self.ack_s, self.run_s, self.settle_s = ack_s, run_s, settle_s
         self.events, self.silent = dict(events or {}), silent
@@ -48,12 +49,24 @@ class FakeVehicle:
         self.last_result = None
         self.submits = []  # (time, request_id, first?)
         self.seen = {}  # request id -> mission number
+        self.picks = list(picks or [])  # CT-2: the answers to pick_request in order: (pallet, destination) or a reason
+        self.pick_requests = []
 
     def on_message(self, msg):
         now = self.clock.rel()
         t = msg.get("t")
         if t == "lease_request":
             self.outbox.append((now, {"t": "ack", "request_id": msg["request_id"], "lease_id": "L"}))
+        elif t == "pick_request":
+            rid = msg["request_id"]
+            self.pick_requests.append((now, rid))
+            self.outbox.append((now + self.ack_s, {"t": "ack", "of": "pick_request", "request_id": rid}))
+            answer = self.picks.pop(0) if self.picks else "none_remaining"
+            pick = None if isinstance(answer, str) else {"pallet_id": answer[0], "destination_id": answer[1]}
+            self.outbox.append((now + 2 * self.ack_s, {
+                "t": "pick", "request_id": rid, "targets_revision": TARGETS["targets_revision"],
+                "reason": answer if isinstance(answer, str) else "ok", "pick": pick,
+                "plan": [] if pick is None else [list(answer)], "missions": 0 if pick is None else 1, "blocked": {}}))
         elif t == "mission_submit":
             rid = msg["request_id"]
             first = rid not in self.seen
@@ -128,6 +141,7 @@ class WiredProbe(lcp.Probe):
 
     async def open(self):
         self.epoch, self.request_token = 1, None
+        self.capabilities = {"next_pick": True, "next_pick_deadline_ms": 5000}
         self.ws = FakeWS(self.vehicle)
         self._reader = asyncio.create_task(self._read(self.ws))
 
@@ -195,7 +209,7 @@ def test_a_teleop_between_missions_stops_before_the_next_submit():
 
 def test_a_feedback_loss_that_lasts_stops_even_when_it_recovers_and_the_mission_out_ends():
     clock = Clock()
-    v = FakeVehicle(clock, ["done", "done", "done"], events={1.0: {"feedback_ok": False}})
+    v = FakeVehicle(clock, ["done", "done", "done"], events={3.0: {"feedback_ok": False}})
     p = _run(v, clock)
     assert len(v.seen) == 1 and p.report["queue"]["stop_reason"] == "차량 피드백 없음"
     assert p.report["missions_run"][0]["result"]["outcome"] == "done"
@@ -219,7 +233,7 @@ def test_a_slow_answer_is_resent_and_waited_for_not_refused():
 def test_a_stop_while_the_answer_is_out_ends_the_resending_at_once():
     """Codex PR 4 review round 3 P2-1: the queue stops (and forgets the submit) -- no resend after it."""
     clock = Clock()
-    v = FakeVehicle(clock, ["done", "done", "done"], ack_s=5.0, events={1.0: {"mode": "STOPPED"}})
+    v = FakeVehicle(clock, ["done", "done", "done"], ack_s=5.0, events={3.0: {"mode": "STOPPED"}})
     p = _run(v, clock)
     stop_at = next(ms for _, ms in p.queue.stops) / 1000.0 - 1000.0
     assert p.report["queue"]["stop_reason"] == "정지됨(STOP)" and len(p.report["queue"]["uncertain"]) == 1
@@ -310,17 +324,120 @@ def test_a_rearm_refused_for_a_moved_generation_is_returned_not_retried():
 
 def test_an_answer_at_a_resend_boundary_is_not_followed_by_another_send():
     """Codex PR 4 review round 4 P2: a refusal arriving as the 0.5 s resend comes due -- nothing is sent after it."""
+    # the second submit's refusal: the first one's is the queue's one start resubmit (plan D5 exception)
     clock = Clock()
-    v = FakeVehicle(clock, ["done", "done", "done"], refuse={1}, ack_s=0.5)
+    v = FakeVehicle(clock, ["done", "done", "done"], refuse={2}, ack_s=0.5)
     real = v.on_message
     answered = {}
 
     def on_message(msg):
         real(msg)
-        if msg.get("t") == "mission_submit" and "t" not in answered:
+        if msg.get("t") == "mission_submit" and len(v.seen) == 2 and "t" not in answered:
             answered["t"] = clock.rel() + v.ack_s
 
     v.on_message = on_message
     p = _run(v, clock)
     assert p.report["queue"]["stop_reason"] == "거부: not_stopped"
     assert all(t < answered["t"] + 1e-9 for t, _, _ in v.submits)
+
+
+def test_the_auto_item_submits_each_pick_and_ends_on_none_remaining():
+    # CT-2 D4: one standing item, a pick_request before each mission, the recommended ids submitted
+    clock = Clock()
+    v = FakeVehicle(clock, ["done", "done"], picks=[("P-1", "D-1"), ("P-2", "D-2"), "none_remaining"])
+    probe = _run(v, clock, cycle="auto")
+    assert [(e["pallet_id"], e["destination_id"]) for e in probe.report["missions_run"]] == [("P-1", "D-1"),
+                                                                                              ("P-2", "D-2")]
+    assert len(v.pick_requests) == 3
+    q = probe.report["queue"]
+    assert q["stop_reason"] == "완료" and q["counts"]["done"] == 2 and q["items_left"] == []
+    assert [f["pallet_id"] for f in q["finished"]] == ["P-1", "P-2"]
+
+
+def test_the_auto_item_stops_when_no_destination_is_free():
+    clock = Clock()
+    v = FakeVehicle(clock, ["done"], picks=[("P-1", "D-1"), "no_free_destination"])
+    probe = _run(v, clock, cycle="auto")
+    q = probe.report["queue"]
+    assert q["stop_reason"] == "자동 선택 실패: no_free_destination" and q["items_left"] == ["auto"]
+    assert q["counts"]["done"] == 1 and not q["uncertain"]
+
+
+def test_a_recomputed_ok_after_a_none_remaining_before_the_ack_is_taken():
+    # contract 5.3: a none_remaining before the ack is not final; the same request's re-computed ok after it is used
+    import mission_queue as mq
+
+    probe = WiredProbe(None)
+    q = probe.queue = mq.MissionQueue()
+    q.on_welcome(1)
+    q.add({"item_id": "A", "kind": "auto", "scope": "remaining", "pallet_id": None, "destination_id": None,
+           "label": "", "added_unix": 0.0})
+    now = lcp.time.monotonic() * 1000.0  # _read stamps what it hands the queue with the real clock
+    q.resume(now)
+    q.on_state({"mode": "PAUSED", "stopped_confirmed": True, "feedback_ok": True, "mission": None}, now)
+    probe.targets = dict(TARGETS)
+    ctx = {"connected": True, "welcomed": True, "has_lease": True, "targets": TARGETS, "next_pick": True,
+           "state": {"mode": "PAUSED", "stopped_confirmed": True, "feedback_ok": True, "mission": None}}
+    rid = q.next(ctx, now, lambda: "k1")["pick_request"]["request_id"]
+    key = {"epoch": 1, "item_id": "A", "request_id": rid}
+    probe.queue_picking, probe.queue_pick_answer = {"key": dict(key)}, {"key": dict(key)}
+    msgs = [{"t": "pick", "request_id": rid, "targets_revision": 1, "reason": "none_remaining", "pick": None},
+            {"t": "pick", "request_id": rid, "targets_revision": 1, "reason": "ok",
+             "pick": {"pallet_id": "P-1", "destination_id": "D-1"}, "plan": [["P-1", "D-1"]], "missions": 1},
+            {"t": "ack", "of": "pick_request", "request_id": rid}]
+
+    class Feed:
+        close_code = None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not msgs:
+                raise StopAsyncIteration
+            return json.dumps(msgs.pop(0))
+
+    feed = Feed()
+    probe.ws = feed
+    asyncio.run(probe._read(feed))
+    assert q.phase == "picked" and q.held["pallet_id"] == "P-1" and q.pick["acked"] and q.items
+
+
+def test_a_start_up_pause_in_the_states_does_not_stop_the_queue():
+    # ws1 CT-2 V3: 2.5-2.9 s without a state just after the session starts; the queue is resumed only once the states
+    # flow steadily, as an operator resumes once the screen is live
+    clock = Clock()
+    v = FakeVehicle(clock, ["done", "done", "done"], silent=(0.15, 2.9))
+    p = _run(v, clock)
+    assert p.report["start_steady"]["ok"] and p.report["queue"]["stop_reason"] == "완료"
+    assert p.report["queue"]["counts"]["done"] == 3
+
+
+def test_the_sessions_first_not_stopped_refusal_is_the_queues_own_one_resubmit():
+    # plan D5's exception (user decision 2026-10-25; ws1 CT-2 V3 seed 2): the queue submits the same item once more
+    # after a 1 s stand -- no operator step, the probe does nothing of its own
+    clock = Clock()
+    v = FakeVehicle(clock, ["refused", "done", "done", "done"], refuse={1})  # the refused submit takes a number
+    p = _run(v, clock)
+    assert "operator_resumes" not in p.report
+    assert p.report["queue"]["stop_reason"] == "완료" and p.report["queue"]["counts"]["done"] == 3
+    firsts = [(t, rid) for t, rid, first in v.submits if first]
+    assert v.seen[firsts[0][1]] == 1 and firsts[1][1] != firsts[0][1]  # a new request for the same item
+    assert firsts[1][0] - (firsts[0][0] + v.ack_s) >= 1.0 - 1e-6  # after the refusal, a 1 s stand
+
+
+def test_a_second_not_stopped_refusal_ends_the_run():
+    clock = Clock()
+    v = FakeVehicle(clock, ["done", "done", "done"], refuse={1, 2})
+    p = _run(v, clock)
+    assert len(v.seen) == 2 and p.report["queue"]["stop_reason"] == "거부: not_stopped"
+
+
+def test_the_superseded_operator_resume_flag_is_refused():
+    # both it and the queue's own start resubmit would resubmit after the same refusal
+    import subprocess
+    import sys as _sys
+
+    done = subprocess.run([_sys.executable, str(Path(lcp.__file__)), "--port-file", "x.json", "--report", "r.json",
+                           "--queue-resume-not-stopped"], capture_output=True, text=True)
+    assert done.returncode == 2 and "superseded" in done.stderr

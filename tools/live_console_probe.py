@@ -54,6 +54,9 @@ class Probe:
         self.queue_has_lease = False  # the lease as console/web/js/protocol.js holds it (a state may take it away)
         self.queue_asking = None  # {key, entry} of the submit out: its answer goes to the queue as it is received
         self.queue_forgotten: set = set()  # request ids the queue dropped (D6 forget): never sent again
+        self.queue_picking = None  # CT-2: {key} of the pick_request whose pick is awaited (cleared by the pick)
+        self.queue_pick_answer = None  # CT-2: {key} of the pick_request whose ack / reject is awaited (either order)
+        self.capabilities: dict = {}
 
     def queue_apply(self, out) -> None:
         """queuewire apply(): a stop that forgets the submit out ends its resending at once (Codex PR 4 r3 P2-1)."""
@@ -77,6 +80,7 @@ class Probe:
         self.epoch = welcome["session_epoch"]
         # persistent console plan D7: the connection's request token, its seq (a reconnect gets a new token)
         self.request_token, self.request_seq = welcome.get("request_token"), 0
+        self.capabilities = welcome.get("capabilities") or {}
         self.event("welcome", session_epoch=self.epoch, capabilities=welcome.get("capabilities"))
         self._reader = asyncio.create_task(self._read(self.ws))
         if getattr(self, "_echoer", None) is None:
@@ -128,6 +132,19 @@ class Probe:
                                         "permit": msg.get("permit"), "last_result": msg.get("last_result")})
                 elif t == "targets":
                     self.targets = msg
+                elif t == "pick":
+                    picking_ = self.queue_picking
+                    self.event("pick", request_id=msg.get("request_id"), reason=msg.get("reason"), pick=msg.get("pick"),
+                               plan=msg.get("plan"), targets_revision=msg.get("targets_revision"))
+                    if self.queue is not None and picking_ is not None and \
+                            msg.get("request_id") == picking_["key"]["request_id"]:
+                        held_ = (self.targets or {}).get("targets_revision")
+                        self.queue_apply(self.queue.on_pick(picking_["key"], msg, time.monotonic() * 1000.0, held_))
+                        # kept while the queue still waits on this request (a none_remaining before its ack may be
+                        # followed by a re-computed ok, contract 5.3; Codex CT-2 impl r2 P3); its ack is queue_pick_answer
+                        if not (self.queue.phase == "picking"
+                                and (self.queue.pick or {}).get("request_id") == picking_["key"]["request_id"]):
+                            self.queue_picking = None
                 elif t == "missions":
                     self.missions = msg
                     if self.queue is not None:  # queuewire onResults: oldest first
@@ -135,6 +152,13 @@ class Probe:
                             self.queue.on_result(r_, time.monotonic() * 1000.0)
                 elif t in ("ack", "reject"):
                     self.replies[msg.get("request_id")] = (time.monotonic(), msg)
+                    answer_ = self.queue_pick_answer
+                    if self.queue is not None and answer_ is not None and \
+                            msg.get("request_id") == answer_["key"]["request_id"]:
+                        self.queue_pick_answer = None
+                        if t == "reject":
+                            self.queue_picking = None  # no pick follows a refusal
+                        self.queue_apply(self.queue.on_answer(answer_["key"], msg, time.monotonic() * 1000.0))
                     asking_ = self.queue_asking
                     if self.queue is not None and asking_ is not None and \
                             msg.get("request_id") == asking_["key"]["request_id"]:
@@ -1110,6 +1134,18 @@ async def cycle_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def wait_steady_states(p: Probe, n: int = 20, gap_s: float = 0.5, timeout_s: float = 120.0) -> bool:
+    """True once the last n + 1 states came at most gap_s apart and the newest is fresh (about 2 s of steady flow)."""
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        st = [s_["mono"] for s_ in p.states[-(n + 1):]]
+        if len(st) == n + 1 and max(b_ - a_ for a_, b_ in zip(st, st[1:])) <= gap_s \
+                and time.monotonic() - st[-1] <= gap_s:
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
 async def queue_scenario(p: Probe, args):
     """CT-1 PR 4 (docs/plans/2026-10-22-continuous-transport-ct1.md): the --cycle legs run by the console's own mission
     queue (tools/mission_queue.py, a port of console/web/js/queue.js) -- fed every state, result, welcome and close as
@@ -1134,12 +1170,26 @@ async def queue_scenario(p: Probe, args):
         ids["n"] += 1
         return f"q{ids['n']}"
 
-    for leg in [leg for leg in args.cycle.split(",") if leg]:
-        pallet_id, destination_id = leg.split(":")
-        q.add(mission_queue.new_item(pallet_id, destination_id, new_id()))
+    if args.cycle == "auto":
+        # CT-2 D4: one standing "all remaining pallets" item, resolved by the vehicle's pick_request answers
+        q.add({"item_id": new_id(), "kind": "auto", "scope": "remaining", "pallet_id": None, "destination_id": None,
+               "label": "남은 팔레트 전부", "added_unix": time.time()})
+        q.pick_deadline_ms = int(p.capabilities.get("next_pick_deadline_ms") or mission_queue.PICK_DEADLINE_MS)
+        expected = sum(1 for x in (p.targets or {}).get("pallets") or [] if x.get("state") == "available")
+    else:
+        for leg in [leg for leg in args.cycle.split(",") if leg]:
+            pallet_id, destination_id = leg.split(":")
+            q.add(mission_queue.new_item(pallet_id, destination_id, new_id()))
+        expected = len(q.items)
     p.report["missions_run"] = []
+    pick_resend = None
+    # The operator resumes once the screen is live: states arriving steadily, not inside the runner's start-up pause
+    # (2.5-2.9 s without a state just after the session starts, ws1 2026-10-24 CT-2 V3, which stopped the queue on its
+    # 2 s silence rule before anything was sent -- in either arm, by timing alone; the PR 4 note).
+    started_wait = time.monotonic()
+    p.report["start_steady"] = {"ok": await wait_steady_states(p), "waited_s": round(time.monotonic() - started_wait, 2)}
     q.resume(time.monotonic() * 1000.0)
-    closed_seen, deadline = False, time.monotonic() + args.mission_timeout_s * max(1, len(q.items) + 1)
+    closed_seen, deadline = False, time.monotonic() + args.mission_timeout_s * max(1, expected + 1)
     while time.monotonic() < deadline:
         now_ms = time.monotonic() * 1000.0
         if p.closed_code is not None and not closed_seen:
@@ -1153,13 +1203,22 @@ async def queue_scenario(p: Probe, args):
                 if got_ is not None:
                     entry["result"] = {"mission_id": mid_, "outcome": got_["outcome"], "reason": got_["reason"]}
                     entry["ended_mono"] = time.monotonic()
+        p.queue_forgotten.update(q.drain_forget())
+        # (a not_stopped refusal of the session's first submit is the queue's own one resubmit now: plan D5's
+        # exception, tools/mission_queue.py -- the probe's operator resume it replaces is refused in main())
         if q.run != "running" and q.current is None and p.queue_asking is None:
             break  # stopped, nothing out: the queue's end here
         if q.run != "running" and q.phase == "in_mission" and closed_seen:
             break  # its result can no longer come
         ctx = {"connected": p.closed_code is None, "welcomed": p.closed_code is None, "has_lease": p.queue_has_lease,
-               "state": p.state, "targets": p.targets}
+               "state": p.state, "targets": p.targets, "next_pick": p.capabilities.get("next_pick") is True}
         n = q.next(ctx, now_ms, new_id)
+        if n and "pick_request" in n:
+            r_ = n["pick_request"]
+            p.queue_picking = {"key": {"epoch": q.epoch, "item_id": r_["item_id"], "request_id": r_["request_id"]}}
+            p.queue_pick_answer = {"key": dict(p.queue_picking["key"])}
+            pick_resend = asyncio.ensure_future(p.request_resent("pick_request", r_["request_id"]))
+            n = None
         if n:
             s_ = n["submit"]
             key = {"epoch": q.epoch, "item_id": s_["item_id"], "request_id": s_["request_id"]}
@@ -1172,14 +1231,20 @@ async def queue_scenario(p: Probe, args):
                 targets_revision=s_["targets_revision"]))
         await p.echo()
         await asyncio.sleep(0.25)
-    if resend is not None and not resend.done():
-        resend.cancel()
+    for task_ in (resend, pick_resend):
+        if task_ is not None and not task_.done():
+            task_.cancel()
     for entry in p.report["missions_run"]:
         if "result" not in entry:
             entry["result_not_this_mission"] = True  # the queue never applied a result for it
     p.report["queue"] = {"stop_reason": q.stop_reason, "stops": q.stops, "counts": q.counts,
-                         "items_left": [f"{it['pallet_id']}:{it['destination_id']}" for it in q.items],
-                         "uncertain": [it["item_id"] for it in q.items if it.get("uncertain")]}
+                         "items_left": [f"{it['pallet_id']}:{it['destination_id']}" if it.get("kind") != "auto"
+                                        else "auto" for it in q.items],
+                         "uncertain": [it["item_id"] for it in q.items if it.get("uncertain")],
+                         "picks": q.picks, "last_pick_blocked": q.last_pick_blocked,
+                         "finished": [{"pallet_id": f.get("pallet_id"), "destination_id": f.get("destination_id"),
+                                       "outcome": f.get("outcome"), "mission_id": f.get("mission_id")}
+                                      for f in reversed(q.finished)]}
     p.report["missions_message"] = p.missions
     if args.end_session and p.closed_code is None:
         await p.until(p.standing, 30, label="standing_before_end")
@@ -1440,7 +1505,12 @@ def main():
     ap.add_argument("--quiet-s", type=float, default=8.0, help="lift scenario: the client quiet / runner stopped (s)")
     ap.add_argument("--no-sigstop", action="store_true",
                     help="lift scenario: skip the runner SIGSTOP part (until main's SLAM link stall fix)")
-    ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle scenario: pallet:destination,...")
+    ap.add_argument("--queue-resume-not-stopped", action="store_true",
+                    help="superseded and refused: the queue itself now submits the session's first item once more "
+                         "after a not_stopped refusal and a 1 s stand (plan D5 exception, user decision 2026-10-25); "
+                         "the runs that used this operator resume (CT-2 V3 seed 2 reruns, leg-failures V4) ran "
+                         "snapshots from before it")
+    ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle / queue scenario: pallet:destination,...; queue: \"auto\" for one all-remaining-pallets item (CT-2)")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
     ap.add_argument("--reconnect-at-end", action="store_true",
@@ -1488,6 +1558,9 @@ def main():
     ap.add_argument("--tour-pacing-wait-s", type=float, default=900.0,
                     help="tour scenario: no progress this long while teleop is forbidden for pacing (wall s)")
     args = ap.parse_args()
+    if args.queue_resume_not_stopped:
+        # both would resubmit after the same refusal
+        ap.error("--queue-resume-not-stopped is superseded by the queue's own start resubmit (plan D5 exception)")
     # The job's timeout ends a stuck probe with SIGTERM: leave through the finally below, so the report is written.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
     end = time.monotonic() + args.wait_port_s

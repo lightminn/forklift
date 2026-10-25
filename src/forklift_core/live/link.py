@@ -116,6 +116,7 @@ class Link:
         self._next_tick = self._next_state = None
         self.log: list[dict] = []  # every message handled with when (mono), for live_log.jsonl
         self.conn_of: dict[str, str] = {}  # client_id -> current conn_id, for the mission replies
+        self.pick = None  # CT-2 D5: a PickService answers pick_request after the arbiter's ack (None: unsupported)
 
     def _handle(self, conn_id, client_id, msg, now, where):
         try:
@@ -133,6 +134,9 @@ class Link:
             targets = getattr(self.a.mission, "targets", None)
             if reply.get("t") == "ack" and msg.get("t") == "targets_request" and targets is not None:
                 self.ch.put(conn_id, targets.message())  # contract 5: the current list to the asker
+            if reply.get("t") == "ack" and msg.get("t") == "pick_request" and self.pick is not None:
+                # CT-2 D3: every ack -- a stored one to a resend too -- asks again; the pick follows when computed
+                self.pick.submit(conn_id, client_id, msg["request_id"], now)
 
     def _conn_event(self, kind, conn_id, client_id, extra, now, where):
         if kind == "connect":
@@ -182,6 +186,10 @@ class Link:
             client_id, conn_id = reply.pop("client_id", None), reply.pop("conn_id", None)
             if conn_id is not None and self.conn_of.get(client_id) == conn_id:
                 self.ch.put(conn_id, reply)  # else the asking connection is gone: a resend gets the stored result
+        if self.pick is not None:
+            for conn_id, client_id, msg in self.pick.poll(now):
+                if self.conn_of.get(client_id) == conn_id:  # else the asking connection is gone: it asks again
+                    self.ch.put(conn_id, msg)
         out = self.a.step(now, safety, candidate, drive)
         if self._next_tick is None or now >= self._next_tick:
             self.ch.put(None, self.a.tick(now))

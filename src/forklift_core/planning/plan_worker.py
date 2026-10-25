@@ -12,6 +12,7 @@ Jobs (each a module-level planner and a copy of its arguments):
 - ``leg``: ``plan_transport_leg`` or ``plan_return_leg``, then once more with the tight arguments when the first
   status is one of ``retry_on`` -- the caller's own fallback, run here so both share one deadline.
 - ``dock``: ``scan_docking.dock(*args, **kwargs)`` and its wall time (real-time plan D9b).
+- ``next_pick``: ``next_pick.recommend(payload["snapshot"])`` and its wall time (CT-2 D2).
 - ``observe_ladder``: a live mission's first leg (persistent console plan D2, agreed with the main session
   2026-10-18): the setup's candidate ladder -- every waypoint with ``extended=False``, then, only if none plans,
   every one with ``extended=True`` -- stopping at the first success or, between candidates, at the payload's
@@ -93,6 +94,12 @@ def _run(name: str, payload: dict):
         if result.success and pm.final_straight_prefix(result.transport, payload["keep_m"]) is None:
             # no delivery straight left to arm the docking on (arm_docking's own rule, Codex 6c round 2 P2-1)
             result = pm.MissionPlan(False, "transport:no_final_straight")
+        return {"result": result, "wall_s": time.monotonic() - started}
+    if name == "next_pick":  # CT-2 D2: the next pallet and destination from a snapshot (plan 2026-10-24-ct2-next-pick)
+        from forklift_core.mission.next_pick import recommend
+
+        started = time.monotonic()
+        result = recommend(payload["snapshot"])
         return {"result": result, "wall_s": time.monotonic() - started}
     if name == "echo":  # the tests' job
         if payload.get("sleep_s"):
