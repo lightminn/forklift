@@ -112,6 +112,60 @@ def test_a_session_cut_mid_mission_counts_its_last_mission_from_the_run_record(t
     assert session_missions(str(tmp_path / "s"))["session_failed"] == 0
 
 
+def test_the_probes_acked_submits_count_a_mission_cut_before_any_retry(tmp_path):
+    """Codex V5 review P2-1: a session cut in m2 before D7 has a run record with the same (empty) retries as m1 --
+    the mission count comes from the probe's acked submits against the mission folders, not from the retries."""
+    import json
+
+    from leg_failures_pairs import session_missions
+
+    session = tmp_path / "s"
+    md = session / "live/epoch_1/run/missions/m1"
+    md.mkdir(parents=True)
+    (md / "records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
+    (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 30.0}}))
+    (session / "live/epoch_1/run/result.json").write_text(json.dumps(
+        {"success": False, "failure_reason": "slam_link_failed: x", "docking_retries": []}))
+    (session / "probe.json").write_text(json.dumps({"missions_run": [
+        {"pallet_id": "P-4", "submit": {"t": "ack"}}, {"pallet_id": "P-5", "submit": {"t": "ack"}},
+        {"pallet_id": "P-3", "submit": {"t": "reject"}}]}))
+    out = session_missions(str(session))
+    assert (out["missions"], out["done"], out["session_failed"]) == (2, 1, 1)
+    # the same session that ended between missions (as many acked as folders): nothing added
+    (session / "probe.json").write_text(json.dumps({"missions_run": [{"pallet_id": "P-4", "submit": {"t": "ack"}}]}))
+    out = session_missions(str(session))
+    assert (out["missions"], out["session_failed"]) == (1, 0)
+
+
+def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
+    """Re-approach hold plan 2a (V5): a session's score is how many of its scheduled missions completed with no
+    re-approach stall -- a stalled mission that recovered scores 0, a mission not reached or cut scores 0 (Codex V5
+    review P2-2: failing earlier must not look like a win); the pair test is an exact one-sided sign test."""
+    import json
+
+    from leg_failures_pairs import session_score, sign_test_p
+
+    session = tmp_path / "s"
+
+    def mission(m, outcome, retries=(), rounds=()):
+        md = session / "live/epoch_1/run/missions" / m
+        md.mkdir(parents=True)
+        (md / "records.json").write_text(json.dumps({"state": {"docking_retries": list(retries), "delivery_docking": {
+            "rounds": [{"time_s": t} for t in rounds]}}}))
+        (md / "result.json").write_text(json.dumps({"result": {"outcome": outcome, "ended_s": 100.0}}))
+
+    b = {"trigger": "b", "time_s": 10.0, "counted": True, "plan": {"length_m": 2.0}}
+    d = {"trigger": "d", "time_s": 20.0, "counted": True, "plan": {"length_m": 2.0}}
+    mission("m1", "done")  # no D7 at all: clean
+    mission("m2", "done", [b, d], [30.0])  # b stood (no round before d), d arrived: stalled, recovered -> 0
+    mission("m3", "done", [b], [15.0])  # one re-approach that arrived: clean
+    assert session_score(str(session), scheduled=3) == 2
+    assert session_score(str(session), scheduled=4) == 2  # a mission never reached scores 0
+    assert sign_test_p([1, 1, 1, 1, 1]) == pytest.approx(1 / 32)
+    assert sign_test_p([1, -1, 0, 0]) == pytest.approx(3 / 4)
+    assert sign_test_p([0, 0]) == 1.0
+
+
 def test_rates_from_counts_stay_exact_so_ties_hold():
     """Codex plan round 5 P2: 3/3 - 2/3 and 0/3 - 1/3 are the same size; in floats they were not (p 0.015625, pass)."""
     rows = [{"seed": k, "main": [2, 3, 0], "fix": [3, 3, 0]} for k in range(6)]

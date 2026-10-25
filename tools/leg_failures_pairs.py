@@ -90,7 +90,13 @@ def _session_states(run_dir) -> list:
     that record repeats the last mission folder's (Codex V4 hold review P2)."""
     import glob
 
+    try:  # the probe's accepted submits: how many missions the session started (Codex V5 review P2-1)
+        acked = sum(1 for m in _json(f"{run_dir}/probe.json").get("missions_run") or []
+                    if (m.get("submit") or {}).get("t") == "ack")
+    except (OSError, ValueError):
+        acked = None
     out = []
+    tail = None  # the last run's failure record, when the run failed
     for run in sorted(glob.glob(f"{run_dir}/live/epoch_*/run")):
         last = None
         for md in sorted(glob.glob(f"{run}/missions/m*")):
@@ -105,10 +111,19 @@ def _session_states(run_dir) -> list:
             top = _json(f"{run}/result.json")
         except (OSError, ValueError):
             continue
-        retries = top.get("docking_retries") or []
-        if top.get("success") is False and (last is None or retries != (last.get("docking_retries") or [])):
-            out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {}},
-                        {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}))
+        if top.get("success") is False:
+            retries = top.get("docking_retries") or []
+            fresh = last is None or retries != (last.get("docking_retries") or [])
+            tail = ({"docking_retries": retries if fresh else [],
+                     "delivery_docking": (top.get("delivery_docking") or {}) if fresh else {}},
+                    {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}, fresh)
+    if tail is not None:
+        st, res, fresh = tail
+        # missions accepted but with no folder were cut; without the probe's count, a run record unlike the last
+        # mission's stands for one (the earlier rule)
+        missing = max(0, acked - len(out)) if acked is not None else int(fresh)
+        for k in range(missing):
+            out.append((st if k == 0 else {"docking_retries": []}, dict(res)))
     return out
 
 
@@ -145,6 +160,40 @@ def session_missions(run_dir) -> dict:
         out["recovery_after_docking"] += res.get("reason") == "transport_recovery_after_docking"
         out["hold_exits"] += sum(1 for e in st.get("docking_retries") or [] if e.get("trigger") == "h")
     return out
+
+
+def _mission_clean(st, res) -> bool:
+    """Done, and every counted re-approach in it arrived (a docking round in its window) and was planned."""
+    if res.get("outcome") != "done":
+        return False
+    counted = [e for e in st.get("docking_retries") or [] if e.get("counted")]
+    rounds = [float(r["time_s"]) for r in (st.get("delivery_docking") or {}).get("rounds") or []
+              if r.get("time_s") is not None]
+    for k, ev in enumerate(counted):
+        plan = ev.get("plan") or {}
+        if plan.get("refused") or plan.get("length_m") is None:
+            return False
+        end = counted[k + 1]["time_s"] if k + 1 < len(counted) else res.get("ended_s")
+        if not any(t > ev["time_s"] + 1e-9 and (end is None or t <= float(end) + 1e-9) for t in rounds):
+            return False
+    return True
+
+
+def session_score(run_dir, scheduled=3) -> int:
+    """Re-approach hold plan 2a (V5) primary: of the session's scheduled missions, how many completed with no
+    re-approach stall. A mission not reached, cut or failed scores 0, and so does one whose stall recovered."""
+    return min(int(scheduled), sum(_mission_clean(st, res) for st, res in _session_states(run_dir)))
+
+
+def sign_test_p(differences) -> float:
+    """Exact one-sided sign test: P(at least the observed positives | the nonzero differences split as a fair coin)."""
+    from math import comb
+
+    pos = sum(1 for d in differences if d > 0)
+    n = sum(1 for d in differences if d != 0)
+    if n == 0:
+        return 1.0
+    return sum(comb(n, k) for k in range(pos, n + 1)) / 2 ** n
 
 
 def collect(live_dir, prefix, scene, seeds, arms=("main", "fix")) -> list:
