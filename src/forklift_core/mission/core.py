@@ -2641,10 +2641,10 @@ class MissionCore:
         if not rec["end_free"]:
             rec["outcome"] = "short"
             hooks.require(False, "observe_start_backoff_short")
-        target = ob["target"]
+        target, grid_world, scenario = ob["target"], hooks.grid_world, options.scenario
         start_ = hooks.wall()
         replanned = hooks.plan_observation_leg(
-            hooks.grid_world(options.scenario), target, options.planner_config, geometry=self.geometry,
+            grid_world(scenario), target, options.planner_config, geometry=self.geometry,
             start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
             pickup_bounds=self.observe_bounds(), extended=False, **hooks.grid_kwargs("observe"))
         leg_ = self.state["observe_replan_leg"]
