@@ -201,3 +201,26 @@ def test_the_session_check_hands_the_planners_directions_to_the_arcs(tmp_path):
     out = C.check_session(path, planner=_planners(legs_override=half))
     assert out["missions"][0]["outcome"] == "contact_observed"
     assert out["missions"][0]["stages"]["transport"]["nearest"] == "P-2"
+
+
+def test_the_keepout_reaches_the_planners_and_the_tall_props_gap_is_recorded(tmp_path):
+    # docs/validation/2026-10-25-ct1-session-keepout.md: a slot marker taller than the LiDAR plane beside the return
+    path = _session(tmp_path, n=1)
+    record = json.loads(path.read_text())
+    record["static_props"] = [{"asset": {"uri": "riibotics:slot_marker", "length_m": 0.9, "width_m": 0.03,
+                                         "height_m": 1.3},
+                               "rectangle": {"x_m": 6.0, "y_m": 0.36 + 0.25 + 0.015, "length_m": 0.9, "width_m": 0.03,
+                                             "yaw_rad": 0.0}}]
+    path.write_text(json.dumps(record))
+    seen = []
+    observe, transport = _planners()
+
+    def transport_(scenario, config, **kw):
+        seen.append(kw["geometry"].lidar_keepout_m)
+        return transport(scenario, config, **kw)
+
+    out = C.check_session(path, planner=(observe, transport_), lidar_keepout_m=0.15)
+    assert seen == [0.15] and out["settings"]["lidar_keepout_m"] == 0.15
+    stage = out["missions"][0]["stages"]["return_home"]
+    assert stage["tall_nearest"] == "tall:0" and stage["tall_bound_m"] == pytest.approx(0.25, abs=0.01)
+    assert out["missions"][0]["outcome"] == "passed"  # a record beside the outcome, not part of it
