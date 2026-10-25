@@ -42,6 +42,7 @@ MISSION_KEYS = {
         "goal_creep_stalls",  # the final goal's creep stall latches (plan 2026-10-24-goal-creep-stall G2)
         # plan 2026-10-24-leg-end-budget-stands: O1's pending stand and its attempts, R1's checks and arrivals
         "observe_end_stand", "observe_end_stands", "return_loose_checks", "return_loose_arrivals",
+        "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
