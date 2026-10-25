@@ -50,13 +50,18 @@ Real-time back-off (live runs): a run's "pace_log" glob names its live_log.jsonl
 --pace-period-s the bundle takes, for each run older than --pace-warmup-s, simulated over wall time across the last
 --pace-window-s of tick records up to now (a run whose ticks stopped counts its silence as a gap) and the 99th
 percentile tick gap. When the median of those ratios falls below --pace-floor, or a run's gap p99 exceeds
---pace-gap-p99-s, or a run has written no tick for --pace-stall-s, the bundle starts no new run until fewer than
-(running - 1) run -- one step back -- and waits a window before it steps back again. OUT/pace.jsonl keeps every
-evaluation, runs it could not measure included.
+--pace-gap-p99-s (either for --pace-confirm evaluations in a row), or a run has written no tick for --pace-stall-s (at
+once), the bundle starts no new run until fewer than (running - 1) run -- one step back -- and waits a window before
+it steps back again. The warm-up (540 s) is a session's start-up, 0.22-0.33 for its first four minutes on ws1, plus a
+window, so that no judged window holds it: with 240 s every bundle of rh (2026-10-25) stepped back on its own
+start-up and stayed at half its slots. After --pace-recover clean evaluations in a row (each measured run at pace) and
+a window since the last change, the cap goes up by one again: a back-off that was a false alarm costs minutes, not the
+job. OUT/pace.jsonl keeps every evaluation, runs it could not measure included.
 
 Several bundle jobs can share one list (--claim-dir): each run is claimed with an atomic mkdir before its first
 attempt, so a job with a free slot takes the next unclaimed run and the jobs' last waves end together instead of one
-job holding its GPU for a single straggler.
+job holding its GPU for a single straggler. A job refuses to start while another bundle on this node runs the same
+list without the same --claim-dir (both would run every run into the same folders; --list-registry-dir).
 
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
@@ -426,6 +431,46 @@ class NodeLedger:
             (self.dir / f"r-{key}").unlink(missing_ok=True)
 
 
+def _runner_alive(pid) -> bool:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return b"isaac_bundle" in f.read()
+    except OSError:
+        return False
+
+
+def register_list(directory, list_path, claim_dir, job_id, pid=None, alive=_runner_alive):
+    """Record that this runner runs list_path with claim_dir; return (the conflict, or None; the entry to remove at
+    exit, or None). A conflict is another live runner on this node with the same list and not the same claim dir:
+    without a shared claim dir both would run every run into the same folders (rcq, 2026-10-25, two jobs on one list
+    with none)."""
+    d = Path(directory)
+    d.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid() if pid is None else pid
+    key = zlib.crc32(os.path.realpath(list_path).encode())
+    mine = os.path.realpath(claim_dir) if claim_dir else None
+    with open(d / ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for f in d.glob(f"l-{key:08x}-*"):
+            try:
+                other = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            if other.get("list") != os.path.realpath(list_path) or other.get("pid") == pid:
+                continue
+            if not alive(other.get("pid")):
+                f.unlink(missing_ok=True)
+                continue
+            if mine is None or other.get("claim_dir") != mine:
+                return (f"job {other.get('job')} (pid {other.get('pid')}) runs {list_path} with claim dir "
+                        f"{other.get('claim_dir')}, this one with {mine}: two jobs on one list need the same "
+                        "--claim-dir", None)
+        entry = d / f"l-{key:08x}-{job_id}-{pid}"
+        entry.write_text(json.dumps({"list": os.path.realpath(list_path), "claim_dir": mine, "job": job_id,
+                                     "pid": pid}) + "\n")
+        return None, entry
+
+
 def visible_gpus(env) -> list[str]:
     """The GPUs the job sees: CUDA_VISIBLE_DEVICES, else SLURM_JOB_GPUS."""
     value = env.get("CUDA_VISIBLE_DEVICES") or env.get("SLURM_JOB_GPUS") or ""
@@ -671,7 +716,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                shard_mib=SHARD_MIB, session_vram_mib=SESSION_VRAM_MIB, vram_probe=None, vram_period_s=1.0,
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
-               pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
+               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
+               pace_recover=10,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -707,7 +753,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
-          "pace_below": 0,
+          "pace_below": 0, "pace_clean": 0, "stepups": [],
           "node_ram_waits": 0, "claimed_elsewhere": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
@@ -946,9 +992,21 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             st["backoff_at"] = now
             st["backoffs"].append({"t": round(time.time(), 1), "reason": reason, "cap": st["cap"]})
             stepped = True
+        # back up by one after pace_recover clean evaluations in a row (something measured, all of it at pace): a
+        # back-off is otherwise for the rest of the job, and one taken on a false alarm halves the bundle for hours
+        measured = any(v["ratio"] is not None or v["gap_p99_s"] is not None for v in rows.values())
+        st["pace_clean"] = st["pace_clean"] + 1 if measured and reason is None else 0
+        stepped_up = False
+        if not stepped and st["cap"] < slots and st["pace_clean"] >= pace_recover and cooled:
+            st["cap"] += 1
+            st["backoff_at"] = now
+            st["pace_clean"] = 0
+            st["stepups"].append({"t": round(time.time(), 1), "cap": st["cap"]})
+            stepped_up = True
         with pace_path.open("a") as f:
             f.write(json.dumps({"t": round(time.time(), 1), "runs": rows, "unmeasured": unmeasured, "cap": st["cap"],
-                                "reason": reason, "stepped_back": stepped}) + "\n")
+                                "reason": reason, "stepped_back": stepped,
+                                "stepped_up": stepped_up}) + "\n")
 
     def end_all(now):
         for r in live.values():
@@ -1094,7 +1152,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
-        "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"],
+        "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
         "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
         "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
@@ -1149,11 +1207,16 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-floor", type=float, help="step back when the median sim/wall of live runs is below")
     ap.add_argument("--pace-gap-p99-s", type=float, help="step back when a live run's tick gap p99 is above")
     ap.add_argument("--pace-window-s", type=float, default=300.0)
-    ap.add_argument("--pace-warmup-s", type=float, default=240.0)
+    ap.add_argument("--pace-warmup-s", type=float, default=540.0,
+                    help="a run is judged from this age: its start-up (~240 s) plus a window")
     ap.add_argument("--pace-period-s", type=float, default=60.0)
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
     ap.add_argument("--pace-confirm", type=int, default=2,
                     help="evaluations in a row a slow window or tick gap must persist before a step back")
+    ap.add_argument("--pace-recover", type=int, default=10,
+                    help="clean evaluations in a row (and a window since the last change) before the cap goes up one")
+    ap.add_argument("--list-registry-dir", default=f"/tmp/isaac_bundle_lists_{os.getuid()}",
+                    help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
                     help="node-wide RAM reservations shared by this user's bundle jobs")
     ap.add_argument("--bridge-cpus", default="auto",
@@ -1199,23 +1262,35 @@ def main(argv=None) -> int:
         return 2
     if probe is not None and shards is None:
         print("no shard count: GPU memory is sampled but not gated", file=sys.stderr)
+    job_id = os.environ.get("SLURM_JOB_ID") or f"local{os.getpid()}"
+    conflict, entry = register_list(a.list_registry_dir, a.list, a.claim_dir, job_id)
+    if conflict:
+        print(f"refusing: {conflict}", file=sys.stderr)
+        return 2
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
-    summary = run_bundle(
+    try:
+        summary = _run_main(a, runs, slots, shards, probe, stop)
+    finally:
+        entry.unlink(missing_ok=True)
+    print(json.dumps(summary))
+    return summary["exit_code"]
+
+
+def _run_main(a, runs, slots, shards, probe, stop):
+    return run_bundle(
         runs, a.out, slots=slots, stagger_s=a.stagger_s, grace_s=a.grace_s, run_timeout_s=a.run_timeout_s,
         shards=shards, shard_mib=a.shard_mib, session_vram_mib=a.session_vram_mib, vram_probe=probe,
         vram_period_s=a.vram_period_s, vram_unreadable_s=a.vram_unreadable_s,
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
-        pace_confirm=a.pace_confirm,
+        pace_confirm=a.pace_confirm, pace_recover=a.pace_recover,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
     )
-    print(json.dumps(summary))
-    return summary["exit_code"]
 
 
 if __name__ == "__main__":
