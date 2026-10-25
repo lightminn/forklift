@@ -2,8 +2,10 @@
 #SBATCH --job-name=slam_cost
 #SBATCH --partition=compute
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=3G
-#SBATCH --time=01:00:00
+#SBATCH --mem=1G
+#SBATCH --time=00:30:00
+# (sizes from sacct, 68 jobs to 2026-10-26: MaxRSS <= 0.23 GB, longest 22.7 min; the slam_toolbox container runs
+#  outside the job's cgroup. A paced long replay asks for its own --time: the wall budget is read from squeue.)
 # slam_link_failed plan E1 (docs/plans/2026-10-25-slam-link-failed.md 3): a run's recorded scans replayed into a fresh
 # mapping bridge (tools/slam_remap_drive.py) with a params variant, slam_toolbox on one CPU of the job and the driver
 # on the other, then tools/slam_cost_summary.py. Records the CPU state (the SLAM CPU's SMT siblings, node load, the
