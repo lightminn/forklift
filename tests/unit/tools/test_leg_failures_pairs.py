@@ -191,26 +191,36 @@ def test_each_failed_epoch_keeps_its_own_cut_mission_and_a_surplus_of_folders_is
     assert session_missions(str(session))["inconsistent"] is True
 
 
-def test_a_cut_mission_with_no_record_has_an_unknown_d7_and_a_folder_without_result_is_unfinished(tmp_path):
-    """Codex V5 4th review P2: an acked mission with neither folder nor run record (a killed run) may have been cut in
-    D7 -- d7_unknown, which guard 1b counts against the hold arm; a folder with records but no result.json keeps its
-    retries as an unfinished mission (d7_failed), and a done one with a result but no records is not clean."""
+def test_a_mission_missing_a_file_is_bounded_best_on_off_and_worst_on_the_hold(tmp_path):
+    """Codex V5 4th-6th review P2: a mission missing records.json, result.json or both is unknown there -- at the best
+    bound (off) an unknown outcome is done, unknown records are clean and add no D7 failure or refusal; at the worst
+    (the hold arm) an unknown outcome is not done, unknown records are a stall, a D7 failure when not done, one refusal
+    and an unconfirmed contact. Without the probe's report, scheduled missions with no folder are unknown."""
     import json
 
-    from leg_failures_pairs import session_missions, session_score
+    from leg_failures_pairs import session_missions, session_v5
 
     session = tmp_path / "s"
     run = session / "live/epoch_1/run"
-    (run / "missions/m1").mkdir(parents=True)
+    (run / "missions/m1").mkdir(parents=True)  # records with a re-approach that stood, no result.json
     (run / "missions/m1/records.json").write_text(json.dumps({"state": {"docking_retries": [
         {"trigger": "b", "time_s": 5.0, "counted": True, "plan": {"length_m": 2.0}}]}}))
-    (run / "missions/m2").mkdir(parents=True)
+    (run / "missions/m2").mkdir(parents=True)  # a done result, no records.json
     (run / "missions/m2/result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 9.0}}))
-    (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 3}))
-    out = session_missions(str(session))
-    assert (out["missions"], out["done"], out["d7_failed"], out["d7_unknown"]) == (3, 1, 1, 1)
-    assert (out["unknown"], out["unknown_done"]) == (2, 1)
-    assert session_score(str(session)) == 0  # the done m2 has no records: a stall cannot be ruled out
+    (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 3}))  # m3: nothing
+    out = session_v5(str(session))
+    assert out["unknown"] == 3 and out["inconsistent"] is False
+    assert out["best"] == {"score": 2, "done": 3, "d7_failed": 0, "refusals": 0, "contacts": 0, "contact_unknown": 0}
+    assert out["worst"] == {"score": 0, "done": 1, "d7_failed": 2, "refusals": 2, "contacts": 0, "contact_unknown": 2}
+    assert session_missions(str(session))["unknown"] == 3
+    # no probe report: the scheduled missions with no folder are unknown too
+    (session / "probe.json").unlink()
+    out = session_v5(str(session))
+    assert out["unknown"] == 3 and out["worst"]["done"] == 1 and out["best"]["done"] == 3
+    # a known forbidden contact counts on either bound
+    (run / "missions/m2/records.json").write_text(json.dumps({"state": {"docking_retries": [],
+                                                                       "forbidden_pocket_contacts": [{"t": 1}]}}))
+    assert session_v5(str(session))["best"]["contacts"] == 1
 
 
 def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
@@ -242,51 +252,44 @@ def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_ex
     assert sign_test_p([0, 0]) == 1.0
 
 
-def test_the_v5_judgement_needs_the_sign_test_the_total_score_and_the_failure_margin():
-    """Re-approach hold plan 2a (V5, 3rd ed.): p < 0.05 on the score differences, the summed score not lower (Codex V5
-    2nd review P2: 20 wins 2->3 and 10 losses 3->0 pass the sign test with the total 160 -> 150), failures (scheduled
-    minus done) on <= off + 6, and refusals not increased."""
+def test_the_v5_judgement_takes_off_at_its_best_and_the_hold_at_its_worst():
+    """Re-approach hold plan 2a (V5): p < 0.05 on the score differences, the summed score not lower (Codex V5 2nd
+    review P2: 20 wins 2->3 and 10 losses 3->0 pass the sign test with the total 160 -> 150), failures (scheduled minus
+    done) on <= off + 6, D7 failures and refusals not increased, no contact on the hold arm and none unconfirmed;
+    off is read at its best bound and the hold at its worst; an inconsistent session is undecidable."""
     from leg_failures_pairs import v5_judge
 
-    def row(off, on, done_off=None, done_on=None, ref=(0, 0), d7=(0, 0), inconsistent=False):
-        return {"seed": 0, "score": {"main": off, "fix": on}, "main": [0, 0, ref[0]], "fix": [0, 0, ref[1]],
-                "missions": {"main": {"done": off if done_off is None else done_off, "d7_failed": d7[0]},
-                             "fix": {"done": on if done_on is None else done_on, "d7_failed": d7[1],
-                                     "inconsistent": inconsistent}}}
+    def q(score, done=None, d7=0, ref=0, contacts=0, cu=0):
+        return {"score": score, "done": score if done is None else done, "d7_failed": d7, "refusals": ref,
+                "contacts": contacts, "contact_unknown": cu}
+
+    def row(off, on, inconsistent=False, off_best=None, on_worst=None):
+        return {"seed": 0, "v5": {"main": {"inconsistent": False, "unknown": 0, "best": off_best or off, "worst": off},
+                                  "fix": {"inconsistent": inconsistent, "unknown": 0, "best": on,
+                                          "worst": on_worst or on}}}
 
     # every stall recovered (done 3 on both arms), so only the summed score can reject it
-    counter = [row(2, 3, 3, 3)] * 20 + [row(3, 0, 3, 3)] * 10 + [row(3, 3)] * 30
+    counter = [row(q(2, 3), q(3))] * 20 + [row(q(3), q(0, 3))] * 10 + [row(q(3), q(3))] * 30
     out = v5_judge(counter)
     assert out["p"] < 0.05 and (out["score_main"], out["score_fix"]) == (160, 150) and out["verdict"] == "fail"
-    good = [row(2, 3)] * 10 + [row(3, 3)] * 50
+    good = [row(q(2), q(3))] * 10 + [row(q(3), q(3))] * 50
     assert v5_judge(good)["verdict"] == "pass"
     # the score rose but done fell by 7 (> 6): the failure guard rejects; by 6 it holds
-    worse_done = [row(2, 3, done_off=3, done_on=3)] * 10 + [row(3, 3)] * 43 + [row(2, 2, 3, 2)] * 7
+    worse_done = [row(q(2, 3), q(3))] * 10 + [row(q(3), q(3))] * 43 + [row(q(2, 3), q(2))] * 7
     assert v5_judge(worse_done)["verdict"] == "fail"
-    assert v5_judge(worse_done[:-1] + [row(3, 3)])["verdict"] == "pass"
-    assert v5_judge(good[:-1] + [row(3, 3, ref=(0, 1))])["verdict"] == "fail"
-    # Codex V5 3rd review: six recovering stalls turned into failures pass the margin; the D7 failure guard rejects
-    convert = [row(2, 3, 3, 3)] * 10 + [row(2, 2, 3, 2, d7=(0, 1))] * 6 + [row(3, 3)] * 44
+    assert v5_judge(worse_done[:-1] + [row(q(3), q(3))])["verdict"] == "pass"
+    # Codex V5 3rd review: six recovering stalls turned into failures pass the margin; the D7 guard rejects
+    convert = [row(q(2, 3), q(3))] * 10 + [row(q(2, 3), q(2, d7=1))] * 6 + [row(q(3), q(3))] * 44
     assert v5_judge(convert)["verdict"] == "fail"
-    # Codex V5 4th review P2: the same six cut with no record (D7 unknown) count against the hold arm
-    unknown = [row(2, 3, 3, 3)] * 10 + [row(2, 2, 3, 2)] * 6 + [row(3, 3)] * 44
-    unknown[10:16] = [dict(r, missions={"main": r["missions"]["main"], "fix": dict(r["missions"]["fix"], d7_unknown=1)})
-                      for r in unknown[10:16]]
-    assert v5_judge(unknown)["verdict"] == "fail" and v5_judge(unknown)["d7_unknown_fix"] == 6
-    # Codex V5 5th review P2: unknown missions are bounded against the hold on every guard -- off's done missions with
-    # no records score as clean (upper bound), so five lost records on off are no win ...
-    lost = [row(3, 3)] * 55 + [dict(row(2, 3, 3, 3), missions={"main": {"done": 3, "d7_failed": 0, "unknown_done": 1},
-                                                                "fix": {"done": 3, "d7_failed": 0}})] * 5
+    assert v5_judge(good[:-1] + [row(q(3), q(3, ref=1))])["verdict"] == "fail"
+    assert v5_judge(good[:-1] + [row(q(3), q(3, contacts=1))])["verdict"] == "fail"
+    # Codex V5 6th review P2: an unknown mission on the hold arm leaves its contact unconfirmed -- not adopted
+    assert v5_judge(good[:-1] + [row(q(3), q(3), on_worst=q(2, 2, d7=0, ref=0, cu=1))])["verdict"] == "fail"
+    # the bounds are what is read: off's best and the hold's worst (Codex V5 5th/6th review: five off results lost
+    # read at the best bound are no win)
+    lost = [row(q(3), q(3))] * 55 + [row(q(2, 2), q(3), off_best=q(3))] * 5
     assert v5_judge(lost)["wins"] == 0 and v5_judge(lost)["verdict"] == "fail"
-    # ... and each unknown mission on the hold arm counts one refusal (a refused re-approach plan ends the mission)
-    hidden = [row(2, 3, 3, 3)] * 10 + [row(3, 3)] * 44 + [
-        dict(row(2, 2, 2, 2, d7=(1, 0)), missions={"main": {"done": 2, "d7_failed": 1},
-                                                   "fix": {"done": 2, "d7_failed": 0, "d7_unknown": 1, "unknown": 1}})] * 6
-    out = v5_judge(hidden)
-    assert out["refusals_fix_bound"] == 6 and out["verdict"] == "fail"
-    # a session over its scheduled missions, or flagged inconsistent, stops the judgement
-    assert v5_judge(good[:-1] + [row(3, 3, 3, 4)])["verdict"] == "undecidable"
-    assert v5_judge(good[:-1] + [row(3, 3, inconsistent=True)])["verdict"] == "undecidable"
+    assert v5_judge(good[:-1] + [row(q(3), q(3), inconsistent=True)])["verdict"] == "undecidable"
 
 
 def test_rates_from_counts_stay_exact_so_ties_hold():
