@@ -3474,7 +3474,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
                                   if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
                                   else None)
-                          for name_ in slam_map_module.SHARED_INPUTS})
+                          for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)})
         if mismatches_:
             raise SessionFailure(f"{slam_map_module.MISMATCH}: " + "; ".join(mismatches_))
         state["slam_map"] = {"mode": "localization", "map_id": slam_bundle_.map_id,
