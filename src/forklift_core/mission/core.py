@@ -1933,6 +1933,10 @@ class MissionCore:
                 tracking = trackers[ms.phase].update(rear, signed_speed, dt)
                 ms.last_tracking = tracking
                 ms.slam_stall_ticks = 0
+                # this tick's creep verdict and dock wait were the old path's (Codex implementation round 1 P2); the
+                # creep watch itself starts over on the new tracker (it is keyed on it)
+                creep_ = None
+                ms.dock_stop_ticks = 0
             else:
                 tracking = replace(tracking, status="braking", speed_mps=0.0)
         dock_stop = (

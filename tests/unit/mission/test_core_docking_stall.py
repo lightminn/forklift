@@ -121,6 +121,19 @@ def test_a_reapproach_hold_exit_due_brakes_then_runs_on_the_stand():
     assert "hold_exit" not in w.names() and out.tracking.status == "arrived"
 
 
+def test_an_exit_does_not_carry_the_old_paths_creep_or_dock_wait_onto_the_new_one():
+    """Codex implementation round 1 P2: an R2 creep standing at 119 dock-stop ticks, then an exit re-installs a
+    re-approach -- that tick's creep verdict and wait belong to the old path, not a dock on the new one (h -> a)."""
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=True, remaining=0.0)
+    w.core.goal_creep = lambda t, tracking, dt: "r2"
+    w.ms.dock_stop_ticks = 119
+    w.core.reapproach_hold_exit_due = lambda t: "correction_gap"
+    w.core.reapproach_hold_exit = lambda t, reason: w.calls.append(("hold_exit", (reason,), {}))
+    w.tick(Tracking(status="tracking"))
+    assert "hold_exit" in w.names() and "dock_at_delivery_straight" not in w.names()
+    assert w.ms.dock_stop_ticks == 0
+
+
 def test_no_reapproach_hold_exit_leaves_the_tick_as_it_was():
     w = World(docking={"reapproach": True, "status": "armed"}, stop_now=False, remaining=1.0)
     w.core.reapproach_hold_exit_due = lambda t: None
