@@ -301,10 +301,11 @@ def _rgba_of(camera):
     if not determinism.enabled():
         return camera.get_rgba()
     frame = camera.get_current_frame()
-    rgba = frame.get("rgba") if isinstance(frame, dict) else None
+    # the rgb annotator's data sits under its own name, "rgb" (Isaac 5.1 Camera.attach_annotator)
+    rgba = frame.get("rgb") if isinstance(frame, dict) else None
     if rgba is None or not hasattr(rgba, "__len__") or len(rgba) == 0:
         determinism.mark("frame_sync:no_rgba")
-        raise determinism.DeterministicBroken("frame_sync: the current frame holds no rgba")
+        raise determinism.DeterministicBroken("frame_sync: the current frame holds no rgb")
     return rgba
 
 

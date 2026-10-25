@@ -49,14 +49,15 @@ class FrameSync:
 
 def rgba_of(camera):
     """A camera's RGB(A) as the run reads it: the direct getter (``get_rgba``, as before) -- or, in a deterministic
-    run, the current frame's own ``rgba``. The direct getter reads the annotator again and, the 2026-10-25 probe found,
-    hands back RGB that differs between processes even after the sync (0/40 frames alike, the current frame's 40/40;
-    depth alike either way)."""
+    run, the current frame's own RGB (key "rgb"), the annotator's data taken at that render's completion with its
+    rendering_time. The direct getter reads the annotator again, whenever it is called; the 2026-10-25 probe found its
+    RGB different between processes even after the sync (0/40 frames)."""
     if not determinism.enabled():
         return camera.get_rgba()
     frame = camera.get_current_frame()
-    rgba = frame.get("rgba") if isinstance(frame, dict) else None
+    # the rgb annotator's data sits under its own name, "rgb" (Isaac 5.1 Camera.attach_annotator)
+    rgba = frame.get("rgb") if isinstance(frame, dict) else None
     if rgba is None or not hasattr(rgba, "__len__") or len(rgba) == 0:
         determinism.mark("frame_sync:no_rgba")
-        raise determinism.DeterministicBroken("frame_sync: the current frame holds no rgba")
+        raise determinism.DeterministicBroken("frame_sync: the current frame holds no rgb")
     return rgba
