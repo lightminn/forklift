@@ -76,7 +76,9 @@ nvidia-smi) into its output folder's stall_diagnostics.txt, then SIGUSR1 to its 
 faulthandler writes every thread's Python stack to <output>.stall_stack.txt) -- then, --stack-wait-s later, ended like
 a timeout (TERM, KILL after --grace-s) and recorded as stalled; it is never retried (a hang is not the infrastructure,
 and a rerun would blur a deterministic comparison). Before the first progress file exists the silence counts from
-the run's start; a run with no progress file named is not watched.
+the run's start, and is judged only while a Python process runs --stack-match (run_transport) under the run,
+from the later of the run's and that runner's start -- between a live session's epochs the supervisor runs alone for
+up to its backoff plus 300 s of standby; a run with no progress file named is not watched.
 
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
@@ -434,13 +436,35 @@ def watch_globs(run, watch_rel=None):
     return []
 
 
-def progress_silence(run, start_wall, watch_rel=None, now=time.time):
-    """Seconds since the run's progress files last changed (from its start while none exists yet); None when the run
-    has no progress file named, so nothing is judged."""
+def _runner_start(pids, match):
+    """The latest start (wall clock) of the Python processes among pids running `match`, or None when none runs."""
+    try:
+        with open("/proc/stat") as f:
+            btime = next(int(x.split()[1]) for x in f if x.startswith("btime "))
+    except (OSError, ValueError, StopIteration):
+        return None
+    starts = []
+    for p in pids:
+        if not match or match not in _cmdline(p):
+            continue
+        try:
+            if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
+                continue
+            with open(f"/proc/{p}/stat") as f:
+                starts.append(btime + int(f.read().rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK"))
+        except (OSError, ValueError, IndexError):
+            continue
+    return max(starts) if starts else None
+
+
+def progress_silence(run, start_wall, watch_rel=None, now=time.time, runner_start=None):
+    """Seconds since the run's progress files last changed, counted at the earliest from the later of its start and
+    its runner's start (runner_start: between a live session's epochs, and while a new runner starts up, there is no
+    record to wait for); None when the run has no progress file named, so nothing is judged."""
     globs = watch_globs(run, watch_rel)
     if not globs:
         return None
-    latest = start_wall
+    latest = max(start_wall, runner_start or 0.0)
     for pattern in globs:
         for path in glob.glob(pattern):
             try:
@@ -873,6 +897,7 @@ class _Live:
     stalled: bool = False
     silence_max: float = 0.0
     stack_term_at: float | None = None  # a stalled run's TERM, stack_wait_s after its SIGUSR1
+    no_runner_since: float | None = None
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -899,7 +924,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
-               diag_wait_s=60.0,
+               diag_wait_s=60.0, no_runner_s=900.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -1265,10 +1290,20 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
                 if stall_s and not r.stalled and r.term_at is None and now >= st["stall_next"]:
-                    silence = progress_silence(r.run, r.start_wall, watch_rel)
+                    # judged only while its runner (run_transport) runs, from that runner's start
+                    started = _runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match else 0.0
+                    silence, limit = None, stall_s
+                    if started is not None:
+                        r.no_runner_since = None
+                        silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
+                    elif no_runner_s and watch_globs(r.run, watch_rel):
+                        # no runner: a live session between epochs (backoff, bridge start, standby: ~7 min at most)
+                        # is no stall, a run stuck without a runner is, after no_runner_s
+                        r.no_runner_since = now if r.no_runner_since is None else r.no_runner_since
+                        silence, limit = now - r.no_runner_since, no_runner_s
                     if silence is not None:
                         r.silence_max = max(r.silence_max, silence)
-                        if silence >= stall_s:
+                        if silence >= limit:
                             # first what it was doing: diagnostics in a thread (py-spy, /proc, nvidia-smi -- they
                             # must not hold up the other runs), at most diag_wait_s
                             r.stalled = True
