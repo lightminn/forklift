@@ -113,14 +113,16 @@ riib_scene 의 층 선택:
   - 새 기본의 기준선 → 같은 모형으로 새로 잰다고 적었다.
   - 반영하지 않은 것: 러너 기본도 바꾸라는 취지 → 기록 계약과 SLAM 없는 실행 때문에 두고, 도움말·지침에 적었다.
 
-## 7. 진행 상태 (2026-10-25 재부팅 전)
+## 7. 연기 시험 결과 (ws1 묶음 11258, 스냅숏 `tsd_a024b404`, 2026-10-25)
 
-- 끝남: 계획(Codex 2 차 수렴, agy), 구현(a024b404), ws1 전체 pytest 6903 통과·10 실패(ws1 기존 목록), 재생 게이트 29/29(tsd_a024b404, 잡 11256).
-- 기다림: Isaac 연기 시험 묶음 ws1 잡 11258(스냅숏 `tsd_a024b404`, 출력 `test_runs/live/tsd_smoke/`, 목록 `runs.jsonl`). 총괄이 팀원 잡 11322–11328 뒤로 dependency 를 걸었다.
-  - (a) `tsd_live_default`: isaac_live 기본(team-spec) CT-1 line_m P-1:D-1.
-  - (b) `tsd_riib_a2`: riib_scene NOISE=a2 기본, line_2.
-  - (c) `tsd_loc_reported`: s5_v5(r7 번들) + `ENCODER_MODEL=reported`, localization 이 도는지.
-  - (d) `tsd_loc_default`: s5_v5 기본(team-spec) → `slam_map_mismatch` 로 거절되는지.
-  - 이 구성은 4 절의 "survey + localization" 대신이다. 투어 파일이 지워져 재survey 는 머지 뒤 localization 사용자의 운영 절차로 남긴다. 결과를 보고 4 절을 고친다.
-- 다음: 결과 확인 → 4 절·검증 기록 → PR(이 브랜치에 과삽입 계획서 포함) → 머지 → 모든 세션 공지(3·5 절) → ws1 `bd_isaac/bd.sbatch` 기본 전환 → ws1-디스크-정리 에 정리 목록(`ins_tail/`, `tsd_smoke/`, 스냅숏 `tsd_a024b404`·`slip_d7a180c3`, lf_67694d16 30 실행·slip_d7a180c3_* 보존 해제).
-- 추가 근거(PR 본문·과삽입 문서에 넣을 것): riib `rp_c9fad6e8/rp_line_1_default` 접촉도 같은 유형이다(reported, 오도메트리 −20.0 mm, 겨냥 0.3 mm). 짝 실행 fast 는 +6.8 mm 로 완주했다(`test_runs/live/ins_tail/depth_split_batch.py`).
+4 절의 "survey + localization" 은 투어 파일이 지워져 다음 두 시험으로 대신했다. 옛 번들을 reported 로 쓰는 경우와, 새 기본에서 거절되는 경우다. team-spec 재survey 는 머지 뒤 localization 사용자의 운영 절차로 남긴다(3 절).
+
+| 실행 | 모형·층 | 결과 |
+|---|---|---|
+| isaac_live 기본, CT-1 line_m P-1:D-1 | team_spec_quantized, single_team_spec | 미션 완료 |
+| riib_scene NOISE=a2 기본, line_2 | team_spec_quantized, single_a2_team_spec | 하역까지 진행, `Pallet missed the green destination center`(도킹 fallback). line_2 하역 정밀도의 기존 약점이고 배선 문제가 아니다 |
+| s5_v5(r7 번들) + `ENCODER_MODEL=reported` | reported | localization 미션 완료 |
+| s5_v5(r7 번들) 기본 | team_spec_quantized | `slam_map_mismatch: obstacle_layer differs from the survey's` 로 시작 거절(기대대로) |
+
+- 출력: ws1 `test_runs/live/tsd_smoke/`.
+- 추가 근거: riib `rp_c9fad6e8/rp_line_1_default` 접촉도 같은 유형이다(reported, 오도메트리 −20.0 mm, 겨냥 0.3 mm). 짝 실행 fast 는 +6.8 mm 로 완주했다(`test_runs/live/ins_tail/depth_split_batch.py`).
