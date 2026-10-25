@@ -1127,6 +1127,7 @@ class MissionCore:
             direction = cusp_handed_.hand_direction
         else:
             direction = 1 if truth_speed > 0 else -1
+        self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
@@ -4415,6 +4416,23 @@ class MissionCore:
             "used", "decided")}  # the candidate read: its id, hypothesis, axis and support are the side evidence's target
 
     # --- M-a3: the paused tick and the resume (docs/plans/2026-10-16-m-a3-mission-commands.md E3-E6) ---
+    def _note_release_standing(self, rear, standing=None) -> None:
+        """The start-band release's anchor (docs/plans/2026-10-24-start-band-release.md): the permission latches it at
+        the first standing tick, and again while standing once a correction dropped it. Every tick that reads the
+        permission tells it -- the driving tick, the watch while a plan is waited for, the scene replan's escape and
+        candidate checks (Codex round 3 P2: the device's ticks run the watch, not the driving tick). A no-op with the
+        release off or a permission without it."""
+        obstacle, slam, hooks = self.obstacle, self.slam, self.hooks
+        if obstacle is None or getattr(self.options, "start_band_release", "off") != "on":
+            return  # off: not even a read of the permission (a replay records every port read)
+        perm = obstacle["layer"].permission
+        note = getattr(perm, "note_standing", None)
+        if note is None or getattr(perm.config, "start_band_m", 0.0) <= 0.0:
+            return
+        if standing is None:
+            standing = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
+        note(bool(standing), tuple(float(v) for v in rear), obstacle["version"])
+
     def permission_watch(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
         """The permission while paused (E3): the grid re-projected after a correction change, the layer's limit
         with its emergency stop and sensor silence, and the cap the command assembly steps to -- every tick,
@@ -4435,6 +4453,7 @@ class MissionCore:
                 leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
             obstacle["layer"].refresh(t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
                                       path_ahead=leg_now, loaded=loaded, direction=leg_dir_now)
+        self._note_release_standing(rear)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
@@ -6695,6 +6714,7 @@ class MissionCore:
             return mail_
 
         def candidate(result):
+            core._note_release_standing(box.rear, stopped())  # the device plans standing (after its release)
             tracker_ = RearAxlePathTracker(result.poses, result.directions, result.curvatures_inv_m,
                                            trackers[ms.phase].config)
             return core._scene_preview(tracker_, t, box.rear, dt, uncut=result)
@@ -6716,6 +6736,7 @@ class MissionCore:
         def escape_plan(extra, clearance_m):
             if obstacle is None:
                 return None
+            core._note_release_standing(box.rear, stopped())  # re-latched after the release's correction, if any
             _, _, _, (rects_, footprint_, bounds_) = core.escape_leg(ms.phase)
             checker_ = FootprintCollisionChecker(list(rects_) + list(extra), footprint_, bounds_)
             layer_ = obstacle["layer"]
@@ -6729,9 +6750,17 @@ class MissionCore:
                 (options.travel_config or options.planner_config).clearance_m)
             cell_ = float(layer_.snapshot.resolution_m) if layer_.snapshot is not None else 0.05
             kappa_now_ = float(hooks.held_kappa())
+            if getattr(options, "start_band_release", "off") == "on":
+                # start-band release (docs/plans/2026-10-24-start-band-release.md): the trigger's rectangles the stop
+                # already comes within the sweep pad of pass the sweep while it stays as far from them; the end's
+                # clearance still counts every rectangle
+                near_, far_ = esc.start_band_rectangles(list(extra), footprint_, pose_)
+                sweep_checker_ = FootprintCollisionChecker(list(rects_) + far_, footprint_, bounds_)
+            else:
+                near_, sweep_checker_ = [], checker_
             candidates_ = esc.evaluate(
                 pose_,
-                sweep_free=lambda poses_, d_: esc.rectangles_sweep_free(checker_, poses_),
+                sweep_free=lambda poses_, d_: esc.rectangles_sweep_free(sweep_checker_, poses_, near_, footprint_),
                 path_blocked=lambda poses_, d_, x_, r_: layer_.check_candidate(
                     poses_, current_pose=pose_, direction=d_, loaded=loaded_, extra_margin_m=x_, extra_ramp_m=r_).blocked,
                 arc_blocked=lambda k_, d_: layer_.check_arc_candidate(
@@ -6744,6 +6773,12 @@ class MissionCore:
             state.setdefault("scene_escape_candidates", []).append(
                 {"time_s": float(t), "candidates": [c_.record() for c_ in candidates_],
                  "chosen": None if choice_ is None else choice_.record()})
+            if near_:
+                # the start-band release's rectangles (the device's author: a pass by the moving-away rule is told
+                # apart in the record); the key is absent with the release off or nothing released
+                state["scene_escape_candidates"][-1]["released"] = [
+                    {"x_m": float(r_.x_m), "y_m": float(r_.y_m), "length_m": float(r_.length_m),
+                     "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
             if choice_ is None:
                 return None
             poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)

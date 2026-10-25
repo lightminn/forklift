@@ -67,6 +67,9 @@ class PermissionConfig:
     lookahead_m: float = 3.0
     end_creep_mps: float = 0.02
     shadow_band_m: float = 0.0  # RETAINED passes only inside the outline grown by this (D4 delta)
+    # Start-band release (docs/plans/2026-10-24-start-band-release.md): an occupied cell outside the outline at the
+    # start but within this distance of it does not block while the swept outline stays as far from it; 0: off.
+    start_band_m: float = 0.0
 
 
 @dataclass
@@ -336,6 +339,25 @@ class DrivePermission:
         self.snapshot: GridSnapshot | None = None
         self.path_check: Check | None = None
         self._driven_since_m = 0.0
+        # Start-band release (docs/plans/2026-10-24-start-band-release.md): the pose latched at the first standing
+        # tick, its correction version and each start-band cell's best (largest) part distances since.
+        self.release_anchor: dict | None = None
+        self._standing = False
+        # how often a walk ran with start-band cells released: the whole walk kept away ("passed") or it was cut where
+        # the outline comes nearer to one of them ("capped") -- diagnostics only, never read by the checks
+        self.release_stats = {"checks": 0, "passed": 0, "capped": 0}
+
+    def note_standing(self, standing: bool, pose, correction_version: int) -> None:
+        """The truck stands (or moves) at pose: the first standing tick latches the start-band release's anchor."""
+        if self.config.start_band_m <= 0.0:
+            return
+        if standing and (not self._standing or self.release_anchor is None
+                         or self.release_anchor["version"] != int(correction_version)):
+            # a new standing, or still standing after the anchor was dropped (a correction re-projected the grid
+            # under it -- the scene replan's release raises the version before its escape is checked, Codex v2 P2-3)
+            self.release_anchor = {"pose": tuple(float(v) for v in pose), "version": int(correction_version),
+                                   "best": {}}
+        self._standing = bool(standing)
 
     @staticmethod
     def _enters(snapshot, cell, own_pose, own_footprint, pose, footprint, margin, direction) -> bool:
@@ -733,9 +755,11 @@ class DrivePermission:
         limit = self.config.lookahead_m if lookahead_m is None else float(lookahead_m)
         samples, arc, total = resample_path(poses, self.config.step_m, limit)
         own = None if kernels.mode() == "numba" else self._own_cells(snapshot, current_pose, own_footprint)
-        return self._walk(snapshot, samples, arc, footprint, own, full_path_m=total, direction=direction,
-                          own_pose=current_pose, own_footprint=own_footprint, extra_margin_m=extra_margin_m,
-                          extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes)
+        walked, samples, arc, cap = self._start_release(snapshot, samples, arc, footprint, current_pose)
+        return self._capped(self._walk(walked, samples, arc, footprint, own, full_path_m=None if cap else total,
+                                       direction=direction, own_pose=current_pose, own_footprint=own_footprint,
+                                       extra_margin_m=extra_margin_m, extra_ramp_m=extra_ramp_m,
+                                       unknown_passes=unknown_passes), cap)
 
     @dumped("check_arc", pure=True, strata=lambda self_, a, k, r: (
         a[3] >= 0, bucket(a[2]), shape_kind(a[4]), self_.config.step_m, r.blocked, r.verified_m > 0))
@@ -747,8 +771,62 @@ class DrivePermission:
         length = cfg.stopping.distance_m(speed_cap_mps) + cfg.step_m
         samples, arc = arc_poses(current_pose, curvature_inv_m, 1 if direction >= 0 else -1, length, cfg.step_m)
         own = None if kernels.mode() == "numba" else self._own_cells(snapshot, current_pose, own_footprint)
-        return self._walk(snapshot, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
-                          own_pose=current_pose, own_footprint=own_footprint)
+        walked, samples, arc, cap = self._start_release(snapshot, samples, arc, footprint, current_pose)
+        return self._capped(self._walk(walked, samples, arc, footprint, own, direction=1 if direction >= 0 else -1,
+                                       own_pose=current_pose, own_footprint=own_footprint), cap)
+
+    def _start_release(self, snapshot, samples, arc, footprint, current_pose):
+        """(the snapshot the walk reads, its samples, their arc lengths, the cap) of the start-band release.
+
+        Off (no band, no anchor, a correction since it, nothing in the band): the walk's own, cap None. On: the
+        start-band cells read as free (never as evidence) and the samples cut at the last pose before the swept outline
+        first comes nearer to one of them than allowed; the cap is (that arc length, those cells) or None when the
+        whole walk keeps away. Each call raises the cells' best distances to the current pose's (never lowers them)."""
+        band = float(self.config.start_band_m)
+        anchor = self.release_anchor
+        if band <= 0.0 or anchor is None or current_pose is None or snapshot is None:
+            return snapshot, samples, arc, None
+        if int(snapshot.correction_version) != anchor["version"]:
+            self.release_anchor = None  # the grid moved under the anchor: no release until the truck stands again
+            return snapshot, samples, arc, None
+        from forklift_core.control import start_release as sr
+
+        cells, d0 = sr.start_band_cells(snapshot, anchor["pose"], footprint, band)
+        if not len(cells):
+            return snapshot, samples, arc, None
+        pose = tuple(float(v) for v in current_pose)
+        now = sr.part_distances(snapshot, cells, [pose], footprint)[0]  # (m, P)
+        # each cell's history under a key that survives the rolling grid's origin moving (its world cell index) and
+        # apart for each checked shape (hull forward, body and blades reversing -- Codex v2 P2-1, P2-2)
+        keys = sr.history_keys(snapshot, cells, footprint)
+        best = np.array([np.maximum(anchor["best"].get(k, d), d0_c) for k, d, d0_c in zip(keys, now, d0)])
+        if np.all(best.min(axis=1) > band):
+            self.release_anchor = None  # moved away from every start-band cell: the walk's own rule from here
+            return snapshot, samples, arc, None
+        # a part that started within the band is held to the band, one that started farther to the band plus the
+        # stopping margin (the walk's own lateral and stopping inflation, never more than its best so far)
+        cap = np.where(d0 > band, band + float(self.config.stopping.margin_m), band)
+        first, hit = sr.release_length(snapshot, cells, np.minimum(best, cap), cap, samples, arc, footprint)
+        for k, d in zip(keys, np.maximum(best, now)):
+            anchor["best"][k] = d
+        walked = sr.released(snapshot, cells)
+        self.release_stats["checks"] += 1
+        if not np.isfinite(first):
+            self.release_stats["passed"] += 1
+            return walked, samples, arc, None
+        self.release_stats["capped"] += 1
+        keep = np.asarray(arc) <= first + 1e-12
+        keep[0] = True
+        return walked, np.asarray(samples)[keep], np.asarray(arc)[keep], (first, tuple(map(tuple, hit[:20].tolist())))
+
+    @staticmethod
+    def _capped(check: Check, cap) -> Check:
+        """The walk cut at a start-band cap: blocked there by the cells that end the release, unless it stopped
+        before on its own (its own reason, cells and evidence of the part it walked)."""
+        if cap is None or check.blocked is not None:
+            return check
+        first, hit = cap
+        return Check(min(check.verified_m, first), "occupied", check.oldest_free_s, False, hit, check.first_unknown_m)
 
     def update(self, snapshot: GridSnapshot, path_ahead, footprint: Footprint, own_footprint: Footprint, *,
                current_pose, direction: int = 0, lookahead_m: float | None = None) -> Check:

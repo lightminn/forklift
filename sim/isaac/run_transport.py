@@ -521,6 +521,15 @@ def arguments() -> argparse.Namespace:
         "run. Not with --grid-planning, whose world has no props to grow.",
     )
     parser.add_argument(
+        "--start-band-release",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-24-start-band-release.md: an occupied cell the stopped truck's outline is already within "
+        "the permission's own start inflation of (envelope + half a sample step) does not block a motion whose swept "
+        "outline stays as far from it -- in the drive permission (path and stop arc) and in the scene replan's escape "
+        "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
+    )
+    parser.add_argument(
         "--permit-stop-replan",
         choices=("on", "off"),
         default="on",
@@ -585,6 +594,15 @@ def arguments() -> argparse.Namespace:
                         "ONNX in a worker process on --recognition-learned-python, the geometric fallback on a model "
                         "failure) instead of the oracle instance masks; identity is confirmed at score >= "
                         "--recognition-tau (docs/plans/2026-10-19-recognition-stage3-learned-proposals.md, task 6).")
+    parser.add_argument("--recognition-occupancy-margin-m", type=lambda v: None if v.lower() == "none" else float(v),
+                        default=0.05,
+                        help="The far target's occupancy exclusion under the floor contract (every pallet of the "
+                        "run on the floor, none overlapping -- the layout's placement check): with one confirmed "
+                        "known-shape fit on the floor in the zone and its centre within this margin of its fit, "
+                        "what else could be in the zone is not another pallet centred there "
+                        "(docs/plans/2026-10-24-far-target-occupancy.md O1). 0.05 is an empirical Isaac value, not "
+                        "a measured bound; 'none' turns it off (every run before it, and the real D435i until its far "
+                        "error is measured).")
     parser.add_argument("--recognition-onnx", type=Path, default=None, help="The learned proposer's ONNX model.")
     parser.add_argument("--recognition-tau", type=float, default=None, help="The learned identity threshold.")
     parser.add_argument("--recognition-conf", type=float, default=0.05,
@@ -3306,6 +3324,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 proposer=far_learned.get("source"),
                 identity_threshold=args.recognition_tau if far_learned else None,
                 proposer_record=far_learned.get("record"),
+                occupancy_margin_m=args.recognition_occupancy_margin_m,
             )
             if session is not None:  # the first mission's pallet (later ones set at their switch)
                 far_runtime.truth_instance = [p_.pallet_id for p_ in session.pallets].index(session.sequence[0][0])
@@ -3451,6 +3470,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "unpermitted": [],
             "min_allowed": {},
         }
+        if getattr(args, "start_band_release", "off") == "on":
+            # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the
+            # envelope plus half a sample step); the candidate and teleop permissions copy this config
+            pconf_ = obstacle["layer"].permission.config
+            obstacle["layer"].permission.config = replace(
+                pconf_, start_band_m=float(pconf_.envelope_offset_m) + float(pconf_.step_m) / 2.0)
         if slam_bundle_ is not None and obstacle["layer"].memory is not None:
             # SLAM localization plan L3: occupancy dated 1 s before the run's first stamp (0), so every live clear
             # may remove it; set into the layer's own memory before any plan (a scratch copy inherits it)
@@ -5555,6 +5580,7 @@ def drive(S, isaac) -> None:
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
+                                start_band_release=getattr(args, "start_band_release", "off"),
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,
@@ -7204,6 +7230,38 @@ def drive(S, isaac) -> None:
                 return session_anchor_poses(kept_, session_slots_, did_,
                                             (float(goal_.x_m), float(goal_.y_m), float(goal_.yaw_rad)))
 
+            # CT-2 D5 (docs/plans/2026-10-24-ct2-next-pick.md): pick_request answered from a snapshot of the asking
+            # tick (the targets, the truck, home = the wait pose, the scene, the planner's neighbour arguments and each
+            # destination's slot anchors), computed on the planning worker
+            from forklift_core.live.pick import PICK_DEADLINE_MS, PickService
+            from forklift_core.mission.next_pick import PickSnapshot
+
+            def next_pick_snapshot_():
+                import copy as pick_copy
+
+                rear_ = live_state.get("rear")
+                wait_ = live_session_["wait"]
+                # the ended missions' anchor evidence decided first, as a preparation does before its payload (plan
+                # 2026-10-22-slot-anchored-neighbours 2.2; Codex CT-2 impl r1 P2): else the last delivered pallet's
+                # slot anchor is missing from the pick
+                session_anchor_decide_(live_state.get("t", 0.0))
+                anchors_ = {did_: session_anchor_poses_(did_, pose_, None) or {}
+                            for did_, pose_ in core.targets.destinations.items()}
+                return PickSnapshot(pick_copy.deepcopy(core.targets), None if rear_ is None else tuple(rear_),
+                                    (float(wait_.x_m), float(wait_.y_m), float(wait_.yaw_rad)),
+                                    live_session_["scenario"], geometry, float(planner_config.clearance_m),
+                                    dict(live_session_["nominal"]), tuple(live_session_["shape"]),
+                                    float(SESSION_PRIOR_GROW_M), slot_anchors=anchors_)
+
+            def next_pick_pose_():
+                rear_ = live_state.get("rear")
+                return None if rear_ is None else {
+                    "x_m": float(rear_[0]), "y_m": float(rear_[1]), "yaw_rad": float(rear_[2]),
+                    "correction_version": None if obstacle is None else int(obstacle["version"])}
+
+            live.enable_next_pick(PickService(next_pick_snapshot_, worker=core.jobs, pose=next_pick_pose_),
+                                  PICK_DEADLINE_MS)
+
             def unaligned_delivery_refusal_():
                 """Plan 2.3: the delivery straight about to be driven with no accepted docking -- checked as before
                 the anchors (the search stage's props, the delivery straight and the withdraw); the anchored pallets
@@ -8451,6 +8509,7 @@ def drive(S, isaac) -> None:
                     # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
                     # a preempt: zero wheels, steering held. The applied command is written back for the core.
                     live_state["rear"] = tuple(float(v) for v in rear)
+                    live_state["t"] = float(t)  # the tick's sim time (CT-2: the anchors decided at a pick's snapshot)
                     speed_now_ = live.feedback.rear_axle_speed_mps if live.feedback is not None else 0.0
                     # The sim distance driven since the last tick, for the installed arcs: the odometry's own motion
                     # (Codex M-c round 10 P2: the end speed times dt missed a braking interval's travel).
@@ -8850,6 +8909,8 @@ def drive(S, isaac) -> None:
                         "mission_replans": obstacle.get("mission_replans", []),
                         "silence_trace": obstacle.get("silence_trace"),
                         "backoff_records": obstacle.get("backoff_records", []),
+                        **({"start_band_release": dict(obstacle["layer"].permission.release_stats)}
+                           if getattr(args, "start_band_release", "off") == "on" else {}),
                         "shadow_memory": None if obstacle["layer"].shadow is None else {
                             **obstacle["layer"].shadow.stats,
                             "band_m": obstacle["layer"].shadow.band_m,

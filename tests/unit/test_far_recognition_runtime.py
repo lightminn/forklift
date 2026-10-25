@@ -120,6 +120,68 @@ def test_the_saved_frames_recompute_every_stop_exactly(tmp_path):
     assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
 
 
+def test_the_occupancy_margin_is_recorded_and_the_recompute_uses_it(tmp_path):
+    """plan 2026-10-24-far-target-occupancy: the run's margin is in its record (None: off, every earlier record),
+    each decision's exclusion detail is in the frame record, and the recompute replays with the recorded margin."""
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition", occupancy_margin_m=0.05)
+    assert run.far.occupancy_margin_m == 0.05
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    summary = run.summary()
+    assert summary["occupancy_margin_m"] == 0.05
+    pairs = RC.recompute(tmp_path, recognition=summary)
+    assert len(pairs) == 1 and RC.differences(*pairs[0]) == []
+    assert "occupancy_margin_m" not in _runtime().summary()  # off: the earlier records' form (ec4bece golden)
+    old = {k: v for k, v in summary.items() if k != "occupancy_margin_m"}
+    runtime = RC.runtime_for(old)
+    assert runtime.far.occupancy_margin_m is None
+
+
+def test_the_recompute_closes_every_saved_frame(tmp_path, monkeypatch):
+    """ws1 full suite 2026-10-24: an unclosed frame file surfaced as a ResourceWarning (an error under -W error)
+    whenever the garbage collector happened to run inside another test."""
+    from tools import recompute_far_recognition as RC
+
+    xs = _leg()
+    run = _runtime(lag_steps=11, out_dir=tmp_path / "recognition")
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    opened, load = [], np.load
+
+    def spy(*a, **kw):
+        opened.append(load(*a, **kw))
+        return opened[-1]
+
+    monkeypatch.setattr(RC.np, "load", spy)
+    RC.recompute(tmp_path, recognition=run.summary())
+    assert opened and all(z.fid is None for z in opened)
+
+
+def test_a_stop_decided_by_occupancy_keeps_its_detail_in_the_attempt(monkeypatch):
+    """Codex implementation review 2026-10-24 P3: the attempt record dropped the stop block and with it what the
+    exclusion removed and its inequality."""
+    from forklift_core.perception import recognition_bridge as B
+    from forklift_core.perception.target_selection import Selection
+
+    orig = B.select_target
+
+    def occupied(*a, **kw):
+        s = orig(*a, **kw)
+        return Selection(s.status, s.candidate_id, s.reasons + ("occupancy_excluded",), {"excluded": ["l2"], "slack_m": 0.01})
+
+    monkeypatch.setattr(B, "select_target", occupied)
+    xs = _leg()
+    run = _runtime(lag_steps=11, occupancy_margin_m=0.05)
+    _drive(run, 11, xs)
+    _stop(run, xs)
+    attempt = run.attempts[-1]
+    assert "occupancy_excluded" in attempt["reasons"] and attempt["occupancy"] == {"excluded": ["l2"], "slack_m": 0.01}
+    assert "stop" not in attempt
+
+
 def test_a_frame_before_the_cameras_first_render_is_skipped():
     run = _runtime()
     run.record_step(24, 24 * DT, (0, 0, 0), (0, 0, 0), PALLET)

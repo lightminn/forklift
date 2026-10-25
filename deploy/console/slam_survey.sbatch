@@ -44,6 +44,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
   printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
   printf 'SCENE_FILE=\n'  # the console's runner word for word: the factory hall
+  printf 'ENCODER_MODEL=%q\n' "${ENCODER_MODEL:-reported}"  # the console's runner reads it (reported unless set)
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -75,6 +76,10 @@ LOC=()  # SLAM localization plan L7: localize on the survey bundle from the star
 [ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
 LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-planning)
 [ -n "${SCENE_FILE:-}" ] && LAYOUT=(--layout scene --scene-file "$SCENE_FILE")
+# the SLAM odometry's encoders and the obstacle layer's age table drawn from the same model (the runner refuses a
+# reported table for a team-spec model; PR #108's team-spec table)
+LAYER=config/obstacle_layer_single.yaml
+[ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --base-scene "$BASE_SCENE" \
@@ -84,7 +89,7 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   "${LAYOUT[@]}" --fps 60 \
   --use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
-  --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --seed "$SEED" \
+  --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \

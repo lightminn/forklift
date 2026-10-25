@@ -13,9 +13,11 @@
 # (before the time limit) is passed to the supervisor, which ends the runner and its bridge and starts no more.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/isaac_live.sbatch OUT
-#   optional: PORT (8798), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
+#   optional: PORT (8798), FACTOR (0.4), SEED (0), ENCODER_MODEL (reported; team_spec_quantized takes the team-spec
+#   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
 #   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
 #   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
+#   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -33,10 +35,12 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
-JOB=${SLURM_JOB_ID:-local$$}
+# In a bundle (deploy/slurm/isaac_bundle.sbatch) several sessions share one Slurm job: SESSION_ID names this one's
+# bridge containers and BRIDGE_CPU pins its bridge to a CPU of its own; alone, the job ID and the job's first CPU.
+JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
-CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
+CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)}
 # Every value the epoch scripts use, quoted for the shell once here; the scripts below expand nothing at writing.
 {
   printf 'ROOT=%q\nBASE_SCENE=%q\nFORKLIFT_URDF=%q\nVENV_PY=%q\nJOB=%q\nCPU0=%q\n' \
@@ -44,6 +48,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'PORT=%q\nFACTOR=%q\nSEED=%q\nEXTRA_ARGS=%q\n' "${PORT:-8798}" "${FACTOR:-0.4}" "${SEED:-0}" "${EXTRA_ARGS:-}"
   printf 'MAP_BUNDLE=%q\nMAP_START_POSE=%q\n' "${MAP_BUNDLE:-}" "${MAP_START_POSE:-}"
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
+  printf 'ENCODER_MODEL=%q\n' "${ENCODER_MODEL:-reported}"
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -79,6 +84,10 @@ LOC=()  # SLAM localization plan L7: localize on the survey bundle from the star
 [ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
 LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-planning)
 [ -n "${SCENE_FILE:-}" ] && LAYOUT=(--layout scene --scene-file "$SCENE_FILE")
+# the SLAM odometry's encoders and the obstacle layer's age table drawn from the same model (the runner refuses a
+# reported table for a team-spec model; PR #108's team-spec table)
+LAYER=config/obstacle_layer_single.yaml
+[ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --base-scene "$BASE_SCENE" \
@@ -88,7 +97,7 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   "${LAYOUT[@]}" --fps 60 \
   --use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
-  --obstacle-layer config/obstacle_layer_single.yaml --obstacle-act --seed "$SEED" \
+  --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \

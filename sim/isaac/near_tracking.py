@@ -1100,6 +1100,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "recognition_providers": "CPUExecutionProvider",
                               "recognition_timeout_s": 10.0, "recognition_threads": 4,
                               "recognition_device_id": 0,
+                              # 2026-10-24: the far target's occupancy exclusion (a far run only, refused with near
+                              # tracking; docs/plans/2026-10-24-far-target-occupancy.md)
+                              "recognition_occupancy_margin_m": 0.05,
                               # 2026-10-20: the bottom-deck side evidence (docs/plans/2026-10-19-bottom-deck-side-
                               # evidence.md); off reproduces every earlier record, on is a condition of its own.
                               "bottom_deck_check": "off",
@@ -1124,7 +1127,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "inject_observe_end_offset_m": None, "diag_return_stall_budget": None,
                               # 2026-10-24 P6: the permission-stop replan; a scene layout's only, so on reproduces
                               # every earlier (bay layout) measurement run.
-                              "permit_stop_replan": "on"}
+                              "permit_stop_replan": "on",
+                              # 2026-10-24: the start-band release; off in every earlier run.
+                              "start_band_release": "off"}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

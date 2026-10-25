@@ -80,6 +80,26 @@ class _Replay:
         return saved_proposals(self.frame)
 
 
+def _frames(run_dir: Path):
+    """The run's saved frames in order, each closed once the loop moves on (an open file left to the garbage
+    collector is a ResourceWarning, an error under the suite's -W error)."""
+    for path in sorted((run_dir / "recognition").glob("frame_*.npz")):
+        with np.load(path) as z:
+            yield path, z
+
+
+def runtime_for(rec: dict, replay=None):
+    """A FarRuntime as the recorded run had it. A record without an occupancy margin (every one before
+    plan 2026-10-24-far-target-occupancy) ran with the exclusion off."""
+    R = _runtime_module()
+    proposer = rec.get("proposer") or {"kind": "oracle"}
+    return R.FarRuntime(fork_spacing=rec["fork_spacing_m"], pallet_depth_m=rec["pallet_depth_m"],
+                        pallet_shape=rec["pallet_shape"], zone_centre_xy=rec["zone"]["centre_xy"],
+                        zone_radius_m=rec["zone"]["radius_m"], camera_x_m=rec["camera_x_m"], dt=1 / 120,
+                        proposer=replay, identity_threshold=proposer.get("tau"),
+                        occupancy_margin_m=rec.get("occupancy_margin_m"))
+
+
 def recompute(run_dir: Path, *, recognition: dict | None = None, model=None) -> list:
     """[(recorded attempt, recomputed record)] per stop, in order. ``model``: a learned run's model, rerun."""
     R = _runtime_module()
@@ -88,16 +108,12 @@ def recompute(run_dir: Path, *, recognition: dict | None = None, model=None) -> 
     if model is not None and proposer["kind"] != "learned":
         raise ValueError("a model rerun needs a learned run")
     replay = _Replay(model) if proposer["kind"] == "learned" else None
-    runtime = R.FarRuntime(fork_spacing=rec["fork_spacing_m"], pallet_depth_m=rec["pallet_depth_m"],
-                           pallet_shape=rec["pallet_shape"], zone_centre_xy=rec["zone"]["centre_xy"],
-                           zone_radius_m=rec["zone"]["radius_m"], camera_x_m=rec["camera_x_m"], dt=1 / 120,
-                           proposer=replay, identity_threshold=proposer.get("tau"))
+    runtime = runtime_for(rec, replay)
     far = runtime.far
     far.start_leg()
     out, attempts, leg = [], iter(rec["attempts"]), 0
     changes = sorted(rec.get("zone_changes") or [], key=lambda c: c["leg"])
-    for path in sorted((run_dir / "recognition").glob("frame_*.npz")):
-        z = np.load(path)
+    for path, z in _frames(run_dir):
         for change in changes:  # the zone a leg had (a re-observation narrows it to the pallet judged)
             if change["leg"] <= leg:
                 runtime.zone_centre_xy = tuple(change["centre_xy"])
@@ -138,8 +154,7 @@ def model_check(run_dir: Path, model, *, score_tol: float = 1e-3, min_iou: float
     """[(frame, problem)] where rerunning ``model`` on a learned frame's saved RGB does not give its recorded
     proposals (frames that fell back to the geometric proposer are skipped)."""
     problems = []
-    for path in sorted((run_dir / "recognition").glob("frame_*.npz")):
-        z = np.load(path)
+    for path, z in _frames(run_dir):
         if "proposer_source" not in z.files or str(z["proposer_source"]) != "learned":
             continue
         want, _ = saved_proposals(z)
