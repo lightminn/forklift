@@ -219,6 +219,7 @@ class MockVehicle:
         self.at: dict[str, str] = {}  # plan D3: where each pallet is verified to stand (set at a delivery here)
         self._picks: dict = {}  # CT-2: conn_id -> pick messages waiting to go out after the reply
         self._pick_override = None
+        self._submit_override = None  # queue plan D5 exception: the next submit meets a settling truck
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -699,6 +700,12 @@ class MockVehicle:
 
     # --------------------------------------------------------------- mission API
     def _req_mission_submit(self, msg: dict) -> dict:
+        if self._submit_override == "start_not_stopped":
+            # the start-up settling (queue plan D5's one exception): refused, and the stand starts over its hold
+            self._submit_override = None
+            self.stopped_confirmed = False
+            self._still_since = self._now()
+            return self._reply(msg, reason="not_stopped")
         self._book_end(self._now())  # the ended mission is booked before a new one replaces it
         if self.scene["damaged"] is not None:
             return self._reply(msg, reason="scene_damaged")  # automatic work waits for a scene reset (D6)
@@ -953,6 +960,9 @@ class MockVehicle:
         now = self._now()
         if kind in self.PICK_INJECTIONS:
             self._pick_override = kind  # the next pick only (CT-2 console plan C7)
+            return
+        if kind == "start_not_stopped":
+            self._submit_override = kind  # the next mission_submit only
             return
         if kind == "scene_damage":
             if self.scene["damaged"] is None:

@@ -1130,7 +1130,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "start_band_release": "off",
                               # 2026-10-25 leg-failures B1/B2: the D7 re-approach's curvature and cruise caps; unset
                               # in every earlier run.
-                              "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None}
+                              "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None,
+                              # 2026-10-25: the low-clearance guard; off in every earlier run.
+                              "low_clearance_guard": "off", "low_clearance_margin_m": 0.05,
+                              "low_clearance_deviation_m": 0.02}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

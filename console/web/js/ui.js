@@ -465,6 +465,7 @@ function renderQueue(m, st, control) {
   const blocked = !running && /^자동 선택 실패/.test(q.stopReason ?? "") ? blockedText(q.lastPickBlocked) : "";
   $("q-why").textContent = running
     ? (q.phase === "submitting" ? "제출 중" : q.phase === "in_mission" ? `진행 중 ${q.current?.mission_id ?? ""}`
+      : q.phase === "start_retry" ? `시작 직후 서 있음 확인 뒤 1회 재제출 · ${q.startRetry?.standSince == null ? "차가 서기를 기다리는 중" : "서 있음 1 s 확인 중"}`
       : q.phase === "picking" ? "자동 선택 중 · 차량에 다음 팔레트를 묻는 중"
       : q.phase === "picked" ? `자동 선택: ${q.held?.pallet_id} → ${destinationLabel(q.held?.destination_id ?? "?")} · 제출 조건 기다리는 중`
       : "다음 항목 조건 기다리는 중")
@@ -517,7 +518,8 @@ function renderQueue(m, st, control) {
     else if (it.uncertain) {
       const which = isAuto && it.uncertain_pallet_id ? ` · ${it.uncertain_pallet_id} → ${it.uncertain_destination_id}` : "";
       state = `불확실 — 냈지만 결과를 모릅니다${which}${it.maybe ? ` (미션 ${it.maybe.mission_id})` : ""}${vehicleNow}`;
-    } else if (isAuto && front && q.phase === "picking") state = "자동 선택 중";
+    } else if (front && q.phase === "start_retry") state = "시작 직후 서 있음 확인 뒤 1회 재제출";
+    else if (isAuto && front && q.phase === "picking") state = "자동 선택 중";
     else if (isAuto && front && q.phase === "picked") state = `자동 선택: ${q.held?.pallet_id} → ${q.held?.destination_id}`;
     else if (isAuto) {
       const parts = [`옮긴 ${it.moved ?? 0}건`];

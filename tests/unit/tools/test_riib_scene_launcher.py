@@ -79,6 +79,13 @@ def test_the_start_band_release_is_off_unless_asked(tmp_path):
     assert contains(args_of(dry_run(tmp_path, START_BAND="on")), ["--start-band-release", "on"])
 
 
+def test_the_low_clearance_guard_is_on_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-25-low-clearance-guard.md
+    assert contains(args_of(dry_run(tmp_path)), ["--low-clearance-guard", "on"])
+    assert " LOW_CLEARANCE=on " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="off")), ["--low-clearance-guard", "off"])
+
+
 def test_the_keepout_can_be_turned_on(tmp_path):
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.15")), ["--lidar-keepout-m", "0.15"])
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
@@ -102,7 +109,7 @@ def test_the_obstacle_layer_keeps_the_constant_noise_and_draws_the_a2_spec_on_re
     assert contains(a2, ["--obstacle-layer", "config/obstacle_layer_single_a2.yaml"])
 
 
-@pytest.mark.parametrize("env", [{"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
+@pytest.mark.parametrize("env", [{"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"}])
 def test_bad_choices_are_refused(tmp_path, env):
@@ -185,3 +192,12 @@ def test_the_runners_recorded_code_counts_when_the_process_ended_with_zero(tmp_p
     fake.chmod(0o755)
     out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(fake))
     assert out.returncode == expected, (out.returncode, out.stdout, out.stderr)
+
+
+def test_a_bundle_names_and_pins_each_run_s_bridge():
+    # several runs share one Slurm job in a bundle (tools/isaac_bundle.py): the bridge container takes its name from
+    # SESSION_ID and its cpuset from BRIDGE_CPU, the job ID and the job's first CPU otherwise
+    text = LAUNCHER.read_text()
+    assert "NAME_B=slam_bridge_${SESSION_ID:-${SLURM_JOB_ID:-$$}}_riib" in text
+    assert "CPU0=${BRIDGE_CPU:-$(taskset -cp $$" in text
+    assert 'trap \'kill -TERM "$RUNNER" 2>/dev/null\' TERM INT' in text

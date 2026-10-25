@@ -540,6 +540,19 @@ def arguments() -> argparse.Namespace:
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
     )
     parser.add_argument(
+        "--low-clearance-guard",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-25-low-clearance-guard.md: the props no taller than the LiDAR plane, which the drive "
+        "permission never sees, are watched along the stop arc of the estimated pose; each check is held to the leg's "
+        "planned clearance the same distance ahead (min(margin, planned - deviation)), contact always a violation, and "
+        "the wheel speed is capped after the slew so the truck stops before it. Off: as every earlier run.",
+    )
+    parser.add_argument("--low-clearance-margin-m", type=float, default=0.05,
+                        help="the low-clearance guard's margin where the plan leaves room (m, >= 0)")
+    parser.add_argument("--low-clearance-deviation-m", type=float, default=0.02,
+                        help="how much nearer than planned the low-clearance guard lets a tight plan be followed (m, >= 0)")
+    parser.add_argument(
         "--permit-stop-replan",
         choices=("on", "off"),
         default="on",
@@ -1051,6 +1064,9 @@ def arguments() -> argparse.Namespace:
             parser.error("--exit-clearance-m must be a positive number of metres")
     if not (math.isfinite(args.lidar_keepout_m) and args.lidar_keepout_m >= 0):
         parser.error("--lidar-keepout-m must be a finite non-negative number of metres")
+    for name_ in ("low_clearance_margin_m", "low_clearance_deviation_m"):
+        if not (math.isfinite(getattr(args, name_)) and getattr(args, name_) >= 0):
+            parser.error(f"--{name_.replace('_', '-')} must be a finite non-negative number of metres")
     if args.lidar_keepout_m > 0 and getattr(args, "grid_planning", False):
         parser.error("--lidar-keepout-m grows the scene's props, which --grid-planning plans without")
     if args.layout == "scene":
@@ -5580,6 +5596,11 @@ def drive(S, isaac) -> None:
                                 # leg-failures B1/B2: a record from before the options ran without the caps
                                 d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
+                                # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
+                                low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
+                                low_clearance_margin_m=getattr(args, "low_clearance_margin_m", 0.05),
+                                low_clearance_deviation_m=getattr(args, "low_clearance_deviation_m", 0.02),
+                                low_clearance_unloaded_shape=unloaded_shape,
                                 near_drop_frames_from_m=args.near_drop_frames_from_m,
                                 planning_target=args.planning_target,
                                 perception_max_attempts=args.perception_max_attempts,
@@ -8495,6 +8516,9 @@ def drive(S, isaac) -> None:
                         pallet_yaw,
                     ],
                 )
+                if getattr(args, "low_clearance_guard", "off") == "on" and not paused_:
+                    # docs/plans/2026-10-25-low-clearance-guard.md: the cap the command assembly applies after the slew
+                    core.low_clearance_tick(t, rear, kappa, requested_speed, loaded)
                 # M-a1 slice 5: the command assembly is the core's (the e-stop probe above stays the runner's, truth).
                 steer_before_ = steering_command.copy() if live is not None else None
                 command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
