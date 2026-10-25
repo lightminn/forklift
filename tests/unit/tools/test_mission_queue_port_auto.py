@@ -211,6 +211,11 @@ CASES = {
 }
 CASES["no_feature"] = [{"op": "welcome", "epoch": 7}, {"op": "add_auto"}, standing(0), {"op": "resume", "now": 10},
                        nxt(20, standing(20), nextPick=False)]
+# Plan D5's exception for an auto item (queue.js f850942d): the resubmit is the refused pick's pallet and destination,
+# with no new pick_request
+CASES["start_retry_auto_same_pick"] = base(
+    ACK, ok_pick(100, "P-2", "D-1"), nxt(150, standing(150)),
+    {"op": "answer", "answer": {"t": "reject", "reason": "not_stopped"}}, standing(200), nxt(1300, standing(1300)))
 
 
 @pytest.mark.parametrize("name", sorted(CASES))

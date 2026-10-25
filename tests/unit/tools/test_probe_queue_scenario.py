@@ -152,7 +152,7 @@ class WiredProbe(lcp.Probe):
         pass
 
 
-def _run(vehicle, clock, cycle="P-1:D-1,P-2:D-2,P-3:D-3", resume_not_stopped=False):
+def _run(vehicle, clock, cycle="P-1:D-1,P-2:D-2,P-3:D-3"):
     real_mono = lcp.time.monotonic
 
     async def fake_sleep(s):
@@ -164,8 +164,7 @@ def _run(vehicle, clock, cycle="P-1:D-1,P-2:D-2,P-3:D-3", resume_not_stopped=Fal
     lcp.asyncio.sleep, lcp.time.monotonic = fake_sleep, clock.monotonic
     probe = WiredProbe(vehicle)
     try:
-        args = SimpleNamespace(cycle=cycle, mission_timeout_s=60.0, end_session=False,
-                               queue_resume_not_stopped=resume_not_stopped)
+        args = SimpleNamespace(cycle=cycle, mission_timeout_s=60.0, end_session=False)
 
         async def go():
             await lcp.queue_scenario(probe, args)
@@ -325,14 +324,15 @@ def test_a_rearm_refused_for_a_moved_generation_is_returned_not_retried():
 
 def test_an_answer_at_a_resend_boundary_is_not_followed_by_another_send():
     """Codex PR 4 review round 4 P2: a refusal arriving as the 0.5 s resend comes due -- nothing is sent after it."""
+    # the second submit's refusal: the first one's is the queue's one start resubmit (plan D5 exception)
     clock = Clock()
-    v = FakeVehicle(clock, ["done", "done", "done"], refuse={1}, ack_s=0.5)
+    v = FakeVehicle(clock, ["done", "done", "done"], refuse={2}, ack_s=0.5)
     real = v.on_message
     answered = {}
 
     def on_message(msg):
         real(msg)
-        if msg.get("t") == "mission_submit" and "t" not in answered:
+        if msg.get("t") == "mission_submit" and len(v.seen) == 2 and "t" not in answered:
             answered["t"] = clock.rel() + v.ack_s
 
     v.on_message = on_message
@@ -413,17 +413,31 @@ def test_a_start_up_pause_in_the_states_does_not_stop_the_queue():
     assert p.report["queue"]["counts"]["done"] == 3
 
 
-def test_a_not_stopped_refusal_is_resumed_once_after_the_truck_stands():
-    # the queue plan's D5: the operator resumes once more after a not_stopped refusal (ws1 CT-2 V3 seed 2)
+def test_the_sessions_first_not_stopped_refusal_is_the_queues_own_one_resubmit():
+    # plan D5's exception (user decision 2026-10-25; ws1 CT-2 V3 seed 2): the queue submits the same item once more
+    # after a 1 s stand -- no operator step, the probe does nothing of its own
     clock = Clock()
     v = FakeVehicle(clock, ["refused", "done", "done", "done"], refuse={1})  # the refused submit takes a number
-    p = _run(v, clock, resume_not_stopped=True)
-    assert p.report["operator_resumes"] == [{"after": "거부: not_stopped", "stood": True}]
+    p = _run(v, clock)
+    assert "operator_resumes" not in p.report
     assert p.report["queue"]["stop_reason"] == "완료" and p.report["queue"]["counts"]["done"] == 3
+    firsts = [(t, rid) for t, rid, first in v.submits if first]
+    assert v.seen[firsts[0][1]] == 1 and firsts[1][1] != firsts[0][1]  # a new request for the same item
+    assert firsts[1][0] - (firsts[0][0] + v.ack_s) >= 1.0 - 1e-6  # after the refusal, a 1 s stand
 
 
 def test_a_second_not_stopped_refusal_ends_the_run():
     clock = Clock()
     v = FakeVehicle(clock, ["done", "done", "done"], refuse={1, 2})
-    p = _run(v, clock, resume_not_stopped=True)
-    assert len(p.report["operator_resumes"]) == 1 and p.report["queue"]["stop_reason"] == "거부: not_stopped"
+    p = _run(v, clock)
+    assert len(v.seen) == 2 and p.report["queue"]["stop_reason"] == "거부: not_stopped"
+
+
+def test_the_superseded_operator_resume_flag_is_refused():
+    # both it and the queue's own start resubmit would resubmit after the same refusal
+    import subprocess
+    import sys as _sys
+
+    done = subprocess.run([_sys.executable, str(Path(lcp.__file__)), "--port-file", "x.json", "--report", "r.json",
+                           "--queue-resume-not-stopped"], capture_output=True, text=True)
+    assert done.returncode == 2 and "superseded" in done.stderr
