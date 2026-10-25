@@ -825,7 +825,10 @@ def arguments() -> argparse.Namespace:
         "angle, counted from the joint angles each physics tick and integrated as increments; "
         "team_spec_typical_inl adds a first-harmonic INL at the datasheet typical amplitude (MT6701 1.0 deg, "
         "KTH7801 0.35 deg; shape assumed, phase per --slam-noise-seed). With a team-spec model the "
-        "Gaussian wheel and steering noise is not added (the LiDAR range noise is).",
+        "Gaussian wheel and steering noise is not added (the LiDAR range noise is). The operating launchers "
+        "(console live and survey, Riibotics scenes) run team_spec_quantized by default since 2026-10-25 "
+        "(docs/plans/2026-10-25-team-spec-default.md); the runner's own default stays reported, the reading of "
+        "a record without this argument.",
     )
     parser.add_argument(
         "--odometry-wheel-radius-m",

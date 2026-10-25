@@ -383,12 +383,15 @@ def test_an_epoch_limit_after_a_scene_reset_lingers_too(tmp_path):
 
 
 def test_the_live_runner_takes_the_encoder_model_with_its_own_age_table():
-    """Plan 2026-10-24-insertion-depth-margin 5: ENCODER_MODEL (default reported) picks the SLAM odometry's encoders,
-    and a team-spec model the team-spec obstacle-layer age table -- the runner refuses the reported table for it."""
+    """Plan 2026-10-24-insertion-depth-margin 5: ENCODER_MODEL picks the SLAM odometry's encoders, and a team-spec
+    model the team-spec obstacle-layer age table -- the runner refuses the reported table for it. The default is the
+    joint-angle model (plan 2026-10-25-team-spec-default), reported on request, nothing else."""
     from pathlib import Path
 
     live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
-    assert "printf 'ENCODER_MODEL=%q\\n' \"${ENCODER_MODEL:-reported}\"" in live
+    assert "ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}" in live
+    assert 'case "$ENCODER_MODEL" in reported|team_spec_quantized) ;;' in live
+    assert "printf 'ENCODER_MODEL=%q\\n' \"$ENCODER_MODEL\"" in live
     runner = live[live.index('cat > "$OUT/runner.sh"'):]
     runner = runner[: runner.index("EOT\n")]
     assert ('LAYER=config/obstacle_layer_single.yaml\n'
