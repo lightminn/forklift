@@ -104,3 +104,48 @@ def test_on_through_the_device_the_permission_still_holds_a_start_within_its_own
         sbe.make = real_make
     rec = state["scene_escape_candidates"][-1]
     assert rec["chosen"] is None
+
+
+def test_on_a_start_nearer_than_the_dense_sweep_error_is_not_passed():
+    # agy: 0 < d0 < min_d0_m -- named as within the pad, but the moving-away rule refuses it (the continuous sweep
+    # could touch between the checked poses), so no straight passes the sweep
+    import math
+
+    from forklift_core.control import escape as esc
+    from forklift_core.control.start_release import footprint_rect_distance, min_d0_m
+
+    core, ms, state, calls, rear, held = make()
+    core.options.escape_start_release = "on"
+    pose = _standing(core)
+    footprint = core.escape_leg("transport")[3][1]
+    rect = _near_rect(core, pose)
+    gap = footprint_rect_distance(pose, footprint, rect)
+    shift = gap - min_d0_m(footprint) / 2.0  # move it in to half the dense error
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    close = Rectangle(rect.x_m + shift * s, rect.y_m - shift * c, 0.05, 0.05, 0.0)
+    assert 0.0 < footprint_rect_distance(pose, footprint, close) < min_d0_m(footprint)
+    assert esc.start_band_rectangles([close], footprint, pose)[0] == [close]
+    assert _plan(core, [close]) is None
+    rec = state["scene_escape_candidates"][-1]
+    assert rec["released"] and not any(c_["sweep_free"] for c_ in rec["candidates"])
+
+
+def test_both_switches_on_release_the_sweep_once_and_keep_both_records_apart():
+    core, ms, state, calls, rear, held = make()
+    core.options.escape_start_release = "on"
+    core.options.start_band_release = "on"
+    pose = _standing(core)
+    rect = _near_rect(core, pose)
+    assert _plan(core, [rect]) is not None
+    assert len(state["scene_escape_candidates"][-1]["released"]) == 1
+    assert core.obstacle["escape_start_release"] == {"escapes_released": 1}
+
+
+def test_the_start_band_release_alone_keeps_no_escape_start_record():
+    core, ms, state, calls, rear, held = make()
+    core.options.start_band_release = "on"
+    pose = _standing(core)
+    rect = _near_rect(core, pose)
+    _plan(core, [rect])
+    assert state["scene_escape_candidates"][-1]["released"]
+    assert "escape_start_release" not in core.obstacle
