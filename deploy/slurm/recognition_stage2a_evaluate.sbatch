@@ -2,8 +2,8 @@
 #SBATCH --job-name=recog-2a-eval
 #SBATCH --partition=compute
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=8G
-#SBATCH --time=00:30:00
+#SBATCH --mem=2G
+#SBATCH --time=00:10:00
 #SBATCH --output=%x-%j.log
 # Stage 2A dev evaluation: oracle-fit and baseline on the stage 1B Isaac datasets.
 # Usage: sbatch --chdir=<run dir> deploy/slurm/recognition_stage2a_evaluate.sbatch <source dir> <isaac run dir> <manifest>

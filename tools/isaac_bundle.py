@@ -64,6 +64,11 @@ attempt, so a job with a free slot takes the next unclaimed run and the jobs' la
 job holding its GPU for a single straggler. A job refuses to start while another bundle on this node runs the same
 list without the same --claim-dir (both would run every run into the same folders; --list-registry-dir).
 
+Time limit: with --run-est-min (default the kind's measured p95 run) and inside a Slurm job, the runner reads the
+job's time left (squeue %L, again every 5 min: scontrol can shorten it) and starts no run with less than that plus
+--grace-s and a minute left; such runs are recorded as time_left and stay unclaimed for another job on the list.
+`sizes KIND --runs R --jobs J [--run-min M]` prints a --time to match.
+
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
 with the code of what it ran. Exit 0 when every run's last attempt exited 0, 1 otherwise, 2 for a refused
@@ -107,15 +112,18 @@ INFRA_PATTERNS = re.compile(
 # GPU's 16,303 MiB with the device check's margin.
 KINDS = {
     # live console sessions (isaac_live / ct1_queue), paced at 0.4: anon <= 5.48 GiB, 1.0-1.2 cores, 3,886-3,915 MiB
-    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950},
+    # run_min: a run's p95 wall time -- live ct1_queue 29.6 (rh/sf, 39 runs, max 30.5), riib 62.4 (lcg, 32 runs; rcf
+    # 46.6, dv3's trailer up to 77), bd 12.1 (bd_isaac, 151 jobs); a batch with longer runs passes --run-min
+    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
-    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500},
+    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63},
     # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
-    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500},
+    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500, "run_min": 13},
 }
 BRIDGE_CORE_CPUS = 2  # one physical core (its two hyperthreads) for the SLAM bridges, apart from the Isaac sessions
 SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
 MARGIN_GIB = 0.5
+TERM_EARLY_S = 180  # --signal=B:TERM@120 reaches the batch shell up to 60 s before that (Slurm's signal resolution)
 BRIDGE_MIB = 760  # a SLAM bridge container, outside the job's cgroup: 0.12-0.74 GiB measured (se* pilot, 16 bridges)
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
@@ -320,7 +328,7 @@ def job_gpu_index(env) -> int | None:
     return int(gpus[0]) if len(gpus) == 1 and gpus[0].isdigit() else None
 
 
-def sbatch_sizes(kind, slots=None) -> dict:
+def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     """The job's resources for `slots` sessions of `kind` (default its max per GPU): shards for the sessions' GPU
     memory (a riib session with its video holds 4.47 GB, more than a 4,076 MiB shard, so 3 of them take 4 shards --
     the shards are what other jobs on the GPU rely on), 2 cores per session, RAM = slots x session +
@@ -337,7 +345,48 @@ def sbatch_sizes(kind, slots=None) -> dict:
     # no core for the SLAM bridges by default: set apart (P2c) they answered keyframes on the same curve as on a shared
     # CPU (scans 4,500-4,999: median 0.32 s, p95 0.77-0.82 s -- the graph's size sets it, not contention), so the two
     # CPUs go to more sessions; --bridge-cpus N with a bigger --cpus-per-task still sets one apart
-    return {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
+    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
+    if runs:
+        out["time"] = time_limit(runs, slots, jobs, run_min or k["run_min"])
+    return out
+
+
+def time_limit(runs, slots, jobs=1, run_min=30.0, stagger_min=1.0):
+    """--time for `runs` runs on `jobs` jobs of `slots` sharing one list: the waves they make together times a run's
+    p95, the stagger of one wave, 5 min of start and settling, 15 % on top, rounded up to 5 min. A job that started
+    late or ran short of time leaves runs for the others: the runner starts no run its time limit would cut."""
+    waves = -(-runs // (slots * jobs))
+    minutes = (waves * run_min + (slots - 1) * stagger_min + 5) * 1.15
+    minutes = int(-(-minutes // 5) * 5)
+    return f"{minutes // 60:02d}:{minutes % 60:02d}:00"
+
+
+def job_time_left(env, run=subprocess.run, now=time.time):
+    """Seconds left before the job's end: the smaller of SLURM_JOB_END_TIME (set at the start, always there in a
+    Slurm job) and squeue's %L (which follows a limit shortened by scontrol since); None outside Slurm."""
+    left = []
+    end = env.get("SLURM_JOB_END_TIME", "")
+    if end.isdigit():
+        left.append(int(end) - now())
+    if env.get("SLURM_JOB_ID"):
+        q = slurm_time_left(env["SLURM_JOB_ID"], run)
+        if q is not None:
+            left.append(q)
+    return min(left) if left else None
+
+
+def slurm_time_left(job_id, run=subprocess.run):
+    """Seconds left in the Slurm job's time limit (squeue %L), or None when unknown or unlimited."""
+    try:
+        text = run(["squeue", "-h", "-j", str(job_id), "-o", "%L"], capture_output=True, text=True,
+                   timeout=20).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.fullmatch(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)", text)
+    if not m:
+        return None
+    d, h, mi, se = (int(x) if x else 0 for x in m.groups())
+    return ((d * 24 + h) * 60 + mi) * 60 + se
 
 
 def wave_warning(n_runs, kind, jobs=1):
@@ -752,7 +801,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
-               pace_recover=10, pace_stall_warmup_s=240.0,
+               pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -788,7 +837,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
-          "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None,
+          "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
+          "time_left": 0, "time_left_retry": [],
           "node_ram_waits": 0, "claimed_elsewhere": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
@@ -1124,6 +1174,28 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             while queue and claimed_elsewhere(queue[0][1], queue[0][2]):  # before any wait: nothing to wait for
                 queue.popleft()
                 st["claimed_elsewhere"] += 1
+            # the job's time limit (re-read: scontrol can shorten it): a run that would not end before it is not
+            # started -- left unclaimed for another job on the list instead of being cut by Slurm's TERM
+            if run_est_s and time_left is not None and now >= st["time_next"]:
+                st["time_next"] = now + time_check_s
+                left = time_left()
+                if left is not None:
+                    st["deadline"] = now + left
+            if (not stopping and queue and st["deadline"] is not None
+                    and st["deadline"] - now < run_est_s + TERM_EARLY_S + grace_s + 60):
+                # a first attempt goes back unclaimed for another job on the list; a retry of ours keeps its claim
+                # (its outputs are this job's attempts) and is recorded apart: someone has to run it again
+                while queue:
+                    index, run, attempt = queue.popleft()
+                    if claimed_elsewhere(run, attempt):
+                        st["claimed_elsewhere"] += 1
+                        continue
+                    status = "time_left" if attempt == 1 else "time_left_retry"
+                    record({"name": run.name, "index": index, "slot": None, "attempt": attempt, "status": status,
+                            "rc": None, "signal": None, "retried": False})
+                    st["time_left"] += 1
+                    if attempt > 1:
+                        st["time_left_retry"].append(run.name)
             if (not stopping and queue and len(live) < min(slots, st["cap"])
                     and (st["last_start"] is None or now - st["last_start"] >= stagger_s)):
                 v = verdict(now)
@@ -1205,13 +1277,15 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
 
     final = [r for r in records if not r.get("retried")]  # the last attempt of each run
     failed = sum(1 for r in final if r["status"] == "infra_failed" or (r["status"] == "ended" and r["rc"] != 0))
-    not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted"))
+    not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
+                                                          "time_left_retry"))
     summary = {
         "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
+        "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
         "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
         "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
@@ -1245,14 +1319,21 @@ def main(argv=None) -> int:
                                      description="sbatch options for a bundle of measured session kinds")
         sp.add_argument("kind", choices=sorted(KINDS))
         sp.add_argument("--slots", type=int)
+        sp.add_argument("--runs", type=int, help="the list's runs: also print --time")
+        sp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list")
+        sp.add_argument("--run-min", type=float, help="a run's p95 wall minutes (default: the kind's measured)")
         a = sp.parse_args(argv[1:])
         try:
-            z = sbatch_sizes(a.kind, a.slots)
+            z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min)
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2
-        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G")
+        print(f"--gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_gib']}G"
+              + (f" --time={z['time']}" if "time" in z else ""))
         print(f"(then: deploy/slurm/isaac_bundle.sbatch RUNS OUT {a.kind})", file=sys.stderr)
+        if a.run_min is not None:
+            print(f"(and BUNDLE_ARGS=\"... --run-est-min {a.run_min:g}\": the runner starts no run with less than its "
+                  "estimate left, and its default is the kind's)", file=sys.stderr)
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", required=True, help="the run list (JSON lines)")
@@ -1282,6 +1363,9 @@ def main(argv=None) -> int:
                     help="evaluations in a row a slow window or tick gap must persist before a step back")
     ap.add_argument("--pace-recover", type=int, default=10,
                     help="clean evaluations in a row (and a window since the last change) before the cap goes up one")
+    ap.add_argument("--run-est-min", type=float,
+                    help="a run's p95 wall minutes: no run starts with less than this (+ grace) left in the job's "
+                         "time limit (default: --kind's measured; 0: off)")
     ap.add_argument("--list-registry-dir", default=f"/tmp/isaac_bundle_lists_{os.getuid()}",
                     help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
@@ -1354,6 +1438,8 @@ def _run_main(a, runs, slots, shards, probe, stop):
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
         pace_confirm=a.pace_confirm, pace_recover=a.pace_recover, pace_stall_warmup_s=a.pace_stall_warmup_s,
+        run_est_s=60 * (a.run_est_min if a.run_est_min is not None else (KINDS[a.kind]["run_min"] if a.kind else 0)),
+        time_left=(lambda: job_time_left(os.environ)) if os.environ.get("SLURM_JOB_ID") else None,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),

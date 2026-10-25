@@ -4,7 +4,7 @@
 #SBATCH --gres=shard:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
-#SBATCH --time=02:00:00
+#SBATCH --time=01:30:00
 # One Riibotics demo scene (tools/riibotics_isaac_scenes.py) as an Isaac autonomous mission (--layout scene: the
 # scene's layout is the planner's prior map). Defaults (user decision 2026-10-22, deploy/riibotics/README.md):
 #   MODE=slam      far recognition (learned proposals), SLAM feedback through the slam_toolbox bridge, D7 docking
