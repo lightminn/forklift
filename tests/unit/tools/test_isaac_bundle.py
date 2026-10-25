@@ -1197,3 +1197,77 @@ def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
     rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
     out = capsys.readouterr().out
     assert rc == 0 and "1 of 4" in out and "0 problems" in out
+
+
+def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
+    # 20 live runs on 2 jobs of 4: 3 waves x 30 min + 3 min stagger + 5 min, +15 %, up to 5 min
+    assert ib.time_limit(20, 4, 2, 30) == "01:55:00"
+    assert ib.time_limit(2, 2, 1, 30) == "00:45:00"
+    assert ib.sbatch_sizes("live", 2, runs=2)["time"] == "00:45:00"
+    assert "time" not in ib.sbatch_sizes("live")
+    assert ib.sbatch_sizes("riib", runs=12, jobs=2, run_min=80)["time"] == ib.time_limit(12, 3, 2, 80)
+
+
+def test_sizes_prints_the_time(capsys):
+    assert ib.main(["sizes", "live", "--runs", "20", "--jobs", "2"]) == 0
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G --time=01:55:00"
+
+
+def test_squeue_time_left_is_parsed():
+    class Out:
+        def __init__(self, text):
+            self.stdout = text
+    for out, secs in (("1:02:03", 3723), ("45:10", 2710), ("2-01:00:00", 176400), ("UNLIMITED", None), ("", None)):
+        assert ib.slurm_time_left(1, run=lambda *a, _out=out, **k: Out(_out)) == secs
+
+
+def test_the_job_s_end_comes_from_its_start_and_from_a_shortened_limit():
+    class Out:
+        def __init__(self, text):
+            self.stdout = text
+    env = {"SLURM_JOB_ID": "7", "SLURM_JOB_END_TIME": "10000"}
+    # squeue fails: the end Slurm set at the start still holds (Codex: no time check at all before)
+    assert ib.job_time_left(env, run=lambda *a, **k: Out(""), now=lambda: 9000.0) == 1000
+    # scontrol shortened the limit since: squeue's %L is smaller
+    assert ib.job_time_left(env, run=lambda *a, **k: Out("5:00"), now=lambda: 9000.0) == 300
+    assert ib.job_time_left({}, now=lambda: 0.0) is None
+
+
+def test_a_retry_left_for_time_keeps_its_claim_and_is_named(tmp_path):
+    # Codex: a retry of this job's own run cannot go to another job (the claim and its attempts are this job's)
+    out = tmp_path / "r"
+    left = iter([3600] + [100] * 1000)
+    run = ib.Run(name="r", argv=py(FLAKY, str(out), "1"), scan=[str(out / "run.log")],
+                 retry_move=[str(out)])
+    summary = bundle(tmp_path, [run], slots=1, run_est_s=600, time_left=lambda: next(left), time_check_s=0.0,
+                     claim_dir=str(tmp_path / "claims"))
+    statuses = [json.loads(x)["status"] for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert statuses == ["infra_failed", "time_left_retry"]
+    assert summary["time_left_retry"] == ["r"] and summary["exit_code"] == 1
+    assert (tmp_path / "claims" / "r").is_dir()
+
+
+def test_no_run_starts_that_the_job_s_time_limit_would_cut(tmp_path):
+    claims = tmp_path / "claims"
+    runs = [stamp_run(n, tmp_path, 0.05) for n in ("a", "b")]
+    summary = bundle(tmp_path, runs, run_est_s=600, time_left=lambda: 300, claim_dir=str(claims))
+    r = results(tmp_path)
+    assert r["a"]["status"] == r["b"]["status"] == "time_left"
+    assert summary["time_left"] == 2 and summary["exit_code"] == 1
+    assert list(claims.iterdir()) == []  # left unclaimed for another job on the list
+
+
+def test_runs_start_while_the_time_left_holds_them(tmp_path):
+    summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.05) for n in ("a", "b")], run_est_s=600,
+                     time_left=lambda: 3600)
+    assert summary["time_left"] == 0 and summary["exit_code"] == 0
+
+
+def test_a_shortened_time_limit_is_read_again(tmp_path):
+    # scontrol can shorten a running job's limit: the runner re-reads it
+    left = iter([3600] + [100] * 1000)
+    runs = [stamp_run(n, tmp_path, 0.3) for n in ("a", "b", "c")]
+    summary = bundle(tmp_path, runs, slots=1, run_est_s=600, time_left=lambda: next(left), time_check_s=0.0)
+    r = results(tmp_path)
+    assert r["a"]["status"] == "ended" and r["b"]["status"] == r["c"]["status"] == "time_left"
+    assert summary["time_left"] == 2
