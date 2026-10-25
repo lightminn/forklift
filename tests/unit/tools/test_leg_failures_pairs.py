@@ -253,6 +253,29 @@ def test_an_empty_mission_folder_is_an_unknown_mission_and_counts_against_the_sc
     assert (out["best"]["score"], out["worst"]["score"], out["worst"]["contact_unknown"]) == (3, 2, 1)
 
 
+def test_a_forgotten_or_unanswered_submit_may_have_started_a_mission(tmp_path):
+    """Codex V5 10th review P2: the probe keeps a submit whose reply it never saw as forgotten (or with no reply at
+    all); the vehicle may have taken it, so it counts as a mission that may have started -- unknown -- and only an
+    explicit reject does not."""
+    import json
+
+    from leg_failures_pairs import session_v5
+
+    session = tmp_path / "s"
+    for k in (1, 2):
+        md = session / f"live/epoch_1/run/missions/m{k}"
+        md.mkdir(parents=True)
+        (md / "records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
+        (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 9.0}}))
+    for third in ({"submit": {"t": "forgotten"}}, {}):
+        (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 2 + [third]}))
+        out = session_v5(str(session))
+        assert (out["inconsistent"], out["unknown"], out["worst"]["contact_unknown"]) == (False, 1, 1)
+    (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 2 + [
+        {"submit": {"t": "reject"}}]}))
+    assert session_v5(str(session))["unknown"] == 0
+
+
 def test_after_a_folder_with_no_records_the_run_record_is_told_apart_by_time(tmp_path):
     """Codex V5 8th review P2: m3 done at 30 s with no records.json, then a failed run record whose counted retry is at
     40 s -- a separate cut mission (a fourth: over the schedule, inconsistent); a retry within m3 (20 s) is m3's own;

@@ -96,9 +96,11 @@ def _session(run_dir):
     3rd review P2: a duplicated done folder would hide a failure)."""
     import glob
 
-    try:  # the probe's accepted submits: how many missions the session started (Codex V5 review P2-1)
+    try:  # the probe's submits not rejected: how many missions the session may have started (Codex V5 review P2-1).
+        # A submit forgotten or unanswered may still have been taken by the vehicle (Codex V5 10th review P2), and
+        # counting one that never started is conservative (an unknown mission: off at best, the hold at worst)
         acked = sum(1 for m in _json(f"{run_dir}/probe.json").get("missions_run") or []
-                    if (m.get("submit") or {}).get("t") == "ack")
+                    if (m.get("submit") or {}).get("t") != "reject")
     except (OSError, ValueError):
         acked = None
     out = []
