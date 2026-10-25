@@ -190,6 +190,17 @@ def test_a_map_mismatch_stops_at_once_and_its_reason_reaches_the_port_file(tmp_p
     assert port["state"] == "crashed" and port["reason"] == reason
 
 
+def test_the_registrys_map_id_is_held_against_the_bundle_folder(tmp_path):
+    # live-default plan S3 D2 (Codex P2): the session's expected id came from the folder itself, so a folder naming
+    # another bundle of the same scene (one the acceptance check refused, say) passed; the registry's id is checked
+    folder, map_id = _bundle(tmp_path)
+    result = run(tmp_path / "other", runner_exiting(0), map_bundle=folder, expected_map_id="0" * 64)
+    assert result["epochs"] == 0 and result["end"] == "map_mismatch" and "map_id" in result["reason"]
+    assert not (tmp_path / "other" / "epoch_1").exists()
+    ok = run(tmp_path / "same", runner_exiting(0), map_bundle=folder, expected_map_id=map_id, max_epochs=1)
+    assert ok["codes"] == [0]
+
+
 def test_a_bundle_that_does_not_load_starts_no_epoch(tmp_path):
     folder, _ = _bundle(tmp_path)
     (folder / "map.data").write_bytes(b"changed")

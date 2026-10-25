@@ -243,8 +243,8 @@ def _end_child(child, grace_s: float = 60.0) -> int:
 def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float = 10.0, max_failures: int = 3,
               max_epochs: int | None = None, bridge: list[str] | None = None, bridge_stop: list[str] | None = None,
               bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None,
-              grace_s: float = 60.0, map_bundle: Path | None = None, standby_port: int | None = None,
-              standby_host: str = "127.0.0.1", web_root: Path | None = None, standby_linger_s: float = 0.0) -> dict:
+              grace_s: float = 60.0, map_bundle: Path | None = None, expected_map_id: str | None = None,
+              standby_port: int | None = None, standby_host: str = "127.0.0.1", web_root: Path | None = None, standby_linger_s: float = 0.0) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     stop = _Stop()  # first: a TERM during the bundle check or a linger ends them too
@@ -270,7 +270,8 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             from forklift_core.localization.slam_map import MapBundleError, load_bundle
 
             try:
-                bundle = load_bundle(Path(map_bundle))
+                # live-default plan S3 D2: the registry's accepted id, when given, against the folder's own
+                bundle = load_bundle(Path(map_bundle), expected_map_id)
             except MapBundleError as exc:
                 _log(out, {"event": "map_bundle_refused", "reason": str(exc)})
                 _mark_crashed(port_file, 0, 1, str(exc))
@@ -402,6 +403,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-epochs", type=int, default=None)
     ap.add_argument("--slam-map-bundle", type=Path, default=None,
                     help="a survey map bundle: checked and hashed once; fills {expected_map_id} and {map_bundle}")
+    ap.add_argument("--expected-map-id", default=None,
+                    help="the map id the bundle must carry (the registry's accepted bundle); unset: the folder's own")
     ap.add_argument("--standby-port", type=int, default=None,
                     help="the console's port: served by the supervisor while no runner holds it (its page and "
                          "/api/v1/session)")
@@ -414,7 +417,8 @@ def main(argv=None) -> int:
     result = supervise(out=args.out, runner=load(args.runner), port_file=args.port_file, backoff_s=args.backoff_s,
                        max_failures=args.max_failures, max_epochs=args.max_epochs, bridge=load(args.bridge),
                        bridge_stop=load(args.bridge_stop), bridge_ready=args.bridge_ready, exit_file=args.exit_file,
-                       map_bundle=args.slam_map_bundle, standby_port=args.standby_port,
+                       map_bundle=args.slam_map_bundle, expected_map_id=args.expected_map_id,
+                       standby_port=args.standby_port,
                        standby_host=args.standby_host, web_root=args.web_root,
                        standby_linger_s=args.standby_linger_s)
     print(json.dumps(result), flush=True)

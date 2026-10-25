@@ -17,6 +17,8 @@
 #   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
 #   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
 #   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
+#   (MAP_BUNDLE=registry: the accepted bundle of SCENE_FILE and ENCODER_MODEL from config/slam_map_bundles.yaml under
+#   SLAM_BUNDLE_ROOT, its map id held against the folder; MAP_BUNDLE=none: mapping; deploy/console/slam_choice.sh),
 #   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
@@ -31,16 +33,19 @@ OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
-if [ -n "${MAP_BUNDLE:-}" ]; then
-  MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
-  : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
-fi
 # In a bundle (deploy/slurm/isaac_bundle.sbatch) several sessions share one Slurm job: SESSION_ID names this one's
 # bridge containers and BRIDGE_CPU pins its bridge to a CPU of its own; alone, the job ID and the job's first CPU.
 # The SLAM odometry's encoders (plan 2026-10-25-team-spec-default, lead decision): the joint-angle model by default,
 # reported on request (its own baselines; never mixed with the default's), nothing else (no other age table).
 ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
+# The SLAM mode (live-default plan S3 D2): MAP_BUNDLE unset / none / registry / a folder, deploy/console/slam_choice.sh
+. "$ROOT/deploy/console/slam_choice.sh"
+if [ -n "${MAP_BUNDLE:-}" ]; then
+  MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
+  : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
+fi
+echo "slam: $SLAM_CHOICE"
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -113,6 +118,7 @@ trap 'for c in $(docker ps -aq --filter "name=slam_bridge_${JOB}_e"); do docker 
 echo "host=$(hostname) job=$JOB out=$OUT"
 SUP_LOC=()
 [ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")
+[ -n "${MAP_BUNDLE:-}" ] && [ -n "$EXPECTED_MAP_ID" ] && SUP_LOC+=(--expected-map-id "$EXPECTED_MAP_ID")
 # Between runners the supervisor serves the console's port itself (contract 6): the page and /api/v1/session, so a
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).
