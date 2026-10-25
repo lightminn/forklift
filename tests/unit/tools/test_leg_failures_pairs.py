@@ -79,9 +79,37 @@ def test_mission_outcomes_and_arm_names_for_the_reapproach_hold_judgement(tmp_pa
     mission("p_on_random_m_s0", "m2", "done")
     rows = collect(str(tmp_path), "p", "random_m", range(1), arms=("off", "on"))
     tot = mission_totals(rows)
-    assert tot["main"] == {"missions": 2, "done": 1, "recovery_after_docking": 1, "hold_exits": 0}
-    assert tot["fix"] == {"missions": 2, "done": 2, "recovery_after_docking": 0, "hold_exits": 1}
+    assert tot["main"] == {"missions": 2, "done": 1, "recovery_after_docking": 1, "hold_exits": 0, "session_failed": 0}
+    assert tot["fix"] == {"missions": 2, "done": 2, "recovery_after_docking": 0, "hold_exits": 1, "session_failed": 0}
     assert rows[0]["fix"] == [0, 0, 0]  # an uncounted h is no attempt
+
+
+def test_a_session_cut_mid_mission_counts_its_last_mission_from_the_run_record(tmp_path):
+    """Codex V4 hold review P2: a session that ended with the run failed (slam_link_failed) keeps its unfinished
+    mission only in the run's result.json; its re-approaches count, once -- a run record that repeats the last mission
+    folder's (a run that ended after its missions) adds nothing."""
+    import json
+
+    from leg_failures_pairs import session_counts, session_missions
+
+    run = tmp_path / "s" / "live/epoch_1/run"
+    md = run / "missions/m1"
+    md.mkdir(parents=True)
+    done_retries = [{"trigger": "b", "time_s": 10.0, "counted": True, "plan": {"length_m": 2.0}}]
+    (md / "records.json").write_text(json.dumps({"state": {"docking_retries": done_retries, "delivery_docking": {
+        "rounds": [{"time_s": 20.0}]}}}))
+    (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 30.0}}))
+    cut = [{"trigger": "b", "time_s": 50.0, "counted": True, "plan": {"length_m": 2.0}},
+           {"trigger": "d", "time_s": 60.0, "counted": True, "plan": {"length_m": 2.0}}]
+    (run / "result.json").write_text(json.dumps({"success": False, "failure_reason": "slam_link_failed: x",
+                                                 "docking_retries": cut, "delivery_docking": {"rounds": []}}))
+    assert session_counts(str(tmp_path / "s")) == [1, 3, 0]  # m1 1/1, the cut mission 0/2
+    assert session_missions(str(tmp_path / "s"))["session_failed"] == 1
+    # a finished run whose record repeats its last mission's: no extra mission
+    (run / "result.json").write_text(json.dumps({"success": True, "docking_retries": done_retries,
+                                                 "delivery_docking": {"rounds": [{"time_s": 20.0}]}}))
+    assert session_counts(str(tmp_path / "s")) == [1, 1, 0]
+    assert session_missions(str(tmp_path / "s"))["session_failed"] == 0
 
 
 def test_rates_from_counts_stay_exact_so_ties_hold():

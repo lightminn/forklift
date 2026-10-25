@@ -84,20 +84,41 @@ def _json(path):
         return json.load(handle)
 
 
+def _session_states(run_dir) -> list:
+    """Each mission's (state, result) of a session, every epoch: the mission folders, then -- when the run failed
+    mid-mission (slam_link_failed and the like) -- the unfinished mission kept only in the run's result.json, unless
+    that record repeats the last mission folder's (Codex V4 hold review P2)."""
+    import glob
+
+    out = []
+    for run in sorted(glob.glob(f"{run_dir}/live/epoch_*/run")):
+        last = None
+        for md in sorted(glob.glob(f"{run}/missions/m*")):
+            try:
+                st = _json(f"{md}/records.json")["state"]
+                res = _json(f"{md}/result.json").get("result") or {}
+            except (OSError, ValueError, KeyError):
+                continue
+            out.append((st, res))
+            last = st
+        try:
+            top = _json(f"{run}/result.json")
+        except (OSError, ValueError):
+            continue
+        retries = top.get("docking_retries") or []
+        if top.get("success") is False and (last is None or retries != (last.get("docking_retries") or [])):
+            out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {}},
+                        {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}))
+    return out
+
+
 def session_counts(run_dir) -> list:
     """[completed, attempted, refusals] over a session's counted D7 re-approaches (every epoch's missions). An attempt
     is a counted docking retry; it is completed when a docking round falls inside its window (up to the next counted
     retry or the mission's end -- the retry match is made only where the re-approach stands, as V2's extract); it is a
     refusal when its plan was refused (box, length, dry run) or not planned."""
-    import glob
-
     completed = attempted = refusals = 0
-    for md in sorted(glob.glob(f"{run_dir}/live/epoch_*/run/missions/m*")):
-        try:
-            st = _json(f"{md}/records.json")["state"]
-            res = _json(f"{md}/result.json").get("result") or {}
-        except (OSError, ValueError, KeyError):
-            continue
+    for st, res in _session_states(run_dir):
         counted = [e for e in st.get("docking_retries") or [] if e.get("counted")]
         rounds = [float(r["time_s"]) for r in (st.get("delivery_docking") or {}).get("rounds") or []
                   if r.get("time_s") is not None]
@@ -116,16 +137,10 @@ def session_counts(run_dir) -> list:
 def session_missions(run_dir) -> dict:
     """A session's mission outcomes (re-approach hold plan V4a guard 2): missions run, done, ended on
     transport_recovery_after_docking, and the hold exits taken (uncounted docking retries ``h``)."""
-    import glob
-
-    out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0}
-    for md in sorted(glob.glob(f"{run_dir}/live/epoch_*/run/missions/m*")):
-        try:
-            st = _json(f"{md}/records.json")["state"]
-            res = _json(f"{md}/result.json").get("result") or {}
-        except (OSError, ValueError, KeyError):
-            continue
+    out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0, "session_failed": 0}
+    for st, res in _session_states(run_dir):
         out["missions"] += 1
+        out["session_failed"] += res.get("outcome") == "session_failed"
         out["done"] += res.get("outcome") == "done"
         out["recovery_after_docking"] += res.get("reason") == "transport_recovery_after_docking"
         out["hold_exits"] += sum(1 for e in st.get("docking_retries") or [] if e.get("trigger") == "h")
@@ -148,7 +163,7 @@ def mission_totals(rows) -> dict:
     """Each arm's mission outcomes summed over the seeds (re-approach hold plan V4a guard 2)."""
     out = {}
     for arm in ("main", "fix"):
-        keys = ("missions", "done", "recovery_after_docking", "hold_exits")
+        keys = ("missions", "done", "recovery_after_docking", "hold_exits", "session_failed")
         out[arm] = {k: sum(r["missions"][arm][k] for r in rows if "missions" in r) for k in keys}
     return out
 
