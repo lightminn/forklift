@@ -244,6 +244,7 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
               max_epochs: int | None = None, bridge: list[str] | None = None, bridge_stop: list[str] | None = None,
               bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None,
               grace_s: float = 60.0, map_bundle: Path | None = None, expected_map_id: str | None = None,
+              slam_choice: str | None = None,
               standby_port: int | None = None, standby_host: str = "127.0.0.1", web_root: Path | None = None, standby_linger_s: float = 0.0) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -265,6 +266,8 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
 
     try:
         session_values = {}
+        if slam_choice is not None:  # live-default plan S3 D2: what the launcher chose and why
+            _log(out, {"event": "slam_choice", "choice": slam_choice})
         if map_bundle is not None:
             sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
             from forklift_core.localization.slam_map import MapBundleError, load_bundle
@@ -405,6 +408,7 @@ def main(argv=None) -> int:
                     help="a survey map bundle: checked and hashed once; fills {expected_map_id} and {map_bundle}")
     ap.add_argument("--expected-map-id", default=None,
                     help="the map id the bundle must carry (the registry's accepted bundle); unset: the folder's own")
+    ap.add_argument("--slam-choice", default=None, help="the launcher's SLAM mode choice and its reason, logged")
     ap.add_argument("--standby-port", type=int, default=None,
                     help="the console's port: served by the supervisor while no runner holds it (its page and "
                          "/api/v1/session)")
@@ -418,6 +422,7 @@ def main(argv=None) -> int:
                        max_failures=args.max_failures, max_epochs=args.max_epochs, bridge=load(args.bridge),
                        bridge_stop=load(args.bridge_stop), bridge_ready=args.bridge_ready, exit_file=args.exit_file,
                        map_bundle=args.slam_map_bundle, expected_map_id=args.expected_map_id,
+                       slam_choice=args.slam_choice,
                        standby_port=args.standby_port,
                        standby_host=args.standby_host, web_root=args.web_root,
                        standby_linger_s=args.standby_linger_s)

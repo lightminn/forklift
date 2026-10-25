@@ -62,3 +62,30 @@ def test_the_lookup_command_prints_what_the_launcher_reads(tmp_path, capsys):
     assert reg.main(["lookup", str(book), "--scene-file", str(scene), "--encoder-model", "team_spec_quantized"]) == 0
     assert capsys.readouterr().out.split() == ["fa", "a" * 64, "1.0,-2.0,2.5"]
     assert reg.main(["lookup", str(book), "--scene-file", str(scene), "--encoder-model", "reported"]) == reg.NONE
+
+
+def test_a_missing_registry_is_an_error_not_an_empty_one(tmp_path):
+    # Codex implementation review P2: a lookup on a registry file that is not there read as "no row" -> mapping
+    scene = tmp_path / "s.json"
+    scene.write_text("{}")
+    with pytest.raises(FileNotFoundError):
+        reg.main(["lookup", str(tmp_path / "absent.yaml"), "--scene-file", str(scene), "--encoder-model", "reported"])
+    assert reg.read(tmp_path / "absent.yaml", missing_ok=True) == {"bundles": []}  # what add starts from
+
+
+def test_the_report_must_be_the_bundles_own():
+    # Codex P2: an accepted report of survey A with the manifest of bundle B registered B
+    with pytest.raises(ValueError, match="map_id"):
+        reg.entry(_manifest(map_id="b" * 64), {**_report(), "map_id": "a" * 64}, folder="f", start=[0, 0, 0],
+                  name="line_m")
+    assert reg.entry(_manifest(), {**_report(), "map_id": "a" * 64}, folder="f", start=[0, 0, 0], name="line_m")
+
+
+def test_the_survey_run_and_nodes_must_be_the_reports_own(tmp_path):
+    s, t = tmp_path / "s", tmp_path / "t"
+    report = {**_report(), "map_id": "a" * 64, "epoch": str(s / "epoch_1"), "readback": str(s / "readback")}
+    reg.check_sources(report, s / "epoch_1" / "run", s / "readback" / "dump" / "nodes.csv")
+    with pytest.raises(ValueError, match="survey run"):
+        reg.check_sources(report, t / "epoch_1" / "run", s / "readback" / "dump" / "nodes.csv")
+    with pytest.raises(ValueError, match="nodes"):
+        reg.check_sources(report, s / "epoch_1" / "run", t / "readback" / "dump" / "nodes.csv")

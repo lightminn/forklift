@@ -42,6 +42,9 @@ def start_pose(base_pose_row) -> list[float]:
 def entry(manifest: dict, report: dict, *, folder: str, start, name: str) -> dict:
     """The registry row of an accepted survey bundle (ValueError when the survey was not accepted or has no scene)."""
     world = report.get("world") or {}
+    if report.get("map_id") is not None and report["map_id"] != manifest.get("map_id"):
+        raise ValueError(f"{name}: the report's map_id {str(report['map_id'])[:12]} is not the bundle's "
+                         f"{str(manifest.get('map_id'))[:12]}")
     if not (report.get("ok") is True and world.get("ok") is True):
         raise ValueError(f"{name}: the survey was not accepted (report ok {report.get('ok')}, world ok {world.get('ok')})")
     scene = (manifest.get("inputs") or {}).get(SCENE_INPUT) or {}
@@ -52,6 +55,14 @@ def entry(manifest: dict, report: dict, *, folder: str, start, name: str) -> dic
             "encoder_model": model, "folder": folder, "map_id": manifest["map_id"],
             "start_pose": [float(v) for v in start],
             "v2": {"position_max_m": float(world["position_max_m"]), "yaw_max_rad": float(world["yaw_max_rad"])}}
+
+
+def check_sources(report: dict, survey_run: Path, nodes_csv: Path) -> None:
+    """The survey run and read-back nodes the start pose is computed from are the report's own (ValueError else)."""
+    if Path(survey_run).resolve() != (Path(report["epoch"]) / "run").resolve():
+        raise ValueError(f"the survey run {survey_run} is not the report's ({report['epoch']}/run)")
+    if Path(nodes_csv).resolve() != (Path(report["readback"]) / "dump" / "nodes.csv").resolve():
+        raise ValueError(f"the nodes {nodes_csv} are not the report's read-back ({report['readback']})")
 
 
 def put(book: dict, row: dict) -> dict:
@@ -68,8 +79,13 @@ def lookup(book: dict, scene_sha256: str, encoder_model: str) -> dict | None:
     return rows[0] if rows else None
 
 
-def read(path: Path) -> dict:
-    return yaml.safe_load(Path(path).read_text()) or {"bundles": []} if Path(path).exists() else {"bundles": []}
+def read(path: Path, *, missing_ok: bool = False) -> dict:
+    """The registry; a file that is not there is empty only for ``add`` (``missing_ok``), an error for a lookup."""
+    if not Path(path).exists():
+        if missing_ok:
+            return {"bundles": []}
+        raise FileNotFoundError(f"no SLAM bundle registry at {path}")
+    return yaml.safe_load(Path(path).read_text()) or {"bundles": []}
 
 
 def write(path: Path, book: dict) -> None:
@@ -112,9 +128,10 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "add":
         manifest = json.loads((a.bundle / "manifest.json").read_text())
-        row = entry(manifest, json.loads(a.report.read_text()), folder=a.bundle.name,
-                    start=_survey_start(a.survey_run, a.nodes), name=a.name)
-        write(a.registry, put(read(a.registry), row))
+        report = json.loads(a.report.read_text())
+        check_sources(report, a.survey_run, a.nodes)
+        row = entry(manifest, report, folder=a.bundle.name, start=_survey_start(a.survey_run, a.nodes), name=a.name)
+        write(a.registry, put(read(a.registry, missing_ok=True), row))
         print(json.dumps(row))
         return 0
     row = lookup(read(a.registry), sha256(a.scene_file), a.encoder_model)

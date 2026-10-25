@@ -201,6 +201,14 @@ def test_the_registrys_map_id_is_held_against_the_bundle_folder(tmp_path):
     assert ok["codes"] == [0]
 
 
+def test_the_launchers_slam_choice_is_in_the_session_record(tmp_path):
+    # live-default plan S3 D2 (Codex P3): mapping forced, unset or for want of a registry row tell apart in the record
+    run(tmp_path / "out", runner_exiting(0), max_epochs=1, slam_choice="mapping (MAP_BUNDLE=none)")
+    events = [json.loads(x) for x in (tmp_path / "out" / "supervisor.jsonl").read_text().splitlines() if x.strip()]
+    assert {"event": "slam_choice", "choice": "mapping (MAP_BUNDLE=none)"} in [
+        {k: e[k] for k in ("event", "choice") if k in e} for e in events]
+
+
 def test_a_bundle_that_does_not_load_starts_no_epoch(tmp_path):
     folder, _ = _bundle(tmp_path)
     (folder / "map.data").write_bytes(b"changed")

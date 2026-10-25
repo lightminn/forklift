@@ -96,3 +96,40 @@ def test_a_correction_jump_is_measured_between_processed_keyframes():
     j = cmp.metrics(run)["correction_jumps"]
     assert j["position_max_m"] == pytest.approx(0.07) and j["position_over_0_05_m"] == 2
     assert math.isfinite(j["yaw_max_rad"])
+
+
+def test_missing_or_non_finite_samples_never_pass():
+    # Codex implementation review P2: a run with keyframe times missing, NaN applied poses, or an R without control rows
+    gaps = _run()
+    for r in gaps.records[1:]:
+        r["slam_wall_s"] = None
+    assert "keyframe" in " ".join(cmp.verdict(gaps, _run(dx=0.04))["failed"])
+    nan = _run()
+    for row in nan.control:
+        row[1] = float("nan")
+    assert not cmp.verdict(nan, _run(dx=0.04))["ok"]
+    bare = _run(dx=0.04)
+    bare.control[:] = []
+    assert not cmp.verdict(_run(dx=0.02), bare)["ok"]
+
+
+def test_not_comparable_is_not_a_pass():
+    r = cmp.RunData(records=[], control=[], missions=[], failure="slam_map_not_loaded")
+    out = cmp.verdict(_run(), r)
+    assert not out["ok"] and "not comparable" in " ".join(out["failed"])
+
+
+def test_every_sample_after_the_common_span_is_held_to_the_absolute_bounds():
+    # Codex: L to 3,700 s, R to 3,699 s, L's last applied error 0.22 m passed under the 1 s allowance
+    l_run, r_run = _run(dx=0.02), _run(3699.0, dx=0.04)
+    l_run.control[-1][1] += 0.2
+    out = cmp.verdict(l_run, r_run)
+    assert not out["ok"] and out["l_after_r"] is not None and "0.15" in " ".join(out["failed"])
+
+
+def test_the_applied_delay_is_reported():
+    run = _run(600.0)
+    for r in run.records:
+        r["applied_tick_s"] = r["stamp_s"] + 0.25
+    d = cmp.metrics(run)["applied_delay_s"]
+    assert d["median"] == pytest.approx(0.25) and d["max"] == pytest.approx(0.25)

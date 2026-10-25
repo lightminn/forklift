@@ -66,10 +66,13 @@ def _span(run: RunData):
 
 
 def _stats(position, yaw) -> dict:
+    """Median and max of the errors; ``finite`` False (no figures) when a sample is missing a value."""
     position, yaw = np.asarray(position, float), np.asarray(yaw, float)
     if not len(position):
-        return {"n": 0}
-    return {"n": int(len(position)), "position_median_m": float(np.median(position)),
+        return {"n": 0, "finite": False}
+    if not (np.isfinite(position).all() and np.isfinite(yaw).all()):
+        return {"n": int(len(position)), "finite": False}
+    return {"n": int(len(position)), "finite": True, "position_median_m": float(np.median(position)),
             "position_max_m": float(position.max()), "yaw_median_rad": float(np.median(yaw)),
             "yaw_max_rad": float(yaw.max())}
 
@@ -114,8 +117,13 @@ def metrics(run: RunData, t0=None, t1=None) -> dict:
     missions = [m for m in run.missions if (t0 is None or m["ended_s"] >= t0) and (t1 is None or m["ended_s"] <= t1)]
     done = [m for m in missions if m.get("outcome") == "done"]
     errors = [m["delivery_error_m"] for m in done if m.get("delivery_error_m") is not None]
-    walls = [float(r["slam_wall_s"]) for r in processed if r.get("slam_wall_s") is not None]
-    return {"keyframes": len(processed), "keyframe_max_s": max(walls) if walls else None,
+    walls = [r.get("slam_wall_s") for r in processed]
+    timed = bool(walls) and all(w is not None and math.isfinite(float(w)) for w in walls)
+    delays = [float(r["applied_tick_s"]) - float(r["stamp_s"]) for r in processed if r.get("applied_tick_s") is not None]
+    return {"keyframes": len(processed), "keyframes_timed": timed,
+            "keyframe_max_s": max(float(w) for w in walls if w is not None) if timed else None,
+            "applied_delay_s": ({"n": len(delays), "median": float(np.median(delays)), "max": float(max(delays))}
+                                if delays else {"n": 0}),
             "response": _stats(rp, ry), "applied": _stats(ap, ay), "correction_jumps": correction_jumps(processed),
             "missions_done": len(done), "missions_ended": len(missions),
             "delivery_error_max_m": max(errors) if errors else None}
@@ -148,8 +156,12 @@ COMPARED = (("applied", "position_median_m", "applied position median"), ("appli
 def verdict(l_run: RunData, r_run: RunData) -> dict:
     failed = []
     whole = metrics(l_run)
-    if whole["keyframe_max_s"] is None or not whole["keyframe_max_s"] < KEYFRAME_MAX_S:
-        failed.append(f"L keyframe max {whole['keyframe_max_s']} s (< {KEYFRAME_MAX_S} s)")
+    if not whole["keyframes_timed"] or not whole["keyframe_max_s"] < KEYFRAME_MAX_S:
+        failed.append(f"L keyframe max {whole['keyframe_max_s']} s (< {KEYFRAME_MAX_S} s; every keyframe timed: "
+                      f"{whole['keyframes_timed']})")
+    for group in ("response", "applied"):
+        if not whole[group]["finite"]:
+            failed.append(f"L {group} pose samples missing or not finite")
     if l_run.failure and any(str(l_run.failure).startswith(b) for b in BAD_ENDS):
         failed.append(f"L end: {l_run.failure}")
     prog = progress(l_run)
@@ -160,20 +172,30 @@ def verdict(l_run: RunData, r_run: RunData) -> dict:
     ls, rs = _span(l_run), _span(r_run)
     if ls is None or rs is None or min(ls[1], rs[1]) <= max(ls[0], rs[0]):
         out["comparison"] = "not comparable (no common sim span)"
+        failed.append("L/R not comparable: no common sim span")
     else:
         c0, c1 = max(ls[0], rs[0]), min(ls[1], rs[1])
         out["common_span_s"] = [c0, c1]
         ml, mr = metrics(l_run, c0, c1), metrics(r_run, c0, c1)
         out["comparison"] = {"l": ml, "r": mr}
+        for group in ("response", "applied"):
+            if not (ml[group]["finite"] and mr[group]["finite"]):
+                failed.append(f"{group} pose samples missing or not finite on the common span (L {ml[group]['n']}, "
+                              f"R {mr[group]['n']})")
         for group, key, label in COMPARED:
             a, b = ml[group].get(key), mr[group].get(key)
-            if a is None or (b is not None and a > b):
+            if a is not None and b is not None and a > b:
                 failed.append(f"{label}: L {a} > R {b}")
         if ml["missions_done"] < mr["missions_done"]:
             failed.append(f"missions done on the common span: L {ml['missions_done']} < R {mr['missions_done']}")
-    if ls is not None and (rs is None or ls[1] > rs[1] + 1.0):
-        t0 = rs[1] if rs is not None else ls[0]
-        _, ap, ay = _applied(l_run, t0, None)
+    c_end = out["common_span_s"][1] if out["common_span_s"] is not None else None
+    t_after, _, _ = _applied(l_run, c_end, None) if c_end is not None else _applied(l_run)
+    if ls is not None and (c_end is None or (t_after > c_end).any()):
+        t0 = c_end if c_end is not None else ls[0]
+        t_a, ap, ay = _applied(l_run, t0, None)
+        if c_end is not None:
+            keep = t_a > c_end
+            ap, ay = ap[keep], ay[keep]
         t_all, p_all, _ = _applied(l_run)
         first = p_all[t_all < ls[0] + HALF_S]
         second = p_all[t_all >= ls[1] - HALF_S]
@@ -182,12 +204,13 @@ def verdict(l_run: RunData, r_run: RunData) -> dict:
                  "first_half_median_m": float(np.median(first)) if len(first) else None,
                  "second_half_median_m": float(np.median(second)) if len(second) else None}
         problems = []
-        if after["position_max_m"] is None or after["position_max_m"] > POSITION_MAX_M:
+        if after["position_max_m"] is None or not after["position_max_m"] <= POSITION_MAX_M:
             problems.append(f"L after R: applied position max {after['position_max_m']} > {POSITION_MAX_M} m")
-        if after["yaw_max_rad"] is None or after["yaw_max_rad"] > YAW_MAX_RAD:
+        if after["yaw_max_rad"] is None or not after["yaw_max_rad"] <= YAW_MAX_RAD:
             problems.append(f"L after R: applied heading max {after['yaw_max_rad']} > {YAW_MAX_RAD} rad")
-        if (after["first_half_median_m"] is None or after["second_half_median_m"] is None
-                or after["second_half_median_m"] > after["first_half_median_m"]):
+        r_cut = rs is None or bool(r_run.failure) or (rs[1] - rs[0]) < OBSERVED_MIN_S
+        if r_cut and (after["first_half_median_m"] is None or after["second_half_median_m"] is None
+                      or after["second_half_median_m"] > after["first_half_median_m"]):
             problems.append("L after R: the second half's applied-position median is above the first's")
         after["ok"] = not problems
         out["l_after_r"] = after
@@ -221,7 +244,8 @@ def main(argv=None) -> int:
     out = verdict(load(a.l_run), load(a.r_run))
     if a.json is not None:
         a.json.write_text(json.dumps(out, indent=1) + "\n")
-    print("PASS" if out["ok"] else "FAIL", "; ".join(out["failed"]))
+    print("PASS" if out["ok"] else "FAIL", "; ".join(out["failed"]),
+          "| common span", out["common_span_s"], "| R end", out["r_failure"])
     return 0 if out["ok"] else 1
 
 
