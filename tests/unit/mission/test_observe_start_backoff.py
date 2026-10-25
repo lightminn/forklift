@@ -86,47 +86,50 @@ def test_a_stop_overlapping_the_prior_does_not_back_off():
 
 @pytest.mark.parametrize("advice, outcome", [({"backoff_m": None, "within_m": 0.30}, "no_room"),
                                              ({"backoff_m": None, "blocked_at_m": 0.05}, "blocked")])
-def test_no_valid_start_within_the_cap_or_a_blocked_way_back_ends_as_before(monkeypatch, advice, outcome):
+def test_no_valid_start_either_way_within_the_cap_ends_as_before(monkeypatch, advice, outcome):
     core, state, pose, target, zone = _observe_core()
-    seen = {}
-    monkeypatch.setattr(pm, "backoff_advice", lambda free, c, start, **k: seen.update(k) or dict(advice))
+    seen = []
+    monkeypatch.setattr(pm, "straight_start_advice",
+                        lambda free, c, start, direction, **k: seen.append((direction, k)) or dict(advice))
     assert not core._observe_backoff_start(10.0, np.array(pose), target)
-    assert state["observe_start_backoffs"][-1]["outcome"] == outcome
-    assert seen == {"step_m": 0.01, "limit_m": 0.30}
+    rec = state["observe_start_backoffs"][-1]
+    assert rec["outcome"] == outcome and [t["direction"] for t in rec["tries"]] == [-1, 1]
+    assert seen == [(-1, {"step_m": 0.01, "limit_m": 0.30}), (1, {"step_m": 0.01, "limit_m": 0.30})]
 
 
 def test_the_length_is_clipped_by_the_advice_s_free_run_and_the_cap(monkeypatch):
     core, state, pose, target, zone = _observe_core()
-    monkeypatch.setattr(pm, "backoff_advice", lambda *a, **k: {"backoff_m": 0.05, "backoff_max_m": 0.06})
+    monkeypatch.setattr(pm, "straight_start_advice", lambda *a, **k: {"backoff_m": 0.05, "backoff_max_m": 0.06})
     assert core._observe_backoff_start(10.0, np.array(pose), target)
     assert state["observe_start_backoffs"][-1]["length_m"] == pytest.approx(0.06)
     # Codex impl review P2: a run clipped below the advice plus the tracker's end tolerance is not driven
     core1, state1, pose1, target1, _ = _observe_core()
-    monkeypatch.setattr(pm, "backoff_advice", lambda *a, **k: {"backoff_m": 0.01, "backoff_max_m": 0.01})
+    monkeypatch.setattr(pm, "straight_start_advice", lambda *a, **k: {"backoff_m": 0.01, "backoff_max_m": 0.01})
     assert not core1._observe_backoff_start(10.0, np.array(pose1), target1)
-    assert state1["observe_start_backoffs"][-1]["outcome"] == "clipped" and core1.observe_backoff is None
+    assert state1["observe_start_backoffs"][-1]["outcome"] == "clipped" and core1.observe_backoff is None  # both ways
     core2, state2, pose2, target2, _ = _observe_core()
-    monkeypatch.setattr(pm, "backoff_advice", lambda *a, **k: {"backoff_m": 0.29, "backoff_max_m": 1.0})
+    monkeypatch.setattr(pm, "straight_start_advice", lambda *a, **k: {"backoff_m": 0.29, "backoff_max_m": 1.0})
     assert core2._observe_backoff_start(10.0, np.array(pose2), target2)
     assert state2["observe_start_backoffs"][-1]["length_m"] == pytest.approx(0.30)
 
 
 def test_a_refused_sweep_path_or_permit_installs_nothing(monkeypatch):
+    # the way back refused by its pre-checks; forward runs into the prior ahead (blocked)
     from forklift_core.control import escape as esc
 
     core, state, pose, target, zone = _observe_core()
     monkeypatch.setattr(esc, "rectangles_sweep_free", lambda checker, poses, *a: False)
     assert not core._observe_backoff_start(10.0, np.array(pose), target)
-    assert state["observe_start_backoffs"][-1]["outcome"] == "precheck_sweep"
+    assert state["observe_start_backoffs"][-1]["tries"][0]["outcome"] == "precheck_sweep"
     monkeypatch.undo()
     core, state, pose, target, zone = _observe_core()
     core.obstacle["layer"].check_candidate = lambda *a, **k: SimpleNamespace(blocked="occupied")
     assert not core._observe_backoff_start(10.0, np.array(pose), target)
-    assert state["observe_start_backoffs"][-1]["outcome"] == "precheck_path:occupied"
+    assert state["observe_start_backoffs"][-1]["tries"][0]["outcome"] == "precheck_path:occupied"
     core, state, pose, target, zone = _observe_core()
     core.obstacle["layer"].candidate_permit = lambda *a, **k: {"ok": False}
     assert not core._observe_backoff_start(10.0, np.array(pose), target)
-    assert state["observe_start_backoffs"][-1]["outcome"] == "precheck_permit" and core.observe_backoff is None
+    assert state["observe_start_backoffs"][-1]["tries"][0]["outcome"] == "precheck_permit" and core.observe_backoff is None
 
 
 def _tracking(core, pose, **fields):
@@ -313,3 +316,26 @@ def test_the_install_tick_goes_through_the_backoff_s_own_tick():
     w.core.observe_backoff_tick = tick
     w.tick(miss)
     assert seen == ["tracking"]
+
+
+def test_a_blocked_way_back_goes_forward_with_the_same_checks():
+    # plan v4 B3 (Isaac survey random_m S2/M2: the hall bound behind the stop, the way back blocked at 0.15 m)
+    core, ms_state, pose, target, zone = _observe_core()
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    fp = core.geometry.unloaded_footprint
+    behind = fp.rear_m + GAP_M + 0.1
+    wall = Rectangle(pose[0] - behind * c, pose[1] - behind * s, 0.2, 1.0, pose[2])
+    core.hooks.grid_kwargs = lambda kind=None, **k: {"pickup_obstacle": wall}
+    assert core._observe_backoff_start(10.0, np.array(pose), target)
+    rec = ms_state["observe_start_backoffs"][-1]
+    assert [t["outcome"] for t in rec["tries"]] == ["blocked", "chosen"] and rec["direction"] == 1
+    assert core.observe_backoff["direction"] == 1 and int(core.trackers["observe"]._directions[0]) == 1
+
+
+def test_the_directional_advice_matches_the_console_s_backoff_advice_backwards():
+    core, state, pose, target, zone = _observe_core()
+    checker, footprint, clearance = core._observe_start_check()
+    start = PlanningPose(*pose)
+    a = pm.straight_start_advice(checker.free, clearance, start, -1, step_m=0.05, limit_m=1.0)
+    b = pm.backoff_advice(checker.free, clearance, start)
+    assert (a["backoff_m"], a["backoff_max_m"]) == (b["backoff_m"], b["backoff_max_m"])

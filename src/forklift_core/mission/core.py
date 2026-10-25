@@ -2525,49 +2525,67 @@ class MissionCore:
         if not checker.free((start.x_m, start.y_m, start.yaw_rad), 0.0):
             rec["outcome"] = "overlap"
             return False
-        advice = pm.backoff_advice(checker.free, clearance, start, step_m=OBSERVE_BACKOFF_STEP_M,
-                                   limit_m=OBSERVE_BACKOFF_LIMIT_M)
-        rec["advice"] = advice
-        if advice.get("backoff_m") is None:
-            rec["outcome"] = "blocked" if "blocked_at_m" in advice else "no_room"
-            return False
-        length = min(float(advice["backoff_m"]) + OBSERVE_BACKOFF_PAD_M, float(advice["backoff_max_m"]),
-                     OBSERVE_BACKOFF_LIMIT_M)
-        rec["length_m"] = length
-        if length < float(advice["backoff_m"]) + esc.END_POSITION_TOL_M - 1e-9:
-            # clipped by the free run behind: the tracker may stop short of the advice by its end tolerance
-            rec["outcome"] = "clipped"
-            return False
-        poses = esc.straight(rear, -1, length)
         layer = obstacle["layer"]
         pconf = layer.permission.config
         speed = float(options.backoff_speed_mps)
         stop_m = float(pconf.stopping.distance_m(speed) + pconf.step_m)
         kappa = float(self.hooks.held_kappa())
         rec["held_kappa"] = kappa
-        if not esc.rectangles_sweep_free(checker, poses):
-            rec["outcome"] = "precheck_sweep"
-            return False
-        ahead = esc.straight(rear, -1, length + stop_m)
         pose_ = tuple(float(v) for v in rear)
-        blocked = layer.check_candidate(ahead, current_pose=pose_, direction=-1, loaded=False).blocked
-        if blocked is not None:
-            rec["outcome"] = f"precheck_path:{blocked}"
+        tries = rec.setdefault("tries", [])
+        chosen = None
+        for direction in (-1, 1):
+            # back first, forward when the way back is refused for any reason (Isaac survey random_m S2/M2: the hall
+            # bound behind, blocked at 0.15 m) -- plan v4 B3; every check below holds for either direction
+            try_ = {"direction": direction}
+            tries.append(try_)
+            advice = pm.straight_start_advice(checker.free, clearance, start, direction, step_m=OBSERVE_BACKOFF_STEP_M,
+                                              limit_m=OBSERVE_BACKOFF_LIMIT_M)
+            try_["advice"] = advice
+            if advice.get("backoff_m") is None:
+                try_["outcome"] = "blocked" if "blocked_at_m" in advice else "no_room"
+                continue
+            length = min(float(advice["backoff_m"]) + OBSERVE_BACKOFF_PAD_M, float(advice["backoff_max_m"]),
+                         OBSERVE_BACKOFF_LIMIT_M)
+            try_["length_m"] = length
+            if length < float(advice["backoff_m"]) + esc.END_POSITION_TOL_M - 1e-9:
+                # clipped by the free run: the tracker may stop short of the advice by its end tolerance
+                try_["outcome"] = "clipped"
+                continue
+            poses = esc.straight(rear, direction, length)
+            if not esc.rectangles_sweep_free(checker, poses):
+                try_["outcome"] = "precheck_sweep"
+                continue
+            ahead = esc.straight(rear, direction, length + stop_m)
+            blocked = layer.check_candidate(ahead, current_pose=pose_, direction=direction, loaded=False).blocked
+            if blocked is not None:
+                try_["outcome"] = f"precheck_path:{blocked}"
+                continue
+            permit = layer.candidate_permit(t, poses, current_pose=pose_, direction=direction, loaded=False,
+                                            curvature_inv_m=0.0, measured_curvature_inv_m=kappa, cap_mps=speed)
+            try_["permit"] = permit
+            if not permit["ok"]:
+                try_["outcome"] = "precheck_permit"
+                continue
+            try_["outcome"] = "chosen"
+            chosen = (direction, length, poses)
+            break
+        if chosen is None:
+            rec["outcome"] = tries[0]["outcome"] if tries[0]["outcome"] == tries[-1]["outcome"] else "+".join(
+                t_["outcome"] for t_ in tries)
+            rec["advice"] = tries[0].get("advice")
             return False
-        permit = layer.candidate_permit(t, poses, current_pose=pose_, direction=-1, loaded=False, curvature_inv_m=0.0,
-                                        measured_curvature_inv_m=kappa, cap_mps=speed)
-        rec["permit"] = permit
-        if not permit["ok"]:
-            rec["outcome"] = "precheck_permit"
-            return False
+        direction, length, poses = chosen
+        rec.update(direction=direction, length_m=length, advice=tries[-1]["advice"])
         leg_tracker = trackers["observe"]
         n = len(poses)
         trackers["observe"] = RearAxlePathTracker(
-            poses, np.full(n, -1, dtype=np.int8), np.zeros(n),
+            poses, np.full(n, direction, dtype=np.int8), np.zeros(n),
             replace(leg_tracker.config, cruise_speed_mps=speed, position_tolerance_m=esc.END_POSITION_TOL_M,
                     yaw_tolerance_rad=esc.END_YAW_TOL_RAD, overshoot_tolerance_m=esc.END_POSITION_TOL_M))
         self.observe_backoff = {"time_s": float(t), "serial": serial, "target": target, "leg_tracker": leg_tracker,
                                 "config": leg_tracker.config, "tracker": trackers["observe"], "stop_m": stop_m,
+                                "direction": direction,
                                 "footprint": footprint, "released": False, "stopping": False, "record": rec}
         self.observe_backoff_used.append(serial)
         ms.phase_started = t
@@ -2592,7 +2610,8 @@ class MissionCore:
         from forklift_core.control.stop_sweep import stop_poses, sweep_margin_m
 
         margin = sweep_margin_m(footprint)
-        if not all(checker.free(p, margin) for p in stop_poses(rear, -1, ob["stop_m"], float(hooks.held_kappa()))):
+        if not all(checker.free(p, margin)
+                   for p in stop_poses(rear, ob["direction"], ob["stop_m"], float(hooks.held_kappa()))):
             # the stop from here, straight on or with the steering held, reaches a rectangle: a hold on this tick
             # (the command assembly), the mission ends on the next
             ob["stopping"] = True
