@@ -36,6 +36,22 @@ def test_the_far_pixel_lag_is_zero_in_a_deterministic_run_and_the_override_kept(
     assert _runner_args(["--deterministic"]).deterministic_overrides == {}
 
 
+def test_a_deterministic_run_takes_the_oracle_masks_instead_of_the_learned_proposer(tmp_path):
+    # plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), the learned proposer reads
+    # RGB; the oracle instance masks come from the segmentation, identical once the frame is synced
+    onnx = tmp_path / "model.onnx"
+    onnx.write_bytes(b"")
+    far = ["--recognition", "far", "--slam-feedback", "slam.sock", "--recognition-proposals", "learned",
+           "--recognition-onnx", str(onnx), "--recognition-tau", "0.3",
+           "--recognition-learned-python", "/usr/bin/python3"]
+    assert _runner_args(far).recognition_proposals == "learned"
+    args = _runner_args(far + ["--deterministic"])
+    assert args.recognition_proposals == "oracle"
+    assert args.deterministic_overrides == {"recognition_proposals": "learned"}
+    oracle = _runner_args(["--recognition", "far", "--slam-feedback", "slam.sock", "--deterministic"])
+    assert oracle.recognition_proposals == "oracle" and oracle.deterministic_overrides == {}
+
+
 def _body(name: str) -> str:
     """The nested function's source, up to the next def at its own indentation or less."""
     m = re.search(rf"\n( *)def {name}\(", SOURCE)

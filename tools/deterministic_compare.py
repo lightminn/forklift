@@ -33,6 +33,9 @@ from pathlib import Path
 import numpy as np
 
 SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt"}
+# Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9) and a deterministic run keeps it
+# off the decision path (the oracle masks replace the learned proposer), so array members holding RGB are left out.
+RGB_MEMBERS = {"rgb", "rgba"}
 WALL_KEY = re.compile(r"(^|_)(wall|mono)(_s)?$|_wall_s$|^wall_s_|^wall_time_s$|^elapsed_s$|^model_ms$|_mono$")
 IDENTITY_KEYS = {"pid", "session_epoch", "token", "request_token", "submitted", "decided", "port", "started"}
 SNAPSHOT = re.compile(r"/snapshots/[^/]+/")
@@ -80,7 +83,7 @@ def _arrays(path: Path) -> dict:
     if path.suffix == ".npy":
         return {"": np.load(path, allow_pickle=False)}
     with np.load(path, allow_pickle=False) as z:
-        return {k: z[k] for k in z.files}
+        return {k: z[k] for k in z.files if k.lower() not in RGB_MEMBERS}
 
 
 def _array_key(a: np.ndarray) -> bytes:

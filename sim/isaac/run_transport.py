@@ -1365,6 +1365,11 @@ def arguments() -> argparse.Namespace:
     if args.deterministic and args.recognition_pixel_lag_steps:
         args.deterministic_overrides["recognition_pixel_lag_steps"] = args.recognition_pixel_lag_steps
         args.recognition_pixel_lag_steps = 0
+    # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
+    # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced).
+    if args.deterministic and getattr(args, "recognition_proposals", "oracle") == "learned":
+        args.deterministic_overrides["recognition_proposals"] = "learned"
+        args.recognition_proposals = "oracle"
     return args
 
 
