@@ -13,7 +13,7 @@
 ## 2. 이미 있는 것과 없는 것
 
 있음(PR #62 S3·L3–L7, main):
-- 런처 `MAP_BUNDLE`·`MAP_START_POSE`(`deploy/console/isaac_live.sbatch` 34–62), 감독자의 세션 단위 묶음 해시(`tools/live_supervisor.py` 25–28), 브리지의 묶음 적재·L4 시작 검사(`slam_map_mismatch`·`slam_map_not_loaded`·`slam_not_localized`), runner 의 묶음 대조(`run_transport.py` 3427–3444)와 조사 격자의 정적 층 적재(4453–4456), 결과 기록·화면의 `map_id`(`mission/results.py`, `console/web/js/ui.js`).
+- 런처 `MAP_BUNDLE`·`MAP_START_POSE`(`deploy/console/isaac_live.sbatch` 34–62), 감독자의 세션 단위 묶음 해시(`tools/live_supervisor.py` 25–28), 브리지의 묶음 적재·L4 시작 검사(`slam_map_mismatch`·`slam_map_not_loaded`·`slam_not_localized`), runner 의 묶음 대조(`run_transport.py` 3459–3480, ① 재계산에서 고친 행)와 조사 격자의 정적 층 적재, 결과 기록·화면의 `map_id`(`mission/results.py`, `console/web/js/ui.js`).
 - 조사 에폭 런처(`deploy/console/slam_survey.sbatch`, SCENE_FILE·CYCLE 지원)와 묶음 작성기·검사(`tools/slam_survey_bundle.py`: finalize·received·nodes·world(V2′)·start·coverage·moving).
 
 없음:
@@ -25,7 +25,21 @@
 
 - **D1 묶음 등록부.** `config/slam_map_bundles.yaml` 에 장면 파일(내용 해시)·오도메트리 모형별로 묶음 폴더·`map_id`·출발 자세를 적는다. 묶음 파일은 ws1 `artifacts/slam_bundles/<장면>_<모형>_<map_id 앞 12>/`. 저장소에는 등록부만 커밋한다(묶음은 큰 이진 파일).
 - **D2 런처 기본.** `isaac_live.sbatch` 가 `SCENE_FILE` 과 `ENCODER_MODEL` 로 등록부를 찾아, 있으면 `MAP_BUNDLE`·`MAP_START_POSE` 를 채운다. 없으면 mapping. `MAP_BUNDLE=none` 은 mapping 을 강제한다(대조 실험·조사 에폭용). 고른 결과를 세션 기록(`supervisor.jsonl`)과 상태 메시지의 `slam.mode` 에 남긴다.
-- **D3 seed 재사용.** 장면 파일·소품·충돌체가 같으면 seed 가 달라도 LiDAR 평면의 세계는 같다. 그래서 묶음 대조에서 seed·`slam_noise_seed` 일치 요구를 "장면 내용 해시(장면 파일 + 생성된 장면 USD + 소품)" 일치로 바꾼다. 잡음 seed 가 다른 위치 추정은 S2 재생에서 이미 했다(지도 실행과 입력 실행의 잡음이 달랐다). 바뀌면 안 되는 것(URDF·LiDAR 설정·장애물 층·충돌체)은 그대로 대조한다.
+- **D3 seed 재사용(장면 파일 배치만).**
+  - 지금의 대조(`slam_map.run_mismatches`)는 다음을 비교한다.
+    - `seed`
+    - `SHARED_ARGUMENTS`(`prism_colliders`·`slam_noise_seed`·`slam_noise_spec`)
+    - `SHARED_INPUTS`(`base_scene`·`forklift_urdf`·`factory_layout`·`lidar`·`obstacle_layer` 의 파일 내용)
+    - 기반 장면 폴더의 USD 해시(`scene_sha256`)
+
+    여기에는 `scene_file` 이 없다(① 재계산에서 발견). 기반 장면이 같으므로 line_m 묶음을 random_m 실행에 써도 지금은 거절되지 않는다.
+  - `--layout scene` 에서 seed 는 장면 기하를 바꾸지 않는다. `make_factory_scenario`·`make_scenario` 의 seed 는 다른 배치에서만 쓰이고, 장면 파일 배치는 파일의 visuals 를 그대로 놓는다. seed 는 잡음(`noise_seed`)에만 쓰인다(`run_transport.py` 2745–2818·3505·4083).
+  - 바꾸는 것:
+    - (a) `SHARED_INPUTS` 에 `scene_file` 을 넣어 내용으로 비교한다.
+    - (b) `--layout scene` 실행에 한해 `seed` 와 `slam_noise_seed` 의 일치를 요구하지 않는다. `slam_noise_spec`(잡음 모형)은 그대로 비교한다.
+    - (c) 공장 홀 배치는 seed 가 소품 배치를 바꾸므로 지금처럼 비교한다.
+  - 잡음 seed 가 다른 위치 추정은 S2 재생에서 이미 했다(지도 실행과 입력 실행의 잡음이 달랐다).
+  - 시험: seed·잡음 seed 만 다른 장면 파일 실행은 통과한다. 장면 파일 내용이 다르면 거절한다. 공장 홀 배치의 seed 차이는 거절한다. `scene_file` 이 없는 옛 묶음은 장면 파일 실행에서 거절한다(재조사 필요).
 - **D4 위치 추정 설정.** 변형 J(`tools/slam_localization_params.py`, 버퍼·chain 3/3, 루프 켬, link 3.0 m, 루프 창 3.0 m·거리 2.0 m). S2 에서 J 두 번이 판정을 채웠다.
 - **D5 묶음 수락 검사와 재조사(총괄 결정 2026-10-26).**
   - V2′(위치 최대 ≤ 0.10 m·방향 최대 ≤ 0.03 rad, 우리 잠정값, PR #62 계획 413 행)는 지도 묶음의 **수락 검사**다. 등록부에는 `slam_survey_bundle.py` 의 검사를 모두 통과한 묶음만 오른다.
