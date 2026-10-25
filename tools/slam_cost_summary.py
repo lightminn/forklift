@@ -11,7 +11,7 @@ unit, so with more than one unit the last is partial and left out of the lines (
 Accuracy: the SLAM pose (the reply's map<-odom composed with the odometry sent) against the record's truth, no
 alignment, position and heading; the growth compares the first and the last complete unit over the record scans both
 hold. Validity (an R0 replay against the live run): within the scans the runner recorded, the replay's keyframes are
-the live bridge's processed ones (same scan ids and stamps -- a missing one fails, a late bridge record after the
+the live bridge's processed ones (same scan ids, stamps to 1 us -- a missing one fails, a late bridge record after the
 runner's last is left out), sent with the runner's own odometry, and the replay's mean cost per tenth of the run
 within 0.7-1.4 of the live one.
 
