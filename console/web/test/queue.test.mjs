@@ -181,8 +181,9 @@ test("a result that arrives before the ack is applied when the ack comes", () =>
   assert.equal(q.items.length, 1);
 });
 
+// (The session's first submit refused not_stopped is plan D5's one exception: queue_start_retry.test.mjs.)
 test("every reject stops; busy and stale also mark the item uncertain; nothing is resubmitted", () => {
-  for (const [reason, uncertain] of [["destination_occupied", false], ["not_stopped", false], ["stale_targets", false],
+  for (const [reason, uncertain] of [["destination_occupied", false], ["stale_targets", false],
     ["no_feedback:rear_axle_speed", false], ["busy", true], ["stale", true]]) {
     const it = item();
     const q = running([it]);

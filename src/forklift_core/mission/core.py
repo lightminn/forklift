@@ -180,6 +180,14 @@ NOT_STOPPED_S = 10.0
 LIFT_RESUME_TOL_M = 0.01
 
 
+def _finite_or_none(value):
+    """A record value: None for a missing or infinite one (the run record is strict JSON)."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
                  paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
@@ -4862,6 +4870,114 @@ class MissionCore:
         warming = slam is not None and not slam_may_drive(slam)
         return SimpleNamespace(releasing=releasing, warming=warming, rear=rear)
 
+    LOW_CLEARANCE_PHASES = ("observe", "approach", "insert", "extract", "transport", "withdraw", "return_home",
+                            "recover_withdraw", "clear_out")
+
+    def low_clearance_tick(self, t: float, rear, kappa: float, requested_speed: float, loaded: bool) -> None:
+        """The low-clearance guard (docs/plans/2026-10-25-low-clearance-guard.md, stage 1): the props below the LiDAR
+        plane along the stop arc of the estimated pose, each check held to the leg's planned clearance the same distance
+        ahead; the cap is applied after the wheel-speed slew in assemble_command. Off (and a record from before the
+        option): nothing is read and no cap is set."""
+        options, state = self.options, self.state
+        if getattr(options, "low_clearance_guard", "off") != "on":
+            return
+        from forklift_core.control.drive_permission import StoppingModel
+        from forklift_core.control.low_clearance import LegClearance, LowClearanceConfig, guard_cap, low_props
+
+        ms, trackers, geometry, obstacle = self.ms, self.trackers, self.geometry, self.obstacle
+        self._low_clearance_cap = None  # (t, cap) -- not in state: state is the run record
+        tracker_ = trackers.get(ms.phase)
+        if ms.phase not in self.LOW_CLEARANCE_PHASES or tracker_ is None:
+            return
+        guard = state.setdefault("low_clearance", {
+            "config": {"margin_m": float(options.low_clearance_margin_m),
+                       "deviation_m": float(options.low_clearance_deviation_m)},
+            "capped_ticks": {}, "zero_ticks": {}, "min_clearance_m": {}, "holds": [], "legs": [],
+        })
+        cache = self.__dict__.setdefault("_low_clearance_legs", {})
+        shape = geometry.loaded_footprint if loaded else options.low_clearance_unloaded_shape
+        key = (id(tracker_), bool(loaded))
+        leg = cache.get(key)
+        if leg is None:
+            poses = tracker_.path_arrays()[0]
+            length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+            slot_from = None
+            if ms.phase == "withdraw":
+                slot_from = 0.0
+            elif ms.phase == "transport" and not (
+                    (obstacle is not None and obstacle.get("backoff", {}).get("phase") == "transport")
+                    or (self.slam is not None and self.slam.get("docking", {}).get("reapproach"))):
+                # the delivery straight is the slot stage's -- only on a tracker that runs to the planned transport's
+                # end (arm_docking's prefix stops before it; Codex round 4 P2-2), never a backoff or an escape
+                # (Codex round 5 P2) nor a docking re-approach (planned on the search props, Codex round 6 P2), which
+                # replace paths["transport"] too
+                # A tracker on the planned transport path, or on its start (arm_docking's prefix, D7's second-round
+                # prefix of the delivery straight): the slot boundary of that path, in its own length (Codex round 7
+                # P2: the second-round prefix lies wholly on the straight).
+                full_ = self.paths.get("transport")
+                full_poses_ = None if full_ is None else np.asarray(getattr(full_, "poses", full_), dtype=float)
+                if full_ is not None and full_ is getattr(self, "_delivery_straight_path", None):
+                    # D7's delivery straight and its second-round prefix: all of it the slot stage, whatever length the
+                    # corrected goal gave it (Codex round 8 P2)
+                    slot_from = 0.0
+                elif full_poses_ is not None and full_poses_.ndim == 2 and len(full_poses_):
+                    full_length_ = float(np.sum(np.hypot(np.diff(full_poses_[:, 0]), np.diff(full_poses_[:, 1]))))
+                    if np.allclose(full_poses_[0], poses[0], atol=1e-6):
+                        slot_from = max(0.0, full_length_ - float(geometry.delivery_straight_m))
+                    elif np.allclose(full_poses_[-1], poses[-1], atol=1e-6):
+                        slot_from = max(0.0, length - float(geometry.delivery_straight_m))
+            plane = float(getattr(geometry, "lidar_plane_m", 1.05))
+            leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
+                               slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)
+            cache.clear()  # one leg at a time: the tracker being followed
+            cache[key] = leg
+            guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m, "slot_from_m": slot_from,
+                                  "min_planned_m": _finite_or_none(float(np.min(leg.c)) if len(leg.c) else None)})
+        cfg = LowClearanceConfig(margin_m=float(options.low_clearance_margin_m),
+                                 deviation_m=float(options.low_clearance_deviation_m))
+        stopping = (obstacle["layer"].permission.config.stopping if obstacle is not None
+                    else StoppingModel(0.15, 1.5, 0.05))
+        tcfg = tracker_.config
+        end_allowance = tcfg.overshoot_tolerance_m if tcfg.overshoot_tolerance_m is not None else tcfg.position_tolerance_m
+        # The arc of the motion the truck has (Codex round 4 P2-1): a truck still rolling stops the way it rolls, at
+        # the largest of the speeds it has or is asked for.
+        truth_speed_fn = getattr(self.hooks, "truth_speed", None)
+        moving = float(truth_speed_fn()) if truth_speed_fn is not None else 0.0
+        commanded = float(state.get("command_speed", 0.0))
+        speed_cap = max(abs(float(requested_speed)), abs(commanded), abs(moving))
+        if abs(moving) > 0.01:
+            direction = 1 if moving > 0 else -1
+        elif abs(commanded) > 1e-6:
+            direction = 1 if commanded > 0 else -1
+        elif requested_speed != 0.0:
+            direction = 1 if requested_speed > 0 else -1
+        else:
+            direction = int(tracker_.leg_ahead()[1]) or 1
+        out = guard_cap(tuple(float(v) for v in rear), float(kappa), direction, speed_cap, shape, leg,
+                        progress_m=tracker_.progress_m(), leg_remaining_m=tracker_.leg_remaining_m(),
+                        end_allowance_m=float(end_allowance), stopping=stopping, config=cfg)
+        from forklift_core.control.low_clearance import shape_clearance
+
+        now_ = shape_clearance(tuple(float(v) for v in rear), shape, leg.props_at(tracker_.progress_m()))
+        low_ = guard["min_clearance_m"]
+        if math.isfinite(now_):
+            low_[ms.phase] = min(low_.get(ms.phase, float(now_)), float(now_))
+        if math.isfinite(out.allowed_mps):
+            self._low_clearance_cap = (t, float(out.allowed_mps))
+            if out.allowed_mps < speed_cap:
+                guard["capped_ticks"][ms.phase] = guard["capped_ticks"].get(ms.phase, 0) + 1
+            if out.allowed_mps == 0.0:
+                guard["zero_ticks"][ms.phase] = guard["zero_ticks"].get(ms.phase, 0) + 1
+                holds = guard["holds"]
+                if not holds or holds[-1]["phase"] != ms.phase or t - holds[-1]["last_s"] > 0.5:
+                    if len(holds) < 50:
+                        holds.append({"since_s": float(t), "last_s": float(t), "phase": ms.phase,
+                                      "lower_bound_m": _finite_or_none(out.lower_bound_m),
+                                      "threshold_m": _finite_or_none(out.threshold_m),
+                                      "clearance_now_m": _finite_or_none(now_)})
+                else:
+                    holds[-1]["last_s"] = float(t)
+
     def assemble_command(self, t: float, dt: float, requested_speed: float, curvature: float, kappa: float,
                          steering_command, estop_holding: bool, obstacle_hold: bool, dwell_hold: bool,
                          cusp_hold: bool, safety_hold: bool) -> SimpleNamespace:
@@ -4874,6 +4990,10 @@ class MissionCore:
         state, obstacle, settings, hooks, options, near = (self.state, self.obstacle, self.settings, self.hooks,
                                                            self.options, self.near)
         drive_geometry, COMMAND_ACCEL_MPS2 = options.drive_geometry, options.command_accel_mps2
+        if getattr(options, "low_clearance_guard", "off") == "on":
+            cap_ = getattr(self, "_low_clearance_cap", None)
+            # the guard's zero cap is a hold: wheels to zero, steering held (Codex round 4 P2-3)
+            obstacle_hold = obstacle_hold or (cap_ is not None and cap_[0] == t and cap_[1] == 0.0)
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
             requested_speed = 0.0
@@ -4908,9 +5028,14 @@ class MissionCore:
             cap = obstacle.get("permission_cap")
             if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
                 wheel_speed = math.copysign(cap[1], wheel_speed)
+            if getattr(options, "low_clearance_guard", "off") == "on":
+                wheel_speed = self._low_clearance_capped(t, wheel_speed)
             if estop_holding or safety_hold:
                 wheel_speed = 0.0
             state["command_speed"] = wheel_speed
+        elif getattr(options, "low_clearance_guard", "off") == "on":
+            # no slew without the obstacle layer: the guard's cap as a step (plan D4)
+            wheel_speed = self._low_clearance_capped(t, wheel_speed)
         drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)
         rate = settings["steering_command_rate_rad_s"] * dt
         steering_command += np.clip(target_steering - steering_command, -rate, rate)
@@ -4921,6 +5046,13 @@ class MissionCore:
             near["commands"].add(t + dt, drive.speed_mps)  # the interval [t, t + dt]
         return SimpleNamespace(drive=drive, steering_command=steering_command, actual_steering=actual_steering,
                                requested_speed=requested_speed)
+
+    def _low_clearance_capped(self, t: float, wheel_speed: float) -> float:
+        """The wheel speed under this tick's low-clearance cap (sign kept; plan D4)."""
+        cap = getattr(self, "_low_clearance_cap", None)
+        if cap is not None and cap[0] == t and abs(wheel_speed) > cap[1]:
+            return math.copysign(cap[1], wheel_speed)
+        return wheel_speed
 
     # --- M-a1 slice 6a: closures moved from run(), statement for statement ---
     def cusp_excluded(self, phase_) -> str | None:
@@ -5191,6 +5323,23 @@ class MissionCore:
         base_ = slam.get("transport_config", trackers["transport"].config)
         return replace(base_, position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
 
+    def reapproach_tracker_config(self):
+        """Leg-failures plan B2 (docs/plans/2026-10-25-leg-failures.md): the D7 re-approach's dry run and its tracker
+        -- the docking stop's, its cruise capped at ``d7_reapproach_cruise_mps`` when a launcher sets one (None: as
+        before). The round-two stop keeps docking_stop_config itself."""
+        base_ = self.docking_stop_config()
+        cap_ = getattr(self.options, "d7_reapproach_cruise_mps", None)
+        return base_ if cap_ is None else replace(base_, cruise_speed_mps=min(base_.cruise_speed_mps, float(cap_)))
+
+    def reapproach_planner_config(self, config):
+        """Leg-failures plan B1: the re-approach plans with its curvature limit capped at
+        ``d7_reapproach_curvature_inv_m`` when a launcher sets one -- a gentler S whose reversal the steering rate
+        follows (None: the config as given)."""
+        cap_ = getattr(self.options, "d7_reapproach_curvature_inv_m", None)
+        if cap_ is None:
+            return config
+        return replace(config, curvature_limit_inv_m=min(config.curvature_limit_inv_m, float(cap_)))
+
     def unaligned_delivery_check(self) -> None:
         """The delivery straight about to be driven with no accepted docking (docs/plans/2026-10-22-slot-anchored-
         neighbours.md 2.3): the runner's hook re-checks it as it was checked before slot anchors -- None, or the
@@ -5243,7 +5392,7 @@ class MissionCore:
         at the line start within the stop's tolerance."""
         time = self.hooks.time_module()  # the runner's time (the recorded Clock proxy when recording)
         bicycle_rollout = self.hooks.bicycle_rollout
-        docking_stop_config = self.docking_stop_config
+        docking_stop_config = self.reapproach_tracker_config  # B2: the tracker install_reapproach puts in
         geometry = self.geometry
         grid_kwargs = self.hooks.grid_kwargs
         grid_world = self.hooks.grid_world
@@ -5260,7 +5409,7 @@ class MissionCore:
             grid_world(slam.get("transport_scenario", scenario)),
             PlanningPose(*(float(v) for v in start_rear)),
             PlanningPose(*(float(v) for v in line)),
-            config if config is not None else planner_config,
+            self.reapproach_planner_config(config if config is not None else planner_config),
             geometry=geometry,
             keep_m=geometry.delivery_straight_m,
             deadline=deadline_ if deadline_ is not None else SearchBudget(determinism.budget(20.0)),
@@ -5282,7 +5431,7 @@ class MissionCore:
         at its end (no arm_docking: a re-approach may end on a reverse curve)."""
         path_record = self.hooks.path_record  # a runner module-level name
         add_path_display = self.hooks.add_path_display
-        docking_stop_config = self.docking_stop_config
+        docking_stop_config = self.reapproach_tracker_config  # B2: the config its dry run was accepted with
         geometry = self.geometry
         ms = self.ms
         obstacle = self.obstacle
@@ -5297,6 +5446,8 @@ class MissionCore:
         state["paths"]["transport"] = path_record(path)
         self.hooks.write_paths()
         add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        # the transport's own settings stay the base of later stops (B2's capped cruise is the re-approach's alone)
+        slam.setdefault("transport_config", trackers["transport"].config)
         trackers["transport"] = RearAxlePathTracker(
             path.poses, path.directions, path.curvatures_inv_m, docking_stop_config()
         )
@@ -5736,6 +5887,7 @@ class MissionCore:
         state.setdefault("paths_replaced", []).append(
             {"leg": "transport", "time_s": t, "by": "delivery_straight", "path": state["paths"].get("transport")})
         paths["transport"] = path
+        self._delivery_straight_path = path  # the low-clearance guard's slot stage, whatever its length (no other use)
         state["paths"]["transport"] = path_record(path)
         trackers["transport"] = RearAxlePathTracker(
             path.poses, path.directions, path.curvatures_inv_m, slam.get("transport_config", trackers["transport"].config)
@@ -6612,35 +6764,44 @@ class MissionCore:
             out.update(ok=True, why="no_layer")
             return out
         strict_ = self._scene_permit_strict(tracker, leg_, uncut)
+        # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
+        zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
-            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_)
+            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
+            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         return out
 
-    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
-        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
-        acting -- the transport's docking straight, the last delivery straight of the tracker permission_acting reads
-        -- so its unknown cells must be verified before it is installed. ``uncut``: the candidate's plan before
-        install's arm_docking, which cuts the tracker back to where the final straight keeps keep_m; the length it
-        cuts (measured, not the nominal keep -- the cut falls on a sample, Codex impl round 5 P2-1) widens the zone.
-        None: the tracker is the installed one, already cut. A return always has the permission."""
+    @staticmethod
+    def _poses_length(poses) -> float:
+        poses = np.asarray(poses, dtype=float)
+        return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+
+    def _scene_zone_start_m(self, tracker, uncut=None) -> float | None:
+        """Leg-failures plan A1 (docs/plans/2026-10-25-leg-failures.md): how far along the candidate tracker the zone
+        the permission does not act on begins -- the transport's docking straight, the last delivery straight of the
+        tracker permission_acting reads. ``uncut``: the candidate's plan before install's arm_docking, which cuts the
+        tracker back to where the final straight keeps keep_m; the length it cuts (measured, not the nominal keep --
+        the cut falls on a sample, Codex impl round 5 P2-1) widens the zone. None: the tracker is the installed one,
+        already cut. A return has no such zone (None)."""
         if self.ms.phase != "transport":
-            return False
-
-        def length(poses):
-            poses = np.asarray(poses, dtype=float)
-            return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
-
+            return None
         cut_ = 0.0
         docking_ = (self.slam or {}).get("docking") or {}
         if uncut is not None and docking_.get("status") in ("pending", "armed"):
             prefix_ = self.hooks.final_straight_prefix(uncut, docking_.get("keep_m", self.geometry.delivery_straight_m))
             if prefix_ is not None:
-                cut_ = length(uncut.poses) - length(prefix_.poses)
-        zone_ = cut_ + float(self.geometry.delivery_straight_m)
-        return float(tracker.remaining_to_goal_m()) - length(leg) <= zone_ + 1e-6
+                cut_ = self._poses_length(uncut.poses) - self._poses_length(prefix_.poses)
+        return float(tracker.remaining_to_goal_m()) - (cut_ + float(self.geometry.delivery_straight_m))
+
+    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
+        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
+        acting, so its cells there must be verified before it is installed -- the leg's length reaching the zone start
+        (``_scene_zone_start_m``). A return always has the permission."""
+        zone_ = self._scene_zone_start_m(tracker, uncut)
+        return zone_ is not None and self._poses_length(leg) >= zone_ - 1e-6
 
     def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's world this tick (plan 2.1)."""

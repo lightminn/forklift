@@ -3,7 +3,9 @@ Python, for the live probe (CT-1 PR 4: continuous runs under the queue's own pol
 line port of the decisions the probe needs: fixed items and the CT-2 auto item (its pick_request / pick, picking and
 picked), resume/stop, the welcome, disconnect and lease events, the
 states (silence, feedback loss, STOPPED / TELEOP, a safety preempt, a mission not ours, paused / cancelling), the
-results, the submit answers, the timer and the next submit. Times are milliseconds, as in the JS; the stop reasons
+results, the submit answers, the timer and the next submit. Plan D5's one exception is ported too (the session's first submit refused not_stopped goes out once more after a
+1 s stand: user decision 2026-10-25, feat/queue-start-resubmit 55b3ab81, f850942d and e6d8b7fd; the port has no item
+remove / move / clear, so queue.js's #retryFront has no caller here -- next() checks the front as the JS does). Times are milliseconds, as in the JS; the stop reasons
 are the JS strings, so tests/unit/tools/test_mission_queue_port.py can run both on the same events."""
 
 from __future__ import annotations
@@ -17,6 +19,10 @@ FINISHED_KEEP = 50
 PICK_DEADLINE_MS = 5000
 PREEMPT = {"preempt", "safety_preempt"}
 UNSURE_REJECTS = {"busy", "stale"}
+# Plan D5's one exception (queue.js START_RETRY_STAND_MS): the session's first queue submit refused not_stopped is
+# submitted again once, the same item, after the truck has stood this long in a row (PAUSED, stop confirmed, feedback
+# valid, on the page's clock like the other waits)
+START_RETRY_STAND_MS = 1000
 KINDS = {"fixed", "auto"}
 # console/web/js/results.js ACTIVE
 ACTIVE = ["accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering"]
@@ -71,6 +77,13 @@ class MissionQueue:
         self.finished: list = []
         self.counts = {"done": 0, "failed": 0, "cancelled": 0}
         self.epoch = None
+        self.submits_this_epoch = 0  # the queue's own submits in this session (the first one may be resubmitted once)
+        # {item_id, pallet_id, destination_id, stand_since, control_gen}: the one resubmit waiting for its stand (plan
+        # D5 exception) -- the refused submit's own pallet and destination, so an auto item does not ask for a new pick
+        self.start_retry: dict | None = None
+        self.start_retry_used = False  # spent for this session
+        self.mission_seen_this_epoch = False  # a mission (any, a manual one too) seen in this session: past 'the start'
+        self.last_control_gen = None
         self.last_state_at = None
         self.wait_since = None
         self.feedback_lost_since = None
@@ -117,6 +130,9 @@ class MissionQueue:
         if self.phase == "submitting":
             forget = (self.current or {}).get("request_id")
             self._drop_current_as_uncertain()
+        if self.phase == "start_retry":  # the resubmit is not made: nothing went out
+            self.phase = "waiting"
+            self.start_retry = None
         if self.run == "running":
             self.run, self.stop_reason = "stopped", reason
             self.stops.append((reason, now_ms))
@@ -134,6 +150,11 @@ class MissionQueue:
             self.last_result_at = None
             self.last_pick = None
             self.last_pick_blocked = None
+        if epoch != self.epoch:  # a session of its own: its first submit may be resubmitted once again
+            self.submits_this_epoch = 0
+            self.start_retry_used = False
+            self.mission_seen_this_epoch = False
+            self.last_control_gen = None
         self.epoch = epoch
         self.last_state_at = None
         return out
@@ -150,6 +171,14 @@ class MissionQueue:
         if self.run == "running" and ref is not None and now_ms - ref > SILENCE_MS:
             out = self.stop("상태 수신 끊김", now_ms)
         self.last_state_at = now_ms
+        if state is not None and (state.get("mission") or {}).get("status") in ACTIVE:
+            self._mission_seen(now_ms)
+        gen = (state or {}).get("control_gen")
+        # JS Number.isInteger: an integral float (5.0) counts, a bool does not (Codex port round 2 P3)
+        gen = gen if (isinstance(gen, int) and not isinstance(gen, bool)) or (
+            isinstance(gen, float) and gen.is_integer()) else None
+        if gen is not None:
+            self.last_control_gen = gen
         lost = self._feedback_lost(now_ms)
         if state is not None and state.get("feedback_ok") is False:
             if self.feedback_lost_since is None:
@@ -168,6 +197,14 @@ class MissionQueue:
             return self.stop("안전 선점 정지", now_ms)
         if self._feedback_lost(now_ms):
             return self.stop("차량 피드백 없음", now_ms)
+        if self.phase == "start_retry":  # the stand counted in a row; a break starts it over
+            # a STOP and a rearm between two states shows only as a new control generation (Codex start-retry r1)
+            if gen is not None and self.start_retry["control_gen"] is not None and gen != self.start_retry["control_gen"]:
+                return self.stop("시작 직후 재제출 취소: 제어 세대가 바뀜", now_ms)
+            standing = (state.get("mode") == "PAUSED" and state.get("stopped_confirmed") is True
+                        and state.get("feedback_ok") is not False)
+            since = self.start_retry["stand_since"] if self.start_retry["stand_since"] is not None else now_ms
+            self.start_retry["stand_since"] = since if standing else None
         mi = state.get("mission")
         if mi and mi.get("status") in ACTIVE:
             if not self._is_ours(mi):
@@ -178,6 +215,8 @@ class MissionQueue:
 
     def on_result(self, result, now_ms) -> None:
         mid = (result or {}).get("mission_id")
+        if mid:
+            self._mission_seen(now_ms)  # the results book is this session's (contract 5.2)
         if not mid or mid in self.applied:
             return
         maybe = next((x for x in self.items if x.get("uncertain") and (x.get("maybe") or {}).get("mission_id") == mid
@@ -221,6 +260,19 @@ class MissionQueue:
             return {}
         reason = (answer or {}).get("reason") or "unknown"
         item = next((x for x in self.items if x["item_id"] == c["item_id"]), None)
+        if (reason == "not_stopped" and self.submits_this_epoch == 1 and not self.start_retry_used and item
+                and "seen" not in c and not self.mission_seen_this_epoch):
+            # Plan D5's one exception: the truck was still settling right after the start (no mission seen in this
+            # session, none taken for this submit before the answer); the same pallet and destination once more after
+            # a stand
+            self.start_retry_used = True
+            self.start_retry = {"item_id": c["item_id"], "pallet_id": c.get("pallet_id"),
+                                "destination_id": c.get("destination_id"), "stand_since": None,
+                                "control_gen": self.last_control_gen}
+            self.current = None
+            self.phase = "start_retry"
+            self.early.clear()
+            return {}
         if item and reason in UNSURE_REJECTS:
             item["uncertain"] = True
             if item.get("kind") == "auto":  # what may have gone out, kept on the mark (Codex CT-2 r1)
@@ -294,6 +346,22 @@ class MissionQueue:
             return None
         if self.last_result_at is not None and now_ms - self.last_result_at < SETTLE_MS:
             return None
+        if self.phase == "start_retry":
+            if front["item_id"] != self.start_retry["item_id"]:
+                self.stop("시작 직후 재제출 취소: 맨 앞 항목이 바뀜", now_ms)
+                return None
+            since = self.start_retry["stand_since"]
+            if since is None or now_ms - since < START_RETRY_STAND_MS:
+                return None
+            again = self.start_retry
+            self.phase = "waiting"
+            self.start_retry = None
+            r = resolve_item({"kind": "fixed", "pallet_id": again["pallet_id"], "destination_id": again["destination_id"]},
+                             ctx["targets"], st)
+            if not r["ok"]:
+                self.stop(f"대상 확인 실패: {r['reason']}", now_ms)
+                return None
+            return self._submit(front, r["pallet_id"], r["destination_id"], ctx, new_id)  # an auto item too: no pick
         if front.get("kind") == "auto":
             return self._next_auto(front, ctx, now_ms, new_id)
         r = resolve_item(front, ctx["targets"], st)
@@ -310,6 +378,7 @@ class MissionQueue:
                         "epoch": self.epoch, "pallet_id": pallet_id, "destination_id": destination_id}
         self.phase = "submitting"
         self.early.clear()
+        self.submits_this_epoch += 1
         return {"submit": submit}
 
     def _next_auto(self, front, ctx, now_ms, new_id):
@@ -365,6 +434,15 @@ class MissionQueue:
         self.pick, self.held, self.pick_asks = None, None, 0
 
     # --- internals --------------------------------------------------------------------------------------------
+    def _mission_seen(self, now_ms=None) -> None:
+        """A mission seen in this session (queue.js #missionSeen, e6d8b7fd): a resubmit waiting for 'just after the
+        start' is over."""
+        if self.mission_seen_this_epoch:
+            return
+        self.mission_seen_this_epoch = True
+        if self.phase == "start_retry":
+            self.stop("시작 직후 재제출 취소: 미션이 보임", now_ms)
+
     def _feedback_lost(self, now_ms) -> bool:
         return self.feedback_lost_since is not None and now_ms - self.feedback_lost_since >= FEEDBACK_LOST_MS
 
@@ -450,4 +528,4 @@ class MissionQueue:
                 self.stop(str(outcome), now_ms)
 
 
-__all__ = ["MissionQueue", "PICK_DEADLINE_MS", "new_item", "resolve_item"]
+__all__ = ["MissionQueue", "PICK_DEADLINE_MS", "START_RETRY_STAND_MS", "new_item", "resolve_item"]
