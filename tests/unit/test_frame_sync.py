@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "sim/isaac"))
 
-from frame_sync import FrameSync  # noqa: E402
+from frame_sync import FrameSync, rgba_of  # noqa: E402
 
 from forklift_core import determinism  # noqa: E402
 
@@ -69,3 +69,32 @@ def test_off_it_does_nothing():
     sync = FrameSync(cap=20)
     assert sync.sync(cam, cam.render, 5.0) == 0
     assert cam.get_current_frame()["rendering_time"] < 5.0
+
+
+class RgbCamera:
+    """The current frame's rgba (one snapshot with its rendering_time) and a direct getter that reads the annotator
+    again -- which, the 2026-10-25 probe found, differs between processes even after the sync."""
+
+    def get_current_frame(self):
+        return {"rendering_time": 1.0, "rgba": "frame-rgba"}
+
+    def get_rgba(self):
+        return "direct-rgba"
+
+
+def test_a_deterministic_run_reads_rgb_from_the_frame_snapshot():
+    assert rgba_of(RgbCamera()) == "frame-rgba"
+
+
+def test_off_it_reads_the_direct_getter_as_before():
+    determinism.configure(False)
+    assert rgba_of(RgbCamera()) == "direct-rgba"
+
+
+def test_a_frame_without_rgba_ends_the_run():
+    class NoRgba(RgbCamera):
+        def get_current_frame(self):
+            return {"rendering_time": 1.0}
+
+    with pytest.raises(determinism.DeterministicBroken, match="rgba"):
+        rgba_of(NoRgba())

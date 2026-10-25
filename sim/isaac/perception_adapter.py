@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core import determinism
 from forklift_core._validation import _finite_scalar, _real_array
 from forklift_core.geometry import RigidTransform
 from forklift_core.perception.pocket_observation import PocketObservation
@@ -291,6 +292,20 @@ class CaptureState:
     # The accepted frame's instance ids when a semantic reader is given (Isaac recognition far capture);
     # None otherwise.
     instance_ids: np.ndarray | None = None
+
+
+def _rgba_of(camera):
+    """The capture's RGB(A): the direct getter as before, or in a deterministic run the current frame's own ``rgba``
+    (the direct getter's RGB differs between processes even after the frame sync -- deterministic-run plan D1,
+    2026-10-25 probe; ``frame_sync.rgba_of`` is the runner's copy of this rule)."""
+    if not determinism.enabled():
+        return camera.get_rgba()
+    frame = camera.get_current_frame()
+    rgba = frame.get("rgba") if isinstance(frame, dict) else None
+    if rgba is None or not hasattr(rgba, "__len__") or len(rgba) == 0:
+        determinism.mark("frame_sync:no_rgba")
+        raise determinism.DeterministicBroken("frame_sync: the current frame holds no rgba")
+    return rgba
 
 
 class SensorCapture:
@@ -631,7 +646,7 @@ def capture_scene_steps(
             if step_steps is not None:
                 yield from step_steps()
             # Own both buffers: Isaac/fakes may mutate the same arrays on the next step.
-            rgba = np.array(camera.get_rgba(), copy=True)
+            rgba = np.array(_rgba_of(camera), copy=True)  # the frame's own rgba in a deterministic run
             raw_depth = np.array(camera.get_depth(), copy=True)
             if raw_depth.ndim and raw_depth.shape[-1] == 1:
                 raw_depth = np.squeeze(raw_depth, axis=-1)
