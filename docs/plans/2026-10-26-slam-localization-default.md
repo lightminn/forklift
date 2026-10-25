@@ -41,7 +41,15 @@
 
 ## 5. 조사 결과
 
-(잡 11393·11394 뒤에 적는다.)
+**첫 제출(11393·11394)은 무효다.** `slam_survey.sbatch` 가 env 파일에 `SCENE_FILE` 을 빈 값으로 써서 runner 가 공장 홀에서 돌았다. 그래서 P-1→D-1 하나만 완료했고 P-2·P-3 는 `invalid` 로 거절됐다. 11394 는 대기 중에 취소했다. 런처는 4706f30d 에서 고쳤다(live 런처와 같은 줄로 `SCENE_FILE` 을 넘기고, 시험을 붙였다).
+
+**재제출(ws1 `test_runs/live/slam_survey_ct2b`, 스냅숏 survey_4706f30d, 잡 11436–11439).** line_m·random_m 각각 두 설정으로 조사한다.
+- S: `slam_toolbox_isaac_survey.yaml` 그대로(완화 전 루프 탐색 3.0/8.0/0.05/0.03).
+- M: `slam_toolbox_isaac_survey_mitigated.yaml`(sha256 `590d1d449ee89a7e7ac4d70358edbb290805d990e3138645d038b79b66e46569`). S 에서 루프 탐색 네 값만 slam_link 완화값(1.5/4.0/0.10/0.05)으로 바꿨다. 파일은 실행한 것과 바이트 단위로 같게 커밋했다. 머리말 주석은 S 에서 물려받은 문구라 값과 맞지 않는다. survey 에 완화를 넣기로 하면 이 파일이 정본이 되고, 그때 머리말을 고친다(매개변수는 그대로).
+- 순환은 CT-2 미션 한 번(line_m P-1:D-1,P-2:D-2,P-3:D-3 / random_m P-4:D-1,P-5:D-2,P-3:D-3)이고 team-spec 오도메트리, seed 0 이다.
+- coverage 판정 영역(`config/slam_survey_tour.yaml`)은 공장 홀 통로 전용이다. CT-2 장면에서는 같은 장면 CT-2 실행(`ct2_624d0616_fixed_line_m_s3`·`ct2_07ca86aa_fixed_random_m_s3`)의 운행 경로를 조사 노드가 덮는지(`reference_path`)로 판정한다.
+
+(결과는 잡이 끝난 뒤 적는다.)
 
 ## 6. 남는 위험
 
