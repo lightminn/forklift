@@ -9,14 +9,15 @@
 
 ### 사전 등록 조건은 채우지 못했다
 
-재판정 문서(`docs/validation/2026-10-23-joint-angle-odometry-rejudge.md` 3 절)의 승격 조건 1–4 를 PR #132(`docs/validation/2026-10-25-joint-angle-promotion-failures.md` 3 절)에서 판정했다. 결과는 조건 1·2 불충족, 3 미판정, 4 충족이다. **이 결정은 조건을 바꿔 통과시킨 것이 아니다.** 조건은 그대로 두고, 근거를 따져 총괄이 결정했다.
+재판정 문서(`docs/validation/2026-10-23-joint-angle-odometry-rejudge.md` 3 절)의 승격 조건 1–4 를 PR #132(`docs/validation/2026-10-25-joint-angle-promotion-failures.md` 3 절)에서 판정했다. 결과는 조건 1·2 불충족, 3 미판정, 4 충족이다.
 
-조건 2·3 은 표본으로 가를 수 없다는 것이 드러났다.
-- Isaac 은 같은 seed 라도 결정적이지 않다.
-  - 같은 seed 반복에서 실패가 팔을 옮겨 다녔다. PR #127 에서 team-spec 이 실패한 seed 를 다시 돌리면 team-spec 이 완주하고 reported 가 실패했다.
-  - 그래서 "team-spec 에만 있는 유형"(조건 2)은 표본을 늘려도 빈도만 알려 줄 뿐이다.
-  - 조건 3(오도메트리 조합이 그 기전을 더 자주 부르는가)은 결정 모드가 있어야 가를 수 있다.
-- 조건 1 은 원래 기준(유효 수 같음)으로 불충족이다. 공통 42 쌍의 보조 분석에서는 team-spec 이 뚜렷이 작다(아래).
+**이 결정은 사전 조건을 채우지 못한 상태에서 총괄이 근거를 따져 내린 예외 결정이다.** 조건은 바꾸지도, 폐기하지도 않았다. 판정 결과(불충족·미판정)도 그대로 남는다.
+
+- 조건 1·2 는 이번 자료로 채우지 못했고, 조건 3 은 이번 자료로 판정하지 못했다.
+  - Isaac 이 같은 seed 에서도 결정적이지 않아, 실패가 반복마다 팔을 옮겨 다녔다. 그래서 개별 실패의 반사실(같은 조건에서 오도메트리만 바꾸면 어떻게 되는가)은 재현할 수 없다.
+  - 실패 빈도나 평균 효과의 비교(조건 2)는 더 큰 무작위 배정 표본으로 할 수 있지만, 하지 않았다. 조건 3 은 결정 모드나 쌍 궤적 대조가 필요하다.
+  - 조건 1 은 원래 기준(유효 수 같음)으로 불충족이다. 공통 42 쌍의 보조 분석에서는 team-spec 이 작다. 이것은 보조 분석이지 요건 충족이 아니다.
+- 총괄은 이 불확실성을 받아들이고 아래 근거로 결정했다.
 
 ### 근거
 
@@ -26,7 +27,7 @@
   - 실차는 각도 엔코더를 단다. 뒤바퀴에 MT6701(4,096 계수), 조향에 KTH7801 이다. team-spec 이 그 부품을 모형으로 삼은 것이다.
 - **근접 구간(약 2.5 m, 14 s)의 오도메트리 앞뒤 오차**(같은 문서):
   - reported 63 실행 148 미션: −21.9 ~ +25.1 mm.
-  - team-spec 5 실행 14 미션: +1.0 ~ +2.1 mm(표본의 기술 통계).
+  - team-spec 5 실행 14 미션: +1.0 ~ +2.1 mm. 표본이 reported 의 10 분의 1 이라 이 범위는 기술 통계일 뿐이고, team-spec 의 꼬리는 아직 관측되지 않았을 수 있다.
   - 과삽입 금지 접촉 두 건은 둘 다 reported 다(오도메트리 −21.9 / −20.5 mm).
 - **hold 드리프트**(PR #132, 공통 42 쌍): |중앙값| 1.40 대 3.92 mm, 최대 3.32 대 19.76 mm.
 - **삽입 깊이 Δ**(PR #132): team-spec −0.8 ~ +6.7 mm, reported 최대 +23.4 mm.
@@ -45,7 +46,7 @@
 | `deploy/console/slam_survey.sbatch` | 같음 | 같게 바꿈 |
 | `deploy/riibotics/riib_scene.sbatch` | 엔코더 인자 없음(러너 기본 reported), 층은 NOISE 로만 | `ENCODER_MODEL`(기본 team_spec_quantized)을 넘기고, 층을 NOISE × 모형으로 고른다 |
 | `config/obstacle_layer_single_a2_team_spec.yaml` | 없음 | 새로 둔다: `obstacle_layer_single_a2.yaml` 에 team-spec 나이 표(`obstacle_odometry_age_team_spec.json`) |
-| ws1 `test_runs/bd_isaac/bd.sbatch` (저장소 밖) | 기본 reported | 머지 뒤 기본 team_spec_quantized |
+| ws1 `test_runs/bd_isaac/bd.sbatch` (저장소 밖, 유일한 bd 사본 — `jao3/bd.sbatch` 는 이제 없다) | 기본 reported | 머지 뒤 기본 team_spec_quantized |
 | ws1 `test_runs/live/ct1_*.sbatch` (저장소 밖) | `isaac_live.sbatch` 를 부름 | 바꿀 것 없음. 스냅숏의 런처 기본을 따른다 |
 | 러너 `--encoder-model` 기본 | reported | **그대로 둔다**(아래) |
 
@@ -67,20 +68,28 @@ riib_scene 의 층 선택:
 
 ## 3. 섞지 않을 것
 
+- 실행마다 `meta.json` 의 `encoder_model` 에 모형이 남는다. 집계 도구는 이 값으로 나눈다(`tools/p0a_measure.py` 는 모형이 다른 실행을 섞으면 거절한다).
+- 새 기본으로 낸 결과를 판정하려면 같은 모형의 기준선을 새로 잰다(비교의 두 팔은 같은 모형). 기존 reported 기준선과의 직접 비교는 하지 않는다.
 - reported 로 잰 기준선과 비교는 그대로 reported 기준선이다(게이트 f_p2b, CT-1·CT-2 V3/V4, 리보틱스 장면 결과 등). 새 기본으로 낸 결과와 한 표에 섞지 않는다. 비교의 두 팔은 같은 모형이어야 한다.
 - 진행 중인 배치는 스냅숏 사본으로 돌아서 머지의 영향을 받지 않는다(두 세션 확인).
   - sw-연속이송-재관측: V4 hold 묶음 11205·11206, `lf_5d280e80`. 후속도 같은 스냅숏으로 낸다.
   - v-g2 조사 잡 재개: rcf 11088·11089, rcq 11090·11091, `rc_fdf0e789`. 추가가 필요하면 새 스냅숏에서 두 팔을 다시 같은 시간대에 낸다.
+- riib `MODE=truth` 도 나이 표가 바뀐다(허가층이 나이 표를 쓴다). 이전 truth 결과와 같은 기준선으로 보지 않는다.
+- **survey 지도 번들은 그것을 만든 층에 묶인다.** 지도 계약이 장애물 층 해시도 비교하므로, reported 층으로 만든 번들(ws1 `test_runs/live/s2_survey/r6`·`r7`, `live/s5_v5*.sbatch` 가 씀)은 새 기본(team-spec 층)으로 쓰면 러너가 `slam_map_mismatch` 로 시작을 거절한다(Codex 재현).
+  - 옛 번들을 쓰는 실행은 `ENCODER_MODEL=reported` 를 명시한다.
+  - team-spec 으로 쓰려면 `slam_survey.sbatch`(새 기본)로 다시 survey 해 새 번들을 만든다.
+  - 머지 공지에 넣는다.
 - 재생 게이트 29 건은 기록의 인자로 돈다. 바뀌지 않으므로 f_p2b 절차(게이트 기준 교체)는 필요 없다. 머지 전 게이트로 확인한다.
 
 ## 4. 검증
 
-- 런처 DRY_RUN 으로 모형·층 조합 넷(riib NOISE × 모형)과 isaac_live·slam_survey 기본을 확인하고, 시험으로 고정한다(`tests/unit/tools/test_riib_scene_launcher.py` 등).
+- riib 은 DRY_RUN 으로 MODE × NOISE × 모형 조합을 러너 파서까지 통과시키는 시험으로 고정한다(`tests/unit/tools/test_riib_scene_launcher.py`). isaac_live·slam_survey 에는 DRY_RUN 이 없으므로, 기본·거절·층 선택을 소스 시험으로 고정하고(`test_live_supervisor.py`, `test_slam_survey_bundle.py`) Isaac 연기 시험으로 실제 기동을 본다.
 - 새 층 파일과 a2 층이 나이 표를 빼고 같은지 확인한다(시험).
 - ws1 전체 pytest, 재생 게이트 29/29.
 - Isaac 연기 시험(묶음):
   - isaac_live 기본(team-spec)으로 CT-1 queue line_m 한 세션.
   - riib_scene NOISE=a2 기본으로 한 실행.
+  - slam_survey 기본(team-spec)으로 새 번들을 만들고, 그 번들로 isaac_live localization 한 세션(`MAP_BUNDLE`).
   - 나이 표 VALID, 미션이 도는지 본다. 성능 비교가 아니라 배선 확인이다.
 
 ## 5. 머지 뒤
@@ -91,4 +100,15 @@ riib_scene 의 층 선택:
 
 ## 6. 자체 검토·검토 기록
 
-(Codex·agy 검토 뒤 적는다.)
+- ① 직접 재계산: 근거 수치는 과삽입 분석(`ins_tail/split.json`)과 PR #132 표에서 다시 옮겼다. 런처·층·나이 표 조합은 시험으로 확인했다.
+- ② Codex 1 차(P1 없음, P2 2·P3 2):
+  - 러너 기본 유지에 찬성했다. 세 런처의 MODE × NOISE × 모형 조합 전부가 파서와 `age_table_problem` 을 통과했고, 재생·근접 계약에 영향 없음도 확인됐다.
+  - P2: survey 번들의 층 해시 → 3 절에 절차를 넣었다.
+  - P2: "표본으로 판정 불가" 단정 → 1 절 서술을 "이번 자료로 판정 못 함, 불확실성을 받아들인 예외 결정"으로 좁혔다.
+  - P3: DRY_RUN 없음 → 검증 방법을 고쳤다. P3: README → 고쳤다. jao3 bd 사본 → ws1 에 없음.
+- ③ agy 독립 검토(Gemini 3.8 Flash, 1·2 를 보지 않음):
+  - "조건을 바꾼 것이 아니다" 는 방어처럼 읽힌다 → 예외 결정이라고 바로 적었다.
+  - 표본 크기 차(14 대 148)와 미관측 꼬리 → 1 절에 적었다.
+  - 결과에 모형 태그가 있는지 → `meta.json` 의 `encoder_model` 과 집계 도구의 거절을 3 절에 적었다.
+  - 새 기본의 기준선 → 같은 모형으로 새로 잰다고 적었다.
+  - 반영하지 않은 것: 러너 기본도 바꾸라는 취지 → 기록 계약과 SLAM 없는 실행 때문에 두고, 도움말·지침에 적었다.
