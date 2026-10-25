@@ -5035,8 +5035,10 @@ class MissionCore:
                 wheel_speed = math.copysign(cap[1], wheel_speed)
             if getattr(options, "low_clearance_guard", "off") == "on":
                 wheel_speed = self._low_clearance_capped(t, wheel_speed)
-            if estop_holding or safety_hold or escape_stop_:
+            if estop_holding or safety_hold:
                 wheel_speed = 0.0
+            if escape_stop_:
+                wheel_speed = 0.0  # a released escape's guard stopped it: the same step as the e-stop's
             state["command_speed"] = wheel_speed
         elif getattr(options, "low_clearance_guard", "off") == "on":
             # no slew without the obstacle layer: the guard's cap as a step (plan D4)
