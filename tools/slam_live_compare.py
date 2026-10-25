@@ -55,6 +55,33 @@ def _yaw_err(a, b):
     return abs(math.remainder(a - b, 2 * math.pi))
 
 
+def _finite(values, n) -> bool:
+    try:
+        return values is not None and len(values) == n and all(math.isfinite(float(v)) for v in values)
+    except (TypeError, ValueError):
+        return False
+
+
+def record_problems(run: RunData) -> list[str]:
+    """What is missing or not finite in the raw samples, before any filter could drop it (Codex round 2): every
+    processed keyframe's stamp, bridge time, correction, odometry and truth, and every control row."""
+    out = []
+    for r in run.records:
+        if r.get("status") != "processed":
+            continue
+        bad = [k for k, ok in (("stamp_s", _finite([r.get("stamp_s")], 1)),
+                               ("slam_wall_s", _finite([r.get("slam_wall_s")], 1)),
+                               ("map_from_odom", _finite(r.get("map_from_odom"), 3)),
+                               ("odom_base", _finite(r.get("odom_base"), 3)),
+                               ("truth_base", _finite(r.get("truth_base"), 3))) if not ok]
+        if bad:
+            out.append(f"keyframe {r.get('scan_id')}: {', '.join(bad)} missing or not finite")
+    bad_rows = [i for i, row in enumerate(run.control) if not _finite(row, 7)]
+    if bad_rows:
+        out.append(f"{len(bad_rows)} control rows missing a value or not finite (first {bad_rows[0]})")
+    return out
+
+
 def _processed(run: RunData, t0=None, t1=None) -> list:
     return [r for r in run.records if r.get("status") == "processed" and r.get("stamp_s") is not None
             and (t0 is None or r["stamp_s"] >= t0) and (t1 is None or r["stamp_s"] <= t1)]
@@ -154,7 +181,7 @@ COMPARED = (("applied", "position_median_m", "applied position median"), ("appli
 
 
 def verdict(l_run: RunData, r_run: RunData) -> dict:
-    failed = []
+    failed = [f"L record: {p}" for p in record_problems(l_run)[:5]] + [f"R record: {p}" for p in record_problems(r_run)[:5]]
     whole = metrics(l_run)
     if not whole["keyframes_timed"] or not whole["keyframe_max_s"] < KEYFRAME_MAX_S:
         failed.append(f"L keyframe max {whole['keyframe_max_s']} s (< {KEYFRAME_MAX_S} s; every keyframe timed: "

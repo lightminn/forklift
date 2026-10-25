@@ -133,3 +133,22 @@ def test_the_applied_delay_is_reported():
         r["applied_tick_s"] = r["stamp_s"] + 0.25
     d = cmp.metrics(run)["applied_delay_s"]
     assert d["median"] == pytest.approx(0.25) and d["max"] == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize("damage", ["no_correction", "no_truth", "no_stamp", "control_time_nan"])
+def test_a_damaged_raw_sample_fails_before_any_filtering(damage):
+    # Codex implementation review round 2 P2: samples dropped by the filters passed as if they were not there
+    l_run = _run(dx=0.02)
+    r = l_run.records[100]
+    if damage == "no_correction":
+        r["map_from_odom"] = None
+    elif damage == "no_truth":
+        r["truth_base"] = None
+    elif damage == "no_stamp":
+        r["stamp_s"], r["slam_wall_s"] = None, 2.0
+    else:
+        l_run.control[500][0] = float("nan")
+        l_run.control[500][1] += 0.2
+    out = cmp.verdict(l_run, _run(dx=0.04))
+    assert not out["ok"] and "L record" in " ".join(out["failed"])
+    assert cmp.verdict(_run(dx=0.02), l_run)["ok"] is False  # the same damage on R's side

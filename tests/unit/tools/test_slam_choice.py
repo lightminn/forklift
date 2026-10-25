@@ -27,7 +27,7 @@ def _registry(tmp_path):
     scene.write_text(json.dumps({"name": "line_m"}))
     manifest = {"map_id": "a" * 64, "inputs": {"scene_file": {"path": scene.name, "sha256": reg.sha256(scene)}},
                 "run": {"arguments": {"layout": "scene", "encoder_model": "team_spec_quantized"}}}
-    row = reg.entry(manifest, {"ok": True, "world": {"ok": True, "position_max_m": 0.09, "yaw_max_rad": 0.006}},
+    row = reg.entry(manifest, {"ok": True, "map_id": "a" * 64, "world": {"ok": True, "position_max_m": 0.09, "yaw_max_rad": 0.006}},
                     folder="line_m_tsq_aaaaaaaaaaaa", start=[1.5, -2.0, 0.25], name="line_m")
     book = tmp_path / "bundles.yaml"
     reg.write(book, reg.put({"bundles": []}, row))

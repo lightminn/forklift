@@ -42,7 +42,7 @@ def start_pose(base_pose_row) -> list[float]:
 def entry(manifest: dict, report: dict, *, folder: str, start, name: str) -> dict:
     """The registry row of an accepted survey bundle (ValueError when the survey was not accepted or has no scene)."""
     world = report.get("world") or {}
-    if report.get("map_id") is not None and report["map_id"] != manifest.get("map_id"):
+    if not report.get("map_id") or report["map_id"] != manifest.get("map_id"):  # the writer always records it
         raise ValueError(f"{name}: the report's map_id {str(report['map_id'])[:12]} is not the bundle's "
                          f"{str(manifest.get('map_id'))[:12]}")
     if not (report.get("ok") is True and world.get("ok") is True):

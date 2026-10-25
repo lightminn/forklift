@@ -15,8 +15,8 @@ def _manifest(scene_hash="s" * 64, model="team_spec_quantized", map_id="a" * 64)
             "run": {"arguments": {"layout": "scene", "encoder_model": model}}}
 
 
-def _report(ok=True, world_ok=True, position=0.092, yaw=0.006):
-    return {"ok": ok, "world": {"ok": world_ok, "position_max_m": position, "yaw_max_rad": yaw}}
+def _report(ok=True, world_ok=True, position=0.092, yaw=0.006, map_id="a" * 64):
+    return {"ok": ok, "map_id": map_id, "world": {"ok": world_ok, "position_max_m": position, "yaw_max_rad": yaw}}
 
 
 def test_the_start_pose_is_the_base_link_pose_whatever_its_heading():
@@ -39,7 +39,7 @@ def test_only_an_accepted_survey_enters_the_registry():
 
 def test_lookup_by_scene_content_and_odometry_model():
     a = reg.entry(_manifest(), _report(), folder="fa", start=[0, 0, 0], name="line_m")
-    b = reg.entry(_manifest(scene_hash="t" * 64, map_id="b" * 64), _report(), folder="fb", start=[0, 0, 0],
+    b = reg.entry(_manifest(scene_hash="t" * 64, map_id="b" * 64), _report(map_id="b" * 64), folder="fb", start=[0, 0, 0],
                   name="random_m")
     book = reg.put(reg.put({"bundles": []}, a), b)
     assert reg.lookup(book, "s" * 64, "team_spec_quantized")["folder"] == "fa"
@@ -47,7 +47,7 @@ def test_lookup_by_scene_content_and_odometry_model():
     assert reg.lookup(book, "s" * 64, "reported") is None  # a bundle is bound to its odometry model
     assert reg.lookup(book, "u" * 64, "team_spec_quantized") is None
     # a new accepted survey of the same scene and model replaces the old row
-    a2 = reg.entry(_manifest(map_id="c" * 64), _report(position=0.05), folder="fa2", start=[0, 0, 0], name="line_m")
+    a2 = reg.entry(_manifest(map_id="c" * 64), _report(position=0.05, map_id="c" * 64), folder="fa2", start=[0, 0, 0], name="line_m")
     book = reg.put(book, a2)
     assert len(book["bundles"]) == 2 and reg.lookup(book, "s" * 64, "team_spec_quantized")["map_id"] == "c" * 64
 
@@ -79,6 +79,8 @@ def test_the_report_must_be_the_bundles_own():
         reg.entry(_manifest(map_id="b" * 64), {**_report(), "map_id": "a" * 64}, folder="f", start=[0, 0, 0],
                   name="line_m")
     assert reg.entry(_manifest(), {**_report(), "map_id": "a" * 64}, folder="f", start=[0, 0, 0], name="line_m")
+    with pytest.raises(ValueError, match="map_id"):  # round 2: a report without its id is not the bundle's either
+        reg.entry(_manifest(), {**_report(), "map_id": None}, folder="f", start=[0, 0, 0], name="line_m")
 
 
 def test_the_survey_run_and_nodes_must_be_the_reports_own(tmp_path):
