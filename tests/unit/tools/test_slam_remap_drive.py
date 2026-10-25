@@ -13,8 +13,25 @@ from tools import slam_remap_drive as rd
 
 def test_pace_offsets_are_the_records_own_send_times():
     recs = [{"scan_id": i, "stamp_s": 0.1 * i, "sent_mono": 100.0 + 0.25 * i} for i in range(6)]
-    off, estimated = rd.pace_offsets(recs)
-    assert off == pytest.approx([0.0, 0.25, 0.5, 0.75, 1.0, 1.25]) and estimated == 0
+    off, estimated, first = rd.pace_offsets(recs)
+    assert off == pytest.approx([0.0, 0.25, 0.5, 0.75, 1.0, 1.25]) and estimated == 0 and first == 0
+
+
+def test_pace_offsets_refuse_a_decreasing_or_missing_send_time():
+    recs = [{"scan_id": i, "stamp_s": 0.1 * i, "sent_mono": 10.0 + i} for i in range(4)]
+    recs[2]["sent_mono"] = 9.0
+    with pytest.raises(SystemExit):
+        rd.pace_offsets(recs)
+    recs[2]["sent_mono"] = float("nan")
+    with pytest.raises(SystemExit):
+        rd.pace_offsets(recs)
+
+
+def test_planned_wall_covers_the_last_due_scan_of_the_spliced_units():
+    truth = _loop_truth(11)
+    plan = rd.splice_plan([0.1 * i for i in range(11)], truth, truth, end=10, until_sim_s=2.5)
+    pace = [0.25 * i for i in range(11)]
+    assert rd.planned_wall_s(plan, pace, unit_wall=2.5) == pytest.approx(2.5 * 2 + 0.25 * 5)
 
 
 def test_pace_offsets_fill_scans_without_a_send_time_by_stamp_and_count_them():
@@ -22,9 +39,9 @@ def test_pace_offsets_fill_scans_without_a_send_time_by_stamp_and_count_them():
     recs = [{"scan_id": i, "stamp_s": 0.1 * i} for i in range(3)]
     recs += [{"scan_id": i, "stamp_s": 0.1 * i, "sent_mono": 50.0 + 0.5 * (i - 3)} for i in range(3, 6)]
     recs.insert(4, {"scan_id": 99, "stamp_s": 0.35})  # a gap inside the timed part, filled between its neighbours
-    off, estimated = rd.pace_offsets(recs)
-    assert estimated == 4
-    assert off[:3] == pytest.approx([0.0, 0.0, 0.0])  # held at the first timed scan
+    off, estimated, first = rd.pace_offsets(recs)
+    assert estimated == 4 and first == 3
+    assert off[:4] == pytest.approx([0.0, 0.0, 0.0, 0.0])  # before the first timed scan: no waiting
     assert off[4] == pytest.approx(0.25)  # halfway in stamp between 0.3 (0.0) and 0.4 (0.5)
     assert np.all(np.diff(off) >= 0)
     with pytest.raises(SystemExit):

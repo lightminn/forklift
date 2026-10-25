@@ -4,14 +4,18 @@
 
 Cost: keyframe slam_wall_s per spliced unit (mean and maximum), the maximum, the mean of the last 10 % of keyframes,
 and least-squares lines against sim time extrapolated to sim 8 h (the plan's 350 passes at the measured 83 s pass
-period): one through every keyframe, and, with three units or more, one through the per-unit means and one through
-the per-unit maxima at the units' mid times -- a change that only flattens the finite window, or leaves one slow
-keyframe per pass growing, still shows its slope there. Accuracy: the SLAM pose (the reply's map<-odom
-composed with the odometry sent) against the record's truth, no alignment, position and heading, per unit and its
-growth. Validity (an R0 replay against the live run): the same keyframe stamps as the live bridge processed, and the
-replay's mean cost per tenth of the run within 0.7-1.4 of the live one.
+period): one through every keyframe, and, with three complete units or more, one through the per-unit means and one
+through the per-unit maxima at the units' mid times -- a change that only flattens the finite window, or leaves one
+slow keyframe per pass growing, still shows its slope there. A spliced replay stops at its sim limit inside its last
+unit, so with more than one unit the last is partial and left out of the lines (the maximum and the tail keep it).
+Accuracy: the SLAM pose (the reply's map<-odom composed with the odometry sent) against the record's truth, no
+alignment, position and heading; the growth compares the first and the last complete unit over the record scans both
+hold. Validity (an R0 replay against the live run): within the scans the runner recorded, the replay's keyframes are
+the live bridge's processed ones (same scan ids and stamps -- a missing one fails, a late bridge record after the
+runner's last is left out), sent with the runner's own odometry, and the replay's mean cost per tenth of the run
+within 0.7-1.4 of the live one.
 
-    python tools/slam_cost_summary.py DRIVE_JSONL [--live-bridge DIR] > summary.json
+    python tools/slam_cost_summary.py DRIVE_JSONL [--live-epoch EPOCH_DIR] > summary.json
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ def cost_summary(rows: list) -> dict:
     t = [float(r["stamp_s"]) for r in rows]
     w = [float(r["slam_wall_s"]) for r in rows]
     a, b = _fit(t, w)
-    units = sorted({int(r.get("unit", 0)) for r in rows})
+    units = complete_units(rows)
     tail = w[-max(1, len(w) // 10):]
     by = {u: [r for r in rows if int(r.get("unit", 0)) == u] for u in units}
     mid = [statistics.fmean(float(r["stamp_s"]) for r in by[u]) for u in units]
@@ -45,13 +49,19 @@ def cost_summary(rows: list) -> dict:
     maxes = [max(float(r["slam_wall_s"]) for r in by[u]) for u in units]
     out = {"keyframes": len(rows), "max_s": max(w), "last_tenth_mean_s": statistics.fmean(tail),
            "unit_mean_s": means, "unit_max_s": maxes,
-           "slope_s_per_s": b, "intercept_s": a, "at_8h_s": a + b * EIGHT_HOURS_S,
+           "units_complete": len(units), "slope_s_per_s": b, "intercept_s": a, "at_8h_s": a + b * EIGHT_HOURS_S,
            "mean_at_8h_s": None, "max_at_8h_s": None}
     if len(units) >= 3:
         am, bm = _fit(mid, means)
         ax, bx = _fit(mid, maxes)
         out.update(mean_at_8h_s=am + bm * EIGHT_HOURS_S, max_at_8h_s=ax + bx * EIGHT_HOURS_S)
     return out
+
+
+def complete_units(rows: list) -> list:
+    """The units a spliced replay finished: all but the last when there is more than one."""
+    units = sorted({int(r.get("unit", 0)) for r in rows})
+    return units[:-1] if len(units) > 1 else units
 
 
 def slam_pose(r) -> tuple:
@@ -69,15 +79,23 @@ def accuracy(rows: list) -> dict:
         e = math.hypot(x - tx, y - ty)
         pos.append(e)
         yaw.append(abs(math.degrees(math.atan2(math.sin(th - tth), math.cos(th - tth)))))
-        by_unit.setdefault(int(r.get("unit", 0)), []).append(e)
-    unit_med = [statistics.median(by_unit[u]) for u in sorted(by_unit)]
+        by_unit.setdefault(int(r.get("unit", 0)), {})[int(r.get("src", -1))] = e
+    units = complete_units(rows)
+    unit_med = [statistics.median(by_unit[u].values()) for u in units]
+    common = set(by_unit[units[0]]) & set(by_unit[units[-1]])
+    growth = (statistics.median(by_unit[units[-1]][k] for k in common)
+              - statistics.median(by_unit[units[0]][k] for k in common)) if common else None
     return {"pos_median_m": statistics.median(pos), "pos_max_m": max(pos), "yaw_median_deg": statistics.median(yaw),
-            "yaw_max_deg": max(yaw), "unit_pos_median_m": unit_med, "growth_m": unit_med[-1] - unit_med[0]}
+            "yaw_max_deg": max(yaw), "unit_pos_median_m": unit_med, "growth_m": growth}
 
 
-def validity(rows: list, live: list) -> dict:
-    live_kf = [r for r in live if r.get("status") == "processed"]
-    same = [round(float(r["stamp_s"]), 6) for r in rows] == [round(float(r["stamp_s"]), 6) for r in live_kf]
+def validity(rows: list, live: list, runner: list) -> dict:
+    n = len(runner)
+    live_kf = [r for r in live if r.get("status") == "processed" and int(r["scan_id"]) < n]
+    same = ([int(r["src"]) for r in rows] == [int(r["scan_id"]) for r in live_kf]
+            and [round(float(r["stamp_s"]), 6) for r in rows] == [round(float(r["stamp_s"]), 6) for r in live_kf])
+    same_odom = all([float(v) for v in r["odom_base"]] == [float(v) for v in runner[int(r["src"])]["odom_base"]]
+                    for r in rows if int(r["src"]) < n)
     ratios = []
     if same and live_kf:
         n = len(live_kf)
@@ -86,20 +104,27 @@ def validity(rows: list, live: list) -> dict:
             ratios.append(statistics.fmean(float(r["slam_wall_s"]) for r in rows[lo:hi])
                           / statistics.fmean(float(r["wall_s"]) for r in live_kf[lo:hi]))
     late = ratios[3:]  # the first tenths are 30-40 ms, where the ratio is noise
-    return {"same_keyframes": same, "tenth_ratio": ratios,
-            "ok": bool(same and late and all(RATIO_LO <= x <= RATIO_HI for x in late))}
+    return {"same_keyframes": same, "same_odometry": same_odom, "tenth_ratio": ratios,
+            "ok": bool(same and same_odom and late and all(RATIO_LO <= x <= RATIO_HI for x in late))}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("drive", type=Path)
-    ap.add_argument("--live-bridge", type=Path, default=None, help="the live run's bridge folder (records.jsonl)")
+    ap.add_argument("--live-epoch", type=Path, default=None,
+                    help="the live run's epoch folder (bridge/records.jsonl, run/spool slam.records)")
     a = ap.parse_args(argv)
     rows = [json.loads(line) for line in a.drive.read_text().splitlines() if line.strip()]
     out = {"drive": str(a.drive), "cost": cost_summary(rows), "accuracy": accuracy(rows)}
-    if a.live_bridge is not None:
-        live = [json.loads(line) for line in (a.live_bridge / "records.jsonl").read_text().splitlines() if line.strip()]
-        out["validity"] = validity(rows, live)
+    if a.live_epoch is not None:
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from forklift_core.live.spool import load_list
+
+        live = [json.loads(line) for line in (a.live_epoch / "bridge/records.jsonl").read_text().splitlines()
+                if line.strip()]
+        out["validity"] = validity(rows, live, load_list(a.live_epoch / "run/spool", "slam.records"))
     print(json.dumps(out, indent=1))
     return 0
 

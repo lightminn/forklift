@@ -10,7 +10,9 @@
 # container's cpu.pressure) beside the result.
 #   sbatch deploy/slurm/slam_cost_replay.sbatch OUT RUN_DIR "key=value ..." [driver args, e.g. --noise-seed 1
 #       --allow-unanswered-tail 8 --pace-live --splice-to-sim-s 1500]
-#   LIVE_BRIDGE (environment): the live run's bridge folder, for the summary's validity check
+#   LIVE_EPOCH (environment): the live run's epoch folder, for the summary's validity check
+#   A paced replay runs at the live wall rate (0.4 live factor: sim 1,500 s ~ 63 min) -- give it --time; the driver
+#   refuses a plan longer than the job's remaining time less 5 min (--wall-budget-s).
 # Run from the repository root (a snapshot); docker image forklift/ros2-dev:jazzy.
 set -u
 OUT=$(realpath -m "$1"); RUN=$(realpath "$2"); SETS=$3; shift 3
@@ -41,17 +43,24 @@ docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
   -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml >/dev/null
 CID=$(docker inspect -f '{{.Id}}' "$NAME" 2>/dev/null)
-taskset -c "$DRV_CPU" "$PY" "$ROOT/tools/slam_remap_drive.py" "$RUN" "$OUT/sock/slam.sock" "$OUT/drive.jsonl" "$@" \
+LEFT=$(squeue -h -j "$JOB" -o %L 2>/dev/null)
+secs() { local d=0 h=0 m=0 s=0 t=$1; [[ $t == *-* ]] && { d=${t%%-*}; t=${t#*-}; }
+  IFS=: read -r -a p <<< "$t"; case ${#p[@]} in 3) h=${p[0]}; m=${p[1]}; s=${p[2]};; 2) m=${p[0]}; s=${p[1]};; 1) s=${p[0]};; esac
+  echo $(( 10#$d * 86400 + 10#$h * 3600 + 10#$m * 60 + 10#$s )); }
+BUDGET=()
+[ -n "$LEFT" ] && [ "$LEFT" != "UNLIMITED" ] && BUDGET=(--wall-budget-s $(( $(secs "$LEFT") - 300 )))
+taskset -c "$DRV_CPU" "$PY" "$ROOT/tools/slam_remap_drive.py" "$RUN" "$OUT/sock/slam.sock" "$OUT/drive.jsonl" "${BUDGET[@]}" "$@" \
   > "$OUT/drive.log" 2>&1
 DRV=$?
 {
   echo "load_end=$(cut -d' ' -f1-3 /proc/loadavg) end=$(date -Is)"
   echo "cpu_pressure=$(cat /sys/fs/cgroup/system.slice/docker-$CID.scope/cpu.pressure 2>/dev/null | tr '\n' ' ')"
 } >> "$OUT/env.txt"
-CON=$(timeout 120 docker wait "$NAME")
+docker stop -t 20 "$NAME" >/dev/null 2>&1
+CON=$(timeout 60 docker wait "$NAME")
 docker logs "$NAME" > "$OUT/container.log" 2>&1
 SUMMARY_ARGS=()
-[ -n "${LIVE_BRIDGE:-}" ] && SUMMARY_ARGS=(--live-bridge "$LIVE_BRIDGE")
+[ -n "${LIVE_EPOCH:-}" ] && SUMMARY_ARGS=(--live-epoch "$LIVE_EPOCH")
 "$PY" "$ROOT/tools/slam_cost_summary.py" "$OUT/drive.jsonl" "${SUMMARY_ARGS[@]}" > "$OUT/summary.json"
 SUM=$?
 SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)

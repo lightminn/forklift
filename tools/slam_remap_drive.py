@@ -11,15 +11,16 @@ own KeyframeGate picks keyframes, as live. Prints ``config {...}`` (what this re
 
 slam_link_failed plan E0 (docs/plans/2026-10-25-slam-link-failed.md 3): ``--allow-unanswered-tail N`` replays a failed
 run whose last scans were sent without a record; ``--pace-live`` sends each scan no earlier than its live wall offset,
-the record's own send time (``sent_mono``, kept for every scan of the asynchronous link; the synchronous start-up
-scans without one are filled by stamp and counted), so slam_toolbox's wall-clock map regeneration overlaps keyframes as
-live (lockstep otherwise); ``--splice-to-sim-s T``
+the record's own send time (``sent_mono``, kept for every scan of the asynchronous link; scans without one are
+filled by stamp and counted, the synchronous start-up before the first timed scan is sent without waiting and the
+pacing clock starts at that scan), so slam_toolbox's wall-clock map regeneration overlaps keyframes as live
+(lockstep otherwise); ``--wall-budget-s B`` refuses a paced replay planned longer than B; ``--splice-to-sim-s T``
 repeats the record from scan 0 to the last scan back at the start pose until sim T, stamps continued, odometry
 continued by the record's own increments and the truth repeated. Each processed reply's line carries its unit, the
 odometry sent and the truth for the accuracy summary.
 
     python tools/slam_remap_drive.py RUN_DIR SOCKET OUT_JSONL [--noise-seed S] [--odom-file F] [--ranges-bin B]
-        [--allow-unanswered-tail N] [--pace-live] [--splice-to-sim-s T]
+        [--allow-unanswered-tail N] [--pace-live] [--wall-budget-s B] [--splice-to-sim-s T]
 """
 
 from __future__ import annotations
@@ -69,17 +70,24 @@ def answered_length(records: int, scans: int, *, allow_tail: int) -> int:
 
 
 def pace_offsets(records: list) -> tuple:
-    """Each scan's live wall offset from scan 0 and how many were estimated: the record's ``sent_mono`` where kept,
-    otherwise interpolated by stamp between the timed scans and held flat beyond them."""
+    """(offsets, estimated, first_timed): each scan's live wall offset from the first scan with a recorded send time
+    (``sent_mono``), scans without one interpolated by stamp between timed scans and those before the first timed
+    scan at 0 (sent without waiting: the synchronous start-up); refuses a non-finite or decreasing send time."""
     stamps = np.array([float(r["stamp_s"]) for r in records])
     timed = [i for i, r in enumerate(records) if r.get("sent_mono") is not None]
     if len(timed) < 2:
         raise SystemExit("pacing needs at least two scans with a recorded send time")
-    mono = np.maximum.accumulate(np.array([float(records[i]["sent_mono"]) for i in timed]))
+    mono = np.array([float(records[i]["sent_mono"]) for i in timed])
+    if not np.all(np.isfinite(mono)) or np.any(np.diff(mono) < 0):
+        raise SystemExit("recorded send times are not finite and non-decreasing")
     wall = np.interp(stamps, stamps[timed], mono)
     wall[timed] = mono
-    wall = np.maximum.accumulate(wall)
-    return wall - wall[0], len(records) - len(timed)
+    return np.maximum(wall - mono[0], 0.0), len(records) - len(timed), timed[0]
+
+
+def planned_wall_s(plan: list, pace, unit_wall: float) -> float:
+    """The paced replay's wall length from its anchor: the latest due time of any planned scan."""
+    return max(float(pace[p.src]) + p.unit * unit_wall for p in plan)
 
 
 def relative(a, b) -> tuple:
@@ -163,6 +171,7 @@ def main(argv=None) -> int:
     ap.add_argument("--ranges-bin", type=Path, default=None)
     ap.add_argument("--allow-unanswered-tail", type=int, default=0)
     ap.add_argument("--pace-live", action="store_true", help="send at the record's own send times")
+    ap.add_argument("--wall-budget-s", type=float, default=None, help="refuse a paced replay planned longer than this")
     ap.add_argument("--splice-to-sim-s", type=float, default=None)
     a = ap.parse_args(argv)
     records = load_list(a.run / "spool", "slam.records")
@@ -188,15 +197,19 @@ def main(argv=None) -> int:
     truth = [tuple(r["truth_base"]) for r in records]
     end = splice_end(truth) if a.splice_to_sim_s is not None else None
     plan = splice_plan(stamps, src_odom, truth, end=end, until_sim_s=a.splice_to_sim_s)
-    pace, estimated = None, None
+    pace, estimated, first_timed, planned_wall = None, None, None, None
     if a.pace_live:
-        pace, estimated = pace_offsets(records[:n])
+        pace, estimated, first_timed = pace_offsets(records[:n])
         unit_wall = float(pace[end]) if end is not None else 0.0
+        planned_wall = planned_wall_s(plan, pace, unit_wall)
+        if a.wall_budget_s is not None and planned_wall > a.wall_budget_s:
+            raise SystemExit(f"paced replay needs {planned_wall:.0f} s of wall time, the budget is {a.wall_budget_s:.0f} s")
     print("config " + json.dumps({"run": str(a.run.resolve()), "noise_seed": a.noise_seed,
                                   "odom_file": str(a.odom_file) if a.odom_file else None,
                                   "ranges_bin": str(a.ranges_bin) if a.ranges_bin else None,
                                   "unanswered_tail": len(log["scan_stamps_s"]) - n,
                                   "pace_live": a.pace_live, "pace_estimated": estimated,
+                                  "pace_first_timed": first_timed, "planned_wall_s": planned_wall,
                                   "splice_end": end, "splice_to_sim_s": a.splice_to_sim_s, "planned": len(plan)}),
           flush=True)
     given = read_ranges_bin(a.ranges_bin) if a.ranges_bin else {}
@@ -206,13 +219,14 @@ def main(argv=None) -> int:
             break
         time.sleep(1)
     client = slam_link.SlamLinkClient(a.socket, timeout_s=120.0)
-    started, sent = time.monotonic(), 0
+    started, sent, anchor = time.monotonic(), 0, None
     with open(a.out, "w") as out:
         for k, item in enumerate(plan):
             stamp, clean = item.stamp_s, ranges[item.src]
-            if pace is not None:
-                due = started + float(pace[item.src]) + item.unit * unit_wall
-                wait = due - time.monotonic()
+            if pace is not None and (anchor is not None or (item.unit == 0 and item.src >= first_timed)):
+                if anchor is None:
+                    anchor = time.monotonic() - float(pace[item.src])
+                wait = anchor + float(pace[item.src]) + item.unit * unit_wall - time.monotonic()
                 if wait > 0:
                     time.sleep(wait)
             scan_ranges = np.asarray(clean, float).copy()
