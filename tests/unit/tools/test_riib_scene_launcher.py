@@ -109,22 +109,42 @@ def test_the_rack_aisle_keeps_its_uprights_wider_by_default_and_the_other_scenes
 
 def test_the_obstacle_layer_keeps_the_constant_noise_and_draws_the_a2_spec_on_request(tmp_path):
     # P3a: const by default (user decision 2026-10-24 -- the A2 scan also feeds SLAM and the scan docking), a2 on request
-    out = dry_run(tmp_path)
+    out = dry_run(tmp_path, ENCODER_MODEL="reported")
     assert contains(args_of(out), ["--obstacle-layer", "config/obstacle_layer_single.yaml"])
     assert " NOISE=const " in (tmp_path / "out/riib_defaults.txt").read_text()
-    a2 = args_of(dry_run(tmp_path, NOISE="a2"))
+    a2 = args_of(dry_run(tmp_path, NOISE="a2", ENCODER_MODEL="reported"))
     assert contains(a2, ["--obstacle-layer", "config/obstacle_layer_single_a2.yaml"])
+
+
+@pytest.mark.parametrize("noise, encoder, layer", [
+    ("const", None, "config/obstacle_layer_single_team_spec.yaml"),
+    ("a2", None, "config/obstacle_layer_single_a2_team_spec.yaml"),
+    ("const", "reported", "config/obstacle_layer_single.yaml"),
+    ("a2", "reported", "config/obstacle_layer_single_a2.yaml"),
+    ("const", "team_spec_quantized", "config/obstacle_layer_single_team_spec.yaml")])
+def test_the_odometry_is_the_joint_angle_model_by_default_with_its_age_table(tmp_path, noise, encoder, layer):
+    """Plan 2026-10-25-team-spec-default (lead decision): the joint-angle encoders by default, reported on request;
+    the layer is the NOISE row with the model's own odometry age table (the runner refuses a mismatched table)."""
+    env = {"NOISE": noise, **({} if encoder is None else {"ENCODER_MODEL": encoder})}
+    args = args_of(dry_run(tmp_path, **env))
+    assert contains(args, ["--encoder-model", encoder or "team_spec_quantized"])
+    assert contains(args, ["--obstacle-layer", layer])
+    assert f" ENCODER_MODEL={encoder or 'team_spec_quantized'}" in (tmp_path / "out/riib_defaults.txt").read_text()
+    truth = args_of(dry_run(tmp_path, MODE="truth", **env))
+    assert contains(truth, ["--encoder-model", encoder or "team_spec_quantized"]) and contains(truth, ["--obstacle-layer", layer])
 
 
 @pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
-                                 {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"}])
+                                 {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
+                                 {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)
     assert out.returncode != 0
 
 
-@pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"}])
+@pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
+                                 {"ENCODER_MODEL": "reported"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -151,8 +171,10 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     assert (parsed.fps, parsed.max_sim_seconds, parsed.delivery_straight_m, parsed.alignment_straight_m,
             parsed.withdrawal_m, parsed.insertion_reserve_m) == (60, 1500.0, 1.5, 2.1, 0.55, 0.016)
     assert parsed.record_slam and parsed.return_home and parsed.obstacle_act and parsed.d7_planner
-    layer = "config/obstacle_layer_single_a2.yaml" if env.get("NOISE") == "a2" else "config/obstacle_layer_single.yaml"
-    assert str(parsed.obstacle_layer).endswith(layer)
+    encoder = env.get("ENCODER_MODEL", "team_spec_quantized")
+    age = "" if encoder == "reported" else "_team_spec"
+    layer = f"config/obstacle_layer_single{'_a2' if env.get('NOISE') == 'a2' else ''}{age}.yaml"
+    assert str(parsed.obstacle_layer).endswith(layer) and parsed.encoder_model == encoder
     if env.get("MODE") == "truth":
         assert not parsed.use_perception and not parsed.d7_docking and parsed.recognition == "off"
     else:

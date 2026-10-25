@@ -273,6 +273,14 @@ def test_the_survey_job_runs_the_consoles_runner_word_for_word():
     assert "--max-epochs 1" in survey and "--end-session" in survey
 
 
+def test_the_survey_takes_the_consoles_default_odometry():
+    """Plan 2026-10-25-team-spec-default: the survey maps with the console's encoders (joint-angle by default)."""
+    for name in ("isaac_live.sbatch", "slam_survey.sbatch"):
+        text = (ROOT / "deploy" / "console" / name).read_text()
+        assert "ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}" in text, name
+        assert 'case "$ENCODER_MODEL" in reported|team_spec_quantized) ;;' in text, name
+
+
 def test_the_bridge_container_writes_the_graph_after_the_bridge_and_before_slam_toolbox_stops():
     script = (ROOT / "tools" / "slam_bridge_container.sh").read_text()
     bridge = script.index("python3 -m forklift_ros.isaac_slam_bridge")

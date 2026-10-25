@@ -5374,6 +5374,23 @@ class MissionCore:
         base_ = slam.get("transport_config", trackers["transport"].config)
         return replace(base_, position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
 
+    def reapproach_tracker_config(self):
+        """Leg-failures plan B2 (docs/plans/2026-10-25-leg-failures.md): the D7 re-approach's dry run and its tracker
+        -- the docking stop's, its cruise capped at ``d7_reapproach_cruise_mps`` when a launcher sets one (None: as
+        before). The round-two stop keeps docking_stop_config itself."""
+        base_ = self.docking_stop_config()
+        cap_ = getattr(self.options, "d7_reapproach_cruise_mps", None)
+        return base_ if cap_ is None else replace(base_, cruise_speed_mps=min(base_.cruise_speed_mps, float(cap_)))
+
+    def reapproach_planner_config(self, config):
+        """Leg-failures plan B1: the re-approach plans with its curvature limit capped at
+        ``d7_reapproach_curvature_inv_m`` when a launcher sets one -- a gentler S whose reversal the steering rate
+        follows (None: the config as given)."""
+        cap_ = getattr(self.options, "d7_reapproach_curvature_inv_m", None)
+        if cap_ is None:
+            return config
+        return replace(config, curvature_limit_inv_m=min(config.curvature_limit_inv_m, float(cap_)))
+
     def unaligned_delivery_check(self) -> None:
         """The delivery straight about to be driven with no accepted docking (docs/plans/2026-10-22-slot-anchored-
         neighbours.md 2.3): the runner's hook re-checks it as it was checked before slot anchors -- None, or the
@@ -5426,7 +5443,7 @@ class MissionCore:
         at the line start within the stop's tolerance."""
         time = self.hooks.time_module()  # the runner's time (the recorded Clock proxy when recording)
         bicycle_rollout = self.hooks.bicycle_rollout
-        docking_stop_config = self.docking_stop_config
+        docking_stop_config = self.reapproach_tracker_config  # B2: the tracker install_reapproach puts in
         geometry = self.geometry
         grid_kwargs = self.hooks.grid_kwargs
         grid_world = self.hooks.grid_world
@@ -5443,7 +5460,7 @@ class MissionCore:
             grid_world(slam.get("transport_scenario", scenario)),
             PlanningPose(*(float(v) for v in start_rear)),
             PlanningPose(*(float(v) for v in line)),
-            config if config is not None else planner_config,
+            self.reapproach_planner_config(config if config is not None else planner_config),
             geometry=geometry,
             keep_m=geometry.delivery_straight_m,
             deadline=deadline_ if deadline_ is not None else SearchBudget(20.0),
@@ -5465,7 +5482,7 @@ class MissionCore:
         at its end (no arm_docking: a re-approach may end on a reverse curve)."""
         path_record = self.hooks.path_record  # a runner module-level name
         add_path_display = self.hooks.add_path_display
-        docking_stop_config = self.docking_stop_config
+        docking_stop_config = self.reapproach_tracker_config  # B2: the config its dry run was accepted with
         geometry = self.geometry
         ms = self.ms
         obstacle = self.obstacle
@@ -5480,6 +5497,8 @@ class MissionCore:
         state["paths"]["transport"] = path_record(path)
         self.hooks.write_paths()
         add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        # the transport's own settings stay the base of later stops (B2's capped cruise is the re-approach's alone)
+        slam.setdefault("transport_config", trackers["transport"].config)
         trackers["transport"] = RearAxlePathTracker(
             path.poses, path.directions, path.curvatures_inv_m, docking_stop_config()
         )
@@ -6796,35 +6815,44 @@ class MissionCore:
             out.update(ok=True, why="no_layer")
             return out
         strict_ = self._scene_permit_strict(tracker, leg_, uncut)
+        # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
+        zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
-            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_)
+            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
+            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         return out
 
-    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
-        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
-        acting -- the transport's docking straight, the last delivery straight of the tracker permission_acting reads
-        -- so its unknown cells must be verified before it is installed. ``uncut``: the candidate's plan before
-        install's arm_docking, which cuts the tracker back to where the final straight keeps keep_m; the length it
-        cuts (measured, not the nominal keep -- the cut falls on a sample, Codex impl round 5 P2-1) widens the zone.
-        None: the tracker is the installed one, already cut. A return always has the permission."""
+    @staticmethod
+    def _poses_length(poses) -> float:
+        poses = np.asarray(poses, dtype=float)
+        return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+
+    def _scene_zone_start_m(self, tracker, uncut=None) -> float | None:
+        """Leg-failures plan A1 (docs/plans/2026-10-25-leg-failures.md): how far along the candidate tracker the zone
+        the permission does not act on begins -- the transport's docking straight, the last delivery straight of the
+        tracker permission_acting reads. ``uncut``: the candidate's plan before install's arm_docking, which cuts the
+        tracker back to where the final straight keeps keep_m; the length it cuts (measured, not the nominal keep --
+        the cut falls on a sample, Codex impl round 5 P2-1) widens the zone. None: the tracker is the installed one,
+        already cut. A return has no such zone (None)."""
         if self.ms.phase != "transport":
-            return False
-
-        def length(poses):
-            poses = np.asarray(poses, dtype=float)
-            return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
-
+            return None
         cut_ = 0.0
         docking_ = (self.slam or {}).get("docking") or {}
         if uncut is not None and docking_.get("status") in ("pending", "armed"):
             prefix_ = self.hooks.final_straight_prefix(uncut, docking_.get("keep_m", self.geometry.delivery_straight_m))
             if prefix_ is not None:
-                cut_ = length(uncut.poses) - length(prefix_.poses)
-        zone_ = cut_ + float(self.geometry.delivery_straight_m)
-        return float(tracker.remaining_to_goal_m()) - length(leg) <= zone_ + 1e-6
+                cut_ = self._poses_length(uncut.poses) - self._poses_length(prefix_.poses)
+        return float(tracker.remaining_to_goal_m()) - (cut_ + float(self.geometry.delivery_straight_m))
+
+    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
+        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
+        acting, so its cells there must be verified before it is installed -- the leg's length reaching the zone start
+        (``_scene_zone_start_m``). A return always has the permission."""
+        zone_ = self._scene_zone_start_m(tracker, uncut)
+        return zone_ is not None and self._poses_length(leg) >= zone_ - 1e-6
 
     def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's world this tick (plan 2.1)."""

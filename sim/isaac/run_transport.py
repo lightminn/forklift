@@ -505,6 +505,22 @@ def arguments() -> argparse.Namespace:
         "reaches R1 without its replans. The pose is not changed. Off: every earlier run.",
     )
     parser.add_argument(
+        "--d7-reapproach-curvature-inv-m",
+        type=float,
+        default=None,
+        help="docs/plans/2026-10-25-leg-failures.md B1: the D7 re-approach (and an obstacle replan of it) plans with "
+        "its curvature limit capped at this value (1/m) -- a gentler S whose curvature reversal the steering rate "
+        "follows. Set by the scene batch launchers; unset (None): the planner's own limit, every earlier run.",
+    )
+    parser.add_argument(
+        "--d7-reapproach-cruise-mps",
+        type=float,
+        default=None,
+        help="docs/plans/2026-10-25-leg-failures.md B2: the D7 re-approach's dry run and tracker cruise capped at this "
+        "speed (m/s); the round-two stop and every other leg keep theirs. Set by the scene batch launchers; unset "
+        "(None): the transport's cruise, every earlier run.",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -816,7 +832,10 @@ def arguments() -> argparse.Namespace:
         "angle, counted from the joint angles each physics tick and integrated as increments; "
         "team_spec_typical_inl adds a first-harmonic INL at the datasheet typical amplitude (MT6701 1.0 deg, "
         "KTH7801 0.35 deg; shape assumed, phase per --slam-noise-seed). With a team-spec model the "
-        "Gaussian wheel and steering noise is not added (the LiDAR range noise is).",
+        "Gaussian wheel and steering noise is not added (the LiDAR range noise is). The operating launchers "
+        "(console live and survey, Riibotics scenes) run team_spec_quantized by default since 2026-10-25 "
+        "(docs/plans/2026-10-25-team-spec-default.md); the runner's own default stays reported, the reading of "
+        "a record without this argument.",
     )
     parser.add_argument(
         "--odometry-wheel-radius-m",
@@ -931,7 +950,7 @@ def arguments() -> argparse.Namespace:
                         "in the first session only (a scene reset restarts the runner with the same arguments)")
     # Persistent console plan section 4 (U10b, U12, U23): controlled injections for the use cases
     parser.add_argument("--live-test-push-pallet", default=None, metavar="PHASE",
-                        help="U12 tests only: when a mission first enters PHASE, the pallet is moved 0.05 m sideways -- the "
+                        help="U12 tests only: when a mission first enters PHASE, the pallet is moved 0.05 m to the truck's left -- the "
                         "truth checks see a displaced pallet (scene damage, latched)")
     parser.add_argument("--live-test-fail-at", default=None, metavar="PHASE",
                         help="U10b tests only: when a mission first enters PHASE it fails as a tracking failure (the "
@@ -2200,7 +2219,9 @@ PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
 # Container keys the runner derives from what each tick's recorded outputs already carry, added after format 2 records
 # were made: never compared, so a record without them still matches (plan 2026-10-24-goal-creep-stall: the wheel speed
 # the last physics step ran on; Codex implementation round 2 P2).
-PROJECTION_NOT_COMPARED = {"slam": ("applied_speed",)}
+PROJECTION_NOT_COMPARED = {"slam": ("applied_speed",),
+                           # plan 2026-10-25-slip-check-relative: the slip watch's record, from each tick's truth
+                           "state": ("slip_watch",)}
 # Objects a container holds for a service, which the service changes inside its recorded calls (the physics step
 # runs the SLAM bridge's odometry, stop detector and noise): a replay never runs them, so they are compared by
 # their logical id only -- their effects on the mission reach it through the watched keys (Codex P2).
@@ -5461,6 +5482,30 @@ def drive(S, isaac) -> None:
     # Plan 2026-10-22-session-scene-pallet-props 2.6: a live session's other pallets join the obstacles the docking
     # correction's dry run checks (the list itself keeps what the run spawns and removes); None: no others.
     session_extra_ = {"fn": None}
+    # The carried load's slip watch (plan 2026-10-25-slip-check-relative): the forks in the pockets, the outline's
+    # motion since the insert-to-lift instant and the absolute along check; the old absolute lateral is recorded only.
+    # Made here, not in the setup: a recorded setup from before it replays as it was.
+    import xml.etree.ElementTree as ET_
+
+    from slip_watch import SlipWatch, merge_gaps
+
+    # The fork lift's velocity limit: how far the lift can move in the physics step between the joints the watch reads
+    # and the truth it judges (round 2 P2-1).
+    fork_lift_velocity_mps_ = float(
+        ET_.parse(args.forklift_urdf).getroot().find("joint[@name='fork_lift']/limit").get("velocity"))
+
+    slip_watch = SlipWatch(inserted_along_m=geometry.inserted_offset_m - abs(args.rear_axle_offset_m),
+                           outline_half_m=(geometry.pallet_depth_m / 2, geometry.pallet_width_m / 2))
+
+    # Slip check plan: the joints the command's steering read takes each tick, kept for the slip watch's lift (one
+    # recorded call, as before).
+    joints_tick_ = {"q": None, "t": None}
+
+    def steering_position_():
+        joints_tick_["q"] = robot.get_joint_positions()
+        joints_tick_["t"] = t  # the tick it was read in: the lift's reach covers the physics since (round 3 P2)
+        return joints_tick_["q"][steers]
+
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
         geometry=geometry, settings=settings, pallet_geometry=args.pallet_geometry_loaded,
@@ -5542,7 +5587,7 @@ def drive(S, isaac) -> None:
             far_recognition=far_recognition_hook if far_runtime is not None else None,
             far_recognition_zone=far_recognition_zone_hook if far_runtime is not None else None,
             # M-a1 slice 5: the release at a stop, the measured steering.
-            steering_position=lambda: robot.get_joint_positions()[steers],
+            steering_position=steering_position_,
             # M-a1 slice 6d: the near field's mission side (near_tick, the correction redraws, installs, retry).
             steering_command=lambda: steering_command, correction_grid=lambda *a: correction_grid(*a),
             redraw_docking=lambda *a, **k: redraw_docking(*a, **k),
@@ -5586,6 +5631,9 @@ def drive(S, isaac) -> None:
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
                                 start_band_release=getattr(args, "start_band_release", "off"),
+                                # leg-failures B1/B2: a record from before the options ran without the caps
+                                d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
+                                d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
                                 restart_confirm_scans=int(getattr(args, "restart_confirm_scans", 0) or 0),
@@ -7665,7 +7713,11 @@ def drive(S, isaac) -> None:
                     # Plan section 4 (U12, U10b): the use cases' controlled injections, once a session
                     if ms.phase == args.live_test_push_pallet and not live_injected_.get("push"):
                         live_injected_["push"] = True
-                        pallet.set_world_pose(np.asarray(ppos, dtype=float) + np.array([0.0, 0.05, 0.0]), pq)
+                        # Slip check plan: to the truck's left (truth heading), so a push while carrying is a
+                        # sideways slide on the forks whatever way the truck faces; U12 judges its size only.
+                        yaw_push_ = yaw_and_tilt(q)[0]
+                        pallet.set_world_pose(np.asarray(ppos, dtype=float)
+                                              + 0.05 * np.array([-math.sin(yaw_push_), math.cos(yaw_push_), 0.0]), pq)
                         state.setdefault("live_test_injections", []).append(
                             {"push_pallet_m": 0.05, "phase": ms.phase, "t": float(t)})
                         ppos, pq = pallet.get_world_pose()
@@ -7879,22 +7931,35 @@ def drive(S, isaac) -> None:
                                 f"Measured pallet solid overlap in {ms.phase}: {box_.name}",
                                 cargo=True,
                             )
-                relative = ppos[:2] - base[:2]
                 # Live (plan D5a): a mission ended while carrying leaves the load on the forks under teleop -- the
                 # drop and slip are watched there too.
-                if ms.phase in ["extract", "transport"] or (
-                        live is not None and core.commands.adopted_id is None and core.cargo.relation == "carrying"):
+                # A phase is a running mission's only: one that ended leaves its phase behind, and idle the carrying
+                # relation decides (slip check plan, Codex impl rounds 1-2).
+                running_ = live is None or core.commands.adopted_id is not None
+                if (running_ and ms.phase in ["extract", "transport"]) or (
+                        live is not None and not running_ and core.cargo.relation == "carrying"):
                     scene_require(t, ppos[2] > 0.04, "Pallet dropped during transport", cargo=True)
-                    scene_require(
-                        t, abs(
-                            float(np.dot(relative, forward))
-                            - (geometry.inserted_offset_m - abs(args.rear_axle_offset_m))
-                        )
-                        < 0.08
-                        and abs(float(np.dot(relative, [-forward[1], forward[0]]))) < 0.04,
-                        "Pallet slipped off forks",
-                        cargo=True,
-                    )
+                # Slip check plan: the carried load's watch, the lift included (the drop check above stays out of it --
+                # the pallet starts the lift on the floor). Here with the truth checks, before the tick's arrival moves
+                # the phase on and before a cancel closes the mission's record (Codex impl round 1 P1-1, P2-3); a running
+                # mission's phase or idle carrying, as the drop check (P1-2). The lift is read from the joints the
+                # previous tick's steering read took (no new recorded call -- the replay compares their order), one
+                # physics step before the truth: the pockets are judged at both ends of what the lift can move in that
+                # step (the URDF's velocity limit), each blade's worse (round 2 P2-1) -- every step since the read: a
+                # tick that failed before its command assembly stepped without one (round 3 P2).
+                lift_reach_m_ = (None if joints_tick_["q"] is None
+                                 else fork_lift_velocity_mps_ * max(t - joints_tick_["t"], dt))
+                if (running_ and ms.phase in ["lift", "extract", "transport"]) or (
+                        live is not None and not running_ and core.cargo.relation == "carrying"):
+                    slip_ = slip_watch.check(
+                        state.setdefault("slip_watch", {}), t=t, phase=ms.phase if running_ else "idle",
+                        base=(float(base[0]), float(base[1]), float(yaw)),
+                        pallet=(float(ppos[0]), float(ppos[1]), float(pallet_yaw)),
+                        gaps=None if joints_tick_["q"] is None else merge_gaps(*(
+                            insertion_geometry.pocket_side_gaps(base, q, float(joints_tick_["q"][lift_index[0]]) + d_,
+                                                                ppos, pq)
+                            for d_ in (-lift_reach_m_, lift_reach_m_))))
+                    scene_require(t, slip_ is None, f"Pallet slipped off forks: {slip_}", cargo=True)
                 if ms.phase in ["approach", "insert"]:
                     scene_require(
                         t, np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
@@ -8618,6 +8683,11 @@ def drive(S, isaac) -> None:
                         lift_m=float(robot.get_joint_positions()[lift_index[0]]),
                         # the path being followed, for the page's map (display only): none without a running mission
                         plan_key=live_plan_key_, plan_poses=live_plan_poses_)
+                # Slip check plan: the baseline at the tick's end with the phase this tick ended in and the truth read
+                # at its start (as the trace evidence), live and batch alike.
+                slip_watch.end_tick(ms.phase if live is None or core.commands.adopted_id is not None else "idle",
+                                    (float(base[0]), float(base[1]), float(yaw)),
+                                    (float(ppos[0]), float(ppos[1]), float(pallet_yaw)), t=t)
                 if dwell_standing and wheel_lock["q"] is None:
                     # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                     controller_ = robot.get_articulation_controller()
@@ -9095,6 +9165,20 @@ def main() -> None:
     args = arguments()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
+    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
+    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
+    # output so that the replay gate's view of the output directory does not change.
+    import faulthandler
+    import signal as signal_
+
+    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
+                          all_threads=True)
+    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
+    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
+    import ctypes
+
+    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())

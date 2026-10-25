@@ -4,8 +4,8 @@
 #SBATCH --gres=shard:1
 #SBATCH --qos=admin
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=6G
-#SBATCH --time=01:00:00
+#SBATCH --mem=4G
+#SBATCH --time=00:20:00
 #SBATCH --output=%x_%j.log
 # Usage: sbatch --chdir=<run dir> --export=ALL,SRC=<source snapshot>,OUT=<out dir>,ARGS="<render args>" \
 #        recognition_isaac_render.sbatch   (--mem and --time are overridden on the command line from measured runs)
