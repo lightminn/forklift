@@ -3,6 +3,7 @@ escape sweep passes the trigger's rectangles the stop already stands within the 
 with the permission left as it is -- no start band, no anchor; the escape's other checks and its final permit stay."""
 
 import numpy as np
+import pytest
 from test_core_scene_replan import DT, make  # the device's core fixtures
 from test_start_band_escape import _escape_through_the_device, _near_rect, _standing
 
@@ -206,3 +207,75 @@ def test_an_escape_without_a_released_rectangle_carries_no_guard():
     pose = _standing(core)
     chosen = _plan(core, [])
     assert chosen is not None and chosen[3] is None
+
+
+def test_the_guard_s_stop_holds_the_wheels_at_zero_on_the_same_tick_with_the_steering_held():
+    # Codex re-review P2-1: the slew left -0.0875 m/s and a new steering on the tick the guard stopped
+    import math
+
+    core, ms, state, calls, rear, held = make()
+    pose, rect, chosen = _installed(core, state)
+    d0 = chosen[3]["d0"][0]
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    near = np.array([pose[0] - 0.75 * d0 * s, pose[1] + 0.75 * d0 * c, pose[2]])
+    core.scene_replan_tick(0.3, near, -0.1, DT)
+    assert core.scene_escape["status"] == "stopped"
+    core.options.obstacle_act = True
+    core.options.command_accel_mps2 = 0.5
+    core.settings = {"steering_command_rate_rad_s": 1.0}
+    core.hooks.steering_position = lambda: np.zeros(2)
+    state["command_speed"] = -0.1
+    steering = np.array([0.02, 0.02])
+    out = core.assemble_command(0.3, DT, -0.1, 0.3, 0.0, steering, False, False, False, False, False)
+    assert out.drive.speed_mps == 0.0 and out.requested_speed == 0.0
+    assert np.allclose(out.steering_command, [0.02, 0.02])  # held, not turned toward 0.3 m^-1
+    other = core.assemble_command(0.3 + DT, DT, -0.1, 0.0, 0.0, steering, False, False, False, False, False)
+    assert other.drive.speed_mps != 0.0  # only the tick it stopped on
+
+
+def test_the_guard_looks_a_stop_length_ahead_of_the_pose():
+    from forklift_core.mission.core import MissionCore
+    from forklift_core.planning import Footprint
+
+    foot = Footprint(1.29, 0.17, 0.36)
+    # a rectangle behind the rear face, 0.05 m off; backing at it: the pose is clear, the stop ahead is not
+    behind = Rectangle(-0.17 - 0.05 - 0.025, 0.0, 0.05, 0.05, 0.0)
+    guard = {"rects": [behind], "d0": [0.05], "footprint": foot, "direction": -1, "stop_m": 0.04}
+    assert MissionCore._escape_guard_breached(guard, (0.0, 0.0, 0.0))
+    assert not MissionCore._escape_guard_breached(dict(guard, stop_m=0.01), (0.0, 0.0, 0.0))
+    assert not MissionCore._escape_guard_breached(dict(guard, direction=1), (0.0, 0.0, 0.0))
+
+
+def test_a_correction_change_moves_the_guard_s_rectangles_with_the_grid():
+    # Codex re-review P2-2: +50 mm of correction alone stopped the escape against the rectangles of the old
+    # projection; -50 mm with a 7 mm drift toward the rectangle went unseen
+    import math
+
+    from forklift_core.localization.slam_pose import compose
+
+    core, ms, state, calls, rear, held = make()
+    pose, rect, chosen = _installed(core, state)
+    guard = core.scene_escape["guard"]
+    delta = (0.0, 0.05, 0.0)
+    core._escape_guard_reexpress(delta)
+    moved = compose(delta, pose)
+    assert not core._escape_guard_breached(guard, moved)  # the same place on the grid: no false stop
+    d0 = guard["d0"][0]
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    toward = (moved[0] - 0.75 * d0 * s, moved[1] + 0.75 * d0 * c, moved[2])
+    assert core._escape_guard_breached(guard, toward)
+    assert guard["checker"].free(moved, 0.0)
+    assert core.obstacle["escape_start_release"]["reexpressed"] == 1
+
+
+def test_the_reprojection_re_expresses_the_guard_only_with_the_switch_on():
+    core, ms, state, calls, rear, held = make()
+    seen = []
+    core._escape_guard_reexpress = lambda delta: seen.append(tuple(delta))
+    core.obstacle = {"layer": type("L", (), {"refresh": lambda self, *a, **k: None})(), "applied": (0.0, 0.0, 0.0),
+                     "version": 0}
+    core._reproject(1.0, (0.0, 0.05, 0.0), (2.0, 0.3, 0.05), True)
+    assert seen == []
+    core.options.escape_start_release = "on"
+    core._reproject(1.1, (0.0, 0.10, 0.0), (2.0, 0.3, 0.05), True)
+    assert seen and seen[0][1] == pytest.approx(0.05)

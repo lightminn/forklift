@@ -3988,6 +3988,8 @@ class MissionCore:
         obstacle["version"] += 1
         obstacle["applied"] = applied_now
         obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+        if getattr(self.options, "escape_start_release", "off") == "on":
+            self._escape_guard_reexpress(compose(tuple(float(v) for v in applied_now), invert(old)))
         if ms.phase in trackers:
             leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
         else:  # a phase without a follower (lift, lower, settle): the truck's own place
@@ -4996,6 +4998,9 @@ class MissionCore:
             cap_ = getattr(self, "_low_clearance_cap", None)
             # the guard's zero cap is a hold: wheels to zero, steering held (Codex round 4 P2-3)
             obstacle_hold = obstacle_hold or (cap_ is not None and cap_[0] == t and cap_[1] == 0.0)
+        escape_stop_ = (getattr(options, "escape_start_release", "off") == "on"
+                        and getattr(self, "_escape_guard_stop_t", None) == float(t))
+        obstacle_hold = obstacle_hold or escape_stop_  # a released escape stopped: a hold, then a step to zero
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
             requested_speed = 0.0
@@ -5032,7 +5037,7 @@ class MissionCore:
                 wheel_speed = math.copysign(cap[1], wheel_speed)
             if getattr(options, "low_clearance_guard", "off") == "on":
                 wheel_speed = self._low_clearance_capped(t, wheel_speed)
-            if estop_holding or safety_hold:
+            if estop_holding or safety_hold or escape_stop_:
                 wheel_speed = 0.0
             state["command_speed"] = wheel_speed
         elif getattr(options, "low_clearance_guard", "off") == "on":
@@ -6963,7 +6968,11 @@ class MissionCore:
 
                 guard_ = {"rects": list(near_), "d0": [float(footprint_rect_distance(pose_, footprint_, r_))
                                                        for r_ in near_],
-                          "footprint": footprint_, "checker": checker_, "threshold_m": float(choice_.threshold_m)}
+                          "footprint": footprint_, "checker": checker_, "threshold_m": float(choice_.threshold_m),
+                          # the stop ahead of each watched pose (the escape's own speed), and what a correction
+                          # change re-expresses: the trigger's rectangles come from the grid (Codex re-review P2-2)
+                          "direction": int(choice_.direction), "stop_m": float(stop_len_),
+                          "scene": list(rects_), "extra": list(extra), "bounds": bounds_}
             return poses_, int(choice_.direction), int(leg_dir_), guard_
 
         def escape_install(chosen):
@@ -7047,12 +7056,34 @@ class MissionCore:
 
     @staticmethod
     def _escape_guard_breached(guard, rear) -> bool:
-        """Whether the outline at rear comes nearer a released rectangle than half its start gap."""
+        """Whether the outline at rear, or anywhere on the straight ahead of it in the escape's direction for its
+        stop length, comes nearer a released rectangle than half its start gap."""
+        from forklift_core.control import escape as esc
         from forklift_core.control.start_release import footprint_rect_distance
 
-        pose = tuple(float(v) for v in rear)
-        return any(footprint_rect_distance(pose, guard["footprint"], r) < d0 / 2.0
-                   for r, d0 in zip(guard["rects"], guard["d0"]))
+        ahead = esc.straight(tuple(float(v) for v in rear), guard["direction"], guard["stop_m"], step_m=0.005)
+        return any(footprint_rect_distance(tuple(p), guard["footprint"], r) < d0 / 2.0
+                   for p in ahead for r, d0 in zip(guard["rects"], guard["d0"]))
+
+    def _escape_guard_reexpress(self, delta) -> None:
+        """A correction change re-expressed the grid and the control pose by ``delta``: the guard's rectangles,
+        found on the grid, move with them (the scene's props stay)."""
+        from forklift_core.planning import Rectangle
+        from forklift_core.planning.geometry import FootprintCollisionChecker
+
+        guard = (self.scene_escape or {}).get("guard")
+        if guard is None:
+            return
+
+        def moved(r):
+            x, y, yaw = compose(tuple(float(v) for v in delta), (float(r.x_m), float(r.y_m), float(r.yaw_rad)))
+            return Rectangle(x, y, float(r.length_m), float(r.width_m), yaw)
+
+        guard["rects"] = [moved(r) for r in guard["rects"]]
+        guard["extra"] = [moved(r) for r in guard["extra"]]
+        guard["checker"] = FootprintCollisionChecker(list(guard["scene"]) + guard["extra"], guard["footprint"],
+                                                     guard["bounds"])
+        self._escape_release_count("reexpressed")
 
     @staticmethod
     def _escape_guard_end_ok(guard, rear) -> bool:
@@ -7083,7 +7114,10 @@ class MissionCore:
             standing_ = ports.stopped()
             guard_ = self.scene_escape.get("guard")
             if guard_ is not None and self._escape_guard_breached(guard_, ports.box.rear):
-                self.scene_escape["status"] = "stopped"  # nearer a released rectangle than half its start gap
+                # nearer a released rectangle than half its start gap, now or within the stop ahead: the wheels to
+                # zero on this tick, steering held (Codex re-review P2-1)
+                self.scene_escape["status"] = "stopped"
+                self._escape_guard_stop_t = float(t)
                 self._escape_release_count("stopped_approach")
             elif tracking.status == "arrived" or (
                     standing_ and (tracking.status == "failed" or tracker_.remaining_to_goal_m() <= 1e-6)):
