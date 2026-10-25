@@ -671,7 +671,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                shard_mib=SHARD_MIB, session_vram_mib=SESSION_VRAM_MIB, vram_probe=None, vram_period_s=1.0,
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
-               pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0,
+               pace_window_s=300.0, pace_warmup_s=240.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -707,6 +707,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
+          "pace_below": 0,
           "node_ram_waits": 0, "claimed_elsewhere": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
@@ -915,26 +916,32 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 "silence_s": round(silence, 1)}
             if ratio is not None:
                 r.pace_min = round(min(ratio, r.pace_min if r.pace_min is not None else ratio), 4)
-        reason = None
+        # a stall is judged first and on its own: it steps back at once, whatever the pace of the others
+        stall = None
+        if rows:
+            worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
+            if worst[1]["silence_s"] >= pace_stall_s:
+                stall = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
+        slow = None
         ratios = sorted(v["ratio"] for v in rows.values() if v["ratio"] is not None)
         if ratios:
             k = len(ratios) // 2
             median = ratios[k] if len(ratios) % 2 else (ratios[k - 1] + ratios[k]) / 2
             if pace_floor is not None and median < pace_floor:
-                reason = f"median sim/wall {median:.4f} < {pace_floor}"
-        if reason is None and rows:
-            worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
-            if worst[1]["silence_s"] >= pace_stall_s:
-                reason = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
-            elif pace_gap_p99_s is not None and any(v["gap_p99_s"] is not None for v in rows.values()):
-                worst = max(((k, v) for k, v in rows.items() if v["gap_p99_s"] is not None),
-                            key=lambda kv: kv[1]["gap_p99_s"])
-                if worst[1]["gap_p99_s"] > pace_gap_p99_s:
-                    reason = f"{worst[0]} tick gap p99 {worst[1]['gap_p99_s']} s > {pace_gap_p99_s}"
+                slow = f"median sim/wall {median:.4f} < {pace_floor}"
+        if slow is None and pace_gap_p99_s is not None and any(v["gap_p99_s"] is not None for v in rows.values()):
+            worst = max(((k, v) for k, v in rows.items() if v["gap_p99_s"] is not None), key=lambda kv: kv[1]["gap_p99_s"])
+            if worst[1]["gap_p99_s"] > pace_gap_p99_s:
+                slow = f"{worst[0]} tick gap p99 {worst[1]['gap_p99_s']} s > {pace_gap_p99_s}"
+        reason = stall or slow
         cooled = st["backoff_at"] is None or now - st["backoff_at"] >= pace_window_s
         running = sum(1 for r in live.values() if r.exited is None)
         stepped = False
-        if reason and cooled and st["cap"] > 1:
+        # a stall steps back at once; a slow window only after pace_confirm evaluations in a row (one window dipping
+        # below the floor is within a single session's own spread: lfv4 single runs' 300 s minima 0.3467-0.3648)
+        st["pace_below"] = st["pace_below"] + 1 if slow else 0
+        confirmed = stall is not None or (slow is not None and st["pace_below"] >= pace_confirm)
+        if confirmed and cooled and st["cap"] > 1:
             st["cap"] = max(1, min(st["cap"], running) - 1)
             st["backoff_at"] = now
             st["backoffs"].append({"t": round(time.time(), 1), "reason": reason, "cap": st["cap"]})
@@ -1145,6 +1152,8 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=240.0)
     ap.add_argument("--pace-period-s", type=float, default=60.0)
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    ap.add_argument("--pace-confirm", type=int, default=2,
+                    help="evaluations in a row a slow window or tick gap must persist before a step back")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
                     help="node-wide RAM reservations shared by this user's bundle jobs")
     ap.add_argument("--bridge-cpus", default="auto",
@@ -1200,6 +1209,7 @@ def main(argv=None) -> int:
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
+        pace_confirm=a.pace_confirm,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
