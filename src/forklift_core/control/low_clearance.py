@@ -22,6 +22,10 @@ from forklift_core.control.start_release import footprint_rect_distance
 from forklift_core.planning.pallet_mission import LIDAR_PLANE_M, SEARCH_TAG, SLOT_TAG, TransportScenario
 
 
+RECORD_CUTOFF_M = 0.2  # the leg's planned clearance is recorded exactly below this
+RECORD_STRIDE = 4  # ... at every this many path poses (a record, not a check: the guard computes c where it needs it)
+
+
 @dataclass(frozen=True)
 class LowClearanceConfig:
     margin_m: float = 0.05  # the share of localisation error and pallet slip on the forks the guard keeps
@@ -50,16 +54,67 @@ def shape_radius(shape) -> float:
                for fp, lat, lon in parts_of(shape))
 
 
-def shape_clearance(pose, shape, rects) -> float:
-    """Exact distance between the shape at ``pose`` and the nearest rectangle (0 where they meet, inf with none)."""
+def _lower_bound(pose, parts, rect) -> float:
+    """A cheap lower bound on the distance between the shape's parts at ``pose`` and ``rect``: for each part, the
+    largest gap between the two rectangles' projections on the four edge directions (a separating-axis bound; never
+    above the exact distance, exact when they are separated along one of those axes)."""
+    c, s_ = math.cos(pose[2]), math.sin(pose[2])
+    rc, rs = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+    hl, hw = rect.length_m / 2, rect.width_m / 2
+    corners = [(rect.x_m + a * rc - b * rs, rect.y_m + a * rs + b * rc) for a, b in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))]
+    best = math.inf
+    for fp, lat, lon in parts:
+        ox, oy = pose[0] + lon * c - lat * s_, pose[1] + lon * s_ + lat * c  # the part's frame origin
+        pc = [(ox + a * c - b * s_, oy + a * s_ + b * c) for a, b in
+              ((fp.front_m, fp.half_width_m), (fp.front_m, -fp.half_width_m), (-fp.rear_m, -fp.half_width_m),
+               (-fp.rear_m, fp.half_width_m))]
+        gap = 0.0
+        for ax, ay in ((c, s_), (-s_, c), (rc, rs), (-rs, rc)):
+            p1 = [x * ax + y * ay for x, y in pc]
+            p2 = [x * ax + y * ay for x, y in corners]
+            gap = max(gap, min(p2) - max(p1), min(p1) - max(p2))
+        best = min(best, gap)
+    return best
+
+
+def _rect_box(rect):
+    """(xmin, ymin, xmax, ymax) of a rectangle."""
+    ex = abs(rect.length_m / 2 * math.cos(rect.yaw_rad)) + abs(rect.width_m / 2 * math.sin(rect.yaw_rad))
+    ey = abs(rect.length_m / 2 * math.sin(rect.yaw_rad)) + abs(rect.width_m / 2 * math.cos(rect.yaw_rad))
+    return rect.x_m - ex, rect.y_m - ey, rect.x_m + ex, rect.y_m + ey
+
+
+def _outline_box(poses, shape):
+    """(xmin, ymin, xmax, ymax) of the shape's part corners at all the poses."""
+    xs, ys = [], []
+    for pose in poses:
+        c, s_ = math.cos(pose[2]), math.sin(pose[2])
+        for fp, lat, lon in parts_of(shape):
+            for a, b in ((lon + fp.front_m, lat + fp.half_width_m), (lon + fp.front_m, lat - fp.half_width_m),
+                         (lon - fp.rear_m, lat - fp.half_width_m), (lon - fp.rear_m, lat + fp.half_width_m)):
+                xs.append(pose[0] + a * c - b * s_)
+                ys.append(pose[1] + a * s_ + b * c)
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _box_gap(a, b) -> float:
+    """Distance between two axis-aligned boxes (0 where they overlap): a lower bound for what they hold."""
+    return math.hypot(max(0.0, b[0] - a[2], a[0] - b[2]), max(0.0, b[1] - a[3], a[1] - b[3]))
+
+
+def shape_clearance(pose, shape, rects, cutoff: float = math.inf) -> float:
+    """Exact distance between the shape at ``pose`` and the nearest rectangle (0 where they meet, inf with none).
+    With ``cutoff``, a rectangle whose cheap lower bound is at least ``cutoff`` is not measured: the result is then
+    exact where below ``cutoff`` and at least ``cutoff`` otherwise (the guard only needs to know which)."""
     if not rects:
         return math.inf
-    reach = shape_radius(shape)
+    parts = parts_of(shape)
     best = math.inf
+    pose_ = tuple(float(v) for v in pose)
     for r in rects:
-        if math.hypot(r.x_m - pose[0], r.y_m - pose[1]) - math.hypot(r.length_m, r.width_m) / 2 - reach > best:
-            continue  # farther than the nearest already found
-        best = min(best, footprint_rect_distance(tuple(float(v) for v in pose), shape, r))
+        if _lower_bound(pose_, parts, r) >= min(best, cutoff):
+            continue  # no nearer than the nearest already found, or than the cutoff
+        best = min(best, footprint_rect_distance(pose_, shape, r))
         if best <= 0.0:
             return 0.0
     return best
@@ -85,7 +140,14 @@ class LegClearance:
             raise ValueError("poses must be an (N, 3) array")
         self.poses = poses
         self.s = np.r_[0.0, np.cumsum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))]
-        self.c = np.array([shape_clearance(p, self.shape, self.props_at(si)) for p, si in zip(poses, self.s)])
+        # for the record only (the guard computes c where it needs it): exact below RECORD_CUTOFF_M
+        boxes = {id(props): [(r, _rect_box(r)) for r in props] for props in (self.search_props, self.slot_props)}
+        c = []
+        for p_, si in zip(poses[::RECORD_STRIDE], self.s[::RECORD_STRIDE]):
+            box = _outline_box([p_], self.shape)
+            near = [r for r, rb in boxes[id(self.props_at(si))] if _box_gap(box, rb) < RECORD_CUTOFF_M]
+            c.append(shape_clearance(p_, self.shape, near, cutoff=RECORD_CUTOFF_M) if near else math.inf)
+        self.c = np.array(c)
 
     @property
     def length_m(self) -> float:
@@ -106,12 +168,12 @@ class LegClearance:
         dyaw = float(np.arctan2(np.sin(b[2] - a[2]), np.cos(b[2] - a[2])))
         return np.array([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), a[2] + t * dyaw])
 
-    def at(self, s: float) -> float:
+    def at(self, s: float, cutoff: float = math.inf) -> float:
         """c at path length ``s`` (clamped to the path): the shape at the planned pose there against the props of the
         stage that planned it -- computed, never blended between poses or across the stage boundary (Codex rounds 8,
-        9); inf where no prop is near."""
+        9); inf where no prop is near. Exact below ``cutoff``, at least ``cutoff`` otherwise."""
         s = min(max(float(s), 0.0), self.length_m)
-        return shape_clearance(self.pose_at(s), self.shape, self.props_at(s))
+        return shape_clearance(self.pose_at(s), self.shape, self.props_at(s), cutoff=cutoff)
 
 
 @dataclass(frozen=True)
@@ -151,10 +213,29 @@ def guard_cap(pose, curvature_inv_m: float, direction: int, speed_cap_mps: float
         mid = np.array([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2] + dyaw / 2])
         checks.append((mid, (float(arc[i - 1]) + float(arc[i])) / 2, motion / 2, float(arc[i - 1])))
     end_along = progress_m + remaining
+    # One sweep-wide filter per stage: a prop whose axis-aligned box stays farther than the margin plus the largest pad
+    # from the axis-aligned box of every check's outline cannot violate anywhere on this arc.
+    reach_cut = config.margin_m + max(pad for _, _, pad, _ in checks)
+    sweep_box = _outline_box([c_[0] for c_ in checks], shape)
+    near_cache: dict = {}
+
+    def near_props(props):
+        key = id(props)
+        if key not in near_cache:
+            near_cache[key] = [r for r in props if _box_gap(sweep_box, _rect_box(r)) < reach_cut]
+        return near_cache[key]
+
     for check_pose, s_check, pad, s_from in checks:
         along = min(progress_m + s_check, end_along)
-        lower = shape_clearance(check_pose, shape, leg.props_at(along)) - pad
-        planned = leg.at(along) - max(0.0, s_check - remaining)
+        props = near_props(leg.props_at(along))
+        if not props:
+            continue
+        lower = shape_clearance(check_pose, shape, props, cutoff=config.margin_m + pad) - pad
+        if lower >= config.margin_m:
+            continue  # no threshold exceeds the margin: no violation, whatever the plan left here
+        overrun = max(0.0, s_check - remaining)
+        # exact where it can matter: a c at or above margin + deviation + overrun gives the margin itself
+        planned = leg.at(along, cutoff=config.margin_m + config.deviation_m + overrun) - overrun
         threshold = min(config.margin_m, max(0.0, planned - config.deviation_m))
         if lower <= 0.0 or lower < threshold:
             return GuardCap(stopping.speed_for(s_from) if s_from > 0.0 else 0.0, s_from, lower, threshold, length)

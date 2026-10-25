@@ -202,3 +202,21 @@ def test_the_planned_clearance_follows_the_path_between_its_poses():
                           search_props=[corner], slot_props=[corner])
     for x in (2.6, 2.75, 2.9):
         assert leg.at(x - 2.48) == pytest.approx(lc.shape_clearance((x, 0.0, 0.0), Footprint(1.56, 0.0, 0.4), [corner]))
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_the_cutoff_and_the_lower_bound_never_change_a_distance_below_the_cutoff(seed):
+    rng = np.random.default_rng(seed)
+    unloaded = [(Footprint(1.0, 0.17, 0.36), 0.0, 0.0), (Footprint(0.6, 0.6, 0.05), 0.2, 1.3),
+                (Footprint(0.6, 0.6, 0.05), -0.2, 1.3)]
+    rects = [Rectangle(*rng.uniform(-3, 3, 2), *rng.uniform(0.02, 1.5, 2), rng.uniform(-3, 3)) for _ in range(12)]
+    for shape in (LOADED, unloaded):
+        for _ in range(20):
+            pose = (*rng.uniform(-1, 1, 2), rng.uniform(-3, 3))
+            exact = min(lc.footprint_rect_distance(pose, shape, r) for r in rects)
+            for cutoff in (0.0, 0.05, 0.2, math.inf):
+                got = lc.shape_clearance(pose, shape, rects, cutoff=cutoff)
+                if exact < cutoff:
+                    assert got == pytest.approx(exact, abs=1e-12)
+                else:
+                    assert got >= min(exact, cutoff) - 1e-12
