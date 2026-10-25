@@ -104,16 +104,17 @@ def _box_gap(a, b) -> float:
 
 def shape_clearance(pose, shape, rects, cutoff: float = math.inf) -> float:
     """Exact distance between the shape at ``pose`` and the nearest rectangle (0 where they meet, inf with none).
-    With ``cutoff``, a rectangle whose cheap lower bound is at least ``cutoff`` is not measured: the result is then
-    exact where below ``cutoff`` and at least ``cutoff`` otherwise (the guard only needs to know which)."""
+    With ``cutoff``, a rectangle whose cheap lower bound exceeds ``cutoff`` is not measured: the result is then exact
+    where at or below ``cutoff`` (a contact included, whatever the cutoff) and above it otherwise."""
     if not rects:
         return math.inf
     parts = parts_of(shape)
     best = math.inf
     pose_ = tuple(float(v) for v in pose)
     for r in rects:
-        if _lower_bound(pose_, parts, r) >= min(best, cutoff):
-            continue  # no nearer than the nearest already found, or than the cutoff
+        lb = _lower_bound(pose_, parts, r)
+        if lb >= best or lb > cutoff:
+            continue  # no nearer than the nearest already found, or beyond the cutoff (a contact is always measured)
         best = min(best, footprint_rect_distance(pose_, shape, r))
         if best <= 0.0:
             return 0.0
@@ -222,7 +223,7 @@ def guard_cap(pose, curvature_inv_m: float, direction: int, speed_cap_mps: float
     def near_props(props):
         key = id(props)
         if key not in near_cache:
-            near_cache[key] = [r for r in props if _box_gap(sweep_box, _rect_box(r)) < reach_cut]
+            near_cache[key] = [r for r in props if _box_gap(sweep_box, _rect_box(r)) <= reach_cut]
         return near_cache[key]
 
     for check_pose, s_check, pad, s_from in checks:
@@ -231,8 +232,8 @@ def guard_cap(pose, curvature_inv_m: float, direction: int, speed_cap_mps: float
         if not props:
             continue
         lower = shape_clearance(check_pose, shape, props, cutoff=config.margin_m + pad) - pad
-        if lower >= config.margin_m:
-            continue  # no threshold exceeds the margin: no violation, whatever the plan left here
+        if lower > 0.0 and lower >= config.margin_m:
+            continue  # no threshold exceeds the margin and no contact: no violation, whatever the plan left here
         overrun = max(0.0, s_check - remaining)
         # exact where it can matter: a c at or above margin + deviation + overrun gives the margin itself
         planned = leg.at(along, cutoff=config.margin_m + config.deviation_m + overrun) - overrun

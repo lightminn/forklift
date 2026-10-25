@@ -216,7 +216,19 @@ def test_the_cutoff_and_the_lower_bound_never_change_a_distance_below_the_cutoff
             exact = min(lc.footprint_rect_distance(pose, shape, r) for r in rects)
             for cutoff in (0.0, 0.05, 0.2, math.inf):
                 got = lc.shape_clearance(pose, shape, rects, cutoff=cutoff)
-                if exact < cutoff:
+                if exact <= cutoff:
                     assert got == pytest.approx(exact, abs=1e-12)
                 else:
-                    assert got >= min(exact, cutoff) - 1e-12
+                    assert got > cutoff - 1e-12
+
+
+def test_contact_is_a_violation_even_with_a_zero_margin():
+    # Codex review of the speed-up: margin 0 and a cutoff of 0 skipped a touching prop; moving away from it forward
+    fp = Footprint(1.0, 0.0, 0.5)
+    touching = Rectangle(-0.5, 0.0, 1.0, 1.0, 0.0)  # its front face on the rear axle line
+    leg = lc.LegClearance(straight(0.0, 2.0), fp, search_props=[touching], slot_props=[touching])
+    zero = lc.LowClearanceConfig(margin_m=0.0, deviation_m=0.0)
+    out = lc.guard_cap((0.0, 0.0, 0.0), 0.0, 1, 0.3, fp, leg, progress_m=0.0, leg_remaining_m=2.0,
+                       end_allowance_m=0.03, stopping=STOP, config=zero)
+    assert out.allowed_mps == 0.0
+    assert lc.shape_clearance((0.0, 0.0, 0.0), fp, [touching], cutoff=0.0) == 0.0
