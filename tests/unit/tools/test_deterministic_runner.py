@@ -50,6 +50,19 @@ def test_a_deterministic_run_takes_the_oracle_masks_instead_of_the_learned_propo
     assert args.deterministic_overrides == {"recognition_proposals": "learned"}
     oracle = _runner_args(["--recognition", "far", "--slam-feedback", "slam.sock", "--deterministic"])
     assert oracle.recognition_proposals == "oracle" and oracle.deterministic_overrides == {}
+    # the learned proposer's own inputs are not asked for when the deterministic run replaces it (Codex P3)
+    bare = _runner_args(["--recognition", "far", "--slam-feedback", "slam.sock", "--recognition-proposals", "learned",
+                         "--deterministic"])
+    assert bare.recognition_proposals == "oracle" and bare.deterministic_overrides == {"recognition_proposals": "learned"}
+
+
+def test_a_deterministic_run_refuses_a_boundary_record():
+    # boundary records keep RGB by content hash (arrays_*.npz members, image_save pixel entries), which the strict
+    # comparison cannot tell from the rest -- the two are not combined (plan D1b, Codex)
+    import pytest
+
+    with pytest.raises(SystemExit):
+        _runner_args(["--deterministic", "--record-boundary"])
 
 
 def _body(name: str) -> str:
