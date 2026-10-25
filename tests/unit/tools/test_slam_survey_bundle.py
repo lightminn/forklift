@@ -273,6 +273,16 @@ def test_the_survey_job_runs_the_consoles_runner_word_for_word():
     assert "--max-epochs 1" in survey and "--end-session" in survey
 
 
+def test_the_survey_maps_the_scene_file_it_is_given_as_the_console_runs_it():
+    # live-default plan S3: the CT-2 surveys (SCENE_FILE=line_m_session.json) ran in the factory hall because the env
+    # file blanked SCENE_FILE; the survey writes it as the console does, so its runner sees the same scene
+    live = (ROOT / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    survey = (ROOT / "deploy" / "console" / "slam_survey.sbatch").read_text()
+    line = """printf 'SCENE_FILE=%q\\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")\""""
+    assert line in live and line in survey
+    assert "printf 'SCENE_FILE=\\n'" not in survey
+
+
 def test_the_survey_takes_the_consoles_default_odometry():
     """Plan 2026-10-25-team-spec-default: the survey maps with the console's encoders (joint-angle by default)."""
     for name in ("isaac_live.sbatch", "slam_survey.sbatch"):
