@@ -1324,17 +1324,6 @@ class MissionCore:
         options, obstacle = self.options, self.obstacle
         tracker_ = self.trackers.get(self.ms.phase)
         key_ = (self.ms.phase, id(tracker_))
-        if gate_only:
-            # docs/plans/2026-10-25-restart-confirmation.md R2: the raw limit allowed a restart and only the
-            # confirmation held the wheels -- the watch pauses: this tick's work time is kept apart and taken off the
-            # held time (its start stays: the work clock skips pauses and plan waits, so moving the start by a
-            # tick's work time would not take off the same amount, Codex plan re-review P2), neither counting this
-            # tick nor starting over
-            last_ = self.permit_stop_since
-            if last_ is not None and last_["key"] == key_:
-                last_["gate_s"] = last_.get("gate_s", 0.0) + self.commands.work_elapsed(last_["last_s"], t)
-                last_["last_s"] = t
-            return
         watching = (
             getattr(options, "permit_stop_replan", "off") == "on" and not getattr(options, "grid_planning", False)
             and getattr(options, "obstacle_act", False) and acting and allowed == 0.0 and why == "occupied"
@@ -1347,6 +1336,20 @@ class MissionCore:
             self.permit_stop_since = None
             return
         last_ = self.permit_stop_since
+        if gate_only:
+            # docs/plans/2026-10-25-restart-confirmation.md R2: the raw limit allowed a restart and only the
+            # confirmation held the wheels -- the watch pauses: this tick's work time is kept apart and taken off the
+            # held time (its start stays: the work clock skips pauses and plan waits, so moving the start by a
+            # tick's work time would not take off the same amount, Codex plan re-review P2), neither counting this
+            # tick nor starting over. Only a live stretch pauses: the watch's own checks (eligibility above, the
+            # leg and tracker, a gap) come first, and a stretch they end starts again on the next real zero (Codex
+            # implementation review P2).
+            if last_ is None or last_["key"] != key_ or t - last_["last_s"] > PERMIT_STOP_GAP_S:
+                self.permit_stop_since = None
+                return
+            last_["gate_s"] = last_.get("gate_s", 0.0) + self.commands.work_elapsed(last_["last_s"], t)
+            last_["last_s"] = t
+            return
         if last_ is None or last_["key"] != key_ or t - last_["last_s"] > PERMIT_STOP_GAP_S:
             # A new stretch: the first tick, another leg or tracker (a replan installed one), or a gap in the watch's
             # ticks -- the device owning them, a pause (Codex implementation review P3).
@@ -4483,20 +4486,26 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        acting = False
+        gate_applies_ = False
+        if ms.phase in trackers:
+            acting, docking_straight = self.permission_acting()
+            pocket_now_ = bool(options.pocket_check and (
+                ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
+            gate_applies_ = acting and not pocket_now_  # the confirmation's own scope (R1), as in permission()
+            # D5: the approach straight and the insertion act too (as in the permission tick) -- their pocket
+            # work does not run while paused, the layer's own cap does.
+            acting = acting or pocket_now_
         gate_ = self.__dict__.get("_restart_confirm")
-        if gate_ is not None and int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and gate_.armed:
-            # R1: a plan wait reads the permission at the standing direction -- no confirmation, the count over
+        if (gate_ is not None and int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and gate_.armed
+                and gate_applies_ and gate_.key == (ms.phase, id(trackers.get(ms.phase)))):
+            # R1: a plan wait reads the permission at the standing direction -- no confirmation, the count over;
+            # only this leg's own confirmation, and only where it applies (not the pocket or docking stretch,
+            # Codex implementation review P2)
             gate_.observation_gap(self._clearing_scans())
             if allowed > 0.0:
                 allowed, why = 0.0, "occupied"
         self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
-        acting = False
-        if ms.phase in trackers:
-            acting, docking_straight = self.permission_acting()
-            # D5: the approach straight and the insertion act too (as in the permission tick) -- their pocket
-            # work does not run while paused, the layer's own cap does.
-            acting = acting or bool(options.pocket_check and (
-                ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
         obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and acting) else None
         return SimpleNamespace(allowed=allowed, why=why, acting=acting,
                                obstacle_hold=bool(options.obstacle_act and acting and allowed == 0.0))

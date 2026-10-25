@@ -344,3 +344,14 @@ def test_the_confirmation_wait_is_taken_off_in_work_time_across_an_earlier_plan_
         t = round(t + 0.05, 6)
     core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True)
     assert not state.get("scene_replans")  # 2.95 s of real zero: not yet (moving the start by 0.2 s read 3.05 s)
+
+
+def test_a_confirmation_tick_after_a_gap_does_not_carry_the_old_stretch():
+    # Codex implementation review P2: the first tick back from a long plan wait being a confirmation tick must not
+    # hide the gap and hand the next real zero the old held time
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    hold(core, 10.0, 2.8)
+    core.permit_stop_tick(20.0, core.hooks.rear(), 0.0, "occupied", True, gate_only=True)  # back after 7 s away
+    hold(core, 20.1, 0.1)
+    assert not state.get("scene_replans")
