@@ -112,3 +112,47 @@ def test_a_sim_time_value_change_fails(tmp_path):
     (b / "run" / "result.json").write_text(json.dumps(r))
     out = dc.compare(a, b)
     assert out["equal"] is False and any("finished_s" in d for d in out["differences"])
+
+
+def test_paths_beside_a_run_folder_are_the_runs_own(tmp_path):
+    # a bundle slot is <slot>/run with sock/ and bridge/ beside it, and result.json's arguments name them (dv3 V1)
+    runs = []
+    for tag in ("a", "b"):
+        run = make_run(tmp_path, path_tag=tag) / "run"
+        result = json.loads((run / "result.json").read_text())
+        result["arguments"] = {"slam_feedback": str(run.parent / "sock" / "slam.sock")}
+        (run / "result.json").write_text(json.dumps(result))
+        runs.append(run)
+    out = dc.compare(*runs)
+    assert out["equal"] is True, out["differences"]
+
+
+def test_render_and_object_identities_are_left_out_but_the_same_tracker_still_compares(tmp_path):
+    # dv3 V1: the Kit render frame number (the sync takes a varying number of renders), the scene-replan tracker
+    # serial (id() % 10**6) and the cusp hold key's id(tracker) differed between deterministic runs, nothing else
+    def write(tag, frame, serial, ids):
+        run = make_run(tmp_path, path_tag=tag) / "run"
+        result = json.loads((run / "result.json").read_text())
+        result["perception"] = {"capture_diagnostics": {"sensor_frame_id": {"referenceTimeNumerator": frame},
+                                                        "depth_valid": 0.9}}
+        result["scene_replans"] = [{"tracker_serial": serial, "leg": 2}]
+        result["cusp_heading_holds"] = [{"key": ["approach", i, 1], "cancelled_by": None} for i in ids]
+        (run / "result.json").write_text(json.dumps(result))
+        return run
+
+    a = write("a", 892, 27408, [1111, 2222, 1111])
+    b = write("b", 1124, 76368, [9999, 5555, 9999])
+    assert dc.compare(a, b)["equal"] is True, dc.compare(a, b)["differences"]
+    c = write("c", 1124, 76368, [9999, 5555, 5555])  # the third hold on another tracker: a real difference
+    assert dc.compare(a, c)["equal"] is False
+
+
+def test_a_different_value_beside_the_run_folder_still_fails(tmp_path):
+    runs = []
+    for tag, name in (("a", "slam.sock"), ("b", "other.sock")):
+        run = make_run(tmp_path, path_tag=tag) / "run"
+        result = json.loads((run / "result.json").read_text())
+        result["arguments"] = {"slam_feedback": str(run.parent / "sock" / name)}
+        (run / "result.json").write_text(json.dumps(result))
+        runs.append(run)
+    assert dc.compare(*runs)["equal"] is False

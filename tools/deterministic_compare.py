@@ -37,7 +37,11 @@ SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt
 # off the decision path (the oracle masks replace the learned proposer), so array members holding RGB are left out.
 RGB_MEMBERS = {"rgb", "rgba"}
 WALL_KEY = re.compile(r"(^|_)(wall|mono)(_s)?$|_wall_s$|^wall_s_|^wall_time_s$|^elapsed_s$|^model_ms$|_mono$")
-IDENTITY_KEYS = {"pid", "session_epoch", "token", "request_token", "submitted", "decided", "port", "started"}
+IDENTITY_KEYS = {"pid", "session_epoch", "token", "request_token", "submitted", "decided", "port", "started",
+                 # the Kit render frame number (the frame sync takes a varying number of renders, dv3 V1) and the
+                 # scene-replan tracker label id(tracker) % 10**6
+                 "sensor_frame_id", "tracker_serial"}
+HOLD_LISTS = {"cusp_heading_holds", "cusp_heading_hold"}  # key / cancelled_by = [phase, id(tracker), leg]
 SNAPSHOT = re.compile(r"/snapshots/[^/]+/")
 CONSOLE_TRAFFIC = {"cycle", "gate"}
 
@@ -46,6 +50,23 @@ def _norm_str(value: str, roots: tuple) -> str:
     for root in roots:
         value = value.replace(str(root), "<RUN>")
     return SNAPSHOT.sub("/snapshots/<SNAP>/", value)
+
+
+def _tracker_ordinals(holds):
+    """Cusp heading-hold records with id(tracker) replaced by its first-seen ordinal, so "the same tracker" still
+    compares (as ``run_transport._identity_free`` does for boundary records)."""
+    ordinals: dict = {}
+    many = isinstance(holds, list)
+    out = []
+    for hold in holds if many else [holds]:
+        if isinstance(hold, dict):
+            hold = dict(hold)
+            for field in ("key", "cancelled_by"):
+                v = hold.get(field)
+                if isinstance(v, list) and len(v) == 3:
+                    hold[field] = [v[0], f"<tracker {ordinals.setdefault(v[1], len(ordinals))}>", v[2]]
+        out.append(hold)
+    return out if many else out[0]
 
 
 def normalise(value, roots: tuple, path: str = ""):
@@ -57,7 +78,7 @@ def normalise(value, roots: tuple, path: str = ""):
             here = f"{path}.{k}" if path else k
             if WALL_KEY.search(k) or k in IDENTITY_KEYS or here == "deterministic.diagnostics":
                 continue
-            out[k] = normalise(sub, roots, here)
+            out[k] = normalise(_tracker_ordinals(sub) if k in HOLD_LISTS else sub, roots, here)
         return out
     if isinstance(value, list):
         return [normalise(v, roots, path) for v in value]
@@ -93,6 +114,8 @@ def _array_key(a: np.ndarray) -> bytes:
 def _items(run: Path) -> dict:
     """{relative name: ("json", lines) | ("arrays", {member: array}) | ("bytes", data)}"""
     roots = (run, run.resolve())
+    if run.name == "run":  # a runner slot <slot>/run: the sock/ and bridge/ the arguments name sit beside it
+        roots += (run.parent, run.resolve().parent)
     items: dict = {}
     spools: dict = {}
     for path in sorted(p for p in run.rglob("*") if p.is_file()):
