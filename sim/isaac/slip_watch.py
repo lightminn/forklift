@@ -38,6 +38,16 @@ def relative(base, pallet) -> tuple:
     return (c * dx + s * dy, -s * dx + c * dy, _wrap(pyaw - byaw))
 
 
+def merge_gaps(*readings: dict) -> dict:
+    """Pocket side gaps taken at several lifts (the reach of one physics step), each blade's worse: the smaller gap
+    on each side, None (no wall) if any reading has none there."""
+    out = {}
+    for side in ("left", "right"):
+        pairs = [r.get(side) or (None, None) for r in readings]
+        out[side] = tuple(None if any(p[i] is None for p in pairs) else min(p[i] for p in pairs) for i in (0, 1))
+    return out
+
+
 class SlipWatch:
     def __init__(self, *, inserted_along_m: float, outline_half_m: tuple):
         self.inserted_along_m = float(inserted_along_m)

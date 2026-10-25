@@ -36,7 +36,7 @@ def test_the_phase_watch_is_a_running_missions_only():
     """Codex slip impl round 1 P1-2: a mission ended in the lift leaves its phase behind; idle, only the carrying
     relation decides (a manual ground and back-out is not a slip)."""
     at = SOURCE.index("slip_watch.check(")
-    head = SOURCE[at - 900:at]
+    head = SOURCE[at - 2500:at]
     assert "running_ = live is None or core.commands.adopted_id is not None" in head
     assert 'running_ and ms.phase in ["lift", "extract", "transport"]' in head
     assert 'not running_ and core.cargo.relation == "carrying"' in head
@@ -62,7 +62,7 @@ def test_the_old_absolute_lateral_is_no_longer_judged_and_the_drop_check_keeps_i
     assert "< 0.04,\n" not in SOURCE[SOURCE.index("Pallet dropped during transport") - 400:
                                       SOURCE.index("Pallet dropped during transport") + 900]
     drop = SOURCE[SOURCE.index("Pallet dropped during transport") - 400:SOURCE.index("Pallet dropped during transport")]
-    assert 'ms.phase in ["extract", "transport"]' in drop  # not in the lift: the pallet starts it on the floor
+    assert 'ms.phase in ["extract", "transport"]' in drop and '"lift"' not in drop  # the pallet starts the lift on the floor
 
 
 def test_the_baseline_is_taken_at_the_tick_end_with_the_phase_the_tick_ended_in():
@@ -101,3 +101,18 @@ def test_the_diagnostic_pallet_friction_binds_a_min_combined_material_to_the_pal
     bind = SCENE[SCENE.index("UsdShade.MaterialBindingAPI.Apply(prim).Bind("):][:300]
     assert "pallet_material" in bind
     assert "root_path in pallet_roots" in SCENE
+
+
+def test_the_runner_judges_the_pockets_over_the_lifts_reach_in_one_step():
+    at = SOURCE.index("slip_watch.check(")
+    call = SOURCE[at - 1200:SOURCE.index("cargo=True", at)]
+    assert "merge_gaps(" in call and "lift_reach_m_" in call
+    assert 'joint[@name=\'fork_lift\']/limit' in SOURCE or "fork_lift_velocity_mps_" in SOURCE
+    assert "fork_lift_velocity_mps_ * dt" in SOURCE
+
+
+def test_the_drop_check_is_a_running_missions_too():
+    """Codex slip impl round 2: the same running/idle carrying split (a mission ended in extract, its pallet grounded
+    by hand, is no drop)."""
+    drop = SOURCE[SOURCE.index("Pallet dropped during transport") - 500:SOURCE.index("Pallet dropped during transport")]
+    assert 'running_ and ms.phase in ["extract", "transport"]' in drop

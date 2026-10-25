@@ -5441,7 +5441,15 @@ def drive(S, isaac) -> None:
     # The carried load's slip watch (plan 2026-10-25-slip-check-relative): the forks in the pockets, the outline's
     # motion since the insert-to-lift instant and the absolute along check; the old absolute lateral is recorded only.
     # Made here, not in the setup: a recorded setup from before it replays as it was.
-    from slip_watch import SlipWatch
+    import xml.etree.ElementTree as ET_
+
+    from slip_watch import SlipWatch, merge_gaps
+
+    # The fork lift's velocity limit: how far the lift can move in the physics step between the joints the watch reads
+    # and the truth it judges (round 2 P2-1).
+    fork_lift_velocity_mps_ = float(
+        ET_.parse(args.forklift_urdf).getroot().find("joint[@name='fork_lift']/limit").get("velocity"))
+    lift_reach_m_ = fork_lift_velocity_mps_ * dt
 
     slip_watch = SlipWatch(inserted_along_m=geometry.inserted_offset_m - abs(args.rear_axle_offset_m),
                            outline_half_m=(geometry.pallet_depth_m / 2, geometry.pallet_width_m / 2))
@@ -7872,25 +7880,29 @@ def drive(S, isaac) -> None:
                             )
                 # Live (plan D5a): a mission ended while carrying leaves the load on the forks under teleop -- the
                 # drop and slip are watched there too.
-                if ms.phase in ["extract", "transport"] or (
-                        live is not None and core.commands.adopted_id is None and core.cargo.relation == "carrying"):
+                # A phase is a running mission's only: one that ended leaves its phase behind, and idle the carrying
+                # relation decides (slip check plan, Codex impl rounds 1-2).
+                running_ = live is None or core.commands.adopted_id is not None
+                if (running_ and ms.phase in ["extract", "transport"]) or (
+                        live is not None and not running_ and core.cargo.relation == "carrying"):
                     scene_require(t, ppos[2] > 0.04, "Pallet dropped during transport", cargo=True)
                 # Slip check plan: the carried load's watch, the lift included (the drop check above stays out of it --
                 # the pallet starts the lift on the floor). Here with the truth checks, before the tick's arrival moves
-                # the phase on and before a cancel closes the mission's record (Codex impl round 1 P1-1, P2-3). A phase
-                # is a running mission's only: one that ended leaves its phase behind, and idle the carrying relation
-                # decides (P1-2). The lift is read from the joints the previous tick's steering read took (no new
-                # recorded call -- the replay compares their order; one physics step earlier, the lift moves at most
-                # 0.5 mm in it, and it only picks the blocks level with the blades).
-                running_ = live is None or core.commands.adopted_id is not None
+                # the phase on and before a cancel closes the mission's record (Codex impl round 1 P1-1, P2-3); a running
+                # mission's phase or idle carrying, as the drop check (P1-2). The lift is read from the joints the
+                # previous tick's steering read took (no new recorded call -- the replay compares their order), one
+                # physics step before the truth: the pockets are judged at both ends of what the lift can move in that
+                # step (the URDF's velocity limit), each blade's worse (round 2 P2-1).
                 if (running_ and ms.phase in ["lift", "extract", "transport"]) or (
                         live is not None and not running_ and core.cargo.relation == "carrying"):
                     slip_ = slip_watch.check(
                         state.setdefault("slip_watch", {}), t=t, phase=ms.phase if running_ else "idle",
                         base=(float(base[0]), float(base[1]), float(yaw)),
                         pallet=(float(ppos[0]), float(ppos[1]), float(pallet_yaw)),
-                        gaps=None if joints_tick_["q"] is None else insertion_geometry.pocket_side_gaps(
-                            base, q, float(joints_tick_["q"][lift_index[0]]), ppos, pq))
+                        gaps=None if joints_tick_["q"] is None else merge_gaps(*(
+                            insertion_geometry.pocket_side_gaps(base, q, float(joints_tick_["q"][lift_index[0]]) + d_,
+                                                                ppos, pq)
+                            for d_ in (-lift_reach_m_, lift_reach_m_))))
                     scene_require(t, slip_ is None, f"Pallet slipped off forks: {slip_}", cargo=True)
                 if ms.phase in ["approach", "insert"]:
                     scene_require(

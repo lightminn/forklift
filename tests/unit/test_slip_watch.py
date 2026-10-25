@@ -236,3 +236,25 @@ def test_a_tick_with_no_joints_read_yet_leaves_the_pockets_unchecked_and_counted
     summary = {}
     fail = w.check(summary, t=0.0, phase="transport", base=(0.0, 0.0, 0.0), pallet=(ALONG, 0.0, 0.0), gaps=None)
     assert fail is None and summary["pocket_unchecked"] == 1
+
+
+def test_the_pockets_are_judged_over_the_lift_the_step_can_reach():
+    """Codex slip impl round 2 P2-1: the lift is the previous tick's read, so the gaps are taken at both ends of
+    what one physics step can move it and each blade keeps the worse -- a wall missing at either end fails.
+    The carried seat keeps walls over [0.087, 0.1895] m, 16 mm beyond the 8.3 mm step either way."""
+    step = 1.0 / 120  # the URDF's fork_lift velocity limit (1.0 m/s) over one physics step
+    def judged(lift, pz):
+        return SW.merge_gaps(*(GEOMETRY.pocket_side_gaps((0.0, 0.0, 0.0), _q(0.0), lift + d, (0.93, 0.0, pz), _q(0.0))
+                               for d in (-step, step)))
+    w = watch()
+    assert w.check({}, t=0.0, phase="transport", base=(0.0, 0.0, 0.0), pallet=(ALONG, 0.0, 0.0),
+                   gaps=judged(LIFT, PALLET_Z)) is None
+    # Codex's case: read at 0.1645 with the true lift 0.165 above the blocks of a pallet 25 mm low
+    assert w.check({}, t=0.0, phase="transport", base=(0.0, 0.0, 0.0), pallet=(ALONG, 0.0, 0.0),
+                   gaps=judged(0.1645, 0.09225)) == "pocket_clearance"
+
+
+def test_merging_keeps_each_sides_smaller_gap_and_a_missing_wall():
+    a = {"left": (0.03, 0.05), "right": (None, 0.04)}
+    b = {"left": (0.04, 0.02), "right": (0.06, 0.05)}
+    assert SW.merge_gaps(a, b) == {"left": (0.03, 0.02), "right": (None, 0.04)}
