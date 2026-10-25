@@ -11,6 +11,11 @@
 #   sbatch deploy/slurm/slam_cost_replay.sbatch OUT RUN_DIR "key=value ..." [driver args, e.g. --noise-seed 1
 #       --allow-unanswered-tail 8 --pace-live --splice-to-sim-s 1500]
 #   LIVE_EPOCH (environment): the live run's epoch folder, for the summary's validity check
+#   SLAM_NODE=sync|lifelong (environment, default sync): the slam_toolbox node; LIFELONG_PARAMS=1 adds the lifelong
+#   keys at the deployed mapper_params_lifelong.yaml values (slam-bounded-graph plan candidate B); DUMP_GRAPH=1
+#   serializes and dumps the final graph (nodes, edges) for the connectivity check; BASELINE (environment): a baseline
+#   replay's drive.jsonl of the same input for the excess-error summary. The node's effective parameters are always
+#   saved (bridge/params_effective.yaml).
 #   A paced replay runs at the live wall rate (0.4 live factor: sim 1,500 s ~ 63 min) -- give it --time; the driver
 #   refuses a plan longer than the job's remaining time less 5 min (--wall-budget-s).
 # Run from the repository root (a snapshot); docker image forklift/ros2-dev:jazzy.
@@ -27,6 +32,19 @@ CPU0=$(echo "$CPUS" | cut -d, -f1 | cut -d- -f1)
 DRV_CPU=$(echo "$CPUS" | tr ',' '\n' | sed 's/-/\n/' | tail -1)
 YAML=$OUT/slam.yaml
 cp "$ROOT/ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml" "$YAML"
+if [ "${LIFELONG_PARAMS:-0}" = 1 ]; then
+  # mapper_params_lifelong.yaml 22-29 (slam_toolbox 2.8.5): set explicitly, the C++ defaults differ
+  cat >> "$YAML" <<'EOF'
+    lifelong_search_use_tree: false
+    lifelong_minimum_score: 0.1
+    lifelong_iou_match: 0.85
+    lifelong_node_removal_score: 0.04
+    lifelong_overlap_score_scale: 0.06
+    lifelong_constraint_multiplier: 0.08
+    lifelong_nearby_penalty: 0.001
+    lifelong_candidates_scale: 0.03
+EOF
+fi
 for kv in $SETS; do
   k=${kv%%=*}; v=${kv#*=}
   grep -qE "^    $k:" "$YAML" || { echo "unknown param $k"; exit 2; }
@@ -41,7 +59,8 @@ trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
 } > "$OUT/env.txt"
 docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
-  -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml >/dev/null
+  -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
+  "${SLAM_NODE:-sync}" >/dev/null
 CID=$(docker inspect -f '{{.Id}}' "$NAME" 2>/dev/null)
 LEFT=$(squeue -h -j "$JOB" -o %L 2>/dev/null)
 secs() { local d=0 h=0 m=0 s=0 t=$1; [[ $t == *-* ]] && { d=${t%%-*}; t=${t#*-}; }
@@ -56,11 +75,16 @@ DRV=$?
   echo "load_end=$(cut -d' ' -f1-3 /proc/loadavg) end=$(date -Is)"
   echo "cpu_pressure=$(cat /sys/fs/cgroup/system.slice/docker-$CID.scope/cpu.pressure 2>/dev/null | tr '\n' ' ')"
 } >> "$OUT/env.txt"
+docker exec "$NAME" bash /workspace/tools/slam_cost_dump.sh /out "$([ "${DUMP_GRAPH:-0}" = 1 ] && echo graph)" \
+  > "$OUT/dump_exec.log" 2>&1
+echo "dump exit $?" >> "$OUT/dump_exec.log"
 docker stop -t 20 "$NAME" >/dev/null 2>&1
 CON=$(timeout 60 docker wait "$NAME")
 docker logs "$NAME" > "$OUT/container.log" 2>&1
 SUMMARY_ARGS=()
-[ -n "${LIVE_EPOCH:-}" ] && SUMMARY_ARGS=(--live-epoch "$LIVE_EPOCH")
+[ -n "${LIVE_EPOCH:-}" ] && SUMMARY_ARGS+=(--live-epoch "$LIVE_EPOCH")
+[ -n "${BASELINE:-}" ] && SUMMARY_ARGS+=(--baseline "$BASELINE")
+[ "${DUMP_GRAPH:-0}" = 1 ] && SUMMARY_ARGS+=(--graph-dump "$OUT/bridge/dump")
 "$PY" "$ROOT/tools/slam_cost_summary.py" "$OUT/drive.jsonl" "${SUMMARY_ARGS[@]}" > "$OUT/summary.json"
 SUM=$?
 SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)

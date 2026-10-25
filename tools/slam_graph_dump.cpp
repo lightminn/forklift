@@ -2,6 +2,8 @@
 // the SLAM localization plan needs from it (docs/plans/2026-10-20-slam-localization-session.md L2, V2'):
 //   <out>/nodes.csv   one line per processed scan: unique id, state id, stamp, corrected and odometric base pose
 //   <out>/graph.json  vertex and edge counts, the occupancy grid's size, origin and resolution
+//   <out>/edges.csv   one line per graph edge: the source and target scans' unique ids (slam-bounded-graph plan 4.3:
+//                     components and reachability after node removal)
 //   <out>/grid.u8     that grid, karto's GridStates (0 unknown, 100 occupied, 255 free), row-major from the origin
 // The grid is the one slam_toolbox publishes on /map for this graph (SMapper::getOccupancyGrid: CreateFromScans over
 // every processed scan with the given resolution, min_pass_through and occupancy_threshold).
@@ -70,6 +72,12 @@ static int dump(int argc, char ** argv)
     vertices += named.second.size();
   }
   const size_t edges = mapper->GetGraph()->GetEdges().size();
+  std::ofstream edge_rows(out + "/edges.csv");
+  edge_rows << "source,target\n";
+  for (karto::Edge<karto::LocalizedRangeScan> * edge : mapper->GetGraph()->GetEdges()) {
+    edge_rows << edge->GetSource()->GetObject()->GetUniqueId() << ','
+              << edge->GetTarget()->GetObject()->GetUniqueId() << '\n';
+  }
 
   karto::OccupancyGrid * grid = karto::OccupancyGrid::CreateFromScans(scans, resolution, min_pass, threshold);
   std::ofstream meta(out + "/graph.json");
@@ -88,5 +96,5 @@ static int dump(int argc, char ** argv)
     }
   }
   meta << "}\n";
-  return grid != nullptr && nodes.good() && meta.good() ? 0 : 1;
+  return grid != nullptr && nodes.good() && meta.good() && edge_rows.good() ? 0 : 1;
 }

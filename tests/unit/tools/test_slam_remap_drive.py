@@ -97,3 +97,36 @@ def test_unanswered_tail_is_accepted_only_when_allowed():
     with pytest.raises(SystemExit):
         rd.answered_length(4874, 4890, allow_tail=8)
     assert rd.answered_length(100, 100, allow_tail=0) == 100
+
+
+def _source(name, n, shift):
+    truth = [(x + shift, y, yaw) for x, y, yaw in _loop_truth(n)]
+    odom = [(x + 0.01 * i, y, yaw) for i, (x, y, yaw) in enumerate(truth)]
+    return rd.Source(name=name, stamps=[0.1 * i for i in range(n)], odom=odom, truth=truth, ranges=None, end=n - 1)
+
+
+def test_mixed_splice_alternates_source_runs_and_keeps_their_ids():
+    # plan 2026-10-25-slam-bounded-graph 4.1: units taken in turn from different runs of the same scene
+    a, b = _source("a", 101, 0.0), _source("b", 51, 0.001)
+    plan = rd.splice_plan_multi([a, b], until_sim_s=40.0)
+    runs = [p.run for p in plan]
+    assert runs[:100] == [0] * 100 and runs[100:150] == [1] * 50 and runs[150] == 0
+    st = [p.stamp_s for p in plan]
+    assert all(y > x for x, y in zip(st, st[1:])) and st[-1] <= 40.0
+    # a unit's truth is its own run's, its scan ids the run's own
+    assert plan[100].truth == b.truth[0] and plan[100].src == 0 and plan[149].src == 49
+    # across the seam the odometry continues by the previous run's step into its return scan
+    assert rd.relative(plan[99].odom, plan[100].odom) == pytest.approx(rd.relative(a.odom[99], a.odom[100]))
+    # within a unit, the run's own increments
+    assert rd.relative(plan[100].odom, plan[101].odom) == pytest.approx(rd.relative(b.odom[0], b.odom[1]))
+    # the next unit of run a starts after b's period
+    assert plan[150].stamp_s == pytest.approx(10.0 + 5.0)
+
+
+def test_one_source_matches_the_single_run_splice():
+    truth = _loop_truth(101)
+    odom = [(x + 0.01 * i, y, yaw) for i, (x, y, yaw) in enumerate(truth)]
+    stamps = [0.1 * i for i in range(101)]
+    single = rd.splice_plan(stamps, odom, truth, end=100, until_sim_s=25.0)
+    multi = rd.splice_plan_multi([rd.Source("a", stamps, odom, truth, None, 100)], until_sim_s=25.0)
+    assert [(p.src, p.unit, p.stamp_s, p.odom) for p in single] == [(p.src, p.unit, p.stamp_s, p.odom) for p in multi]

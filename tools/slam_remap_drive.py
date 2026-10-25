@@ -16,11 +16,12 @@ filled by stamp and counted, the synchronous start-up before the first timed sca
 pacing clock starts at that scan), so slam_toolbox's wall-clock map regeneration overlaps keyframes as live
 (lockstep otherwise); ``--wall-budget-s B`` refuses a paced replay planned longer than B; ``--splice-to-sim-s T``
 repeats the record from scan 0 to the last scan back at the start pose until sim T, stamps continued, odometry
-continued by the record's own increments and the truth repeated. Each processed reply's line carries its unit, the
-odometry sent and the truth for the accuracy summary.
+continued by the record's own increments and the truth repeated; ``--splice-runs RUN ...`` takes the units in turn
+from the main run and these other runs of the same scene (slam-bounded-graph plan 4.1). Each processed reply's line
+carries its unit, source run and source scan, the odometry sent and the truth for the accuracy summary.
 
     python tools/slam_remap_drive.py RUN_DIR SOCKET OUT_JSONL [--noise-seed S] [--odom-file F] [--ranges-bin B]
-        [--allow-unanswered-tail N] [--pace-live] [--wall-budget-s B] [--splice-to-sim-s T]
+        [--allow-unanswered-tail N] [--pace-live] [--wall-budget-s B] [--splice-to-sim-s T [--splice-runs RUN ...]]
 """
 
 from __future__ import annotations
@@ -124,6 +125,18 @@ class Planned:
     stamp_s: float
     odom: tuple
     truth: tuple
+    run: int = 0  # which source run (splice_plan_multi)
+
+
+@dataclass(frozen=True)
+class Source:
+    """One run's scans for a splice: its stamps, odometry, truth, ranges and the splice end (scan back at the start)."""
+    name: str
+    stamps: list
+    odom: list
+    truth: list
+    ranges: object
+    end: int
 
 
 def splice_plan(stamps, odom, truth, *, end, until_sim_s) -> list:
@@ -133,19 +146,49 @@ def splice_plan(stamps, odom, truth, *, end, until_sim_s) -> list:
     if end is None:
         return [Planned(i, 0, float(stamps[i]), tuple(float(v) for v in odom[i]), tuple(truth[i]))
                 for i in range(len(stamps))]
-    period = float(stamps[end]) - float(stamps[0])
-    out, unit, pose = [], 0, tuple(float(v) for v in odom[0])
+    return splice_plan_multi([Source("", stamps, odom, truth, None, end)], until_sim_s=until_sim_s)
+
+
+def splice_plan_multi(sources: list, *, until_sim_s) -> list:
+    """Units taken in turn from ``sources`` (runs of one scene, each from its scan 0 to before its return scan
+    ``end``) until sim ``until_sim_s`` (slam-bounded-graph plan 4.1): each unit starts where the previous one's period
+    ended, its odometry continues the previous scan's by the unit's own increments (across a seam, the previous
+    run's step into its return scan), its truth and scan ids are its own run's."""
+    out, unit, prev = [], 0, None
+    pose = tuple(float(v) for v in sources[0].odom[0])
+    t = float(sources[0].stamps[0])
     while True:
-        for i in range(end):
-            if unit or i:
-                prev = i - 1 if i else end - 1
-                nxt = i if i else end
-                pose = compose(pose, relative(odom[prev], odom[nxt]))
-            stamp = float(stamps[i]) + unit * period
+        k = unit % len(sources)
+        src = sources[k]
+        base = float(src.stamps[0])
+        for i in range(src.end):
+            if i:
+                pose = compose(pose, relative(src.odom[i - 1], src.odom[i]))
+            elif prev is not None:
+                pose = compose(pose, relative(prev.odom[prev.end - 1], prev.odom[prev.end]))
+            stamp = t + float(src.stamps[i]) - base
             if stamp > until_sim_s:
                 return out
-            out.append(Planned(i, unit, stamp, pose, tuple(truth[i])))
-        unit += 1
+            out.append(Planned(i, unit, stamp, pose, tuple(src.truth[i]), run=k))
+        t += float(src.stamps[src.end]) - base
+        prev, unit = src, unit + 1
+
+
+def load_source(run: Path, *, allow_tail: int) -> tuple:
+    """(records, slam log, Source with end None) of one run's answered scans, checked against each other."""
+    records = load_list(run / "spool", "slam.records")
+    log = load_slam_log(run)
+    stamps = np.asarray(log["scan_stamps_s"], float)
+    if len(np.asarray(log.get("silenced_scan_stamps_s", []))):
+        raise SystemExit(f"{run}: silenced scans: the noise stream would need them skipped")
+    n = answered_length(len(records), len(stamps), allow_tail=allow_tail)
+    if [r["scan_id"] for r in records] != list(range(len(records))):
+        raise SystemExit(f"{run}: spool records are not scans 0..n-1 of the slam log")
+    if not np.allclose([r["stamp_s"] for r in records], stamps[:n], atol=1e-6):
+        raise SystemExit(f"{run}: spool stamps differ from the slam log")
+    src = Source(str(run.resolve()), stamps[:n], [r["odom_base"] for r in records],
+                 [tuple(r["truth_base"]) for r in records], log["scan_ranges_m"][:n], None)
+    return records, log, src
 
 
 def load_odom_file(path: Path, run: Path, records: list, digest: str) -> np.ndarray:
@@ -173,19 +216,13 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-live", action="store_true", help="send at the record's own send times")
     ap.add_argument("--wall-budget-s", type=float, default=None, help="refuse a paced replay planned longer than this")
     ap.add_argument("--splice-to-sim-s", type=float, default=None)
+    ap.add_argument("--splice-runs", type=Path, nargs="+", default=[],
+                    help="other runs of the same scene whose units alternate with this one's (needs --splice-to-sim-s)")
     a = ap.parse_args(argv)
-    records = load_list(a.run / "spool", "slam.records")
-    log = load_slam_log(a.run)
-    stamps = np.asarray(log["scan_stamps_s"], float)
-    ranges = log["scan_ranges_m"]
-    if len(np.asarray(log.get("silenced_scan_stamps_s", []))):
-        raise SystemExit("silenced scans: the noise stream would need them skipped")
-    n = answered_length(len(records), len(stamps), allow_tail=a.allow_unanswered_tail)
-    stamps, ranges = stamps[:n], ranges[:n]
-    if [r["scan_id"] for r in records] != list(range(len(records))):
-        raise SystemExit("spool records are not scans 0..n-1 of the slam log")
-    if not np.allclose([r["stamp_s"] for r in records], stamps, atol=1e-6):
-        raise SystemExit("spool stamps differ from the slam log")
+    if a.splice_runs and (a.splice_to_sim_s is None or a.pace_live):
+        raise SystemExit("--splice-runs needs --splice-to-sim-s and is not paced")
+    records, log, main_src = load_source(a.run, allow_tail=a.allow_unanswered_tail)
+    stamps, ranges, n = main_src.stamps, main_src.ranges, len(records)
     odom = None
     if a.odom_file:
         from gyro_heading_offline import record_digest, run_geometry
@@ -193,10 +230,17 @@ def main(argv=None) -> int:
         odom = load_odom_file(a.odom_file, a.run, records, record_digest(log, records, run_geometry(a.run)))
     if a.splice_to_sim_s is not None and (a.ranges_bin or a.odom_file):
         raise SystemExit("--splice-to-sim-s takes the record's own odometry and redrawn noise only")
-    src_odom = odom if odom is not None else [r["odom_base"] for r in records]
-    truth = [tuple(r["truth_base"]) for r in records]
+    src_odom = odom if odom is not None else main_src.odom
+    truth = main_src.truth
     end = splice_end(truth) if a.splice_to_sim_s is not None else None
-    plan = splice_plan(stamps, src_odom, truth, end=end, until_sim_s=a.splice_to_sim_s)
+    sources = [Source(main_src.name, stamps, src_odom, truth, ranges, end)]
+    for other in a.splice_runs:
+        _, _, o = load_source(other, allow_tail=a.allow_unanswered_tail)
+        sources.append(Source(o.name, o.stamps, o.odom, o.truth, o.ranges, splice_end(o.truth)))
+    if len(sources) > 1:
+        plan = splice_plan_multi(sources, until_sim_s=a.splice_to_sim_s)
+    else:
+        plan = splice_plan(stamps, src_odom, truth, end=end, until_sim_s=a.splice_to_sim_s)
     pace, estimated, first_timed, planned_wall = None, None, None, None
     if a.pace_live:
         pace, estimated, first_timed = pace_offsets(records[:n])
@@ -210,7 +254,8 @@ def main(argv=None) -> int:
                                   "unanswered_tail": len(log["scan_stamps_s"]) - n,
                                   "pace_live": a.pace_live, "pace_estimated": estimated,
                                   "pace_first_timed": first_timed, "planned_wall_s": planned_wall,
-                                  "splice_end": end, "splice_to_sim_s": a.splice_to_sim_s, "planned": len(plan)}),
+                                  "splice_end": end, "splice_to_sim_s": a.splice_to_sim_s, "planned": len(plan),
+                                  "sources": [{"run": x.name, "splice_end": x.end} for x in sources]}),
           flush=True)
     given = read_ranges_bin(a.ranges_bin) if a.ranges_bin else {}
     rng = np.random.default_rng([a.noise_seed, 7])
@@ -222,7 +267,7 @@ def main(argv=None) -> int:
     started, sent, anchor = time.monotonic(), 0, None
     with open(a.out, "w") as out:
         for k, item in enumerate(plan):
-            stamp, clean = item.stamp_s, ranges[item.src]
+            stamp, clean = item.stamp_s, sources[item.run].ranges[item.src]
             if pace is not None and (anchor is not None or (item.unit == 0 and item.src >= first_timed)):
                 if anchor is None:
                     anchor = time.monotonic() - float(pace[item.src])
@@ -239,7 +284,8 @@ def main(argv=None) -> int:
                                                    ANG0, DANG, RMIN, RMAX))
             sent += 1
             if reply.status == "processed":
-                out.write(json.dumps({"scan_id": k, "src": item.src, "unit": item.unit, "stamp_s": float(stamp),
+                out.write(json.dumps({"scan_id": k, "src": item.src, "run": item.run, "unit": item.unit,
+                                      "stamp_s": float(stamp),
                                       "slam_wall_s": reply.slam_wall_s, "map_from_odom": list(reply.map_from_odom),
                                       "odom_base": list(item.odom), "truth_base": list(item.truth)}) + "\n")
     client.close()

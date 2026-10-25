@@ -109,3 +109,41 @@ def test_one_slow_keyframe_per_pass_fails_the_unit_max_extrapolation():
 def test_unit_lines_need_three_units():
     rows = [row(t, 0.03, unit=t // 500) for t in range(0, 1000, 10)]
     assert cs.cost_summary(rows)["max_at_8h_s"] is None
+
+
+def _mixed(err_of):
+    """Rows of a mixed splice: units alternate runs 0 and 1, scans 0..4 per unit, position error err_of(run, unit)."""
+    rows = []
+    for u in range(5):
+        run = u % 2
+        for k in range(5):
+            r = row(100 * u + k, 0.05, unit=u, src=k, truth=(err_of(run, u), 0.0, 0.0))
+            r["run"] = run
+            rows.append(r)
+    return rows
+
+
+def test_growth_is_per_source_run_so_a_hard_first_path_cannot_hide_drift():
+    # Codex round 2 counterexample: the first unit's run is the hard one, the last unit's run drifts 1 -> 10 cm
+    rows = _mixed(lambda run, u: (0.15 if u < 2 else 0.19) if run == 0 else (0.01 if u == 1 else 0.10))
+    e = cs.accuracy(rows)
+    assert e["growth_m"] < 0  # the old first-vs-last comparison passes it
+    assert e["source_growth_m"] == pytest.approx(0.09)  # run 1: 0.01 at unit 1 -> 0.10 at unit 3 (unit 4 is partial)
+
+
+def test_excess_over_the_baseline_on_the_same_segments():
+    base = _mixed(lambda run, u: 0.02)
+    cand = _mixed(lambda run, u: 0.02 + 0.01 * u)
+    x = cs.excess_over_baseline(cand, base)
+    assert x["unit_excess_median_m"] == pytest.approx([0.0, 0.01, 0.02, 0.03])
+    assert x["excess_growth_m"] == pytest.approx(0.03)
+
+
+def test_graph_connectivity_from_a_dump(tmp_path):
+    (tmp_path / "nodes.csv").write_text("unique_id,state_id,stamp_s,x,y,yaw,odom_x,odom_y,odom_yaw\n"
+                                        + "".join(f"{i},{i},{i},0,0,0,0,0,0\n" for i in (0, 1, 2, 5, 6)))
+    (tmp_path / "edges.csv").write_text("source,target\n0,1\n1,2\n5,6\n")
+    g = cs.graph_connectivity(tmp_path)
+    assert g == {"nodes": 5, "edges": 3, "components": 2, "reachable_from_first": 3, "connected": False}
+    (tmp_path / "edges.csv").write_text("source,target\n0,1\n1,2\n2,5\n5,6\n")
+    assert cs.graph_connectivity(tmp_path)["connected"] is True
