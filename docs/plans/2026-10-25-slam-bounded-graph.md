@@ -89,7 +89,15 @@ karto 의 scan 저장소는 상태 ID 를 키로 하는 `std::map` 이고(`Mappe
 
 ## 6. 결과
 
-(S2 뒤에 적는다.)
+### 6.0 S0 운용 확인 (2026-10-26, 코드 읽기)
+
+- **에폭:** 감독자(`tools/live_supervisor.py` 282–301·345–380)는 에폭마다 새 브리지 컨테이너(`slam_bridge_<잡>_e<n>`, `deploy/console/isaac_live.sbatch` 63–76)와 새 runner 를 띄운다. runner 종료 코드 0 은 세션 끝, 3 은 새 장면(다음 에폭 즉시), 그 밖은 crashed 로 재시도한다(`run_transport.py` 8760). 에폭 사이에 그래프는 이어지지 않는다 — mapping 은 컨테이너와 함께 사라지고, `MAP_BUNDLE` 이면 에폭마다 같은 묶음에서 다시 위치 추정한다(묶음은 세션 동안 바뀌지 않는다, `live_supervisor.py` 25–28).
+- **에폭 안의 SLAM 리셋: 없다.** 링크에는 재연결이 없고(`slam_link.py` 256 `close` 뿐), 링크 오류는 `slam_link_failed` 로 에폭을 끝낸다(`run_transport.py` 6359·7707). 코드가 부르는 slam_toolbox 서비스는 `serialize_map` 뿐이다. SLAM tracker 는 미션 사이에 초기화되지 않는 세션 상태다(`mission/baseline.py` 8·82).
+- **콘솔 `sim_reset`:** 차가 서 있고 미션이 없을 때만 받으며(`safety/arbiter.py` 375–397, 감독자 아래에서만 허용 `live_runtime.py` 104·113), runner 가 다음 틱에 끝나 종료 코드 3 을 낸다(`run_transport.py` 7606–7609). 곧 **장면까지 새로 만드는 새 에폭**이다(차·팔레트가 처음 자리로). SLAM 만 리셋하는 경로가 아니다.
+- **미션 사이:** 대기열은 콘솔 쪽에 있고 runner 는 미션이 진행 중이면 새 제출을 거절한다(`mission/commands.py` 155–157). 미션 끝은 `LiveRuntime.end_mission`(`live_runtime.py` 379) → `MissionCore.end_reset`(`core.py` 6893). 유휴는 따로 갈고리가 없고 주 루프가 `paused` 로 틱을 이어 간다(`run_transport.py` 7981–7982). 그동안 SLAM 은 계속 돈다.
+- **결론:** C′ 를 라이브에 넣으려면 runner 의 유휴 분기(`run_transport.py` 7981 근처)에 새 갈고리와 브리지 쪽 새 서비스(또는 `/slam_toolbox/reset` 호출과 3 장의 인계 계약 전체)가 필요하다. `sim_reset` 으로 대신하면 장면이 처음으로 돌아가 연속 운용이 끊긴다. A 는 지금 경로로 바로 쓸 수 있다(에폭마다 같은 묶음). B 는 컨테이너가 띄우는 노드만 바꾸면 된다(`tools/slam_bridge_container.sh` 25–34 의 실행 파일 선택).
+
+(S2 결과는 아래에 적는다.)
 
 ## 7. 자체 검토
 
