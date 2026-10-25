@@ -1,5 +1,8 @@
 # The SLAM survey epoch's mapping config (docs/plans/2026-10-20-slam-localization-session.md L2, S2): the online
-# config below with one change, link_scan_maximum_distance 1.5 -> 3.0 (SURVEY CHANGED). An offline replay of the r6
+# config as it was before the slam_link_failed mitigation (docs/plans/2026-10-25-slam-link-failed.md 6.3: the four
+# loop-search keys below keep 3.0 / 8.0 / 0.05 / 0.03, the values the V2' figures here were measured with; a survey
+# epoch is one cycle, and whether it takes the mitigation is decided with the CT-2 surveys of the localization-
+# default plan), with one change, link_scan_maximum_distance 1.5 -> 3.0 (SURVEY CHANGED). An offline replay of the r6
 # survey record (ws1 test_runs/live/s2_survey/remap, 6 scan-noise realizations of the same trajectory) put this
 # variant's V2' maximum at 0.103-0.177 m (median 0.132) against 0.095-0.452 (0.193) for the online config, and the
 # r6 record's own scans at 0.147 against 0.397 m; none of the tried variants keeps V2' <= 0.10 m reliably. Live

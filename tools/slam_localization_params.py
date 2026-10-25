@@ -23,7 +23,10 @@ from forklift_core.localization.slam_map import MapBundleError, load_bundle
 
 LOCALIZATION_KEYS = {"scan_buffer_size": 3, "loop_match_minimum_chain_size": 3, "do_loop_closing": True,
                      "link_scan_maximum_distance": 3.0, "loop_search_space_dimension": 3.0,
-                     "loop_search_maximum_distance": 2.0}
+                     "loop_search_maximum_distance": 2.0,
+                     # pinned, not inherited from the mapping config: the values the bounded-graph plan's S2 replays
+                     # measured J with (they ran on the slam_link_failed mitigation's online config)
+                     "loop_search_space_resolution": 0.10, "loop_search_space_smear_deviation": 0.05}
 
 
 def localization_params(mapping: dict, prefix: str, start: list[float]) -> dict:

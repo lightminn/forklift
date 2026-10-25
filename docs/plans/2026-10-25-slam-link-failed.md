@@ -214,6 +214,10 @@ E1 결과를 보기 전에 고정한다. 목표 운용 시간은 상위 계획 1
 - 완화 전 같은 실행들은 모두 2 건을 마치고 sim 485–570 s 에서 slam_link_failed 로 끝났다(keyframe 최대 1.04–1.15 s). 위치 오차는 완화 전과 같은 수준이다(같은 지표로 다시 잼: line_m 0.024 / 0.18–0.20, random_m 0.10–0.20 / 0.25–0.32).
 - auto_random r2 의 실패는 도킹 재시도 대조 거절이다. slam_link 와 무관하지만 위치 오차 최대 0.48 m 가 함께 있어 기록해 둔다.
 - line_m_s2 의 첫 두 번은 시작 직후 재제출(PR #131)이 없는 스냅숏이라 무효였다. main 을 병합한 스냅숏(90602d9a, `ENCODER_MODEL=reported` 로 원래 실행과 같은 오도메트리)으로 다시 돌렸다(묶음 11391, `test_runs/live/slamfix_90602d9a`).
+- **같은 값을 쓰는 설정(5 장 3, PR Codex 검토 반영).**
+  - 위치 추정 변형 J(`tools/slam_localization_params.py`)는 루프 탐색 해상도·smear 를 online 설정에서 물려받고 있었다. 그래서 이 완화가 J 도 0.05/0.03 → 0.10/0.05 로 바꾼다. SLAM 그래프 크기 계획의 S2 재생은 이미 완화된 online 설정에서 돌았으므로 후보 A 의 근거가 바로 이 값이다. J 에 0.10/0.05 를 명시적으로 고정해, mapping 설정을 다시 바꿔도 J 가 따라 바뀌지 않게 한다. 거리 2.0 m·창 3.0 m 는 그대로다.
+  - survey 설정(`slam_toolbox_isaac_survey.yaml`)은 완화 전 값(3.0/8.0/0.05/0.03)을 그대로 둔다. 그 설정의 V2′ 수치가 이 값으로 잰 것이고, survey 에폭은 한 순환이다. 완화를 survey 에도 넣을지는 CT-2 survey(live 위치 추정 기본 계획 S3)의 결과를 보고 정한다.
+- **재현 범위.** 5 장 1 의 재생 도구 가운데 `tools/slam_cost_summary.py`·`tools/slam_cost_container.sh`·`deploy/slurm/slam_cost_replay.sbatch` 와 `slam_remap_drive.py` 의 새 옵션은 이 PR 에 없다. SLAM 그래프 크기 계획의 PR 에 함께 들어간다. 그 전에 재현하려면 ws1 스냅숏 `slam_cost_*`·`bounded_d864a846` 이나 `feat/deterministic-sim` 브랜치를 쓴다.
 - 판정(6.3 기준, 확정): 유효 8 회 모두 slam_link_failed 없음, keyframe 최대 ≤ 0.5 s(0.13–0.44 s). 임시 완화를 online 기본값으로 둔다. line_m_s2 의 keyframe 최대(0.36–0.44 s)는 다른 실행(0.13–0.21 s)보다 높다. 비용은 여전히 자라므로(6.4) 근본 해결은 별도 계획에서 한다.
 
 ### 6.4 sim 5,000 s 재생 (2026-10-25, ws1 `test_runs/live/slam_cost_e1/m4`, 같은 입력·빠른 재생)
