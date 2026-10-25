@@ -149,6 +149,11 @@ def splice_plan(stamps, odom, truth, *, end, until_sim_s) -> list:
     return splice_plan_multi([Source("", stamps, odom, truth, None, end)], until_sim_s=until_sim_s)
 
 
+def first_unit_plan(stamps, odom, truth, *, end) -> list:
+    """The record's scans 0..end-1 (one unit, up to its return scan): the run a replay map bundle is built from."""
+    return splice_plan(stamps, odom, truth, end=end, until_sim_s=float(stamps[end - 1]))
+
+
 def splice_plan_multi(sources: list, *, until_sim_s) -> list:
     """Units taken in turn from ``sources`` (runs of one scene, each from its scan 0 to before its return scan
     ``end``) until sim ``until_sim_s`` (slam-bounded-graph plan 4.1): each unit starts where the previous one's period
@@ -216,6 +221,8 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-live", action="store_true", help="send at the record's own send times")
     ap.add_argument("--wall-budget-s", type=float, default=None, help="refuse a paced replay planned longer than this")
     ap.add_argument("--splice-to-sim-s", type=float, default=None)
+    ap.add_argument("--first-unit-only", action="store_true",
+                    help="send scan 0 up to the run's return scan only (a map for candidate A)")
     ap.add_argument("--splice-runs", type=Path, nargs="+", default=[],
                     help="other runs of the same scene whose units alternate with this one's (needs --splice-to-sim-s)")
     a = ap.parse_args(argv)
@@ -232,12 +239,16 @@ def main(argv=None) -> int:
         raise SystemExit("--splice-to-sim-s takes the record's own odometry and redrawn noise only")
     src_odom = odom if odom is not None else main_src.odom
     truth = main_src.truth
-    end = splice_end(truth) if a.splice_to_sim_s is not None else None
+    if a.first_unit_only and (a.splice_to_sim_s is not None or a.pace_live):
+        raise SystemExit("--first-unit-only is not spliced or paced")
+    end = splice_end(truth) if a.splice_to_sim_s is not None or a.first_unit_only else None
     sources = [Source(main_src.name, stamps, src_odom, truth, ranges, end)]
     for other in a.splice_runs:
         _, _, o = load_source(other, allow_tail=a.allow_unanswered_tail)
         sources.append(Source(o.name, o.stamps, o.odom, o.truth, o.ranges, splice_end(o.truth)))
-    if len(sources) > 1:
+    if a.first_unit_only:
+        plan = first_unit_plan(stamps, src_odom, truth, end=end)
+    elif len(sources) > 1:
         plan = splice_plan_multi(sources, until_sim_s=a.splice_to_sim_s)
     else:
         plan = splice_plan(stamps, src_odom, truth, end=end, until_sim_s=a.splice_to_sim_s)

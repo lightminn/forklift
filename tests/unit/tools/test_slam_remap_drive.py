@@ -130,3 +130,10 @@ def test_one_source_matches_the_single_run_splice():
     single = rd.splice_plan(stamps, odom, truth, end=100, until_sim_s=25.0)
     multi = rd.splice_plan_multi([rd.Source("a", stamps, odom, truth, None, 100)], until_sim_s=25.0)
     assert [(p.src, p.unit, p.stamp_s, p.odom) for p in single] == [(p.src, p.unit, p.stamp_s, p.odom) for p in multi]
+
+
+def test_first_unit_only_is_the_record_up_to_its_return_scan():
+    # bounded-graph plan candidate A: the map is built from one run's first unit
+    truth = _loop_truth(101)
+    plan = rd.first_unit_plan([0.1 * i for i in range(101)], truth, truth, end=100)
+    assert [p.src for p in plan] == list(range(100)) and {p.unit for p in plan} == {0}

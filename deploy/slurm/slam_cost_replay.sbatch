@@ -16,6 +16,9 @@
 #   serializes and dumps the final graph (nodes, edges) for the connectivity check; BASELINE (environment): a baseline
 #   replay's drive.jsonl of the same input for the excess-error summary. The node's effective parameters are always
 #   saved (bridge/params_effective.yaml).
+#   SLAM_NODE=localization: MAP_BUNDLE (a bundle folder, tools/slam_replay_bundle.py), MAP_ID, MAP_START_POSE "x,y,yaw"
+#   and LOC_SETS "key=value ..." (applied to the localization params) -- candidate A; no graph dump (localization
+#   refuses serialize_map).
 #   A paced replay runs at the live wall rate (0.4 live factor: sim 1,500 s ~ 63 min) -- give it --time; the driver
 #   refuses a plan longer than the job's remaining time less 5 min (--wall-budget-s).
 # Run from the repository root (a snapshot); docker image forklift/ros2-dev:jazzy.
@@ -57,7 +60,12 @@ trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
   echo "slam_cpu_siblings=$(cat /sys/devices/system/cpu/cpu$CPU0/topology/thread_siblings_list 2>/dev/null)"
   echo "load_start=$(cut -d' ' -f1-3 /proc/loadavg) start=$(date -Is)"
 } > "$OUT/env.txt"
-docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
+LOC_DOCKER=()
+if [ "${SLAM_NODE:-sync}" = localization ]; then
+  LOC_DOCKER=(-v "$(realpath "${MAP_BUNDLE:?the bundle}"):/bundle:ro" -e SLAM_EXPECTED_MAP_ID="${MAP_ID:?the map id}"
+              -e SLAM_MAP_START_POSE="${MAP_START_POSE:?the start pose}" -e LOC_SETS="${LOC_SETS:-}")
+fi
+docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 "${LOC_DOCKER[@]}" \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
   -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
   "${SLAM_NODE:-sync}" "$([ "${DUMP_GRAPH:-0}" = 1 ] && echo graph)" >/dev/null
