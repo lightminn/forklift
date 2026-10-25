@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 
 
@@ -80,6 +81,10 @@ def main():
     ap.add_argument("--static", action="store_true", help="the camera holds still through the warm-up and the frames")
     ap.add_argument("--direct-read", action="store_true",
                     help="also hash the direct getters (get_rgba / get_depth) after the sync, as the runner reads pixels")
+    ap.add_argument("--rp", action="append", default=[],
+                    help="omni:rtx:...=value on the camera's render product prim (Kit 107 keeps the RTX settings there; "
+                         "the /rtx carb paths are deprecated and were not honoured), written after the camera exists "
+                         "and read back")
     ap.add_argument("--carb-after", action="append", default=[],
                     help="/key=value written after the cameras are initialized and read back")
     args = ap.parse_args()
@@ -99,7 +104,7 @@ def main():
               "config": {"base_scene": str(args.base_scene) if args.base_scene else None, "warmup": args.warmup,
                          "frames": args.frames, "resolution": [width, height], "anti_aliasing": args.anti_aliasing,
                          "sync_frame": args.sync_frame, "extra_args": args.extra_arg, "vary_load": args.vary_load,
-                         "second_camera": args.second_camera, "render_every": args.render_every},
+                         "second_camera": args.second_camera, "render_every": args.render_every, "rp": args.rp},
               "carb": {}, "frames": [], "errors": []}
     try:
         import carb
@@ -139,6 +144,23 @@ def main():
             cam2.set_world_pose(position=np.array([0.0, 0.0, 9.0]), orientation=np.array([0.0, 0.7071068, 0.0, 0.7071068]),
                                 camera_axes="usd")
         cam.add_distance_to_image_plane_to_frame()
+        record["render_product"] = {}
+        if args.rp:
+            stage = omni.usd.get_context().get_stage()
+            rp_prim = stage.GetPrimAtPath(cam.get_render_product_path())
+            for item in args.rp:
+                name, _, raw = item.partition("=")
+                attr = rp_prim.GetAttribute(name)
+                if not attr or not attr.IsValid():
+                    raise RuntimeError(f"render product {rp_prim.GetPath()} has no attribute {name}")
+                kind = str(attr.GetTypeName())
+                value = {"bool": lambda s: s.lower() in ("1", "true"), "int": int, "uint": int,
+                         "float": float, "double": float}.get(kind, str)(raw)
+                attr.Set(value)
+            for _ in range(2):
+                app.update()
+            record["render_product"] = {item.partition("=")[0]: str(rp_prim.GetAttribute(item.partition("=")[0]).Get())
+                                        for item in args.rp}
 
         after_items = parse_carb(args.carb_after)
         for key, value in after_items:
@@ -169,6 +191,7 @@ def main():
                 place(f)
                 world.step(render=False)
             place(f)
+            t0 = time.perf_counter()
             world.step(render=True)
             extra = 0
             if args.sync_frame:
@@ -176,10 +199,11 @@ def main():
                                          - float(world.current_time)) > 1e-6:
                     world.render()
                     extra += 1
+            step_s = time.perf_counter() - t0
             frame = cam.get_current_frame()
-            rgba, depth = frame.get("rgba"), frame.get("distance_to_image_plane")
+            rgba, depth = frame.get("rgb"), frame.get("distance_to_image_plane")
             entry = {"frame": f, "rendering_time": frame.get("rendering_time"), "sim_time": float(world.current_time),
-                     "extra_renders": extra}
+                     "extra_renders": extra, "step_s": round(step_s, 5)}
             if i < args.save_rgb and rgba is not None and len(rgba):
                 kept[f"f{f}"] = np.asarray(rgba)[..., :3].astype(np.uint8)
             for name, arr in (("rgb", rgba), ("depth", depth)):
@@ -194,6 +218,10 @@ def main():
                     entry[name] = (hashlib.sha256(np.ascontiguousarray(arr).tobytes()).hexdigest()[:16]
                                    if arr is not None and hasattr(arr, "__len__") and len(arr) else None)
             record["frames"].append(entry)
+        if args.rp:
+            # read again after the frames: a value the renderer put back (seen for aa:op none / taa) shows here
+            record["render_product_end"] = {
+                item.partition("=")[0]: str(rp_prim.GetAttribute(item.partition("=")[0]).Get()) for item in args.rp}
         if kept:
             np.savez_compressed(args.out / f"{args.tag}_rgb.npz", **kept)
     except BaseException:
