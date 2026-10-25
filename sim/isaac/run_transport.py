@@ -911,7 +911,7 @@ def arguments() -> argparse.Namespace:
                         "in the first session only (a scene reset restarts the runner with the same arguments)")
     # Persistent console plan section 4 (U10b, U12, U23): controlled injections for the use cases
     parser.add_argument("--live-test-push-pallet", default=None, metavar="PHASE",
-                        help="U12 tests only: when a mission first enters PHASE, the pallet is moved 0.05 m sideways -- the "
+                        help="U12 tests only: when a mission first enters PHASE, the pallet is moved 0.05 m to the truck's left -- the "
                         "truth checks see a displaced pallet (scene damage, latched)")
     parser.add_argument("--live-test-fail-at", default=None, metavar="PHASE",
                         help="U10b tests only: when a mission first enters PHASE it fails as a tracking failure (the "
