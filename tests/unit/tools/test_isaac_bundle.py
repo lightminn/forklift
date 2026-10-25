@@ -1335,3 +1335,29 @@ def test_the_run_list_takes_watch(tmp_path):
     path.write_text(json.dumps({"name": "a", "argv": ["true"], "watch": ["/o/{attempt}/f"]}) + "\n")
     (run,) = ib.load_runs(path)
     assert run.at(2).watch == ["/o/2/f"]
+
+
+HANGING_TRANSPORT = (
+    "import faulthandler,pathlib,signal,sys,time\n"
+    "out=pathlib.Path(sys.argv[1]); out.mkdir(parents=True)\n"
+    "faulthandler.register(signal.SIGUSR1, file=open(str(out)+'.stall_stack.txt','w'), all_threads=True)\n"
+    "def stuck_in_render():\n"
+    "    time.sleep(60)\n"
+    "stuck_in_render()\n"
+)
+
+
+def test_a_stalled_run_leaves_its_stack_and_diagnostics_before_it_is_ended(tmp_path):
+    # 2026-10-26: dv3_trailer_det2 and 11119 hung with no trace of where; the run is asked for its stack first
+    script = tmp_path / "run_transport.py"
+    script.write_text(HANGING_TRANSPORT)
+    out = tmp_path / "riib_s0"
+    # as riib_scene.sbatch runs it: under timeout, which names the script too and must not get SIGUSR1
+    run = ib.Run(name="riib_s0", argv=["bash", "-c", f"timeout 60 {sys.executable} {script} {out}/run"],
+                 retry_move=[str(out)], watch=[str(out / "run" / "frames.jsonl")])
+    summary = bundle(tmp_path, [run], stall_s=1.0, stall_check_s=0.1, stack_wait_s=0.5, grace_s=2.0)
+    r = results(tmp_path)["riib_s0"]
+    assert r["status"] == "stalled" and summary["stalled"] == 1
+    assert "stuck_in_render" in (out / "run.stall_stack.txt").read_text()
+    assert r["stall_diagnostics"] == str(out / "stall_diagnostics.txt")
+    assert "threads: tid comm state" in (out / "stall_diagnostics.txt").read_text()

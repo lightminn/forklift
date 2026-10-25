@@ -9153,6 +9153,20 @@ def main() -> None:
     args = arguments()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
+    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
+    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
+    # output so that the replay gate's view of the output directory does not change.
+    import faulthandler
+    import signal as signal_
+
+    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
+                          all_threads=True)
+    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
+    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
+    import ctypes
+
+    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
