@@ -348,3 +348,21 @@ def test_the_localization_params_change_only_the_localization_keys(tmp_path):
     assert after["map_file_name"] == str(folder / "map") and after["map_start_pose"] == [-2.0, 0.0, 0.0]
     assert slp.main([str(src), str(tmp_path / "no.yaml"), str(folder), "0" * 64, "0,0,0"]) == 1
     assert not (tmp_path / "no.yaml").exists()
+
+
+def test_variant_j_holds_its_loop_search_whatever_the_mapping_config():
+    # Codex mitigation review P2: J inherited the loop search resolution and smear from the online config, so the
+    # mapping mitigation changed localization too. J pins the values the bounded-graph plan's S2 replays measured
+    # (0.10 m / 0.05 m: those replays ran on the mitigated config), the distance and window as before.
+    import sys
+
+    root = Path(__file__).resolve().parents[4]
+    sys.path.insert(0, str(root / "tools"))
+    import slam_localization_params as slp
+
+    for mapping in ({"loop_search_space_resolution": 0.05, "loop_search_space_smear_deviation": 0.03},
+                    {"loop_search_space_resolution": 0.10, "loop_search_space_smear_deviation": 0.05}):
+        p = slp.localization_params({"slam_toolbox": {"ros__parameters": dict(mapping)}}, "map", [0, 0, 0])
+        p = p["slam_toolbox"]["ros__parameters"]
+        assert (p["loop_search_space_resolution"], p["loop_search_space_smear_deviation"]) == (0.10, 0.05)
+        assert (p["loop_search_maximum_distance"], p["loop_search_space_dimension"]) == (2.0, 3.0)
