@@ -103,7 +103,7 @@ def _session(run_dir):
         acked = None
     out = []
     for run in sorted(glob.glob(f"{run_dir}/live/epoch_*/run")):
-        last = None
+        last = None  # the epoch's last folder's state; "unknown" when its records are missing
         for md in sorted(glob.glob(f"{run}/missions/m*")):
             try:
                 st = _json(f"{md}/records.json")["state"]
@@ -113,16 +113,17 @@ def _session(run_dir):
                 res = _json(f"{md}/result.json").get("result") or {}
             except (OSError, ValueError):
                 res = None
-            if st is None and res is None:
-                continue
-            out.append((st, res))
-            last = st or {}
+            out.append((st, res))  # an empty folder is still a mission, both unknown (Codex V5 7th review P2)
+            last = "unknown" if st is None else st
         try:
             top = _json(f"{run}/result.json")
         except (OSError, ValueError):
             continue
         retries = top.get("docking_retries") or []
-        if top.get("success") is False and (last is None or retries != (last.get("docking_retries") or [])):
+        # after a folder with no records the run record cannot be told from that mission's: add nothing -- the
+        # probe's count (or the scheduled count) fills a cut mission as unknown, read at both bounds
+        if top.get("success") is False and last != "unknown" and (
+                last is None or retries != (last.get("docking_retries") or [])):
             out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {},
                          "forbidden_pocket_contacts": top.get("forbidden_pocket_contacts") or [],
                          "slam": top.get("slam") or {}},

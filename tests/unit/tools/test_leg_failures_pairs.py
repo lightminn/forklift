@@ -223,6 +223,36 @@ def test_a_mission_missing_a_file_is_bounded_best_on_off_and_worst_on_the_hold(t
     assert session_v5(str(session))["best"]["contacts"] == 1
 
 
+def test_an_empty_mission_folder_is_an_unknown_mission_and_counts_against_the_schedule(tmp_path):
+    """Codex V5 7th review P2: a folder with neither file is still a mission -- unknown at both bounds, counted against
+    the acked and scheduled missions (three done folders and an empty fourth are inconsistent); after a folder with no
+    records a failed run's record is not added as another mission (it cannot be told from that one)."""
+    import json
+
+    from leg_failures_pairs import session_v5
+
+    session = tmp_path / "s"
+    run = session / "live/epoch_1/run"
+    for k in (1, 2, 3):
+        md = run / f"missions/m{k}"
+        md.mkdir(parents=True)
+        (md / "records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
+        (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 9.0}}))
+    (run / "missions/m4").mkdir()
+    assert session_v5(str(session))["inconsistent"] is True
+    (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 3}))
+    assert session_v5(str(session))["inconsistent"] is True
+    # two done folders, an empty third and a failed run record: three missions, the third unknown
+    for f in ("records.json", "result.json"):
+        (run / "missions/m3" / f).unlink()
+    (run / "missions/m4").rmdir()
+    (run / "result.json").write_text(json.dumps({"success": False, "failure_reason": "x", "docking_retries": [
+        {"trigger": "b", "time_s": 1.0, "counted": True, "plan": {"length_m": 2.0}}]}))
+    out = session_v5(str(session))
+    assert (out["inconsistent"], out["unknown"]) == (False, 1)
+    assert (out["best"]["score"], out["worst"]["score"], out["worst"]["contact_unknown"]) == (3, 2, 1)
+
+
 def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
     """Re-approach hold plan 2a (V5): a session's score is how many of its scheduled missions completed with no
     re-approach stall -- a stalled mission that recovered scores 0, a mission not reached or cut scores 0 (Codex V5
