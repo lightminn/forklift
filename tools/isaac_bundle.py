@@ -70,8 +70,11 @@ job's time left (squeue %L, again every 5 min: scontrol can shorten it) and star
 `sizes KIND --runs R --jobs J [--run-min M]` prints a --time to match.
 
 Stall watchdog: a run whose progress files -- its "watch" globs, else its pace_log, else the kind's file under its first
-retry_move (riib: run/frames.jsonl) -- have not changed for --stall-min (default the kind's) is ended like a
-timeout (TERM, KILL after --grace-s) and recorded as stalled; it is never retried (a hang is not the infrastructure,
+retry_move (riib: run/frames.jsonl) -- have not changed for --stall-min (default the kind's) is first looked at --
+tools/stall_watch.py's capture_diagnostics (py-spy --native, every thread's state/utime/stime/wchan, /proc status,
+nvidia-smi) into its output folder's stall_diagnostics.txt, then SIGUSR1 to its run_transport processes (their
+faulthandler writes every thread's Python stack to <output>.stall_stack.txt) -- then, --stack-wait-s later, ended like
+a timeout (TERM, KILL after --grace-s) and recorded as stalled; it is never retried (a hang is not the infrastructure,
 and a rerun would blur a deterministic comparison). Before the first progress file exists the silence counts from
 the run's start; a run with no progress file named is not watched.
 
@@ -371,6 +374,53 @@ def time_limit(runs, slots, jobs=1, run_min=30.0, stagger_min=1.0):
     minutes = (waves * run_min + (slots - 1) * stagger_min + 5) * 1.15
     minutes = int(-(-minutes // 5) * 5)
     return f"{minutes // 60:02d}:{minutes % 60:02d}:00"
+
+
+def _cmdline(pid) -> str:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
+
+def stall_targets(pids, match):
+    """The pids of Python interpreters running `match` that catch SIGUSR1 (tools/stall_watch.py's test, inlined: this
+    file runs alone). The interpreter test keeps out `timeout`, which names the script too and forwards SIGUSR1."""
+    out = []
+    for p in pids:
+        if not match or match not in _cmdline(p):
+            continue
+        try:
+            if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
+                continue
+        except OSError:
+            continue
+        try:
+            with open(f"/proc/{p}/status") as f:
+                cgt = next((int(x.split()[1], 16) for x in f if x.startswith("SigCgt:")), 0)
+        except (OSError, ValueError):
+            continue
+        if cgt >> (signal.SIGUSR1 - 1) & 1:
+            out.append(p)
+    return out
+
+
+def stall_diagnostics(pids, r, out):
+    """tools/stall_watch.py's capture_diagnostics for a stalled run, into its output folder (its first retry_move) or
+    else beside the bundle's run log; the path, or the error -- never raised, the run is ended either way."""
+    folder = r.run.retry_move[0] if r.run.retry_move and os.path.isdir(r.run.retry_move[0]) else None
+    path = (os.path.join(folder, "stall_diagnostics.txt") if folder
+            else str(Path(out) / "runs" / f"{r.run.name}.{r.attempt}.stall_diagnostics.txt"))
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            from stall_watch import capture_diagnostics
+        finally:
+            sys.path.pop(0)
+        return capture_diagnostics(pids, path)
+    except Exception as exc:  # noqa: BLE001
+        return f"<{exc!r}>"
 
 
 def watch_globs(run, watch_rel=None):
@@ -822,6 +872,11 @@ class _Live:
     timeout: bool = False
     stalled: bool = False
     silence_max: float = 0.0
+    stack_term_at: float | None = None  # a stalled run's TERM, stack_wait_s after its SIGUSR1
+    diagnostics: str | None = None
+    diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
+    diag_deadline: float | None = None
+    stack_pids: list = field(default_factory=list)
     term_at: float | None = None
     killed: bool = False
     vram_max: int = 0
@@ -843,7 +898,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
-               stall_s=None, stall_check_s=30.0, watch_rel=None,
+               stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
+               diag_wait_s=60.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -970,6 +1026,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": "infra_failed" if infra else ("stalled" if r.stalled else "ended"), "infra": signs,
             "retried": retry, "stalled": r.stalled, "silence_max_s": round(r.silence_max, 1),
+            "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
             "timeout": r.timeout, "killed": r.killed, "session_id": r.env["SESSION_ID"],
             "bridge_cpu": r.env["BRIDGE_CPU"], "port": r.env["PORT"], "vram_max_mib": r.vram_max,
@@ -1207,13 +1264,28 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
-                if stall_s and r.term_at is None and now >= st["stall_next"]:
+                if stall_s and not r.stalled and r.term_at is None and now >= st["stall_next"]:
                     silence = progress_silence(r.run, r.start_wall, watch_rel)
                     if silence is not None:
                         r.silence_max = max(r.silence_max, silence)
-                        if silence >= stall_s:  # ended like a timeout: TERM, KILL after the grace, not retried
-                            r.stalled, r.term_at = True, now
-                            _kill([r.proc.pid], signal.SIGTERM)
+                        if silence >= stall_s:
+                            # first what it was doing: diagnostics in a thread (py-spy, /proc, nvidia-smi -- they
+                            # must not hold up the other runs), at most diag_wait_s
+                            r.stalled = True
+                            r.stack_pids = [p for p in token_pids(r.env["BUNDLE_TOKEN"])
+                                            if stack_match and stack_match in _cmdline(p)]
+                            r.diag_thread = threading.Thread(target=lambda r=r: setattr(
+                                r, "diagnostics", stall_diagnostics(r.stack_pids, r, out)), daemon=True)
+                            r.diag_thread.start()
+                            r.diag_deadline = now + diag_wait_s
+                if (r.stalled and r.stack_term_at is None and r.term_at is None
+                        and (not r.diag_thread.is_alive() or now >= r.diag_deadline)):
+                    # then the stack: SIGUSR1 only to processes that catch it (run_transport's faulthandler)
+                    _kill(stall_targets(r.stack_pids, stack_match), signal.SIGUSR1)
+                    r.stack_term_at = now + stack_wait_s
+                if r.stalled and r.term_at is None and r.stack_term_at is not None and now >= r.stack_term_at:
+                    r.term_at = now  # then ended like a timeout: TERM, KILL after the grace, never retried
+                    _kill([r.proc.pid], signal.SIGTERM)
                 if r.term_at is not None and not r.killed and now - r.term_at > grace_s:
                     r.killed = True
                     _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
