@@ -647,6 +647,50 @@ class InsertionGeometry:
             out[side] = float(gaps.min()) if gaps.size else None
         return out
 
+    def pocket_side_gaps(
+        self,
+        base_position_m: ArrayLike,
+        base_quaternion_wxyz: ArrayLike,
+        lift_m: float,
+        pallet_position_m: ArrayLike,
+        pallet_quaternion_wxyz: ArrayLike,
+    ) -> dict:
+        """Each blade's gap to the pocket wall on its -y side and on its +y side, (minus, plus), in the pallet frame.
+
+        The walls are lateral_clearances' (blocks beside the blade along x and z, its axis-aligned box in the pallet
+        frame), split by which side of the blade's centre a wall's centre lies; a side without a wall is None. The
+        blade is in a pocket when both sides have a wall: the nearest-wall gap alone stays positive for a blade
+        outside an outer block (slip check plan 2026-10-25, Codex round 2). min(minus, plus) is lateral_clearances.
+        """
+        world_from_pallet = _rotation(pallet_quaternion_wxyz)
+        pallet_from_base = world_from_pallet.T @ _rotation(base_quaternion_wxyz)
+        translation = world_from_pallet.T @ (
+            _vector(base_position_m) - _vector(pallet_position_m)
+        )
+        out: dict = {}
+        for name, center, half in self.fork_boxes:
+            if "fork_collision" not in name:
+                continue
+            fork_center = translation + pallet_from_base @ (center + [0.0, 0.0, lift_m])
+            fork_half = np.abs(pallet_from_base) @ half
+            low, high = fork_center - fork_half, fork_center + fork_half
+            box_low = self._pallet_centers - self._pallet_halves
+            box_high = self._pallet_centers + self._pallet_halves
+            beside = (
+                (box_low[:, 0] < high[0])
+                & (box_high[:, 0] > low[0])
+                & (box_low[:, 2] < high[2])
+                & (box_high[:, 2] > low[2])
+                & ~self._pallet_support
+            )
+            below = beside & (self._pallet_centers[:, 1] < fork_center[1])
+            above = beside & (self._pallet_centers[:, 1] >= fork_center[1])
+            minus = low[1] - box_high[below, 1]
+            plus = box_low[above, 1] - high[1]
+            side = "left" if "left" in name else "right"
+            out[side] = (float(minus.min()) if minus.size else None, float(plus.min()) if plus.size else None)
+        return out
+
     def body_contacts(self, base_position_m: ArrayLike, base_quaternion_wxyz: ArrayLike, lift_m: float,
                       pallet_position_m: ArrayLike, pallet_quaternion_wxyz: ArrayLike, *,
                       steering: dict | None = None, clearance_m: float = 0.002) -> tuple[tuple[str, str], ...]:
