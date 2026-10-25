@@ -206,6 +206,26 @@ def judged_coverage(result: dict, nodes: dict, tour_config: dict, reference_runs
     return out
 
 
+def coverage_report(result: dict, nodes: dict, tour_config: dict | None, reference_run: Path | None,
+                    tour_path: Path | None, grid: dict | None) -> dict:
+    """The survey's coverage verdict. The factory hall: the judged region of the tour config. A ``--layout scene``
+    survey (a CT-2 scene file, live-default plan S3): the judged region is the hall's, so the verdict is the reference
+    run's own path -- a run of the same scene -- within reach of the final nodes (base frame, as its truth is)."""
+    if (result.get("arguments") or {}).get("layout") == "scene":
+        if reference_run is None:
+            return {"ok": False, "basis": "reference_path",
+                    "reason": "a scene-file survey is judged by a reference run of the same scene; none given"}
+        try:
+            check = coverage_check(path_points(reference_run), np.column_stack((nodes["x"], nodes["y"])),
+                                   COVERAGE_RADIUS_M)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "basis": "reference_path", "reference": str(reference_run), "reason": str(exc)}
+        return {"basis": "reference_path", "reference": str(reference_run), **check}
+    if tour_config is None:
+        return {"ok": False, "reason": "no tour config: the judged region is not defined"}
+    return judged_coverage(result, nodes, tour_config, [reference_run] if reference_run else [], tour_path, grid)
+
+
 def path_points(run: Path) -> np.ndarray:
     """Every physics step's base position of a run (Isaac truth; a spooled log is refused when incomplete)."""
     return np.asarray(load_slam_log(run)["base_pose_world"], float)[:, :2]
@@ -402,12 +422,8 @@ def main(argv=None) -> int:
             tolerance = 0.5 * float(np.median(np.diff(joint_stamps)))  # half a physics step
             report["world"] = world_check(nodes, joint_stamps, base, tolerance)
             report["start"] = start_check(nodes, joint_stamps, base, tolerance)
-        if args.tour_config is None:
-            report["coverage"] = {"ok": False, "reason": "no tour config: the judged region is not defined"}
-        else:
-            references = [args.reference_run] if args.reference_run else []
-            report["coverage"] = judged_coverage(result, nodes, yaml.safe_load(args.tour_config.read_text()),
-                                                 references, args.tour_path, grid)
+        tour_config = yaml.safe_load(args.tour_config.read_text()) if args.tour_config is not None else None
+        report["coverage"] = coverage_report(result, nodes, tour_config, args.reference_run, args.tour_path, grid)
         if args.reference_run is not None:
             # the operational path of a reference run, recorded beside the verdict (base frame, as its truth is)
             try:

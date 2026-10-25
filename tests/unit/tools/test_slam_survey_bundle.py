@@ -74,6 +74,20 @@ def test_coverage_finds_the_farthest_path_point():
     assert sb.coverage_check(path[:2], nodes, 3.0)["ok"]
 
 
+def test_a_scene_file_survey_is_judged_by_the_reference_runs_path(monkeypatch, tmp_path):
+    # live-default plan S3: the judged region (tour config aisles, travel planner clearance) is the factory hall's; a
+    # --layout scene survey (CT-2) has no travel_planner_config and is judged by a run of the same scene's own path
+    nodes = {"x": np.array([0.0, 10.0]), "y": np.array([0.0, 0.0]), "yaw": np.zeros(2)}
+    result = {"arguments": {"layout": "scene", "rear_axle_offset_m": 0.2}}
+    monkeypatch.setattr(sb, "path_points", lambda run: np.array([[7.5, 0.0], [0.0, 2.0]]))
+    out = sb.coverage_report(result, nodes, None, tmp_path / "ref", None, None)
+    assert out["ok"] is True and out["basis"] == "reference_path" and out["reference"] == str(tmp_path / "ref")
+    monkeypatch.setattr(sb, "path_points", lambda run: np.array([[10.0, 3.5]]))
+    assert sb.coverage_report(result, nodes, None, tmp_path / "ref", None, None)["ok"] is False
+    missing = sb.coverage_report(result, nodes, {"aisles": []}, None, None, None)
+    assert missing["ok"] is False and "reference run" in missing["reason"]
+
+
 def test_the_cost_check_records_processed_keyframes_only():
     records = [{"status": "processed", "wall_s": 0.05}] * 9 + [{"status": "skipped", "wall_s": 5.0},
                                                                  {"status": "processed", "wall_s": 0.31}]
