@@ -1326,11 +1326,13 @@ class MissionCore:
         key_ = (self.ms.phase, id(tracker_))
         if gate_only:
             # docs/plans/2026-10-25-restart-confirmation.md R2: the raw limit allowed a restart and only the
-            # confirmation held the wheels -- the watch pauses (its start moves on by the tick), neither counting
-            # this tick nor starting over
+            # confirmation held the wheels -- the watch pauses: this tick's work time is kept apart and taken off the
+            # held time (its start stays: the work clock skips pauses and plan waits, so moving the start by a
+            # tick's work time would not take off the same amount, Codex plan re-review P2), neither counting this
+            # tick nor starting over
             last_ = self.permit_stop_since
             if last_ is not None and last_["key"] == key_:
-                last_["since_s"] += t - last_["last_s"]
+                last_["gate_s"] = last_.get("gate_s", 0.0) + self.commands.work_elapsed(last_["last_s"], t)
                 last_["last_s"] = t
             return
         watching = (
@@ -1352,7 +1354,7 @@ class MissionCore:
             return
         last_["last_s"] = t
         since_ = last_["since_s"]
-        held_ = self.commands.work_elapsed(since_, t)
+        held_ = self.commands.work_elapsed(since_, t) - last_.get("gate_s", 0.0)
         if held_ < PERMIT_STOP_S - 1e-9:
             return
         self.permit_stop_since = None

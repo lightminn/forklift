@@ -325,3 +325,22 @@ def test_a_restart_confirmation_tick_pauses_the_watch_without_counting_or_restar
     hold(core, t, 0.3)
     assert state["scene_replans"][-1]["trigger"] == "permit_stop"
     assert state["scene_replans"][-1]["detail"]["held_s"] == pytest.approx(PERMIT_STOP_S, abs=0.11)
+
+
+def test_the_confirmation_wait_is_taken_off_in_work_time_across_an_earlier_plan_wait():
+    # Codex plan re-review P2: moving the watch's start by the confirmation's work time miscounts when the work clock
+    # skipped an earlier plan wait inside the stretch
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    paused = [(10.1, 10.2)]  # a plan wait the work clock skips
+    core.commands.work_elapsed = lambda a, b: (b - a) - sum(max(0.0, min(b, e) - max(a, s_)) for s_, e in paused)
+    t = 10.0
+    while t < 13.05:  # 2.95 s of work time held at a real zero (3.05 s of sim time less the 0.1 s wait)
+        if not 10.1 <= t < 10.2:
+            core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True)
+        t = round(t + 0.05, 6)
+    for _ in range(4):  # 0.2 s held by the confirmation alone
+        core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True, gate_only=True)
+        t = round(t + 0.05, 6)
+    core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True)
+    assert not state.get("scene_replans")  # 2.95 s of real zero: not yet (moving the start by 0.2 s read 3.05 s)
