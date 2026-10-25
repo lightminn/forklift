@@ -13,7 +13,7 @@
 # (before the time limit) is passed to the supervisor, which ends the runner and its bridge and starts no more.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/isaac_live.sbatch OUT
-#   optional: PORT (8798), FACTOR (0.4), SEED (0), ENCODER_MODEL (reported; team_spec_quantized takes the team-spec
+#   optional: PORT (8798), FACTOR (0.4), SEED (0), ENCODER_MODEL (team_spec_quantized, or reported; each takes its own
 #   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
 #   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
 #   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
@@ -37,6 +37,10 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
 fi
 # In a bundle (deploy/slurm/isaac_bundle.sbatch) several sessions share one Slurm job: SESSION_ID names this one's
 # bridge containers and BRIDGE_CPU pins its bridge to a CPU of its own; alone, the job ID and the job's first CPU.
+# The SLAM odometry's encoders (plan 2026-10-25-team-spec-default, lead decision): the joint-angle model by default,
+# reported on request (its own baselines; never mixed with the default's), nothing else (no other age table).
+ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
+case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -48,7 +52,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'PORT=%q\nFACTOR=%q\nSEED=%q\nEXTRA_ARGS=%q\n' "${PORT:-8798}" "${FACTOR:-0.4}" "${SEED:-0}" "${EXTRA_ARGS:-}"
   printf 'MAP_BUNDLE=%q\nMAP_START_POSE=%q\n' "${MAP_BUNDLE:-}" "${MAP_START_POSE:-}"
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
-  printf 'ENCODER_MODEL=%q\n' "${ENCODER_MODEL:-reported}"
+  printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'

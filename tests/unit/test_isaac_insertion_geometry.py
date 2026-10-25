@@ -404,6 +404,37 @@ def test_a_block_over_the_blade_centreline_still_counts_as_a_wall(geometry):
     assert gaps["right"] < 0
 
 
+def side_gaps(geometry, base=(-0.89, 0, 0), q=(1, 0, 0, 0), lift=0, pallet=(0, 0, 0), pq=(1, 0, 0, 0)):
+    return geometry.pocket_side_gaps(base, q, lift, pallet, pq)
+
+
+def test_pocket_side_gaps_see_a_wall_on_each_side_of_each_blade(geometry):
+    """Plan 2026-10-25-slip-check-relative O1: the forks are in the pockets when each blade has a pocket wall on
+    both sides; the nearer one is lateral_clearances."""
+    gaps, near = side_gaps(geometry), lateral(geometry)
+    for side in ("left", "right"):
+        minus, plus = gaps[side]
+        assert minus is not None and plus is not None and minus > 0 and plus > 0
+        assert min(minus, plus) == pytest.approx(near[side], abs=1e-12)
+    shifted = side_gaps(geometry, base=(-0.89, 0.02, 0))
+    assert shifted["left"][0] == pytest.approx(gaps["left"][0] + 0.02, abs=1e-9)
+    assert shifted["left"][1] == pytest.approx(gaps["left"][1] - 0.02, abs=1e-9)
+
+
+def test_a_blade_beyond_the_outer_block_has_no_wall_on_its_outer_side(geometry):
+    """Codex slip plan review round 2: a blade outside the pallet's side kept a positive nearest-wall gap."""
+    gaps = side_gaps(geometry, base=(-0.89, 0.40, 0))
+    near = lateral(geometry, base=(-0.89, 0.40, 0))
+    outside = [side for side in ("left", "right") if None in gaps[side]]
+    assert outside and all(near[side] is None or near[side] > 0 for side in outside)
+
+
+def test_pocket_side_gaps_go_negative_on_a_scrape_and_are_none_outside_the_pallet(geometry):
+    gaps = side_gaps(geometry, base=(-0.89, 0.05, 0))
+    assert min(v for pair in gaps.values() for v in pair if v is not None) < 0
+    assert side_gaps(geometry, base=(-3.0, 0, 0)) == {"left": (None, None), "right": (None, None)}
+
+
 @pytest.mark.parametrize(
     "model,reserve,tip,front,target,target_front,drive",
     [

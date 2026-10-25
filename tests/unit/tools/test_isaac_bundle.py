@@ -1028,3 +1028,310 @@ def test_a_stall_steps_back_at_once_even_when_the_pace_is_also_slow(tmp_path):
     summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.5, pace_warmup_s=0.3,
                      pace_period_s=0.1, pace_stall_s=0.4, pace_confirm=99)
     assert summary["backoffs"] and "no tick" in summary["backoffs"][0]["reason"]
+
+
+SLOW_THEN_FAST = (
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+    "while time.monotonic()<t0+float(sys.argv[3]):\n"
+    "    r=0.25 if time.monotonic()<t0+float(sys.argv[2]) else 0.4\n"
+    "    t+=0.02*r; f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n');"
+    " f.flush(); time.sleep(0.02)"
+)
+
+
+def test_a_bundle_steps_back_up_once_the_pace_is_clean_again(tmp_path):
+    # rh (2026-10-25): a back-off on a start-up dip kept the bundle at half its slots for good
+    def run(name):
+        log = tmp_path / f"{name}_live_log.jsonl"
+        return ib.Run(name=name, argv=py(SLOW_THEN_FAST, str(log), "0.6", "3.0"), pace_log=str(log))
+    summary = bundle(tmp_path, [run("a"), run("b")], slots=2, pace_floor=0.345, pace_window_s=0.3,
+                     pace_warmup_s=0.2, pace_period_s=0.1, pace_confirm=2, pace_recover=3)
+    assert summary["backoffs"] and summary["stepups"] and summary["final_cap"] == 2
+    assert summary["stepups"][0]["t"] > summary["backoffs"][0]["t"]
+    rows = [json.loads(x) for x in (tmp_path / "out" / "pace.jsonl").read_text().splitlines()]
+    assert any(r["stepped_up"] for r in rows)
+
+
+def test_no_step_up_without_measured_runs(tmp_path):
+    # runs without a pace log measure nothing: an empty evaluation is not a clean one
+    runs = [paced_run("a", tmp_path, 0.25, 1.2), stamp_run("b", tmp_path, 1.2), stamp_run("c", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=2)
+    assert summary["backoffs"] and summary["final_cap"] == 1 and summary["stepups"] == []
+
+
+def test_the_default_warm_up_is_start_up_plus_a_window():
+    import inspect
+    assert inspect.signature(ib.run_bundle).parameters["pace_warmup_s"].default == 540.0
+
+
+PHASED = (
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+    "for ph in sys.argv[2].split(','):\n"
+    "    r, until = ph.split(':')\n"
+    "    while time.monotonic() < t0 + float(until):\n"
+    "        if r != 'stop':\n"
+    "            t += 0.02 * float(r); f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n')\n"
+    "            f.flush()\n"
+    "        time.sleep(0.02)"
+)
+
+
+def phased_run(name, tmp_path, phases):
+    log = tmp_path / f"{name}_live_log.jsonl"
+    return ib.Run(name=name, argv=py(PHASED, str(log), phases), pace_log=str(log))
+
+
+def test_no_step_up_while_a_running_run_is_unmeasured(tmp_path):
+    # Codex round 1: one run at pace must not raise the cap while another one has not been measured
+    runs = [phased_run("a", tmp_path, "0.25:0.8,0.4:3.0"), ib.Run(name="mute", argv=py("import time; time.sleep(3)"),
+                                                                  pace_log=str(tmp_path / "never.jsonl"))]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=3, pace_stall_s=99, pace_stall_warmup_s=0.1)
+    assert summary["backoffs"] and summary["stepups"] == []
+
+
+def test_no_step_up_while_a_run_without_a_pace_log_runs(tmp_path):
+    # Codex round 2: a run with no pace_log is load the bundle cannot measure, not load that is at pace
+    runs = [phased_run("a", tmp_path, "0.25:0.8,0.4:3.0"), stamp_run("blind", tmp_path, 3.0)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=3)
+    assert summary["backoffs"] and summary["stepups"] == []
+
+
+def test_a_step_up_does_not_delay_the_next_back_off(tmp_path):
+    # Codex round 1: a stall right after a step-up stepped back only a window after the step-up
+    runs = [phased_run("a", tmp_path, "0.25:1.2,0.4:2.3,stop:4.0"), phased_run("b", tmp_path, "0.25:1.2,0.4:4.0")]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=1.0, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=1, pace_recover=2, pace_stall_s=0.3, pace_stall_warmup_s=0.1)
+    assert summary["stepups"] and len(summary["backoffs"]) >= 2
+    up, again = summary["stepups"][0]["t"], summary["backoffs"][1]
+    assert "no tick" in again["reason"] and again["t"] - up < 1.0
+
+
+def test_a_stall_in_the_pace_warm_up_steps_back(tmp_path):
+    # Codex round 1: a run that stops ticking in its first minutes is a stall before its pace is judged
+    runs = [phased_run("hang", tmp_path, "0.4:0.3,stop:2.0"), phased_run("b", tmp_path, "0.4:2.0"),
+            stamp_run("later", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=99,
+                     pace_period_s=0.1, pace_stall_s=0.4, pace_stall_warmup_s=0.2)
+    assert summary["backoffs"] and "hang" in summary["backoffs"][0]["reason"]
+
+
+def test_a_reused_pid_is_not_the_registered_runner(tmp_path):
+    # Codex round 1: after a SIGKILL the pid can belong to another isaac_bundle process later
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        ib.register_list(reg, lst, None, "1", pid=other.pid, ident=["another-boot", 1])
+        assert ib.register_list(reg, lst, None, "2")[0] is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def _sleeper():
+    import subprocess
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "isaac_bundle"])
+
+
+def test_two_runners_on_one_list_need_the_same_claim_dir(tmp_path):
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        conflict, entry = ib.register_list(reg, lst, None, "1", pid=other.pid)
+        assert conflict is None and entry.exists()
+        assert "claim" in ib.register_list(reg, lst, None, "2")[0]  # neither claims: both would run everything
+        assert "claim" in ib.register_list(reg, lst, tmp_path / "c", "2")[0]  # the other one does not claim
+        assert ib.register_list(reg, tmp_path / "elsewhere.jsonl", None, "2")[0] is None  # another list
+    finally:
+        other.kill()
+        other.wait()
+    conflict, entry = ib.register_list(reg, lst, None, "3")  # the other runner is gone: its entry goes
+    assert conflict is None and len(list(reg.glob("l-*"))) == 2  # this one and elsewhere's
+
+
+def test_two_runners_with_the_same_claim_dir_share_a_list(tmp_path):
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        assert ib.register_list(reg, lst, tmp_path / "c", "1", pid=other.pid)[0] is None
+        assert ib.register_list(reg, lst, str(tmp_path / "c") + "/", "2")[0] is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": py("pass")}) + "\n")
+    other = _sleeper()
+    try:
+        ib.register_list(tmp_path / "reg", path, None, "1", pid=other.pid)
+        rc = ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+                      "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0", "--list-registry-dir",
+                      str(tmp_path / "reg")])
+    finally:
+        other.kill()
+        other.wait()
+    assert rc == 2 and not (tmp_path / "out" / "results.jsonl").exists()
+
+
+def test_a_half_empty_last_wave_is_warned():
+    # rcq (2026-10-25): 20 runs on 2 live jobs of 4 slots end with a wave of 4 of 8 slots
+    w = ib.wave_warning(20, "live", 2)
+    assert w and "4 of 8" in w and "16 or 24" in w and "longest runs first" in w
+    assert ib.wave_warning(16, "live", 2) is None and ib.wave_warning(21, "live", 2) is None
+    assert "1 of 6" in ib.wave_warning(13, "riib", 2)
+    assert "4 runs on 1 job" in ib.wave_warning(4, "live", 2)  # fewer jobs fill the wave
+    assert ib.wave_warning(3, "live", 1) is None
+
+
+def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
+    path = tmp_path / "runs.jsonl"
+    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(5)))
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner: [])
+    rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "1 of 4" in out and "0 problems" in out
+
+
+def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
+    # 20 live runs on 2 jobs of 4: 3 waves x 30 min + 3 min stagger + 5 min, +15 %, up to 5 min
+    assert ib.time_limit(20, 4, 2, 30) == "01:55:00"
+    assert ib.time_limit(2, 2, 1, 30) == "00:45:00"
+    assert ib.sbatch_sizes("live", 2, runs=2)["time"] == "00:45:00"
+    assert "time" not in ib.sbatch_sizes("live")
+    assert ib.sbatch_sizes("riib", runs=12, jobs=2, run_min=80)["time"] == ib.time_limit(12, 3, 2, 80)
+
+
+def test_sizes_prints_the_time(capsys):
+    assert ib.main(["sizes", "live", "--runs", "20", "--jobs", "2"]) == 0
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G --time=01:55:00"
+
+
+def test_squeue_time_left_is_parsed():
+    class Out:
+        def __init__(self, text):
+            self.stdout = text
+    for out, secs in (("1:02:03", 3723), ("45:10", 2710), ("2-01:00:00", 176400), ("UNLIMITED", None), ("", None)):
+        assert ib.slurm_time_left(1, run=lambda *a, _out=out, **k: Out(_out)) == secs
+
+
+def test_the_job_s_end_comes_from_its_start_and_from_a_shortened_limit():
+    class Out:
+        def __init__(self, text):
+            self.stdout = text
+    env = {"SLURM_JOB_ID": "7", "SLURM_JOB_END_TIME": "10000"}
+    # squeue fails: the end Slurm set at the start still holds (Codex: no time check at all before)
+    assert ib.job_time_left(env, run=lambda *a, **k: Out(""), now=lambda: 9000.0) == 1000
+    # scontrol shortened the limit since: squeue's %L is smaller
+    assert ib.job_time_left(env, run=lambda *a, **k: Out("5:00"), now=lambda: 9000.0) == 300
+    assert ib.job_time_left({}, now=lambda: 0.0) is None
+
+
+def test_a_retry_left_for_time_keeps_its_claim_and_is_named(tmp_path):
+    # Codex: a retry of this job's own run cannot go to another job (the claim and its attempts are this job's)
+    out = tmp_path / "r"
+    left = iter([3600] + [100] * 1000)
+    run = ib.Run(name="r", argv=py(FLAKY, str(out), "1"), scan=[str(out / "run.log")],
+                 retry_move=[str(out)])
+    summary = bundle(tmp_path, [run], slots=1, run_est_s=600, time_left=lambda: next(left), time_check_s=0.0,
+                     claim_dir=str(tmp_path / "claims"))
+    statuses = [json.loads(x)["status"] for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert statuses == ["infra_failed", "time_left_retry"]
+    assert summary["time_left_retry"] == ["r"] and summary["exit_code"] == 1
+    assert (tmp_path / "claims" / "r").is_dir()
+
+
+def test_no_run_starts_that_the_job_s_time_limit_would_cut(tmp_path):
+    claims = tmp_path / "claims"
+    runs = [stamp_run(n, tmp_path, 0.05) for n in ("a", "b")]
+    summary = bundle(tmp_path, runs, run_est_s=600, time_left=lambda: 300, claim_dir=str(claims))
+    r = results(tmp_path)
+    assert r["a"]["status"] == r["b"]["status"] == "time_left"
+    assert summary["time_left"] == 2 and summary["exit_code"] == 1
+    assert list(claims.iterdir()) == []  # left unclaimed for another job on the list
+
+
+def test_runs_start_while_the_time_left_holds_them(tmp_path):
+    summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.05) for n in ("a", "b")], run_est_s=600,
+                     time_left=lambda: 3600)
+    assert summary["time_left"] == 0 and summary["exit_code"] == 0
+
+
+def test_a_shortened_time_limit_is_read_again(tmp_path):
+    # scontrol can shorten a running job's limit: the runner re-reads it
+    left = iter([3600] + [100] * 1000)
+    runs = [stamp_run(n, tmp_path, 0.3) for n in ("a", "b", "c")]
+    summary = bundle(tmp_path, runs, slots=1, run_est_s=600, time_left=lambda: next(left), time_check_s=0.0)
+    r = results(tmp_path)
+    assert r["a"]["status"] == "ended" and r["b"]["status"] == r["c"]["status"] == "time_left"
+    assert summary["time_left"] == 2
+
+
+# --- stall watchdog -------------------------------------------------------------------------------------------------
+
+WRITES_THEN_HANGS = (
+    "import sys,time; p=sys.argv[1]; end=time.monotonic()+float(sys.argv[2])\n"
+    "while time.monotonic()<end:\n"
+    "    open(p,'a').write('x\\n'); time.sleep(0.05)\n"
+    "time.sleep(float(sys.argv[3]))"
+)
+
+
+def writer(name, tmp_path, write_s, hang_s, **extra):
+    path = tmp_path / f"{name}.progress"
+    return ib.Run(name=name, argv=py(WRITES_THEN_HANGS, str(path), str(write_s), str(hang_s)), watch=[str(path)],
+                  **extra)
+
+
+def test_a_run_whose_progress_stops_is_ended_as_stalled_and_not_retried(tmp_path):
+    # dv3_trailer_det2 (2026-10-26) hung in world.render() for 45 min while its bundle held a GPU
+    hung = writer("hung", tmp_path, 0.3, 30, retry_move=[str(tmp_path / "hung_out")])
+    fine = writer("fine", tmp_path, 1.5, 0)
+    t0 = time.monotonic()
+    summary = bundle(tmp_path, [hung, fine], stall_s=0.6, stall_check_s=0.1, grace_s=1.0)
+    r = results(tmp_path)
+    assert r["hung"]["status"] == "stalled" and r["hung"]["retried"] is False and r["hung"]["silence_max_s"] >= 0.6
+    assert r["fine"]["status"] == "ended" and r["fine"]["rc"] == 0
+    assert summary["stalled"] == 1 and summary["failed"] == 1 and time.monotonic() - t0 < 10
+
+
+def test_silence_counts_from_the_start_until_a_progress_file_exists(tmp_path):
+    never = ib.Run(name="never", argv=py("import time; time.sleep(30)"), watch=[str(tmp_path / "none.jsonl")])
+    bundle(tmp_path, [never], stall_s=0.5, stall_check_s=0.1, grace_s=1.0)
+    assert results(tmp_path)["never"]["status"] == "stalled"
+
+
+def test_a_run_without_a_progress_file_is_not_watched(tmp_path):
+    quiet = ib.Run(name="quiet", argv=py("import time; time.sleep(1.0)"))
+    summary = bundle(tmp_path, [quiet], stall_s=0.3, stall_check_s=0.1)
+    assert results(tmp_path)["quiet"]["status"] == "ended" and summary["stalled"] == 0
+
+
+def test_the_kind_s_progress_file_under_the_output_is_watched(tmp_path):
+    out = tmp_path / "riib_s0"
+    code = "import pathlib,sys,time; d=pathlib.Path(sys.argv[1])/'run'; d.mkdir(parents=True); " \
+           "(d/'frames.jsonl').write_text('{}\\n'); time.sleep(30)"
+    run = ib.Run(name="riib_s0", argv=py(code, str(out)), retry_move=[str(out)])
+    assert ib.watch_globs(run, "run/frames.jsonl") == [str(out / "run" / "frames.jsonl")]
+    bundle(tmp_path, [run], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, watch_rel="run/frames.jsonl")
+    assert results(tmp_path)["riib_s0"]["status"] == "stalled"
+
+
+def test_watch_globs_prefer_the_list_then_the_pace_log():
+    run = ib.Run(name="a", argv=["true"], pace_log="/x/live_log.jsonl", retry_move=["/o"])
+    assert ib.watch_globs(run, "run/frames.jsonl") == ["/x/live_log.jsonl"]
+    run.watch = ["/o/p.jsonl"]
+    assert ib.watch_globs(run, "run/frames.jsonl") == ["/o/p.jsonl"]
+
+
+def test_the_run_list_takes_watch(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"], "watch": ["/o/{attempt}/f"]}) + "\n")
+    (run,) = ib.load_runs(path)
+    assert run.at(2).watch == ["/o/2/f"]
