@@ -182,6 +182,9 @@ COMPARED = (("applied", "position_median_m", "applied position median"), ("appli
 
 def verdict(l_run: RunData, r_run: RunData) -> dict:
     failed = [f"L record: {p}" for p in record_problems(l_run)[:5]] + [f"R record: {p}" for p in record_problems(r_run)[:5]]
+    if failed:  # a damaged record is the verdict; the figures need whole samples (Codex round 3 P3)
+        return {"ok": False, "failed": failed, "l": None, "progress": None, "r_failure": r_run.failure,
+                "common_span_s": None, "l_after_r": None, "comparison": "records damaged"}
     whole = metrics(l_run)
     if not whole["keyframes_timed"] or not whole["keyframe_max_s"] < KEYFRAME_MAX_S:
         failed.append(f"L keyframe max {whole['keyframe_max_s']} s (< {KEYFRAME_MAX_S} s; every keyframe timed: "

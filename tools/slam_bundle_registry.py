@@ -43,7 +43,7 @@ def entry(manifest: dict, report: dict, *, folder: str, start, name: str) -> dic
     """The registry row of an accepted survey bundle (ValueError when the survey was not accepted or has no scene)."""
     world = report.get("world") or {}
     if not report.get("map_id") or report["map_id"] != manifest.get("map_id"):  # the writer always records it
-        raise ValueError(f"{name}: the report's map_id {str(report['map_id'])[:12]} is not the bundle's "
+        raise ValueError(f"{name}: the report's map_id {str(report.get('map_id'))[:12]} is not the bundle's "
                          f"{str(manifest.get('map_id'))[:12]}")
     if not (report.get("ok") is True and world.get("ok") is True):
         raise ValueError(f"{name}: the survey was not accepted (report ok {report.get('ok')}, world ok {world.get('ok')})")
