@@ -1016,8 +1016,9 @@ def arguments() -> argparse.Namespace:
     # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
     # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced)
     # -- replaced before the learned inputs are checked, which it then does not need.
-    args.deterministic_learned_replaced = bool(args.deterministic and args.recognition_proposals == "learned")
-    if args.deterministic_learned_replaced:
+    # a local, not an args attribute: every args field is a near-field contract condition (Codex)
+    learned_replaced = bool(args.deterministic and args.recognition_proposals == "learned")
+    if learned_replaced:
         args.recognition_proposals = "oracle"
     if args.deterministic and args.record_boundary:
         parser.error("--deterministic is not combined with --record-boundary: a boundary record keeps RGB by content "
@@ -1339,7 +1340,7 @@ def arguments() -> argparse.Namespace:
     if args.deterministic and args.recognition_pixel_lag_steps:
         args.deterministic_overrides["recognition_pixel_lag_steps"] = args.recognition_pixel_lag_steps
         args.recognition_pixel_lag_steps = 0
-    if getattr(args, "deterministic_learned_replaced", False):  # replaced above (plan D1b)
+    if learned_replaced:  # replaced above (plan D1b)
         args.deterministic_overrides["recognition_proposals"] = "learned"
     return args
 
