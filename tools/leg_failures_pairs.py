@@ -102,8 +102,10 @@ def _session(run_dir):
     except (OSError, ValueError):
         acked = None
     out = []
+    ambiguous = False
     for run in sorted(glob.glob(f"{run_dir}/live/epoch_*/run")):
         last = None  # the epoch's last folder's state; "unknown" when its records are missing
+        last_end = None  # that folder's result ended_s, when known
         for md in sorted(glob.glob(f"{run}/missions/m*")):
             try:
                 st = _json(f"{md}/records.json")["state"]
@@ -115,20 +117,31 @@ def _session(run_dir):
                 res = None
             out.append((st, res))  # an empty folder is still a mission, both unknown (Codex V5 7th review P2)
             last = "unknown" if st is None else st
+            last_end = (res or {}).get("ended_s")
         try:
             top = _json(f"{run}/result.json")
         except (OSError, ValueError):
             continue
         retries = top.get("docking_retries") or []
-        # after a folder with no records the run record cannot be told from that mission's: add nothing -- the
-        # probe's count (or the scheduled count) fills a cut mission as unknown, read at both bounds
+        if last == "unknown" and top.get("success") is False and retries:
+            # after a folder with no records, the run record's retries are told from that mission's by time (Codex
+            # V5 8th review P2): all after its end -> a separate cut mission; all within it -> that mission's; else,
+            # or with no end time, the mission count cannot be settled -> inconsistent
+            times = [e.get("time_s") for e in retries]
+            if last_end is not None and all(t is not None and t > float(last_end) for t in times):
+                last = {}
+            elif last_end is not None and all(t is not None and t <= float(last_end) for t in times):
+                pass
+            else:
+                ambiguous = True
         if top.get("success") is False and last != "unknown" and (
                 last is None or retries != (last.get("docking_retries") or [])):
             out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {},
                          "forbidden_pocket_contacts": top.get("forbidden_pocket_contacts") or [],
                          "slam": top.get("slam") or {}},
                         {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}))
-    inconsistent = acked is not None and len(out) > acked
+    # an unsettled run record matters only without the probe's count; with it, a separate cut mission is filled below
+    inconsistent = (ambiguous and acked is None) or (acked is not None and len(out) > acked)
     for _ in range(max(0, acked - len(out)) if acked is not None else 0):
         out.append((None, None))
     return out, inconsistent, acked

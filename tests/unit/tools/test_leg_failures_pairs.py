@@ -253,6 +253,37 @@ def test_an_empty_mission_folder_is_an_unknown_mission_and_counts_against_the_sc
     assert (out["best"]["score"], out["worst"]["score"], out["worst"]["contact_unknown"]) == (3, 2, 1)
 
 
+def test_after_a_folder_with_no_records_the_run_record_is_told_apart_by_time(tmp_path):
+    """Codex V5 8th review P2: m3 done at 30 s with no records.json, then a failed run record whose counted retry is at
+    40 s -- a separate cut mission (a fourth: over the schedule, inconsistent); a retry within m3 (20 s) is m3's own;
+    with no end time to compare it cannot be settled (inconsistent)."""
+    import json
+
+    from leg_failures_pairs import session_v5
+
+    session = tmp_path / "s"
+    run = session / "live/epoch_1/run"
+    for k in (1, 2, 3):
+        md = run / f"missions/m{k}"
+        md.mkdir(parents=True)
+        if k < 3:
+            (md / "records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
+        (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 10.0 * k}}))
+
+    def record(t):
+        (run / "result.json").write_text(json.dumps({"success": False, "failure_reason": "x", "docking_retries": [
+            {"trigger": "b", "time_s": t, "counted": True, "plan": {"length_m": 2.0}}]}))
+
+    record(40.0)
+    assert session_v5(str(session))["inconsistent"] is True  # four missions over three scheduled
+    record(20.0)
+    out = session_v5(str(session))
+    assert (out["inconsistent"], out["unknown"]) == (False, 1)
+    (run / "missions/m3/result.json").unlink()
+    (run / "missions/m3/result.json").write_text(json.dumps({"result": {"outcome": "done"}}))
+    assert session_v5(str(session))["inconsistent"] is True
+
+
 def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
     """Re-approach hold plan 2a (V5): a session's score is how many of its scheduled missions completed with no
     re-approach stall -- a stalled mission that recovered scores 0, a mission not reached or cut scores 0 (Codex V5
