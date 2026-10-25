@@ -1,11 +1,12 @@
 """Deterministic-run plan D1: a camera's frame brought to the step's time before its pixels are read.
 
 The annotators of an Isaac camera hand back the frame of whichever render they last finished, which in a normal run
-trails the step by a varying number of renders -- the reason two same-seed runs read different RGB (and, at times,
-depth) on the same tick. In a deterministic run the caller renders without physics (``world.render()``) until the
-camera frame's ``rendering_time`` is the step's simulation time; the 2026-10-24 probes found the pixels identical
-across processes that way even when the number of extra renders differed. The count is a diagnostic (left out of the
-deterministic comparison); past ``cap`` renders the run ends. Off, nothing is rendered."""
+trails the step by a varying number of renders -- the reason two same-seed runs read different depth on the same
+tick at times. In a deterministic run the caller renders without physics (``world.render()``) until the camera
+frame's ``rendering_time`` is the step's simulation time; the 2026-10-25 probes (ws1 job 11154) found depth identical
+across processes that way, even when the number of extra renders differed. RTX RGB is not: it differed between
+processes on every frame with the same simulation and rendering times (plan D1b). The count is a diagnostic (left out
+of the deterministic comparison); past ``cap`` renders the run ends. Off, nothing is rendered."""
 
 from __future__ import annotations
 
