@@ -191,6 +191,27 @@ def test_each_failed_epoch_keeps_its_own_cut_mission_and_a_surplus_of_folders_is
     assert session_missions(str(session))["inconsistent"] is True
 
 
+def test_a_cut_mission_with_no_record_has_an_unknown_d7_and_a_folder_without_result_is_unfinished(tmp_path):
+    """Codex V5 4th review P2: an acked mission with neither folder nor run record (a killed run) may have been cut in
+    D7 -- d7_unknown, which guard 1b counts against the hold arm; a folder with records but no result.json keeps its
+    retries as an unfinished mission (d7_failed), and a done one with a result but no records is not clean."""
+    import json
+
+    from leg_failures_pairs import session_missions, session_score
+
+    session = tmp_path / "s"
+    run = session / "live/epoch_1/run"
+    (run / "missions/m1").mkdir(parents=True)
+    (run / "missions/m1/records.json").write_text(json.dumps({"state": {"docking_retries": [
+        {"trigger": "b", "time_s": 5.0, "counted": True, "plan": {"length_m": 2.0}}]}}))
+    (run / "missions/m2").mkdir(parents=True)
+    (run / "missions/m2/result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 9.0}}))
+    (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 3}))
+    out = session_missions(str(session))
+    assert (out["missions"], out["done"], out["d7_failed"], out["d7_unknown"]) == (3, 1, 1, 1)
+    assert session_score(str(session)) == 0  # the done m2 has no records: a stall cannot be ruled out
+
+
 def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
     """Re-approach hold plan 2a (V5): a session's score is how many of its scheduled missions completed with no
     re-approach stall -- a stalled mission that recovered scores 0, a mission not reached or cut scores 0 (Codex V5
@@ -246,6 +267,11 @@ def test_the_v5_judgement_needs_the_sign_test_the_total_score_and_the_failure_ma
     # Codex V5 3rd review: six recovering stalls turned into failures pass the margin; the D7 failure guard rejects
     convert = [row(2, 3, 3, 3)] * 10 + [row(2, 2, 3, 2, d7=(0, 1))] * 6 + [row(3, 3)] * 44
     assert v5_judge(convert)["verdict"] == "fail"
+    # Codex V5 4th review P2: the same six cut with no record (D7 unknown) count against the hold arm
+    unknown = [row(2, 3, 3, 3)] * 10 + [row(2, 2, 3, 2)] * 6 + [row(3, 3)] * 44
+    unknown[10:16] = [dict(r, missions={"main": r["missions"]["main"], "fix": dict(r["missions"]["fix"], d7_unknown=1)})
+                      for r in unknown[10:16]]
+    assert v5_judge(unknown)["verdict"] == "fail" and v5_judge(unknown)["d7_unknown_fix"] == 6
     # a session over its scheduled missions, or flagged inconsistent, stops the judgement
     assert v5_judge(good[:-1] + [row(3, 3, 3, 4)])["verdict"] == "undecidable"
     assert v5_judge(good[:-1] + [row(3, 3, inconsistent=True)])["verdict"] == "undecidable"

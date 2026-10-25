@@ -104,13 +104,20 @@ def _session(run_dir):
     for run in sorted(glob.glob(f"{run_dir}/live/epoch_*/run")):
         last = None
         for md in sorted(glob.glob(f"{run}/missions/m*")):
+            # a folder missing one file is still a mission (Codex V5 4th review P2): no result.json -> unfinished,
+            # no records.json -> its re-approaches unknown (state None)
             try:
                 st = _json(f"{md}/records.json")["state"]
-                res = _json(f"{md}/result.json").get("result") or {}
             except (OSError, ValueError, KeyError):
+                st = None
+            try:
+                res = _json(f"{md}/result.json").get("result") or {}
+            except (OSError, ValueError):
+                res = {"outcome": "session_failed", "reason": "no_result", "ended_s": None}
+            if st is None and not res:
                 continue
             out.append((st, res))
-            last = st
+            last = st or {}
         try:
             top = _json(f"{run}/result.json")
         except (OSError, ValueError):
@@ -120,8 +127,9 @@ def _session(run_dir):
             out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {}},
                         {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}))
     inconsistent = acked is not None and len(out) > acked
+    # cut with no record anywhere: whether it reached D7 is unknown (state None, Codex V5 4th review P2)
     for _ in range(max(0, acked - len(out)) if acked is not None else 0):
-        out.append(({"docking_retries": []}, {"outcome": "session_failed", "reason": "no_run_record", "ended_s": None}))
+        out.append((None, {"outcome": "session_failed", "reason": "no_run_record", "ended_s": None}))
     return out, inconsistent
 
 
@@ -136,6 +144,7 @@ def session_counts(run_dir) -> list:
     refusal when its plan was refused (box, length, dry run) or not planned."""
     completed = attempted = refusals = 0
     for st, res in _session_states(run_dir):
+        st = st or {}  # an unknown mission adds no attempt
         counted = [e for e in st.get("docking_retries") or [] if e.get("counted")]
         rounds = [float(r["time_s"]) for r in (st.get("delivery_docking") or {}).get("rounds") or []
                   if r.get("time_s") is not None]
@@ -156,8 +165,11 @@ def session_missions(run_dir) -> dict:
     transport_recovery_after_docking, and the hold exits taken (uncounted docking retries ``h``)."""
     states, inconsistent = _session(run_dir)
     out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0, "session_failed": 0,
-           "d7_failed": 0, "reasons": [], "inconsistent": inconsistent}
+           "d7_failed": 0, "d7_unknown": 0, "reasons": [], "inconsistent": inconsistent}
     for st, res in states:
+        # an unfinished mission with no records: whether it reached D7 is unknown (guard 1b counts it against the hold)
+        out["d7_unknown"] += st is None and res.get("outcome") != "done"
+        st = st or {}
         out["missions"] += 1
         out["session_failed"] += res.get("outcome") == "session_failed"
         out["done"] += res.get("outcome") == "done"
@@ -173,7 +185,7 @@ def session_missions(run_dir) -> dict:
 
 def _mission_clean(st, res) -> bool:
     """Done, and every counted re-approach in it arrived (a docking round in its window) and was planned."""
-    if res.get("outcome") != "done":
+    if res.get("outcome") != "done" or st is None:  # no records: a stall cannot be ruled out
         return False
     counted = [e for e in st.get("docking_retries") or [] if e.get("counted")]
     rounds = [float(r["time_s"]) for r in (st.get("delivery_docking") or {}).get("rounds") or []
@@ -212,7 +224,8 @@ def v5_judge(rows, scheduled=3) -> dict:
     """Re-approach hold plan 2a (V5) judgement over collected rows: the exact sign test on the score differences
     (p < 0.05), the summed score not lower, the failures (scheduled - done, summed) on <= off + V5_FAILURE_MARGIN and
     the refusals not increased, and the missions that did not finish after a re-approach (d7_failed) not increased
-    (Codex V5 3rd review: the margin of 6 alone lets a stall turn into a failure). A session with inconsistent records
+    (Codex V5 3rd review: the margin of 6 alone lets a stall turn into a failure) -- an unfinished mission with no
+    records counted as one on the hold arm only, so the hold must win under the worst case (4th review P2). A session with inconsistent records
     (more missions than acked, more done than scheduled, a score above its done) stops the judgement: "undecidable".
     The hold missions' forbidden contacts are read from the runs separately."""
     bad = [r.get("seed") for r in rows for arm in ("main", "fix")
@@ -227,13 +240,15 @@ def v5_judge(rows, scheduled=3) -> dict:
            "failures_main": failures["main"], "failures_fix": failures["fix"], "refusals_main": refusals["main"],
            "refusals_fix": refusals["fix"]}
     d7 = {arm: sum(r["missions"][arm].get("d7_failed", 0) for r in rows) for arm in ("main", "fix")}
-    out.update(d7_failed_main=d7["main"], d7_failed_fix=d7["fix"], inconsistent_seeds=sorted(set(bad)))
+    unknown = {arm: sum(r["missions"][arm].get("d7_unknown", 0) for r in rows) for arm in ("main", "fix")}
+    out.update(d7_failed_main=d7["main"], d7_failed_fix=d7["fix"], d7_unknown_main=unknown["main"],
+               d7_unknown_fix=unknown["fix"], inconsistent_seeds=sorted(set(bad)))
     if bad:
         out["verdict"] = "undecidable"
         return out
     ok = (out["p"] < ALPHA and score["fix"] >= score["main"]
           and failures["fix"] <= failures["main"] + V5_FAILURE_MARGIN and refusals["fix"] <= refusals["main"]
-          and d7["fix"] <= d7["main"])
+          and d7["fix"] + unknown["fix"] <= d7["main"])  # unknown: as failed on the hold arm, not on off
     out["verdict"] = "pass" if ok else "fail"
     return out
 
