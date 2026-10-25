@@ -54,9 +54,10 @@ percentile tick gap. When the median of those ratios falls below --pace-floor, o
 once), the bundle starts no new run until fewer than (running - 1) run -- one step back -- and waits a window before
 it steps back again. The warm-up (540 s) is a session's start-up, 0.22-0.33 for its first four minutes on ws1, plus a
 window, so that no judged window holds it: with 240 s every bundle of rh (2026-10-25) stepped back on its own
-start-up and stayed at half its slots. After --pace-recover clean evaluations in a row (each measured run at pace) and
-a window since the last change, the cap goes up by one again: a back-off that was a false alarm costs minutes, not the
-job. OUT/pace.jsonl keeps every evaluation, runs it could not measure included.
+start-up and stayed at half its slots. Stalls are judged earlier, from --pace-stall-warmup-s. After --pace-recover clean
+evaluations in a row (every running live run past its warm-up, measured and at pace) and a window since the last
+back-off and the last step-up, the cap goes up by one again: a back-off that was a false alarm costs minutes, not the
+job. A step-up does not delay the next back-off. OUT/pace.jsonl keeps every evaluation, runs it could not measure included.
 
 Several bundle jobs can share one list (--claim-dir): each run is claimed with an atomic mkdir before its first
 attempt, so a job with a free slot takes the next unclaimed run and the jobs' last waves end together instead of one
@@ -431,15 +432,31 @@ class NodeLedger:
             (self.dir / f"r-{key}").unlink(missing_ok=True)
 
 
-def _runner_alive(pid) -> bool:
+def _proc_identity(pid):
+    """[boot id, start time in clock ticks] of a process, or None: a pid alone is reused after a SIGKILL."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            boot = f.read().strip()
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return [boot, int(fields[19])]  # stat field 22 (fields[0] here is field 3)
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _runner_alive(entry) -> bool:
+    """The registered runner itself is still running: an isaac_bundle with the same boot and start time."""
+    pid = entry.get("pid")
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
-            return b"isaac_bundle" in f.read()
+            if b"isaac_bundle" not in f.read():
+                return False
     except OSError:
         return False
+    return entry.get("ident") is not None and _proc_identity(pid) == entry.get("ident")
 
 
-def register_list(directory, list_path, claim_dir, job_id, pid=None, alive=_runner_alive):
+def register_list(directory, list_path, claim_dir, job_id, pid=None, alive=_runner_alive, ident=None):
     """Record that this runner runs list_path with claim_dir; return (the conflict, or None; the entry to remove at
     exit, or None). A conflict is another live runner on this node with the same list and not the same claim dir:
     without a shared claim dir both would run every run into the same folders (rcq, 2026-10-25, two jobs on one list
@@ -458,7 +475,7 @@ def register_list(directory, list_path, claim_dir, job_id, pid=None, alive=_runn
                 continue
             if other.get("list") != os.path.realpath(list_path) or other.get("pid") == pid:
                 continue
-            if not alive(other.get("pid")):
+            if not alive(other):
                 f.unlink(missing_ok=True)
                 continue
             if mine is None or other.get("claim_dir") != mine:
@@ -467,7 +484,7 @@ def register_list(directory, list_path, claim_dir, job_id, pid=None, alive=_runn
                         "--claim-dir", None)
         entry = d / f"l-{key:08x}-{job_id}-{pid}"
         entry.write_text(json.dumps({"list": os.path.realpath(list_path), "claim_dir": mine, "job": job_id,
-                                     "pid": pid}) + "\n")
+                                     "pid": pid, "ident": ident or _proc_identity(pid)}) + "\n")
         return None, entry
 
 
@@ -717,7 +734,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
-               pace_recover=10,
+               pace_recover=10, pace_stall_warmup_s=240.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -753,7 +770,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
-          "pace_below": 0, "pace_clean": 0, "stepups": [],
+          "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None,
           "node_ram_waits": 0, "claimed_elsewhere": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
@@ -945,16 +962,33 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                       budget_mib=budget, session_mib=session_vram_mib, free_mib=st["free"])
 
     def evaluate_pace(now):
-        rows, unmeasured = {}, []
+        # a run's pace is judged from pace_warmup_s (its start-up runs slow), its stalls already from
+        # pace_stall_warmup_s: a session that hangs in its first minutes must not wait 9 min to be seen
+        rows, unmeasured, early, warming, blind = {}, [], {}, 0, 0
         for r in live.values():
-            if r.pace is None or r.exited is not None or now - r.start < pace_warmup_s:
+            if r.exited is not None:
+                continue
+            if r.pace is None:  # running without a pace log: load nothing can measure
+                blind += 1
+                continue
+            age = now - r.start
+            if age < pace_warmup_s:
+                warming += 1
+                if age < pace_stall_warmup_s:
+                    continue
+                r.pace.read(r.run.pace_log)
+                got = r.pace.measure(now)
+                if got is not None:
+                    early[r.run.name] = round(got[2], 1)
+                elif age >= pace_stall_warmup_s + pace_stall_s:
+                    early[r.run.name] = round(age, 1)  # never ticked
                 continue
             r.pace.read(r.run.pace_log)
             got = r.pace.measure(now)
             if got is None:
                 unmeasured.append(r.run.name)
-                if now - r.start >= pace_warmup_s + pace_stall_s:
-                    rows[r.run.name] = {"ratio": None, "gap_p99_s": None, "silence_s": round(now - r.start, 1),
+                if age >= pace_warmup_s + pace_stall_s:
+                    rows[r.run.name] = {"ratio": None, "gap_p99_s": None, "silence_s": round(age, 1),
                                         "no_tick": True}
                 continue
             ratio, gap99, silence = got
@@ -964,10 +998,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 r.pace_min = round(min(ratio, r.pace_min if r.pace_min is not None else ratio), 4)
         # a stall is judged first and on its own: it steps back at once, whatever the pace of the others
         stall = None
-        if rows:
-            worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
-            if worst[1]["silence_s"] >= pace_stall_s:
-                stall = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
+        silences = {**early, **{k: v["silence_s"] for k, v in rows.items()}}
+        if silences:
+            worst = max(silences.items(), key=lambda kv: kv[1])
+            if worst[1] >= pace_stall_s:
+                stall = f"{worst[0]} has written no tick for {worst[1]} s"
         slow = None
         ratios = sorted(v["ratio"] for v in rows.values() if v["ratio"] is not None)
         if ratios:
@@ -992,19 +1027,25 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             st["backoff_at"] = now
             st["backoffs"].append({"t": round(time.time(), 1), "reason": reason, "cap": st["cap"]})
             stepped = True
-        # back up by one after pace_recover clean evaluations in a row (something measured, all of it at pace): a
-        # back-off is otherwise for the rest of the job, and one taken on a false alarm halves the bundle for hours
-        measured = any(v["ratio"] is not None or v["gap_p99_s"] is not None for v in rows.values())
-        st["pace_clean"] = st["pace_clean"] + 1 if measured and reason is None else 0
+        # back up by one after pace_recover clean evaluations in a row: a back-off is otherwise for the rest of the
+        # job, and one taken on a false alarm halves the bundle for hours. Clean = every running run has a pace log,
+        # is past its warm-up and measured, none slow or stalled -- a start, a run still warming, one not measured
+        # or one without a pace log restarts the count, so the cap only goes up on the load that is running. The
+        # step-up has its own wait: it does not delay the next back-off.
+        whole = (bool(rows) and not warming and not unmeasured and not blind
+                 and all(v["ratio"] is not None for v in rows.values()))
+        st["pace_clean"] = st["pace_clean"] + 1 if whole and reason is None else 0
         stepped_up = False
-        if not stepped and st["cap"] < slots and st["pace_clean"] >= pace_recover and cooled:
+        up_cooled = cooled and (st["stepup_at"] is None or now - st["stepup_at"] >= pace_window_s)
+        if not stepped and st["cap"] < slots and st["pace_clean"] >= pace_recover and up_cooled:
             st["cap"] += 1
-            st["backoff_at"] = now
+            st["stepup_at"] = now
             st["pace_clean"] = 0
             st["stepups"].append({"t": round(time.time(), 1), "cap": st["cap"]})
             stepped_up = True
         with pace_path.open("a") as f:
-            f.write(json.dumps({"t": round(time.time(), 1), "runs": rows, "unmeasured": unmeasured, "cap": st["cap"],
+            f.write(json.dumps({"t": round(time.time(), 1), "runs": rows, "unmeasured": unmeasured, "early": early,
+                                "cap": st["cap"],
                                 "reason": reason, "stepped_back": stepped,
                                 "stepped_up": stepped_up}) + "\n")
 
@@ -1211,6 +1252,8 @@ def main(argv=None) -> int:
                     help="a run is judged from this age: its start-up (~240 s) plus a window")
     ap.add_argument("--pace-period-s", type=float, default=60.0)
     ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    ap.add_argument("--pace-stall-warmup-s", type=float, default=240.0,
+                    help="a run's stalls are judged from this age (its pace from --pace-warmup-s)")
     ap.add_argument("--pace-confirm", type=int, default=2,
                     help="evaluations in a row a slow window or tick gap must persist before a step back")
     ap.add_argument("--pace-recover", type=int, default=10,
@@ -1286,7 +1329,7 @@ def _run_main(a, runs, slots, shards, probe, stop):
         cleanup=(lambda sid: []) if a.no_cleanup else docker_cleanup, stop=stop, retries=a.retries,
         pace_floor=a.pace_floor, pace_gap_p99_s=a.pace_gap_p99_s, pace_window_s=a.pace_window_s,
         pace_warmup_s=a.pace_warmup_s, pace_period_s=a.pace_period_s, pace_stall_s=a.pace_stall_s,
-        pace_confirm=a.pace_confirm, pace_recover=a.pace_recover,
+        pace_confirm=a.pace_confirm, pace_recover=a.pace_recover, pace_stall_warmup_s=a.pace_stall_warmup_s,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),

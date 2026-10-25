@@ -1065,6 +1065,72 @@ def test_the_default_warm_up_is_start_up_plus_a_window():
     assert inspect.signature(ib.run_bundle).parameters["pace_warmup_s"].default == 540.0
 
 
+PHASED = (
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+    "for ph in sys.argv[2].split(','):\n"
+    "    r, until = ph.split(':')\n"
+    "    while time.monotonic() < t0 + float(until):\n"
+    "        if r != 'stop':\n"
+    "            t += 0.02 * float(r); f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n')\n"
+    "            f.flush()\n"
+    "        time.sleep(0.02)"
+)
+
+
+def phased_run(name, tmp_path, phases):
+    log = tmp_path / f"{name}_live_log.jsonl"
+    return ib.Run(name=name, argv=py(PHASED, str(log), phases), pace_log=str(log))
+
+
+def test_no_step_up_while_a_running_run_is_unmeasured(tmp_path):
+    # Codex round 1: one run at pace must not raise the cap while another one has not been measured
+    runs = [phased_run("a", tmp_path, "0.25:0.8,0.4:3.0"), ib.Run(name="mute", argv=py("import time; time.sleep(3)"),
+                                                                  pace_log=str(tmp_path / "never.jsonl"))]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=3, pace_stall_s=99, pace_stall_warmup_s=0.1)
+    assert summary["backoffs"] and summary["stepups"] == []
+
+
+def test_no_step_up_while_a_run_without_a_pace_log_runs(tmp_path):
+    # Codex round 2: a run with no pace_log is load the bundle cannot measure, not load that is at pace
+    runs = [phased_run("a", tmp_path, "0.25:0.8,0.4:3.0"), stamp_run("blind", tmp_path, 3.0)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=3)
+    assert summary["backoffs"] and summary["stepups"] == []
+
+
+def test_a_step_up_does_not_delay_the_next_back_off(tmp_path):
+    # Codex round 1: a stall right after a step-up stepped back only a window after the step-up
+    runs = [phased_run("a", tmp_path, "0.25:1.2,0.4:2.3,stop:4.0"), phased_run("b", tmp_path, "0.25:1.2,0.4:4.0")]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=1.0, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=1, pace_recover=2, pace_stall_s=0.3, pace_stall_warmup_s=0.1)
+    assert summary["stepups"] and len(summary["backoffs"]) >= 2
+    up, again = summary["stepups"][0]["t"], summary["backoffs"][1]
+    assert "no tick" in again["reason"] and again["t"] - up < 1.0
+
+
+def test_a_stall_in_the_pace_warm_up_steps_back(tmp_path):
+    # Codex round 1: a run that stops ticking in its first minutes is a stall before its pace is judged
+    runs = [phased_run("hang", tmp_path, "0.4:0.3,stop:2.0"), phased_run("b", tmp_path, "0.4:2.0"),
+            stamp_run("later", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=99,
+                     pace_period_s=0.1, pace_stall_s=0.4, pace_stall_warmup_s=0.2)
+    assert summary["backoffs"] and "hang" in summary["backoffs"][0]["reason"]
+
+
+def test_a_reused_pid_is_not_the_registered_runner(tmp_path):
+    # Codex round 1: after a SIGKILL the pid can belong to another isaac_bundle process later
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        ib.register_list(reg, lst, None, "1", pid=other.pid, ident=["another-boot", 1])
+        assert ib.register_list(reg, lst, None, "2")[0] is None
+    finally:
+        other.kill()
+        other.wait()
+
+
 def _sleeper():
     import subprocess
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "isaac_bundle"])
