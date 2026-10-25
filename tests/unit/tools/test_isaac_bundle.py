@@ -1271,3 +1271,67 @@ def test_a_shortened_time_limit_is_read_again(tmp_path):
     r = results(tmp_path)
     assert r["a"]["status"] == "ended" and r["b"]["status"] == r["c"]["status"] == "time_left"
     assert summary["time_left"] == 2
+
+
+# --- stall watchdog -------------------------------------------------------------------------------------------------
+
+WRITES_THEN_HANGS = (
+    "import sys,time; p=sys.argv[1]; end=time.monotonic()+float(sys.argv[2])\n"
+    "while time.monotonic()<end:\n"
+    "    open(p,'a').write('x\\n'); time.sleep(0.05)\n"
+    "time.sleep(float(sys.argv[3]))"
+)
+
+
+def writer(name, tmp_path, write_s, hang_s, **extra):
+    path = tmp_path / f"{name}.progress"
+    return ib.Run(name=name, argv=py(WRITES_THEN_HANGS, str(path), str(write_s), str(hang_s)), watch=[str(path)],
+                  **extra)
+
+
+def test_a_run_whose_progress_stops_is_ended_as_stalled_and_not_retried(tmp_path):
+    # dv3_trailer_det2 (2026-10-26) hung in world.render() for 45 min while its bundle held a GPU
+    hung = writer("hung", tmp_path, 0.3, 30, retry_move=[str(tmp_path / "hung_out")])
+    fine = writer("fine", tmp_path, 1.5, 0)
+    t0 = time.monotonic()
+    summary = bundle(tmp_path, [hung, fine], stall_s=0.6, stall_check_s=0.1, grace_s=1.0)
+    r = results(tmp_path)
+    assert r["hung"]["status"] == "stalled" and r["hung"]["retried"] is False and r["hung"]["silence_max_s"] >= 0.6
+    assert r["fine"]["status"] == "ended" and r["fine"]["rc"] == 0
+    assert summary["stalled"] == 1 and summary["failed"] == 1 and time.monotonic() - t0 < 10
+
+
+def test_silence_counts_from_the_start_until_a_progress_file_exists(tmp_path):
+    never = ib.Run(name="never", argv=py("import time; time.sleep(30)"), watch=[str(tmp_path / "none.jsonl")])
+    bundle(tmp_path, [never], stall_s=0.5, stall_check_s=0.1, grace_s=1.0)
+    assert results(tmp_path)["never"]["status"] == "stalled"
+
+
+def test_a_run_without_a_progress_file_is_not_watched(tmp_path):
+    quiet = ib.Run(name="quiet", argv=py("import time; time.sleep(1.0)"))
+    summary = bundle(tmp_path, [quiet], stall_s=0.3, stall_check_s=0.1)
+    assert results(tmp_path)["quiet"]["status"] == "ended" and summary["stalled"] == 0
+
+
+def test_the_kind_s_progress_file_under_the_output_is_watched(tmp_path):
+    out = tmp_path / "riib_s0"
+    code = "import pathlib,sys,time; d=pathlib.Path(sys.argv[1])/'run'; d.mkdir(parents=True); " \
+           "(d/'frames.jsonl').write_text('{}\\n'); time.sleep(30)"
+    run = ib.Run(name="riib_s0", argv=py(code, str(out)), retry_move=[str(out)])
+    assert ib.watch_globs(run, "run/frames.jsonl") == [str(out / "run" / "frames.jsonl")]
+    bundle(tmp_path, [run], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, watch_rel="run/frames.jsonl")
+    assert results(tmp_path)["riib_s0"]["status"] == "stalled"
+
+
+def test_watch_globs_prefer_the_list_then_the_pace_log():
+    run = ib.Run(name="a", argv=["true"], pace_log="/x/live_log.jsonl", retry_move=["/o"])
+    assert ib.watch_globs(run, "run/frames.jsonl") == ["/x/live_log.jsonl"]
+    run.watch = ["/o/p.jsonl"]
+    assert ib.watch_globs(run, "run/frames.jsonl") == ["/o/p.jsonl"]
+
+
+def test_the_run_list_takes_watch(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"], "watch": ["/o/{attempt}/f"]}) + "\n")
+    (run,) = ib.load_runs(path)
+    assert run.at(2).watch == ["/o/2/f"]

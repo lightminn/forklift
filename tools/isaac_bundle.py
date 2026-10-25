@@ -69,6 +69,12 @@ job's time left (squeue %L, again every 5 min: scontrol can shorten it) and star
 --grace-s and a minute left; such runs are recorded as time_left and stay unclaimed for another job on the list.
 `sizes KIND --runs R --jobs J [--run-min M]` prints a --time to match.
 
+Stall watchdog: a run whose progress files -- its "watch" globs, else its pace_log, else the kind's file under its first
+retry_move (riib: run/frames.jsonl) -- have not changed for --stall-min (default the kind's) is ended like a
+timeout (TERM, KILL after --grace-s) and recorded as stalled; it is never retried (a hang is not the infrastructure,
+and a rerun would blur a deterministic comparison). Before the first progress file exists the silence counts from
+the run's start; a run with no progress file named is not watched.
+
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
 with the code of what it ran. Exit 0 when every run's last attempt exited 0, 1 otherwise, 2 for a refused
@@ -114,9 +120,14 @@ KINDS = {
     # live console sessions (isaac_live / ct1_queue), paced at 0.4: anon <= 5.48 GiB, 1.0-1.2 cores, 3,886-3,915 MiB
     # run_min: a run's p95 wall time -- live ct1_queue 29.6 (rh/sf, 39 runs, max 30.5), riib 62.4 (lcg, 32 runs; rcf
     # 46.6, dv3's trailer up to 77), bd 12.1 (bd_isaac, 151 jobs); a batch with longer runs passes --run-min
-    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30},
+    # stall_min: no change of a run's progress file for this long ends it (status stalled, not retried). live: the
+    # live_log.jsonl of 30 runs (rh/sf) never went quiet for more than 3.3 s, its first record came 38-50 s after
+    # the start. riib (run/frames.jsonl, watch_rel): off until its normal silences are measured -- its outputs carry
+    # no wall-clock timeline (dv3_trailer_det2 hung in render for 45 min); pass --stall-min to watch a riib list now
+    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30, "stall_min": 10},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
-    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63},
+    "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
+             "watch_rel": "run/frames.jsonl"},
     # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
     "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500, "run_min": 13},
 }
@@ -137,13 +148,14 @@ class Run:
     scan: list = field(default_factory=list)
     retry_move: list = field(default_factory=list)
     pace_log: str | None = None
+    watch: list = field(default_factory=list)
 
     def at(self, attempt) -> Run:
         """This run with "{attempt}" filled in."""
         f = (lambda x: x.replace("{attempt}", str(attempt)))  # noqa: E731
         return Run(self.name, [f(a) for a in self.argv], {k: f(v) for k, v in self.env.items()}, self.cwd,
                    [f(g) for g in self.scan], [f(m) for m in self.retry_move],
-                   f(self.pace_log) if self.pace_log else None)
+                   f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch])
 
     @property
     def retryable(self) -> bool:
@@ -162,7 +174,7 @@ def load_runs(path) -> list[Run]:
         obj = json.loads(line)
         if not isinstance(obj, dict):
             raise ValueError(f"line {n}: not an object")
-        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log"}
+        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch"}
         if unknown:
             raise ValueError(f"line {n}: unknown keys {sorted(unknown)}")
         name = obj.get("name")
@@ -188,7 +200,7 @@ def load_runs(path) -> list[Run]:
         if cwd is not None and not isinstance(cwd, str):
             raise ValueError(f"line {n}: cwd must be a string")
         lists = {}
-        for key in ("scan", "retry_move"):
+        for key in ("scan", "retry_move", "watch"):
             value = obj.get(key, [])
             if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
                 raise ValueError(f"line {n}: {key} must be a list of strings")
@@ -359,6 +371,33 @@ def time_limit(runs, slots, jobs=1, run_min=30.0, stagger_min=1.0):
     minutes = (waves * run_min + (slots - 1) * stagger_min + 5) * 1.15
     minutes = int(-(-minutes // 5) * 5)
     return f"{minutes // 60:02d}:{minutes % 60:02d}:00"
+
+
+def watch_globs(run, watch_rel=None):
+    """A run's progress files: its "watch" globs, else its pace_log, else watch_rel under its first retry_move."""
+    if run.watch:
+        return list(run.watch)
+    if run.pace_log:
+        return [run.pace_log]
+    if watch_rel and run.retry_move:
+        return [os.path.join(run.retry_move[0], watch_rel)]
+    return []
+
+
+def progress_silence(run, start_wall, watch_rel=None, now=time.time):
+    """Seconds since the run's progress files last changed (from its start while none exists yet); None when the run
+    has no progress file named, so nothing is judged."""
+    globs = watch_globs(run, watch_rel)
+    if not globs:
+        return None
+    latest = start_wall
+    for pattern in globs:
+        for path in glob.glob(pattern):
+            try:
+                latest = max(latest, os.stat(path).st_mtime)
+            except OSError:
+                continue
+    return now() - latest
 
 
 def job_time_left(env, run=subprocess.run, now=time.time):
@@ -781,6 +820,8 @@ class _Live:
     log_path: Path
     attempt: int = 1
     timeout: bool = False
+    stalled: bool = False
+    silence_max: float = 0.0
     term_at: float | None = None
     killed: bool = False
     vram_max: int = 0
@@ -802,6 +843,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
+               stall_s=None, stall_check_s=30.0, watch_rel=None,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -838,7 +880,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
           "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
-          "time_left": 0, "time_left_retry": [],
+          "time_left": 0, "time_left_retry": [], "stall_next": 0.0, "stalled": 0,
           "node_ram_waits": 0, "claimed_elsewhere": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
@@ -910,7 +952,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             removed = list(cleanup(r.env["SESSION_ID"]) or [])
         except Exception as exc:  # noqa: BLE001 -- a cleanup failure must not stop the other runs
             cleanup_error = repr(exc)
-        retry = (infra and runs[r.index].retryable and r.attempt <= retries and not stopping
+        retry = (infra and not r.stalled and runs[r.index].retryable and r.attempt <= retries and not stopping
                  and cleanup_error is None)  # a bridge that could not be removed may still hold the run's state
         moved, move_error = [], None
         if retry:
@@ -926,7 +968,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 move_error, retry = repr(exc), False
         record({
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
-            "status": "infra_failed" if infra else "ended", "infra": signs, "retried": retry,
+            "status": "infra_failed" if infra else ("stalled" if r.stalled else "ended"), "infra": signs,
+            "retried": retry, "stalled": r.stalled, "silence_max_s": round(r.silence_max, 1),
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
             "timeout": r.timeout, "killed": r.killed, "session_id": r.env["SESSION_ID"],
             "bridge_cpu": r.env["BRIDGE_CPU"], "port": r.env["PORT"], "vram_max_mib": r.vram_max,
@@ -935,6 +978,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         })
         if infra:
             st["infra"] += 1
+        if r.stalled:
+            st["stalled"] += 1
         if cleanup_error or move_error:
             note_error(f"settle {r.run.name} attempt {r.attempt}", cleanup_error or move_error)
         if retry:
@@ -1162,9 +1207,18 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
+                if stall_s and r.term_at is None and now >= st["stall_next"]:
+                    silence = progress_silence(r.run, r.start_wall, watch_rel)
+                    if silence is not None:
+                        r.silence_max = max(r.silence_max, silence)
+                        if silence >= stall_s:  # ended like a timeout: TERM, KILL after the grace, not retried
+                            r.stalled, r.term_at = True, now
+                            _kill([r.proc.pid], signal.SIGTERM)
                 if r.term_at is not None and not r.killed and now - r.term_at > grace_s:
                     r.killed = True
                     _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
+            if stall_s and now >= st["stall_next"]:
+                st["stall_next"] = now + stall_check_s
             if vram_probe is not None and now >= vram_next:
                 vram_next = now + vram_period_s
                 sample_vram(now)
@@ -1276,7 +1330,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         drop_unstarted("not_started")
 
     final = [r for r in records if not r.get("retried")]  # the last attempt of each run
-    failed = sum(1 for r in final if r["status"] == "infra_failed" or (r["status"] == "ended" and r["rc"] != 0))
+    failed = sum(1 for r in final if r["status"] in ("infra_failed", "stalled")
+                 or (r["status"] == "ended" and r["rc"] != 0))
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
                                                           "time_left_retry"))
     summary = {
@@ -1286,6 +1341,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
+        "stalled": st["stalled"], "stall_s": stall_s,
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
         "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
         "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
@@ -1366,6 +1422,10 @@ def main(argv=None) -> int:
     ap.add_argument("--run-est-min", type=float,
                     help="a run's p95 wall minutes: no run starts with less than this (+ grace) left in the job's "
                          "time limit (default: --kind's measured; 0: off)")
+    ap.add_argument("--stall-min", type=float,
+                    help="end a run whose progress files (its watch globs, else its pace_log, else the kind's file "
+                         "under its output) have not changed for this long, status stalled, not retried (default: "
+                         "--kind's; 0: off)")
     ap.add_argument("--list-registry-dir", default=f"/tmp/isaac_bundle_lists_{os.getuid()}",
                     help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
@@ -1414,6 +1474,12 @@ def main(argv=None) -> int:
     if probe is not None and shards is None:
         print("no shard count: GPU memory is sampled but not gated", file=sys.stderr)
     job_id = os.environ.get("SLURM_JOB_ID") or f"local{os.getpid()}"
+    est_min = a.run_est_min if a.run_est_min is not None else (KINDS[a.kind]["run_min"] if a.kind else 0)
+    left = job_time_left(os.environ) if est_min and os.environ.get("SLURM_JOB_ID") else None
+    if left is not None and left < 60 * est_min + TERM_EARLY_S + a.grace_s + 60:
+        print(f"warning: the job has {left / 60:.0f} min left and a run is estimated at {est_min:g} min: no run will "
+              "start (each is left as time_left) -- pass --run-est-min with the runs' real length, or a longer --time",
+              file=sys.stderr)
     conflict, entry = register_list(a.list_registry_dir, a.list, a.claim_dir, job_id)
     if conflict:
         print(f"refusing: {conflict}", file=sys.stderr)
@@ -1440,6 +1506,8 @@ def _run_main(a, runs, slots, shards, probe, stop):
         pace_confirm=a.pace_confirm, pace_recover=a.pace_recover, pace_stall_warmup_s=a.pace_stall_warmup_s,
         run_est_s=60 * (a.run_est_min if a.run_est_min is not None else (KINDS[a.kind]["run_min"] if a.kind else 0)),
         time_left=(lambda: job_time_left(os.environ)) if os.environ.get("SLURM_JOB_ID") else None,
+        stall_s=60 * (a.stall_min if a.stall_min is not None else (KINDS[a.kind].get("stall_min", 0) if a.kind else 0)),
+        watch_rel=KINDS[a.kind].get("watch_rel") if a.kind else None,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
