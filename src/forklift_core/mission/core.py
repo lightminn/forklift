@@ -6910,10 +6910,12 @@ class MissionCore:
                 (options.travel_config or options.planner_config).clearance_m)
             cell_ = float(layer_.snapshot.resolution_m) if layer_.snapshot is not None else 0.05
             kappa_now_ = float(hooks.held_kappa())
-            if getattr(options, "start_band_release", "off") == "on":
+            if (getattr(options, "start_band_release", "off") == "on"
+                    or getattr(options, "escape_start_release", "off") == "on"):
                 # start-band release (docs/plans/2026-10-24-start-band-release.md): the trigger's rectangles the stop
                 # already comes within the sweep pad of pass the sweep while it stays as far from them; the end's
-                # clearance still counts every rectangle
+                # clearance still counts every rectangle. --escape-start-release turns on this part alone, the
+                # permission keeping its own start rule (docs/plans/2026-10-25-escape-start-release.md E2)
                 near_, far_ = esc.start_band_rectangles(list(extra), footprint_, pose_)
                 sweep_checker_ = FootprintCollisionChecker(list(rects_) + far_, footprint_, bounds_)
             else:
@@ -6939,6 +6941,9 @@ class MissionCore:
                 state["scene_escape_candidates"][-1]["released"] = [
                     {"x_m": float(r_.x_m), "y_m": float(r_.y_m), "length_m": float(r_.length_m),
                      "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
+                if getattr(options, "escape_start_release", "off") == "on":
+                    rel_ = obstacle.setdefault("escape_start_release", {"escapes_released": 0})
+                    rel_["escapes_released"] += 1
             if choice_ is None:
                 return None
             poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
