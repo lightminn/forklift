@@ -76,7 +76,7 @@ class RgbCamera:
     again -- which, the 2026-10-25 probe found, differs between processes even after the sync."""
 
     def get_current_frame(self):
-        return {"rendering_time": 1.0, "rgba": "frame-rgba"}
+        return {"rendering_time": 1.0, "rgb": "frame-rgba"}  # Isaac 5.1: the rgb annotator's own name
 
     def get_rgba(self):
         return "direct-rgba"
@@ -94,7 +94,7 @@ def test_off_it_reads_the_direct_getter_as_before():
 def test_a_frame_without_rgba_ends_the_run():
     class NoRgba(RgbCamera):
         def get_current_frame(self):
-            return {"rendering_time": 1.0}
+            return {"rendering_time": 1.0, "rgba": "not the key Isaac uses"}
 
-    with pytest.raises(determinism.DeterministicBroken, match="rgba"):
+    with pytest.raises(determinism.DeterministicBroken, match="holds no rgb"):
         rgba_of(NoRgba())
