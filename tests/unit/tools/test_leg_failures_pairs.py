@@ -60,6 +60,30 @@ def test_a_session_counts_its_counted_reapproaches_by_the_docking_round_in_each_
     assert session_counts(str(tmp_path / "missing")) == [0, 0, 0]
 
 
+def test_mission_outcomes_and_arm_names_for_the_reapproach_hold_judgement(tmp_path):
+    """Re-approach hold plan V4a guard 2: each arm's done missions, its transport_recovery_after_docking endings and
+    its hold exits, read from run folders named by the arms given (off / on)."""
+    import json
+
+    from leg_failures_pairs import collect, mission_totals
+
+    def mission(run, m, outcome, reason=None, retries=()):
+        md = tmp_path / run / "live/epoch_1/run/missions" / m
+        md.mkdir(parents=True)
+        (md / "records.json").write_text(json.dumps({"state": {"docking_retries": list(retries)}}))
+        (md / "result.json").write_text(json.dumps({"result": {"outcome": outcome, "reason": reason, "ended_s": 9}}))
+
+    mission("p_off_random_m_s0", "m1", "done")
+    mission("p_off_random_m_s0", "m2", "failed", "transport_recovery_after_docking")
+    mission("p_on_random_m_s0", "m1", "done", retries=[{"trigger": "h", "time_s": 3.0, "counted": False}])
+    mission("p_on_random_m_s0", "m2", "done")
+    rows = collect(str(tmp_path), "p", "random_m", range(1), arms=("off", "on"))
+    tot = mission_totals(rows)
+    assert tot["main"] == {"missions": 2, "done": 1, "recovery_after_docking": 1, "hold_exits": 0}
+    assert tot["fix"] == {"missions": 2, "done": 2, "recovery_after_docking": 0, "hold_exits": 1}
+    assert rows[0]["fix"] == [0, 0, 0]  # an uncounted h is no attempt
+
+
 def test_rates_from_counts_stay_exact_so_ties_hold():
     """Codex plan round 5 P2: 3/3 - 2/3 and 0/3 - 1/3 are the same size; in floats they were not (p 0.015625, pass)."""
     rows = [{"seed": k, "main": [2, 3, 0], "fix": [3, 3, 0]} for k in range(6)]

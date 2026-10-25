@@ -113,10 +113,44 @@ def session_counts(run_dir) -> list:
     return [completed, attempted, refusals]
 
 
-def collect(live_dir, prefix, scene, seeds) -> list:
-    """The pairs file's rows from the V4 run folders <live_dir>/<prefix>_{main,fix}_<scene>_s<seed>."""
-    return [{"seed": s, "main": session_counts(f"{live_dir}/{prefix}_main_{scene}_s{s}"),
-             "fix": session_counts(f"{live_dir}/{prefix}_fix_{scene}_s{s}")} for s in seeds]
+def session_missions(run_dir) -> dict:
+    """A session's mission outcomes (re-approach hold plan V4a guard 2): missions run, done, ended on
+    transport_recovery_after_docking, and the hold exits taken (uncounted docking retries ``h``)."""
+    import glob
+
+    out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0}
+    for md in sorted(glob.glob(f"{run_dir}/live/epoch_*/run/missions/m*")):
+        try:
+            st = _json(f"{md}/records.json")["state"]
+            res = _json(f"{md}/result.json").get("result") or {}
+        except (OSError, ValueError, KeyError):
+            continue
+        out["missions"] += 1
+        out["done"] += res.get("outcome") == "done"
+        out["recovery_after_docking"] += res.get("reason") == "transport_recovery_after_docking"
+        out["hold_exits"] += sum(1 for e in st.get("docking_retries") or [] if e.get("trigger") == "h")
+    return out
+
+
+def collect(live_dir, prefix, scene, seeds, arms=("main", "fix")) -> list:
+    """The pairs file's rows from the V4 run folders <live_dir>/<prefix>_<arm>_<scene>_s<seed>, the two arms read
+    as "main" and "fix" (the baseline first), each with its session's mission outcomes."""
+    base, fix = arms
+    rows = []
+    for s in seeds:
+        b, f = f"{live_dir}/{prefix}_{base}_{scene}_s{s}", f"{live_dir}/{prefix}_{fix}_{scene}_s{s}"
+        rows.append({"seed": s, "main": session_counts(b), "fix": session_counts(f),
+                     "missions": {"main": session_missions(b), "fix": session_missions(f)}})
+    return rows
+
+
+def mission_totals(rows) -> dict:
+    """Each arm's mission outcomes summed over the seeds (re-approach hold plan V4a guard 2)."""
+    out = {}
+    for arm in ("main", "fix"):
+        keys = ("missions", "done", "recovery_after_docking", "hold_exits")
+        out[arm] = {k: sum(r["missions"][arm][k] for r in rows if "missions" in r) for k in keys}
+    return out
 
 
 def main() -> None:
@@ -125,16 +159,20 @@ def main() -> None:
     parser.add_argument("--collect", nargs=3, metavar=("LIVE_DIR", "PREFIX", "SCENE"),
                         help="build the rows from the V4 run folders instead (seeds 0-9)")
     parser.add_argument("--out", help="write the collected rows here")
+    parser.add_argument("--arms", nargs=2, default=("main", "fix"), metavar=("BASELINE", "FIX"),
+                        help="the two arms' names in the run folders (default main fix)")
+    parser.add_argument("--seeds", type=int, default=10, help="seeds 0..N-1 (default 10)")
     args = parser.parse_args()
     if args.collect:
-        rows = collect(*args.collect, range(10))
+        rows = collect(*args.collect, range(args.seeds), arms=tuple(args.arms))
         if args.out:
             with open(args.out, "w") as handle:
                 json.dump(rows, handle, indent=1)
     else:
         with open(args.pairs) as handle:
             rows = json.load(handle)
-    print(json.dumps({"rows": rows, "judgement": judge(pairs_from_rows(rows))}, indent=2, default=float))
+    print(json.dumps({"rows": rows, "judgement": judge(pairs_from_rows(rows)), "missions": mission_totals(rows)},
+                     indent=2, default=float))
 
 
 if __name__ == "__main__":
