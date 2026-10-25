@@ -1075,8 +1075,6 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "mission_commands": None,
                               # 2026-10-25: the deterministic-run switch (plan D0) -- compared, its absence off
                               "deterministic": False,
-                              # 2026-10-25: RTX preset on the render products -- compared, its absence the scene's own
-                              "render_preset": "default",
                               # 2026-10-17: M-c live runs -- off unless given; a live run is not a measurement run.
                               "live": False, "live_port_file": None, "live_host": "127.0.0.1", "live_factor": 1.0,
                               "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,

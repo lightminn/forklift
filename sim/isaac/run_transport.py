@@ -24,7 +24,6 @@ from pathlib import Path
 import numpy as np
 from frame_sync import FrameSync
 from frame_sync import rgba_of as frame_sync_rgba
-import render_preset
 
 from forklift_core import determinism
 
@@ -612,10 +611,6 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--recognition-frame-every", type=int, default=24,
                         help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
-    parser.add_argument("--render-preset", choices=sorted(render_preset.PRESETS), default="default",
-                        help="RTX settings written on every camera's render product, where Isaac 5.1 reads them "
-                        "(sim/isaac/render_preset.py). fast = FXAA and sampled direct lighting off, about half the "
-                        "render step; it changes the RGB the learned proposer sees. default writes nothing.")
     parser.add_argument("--deterministic", action="store_true",
                         help="Isaac test-only deterministic run (docs/plans/2026-10-25-deterministic-sim-mode.md): camera reads synced to the step, the SLAM static layer kept out of planning, wall budgets at the cap; the same code, seed and inputs give the same records. Off by default.")
     parser.add_argument("--recognition-pixel-lag-steps", type=int, default=0,
@@ -3394,8 +3389,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     far_runtime.paused = False
 
             perception_capture.capture = _paused_capture
-    # After the last camera is made: the preset on every render product, read back (render_preset.py).
-    state["render_preset"] = render_preset.apply_all(stage, getattr(args, "render_preset", "default"))
     names = list(robot.dof_names)
     wheels = np.array(
         [
@@ -9334,12 +9327,6 @@ def main() -> None:
             state["render_mode"]["at_end"] = carb.settings.get_settings().get(
                 "/rtx/rendermode"
             )
-        if app is not None and state.get("render_preset", {}).get("render_products"):
-            import omni.usd
-
-            # a value the renderer put back during the run (aa:op none / taa did, in the probes)
-            state["render_preset"]["drift_at_end"] = render_preset.drifted(
-                omni.usd.get_context().get_stage(), state["render_preset"])
         if "deterministic" in state:  # plan D0: why it stopped being deterministic, and the diagnostics
             state["deterministic"]["broken"] = determinism.broken()
             state["deterministic"]["diagnostics"]["frame_sync"] = frame_sync.summary()
