@@ -165,9 +165,12 @@ def session_missions(run_dir) -> dict:
     transport_recovery_after_docking, and the hold exits taken (uncounted docking retries ``h``)."""
     states, inconsistent = _session(run_dir)
     out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0, "session_failed": 0,
-           "d7_failed": 0, "d7_unknown": 0, "reasons": [], "inconsistent": inconsistent}
+           "d7_failed": 0, "d7_unknown": 0, "unknown": 0, "unknown_done": 0, "reasons": [],
+           "inconsistent": inconsistent}
     for st, res in states:
-        # an unfinished mission with no records: whether it reached D7 is unknown (guard 1b counts it against the hold)
+        # a mission with no records: its re-approaches are unknown; v5_judge bounds them against the hold
+        out["unknown"] += st is None
+        out["unknown_done"] += st is None and res.get("outcome") == "done"
         out["d7_unknown"] += st is None and res.get("outcome") != "done"
         st = st or {}
         out["missions"] += 1
@@ -231,8 +234,16 @@ def v5_judge(rows, scheduled=3) -> dict:
     bad = [r.get("seed") for r in rows for arm in ("main", "fix")
            if r["missions"][arm].get("inconsistent") or not 0 <= r["score"][arm] <= r["missions"][arm]["done"]
            <= int(scheduled)]
-    diffs = [r["score"]["fix"] - r["score"]["main"] for r in rows]
-    score = {arm: sum(r["score"][arm] for r in rows) for arm in ("main", "fix")}
+    # Missions with no records are bounded against the hold on every guard (Codex V5 4th, 5th review P2): on the
+    # hold arm such a mission scores 0, failed after D7 when unfinished and carries one refusal (a refused re-approach
+    # plan ends the mission, docking_retry_no_plan); on off a done one scores as clean (the upper bound).
+    def scored(r, arm):
+        if arm == "fix":
+            return r["score"]["fix"]
+        return min(int(scheduled), r["score"]["main"] + r["missions"]["main"].get("unknown_done", 0))
+
+    diffs = [scored(r, "fix") - scored(r, "main") for r in rows]
+    score = {arm: sum(scored(r, arm) for r in rows) for arm in ("main", "fix")}
     failures = {arm: sum(int(scheduled) - r["missions"][arm]["done"] for r in rows) for arm in ("main", "fix")}
     refusals = {arm: sum(r[arm][2] for r in rows) for arm in ("main", "fix")}
     out = {"pairs": len(rows), "wins": sum(d > 0 for d in diffs), "losses": sum(d < 0 for d in diffs),
@@ -241,13 +252,14 @@ def v5_judge(rows, scheduled=3) -> dict:
            "refusals_fix": refusals["fix"]}
     d7 = {arm: sum(r["missions"][arm].get("d7_failed", 0) for r in rows) for arm in ("main", "fix")}
     unknown = {arm: sum(r["missions"][arm].get("d7_unknown", 0) for r in rows) for arm in ("main", "fix")}
+    refusals_bound = refusals["fix"] + sum(r["missions"]["fix"].get("unknown", 0) for r in rows)
     out.update(d7_failed_main=d7["main"], d7_failed_fix=d7["fix"], d7_unknown_main=unknown["main"],
-               d7_unknown_fix=unknown["fix"], inconsistent_seeds=sorted(set(bad)))
+               d7_unknown_fix=unknown["fix"], refusals_fix_bound=refusals_bound, inconsistent_seeds=sorted(set(bad)))
     if bad:
         out["verdict"] = "undecidable"
         return out
     ok = (out["p"] < ALPHA and score["fix"] >= score["main"]
-          and failures["fix"] <= failures["main"] + V5_FAILURE_MARGIN and refusals["fix"] <= refusals["main"]
+          and failures["fix"] <= failures["main"] + V5_FAILURE_MARGIN and refusals_bound <= refusals["main"]
           and d7["fix"] + unknown["fix"] <= d7["main"])  # unknown: as failed on the hold arm, not on off
     out["verdict"] = "pass" if ok else "fail"
     return out

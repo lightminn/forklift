@@ -209,6 +209,7 @@ def test_a_cut_mission_with_no_record_has_an_unknown_d7_and_a_folder_without_res
     (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 3}))
     out = session_missions(str(session))
     assert (out["missions"], out["done"], out["d7_failed"], out["d7_unknown"]) == (3, 1, 1, 1)
+    assert (out["unknown"], out["unknown_done"]) == (2, 1)
     assert session_score(str(session)) == 0  # the done m2 has no records: a stall cannot be ruled out
 
 
@@ -272,6 +273,17 @@ def test_the_v5_judgement_needs_the_sign_test_the_total_score_and_the_failure_ma
     unknown[10:16] = [dict(r, missions={"main": r["missions"]["main"], "fix": dict(r["missions"]["fix"], d7_unknown=1)})
                       for r in unknown[10:16]]
     assert v5_judge(unknown)["verdict"] == "fail" and v5_judge(unknown)["d7_unknown_fix"] == 6
+    # Codex V5 5th review P2: unknown missions are bounded against the hold on every guard -- off's done missions with
+    # no records score as clean (upper bound), so five lost records on off are no win ...
+    lost = [row(3, 3)] * 55 + [dict(row(2, 3, 3, 3), missions={"main": {"done": 3, "d7_failed": 0, "unknown_done": 1},
+                                                                "fix": {"done": 3, "d7_failed": 0}})] * 5
+    assert v5_judge(lost)["wins"] == 0 and v5_judge(lost)["verdict"] == "fail"
+    # ... and each unknown mission on the hold arm counts one refusal (a refused re-approach plan ends the mission)
+    hidden = [row(2, 3, 3, 3)] * 10 + [row(3, 3)] * 44 + [
+        dict(row(2, 2, 2, 2, d7=(1, 0)), missions={"main": {"done": 2, "d7_failed": 1},
+                                                   "fix": {"done": 2, "d7_failed": 0, "d7_unknown": 1, "unknown": 1}})] * 6
+    out = v5_judge(hidden)
+    assert out["refusals_fix_bound"] == 6 and out["verdict"] == "fail"
     # a session over its scheduled missions, or flagged inconsistent, stops the judgement
     assert v5_judge(good[:-1] + [row(3, 3, 3, 4)])["verdict"] == "undecidable"
     assert v5_judge(good[:-1] + [row(3, 3, inconsistent=True)])["verdict"] == "undecidable"
