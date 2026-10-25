@@ -29,6 +29,10 @@ OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
+# The SLAM odometry's encoders (plan 2026-10-25-team-spec-default, lead decision): the joint-angle model by default,
+# reported on request (its own baselines; never mixed with the default's), nothing else (no other age table).
+ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
+case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 JOB=${SLURM_JOB_ID:-local$$}
 # the survey's mapping params, relative to the repository (the bridge container sees it under /workspace)
 MAP_PARAMS=${MAP_PARAMS:-ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml}
@@ -44,7 +48,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
   printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
   printf 'SCENE_FILE=\n'  # the console's runner word for word: the factory hall
-  printf 'ENCODER_MODEL=%q\n' "${ENCODER_MODEL:-reported}"  # the console's runner reads it (reported unless set)
+  printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"  # the console's runner reads it
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
