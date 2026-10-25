@@ -100,6 +100,11 @@ def test_the_length_is_clipped_by_the_advice_s_free_run_and_the_cap(monkeypatch)
     monkeypatch.setattr(pm, "backoff_advice", lambda *a, **k: {"backoff_m": 0.05, "backoff_max_m": 0.06})
     assert core._observe_backoff_start(10.0, np.array(pose), target)
     assert state["observe_start_backoffs"][-1]["length_m"] == pytest.approx(0.06)
+    # Codex impl review P2: a run clipped below the advice plus the tracker's end tolerance is not driven
+    core1, state1, pose1, target1, _ = _observe_core()
+    monkeypatch.setattr(pm, "backoff_advice", lambda *a, **k: {"backoff_m": 0.01, "backoff_max_m": 0.01})
+    assert not core1._observe_backoff_start(10.0, np.array(pose1), target1)
+    assert state1["observe_start_backoffs"][-1]["outcome"] == "clipped" and core1.observe_backoff is None
     core2, state2, pose2, target2, _ = _observe_core()
     monkeypatch.setattr(pm, "backoff_advice", lambda *a, **k: {"backoff_m": 0.29, "backoff_max_m": 1.0})
     assert core2._observe_backoff_start(10.0, np.array(pose2), target2)
@@ -239,6 +244,7 @@ def _miss_world(start_ok, *, on=True):
     if on:
         w.core.options.observe_start_backoff = "on"
     w.core._observe_backoff_start = lambda t, rear, target: w.calls.append(("backoff_start", (target,), {})) or start_ok
+    w.core.observe_backoff_tick = lambda t, rear, tracking, v, dt: SimpleNamespace(tracking=tracking, rear=rear)
     return w, OBSERVE_MISS
 
 
@@ -293,3 +299,17 @@ def test_the_runner_runs_the_backoff_tick_instead_of_the_stall_and_observe_recov
     k = src.index("recover_ = core.cusp_and_observe_recovery(", j)
     assert "elif not scene_raised_:" in src[i:j] and i < j < k
     assert src.index("command_ = core.command(", k) > k
+
+
+def test_the_install_tick_goes_through_the_backoff_s_own_tick():
+    # Codex impl review P2: the install tick's first update read arrived and went on to the observe capture
+    w, miss = _miss_world(True)
+    seen = []
+
+    def tick(t, rear, tracking, signed_speed, dt):
+        seen.append(tracking.status)
+        return SimpleNamespace(tracking=tracking, rear=rear)
+
+    w.core.observe_backoff_tick = tick
+    w.tick(miss)
+    assert seen == ["tracking"]

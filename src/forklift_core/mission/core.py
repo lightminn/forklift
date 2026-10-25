@@ -2458,10 +2458,11 @@ class MissionCore:
                         and getattr(options, "observe_start_backoff", "off") == "on"
                         and self._observe_backoff_start(t, rear, target)):
                     # docs/plans/2026-10-26-observe-start-backoff.md B2: backed off straight first; the same target is
-                    # planned again once the backoff ends (observe_backoff_tick)
+                    # planned again once the backoff ends. This tick already goes through the backoff's own tick (its
+                    # guard and end): the new tracker's first update may already read arrived (Codex impl review P2)
                     tracking = trackers["observe"].update(rear, signed_speed, dt)
                     ms.last_tracking = tracking
-                    return SimpleNamespace(tracking=tracking, rear=rear)
+                    return self.observe_backoff_tick(t, rear, tracking, signed_speed, dt)
                 require(replanned.success, f"observe_replan_failed:{replanned.status}")
                 tracking = self._install_observe_replan(t, rear, replanned, trackers["observe"].config, signed_speed, dt)
         if slam is not None and ms.phase == "observe":
@@ -2533,6 +2534,10 @@ class MissionCore:
         length = min(float(advice["backoff_m"]) + OBSERVE_BACKOFF_PAD_M, float(advice["backoff_max_m"]),
                      OBSERVE_BACKOFF_LIMIT_M)
         rec["length_m"] = length
+        if length < float(advice["backoff_m"]) + esc.END_POSITION_TOL_M - 1e-9:
+            # clipped by the free run behind: the tracker may stop short of the advice by its end tolerance
+            rec["outcome"] = "clipped"
+            return False
         poses = esc.straight(rear, -1, length)
         layer = obstacle["layer"]
         pconf = layer.permission.config
