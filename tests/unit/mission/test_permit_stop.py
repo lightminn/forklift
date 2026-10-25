@@ -309,3 +309,30 @@ def test_a_request_ended_with_its_plan_still_out_leaves_no_job_or_answer_behind(
     assert out.owned is False and state["scene_replans"][-1]["reason"] == "scene_replan_failed:permit_stop:timeout"
     assert core.pending is None and core.jobs.discarded == [job] and core.scene_mail is None
     assert state["async_plans"][-1]["dropped"] == "scene_replan_ended"
+
+
+class Escape:
+    """A scene replan escape installed in the leg's place: nothing ahead of it."""
+
+    config = SimpleNamespace(cruise_speed_mps=0.18)
+    leg_index = 0
+
+    def leg_ahead(self):
+        return np.zeros((0, 3)), -1
+
+
+def test_after_an_escape_the_obstacles_are_found_on_the_leg_it_left():
+    # Codex review of docs/plans/2026-10-25-escape-start-release.md P2-3: the escape replaces the leg's tracker and
+    # stays installed until the request's next install, so the replan after it read no cells ahead (1 -> 0)
+    core, ms, state, calls, rear, held = make()
+    snap = grid(AHEAD)
+    with_layer(core, Layer(snap))
+    hold(core, 10.0, PERMIT_STOP_S + 0.1)
+    fn = core.scene_replan.request_["extra_fn"]
+    leg = core.trackers["transport"]
+    escape = Escape()
+    core.trackers["transport"] = escape
+    core.scene_escape = {"status": "cleared", "tracker": escape, "leg_tracker": leg}
+    assert cells_of(fn(), snap) == AHEAD
+    core.scene_escape = None  # a later install consumed it: the tracker installed is the leg's own again
+    assert fn() == []

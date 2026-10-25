@@ -1346,6 +1346,9 @@ class MissionCore:
             # Read when the device plans (after its release and re-projection): the leg ahead and the stop arc
             # checked again on the snapshot of that moment (Codex implementation review P2).
             tr_ = self.trackers.get(phase_)
+            esc_ = self.scene_escape
+            if esc_ is not None and tr_ is not None and esc_.get("tracker") is tr_:
+                tr_ = esc_["leg_tracker"]  # after an escape: the leg it left, not the escape (Codex review P2-3)
             leg_, dir_ = tr_.leg_ahead() if tr_ is not None else (np.zeros((0, 3)), -1)
             return current_blocked_rectangles(
                 layer_, rear=hooks_.rear(), leg=leg_, direction=int(dir_) or -1, loaded=bool(hooks_.loaded()),
@@ -6942,8 +6945,7 @@ class MissionCore:
                     {"x_m": float(r_.x_m), "y_m": float(r_.y_m), "length_m": float(r_.length_m),
                      "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
                 if getattr(options, "escape_start_release", "off") == "on":
-                    rel_ = obstacle.setdefault("escape_start_release", {"escapes_released": 0})
-                    rel_["escapes_released"] += 1
+                    core._escape_release_count("escapes_released")
             if choice_ is None:
                 return None
             poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
@@ -6953,11 +6955,21 @@ class MissionCore:
             state["scene_escape_candidates"][-1]["permit"] = permit_
             if not permit_["ok"]:
                 return None  # the prefix itself must start (Codex counterexample: an end clear, a start held at 0)
-            return poses_, int(choice_.direction), int(leg_dir_)
+            guard_ = None
+            if near_ and getattr(options, "escape_start_release", "off") == "on":
+                # docs/plans/2026-10-25-escape-start-release.md E4 (Codex plan review P2-1, P2-2): the released
+                # rectangles and the end criterion go with the escape, watched on the pose it is driven from
+                from forklift_core.control.start_release import footprint_rect_distance
+
+                guard_ = {"rects": list(near_), "d0": [float(footprint_rect_distance(pose_, footprint_, r_))
+                                                       for r_ in near_],
+                          "footprint": footprint_, "checker": checker_, "threshold_m": float(choice_.threshold_m)}
+            return poses_, int(choice_.direction), int(leg_dir_), guard_
 
         def escape_install(chosen):
-            poses_, direction_, leg_dir_ = chosen
-            config0_ = trackers[ms.phase].config
+            poses_, direction_, leg_dir_, guard_ = chosen
+            leg_tracker_ = trackers[ms.phase]
+            config0_ = leg_tracker_.config
             n_ = len(poses_)
             trackers[ms.phase] = RearAxlePathTracker(
                 poses_, np.full(n_, direction_, dtype=np.int8), np.zeros(n_),
@@ -6967,7 +6979,13 @@ class MissionCore:
             # The existing escape's ownership, so the permission acts on it every tick (Codex round 3 P2-2).
             obstacle["backoff"] = {"phase": ms.phase, "config": config0_, "time_s": float(t), "leg_dir": leg_dir_,
                                    "escape": True, "scene": True}
-            core.scene_escape = {"status": "running", "config": config0_, "zero_since": None}
+            # the leg it left: the P6 trigger's obstacles are found again on that leg, not on the escape (Codex plan
+            # review P2-3)
+            core.scene_escape = {"status": "running", "config": config0_, "zero_since": None,
+                                 "tracker": trackers[ms.phase], "leg_tracker": leg_tracker_}
+            if guard_ is not None:
+                core.scene_escape["guard"] = guard_
+                core._escape_release_count("installed")
             ms.phase_started = t
             core._refresh_for_new_leg(t, box.rear)
 
@@ -7022,6 +7040,28 @@ class MissionCore:
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box,
                                resumable=resumable, abandon=abandon)
 
+    # --- the P6 escape's own start-pad release (docs/plans/2026-10-25-escape-start-release.md E3, E4) ---
+    def _escape_release_count(self, key: str) -> None:
+        rec_ = self.obstacle.setdefault("escape_start_release", {"escapes_released": 0})
+        rec_[key] = rec_.get(key, 0) + 1
+
+    @staticmethod
+    def _escape_guard_breached(guard, rear) -> bool:
+        """Whether the outline at rear comes nearer a released rectangle than half its start gap."""
+        from forklift_core.control.start_release import footprint_rect_distance
+
+        pose = tuple(float(v) for v in rear)
+        return any(footprint_rect_distance(pose, guard["footprint"], r) < d0 / 2.0
+                   for r, d0 in zip(guard["rects"], guard["d0"]))
+
+    @staticmethod
+    def _escape_guard_end_ok(guard, rear) -> bool:
+        """The escape's end criterion at the pose it ended at: the clearance to every rectangle, the released ones
+        included, at least the chosen candidate's end threshold."""
+        from forklift_core.control import escape as esc
+
+        return esc.clearance_m(guard["checker"].free, tuple(float(v) for v in rear)) >= guard["threshold_m"]
+
     def scene_replan_tick(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's tick ahead of the follower (plan 2.1): owned or not, what the wheels and steering get, the
         control pose after a release; a request that ends raises its reason."""
@@ -7041,9 +7081,21 @@ class MissionCore:
             tracking = tracker_.update(ports.box.rear, signed_speed, dt)
             ms.last_tracking = tracking
             standing_ = ports.stopped()
-            if tracking.status == "arrived" or (
+            guard_ = self.scene_escape.get("guard")
+            if guard_ is not None and self._escape_guard_breached(guard_, ports.box.rear):
+                self.scene_escape["status"] = "stopped"  # nearer a released rectangle than half its start gap
+                self._escape_release_count("stopped_approach")
+            elif tracking.status == "arrived" or (
                     standing_ and (tracking.status == "failed" or tracker_.remaining_to_goal_m() <= 1e-6)):
-                self.scene_escape["status"] = "done"
+                if guard_ is not None and not self._escape_guard_end_ok(guard_, ports.box.rear):
+                    # the end region was checked for the planned end; the escape may end elsewhere (Codex plan
+                    # review P2-2): its own end pose must keep the same criterion
+                    self.scene_escape["status"] = "stopped"
+                    self._escape_release_count("stopped_end")
+                else:
+                    self.scene_escape["status"] = "done"
+                    if guard_ is not None:
+                        self._escape_release_count("done")
             else:
                 allowed_ = self.last_permission[0] if self.last_permission is not None else None
                 if allowed_ is not None and allowed_ <= 0.0 and standing_:

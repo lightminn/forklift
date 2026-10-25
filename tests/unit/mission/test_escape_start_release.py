@@ -149,3 +149,60 @@ def test_the_start_band_release_alone_keeps_no_escape_start_record():
     _plan(core, [rect])
     assert state["scene_escape_candidates"][-1]["released"]
     assert "escape_start_release" not in core.obstacle
+
+
+def _installed(core, state):
+    """A released escape planned and installed; the device's tick drives it (stub device: always the escape)."""
+    from types import SimpleNamespace
+
+    core.options.escape_start_release = "on"
+    pose = _standing(core)
+    rect = _near_rect(core, pose)
+    ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
+    chosen = ports.escape_plan((rect,), None)
+    assert chosen is not None and chosen[3] is not None
+    ports.escape_install(chosen)
+    core.hooks.truth_velocity = lambda: np.zeros(3)
+    core.scene_replan = SimpleNamespace(active=lambda: True,
+                                        step=lambda t, p: SimpleNamespace(owned=True, output="escape", steer=None,
+                                                                          end=None))
+    return pose, rect, chosen
+
+
+def test_a_released_escape_stops_once_the_outline_comes_nearer_than_half_its_start_gap():
+    # Codex plan review P2-1: the driving permission checks other shapes than the planner's outline
+    import math
+
+    core, ms, state, calls, rear, held = make()
+    pose, rect, chosen = _installed(core, state)
+    d0 = chosen[3]["d0"][0]
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    near = np.array([pose[0] - 0.75 * d0 * s, pose[1] + 0.75 * d0 * c, pose[2]])  # toward the left side's rectangle
+    core.scene_replan_tick(0.3, near, 0.0, DT)
+    assert core.scene_escape["status"] == "stopped"
+    assert core.obstacle["escape_start_release"]["stopped_approach"] == 1
+
+
+def test_a_released_escape_ends_done_only_where_its_end_criterion_holds():
+    # Codex plan review P2-2: the escape counts as done on a failed or used-up tracker, off the checked end region
+    core, ms, state, calls, rear, held = make()
+    pose, rect, chosen = _installed(core, state)
+    end = np.array(chosen[0][-1])
+    core.scene_replan_tick(0.3, end, 0.0, DT)
+    assert core.scene_escape["status"] == "done"
+    assert core.obstacle["escape_start_release"]["done"] == 1
+
+    core2, ms2, state2, *_ = make()
+    pose2, rect2, chosen2 = _installed(core2, state2)
+    core2.scene_escape["guard"]["threshold_m"] = 10.0  # an end no pose can keep
+    core2.scene_replan_tick(0.3, np.array(chosen2[0][-1]), 0.0, DT)
+    assert core2.scene_escape["status"] == "stopped"
+    assert core2.obstacle["escape_start_release"]["stopped_end"] == 1
+
+
+def test_an_escape_without_a_released_rectangle_carries_no_guard():
+    core, ms, state, calls, rear, held = make()
+    core.options.escape_start_release = "on"
+    pose = _standing(core)
+    chosen = _plan(core, [])
+    assert chosen is not None and chosen[3] is None
