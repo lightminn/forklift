@@ -117,13 +117,16 @@ def _session_states(run_dir) -> list:
             tail = ({"docking_retries": retries if fresh else [],
                      "delivery_docking": (top.get("delivery_docking") or {}) if fresh else {}},
                     {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}, fresh)
-    if tail is not None:
-        st, res, fresh = tail
-        # missions accepted but with no folder were cut; without the probe's count, a run record unlike the last
-        # mission's stands for one (the earlier rule)
-        missing = max(0, acked - len(out)) if acked is not None else int(fresh)
-        for k in range(missing):
-            out.append((st if k == 0 else {"docking_retries": []}, dict(res)))
+    # missions accepted but with no folder were cut, whether or not the run left a record (Codex V5 2nd review P2: a
+    # killed run has none); without the probe's count, a run record unlike the last mission's stands for one (the
+    # earlier rule)
+    if tail is None:
+        tail = ({"docking_retries": []}, {"outcome": "session_failed", "reason": "no_run_record", "ended_s": None},
+                False)
+    st, res, fresh = tail
+    missing = max(0, acked - len(out)) if acked is not None else int(fresh)
+    for k in range(missing):
+        out.append((st if k == 0 else {"docking_retries": []}, dict(res)))
     return out
 
 
@@ -196,6 +199,27 @@ def sign_test_p(differences) -> float:
     return sum(comb(n, k) for k in range(pos, n + 1)) / 2 ** n
 
 
+V5_FAILURE_MARGIN = 6
+
+
+def v5_judge(rows, scheduled=3) -> dict:
+    """Re-approach hold plan 2a (V5) judgement over collected rows: the exact sign test on the score differences
+    (p < 0.05), the summed score not lower, the failures (scheduled - done, summed) on <= off + V5_FAILURE_MARGIN and
+    the refusals not increased. The hold missions' forbidden contacts are read from the runs separately."""
+    diffs = [r["score"]["fix"] - r["score"]["main"] for r in rows]
+    score = {arm: sum(r["score"][arm] for r in rows) for arm in ("main", "fix")}
+    failures = {arm: sum(int(scheduled) - r["missions"][arm]["done"] for r in rows) for arm in ("main", "fix")}
+    refusals = {arm: sum(r[arm][2] for r in rows) for arm in ("main", "fix")}
+    out = {"pairs": len(rows), "wins": sum(d > 0 for d in diffs), "losses": sum(d < 0 for d in diffs),
+           "p": sign_test_p(diffs), "score_main": score["main"], "score_fix": score["fix"],
+           "failures_main": failures["main"], "failures_fix": failures["fix"], "refusals_main": refusals["main"],
+           "refusals_fix": refusals["fix"]}
+    ok = (out["p"] < ALPHA and score["fix"] >= score["main"]
+          and failures["fix"] <= failures["main"] + V5_FAILURE_MARGIN and refusals["fix"] <= refusals["main"])
+    out["verdict"] = "pass" if ok else "fail"
+    return out
+
+
 def collect(live_dir, prefix, scene, seeds, arms=("main", "fix")) -> list:
     """The pairs file's rows from the V4 run folders <live_dir>/<prefix>_<arm>_<scene>_s<seed>, the two arms read
     as "main" and "fix" (the baseline first), each with its session's mission outcomes."""
@@ -204,7 +228,8 @@ def collect(live_dir, prefix, scene, seeds, arms=("main", "fix")) -> list:
     for s in seeds:
         b, f = f"{live_dir}/{prefix}_{base}_{scene}_s{s}", f"{live_dir}/{prefix}_{fix}_{scene}_s{s}"
         rows.append({"seed": s, "main": session_counts(b), "fix": session_counts(f),
-                     "missions": {"main": session_missions(b), "fix": session_missions(f)}})
+                     "missions": {"main": session_missions(b), "fix": session_missions(f)},
+                     "score": {"main": session_score(b), "fix": session_score(f)}})
     return rows
 
 
@@ -226,17 +251,20 @@ def main() -> None:
     parser.add_argument("--arms", nargs=2, default=("main", "fix"), metavar=("BASELINE", "FIX"),
                         help="the two arms' names in the run folders (default main fix)")
     parser.add_argument("--seeds", type=int, default=10, help="seeds 0..N-1 (default 10)")
+    parser.add_argument("--first-seed", type=int, default=0, help="the first seed (V5: 10)")
     args = parser.parse_args()
     if args.collect:
-        rows = collect(*args.collect, range(args.seeds), arms=tuple(args.arms))
+        rows = collect(*args.collect, range(args.first_seed, args.first_seed + args.seeds), arms=tuple(args.arms))
         if args.out:
             with open(args.out, "w") as handle:
                 json.dump(rows, handle, indent=1)
     else:
         with open(args.pairs) as handle:
             rows = json.load(handle)
-    print(json.dumps({"rows": rows, "judgement": judge(pairs_from_rows(rows)), "missions": mission_totals(rows)},
-                     indent=2, default=float))
+    out = {"rows": rows, "judgement": judge(pairs_from_rows(rows)), "missions": mission_totals(rows)}
+    if all("score" in r and "missions" in r for r in rows):
+        out["v5"] = v5_judge(rows)
+    print(json.dumps(out, indent=2, default=float))
 
 
 if __name__ == "__main__":
