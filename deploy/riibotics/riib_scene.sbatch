@@ -31,8 +31,10 @@
 #                  start inflation of does not block moving away from it (docs/plans/2026-10-24-start-band-release.md);
 #                  off: no gain on the trailer and one actual load overlap in the rack aisle with it on
 #                  (docs/validation/2026-10-24-start-band-release.md)
-#   RESTART_CONFIRM=0 --restart-confirm-scans: after an occupied stop, this many new scans in a row must allow a
-#                  restart (docs/plans/2026-10-25-restart-confirmation.md); 0 (default) as before, until the Isaac comparison
+#   RESTART_CONFIRM=3 --restart-confirm-scans: after an occupied stop, this many new scans in a row must allow a
+#                  restart (docs/plans/2026-10-25-restart-confirmation.md); 3: in the rack aisle it held the stops it
+#                  armed on with no new failure and no fewer completions (docs/validation/2026-10-26-restart-confirmation.md);
+#                  RESTART_CONFIRM=0 as before
 #   LOW_CLEARANCE=on --low-clearance-guard: the props below the LiDAR plane watched along the stop arc of the
 #                  estimated pose, the speed capped before the planned clearance is used up
 #                  (docs/plans/2026-10-25-low-clearance-guard.md); on: no low-prop overlap and no fewer completions
@@ -58,7 +60,7 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-0}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac

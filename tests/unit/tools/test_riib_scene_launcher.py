@@ -86,11 +86,11 @@ def test_the_low_clearance_guard_is_on_unless_turned_off(tmp_path):
     assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="off")), ["--low-clearance-guard", "off"])
 
 
-def test_the_restart_confirmation_is_off_unless_asked(tmp_path):
-    # docs/plans/2026-10-25-restart-confirmation.md: 0 until the Isaac comparison
-    assert contains(args_of(dry_run(tmp_path)), ["--restart-confirm-scans", "0"])
-    assert " RESTART_CONFIRM=0 " in (tmp_path / "out/riib_defaults.txt").read_text()
-    assert contains(args_of(dry_run(tmp_path, RESTART_CONFIRM="3")), ["--restart-confirm-scans", "3"])
+def test_the_restart_confirmation_takes_three_scans_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-26-restart-confirmation.md
+    assert contains(args_of(dry_run(tmp_path)), ["--restart-confirm-scans", "3"])
+    assert " RESTART_CONFIRM=3 " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, RESTART_CONFIRM="0")), ["--restart-confirm-scans", "0"])
 
 
 def test_the_keepout_can_be_turned_on(tmp_path):
