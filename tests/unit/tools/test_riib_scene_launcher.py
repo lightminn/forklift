@@ -79,10 +79,11 @@ def test_the_start_band_release_is_off_unless_asked(tmp_path):
     assert contains(args_of(dry_run(tmp_path, START_BAND="on")), ["--start-band-release", "on"])
 
 
-def test_the_low_clearance_guard_is_off_unless_asked(tmp_path):
-    assert contains(args_of(dry_run(tmp_path)), ["--low-clearance-guard", "off"])
-    assert " LOW_CLEARANCE=off " in (tmp_path / "out/riib_defaults.txt").read_text()
-    assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="on")), ["--low-clearance-guard", "on"])
+def test_the_low_clearance_guard_is_on_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-25-low-clearance-guard.md
+    assert contains(args_of(dry_run(tmp_path)), ["--low-clearance-guard", "on"])
+    assert " LOW_CLEARANCE=on " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="off")), ["--low-clearance-guard", "off"])
 
 
 def test_the_keepout_can_be_turned_on(tmp_path):
