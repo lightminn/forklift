@@ -7875,6 +7875,23 @@ def drive(S, isaac) -> None:
                 if ms.phase in ["extract", "transport"] or (
                         live is not None and core.commands.adopted_id is None and core.cargo.relation == "carrying"):
                     scene_require(t, ppos[2] > 0.04, "Pallet dropped during transport", cargo=True)
+                # Slip check plan: the carried load's watch, the lift included (the drop check above stays out of it --
+                # the pallet starts the lift on the floor). Here with the truth checks, before the tick's arrival moves
+                # the phase on and before a cancel closes the mission's record (Codex impl round 1 P1-1, P2-3). A phase
+                # is a running mission's only: one that ended leaves its phase behind, and idle the carrying relation
+                # decides (P1-2). The lift is read from the joints the previous tick's steering read took (no new
+                # recorded call -- the replay compares their order; one physics step earlier, the lift moves at most
+                # 0.5 mm in it, and it only picks the blocks level with the blades).
+                running_ = live is None or core.commands.adopted_id is not None
+                if (running_ and ms.phase in ["lift", "extract", "transport"]) or (
+                        live is not None and not running_ and core.cargo.relation == "carrying"):
+                    slip_ = slip_watch.check(
+                        state.setdefault("slip_watch", {}), t=t, phase=ms.phase if running_ else "idle",
+                        base=(float(base[0]), float(base[1]), float(yaw)),
+                        pallet=(float(ppos[0]), float(ppos[1]), float(pallet_yaw)),
+                        gaps=None if joints_tick_["q"] is None else insertion_geometry.pocket_side_gaps(
+                            base, q, float(joints_tick_["q"][lift_index[0]]), ppos, pq))
+                    scene_require(t, slip_ is None, f"Pallet slipped off forks: {slip_}", cargo=True)
                 if ms.phase in ["approach", "insert"]:
                     scene_require(
                         t, np.linalg.norm(ppos[:2] - initial_pallet[:2]) < 0.018,
@@ -8492,20 +8509,6 @@ def drive(S, isaac) -> None:
                 command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
                                                  obstacle_hold, dwell_hold, cusp_hold, safety_hold)
                 drive, steering_command, actual_steering = command_.drive, command_.steering_command, command_.actual_steering
-                # Slip check plan: the carried load's watch, the lift included (the drop check above stays out of it --
-                # the pallet starts the lift on the floor). Here, not with the truth checks above: the lift is read from
-                # the joints the command's steering read took this tick (no new recorded call; the replay compares
-                # their order), and nothing has stepped the physics since the truth was read.
-                if ms.phase in ["lift", "extract", "transport"] or (
-                        live is not None and core.commands.adopted_id is None and core.cargo.relation == "carrying"):
-                    slip_ = slip_watch.check(
-                        state.setdefault("slip_watch", {}), t=t,
-                        phase=ms.phase if live is None or core.commands.adopted_id is not None else "idle",
-                        base=(float(base[0]), float(base[1]), float(yaw)),
-                        pallet=(float(ppos[0]), float(ppos[1]), float(pallet_yaw)),
-                        gaps=insertion_geometry.pocket_side_gaps(
-                            base, q, float(joints_tick_["q"][lift_index[0]]), ppos, pq))
-                    scene_require(t, slip_ is None, f"Pallet slipped off forks: {slip_}", cargo=True)
                 requested_speed = command_.requested_speed
                 if live is not None:
                     # M-c (plan C2): the arbiter decides what drives. AUTO and PAUSED: the core's command as assembled.

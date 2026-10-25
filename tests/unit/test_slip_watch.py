@@ -204,3 +204,35 @@ def test_the_summary_records_the_failing_tick_before_returning():
     f = summary["failure"]
     assert f["t"] == 2.0 and f["rel"] == pytest.approx([ALONG, 0.05, 0.0]) and f["outline_motion_m"] == pytest.approx(0.05)
     assert summary["checks"] == 2
+
+
+def test_the_old_check_is_recorded_only_where_it_applied():
+    """Codex slip impl round 1 P2-4: the earlier check never ran in the lift -- a 50 mm seat there is no old failure;
+    in extract (and idle carrying) it is."""
+    w = watch()
+    seat = (ALONG, 0.05, 0.0)
+    lifted(w, seat)
+    summary = {}
+    carried(w, seat, summary=summary, phase="lift", t=1.0, gaps={"left": (0.05, 0.05), "right": (0.05, 0.05)})
+    assert summary["old_would_fail_s"] is None and summary["old_lateral_max_m"] == 0.0
+    carried(w, seat, summary=summary, phase="idle", t=2.0, gaps={"left": (0.05, 0.05), "right": (0.05, 0.05)})
+    assert summary["old_would_fail_s"] == 2.0
+    assert summary["old_lateral_max_m"] == pytest.approx(0.05)
+
+
+def test_each_blades_smallest_pocket_gap_keeps_its_time():
+    """Codex slip impl round 1 P2-5 (plan: the smallest gap per blade and when)."""
+    w = watch()
+    summary = {}
+    carried(w, (ALONG, 0.0, 0.0), summary=summary, t=1.0, gaps={"left": (0.03, 0.05), "right": (0.05, 0.04)})
+    carried(w, (ALONG, 0.0, 0.0), summary=summary, t=2.0, gaps={"left": (0.05, 0.02), "right": (0.06, 0.05)})
+    assert summary["pocket_gap_min_m"] == {"left": 0.02, "right": 0.04}
+    assert summary["pocket_gap_min_t"] == {"left": 2.0, "right": 1.0}
+
+
+def test_a_tick_with_no_joints_read_yet_leaves_the_pockets_unchecked_and_counted():
+    """The runner's first tick has no steering read before it (the lift unknown): the pockets are not judged then."""
+    w = watch()
+    summary = {}
+    fail = w.check(summary, t=0.0, phase="transport", base=(0.0, 0.0, 0.0), pallet=(ALONG, 0.0, 0.0), gaps=None)
+    assert fail is None and summary["pocket_unchecked"] == 1

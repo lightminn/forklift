@@ -60,32 +60,41 @@ class SlipWatch:
             self.baseline = {"seat": list(relative(base, pallet)), "t": float(t)}
         self._phase = phase
 
-    def check(self, summary: dict, *, t: float, phase: str, base, pallet, gaps: dict) -> str | None:
+    def check(self, summary: dict, *, t: float, phase: str, base, pallet, gaps: dict | None) -> str | None:
         """One watched tick: None, or the failing condition (pocket_clearance / outline_motion / along). ``summary``
-        is the mission's record (state["slip_watch"]), updated -- the failing tick included -- before returning."""
+        is the mission's record (state["slip_watch"]), updated -- the failing tick included -- before returning.
+        ``gaps`` None: the lift is not known yet (no joints read before this tick) -- the pockets are not judged and
+        the tick is counted. The old check is recorded where it applied: extract, transport and idle carrying, never
+        the lift."""
         rel = relative(base, pallet)
         summary.setdefault("checks", 0)
         summary["checks"] += 1
         summary["baseline"] = None if self.baseline is None else dict(self.baseline)
-        # the earlier check, recorded only
-        old = abs(rel[1])
-        summary["old_lateral_max_m"] = max(summary.get("old_lateral_max_m", 0.0), old)
+        # the earlier check, recorded only, where it applied
+        summary.setdefault("old_lateral_max_m", 0.0)
         summary.setdefault("old_would_fail_s", None)
-        if old >= OLD_LATERAL_MAX_M and summary["old_would_fail_s"] is None:
-            summary["old_would_fail_s"] = float(t)
+        if phase != "lift":
+            old = abs(rel[1])
+            summary["old_lateral_max_m"] = max(summary["old_lateral_max_m"], old)
+            if old >= OLD_LATERAL_MAX_M and summary["old_would_fail_s"] is None:
+                summary["old_would_fail_s"] = float(t)
         # 1. the forks in the pockets
         gap_min = {}
         in_pockets = True
-        for side in ("left", "right"):
-            pair = (gaps or {}).get(side) or (None, None)
-            values = [v for v in pair if v is not None]
-            gap_min[side] = min(values) if values else None
-            if len(values) < 2 or min(values) <= POCKET_MARGIN_M:
-                in_pockets = False
+        if gaps is None:
+            summary["pocket_unchecked"] = summary.get("pocket_unchecked", 0) + 1
+        else:
+            for side in ("left", "right"):
+                pair = gaps.get(side) or (None, None)
+                values = [v for v in pair if v is not None]
+                gap_min[side] = min(values) if values else None
+                if len(values) < 2 or min(values) <= POCKET_MARGIN_M:
+                    in_pockets = False
         mins = summary.setdefault("pocket_gap_min_m", {"left": None, "right": None})
+        when = summary.setdefault("pocket_gap_min_t", {"left": None, "right": None})
         for side, v in gap_min.items():
             if v is not None and (mins[side] is None or v < mins[side]):
-                mins[side] = v
+                mins[side], when[side] = v, float(t)
         # 2. the motion since the load was taken
         motion = None
         if self.baseline is not None:

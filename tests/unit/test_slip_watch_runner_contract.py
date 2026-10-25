@@ -24,13 +24,29 @@ def test_the_slip_watch_judges_lift_extract_transport_and_live_carrying():
     assert 'f"Pallet slipped off forks: {slip_}"' in call
 
 
-def test_the_lift_comes_from_the_steering_reads_joints_with_no_new_recorded_call():
-    """The replay compares the recorded calls in order: the watch reads the lift from the joints the command's
-    steering read took this tick, so it runs after the command assembly and before the physics step."""
+def test_the_watch_runs_with_the_truth_checks_at_the_ticks_start():
+    """Codex slip impl round 1 P1-1, P2-3: before the tick's arrival moves the phase on (the last transport tick) and
+    before a cancel closes the mission's record -- with the other truth checks, ahead of the release gate."""
     at = SOURCE.index("slip_watch.check(")
-    assert SOURCE.index("command_ = core.assemble_command(") < at
-    assert at < SOURCE.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')
-    assert 'joints_tick_["q"][lift_index[0]]' in SOURCE[at:at + 700]
+    assert SOURCE.index("Pallet dropped during transport") < at < SOURCE.index("gate_ = core.release_gate(t, rear)")
+    assert at < SOURCE.index("command_ = core.assemble_command(")
+
+
+def test_the_phase_watch_is_a_running_missions_only():
+    """Codex slip impl round 1 P1-2: a mission ended in the lift leaves its phase behind; idle, only the carrying
+    relation decides (a manual ground and back-out is not a slip)."""
+    at = SOURCE.index("slip_watch.check(")
+    head = SOURCE[at - 900:at]
+    assert "running_ = live is None or core.commands.adopted_id is not None" in head
+    assert 'running_ and ms.phase in ["lift", "extract", "transport"]' in head
+    assert 'not running_ and core.cargo.relation == "carrying"' in head
+
+
+def test_the_lift_comes_from_the_steering_reads_joints_with_no_new_recorded_call():
+    """The replay compares the recorded calls in order: the watch reads the lift from the joints the previous tick's
+    steering read took (one physics step before the truth: the lift moves at most 0.5 mm in it)."""
+    at = SOURCE.index("slip_watch.check(")
+    assert 'joints_tick_["q"][lift_index[0]]' in SOURCE[at - 900:at + 900]
     assert "steering_position=steering_position_," in SOURCE
     hook = _block("def steering_position_():", "return")
     assert 'joints_tick_["q"] = robot.get_joint_positions()' in hook
