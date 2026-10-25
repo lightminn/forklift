@@ -21,7 +21,7 @@
 #
 # Sizes per kind of run, from ws1 measurements (2026-10-24, the plan's section 1 and 2.4): shard = runs at once,
 #   live session with learned proposals  4 runs: shard:4, 8 CPUs, 27G (1.0-1.2 cores, <= 6.51 GiB, 3.9 GB GPU each);
-#                                        BUNDLE_ARGS="--pace-floor 0.345 --pace-gap-p99-s 0.12" with a pace_log per run
+#                                        BUNDLE_ARGS="--pace-floor 0.335 --pace-gap-p99-s 0.12" with a pace_log per run
 #   batch riib_scene-like run            4 runs: shard:4, 8 CPUs, 28G (3.1 cores of 4 alone -- slower at 2, <= 6.8 GiB)
 # Four sessions fill a GPU (4 x 3,915 MiB of 16,303); the runner's device free-memory check holds a start that would
 # not fit. Long operator sessions (isaac_live.sbatch's 8 h) stay single jobs: the memory figures cover runs up to 70 min.

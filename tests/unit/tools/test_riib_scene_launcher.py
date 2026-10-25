@@ -79,6 +79,13 @@ def test_the_start_band_release_is_off_unless_asked(tmp_path):
     assert contains(args_of(dry_run(tmp_path, START_BAND="on")), ["--start-band-release", "on"])
 
 
+def test_the_low_clearance_guard_is_on_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-25-low-clearance-guard.md
+    assert contains(args_of(dry_run(tmp_path)), ["--low-clearance-guard", "on"])
+    assert " LOW_CLEARANCE=on " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="off")), ["--low-clearance-guard", "off"])
+
+
 def test_the_keepout_can_be_turned_on(tmp_path):
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.15")), ["--lidar-keepout-m", "0.15"])
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
@@ -102,7 +109,7 @@ def test_the_obstacle_layer_keeps_the_constant_noise_and_draws_the_a2_spec_on_re
     assert contains(a2, ["--obstacle-layer", "config/obstacle_layer_single_a2.yaml"])
 
 
-@pytest.mark.parametrize("env", [{"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
+@pytest.mark.parametrize("env", [{"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"}])
 def test_bad_choices_are_refused(tmp_path, env):
