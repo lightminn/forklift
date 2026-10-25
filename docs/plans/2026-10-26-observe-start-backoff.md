@@ -143,3 +143,8 @@ D4 물러남의 끝 처리(관측 단계 도착이 관측 도착이 아님)를 �
   - 적용 범위·비동기·재생 경계(B2·B7)도 반영했다.
 - ② Codex 적대적 검토(계획): (결과 뒤 적는다)
 - ③ 독립 검토: (결과 뒤 적는다)
+
+## 6. 후속(이번 범위 밖)
+
+- 관측 단계에서 `return_home:invalid_start` 로 끝난 4 미션(rh_5d280e80_off_random_m_s8 m3, rh_5d280e80_on_random_m_s4 m3, rh_5d280e80_on_random_m_s6 m3, rh_5d280e80_on_tq_random_m_s2 m2): 별도 원인, 미조사. 그 미션들의 관측 재계획은 성공했으니 이 작업의 경로가 아니다. 이 PR 뒤 같은 방식(기록 자세로 재계산해 원인 분리)으로 볼지 총괄에 제안한다.
+- `scene_replan_failed:permit_stop:invalid_start`(운반·복귀의 P6 탈출): 별도 원인이고 이 작업에서는 조사하지 않았다. 출발 패드에 막힌 경우는 탈출 시작 여유 작업(`docs/plans/2026-10-25-escape-start-release.md`)이 다루고, 그 밖의 경우(리보틱스 rcf 11 건 등)는 미조사다.
