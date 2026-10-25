@@ -1028,3 +1028,153 @@ def test_a_stall_steps_back_at_once_even_when_the_pace_is_also_slow(tmp_path):
     summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.5, pace_warmup_s=0.3,
                      pace_period_s=0.1, pace_stall_s=0.4, pace_confirm=99)
     assert summary["backoffs"] and "no tick" in summary["backoffs"][0]["reason"]
+
+
+SLOW_THEN_FAST = (
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+    "while time.monotonic()<t0+float(sys.argv[3]):\n"
+    "    r=0.25 if time.monotonic()<t0+float(sys.argv[2]) else 0.4\n"
+    "    t+=0.02*r; f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n');"
+    " f.flush(); time.sleep(0.02)"
+)
+
+
+def test_a_bundle_steps_back_up_once_the_pace_is_clean_again(tmp_path):
+    # rh (2026-10-25): a back-off on a start-up dip kept the bundle at half its slots for good
+    def run(name):
+        log = tmp_path / f"{name}_live_log.jsonl"
+        return ib.Run(name=name, argv=py(SLOW_THEN_FAST, str(log), "0.6", "3.0"), pace_log=str(log))
+    summary = bundle(tmp_path, [run("a"), run("b")], slots=2, pace_floor=0.345, pace_window_s=0.3,
+                     pace_warmup_s=0.2, pace_period_s=0.1, pace_confirm=2, pace_recover=3)
+    assert summary["backoffs"] and summary["stepups"] and summary["final_cap"] == 2
+    assert summary["stepups"][0]["t"] > summary["backoffs"][0]["t"]
+    rows = [json.loads(x) for x in (tmp_path / "out" / "pace.jsonl").read_text().splitlines()]
+    assert any(r["stepped_up"] for r in rows)
+
+
+def test_no_step_up_without_measured_runs(tmp_path):
+    # runs without a pace log measure nothing: an empty evaluation is not a clean one
+    runs = [paced_run("a", tmp_path, 0.25, 1.2), stamp_run("b", tmp_path, 1.2), stamp_run("c", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=2)
+    assert summary["backoffs"] and summary["final_cap"] == 1 and summary["stepups"] == []
+
+
+def test_the_default_warm_up_is_start_up_plus_a_window():
+    import inspect
+    assert inspect.signature(ib.run_bundle).parameters["pace_warmup_s"].default == 540.0
+
+
+PHASED = (
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+    "for ph in sys.argv[2].split(','):\n"
+    "    r, until = ph.split(':')\n"
+    "    while time.monotonic() < t0 + float(until):\n"
+    "        if r != 'stop':\n"
+    "            t += 0.02 * float(r); f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n')\n"
+    "            f.flush()\n"
+    "        time.sleep(0.02)"
+)
+
+
+def phased_run(name, tmp_path, phases):
+    log = tmp_path / f"{name}_live_log.jsonl"
+    return ib.Run(name=name, argv=py(PHASED, str(log), phases), pace_log=str(log))
+
+
+def test_no_step_up_while_a_running_run_is_unmeasured(tmp_path):
+    # Codex round 1: one run at pace must not raise the cap while another one has not been measured
+    runs = [phased_run("a", tmp_path, "0.25:0.8,0.4:3.0"), ib.Run(name="mute", argv=py("import time; time.sleep(3)"),
+                                                                  pace_log=str(tmp_path / "never.jsonl"))]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=3, pace_stall_s=99, pace_stall_warmup_s=0.1)
+    assert summary["backoffs"] and summary["stepups"] == []
+
+
+def test_no_step_up_while_a_run_without_a_pace_log_runs(tmp_path):
+    # Codex round 2: a run with no pace_log is load the bundle cannot measure, not load that is at pace
+    runs = [phased_run("a", tmp_path, "0.25:0.8,0.4:3.0"), stamp_run("blind", tmp_path, 3.0)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=2, pace_recover=3)
+    assert summary["backoffs"] and summary["stepups"] == []
+
+
+def test_a_step_up_does_not_delay_the_next_back_off(tmp_path):
+    # Codex round 1: a stall right after a step-up stepped back only a window after the step-up
+    runs = [phased_run("a", tmp_path, "0.25:1.2,0.4:2.3,stop:4.0"), phased_run("b", tmp_path, "0.25:1.2,0.4:4.0")]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=1.0, pace_warmup_s=0.2,
+                     pace_period_s=0.1, pace_confirm=1, pace_recover=2, pace_stall_s=0.3, pace_stall_warmup_s=0.1)
+    assert summary["stepups"] and len(summary["backoffs"]) >= 2
+    up, again = summary["stepups"][0]["t"], summary["backoffs"][1]
+    assert "no tick" in again["reason"] and again["t"] - up < 1.0
+
+
+def test_a_stall_in_the_pace_warm_up_steps_back(tmp_path):
+    # Codex round 1: a run that stops ticking in its first minutes is a stall before its pace is judged
+    runs = [phased_run("hang", tmp_path, "0.4:0.3,stop:2.0"), phased_run("b", tmp_path, "0.4:2.0"),
+            stamp_run("later", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.3, pace_warmup_s=99,
+                     pace_period_s=0.1, pace_stall_s=0.4, pace_stall_warmup_s=0.2)
+    assert summary["backoffs"] and "hang" in summary["backoffs"][0]["reason"]
+
+
+def test_a_reused_pid_is_not_the_registered_runner(tmp_path):
+    # Codex round 1: after a SIGKILL the pid can belong to another isaac_bundle process later
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        ib.register_list(reg, lst, None, "1", pid=other.pid, ident=["another-boot", 1])
+        assert ib.register_list(reg, lst, None, "2")[0] is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def _sleeper():
+    import subprocess
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "isaac_bundle"])
+
+
+def test_two_runners_on_one_list_need_the_same_claim_dir(tmp_path):
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        conflict, entry = ib.register_list(reg, lst, None, "1", pid=other.pid)
+        assert conflict is None and entry.exists()
+        assert "claim" in ib.register_list(reg, lst, None, "2")[0]  # neither claims: both would run everything
+        assert "claim" in ib.register_list(reg, lst, tmp_path / "c", "2")[0]  # the other one does not claim
+        assert ib.register_list(reg, tmp_path / "elsewhere.jsonl", None, "2")[0] is None  # another list
+    finally:
+        other.kill()
+        other.wait()
+    conflict, entry = ib.register_list(reg, lst, None, "3")  # the other runner is gone: its entry goes
+    assert conflict is None and len(list(reg.glob("l-*"))) == 2  # this one and elsewhere's
+
+
+def test_two_runners_with_the_same_claim_dir_share_a_list(tmp_path):
+    reg, lst = tmp_path / "reg", tmp_path / "runs.jsonl"
+    lst.write_text("")
+    other = _sleeper()
+    try:
+        assert ib.register_list(reg, lst, tmp_path / "c", "1", pid=other.pid)[0] is None
+        assert ib.register_list(reg, lst, str(tmp_path / "c") + "/", "2")[0] is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": py("pass")}) + "\n")
+    other = _sleeper()
+    try:
+        ib.register_list(tmp_path / "reg", path, None, "1", pid=other.pid)
+        rc = ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+                      "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0", "--list-registry-dir",
+                      str(tmp_path / "reg")])
+    finally:
+        other.kill()
+        other.wait()
+    assert rc == 2 and not (tmp_path / "out" / "results.jsonl").exists()
