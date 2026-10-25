@@ -126,3 +126,9 @@ riib_scene 의 층 선택:
 
 - 출력: ws1 `test_runs/live/tsd_smoke/`.
 - 추가 근거: riib `rp_c9fad6e8/rp_line_1_default` 접촉도 같은 유형이다(reported, 오도메트리 −20.0 mm, 겨냥 0.3 mm). 짝 실행 fast 는 +6.8 mm 로 완주했다(`test_runs/live/ins_tail/depth_split_batch.py`).
+
+### 승격 (b) 단계: 보류 (총괄, 2026-10-26)
+
+- 결정 모드 확인 뒤 같은 조건에서 오도메트리만 바꿔 다시 돌리는 (b) 단계는 하지 않는다. 승격은 이미 정했고, 더 돌려도 근거가 하나 늘 뿐이며 ws1 시간이 든다.
+- 재개 조건: 결정 모드 PR 1(콘솔, ws1 11319·11320)이 머지된 뒤 team-spec 에서만 보였던 실패 두 유형(return_home 정체, 도킹 뒤 복구)이 다시 나오면 재개한다.
+- 과삽입 안 A(삽입 직전 앞면 재측정)는 계획으로만 보존한다(`docs/plans/2026-10-25-insertion-depth-tail.md`).
