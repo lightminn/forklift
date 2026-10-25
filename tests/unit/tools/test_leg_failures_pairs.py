@@ -267,12 +267,13 @@ def test_a_forgotten_or_unanswered_submit_may_have_started_a_mission(tmp_path):
         md.mkdir(parents=True)
         (md / "records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
         (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 9.0}}))
-    for third in ({"submit": {"t": "forgotten"}}, {}):
+    for third in ({"submit": {"t": "forgotten"}}, {}, {"submit": {"t": "reject", "reason": "busy"}},
+                  {"submit": {"t": "reject", "reason": "stale"}}):  # unsure rejects too (Codex V5 11th review P2)
         (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 2 + [third]}))
         out = session_v5(str(session))
         assert (out["inconsistent"], out["unknown"], out["worst"]["contact_unknown"]) == (False, 1, 1)
     (session / "probe.json").write_text(json.dumps({"missions_run": [{"submit": {"t": "ack"}}] * 2 + [
-        {"submit": {"t": "reject"}}]}))
+        {"submit": {"t": "reject", "reason": "invalid_target"}}]}))
     assert session_v5(str(session))["unknown"] == 0
 
 

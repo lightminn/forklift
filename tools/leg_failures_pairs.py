@@ -96,11 +96,17 @@ def _session(run_dir):
     3rd review P2: a duplicated done folder would hide a failure)."""
     import glob
 
-    try:  # the probe's submits not rejected: how many missions the session may have started (Codex V5 review P2-1).
-        # A submit forgotten or unanswered may still have been taken by the vehicle (Codex V5 10th review P2), and
-        # counting one that never started is conservative (an unknown mission: off at best, the hold at worst)
+    from mission_queue import UNSURE_REJECTS
+
+    def maybe_started(submit) -> bool:
+        # only a settled reject was not taken: a forgotten or unanswered submit (Codex V5 10th review P2) and a
+        # reject the queue holds unsure -- busy, stale: the original may still be pending (11th review P2) -- may
+        # have started; counting one that never did is conservative (unknown: off at best, the hold at worst)
+        return submit.get("t") != "reject" or submit.get("reason") in UNSURE_REJECTS
+
+    try:  # the probe's submits that may have started a mission (Codex V5 review P2-1)
         acked = sum(1 for m in _json(f"{run_dir}/probe.json").get("missions_run") or []
-                    if (m.get("submit") or {}).get("t") != "reject")
+                    if maybe_started(m.get("submit") or {}))
     except (OSError, ValueError):
         acked = None
     out = []
