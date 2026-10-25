@@ -540,6 +540,15 @@ def arguments() -> argparse.Namespace:
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
     )
     parser.add_argument(
+        "--observe-start-backoff",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-26-observe-start-backoff.md: the first far observation's replan that comes back "
+        "invalid_start (the stop within the planner clearance of the pickup prior) backs off straight by the start "
+        "check's own advice (at most 0.30 m, once per observe leg) and plans the same target again. Off: as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--low-clearance-guard",
         choices=("on", "off"),
         default="off",
@@ -5601,6 +5610,8 @@ def drive(S, isaac) -> None:
                                 cusp_heading_hold_position_m=CUSP_HEADING_HOLD_POSITION_M,
                                 cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
+                                # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
+                                observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -8153,7 +8164,12 @@ def drive(S, isaac) -> None:
                     scene_raised_ = getattr(follow_, "scene_raised", False)
                     if scene_raised_:
                         plan_wait_ = True  # the device's request: this tick stands (scene replan plan 2.1)
-                    if not scene_raised_:
+                    if not scene_raised_ and ms.phase == "observe" and core.observe_backoff is not None:
+                        # docs/plans/2026-10-26-observe-start-backoff.md B4: the start backoff's own tick, ahead of the
+                        # stall and observe recoveries (they do not run while it lasts)
+                        backoff_ = core.observe_backoff_tick(t, rear, tracking, signed_speed, dt)
+                        tracking, rear = backoff_.tracking, backoff_.rear
+                    elif not scene_raised_:
                         # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
                         stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
                         tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
@@ -8162,6 +8178,7 @@ def drive(S, isaac) -> None:
                         tracking, rear = recover_.tracking, recover_.rear
                         if ms.phase == "bottom_deck_refused":
                             break  # plan 2026-10-19 task 4: a side recovery ended the mission (no command after it)
+                    if not scene_raised_:
                         # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
                         command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
                                                 safety_hold)

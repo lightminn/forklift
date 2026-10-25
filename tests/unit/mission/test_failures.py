@@ -102,6 +102,8 @@ KNOWN = {
         "plan_worker_dead: ",
         "session_anchor_unaligned:",  # an unaligned delivery straight the anchors allowed (plan 2026-10-22-slot 2.3)
         "observe:stall_exhausted",  # the first far observation's stall with no candidate or replan left (scene replan 2.3)
+        # plan 2026-10-26-observe-start-backoff: the start backoff ends short of a valid start, or its guard stopped it
+        "observe_start_backoff_short", "observe_start_backoff_stopped",
     },
 }
 

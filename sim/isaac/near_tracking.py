@@ -1131,6 +1131,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-25 leg-failures B1/B2: the D7 re-approach's curvature and cruise caps; unset
                               # in every earlier run.
                               "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None,
+                              # 2026-10-26: the first far observation's start backoff; off in every earlier run.
+                              "observe_start_backoff": "off",
                               # 2026-10-25: the low-clearance guard; off in every earlier run.
                               "low_clearance_guard": "off", "low_clearance_margin_m": 0.05,
                               "low_clearance_deviation_m": 0.02}
