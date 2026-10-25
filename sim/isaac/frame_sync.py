@@ -45,3 +45,18 @@ class FrameSync:
 
     def summary(self) -> dict:
         return {"calls": self.calls, "renders": self.renders, "max_renders": self.max_renders, "cap": self.cap}
+
+
+def rgba_of(camera):
+    """A camera's RGB(A) as the run reads it: the direct getter (``get_rgba``, as before) -- or, in a deterministic
+    run, the current frame's own ``rgba``. The direct getter reads the annotator again and, the 2026-10-25 probe found,
+    hands back RGB that differs between processes even after the sync (0/40 frames alike, the current frame's 40/40;
+    depth alike either way)."""
+    if not determinism.enabled():
+        return camera.get_rgba()
+    frame = camera.get_current_frame()
+    rgba = frame.get("rgba") if isinstance(frame, dict) else None
+    if rgba is None or not hasattr(rgba, "__len__") or len(rgba) == 0:
+        determinism.mark("frame_sync:no_rgba")
+        raise determinism.DeterministicBroken("frame_sync: the current frame holds no rgba")
+    return rgba

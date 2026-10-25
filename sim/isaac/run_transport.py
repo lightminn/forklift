@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 from frame_sync import FrameSync
+from frame_sync import rgba_of as frame_sync_rgba
 
 from forklift_core import determinism
 
@@ -5882,7 +5883,7 @@ def drive(S, isaac) -> None:
             (SLAM plan v3.1: frames match the run length)."""
             frame_sync.sync(camera, world.render, world.current_time)  # deterministic run only (D1)
             frame = camera.get_current_frame()
-            rgba = camera.get_rgba()
+            rgba = frame_sync_rgba(camera)  # the frame's own rgba when deterministic
             # get_rgba reads the RGB annotator directly. The SDK's cached
             # frame metadata can lag; retain it for audit without treating
             # its timestamp as a control or image-acquisition failure.
@@ -5896,7 +5897,7 @@ def drive(S, isaac) -> None:
                 # under SLAM feedback the pose the robot believes.
                 now_base, now_q = annotation_pose()
                 now_yaw, _ = yaw_and_tilt(now_q)
-                live = perception_camera.get_rgba()
+                live = frame_sync_rgba(perception_camera)
                 if live is None or live.ndim != 3 or live.size == 0:
                     live = None
                 video_rgb = inset.compose_frame(
@@ -5949,7 +5950,7 @@ def drive(S, isaac) -> None:
             if args.extra_views:
                 for name in args.extra_views:
                     view_camera = extra_cameras[name]
-                    view_rgba = view_camera.get_rgba()
+                    view_rgba = frame_sync_rgba(view_camera)
                     expected = (
                         (480, 640, 4) if name == "perception" else (720, 1280, 4)
                     )
@@ -6107,7 +6108,7 @@ def drive(S, isaac) -> None:
 
             def read_() -> None:
                 semantic_ = frr.decode_mission_semantic(frame_.get("semantic_segmentation"))
-                rgba_ = np.array(perception_camera.get_rgba(), copy=True)
+                rgba_ = np.array(frame_sync_rgba(perception_camera), copy=True)  # the frame's own rgba when deterministic
                 raw_ = np.array(perception_camera.get_depth(), copy=True)
                 if raw_.ndim == 3 and raw_.shape[-1] == 1:
                     raw_ = np.squeeze(raw_, axis=-1)

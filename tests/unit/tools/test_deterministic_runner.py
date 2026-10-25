@@ -54,6 +54,15 @@ def test_every_camera_read_is_synced_before_its_pixels():
     assert "frame_sync.sync(perception_camera" in capture
 
 
+def test_rgb_is_read_through_rgba_of_where_it_is_recorded():
+    """The direct getter's RGB differs between processes even after the sync (2026-10-25 probe); a deterministic run
+    reads the current frame's own rgba (frame_sync.rgba_of)."""
+    assert "frame_sync_rgba(perception_camera)" in _body("far_drive_frame")
+    assert "frame_sync_rgba(camera)" in _body("write_video_frame")
+    adapter = (ROOT / "sim/isaac/perception_adapter.py").read_text()
+    assert "np.array(_rgba_of(camera), copy=True)" in adapter
+
+
 def test_deterministic_planning_does_not_read_the_slam_map():
     block = SOURCE[SOURCE.index('latest = args.slam_map_dir / "latest_map.npz"') - 400:]
     assert re.search(r"elif layer_\.memory is not None and args\.slam_map_dir is not None and "
