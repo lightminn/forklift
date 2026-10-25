@@ -1016,3 +1016,15 @@ def test_a_persistently_slow_bundle_steps_back(tmp_path):
     summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.4, pace_warmup_s=0.3,
                      pace_period_s=0.1, pace_confirm=2)
     assert summary["backoffs"] and summary["final_cap"] == 1
+
+
+
+def test_a_stall_steps_back_at_once_even_when_the_pace_is_also_slow(tmp_path):
+    # one run ticks slowly, the other stops ticking: the stall must not wait for pace_confirm
+    log = tmp_path / "stall_live_log.jsonl"
+    code = PACED.replace("time.monotonic()+float(sys.argv[3])", "time.monotonic()+0.4") + "\ntime.sleep(1.5)"
+    runs = [ib.Run(name="stall", argv=py(code, str(log), "0.2", "0"), pace_log=str(log)),
+            paced_run("slow", tmp_path, 0.2, 2.0), stamp_run("later", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.5, pace_warmup_s=0.3,
+                     pace_period_s=0.1, pace_stall_s=0.4, pace_confirm=99)
+    assert summary["backoffs"] and "no tick" in summary["backoffs"][0]["reason"]

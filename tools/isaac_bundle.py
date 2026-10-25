@@ -916,29 +916,31 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 "silence_s": round(silence, 1)}
             if ratio is not None:
                 r.pace_min = round(min(ratio, r.pace_min if r.pace_min is not None else ratio), 4)
-        reason = None
+        # a stall is judged first and on its own: it steps back at once, whatever the pace of the others
+        stall = None
+        if rows:
+            worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
+            if worst[1]["silence_s"] >= pace_stall_s:
+                stall = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
+        slow = None
         ratios = sorted(v["ratio"] for v in rows.values() if v["ratio"] is not None)
         if ratios:
             k = len(ratios) // 2
             median = ratios[k] if len(ratios) % 2 else (ratios[k - 1] + ratios[k]) / 2
             if pace_floor is not None and median < pace_floor:
-                reason = f"median sim/wall {median:.4f} < {pace_floor}"
-        if reason is None and rows:
-            worst = max(rows.items(), key=lambda kv: kv[1]["silence_s"])
-            if worst[1]["silence_s"] >= pace_stall_s:
-                reason = f"{worst[0]} has written no tick for {worst[1]['silence_s']} s"
-            elif pace_gap_p99_s is not None and any(v["gap_p99_s"] is not None for v in rows.values()):
-                worst = max(((k, v) for k, v in rows.items() if v["gap_p99_s"] is not None),
-                            key=lambda kv: kv[1]["gap_p99_s"])
-                if worst[1]["gap_p99_s"] > pace_gap_p99_s:
-                    reason = f"{worst[0]} tick gap p99 {worst[1]['gap_p99_s']} s > {pace_gap_p99_s}"
+                slow = f"median sim/wall {median:.4f} < {pace_floor}"
+        if slow is None and pace_gap_p99_s is not None and any(v["gap_p99_s"] is not None for v in rows.values()):
+            worst = max(((k, v) for k, v in rows.items() if v["gap_p99_s"] is not None), key=lambda kv: kv[1]["gap_p99_s"])
+            if worst[1]["gap_p99_s"] > pace_gap_p99_s:
+                slow = f"{worst[0]} tick gap p99 {worst[1]['gap_p99_s']} s > {pace_gap_p99_s}"
+        reason = stall or slow
         cooled = st["backoff_at"] is None or now - st["backoff_at"] >= pace_window_s
         running = sum(1 for r in live.values() if r.exited is None)
         stepped = False
         # a stall steps back at once; a slow window only after pace_confirm evaluations in a row (one window dipping
         # below the floor is within a single session's own spread: lfv4 single runs' 300 s minima 0.3467-0.3648)
-        st["pace_below"] = st["pace_below"] + 1 if reason else 0
-        confirmed = reason is not None and ("no tick" in reason or st["pace_below"] >= pace_confirm)
+        st["pace_below"] = st["pace_below"] + 1 if slow else 0
+        confirmed = stall is not None or (slow is not None and st["pace_below"] >= pace_confirm)
         if confirmed and cooled and st["cap"] > 1:
             st["cap"] = max(1, min(st["cap"], running) - 1)
             st["backoff_at"] = now
