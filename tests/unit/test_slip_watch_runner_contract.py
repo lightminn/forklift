@@ -108,7 +108,15 @@ def test_the_runner_judges_the_pockets_over_the_lifts_reach_in_one_step():
     call = SOURCE[at - 1200:SOURCE.index("cargo=True", at)]
     assert "merge_gaps(" in call and "lift_reach_m_" in call
     assert 'joint[@name=\'fork_lift\']/limit' in SOURCE or "fork_lift_velocity_mps_" in SOURCE
-    assert "fork_lift_velocity_mps_ * dt" in SOURCE
+    assert "fork_lift_velocity_mps_ * max(t - joints_tick_[\"t\"], dt)" in SOURCE.replace("'", '"') \
+        or 'fork_lift_velocity_mps_ * max(t - joints_tick_["t"], dt)' in SOURCE
+
+
+def test_the_reach_covers_the_time_since_the_joints_were_read():
+    """Codex slip impl round 3 P2: a tick that failed before its command assembly steps the physics without a
+    steering read -- the next judgement's joints are two steps old, so the reach is the time since the read."""
+    hook = _block("def steering_position_():", "return")
+    assert 'joints_tick_["t"] = t' in hook
 
 
 def test_the_drop_check_is_a_running_missions_too():

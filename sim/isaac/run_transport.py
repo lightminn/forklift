@@ -5449,17 +5449,17 @@ def drive(S, isaac) -> None:
     # and the truth it judges (round 2 P2-1).
     fork_lift_velocity_mps_ = float(
         ET_.parse(args.forklift_urdf).getroot().find("joint[@name='fork_lift']/limit").get("velocity"))
-    lift_reach_m_ = fork_lift_velocity_mps_ * dt
 
     slip_watch = SlipWatch(inserted_along_m=geometry.inserted_offset_m - abs(args.rear_axle_offset_m),
                            outline_half_m=(geometry.pallet_depth_m / 2, geometry.pallet_width_m / 2))
 
     # Slip check plan: the joints the command's steering read takes each tick, kept for the slip watch's lift (one
     # recorded call, as before).
-    joints_tick_ = {"q": None}
+    joints_tick_ = {"q": None, "t": None}
 
     def steering_position_():
         joints_tick_["q"] = robot.get_joint_positions()
+        joints_tick_["t"] = t  # the tick it was read in: the lift's reach covers the physics since (round 3 P2)
         return joints_tick_["q"][steers]
 
     core = MissionCore(
@@ -7892,7 +7892,10 @@ def drive(S, isaac) -> None:
                 # mission's phase or idle carrying, as the drop check (P1-2). The lift is read from the joints the
                 # previous tick's steering read took (no new recorded call -- the replay compares their order), one
                 # physics step before the truth: the pockets are judged at both ends of what the lift can move in that
-                # step (the URDF's velocity limit), each blade's worse (round 2 P2-1).
+                # step (the URDF's velocity limit), each blade's worse (round 2 P2-1) -- every step since the read: a
+                # tick that failed before its command assembly stepped without one (round 3 P2).
+                lift_reach_m_ = (None if joints_tick_["q"] is None
+                                 else fork_lift_velocity_mps_ * max(t - joints_tick_["t"], dt))
                 if (running_ and ms.phase in ["lift", "extract", "transport"]) or (
                         live is not None and not running_ and core.cargo.relation == "carrying"):
                     slip_ = slip_watch.check(
