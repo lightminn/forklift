@@ -1197,3 +1197,181 @@ def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
     rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
     out = capsys.readouterr().out
     assert rc == 0 and "1 of 4" in out and "0 problems" in out
+
+
+def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
+    # 20 live runs on 2 jobs of 4: 3 waves x 30 min + 3 min stagger + 5 min, +15 %, up to 5 min
+    assert ib.time_limit(20, 4, 2, 30) == "01:55:00"
+    assert ib.time_limit(2, 2, 1, 30) == "00:45:00"
+    assert ib.sbatch_sizes("live", 2, runs=2)["time"] == "00:45:00"
+    assert "time" not in ib.sbatch_sizes("live")
+    assert ib.sbatch_sizes("riib", runs=12, jobs=2, run_min=80)["time"] == ib.time_limit(12, 3, 2, 80)
+
+
+def test_sizes_prints_the_time(capsys):
+    assert ib.main(["sizes", "live", "--runs", "20", "--jobs", "2"]) == 0
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G --time=01:55:00"
+
+
+def test_squeue_time_left_is_parsed():
+    class Out:
+        def __init__(self, text):
+            self.stdout = text
+    for out, secs in (("1:02:03", 3723), ("45:10", 2710), ("2-01:00:00", 176400), ("UNLIMITED", None), ("", None)):
+        assert ib.slurm_time_left(1, run=lambda *a, _out=out, **k: Out(_out)) == secs
+
+
+def test_the_job_s_end_comes_from_its_start_and_from_a_shortened_limit():
+    class Out:
+        def __init__(self, text):
+            self.stdout = text
+    env = {"SLURM_JOB_ID": "7", "SLURM_JOB_END_TIME": "10000"}
+    # squeue fails: the end Slurm set at the start still holds (Codex: no time check at all before)
+    assert ib.job_time_left(env, run=lambda *a, **k: Out(""), now=lambda: 9000.0) == 1000
+    # scontrol shortened the limit since: squeue's %L is smaller
+    assert ib.job_time_left(env, run=lambda *a, **k: Out("5:00"), now=lambda: 9000.0) == 300
+    assert ib.job_time_left({}, now=lambda: 0.0) is None
+
+
+def test_a_retry_left_for_time_keeps_its_claim_and_is_named(tmp_path):
+    # Codex: a retry of this job's own run cannot go to another job (the claim and its attempts are this job's)
+    out = tmp_path / "r"
+    left = iter([3600] + [100] * 1000)
+    run = ib.Run(name="r", argv=py(FLAKY, str(out), "1"), scan=[str(out / "run.log")],
+                 retry_move=[str(out)])
+    summary = bundle(tmp_path, [run], slots=1, run_est_s=600, time_left=lambda: next(left), time_check_s=0.0,
+                     claim_dir=str(tmp_path / "claims"))
+    statuses = [json.loads(x)["status"] for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert statuses == ["infra_failed", "time_left_retry"]
+    assert summary["time_left_retry"] == ["r"] and summary["exit_code"] == 1
+    assert (tmp_path / "claims" / "r").is_dir()
+
+
+def test_no_run_starts_that_the_job_s_time_limit_would_cut(tmp_path):
+    claims = tmp_path / "claims"
+    runs = [stamp_run(n, tmp_path, 0.05) for n in ("a", "b")]
+    summary = bundle(tmp_path, runs, run_est_s=600, time_left=lambda: 300, claim_dir=str(claims))
+    r = results(tmp_path)
+    assert r["a"]["status"] == r["b"]["status"] == "time_left"
+    assert summary["time_left"] == 2 and summary["exit_code"] == 1
+    assert list(claims.iterdir()) == []  # left unclaimed for another job on the list
+
+
+def test_runs_start_while_the_time_left_holds_them(tmp_path):
+    summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.05) for n in ("a", "b")], run_est_s=600,
+                     time_left=lambda: 3600)
+    assert summary["time_left"] == 0 and summary["exit_code"] == 0
+
+
+def test_a_shortened_time_limit_is_read_again(tmp_path):
+    # scontrol can shorten a running job's limit: the runner re-reads it
+    left = iter([3600] + [100] * 1000)
+    runs = [stamp_run(n, tmp_path, 0.3) for n in ("a", "b", "c")]
+    summary = bundle(tmp_path, runs, slots=1, run_est_s=600, time_left=lambda: next(left), time_check_s=0.0)
+    r = results(tmp_path)
+    assert r["a"]["status"] == "ended" and r["b"]["status"] == r["c"]["status"] == "time_left"
+    assert summary["time_left"] == 2
+
+
+# --- stall watchdog -------------------------------------------------------------------------------------------------
+
+WRITES_THEN_HANGS = (
+    "import sys,time; p=sys.argv[1]; end=time.monotonic()+float(sys.argv[2])\n"
+    "while time.monotonic()<end:\n"
+    "    open(p,'a').write('x\\n'); time.sleep(0.05)\n"
+    "time.sleep(float(sys.argv[3]))"
+)
+
+
+def writer(name, tmp_path, write_s, hang_s, **extra):
+    path = tmp_path / f"{name}.progress"
+    return ib.Run(name=name, argv=py(WRITES_THEN_HANGS, str(path), str(write_s), str(hang_s)), watch=[str(path)],
+                  **extra)
+
+
+def test_a_run_whose_progress_stops_is_ended_as_stalled_and_not_retried(tmp_path):
+    # dv3_trailer_det2 (2026-10-26) hung in world.render() for 45 min while its bundle held a GPU
+    hung = writer("hung", tmp_path, 0.3, 30, retry_move=[str(tmp_path / "hung_out")])
+    fine = writer("fine", tmp_path, 1.5, 0)
+    t0 = time.monotonic()
+    summary = bundle(tmp_path, [hung, fine], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, stack_match=None)
+    r = results(tmp_path)
+    assert r["hung"]["status"] == "stalled" and r["hung"]["retried"] is False and r["hung"]["silence_max_s"] >= 0.6
+    assert r["fine"]["status"] == "ended" and r["fine"]["rc"] == 0
+    assert summary["stalled"] == 1 and summary["failed"] == 1 and time.monotonic() - t0 < 10
+
+
+def test_silence_counts_from_the_start_until_a_progress_file_exists(tmp_path):
+    never = ib.Run(name="never", argv=py("import time; time.sleep(30)"), watch=[str(tmp_path / "none.jsonl")])
+    bundle(tmp_path, [never], stall_s=0.5, stall_check_s=0.1, grace_s=1.0, stack_match=None)
+    assert results(tmp_path)["never"]["status"] == "stalled"
+
+
+def test_a_run_without_a_progress_file_is_not_watched(tmp_path):
+    quiet = ib.Run(name="quiet", argv=py("import time; time.sleep(1.0)"))
+    summary = bundle(tmp_path, [quiet], stall_s=0.3, stall_check_s=0.1)
+    assert results(tmp_path)["quiet"]["status"] == "ended" and summary["stalled"] == 0
+
+
+def test_the_kind_s_progress_file_under_the_output_is_watched(tmp_path):
+    out = tmp_path / "riib_s0"
+    code = "import pathlib,sys,time; d=pathlib.Path(sys.argv[1])/'run'; d.mkdir(parents=True); " \
+           "(d/'frames.jsonl').write_text('{}\\n'); time.sleep(30)"
+    run = ib.Run(name="riib_s0", argv=py(code, str(out)), retry_move=[str(out)])
+    assert ib.watch_globs(run, "run/frames.jsonl") == [str(out / "run" / "frames.jsonl")]
+    bundle(tmp_path, [run], stall_s=0.6, stall_check_s=0.1, grace_s=1.0, watch_rel="run/frames.jsonl",
+           stack_match=None)
+    assert results(tmp_path)["riib_s0"]["status"] == "stalled"
+
+
+def test_watch_globs_prefer_the_list_then_the_pace_log():
+    run = ib.Run(name="a", argv=["true"], pace_log="/x/live_log.jsonl", retry_move=["/o"])
+    assert ib.watch_globs(run, "run/frames.jsonl") == ["/x/live_log.jsonl"]
+    run.watch = ["/o/p.jsonl"]
+    assert ib.watch_globs(run, "run/frames.jsonl") == ["/o/p.jsonl"]
+
+
+def test_the_run_list_takes_watch(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"], "watch": ["/o/{attempt}/f"]}) + "\n")
+    (run,) = ib.load_runs(path)
+    assert run.at(2).watch == ["/o/2/f"]
+
+
+HANGING_TRANSPORT = (
+    "import faulthandler,pathlib,signal,sys,time\n"
+    "out=pathlib.Path(sys.argv[1]); out.mkdir(parents=True)\n"
+    "faulthandler.register(signal.SIGUSR1, file=open(str(out)+'.stall_stack.txt','w'), all_threads=True)\n"
+    "def stuck_in_render():\n"
+    "    time.sleep(60)\n"
+    "stuck_in_render()\n"
+)
+
+
+def test_a_stalled_run_leaves_its_stack_and_diagnostics_before_it_is_ended(tmp_path):
+    # 2026-10-26: dv3_trailer_det2 and 11119 hung with no trace of where; the run is asked for its stack first
+    script = tmp_path / "run_transport.py"
+    script.write_text(HANGING_TRANSPORT)
+    out = tmp_path / "riib_s0"
+    # as riib_scene.sbatch runs it: under timeout, which names the script too and must not get SIGUSR1
+    run = ib.Run(name="riib_s0", argv=["bash", "-c", f"timeout 60 {sys.executable} {script} {out}/run"],
+                 retry_move=[str(out)], watch=[str(out / "run" / "frames.jsonl")])
+    summary = bundle(tmp_path, [run], stall_s=1.0, stall_check_s=0.1, stack_wait_s=0.5, grace_s=2.0)
+    r = results(tmp_path)["riib_s0"]
+    assert r["status"] == "stalled" and summary["stalled"] == 1
+    assert "stuck_in_render" in (out / "run.stall_stack.txt").read_text()
+    assert r["stall_diagnostics"] == str(out / "stall_diagnostics.txt")
+    assert "threads: tid comm state" in (out / "stall_diagnostics.txt").read_text()
+
+
+def test_a_run_whose_runner_is_not_running_is_not_judged(tmp_path):
+    # between a live session's epochs only the supervisor runs (backoff + up to 300 s of standby): no record is due
+    quiet = writer("between_epochs", tmp_path, 0.1, 1.5)  # python -c, not run_transport.py
+    summary = bundle(tmp_path, [quiet], stall_s=0.3, stall_check_s=0.1)
+    assert results(tmp_path)["between_epochs"]["status"] == "ended" and summary["stalled"] == 0
+
+
+def test_a_run_without_a_runner_for_too_long_is_a_stall(tmp_path):
+    stuck = writer("stuck_between_epochs", tmp_path, 0.1, 30)  # never a run_transport.py process
+    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6)
+    assert results(tmp_path)["stuck_between_epochs"]["status"] == "stalled" and summary["stalled"] == 1

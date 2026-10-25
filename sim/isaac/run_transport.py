@@ -546,6 +546,13 @@ def arguments() -> argparse.Namespace:
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
     )
     parser.add_argument(
+        "--restart-confirm-scans", type=int, default=0,
+        help="docs/plans/2026-10-25-restart-confirmation.md: after the permission stops the truck for an occupied cell, "
+        "its output stays at zero until every clearing sensor has given this many new scans in a row on which the "
+        "raw limit is positive (a painted halo cleared for one scan no longer lets it creep); 0 (default): as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--low-clearance-guard",
         choices=("on", "off"),
         default="off",
@@ -1085,6 +1092,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--exit-clearance-m must be a positive number of metres")
     if not (math.isfinite(args.lidar_keepout_m) and args.lidar_keepout_m >= 0):
         parser.error("--lidar-keepout-m must be a finite non-negative number of metres")
+    if getattr(args, "restart_confirm_scans", 0) < 0:
+        parser.error("--restart-confirm-scans must be 0 (off) or a positive number of scans")
     for name_ in ("low_clearance_margin_m", "low_clearance_deviation_m"):
         if not (math.isfinite(getattr(args, name_)) and getattr(args, name_) >= 0):
             parser.error(f"--{name_.replace('_', '-')} must be a finite non-negative number of metres")
@@ -5659,6 +5668,7 @@ def drive(S, isaac) -> None:
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
+                                restart_confirm_scans=int(getattr(args, "restart_confirm_scans", 0) or 0),
                                 low_clearance_margin_m=getattr(args, "low_clearance_margin_m", 0.05),
                                 low_clearance_deviation_m=getattr(args, "low_clearance_deviation_m", 0.02),
                                 low_clearance_unloaded_shape=unloaded_shape,
@@ -9017,6 +9027,8 @@ def drive(S, isaac) -> None:
                         "backoff_records": obstacle.get("backoff_records", []),
                         **({"start_band_release": dict(obstacle["layer"].permission.release_stats)}
                            if getattr(args, "start_band_release", "off") == "on" else {}),
+                        **({"restart_confirm": obstacle.get("restart_confirm") or {"scans": int(args.restart_confirm_scans)}}
+                           if int(getattr(args, "restart_confirm_scans", 0) or 0) > 0 else {}),
                         "shadow_memory": None if obstacle["layer"].shadow is None else {
                             **obstacle["layer"].shadow.stats,
                             "band_m": obstacle["layer"].shadow.band_m,
@@ -9219,6 +9231,20 @@ def main() -> None:
     determinism.configure(getattr(args, "deterministic", False))
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
+    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
+    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
+    # output so that the replay gate's view of the output directory does not change.
+    import faulthandler
+    import signal as signal_
+
+    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
+                          all_threads=True)
+    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
+    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
+    import ctypes
+
+    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())

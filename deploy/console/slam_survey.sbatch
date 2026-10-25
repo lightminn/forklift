@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --gres=shard:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --mem=7G
 #SBATCH --time=02:30:00
 #SBATCH --signal=B:TERM@120
 # A SLAM survey epoch (docs/plans/2026-10-20-slam-localization-session.md L2, S2): one epoch of the console's live

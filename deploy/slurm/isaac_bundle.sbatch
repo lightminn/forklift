@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --gres=shard:4
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=27G
+#SBATCH --mem=24G
 #SBATCH --time=02:00:00
 #SBATCH --signal=B:TERM@120
 # Several Isaac runs in one job (tools/isaac_bundle.py, docs/plans/2026-10-24-ws1-isaac-bundle.md): a run list of
@@ -12,7 +12,8 @@
 # BRIDGE_CPU and PORT (deploy/console/isaac_live.sbatch and deploy/riibotics/riib_scene.sbatch name their bridge
 # container and pin it with them), the list's env overriding.
 #
-#   sbatch $(python3 tools/isaac_bundle.py sizes KIND [--slots N]) --time=T deploy/slurm/isaac_bundle.sbatch RUNS.jsonl OUT KIND
+#   sbatch $(python3 tools/isaac_bundle.py sizes KIND [--slots N] --runs R --jobs J [--run-min M]) \
+#     deploy/slurm/isaac_bundle.sbatch RUNS.jsonl OUT KIND
 #   (KIND = live|riib|bd: the runner takes the slots and the session GPU memory from it; without it, slots = shards)
 #   (sizes prints --gres/--cpus-per-task/--mem from the measured per-session RAM, cores and GPU memory, in proportion
 #   to the sessions; riib holds 3 per GPU -- 4.15-4.37 GB each with its video)
@@ -33,8 +34,13 @@
 #   (isaac_bundle.py sizes prints these; the figures above it are the source)
 # Four sessions fill a GPU (4 x 3,915 MiB of 16,303); the runner's device free-memory check holds a start that would
 # not fit. Long operator sessions (isaac_live.sbatch's 8 h) stay single jobs: the memory figures cover runs up to 70 min.
-# --time: the list's runs in waves of N slots plus a minute of stagger per run, with room. The batch shell gets TERM
-# 120 s before the limit and passes it to the runner, which TERMs every run and KILLs what is left after 110 s.
+# --time (sizes --runs prints it): the waves the list's jobs make together x a run's p95 (the kind's measured, or
+# --run-min M -- then give the runner the same: BUNDLE_ARGS="... --run-est-min M") + a wave's stagger + 5 min, +15 %.
+# The runner starts no run with less than its p95 (+ the early TERM and grace) left in the job: a first attempt is
+# recorded time_left and left unclaimed for another job on the list, a retry of its own time_left_retry (exit 1 either
+# way: check summary.json for runs nobody ran). The batch shell
+# gets TERM 120 s before the limit and passes it to the runner, which TERMs every run and KILLs what is left after
+# 110 s.
 #
 # Run from the repository root.
 set -u

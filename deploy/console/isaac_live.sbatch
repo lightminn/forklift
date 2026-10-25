@@ -130,6 +130,12 @@ SUP_LOC=()
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
   --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}' '{expected_map_id}' '{map_bundle}')" &
 SUP=$!
+# Progress watchdog (tools/stall_watch.py): when no epoch's run/live_log.jsonl has changed for STALL_MIN minutes
+# (default 10, 0 off) the runner gets SIGUSR1 -- its stack goes to run.stall_stack.txt -- and the supervisor TERM, as
+# on Slurm's TERM; $OUT/stall.jsonl says so. A live session never went 3.3 s without a record in 30 runs (first record
+# 38-50 s after its start); 11119 (2026-10-26) sat silent for 34 min mid-transport until its time limit.
+"$VENV_PY" "$ROOT/tools/stall_watch.py" --glob "$OUT/epoch_*/run/live_log.jsonl" --stall-min "${STALL_MIN:-10}" \
+  --term-pid "$SUP" --marker "$OUT/stall.jsonl" &
 trap 'kill -TERM "$SUP" 2>/dev/null' TERM INT  # Slurm's TERM: the supervisor ends the runner and the bridge
 wait "$SUP"
 rc=$?
