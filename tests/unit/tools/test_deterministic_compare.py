@@ -16,6 +16,7 @@ def make_run(root: Path, *, frame_bit=False, broken=None, wall=1.0, path_tag="a"
     run = root / path_tag / "run"
     (run / "recognition").mkdir(parents=True)
     (run / "spool" / "slam.control").mkdir(parents=True)
+    (run / "spool" / "manifest.json").write_text(json.dumps({"complete": True, "cuts": 6 // spool_cut}))
     result = {
         "phase": "done", "planning_wall_s": wall, "output": str(run / "x.npz"),
         "async_plans": [{"site": "observe", "requested_s": 3.3, "finished_s": 3.35, "wall_s": wall,
@@ -145,6 +146,79 @@ def test_render_and_object_identities_are_left_out_but_the_same_tracker_still_co
     assert dc.compare(a, b)["equal"] is True, dc.compare(a, b)["differences"]
     c = write("c", 1124, 76368, [9999, 5555, 5555])  # the third hold on another tracker: a real difference
     assert dc.compare(a, c)["equal"] is False
+
+
+def test_one_tracker_table_across_the_closed_holds_the_open_hold_and_the_watch(tmp_path):
+    # Codex PR 1 review P3: the open hold on the same tracker as a closed one, and the watch's raw id(tracker)
+    def write(tag, closed, open_, watch):
+        run = make_run(tmp_path, path_tag=tag) / "run"
+        result = json.loads((run / "result.json").read_text())
+        result["cusp_heading_holds"] = [{"key": ["approach", closed, 1], "cancelled_by": None}]
+        result["cusp_heading_hold"] = {"key": ["approach", open_, 2], "cancelled_by": None}
+        result["cusp_heading_watch"] = {"tracker": watch, "since_s": 3.0}
+        (run / "result.json").write_text(json.dumps(result))
+        return run
+
+    a = write("a", 111, 111, 111)
+    assert dc.compare(a, write("b", 999, 999, 999))["equal"] is True
+    assert dc.compare(a, write("c", 999, 555, 999))["equal"] is False  # the open hold on another tracker
+    assert dc.compare(a, write("d", 999, 999, 555))["equal"] is False  # the watch on another tracker
+
+
+def test_a_stamp_named_decided_is_left_out_but_a_decided_record_is_compared(tmp_path):
+    # Codex PR 1 review P2: "submitted"/"decided"/"started" are wall stamps (floats) in the far worker and the live
+    # runtime, but "decided" is also the recognition's candidate record and the cusp hold's motion state
+    def write(tag, stamp, hypothesis):
+        run = make_run(tmp_path, path_tag=tag) / "run"
+        result = json.loads((run / "result.json").read_text())
+        result["far_jobs"] = [{"seq": 1, "submitted": stamp, "decided": stamp + 0.2}]
+        result["recognition"] = {"decided": {"candidate_id": 3, "hypothesis": hypothesis}}
+        (run / "result.json").write_text(json.dumps(result))
+        return run
+
+    a = write("a", 1000.0, "epal6")
+    assert dc.compare(a, write("b", 2345.6, "epal6"))["equal"] is True
+    assert dc.compare(a, write("c", 1000.0, "t11"))["equal"] is False
+
+
+def test_runs_that_are_not_valid_deterministic_records_never_compare_equal(tmp_path):
+    # Codex PR 1 review P2: two missing folders, two results without the deterministic block, two incomplete spools
+    # and two runs with record errors were all EQUAL
+    out = dc.compare(tmp_path / "nope_a", tmp_path / "nope_b")
+    assert out["equal"] is False and out["invalid"]["A"] and out["invalid"]["B"]
+
+    def edit(tag, change):
+        slot = make_run(tmp_path, path_tag=tag)
+        result = json.loads((slot / "run" / "result.json").read_text())
+        change(slot, result)
+        (slot / "run" / "result.json").write_text(json.dumps(result))
+        return slot
+
+    plain = [edit(t, lambda s, r: r.pop("deterministic")) for t in ("p1", "p2")]
+    out = dc.compare(*plain)
+    assert out["equal"] is False and any("deterministic" in p for p in out["invalid"]["A"])
+
+    def incomplete(slot, result):
+        (slot / "run" / "spool" / "manifest.json").write_text(json.dumps({"complete": False}))
+
+    out = dc.compare(*[edit(t, incomplete) for t in ("i1", "i2")])
+    assert out["equal"] is False and any("spool" in p for p in out["invalid"]["A"])
+
+    def errors(slot, result):
+        result["far"] = {"live": {"record_errors": ["write failed"]}}
+
+    out = dc.compare(*[edit(t, errors) for t in ("e1", "e2")])
+    assert out["equal"] is False and any("record_errors" in p for p in out["invalid"]["A"])
+
+
+def test_the_spool_manifest_is_checked_not_compared(tmp_path):
+    # its chunk counts follow the wall-clock cut interval; the streams themselves are compared joined
+    slots = []
+    for tag, cuts in (("a", 3), ("b", 5)):
+        slot = make_run(tmp_path, path_tag=tag)
+        (slot / "run" / "spool" / "manifest.json").write_text(json.dumps({"complete": True, "cuts": cuts}))
+        slots.append(slot)
+    assert dc.compare(*slots)["equal"] is True
 
 
 def test_a_different_value_beside_the_run_folder_still_fails(tmp_path):
