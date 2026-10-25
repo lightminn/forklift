@@ -58,6 +58,25 @@ def test_a_deterministic_run_takes_the_oracle_masks_instead_of_the_learned_propo
     assert "deterministic_learned_replaced" not in vars(bare) and "deterministic_learned_replaced" not in vars(oracle)
 
 
+def test_an_off_run_matches_a_measurement_record_that_predates_the_switch():
+    # Codex PR 1 review P2: the recorded arguments of an off run, against a record made before --deterministic existed
+    import json
+
+    import near_tracking
+    import run_transport
+
+    far = ["--recognition", "far", "--slam-feedback", "slam.sock", "--recognition-pixel-lag-steps", "12"]
+    for extra in ([], far):
+        now = json.loads(json.dumps(run_transport.recorded_arguments(_runner_args(extra)), default=str))
+        assert "deterministic_overrides" not in now
+        before = {k: v for k, v in now.items() if k != "deterministic"}
+        problems = near_tracking.condition_problems({"arguments": near_tracking.contract_arguments(before)},
+                                                    {"arguments": near_tracking.contract_arguments(now)})
+        assert problems == []
+    on = run_transport.recorded_arguments(_runner_args(far + ["--deterministic"]))
+    assert on["deterministic"] is True and "deterministic_overrides" not in on
+
+
 def test_a_deterministic_run_refuses_a_boundary_record():
     # boundary records keep RGB by content hash (arrays_*.npz members, image_save pixel entries), which the strict
     # comparison cannot tell from the rest -- the two are not combined (plan D1b, Codex)

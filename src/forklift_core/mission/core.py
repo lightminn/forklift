@@ -1429,12 +1429,12 @@ class MissionCore:
         tight_travel = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
         # One shared 20 s budget for the whole replan (plan D3):
         # retries and other candidates included.
-        obstacle["deadline"] = wall() + 20.0
+        obstacle["deadline"] = wall() + determinism.budget(20.0)  # the cap in a deterministic run (D6)
         if ms.phase == "observe" and obstacle.get("pickup_estimate") is not None:
             # After recognition half the shared budget goes to this leg,
             # the rest to the mission replan below if it fails
             # (Codex checkpoint P2: one 20 s budget for the whole replan).
-            obstacle["deadline"] = replan_start + 10.0
+            obstacle["deadline"] = replan_start + determinism.budget(10.0)
         if ms.phase == "observe":
             target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
             replanned = plan_observation_leg(
@@ -1557,7 +1557,7 @@ class MissionCore:
             # The pallet, not the waypoint, is the goal: plan the
             # mission again from here, and its final straight gives the
             # new waypoint. The rest of the shared budget.
-            obstacle["deadline"] = replan_start + 20.0
+            obstacle["deadline"] = replan_start + determinism.budget(20.0)
             planning_trace = []
             mission_again = plan_transport(
                 grid_world(scenario), planner_config, geometry=geometry,
