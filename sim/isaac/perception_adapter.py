@@ -674,18 +674,21 @@ def capture_scene_steps(
             else:
                 # Last resort for cameras without IDs; identical static renders
                 # can be falsely rejected even though they are fresh frames.
+                # a deterministic run leaves RGB out (it differs between processes; plan D1b)
                 fresh = all(
                     not (
-                        np.array_equal(rgba, old[0], equal_nan=True)
+                        (not determinism.enabled() and np.array_equal(rgba, old[0], equal_nan=True))
                         or np.array_equal(raw_depth, old[1], equal_nan=True)
                     )
                     for old in (previous, state.previous)
                     if old is not None
                 )
+        # The RGB spread tells an unrendered frame; a deterministic run has synced the frame to the step already and
+        # cannot let RTX RGB, which differs between processes, decide the accepted attempt (plan D1b, Codex).
         rgba_ready = (
             rgba.shape == (*shape, 4)
             and rgba.dtype == np.uint8
-            and float(np.std(rgba[:, :, :3])) > threshold
+            and (determinism.enabled() or float(np.std(rgba[:, :, :3])) > threshold)
         )
         depth_ready = raw_depth.shape == shape and raw_depth.dtype.kind in "uif"
         if not rgba_ready:

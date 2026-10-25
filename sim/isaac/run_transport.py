@@ -1045,6 +1045,15 @@ def arguments() -> argparse.Namespace:
                          "its scope)")
         if args.repeat_captures:
             parser.error("--bottom-deck-check on is not defined with --repeat-captures")
+    # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
+    # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced)
+    # -- replaced before the learned inputs are checked, which it then does not need.
+    args.deterministic_learned_replaced = bool(args.deterministic and args.recognition_proposals == "learned")
+    if args.deterministic_learned_replaced:
+        args.recognition_proposals = "oracle"
+    if args.deterministic and args.record_boundary:
+        parser.error("--deterministic is not combined with --record-boundary: a boundary record keeps RGB by content "
+                     "hash, which the strict comparison cannot leave out (plan D1b)")
     # Stage 3's learned far proposals stand on their own inputs (checked before anything else reads them).
     if args.recognition_proposals == "learned":
         if args.recognition != "far":
@@ -1365,11 +1374,8 @@ def arguments() -> argparse.Namespace:
     if args.deterministic and args.recognition_pixel_lag_steps:
         args.deterministic_overrides["recognition_pixel_lag_steps"] = args.recognition_pixel_lag_steps
         args.recognition_pixel_lag_steps = 0
-    # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
-    # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced).
-    if args.deterministic and getattr(args, "recognition_proposals", "oracle") == "learned":
+    if getattr(args, "deterministic_learned_replaced", False):  # replaced above (plan D1b)
         args.deterministic_overrides["recognition_proposals"] = "learned"
-        args.recognition_proposals = "oracle"
     return args
 
 
