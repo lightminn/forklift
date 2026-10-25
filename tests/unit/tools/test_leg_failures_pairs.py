@@ -156,6 +156,41 @@ def test_an_acked_mission_with_no_run_record_still_counts_as_unfinished(tmp_path
     assert session_score(str(session)) == 1
 
 
+def test_each_failed_epoch_keeps_its_own_cut_mission_and_a_surplus_of_folders_is_inconsistent(tmp_path):
+    """Codex V5 3rd review P2: two failed epochs each cut a mission -- each keeps its own retries and reason (one plan
+    refused, one re-approach that arrived), not the last epoch's twice; more mission folders than acked submits is
+    flagged inconsistent, and the V5 judgement will not decide on it."""
+    import json
+
+    from leg_failures_pairs import session_counts, session_missions
+
+    session = tmp_path / "s"
+    e1 = session / "live/epoch_1/run"
+    (e1 / "missions/m1").mkdir(parents=True)
+    (e1 / "missions/m1/records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
+    (e1 / "missions/m1/result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 30.0}}))
+    (e1 / "result.json").write_text(json.dumps({"success": False, "failure_reason": "first",
+        "docking_retries": [{"trigger": "b", "time_s": 40.0, "counted": True, "plan": {"refused": "dry_run"}}]}))
+    e2 = session / "live/epoch_2/run"
+    e2.mkdir(parents=True)
+    (e2 / "result.json").write_text(json.dumps({"success": False, "failure_reason": "second",
+        "docking_retries": [{"trigger": "b", "time_s": 10.0, "counted": True, "plan": {"length_m": 2.0}}],
+        "delivery_docking": {"rounds": [{"time_s": 12.0}]}}))
+    acks = [{"submit": {"t": "ack"}}] * 3
+    (session / "probe.json").write_text(json.dumps({"missions_run": acks}))
+    out = session_missions(str(session))
+    assert (out["missions"], out["done"], out["session_failed"], out["inconsistent"]) == (3, 1, 2, False)
+    assert out["reasons"] == ["first", "second"]
+    assert session_counts(str(session)) == [1, 2, 1]
+    # a folder surplus (four done folders over three acked submits) is inconsistent
+    for k in (2, 3, 4):
+        md = e2 / f"missions/m{k}"
+        md.mkdir(parents=True)
+        (md / "records.json").write_text(json.dumps({"state": {"docking_retries": []}}))
+        (md / "result.json").write_text(json.dumps({"result": {"outcome": "done", "ended_s": 30.0}}))
+    assert session_missions(str(session))["inconsistent"] is True
+
+
 def test_the_v5_score_counts_missions_done_with_no_stall_and_the_sign_test_is_exact(tmp_path):
     """Re-approach hold plan 2a (V5): a session's score is how many of its scheduled missions completed with no
     re-approach stall -- a stalled mission that recovered scores 0, a mission not reached or cut scores 0 (Codex V5
@@ -191,10 +226,11 @@ def test_the_v5_judgement_needs_the_sign_test_the_total_score_and_the_failure_ma
     minus done) on <= off + 6, and refusals not increased."""
     from leg_failures_pairs import v5_judge
 
-    def row(off, on, done_off=None, done_on=None, ref=(0, 0)):
-        return {"score": {"main": off, "fix": on}, "main": [0, 0, ref[0]], "fix": [0, 0, ref[1]],
-                "missions": {"main": {"done": off if done_off is None else done_off},
-                             "fix": {"done": on if done_on is None else done_on}}}
+    def row(off, on, done_off=None, done_on=None, ref=(0, 0), d7=(0, 0), inconsistent=False):
+        return {"seed": 0, "score": {"main": off, "fix": on}, "main": [0, 0, ref[0]], "fix": [0, 0, ref[1]],
+                "missions": {"main": {"done": off if done_off is None else done_off, "d7_failed": d7[0]},
+                             "fix": {"done": on if done_on is None else done_on, "d7_failed": d7[1],
+                                     "inconsistent": inconsistent}}}
 
     # every stall recovered (done 3 on both arms), so only the summed score can reject it
     counter = [row(2, 3, 3, 3)] * 20 + [row(3, 0, 3, 3)] * 10 + [row(3, 3)] * 30
@@ -203,10 +239,16 @@ def test_the_v5_judgement_needs_the_sign_test_the_total_score_and_the_failure_ma
     good = [row(2, 3)] * 10 + [row(3, 3)] * 50
     assert v5_judge(good)["verdict"] == "pass"
     # the score rose but done fell by 7 (> 6): the failure guard rejects; by 6 it holds
-    worse_done = [row(2, 3, done_off=3, done_on=3)] * 10 + [row(3, 3)] * 43 + [row(3, 3, 3, 2)] * 7
+    worse_done = [row(2, 3, done_off=3, done_on=3)] * 10 + [row(3, 3)] * 43 + [row(2, 2, 3, 2)] * 7
     assert v5_judge(worse_done)["verdict"] == "fail"
     assert v5_judge(worse_done[:-1] + [row(3, 3)])["verdict"] == "pass"
     assert v5_judge(good[:-1] + [row(3, 3, ref=(0, 1))])["verdict"] == "fail"
+    # Codex V5 3rd review: six recovering stalls turned into failures pass the margin; the D7 failure guard rejects
+    convert = [row(2, 3, 3, 3)] * 10 + [row(2, 2, 3, 2, d7=(0, 1))] * 6 + [row(3, 3)] * 44
+    assert v5_judge(convert)["verdict"] == "fail"
+    # a session over its scheduled missions, or flagged inconsistent, stops the judgement
+    assert v5_judge(good[:-1] + [row(3, 3, 3, 4)])["verdict"] == "undecidable"
+    assert v5_judge(good[:-1] + [row(3, 3, inconsistent=True)])["verdict"] == "undecidable"
 
 
 def test_rates_from_counts_stay_exact_so_ties_hold():

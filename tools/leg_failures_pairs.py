@@ -84,10 +84,15 @@ def _json(path):
         return json.load(handle)
 
 
-def _session_states(run_dir) -> list:
-    """Each mission's (state, result) of a session, every epoch: the mission folders, then -- when the run failed
-    mid-mission (slam_link_failed and the like) -- the unfinished mission kept only in the run's result.json, unless
-    that record repeats the last mission folder's (Codex V4 hold review P2)."""
+def _session(run_dir):
+    """A session's missions, every epoch, as (state, result) pairs, and whether its records are inconsistent.
+
+    The mission folders come first; each epoch whose run failed mid-mission (slam_link_failed and the like) adds the
+    unfinished mission kept only in that run's result.json, with its own retries and reason, unless the record repeats
+    that epoch's last mission folder's (Codex V4 hold review P2, V5 3rd review P2). Missions the probe acked beyond
+    those were cut with no record at all (a killed run, Codex V5 2nd review P2) and are added as unfinished. Without
+    the probe's count nothing more is added. More missions than acked submits is inconsistent (Codex V5 3rd review
+    P2: a duplicated done folder would hide a failure)."""
     import glob
 
     try:  # the probe's accepted submits: how many missions the session started (Codex V5 review P2-1)
@@ -96,7 +101,6 @@ def _session_states(run_dir) -> list:
     except (OSError, ValueError):
         acked = None
     out = []
-    tail = None  # the last run's failure record, when the run failed
     for run in sorted(glob.glob(f"{run_dir}/live/epoch_*/run")):
         last = None
         for md in sorted(glob.glob(f"{run}/missions/m*")):
@@ -111,23 +115,18 @@ def _session_states(run_dir) -> list:
             top = _json(f"{run}/result.json")
         except (OSError, ValueError):
             continue
-        if top.get("success") is False:
-            retries = top.get("docking_retries") or []
-            fresh = last is None or retries != (last.get("docking_retries") or [])
-            tail = ({"docking_retries": retries if fresh else [],
-                     "delivery_docking": (top.get("delivery_docking") or {}) if fresh else {}},
-                    {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}, fresh)
-    # missions accepted but with no folder were cut, whether or not the run left a record (Codex V5 2nd review P2: a
-    # killed run has none); without the probe's count, a run record unlike the last mission's stands for one (the
-    # earlier rule)
-    if tail is None:
-        tail = ({"docking_retries": []}, {"outcome": "session_failed", "reason": "no_run_record", "ended_s": None},
-                False)
-    st, res, fresh = tail
-    missing = max(0, acked - len(out)) if acked is not None else int(fresh)
-    for k in range(missing):
-        out.append((st if k == 0 else {"docking_retries": []}, dict(res)))
-    return out
+        retries = top.get("docking_retries") or []
+        if top.get("success") is False and (last is None or retries != (last.get("docking_retries") or [])):
+            out.append(({"docking_retries": retries, "delivery_docking": top.get("delivery_docking") or {}},
+                        {"outcome": "session_failed", "reason": top.get("failure_reason"), "ended_s": None}))
+    inconsistent = acked is not None and len(out) > acked
+    for _ in range(max(0, acked - len(out)) if acked is not None else 0):
+        out.append(({"docking_retries": []}, {"outcome": "session_failed", "reason": "no_run_record", "ended_s": None}))
+    return out, inconsistent
+
+
+def _session_states(run_dir) -> list:
+    return _session(run_dir)[0]
 
 
 def session_counts(run_dir) -> list:
@@ -155,13 +154,20 @@ def session_counts(run_dir) -> list:
 def session_missions(run_dir) -> dict:
     """A session's mission outcomes (re-approach hold plan V4a guard 2): missions run, done, ended on
     transport_recovery_after_docking, and the hold exits taken (uncounted docking retries ``h``)."""
-    out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0, "session_failed": 0}
-    for st, res in _session_states(run_dir):
+    states, inconsistent = _session(run_dir)
+    out = {"missions": 0, "done": 0, "recovery_after_docking": 0, "hold_exits": 0, "session_failed": 0,
+           "d7_failed": 0, "reasons": [], "inconsistent": inconsistent}
+    for st, res in states:
         out["missions"] += 1
         out["session_failed"] += res.get("outcome") == "session_failed"
         out["done"] += res.get("outcome") == "done"
         out["recovery_after_docking"] += res.get("reason") == "transport_recovery_after_docking"
         out["hold_exits"] += sum(1 for e in st.get("docking_retries") or [] if e.get("trigger") == "h")
+        # V5 guard 1b: a mission that did not finish after a counted re-approach or a hold exit
+        retried = any(e.get("counted") or e.get("trigger") == "h" for e in st.get("docking_retries") or [])
+        out["d7_failed"] += retried and res.get("outcome") != "done"
+        if res.get("outcome") != "done":
+            out["reasons"].append(res.get("reason"))
     return out
 
 
@@ -205,7 +211,13 @@ V5_FAILURE_MARGIN = 6
 def v5_judge(rows, scheduled=3) -> dict:
     """Re-approach hold plan 2a (V5) judgement over collected rows: the exact sign test on the score differences
     (p < 0.05), the summed score not lower, the failures (scheduled - done, summed) on <= off + V5_FAILURE_MARGIN and
-    the refusals not increased. The hold missions' forbidden contacts are read from the runs separately."""
+    the refusals not increased, and the missions that did not finish after a re-approach (d7_failed) not increased
+    (Codex V5 3rd review: the margin of 6 alone lets a stall turn into a failure). A session with inconsistent records
+    (more missions than acked, more done than scheduled, a score above its done) stops the judgement: "undecidable".
+    The hold missions' forbidden contacts are read from the runs separately."""
+    bad = [r.get("seed") for r in rows for arm in ("main", "fix")
+           if r["missions"][arm].get("inconsistent") or not 0 <= r["score"][arm] <= r["missions"][arm]["done"]
+           <= int(scheduled)]
     diffs = [r["score"]["fix"] - r["score"]["main"] for r in rows]
     score = {arm: sum(r["score"][arm] for r in rows) for arm in ("main", "fix")}
     failures = {arm: sum(int(scheduled) - r["missions"][arm]["done"] for r in rows) for arm in ("main", "fix")}
@@ -214,8 +226,14 @@ def v5_judge(rows, scheduled=3) -> dict:
            "p": sign_test_p(diffs), "score_main": score["main"], "score_fix": score["fix"],
            "failures_main": failures["main"], "failures_fix": failures["fix"], "refusals_main": refusals["main"],
            "refusals_fix": refusals["fix"]}
+    d7 = {arm: sum(r["missions"][arm].get("d7_failed", 0) for r in rows) for arm in ("main", "fix")}
+    out.update(d7_failed_main=d7["main"], d7_failed_fix=d7["fix"], inconsistent_seeds=sorted(set(bad)))
+    if bad:
+        out["verdict"] = "undecidable"
+        return out
     ok = (out["p"] < ALPHA and score["fix"] >= score["main"]
-          and failures["fix"] <= failures["main"] + V5_FAILURE_MARGIN and refusals["fix"] <= refusals["main"])
+          and failures["fix"] <= failures["main"] + V5_FAILURE_MARGIN and refusals["fix"] <= refusals["main"]
+          and d7["fix"] <= d7["main"])
     out["verdict"] = "pass" if ok else "fail"
     return out
 
@@ -252,6 +270,8 @@ def main() -> None:
                         help="the two arms' names in the run folders (default main fix)")
     parser.add_argument("--seeds", type=int, default=10, help="seeds 0..N-1 (default 10)")
     parser.add_argument("--first-seed", type=int, default=0, help="the first seed (V5: 10)")
+    parser.add_argument("--v5", action="store_true",
+                        help="the V5 judgement only -- the V4 signed-rank enumeration is 2^pairs (Codex V5 3rd review)")
     args = parser.parse_args()
     if args.collect:
         rows = collect(*args.collect, range(args.first_seed, args.first_seed + args.seeds), arms=tuple(args.arms))
@@ -261,9 +281,10 @@ def main() -> None:
     else:
         with open(args.pairs) as handle:
             rows = json.load(handle)
-    out = {"rows": rows, "judgement": judge(pairs_from_rows(rows)), "missions": mission_totals(rows)}
-    if all("score" in r and "missions" in r for r in rows):
-        out["v5"] = v5_judge(rows)
+    if args.v5:
+        out = {"rows": rows, "v5": v5_judge(rows), "missions": mission_totals(rows)}
+    else:
+        out = {"rows": rows, "judgement": judge(pairs_from_rows(rows)), "missions": mission_totals(rows)}
     print(json.dumps(out, indent=2, default=float))
 
 
