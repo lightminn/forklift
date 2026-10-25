@@ -86,6 +86,13 @@ def test_the_low_clearance_guard_is_on_unless_turned_off(tmp_path):
     assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="off")), ["--low-clearance-guard", "off"])
 
 
+def test_the_restart_confirmation_is_off_unless_asked(tmp_path):
+    # docs/plans/2026-10-25-restart-confirmation.md: 0 until the Isaac comparison
+    assert contains(args_of(dry_run(tmp_path)), ["--restart-confirm-scans", "0"])
+    assert " RESTART_CONFIRM=0 " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, RESTART_CONFIRM="3")), ["--restart-confirm-scans", "3"])
+
+
 def test_the_keepout_can_be_turned_on(tmp_path):
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.15")), ["--lidar-keepout-m", "0.15"])
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
@@ -109,7 +116,7 @@ def test_the_obstacle_layer_keeps_the_constant_noise_and_draws_the_a2_spec_on_re
     assert contains(a2, ["--obstacle-layer", "config/obstacle_layer_single_a2.yaml"])
 
 
-@pytest.mark.parametrize("env", [{"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
+@pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"}])
 def test_bad_choices_are_refused(tmp_path, env):

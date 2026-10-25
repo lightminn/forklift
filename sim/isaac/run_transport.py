@@ -524,6 +524,13 @@ def arguments() -> argparse.Namespace:
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
     )
     parser.add_argument(
+        "--restart-confirm-scans", type=int, default=0,
+        help="docs/plans/2026-10-25-restart-confirmation.md: after the permission stops the truck for an occupied cell, "
+        "its output stays at zero until every clearing sensor has given this many new scans in a row on which the "
+        "raw limit is positive (a painted halo cleared for one scan no longer lets it creep); 0 (default): as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--low-clearance-guard",
         choices=("on", "off"),
         default="off",
@@ -1048,6 +1055,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--exit-clearance-m must be a positive number of metres")
     if not (math.isfinite(args.lidar_keepout_m) and args.lidar_keepout_m >= 0):
         parser.error("--lidar-keepout-m must be a finite non-negative number of metres")
+    if getattr(args, "restart_confirm_scans", 0) < 0:
+        parser.error("--restart-confirm-scans must be 0 (off) or a positive number of scans")
     for name_ in ("low_clearance_margin_m", "low_clearance_deviation_m"):
         if not (math.isfinite(getattr(args, name_)) and getattr(args, name_) >= 0):
             parser.error(f"--{name_.replace('_', '-')} must be a finite non-negative number of metres")
@@ -5579,6 +5588,7 @@ def drive(S, isaac) -> None:
                                 start_band_release=getattr(args, "start_band_release", "off"),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
+                                restart_confirm_scans=int(getattr(args, "restart_confirm_scans", 0) or 0),
                                 low_clearance_margin_m=getattr(args, "low_clearance_margin_m", 0.05),
                                 low_clearance_deviation_m=getattr(args, "low_clearance_deviation_m", 0.02),
                                 low_clearance_unloaded_shape=unloaded_shape,
@@ -8913,6 +8923,8 @@ def drive(S, isaac) -> None:
                         "backoff_records": obstacle.get("backoff_records", []),
                         **({"start_band_release": dict(obstacle["layer"].permission.release_stats)}
                            if getattr(args, "start_band_release", "off") == "on" else {}),
+                        **({"restart_confirm": obstacle.get("restart_confirm") or {"scans": int(args.restart_confirm_scans)}}
+                           if int(getattr(args, "restart_confirm_scans", 0) or 0) > 0 else {}),
                         "shadow_memory": None if obstacle["layer"].shadow is None else {
                             **obstacle["layer"].shadow.stats,
                             "band_m": obstacle["layer"].shadow.band_m,

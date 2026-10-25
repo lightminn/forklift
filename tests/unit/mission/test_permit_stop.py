@@ -309,3 +309,19 @@ def test_a_request_ended_with_its_plan_still_out_leaves_no_job_or_answer_behind(
     assert out.owned is False and state["scene_replans"][-1]["reason"] == "scene_replan_failed:permit_stop:timeout"
     assert core.pending is None and core.jobs.discarded == [job] and core.scene_mail is None
     assert state["async_plans"][-1]["dropped"] == "scene_replan_ended"
+
+
+def test_a_restart_confirmation_tick_pauses_the_watch_without_counting_or_restarting_it():
+    # docs/plans/2026-10-25-restart-confirmation.md R2: the halo pulses no longer restart the three seconds, and the
+    # confirmation's own wait after an obstacle stepped away does not bring the request forward
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    t = hold(core, 10.0, 2.0)
+    for _ in range(10):  # one second held by the confirmation alone (the raw limit allowed a restart)
+        core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True, gate_only=True)
+        t += 0.1
+    t = hold(core, t, 0.8)
+    assert not state.get("scene_replans")  # 2.0 + 0.8 of real zero: not yet three seconds
+    hold(core, t, 0.3)
+    assert state["scene_replans"][-1]["trigger"] == "permit_stop"
+    assert state["scene_replans"][-1]["detail"]["held_s"] == pytest.approx(PERMIT_STOP_S, abs=0.11)

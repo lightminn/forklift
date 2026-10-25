@@ -1179,6 +1179,11 @@ class MissionCore:
         low[ms.phase] = min(low.get(ms.phase, float("inf")), allowed)
         acting, docking_straight = self.permission_acting()
         pocket_phase = options.pocket_check and (ms.phase == "insert" or (ms.phase == "approach" and docking_straight))
+        gate_only = False
+        if int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and acting and not pocket_phase:
+            # docs/plans/2026-10-25-restart-confirmation.md: on the permission's own limit only (before the pocket
+            # check and the D4 path-blocked stop); off, nothing is read
+            allowed, why, gate_only = self._restart_gate(t, allowed, why)
         if pocket_phase:
             # D5: the approach straight and the insertion run under the
             # permission too; inside the pallet region the depth check
@@ -1288,10 +1293,12 @@ class MissionCore:
             and ms.phase in ("observe", "transport", "return_home")
             and ((allowed == 0.0 and why == "occupied") or cusp_prefix_blocked_)
             and stopped_now
+            and not gate_only
         ):
             obstacle["blocked_ticks"] = obstacle.get("blocked_ticks", 0) + 1
-        else:
+        elif not gate_only:
             obstacle["blocked_ticks"] = 0
+        # (a restart-confirmation tick neither counts nor resets the blocked stop: the raw limit allowed a restart)
         progress_left = trackers[ms.phase].remaining_to_goal_m()
         watch = obstacle.setdefault("progress", {})
         if watch.get("phase") != ms.phase or not acting or progress_left < watch["best_m"] - 1.0:
@@ -1300,11 +1307,11 @@ class MissionCore:
             not (options.grid_planning and acting and self.commands.work_elapsed(watch["since_s"], t) > 60.0),
             f"obstacle_no_progress in {ms.phase}",
         )
-        self.permit_stop_tick(t, rear, allowed, why, acting)
+        self.permit_stop_tick(t, rear, allowed, why, acting, gate_only=gate_only)
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
-    def permit_stop_tick(self, t: float, rear, allowed: float, why: str, acting: bool) -> None:
+    def permit_stop_tick(self, t: float, rear, allowed: float, why: str, acting: bool, *, gate_only: bool = False) -> None:
         """P6 (docs/plans/2026-10-23-planner-permission-clearance.md 3 P6): a scene layout's travel leg the acting
         permission holds at zero for an occupied cell ``PERMIT_STOP_S`` (work time) raises the scene-mode replan
         device's ``permit_stop`` request -- the cells it blocks on, read when the device plans, as obstacles and the
@@ -1317,6 +1324,15 @@ class MissionCore:
         options, obstacle = self.options, self.obstacle
         tracker_ = self.trackers.get(self.ms.phase)
         key_ = (self.ms.phase, id(tracker_))
+        if gate_only:
+            # docs/plans/2026-10-25-restart-confirmation.md R2: the raw limit allowed a restart and only the
+            # confirmation held the wheels -- the watch pauses (its start moves on by the tick), neither counting
+            # this tick nor starting over
+            last_ = self.permit_stop_since
+            if last_ is not None and last_["key"] == key_:
+                last_["since_s"] += t - last_["last_s"]
+                last_["last_s"] = t
+            return
         watching = (
             getattr(options, "permit_stop_replan", "off") == "on" and not getattr(options, "grid_planning", False)
             and getattr(options, "obstacle_act", False) and acting and allowed == 0.0 and why == "occupied"
@@ -4465,6 +4481,12 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        gate_ = self.__dict__.get("_restart_confirm")
+        if gate_ is not None and int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and gate_.armed:
+            # R1: a plan wait reads the permission at the standing direction -- no confirmation, the count over
+            gate_.observation_gap(self._clearing_scans())
+            if allowed > 0.0:
+                allowed, why = 0.0, "occupied"
         self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         acting = False
         if ms.phase in trackers:
@@ -4868,6 +4890,25 @@ class MissionCore:
                 slam["control"][-1][1:4] = rear.tolist()
         warming = slam is not None and not slam_may_drive(slam)
         return SimpleNamespace(releasing=releasing, warming=warming, rear=rear)
+
+    def _clearing_scans(self) -> dict:
+        """The newest scan stamp of each obstacle sensor that may clear cells (restart confirmation, R1)."""
+        layer = self.obstacle["layer"]
+        return {sensor.name: float(layer.last_scan_s.get(sensor.name, -math.inf))
+                for sensor in layer.sensors if sensor.may_clear}
+
+    def _restart_gate(self, t: float, allowed: float, why: str):
+        """(allowed, why, gate_only) through this leg's restart confirmation (R1), its record kept in the obstacle
+        state."""
+        from forklift_core.control.restart_confirm import RestartConfirm
+
+        gate = self.__dict__.get("_restart_confirm")
+        if gate is None:
+            gate = self._restart_confirm = RestartConfirm(int(self.options.restart_confirm_scans))
+        key = (self.ms.phase, id(self.trackers.get(self.ms.phase)))
+        out = gate.step(key, allowed, why, self._clearing_scans())
+        self.obstacle["restart_confirm"] = gate.record()
+        return out.allowed_mps, out.why, out.gate_only
 
     LOW_CLEARANCE_PHASES = ("observe", "approach", "insert", "extract", "transport", "withdraw", "return_home",
                             "recover_withdraw", "clear_out")

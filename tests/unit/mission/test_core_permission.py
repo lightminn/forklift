@@ -235,3 +235,38 @@ def test_without_slam_standing_is_below_10_mm_per_second():
     core, obstacle, _, _ = make("observe", limit=(0.0, "occupied"), velocity=(0.01, 0.0))
     core.permission(10.0, REAR, 0.0, 0.0, False, None)
     assert obstacle["blocked_ticks"] == 0
+
+
+def confirming(n=2):
+    """make() with the restart confirmation on (docs/plans/2026-10-25-restart-confirmation.md) and one clearing LiDAR."""
+    core, obstacle, pocket, calls = make("return_home", limit=(0.0, "occupied"), velocity=(0.0, 0.0))
+    core.options.restart_confirm_scans = n
+    layer = obstacle["layer"]
+    layer.sensors = [SimpleNamespace(name="lidar", may_clear=True), SimpleNamespace(name="camera", may_clear=False)]
+    layer.last_scan_s = {"lidar": 10.0, "camera": 10.0}
+    return core, obstacle, layer
+
+
+def test_an_occupied_stop_holds_a_one_scan_clearing_and_releases_on_n_new_scans():
+    core, obstacle, layer = confirming(2)
+    core.permission(10.0, REAR, 0.0, 0.0, False, None)  # the stop
+    assert obstacle["blocked_ticks"] == 1
+    layer.answer, layer.last_scan_s = (0.15, "occupied"), {"lidar": 10.1, "camera": 10.1}  # one scan clears the halo
+    out = core.permission(10.1, REAR, 0.0, 0.2, False, None)
+    assert out.allowed == 0.0 and out.why == "occupied" and out.obstacle_hold and out.requested_speed == 0.0
+    assert obstacle["permission_cap"] == (10.1, 0.0)
+    assert obstacle["blocked_ticks"] == 1  # neither counted nor reset by the confirmation alone
+    layer.last_scan_s = {"lidar": 10.1, "camera": 10.2}  # only the camera (it never clears) is new
+    assert core.permission(10.15, REAR, 0.0, 0.2, False, None).allowed == 0.0
+    layer.last_scan_s = {"lidar": 10.2, "camera": 10.2}
+    out = core.permission(10.2, REAR, 0.0, 0.2, False, None)
+    assert out.allowed == 0.15 and obstacle["permission_cap"] == (10.2, 0.15)
+    assert obstacle["restart_confirm"] == {"scans": 2, "arms": 1, "releases": 1, "gate_ticks": 2}
+
+
+def test_without_the_option_nothing_of_the_confirmation_is_read():
+    core, obstacle, _, _ = make("return_home", limit=(0.0, "occupied"), velocity=(0.0, 0.0))
+    core.permission(10.0, REAR, 0.0, 0.0, False, None)
+    obstacle["layer"].answer = (0.15, "occupied")
+    out = core.permission(10.1, REAR, 0.0, 0.2, False, None)  # the stand-in layer has no sensors: none was read
+    assert out.allowed == 0.15 and "restart_confirm" not in obstacle
