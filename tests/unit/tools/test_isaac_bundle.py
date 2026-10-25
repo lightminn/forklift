@@ -1000,3 +1000,19 @@ def test_processes_that_survive_stop_the_check(tmp_path, monkeypatch):
                    retry_move=[str(tmp_path / n)]) for n in ("a", "b")]
     problems = ib.check_runs(runs, tmp_path / "runner.py")
     assert len(problems) == 1 and "survive" in problems[0]  # b was not run
+
+
+
+def test_one_slow_evaluation_does_not_step_back(tmp_path):
+    # slow for one evaluation only: with pace_confirm 2 the bundle keeps its slots
+    runs = [paced_run("a", tmp_path, 0.25, 0.7), paced_run("b", tmp_path, 0.25, 0.7)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.4, pace_warmup_s=0.3,
+                     pace_period_s=0.5, pace_confirm=2)
+    assert summary["backoffs"] == [] and summary["final_cap"] == 2
+
+
+def test_a_persistently_slow_bundle_steps_back(tmp_path):
+    runs = [paced_run("a", tmp_path, 0.25, 1.5), paced_run("b", tmp_path, 0.25, 1.5), stamp_run("c", tmp_path, 0.05)]
+    summary = bundle(tmp_path, runs, slots=2, pace_floor=0.345, pace_window_s=0.4, pace_warmup_s=0.3,
+                     pace_period_s=0.1, pace_confirm=2)
+    assert summary["backoffs"] and summary["final_cap"] == 1
