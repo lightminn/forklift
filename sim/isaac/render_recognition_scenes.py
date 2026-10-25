@@ -29,8 +29,6 @@ def arguments(argv=None):
     p.add_argument("--limit", type=int, default=None, help="first N selected recipes per case and shape")
     p.add_argument("--shard", default="0/1")
     p.add_argument("--render-mode", default="RaytracedLighting")
-    p.add_argument("--render-preset", default="default",
-                   help="RTX settings on the render products (sim/isaac/render_preset.py); default writes nothing")
     p.add_argument("--max-captures", type=int, default=8)
     # Stage 3 task 3: the learned proposer's training renders (docs/plans/2026-10-19-recognition-stage3-learned-proposals.md)
     p.add_argument("--catalogue", choices=("eval", "train"), default="eval",
@@ -145,9 +143,6 @@ def main(argv=None):
         ).integer_index
         status["sdk_k"] = sdk.tolist()
         annotators = cc.attach_annotators(rep, camera)
-        import render_preset
-
-        status["render_preset"] = render_preset.apply_all(stage, args.render_preset)
         for _ in range(10):
             world.step(render=True)
         world.pause()
@@ -227,12 +222,6 @@ def main(argv=None):
         status["fatal"] = {"error": repr(exc), "trace": traceback.format_exc()}
     finally:
         # Persist before close: the observed Isaac close path may exit Python.
-        if app is not None and status.get("render_preset", {}).get("render_products"):
-            import omni.usd
-            import render_preset
-
-            status["render_preset"]["drift_at_end"] = render_preset.drifted(
-                omni.usd.get_context().get_stage(), status["render_preset"])
         (args.out / "status.json").write_text(json.dumps(status, indent=1))
         if app is not None:
             app.close()
