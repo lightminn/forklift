@@ -127,8 +127,12 @@ KINDS = {
     # 46.6, dv3's trailer up to 77), bd 12.1 (bd_isaac, 151 jobs); a batch with longer runs passes --run-min
     # stall_min: no change of a run's progress file for this long ends it (status stalled, not retried). live: the
     # live_log.jsonl of 30 runs (rh/sf) never went quiet for more than 3.3 s, its first record came 38-50 s after
-    # the start. riib (run/frames.jsonl, watch_rel): off until its normal silences are measured -- its outputs carry
-    # no wall-clock timeline (dv3_trailer_det2 hung in render for 45 min); pass --stall-min to watch a riib list now
+    # the start. riib (run/frames.jsonl, watch_rel; its outputs carry no wall-clock timeline): 86 runs on ws1
+    # (2026-10-26) took 10-136 s from run.log to frames.jsonl (median 44), waited at most 1.0 s for a SLAM reply and
+    # 0.5 s for an obstacle cast per scan, and wrote result.json at most 3.8 s after their last frame; planning is not
+    # timed in its records and has no wall-clock bound (pallet_mission's retry ladder: up to 390,000 hybrid-A*
+    # expansions, no deadline outside the grid path -- Codex), so riib is measured, not acted on: every watched run's
+    # results line carries silence_max_s; set stall_min from those (dv3_trailer_det2 hung in render for 45 min).
     "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30, "stall_min": 10},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
     "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
@@ -366,6 +370,57 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     if runs:
         out["time"] = time_limit(runs, slots, jobs, run_min or k["run_min"])
     return out
+
+
+# One run per Slurm array task (deploy/slurm/isaac_array.sbatch, docs/plans/2026-10-26-ws1-isaac-array.md): task_gib
+# is the task's own cgroup (no page cache shared with other sessions): live 7 -- a long S3 session's anon reached
+# 5.998 GiB, single live jobs' MaxRSS 5.98-6.51 GiB with the cache -- riib 7.5 (anon 5.93, MaxRSS <= 7.41 at 8G), bd
+# 6.5 (peak 5.82); array_k the tasks at once: live 7 (7 x 7 GiB + 7 x 0.74 GiB of bridges + others' jobs within the
+# 61.4 GiB the node has, and a shard left for others), riib 4 (2 per GPU: 4.47 GB a session takes shard 2), bd 7.
+ARRAY = {"live": {"task_gib": 7.0, "array_k": 7}, "riib": {"task_gib": 7.5, "array_k": 4},
+         "bd": {"task_gib": 6.5, "array_k": 7}}
+RETRY_ROOM_MIN = 10  # a GPU allocation failure comes in a run's first minutes: room for the runner's retry in the task
+
+
+def array_sizes(kind, runs, run_min):
+    """One task's sbatch options for a run list of `runs` runs of `kind`, one run per array task. run_min is the
+    batch's own p95 run length -- required: one kind's runs differ by hours (S3: 21 to 209 min)."""
+    if not runs or runs < 1:
+        raise ValueError("--array needs --runs (the list's runs)")
+    if not run_min:
+        raise ValueError("--array needs --run-min: the batch's own p95 run length in minutes (one kind's runs differ "
+                         "by hours: S3 21-209 min); give the runner the same with --run-est-min")
+    k, a = KINDS[kind], ARRAY[kind]
+    shards = -(-k["vram_mib"] // SHARD_MIB)
+    minutes = int(-(-((run_min + RETRY_ROOM_MIN + 5) * 1.15) // 5) * 5)
+    return {"array": f"0-{runs - 1}%{min(a['array_k'], runs)}", "gres": f"shard:{shards}", "cpus": k["cores"],
+            "mem_mib": int(a["task_gib"] * 1024), "time": f"{minutes // 60:02d}:{minutes % 60:02d}:00"}
+
+
+def collect(out, expect):
+    """Each array task's final state under out/task_<i>/bundle: the last attempt's status per task, and the tasks with
+    no record at all (never started, cancelled before the runner wrote). summary_exit is the task summary's exit_code
+    (None when the summary is missing or unreadable). Returns (rows, missing)."""
+    rows, missing = [], []
+    for i in range(expect):
+        path = Path(out) / f"task_{i}" / "bundle" / "results.jsonl"
+        summary = Path(out) / f"task_{i}" / "bundle" / "summary.json"
+        recs = []
+        if path.exists():
+            with open(path) as f:
+                recs = [json.loads(x) for x in f if x.strip()]
+        if not recs:
+            missing.append(i)
+            continue
+        last = recs[-1]
+        try:  # the runner's own verdict: a run that ended rc 0 can still leave errors (a bridge cleanup that failed)
+            sm = json.loads(summary.read_text())
+            verdict = sm["exit_code"] if isinstance(sm, dict) else None
+        except (OSError, ValueError, KeyError):
+            verdict = None
+        rows.append({"task": i, "name": last.get("name"), "status": last.get("status"), "rc": last.get("rc"),
+                     "attempts": len(recs), "summary_exit": verdict})
+    return rows, missing
 
 
 def time_limit(runs, slots, jobs=1, run_min=30.0, stagger_min=1.0):
@@ -921,7 +976,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                shard_mib=SHARD_MIB, session_vram_mib=SESSION_VRAM_MIB, vram_probe=None, vram_period_s=1.0,
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
-               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
+               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
                diag_wait_s=60.0, no_runner_s=900.0,
@@ -1289,20 +1344,22 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
-                if stall_s and not r.stalled and r.term_at is None and now >= st["stall_next"]:
-                    # judged only while its runner (run_transport) runs, from that runner's start
+                if (not r.stalled and r.term_at is None and now >= st["stall_next"]
+                        and watch_globs(r.run, watch_rel)):
+                    # measured for every watched run (silence_max_s), acted on with stall_s; judged only while its
+                    # runner (run_transport) runs, from that runner's start
                     started = _runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match else 0.0
                     silence, limit = None, stall_s
                     if started is not None:
                         r.no_runner_since = None
                         silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
-                    elif no_runner_s and watch_globs(r.run, watch_rel):
+                        r.silence_max = max(r.silence_max, silence)
+                    elif no_runner_s:
                         # no runner: a live session between epochs (backoff, bridge start, standby: ~7 min at most)
                         # is no stall, a run stuck without a runner is, after no_runner_s
                         r.no_runner_since = now if r.no_runner_since is None else r.no_runner_since
                         silence, limit = now - r.no_runner_since, no_runner_s
-                    if silence is not None:
-                        r.silence_max = max(r.silence_max, silence)
+                    if stall_s and silence is not None:
                         if silence >= limit:
                             # first what it was doing: diagnostics in a thread (py-spy, /proc, nvidia-smi -- they
                             # must not hold up the other runs), at most diag_wait_s
@@ -1324,7 +1381,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if r.term_at is not None and not r.killed and now - r.term_at > grace_s:
                     r.killed = True
                     _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
-            if stall_s and now >= st["stall_next"]:
+            if now >= st["stall_next"]:
                 st["stall_next"] = now + stall_check_s
             if vram_probe is not None and now >= vram_next:
                 vram_next = now + vram_period_s
@@ -1450,7 +1507,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
         "stalled": st["stalled"], "stall_s": stall_s,
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
-        "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
+        "node_gpu": gpu_index, "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
         "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
         "exit_code": 0 if failed == 0 and not_started == 0 and not st["errors"] else 1,
     }
@@ -1477,6 +1534,21 @@ def main(argv=None) -> int:
             print(warning)
         print(f"{len(problems)} problems")
         return 1 if problems else 0
+    if argv[:1] == ["collect"]:
+        cp = argparse.ArgumentParser(prog="isaac_bundle.py collect",
+                                     description="the final state of every task of an array (deploy/slurm/isaac_array.sbatch)")
+        cp.add_argument("out", help="the array's OUT")
+        cp.add_argument("--expect", type=int, required=True, help="the list's runs (the array's tasks)")
+        a = cp.parse_args(argv[1:])
+        rows, missing = collect(a.out, a.expect)
+        for r in rows:
+            print(json.dumps(r))
+        for i in missing:
+            print(json.dumps({"task": i, "status": "missing"}))
+        bad = missing + [r["task"] for r in rows if r["status"] != "ended" or r["rc"] != 0 or r["summary_exit"] != 0]
+        print(f"{len(rows)} of {a.expect} tasks recorded, {len(missing)} missing, {len(bad)} not ended with rc 0 "
+              "and a clean summary")
+        return 1 if bad else 0
     if argv[:1] == ["sizes"]:
         sp = argparse.ArgumentParser(prog="isaac_bundle.py sizes",
                                      description="sbatch options for a bundle of measured session kinds")
@@ -1485,7 +1557,20 @@ def main(argv=None) -> int:
         sp.add_argument("--runs", type=int, help="the list's runs: also print --time")
         sp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list")
         sp.add_argument("--run-min", type=float, help="a run's p95 wall minutes (default: the kind's measured)")
+        sp.add_argument("--array", action="store_true",
+                        help="one run per array task (deploy/slurm/isaac_array.sbatch); needs --runs and --run-min")
         a = sp.parse_args(argv[1:])
+        if a.array:
+            try:
+                z = array_sizes(a.kind, a.runs, a.run_min)
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                return 2
+            print(f"--array={z['array']} --gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_mib']}M "
+                  f"--time={z['time']}")
+            print(f"(then: deploy/slurm/isaac_array.sbatch RUNS OUT {a.kind}, with BUNDLE_ARGS=\"--run-est-min "
+                  f"{a.run_min:g}\")", file=sys.stderr)
+            return 0
         try:
             z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min)
         except ValueError as exc:
@@ -1519,7 +1604,9 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=540.0,
                     help="a run is judged from this age: its start-up (~240 s) plus a window")
     ap.add_argument("--pace-period-s", type=float, default=60.0)
-    ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    # 120 s: healthy live runs went 36-42 s without a tick (escb 2026-10-26: four back-offs at 36.6-42.5 s; rcq up
+    # to 41 s), so 30 s took a session away from bundles that were at pace; a real hang is the stall watchdog's
+    ap.add_argument("--pace-stall-s", type=float, default=120.0)
     ap.add_argument("--pace-stall-warmup-s", type=float, default=240.0,
                     help="a run's stalls are judged from this age (its pace from --pace-warmup-s)")
     ap.add_argument("--pace-confirm", type=int, default=2,

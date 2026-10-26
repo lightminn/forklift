@@ -546,6 +546,15 @@ def arguments() -> argparse.Namespace:
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
     )
     parser.add_argument(
+        "--escape-start-release",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-25-escape-start-release.md: the scene replan's escape sweep alone passes the P6 "
+        "trigger's rectangles the stop already stands within the sweep pad of (not overlapping) while it moves away "
+        "from them; the end region still counts them and the permission keeps its own start rule (unlike "
+        "--start-band-release). Off: as every earlier run.",
+    )
+    parser.add_argument(
         "--restart-confirm-scans", type=int, default=0,
         help="docs/plans/2026-10-25-restart-confirmation.md: after the permission stops the truck for an occupied cell, "
         "its output stays at zero until every clearing sensor has given this many new scans in a row on which the "
@@ -5663,6 +5672,8 @@ def drive(S, isaac) -> None:
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
                                 start_band_release=getattr(args, "start_band_release", "off"),
+                                # docs/plans/2026-10-25-escape-start-release.md: off in a record from before the option
+                                escape_start_release=getattr(args, "escape_start_release", "off"),
                                 # leg-failures B1/B2: a record from before the options ran without the caps
                                 d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
@@ -9027,6 +9038,8 @@ def drive(S, isaac) -> None:
                         "backoff_records": obstacle.get("backoff_records", []),
                         **({"start_band_release": dict(obstacle["layer"].permission.release_stats)}
                            if getattr(args, "start_band_release", "off") == "on" else {}),
+                        **({"escape_start_release": dict(obstacle.get("escape_start_release", {"escapes_released": 0}))}
+                           if getattr(args, "escape_start_release", "off") == "on" else {}),
                         **({"restart_confirm": obstacle.get("restart_confirm") or {"scans": int(args.restart_confirm_scans)}}
                            if int(getattr(args, "restart_confirm_scans", 0) or 0) > 0 else {}),
                         "shadow_memory": None if obstacle["layer"].shadow is None else {
