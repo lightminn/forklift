@@ -372,13 +372,16 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     return out
 
 
-# One run per Slurm array task (deploy/slurm/isaac_array.sbatch, docs/plans/2026-10-26-ws1-isaac-array.md): task_gib
-# is the task's own cgroup (no page cache shared with other sessions): live 7 -- a long S3 session's anon reached
-# 5.998 GiB, single live jobs' MaxRSS 5.98-6.51 GiB with the cache -- riib 7.5 (anon 5.93, MaxRSS <= 7.41 at 8G), bd
-# 6.5 (peak 5.82); array_k the tasks at once: live 7 (7 x 7 GiB + 7 x 0.74 GiB of bridges + others' jobs within the
-# 61.4 GiB the node has, and a shard left for others), riib 4 (2 per GPU: 4.47 GB a session takes shard 2), bd 7.
-ARRAY = {"live": {"task_gib": 7.0, "array_k": 7}, "riib": {"task_gib": 7.5, "array_k": 4},
-         "bd": {"task_gib": 6.5, "array_k": 7}}
+# One run per Slurm array task (deploy/slurm/isaac_array.sbatch, docs/plans/2026-10-26-ws1-isaac-array.md), sized
+# as a single job, not as a bundle's share: a task cannot borrow a neighbour's idle CPUs or page cache. The pilot
+# (11590, 2026-10-26) ran live tasks at CPU 2 / 7G: 3 of 3 ended slam_link_failed (no bridge reply in 1 s) -- the two
+# CPUs are one physical core, the session and its bridge on it, bridge median 0.174-0.178 s against 0.132-0.136 s for
+# the same scenes in a 4-slot bundle -- and the cgroup met its 7G limit 590 and 707 times. cpus: live 4 (the runner's
+# --bridge-cpus auto then gives the bridge one core and the session the other), riib 6 (a riib session used 3.1 of 4
+# CPUs alone: two cores for it, one for the bridge), bd 6 (its single job); task_gib: live and riib 8 (their single
+# jobs'; S3 runner RSS 6.6 GiB), bd 7 (its single job); array_k: CPU-bound -- 20 CPUs: live 5, riib 3, bd 3.
+ARRAY = {"live": {"cpus": 4, "task_gib": 8.0, "array_k": 5}, "riib": {"cpus": 6, "task_gib": 8.0, "array_k": 3},
+         "bd": {"cpus": 6, "task_gib": 7.0, "array_k": 3}}
 RETRY_ROOM_MIN = 10  # a GPU allocation failure comes in a run's first minutes: room for the runner's retry in the task
 
 
@@ -393,7 +396,7 @@ def array_sizes(kind, runs, run_min):
     k, a = KINDS[kind], ARRAY[kind]
     shards = -(-k["vram_mib"] // SHARD_MIB)
     minutes = int(-(-((run_min + RETRY_ROOM_MIN + 5) * 1.15) // 5) * 5)
-    return {"array": f"0-{runs - 1}%{min(a['array_k'], runs)}", "gres": f"shard:{shards}", "cpus": k["cores"],
+    return {"array": f"0-{runs - 1}%{min(a['array_k'], runs)}", "gres": f"shard:{shards}", "cpus": a["cpus"],
             "mem_mib": int(a["task_gib"] * 1024), "time": f"{minutes // 60:02d}:{minutes % 60:02d}:00"}
 
 

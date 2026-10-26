@@ -2,8 +2,8 @@
 #SBATCH --job-name=isaac_array
 #SBATCH --partition=compute
 #SBATCH --gres=shard:1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=7168M
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8192M
 #SBATCH --time=00:55:00
 #SBATCH --signal=B:TERM@120
 # One run of a run list per Slurm array task (docs/plans/2026-10-26-ws1-isaac-array.md): a task's shard, CPUs and
@@ -11,11 +11,13 @@
 # 4-slot bundle used 54 % of what it held) holds nothing for the long ones. Each task runs line SLURM_ARRAY_TASK_ID
 # (0-based, blank lines not counted) of the list with the bundle runner (tools/isaac_bundle.py --slots 1): its SESSION_ID, port and bridge
 # cleanup, infrastructure retry, stall watchdog with diagnostics, time-limit fit and records stay; what a bundle adds
-# on top -- start stagger, VRAM gate across sessions, pace back-off, one shared page cache -- does not apply.
+# on top -- start stagger, VRAM gate across sessions, pace back-off, one shared page cache -- does not apply. A task is
+# sized as a single job (sizes --array): with 4 CPUs the runner's --bridge-cpus auto puts the SLAM bridge on a core of
+# its own; at 2 CPUs (one core shared by session and bridge) the 11590 pilot lost 3 of 3 runs to slam_link_failed.
 #
 #   sbatch $(python3 tools/isaac_bundle.py sizes KIND --array --runs N --run-min M) \
 #     deploy/slurm/isaac_array.sbatch RUNS.jsonl OUT KIND
-#   (sizes prints --array=0-(N-1)%K -- K the tasks at once, live 7 riib 4 -- and one task's --gres/--cpus-per-task/--mem/
+#   (sizes prints --array=0-(N-1)%K -- K the tasks at once, live 5 riib 3 -- and one task's --gres/--cpus-per-task/--mem/
 #   --time; both arms of a comparison go in one list and one array)
 #   BUNDLE_ARGS="--run-est-min M" (the same M; more options as for isaac_bundle.sbatch). M is the batch's own longest
 #   normal run: one kind's runs differ by hours (S3: 21-209 min). Afterwards: isaac_bundle.py collect OUT --expect N.
