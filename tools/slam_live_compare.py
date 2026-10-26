@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import math
 import sys
 from dataclasses import dataclass, field
@@ -497,7 +498,7 @@ def scene_gate(l_runs: list, r_runs: list) -> dict:
     for side, runs in (("l", l_runs), ("r", r_runs)):
         for run in runs:
             holds, inc = hold_records(run)
-            incomplete |= inc
+            incomplete |= inc or bool(record_problems(run))  # every run checked whole, a replaced R included
             pooled[side].setdefault("per_m", []).extend(h["per_m"] for h in holds if h["per_m"] is not None)
             pooled[side].setdefault("jump_rad", []).extend(h["jump_rad"] for h in holds)
             pooled[side].setdefault("jump_m", []).extend(h["jump_m"] for h in holds)
@@ -506,6 +507,8 @@ def scene_gate(l_runs: list, r_runs: list) -> dict:
             pooled[side].setdefault("hold_response_yaw", []).extend(yaw)
     keys = ("per_m", "jump_rad", "jump_m", "hold_response_position", "hold_response_yaw")
     out = {"counts": {k: [len(pooled["l"].get(k, [])), len(pooled["r"].get(k, []))] for k in keys}}
+    if not incomplete:  # every pooled value finite on both sides (Codex round 2: an infinite R p90 made the ratio 0)
+        incomplete = any(not math.isfinite(float(v)) for side in pooled.values() for vals in side.values() for v in vals)
     if incomplete:
         return {**out, "state": "incomplete"}
     if not pooled["l"].get("jump_rad"):  # no closed L hold at all: no evidence, not an 'ok' (Codex P3)
@@ -526,7 +529,7 @@ def scene_gate(l_runs: list, r_runs: list) -> dict:
                 continue
             stats.setdefault(key, {})[name] = {"l": a, "r": b, "ratio": a / b}
     out["stats"] = stats
-    if any(not math.isfinite(s["ratio"]) for v in stats.values() for s in v.values()):
+    if any(not all(math.isfinite(s[k]) for k in ("l", "r", "ratio")) for v in stats.values() for s in v.values()):
         return {**out, "state": "incomplete", "short": ["a non-finite statistic"]}
     if short or not stats:
         return {**out, "state": "insufficient", "short": short or ["no statistic"]}
@@ -597,38 +600,50 @@ def load(run: Path) -> RunData:
 
 
 def judge(spec: dict, loader=None) -> dict:
-    """The second confirmation (plan 5c): ``spec`` = {"scenes": {name: {"pairs": [[L_RUN, R_RUN], ...],
-    "extra_r": [R_RUN, ...]}}} -- the pairs as judged (a re-run R in place of a not comparable one), the replaced
-    original R runs in ``extra_r`` (their holds still count in the gate)."""
+    """The second confirmation (plan 5c): ``spec`` = {"scenes": {name: {"pairs": [PAIR, PAIR]}}}, a PAIR either
+    [L_RUN, R_RUN] or, for a re-run (5c item 6), {"l": L_RUN, "r": R_RERUN, "r_original": R_RUN}. A re-run R may
+    replace only a not comparable original R, and only in a scene where no original pair is comparable; both R runs
+    count in the hold gate and the original's failures are reported."""
     loader = loader or (lambda p: load(Path(p)))
     scenes, out, config = {}, {"scenes": {}}, []
     if set(spec.get("scenes", {})) != set(EXPECTED_SCENES):
         config.append(f"scenes {sorted(spec.get('scenes', {}))} are not {list(EXPECTED_SCENES)}")
-    paths = [p for s in spec.get("scenes", {}).values() for pair in s.get("pairs", []) for p in pair]
-    paths += [p for s in spec.get("scenes", {}).values() for p in s.get("extra_r", [])]
-    if len(paths) != len(set(paths)):
+
+    def parts(pair):
+        if isinstance(pair, dict):
+            return pair["l"], pair["r"], pair.get("r_original")
+        return pair[0], pair[1], None
+
+    named = [p for s in spec.get("scenes", {}).values() for pair in s.get("pairs", []) for p in parts(pair) if p]
+    if len({os.path.realpath(str(p)) for p in named}) != len(named):  # a path alias of one run counts twice too
         config.append("a run is named twice")
     for name, s in spec.get("scenes", {}).items():
-        pairs = [(loader(lp), loader(rp)) for lp, rp in s.get("pairs", [])]
-        extra = [loader(p) for p in s.get("extra_r", [])]
+        entries = [parts(p) for p in s.get("pairs", [])]
+        if len(entries) != EXPECTED_PAIRS:
+            config.append(f"{name}: {len(entries)} pairs, not {EXPECTED_PAIRS}")
+        pairs = [(loader(lp), loader(rp)) for lp, rp, _ in entries]
+        originals = [(lr, loader(op) if op else rr) for (lr, rr), (_, _, op) in zip(pairs, entries)]
+        extra = [o for (_, rr), (_, o) in zip(pairs, originals) if o is not rr]
         if sorted(lr.seed for lr, _ in pairs) != sorted(EXPECTED_SEEDS):
             config.append(f"{name}: L seeds {[lr.seed for lr, _ in pairs]} are not {list(EXPECTED_SEEDS)}")
-        for lr, rr in pairs:
+        for lr, rr in pairs + [(lr, o) for lr, o in originals]:
             if lr.seed != rr.seed or lr.slam_mode != "localization" or rr.slam_mode != "mapping":
                 config.append(f"{name}: a pair is not L localization / R mapping on one seed "
                               f"({lr.slam_mode} {lr.seed} / {rr.slam_mode} {rr.seed})")
         for run in [r for pair in pairs for r in pair] + extra:
-            if run.scene is not None and run.scene != name:
+            if run.scene != name:
                 config.append(f"{name}: a run of scene {run.scene}")
-        for rr in extra:
-            if rr.slam_mode != "mapping" or rr.seed not in EXPECTED_SEEDS:
-                config.append(f"{name}: an extra R is not a mapping run of the confirmation's seeds")
+        if extra:  # the re-run rule (5c item 6)
+            original_comparable = [pair_verdict(lr, o)["comparable"] for lr, o in originals]
+            if any(original_comparable):
+                config.append(f"{name}: an R may be replaced only when no original pair is comparable")
         verdicts = [pair_verdict(lr, rr) for lr, rr in pairs]
         gate = scene_gate([lr for lr, _ in pairs], [rr for _, rr in pairs] + extra)
         scenes[name] = (verdicts, gate)
         out["scenes"][name] = {"pairs": verdicts, "gate": gate,
-                               "extra_r": [{"path": p, "failure": r.failure, "failures": r.failures}
-                                           for p, r in zip(s.get("extra_r", []), extra)]}
+                               "r_originals": [{"path": op, "failure": o.failure, "failures": o.failures,
+                                                "record_problems": record_problems(o)[:5]}
+                                               for (_, _, op), (_, o) in zip(entries, originals) if op]}
     out["overall"] = overall(scenes)
     if config:
         out["overall"] = {"ok": False, "failed": [f"configuration: {c}" for c in config] + out["overall"]["failed"]}

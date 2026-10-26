@@ -187,13 +187,15 @@ def test_judge_puts_pairs_gate_and_overall_together_with_replaced_r_runs_in_the_
             runs[f"L_{s}_{n}"] = arm("localization", n, s, dx=0.02)
             runs[f"R_{s}_{n}"] = arm("mapping", n, s, dx=0.04)
     runs["R_line_m_4_short"] = arm("mapping", 4, "line_m", t_end=500.0, with_holds=False, dx=0.04)
+    runs["R_line_m_3"] = arm("mapping", 3, "line_m", t_end=500.0, with_holds=False, dx=0.04)  # no comparable pair
     runs["R_line_m_4_short"].failures = [{"time_s": 480.0, "reason": "Tracking timeout in transport"}]
     spec = {"scenes": {s: {"pairs": [[f"L_{s}_{n}", f"R_{s}_{n}"] for n in (3, 4)]} for s in ("line_m", "random_m")}}
-    spec["scenes"]["line_m"]["extra_r"] = ["R_line_m_4_short"]
+    # line_m: neither original pair comparable; seed 4's R re-run (R_line_m_4) replaces the short original
+    spec["scenes"]["line_m"]["pairs"][1] = {"l": "L_line_m_4", "r": "R_line_m_4", "r_original": "R_line_m_4_short"}
     out = cmp.judge(spec, loader=runs.__getitem__)
     assert out["overall"]["ok"], out["overall"]["failed"]
-    assert out["scenes"]["line_m"]["gate"]["counts"]["jump_rad"][1] == 24  # the two R's holds; the short R has none
-    assert out["scenes"]["line_m"]["extra_r"][0]["failures"][0]["reason"] == "Tracking timeout in transport"
+    assert out["scenes"]["line_m"]["gate"]["counts"]["jump_rad"][1] == 12  # the re-run's holds; the short ones none
+    assert out["scenes"]["line_m"]["r_originals"][0]["failures"][0]["reason"] == "Tracking timeout in transport"
 
 
 def test_v5_holds_on_the_whole_l_run_even_inside_a_comparable_span():
@@ -243,6 +245,62 @@ def test_judge_checks_the_preregistered_configuration():
     assert not cmp.judge(swapped, loader=runs.__getitem__)["overall"]["ok"]  # L must localize, R must map
     wrong_seed = dict(runs, R_line_m_4=arm("mapping", 5, "line_m", dx=0.04))
     assert not cmp.judge(spec, loader=wrong_seed.__getitem__)["overall"]["ok"]
+
+
+def _config_runs():
+    holds = [(100.0 + 300 * k, 104.0 + 300 * k) for k in range(12)]
+
+    def arm(mode, seed, scene, t_end=3700.0, with_holds=True, **k):
+        r = _run(t_end, holds=holds if with_holds else (), **k)
+        r.slam_mode, r.seed, r.scene = mode, seed, scene
+        return r
+
+    runs = {}
+    for s in ("line_m", "random_m"):
+        for n in (3, 4):
+            runs[f"L_{s}_{n}"] = arm("localization", n, s, dx=0.02)
+            runs[f"R_{s}_{n}"] = arm("mapping", n, s, dx=0.04)
+    return runs, arm
+
+
+def test_judge_refuses_unknown_scenes_and_a_run_named_twice():
+    runs, _ = _config_runs()
+    runs["R_line_m_4"].scene = None
+    spec = {"scenes": {s: {"pairs": [[f"L_{s}_{n}", f"R_{s}_{n}"] for n in (3, 4)]} for s in ("line_m", "random_m")}}
+    assert not cmp.judge(spec, loader=runs.__getitem__)["overall"]["ok"]
+    runs, _ = _config_runs()
+    runs["R_line_m_3/."] = runs["R_line_m_3"]
+    spec["scenes"]["line_m"]["pairs"][1] = {"l": "L_line_m_4", "r": "R_line_m_3/.", "r_original": "R_line_m_4"}
+    assert any("twice" in p for p in cmp.judge(spec, loader=runs.__getitem__)["config_problems"])
+
+
+def test_a_rerun_r_may_replace_only_a_not_comparable_r_in_a_scene_without_a_comparable_pair():
+    runs, arm = _config_runs()
+    # line_m: both original R short (not comparable), seed 4's R re-run long -> allowed
+    runs["R_line_m_3"] = arm("mapping", 3, "line_m", t_end=500.0, with_holds=False, dx=0.04)
+    runs["R_line_m_4"] = arm("mapping", 4, "line_m", t_end=500.0, with_holds=False, dx=0.04)
+    runs["R_line_m_4_b"] = arm("mapping", 4, "line_m", dx=0.04)
+    spec = {"scenes": {s: {"pairs": [[f"L_{s}_{n}", f"R_{s}_{n}"] for n in (3, 4)]} for s in ("line_m", "random_m")}}
+    spec["scenes"]["line_m"]["pairs"][1] = {"l": "L_line_m_4", "r": "R_line_m_4_b", "r_original": "R_line_m_4"}
+    out = cmp.judge(spec, loader=runs.__getitem__)
+    assert out["overall"]["ok"], out["overall"]["failed"]
+    # random_m: its original pair was comparable (and failing) -> a replacement is refused
+    runs["L_random_m_4"] = arm("localization", 4, "random_m", dx=0.05)
+    runs["R_random_m_4_b"] = arm("mapping", 4, "random_m", dx=0.08)
+    spec["scenes"]["random_m"]["pairs"][1] = {"l": "L_random_m_4", "r": "R_random_m_4_b", "r_original": "R_random_m_4"}
+    out = cmp.judge(spec, loader=runs.__getitem__)
+    assert not out["overall"]["ok"] and any("replace" in p for p in out["config_problems"])
+
+
+def test_a_non_finite_statistic_on_either_side_is_incomplete():
+    runs, _ = _config_runs()
+    r = runs["R_line_m_3"]
+    for rec in r.records:
+        if rec["mode"] == "holding":
+            rec["truth_base"] = [float("inf"), 0.0, -0.001]
+            break
+    gate = cmp.scene_gate([runs["L_line_m_3"]], [r, runs["R_line_m_4"]])
+    assert gate["state"] in ("incomplete", "insufficient")
 
 
 def test_overall_needs_a_comparable_pair_in_every_scene():
