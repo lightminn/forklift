@@ -325,7 +325,8 @@ def test_an_escape_prefix_is_found_checked_installed_under_the_escape_ownership_
     ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
     chosen = ports.escape_plan((), None)
     assert chosen is not None and state["scene_escape_candidates"][-1]["permit"]["ok"]
-    poses, direction, leg_dir = chosen
+    poses, direction, leg_dir, guard = chosen
+    assert guard is None  # no release: nothing to watch
     config0 = core.trackers["transport"].config
     ports.escape_install(chosen)
     assert core.obstacle["backoff"]["scene"] and core.obstacle["backoff"]["phase"] == "transport"
