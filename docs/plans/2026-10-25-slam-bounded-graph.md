@@ -111,7 +111,7 @@ karto 의 scan 저장소는 상태 ID 를 키로 하는 `std::map` 이고(`Mappe
 
 ### 6.2 S2 비교 재생 — 비용·정확도·연결성 (2026-10-26, ws1 `test_runs/live/slam_cost_e1/s2`, 스냅숏 d864a846)
 
-입력: line_m 네 실행(`ct2_624d0616_auto_line_m_s1`·`_fixed_line_m_s3`·`_auto_line_m_s4`, `ct2_41a2a7e8_fixed_line_m_s2`)을 번갈아 sim 5,000 s(14 단위) 이어 붙임, 빠른 재생. A 의 지도는 `lf_67694d16_main_line_m_s0` 의 첫 단위를 mapping 으로 재생해 만든 묶음(노드 169, 그 지도의 V2′ 식 world 오차 중앙 3.6 cm·p95 17.2 cm·최대 19.9 cm). 정확도 기준선은 기본값 두 번의 나쁜 쪽.
+입력: line_m 네 실행(`ct2_624d0616_auto_line_m_s1`·`_fixed_line_m_s3`·`_auto_line_m_s4`, `ct2_41a2a7e8_fixed_line_m_s2`)을 번갈아 sim 5,000 s(14 단위) 이어 붙임, 빠른 재생. A 의 지도는 `lf_67694d16_main_line_m_s0`(2026-10-27 ws1 에서 지움, 보관 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 묶음 `c27_07`, 스냅숏 `lf_67694d16` 도 같은 묶음) 의 첫 단위를 mapping 으로 재생해 만든 묶음(노드 169, 그 지도의 V2′ 식 world 오차 중앙 3.6 cm·p95 17.2 cm·최대 19.9 cm). 정확도 기준선은 기본값 두 번의 나쁜 쪽.
 
 | 실행 | keyframe 최대 (s) | 끝 10 % (s) | 단위별 최대 (s, 처음 → 끝) | 위치 중앙 / 최대 (m) | 방향 최대 (°) | 원본별 증가 / 초과 오차 증가 (m) | 그래프 | 판정 1·3·5 |
 |---|---|---|---|---|---|---|---|---|

@@ -24,7 +24,7 @@ CT-2 와 그 뒤의 live 실행 9 건이 `slam_link_failed: scan N: no reply wit
 | ct2_624d0616_auto_line_m_s1 | 4874 | 237 | 0.034 / 0.554, 1.121 | 487 |
 | ct2_624d0616_auto_line_m_s4 | 4898 | 237 | 0.032 / 0.604, 1.064 | 490 |
 | ct2_624d0616_fixed_line_m_s3 | 4851 | 239 | 0.031 / 0.603, 1.088 | 485 |
-| lf_67694d16_main_line_m_s0 | 5019 | 242 | 0.035 / 0.626, 1.148 | 502 |
+| lf_67694d16_main_line_m_s0 (보관 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 묶음 `c27_07`) | 5019 | 242 | 0.035 / 0.626, 1.148 | 502 |
 | reprp_occ_4c53486_random_m_s3_r1 | 5689 | 264 | 0.033 / 0.462, 1.036 | 569 |
 
 - 처리 시간은 `wall_s`(브리지가 scan 을 내보낸 때부터 /pose 를 받을 때까지)이다. keyframe 이 아닌 scan(`skipped`)은 slam_toolbox 로 가지 않는다.
