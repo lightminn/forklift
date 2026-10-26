@@ -33,7 +33,7 @@ ROOT=$(pwd)
 # reported on request (its own baselines; never mixed with the default's), nothing else (no other age table).
 ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
-D7_HOLD=${D7_HOLD:-on}  # the console's runner reads it (a survey tour has no D7 docking)
+D7_HOLD=${D7_HOLD:-on}  # the console's runner reads it: a TOUR has no D7 docking, a CYCLE survey holds as the console does
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 JOB=${SLURM_JOB_ID:-local$$}
 # the survey's mapping params, relative to the repository (the bridge container sees it under /workspace)
