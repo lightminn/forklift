@@ -372,6 +372,57 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     return out
 
 
+# One run per Slurm array task (deploy/slurm/isaac_array.sbatch, docs/plans/2026-10-26-ws1-isaac-array.md): task_gib
+# is the task's own cgroup (no page cache shared with other sessions): live 7 -- a long S3 session's anon reached
+# 5.998 GiB, single live jobs' MaxRSS 5.98-6.51 GiB with the cache -- riib 7.5 (anon 5.93, MaxRSS <= 7.41 at 8G), bd
+# 6.5 (peak 5.82); array_k the tasks at once: live 7 (7 x 7 GiB + 7 x 0.74 GiB of bridges + others' jobs within the
+# 61.4 GiB the node has, and a shard left for others), riib 4 (2 per GPU: 4.47 GB a session takes shard 2), bd 7.
+ARRAY = {"live": {"task_gib": 7.0, "array_k": 7}, "riib": {"task_gib": 7.5, "array_k": 4},
+         "bd": {"task_gib": 6.5, "array_k": 7}}
+RETRY_ROOM_MIN = 10  # a GPU allocation failure comes in a run's first minutes: room for the runner's retry in the task
+
+
+def array_sizes(kind, runs, run_min):
+    """One task's sbatch options for a run list of `runs` runs of `kind`, one run per array task. run_min is the
+    batch's own p95 run length -- required: one kind's runs differ by hours (S3: 21 to 209 min)."""
+    if not runs or runs < 1:
+        raise ValueError("--array needs --runs (the list's runs)")
+    if not run_min:
+        raise ValueError("--array needs --run-min: the batch's own p95 run length in minutes (one kind's runs differ "
+                         "by hours: S3 21-209 min); give the runner the same with --run-est-min")
+    k, a = KINDS[kind], ARRAY[kind]
+    shards = -(-k["vram_mib"] // SHARD_MIB)
+    minutes = int(-(-((run_min + RETRY_ROOM_MIN + 5) * 1.15) // 5) * 5)
+    return {"array": f"0-{runs - 1}%{min(a['array_k'], runs)}", "gres": f"shard:{shards}", "cpus": k["cores"],
+            "mem_mib": int(a["task_gib"] * 1024), "time": f"{minutes // 60:02d}:{minutes % 60:02d}:00"}
+
+
+def collect(out, expect):
+    """Each array task's final state under out/task_<i>/bundle: the last attempt's status per task, and the tasks with
+    no record at all (never started, cancelled before the runner wrote). summary_exit is the task summary's exit_code
+    (None when the summary is missing or unreadable). Returns (rows, missing)."""
+    rows, missing = [], []
+    for i in range(expect):
+        path = Path(out) / f"task_{i}" / "bundle" / "results.jsonl"
+        summary = Path(out) / f"task_{i}" / "bundle" / "summary.json"
+        recs = []
+        if path.exists():
+            with open(path) as f:
+                recs = [json.loads(x) for x in f if x.strip()]
+        if not recs:
+            missing.append(i)
+            continue
+        last = recs[-1]
+        try:  # the runner's own verdict: a run that ended rc 0 can still leave errors (a bridge cleanup that failed)
+            sm = json.loads(summary.read_text())
+            verdict = sm["exit_code"] if isinstance(sm, dict) else None
+        except (OSError, ValueError, KeyError):
+            verdict = None
+        rows.append({"task": i, "name": last.get("name"), "status": last.get("status"), "rc": last.get("rc"),
+                     "attempts": len(recs), "summary_exit": verdict})
+    return rows, missing
+
+
 def time_limit(runs, slots, jobs=1, run_min=30.0, stagger_min=1.0):
     """--time for `runs` runs on `jobs` jobs of `slots` sharing one list: the waves they make together times a run's
     p95, the stagger of one wave, 5 min of start and settling, 15 % on top, rounded up to 5 min. A job that started
@@ -1483,6 +1534,21 @@ def main(argv=None) -> int:
             print(warning)
         print(f"{len(problems)} problems")
         return 1 if problems else 0
+    if argv[:1] == ["collect"]:
+        cp = argparse.ArgumentParser(prog="isaac_bundle.py collect",
+                                     description="the final state of every task of an array (deploy/slurm/isaac_array.sbatch)")
+        cp.add_argument("out", help="the array's OUT")
+        cp.add_argument("--expect", type=int, required=True, help="the list's runs (the array's tasks)")
+        a = cp.parse_args(argv[1:])
+        rows, missing = collect(a.out, a.expect)
+        for r in rows:
+            print(json.dumps(r))
+        for i in missing:
+            print(json.dumps({"task": i, "status": "missing"}))
+        bad = missing + [r["task"] for r in rows if r["status"] != "ended" or r["rc"] != 0 or r["summary_exit"] != 0]
+        print(f"{len(rows)} of {a.expect} tasks recorded, {len(missing)} missing, {len(bad)} not ended with rc 0 "
+              "and a clean summary")
+        return 1 if bad else 0
     if argv[:1] == ["sizes"]:
         sp = argparse.ArgumentParser(prog="isaac_bundle.py sizes",
                                      description="sbatch options for a bundle of measured session kinds")
@@ -1491,7 +1557,20 @@ def main(argv=None) -> int:
         sp.add_argument("--runs", type=int, help="the list's runs: also print --time")
         sp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list")
         sp.add_argument("--run-min", type=float, help="a run's p95 wall minutes (default: the kind's measured)")
+        sp.add_argument("--array", action="store_true",
+                        help="one run per array task (deploy/slurm/isaac_array.sbatch); needs --runs and --run-min")
         a = sp.parse_args(argv[1:])
+        if a.array:
+            try:
+                z = array_sizes(a.kind, a.runs, a.run_min)
+            except ValueError as exc:
+                print(exc, file=sys.stderr)
+                return 2
+            print(f"--array={z['array']} --gres={z['gres']} --cpus-per-task={z['cpus']} --mem={z['mem_mib']}M "
+                  f"--time={z['time']}")
+            print(f"(then: deploy/slurm/isaac_array.sbatch RUNS OUT {a.kind}, with BUNDLE_ARGS=\"--run-est-min "
+                  f"{a.run_min:g}\")", file=sys.stderr)
+            return 0
         try:
             z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min)
         except ValueError as exc:
