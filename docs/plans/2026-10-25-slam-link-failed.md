@@ -214,7 +214,7 @@ E1 결과를 보기 전에 고정한다. 목표 운용 시간은 상위 계획 1
 - 완화 전 같은 실행들은 모두 2 건을 마치고 sim 485–570 s 에서 slam_link_failed 로 끝났다(keyframe 최대 1.04–1.15 s). 위치 오차는 완화 전과 같은 수준이다(같은 지표로 다시 잼: line_m 0.024 / 0.18–0.20, random_m 0.10–0.20 / 0.25–0.32).
 - auto_random r2 의 실패는 도킹 재시도 대조 거절이다. slam_link 와 무관하지만 위치 오차 최대 0.48 m 가 함께 있어 기록해 둔다.
 - line_m_s2 의 첫 두 번은 시작 직후 재제출(PR #131)이 없는 스냅숏이라 무효였다. main 을 병합한 스냅숏(90602d9a, `ENCODER_MODEL=reported` 로 원래 실행과 같은 오도메트리)으로 다시 돌렸다(묶음 11391, `test_runs/live/slamfix_90602d9a`).
-- **참고 — 완화 전, team-spec (v-g2 escb, ws1 `test_runs/live/escb_fc653387_*`, 총괄 전달 2026-10-26).**
+- **참고 — 완화 전, team-spec (v-g2 escb, ws1 `test_runs/live/escb_fc653387_*` — 보관 `gdrive:forklift-archive/ws1-cleanup-20261026-ag/` 의 `ag_escb_01`·`ag_escb_02`, 총괄 전달 2026-10-26).**
   - 조건: CT-1 line_m 순환(미션 3 건) seed 0–9 × 출발 띠 해제 끔·켬 20 세션, team-spec 오도메트리, #145 이전 main 스냅숏(fc653387).
   - 결과: 9 개가 sim 402–480 s 에 `slam_link_failed`(no reply within 1.00 s)로 끝났다. 끔 4, 켬 5 이고 모두 미션 2 건을 마친 뒤였다.
   - 완주한 11 개도 keyframe 최대가 0.77–0.99 s 였다. 1 s 한계 바로 아래다.
