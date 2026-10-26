@@ -25,8 +25,9 @@ CT-2 와 그 뒤의 live 실행 9 건이 `slam_link_failed: scan N: no reply wit
 | ct2_624d0616_auto_line_m_s4 | 4898 | 237 | 0.032 / 0.604, 1.064 | 490 |
 | ct2_624d0616_fixed_line_m_s3 | 4851 | 239 | 0.031 / 0.603, 1.088 | 485 |
 | lf_67694d16_main_line_m_s0 (보관 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 묶음 `c27_07`) | 5019 | 242 | 0.035 / 0.626, 1.148 | 502 |
-| reprp_occ_4c53486_random_m_s3_r1 | 5689 | 264 | 0.033 / 0.462, 1.036 | 569 |
+| reprp_occ_4c53486_random_m_s3_r1 (보관 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 묶음 `c27_07`) | 5689 | 264 | 0.033 / 0.462, 1.036 | 569 |
 
+- 두 실행과 그 스냅숏(`lf_67694d16`·`occ_4c53486`)은 2026-10-27 ws1 에서 지웠다. 보관 묶음은 `c27_07.tar.zst` 이고, 옆에 `.files.tsv`(파일 목록)·`.tar.zst.md5` 가 있다. 같은 폴더의 `c27_02` 에는 `lf_67694d16_fix_line_m_s0`·`fix_random_m_s5`·`s7`·`s8`·`s9`·`main_random_m_s9`·`newtq_occ_4c53486_line_m_s0` 이, `c27_03` 에는 `newtq_occ_4c53486_line_m_s1` 이, `c27_07` 에는 `lf_67694d16_solo_fix_random_m_s7`·`solo_main_random_m_s9` 도 있다.
 - 처리 시간은 `wall_s`(브리지가 scan 을 내보낸 때부터 /pose 를 받을 때까지)이다. keyframe 이 아닌 scan(`skipped`)은 slam_toolbox 로 가지 않는다.
 - U16(SLAM 위치 추정 계획 2.1)은 keyframe 879 개에서 같은 실패로 끝났다. 여기서는 237–275 개에서 끝났다. keyframe 수, 곧 그래프 크기만으로는 설명이 안 된다.
 - 실패한 scan 번호(4,851–5,958)가 비슷한 것은 장면과 임무 순환이 비슷해서다. line_m 넷은 sim 485–502 s, random_m 넷은 545–596 s 에서 끝났다.
