@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=isaac_array
 #SBATCH --partition=compute
-#SBATCH --gres=shard:1
+#SBATCH --gres=shard:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8192M
 #SBATCH --time=00:55:00
@@ -17,7 +17,7 @@
 #
 #   sbatch $(python3 tools/isaac_bundle.py sizes KIND --array --runs N --run-min M) \
 #     deploy/slurm/isaac_array.sbatch RUNS.jsonl OUT KIND
-#   (sizes prints --array=0-(N-1)%K -- K the tasks at once, live 5 riib 3 -- and one task's --gres/--cpus-per-task/--mem/
+#   (sizes prints --array=0-(N-1)%K -- K the tasks at once, live 4 riib 3 -- and one task's --gres/--cpus-per-task/--mem/
 #   --time; both arms of a comparison go in one list and one array)
 #   BUNDLE_ARGS="--run-est-min M" (the same M; more options as for isaac_bundle.sbatch). M is the batch's own longest
 #   normal run: one kind's runs differ by hours (S3: 21-209 min). Afterwards: isaac_bundle.py collect OUT --expect N.

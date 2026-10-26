@@ -3,7 +3,7 @@
     python3 tools/isaac_bundle.py check --list RUNS.jsonl --runner SNAP/sim/isaac/run_transport.py
     sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) deploy/slurm/isaac_bundle.sbatch RUNS OUT KIND
     python3 tools/isaac_bundle.py --list RUNS.jsonl --out OUT [--slots N] [--shards N] [--stagger-s 60]
-        [--session-vram-mib 3950] [--run-timeout-s S] [--grace-s 110] [--retries 1] [--pace-floor R]
+        [--session-vram-mib 4100] [--run-timeout-s S] [--grace-s 110] [--retries 1] [--pace-floor R]
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
@@ -109,7 +109,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SHARD_MIB = 4076  # 16,303 MiB / 4 shards per GPU on ws1 (gres.conf)
-SESSION_VRAM_MIB = 3950  # a live session with the learned worker: 3,886-3,915 MiB measured, + ~40 MiB driver share
+SESSION_VRAM_MIB = 4100  # a live session with the learned worker at its peak (3,890-4,047 MiB) + ~50 MiB driver share: KINDS live
 PORTS = (9000, 9500)
 RESERVED_ENV = ("SESSION_ID", "BRIDGE_CPU", "BUNDLE_SLOT", "BUNDLE_JOB", "BUNDLE_RUN", "BUNDLE_TOKEN")
 # The failures themselves, not summary lines such as riib_scene's "OUT_OF_DEVICE lines: 0".
@@ -133,7 +133,12 @@ KINDS = {
     # timed in its records and has no wall-clock bound (pallet_mission's retry ladder: up to 390,000 hybrid-A*
     # expansions, no deadline outside the grid path -- Codex), so riib is measured, not acted on: every watched run's
     # results line carries silence_max_s; set stall_min from those (dv3_trailer_det2 hung in render for 45 min).
-    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30, "stall_min": 10},
+    # live VRAM (2026-10-27): a GPU gives 16,303 - 464 (the driver's reservation) = 15,839 MiB; sessions with their
+    # learned worker peak at 3,890-4,047 MiB (3,762-3,821 early) and take ~50 MiB of driver share each, so a fourth
+    # session does not fit once they have grown (11596_2 never started; four ran only while small). 4,100 a session:
+    # 3 a GPU, 3 sessions on 4 shards, 1 on 2 -- what the shards tell other jobs -- until session VRAM shrinks
+    # (docs/plans/2026-10-26-ws1-isaac-array.md 5.4).
+    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 3, "vram_mib": 4100, "run_min": 30, "stall_min": 10},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
     "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
              "watch_rel": "run/frames.jsonl"},
@@ -379,8 +384,9 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
 # the same scenes in a 4-slot bundle -- and the cgroup met its 7G limit 590 and 707 times. cpus: live 4 (the runner's
 # --bridge-cpus auto then gives the bridge one core and the session the other), riib 6 (a riib session used 3.1 of 4
 # CPUs alone: two cores for it, one for the bridge), bd 6 (its single job); task_gib: live and riib 8 (their single
-# jobs'; S3 runner RSS 6.6 GiB), bd 7 (its single job); array_k: CPU-bound -- 20 CPUs: live 5, riib 3, bd 3.
-ARRAY = {"live": {"cpus": 4, "task_gib": 8.0, "array_k": 5}, "riib": {"cpus": 6, "task_gib": 8.0, "array_k": 3},
+# jobs'; S3 runner RSS 6.6 GiB), bd 7 (its single job); array_k: 20 CPUs give riib 3, bd 3; live 4 -- a live task
+# takes 2 shards since its VRAM (KINDS) is over one, so a GPU holds 2 of them: 3-slot bundles hold 3 a GPU.
+ARRAY = {"live": {"cpus": 4, "task_gib": 8.0, "array_k": 4}, "riib": {"cpus": 6, "task_gib": 8.0, "array_k": 3},
          "bd": {"cpus": 6, "task_gib": 7.0, "array_k": 3}}
 RETRY_ROOM_MIN = 10  # a GPU allocation failure comes in a run's first minutes: room for the runner's retry in the task
 
@@ -1596,6 +1602,9 @@ def main(argv=None) -> int:
                   f"--time={z['time']}")
             print(f"(then: deploy/slurm/isaac_array.sbatch RUNS OUT {a.kind}, with BUNDLE_ARGS=\"--run-est-min "
                   f"{a.run_min:g}\")", file=sys.stderr)
+            if a.kind == "live":
+                print("note: a live task takes 2 shards (2 a GPU); 3-slot bundles (sizes live --slots 3) hold 3 a GPU",
+                      file=sys.stderr)
             return 0
         try:
             z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min)
@@ -1672,7 +1681,12 @@ def main(argv=None) -> int:
     shards = a.shards or (int(env_shards) if env_shards.isdigit() else None)
     if a.session_vram_mib is None:
         a.session_vram_mib = KINDS[a.kind]["vram_mib"] if a.kind else SESSION_VRAM_MIB
-    slots = a.slots or (kind_slots(a.kind, shards) if a.kind and shards else shards)
+    if a.slots:
+        slots = a.slots
+    elif a.kind and shards:
+        slots = kind_slots(a.kind, shards)
+    else:  # no kind: as many sessions of --session-vram-mib as the shards hold, at most one a shard
+        slots = min(shards, shards * a.shard_mib // a.session_vram_mib) if shards else None
     if not slots:
         print("refusing: no --slots and no shard count (--shards or SLURM_SHARDS_ON_NODE), or the shards hold no "
               "session of --kind", file=sys.stderr)
