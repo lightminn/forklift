@@ -2,7 +2,8 @@
 mission runs the model in the learned venv and talks to it over stdin/stdout.
 
 Protocol: each request is an 8-byte little-endian length and an .npy of the RGB (H, W, 3) uint8; each reply is an
-8-byte length and an .npz with ``masks`` (n, H, W) bool, ``scores`` (n,) float and ``ids`` (n,) str, or ``error``.
+8-byte length and an .npz with ``masks`` (n, H, W) bool, ``scores`` (n,) float and ``ids`` (n,) str, or ``error``;
+either way ``infer_ms``, the worker's own wall time for the model call (a client that does not read it is unaffected).
 An empty request asks for the session's active providers (reply ``providers``).
 """
 from __future__ import annotations
@@ -13,6 +14,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 
 import numpy as np
 
@@ -64,13 +66,16 @@ def serve(proposer, stdin=None, stdout=None) -> None:
             _send(stdout, buf.getvalue())
             continue
         rgb = np.load(io.BytesIO(raw))
+        t0 = time.perf_counter()
         try:
             props = proposer.propose(type("Scene", (), {"rgb": rgb})())
+            infer_ms = 1e3 * (time.perf_counter() - t0)
             masks = np.stack([p.mask for p in props]) if props else np.zeros((0, *rgb.shape[:2]), bool)
             np.savez(buf, masks=masks, scores=np.array([p.score for p in props], float),
-                     ids=np.array([p.proposal_id for p in props]))
+                     ids=np.array([p.proposal_id for p in props]), infer_ms=np.array(infer_ms))
         except Exception as exc:  # noqa: BLE001 -- reported to the client, which falls back
-            np.savez(buf, error=np.array(f"{type(exc).__name__}: {exc}"))
+            np.savez(buf, error=np.array(f"{type(exc).__name__}: {exc}"),
+                     infer_ms=np.array(1e3 * (time.perf_counter() - t0)))
         _send(stdout, buf.getvalue())
 
 
@@ -90,6 +95,7 @@ class WorkerProposer:
                           str(int(threads)), str(int(device_id))]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd, env=env)
         self.timeout_s, self.first_timeout_s, self.calls = float(timeout_s), float(first_timeout_s), 0
+        self.last_infer_ms = None  # the worker's own time for the latest call (None: no reply, or an older worker)
 
     def _exchange(self, payload: bytes) -> bytes | None:
         out: dict = {}
@@ -125,6 +131,7 @@ class WorkerProposer:
         return [str(p) for p in np.load(io.BytesIO(raw))["providers"]]
 
     def propose(self, scene) -> list:
+        self.last_infer_ms = None
         if self.proc.poll() is not None:
             raise RuntimeError(f"learned worker ended (code {self.proc.returncode})")
         buf = io.BytesIO()
@@ -133,6 +140,8 @@ class WorkerProposer:
         if raw is None:
             raise RuntimeError(f"learned worker ended (code {self.proc.poll()})")
         z = np.load(io.BytesIO(raw))
+        if "infer_ms" in z.files:
+            self.last_infer_ms = float(z["infer_ms"])
         if "error" in z.files:
             raise RuntimeError(str(z["error"]))
         return [InstanceProposal(str(i), m, float(s), "learned") for m, s, i in zip(z["masks"], z["scores"], z["ids"])]

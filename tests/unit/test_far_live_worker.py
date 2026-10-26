@@ -68,6 +68,71 @@ def _stop_kw(xs, stamp_s):
                 truth_base=base, truth_pallet=G.PALLET)
 
 
+def test_a_job_with_a_learned_result_records_its_call_times_and_one_without_does_not():
+    # learned VRAM plan 3.1: every finished call, applied or dropped, carries its round trip, the worker's own time
+    # and its source; a job without a learned result (the oracle proposer, a dropped-before-start job) has none
+    live = R.LiveFar(G._runtime(R, lag_steps=11))
+    try:
+        job = {"seq": 1, "kind": "stop", "leg": 0, "gen": 1, "submitted": live.clock() - 0.2}
+        work = SimpleNamespace(proposer_result={"ms": 123.4, "infer_ms": 87.5, "source": "learned"})
+        live._note(job, "dropped", "leg", work=work)
+        live._note(dict(job, seq=2), "applied", work=SimpleNamespace(proposer_result=None))
+        live._note(dict(job, seq=3), "dropped", "queue_full")
+    finally:
+        live.close()
+    first, second, third = live.log
+    assert first["request_mono"] == job["submitted"]  # the request's own time, apart from the elapsed wall_s
+    assert first["model_ms"] == 123.4 and first["infer_wall_s"] == pytest.approx(0.0875)
+    assert first["model_source"] == "learned"
+    assert all(k not in e for e in (second, third) for k in ("model_ms", "infer_wall_s", "model_source"))
+
+
+def test_a_call_that_finishes_after_its_mission_ended_keeps_its_times():
+    # Codex (learned VRAM plan 3.1): a call in flight at a mission end finishes later; its times go to the next record
+    live = R.LiveFar(G._runtime(R, lag_steps=11))
+    done = SimpleNamespace(proposer_result={"ms": 350.0, "infer_ms": 300.0, "source": "learned"})
+    late = [({"seq": 7, "kind": "drive", "mission": "m1", "submitted": 5.0}, "done", done),
+            ({"seq": 8, "kind": "drive", "mission": "m1", "submitted": 6.0}, "error", RuntimeError("x"))]
+    live.worker = SimpleNamespace(poll=lambda: late, clear=lambda: [], close=lambda: None,
+                                  end=lambda: ([], [], None))
+    try:
+        live.mission_id = "m2"
+        live.pump(1, active=True)
+        out = live.end_mission("m2")["live"]
+    finally:
+        live.close()
+    assert out["late_calls"] == [{"mission": "m1", "seq": 7, "kind": "drive", "request_mono": 5.0, "model_ms": 350.0,
+                                  "infer_wall_s": 0.3, "model_source": "learned"}]
+    assert live.late == []  # reported once, in the record of the mission it came in during
+
+
+def test_late_calls_reach_a_record_on_every_end_path():
+    # Codex: an earlier mission's call taken by the next mission's end, and one finishing at the session's close
+    done = SimpleNamespace(proposer_result={"ms": 350.0, "infer_ms": 300.0, "source": "learned"})
+    call = ({"seq": 7, "kind": "drive", "mission": "m1", "submitted": 5.0}, "done", done)
+    live = R.LiveFar(G._runtime(R, lag_steps=11))
+    live.worker.close()
+    live.worker = SimpleNamespace(poll=lambda: [], clear=lambda: [], close=lambda: None, end=lambda: ([], [call], None))
+    live.mission_id = "m2"
+    out = live.end_mission("m2")["live"]
+    assert [c["seq"] for c in out["late_calls"]] == [7]
+    polled = [call]
+    live.worker = SimpleNamespace(poll=lambda: [polled.pop()] if polled else [], close=lambda: None)
+    assert [c["seq"] for c in live.close()] == [7] and live.close() == []
+
+
+def test_the_learned_source_hands_back_the_worker_s_own_time():
+    class Model:
+        last_infer_ms = None
+
+        def propose(self, scene):
+            self.last_infer_ms = 42.0
+            return []
+
+    got = R.LearnedSource(Model(), geometric=lambda scene: None).run(SimpleNamespace(rgb=None))
+    assert got["source"] == "learned" and got["infer_ms"] == 42.0 and got["ms"] >= 0
+
+
 def test_live_frames_applied_on_the_tick_decide_as_the_batch_run_does():
     xs = G._leg()
     batch = G._runtime(R, lag_steps=11)
@@ -535,5 +600,6 @@ def test_a_late_result_of_an_ended_mission_stays_out_of_the_next_ones_record():
 def test_the_session_closes_the_far_worker_after_its_last_missions_record_and_on_any_end():
     src = (ROOT / "sim/isaac/run_transport.py").read_text()
     end = src.index('live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")')
-    assert src.index("far_live.close()", end) - end < 300  # right after, not before
-    assert 'if locals().get("far_live") is not None:\n                far_live.close()' in src  # the finally
+    assert src.index("far_live.close()", end) - end < 500  # right after, not before
+    fin = src.index('if locals().get("far_live") is not None:')  # the finally
+    assert "late_ = far_live.close()" in src[fin:fin + 300] and 'state.setdefault("far_late_calls"' in src[fin:fin + 400]

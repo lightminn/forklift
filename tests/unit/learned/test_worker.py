@@ -37,6 +37,29 @@ def test_the_worker_returns_the_model_proposals(tmp_path):
         w.close()
 
 
+def test_the_reply_carries_the_worker_s_own_time_for_the_model(tmp_path):
+    # learned VRAM plan 3.1: the worker's time apart from the round trip (their difference is the pipe and waiting)
+    w = _fake_worker(tmp_path, """
+        import time; time.sleep(0.05)
+        return []
+    """)
+    try:
+        assert w.last_infer_ms is None
+        w.propose(_Scene())
+        assert 45 <= w.last_infer_ms < 5000
+    finally:
+        w.close()
+    bad = _fake_worker(tmp_path, """
+        raise ValueError("model broke")
+    """)
+    try:
+        with pytest.raises(RuntimeError):
+            bad.propose(_Scene())
+        assert bad.last_infer_ms is not None  # an error reply still says how long the call took
+    finally:
+        bad.close()
+
+
 def test_a_model_error_is_raised_on_the_client(tmp_path):
     w = _fake_worker(tmp_path, """
         raise ValueError("bad input")

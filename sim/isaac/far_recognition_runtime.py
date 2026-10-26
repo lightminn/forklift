@@ -59,6 +59,7 @@ class LearnedSource:
                 props, failures, source, reason = list(self.model.propose(scene)), (), "learned", None
             finally:
                 ms = 1e3 * (time.perf_counter() - t0)
+                infer_ms = getattr(self.model, "last_infer_ms", None)  # the worker's own (WorkerProposer)
         except Exception as exc:  # noqa: BLE001 -- any model failure falls back
             from forklift_core import determinism  # noqa: PLC0415
 
@@ -70,7 +71,8 @@ class LearnedSource:
             reason = f"{type(exc).__name__}: {exc}"
             got = self.geometric(scene)
             props, failures, source = list(got.proposals), tuple(got.failures), "geometric_fallback"
-        return {"source": source, "reason": reason, "proposals": props, "failures": failures, "ms": ms}
+        return {"source": source, "reason": reason, "proposals": props, "failures": failures, "ms": ms,
+                "infer_ms": infer_ms}
 
     def absorb(self, got: dict) -> None:
         """A frame's ``run`` taken into the records (on the tick that applies the frame)."""
@@ -612,6 +614,7 @@ class LiveFar:
         self.mission_dir: Path | None = None  # the runner's: the mission's directory (its result.json)
         self.setup_zone = None  # the runner's: the scene's zone, for a prior pallet at its first place
         self.log: list = []  # this mission's jobs: applied (with their order) or dropped (with why)
+        self.late: list = []  # an ended mission's calls that finished after its end (their times; never applied)
         self.record_errors: list = []
         self.applied = 0
         if io is not None:
@@ -650,15 +653,40 @@ class LiveFar:
         return self.handle
 
     # --- the tick ----------------------------------------------------------------------------------------------------
-    def _note(self, job: dict, status: str, why=None) -> None:
+    def _note(self, job: dict, status: str, why=None, work=None) -> None:
         entry = {"seq": job["seq"], "kind": job["kind"], "leg": job["leg"], "gen": job["gen"], "status": status,
-                 "why": why, "wall_s": float(self.clock()) - job["submitted"]}
+                 "why": why, "wall_s": float(self.clock()) - job["submitted"], "request_mono": job["submitted"]}
+        # a learned call's own times, applied or dropped alike (learned VRAM plan 3.1: the 200 ms share needs every
+        # finished call in its denominator): model_ms the round trip on the worker thread, infer_wall_s the worker's
+        # own time for the model (their difference is the pipe and the waiting), model_source learned or the
+        # geometric fallback. Wall times named for tools/deterministic_compare.py's WALL_KEY; a deterministic run
+        # has no learned result (the oracle masks), so none of the three is there.
+        entry.update(self._model_times(work))
         if job["kind"] == "drive":
             entry["tick"] = job["record"]["tick"]
         if status == "applied":
             self.applied += 1
             entry["order"] = self.applied
         self.log.append(entry)
+
+    @staticmethod
+    def _model_times(work) -> dict:
+        got = getattr(work, "proposer_result", None)
+        if got is None:
+            return {}
+        return {"model_ms": got.get("ms"),
+                "infer_wall_s": None if got.get("infer_ms") is None else got["infer_ms"] / 1e3,
+                "model_source": got.get("source")}
+
+    def _late(self, job: dict, status: str, payload) -> None:
+        """A call of an ended mission that finished after its end (noted in_flight there): its times are kept --
+        the 200 ms share would otherwise lose the slow calls a mission end catches (Codex, learned VRAM plan 3.1)."""
+        if status != "done":
+            return
+        times = self._model_times(payload)
+        if times:
+            self.late.append({"mission": job.get("mission"), "seq": job["seq"], "kind": job["kind"],
+                              "request_mono": job["submitted"], **times})
 
     def _end(self, why: str) -> None:
         h = self.handle
@@ -673,7 +701,8 @@ class LiveFar:
             failure, self.error = self.error, None
         for job, status, payload in self.worker.poll():
             if job.get("mission") != self.mission_id:
-                continue  # an ended mission's late result: accounted at its end (in flight), never applied
+                self._late(job, status, payload)  # never applied; noted in flight at its mission's end
+                continue
             mine = self.handle is not None and job["seq"] == self.handle.seq
             if status == "dropped":
                 why = payload
@@ -686,7 +715,7 @@ class LiveFar:
             elif job["leg"] != self.rt.leg:
                 why = "leg"
             elif status == "error":
-                self._note(job, "error", f"{type(payload).__name__}: {payload}")
+                self._note(job, "error", f"{type(payload).__name__}: {payload}")  # no result: no model times
                 if mine:
                     self._end("error")
                 failure = failure or payload
@@ -694,16 +723,16 @@ class LiveFar:
             else:
                 why = None
             if why is not None:
-                self._note(job, "dropped", why)
+                self._note(job, "dropped", why, work=payload if status != "dropped" else None)
                 if mine:
                     self._end(why)
                 continue
             if job["kind"] == "drive":
                 self.rt.drive_apply(job, payload)
-                self._note(job, "applied")
+                self._note(job, "applied", work=payload)
             else:
                 obs, rec = self.rt.stop_apply(job, payload)
-                self._note(job, "applied")
+                self._note(job, "applied", work=payload)
                 self.handle.state, self.handle.result = "done", (obs, rec)
                 self.handle.decided = float(self.clock())  # judged against the wait limit (stop_state)
                 self.rt.stop_pending = False
@@ -741,9 +770,10 @@ class LiveFar:
     def start_mission(self, mission_id, *, zone_centre_xy, zone_radius_m: float, out_dir: Path | None) -> None:
         self.clear("mission")
         for job, status, payload in self.worker.poll():  # an earlier mission's, accounted at its end (in flight)
-            pass
+            self._late(job, status, payload)
         self.handle, self.error, self.mission_id = None, None, mission_id
         self.log, self.record_errors, self.applied = [], [], 0
+        # self.late is not reset: a late call is reported in the record of the mission during which it came in
         self.rt.reset_for_mission(zone_centre_xy=zone_centre_xy, zone_radius_m=zone_radius_m, out_dir=out_dir)
 
     def _write(self, path: Path, arrays: dict) -> None:
@@ -772,8 +802,13 @@ class LiveFar:
         for job in waiting:
             self._note(job, "dropped", "mission_end")
         for job, status, payload in done:
-            if job.get("mission") == self.mission_id:
-                self._note(job, "dropped", "mission_end" if status != "dropped" else payload)
+            if job.get("mission") != self.mission_id:
+                self._late(job, status, payload)  # an earlier mission's call that finished after its end
+            else:
+                if status == "dropped":
+                    self._note(job, "dropped", payload)
+                else:
+                    self._note(job, "dropped", "mission_end", work=payload if status != "error" else None)
         if running is not None and running.get("mission") == self.mission_id:
             self._note(running, "in_flight", "mission_end")  # an earlier mission's was accounted at its own end
         self._end("mission_end")
@@ -781,6 +816,7 @@ class LiveFar:
             return None
         out = self.summary()
         out["live"]["record_errors"] = self.record_errors
+        self.late = []  # each late call in one mission's record: the first one ended after it came in
         self.mission_id = None
         return out
 
@@ -807,10 +843,17 @@ class LiveFar:
             key = j["status"] if j["status"] != "dropped" else f"dropped:{j['why']}"
             counts[key] = counts.get(key, 0) + 1
         return {**self.rt.summary(), "live": {"mission_id": self.mission_id, "jobs": list(self.log), "counts": counts,
-                                              "record_errors": list(self.record_errors)}}
+                                              "record_errors": list(self.record_errors),
+                                              **({"late_calls": list(self.late)} if self.late else {})}}
 
-    def close(self) -> None:
+    def close(self) -> list:
+        """Ends the worker; the calls that finished after their mission's end and reached no mission's record (the
+        session's last mission, or a result the worker finishes while closing) come back for the run's result."""
         self.worker.close()
+        for job, status, payload in self.worker.poll():
+            self._late(job, status, payload)
+        late, self.late = list(self.late), []
+        return late
 
 
 class GuardedSession:
