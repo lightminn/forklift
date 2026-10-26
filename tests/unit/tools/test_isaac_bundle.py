@@ -1387,3 +1387,9 @@ def test_a_watched_run_s_silence_is_measured_without_a_stall_limit(tmp_path):
     summary = bundle(tmp_path, [quiet], stall_s=None, stall_check_s=0.1, stack_match=None)
     r = results(tmp_path)["measured"]
     assert r["status"] == "ended" and r["silence_max_s"] >= 0.5 and summary["stalled"] == 0
+
+
+def test_the_pace_stall_default_clears_healthy_silences():
+    # escb (2026-10-26) stepped back four times on 36.6-42.5 s without a tick in runs that were at pace
+    import inspect
+    assert inspect.signature(ib.run_bundle).parameters["pace_stall_s"].default == 120.0

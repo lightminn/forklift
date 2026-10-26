@@ -925,7 +925,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                shard_mib=SHARD_MIB, session_vram_mib=SESSION_VRAM_MIB, vram_probe=None, vram_period_s=1.0,
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
-               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
+               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
                diag_wait_s=60.0, no_runner_s=900.0,
@@ -1525,7 +1525,9 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=540.0,
                     help="a run is judged from this age: its start-up (~240 s) plus a window")
     ap.add_argument("--pace-period-s", type=float, default=60.0)
-    ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    # 120 s: healthy live runs went 36-42 s without a tick (escb 2026-10-26: four back-offs at 36.6-42.5 s; rcq up
+    # to 41 s), so 30 s took a session away from bundles that were at pace; a real hang is the stall watchdog's
+    ap.add_argument("--pace-stall-s", type=float, default=120.0)
     ap.add_argument("--pace-stall-warmup-s", type=float, default=240.0,
                     help="a run's stalls are judged from this age (its pace from --pace-warmup-s)")
     ap.add_argument("--pace-confirm", type=int, default=2,
