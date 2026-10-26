@@ -8902,7 +8902,11 @@ def drive(S, isaac) -> None:
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
             if far_live is not None:
-                far_live.close()  # after the last mission's far record is closed (Codex impl round 2 P2)
+                # after the last mission's far record is closed (Codex impl round 2 P2); calls that finished after
+                # their mission ended and reached no record go in the run's (learned VRAM plan 3.1)
+                late_ = far_live.close()
+                if late_:
+                    state.setdefault("far_late_calls", []).extend(late_)
             live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
             live.settle_records()  # a records write failure on its result before the results are taken (U29)
             state.update({"success": True, "mission_results": live.results.message()["results"],
@@ -9198,7 +9202,10 @@ def drive(S, isaac) -> None:
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["async_plan_worker_close_error"] = repr(exc_)
             if locals().get("far_live") is not None:
-                far_live.close()  # the far worker ends with the run, however it ends (idempotent)
+                # the far worker ends with the run, however it ends (idempotent; a second close returns nothing)
+                late_ = far_live.close()
+                if late_:
+                    state.setdefault("far_late_calls", []).extend(late_)
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)
