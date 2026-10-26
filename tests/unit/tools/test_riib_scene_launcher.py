@@ -101,6 +101,14 @@ def test_the_restart_confirmation_takes_three_scans_unless_turned_off(tmp_path):
     assert contains(args_of(dry_run(tmp_path, RESTART_CONFIRM="0")), ["--restart-confirm-scans", "0"])
 
 
+def test_the_d7_reapproach_hold_is_on_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-25-reapproach-slam-hold.md V5 (registered in plan 2a: scene launchers on, runner off)
+    assert contains(args_of(dry_run(tmp_path)), ["--d7-reapproach-hold", "on"])
+    assert " D7_HOLD=on " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, D7_HOLD="off")), ["--d7-reapproach-hold", "off"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--d7-reapproach-hold", "on"])
+
+
 def test_the_keepout_can_be_turned_on(tmp_path):
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.15")), ["--lidar-keepout-m", "0.15"])
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
@@ -145,7 +153,7 @@ def test_the_odometry_is_the_joint_angle_model_by_default_with_its_age_table(tmp
 @pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
-                                 {"ESCAPE_START": "maybe"},
+                                 {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)
