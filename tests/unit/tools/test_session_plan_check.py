@@ -204,7 +204,7 @@ def test_the_session_check_hands_the_planners_directions_to_the_arcs(tmp_path):
 
 
 def test_the_keepout_reaches_the_planners_and_the_tall_props_gap_is_recorded(tmp_path):
-    # docs/validation/2026-10-25-ct1-session-keepout.md: a slot marker taller than the LiDAR plane beside the return
+    # docs/validation/2026-10-27-ct1-keepout.md: a slot marker taller than the LiDAR plane beside the return
     path = _session(tmp_path, n=1)
     record = json.loads(path.read_text())
     record["static_props"] = [{"asset": {"uri": "riibotics:slot_marker", "length_m": 0.9, "width_m": 0.03,

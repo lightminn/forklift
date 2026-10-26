@@ -268,7 +268,7 @@ def plan_mission(session, pallet, geometry, config, targets, slots: dict, pid: s
         entry["stages"][name] = {"nearest": nearest, **({} if nearest is None else clear[nearest]), "all": clear}
         # The props the LiDAR sees (taller than its plane): the planned outline's gap to their true size, which the
         # obstacle layer paints wider -- a record beside the outcome (the return_home stall at a slot marker,
-        # docs/validation/2026-10-25-ct1-session-keepout.md), not part of it.
+        # docs/validation/2026-10-27-ct1-keepout.md), not part of it.
         tall = {f"tall:{i}": p_.rectangle for i, p_ in enumerate(session.static_props)
                 if p_.asset.height_m > LIDAR_PLANE_M}
         if tall:
