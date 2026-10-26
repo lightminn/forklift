@@ -76,6 +76,12 @@
 ## 실행 위치
 
 - ws1 `test_runs/live/osbb_a9d4c4df_*`, `osbb_bundle`(요약 `osbb_bundle/osbb_sum.py`), 스냅숏 `snapshots/osb_a9d4c4df`, 재생 게이트 `test_runs/replay_gate/osb_d6fd3c27`.
+- 보관(2026-10-27 ws1 정리, ws1 원본은 정리됨): `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 에 있다. 묶음마다 `.tar.zst`·`.files.tsv`·`.tar.zst.md5` 가 함께 있다.
+  - `c27_01`: 스냅숏 `osb_a9d4c4df`·`osb_d6fd3c27`·`obm_5e8b8926`
+  - `c27_03`–`c27_06`: 실행 `osbb_a9d4c4df_*` 16 개
+  - `c27_06`: `osbb_bundle`, 재생 게이트 `osb_d6fd3c27`·`obm_5e8b8926`
+  - 계획서 1 장이 인용한 `lf_67694d16_*` 는 `c27_02`·`c27_07`(스냅숏 `lf_67694d16` 포함)에 있다.
+  - `rh_5d280e80_*` 는 `gdrive:forklift-archive/ws1-cleanup-20261027-d/` 로 보관 중이다(ws1 원본 유지).
 
 ## 자체 검토
 
