@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --gres=shard:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --mem=7G
 #SBATCH --time=02:30:00
 #SBATCH --signal=B:TERM@120
 # A SLAM survey epoch (docs/plans/2026-10-20-slam-localization-session.md L2, S2): one epoch of the console's live
@@ -29,6 +29,12 @@ OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
+# The SLAM odometry's encoders (plan 2026-10-25-team-spec-default, lead decision): the joint-angle model by default,
+# reported on request (its own baselines; never mixed with the default's), nothing else (no other age table).
+ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
+case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
+D7_HOLD=${D7_HOLD:-on}  # the console's runner reads it: a TOUR has no D7 docking, a CYCLE survey holds as the console does
+case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 JOB=${SLURM_JOB_ID:-local$$}
 # the survey's mapping params, relative to the repository (the bridge container sees it under /workspace)
 MAP_PARAMS=${MAP_PARAMS:-ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml}
@@ -44,7 +50,8 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
   printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
   printf 'SCENE_FILE=\n'  # the console's runner word for word: the factory hall
-  printf 'ENCODER_MODEL=%q\n' "${ENCODER_MODEL:-reported}"  # the console's runner reads it (reported unless set)
+  printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"  # the console's runner reads it
+  printf 'D7_HOLD=%q\n' "$D7_HOLD"
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -91,7 +98,7 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
   --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
-  --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
+  --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \
   --output "$2/run" > "$2/run.log" 2>&1
 EOT

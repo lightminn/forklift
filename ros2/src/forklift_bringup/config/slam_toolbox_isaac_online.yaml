@@ -49,7 +49,7 @@ slam_toolbox:
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 1.5
-    loop_search_maximum_distance: 3.0
+    loop_search_maximum_distance: 1.5   # CHANGED from 3.0: slam_link_failed mitigation (docs/plans/2026-10-25-slam-link-failed.md 6.2)
     do_loop_closing: true
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
@@ -60,9 +60,9 @@ slam_toolbox:
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
 
-    loop_search_space_dimension: 8.0
-    loop_search_space_resolution: 0.05
-    loop_search_space_smear_deviation: 0.03
+    loop_search_space_dimension: 4.0   # CHANGED from 8.0: same mitigation -- keyframe cost still grows, ~1/8 as fast; not a fix
+    loop_search_space_resolution: 0.10   # CHANGED from 0.05: same mitigation
+    loop_search_space_smear_deviation: 0.05   # CHANGED from 0.03: karto needs >= resolution / 2
 
     distance_variance_penalty: 0.5
     angle_variance_penalty: 1.0

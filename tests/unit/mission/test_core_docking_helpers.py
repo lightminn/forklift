@@ -514,3 +514,60 @@ def test_a_real_time_match_redraws_the_straight_from_where_the_truck_stands_when
     w.core.jobs.answers[1] = (True, {"result": match, "wall_s": 1.1})
     w.core.job_hold(13.3, np.array([8.015, 0.005, 0.0]), 0.0, False)
     assert starts == [pytest.approx((8.015, 0.005, 0.0))]
+
+
+@dataclass(frozen=True)
+class KappaConfig:
+    clearance_m: float = 0.3
+    curvature_limit_inv_m: float = 0.29
+
+
+def test_without_the_reapproach_options_the_reapproach_keeps_its_planner_and_tracker_settings(tmp_path):
+    """Leg-failures plan B1/B2 (2026-10-25): both options None -- the re-approach plans with the planner config
+    itself, and its dry run and its tracker take the docking stop config unchanged."""
+    w = World(tmp_path, docking={"previous_goal": [9.0, 0.0, 0.0], "goal_frame": "held"},
+              plans=[(leg(1.1, 6.0), {"status": "success"})])
+    w.core.options.planner_config = KappaConfig()
+    w.core.start_docking_retry(40.0, "c", "transport_recovery_after_docking")
+    _, args, _ = [c for c in w.calls if c[0] == "plan_docking_reapproach"][0]
+    assert args[3] is w.core.options.planner_config
+    (rolled,) = [c[1][0] for c in w.calls if c[0] == "rollout"]
+    assert rolled == w.core.docking_stop_config() and rolled.cruise_speed_mps == 0.5
+    assert w.core.trackers["transport"].config == rolled
+
+
+def test_the_reapproach_options_cap_only_its_curvature_and_its_cruise(tmp_path):
+    """B1: the re-approach plans at min(the config's curvature limit, the option); B2: its dry run and its installed
+    tracker follow at min(the cruise, the option) -- one config for both; the docking stop's own tolerances and the
+    round-two stop (docking_stop_config) are unchanged."""
+    w = World(tmp_path, docking={"previous_goal": [9.0, 0.0, 0.0], "goal_frame": "held"},
+              plans=[(leg(1.1, 6.0), {"status": "success"})])
+    w.core.options.planner_config = KappaConfig()
+    w.core.options.d7_reapproach_curvature_inv_m = 0.24
+    w.core.options.d7_reapproach_cruise_mps = 0.15
+    w.core.start_docking_retry(40.0, "c", "transport_recovery_after_docking")
+    _, args, _ = [c for c in w.calls if c[0] == "plan_docking_reapproach"][0]
+    assert args[3] == KappaConfig(curvature_limit_inv_m=0.24)
+    (rolled,) = [c[1][0] for c in w.calls if c[0] == "rollout"]
+    assert (rolled.cruise_speed_mps, rolled.position_tolerance_m, rolled.yaw_tolerance_rad) == (0.15, 0.03, 0.05)
+    assert w.core.trackers["transport"].config == rolled
+    assert w.core.docking_stop_config().cruise_speed_mps == 0.5
+    # a larger option never raises either limit
+    w = World(tmp_path, plans=[(leg(1.0, 3.0), {"status": "success"})])
+    w.core.options.planner_config = KappaConfig()
+    w.core.options.d7_reapproach_curvature_inv_m = 0.5
+    w.core.options.d7_reapproach_cruise_mps = 9.0
+    w.core.reapproach_plan((1.0, 2.0, 0.0), (7.5, 0.0, 0.0))
+    _, args, _ = [c for c in w.calls if c[0] == "plan_docking_reapproach"][0]
+    assert args[3] == KappaConfig()
+    (rolled,) = [c[1][0] for c in w.calls if c[0] == "rollout"]
+    assert rolled.cruise_speed_mps == 0.5
+
+
+def test_an_obstacle_replan_during_a_reapproach_takes_the_capped_curvature_too(tmp_path):
+    w = World(tmp_path, docking={"reapproach": True, "previous_goal": [9.0, 0.0, 0.0]},
+              plans=[(leg(1.0, 6.0), {"status": "success"})])
+    w.core.options.d7_reapproach_curvature_inv_m = 0.24
+    w.core.transport_replan(Pose2D(1.0, 2.0, 0.0), KappaConfig(curvature_limit_inv_m=0.27), None)
+    _, args, _ = [c for c in w.calls if c[0] == "plan_docking_reapproach"][0]
+    assert args[3] == KappaConfig(curvature_limit_inv_m=0.24)

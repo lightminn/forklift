@@ -593,6 +593,17 @@ def configure_drives(
             # Cause separation E (diagnostic, --steering-probe only): a null control -- the combine mode
             # applies only between two compliant materials, so against the rigid floor nothing changes.
             tyre_physx.CreateDampingCombineModeAttr("max")
+    # Slip check plan (diagnostic): a pallet-only material with its own friction, so a carried load can slide on the
+    # forks (the real-slip counterexample). Combined by "min" against the forks' material -- PhysX averages two
+    # materials by default, which would keep half the forks' friction. Off unless a settings file sets it.
+    pallet_material = None
+    if settings.get("pallet_contact_friction") is not None:
+        pallet_material = UsdShade.Material.Define(stage, "/World/PalletContactMaterial")
+        pallet_api = UsdPhysics.MaterialAPI.Apply(pallet_material.GetPrim())
+        pallet_api.CreateStaticFrictionAttr(float(settings["pallet_contact_friction"]))
+        pallet_api.CreateDynamicFrictionAttr(float(settings["pallet_contact_friction"]))
+        pallet_api.CreateRestitutionAttr(0.0)
+        PhysxSchema.PhysxMaterialAPI.Apply(pallet_material.GetPrim()).CreateFrictionCombineModeAttr("min")
     collision_counts = {}
     for root_path in roots:
         collision_counts[root_path] = 0
@@ -603,8 +614,10 @@ def configure_drives(
                 contact.CreateContactOffsetAttr(0.002)
                 contact.CreateRestOffsetAttr(0.0)
                 tyre = tyre_material is not None and root_path == "/World/Forklift" and "_tire_collision" in str(prim.GetPath())
+                load = pallet_material is not None and root_path in pallet_roots
                 UsdShade.MaterialBindingAPI.Apply(prim).Bind(
-                    tyre_material if tyre else physics_material, UsdShade.Tokens.strongerThanDescendants, "physics"
+                    pallet_material if load else tyre_material if tyre else physics_material,
+                    UsdShade.Tokens.strongerThanDescendants, "physics"
                 )
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
                 physics = PhysxSchema.PhysxArticulationAPI.Apply(prim)

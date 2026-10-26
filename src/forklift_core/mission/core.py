@@ -62,6 +62,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from forklift_core import determinism
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.baseline import start_digest
@@ -622,7 +623,7 @@ class MissionCore:
                         path_ahead=leg_now, loaded=loaded, direction=leg_dir_now,
                     )
             start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
-            obstacle["deadline"] = hooks.wall() + 20.0
+            obstacle["deadline"] = hooks.wall() + determinism.budget(20.0)  # the cap in a deterministic run (D6)
             if self.jobs is not None and (self.pending is not None or (slam is not None
                                                                        and slam.get("pending_release") is not None)):
                 # Real-time plan D8b: one plan waited for at a time; a pending SLAM release goes first (its own
@@ -1179,6 +1180,11 @@ class MissionCore:
         low[ms.phase] = min(low.get(ms.phase, float("inf")), allowed)
         acting, docking_straight = self.permission_acting()
         pocket_phase = options.pocket_check and (ms.phase == "insert" or (ms.phase == "approach" and docking_straight))
+        gate_only = False
+        if int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and acting and not pocket_phase:
+            # docs/plans/2026-10-25-restart-confirmation.md: on the permission's own limit only (before the pocket
+            # check and the D4 path-blocked stop); off, nothing is read
+            allowed, why, gate_only = self._restart_gate(t, allowed, why)
         if pocket_phase:
             # D5: the approach straight and the insertion run under the
             # permission too; inside the pallet region the depth check
@@ -1288,10 +1294,12 @@ class MissionCore:
             and ms.phase in ("observe", "transport", "return_home")
             and ((allowed == 0.0 and why == "occupied") or cusp_prefix_blocked_)
             and stopped_now
+            and not gate_only
         ):
             obstacle["blocked_ticks"] = obstacle.get("blocked_ticks", 0) + 1
-        else:
+        elif not gate_only:
             obstacle["blocked_ticks"] = 0
+        # (a restart-confirmation tick neither counts nor resets the blocked stop: the raw limit allowed a restart)
         progress_left = trackers[ms.phase].remaining_to_goal_m()
         watch = obstacle.setdefault("progress", {})
         if watch.get("phase") != ms.phase or not acting or progress_left < watch["best_m"] - 1.0:
@@ -1300,11 +1308,11 @@ class MissionCore:
             not (options.grid_planning and acting and self.commands.work_elapsed(watch["since_s"], t) > 60.0),
             f"obstacle_no_progress in {ms.phase}",
         )
-        self.permit_stop_tick(t, rear, allowed, why, acting)
+        self.permit_stop_tick(t, rear, allowed, why, acting, gate_only=gate_only)
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
-    def permit_stop_tick(self, t: float, rear, allowed: float, why: str, acting: bool) -> None:
+    def permit_stop_tick(self, t: float, rear, allowed: float, why: str, acting: bool, *, gate_only: bool = False) -> None:
         """P6 (docs/plans/2026-10-23-planner-permission-clearance.md 3 P6): a scene layout's travel leg the acting
         permission holds at zero for an occupied cell ``PERMIT_STOP_S`` (work time) raises the scene-mode replan
         device's ``permit_stop`` request -- the cells it blocks on, read when the device plans, as obstacles and the
@@ -1329,6 +1337,20 @@ class MissionCore:
             self.permit_stop_since = None
             return
         last_ = self.permit_stop_since
+        if gate_only:
+            # docs/plans/2026-10-25-restart-confirmation.md R2: the raw limit allowed a restart and only the
+            # confirmation held the wheels -- the watch pauses: this tick's work time is kept apart and taken off the
+            # held time (its start stays: the work clock skips pauses and plan waits, so moving the start by a
+            # tick's work time would not take off the same amount, Codex plan re-review P2), neither counting this
+            # tick nor starting over. Only a live stretch pauses: the watch's own checks (eligibility above, the
+            # leg and tracker, a gap) come first, and a stretch they end starts again on the next real zero (Codex
+            # implementation review P2).
+            if last_ is None or last_["key"] != key_ or t - last_["last_s"] > PERMIT_STOP_GAP_S:
+                self.permit_stop_since = None
+                return
+            last_["gate_s"] = last_.get("gate_s", 0.0) + self.commands.work_elapsed(last_["last_s"], t)
+            last_["last_s"] = t
+            return
         if last_ is None or last_["key"] != key_ or t - last_["last_s"] > PERMIT_STOP_GAP_S:
             # A new stretch: the first tick, another leg or tracker (a replan installed one), or a gap in the watch's
             # ticks -- the device owning them, a pause (Codex implementation review P3).
@@ -1336,7 +1358,7 @@ class MissionCore:
             return
         last_["last_s"] = t
         since_ = last_["since_s"]
-        held_ = self.commands.work_elapsed(since_, t)
+        held_ = self.commands.work_elapsed(since_, t) - last_.get("gate_s", 0.0)
         if held_ < PERMIT_STOP_S - 1e-9:
             return
         self.permit_stop_since = None
@@ -1346,6 +1368,9 @@ class MissionCore:
             # Read when the device plans (after its release and re-projection): the leg ahead and the stop arc
             # checked again on the snapshot of that moment (Codex implementation review P2).
             tr_ = self.trackers.get(phase_)
+            esc_ = self.scene_escape
+            if esc_ is not None and tr_ is not None and esc_.get("tracker") is tr_:
+                tr_ = esc_["leg_tracker"]  # after an escape: the leg it left, not the escape (Codex review P2-3)
             leg_, dir_ = tr_.leg_ahead() if tr_ is not None else (np.zeros((0, 3)), -1)
             return current_blocked_rectangles(
                 layer_, rear=hooks_.rear(), leg=leg_, direction=int(dir_) or -1, loaded=bool(hooks_.loaded()),
@@ -1428,12 +1453,12 @@ class MissionCore:
         tight_travel = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
         # One shared 20 s budget for the whole replan (plan D3):
         # retries and other candidates included.
-        obstacle["deadline"] = wall() + 20.0
+        obstacle["deadline"] = wall() + determinism.budget(20.0)  # the cap in a deterministic run (D6)
         if ms.phase == "observe" and obstacle.get("pickup_estimate") is not None:
             # After recognition half the shared budget goes to this leg,
             # the rest to the mission replan below if it fails
             # (Codex checkpoint P2: one 20 s budget for the whole replan).
-            obstacle["deadline"] = replan_start + 10.0
+            obstacle["deadline"] = replan_start + determinism.budget(10.0)
         if ms.phase == "observe":
             target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
             replanned = plan_observation_leg(
@@ -1556,7 +1581,7 @@ class MissionCore:
             # The pallet, not the waypoint, is the goal: plan the
             # mission again from here, and its final straight gives the
             # new waypoint. The rest of the shared budget.
-            obstacle["deadline"] = replan_start + 20.0
+            obstacle["deadline"] = replan_start + determinism.budget(20.0)
             planning_trace = []
             mission_again = plan_transport(
                 grid_world(scenario), planner_config, geometry=geometry,
@@ -1706,6 +1731,8 @@ class MissionCore:
             obstacle["replans"][-1]["same_path"] = True
             obstacle.setdefault("replan_wait", {}).pop(ms.phase, None)
             requested_speed = 0.0
+            if ms.phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
+                self.hold_reapproach(t, paths["transport"].length_m)  # re-approach hold plan H1 (Codex round 1 P2-1)
         else:
             # D4: a replan may rightly be longer (a detour), so the
             # no-progress watch restarts on the new path; the
@@ -1735,6 +1762,8 @@ class MissionCore:
                 realign_install("obstacle_replan")  # Plan D8 S4c-3 stage 2
             if ms.phase == "transport" and slam is not None and not slam["docking"].get("reapproach"):
                 arm_docking()
+            if ms.phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
+                self.hold_reapproach(t, replanned.length_m)  # re-approach hold plan H1 (Codex round 1 P2-1)
             ms.phase_started = t
             requested_speed = 0.0
         return SimpleNamespace(rear=rear, requested_speed=requested_speed)
@@ -1917,6 +1946,24 @@ class MissionCore:
             # Plan 2026-10-24-goal-creep-stall R1: the creep at the "remaining 0" rules' own zero -- a zero command
             # (status kept) lets the stop detector see the stop and those rules take it.
             tracking = replace(tracking, speed_mps=0.0)
+        # Re-approach hold plan E1: an exit due brakes the truck (unless it arrived); standing, the exit runs before
+        # the docking stop and the stall rules below (a stall needs a tracking status, which braking is not)
+        hold_exit_ = self.reapproach_hold_exit_due(t) if d7_owned else None
+        if hold_exit_ is not None and tracking.status != "arrived":
+            if slam["stop_now"]:
+                self.reapproach_hold_exit(t, hold_exit_)
+                rear = slam_rear(t)
+                hooks.set_rear(rear)  # the runner's closures read its rear (Codex slice-3 P2)
+                slam["control"][-1][1:4] = rear.tolist()
+                tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+                ms.last_tracking = tracking
+                ms.slam_stall_ticks = 0
+                # this tick's creep verdict and dock wait were the old path's (Codex implementation round 1 P2); the
+                # creep watch itself starts over on the new tracker (it is keyed on it)
+                creep_ = None
+                ms.dock_stop_ticks = 0
+            else:
+                tracking = replace(tracking, status="braking", speed_mps=0.0)
         dock_stop = (
             ms.phase == "transport"
             and d7_docking_.get("status") == "armed"
@@ -2820,7 +2867,7 @@ class MissionCore:
                                          start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))))
         payload = {"world": world, "waypoints": waypoints, "config": options.planner_config,
                    "geometry": self.geometry, "pickup_bounds": self.observe_bounds(), "grid_kwargs": grid,
-                   "ladders": (False,), "deadline": time.monotonic() + max(1, len(waypoints)) * 20.0}
+                   "ladders": (False,), "deadline": determinism.deadline(max(1, len(waypoints)) * 20.0)}
         self._request("observe_failed", "observe_ladder", payload, t, rear, self._applied_now(), dict(ctx))
 
     def _observe_failed_finish(self, p, value, t: float, rear) -> None:
@@ -4465,14 +4512,26 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
-        self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         acting = False
+        gate_applies_ = False
         if ms.phase in trackers:
             acting, docking_straight = self.permission_acting()
+            pocket_now_ = bool(options.pocket_check and (
+                ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
+            gate_applies_ = acting and not pocket_now_  # the confirmation's own scope (R1), as in permission()
             # D5: the approach straight and the insertion act too (as in the permission tick) -- their pocket
             # work does not run while paused, the layer's own cap does.
-            acting = acting or bool(options.pocket_check and (
-                ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
+            acting = acting or pocket_now_
+        gate_ = self.__dict__.get("_restart_confirm")
+        if (gate_ is not None and int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and gate_.armed
+                and gate_applies_ and gate_.key == (ms.phase, id(trackers.get(ms.phase)))):
+            # R1: a plan wait reads the permission at the standing direction -- no confirmation, the count over;
+            # only this leg's own confirmation, and only where it applies (not the pocket or docking stretch,
+            # Codex implementation review P2)
+            gate_.observation_gap(self._clearing_scans())
+            if allowed > 0.0:
+                allowed, why = 0.0, "occupied"
+        self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and acting) else None
         return SimpleNamespace(allowed=allowed, why=why, acting=acting,
                                obstacle_hold=bool(options.obstacle_act and acting and allowed == 0.0))
@@ -4869,6 +4928,25 @@ class MissionCore:
         warming = slam is not None and not slam_may_drive(slam)
         return SimpleNamespace(releasing=releasing, warming=warming, rear=rear)
 
+    def _clearing_scans(self) -> dict:
+        """The newest scan stamp of each obstacle sensor that may clear cells (restart confirmation, R1)."""
+        layer = self.obstacle["layer"]
+        return {sensor.name: float(layer.last_scan_s.get(sensor.name, -math.inf))
+                for sensor in layer.sensors if sensor.may_clear}
+
+    def _restart_gate(self, t: float, allowed: float, why: str):
+        """(allowed, why, gate_only) through this leg's restart confirmation (R1), its record kept in the obstacle
+        state."""
+        from forklift_core.control.restart_confirm import RestartConfirm
+
+        gate = self.__dict__.get("_restart_confirm")
+        if gate is None:
+            gate = self._restart_confirm = RestartConfirm(int(self.options.restart_confirm_scans))
+        key = (self.ms.phase, id(self.trackers.get(self.ms.phase)))
+        out = gate.step(key, allowed, why, self._clearing_scans())
+        self.obstacle["restart_confirm"] = gate.record()
+        return out.allowed_mps, out.why, out.gate_only
+
     LOW_CLEARANCE_PHASES = ("observe", "approach", "insert", "extract", "transport", "withdraw", "return_home",
                             "recover_withdraw", "clear_out")
 
@@ -4993,6 +5071,9 @@ class MissionCore:
             cap_ = getattr(self, "_low_clearance_cap", None)
             # the guard's zero cap is a hold: wheels to zero, steering held (Codex round 4 P2-3)
             obstacle_hold = obstacle_hold or (cap_ is not None and cap_[0] == t and cap_[1] == 0.0)
+        escape_stop_ = (getattr(options, "escape_start_release", "off") == "on"
+                        and getattr(self, "_escape_guard_stop_t", None) == float(t))
+        obstacle_hold = obstacle_hold or escape_stop_  # a released escape stopped: a hold, then a step to zero
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
             requested_speed = 0.0
@@ -5031,6 +5112,8 @@ class MissionCore:
                 wheel_speed = self._low_clearance_capped(t, wheel_speed)
             if estop_holding or safety_hold:
                 wheel_speed = 0.0
+            if escape_stop_:
+                wheel_speed = 0.0  # a released escape's guard stopped it: the same step as the e-stop's
             state["command_speed"] = wheel_speed
         elif getattr(options, "low_clearance_guard", "off") == "on":
             # no slew without the obstacle layer: the guard's cap as a step (plan D4)
@@ -5322,6 +5405,23 @@ class MissionCore:
         base_ = slam.get("transport_config", trackers["transport"].config)
         return replace(base_, position_tolerance_m=0.03, yaw_tolerance_rad=0.05)
 
+    def reapproach_tracker_config(self):
+        """Leg-failures plan B2 (docs/plans/2026-10-25-leg-failures.md): the D7 re-approach's dry run and its tracker
+        -- the docking stop's, its cruise capped at ``d7_reapproach_cruise_mps`` when a launcher sets one (None: as
+        before). The round-two stop keeps docking_stop_config itself."""
+        base_ = self.docking_stop_config()
+        cap_ = getattr(self.options, "d7_reapproach_cruise_mps", None)
+        return base_ if cap_ is None else replace(base_, cruise_speed_mps=min(base_.cruise_speed_mps, float(cap_)))
+
+    def reapproach_planner_config(self, config):
+        """Leg-failures plan B1: the re-approach plans with its curvature limit capped at
+        ``d7_reapproach_curvature_inv_m`` when a launcher sets one -- a gentler S whose reversal the steering rate
+        follows (None: the config as given)."""
+        cap_ = getattr(self.options, "d7_reapproach_curvature_inv_m", None)
+        if cap_ is None:
+            return config
+        return replace(config, curvature_limit_inv_m=min(config.curvature_limit_inv_m, float(cap_)))
+
     def unaligned_delivery_check(self) -> None:
         """The delivery straight about to be driven with no accepted docking (docs/plans/2026-10-22-slot-anchored-
         neighbours.md 2.3): the runner's hook re-checks it as it was checked before slot anchors -- None, or the
@@ -5374,7 +5474,7 @@ class MissionCore:
         at the line start within the stop's tolerance."""
         time = self.hooks.time_module()  # the runner's time (the recorded Clock proxy when recording)
         bicycle_rollout = self.hooks.bicycle_rollout
-        docking_stop_config = self.docking_stop_config
+        docking_stop_config = self.reapproach_tracker_config  # B2: the tracker install_reapproach puts in
         geometry = self.geometry
         grid_kwargs = self.hooks.grid_kwargs
         grid_world = self.hooks.grid_world
@@ -5391,10 +5491,10 @@ class MissionCore:
             grid_world(slam.get("transport_scenario", scenario)),
             PlanningPose(*(float(v) for v in start_rear)),
             PlanningPose(*(float(v) for v in line)),
-            config if config is not None else planner_config,
+            self.reapproach_planner_config(config if config is not None else planner_config),
             geometry=geometry,
             keep_m=geometry.delivery_straight_m,
-            deadline=deadline_ if deadline_ is not None else SearchBudget(20.0),
+            deadline=deadline_ if deadline_ is not None else SearchBudget(determinism.budget(20.0)),
             **({"occupancy": grid_["occupancy"]} if "occupancy" in grid_ else {}),
         )
         record["planning_wall_s"] = time.monotonic() - planned_at
@@ -5413,7 +5513,7 @@ class MissionCore:
         at its end (no arm_docking: a re-approach may end on a reverse curve)."""
         path_record = self.hooks.path_record  # a runner module-level name
         add_path_display = self.hooks.add_path_display
-        docking_stop_config = self.docking_stop_config
+        docking_stop_config = self.reapproach_tracker_config  # B2: the config its dry run was accepted with
         geometry = self.geometry
         ms = self.ms
         obstacle = self.obstacle
@@ -5428,6 +5528,8 @@ class MissionCore:
         state["paths"]["transport"] = path_record(path)
         self.hooks.write_paths()
         add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
+        # the transport's own settings stay the base of later stops (B2's capped cruise is the re-approach's alone)
+        slam.setdefault("transport_config", trackers["transport"].config)
         trackers["transport"] = RearAxlePathTracker(
             path.poses, path.directions, path.curvatures_inv_m, docking_stop_config()
         )
@@ -5435,12 +5537,84 @@ class MissionCore:
             status="armed", round=1, keep_m=geometry.delivery_straight_m, reapproach=True,
             await_retry_match=True, retry_seed_goal=[float(v) for v in goal],
         )
+        self.hold_reapproach(t, path.length_m)  # re-approach hold plan H1 (off: nothing)
         if obstacle is not None:
             if obstacle.get("backoff", {}).get("phase") == "transport":
                 obstacle.pop("backoff")
             obstacle.setdefault("replan_wait", {}).pop("transport", None)
             obstacle.setdefault("progress", {}).clear()
         ms.phase_started = t
+
+    # Re-approach hold plan (docs/plans/2026-10-25-reapproach-slam-hold.md) E1 exits
+    REAPPROACH_HOLD_GAP_M = 0.12  # the delivery straight's lateral box (straight_from_pose max_lateral_m)
+    REAPPROACH_HOLD_GAP_RAD = 0.08  # and its yaw box (max_yaw_rad)
+    REAPPROACH_HOLD_TIME_S = 40.0  # work time; recorded re-approaches took 2.2-23.6 s
+
+    def hold_reapproach(self, t: float, length_m: float) -> None:
+        """Plan H1: hold the SLAM correction through a D7 re-approach (``--d7-reapproach-hold on``), from its install to
+        the retry match at the line start -- the correction steps it would otherwise follow stall it at a cusp. Not
+        once its docking spent the exits (``reapproach_hold_spent``), nor when the tracker is not tracking."""
+        slam = self.slam
+        if getattr(self.options, "d7_reapproach_hold", "off") != "on" or slam is None:
+            return
+        docking = slam["docking"]
+        if docking.get("reapproach_hold_spent") or slam["tracker"].mode != "tracking":
+            return
+        self.hold_slam(t, held_frame_pallet=False)
+        docking["reapproach_hold"] = {"since_s": float(t), "length_m": float(length_m)}
+        slam["holds"].append({"phase": self.ms.phase, "time_s": t, "event": "hold_reapproach",
+                              "length_m": float(length_m)})
+
+    def reapproach_hold_exit_due(self, t: float) -> str | None:
+        """Plan E1: why the re-approach hold must end now -- the received correction off the applied one by more than
+        the docking straight's box at this odometry (``correction_gap``), the hold's travel past max(2L, L + 2 m)
+        (``hold_travel``) or its work time past 40 s (``hold_time``); None while it may go on, or without one."""
+        slam = self.slam
+        if slam is None or self.ms.phase != "transport":
+            return None
+        docking = slam["docking"]
+        hold = docking.get("reapproach_hold")
+        tracker = slam["tracker"]
+        if hold is None or not docking.get("reapproach") or tracker.mode != "holding":
+            return None
+        if tracker.received is not None and tracker.applied is not None:
+            # both on the same present odometry, as release() applies it; the received stamp is a liveness time
+            odom = self.hooks.slam_odom_base()
+            got, now = compose(tracker.received[0], odom), compose(tracker.applied[0], odom)
+            gap_m = math.hypot(got[0] - now[0], got[1] - now[1])
+            gap_rad = abs(math.atan2(math.sin(got[2] - now[2]), math.cos(got[2] - now[2])))
+            if gap_m > self.REAPPROACH_HOLD_GAP_M or gap_rad > self.REAPPROACH_HOLD_GAP_RAD:
+                return "correction_gap"
+        length = hold["length_m"]
+        if tracker.hold_travel_m > max(2.0 * length, length + 2.0):
+            return "hold_travel"
+        if self.commands.work_elapsed(hold["since_s"], t) > self.REAPPROACH_HOLD_TIME_S:
+            return "hold_time"
+        return None
+
+    def reapproach_hold_exit(self, t: float, reason: str) -> None:
+        """Plan E1, the truck standing: release the hold (the goal and withdraw carried), then -- the docking's first
+        exit -- re-plan the re-approach from here and hold again, uncounted; a second exit leaves the hold and its
+        watch off until this docking ends (the end-of-leg hold as on main)."""
+        slam, state, geometry = self.slam, self.state, self.geometry
+        docking = slam["docking"]
+        used = int(docking.get("reapproach_hold_exits", 0))
+        docking["reapproach_hold_exits"] = used + 1
+        docking.pop("reapproach_hold", None)
+        event = {"trigger": "h", "time_s": t, "counted": False, "exit": reason, "exit_number": used + 1}
+        state.setdefault("docking_retries", []).append(event)
+        event["release"] = self.release_and_carry(t)
+        if used >= 1:
+            docking["reapproach_hold_spent"] = True
+            event["spent"] = True
+            return
+        goal = tuple(docking["previous_goal"])
+        line = self.options.DOCKING_RETRY.line_start(goal, geometry.delivery_straight_m)
+        start_now = self.hooks.slam_rear(t)
+        path, record = self.reapproach_plan(start_now, line)
+        event.update(goal=list(goal), line_start=list(line), start=[float(v) for v in start_now], plan=record)
+        self.hooks.require(path is not None, f"docking_retry_no_plan:{record.get('refused')}:{record.get('status')}")
+        self.install_reapproach(t, path, goal)
 
     def release_and_carry(self, t: float) -> dict:
         """Plan D7c: release a held correction; a goal still in the held frame moves
@@ -5862,6 +6036,7 @@ class MissionCore:
             return
         require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
         docking.pop("reapproach", None)  # plan D7c: a straight ends the re-approach
+        docking.pop("reapproach_hold", None)  # and the re-approach hold's watch (the hold stays the docking's)
         # The path being replaced, kept (paths.json holds only the latest): the transport search
         # path's cusps are judged from it (fork spacing plan, V5 cusp arrivals).
         state.setdefault("paths_replaced", []).append(
@@ -6744,35 +6919,44 @@ class MissionCore:
             out.update(ok=True, why="no_layer")
             return out
         strict_ = self._scene_permit_strict(tracker, leg_, uncut)
+        # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
+        zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
-            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_)
+            cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
+            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         return out
 
-    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
-        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
-        acting -- the transport's docking straight, the last delivery straight of the tracker permission_acting reads
-        -- so its unknown cells must be verified before it is installed. ``uncut``: the candidate's plan before
-        install's arm_docking, which cuts the tracker back to where the final straight keeps keep_m; the length it
-        cuts (measured, not the nominal keep -- the cut falls on a sample, Codex impl round 5 P2-1) widens the zone.
-        None: the tracker is the installed one, already cut. A return always has the permission."""
+    @staticmethod
+    def _poses_length(poses) -> float:
+        poses = np.asarray(poses, dtype=float)
+        return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
+
+    def _scene_zone_start_m(self, tracker, uncut=None) -> float | None:
+        """Leg-failures plan A1 (docs/plans/2026-10-25-leg-failures.md): how far along the candidate tracker the zone
+        the permission does not act on begins -- the transport's docking straight, the last delivery straight of the
+        tracker permission_acting reads. ``uncut``: the candidate's plan before install's arm_docking, which cuts the
+        tracker back to where the final straight keeps keep_m; the length it cuts (measured, not the nominal keep --
+        the cut falls on a sample, Codex impl round 5 P2-1) widens the zone. None: the tracker is the installed one,
+        already cut. A return has no such zone (None)."""
         if self.ms.phase != "transport":
-            return False
-
-        def length(poses):
-            poses = np.asarray(poses, dtype=float)
-            return float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
-
+            return None
         cut_ = 0.0
         docking_ = (self.slam or {}).get("docking") or {}
         if uncut is not None and docking_.get("status") in ("pending", "armed"):
             prefix_ = self.hooks.final_straight_prefix(uncut, docking_.get("keep_m", self.geometry.delivery_straight_m))
             if prefix_ is not None:
-                cut_ = length(uncut.poses) - length(prefix_.poses)
-        zone_ = cut_ + float(self.geometry.delivery_straight_m)
-        return float(tracker.remaining_to_goal_m()) - length(leg) <= zone_ + 1e-6
+                cut_ = self._poses_length(uncut.poses) - self._poses_length(prefix_.poses)
+        return float(tracker.remaining_to_goal_m()) - (cut_ + float(self.geometry.delivery_straight_m))
+
+    def _scene_permit_strict(self, tracker, leg, uncut=None) -> bool:
+        """Plan 2.1 step 6 (7판, Codex Isaac round 2 P2): whether the first gear leg reaches where the permission stops
+        acting, so its cells there must be verified before it is installed -- the leg's length reaching the zone start
+        (``_scene_zone_start_m``). A return always has the permission."""
+        zone_ = self._scene_zone_start_m(tracker, uncut)
+        return zone_ is not None and self._poses_length(leg) >= zone_ - 1e-6
 
     def _scene_ports(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's world this tick (plan 2.1)."""
@@ -6830,7 +7014,7 @@ class MissionCore:
                 else:
                     kind_, args_, extra_kw_ = "return", (grid_world(world_), start_, options.return_to_pose, cfg_), {}
                 worker_kw_ = {**kwargs_, **extra_kw_}  # the worker's planner is unbound: the exit prefix goes along
-                payload_ = {"kind": kind_, "args": args_, "kwargs": {**worker_kw_, "deadline": time.monotonic() + 20.0},
+                payload_ = {"kind": kind_, "args": args_, "kwargs": {**worker_kw_, "deadline": determinism.deadline(20.0)},
                             "retry_on": (), "tight_args": args_, "tight_kwargs": worker_kw_}
                 core._request("scene_replan", "leg", payload_, t, box.rear, core._applied_now(), ctx={})
                 return
@@ -6882,10 +7066,12 @@ class MissionCore:
                 (options.travel_config or options.planner_config).clearance_m)
             cell_ = float(layer_.snapshot.resolution_m) if layer_.snapshot is not None else 0.05
             kappa_now_ = float(hooks.held_kappa())
-            if getattr(options, "start_band_release", "off") == "on":
+            if (getattr(options, "start_band_release", "off") == "on"
+                    or getattr(options, "escape_start_release", "off") == "on"):
                 # start-band release (docs/plans/2026-10-24-start-band-release.md): the trigger's rectangles the stop
                 # already comes within the sweep pad of pass the sweep while it stays as far from them; the end's
-                # clearance still counts every rectangle
+                # clearance still counts every rectangle. --escape-start-release turns on this part alone, the
+                # permission keeping its own start rule (docs/plans/2026-10-25-escape-start-release.md E2)
                 near_, far_ = esc.start_band_rectangles(list(extra), footprint_, pose_)
                 sweep_checker_ = FootprintCollisionChecker(list(rects_) + far_, footprint_, bounds_)
             else:
@@ -6911,6 +7097,8 @@ class MissionCore:
                 state["scene_escape_candidates"][-1]["released"] = [
                     {"x_m": float(r_.x_m), "y_m": float(r_.y_m), "length_m": float(r_.length_m),
                      "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
+                if getattr(options, "escape_start_release", "off") == "on":
+                    core._escape_release_count("escapes_released")
             if choice_ is None:
                 return None
             poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
@@ -6920,11 +7108,26 @@ class MissionCore:
             state["scene_escape_candidates"][-1]["permit"] = permit_
             if not permit_["ok"]:
                 return None  # the prefix itself must start (Codex counterexample: an end clear, a start held at 0)
-            return poses_, int(choice_.direction), int(leg_dir_)
+            guard_ = None
+            if near_ and getattr(options, "escape_start_release", "off") == "on":
+                # docs/plans/2026-10-25-escape-start-release.md E4 (Codex plan review P2-1, P2-2): the released
+                # rectangles and the end criterion go with the escape, watched on the pose it is driven from
+                from forklift_core.control.start_release import footprint_rect_distance
+
+                guard_ = {"rects": list(near_), "d0": [float(footprint_rect_distance(pose_, footprint_, r_))
+                                                       for r_ in near_],
+                          "footprint": footprint_, "checker": checker_, "threshold_m": float(choice_.threshold_m),
+                          # the stop ahead of each watched pose (the escape's own speed), and what a correction
+                          # change re-expresses: the trigger's rectangles come from the grid (Codex re-review P2-2)
+                          "direction": int(choice_.direction), "stop_m": float(stop_len_),
+                          "scene": list(rects_), "extra": list(extra), "bounds": bounds_,
+                          "applied": tuple(float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0)))}
+            return poses_, int(choice_.direction), int(leg_dir_), guard_
 
         def escape_install(chosen):
-            poses_, direction_, leg_dir_ = chosen
-            config0_ = trackers[ms.phase].config
+            poses_, direction_, leg_dir_, guard_ = chosen
+            leg_tracker_ = trackers[ms.phase]
+            config0_ = leg_tracker_.config
             n_ = len(poses_)
             trackers[ms.phase] = RearAxlePathTracker(
                 poses_, np.full(n_, direction_, dtype=np.int8), np.zeros(n_),
@@ -6934,7 +7137,13 @@ class MissionCore:
             # The existing escape's ownership, so the permission acts on it every tick (Codex round 3 P2-2).
             obstacle["backoff"] = {"phase": ms.phase, "config": config0_, "time_s": float(t), "leg_dir": leg_dir_,
                                    "escape": True, "scene": True}
-            core.scene_escape = {"status": "running", "config": config0_, "zero_since": None}
+            # the leg it left: the P6 trigger's obstacles are found again on that leg, not on the escape (Codex plan
+            # review P2-3)
+            core.scene_escape = {"status": "running", "config": config0_, "zero_since": None,
+                                 "tracker": trackers[ms.phase], "leg_tracker": leg_tracker_}
+            if guard_ is not None:
+                core.scene_escape["guard"] = guard_
+                core._escape_release_count("installed")
             ms.phase_started = t
             core._refresh_for_new_leg(t, box.rear)
 
@@ -6989,6 +7198,77 @@ class MissionCore:
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box,
                                resumable=resumable, abandon=abandon)
 
+    # --- the P6 escape's own start-pad release (docs/plans/2026-10-25-escape-start-release.md E3, E4) ---
+    def _escape_release_count(self, key: str) -> None:
+        rec_ = self.obstacle.setdefault("escape_start_release", {"escapes_released": 0})
+        rec_[key] = rec_.get(key, 0) + 1
+
+    @staticmethod
+    def _escape_guard_breached(guard, rear, kappa: float = 0.0) -> bool:
+        """Whether the outline at rear, or anywhere ahead of it for the escape's stop length in its direction --
+        on the straight and on the arc of the held steering ``kappa`` (a stop keeps the steering; Codex re-review 3
+        P2-2), swept continuously -- comes nearer a released rectangle than half its start gap."""
+        from forklift_core.control import start_release as sr
+
+        x0, y0, yaw0 = (float(v) for v in rear)
+        d = 1.0 if guard["direction"] >= 0 else -1.0
+        poses = [(x0, y0, yaw0)]
+        for k in {0.0, float(kappa)}:
+            # the walk's dense spacing, and its bound on how much nearer the continuous sweep can come between the
+            # samples taken off every distance (Codex re-review 4 P2: 5 mm samples missed an overlap at -0.62 m^-1)
+            n = max(1, int(math.ceil(max(guard["stop_m"] / sr.DENSE_STEP_M,
+                                         abs(k) * guard["stop_m"] / sr.DENSE_YAW_RAD))))
+            for i in range(1, n + 1):
+                s_ = d * guard["stop_m"] * i / n
+                if abs(k) < 1e-9:
+                    poses.append((x0 + s_ * math.cos(yaw0), y0 + s_ * math.sin(yaw0), yaw0))
+                else:
+                    yaw_ = yaw0 + k * s_
+                    poses.append((x0 + (math.sin(yaw_) - math.sin(yaw0)) / k,
+                                  y0 - (math.cos(yaw_) - math.cos(yaw0)) / k, yaw_))
+        err = sr.dense_error_m(sr.shape_radius(guard["footprint"]))
+        # 1e-9: the rounding sweep_keeps_away allows (Codex re-review 5 P3: d0 at min_d0 stopped by 1.7e-17 m)
+        return any(sr.footprint_rect_distance(p, guard["footprint"], r) - err < d0 / 2.0 - 1e-9
+                   for p in poses for r, d0 in zip(guard["rects"], guard["d0"]))
+
+    def _escape_guard_sync(self) -> None:
+        """The guard's rectangles, found on the grid under the correction it was planned with, re-expressed under
+        the correction applied now (the grid and the control pose moved together)."""
+        guard = (self.scene_escape or {}).get("guard")
+        if guard is None:
+            return
+        now = tuple(float(v) for v in (self.obstacle.get("applied") or (0.0, 0.0, 0.0)))
+        if now != guard["applied"]:
+            self._escape_guard_reexpress(compose(now, invert(guard["applied"])))
+            guard["applied"] = now
+
+    def _escape_guard_reexpress(self, delta) -> None:
+        """Move the guard's grid rectangles by ``delta`` (the scene's props stay) and rebuild its end checker."""
+        from forklift_core.planning import Rectangle
+        from forklift_core.planning.geometry import FootprintCollisionChecker
+
+        guard = (self.scene_escape or {}).get("guard")
+        if guard is None:
+            return
+
+        def moved(r):
+            x, y, yaw = compose(tuple(float(v) for v in delta), (float(r.x_m), float(r.y_m), float(r.yaw_rad)))
+            return Rectangle(x, y, float(r.length_m), float(r.width_m), yaw)
+
+        guard["rects"] = [moved(r) for r in guard["rects"]]
+        guard["extra"] = [moved(r) for r in guard["extra"]]
+        guard["checker"] = FootprintCollisionChecker(list(guard["scene"]) + guard["extra"], guard["footprint"],
+                                                     guard["bounds"])
+        self._escape_release_count("reexpressed")
+
+    @staticmethod
+    def _escape_guard_end_ok(guard, rear) -> bool:
+        """The escape's end criterion at the pose it ended at: the clearance to every rectangle, the released ones
+        included, at least the chosen candidate's end threshold."""
+        from forklift_core.control import escape as esc
+
+        return esc.clearance_m(guard["checker"].free, tuple(float(v) for v in rear)) >= guard["threshold_m"]
+
     def scene_replan_tick(self, t: float, rear, signed_speed: float, dt: float) -> SimpleNamespace:
         """The device's tick ahead of the follower (plan 2.1): owned or not, what the wheels and steering get, the
         control pose after a release; a request that ends raises its reason."""
@@ -7008,9 +7288,30 @@ class MissionCore:
             tracking = tracker_.update(ports.box.rear, signed_speed, dt)
             ms.last_tracking = tracking
             standing_ = ports.stopped()
-            if tracking.status == "arrived" or (
+            guard_ = self.scene_escape.get("guard")
+            if guard_ is not None:
+                self._escape_guard_sync()  # every correction path (the reprojection, the watch, the scan) changes
+                # obstacle["applied"]; the guard follows it here, before it judges (Codex re-review 3 P2-3)
+            if guard_ is not None and self._escape_guard_breached(guard_, ports.box.rear,
+                                                                  float(self.hooks.held_kappa())):
+                # nearer a released rectangle than half its start gap, now or within the stop ahead: the wheels to
+                # zero on this tick, steering held (Codex re-review P2-1)
+                self.scene_escape["status"] = "stopped"
+                self._escape_guard_stop_t = float(t)
+                self._escape_release_count("stopped_approach")
+            elif tracking.status == "arrived" or (
                     standing_ and (tracking.status == "failed" or tracker_.remaining_to_goal_m() <= 1e-6)):
-                self.scene_escape["status"] = "done"
+                if guard_ is not None and not self._escape_guard_end_ok(guard_, ports.box.rear):
+                    # the end region was checked for the planned end; the escape may end elsewhere (Codex plan
+                    # review P2-2): its own end pose must keep the same criterion -- a stop as the approach's
+                    # (Codex re-review 3 P2-1)
+                    self.scene_escape["status"] = "stopped"
+                    self._escape_guard_stop_t = float(t)
+                    self._escape_release_count("stopped_end")
+                else:
+                    self.scene_escape["status"] = "done"
+                    if guard_ is not None:
+                        self._escape_release_count("done")
             else:
                 allowed_ = self.last_permission[0] if self.last_permission is not None else None
                 if allowed_ is not None and allowed_ <= 0.0 and standing_:

@@ -325,7 +325,8 @@ def test_an_escape_prefix_is_found_checked_installed_under_the_escape_ownership_
     ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
     chosen = ports.escape_plan((), None)
     assert chosen is not None and state["scene_escape_candidates"][-1]["permit"]["ok"]
-    poses, direction, leg_dir = chosen
+    poses, direction, leg_dir, guard = chosen
+    assert guard is None  # no release: nothing to watch
     config0 = core.trackers["transport"].config
     ports.escape_install(chosen)
     assert core.obstacle["backoff"]["scene"] and core.obstacle["backoff"]["phase"] == "transport"
@@ -541,6 +542,28 @@ def test_the_candidate_permit_is_strict_where_the_permission_stops_acting():
     assert not core._scene_permit_strict(tracker, on, full)
     ms.phase = "return_home"
     assert not core._scene_permit_strict(tracker, leg)
+
+
+def test_the_zone_start_is_where_the_permission_stops_acting_along_the_candidate():
+    """Leg-failures plan A1: the core hands the candidate permit the distance from the truck to the zone the
+    permission does not act on (remaining - keep cut - delivery straight); a return has no zone."""
+    core, ms, state, calls, rear, held = make()
+    tracker = core.trackers["transport"]
+    leg, _ = tracker.leg_ahead()
+    whole = float(tracker.remaining_to_goal_m())
+    straight = core.geometry.delivery_straight_m
+    assert core._scene_zone_start_m(tracker) == pytest.approx(whole - straight, abs=1e-9)
+    from forklift_core.planning.pallet_mission import final_straight_prefix
+
+    core.hooks.final_straight_prefix = final_straight_prefix
+    core.slam = {"docking": {"status": "armed", "keep_m": 0.4}}
+    full = core.paths["transport"]
+    cut_m = float(np.sum(np.hypot(*np.diff(np.asarray(full.poses)[:, :2], axis=0).T))) - float(np.sum(np.hypot(
+        *np.diff(np.asarray(final_straight_prefix(full, 0.4).poses)[:, :2], axis=0).T)))
+    assert core._scene_zone_start_m(tracker, full) == pytest.approx(whole - straight - cut_m, abs=1e-9)
+    core.slam = None
+    ms.phase = "return_home"
+    assert core._scene_zone_start_m(tracker) is None
 
 
 def test_the_delivery_docking_keeps_its_transport_but_not_the_return():
