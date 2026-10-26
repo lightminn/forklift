@@ -888,6 +888,31 @@ def backoff_advice(free, clearance_m: float, start: Pose2D, *, step_m: float = 0
     return {"backoff_m": first, "backoff_max_m": last, "from_rear": [start.x_m, start.y_m, start.yaw_rad]}
 
 
+def straight_start_advice(free, clearance_m: float, start: Pose2D, direction: int, *, step_m: float = 0.01,
+                          limit_m: float = 0.30) -> dict:
+    """backoff_advice along the start's heading in ``direction`` (-1 back, +1 forward): the first distance at which
+    the start check passes, every pose before it free at clearance 0 (docs/plans/2026-10-26-observe-start-backoff.md
+    B3; backoff_advice itself stays the console's)."""
+    d_ = -1.0 if direction < 0 else 1.0
+    bx, by = d_ * cos(start.yaw_rad), d_ * sin(start.yaw_rad)
+    first = last = None
+    for k in range(1, int(round(limit_m / step_m)) + 1):
+        d = round(k * step_m, 6)
+        pose = (start.x_m + d * bx, start.y_m + d * by, start.yaw_rad)
+        if free(pose, clearance_m):
+            if first is None:
+                first = d
+            last = d
+            continue
+        if first is not None:
+            break
+        if not free(pose, 0.0):
+            return {"backoff_m": None, "blocked_at_m": d, "direction": int(d_)}
+    if first is None:
+        return {"backoff_m": None, "within_m": float(limit_m), "direction": int(d_)}
+    return {"backoff_m": first, "backoff_max_m": last, "direction": int(d_)}
+
+
 def final_straight_prefix(path: PlanResult, keep_m: float) -> PlanResult | None:
     """The approach up to where its final forward straight still has keep_m left.
 

@@ -24,6 +24,7 @@ MISSION_KEYS = {
         "paths", "paths_replaced", "planning_status", "planning_target_source", "planning_traces", "planning_wall_s",
         "observation_attempts", "observation_candidates", "observation_waypoint_selected", "observation_drops",
         "observe_replans", "observe_replan_leg", "observe_loose_arrival", "observe_loose_arrivals",
+        "observe_start_backoffs",  # plan 2026-10-26-observe-start-backoff B6
         "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
         "cusp_replans", "stall_replans", "docking_retries", "cusp_heading_watch", "cusp_stalls", "cusp_heading_hold",
@@ -90,7 +91,9 @@ CORE_FIELDS = ("release_replan_needed", "observe_failed_needed", "far_leg_recapt
                "last_permission",
                "return_correction_drops",  # plan D11: a mission's own count
                "loaded_wait",  # plan D5 6c: a loaded mission's start wait
-               "goal_creep_watch")  # plan 2026-10-24-goal-creep-stall G2: the watch's window and latch
+               "goal_creep_watch",  # plan 2026-10-24-goal-creep-stall G2: the watch's window and latch
+               # plan 2026-10-26-observe-start-backoff B8: the backoff in progress and the leg serials it was used on
+               "observe_backoff", "observe_backoff_used")
 
 
 def _plain(value, where: str):

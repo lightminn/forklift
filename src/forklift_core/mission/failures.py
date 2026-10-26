@@ -50,6 +50,7 @@ PREFIXES = {
     "perception_capture_failed": MISSION, "observation_discarded": MISSION, "near_capture_": MISSION,
     "pocket_check_refused": MISSION,  # the insertion refused (it turns on the observed yaw too; Codex D6 P2-5)
     "near_field_": MISSION, "observe:": MISSION, "observe_replan_failed": MISSION, "docking_": MISSION,
+    "observe_start_backoff_": MISSION,  # plan 2026-10-26-observe-start-backoff: short / stopped
     "slam_release_": MISSION, "async_plan_failed": MISSION, "async_plan_discarded": MISSION,
     "async_near_no_fresh_depth": MISSION, "planning_wait_moving": MISSION, "Pallet was not lifted": MISSION,
     "Pallet did not settle onto destination floor": MISSION, "Fork did not lower": MISSION,
