@@ -2,8 +2,8 @@
 #SBATCH --job-name=slam_remap
 #SBATCH --partition=compute
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=4G
-#SBATCH --time=00:45:00
+#SBATCH --mem=1G
+#SBATCH --time=00:10:00
 # Replay a run's recorded SLAM scans into a fresh mapping bridge (tools/slam_remap_drive.py) with a params variant, then
 # V2' on the saved graph (plans docs/plans/2026-10-20-slam-localization-session.md r6 diagnosis, 2026-10-21 gyro-heading V-G0).
 #   sbatch deploy/slurm/slam_remap.sbatch OUT RUN_DIR "key=value ..." [driver args]

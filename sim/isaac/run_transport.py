@@ -22,8 +22,14 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
+from frame_sync import FrameSync
+from frame_sync import rgba_of as frame_sync_rgba
+
+from forklift_core import determinism
 
 EXIT_CLEARANCE_M = 0.08
+# Deterministic-run plan D1: every camera read brought to its step's time (a no-op unless --deterministic).
+frame_sync = FrameSync()
 
 
 # Braking into the mid-approach standing frame (a planned stop).
@@ -549,6 +555,13 @@ def arguments() -> argparse.Namespace:
         "--start-band-release). Off: as every earlier run.",
     )
     parser.add_argument(
+        "--restart-confirm-scans", type=int, default=0,
+        help="docs/plans/2026-10-25-restart-confirmation.md: after the permission stops the truck for an occupied cell, "
+        "its output stays at zero until every clearing sensor has given this many new scans in a row on which the "
+        "raw limit is positive (a painted halo cleared for one scan no longer lets it creep); 0 (default): as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--low-clearance-guard",
         choices=("on", "off"),
         default="off",
@@ -614,6 +627,8 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--recognition-frame-every", type=int, default=24,
                         help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Isaac test-only deterministic run (docs/plans/2026-10-25-deterministic-sim-mode.md): camera reads synced to the step, the SLAM static layer kept out of planning, wall budgets at the cap; the same code, seed and inputs give the same records. Off by default.")
     parser.add_argument("--recognition-pixel-lag-steps", type=int, default=0,
                         help="Physics steps the driving frames' pixels trail their render metadata (measured "
                         "per render cadence; the smoke run records what fits it).")
@@ -1041,6 +1056,16 @@ def arguments() -> argparse.Namespace:
                          "its scope)")
         if args.repeat_captures:
             parser.error("--bottom-deck-check on is not defined with --repeat-captures")
+    # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
+    # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced)
+    # -- replaced before the learned inputs are checked, which it then does not need.
+    # a local, not an args attribute: every args field is a near-field contract condition (Codex)
+    learned_replaced = bool(args.deterministic and args.recognition_proposals == "learned")
+    if learned_replaced:
+        args.recognition_proposals = "oracle"
+    if args.deterministic and args.record_boundary:
+        parser.error("--deterministic is not combined with --record-boundary: a boundary record keeps RGB by content "
+                     "hash, which the strict comparison cannot leave out (plan D1b)")
     # Stage 3's learned far proposals stand on their own inputs (checked before anything else reads them).
     if args.recognition_proposals == "learned":
         if args.recognition != "far":
@@ -1076,6 +1101,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--exit-clearance-m must be a positive number of metres")
     if not (math.isfinite(args.lidar_keepout_m) and args.lidar_keepout_m >= 0):
         parser.error("--lidar-keepout-m must be a finite non-negative number of metres")
+    if getattr(args, "restart_confirm_scans", 0) < 0:
+        parser.error("--restart-confirm-scans must be 0 (off) or a positive number of scans")
     for name_ in ("low_clearance_margin_m", "low_clearance_deviation_m"):
         if not (math.isfinite(getattr(args, name_)) and getattr(args, name_) >= 0):
             parser.error(f"--{name_.replace('_', '-')} must be a finite non-negative number of metres")
@@ -1355,6 +1382,14 @@ def arguments() -> argparse.Namespace:
     args.pallet_geometry_loaded = pallet_geometry
     # Kit's --portable-root and related application arguments are consumed by Kit.
     args.kit_arguments = unknown
+    # Deterministic-run plan D1: a synced frame does not trail its step, so the far driving frames' pixel lag is 0;
+    # what was asked is kept in the run's record.
+    args.deterministic_overrides = {}
+    if args.deterministic and args.recognition_pixel_lag_steps:
+        args.deterministic_overrides["recognition_pixel_lag_steps"] = args.recognition_pixel_lag_steps
+        args.recognition_pixel_lag_steps = 0
+    if learned_replaced:  # replaced above (plan D1b)
+        args.deterministic_overrides["recognition_proposals"] = "learned"
     return args
 
 
@@ -3305,7 +3340,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_mount,
             # Every physics step, capture included, goes through step_world
             # (SLAM plan: odometry, scans and the lockstep must see them all).
-            step_fn=lambda: cells.stepper["fn"](True),
+            step_fn=lambda: (cells.stepper["fn"](True),  # then, in a deterministic run, the frame at that step (D1)
+                             frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time)),
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
@@ -4315,6 +4351,7 @@ def drive(S, isaac) -> None:
             # runs out on its own (plan D6).
             pocket["silenced_frames"] = pocket.get("silenced_frames", 0) + 1
             return
+        frame_sync.sync(pocket_camera, world.render, world.current_time)  # deterministic run only (D1)
         raw = pocket_camera.get_depth()
         if recorder is not None:
             # Plan D8b: every read, labelled, before anything below can drop it; its
@@ -4472,7 +4509,11 @@ def drive(S, isaac) -> None:
                 # SLAM localization plan L3: the survey grid, set into the layer's memory when it was made, is the
                 # only static SLAM layer; the bridge's latest_map.npz is not read.
                 use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
-            elif layer_.memory is not None and args.slam_map_dir is not None:
+            elif layer_.memory is not None and args.slam_map_dir is not None and getattr(args, "deterministic", False):
+                # Deterministic-run plan D4: slam_toolbox has no barrier between a scan and its map, so a
+                # deterministic run plans without the SLAM static layer (the pose corrections stay).
+                map_note = {"slam_static_layer": "off_deterministic"}
+            elif layer_.memory is not None and args.slam_map_dir is not None and not getattr(args, "deterministic", False):
                 latest = args.slam_map_dir / "latest_map.npz"
                 if latest.exists():
                     # One open file: its fstat and its contents go together (the
@@ -5638,6 +5679,7 @@ def drive(S, isaac) -> None:
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
+                                restart_confirm_scans=int(getattr(args, "restart_confirm_scans", 0) or 0),
                                 low_clearance_margin_m=getattr(args, "low_clearance_margin_m", 0.05),
                                 low_clearance_deviation_m=getattr(args, "low_clearance_deviation_m", 0.02),
                                 low_clearance_unloaded_shape=unloaded_shape,
@@ -5872,8 +5914,9 @@ def drive(S, isaac) -> None:
         def write_video_frame(stamp: float) -> None:
             """One video frame per fps tick of physics, capture steps included
             (SLAM plan v3.1: frames match the run length)."""
+            frame_sync.sync(camera, world.render, world.current_time)  # deterministic run only (D1)
             frame = camera.get_current_frame()
-            rgba = camera.get_rgba()
+            rgba = frame_sync_rgba(camera)  # the frame's own rgba when deterministic
             # get_rgba reads the RGB annotator directly. The SDK's cached
             # frame metadata can lag; retain it for audit without treating
             # its timestamp as a control or image-acquisition failure.
@@ -5887,7 +5930,7 @@ def drive(S, isaac) -> None:
                 # under SLAM feedback the pose the robot believes.
                 now_base, now_q = annotation_pose()
                 now_yaw, _ = yaw_and_tilt(now_q)
-                live = perception_camera.get_rgba()
+                live = frame_sync_rgba(perception_camera)
                 if live is None or live.ndim != 3 or live.size == 0:
                     live = None
                 video_rgb = inset.compose_frame(
@@ -5940,7 +5983,7 @@ def drive(S, isaac) -> None:
             if args.extra_views:
                 for name in args.extra_views:
                     view_camera = extra_cameras[name]
-                    view_rgba = view_camera.get_rgba()
+                    view_rgba = frame_sync_rgba(view_camera)
                     expected = (
                         (480, 640, 4) if name == "perception" else (720, 1280, 4)
                     )
@@ -6091,13 +6134,14 @@ def drive(S, isaac) -> None:
             """One driving frame for the far recognition: render-metadata time, pixels and instance ids. A live run
             hands its work to the far worker; a failure of its read is raised by the tick, after this step's other
             sensors (plan 2026-10-22-live-far-recognition task 9)."""
+            frame_sync.sync(perception_camera, world.render, world.current_time)  # deterministic run only (D1)
             frame_ = perception_camera.get_current_frame()
             # the sensor's own contract (its metadata): a session failure, as before (task 9; Codex impl round 1 P2)
             rendering_s_ = float(frame_["rendering_time"]) - initial_time
 
             def read_() -> None:
                 semantic_ = frr.decode_mission_semantic(frame_.get("semantic_segmentation"))
-                rgba_ = np.array(perception_camera.get_rgba(), copy=True)
+                rgba_ = np.array(frame_sync_rgba(perception_camera), copy=True)  # the frame's own rgba when deterministic
                 raw_ = np.array(perception_camera.get_depth(), copy=True)
                 if raw_.ndim == 3 and raw_.shape[-1] == 1:
                     raw_ = np.squeeze(raw_, axis=-1)
@@ -7447,7 +7491,7 @@ def drive(S, isaac) -> None:
                 grid_.pop("deadline", None)
                 payload_ = {"world": grid_world(scenario_), "waypoints": waypoints_, "config": planner_config,
                             "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
-                            "deadline": time.monotonic() + 2 * len(waypoints_) * 20.0}
+                            "deadline": determinism.deadline(2 * len(waypoints_) * 20.0)}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
                            "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
@@ -7485,7 +7529,7 @@ def drive(S, isaac) -> None:
                 payload_ = {"args": (grid_world(scenario_), start_),
                             "kwargs": {"config": planner_config, "geometry": geometry,
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
-                                       "occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0,
+                                       "occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0),
                                        **({} if transport_exit is None else {"exit_prefix": transport_exit})},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
@@ -8996,6 +9040,8 @@ def drive(S, isaac) -> None:
                            if getattr(args, "start_band_release", "off") == "on" else {}),
                         **({"escape_start_release": dict(obstacle.get("escape_start_release", {"escapes_released": 0}))}
                            if getattr(args, "escape_start_release", "off") == "on" else {}),
+                        **({"restart_confirm": obstacle.get("restart_confirm") or {"scans": int(args.restart_confirm_scans)}}
+                           if int(getattr(args, "restart_confirm_scans", 0) or 0) > 0 else {}),
                         "shadow_memory": None if obstacle["layer"].shadow is None else {
                             **obstacle["layer"].shadow.stats,
                             "band_m": obstacle["layer"].shadow.band_m,
@@ -9162,10 +9208,56 @@ def drive(S, isaac) -> None:
                 close_boundary_record(state, sys.exc_info()[1], final_state=projection_)
 
 
+def recorded_arguments(args: argparse.Namespace) -> dict:
+    """The run's arguments as result.json records them -- each one the near-field contract compares (an argument
+    added later is left out at the value every earlier record ran with)."""
+    return {
+        k: (
+            asdict(v)
+            if k in {"pallet_geometry_loaded", "drive_geometry"}
+            else str(v)
+            if isinstance(v, Path)
+            else v
+        )
+        for k, v in vars(args).items()
+        if (k != "extra_views" or v)
+        # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
+        and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
+        # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
+        and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
+        # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
+        and (k != "lidar_keepout_m" or v != 0.0)
+        # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
+        and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
+        # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
+        # among the arguments (an off run would otherwise record a field no earlier record has -- Codex PR 1 review)
+        and k != "deterministic_overrides"
+        and (
+            k not in {"quarter_eye", "quarter_target", "quarter_focal"}
+            or (v is not None and (k != "quarter_focal" or v != 2.5))
+        )
+    }
+
+
 def main() -> None:
     args = arguments()
+    determinism.configure(getattr(args, "deterministic", False))
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
+    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
+    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
+    # output so that the replay gate's view of the output directory does not change.
+    import faulthandler
+    import signal as signal_
+
+    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
+                          all_threads=True)
+    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
+    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
+    import ctypes
+
+    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
@@ -9224,29 +9316,9 @@ def main() -> None:
             "axle_to_fork_tip_m": args.axle_to_fork_tip_m,
         },
         "python": sys.version,
-        "arguments": {
-            k: (
-                asdict(v)
-                if k in {"pallet_geometry_loaded", "drive_geometry"}
-                else str(v)
-                if isinstance(v, Path)
-                else v
-            )
-            for k, v in vars(args).items()
-            if (k != "extra_views" or v)
-            # M-a3 (plan E9): not recorded at its default, so a run without commands records what it always did
-            and (k != "mission_commands" or v is not None) and k not in ("mission_schedule", "mission_stop_kinds")
-            # SLAM localization plan L7: not recorded unset, so a mapping run records what it always did
-            and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
-            # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
-            and (k != "lidar_keepout_m" or v != 0.0)
-            # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
-            and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
-            and (
-                k not in {"quarter_eye", "quarter_target", "quarter_focal"}
-                or (v is not None and (k != "quarter_focal" or v != 2.5))
-            )
-        },
+        **({"deterministic": {"enabled": True, "broken": [], "overrides": dict(args.deterministic_overrides),
+                              "diagnostics": {}}} if args.deterministic else {}),
+        "arguments": recorded_arguments(args),
     }
     scene_root = Path(args.base_scene).resolve().parent
     state["scene_sha256"] = {
@@ -9303,6 +9375,9 @@ def main() -> None:
             state["render_mode"]["at_end"] = carb.settings.get_settings().get(
                 "/rtx/rendermode"
             )
+        if "deterministic" in state:  # plan D0: why it stopped being deterministic, and the diagnostics
+            state["deterministic"]["broken"] = determinism.broken()
+            state["deterministic"]["diagnostics"]["frame_sync"] = frame_sync.summary()
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 

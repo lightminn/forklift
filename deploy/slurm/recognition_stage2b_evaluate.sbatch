@@ -3,7 +3,7 @@
 #SBATCH --partition=compute
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=1G
-#SBATCH --time=00:45:00
+#SBATCH --time=00:10:00
 #SBATCH --output=%x-%j.log
 # Stage 2B dev evaluation: oracle-fit only (the baseline detector is unchanged since 2A), two
 # datasets at a time. 1B/2A evaluation processes peaked near 230 MB each (job 2876: 8 processes,

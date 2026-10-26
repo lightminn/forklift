@@ -336,3 +336,49 @@ def test_after_an_escape_the_obstacles_are_found_on_the_leg_it_left():
     assert cells_of(fn(), snap) == AHEAD
     core.scene_escape = None  # a later install consumed it: the tracker installed is the leg's own again
     assert fn() == []
+
+
+def test_a_restart_confirmation_tick_pauses_the_watch_without_counting_or_restarting_it():
+    # docs/plans/2026-10-25-restart-confirmation.md R2: the halo pulses no longer restart the three seconds, and the
+    # confirmation's own wait after an obstacle stepped away does not bring the request forward
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    t = hold(core, 10.0, 2.0)
+    for _ in range(10):  # one second held by the confirmation alone (the raw limit allowed a restart)
+        core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True, gate_only=True)
+        t += 0.1
+    t = hold(core, t, 0.8)
+    assert not state.get("scene_replans")  # 2.0 + 0.8 of real zero: not yet three seconds
+    hold(core, t, 0.3)
+    assert state["scene_replans"][-1]["trigger"] == "permit_stop"
+    assert state["scene_replans"][-1]["detail"]["held_s"] == pytest.approx(PERMIT_STOP_S, abs=0.11)
+
+
+def test_the_confirmation_wait_is_taken_off_in_work_time_across_an_earlier_plan_wait():
+    # Codex plan re-review P2: moving the watch's start by the confirmation's work time miscounts when the work clock
+    # skipped an earlier plan wait inside the stretch
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    paused = [(10.1, 10.2)]  # a plan wait the work clock skips
+    core.commands.work_elapsed = lambda a, b: (b - a) - sum(max(0.0, min(b, e) - max(a, s_)) for s_, e in paused)
+    t = 10.0
+    while t < 13.05:  # 2.95 s of work time held at a real zero (3.05 s of sim time less the 0.1 s wait)
+        if not 10.1 <= t < 10.2:
+            core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True)
+        t = round(t + 0.05, 6)
+    for _ in range(4):  # 0.2 s held by the confirmation alone
+        core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True, gate_only=True)
+        t = round(t + 0.05, 6)
+    core.permit_stop_tick(t, core.hooks.rear(), 0.0, "occupied", True)
+    assert not state.get("scene_replans")  # 2.95 s of real zero: not yet (moving the start by 0.2 s read 3.05 s)
+
+
+def test_a_confirmation_tick_after_a_gap_does_not_carry_the_old_stretch():
+    # Codex implementation review P2: the first tick back from a long plan wait being a confirmation tick must not
+    # hide the gap and hand the next real zero the old held time
+    core, ms, state, *_ = make()
+    with_layer(core, Layer(grid(AHEAD)))
+    hold(core, 10.0, 2.8)
+    core.permit_stop_tick(20.0, core.hooks.rear(), 0.0, "occupied", True, gate_only=True)  # back after 7 s away
+    hold(core, 20.1, 0.1)
+    assert not state.get("scene_replans")

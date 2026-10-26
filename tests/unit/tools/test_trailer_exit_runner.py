@@ -89,7 +89,7 @@ def test_the_hooks_hold_the_exit_prefix_and_drive_binds_it_from_the_setup():
     spec.loader.exec_module(module)
     assert "transport_exit" in replay_setup.drive_inputs(module.drive)
     # the loaded delivery's worker job and the first mission plan
-    loaded = source[source.index('"occupancy": grid_["occupancy"], "deadline": time.monotonic() + 3 * 20.0'):][:200]
+    loaded = source[source.index('"occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0)'):][:200]
     assert '**({} if transport_exit is None else {"exit_prefix": transport_exit})' in loaded
     first = source[source.index('        plans = plan_transport(\n            grid_world(scenario),'):][:420]
     assert '**({} if transport_exit is None else {"exit_prefix": transport_exit})' in first

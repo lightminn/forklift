@@ -41,6 +41,21 @@ def test_the_bridge_sends_keyframes_to_a_thresholds_zero_slam_toolbox():
     assert params["minimum_time_interval"] == 0.0
 
 
+def test_online_loop_search_is_the_slam_link_mitigation():
+    # docs/plans/2026-10-25-slam-link-failed.md 6.2: R4 + R5 + R7, a temporary mitigation (the keyframe cost still grows
+    # about 1/8 as fast as before, not a fix); karto needs the smear at least half the loop search resolution
+    import yaml
+
+    config = Path(__file__).resolve().parents[2] / "forklift_bringup/config/slam_toolbox_isaac_online.yaml"
+    params = yaml.safe_load(config.read_text())["slam_toolbox"]["ros__parameters"]
+    assert params["loop_search_space_dimension"] == 4.0
+    assert params["loop_search_space_resolution"] == 0.10
+    assert params["loop_search_space_smear_deviation"] == 0.05
+    assert params["loop_search_maximum_distance"] == 1.5
+    assert params["loop_search_space_smear_deviation"] >= params["loop_search_space_resolution"] / 2
+    assert params["do_loop_closing"] is True
+
+
 def _grid(value=0, shape=(40, 50)):
     import numpy as np
 
@@ -326,8 +341,28 @@ def test_the_localization_params_change_only_the_localization_keys(tmp_path):
     before = yaml.safe_load(src.read_text())["slam_toolbox"]["ros__parameters"]
     after = yaml.safe_load(out.read_text())["slam_toolbox"]["ros__parameters"]
     changed = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
-    assert changed == {"mode", "map_file_name", "map_start_pose", "scan_buffer_size", "loop_match_minimum_chain_size",
-                       "do_loop_closing"}
+    # only the localization keys: the mode, the map and the tool's own LOCALIZATION_KEYS (variant J since f42222ff)
+    assert changed <= {"mode", "map_file_name", "map_start_pose"} | set(slp.LOCALIZATION_KEYS)
+    assert {"mode", "map_file_name", "map_start_pose"} <= changed
+    assert all(after[k] == v for k, v in slp.LOCALIZATION_KEYS.items())
     assert after["map_file_name"] == str(folder / "map") and after["map_start_pose"] == [-2.0, 0.0, 0.0]
     assert slp.main([str(src), str(tmp_path / "no.yaml"), str(folder), "0" * 64, "0,0,0"]) == 1
     assert not (tmp_path / "no.yaml").exists()
+
+
+def test_variant_j_holds_its_loop_search_whatever_the_mapping_config():
+    # Codex mitigation review P2: J inherited the loop search resolution and smear from the online config, so the
+    # mapping mitigation changed localization too. J pins the values the bounded-graph plan's S2 replays measured
+    # (0.10 m / 0.05 m: those replays ran on the mitigated config), the distance and window as before.
+    import sys
+
+    root = Path(__file__).resolve().parents[4]
+    sys.path.insert(0, str(root / "tools"))
+    import slam_localization_params as slp
+
+    for mapping in ({"loop_search_space_resolution": 0.05, "loop_search_space_smear_deviation": 0.03},
+                    {"loop_search_space_resolution": 0.10, "loop_search_space_smear_deviation": 0.05}):
+        p = slp.localization_params({"slam_toolbox": {"ros__parameters": dict(mapping)}}, "map", [0, 0, 0])
+        p = p["slam_toolbox"]["ros__parameters"]
+        assert (p["loop_search_space_resolution"], p["loop_search_space_smear_deviation"]) == (0.10, 0.05)
+        assert (p["loop_search_maximum_distance"], p["loop_search_space_dimension"]) == (2.0, 3.0)
