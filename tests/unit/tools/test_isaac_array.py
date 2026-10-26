@@ -13,9 +13,18 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_array_sizes_give_one_task_its_own_share():
     z = ib.array_sizes("live", 16, 31)
-    assert z == {"array": "0-15%7", "gres": "shard:1", "cpus": 2, "mem_mib": 7168, "time": "00:55:00"}
-    assert ib.array_sizes("riib", 12, 63)["gres"] == "shard:2"  # 4.47 GB a session: more than one shard
+    assert z == {"array": "0-15%5", "gres": "shard:1", "cpus": 4, "mem_mib": 8192, "time": "00:55:00"}
+    r = ib.array_sizes("riib", 12, 63)
+    assert r["gres"] == "shard:2" and r["cpus"] == 6  # 4.47 GB a session: more than one shard
     assert ib.array_sizes("live", 3, 31)["array"] == "0-2%3"
+
+
+def test_a_four_cpu_task_gives_the_bridge_a_core_of_its_own():
+    # 11590 (2026-10-26): at 2 CPUs the session and its bridge shared one core and 3 of 3 runs lost the SLAM link
+    siblings = {7: (7, 19), 19: (7, 19), 8: (8, 20), 20: (8, 20)}.get
+    cpus = [7, 19, 8, 20]
+    n = ib.auto_bridge_cpus(ib.ARRAY["live"]["cpus"], 1)
+    assert ib.split_bridge_cpus(cpus, n, siblings) == ([8, 20], [7, 19])
 
 
 def test_array_sizes_need_the_batch_s_own_run_length():
@@ -28,7 +37,7 @@ def test_array_sizes_need_the_batch_s_own_run_length():
 def test_sizes_cli_prints_the_array_options(capsys):
     assert ib.main(["sizes", "live", "--array", "--runs", "16", "--run-min", "31"]) == 0
     assert capsys.readouterr().out.strip() == (
-        "--array=0-15%7 --gres=shard:1 --cpus-per-task=2 --mem=7168M --time=00:55:00")
+        "--array=0-15%5 --gres=shard:1 --cpus-per-task=4 --mem=8192M --time=00:55:00")
     assert ib.main(["sizes", "live", "--array", "--runs", "16"]) == 2
 
 
