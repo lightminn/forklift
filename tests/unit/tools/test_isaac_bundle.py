@@ -544,6 +544,54 @@ def test_the_first_run_waits_for_free_gpu_memory(tmp_path):
     assert summary["gpu_full_waits"] == 1 and summary["failed"] == 0
 
 
+def test_a_gpu_that_stays_full_while_nothing_runs_is_given_up(tmp_path):
+    # 11596_2 (2026-10-27): three grown sessions left 3,837 MiB on the GPU; the task waited 54 min holding its shard,
+    # CPUs and memory
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.05)], slots=1, shards=1,
+                     vram_probe=lambda leaders: ([], {0: 1000}), vram_period_s=0.05, gpu_full_give_up_s=0.3)
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [(x["name"], x["status"]) for x in lines] == [("a", "gpu_full"), ("b", "gpu_full")]
+    assert lines[0]["free_mib"] == 1000 and lines[0]["need_mib"] == ib.SESSION_VRAM_MIB and lines[0]["waited_s"] >= 0.3
+    assert summary["gpu_full_gave_up"] == 2 and summary["not_started"] == 2 and summary["exit_code"] == 1
+
+
+def test_giving_up_a_full_gpu_leaves_other_jobs_claims_alone(tmp_path):
+    claims = tmp_path / "claims"
+    (claims / "b").mkdir(parents=True)
+    (claims / "b" / "by").write_text("other-job\n")
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.05)], slots=1, shards=1,
+                     vram_probe=lambda leaders: ([], {0: 1000}), vram_period_s=0.05, gpu_full_give_up_s=0.3,
+                     claim_dir=str(claims))
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [(x["name"], x["status"]) for x in lines] == [("a", "gpu_full")]
+    assert summary["claimed_elsewhere"] == 1 and summary["not_started"] == 1
+
+
+def test_an_unreadable_sample_restarts_the_full_gpu_wait(tmp_path):
+    # Codex (2026-10-27): full, unreadable, full again -- the wait counts from the sample after the gap
+    t0 = time.monotonic()
+
+    def probe(leaders):
+        el = time.monotonic() - t0
+        return None if 0.25 < el < 0.45 else ([], {0: 1000})
+
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1, vram_probe=probe,
+                     vram_period_s=0.02, vram_unreadable_s=10.0, gpu_full_give_up_s=0.4)
+    (line,) = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert line["status"] == "gpu_full" and time.monotonic() - t0 >= 0.8 and line["waited_s"] >= 0.4
+
+
+def test_a_full_gpu_is_waited_out_while_a_run_of_the_job_is_running(tmp_path):
+    # the job's own run will free the device: no giving up while it runs, nor on the stale sample right after it
+    def probe(leaders):
+        return [], {0: 1000 if leaders else 16000}
+
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 1.0), stamp_run("b", tmp_path, 0.05)], slots=2, shards=4,
+                     vram_probe=probe, vram_period_s=0.05, gpu_full_give_up_s=0.5)
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [x["status"] for x in lines] == ["ended", "ended"] and summary["gpu_full_gave_up"] == 0
+
+
 # --- Codex round 3 counterexamples -------------------------------------------------------------------------------------
 
 
