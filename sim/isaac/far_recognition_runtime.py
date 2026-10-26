@@ -661,7 +661,6 @@ class LiveFar:
         # own time for the model (their difference is the pipe and the waiting), model_source learned or the
         # geometric fallback. Wall times named for tools/deterministic_compare.py's WALL_KEY; a deterministic run
         # has no learned result (the oracle masks), so none of the three is there.
-        got = getattr(work, "proposer_result", None)
         entry.update(self._model_times(work))
         if job["kind"] == "drive":
             entry["tick"] = job["record"]["tick"]

@@ -50,6 +50,10 @@ ws1 에서 live 세션(Isaac + learned 작업자)은 정점이 3,890–4,047 MiB
 - 남길 항목: 요청 시각, 왕복 ms, 성공·오류, 적용·폐기 여부, 사유.
 - 이 기록은 `sim/isaac/far_recognition_runtime.py` 의 learned 경로를 바꾼다. 그 경로를 맡은 콘솔 세션과 합의하고 따로 PR 로 낸다. 결정 모드의 재생 게이트도 통과해야 한다.
 - CUDA 기준 팔도 이 계측으로 다시 잰다. 기존 S3 요약은 비교에 쓰지 않는다.
+- 계측은 PR #163 으로 들어갔다. 미션 records 의 `live.jobs` 에 `model_ms`(왕복)·`infer_wall_s`(작업자 안 시간)·`model_source`·`request_mono` 가 남는다. 미션이 끝난 뒤 완료된 호출은 `live.late_calls` 나 실행 결과의 `far_late_calls` 에 남는다.
+- 집계 규칙(콘솔 리뷰):
+  - 짝 없는 in_flight(`late_calls`·`far_late_calls` 에도 없는 것)는 결과가 오지 않은 호출이다. 세션 close 의 join 1 s 안에 끝나지 않은 경우다. 이런 호출은 "최소 (끝 시각 − `request_mono`) 걸린 검열값"으로 200 ms 초과 비율의 분모와 분자에 넣고, 그 수를 따로 보고한다. 빼면 가장 느린 호출이 빠진다.
+  - 세션 첫 호출의 `model_ms` 에는 모델 적재 대기(첫 마감 120 s)가 들어간다. 그래서 두 팔 비교에서 첫 호출은 빼고 따로 보인다(`timing()` 의 first·max_after_first 와 같은 처리). `infer_wall_s` 에는 적재가 들어가지 않는다.
 
 ### 3.2 구성
 
