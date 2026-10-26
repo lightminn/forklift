@@ -19,12 +19,12 @@ slam_fallback() {  # $1: why; online mapping, recorded
   SLAM_CHOICE="mapping (fallback: $1)"
   echo "slam: no accepted survey bundle -- $SLAM_CHOICE" >&2
 }
-SLAM_ASKED=${MAP_BUNDLE:-default}
-case "$SLAM_ASKED" in
+SLAM_STRICT=; [ "${MAP_BUNDLE:-}" = registry ] && SLAM_STRICT=1  # asked for by name: no bundle, no launch
+case "${MAP_BUNDLE:-}" in
   none) MAP_BUNDLE=; EXPECTED_MAP_ID=; MAP_START_POSE=; SLAM_CHOICE="mapping (MAP_BUNDLE=none)" ;;
-  default|registry)
+  ""|registry)
     if [ -z "${SCENE_FILE:-}" ]; then
-      [ "$SLAM_ASKED" = registry ] && { echo "MAP_BUNDLE=registry needs SCENE_FILE" >&2; exit 2; }
+      [ -n "$SLAM_STRICT" ] && { echo "MAP_BUNDLE=registry needs SCENE_FILE" >&2; exit 2; }
       slam_fallback "no SCENE_FILE, the factory hall has no registry row"
     else
       SLAM_ROW=$("$VENV_PY" "$ROOT/tools/slam_bundle_registry.py" lookup \
@@ -38,7 +38,7 @@ case "$SLAM_ASKED" in
         SLAM_CHOICE="localization (registry: $SLAM_FOLDER)"
       elif [ "$SLAM_RC" -eq 3 ]; then
         SLAM_WHY="no registry row for $(basename "$SCENE_FILE") and $ENCODER_MODEL"
-        [ "$SLAM_ASKED" = registry ] && { echo "MAP_BUNDLE=registry: $SLAM_WHY" >&2; exit 2; }
+        [ -n "$SLAM_STRICT" ] && { echo "MAP_BUNDLE=registry: $SLAM_WHY" >&2; exit 2; }
         slam_fallback "$SLAM_WHY"
       else
         echo "the SLAM bundle registry did not read (exit $SLAM_RC)" >&2

@@ -95,6 +95,9 @@ def test_an_explicit_folder_is_used_as_given_and_a_broken_registry_stops(tmp_pat
     rc, (bundle, map_id, start, choice) = _choose(tmp_path, MAP_BUNDLE=str(folder), MAP_START_POSE="0,0,0",
                                                   EXPECTED_MAP_ID="b" * 64)
     assert rc == 0 and bundle == str(folder) and map_id == "b" * 64 and choice == f"localization (given: {folder})"
+    # a folder whose name is a word the chooser could use internally is still a folder (Codex P3)
+    rc, (bundle, _, _, choice) = _choose(tmp_path, MAP_BUNDLE="default", MAP_START_POSE="0,0,0")
+    assert rc == 0 and bundle == "default" and choice == "localization (given: default)"
     book.write_text("bundles: [ {broken")
     for env in ({"MAP_BUNDLE": "registry"}, {}):  # the default too: a registry that does not read is never "no row"
         rc, err = _choose(tmp_path, SCENE_FILE=str(scene), SLAM_BUNDLE_ROOT=str(tmp_path), SLAM_BUNDLE_REGISTRY=str(book),

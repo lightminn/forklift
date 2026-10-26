@@ -402,6 +402,9 @@
 - 하역 오차(`delivery_error_m`)와 하역 도킹 시작 때 위치 오차(`estimate_vs_truth_at_match`): 최대·추세.
 - keyframe 처리 최대(`slam_wall_s`): 1 s 접근 여부.
 - slam_link 유형별 건수: slam_link_failed(무응답), 지도 id 불일치, 묶음 폴더 없음, fallback 으로 mapping 이 된 세션 수.
+- 실행 전체의 적용 위치·yaw 오차 최대(slam.control 대 truth). 유지 중의 일시 오차는 해제 점프에 드러나지 않는다. 유지 중 yaw 0.06 rad 가 해제 전에 회복되면 점프는 0 인데, 이 값은 V5 0.05 rad 를 넘고 D7 출구 0.08 rad 아래다(Codex, SlamPoseTracker 로 재현).
+- D7 유지(`D7_HOLD=on`)의 작동: `hold_reapproach` 횟수, 출구 사유별 횟수, 유지 시간·거리.
+- 비교 기준의 한계: 2 차 확인의 R 은 `D7_HOLD` 끔이다. 그래서 나란히 놓는 것은 참고일 뿐, 조합의 영향을 분리하지 못한다.
 
 ## 6. 남는 위험
 
