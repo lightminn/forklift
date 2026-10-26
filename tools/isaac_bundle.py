@@ -1456,7 +1456,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
         "stalled": st["stalled"], "stall_s": stall_s,
         "final_cap": st["cap"], "vram_job_max_mib": st["job_vram_max"], "budget_mib": budget, "job_id": job_id,
-        "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
+        "node_gpu": gpu_index, "cpus": cpus, "bridge_cpus": bridge_set, "session_cpus": session_cpus if bridge_set else cpus,
         "errors": st["errors"], "start": wall_begin, "wall_s": round(time.monotonic() - t_begin, 3),
         "exit_code": 0 if failed == 0 and not_started == 0 and not st["errors"] else 1,
     }
