@@ -2,6 +2,7 @@
 holding rows from the hold/release timeline and the records' mode, heading compared on tracking rows only, the run's
 own drift allowance, every delivery attempt, comparable pairs, the hold-drift gate per scene and the overall pass."""
 
+import json
 import math
 
 import pytest
@@ -313,3 +314,66 @@ def test_overall_needs_a_comparable_pair_in_every_scene():
     assert not cmp.overall({"line_m": ([good, good], {"state": "insufficient"}),
                             "random_m": ([good, good], gate)})["ok"]
     assert math.isclose(cmp.DRIFT_HALF_HOURS, 15)
+
+
+def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None):
+    """A run folder: an ordered live log whose end summary counts ``dropped`` lost lines, its mission_end lines
+    (``log_missions``) and the mission folders' result.json (``folders``), both [(id, outcome, ended_s, error)]."""
+    log_missions = log_missions if log_missions is not None else [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None)]
+    folders = folders if folders is not None else log_missions
+    run = tmp_path / "run"
+    lines = [{"log_writer": "ordered"}]
+    lines += [{"mission_end": {"mission_id": m, "outcome": o, "ended_s": t}, "delivery_error_m": e, "mono": t}
+              for m, o, t, e in log_missions]
+    lines.append({"log_end": {"dropped_lines": dropped, "line_errors": 0}})
+    run.mkdir()
+    (run / "live_log.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    for m, o, t, e in folders:
+        (run / "missions" / m).mkdir(parents=True)
+        (run / "missions" / m / "result.json").write_text(json.dumps(
+            {"result": {"mission_id": m, "outcome": o, "ended_s": t}, "delivery_error_m": e}))
+    return run
+
+
+def test_a_log_that_lost_lines_is_read_when_its_mission_ends_match_the_mission_folders(tmp_path):
+    # the dropped_lines rule for the next verdict (plan 5d follow-up; the second confirmation's result unchanged)
+    missions, notes = cmp.mission_ends(_log_run(tmp_path))
+    assert [m["mission_id"] for m in missions] == ["m1", "m2"] and missions[0]["delivery_error_m"] == 0.02
+    assert len(notes) == 1 and "lost 1" in notes[0] and "2 mission_end" in notes[0]
+
+
+def test_a_clean_log_has_no_note(tmp_path):
+    missions, notes = cmp.mission_ends(_log_run(tmp_path, dropped=0))
+    assert len(missions) == 2 and notes == []
+
+
+@pytest.mark.parametrize("folders", [
+    [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None), ("m3", "done", 300.0, 0.01)],  # an end line lost
+    [("m1", "done", 100.0, 0.02), ("m2", "done", 200.0, None)],  # outcome differs
+    [("m1", "done", 100.5, 0.02), ("m2", "failed", 200.0, None)],  # ended_s differs
+    [("m1", "done", 100.0, 0.03), ("m2", "failed", 200.0, None)],  # delivery error differs
+])
+def test_a_log_that_lost_lines_and_does_not_match_its_folders_is_refused(tmp_path, folders):
+    with pytest.raises(ValueError, match="lost lines"):
+        cmp.mission_ends(_log_run(tmp_path, folders=folders))
+
+
+def test_a_duplicated_mission_end_is_refused(tmp_path):
+    ends = [("m1", "done", 100.0, 0.02), ("m1", "done", 100.0, 0.02)]
+    with pytest.raises(ValueError, match="lost lines"):
+        cmp.mission_ends(_log_run(tmp_path, log_missions=ends, folders=ends[:1]))
+
+
+def test_judge_reports_the_log_notes(tmp_path):
+    runs = {}
+    for side in ("L", "R"):
+        for scene in ("line_m", "random_m"):
+            for seed in (3, 4):
+                r = _run()
+                r.seed, r.slam_mode, r.scene = seed, "localization" if side == "L" else "mapping", scene
+                runs[f"{side}_{scene}_{seed}"] = r
+    runs["R_line_m_4"].log_notes = ["live log lost 1 line(s); its 25 mission_end lines match the mission folders"]
+    spec = {"scenes": {s: {"pairs": [[f"L_{s}_{k}", f"R_{s}_{k}"] for k in (3, 4)]} for s in ("line_m", "random_m")}}
+    out = cmp.judge(spec, loader=lambda p: runs[p])
+    assert out["scenes"]["line_m"]["log_notes"] == [{"path": "R_line_m_4", "notes": runs["R_line_m_4"].log_notes}]
+    assert out["scenes"]["random_m"]["log_notes"] == []

@@ -50,6 +50,7 @@ class RunData:
     seed: int | None = None  # result.json arguments.seed
     slam_mode: str | None = None  # "localization" (result.json slam_map) or "mapping"
     scene: str | None = None  # the scene file's name without "_session" (line_m, random_m)
+    log_notes: list = field(default_factory=list)  # what was accepted about the live log (a lost-lines read)
 
 
 def failures_of(result: dict) -> list[dict]:
@@ -579,19 +580,57 @@ def overall(scenes: dict) -> dict:
     return {"ok": not failed, "failed": failed}
 
 
+def _ends(entries) -> list:
+    return [{**e["mission_end"], "delivery_error_m": e.get("delivery_error_m")} for e in entries
+            if e.get("mission_end") is not None]
+
+
+def mission_ends(run: Path) -> tuple:
+    """The live log's mission ends and the notes on how they were read. A log whose end summary counts lost lines
+    (written for the next verdict after the second confirmation, plan 5d) is read only when its mission_end lines --
+    the one thing the verdict takes from it -- are exactly the mission folders': the same unique mission ids, and for
+    each the outcome, ended_s and delivery_error_m of missions/<id>/result.json. Anything else is refused."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from forklift_core.live.spool import read_live_log  # noqa: PLC0415
+
+    try:
+        return _ends(read_live_log(run)), []
+    except ValueError as exc:
+        if "lost lines" not in str(exc):
+            raise
+        refused = exc
+    entries = read_live_log(run, allow_incomplete=True)
+    end = next((e["log_end"] for e in reversed(entries) if "log_end" in e), {})
+    ends = _ends(entries)
+    ids = [m.get("mission_id") for m in ends]
+    folders = {}
+    for path in sorted((run / "missions").glob("*/result.json")):
+        saved = json.loads(path.read_text())
+        folders[path.parent.name] = {**(saved.get("result") or {}), "delivery_error_m": saved.get("delivery_error_m")}
+    problems = []
+    if len(set(ids)) != len(ids):
+        problems.append("a mission_end line twice")
+    if set(ids) != set(folders):
+        problems.append(f"mission ids {sorted(set(ids) ^ set(folders))} on one side only")
+    for m in ends:
+        f = folders.get(m.get("mission_id"))
+        if f is not None and any(m.get(k) != f.get(k) for k in ("outcome", "ended_s", "delivery_error_m")):
+            problems.append(f"{m.get('mission_id')}: its end differs from its folder")
+    if problems:
+        raise ValueError(f"{refused}; its mission ends do not match the mission folders: {'; '.join(problems[:5])}")
+    return ends, [f"live log lost {end.get('dropped_lines')} line(s) ({end.get('line_errors')} failed); its "
+                  f"{len(ends)} mission_end lines match the mission folders"]
+
+
 def load(run: Path) -> RunData:
     """An epoch's run folder: result.json's failure, the spooled slam.records / slam.control, the live log's missions."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    from forklift_core.live.spool import load_list, read_live_log  # noqa: PLC0415
+    from forklift_core.live.spool import load_list  # noqa: PLC0415
 
     result = json.loads((run / "result.json").read_text()) if (run / "result.json").exists() else {}
-    missions = []
-    for entry in read_live_log(run):
-        end = entry.get("mission_end")
-        if end is not None:
-            missions.append({**end, "delivery_error_m": entry.get("delivery_error_m")})
+    missions, notes = mission_ends(run)
     return RunData(records=load_list(run / "spool", "slam.records"), control=load_list(run / "spool", "slam.control"),
-                   missions=missions, failure=result.get("failure_reason"), failures=failures_of(result),
+                   missions=missions, log_notes=notes, failure=result.get("failure_reason"), failures=failures_of(result),
                    holds=list((result.get("slam_summary") or {}).get("holds") or []),
                    seed=(result.get("arguments") or {}).get("seed"),
                    slam_mode=(result.get("slam_map") or {}).get("mode") or "mapping",
@@ -643,7 +682,10 @@ def judge(spec: dict, loader=None) -> dict:
         out["scenes"][name] = {"pairs": verdicts, "gate": gate,
                                "r_originals": [{"path": op, "failure": o.failure, "failures": o.failures,
                                                 "record_problems": record_problems(o)[:5]}
-                                               for (_, _, op), (_, o) in zip(entries, originals) if op]}
+                                               for (_, _, op), (_, o) in zip(entries, originals) if op],
+                               "log_notes": [{"path": p, "notes": run.log_notes}
+                                             for (lp, rp, op), (lr, rr), (_, o) in zip(entries, pairs, originals)
+                                             for p, run in ((lp, lr), (rp, rr), (op, o)) if p and run.log_notes]}
     out["overall"] = overall(scenes)
     if config:
         out["overall"] = {"ok": False, "failed": [f"configuration: {c}" for c in config] + out["overall"]["failed"]}
