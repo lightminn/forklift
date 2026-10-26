@@ -27,5 +27,9 @@ def test_off_by_default_and_the_cap_when_on():
 
 def test_the_mission_planners_get_it():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
-    assert source.count("**return_start_backoff_kw(args)") == 3  # mission plan, planner hook, loaded preparation
+    assert source.count("**return_start_backoff_kw(args)") == 2  # the first mission plan, the loaded preparation
     assert "return_start_backoff_m=return_start_backoff_m_of(args)" in source  # the core's option
+    # the core's own mission plans (observe, its worker job, the blocked replan and its tight retry) add it themselves,
+    # as they add the exit prefix: the runner's hook stays a pass-through
+    core = (ROOT / "src/forklift_core/mission/core.py").read_text()
+    assert core.count("**self._mission_backoff_kwargs()") == 4

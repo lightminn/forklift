@@ -5620,8 +5620,7 @@ def drive(S, isaac) -> None:
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
             plan_transport=lambda *a, **k: plan_transport(
-                *a, **k, **({} if transport_exit is None else {"exit_prefix": transport_exit}),
-                **return_start_backoff_kw(args)),
+                *a, **k, **({} if transport_exit is None else {"exit_prefix": transport_exit})),
             final_straight_prefix=lambda *a: final_straight_prefix(*a),
             same_path=same_path, path_stats=path_stats,
             # M-a1 slice 4a: the follower rules' helpers and the cusp heading holds (built further down run()).

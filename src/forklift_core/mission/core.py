@@ -732,8 +732,8 @@ class MissionCore:
                                                  **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs(),
                                                  **backoff_kw_)
                 if first_live_ is not live:  # plan 2026-10-27 R6
-                    note_return_backoff(state, "live_leg", first_live_.start_backoff, False)
-                note_return_backoff(state, "live_leg", live.start_backoff, live.success)
+                    note_return_backoff(state, "live_leg", getattr(first_live_, "start_backoff", None), False)
+                note_return_backoff(state, "live_leg", getattr(live, "start_backoff", None), live.success)
             obstacle["deadline"] = None
             obstacle.setdefault("live_plans", []).append(
                 {"phase": ms.phase, "time_s": t, "status": live.status,
@@ -1647,6 +1647,7 @@ class MissionCore:
                 target_pickup=pocket["planning_pickup"], start_rear=start,
                 return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                 trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                **self._mission_backoff_kwargs(),
             )
             mission_clearance_ = float(planner_config.clearance_m)
             if "invalid_start" in mission_again.status or "invalid_goal" in mission_again.status:
@@ -1659,6 +1660,7 @@ class MissionCore:
                     target_pickup=pocket["planning_pickup"], start_rear=start,
                     return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=tight_travel,
                     trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                    **self._mission_backoff_kwargs(),
                 )
             near_again = (
                 final_straight_prefix(mission_again.approach, geometry.alignment_straight_m)
@@ -3332,7 +3334,7 @@ class MissionCore:
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                            trace=planning_trace, **grid_kwargs("mission", planning_pickup),
-                           **self._exit_prefix_kwargs())
+                           **self._mission_backoff_kwargs(), **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -3354,6 +3356,7 @@ class MissionCore:
             travel_config=travel_config,
             trace=planning_trace,
             **grid_kwargs("mission", planning_pickup),
+            **self._mission_backoff_kwargs(),
         )
         near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
         return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
@@ -6578,8 +6581,8 @@ class MissionCore:
             event["tight_retry"] = True
         if leg == "return_home":  # plan 2026-10-27 R6: each try's backoff, the one taken marked
             if first_ is not replanned:
-                note_return_backoff(state, "release_replan", first_.start_backoff, False)
-            note_return_backoff(state, "release_replan", replanned.start_backoff, replanned.success)
+                note_return_backoff(state, "release_replan", getattr(first_, "start_backoff", None), False)
+            note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(
             replaced_path=path_record(paths[leg]),
             replanned=True,
@@ -6721,6 +6724,13 @@ class MissionCore:
                 "retry_on": tuple(retry_on), "tight_args": tight_args,
                 "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw, **exit_kw)}
 
+    def _mission_backoff_kwargs(self) -> dict:
+        """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 1: the mission plan's return-start backoff cap
+        for the core's plan_transport calls (sync and worker), as _exit_prefix_kwargs gives the exit prefix; none when
+        off, so the calls are as before."""
+        limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
+        return {"return_start_backoff_m": limit} if limit > 0.0 else {}
+
     def _return_backoff_kwargs(self, world) -> dict:
         """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 2-3 / R5: the return-start backoff for a return
         replanned at the withdrawal end (the docking release's, the first live return), on ``world`` -- the scenario as
@@ -6779,7 +6789,7 @@ class MissionCore:
             event["tight_retry"] = True
         if leg == "return_home":  # plan 2026-10-27 R6: the first try's backoff (replaced by the tight retry) too
             note_return_backoff(state, "release_replan", value.get("first_backoff"), False)
-            note_return_backoff(state, "release_replan", replanned.start_backoff, replanned.success)
+            note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
                      planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
         hooks.require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
@@ -6805,7 +6815,7 @@ class MissionCore:
              "async": True, "taken_s": float(t)})
         if ms.phase == "return_home":  # plan 2026-10-27 R6
             note_return_backoff(state, "live_leg", value.get("first_backoff"), False)
-            note_return_backoff(state, "live_leg", live.start_backoff, live.success)
+            note_return_backoff(state, "live_leg", getattr(live, "start_backoff", None), live.success)
         if not live.success:
             tries = sum(1 for lp in obstacle["live_plans"] if lp["phase"] == ms.phase)
             hooks.require(tries < 5, f"obstacle_live_plan_failed in {ms.phase}: {live.status}")
@@ -7048,7 +7058,7 @@ class MissionCore:
                 recs_ = list(value.get("return_backoffs", ()))
                 for i_, rec_ in enumerate(recs_):  # R6, after the adoption's baseline reset
                     note_return_backoff(self.state, "mission_plan", rec_, i_ == len(recs_) - 1
-                                        and value["result"].return_home.start_backoff is not None)
+                                        and getattr(value["result"].return_home, "start_backoff", None) is not None)
             else:
                 self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
 
