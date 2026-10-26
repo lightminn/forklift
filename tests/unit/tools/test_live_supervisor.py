@@ -398,3 +398,17 @@ def test_the_live_runner_takes_the_encoder_model_with_its_own_age_table():
             '[ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml') in runner
     assert '--obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act' in runner
     assert "--obstacle-layer config/obstacle_layer_single.yaml" not in runner
+
+
+def test_the_live_runner_holds_slam_corrections_on_d7_re_approaches_by_default():
+    """Re-approach hold plan 2a: V5 passed, so the live launcher (CT-1 and the console) runs --d7-reapproach-hold on
+    by default and D7_HOLD=off turns it off; EXTRA_ARGS come after it, so a run's own option still wins."""
+    from pathlib import Path
+
+    live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "D7_HOLD=${D7_HOLD:-on}" in live
+    assert 'case "$D7_HOLD" in on|off) ;;' in live
+    assert "printf 'D7_HOLD=%q\\n' \"$D7_HOLD\"" in live
+    runner = live[live.index('cat > "$OUT/runner.sh"'):]
+    runner = runner[: runner.index("EOT\n")]
+    assert runner.index('--d7-reapproach-hold "$D7_HOLD"') < runner.index("$EXTRA_ARGS")
