@@ -98,6 +98,50 @@ class World:
         return self.core.docking_and_stall(t, np.array([1.0, 2.0, 0.0]), tracking, speed, 1 / 120, True)
 
 
+def test_a_reapproach_hold_exit_due_brakes_then_runs_on_the_stand():
+    """Re-approach hold plan E1 (Codex plan round 2: the order against arrival and the stall rules): moving, an exit
+    due brakes to zero with no stall counted; standing, the exit runs before the docking stop and the stall rules;
+    an arrival goes on to the docking as before."""
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=False, remaining=1.0)
+    w.core.reapproach_hold_exit_due = lambda t: "correction_gap"
+    w.core.reapproach_hold_exit = lambda t, reason: w.calls.append(("hold_exit", (reason,), {}))
+    out = w.tick(Tracking(status="tracking", speed_mps=0.2), speed=0.2)
+    assert (out.tracking.status, out.tracking.speed_mps) == ("braking", 0.0) and "hold_exit" not in w.names()
+    assert w.ms.slam_stall_ticks == 0
+    w.slam["stop_now"] = True
+    w.tick(Tracking(status="tracking", at_cusp=True))
+    assert w.names()[:3] == ["hold_exit", "slam_rear", "update"]
+    assert "start_docking_retry" not in w.names() and w.ms.slam_stall_ticks == 0
+    assert w.slam["control"][-1][1:4] == [3.0, 4.0, 0.1]
+    # an arrival is not stopped for an exit
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=True)
+    w.core.reapproach_hold_exit_due = lambda t: "hold_time"
+    w.core.reapproach_hold_exit = lambda t, reason: w.calls.append(("hold_exit", (reason,), {}))
+    out = w.tick(Tracking(status="arrived"))
+    assert "hold_exit" not in w.names() and out.tracking.status == "arrived"
+
+
+def test_an_exit_does_not_carry_the_old_paths_creep_or_dock_wait_onto_the_new_one():
+    """Codex implementation round 1 P2: an R2 creep standing at 119 dock-stop ticks, then an exit re-installs a
+    re-approach -- that tick's creep verdict and wait belong to the old path, not a dock on the new one (h -> a)."""
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=True, remaining=0.0)
+    w.core.goal_creep = lambda t, tracking, dt: "r2"
+    w.ms.dock_stop_ticks = 119
+    w.core.reapproach_hold_exit_due = lambda t: "correction_gap"
+    w.core.reapproach_hold_exit = lambda t, reason: w.calls.append(("hold_exit", (reason,), {}))
+    w.tick(Tracking(status="tracking"))
+    assert "hold_exit" in w.names() and "dock_at_delivery_straight" not in w.names()
+    # the wait starts over (this harness's tracker stands at its end, so the new path counts its own first tick)
+    assert w.ms.dock_stop_ticks <= 1
+
+
+def test_no_reapproach_hold_exit_leaves_the_tick_as_it_was():
+    w = World(docking={"reapproach": True, "status": "armed"}, stop_now=False, remaining=1.0)
+    w.core.reapproach_hold_exit_due = lambda t: None
+    out = w.tick(Tracking(status="tracking", speed_mps=0.2), speed=0.2)
+    assert out.tracking.status == "tracking" and out.tracking.speed_mps == 0.2
+
+
 MISS = Tracking(status="failed", failure="endpoint_heading")
 
 

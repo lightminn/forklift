@@ -3,7 +3,7 @@
     python3 tools/isaac_bundle.py check --list RUNS.jsonl --runner SNAP/sim/isaac/run_transport.py
     sbatch $(python3 tools/isaac_bundle.py sizes live|riib|bd [--slots N]) deploy/slurm/isaac_bundle.sbatch RUNS OUT KIND
     python3 tools/isaac_bundle.py --list RUNS.jsonl --out OUT [--slots N] [--shards N] [--stagger-s 60]
-        [--session-vram-mib 3950] [--run-timeout-s S] [--grace-s 110] [--retries 1] [--pace-floor R]
+        [--session-vram-mib 4100] [--run-timeout-s S] [--grace-s 110] [--retries 1] [--pace-floor R]
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
@@ -109,7 +109,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SHARD_MIB = 4076  # 16,303 MiB / 4 shards per GPU on ws1 (gres.conf)
-SESSION_VRAM_MIB = 3950  # a live session with the learned worker: 3,886-3,915 MiB measured, + ~40 MiB driver share
+SESSION_VRAM_MIB = 4100  # a live session with the learned worker at its peak (3,890-4,047 MiB) + ~50 MiB driver share: KINDS live
 PORTS = (9000, 9500)
 RESERVED_ENV = ("SESSION_ID", "BRIDGE_CPU", "BUNDLE_SLOT", "BUNDLE_JOB", "BUNDLE_RUN", "BUNDLE_TOKEN")
 # The failures themselves, not summary lines such as riib_scene's "OUT_OF_DEVICE lines: 0".
@@ -133,7 +133,12 @@ KINDS = {
     # timed in its records and has no wall-clock bound (pallet_mission's retry ladder: up to 390,000 hybrid-A*
     # expansions, no deadline outside the grid path -- Codex), so riib is measured, not acted on: every watched run's
     # results line carries silence_max_s; set stall_min from those (dv3_trailer_det2 hung in render for 45 min).
-    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30, "stall_min": 10},
+    # live VRAM (2026-10-27): a GPU gives 16,303 - 464 (the driver's reservation) = 15,839 MiB; sessions with their
+    # learned worker peak at 3,890-4,047 MiB (3,762-3,821 early) and take ~50 MiB of driver share each, so a fourth
+    # session does not fit once they have grown (11596_2 never started; four ran only while small). 4,100 a session:
+    # 3 a GPU, 3 sessions on 4 shards, 1 on 2 -- what the shards tell other jobs -- until session VRAM shrinks
+    # (docs/plans/2026-10-26-ws1-isaac-array.md 5.4).
+    "live": {"session_gib": 5.5, "cores": 2, "max_slots": 3, "vram_mib": 4100, "run_min": 30, "stall_min": 10},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
     "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
              "watch_rel": "run/frames.jsonl"},
@@ -363,22 +368,30 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     if shards > 4:
         raise ValueError(f"{kind}: {slots} sessions need {shards} shards, more than a GPU's 4")
     mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
-    # no core for the SLAM bridges by default: set apart (P2c) they answered keyframes on the same curve as on a shared
-    # CPU (scans 4,500-4,999: median 0.32 s, p95 0.77-0.82 s -- the graph's size sets it, not contention), so the two
-    # CPUs go to more sessions; --bridge-cpus N with a bigger --cpus-per-task still sets one apart
-    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
+    # a core for the job's SLAM bridges on top of 2 CPUs a session (the runner's --bridge-cpus auto sets it apart):
+    # with a session and its bridge on one core, 11590's array tasks lost 3 of 3 runs to slam_link_failed and the
+    # 2-slot bundles (V5, kob) about 1 in 10 run-hours; with the core apart, the S3 second round's 8 runs had 2, both
+    # R mapping graphs grown to 1.10-1.15 s and none of the normal-processing kind -- the rule fixed before counted
+    # all (2: a shared-against-split comparison); the lead's reading after the results counts the latter only and
+    # adopted the core provisionally (docs/plans/2026-10-26-ws1-isaac-array.md 5.3; weak evidence, kept counted)
+    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
+           "mem_gib": int(mem)}
     if runs:
         out["time"] = time_limit(runs, slots, jobs, run_min or k["run_min"])
     return out
 
 
-# One run per Slurm array task (deploy/slurm/isaac_array.sbatch, docs/plans/2026-10-26-ws1-isaac-array.md): task_gib
-# is the task's own cgroup (no page cache shared with other sessions): live 7 -- a long S3 session's anon reached
-# 5.998 GiB, single live jobs' MaxRSS 5.98-6.51 GiB with the cache -- riib 7.5 (anon 5.93, MaxRSS <= 7.41 at 8G), bd
-# 6.5 (peak 5.82); array_k the tasks at once: live 7 (7 x 7 GiB + 7 x 0.74 GiB of bridges + others' jobs within the
-# 61.4 GiB the node has, and a shard left for others), riib 4 (2 per GPU: 4.47 GB a session takes shard 2), bd 7.
-ARRAY = {"live": {"task_gib": 7.0, "array_k": 7}, "riib": {"task_gib": 7.5, "array_k": 4},
-         "bd": {"task_gib": 6.5, "array_k": 7}}
+# One run per Slurm array task (deploy/slurm/isaac_array.sbatch, docs/plans/2026-10-26-ws1-isaac-array.md), sized
+# as a single job, not as a bundle's share: a task cannot borrow a neighbour's idle CPUs or page cache. The pilot
+# (11590, 2026-10-26) ran live tasks at CPU 2 / 7G: 3 of 3 ended slam_link_failed (no bridge reply in 1 s) -- the two
+# CPUs are one physical core, the session and its bridge on it, bridge median 0.174-0.178 s against 0.132-0.136 s for
+# the same scenes in a 4-slot bundle -- and the cgroup met its 7G limit 590 and 707 times. cpus: live 4 (the runner's
+# --bridge-cpus auto then gives the bridge one core and the session the other), riib 6 (a riib session used 3.1 of 4
+# CPUs alone: two cores for it, one for the bridge), bd 6 (its single job); task_gib: live and riib 8 (their single
+# jobs'; S3 runner RSS 6.6 GiB), bd 7 (its single job); array_k: 20 CPUs give riib 3, bd 3; live 4 -- a live task
+# takes 2 shards since its VRAM (KINDS) is over one, so a GPU holds 2 of them: 3-slot bundles hold 3 a GPU.
+ARRAY = {"live": {"cpus": 4, "task_gib": 8.0, "array_k": 4}, "riib": {"cpus": 6, "task_gib": 8.0, "array_k": 3},
+         "bd": {"cpus": 6, "task_gib": 7.0, "array_k": 3}}
 RETRY_ROOM_MIN = 10  # a GPU allocation failure comes in a run's first minutes: room for the runner's retry in the task
 
 
@@ -393,7 +406,7 @@ def array_sizes(kind, runs, run_min):
     k, a = KINDS[kind], ARRAY[kind]
     shards = -(-k["vram_mib"] // SHARD_MIB)
     minutes = int(-(-((run_min + RETRY_ROOM_MIN + 5) * 1.15) // 5) * 5)
-    return {"array": f"0-{runs - 1}%{min(a['array_k'], runs)}", "gres": f"shard:{shards}", "cpus": k["cores"],
+    return {"array": f"0-{runs - 1}%{min(a['array_k'], runs)}", "gres": f"shard:{shards}", "cpus": a["cpus"],
             "mem_mib": int(a["task_gib"] * 1024), "time": f"{minutes // 60:02d}:{minutes % 60:02d}:00"}
 
 
@@ -982,7 +995,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                diag_wait_s=60.0, no_runner_s=900.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
-               siblings=_siblings):
+               siblings=_siblings, gpu_full_give_up_s=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if claim_dir is not None:
@@ -1014,6 +1027,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     records = []
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
+          "waiting_since": None, "gpu_full_gave_up": 0, "busy_at": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
           "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
           "time_left": 0, "time_left_retry": [], "stall_next": 0.0, "stalled": 0,
@@ -1310,6 +1324,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         vram_next = 0.0
         while queue or live:
             now = time.monotonic()
+            if live:  # the job's own runs (ending ones too) may still free the device: no give-up counts from before
+                st["busy_at"] = now
             for pid, r in list(live.items()):
                 if r.exited is None:
                     try:
@@ -1457,6 +1473,26 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
                     st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1
                     st["waiting"] = v
+                    st["waiting_since"] = now
+                elif v not in ("over", "gpu_full", "node_ram"):  # an unreadable or stale sample breaks the wait
+                    st["waiting"], st["waiting_since"] = None, None
+                if (v == "gpu_full" and gpu_full_give_up_s and not live
+                        and now - max(st["waiting_since"], st["busy_at"] or 0.0) >= gpu_full_give_up_s):
+                    # nothing of this job runs, so nothing of ours will free the device: other jobs' sessions hold
+                    # it (11596_2, 2026-10-27: three S3 sessions grown to 3,920-4,018 MiB, 464 MiB the driver
+                    # reserves, 3,837 MiB free -- the fourth shard of a GPU without the memory for a fourth session;
+                    # the task held its shard, CPUs and memory for 54 min). Slurm hands shards out from the first
+                    # GPU, so a requeued task would likely land on the same device: end, the list's owner resubmits.
+                    while queue:
+                        index, run, attempt = queue.popleft()
+                        if claimed_elsewhere(run, attempt):  # another job of the list has it: not ours to record
+                            st["claimed_elsewhere"] += 1
+                            continue
+                        record({"name": run.name, "index": index, "slot": None, "attempt": attempt,
+                                "status": "gpu_full", "rc": None, "signal": None, "retried": False,
+                                "free_mib": st["free"], "need_mib": session_vram_mib, "gpu": gpu_index,
+                                "waited_s": round(now - max(st["waiting_since"], st["busy_at"] or 0.0), 1)})
+                        st["gpu_full_gave_up"] += 1
             time.sleep(poll_s)
 
     try:
@@ -1497,11 +1533,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     failed = sum(1 for r in final if r["status"] in ("infra_failed", "stalled")
                  or (r["status"] == "ended" and r["rc"] != 0))
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
-                                                          "time_left_retry"))
+                                                          "time_left_retry", "gpu_full"))
     summary = {
         "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
-        "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
+        "gpu_full_waits": st["gpu_full_waits"], "gpu_full_gave_up": st["gpu_full_gave_up"], "unreadable_starts": st["unreadable_starts"],
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
@@ -1570,6 +1606,9 @@ def main(argv=None) -> int:
                   f"--time={z['time']}")
             print(f"(then: deploy/slurm/isaac_array.sbatch RUNS OUT {a.kind}, with BUNDLE_ARGS=\"--run-est-min "
                   f"{a.run_min:g}\")", file=sys.stderr)
+            if a.kind == "live":
+                print("note: a live task takes 2 shards (2 a GPU); 3-slot bundles (sizes live --slots 3) hold 3 a GPU",
+                      file=sys.stderr)
             return 0
         try:
             z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min)
@@ -1624,6 +1663,9 @@ def main(argv=None) -> int:
                     help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
                     help="node-wide RAM reservations shared by this user's bundle jobs")
+    ap.add_argument("--gpu-full-give-up-min", type=float, default=0.0,
+                    help="with nothing of the job running, stop waiting for a GPU that has stayed full this long and "
+                         "record the unstarted runs as gpu_full (0: wait; the array script gives 10)")
     ap.add_argument("--bridge-cpus", default="auto",
                     help="CPUs set apart for the SLAM bridges, the sessions pinned to the rest (auto: a core when the "
                          "job has one beyond 2 CPUs per slot; 0: bridges share)")
@@ -1643,7 +1685,12 @@ def main(argv=None) -> int:
     shards = a.shards or (int(env_shards) if env_shards.isdigit() else None)
     if a.session_vram_mib is None:
         a.session_vram_mib = KINDS[a.kind]["vram_mib"] if a.kind else SESSION_VRAM_MIB
-    slots = a.slots or (kind_slots(a.kind, shards) if a.kind and shards else shards)
+    if a.slots:
+        slots = a.slots
+    elif a.kind and shards:
+        slots = kind_slots(a.kind, shards)
+    else:  # no kind: as many sessions of --session-vram-mib as the shards hold, at most one a shard
+        slots = min(shards, shards * a.shard_mib // a.session_vram_mib) if shards else None
     if not slots:
         print("refusing: no --slots and no shard count (--shards or SLURM_SHARDS_ON_NODE), or the shards hold no "
               "session of --kind", file=sys.stderr)
@@ -1705,6 +1752,7 @@ def _run_main(a, runs, slots, shards, probe, stop):
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
+        gpu_full_give_up_s=60 * a.gpu_full_give_up_min or None,
     )
 
 

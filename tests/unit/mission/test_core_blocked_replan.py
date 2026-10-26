@@ -170,6 +170,23 @@ def test_transport_replans_through_the_dispatch_and_arms_the_docking_unless_reap
     assert slam["control"][-1] == [0, 1.2, 2.0, 0.0]
 
 
+def test_a_reapproach_replan_asks_for_the_hold_again_whether_the_path_changed_or_not():
+    """Re-approach hold plan H1 (Codex round 1 P2-1): the replan released the hold before planning and installs the
+    tracker itself, so it asks for the re-approach hold again -- on a new path and on the same path kept."""
+    for same in (False, True):
+        slam = {"docking": {"reapproach": True}, "tracker": SimpleNamespace(mode="tracking"), "control": [[0, 0, 0, 0]]}
+        w = World("transport", plans=[plan(length=2.5)], slam=slam, same=same)
+        w.core.hold_reapproach = lambda t, length_m: w.log("hold_reapproach", length_m)
+        w.replan()
+        assert w.names()[-1] == "hold_reapproach"
+        assert [c[1] for c in w.calls if c[0] == "hold_reapproach"] == [(1.0,)] if same else [(2.5,)]
+    slam = {"docking": {"reapproach": False}, "tracker": SimpleNamespace(mode="tracking"), "control": [[0, 0, 0, 0]]}
+    w = World("transport", plans=[plan()], slam=slam)
+    w.core.hold_reapproach = lambda t, length_m: w.log("hold_reapproach", length_m)
+    w.replan()
+    assert "hold_reapproach" not in w.names()  # a transport leg is armed for docking, not held
+
+
 def test_the_return_replans_home_on_the_return_scenario():
     back = SimpleNamespace(destination="D2")
     slam = {"return_scenario": back, "docking": {}, "tracker": SimpleNamespace(mode="tracking")}

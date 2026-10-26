@@ -98,6 +98,9 @@ OBSERVE_END_STAND_S = 3.0  # plan 2026-10-24-leg-end-budget-stands O1: a final-g
 STALL_REPLANS = 2  # the stall replans per mission (transport and return; #117's R2 band reads the same count)
 CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
 CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
+OBSERVE_BACKOFF_LIMIT_M = 0.30  # plan 2026-10-26-observe-start-backoff B3: the most a start backoff goes
+OBSERVE_BACKOFF_STEP_M = 0.01  # its advice's step
+OBSERVE_BACKOFF_PAD_M = 0.03  # past the advice: the backoff tracker's 0.01 m end tolerance and the advice's step
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
 RECOVERY_PHASE_LIMIT_S = 20.0
 MANUAL_GROUND_HOLD_S = 1.0  # plan D14: the manual ground verdict holds this long before the reverse opens
@@ -254,6 +257,12 @@ class MissionCore:
         self.scene_replan = SceneReplan(None)
         # Plan 2026-10-24-goal-creep-stall G2: the final goal's creep watch (a mission's own: CORE_FIELDS).
         self.goal_creep_watch = {"key": None, "last_t": None, "window": [], "latched": False}
+        # docs/plans/2026-10-26-observe-start-backoff.md B4/B8: the first far observation's start backoff in progress and
+        # the observe leg serials that backed off in this mission (a mission's own: CORE_FIELDS); the tick its guard
+        # stopped it on (the command assembly's hold).
+        self.observe_backoff: dict | None = None
+        self.observe_backoff_used: list = []
+        self._observe_backoff_stop_t = None
         self.scene_mail = None  # the device's plan answer: ("ok", result) | ("ok_fail", status) | ("dropped", why)
         self.scene_raised = False  # a request raised in this tick's follower: the rest of the tick stands
         self.permit_stop_since = None  # P6: the held zero limit's stretch {since_s, last_s, key} or None
@@ -1731,6 +1740,8 @@ class MissionCore:
             obstacle["replans"][-1]["same_path"] = True
             obstacle.setdefault("replan_wait", {}).pop(ms.phase, None)
             requested_speed = 0.0
+            if ms.phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
+                self.hold_reapproach(t, paths["transport"].length_m)  # re-approach hold plan H1 (Codex round 1 P2-1)
         else:
             # D4: a replan may rightly be longer (a detour), so the
             # no-progress watch restarts on the new path; the
@@ -1760,6 +1771,8 @@ class MissionCore:
                 realign_install("obstacle_replan")  # Plan D8 S4c-3 stage 2
             if ms.phase == "transport" and slam is not None and not slam["docking"].get("reapproach"):
                 arm_docking()
+            if ms.phase == "transport" and slam is not None and slam["docking"].get("reapproach"):
+                self.hold_reapproach(t, replanned.length_m)  # re-approach hold plan H1 (Codex round 1 P2-1)
             ms.phase_started = t
             requested_speed = 0.0
         return SimpleNamespace(rear=rear, requested_speed=requested_speed)
@@ -1942,6 +1955,24 @@ class MissionCore:
             # Plan 2026-10-24-goal-creep-stall R1: the creep at the "remaining 0" rules' own zero -- a zero command
             # (status kept) lets the stop detector see the stop and those rules take it.
             tracking = replace(tracking, speed_mps=0.0)
+        # Re-approach hold plan E1: an exit due brakes the truck (unless it arrived); standing, the exit runs before
+        # the docking stop and the stall rules below (a stall needs a tracking status, which braking is not)
+        hold_exit_ = self.reapproach_hold_exit_due(t) if d7_owned else None
+        if hold_exit_ is not None and tracking.status != "arrived":
+            if slam["stop_now"]:
+                self.reapproach_hold_exit(t, hold_exit_)
+                rear = slam_rear(t)
+                hooks.set_rear(rear)  # the runner's closures read its rear (Codex slice-3 P2)
+                slam["control"][-1][1:4] = rear.tolist()
+                tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+                ms.last_tracking = tracking
+                ms.slam_stall_ticks = 0
+                # this tick's creep verdict and dock wait were the old path's (Codex implementation round 1 P2); the
+                # creep watch itself starts over on the new tracker (it is keyed on it)
+                creep_ = None
+                ms.dock_stop_ticks = 0
+            else:
+                tracking = replace(tracking, status="braking", speed_mps=0.0)
         dock_stop = (
             ms.phase == "transport"
             and d7_docking_.get("status") == "armed"
@@ -2470,23 +2501,213 @@ class MissionCore:
                         - (len(state["observe_replans"]) + 1 - leg_["start"]),
                     }
                 )
+                if (not replanned.success and replanned.status == "invalid_start"
+                        and getattr(options, "observe_start_backoff", "off") == "on"
+                        and self._observe_backoff_start(t, rear, target)):
+                    # docs/plans/2026-10-26-observe-start-backoff.md B2: backed off straight first; the same target is
+                    # planned again once the backoff ends. This tick already goes through the backoff's own tick (its
+                    # guard and end): the new tracker's first update may already read arrived (Codex impl review P2)
+                    tracking = trackers["observe"].update(rear, signed_speed, dt)
+                    ms.last_tracking = tracking
+                    return self.observe_backoff_tick(t, rear, tracking, signed_speed, dt)
                 require(replanned.success, f"observe_replan_failed:{replanned.status}")
-                paths["observe"] = replanned
-                state.setdefault("paths", {})["observe"] = path_record(replanned)
-                hooks.write_paths()
-                hooks.show_path(replanned, "Observe", (0.2, 0.8, 0.8))
-                trackers["observe"] = RearAxlePathTracker(
-                    replanned.poses,
-                    replanned.directions,
-                    replanned.curvatures_inv_m,
-                    trackers["observe"].config,
-                )
-                ms.phase_started = t
-                realign_install("observe_replan")  # Plan D8 S4c-3 stage 2
-                tracking = trackers["observe"].update(rear, signed_speed, dt)
-                ms.last_tracking = tracking
+                tracking = self._install_observe_replan(t, rear, replanned, trackers["observe"].config, signed_speed, dt)
         if slam is not None and ms.phase == "observe":
             tracking = self.observe_end_stand(t, rear, tracking, signed_speed, dt)
+        return SimpleNamespace(tracking=tracking, rear=rear)
+
+    def _install_observe_replan(self, t: float, rear, replanned, config, signed_speed: float, dt: float):
+        """The observe leg planned again, installed (the observe miss's replan and the start backoff's, plan
+        2026-10-26-observe-start-backoff B5): its path recorded and written, the tracker with ``config``, the phase
+        clock restarted, the realignment told; returns the new tracker's first update."""
+        ms, state, hooks, paths, trackers = self.ms, self.state, self.hooks, self.paths, self.trackers
+        paths["observe"] = replanned
+        state.setdefault("paths", {})["observe"] = hooks.path_record(replanned)
+        hooks.write_paths()
+        hooks.show_path(replanned, "Observe", (0.2, 0.8, 0.8))
+        trackers["observe"] = RearAxlePathTracker(
+            replanned.poses,
+            replanned.directions,
+            replanned.curvatures_inv_m,
+            config,
+        )
+        ms.phase_started = t
+        self.realign_install("observe_replan")  # Plan D8 S4c-3 stage 2
+        tracking = trackers["observe"].update(rear, signed_speed, dt)
+        ms.last_tracking = tracking
+        return tracking
+
+    # --- docs/plans/2026-10-26-observe-start-backoff.md: the first far observation's start backoff ---
+    def _observe_start_check(self):
+        """(checker, clearance): the observe leg's start check, built as plan_observation_leg's search builds it
+        (pallet_mission.observation_start_checker) from the inputs of this tick."""
+        from forklift_core.planning import pallet_mission as pm
+        from forklift_core.planning.grid_collision import make_checker
+
+        options, hooks = self.options, self.hooks
+        kw = dict(hooks.grid_kwargs("observe"))
+        obstacles, footprint, bounds = pm.leg_obstacles(
+            "observe", hooks.grid_world(options.scenario), self.geometry, pickup_obstacle=kw.get("pickup_obstacle"),
+            pickup_bounds=self.observe_bounds())
+        return make_checker(obstacles, footprint, bounds, kw.get("occupancy")), footprint, float(
+            options.planner_config.clearance_m)
+
+    def _observe_backoff_start(self, t: float, rear, target) -> bool:
+        """B2/B3: after the observe miss's replan came back invalid_start, back off straight by the start check's own
+        advice -- the first far observation, once per observe leg, the start free at zero clearance, the advice
+        within 0.30 m, the sweep, the permission's candidate check and its start permit all passing. True: the
+        backoff installed; False (recorded): the miss ends the mission as before."""
+        from forklift_core.control import escape as esc
+        from forklift_core.planning import pallet_mission as pm
+
+        ms, state, options, obstacle, trackers = self.ms, self.state, self.options, self.obstacle, self.trackers
+        serial = state["observe_replan_leg"]["serial"]
+        rec = {"time_s": float(t), "rear": [float(v) for v in rear], "leg_serial": serial, "installed": False}
+        state.setdefault("observe_start_backoffs", []).append(rec)
+        if not self.scene_far_observe() or serial in self.observe_backoff_used or obstacle is None:
+            rec["outcome"] = "not_eligible"
+            return False
+        checker, footprint, clearance = self._observe_start_check()
+        start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+        if not checker.free((start.x_m, start.y_m, start.yaw_rad), 0.0):
+            rec["outcome"] = "overlap"
+            return False
+        layer = obstacle["layer"]
+        pconf = layer.permission.config
+        speed = float(options.backoff_speed_mps)
+        stop_m = float(pconf.stopping.distance_m(speed) + pconf.step_m)
+        kappa = float(self.hooks.held_kappa())
+        rec["held_kappa"] = kappa
+        pose_ = tuple(float(v) for v in rear)
+        tries = rec.setdefault("tries", [])
+        chosen = None
+        for direction in (-1, 1):
+            # back first, forward when the way back is refused for any reason (Isaac survey random_m S2/M2: the hall
+            # bound behind, blocked at 0.15 m) -- plan v4 B3; every check below holds for either direction
+            try_ = {"direction": direction}
+            tries.append(try_)
+            advice = pm.straight_start_advice(checker.free, clearance, start, direction, step_m=OBSERVE_BACKOFF_STEP_M,
+                                              limit_m=OBSERVE_BACKOFF_LIMIT_M)
+            try_["advice"] = advice
+            if advice.get("backoff_m") is None:
+                try_["outcome"] = "blocked" if "blocked_at_m" in advice else "no_room"
+                continue
+            length = min(float(advice["backoff_m"]) + OBSERVE_BACKOFF_PAD_M, float(advice["backoff_max_m"]),
+                         OBSERVE_BACKOFF_LIMIT_M)
+            try_["length_m"] = length
+            if length < float(advice["backoff_m"]) + esc.END_POSITION_TOL_M - 1e-9:
+                # clipped by the free run: the tracker may stop short of the advice by its end tolerance
+                try_["outcome"] = "clipped"
+                continue
+            poses = esc.straight(rear, direction, length)
+            if not esc.rectangles_sweep_free(checker, poses):
+                try_["outcome"] = "precheck_sweep"
+                continue
+            ahead = esc.straight(rear, direction, length + stop_m)
+            blocked = layer.check_candidate(ahead, current_pose=pose_, direction=direction, loaded=False).blocked
+            if blocked is not None:
+                try_["outcome"] = f"precheck_path:{blocked}"
+                continue
+            permit = layer.candidate_permit(t, poses, current_pose=pose_, direction=direction, loaded=False,
+                                            curvature_inv_m=0.0, measured_curvature_inv_m=kappa, cap_mps=speed)
+            try_["permit"] = permit
+            if not permit["ok"]:
+                try_["outcome"] = "precheck_permit"
+                continue
+            try_["outcome"] = "chosen"
+            chosen = (direction, length, poses)
+            break
+        if chosen is None:
+            rec["outcome"] = tries[0]["outcome"] if tries[0]["outcome"] == tries[-1]["outcome"] else "+".join(
+                t_["outcome"] for t_ in tries)
+            rec["advice"] = tries[0].get("advice")
+            return False
+        direction, length, poses = chosen
+        rec.update(direction=direction, length_m=length, advice=tries[-1]["advice"])
+        leg_tracker = trackers["observe"]
+        n = len(poses)
+        trackers["observe"] = RearAxlePathTracker(
+            poses, np.full(n, direction, dtype=np.int8), np.zeros(n),
+            replace(leg_tracker.config, cruise_speed_mps=speed, position_tolerance_m=esc.END_POSITION_TOL_M,
+                    yaw_tolerance_rad=esc.END_YAW_TOL_RAD, overshoot_tolerance_m=esc.END_POSITION_TOL_M))
+        self.observe_backoff = {"time_s": float(t), "serial": serial, "target": target, "leg_tracker": leg_tracker,
+                                "config": leg_tracker.config, "tracker": trackers["observe"], "stop_m": stop_m,
+                                "direction": direction,
+                                "footprint": footprint, "released": False, "stopping": False, "record": rec}
+        self.observe_backoff_used.append(serial)
+        ms.phase_started = t
+        self._refresh_for_new_leg(t, rear)
+        rec["installed"] = True
+        return True
+
+    def observe_backoff_tick(self, t: float, rear, tracking, signed_speed: float, dt: float) -> SimpleNamespace:
+        """B4/B5: the start backoff's tick, ahead of the stall and observe recoveries (the runner skips them while
+        it lasts): the guard on the stop from here, braking on a moving failure, and at its end -- standing, the
+        hold released, the start check again -- the same target planned once and installed, or the mission ended.
+        The tracking it returns is never failed or arrived (no failure end, no observe arrival)."""
+        ms, slam, hooks, options = self.ms, self.slam, self.hooks, self.options
+        ob = self.observe_backoff
+        rec = ob["record"]
+        tracker = self.trackers["observe"]
+        braking = replace(tracking, status="braking", speed_mps=0.0)
+        if ob["stopping"]:
+            rec["outcome"] = "stopped"
+            hooks.require(False, "observe_start_backoff_stopped")
+        checker, footprint, clearance = self._observe_start_check()
+        from forklift_core.control.stop_sweep import stop_poses, sweep_margin_m
+
+        margin = sweep_margin_m(footprint)
+        if not all(checker.free(p, margin)
+                   for p in stop_poses(rear, ob["direction"], ob["stop_m"], float(hooks.held_kappa()))):
+            # the stop from here, straight on or with the steering held, reaches a rectangle: a hold on this tick
+            # (the command assembly), the mission ends on the next
+            ob["stopping"] = True
+            self._observe_backoff_stop_t = float(t)
+            rec["stop_pose"] = [float(v) for v in rear]
+            return SimpleNamespace(tracking=braking, rear=rear)
+        standing = slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01
+        ended = tracking.status == "arrived" or (
+            standing and (tracking.status == "failed" or tracker.remaining_to_goal_m() <= 1e-6))
+        if not ended:
+            if tracking.status in ("failed", "arrived"):
+                return SimpleNamespace(tracking=braking, rear=rear)  # a moving failure: brake to the stop first
+            return SimpleNamespace(tracking=tracking, rear=rear)
+        if not standing:
+            return SimpleNamespace(tracking=braking, rear=rear)
+        if not ob["released"]:
+            ob["released"] = True
+            before = [float(v) for v in rear]
+            released = self.release_after_backoff(t, "release_after_observe_backoff")
+            if released is not None:
+                rear = released
+                hooks.set_rear(rear)
+            rec["end_rear"] = [float(v) for v in rear]
+            rec["release_jump_m"] = float(math.hypot(float(rear[0]) - before[0], float(rear[1]) - before[1]))
+            checker, footprint, clearance = self._observe_start_check()
+        rec["end_free"] = bool(checker.free(tuple(float(v) for v in rear), clearance))
+        if not rec["end_free"]:
+            rec["outcome"] = "short"
+            hooks.require(False, "observe_start_backoff_short")
+        target, grid_world, scenario = ob["target"], hooks.grid_world, options.scenario
+        start_ = hooks.wall()
+        replanned = hooks.plan_observation_leg(
+            grid_world(scenario), target, options.planner_config, geometry=self.geometry,
+            start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+            pickup_bounds=self.observe_bounds(), extended=False, **hooks.grid_kwargs("observe"))
+        leg_ = self.state["observe_replan_leg"]
+        self.state["observe_replans"].append(
+            {"time_s": t, "rear_pose": [float(v) for v in rear], "yaw_error_rad": tracking.yaw_error_rad,
+             "status": replanned.status, "planning_wall_s": hooks.wall() - start_, "leg_serial": leg_["serial"],
+             "after_backoff": True})
+        rec["replan_status"] = replanned.status
+        rec["replan_wall_s"] = self.state["observe_replans"][-1]["planning_wall_s"]
+        if not replanned.success:
+            rec["outcome"] = "replan_failed"
+            hooks.require(False, f"observe_replan_failed:{replanned.status}")
+        rec["replan_cusps"] = int(np.count_nonzero(np.diff(np.asarray(replanned.directions, dtype=int)) != 0))
+        self.observe_backoff = None
+        tracking = self._install_observe_replan(t, rear, replanned, ob["config"], signed_speed, dt)
+        rec["outcome"] = "replanned"
         return SimpleNamespace(tracking=tracking, rear=rear)
 
     def observe_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
@@ -2658,7 +2879,7 @@ class MissionCore:
                 trackers[ms.phase].restart_speed_slew(0.0)
                 requested_speed = 0.0
         if (
-            ms.phase == "observe" and tracking.status == "tracking"
+            ms.phase == "observe" and tracking.status == "tracking" and self.observe_backoff is None
             and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12
             and (slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01)
             and tracking.position_error_m <= OBSERVE_ARRIVAL_M
@@ -4704,6 +4925,8 @@ class MissionCore:
                 ms.phase == "insert" or (ms.phase == "approach" and docking_straight)))
             held_observe = ms.phase == "observe" and holding_now  # R3
             free_leg = ms.phase in ("observe", "transport", "return_home") and not held_observe and not straight_row
+            if self.observe_backoff is not None:
+                free_leg = False  # plan 2026-10-26-observe-start-backoff B4: the backoff goes on or the resume waits
             blocked, silent, verified_m = None, False, None
             if obstacle is not None and acting and not straight_row:
                 silent = not self.cusp_alive(t)
@@ -5049,6 +5272,8 @@ class MissionCore:
             cap_ = getattr(self, "_low_clearance_cap", None)
             # the guard's zero cap is a hold: wheels to zero, steering held (Codex round 4 P2-3)
             obstacle_hold = obstacle_hold or (cap_ is not None and cap_[0] == t and cap_[1] == 0.0)
+        observe_stop_ = self._observe_backoff_stop_t is not None and self._observe_backoff_stop_t == float(t)
+        obstacle_hold = obstacle_hold or observe_stop_  # plan 2026-10-26-observe-start-backoff B4: the guard's hold
         escape_stop_ = (getattr(options, "escape_start_release", "off") == "on"
                         and getattr(self, "_escape_guard_stop_t", None) == float(t))
         obstacle_hold = obstacle_hold or escape_stop_  # a released escape stopped: a hold, then a step to zero
@@ -5090,6 +5315,8 @@ class MissionCore:
                 wheel_speed = self._low_clearance_capped(t, wheel_speed)
             if estop_holding or safety_hold:
                 wheel_speed = 0.0
+            if observe_stop_:
+                wheel_speed = 0.0  # the start backoff's guard stopped it: the same step as the e-stop's
             if escape_stop_:
                 wheel_speed = 0.0  # a released escape's guard stopped it: the same step as the e-stop's
             state["command_speed"] = wheel_speed
@@ -5515,12 +5742,84 @@ class MissionCore:
             status="armed", round=1, keep_m=geometry.delivery_straight_m, reapproach=True,
             await_retry_match=True, retry_seed_goal=[float(v) for v in goal],
         )
+        self.hold_reapproach(t, path.length_m)  # re-approach hold plan H1 (off: nothing)
         if obstacle is not None:
             if obstacle.get("backoff", {}).get("phase") == "transport":
                 obstacle.pop("backoff")
             obstacle.setdefault("replan_wait", {}).pop("transport", None)
             obstacle.setdefault("progress", {}).clear()
         ms.phase_started = t
+
+    # Re-approach hold plan (docs/plans/2026-10-25-reapproach-slam-hold.md) E1 exits
+    REAPPROACH_HOLD_GAP_M = 0.12  # the delivery straight's lateral box (straight_from_pose max_lateral_m)
+    REAPPROACH_HOLD_GAP_RAD = 0.08  # and its yaw box (max_yaw_rad)
+    REAPPROACH_HOLD_TIME_S = 40.0  # work time; recorded re-approaches took 2.2-23.6 s
+
+    def hold_reapproach(self, t: float, length_m: float) -> None:
+        """Plan H1: hold the SLAM correction through a D7 re-approach (``--d7-reapproach-hold on``), from its install to
+        the retry match at the line start -- the correction steps it would otherwise follow stall it at a cusp. Not
+        once its docking spent the exits (``reapproach_hold_spent``), nor when the tracker is not tracking."""
+        slam = self.slam
+        if getattr(self.options, "d7_reapproach_hold", "off") != "on" or slam is None:
+            return
+        docking = slam["docking"]
+        if docking.get("reapproach_hold_spent") or slam["tracker"].mode != "tracking":
+            return
+        self.hold_slam(t, held_frame_pallet=False)
+        docking["reapproach_hold"] = {"since_s": float(t), "length_m": float(length_m)}
+        slam["holds"].append({"phase": self.ms.phase, "time_s": t, "event": "hold_reapproach",
+                              "length_m": float(length_m)})
+
+    def reapproach_hold_exit_due(self, t: float) -> str | None:
+        """Plan E1: why the re-approach hold must end now -- the received correction off the applied one by more than
+        the docking straight's box at this odometry (``correction_gap``), the hold's travel past max(2L, L + 2 m)
+        (``hold_travel``) or its work time past 40 s (``hold_time``); None while it may go on, or without one."""
+        slam = self.slam
+        if slam is None or self.ms.phase != "transport":
+            return None
+        docking = slam["docking"]
+        hold = docking.get("reapproach_hold")
+        tracker = slam["tracker"]
+        if hold is None or not docking.get("reapproach") or tracker.mode != "holding":
+            return None
+        if tracker.received is not None and tracker.applied is not None:
+            # both on the same present odometry, as release() applies it; the received stamp is a liveness time
+            odom = self.hooks.slam_odom_base()
+            got, now = compose(tracker.received[0], odom), compose(tracker.applied[0], odom)
+            gap_m = math.hypot(got[0] - now[0], got[1] - now[1])
+            gap_rad = abs(math.atan2(math.sin(got[2] - now[2]), math.cos(got[2] - now[2])))
+            if gap_m > self.REAPPROACH_HOLD_GAP_M or gap_rad > self.REAPPROACH_HOLD_GAP_RAD:
+                return "correction_gap"
+        length = hold["length_m"]
+        if tracker.hold_travel_m > max(2.0 * length, length + 2.0):
+            return "hold_travel"
+        if self.commands.work_elapsed(hold["since_s"], t) > self.REAPPROACH_HOLD_TIME_S:
+            return "hold_time"
+        return None
+
+    def reapproach_hold_exit(self, t: float, reason: str) -> None:
+        """Plan E1, the truck standing: release the hold (the goal and withdraw carried), then -- the docking's first
+        exit -- re-plan the re-approach from here and hold again, uncounted; a second exit leaves the hold and its
+        watch off until this docking ends (the end-of-leg hold as on main)."""
+        slam, state, geometry = self.slam, self.state, self.geometry
+        docking = slam["docking"]
+        used = int(docking.get("reapproach_hold_exits", 0))
+        docking["reapproach_hold_exits"] = used + 1
+        docking.pop("reapproach_hold", None)
+        event = {"trigger": "h", "time_s": t, "counted": False, "exit": reason, "exit_number": used + 1}
+        state.setdefault("docking_retries", []).append(event)
+        event["release"] = self.release_and_carry(t)
+        if used >= 1:
+            docking["reapproach_hold_spent"] = True
+            event["spent"] = True
+            return
+        goal = tuple(docking["previous_goal"])
+        line = self.options.DOCKING_RETRY.line_start(goal, geometry.delivery_straight_m)
+        start_now = self.hooks.slam_rear(t)
+        path, record = self.reapproach_plan(start_now, line)
+        event.update(goal=list(goal), line_start=list(line), start=[float(v) for v in start_now], plan=record)
+        self.hooks.require(path is not None, f"docking_retry_no_plan:{record.get('refused')}:{record.get('status')}")
+        self.install_reapproach(t, path, goal)
 
     def release_and_carry(self, t: float) -> dict:
         """Plan D7c: release a held correction; a goal still in the held frame moves
@@ -5942,6 +6241,7 @@ class MissionCore:
             return
         require(path is not None, f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
         docking.pop("reapproach", None)  # plan D7c: a straight ends the re-approach
+        docking.pop("reapproach_hold", None)  # and the re-approach hold's watch (the hold stays the docking's)
         # The path being replaced, kept (paths.json holds only the latest): the transport search
         # path's cusps are judged from it (fork spacing plan, V5 cusp arrivals).
         state.setdefault("paths_replaced", []).append(
@@ -6680,6 +6980,8 @@ class MissionCore:
             return False
         if self.pocket.get("planning_pickup") is not None:
             return False
+        if self.observe_backoff is not None:
+            return False  # plan 2026-10-26-observe-start-backoff B4: a start backoff in progress
         return not (self.near_active() or self.realign_active() or self.bottom_deck_leg_active())
 
     def scene_observe_candidate(self, t: float, rear):

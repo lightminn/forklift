@@ -72,6 +72,12 @@ def test_wall_identity_path_and_diagnostic_fields_are_left_out(tmp_path):
     assert out["equal"] is True, out["differences"]
 
 
+def test_the_learned_call_times_in_the_live_job_log_are_wall_times():
+    # learned VRAM plan 3.1 (console review): the job log's model_ms and infer_wall_s differ run to run
+    assert dc.WALL_KEY.search("model_ms") and dc.WALL_KEY.search("infer_wall_s") and dc.WALL_KEY.search("request_mono")
+    assert not dc.WALL_KEY.search("model_source")
+
+
 def test_spools_compare_as_their_joined_rows_whatever_the_cut(tmp_path):
     out = dc.compare(make_run(tmp_path, path_tag="a", spool_cut=2), make_run(tmp_path, path_tag="b", spool_cut=5))
     assert out["equal"] is True, out["differences"]

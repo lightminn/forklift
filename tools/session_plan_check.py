@@ -53,6 +53,7 @@ from forklift_core.planning import Pose2D  # noqa: E402
 from forklift_core.planning.geometry import Rectangle  # noqa: E402
 from forklift_core.planning.pallet_mission import (  # noqa: E402
     D7_PLANNER_OPTIONS,
+    LIDAR_PLANE_M,
     TransportScenario,
     make_transport_planner_config,
     plan_observation_leg,
@@ -265,6 +266,16 @@ def plan_mission(session, pallet, geometry, config, targets, slots: dict, pid: s
         clear = leg_clearance(leg.poses, fp, outlines, getattr(leg, "directions", None))
         nearest = min(clear, key=lambda oid: clear[oid]["bound_m"]) if clear else None
         entry["stages"][name] = {"nearest": nearest, **({} if nearest is None else clear[nearest]), "all": clear}
+        # The props the LiDAR sees (taller than its plane): the planned outline's gap to their true size, which the
+        # obstacle layer paints wider -- a record beside the outcome (the return_home stall at a slot marker,
+        # docs/validation/2026-10-27-ct1-keepout.md), not part of it.
+        tall = {f"tall:{i}": p_.rectangle for i, p_ in enumerate(session.static_props)
+                if p_.asset.height_m > LIDAR_PLANE_M}
+        if tall:
+            tall_clear = leg_clearance(leg.poses, fp, tall, getattr(leg, "directions", None))
+            tall_near = min(tall_clear, key=lambda oid: tall_clear[oid]["bound_m"])
+            entry["stages"][name]["tall_nearest"] = tall_near
+            entry["stages"][name]["tall_bound_m"] = tall_clear[tall_near]["bound_m"]
         for c in clear.values():
             if c["status"] == "contact_observed" or (c["status"] == "clearance_unproven" and worst == "clear"):
                 worst = c["status"]
@@ -274,11 +285,17 @@ def plan_mission(session, pallet, geometry, config, targets, slots: dict, pid: s
     return entry
 
 
-def session_context(path: Path, *, kappa: float = KAPPA) -> dict:
-    """The fixed inputs of a session's planning (its file, pallet, geometry, planner config, drawn slots, shape)."""
+def session_context(path: Path, *, kappa: float = KAPPA, lidar_keepout_m: float = 0.0) -> dict:
+    """The fixed inputs of a session's planning (its file, pallet, geometry, planner config, drawn slots, shape).
+    ``lidar_keepout_m``: the searches keep the LiDAR-visible props that much wider (P1c, run_transport's
+    --lidar-keepout-m); 0 plans as before."""
+    from dataclasses import replace
+
     session = load_session(path)
     pallet = load_pallet_geometry(PALLETS[session.pallet])
     geometry = mission_geometry(URDF, pallet, RESERVE_M, **STRAIGHTS)
+    if lidar_keepout_m:
+        geometry = replace(geometry, lidar_keepout_m=float(lidar_keepout_m))
     config = make_transport_planner_config(curvature_limit_inv_m=kappa, clearance_m=CLEARANCE_M,
                                            max_expansions=MAX_EXPANSIONS, **D7_PLANNER_OPTIONS)
     nominal = {p.pallet_id: (p.nominal.x_m, p.nominal.y_m, p.nominal.yaw_rad) for p in session.pallets}
@@ -305,18 +322,18 @@ def ideal_delivery(targets: TargetsBook, slots: dict, session, pid: str, did: st
 
 
 def check_session(path: Path, *, prior_grow_m: float = SESSION_PRIOR_GROW_M, planner=None, kappa: float = KAPPA,
-                  sequence=None) -> dict:
+                  sequence=None, lidar_keepout_m: float = 0.0) -> dict:
     """``planner``: (plan_observation_leg, plan_transport) stand-ins for tests. ``sequence``: [(pallet, destination)]
     in place of the file's order (CT-2 V2)."""
     observe_planner, transport_planner = planner or (plan_observation_leg, plan_transport)
-    ctx = session_context(path, kappa=kappa)
+    ctx = session_context(path, kappa=kappa, lidar_keepout_m=lidar_keepout_m)
     session = ctx["session"]
     targets = fresh_targets(ctx)
     result = {"session": session.name, "session_sha256": session.sha256, "prior_grow_m": prior_grow_m,
               "settings": {"urdf": str(URDF.relative_to(ROOT)), "reserve_m": RESERVE_M, **STRAIGHTS, "kappa": kappa,
                            "clearance_m": CLEARANCE_M, "max_expansions": MAX_EXPANSIONS,
                            "d7_options": {k: v for k, v in D7_PLANNER_OPTIONS.items()},
-                           "step_m": STEP_M, "fine_step_m": FINE_STEP_M},
+                           "step_m": STEP_M, "fine_step_m": FINE_STEP_M, "lidar_keepout_m": float(lidar_keepout_m)},
               "sequence": [list(x) for x in (session.sequence if sequence is None else sequence)],
               "missions": []}
     slots: dict = {}  # pallet id -> the slot it was delivered to
@@ -345,8 +362,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--prior-grow-m", type=float, default=SESSION_PRIOR_GROW_M)
     ap.add_argument("--kappa", type=float, default=KAPPA, help="the planner curvature limit (1/m)")
+    ap.add_argument("--lidar-keepout-m", type=float, default=0.0,
+                    help="the searches keep the props taller than the LiDAR plane this much wider (m; 0: as before)")
     args = ap.parse_args(argv)
-    result = check_session(args.session, prior_grow_m=args.prior_grow_m, kappa=args.kappa)
+    result = check_session(args.session, prior_grow_m=args.prior_grow_m, kappa=args.kappa,
+                           lidar_keepout_m=args.lidar_keepout_m)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1, default=float) + "\n")
     for m in result["missions"]:

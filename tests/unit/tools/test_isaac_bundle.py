@@ -252,8 +252,9 @@ def test_vram_within_the_budget_does_not_hold_starts(tmp_path):
         return [(pid, 3900, 0) for pid in leaders], {0: 16000}
 
     names = ["a", "b", "c"]
+    # the mechanism at a session size that fits 3 shards (the live default, 4,100 MiB, takes 4 for 3 sessions)
     summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.5) for n in names], slots=3, shards=3, vram_probe=probe,
-                     vram_period_s=0.05)
+                     vram_period_s=0.05, session_vram_mib=3950)
     s = stamps(tmp_path, names)
     assert max(v["t0"] for v in s.values()) < min(v["t1"] for v in s.values())  # all three overlapped
     assert summary["vram_waits"] == 0
@@ -544,6 +545,54 @@ def test_the_first_run_waits_for_free_gpu_memory(tmp_path):
     assert summary["gpu_full_waits"] == 1 and summary["failed"] == 0
 
 
+def test_a_gpu_that_stays_full_while_nothing_runs_is_given_up(tmp_path):
+    # 11596_2 (2026-10-27): three grown sessions left 3,837 MiB on the GPU; the task waited 54 min holding its shard,
+    # CPUs and memory
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.05)], slots=1, shards=1,
+                     vram_probe=lambda leaders: ([], {0: 1000}), vram_period_s=0.05, gpu_full_give_up_s=0.3)
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [(x["name"], x["status"]) for x in lines] == [("a", "gpu_full"), ("b", "gpu_full")]
+    assert lines[0]["free_mib"] == 1000 and lines[0]["need_mib"] == ib.SESSION_VRAM_MIB and lines[0]["waited_s"] >= 0.3
+    assert summary["gpu_full_gave_up"] == 2 and summary["not_started"] == 2 and summary["exit_code"] == 1
+
+
+def test_giving_up_a_full_gpu_leaves_other_jobs_claims_alone(tmp_path):
+    claims = tmp_path / "claims"
+    (claims / "b").mkdir(parents=True)
+    (claims / "b" / "by").write_text("other-job\n")
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05), stamp_run("b", tmp_path, 0.05)], slots=1, shards=1,
+                     vram_probe=lambda leaders: ([], {0: 1000}), vram_period_s=0.05, gpu_full_give_up_s=0.3,
+                     claim_dir=str(claims))
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [(x["name"], x["status"]) for x in lines] == [("a", "gpu_full")]
+    assert summary["claimed_elsewhere"] == 1 and summary["not_started"] == 1
+
+
+def test_an_unreadable_sample_restarts_the_full_gpu_wait(tmp_path):
+    # Codex (2026-10-27): full, unreadable, full again -- the wait counts from the sample after the gap
+    t0 = time.monotonic()
+
+    def probe(leaders):
+        el = time.monotonic() - t0
+        return None if 0.25 < el < 0.45 else ([], {0: 1000})
+
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, shards=1, vram_probe=probe,
+                     vram_period_s=0.02, vram_unreadable_s=10.0, gpu_full_give_up_s=0.4)
+    (line,) = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert line["status"] == "gpu_full" and time.monotonic() - t0 >= 0.8 and line["waited_s"] >= 0.4
+
+
+def test_a_full_gpu_is_waited_out_while_a_run_of_the_job_is_running(tmp_path):
+    # the job's own run will free the device: no giving up while it runs, nor on the stale sample right after it
+    def probe(leaders):
+        return [], {0: 1000 if leaders else 16000}
+
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 1.0), stamp_run("b", tmp_path, 0.05)], slots=2, shards=4,
+                     vram_probe=probe, vram_period_s=0.05, gpu_full_give_up_s=0.5)
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert [x["status"] for x in lines] == ["ended", "ended"] and summary["gpu_full_gave_up"] == 0
+
+
 # --- Codex round 3 counterexamples -------------------------------------------------------------------------------------
 
 
@@ -624,25 +673,30 @@ def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
 @pytest.mark.parametrize(
     "kind, slots, args",
     [
-        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 8, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
-        ("riib", 3, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 20}),  # 3 x 4,500 MiB > 3 shards
-        ("riib", None, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 20}),
-        ("riib", 1, {"slots": 1, "gres": "shard:2", "cpus": 2, "mem_gib": 8}),  # one riib run is over a shard
-        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 4, "mem_gib": 12}),
+        ("live", 3, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 19}),  # 3 x 4,100 MiB > 3 shards
+        ("live", 1, {"slots": 1, "gres": "shard:2", "cpus": 4, "mem_gib": 8}),
+        ("riib", 3, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 20}),  # 3 x 4,500 MiB > 3 shards
+        ("riib", None, {"slots": 3, "gres": "shard:4", "cpus": 8, "mem_gib": 20}),
+        ("riib", 1, {"slots": 1, "gres": "shard:2", "cpus": 4, "mem_gib": 8}),  # one riib run is over a shard
+        ("bd", 2, {"slots": 2, "gres": "shard:2", "cpus": 6, "mem_gib": 12}),
     ],
 )
 def test_sizes_grow_with_the_bundle(kind, slots, args):
     assert ib.sbatch_sizes(kind, slots) == args
+    # 2 CPUs a session and a core apart for the bridges: what the runner's auto split takes
+    assert ib.auto_bridge_cpus(args["cpus"], args["slots"]) == ib.BRIDGE_CORE_CPUS
 
 
 def test_more_sessions_than_a_gpu_holds_are_refused():
     with pytest.raises(ValueError, match="riib"):
         ib.sbatch_sizes("riib", 4)
+    with pytest.raises(ValueError, match="live"):  # 2026-10-27: a fourth grown session does not fit 15,839 MiB
+        ib.sbatch_sizes("live", 4)
 
 
 def test_the_sizes_command_prints_sbatch_options(capsys):
     assert ib.main(["sizes", "live"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G"
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=19G"
 
 
 def test_a_start_waits_for_the_node_s_memory(tmp_path):
@@ -817,8 +871,22 @@ def test_the_runner_takes_its_slots_and_session_memory_from_the_kind(tmp_path, m
     assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
 
 
-@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("riib", 1, 0), ("live", 4, 4),
-                                                ("bd", 4, 4)])
+@pytest.mark.parametrize("shards, slots", [("4", 3), ("2", 1), ("8", 7)])
+def test_without_a_kind_the_slots_follow_the_session_memory(tmp_path, monkeypatch, shards, slots):
+    # Codex (2026-10-27): with neither --kind nor --slots the live session's 4,100 MiB decides, not one a shard
+    seen = {}
+    monkeypatch.setattr(ib, "run_bundle", lambda runs, out, **k: seen.update(k) or {"exit_code": 0})
+    monkeypatch.setenv("SLURM_SHARDS_ON_NODE", shards)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
+    assert seen["slots"] == slots and seen["session_vram_mib"] == ib.SESSION_VRAM_MIB
+
+
+@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("riib", 1, 0), ("live", 4, 3),
+                                                ("live", 2, 1), ("bd", 4, 4)])
 def test_the_kind_s_slots_follow_the_shards(kind, shards, slots):
     assert ib.kind_slots(kind, shards) == slots
 
@@ -1181,22 +1249,22 @@ def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
 
 
 def test_a_half_empty_last_wave_is_warned():
-    # rcq (2026-10-25): 20 runs on 2 live jobs of 4 slots end with a wave of 4 of 8 slots
+    # rcq (2026-10-25): 20 runs on 2 jobs end with a short wave -- live has 3 slots a job since 2026-10-27
     w = ib.wave_warning(20, "live", 2)
-    assert w and "4 of 8" in w and "16 or 24" in w and "longest runs first" in w
-    assert ib.wave_warning(16, "live", 2) is None and ib.wave_warning(21, "live", 2) is None
+    assert w and "2 of 6" in w and "18 or 24" in w and "longest runs first" in w
+    assert ib.wave_warning(18, "live", 2) is None and ib.wave_warning(22, "live", 2) is None
     assert "1 of 6" in ib.wave_warning(13, "riib", 2)
-    assert "4 runs on 1 job" in ib.wave_warning(4, "live", 2)  # fewer jobs fill the wave
+    assert "3 runs on 1 job" in ib.wave_warning(3, "live", 2)  # fewer jobs fill the wave
     assert ib.wave_warning(3, "live", 1) is None
 
 
 def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
     path = tmp_path / "runs.jsonl"
-    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(5)))
+    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(4)))
     monkeypatch.setattr(ib, "check_runs", lambda runs, runner: [])
     rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
     out = capsys.readouterr().out
-    assert rc == 0 and "1 of 4" in out and "0 problems" in out
+    assert rc == 0 and "1 of 3" in out and "0 problems" in out
 
 
 def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
@@ -1210,7 +1278,7 @@ def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
 
 def test_sizes_prints_the_time(capsys):
     assert ib.main(["sizes", "live", "--runs", "20", "--jobs", "2"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G --time=01:55:00"
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=19G --time=02:30:00"
 
 
 def test_squeue_time_left_is_parsed():

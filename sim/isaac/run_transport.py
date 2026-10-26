@@ -527,6 +527,14 @@ def arguments() -> argparse.Namespace:
         "(None): the transport's cruise, every earlier run.",
     )
     parser.add_argument(
+        "--d7-reapproach-hold",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-25-reapproach-slam-hold.md H1/E1: hold the SLAM correction through a D7 re-approach, "
+        "from its install to the retry match at the line start, with the exits (correction gap 0.12 m / 0.08 rad, hold "
+        "travel max(2L, L + 2 m), 40 s) releasing, re-planning and holding again once. Off: every earlier run.",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -544,6 +552,15 @@ def arguments() -> argparse.Namespace:
         "the permission's own start inflation of (envelope + half a sample step) does not block a motion whose swept "
         "outline stays as far from it -- in the drive permission (path and stop arc) and in the scene replan's escape "
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
+    )
+    parser.add_argument(
+        "--observe-start-backoff",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-26-observe-start-backoff.md: the first far observation's replan that comes back "
+        "invalid_start (the stop within the planner clearance of the pickup prior) backs off straight by the start "
+        "check's own advice (at most 0.30 m, once per observe leg) and plans the same target again. Off: as every "
+        "earlier run.",
     )
     parser.add_argument(
         "--escape-start-release",
@@ -5651,6 +5668,8 @@ def drive(S, isaac) -> None:
                                 cusp_heading_hold_position_m=CUSP_HEADING_HOLD_POSITION_M,
                                 cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
+                                # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
+                                observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -5677,6 +5696,8 @@ def drive(S, isaac) -> None:
                                 # leg-failures B1/B2: a record from before the options ran without the caps
                                 d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
+                                # re-approach hold plan H1: a record from before the option ran without the hold
+                                d7_reapproach_hold=getattr(args, "d7_reapproach_hold", "off"),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
                                 restart_confirm_scans=int(getattr(args, "restart_confirm_scans", 0) or 0),
@@ -8208,7 +8229,12 @@ def drive(S, isaac) -> None:
                     scene_raised_ = getattr(follow_, "scene_raised", False)
                     if scene_raised_:
                         plan_wait_ = True  # the device's request: this tick stands (scene replan plan 2.1)
-                    if not scene_raised_:
+                    if not scene_raised_ and ms.phase == "observe" and core.observe_backoff is not None:
+                        # docs/plans/2026-10-26-observe-start-backoff.md B4: the start backoff's own tick, ahead of the
+                        # stall and observe recoveries (they do not run while it lasts)
+                        backoff_ = core.observe_backoff_tick(t, rear, tracking, signed_speed, dt)
+                        tracking, rear = backoff_.tracking, backoff_.rear
+                    elif not scene_raised_:
                         # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
                         stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
                         tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
@@ -8217,6 +8243,7 @@ def drive(S, isaac) -> None:
                         tracking, rear = recover_.tracking, recover_.rear
                         if ms.phase == "bottom_deck_refused":
                             break  # plan 2026-10-19 task 4: a side recovery ended the mission (no command after it)
+                    if not scene_raised_:
                         # M-a1 slice 4a-iv: the command and the stops before the arrival are the core's.
                         command_ = core.command(t, rear, rear_stamp, tracking, signed_speed, dwell_hold, dwell_standing,
                                                 safety_hold)
@@ -8875,7 +8902,11 @@ def drive(S, isaac) -> None:
             state["live_exit_code"] = {"end": 0, "reset": 3}.get(state.get("live_session_request"), 0)
             live.end_mission(book_clock["t"] if book_clock["t"] is not None else 0.0, "failed", "session_end")
             if far_live is not None:
-                far_live.close()  # after the last mission's far record is closed (Codex impl round 2 P2)
+                # after the last mission's far record is closed (Codex impl round 2 P2); calls that finished after
+                # their mission ended and reached no record go in the run's (learned VRAM plan 3.1)
+                late_ = far_live.close()
+                if late_:
+                    state.setdefault("far_late_calls", []).extend(late_)
             live_teleop_withdraw_close(book_clock["t"] or 0.0, "session_end")  # plan D14: an open episode closes
             live.settle_records()  # a records write failure on its result before the results are taken (U29)
             state.update({"success": True, "mission_results": live.results.message()["results"],
@@ -9171,7 +9202,10 @@ def drive(S, isaac) -> None:
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["async_plan_worker_close_error"] = repr(exc_)
             if locals().get("far_live") is not None:
-                far_live.close()  # the far worker ends with the run, however it ends (idempotent)
+                # the far worker ends with the run, however it ends (idempotent; a second close returns nothing)
+                late_ = far_live.close()
+                if late_:
+                    state.setdefault("far_late_calls", []).extend(late_)
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)
