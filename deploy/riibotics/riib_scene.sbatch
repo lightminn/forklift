@@ -31,10 +31,20 @@
 #                  start inflation of does not block moving away from it (docs/plans/2026-10-24-start-band-release.md);
 #                  off: no gain on the trailer and one actual load overlap in the rack aisle with it on
 #                  (docs/validation/2026-10-24-start-band-release.md)
+#   ESCAPE_START=off --escape-start-release: the P6 escape's sweep alone passes the trigger's rectangles the stop
+#                  already stands within the sweep pad of while it moves away; the permission keeps its own start rule
+#                  (docs/plans/2026-10-25-escape-start-release.md); the default follows its Isaac comparison
+#   RESTART_CONFIRM=3 --restart-confirm-scans: after an occupied stop, this many new scans in a row must allow a
+#                  restart (docs/plans/2026-10-25-restart-confirmation.md); 3: in the rack aisle it held the stops it
+#                  armed on with no new failure and no fewer completions (docs/validation/2026-10-26-restart-confirmation.md);
+#                  RESTART_CONFIRM=0 as before
 #   LOW_CLEARANCE=on --low-clearance-guard: the props below the LiDAR plane watched along the stop arc of the
 #                  estimated pose, the speed capped before the planned clearance is used up
 #                  (docs/plans/2026-10-25-low-clearance-guard.md); on: no low-prop overlap and no fewer completions
 #                  in the on/off comparison (docs/validation/2026-10-25-low-clearance-guard.md); LOW_CLEARANCE=off as before
+#   D7_HOLD=on    --d7-reapproach-hold: the SLAM corrections held over a D7 re-approach until its retry match
+#                  (docs/plans/2026-10-25-reapproach-slam-hold.md); on: its registered V5 batch passed
+#                  (docs/validation/2026-10-25-reapproach-slam-hold.md); D7_HOLD=off as before
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -47,7 +57,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -56,7 +66,7 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
@@ -67,7 +77,10 @@ case "$ENCODER_MODEL" in reported) AGE=;; team_spec_quantized) AGE=_team_spec;;
 case "$NOISE" in a2) LAYER=config/obstacle_layer_single_a2$AGE.yaml;; const) LAYER=config/obstacle_layer_single$AGE.yaml;;
   *) echo "NOISE must be a2 or const"; exit 2;; esac
 case "$START_BAND" in on|off) ;; *) echo "START_BAND must be on or off"; exit 2;; esac
+case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exit 2;; esac
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
+case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
+[[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
 NAME=$SCENE
 case "$SCENE" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
@@ -90,9 +103,9 @@ mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
 echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s LOW_CLEARANCE=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$LOW_CLEARANCE" "$ENCODER_MODEL" "$SCENE_FILE" \
-  > "$OUT/riib_defaults.txt"
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" \
+  "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 read QE QT < <("$VENV_PY" -c "import json,sys;v=json.load(open(sys.argv[1]))['views'];print(','.join(map(str,v['quarter_eye'])),','.join(map(str,v['quarter_target'])))" "$SCENE_FILE")
 COMMON=(--base-scene "$BASE_SCENE"
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml
@@ -100,7 +113,8 @@ COMMON=(--base-scene "$BASE_SCENE"
   --delivery-straight-m 1.5 --alignment-straight-m 2.1 --withdrawal-m 0.55 --insertion-reserve-m 0.016
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "${SEED:-0}"
-  --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --low-clearance-guard "$LOW_CLEARANCE"
+  --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
+  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
   --video --extra-views quarter,chase --quarter-eye="$QE" --quarter-target="$QT")
 if [ "$MODE" = truth ]; then
   MODE_ARGS=(--d7-planner)

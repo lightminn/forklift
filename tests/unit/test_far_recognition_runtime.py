@@ -526,3 +526,22 @@ def test_the_recompute_compares_the_candidate_a_not_pickable_stop_decided_on(tmp
         else:
             bad["attempts"][0]["decided"].update(tamper)
         assert ["decided"] == [d for p in RC.recompute(tmp_path, recognition=bad) for d in RC.differences(*p)]
+
+
+def test_a_deterministic_run_ends_on_a_learned_model_failure_instead_of_falling_back():
+    """Deterministic-run plan D6: the learned proposer's failure (a missed wall deadline among them) would switch to
+    the geometric proposals depending on the machine's load; a deterministic run ends there instead."""
+    from forklift_core import determinism
+
+    class Failing:
+        def propose(self, scene):
+            raise RuntimeError("learned worker missed its deadline (10 s); killed")
+
+    source = R.LearnedSource(Failing(), geometric=lambda scene: (_ for _ in ()).throw(AssertionError("no fallback")))
+    determinism.configure(True)
+    try:
+        with pytest.raises(determinism.DeterministicBroken, match="learned_failure"):
+            source.run(object())
+        assert determinism.broken() == ["learned_failure:RuntimeError"]
+    finally:
+        determinism.configure(False)

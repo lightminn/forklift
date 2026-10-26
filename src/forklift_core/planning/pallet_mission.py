@@ -13,6 +13,7 @@ from math import ceil, cos, floor, inf, pi, sin
 
 import numpy as np
 
+from forklift_core import determinism
 from forklift_core._validation import _finite_scalar
 from forklift_core.perception.pallet_geometry import (
     CARRIAGE_INSERTION_LIMIT_M,
@@ -178,6 +179,7 @@ def _search(
         ended = time.monotonic()
         budget.spent_s.append(ended - started)
         if ended > deadline and result.status != "timeout":
+            determinism.timed_out("search_ladder")
             result = _timed_out(result)
     return replace(
         result, analytic_expansion_interval=interval, search_attempts=tuple(attempts)
@@ -862,11 +864,13 @@ def backoff_advice(free, clearance_m: float, start: Pose2D, *, step_m: float = 0
     ``deadline`` (``clock`` time) checked before and at every pose: spent, ``{"skipped": "deadline"}`` -- never a
     partial search reported as nothing found."""
     if deadline is not None and clock() >= deadline:
+        determinism.timed_out("backoff_advice")
         return {"skipped": "deadline"}
     bx, by = -cos(start.yaw_rad), -sin(start.yaw_rad)
     first = last = None
     for k in range(1, int(round(limit_m / step_m)) + 1):
         if deadline is not None and clock() >= deadline:
+            determinism.timed_out("backoff_advice")
             return {"skipped": "deadline"}
         d = round(k * step_m, 6)
         pose = (start.x_m + d * bx, start.y_m + d * by, start.yaw_rad)
@@ -1516,7 +1520,7 @@ def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, conf
     if record["direct"]["reverse_m"] <= RETURN_TURNAROUND_TRIGGER_M:
         return replace(direct, turnaround=record)
     record["evaluated"] = True
-    limit = time.monotonic() + RETURN_TURNAROUND_MAX_S
+    limit = time.monotonic() + determinism.budget(RETURN_TURNAROUND_MAX_S)  # the cap in a deterministic run
     if isinstance(deadline, SearchBudget):
         limit = min(limit, (started if started is not None else time.monotonic()) + float(deadline.seconds))
     elif deadline is not None:
@@ -1539,6 +1543,7 @@ def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, conf
             if time.monotonic() > limit:  # the arcs' own checks share the limit too
                 entry["status"] = "skipped_time"
                 record["timed_out"] = True
+                determinism.timed_out("return_turnaround")
                 continue
             curvature = side * k
             arc_m = degrees * pi / 180 / k
@@ -1569,6 +1574,7 @@ def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, conf
         if time.monotonic() > limit:
             entry["status"] = "skipped_time"
             record["timed_out"] = True
+            determinism.timed_out("return_turnaround")
             continue
         if bound >= best_cost - 1e-9:
             entry["status"] = "pruned"
@@ -1590,6 +1596,7 @@ def _return_turnaround(start_rear, return_to, obstacles, footprint, bounds, conf
         entry.update(status=sub.status, expansions=int(sub.expanded_nodes))
         if sub.status == "timeout" or time.monotonic() > limit:
             record["timed_out"] = True
+            determinism.timed_out("return_turnaround")
             if sub.success:
                 entry["status"] = "late"  # finished after the limit: not compared
             continue

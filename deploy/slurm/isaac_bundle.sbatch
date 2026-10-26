@@ -50,7 +50,7 @@ KIND_ARGS=()
 [ -n "${3:-}" ] && KIND_ARGS=(--kind "$3")
 ROOT=$(pwd)
 mkdir -p "$OUT"
-echo "host=$(hostname) job=${SLURM_JOB_ID:-} shards=${SLURM_SHARDS_ON_NODE:-?} gpus=${CUDA_VISIBLE_DEVICES:-unset}" \
+echo "host=$(hostname) job=${SLURM_JOB_ID:-} shards=${SLURM_SHARDS_ON_NODE:-?} gpus=${CUDA_VISIBLE_DEVICES:-unset} node_gpu=${SLURM_JOB_GPUS:-?}" \
   "cpus=$(taskset -cp $$ | awk -F': ' '{print $2}') list=$LIST out=$OUT $(date -Is)"
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv 2>/dev/null
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design

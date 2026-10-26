@@ -18,6 +18,9 @@
 #   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
 #   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
 #   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
+#   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
+#   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
+#   --d7-reapproach-hold comes later and wins),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -41,6 +44,8 @@ fi
 # reported on request (its own baselines; never mixed with the default's), nothing else (no other age table).
 ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
+D7_HOLD=${D7_HOLD:-on}
+case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -53,6 +58,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'MAP_BUNDLE=%q\nMAP_START_POSE=%q\n' "${MAP_BUNDLE:-}" "${MAP_START_POSE:-}"
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
+  printf 'D7_HOLD=%q\n' "$D7_HOLD"
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -103,7 +109,7 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
   --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
-  --d7-planner --d7-docking --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
+  --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \
   --output "$2/run" > "$2/run.log" 2>&1
 EOT
@@ -123,6 +129,12 @@ SUP_LOC=()
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
   --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}' '{expected_map_id}' '{map_bundle}')" &
 SUP=$!
+# Progress watchdog (tools/stall_watch.py): when no epoch's run/live_log.jsonl has changed for STALL_MIN minutes
+# (default 10, 0 off) the runner gets SIGUSR1 -- its stack goes to run.stall_stack.txt -- and the supervisor TERM, as
+# on Slurm's TERM; $OUT/stall.jsonl says so. A live session never went 3.3 s without a record in 30 runs (first record
+# 38-50 s after its start); 11119 (2026-10-26) sat silent for 34 min mid-transport until its time limit.
+"$VENV_PY" "$ROOT/tools/stall_watch.py" --glob "$OUT/epoch_*/run/live_log.jsonl" --stall-min "${STALL_MIN:-10}" \
+  --term-pid "$SUP" --marker "$OUT/stall.jsonl" &
 trap 'kill -TERM "$SUP" 2>/dev/null' TERM INT  # Slurm's TERM: the supervisor ends the runner and the bridge
 wait "$SUP"
 rc=$?

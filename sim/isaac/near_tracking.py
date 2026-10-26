@@ -1073,6 +1073,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "record_boundary": False,
                               # 2026-10-16: M-a3 mission commands; a run with a schedule is refused below.
                               "mission_commands": None,
+                              # 2026-10-25: the deterministic-run switch (plan D0) -- compared, its absence off
+                              "deterministic": False,
                               # 2026-10-17: M-c live runs -- off unless given; a live run is not a measurement run.
                               "live": False, "live_port_file": None, "live_host": "127.0.0.1", "live_factor": 1.0,
                               "live_lease_timeout_s": 5.0, "live_web_root": None, "live_test_step_delay_ms": 0.0,
@@ -1128,14 +1130,20 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "permit_stop_replan": "on",
                               # 2026-10-24: the start-band release; off in every earlier run.
                               "start_band_release": "off",
+                              # 2026-10-25: the P6 escape's own start-pad release; off in every earlier run.
+                              "escape_start_release": "off",
                               # 2026-10-25 leg-failures B1/B2: the D7 re-approach's curvature and cruise caps; unset
                               # in every earlier run.
                               "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None,
                               # 2026-10-26: the first far observation's start backoff; off in every earlier run.
                               "observe_start_backoff": "off",
+                              # 2026-10-25 re-approach hold plan H1: off in every earlier run.
+                              "d7_reapproach_hold": "off",
                               # 2026-10-25: the low-clearance guard; off in every earlier run.
                               "low_clearance_guard": "off", "low_clearance_margin_m": 0.05,
-                              "low_clearance_deviation_m": 0.02}
+                              "low_clearance_deviation_m": 0.02,
+                              # 2026-10-25: the restart confirmation after an occupied stop; off in every earlier run.
+                              "restart_confirm_scans": 0}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

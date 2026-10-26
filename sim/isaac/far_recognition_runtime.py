@@ -60,6 +60,13 @@ class LearnedSource:
             finally:
                 ms = 1e3 * (time.perf_counter() - t0)
         except Exception as exc:  # noqa: BLE001 -- any model failure falls back
+            from forklift_core import determinism  # noqa: PLC0415
+
+            if determinism.enabled():
+                # Deterministic-run plan D6: the switch depends on the machine (a missed wall deadline among the
+                # failures); a deterministic run ends here instead of taking the geometric path.
+                determinism.mark(f"learned_failure:{type(exc).__name__}")
+                raise determinism.DeterministicBroken(f"learned_failure: {exc}") from exc
             reason = f"{type(exc).__name__}: {exc}"
             got = self.geometric(scene)
             props, failures, source = list(got.proposals), tuple(got.failures), "geometric_fallback"
