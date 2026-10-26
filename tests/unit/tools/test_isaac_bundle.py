@@ -252,8 +252,9 @@ def test_vram_within_the_budget_does_not_hold_starts(tmp_path):
         return [(pid, 3900, 0) for pid in leaders], {0: 16000}
 
     names = ["a", "b", "c"]
+    # the mechanism at a session size that fits 3 shards (the live default, 4,100 MiB, takes 4 for 3 sessions)
     summary = bundle(tmp_path, [stamp_run(n, tmp_path, 0.5) for n in names], slots=3, shards=3, vram_probe=probe,
-                     vram_period_s=0.05)
+                     vram_period_s=0.05, session_vram_mib=3950)
     s = stamps(tmp_path, names)
     assert max(v["t0"] for v in s.values()) < min(v["t1"] for v in s.values())  # all three overlapped
     assert summary["vram_waits"] == 0
@@ -672,7 +673,8 @@ def test_the_job_gpu_comes_from_slurm_not_from_cuda(env, index):
 @pytest.mark.parametrize(
     "kind, slots, args",
     [
-        ("live", 4, {"slots": 4, "gres": "shard:4", "cpus": 8, "mem_gib": 24}),  # 4 x 5.5 + 1.5 + 0.5 = 24
+        ("live", 3, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 19}),  # 3 x 4,100 MiB > 3 shards
+        ("live", 1, {"slots": 1, "gres": "shard:2", "cpus": 2, "mem_gib": 8}),
         ("riib", 3, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 20}),  # 3 x 4,500 MiB > 3 shards
         ("riib", None, {"slots": 3, "gres": "shard:4", "cpus": 6, "mem_gib": 20}),
         ("riib", 1, {"slots": 1, "gres": "shard:2", "cpus": 2, "mem_gib": 8}),  # one riib run is over a shard
@@ -686,11 +688,13 @@ def test_sizes_grow_with_the_bundle(kind, slots, args):
 def test_more_sessions_than_a_gpu_holds_are_refused():
     with pytest.raises(ValueError, match="riib"):
         ib.sbatch_sizes("riib", 4)
+    with pytest.raises(ValueError, match="live"):  # 2026-10-27: a fourth grown session does not fit 15,839 MiB
+        ib.sbatch_sizes("live", 4)
 
 
 def test_the_sizes_command_prints_sbatch_options(capsys):
     assert ib.main(["sizes", "live"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G"
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=6 --mem=19G"
 
 
 def test_a_start_waits_for_the_node_s_memory(tmp_path):
@@ -865,8 +869,22 @@ def test_the_runner_takes_its_slots_and_session_memory_from_the_kind(tmp_path, m
     assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
 
 
-@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("riib", 1, 0), ("live", 4, 4),
-                                                ("bd", 4, 4)])
+@pytest.mark.parametrize("shards, slots", [("4", 3), ("2", 1), ("8", 7)])
+def test_without_a_kind_the_slots_follow_the_session_memory(tmp_path, monkeypatch, shards, slots):
+    # Codex (2026-10-27): with neither --kind nor --slots the live session's 4,100 MiB decides, not one a shard
+    seen = {}
+    monkeypatch.setattr(ib, "run_bundle", lambda runs, out, **k: seen.update(k) or {"exit_code": 0})
+    monkeypatch.setenv("SLURM_SHARDS_ON_NODE", shards)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
+    assert seen["slots"] == slots and seen["session_vram_mib"] == ib.SESSION_VRAM_MIB
+
+
+@pytest.mark.parametrize("kind, shards, slots", [("riib", 4, 3), ("riib", 2, 1), ("riib", 1, 0), ("live", 4, 3),
+                                                ("live", 2, 1), ("bd", 4, 4)])
 def test_the_kind_s_slots_follow_the_shards(kind, shards, slots):
     assert ib.kind_slots(kind, shards) == slots
 
@@ -1229,22 +1247,22 @@ def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
 
 
 def test_a_half_empty_last_wave_is_warned():
-    # rcq (2026-10-25): 20 runs on 2 live jobs of 4 slots end with a wave of 4 of 8 slots
+    # rcq (2026-10-25): 20 runs on 2 jobs end with a short wave -- live has 3 slots a job since 2026-10-27
     w = ib.wave_warning(20, "live", 2)
-    assert w and "4 of 8" in w and "16 or 24" in w and "longest runs first" in w
-    assert ib.wave_warning(16, "live", 2) is None and ib.wave_warning(21, "live", 2) is None
+    assert w and "2 of 6" in w and "18 or 24" in w and "longest runs first" in w
+    assert ib.wave_warning(18, "live", 2) is None and ib.wave_warning(22, "live", 2) is None
     assert "1 of 6" in ib.wave_warning(13, "riib", 2)
-    assert "4 runs on 1 job" in ib.wave_warning(4, "live", 2)  # fewer jobs fill the wave
+    assert "3 runs on 1 job" in ib.wave_warning(3, "live", 2)  # fewer jobs fill the wave
     assert ib.wave_warning(3, "live", 1) is None
 
 
 def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
     path = tmp_path / "runs.jsonl"
-    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(5)))
+    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(4)))
     monkeypatch.setattr(ib, "check_runs", lambda runs, runner: [])
     rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
     out = capsys.readouterr().out
-    assert rc == 0 and "1 of 4" in out and "0 problems" in out
+    assert rc == 0 and "1 of 3" in out and "0 problems" in out
 
 
 def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
@@ -1258,7 +1276,7 @@ def test_the_time_limit_follows_the_waves_and_a_run_s_p95():
 
 def test_sizes_prints_the_time(capsys):
     assert ib.main(["sizes", "live", "--runs", "20", "--jobs", "2"]) == 0
-    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=8 --mem=24G --time=01:55:00"
+    assert capsys.readouterr().out.strip() == "--gres=shard:4 --cpus-per-task=6 --mem=19G --time=02:30:00"
 
 
 def test_squeue_time_left_is_parsed():

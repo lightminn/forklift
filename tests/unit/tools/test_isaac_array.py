@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_array_sizes_give_one_task_its_own_share():
     z = ib.array_sizes("live", 16, 31)
-    assert z == {"array": "0-15%5", "gres": "shard:1", "cpus": 4, "mem_mib": 8192, "time": "00:55:00"}
+    assert z == {"array": "0-15%4", "gres": "shard:2", "cpus": 4, "mem_mib": 8192, "time": "00:55:00"}
     r = ib.array_sizes("riib", 12, 63)
     assert r["gres"] == "shard:2" and r["cpus"] == 6  # 4.47 GB a session: more than one shard
     assert ib.array_sizes("live", 3, 31)["array"] == "0-2%3"
@@ -37,7 +37,7 @@ def test_array_sizes_need_the_batch_s_own_run_length():
 def test_sizes_cli_prints_the_array_options(capsys):
     assert ib.main(["sizes", "live", "--array", "--runs", "16", "--run-min", "31"]) == 0
     assert capsys.readouterr().out.strip() == (
-        "--array=0-15%5 --gres=shard:1 --cpus-per-task=4 --mem=8192M --time=00:55:00")
+        "--array=0-15%4 --gres=shard:2 --cpus-per-task=4 --mem=8192M --time=00:55:00")
     assert ib.main(["sizes", "live", "--array", "--runs", "16"]) == 2
 
 
