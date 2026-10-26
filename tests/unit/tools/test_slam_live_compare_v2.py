@@ -175,12 +175,74 @@ def test_the_gate_adds_raw_release_jumps_and_hold_time_responses_and_skips_short
 
 def test_judge_puts_pairs_gate_and_overall_together_with_replaced_r_runs_in_the_gate():
     holds = [(100.0 + 300 * k, 104.0 + 300 * k) for k in range(12)]
-    runs = {"L1": _run(dx=0.02, holds=holds), "R1": _run(dx=0.04, holds=holds),
-            "L2": _run(dx=0.02, holds=holds), "R2short": _run(500.0, dx=0.04), "R2": _run(dx=0.04, holds=holds)}
-    spec = {"scenes": {"line_m": {"pairs": [["L1", "R1"], ["L2", "R2"]], "extra_r": ["R2short"]}}}
+
+    def arm(mode, seed, scene, t_end=3700.0, with_holds=True, **k):
+        r = _run(t_end, holds=holds if with_holds else (), **k)
+        r.slam_mode, r.seed, r.scene = mode, seed, scene
+        return r
+
+    runs = {}
+    for s in ("line_m", "random_m"):
+        for n in (3, 4):
+            runs[f"L_{s}_{n}"] = arm("localization", n, s, dx=0.02)
+            runs[f"R_{s}_{n}"] = arm("mapping", n, s, dx=0.04)
+    runs["R_line_m_4_short"] = arm("mapping", 4, "line_m", t_end=500.0, with_holds=False, dx=0.04)
+    runs["R_line_m_4_short"].failures = [{"time_s": 480.0, "reason": "Tracking timeout in transport"}]
+    spec = {"scenes": {s: {"pairs": [[f"L_{s}_{n}", f"R_{s}_{n}"] for n in (3, 4)]} for s in ("line_m", "random_m")}}
+    spec["scenes"]["line_m"]["extra_r"] = ["R_line_m_4_short"]
     out = cmp.judge(spec, loader=runs.__getitem__)
     assert out["overall"]["ok"], out["overall"]["failed"]
-    assert out["scenes"]["line_m"]["gate"]["counts"]["jump_rad"][1] == 24  # R1 + R2 holds; R2short has none
+    assert out["scenes"]["line_m"]["gate"]["counts"]["jump_rad"][1] == 24  # the two R's holds; the short R has none
+    assert out["scenes"]["line_m"]["extra_r"][0]["failures"][0]["reason"] == "Tracking timeout in transport"
+
+
+def test_v5_holds_on_the_whole_l_run_even_inside_a_comparable_span():
+    # Codex tool review P2: L 0.20 m / 0.06 rad passed when R was worse on the common span
+    out = cmp.pair_verdict(_run(dx=0.2, dyaw=0.06), _run(dx=0.3, dyaw=0.08))
+    assert out["comparable"] and not out["ok"] and "V5" in " ".join(out["failed"])
+
+
+def test_a_holding_record_outside_every_closed_interval_is_incomplete():
+    # Codex P2: a holding span paired only in part passed as complete
+    run = _run(1000.0, holds=[(100.0, 110.0)])
+    for r in run.records:
+        if 110.0 <= r["applied_tick_s"] < 140.0:
+            r["mode"] = "holding"  # a holding stretch after the release with no hold event or release of its own
+    _, incomplete = cmp.hold_records(run)
+    assert incomplete
+
+
+@pytest.mark.parametrize("bad", [None, float("nan")])
+def test_a_missing_or_nan_jump_is_incomplete(bad):
+    run = _run(1000.0, holds=[(100.0, 110.0)])
+    run.holds[1]["jump_rad"] = bad
+    _, incomplete = cmp.hold_records(run)
+    assert incomplete
+
+
+def test_an_empty_gate_is_insufficient_not_ok():
+    assert cmp.scene_gate([], [])["state"] == "insufficient"
+
+
+def test_judge_checks_the_preregistered_configuration():
+    holds = [(100.0 + 300 * k, 104.0 + 300 * k) for k in range(12)]
+
+    def arm(mode, seed, scene, **k):
+        r = _run(holds=holds, **k)
+        r.slam_mode, r.seed, r.scene = mode, seed, scene
+        return r
+
+    runs = {f"{a}_{s}_{n}": arm("localization" if a == "L" else "mapping", n, s, dx=0.02 if a == "L" else 0.04)
+            for a in "LR" for s in ("line_m", "random_m") for n in (3, 4)}
+    spec = {"scenes": {s: {"pairs": [[f"L_{s}_{n}", f"R_{s}_{n}"] for n in (3, 4)]} for s in ("line_m", "random_m")}}
+    assert cmp.judge(spec, loader=runs.__getitem__)["overall"]["ok"]
+    assert not cmp.judge({"scenes": {}}, loader=runs.__getitem__)["overall"]["ok"]
+    one = {"scenes": {"line_m": {"pairs": [["L_line_m_3", "R_line_m_3"]]}}}
+    assert not cmp.judge(one, loader=runs.__getitem__)["overall"]["ok"]
+    swapped = {"scenes": {s: {"pairs": [[f"R_{s}_{n}", f"L_{s}_{n}"] for n in (3, 4)]} for s in ("line_m", "random_m")}}
+    assert not cmp.judge(swapped, loader=runs.__getitem__)["overall"]["ok"]  # L must localize, R must map
+    wrong_seed = dict(runs, R_line_m_4=arm("mapping", 5, "line_m", dx=0.04))
+    assert not cmp.judge(spec, loader=wrong_seed.__getitem__)["overall"]["ok"]
 
 
 def test_overall_needs_a_comparable_pair_in_every_scene():

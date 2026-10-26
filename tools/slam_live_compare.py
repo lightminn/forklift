@@ -46,6 +46,9 @@ class RunData:
     failure: str | None = None
     failures: list = field(default_factory=list)  # result.json live_failures: the mission failures of the session
     holds: list = field(default_factory=list)  # result.json slam_summary.holds: the session's hold / release timeline
+    seed: int | None = None  # result.json arguments.seed
+    slam_mode: str | None = None  # "localization" (result.json slam_map) or "mapping"
+    scene: str | None = None  # the scene file's name without "_session" (line_m, random_m)
 
 
 def failures_of(result: dict) -> list[dict]:
@@ -271,6 +274,8 @@ COMMON_MIN_S, R_MISSIONS_MIN = 600.0, 2
 HOLD_GATE, HOLD_MIN_R, HOLD_TRAVEL_FLOOR_M, HOLD_PER_M_MIN_TRAVEL_M = 1.5, 10, 0.1, 0.3
 SLAM_FAILURE = ("slam_", "localization_")  # plan 5c item 8 (a): SLAM-attributable mission failures
 LAST_WINDOW_S = 600.0  # item 8 (d): the first hour's last ten minutes
+EXPECTED_SCENES, EXPECTED_SEEDS = ("line_m", "random_m"), (3, 4)  # the second confirmation as pre-registered
+EXPECTED_PAIRS = 2
 
 
 def _timeline_intervals(run: RunData) -> list:
@@ -347,23 +352,30 @@ def hold_records(run: RunData) -> tuple[list, bool]:
             t_h = starts[0]
         closed.append((t_h, t))
         moved = travel(t_h, t)
-        jump_rad, jump_m = abs(float(e.get("jump_rad") or 0.0)), abs(float(e.get("jump_m") or 0.0))
+        try:  # a release without a finite jump is incomplete data, never a zero (Codex tool review P2)
+            jump_rad, jump_m = abs(float(e["jump_rad"])), abs(float(e["jump_m"]))
+        except (KeyError, TypeError, ValueError):
+            jump_rad = jump_m = math.nan
+        if not (math.isfinite(jump_rad) and math.isfinite(jump_m) and math.isfinite(moved)):
+            incomplete = True
+            prev_release = t
+            continue
         values.append({"t_h": t_h, "t_r": t, "travel_m": moved, "jump_rad": jump_rad, "jump_m": jump_m,
                        "per_m": (jump_rad / max(moved, HOLD_TRAVEL_FLOOR_M)
                                  if moved >= HOLD_PER_M_MIN_TRAVEL_M else None)})
         prev_release = t
-    # every recorded holding span must meet a closed interval, the trailing unclosed one excepted
-    span_start = None
-    for ti, r in zip(ticks + [math.inf], recs + [None]):
-        holding = r is not None and r.get("mode") == "holding"
-        if holding and span_start is None:
-            span_start = ti
-        elif not holding and span_start is not None:
-            end = ti
-            trailing = r is None
-            if not trailing and not any(a <= end and b >= span_start for a, b in closed):
-                incomplete = True
-            span_start = None
+    # every holding record must lie inside a closed interval (Codex tool review P2: a span met only in part passed),
+    # those after the last release excepted -- the trailing unclosed hold
+    # -- the trailing exception only for a hold still on at the end (no tracking record after it)
+    last_release = max((b for _, b in closed), default=-math.inf)
+    last_tracking = max((ti for ti, r in zip(ticks, recs) if r.get("mode") == "tracking"), default=-math.inf)
+    for ti, r in zip(ticks, recs):
+        if r.get("mode") != "holding" or any(a <= ti <= b for a, b in closed):
+            continue
+        if ti > last_release and ti > last_tracking:
+            continue  # the session ended holding
+        incomplete = True
+        break
     return values, incomplete
 
 
@@ -462,14 +474,14 @@ def pair_verdict(l_run: RunData, r_run: RunData) -> dict:
             if ml["missions_done"] < mr["missions_done"]:
                 comparison.append(f"missions done on the common span: L {ml['missions_done']} < R {mr['missions_done']}")
             out["comparison"] = {"l": ml, "r": mr}
-    # V5 on L where no comparison covers it: past a comparable span's end, or the whole run when not comparable
-    t_l = _applied(l_run)[0]
-    beyond = (t_l > c_end) if c_end is not None else np.ones(len(t_l), bool)
-    if beyond.any():
-        if not float(lp[beyond].max()) <= POSITION_MAX_M:
-            absolute.append(f"L applied position max {float(lp[beyond].max()):.3f} > {POSITION_MAX_M} m (V5)")
-        if not float(ly[beyond].max()) <= YAW_MAX_RAD:
-            absolute.append(f"L applied heading max {float(ly[beyond].max()):.4f} > {YAW_MAX_RAD} rad (V5)")
+    # V5 on every applied row of L, the common span included (Codex tool review P2: inside a comparable span only
+    # L <= R was asked, so an L at 0.20 m beside an R at 0.30 m passed)
+    if len(lp):
+        if not float(lp.max()) <= POSITION_MAX_M:
+            absolute.append(f"L applied position max {float(lp.max()):.3f} > {POSITION_MAX_M} m (V5)")
+        if not float(ly.max()) <= YAW_MAX_RAD:
+            absolute.append(f"L applied heading max {float(ly.max()):.4f} > {YAW_MAX_RAD} rad (V5)")
+    out["l_delay_windows_p99_s"] = _delay_windows(l_run, ls)
     out["l_absolute_ok"] = not absolute
     out["comparison_ok"] = not comparison if out["comparable"] else None
     out["failed"] = absolute + comparison
@@ -492,9 +504,13 @@ def scene_gate(l_runs: list, r_runs: list) -> dict:
             pos, yaw = _hold_responses(run)  # item 8 (b): responses processed during holds
             pooled[side].setdefault("hold_response_position", []).extend(pos)
             pooled[side].setdefault("hold_response_yaw", []).extend(yaw)
-    out = {"counts": {k: [len(pooled["l"].get(k, [])), len(pooled["r"].get(k, []))] for k in pooled["r"]}}
+    keys = ("per_m", "jump_rad", "jump_m", "hold_response_position", "hold_response_yaw")
+    out = {"counts": {k: [len(pooled["l"].get(k, [])), len(pooled["r"].get(k, []))] for k in keys}}
     if incomplete:
         return {**out, "state": "incomplete"}
+    if not pooled["l"].get("jump_rad"):  # no closed L hold at all: no evidence, not an 'ok' (Codex P3)
+        return {**out, "state": "insufficient", "short": ["no L hold"]}
+    out["not_applicable"] = [k for k in keys if not pooled["l"].get(k)]  # e.g. no L hold travelled 0.3 m
     stats, short = {}, []
     for key in ("per_m", "jump_rad", "jump_m", "hold_response_position", "hold_response_yaw"):
         lv, rv = pooled["l"].get(key, []), pooled["r"].get(key, [])
@@ -510,9 +526,24 @@ def scene_gate(l_runs: list, r_runs: list) -> dict:
                 continue
             stats.setdefault(key, {})[name] = {"l": a, "r": b, "ratio": a / b}
     out["stats"] = stats
-    if short:
-        return {**out, "state": "insufficient", "short": short}
+    if any(not math.isfinite(s["ratio"]) for v in stats.values() for s in v.values()):
+        return {**out, "state": "incomplete", "short": ["a non-finite statistic"]}
+    if short or not stats:
+        return {**out, "state": "insufficient", "short": short or ["no statistic"]}
     out["state"] = ("fail" if any(s["ratio"] > HOLD_GATE for v in stats.values() for s in v.values()) else "ok")
+    return out
+
+
+def _delay_windows(run: RunData, span) -> list:
+    """The reply-to-apply-tick delay's p99 in each sim-600 s window of the first hour (plan 5c item 8: reported)."""
+    if span is None:
+        return []
+    out = []
+    for k in range(WINDOWS):
+        a, b = span[0] + k * WINDOW_S, span[0] + (k + 1) * WINDOW_S
+        d = [float(r["applied_tick_s"]) - float(r["stamp_s"]) for r in _processed(run, a, b)
+             if r.get("applied_tick_s") is not None and r["stamp_s"] < b]
+        out.append(float(np.percentile(d, 99)) if d else None)
     return out
 
 
@@ -558,7 +589,11 @@ def load(run: Path) -> RunData:
             missions.append({**end, "delivery_error_m": entry.get("delivery_error_m")})
     return RunData(records=load_list(run / "spool", "slam.records"), control=load_list(run / "spool", "slam.control"),
                    missions=missions, failure=result.get("failure_reason"), failures=failures_of(result),
-                   holds=list((result.get("slam_summary") or {}).get("holds") or []))
+                   holds=list((result.get("slam_summary") or {}).get("holds") or []),
+                   seed=(result.get("arguments") or {}).get("seed"),
+                   slam_mode=(result.get("slam_map") or {}).get("mode") or "mapping",
+                   scene=(Path((result.get("arguments") or {}).get("scene_file") or "").stem.removesuffix("_session")
+                          or None))
 
 
 def judge(spec: dict, loader=None) -> dict:
@@ -566,15 +601,38 @@ def judge(spec: dict, loader=None) -> dict:
     "extra_r": [R_RUN, ...]}}} -- the pairs as judged (a re-run R in place of a not comparable one), the replaced
     original R runs in ``extra_r`` (their holds still count in the gate)."""
     loader = loader or (lambda p: load(Path(p)))
-    scenes, out = {}, {"scenes": {}}
-    for name, s in spec["scenes"].items():
-        pairs = [(loader(lp), loader(rp)) for lp, rp in s["pairs"]]
+    scenes, out, config = {}, {"scenes": {}}, []
+    if set(spec.get("scenes", {})) != set(EXPECTED_SCENES):
+        config.append(f"scenes {sorted(spec.get('scenes', {}))} are not {list(EXPECTED_SCENES)}")
+    paths = [p for s in spec.get("scenes", {}).values() for pair in s.get("pairs", []) for p in pair]
+    paths += [p for s in spec.get("scenes", {}).values() for p in s.get("extra_r", [])]
+    if len(paths) != len(set(paths)):
+        config.append("a run is named twice")
+    for name, s in spec.get("scenes", {}).items():
+        pairs = [(loader(lp), loader(rp)) for lp, rp in s.get("pairs", [])]
         extra = [loader(p) for p in s.get("extra_r", [])]
+        if sorted(lr.seed for lr, _ in pairs) != sorted(EXPECTED_SEEDS):
+            config.append(f"{name}: L seeds {[lr.seed for lr, _ in pairs]} are not {list(EXPECTED_SEEDS)}")
+        for lr, rr in pairs:
+            if lr.seed != rr.seed or lr.slam_mode != "localization" or rr.slam_mode != "mapping":
+                config.append(f"{name}: a pair is not L localization / R mapping on one seed "
+                              f"({lr.slam_mode} {lr.seed} / {rr.slam_mode} {rr.seed})")
+        for run in [r for pair in pairs for r in pair] + extra:
+            if run.scene is not None and run.scene != name:
+                config.append(f"{name}: a run of scene {run.scene}")
+        for rr in extra:
+            if rr.slam_mode != "mapping" or rr.seed not in EXPECTED_SEEDS:
+                config.append(f"{name}: an extra R is not a mapping run of the confirmation's seeds")
         verdicts = [pair_verdict(lr, rr) for lr, rr in pairs]
         gate = scene_gate([lr for lr, _ in pairs], [rr for _, rr in pairs] + extra)
         scenes[name] = (verdicts, gate)
-        out["scenes"][name] = {"pairs": verdicts, "gate": gate}
+        out["scenes"][name] = {"pairs": verdicts, "gate": gate,
+                               "extra_r": [{"path": p, "failure": r.failure, "failures": r.failures}
+                                           for p, r in zip(s.get("extra_r", []), extra)]}
     out["overall"] = overall(scenes)
+    if config:
+        out["overall"] = {"ok": False, "failed": [f"configuration: {c}" for c in config] + out["overall"]["failed"]}
+    out["config_problems"] = config
     return out
 
 
