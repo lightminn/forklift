@@ -154,6 +154,8 @@
 
 ## 5b. Isaac L/R 확인 결과 (ws1 `test_runs/live/s3conf_874e44a4`, 묶음 11506·11507, 스냅숏 874e44a4, 2026-10-26)
 
+원본 전체는 `gdrive:forklift-archive/ws1-s3conf-874e44a4/` 에 있다(실행마다 `s3c_*.tar.zst`, 최상위·스냅숏은 `s3c_meta.tar.zst`, 각 `.files.tsv`·`.md5`). ws1 에는 판정기 입력만 남겼다: result.json, live_log, 스풀 manifest·slam.records·slam.control, missions/*/result.json.
+
 장면 2 × seed 1·2 × {L = 등록부 묶음 위 위치 추정, R = mapping(지금 기본값, slam_link 완화)}, team-spec, 팔레트 하나 30 구간이다. 판정은 `tools/slam_live_compare.py` 다.
 
 | 쌍 | 판정(규칙 그대로) | L kf 최대 | L 완료/30 | L 관측 sim | 공통 구간 | 적용 위치 중앙/최대 L · R (m) | 적용 방향 최대 L · R (rad) | 공통 구간 완료 L:R |
