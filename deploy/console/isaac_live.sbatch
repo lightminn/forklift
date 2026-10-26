@@ -14,11 +14,12 @@
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/isaac_live.sbatch OUT
 #   optional: PORT (8798), FACTOR (0.4), SEED (0), ENCODER_MODEL (team_spec_quantized, or reported; each takes its own
-#   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
-#   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
-#   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
-#   (MAP_BUNDLE=registry: the accepted bundle of SCENE_FILE and ENCODER_MODEL from config/slam_map_bundles.yaml under
-#   SLAM_BUNDLE_ROOT, its map id held against the folder; MAP_BUNDLE=none: mapping; deploy/console/slam_choice.sh),
+#   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (the SLAM mode,
+#   deploy/console/slam_choice.sh -- unset, the default since the user's decision of 2026-10-27 (live-default plan 5d):
+#   localization on the accepted survey bundle of SCENE_FILE and ENCODER_MODEL from config/slam_map_bundles.yaml under
+#   SLAM_BUNDLE_ROOT, its map id held against the folder, and online mapping as a recorded fallback where the registry
+#   has no row; registry: that bundle or no launch; none: mapping; a folder: that bundle with MAP_START_POSE "x,y,yaw",
+#   map <- base_link at the scene's start), SLAM_BUNDLE_ROOT (where the registry's bundle folders are),
 #   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
 #   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
 #   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
@@ -44,10 +45,12 @@ ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 D7_HOLD=${D7_HOLD:-on}
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
-# The SLAM mode (live-default plan S3 D2): MAP_BUNDLE unset / none / registry / a folder, deploy/console/slam_choice.sh
+# The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
+# registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
 if [ -n "${MAP_BUNDLE:-}" ]; then
-  MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
+  # a bundle folder that is not there stops the launch (an empty realpath would have read as mapping)
+  MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
 echo "slam: $SLAM_CHOICE"

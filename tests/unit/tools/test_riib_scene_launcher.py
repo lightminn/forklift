@@ -109,6 +109,16 @@ def test_the_d7_reapproach_hold_is_on_unless_turned_off(tmp_path):
     assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--d7-reapproach-hold", "on"])
 
 
+def test_the_slam_mode_is_said_and_recorded(tmp_path):
+    # live-default plan 5d: the live console localizes by default; this launcher maps online and says so, never silently
+    out = dry_run(tmp_path)
+    assert "slam: mapping (riib_scene.sbatch maps online" in out.stdout
+    assert "\nSLAM=mapping (" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert not any(a.startswith("--slam-map-bundle") for a in args_of(out))
+    dry_run(tmp_path, MODE="truth")
+    assert "\nSLAM=none (MODE=truth)" in (tmp_path / "out/riib_defaults.txt").read_text()
+
+
 def test_the_keepout_can_be_turned_on(tmp_path):
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.15")), ["--lidar-keepout-m", "0.15"])
     assert contains(args_of(dry_run(tmp_path, KEEPOUT="0.10")), ["--lidar-keepout-m", "0.10"])
