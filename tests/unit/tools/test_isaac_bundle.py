@@ -1375,3 +1375,15 @@ def test_a_run_without_a_runner_for_too_long_is_a_stall(tmp_path):
     stuck = writer("stuck_between_epochs", tmp_path, 0.1, 30)  # never a run_transport.py process
     summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6)
     assert results(tmp_path)["stuck_between_epochs"]["status"] == "stalled" and summary["stalled"] == 1
+
+
+def test_riib_runs_are_measured_not_ended_by_default():
+    # planning has no wall-clock bound (Codex), so riib silences are recorded until a limit is set from them
+    assert ib.KINDS["riib"]["stall_min"] == 0 and ib.KINDS["riib"]["watch_rel"] == "run/frames.jsonl"
+
+
+def test_a_watched_run_s_silence_is_measured_without_a_stall_limit(tmp_path):
+    quiet = writer("measured", tmp_path, 0.2, 1.2)
+    summary = bundle(tmp_path, [quiet], stall_s=None, stall_check_s=0.1, stack_match=None)
+    r = results(tmp_path)["measured"]
+    assert r["status"] == "ended" and r["silence_max_s"] >= 0.5 and summary["stalled"] == 0
