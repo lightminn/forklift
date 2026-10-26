@@ -566,6 +566,16 @@ def arguments() -> argparse.Namespace:
         "earlier run.",
     )
     parser.add_argument(
+        "--return-start-backoff",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-27-return-start-withdraw-extension.md: a return planned from the withdrawal end whose "
+        "start is invalid (the mission plan's return_home, the docking release's replan, the first live return) backs "
+        "straight off first -- the first distance the return's start check accepts while the straight keeps the "
+        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. Off: as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--escape-start-release",
         choices=("on", "off"),
         default="off",
@@ -4915,6 +4925,7 @@ def drive(S, isaac) -> None:
             trace=planning_trace,
             **grid_kwargs("mission"),
             **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+            **return_start_backoff_kw(args),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
         state["planning_wall_s"] = time.monotonic() - planning_start
@@ -5609,7 +5620,8 @@ def drive(S, isaac) -> None:
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
             plan_transport=lambda *a, **k: plan_transport(
-                *a, **k, **({} if transport_exit is None else {"exit_prefix": transport_exit})),
+                *a, **k, **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+                **return_start_backoff_kw(args)),
             final_straight_prefix=lambda *a: final_straight_prefix(*a),
             same_path=same_path, path_stats=path_stats,
             # M-a1 slice 4a: the follower rules' helpers and the cusp heading holds (built further down run()).
@@ -5682,6 +5694,9 @@ def drive(S, isaac) -> None:
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
                                 observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
+                                # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
+                                # before the option
+                                return_start_backoff_m=return_start_backoff_m_of(args),
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -7568,7 +7583,8 @@ def drive(S, isaac) -> None:
                             "kwargs": {"config": planner_config, "geometry": geometry,
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
                                        "occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0),
-                                       **({} if transport_exit is None else {"exit_prefix": transport_exit})},
+                                       **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+                                       **return_start_backoff_kw(args)},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
                            "pickup_bounds": None, "pickup_zone": None,
@@ -9288,6 +9304,21 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
             or (v is not None and (k != "quarter_focal" or v != 2.5))
         )
     }
+
+
+
+def return_start_backoff_m_of(args) -> float:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R1: the backoff cap the planners get, 0 when off (and in a
+    record from before the option)."""
+    from forklift_core.planning.pallet_mission import RETURN_START_BACKOFF_CAP_M
+
+    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") == "on" else 0.0
+
+
+def return_start_backoff_kw(args) -> dict:
+    """The mission planners' keyword for the return-start backoff: none when off, so their calls are as before."""
+    m = return_start_backoff_m_of(args)
+    return {"return_start_backoff_m": m} if m > 0.0 else {}
 
 
 def main() -> None:

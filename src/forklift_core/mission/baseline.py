@@ -25,6 +25,7 @@ MISSION_KEYS = {
         "observation_attempts", "observation_candidates", "observation_waypoint_selected", "observation_drops",
         "observe_replans", "observe_replan_leg", "observe_loose_arrival", "observe_loose_arrivals",
         "observe_start_backoffs",  # plan 2026-10-26-observe-start-backoff B6
+        "return_start_backoffs",  # plan 2026-10-27-return-start-withdraw-extension R6
         "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
         "cusp_replans", "stall_replans", "docking_retries", "cusp_heading_watch", "cusp_stalls", "cusp_heading_hold",
