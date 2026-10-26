@@ -358,6 +358,28 @@ def test_standard_deviation_threshold_is_strict_and_ignores_alpha():
     assert capture(camera, std_threshold=1.9)[0].rgb[0, 0, 0] == 4
 
 
+class FrameRgbCamera(FakeCamera):
+    """A deterministic run reads RGB from the camera's current frame (plan D1)."""
+
+    def get_current_frame(self):
+        return {"rgb": self.rgba, "rendering_time": 0.0}
+
+
+def test_a_deterministic_capture_does_not_accept_or_refuse_a_frame_by_its_rgb():
+    # plan D1b (Codex): RTX RGB differs between processes, so the RGB spread must not decide when a frame is accepted
+    from forklift_core import determinism
+
+    camera = FrameRgbCamera()
+    camera.rgba[:, :, :3] = 7  # flat RGB: refused off, accepted in a deterministic run (the depth is ready)
+    with pytest.raises(MODULE.CaptureFailure):
+        capture(camera, max_attempts=1)
+    determinism.configure(True)
+    try:
+        assert capture(camera, max_attempts=1)[2] == 1
+    finally:
+        determinism.configure(False)
+
+
 @pytest.mark.parametrize("attempts", [0, -1, True, 1.5])
 def test_invalid_retry_limit_is_rejected(attempts):
     with pytest.raises(ValueError):

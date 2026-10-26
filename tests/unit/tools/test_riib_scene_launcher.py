@@ -79,11 +79,26 @@ def test_the_start_band_release_is_off_unless_asked(tmp_path):
     assert contains(args_of(dry_run(tmp_path, START_BAND="on")), ["--start-band-release", "on"])
 
 
+def test_the_escape_start_release_is_off_unless_asked(tmp_path):
+    # docs/plans/2026-10-25-escape-start-release.md: the escape's sweep alone, apart from START_BAND
+    assert contains(args_of(dry_run(tmp_path)), ["--escape-start-release", "off"])
+    assert " ESCAPE_START=off " in (tmp_path / "out/riib_defaults.txt").read_text()
+    on = args_of(dry_run(tmp_path, ESCAPE_START="on"))
+    assert contains(on, ["--escape-start-release", "on"]) and contains(on, ["--start-band-release", "off"])
+
+
 def test_the_low_clearance_guard_is_on_unless_turned_off(tmp_path):
     # docs/validation/2026-10-25-low-clearance-guard.md
     assert contains(args_of(dry_run(tmp_path)), ["--low-clearance-guard", "on"])
     assert " LOW_CLEARANCE=on " in (tmp_path / "out/riib_defaults.txt").read_text()
     assert contains(args_of(dry_run(tmp_path, LOW_CLEARANCE="off")), ["--low-clearance-guard", "off"])
+
+
+def test_the_restart_confirmation_takes_three_scans_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-26-restart-confirmation.md
+    assert contains(args_of(dry_run(tmp_path)), ["--restart-confirm-scans", "3"])
+    assert " RESTART_CONFIRM=3 " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, RESTART_CONFIRM="0")), ["--restart-confirm-scans", "0"])
 
 
 def test_the_keepout_can_be_turned_on(tmp_path):
@@ -127,9 +142,10 @@ def test_the_odometry_is_the_joint_angle_model_by_default_with_its_age_table(tmp
     assert contains(truth, ["--encoder-model", encoder or "team_spec_quantized"]) and contains(truth, ["--obstacle-layer", layer])
 
 
-@pytest.mark.parametrize("env", [{"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
+@pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
+                                 {"ESCAPE_START": "maybe"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)

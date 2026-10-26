@@ -70,10 +70,15 @@ job's time left (squeue %L, again every 5 min: scontrol can shorten it) and star
 `sizes KIND --runs R --jobs J [--run-min M]` prints a --time to match.
 
 Stall watchdog: a run whose progress files -- its "watch" globs, else its pace_log, else the kind's file under its first
-retry_move (riib: run/frames.jsonl) -- have not changed for --stall-min (default the kind's) is ended like a
-timeout (TERM, KILL after --grace-s) and recorded as stalled; it is never retried (a hang is not the infrastructure,
+retry_move (riib: run/frames.jsonl) -- have not changed for --stall-min (default the kind's) is first looked at --
+tools/stall_watch.py's capture_diagnostics (py-spy --native, every thread's state/utime/stime/wchan, /proc status,
+nvidia-smi) into its output folder's stall_diagnostics.txt, then SIGUSR1 to its run_transport processes (their
+faulthandler writes every thread's Python stack to <output>.stall_stack.txt) -- then, --stack-wait-s later, ended like
+a timeout (TERM, KILL after --grace-s) and recorded as stalled; it is never retried (a hang is not the infrastructure,
 and a rerun would blur a deterministic comparison). Before the first progress file exists the silence counts from
-the run's start; a run with no progress file named is not watched.
+the run's start, and is judged only while a Python process runs --stack-match (run_transport) under the run,
+from the later of the run's and that runner's start -- between a live session's epochs the supervisor runs alone for
+up to its backoff plus 300 s of standby; a run with no progress file named is not watched.
 
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
@@ -122,8 +127,12 @@ KINDS = {
     # 46.6, dv3's trailer up to 77), bd 12.1 (bd_isaac, 151 jobs); a batch with longer runs passes --run-min
     # stall_min: no change of a run's progress file for this long ends it (status stalled, not retried). live: the
     # live_log.jsonl of 30 runs (rh/sf) never went quiet for more than 3.3 s, its first record came 38-50 s after
-    # the start. riib (run/frames.jsonl, watch_rel): off until its normal silences are measured -- its outputs carry
-    # no wall-clock timeline (dv3_trailer_det2 hung in render for 45 min); pass --stall-min to watch a riib list now
+    # the start. riib (run/frames.jsonl, watch_rel; its outputs carry no wall-clock timeline): 86 runs on ws1
+    # (2026-10-26) took 10-136 s from run.log to frames.jsonl (median 44), waited at most 1.0 s for a SLAM reply and
+    # 0.5 s for an obstacle cast per scan, and wrote result.json at most 3.8 s after their last frame; planning is not
+    # timed in its records and has no wall-clock bound (pallet_mission's retry ladder: up to 390,000 hybrid-A*
+    # expansions, no deadline outside the grid path -- Codex), so riib is measured, not acted on: every watched run's
+    # results line carries silence_max_s; set stall_min from those (dv3_trailer_det2 hung in render for 45 min).
     "live": {"session_gib": 5.5, "cores": 2, "max_slots": 4, "vram_mib": 3950, "run_min": 30, "stall_min": 10},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
     "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
@@ -373,6 +382,53 @@ def time_limit(runs, slots, jobs=1, run_min=30.0, stagger_min=1.0):
     return f"{minutes // 60:02d}:{minutes % 60:02d}:00"
 
 
+def _cmdline(pid) -> str:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
+
+def stall_targets(pids, match):
+    """The pids of Python interpreters running `match` that catch SIGUSR1 (tools/stall_watch.py's test, inlined: this
+    file runs alone). The interpreter test keeps out `timeout`, which names the script too and forwards SIGUSR1."""
+    out = []
+    for p in pids:
+        if not match or match not in _cmdline(p):
+            continue
+        try:
+            if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
+                continue
+        except OSError:
+            continue
+        try:
+            with open(f"/proc/{p}/status") as f:
+                cgt = next((int(x.split()[1], 16) for x in f if x.startswith("SigCgt:")), 0)
+        except (OSError, ValueError):
+            continue
+        if cgt >> (signal.SIGUSR1 - 1) & 1:
+            out.append(p)
+    return out
+
+
+def stall_diagnostics(pids, r, out):
+    """tools/stall_watch.py's capture_diagnostics for a stalled run, into its output folder (its first retry_move) or
+    else beside the bundle's run log; the path, or the error -- never raised, the run is ended either way."""
+    folder = r.run.retry_move[0] if r.run.retry_move and os.path.isdir(r.run.retry_move[0]) else None
+    path = (os.path.join(folder, "stall_diagnostics.txt") if folder
+            else str(Path(out) / "runs" / f"{r.run.name}.{r.attempt}.stall_diagnostics.txt"))
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            from stall_watch import capture_diagnostics
+        finally:
+            sys.path.pop(0)
+        return capture_diagnostics(pids, path)
+    except Exception as exc:  # noqa: BLE001
+        return f"<{exc!r}>"
+
+
 def watch_globs(run, watch_rel=None):
     """A run's progress files: its "watch" globs, else its pace_log, else watch_rel under its first retry_move."""
     if run.watch:
@@ -384,13 +440,35 @@ def watch_globs(run, watch_rel=None):
     return []
 
 
-def progress_silence(run, start_wall, watch_rel=None, now=time.time):
-    """Seconds since the run's progress files last changed (from its start while none exists yet); None when the run
-    has no progress file named, so nothing is judged."""
+def _runner_start(pids, match):
+    """The latest start (wall clock) of the Python processes among pids running `match`, or None when none runs."""
+    try:
+        with open("/proc/stat") as f:
+            btime = next(int(x.split()[1]) for x in f if x.startswith("btime "))
+    except (OSError, ValueError, StopIteration):
+        return None
+    starts = []
+    for p in pids:
+        if not match or match not in _cmdline(p):
+            continue
+        try:
+            if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
+                continue
+            with open(f"/proc/{p}/stat") as f:
+                starts.append(btime + int(f.read().rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK"))
+        except (OSError, ValueError, IndexError):
+            continue
+    return max(starts) if starts else None
+
+
+def progress_silence(run, start_wall, watch_rel=None, now=time.time, runner_start=None):
+    """Seconds since the run's progress files last changed, counted at the earliest from the later of its start and
+    its runner's start (runner_start: between a live session's epochs, and while a new runner starts up, there is no
+    record to wait for); None when the run has no progress file named, so nothing is judged."""
     globs = watch_globs(run, watch_rel)
     if not globs:
         return None
-    latest = start_wall
+    latest = max(start_wall, runner_start or 0.0)
     for pattern in globs:
         for path in glob.glob(pattern):
             try:
@@ -822,6 +900,12 @@ class _Live:
     timeout: bool = False
     stalled: bool = False
     silence_max: float = 0.0
+    stack_term_at: float | None = None  # a stalled run's TERM, stack_wait_s after its SIGUSR1
+    no_runner_since: float | None = None
+    diagnostics: str | None = None
+    diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
+    diag_deadline: float | None = None
+    stack_pids: list = field(default_factory=list)
     term_at: float | None = None
     killed: bool = False
     vram_max: int = 0
@@ -841,9 +925,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                shard_mib=SHARD_MIB, session_vram_mib=SESSION_VRAM_MIB, vram_probe=None, vram_period_s=1.0,
                vram_unreadable_s=120.0, job_id=None, cpus=None, cleanup=docker_cleanup, stop=None, poll_s=0.5,
                base_env=None, retries=1, oom_counter=job_oom_kills, pace_floor=None, pace_gap_p99_s=None,
-               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=30.0, pace_confirm=2,
+               pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
-               stall_s=None, stall_check_s=30.0, watch_rel=None,
+               stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
+               diag_wait_s=60.0, no_runner_s=900.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings):
@@ -970,6 +1055,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": "infra_failed" if infra else ("stalled" if r.stalled else "ended"), "infra": signs,
             "retried": retry, "stalled": r.stalled, "silence_max_s": round(r.silence_max, 1),
+            "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
             "timeout": r.timeout, "killed": r.killed, "session_id": r.env["SESSION_ID"],
             "bridge_cpu": r.env["BRIDGE_CPU"], "port": r.env["PORT"], "vram_max_mib": r.vram_max,
@@ -1207,17 +1293,44 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
-                if stall_s and r.term_at is None and now >= st["stall_next"]:
-                    silence = progress_silence(r.run, r.start_wall, watch_rel)
-                    if silence is not None:
+                if (not r.stalled and r.term_at is None and now >= st["stall_next"]
+                        and watch_globs(r.run, watch_rel)):
+                    # measured for every watched run (silence_max_s), acted on with stall_s; judged only while its
+                    # runner (run_transport) runs, from that runner's start
+                    started = _runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match else 0.0
+                    silence, limit = None, stall_s
+                    if started is not None:
+                        r.no_runner_since = None
+                        silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
                         r.silence_max = max(r.silence_max, silence)
-                        if silence >= stall_s:  # ended like a timeout: TERM, KILL after the grace, not retried
-                            r.stalled, r.term_at = True, now
-                            _kill([r.proc.pid], signal.SIGTERM)
+                    elif no_runner_s:
+                        # no runner: a live session between epochs (backoff, bridge start, standby: ~7 min at most)
+                        # is no stall, a run stuck without a runner is, after no_runner_s
+                        r.no_runner_since = now if r.no_runner_since is None else r.no_runner_since
+                        silence, limit = now - r.no_runner_since, no_runner_s
+                    if stall_s and silence is not None:
+                        if silence >= limit:
+                            # first what it was doing: diagnostics in a thread (py-spy, /proc, nvidia-smi -- they
+                            # must not hold up the other runs), at most diag_wait_s
+                            r.stalled = True
+                            r.stack_pids = [p for p in token_pids(r.env["BUNDLE_TOKEN"])
+                                            if stack_match and stack_match in _cmdline(p)]
+                            r.diag_thread = threading.Thread(target=lambda r=r: setattr(
+                                r, "diagnostics", stall_diagnostics(r.stack_pids, r, out)), daemon=True)
+                            r.diag_thread.start()
+                            r.diag_deadline = now + diag_wait_s
+                if (r.stalled and r.stack_term_at is None and r.term_at is None
+                        and (not r.diag_thread.is_alive() or now >= r.diag_deadline)):
+                    # then the stack: SIGUSR1 only to processes that catch it (run_transport's faulthandler)
+                    _kill(stall_targets(r.stack_pids, stack_match), signal.SIGUSR1)
+                    r.stack_term_at = now + stack_wait_s
+                if r.stalled and r.term_at is None and r.stack_term_at is not None and now >= r.stack_term_at:
+                    r.term_at = now  # then ended like a timeout: TERM, KILL after the grace, never retried
+                    _kill([r.proc.pid], signal.SIGTERM)
                 if r.term_at is not None and not r.killed and now - r.term_at > grace_s:
                     r.killed = True
                     _kill(set(token_pids(r.env["BUNDLE_TOKEN"])) | {r.proc.pid}, signal.SIGKILL)
-            if stall_s and now >= st["stall_next"]:
+            if now >= st["stall_next"]:
                 st["stall_next"] = now + stall_check_s
             if vram_probe is not None and now >= vram_next:
                 vram_next = now + vram_period_s
@@ -1412,7 +1525,9 @@ def main(argv=None) -> int:
     ap.add_argument("--pace-warmup-s", type=float, default=540.0,
                     help="a run is judged from this age: its start-up (~240 s) plus a window")
     ap.add_argument("--pace-period-s", type=float, default=60.0)
-    ap.add_argument("--pace-stall-s", type=float, default=30.0)
+    # 120 s: healthy live runs went 36-42 s without a tick (escb 2026-10-26: four back-offs at 36.6-42.5 s; rcq up
+    # to 41 s), so 30 s took a session away from bundles that were at pace; a real hang is the stall watchdog's
+    ap.add_argument("--pace-stall-s", type=float, default=120.0)
     ap.add_argument("--pace-stall-warmup-s", type=float, default=240.0,
                     help="a run's stalls are judged from this age (its pace from --pace-warmup-s)")
     ap.add_argument("--pace-confirm", type=int, default=2,
