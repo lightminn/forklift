@@ -985,7 +985,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                diag_wait_s=60.0, no_runner_s=900.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
-               siblings=_siblings):
+               siblings=_siblings, gpu_full_give_up_s=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if claim_dir is not None:
@@ -1017,6 +1017,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     records = []
     st = {"last_start": None, "sampled_at": None, "unreadable_since": None, "unattributed": 0, "free": None,
           "job_vram_max": 0, "vram_waits": 0, "gpu_full_waits": 0, "unreadable_starts": 0, "waiting": None,
+          "waiting_since": None, "gpu_full_gave_up": 0, "busy_at": None,
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
           "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
           "time_left": 0, "time_left_retry": [], "stall_next": 0.0, "stalled": 0,
@@ -1313,6 +1314,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         vram_next = 0.0
         while queue or live:
             now = time.monotonic()
+            if live:  # the job's own runs (ending ones too) may still free the device: no give-up counts from before
+                st["busy_at"] = now
             for pid, r in list(live.items()):
                 if r.exited is None:
                     try:
@@ -1460,6 +1463,26 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
                     st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1
                     st["waiting"] = v
+                    st["waiting_since"] = now
+                elif v not in ("over", "gpu_full", "node_ram"):  # an unreadable or stale sample breaks the wait
+                    st["waiting"], st["waiting_since"] = None, None
+                if (v == "gpu_full" and gpu_full_give_up_s and not live
+                        and now - max(st["waiting_since"], st["busy_at"] or 0.0) >= gpu_full_give_up_s):
+                    # nothing of this job runs, so nothing of ours will free the device: other jobs' sessions hold
+                    # it (11596_2, 2026-10-27: three S3 sessions grown to 3,920-4,018 MiB, 464 MiB the driver
+                    # reserves, 3,837 MiB free -- the fourth shard of a GPU without the memory for a fourth session;
+                    # the task held its shard, CPUs and memory for 54 min). Slurm hands shards out from the first
+                    # GPU, so a requeued task would likely land on the same device: end, the list's owner resubmits.
+                    while queue:
+                        index, run, attempt = queue.popleft()
+                        if claimed_elsewhere(run, attempt):  # another job of the list has it: not ours to record
+                            st["claimed_elsewhere"] += 1
+                            continue
+                        record({"name": run.name, "index": index, "slot": None, "attempt": attempt,
+                                "status": "gpu_full", "rc": None, "signal": None, "retried": False,
+                                "free_mib": st["free"], "need_mib": session_vram_mib, "gpu": gpu_index,
+                                "waited_s": round(now - max(st["waiting_since"], st["busy_at"] or 0.0), 1)})
+                        st["gpu_full_gave_up"] += 1
             time.sleep(poll_s)
 
     try:
@@ -1500,11 +1523,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     failed = sum(1 for r in final if r["status"] in ("infra_failed", "stalled")
                  or (r["status"] == "ended" and r["rc"] != 0))
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
-                                                          "time_left_retry"))
+                                                          "time_left_retry", "gpu_full"))
     summary = {
         "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
-        "gpu_full_waits": st["gpu_full_waits"], "unreadable_starts": st["unreadable_starts"],
+        "gpu_full_waits": st["gpu_full_waits"], "gpu_full_gave_up": st["gpu_full_gave_up"], "unreadable_starts": st["unreadable_starts"],
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
@@ -1627,6 +1650,9 @@ def main(argv=None) -> int:
                     help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
                     help="node-wide RAM reservations shared by this user's bundle jobs")
+    ap.add_argument("--gpu-full-give-up-min", type=float, default=0.0,
+                    help="with nothing of the job running, stop waiting for a GPU that has stayed full this long and "
+                         "record the unstarted runs as gpu_full (0: wait; the array script gives 10)")
     ap.add_argument("--bridge-cpus", default="auto",
                     help="CPUs set apart for the SLAM bridges, the sessions pinned to the rest (auto: a core when the "
                          "job has one beyond 2 CPUs per slot; 0: bridges share)")
@@ -1708,6 +1734,7 @@ def _run_main(a, runs, slots, shards, probe, stop):
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
+        gpu_full_give_up_s=60 * a.gpu_full_give_up_min or None,
     )
 
 

@@ -44,8 +44,10 @@ fi
 echo "host=$(hostname) job=${SLURM_JOB_ID:-} array=${SLURM_ARRAY_JOB_ID:-}_$I shards=${SLURM_SHARDS_ON_NODE:-?}" \
   "node_gpu=${SLURM_JOB_GPUS:-?} cpus=$(taskset -cp $$ | awk -F': ' '{print $2}') list=$LIST out=$TASK $(date -Is)"
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design
+# a GPU that stays full while this task runs nothing is held by someone else: give up after GPU_FULL_GIVE_UP_MIN
+# (status gpu_full, resubmit the task) instead of holding the shard, CPUs and memory until time_left
 "${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" --list "$TASK/run.jsonl" --out "$TASK/bundle" --slots 1 \
-  "${KIND_ARGS[@]}" ${BUNDLE_ARGS:-} &
+  --gpu-full-give-up-min "${GPU_FULL_GIVE_UP_MIN:-10}" "${KIND_ARGS[@]}" ${BUNDLE_ARGS:-} &
 RUNNER=$!
 trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # Slurm's TERM: the runner ends its run
 wait "$RUNNER"
