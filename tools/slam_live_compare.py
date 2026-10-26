@@ -44,6 +44,13 @@ class RunData:
     control: list = field(default_factory=list)  # slam.control rows [t, rear x, y, yaw, truth x, y, yaw]
     missions: list = field(default_factory=list)  # mission_end entries with ended_s and delivery_error_m
     failure: str | None = None
+    failures: list = field(default_factory=list)  # result.json live_failures: the mission failures of the session
+
+
+def failures_of(result: dict) -> list[dict]:
+    """A session's mission failures (``live_failures``: time, phase, reason, class), the traceback left out -- the
+    session's own ``failure_reason`` is its end, and a mission failure does not end a session (S3 result review)."""
+    return [{k: f.get(k) for k in ("time_s", "phase", "reason", "class")} for f in result.get("live_failures") or []]
 
 
 def _compose(a, b):
@@ -198,7 +205,8 @@ def verdict(l_run: RunData, r_run: RunData) -> dict:
     if not prog["ok"]:
         failed.append(f"L progress: observed {prog['observed_s']:.0f} s, windows "
                       f"{[w['window'] for w in prog['windows'] if not w['ok']]} short")
-    out = {"l": whole, "progress": prog, "r_failure": r_run.failure, "common_span_s": None, "l_after_r": None}
+    out = {"l": whole, "progress": prog, "r_failure": r_run.failure, "common_span_s": None, "l_after_r": None,
+           "l_failures": l_run.failures, "r_failures": r_run.failures}
     ls, rs = _span(l_run), _span(r_run)
     if ls is None or rs is None or min(ls[1], rs[1]) <= max(ls[0], rs[0]):
         out["comparison"] = "not comparable (no common sim span)"
@@ -227,8 +235,9 @@ def verdict(l_run: RunData, r_run: RunData) -> dict:
             keep = t_a > c_end
             ap, ay = ap[keep], ay[keep]
         t_all, p_all, _ = _applied(l_run)
-        first = p_all[t_all < ls[0] + HALF_S]
-        second = p_all[t_all >= ls[1] - HALF_S]
+        # the first hour's two half-hours from the first response (not the run's last 30 min: S3 result review)
+        first = p_all[(t_all >= ls[0]) & (t_all < ls[0] + HALF_S)]
+        second = p_all[(t_all >= ls[0] + HALF_S) & (t_all < ls[0] + 2 * HALF_S)]
         after = {"from_s": t0, "position_max_m": float(ap.max()) if len(ap) else None,
                  "yaw_max_rad": float(ay.max()) if len(ay) else None,
                  "first_half_median_m": float(np.median(first)) if len(first) else None,
@@ -262,7 +271,7 @@ def load(run: Path) -> RunData:
         if end is not None:
             missions.append({**end, "delivery_error_m": entry.get("delivery_error_m")})
     return RunData(records=load_list(run / "spool", "slam.records"), control=load_list(run / "spool", "slam.control"),
-                   missions=missions, failure=result.get("failure_reason"))
+                   missions=missions, failure=result.get("failure_reason"), failures=failures_of(result))
 
 
 def main(argv=None) -> int:
@@ -275,7 +284,8 @@ def main(argv=None) -> int:
     if a.json is not None:
         a.json.write_text(json.dumps(out, indent=1) + "\n")
     print("PASS" if out["ok"] else "FAIL", "; ".join(out["failed"]),
-          "| common span", out["common_span_s"], "| R end", out["r_failure"])
+          "| common span", out["common_span_s"], "| R end", out["r_failure"],
+          "| R mission failures", [f.get("reason") for f in out.get("r_failures") or []])
     return 0 if out["ok"] else 1
 
 

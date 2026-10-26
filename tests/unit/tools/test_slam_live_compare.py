@@ -127,6 +127,35 @@ def test_every_sample_after_the_common_span_is_held_to_the_absolute_bounds():
     assert not out["ok"] and out["l_after_r"] is not None and "0.15" in " ".join(out["failed"])
 
 
+def test_the_drift_halves_are_the_first_hours_two_half_hours():
+    # S3 result review (Codex): the halves were the first and the LAST 30 min; the plan means 0-30 vs 30-60 min of the
+    # first hour from the first response -- a run longer than an hour drifting in its second half-hour fails
+    r_run = _run(1000.0, dx=0.04, failure="slam_link_failed: keyframe")
+    l_run = _run(4600.0, dx=0.02)
+    for row in l_run.control:
+        if 1800 <= row[0] < 3600:
+            row[1] += 0.005  # the second half-hour 5 mm worse; most of the last 30 min (2,800-4,600 s) is clean
+    out = cmp.verdict(l_run, r_run)
+    assert out["l_after_r"]["second_half_median_m"] > out["l_after_r"]["first_half_median_m"]
+    assert not out["ok"] and "second half" in " ".join(out["failed"])
+
+
+def test_mission_failures_in_live_failures_are_reported_for_both_arms(tmp_path):
+    import json
+
+    run = tmp_path / "run"
+    (run / "spool").mkdir(parents=True)
+    (run / "result.json").write_text(json.dumps({"failure_reason": None, "live_failures": [
+        {"time_s": 1874.4, "phase": "transport", "reason": "docking_retry_match_refused:correction_out_of_bounds",
+         "class": "mission"}]}))
+    assert cmp.failures_of(json.loads((run / "result.json").read_text())) == [
+        {"time_s": 1874.4, "phase": "transport", "reason": "docking_retry_match_refused:correction_out_of_bounds",
+         "class": "mission"}]
+    out = cmp.verdict(_run(dx=0.02), cmp.RunData(**{**vars(_run(1874.0, dx=0.04)), "failures": [
+        {"time_s": 1874.4, "reason": "docking_retry_match_refused:correction_out_of_bounds", "class": "mission"}]}))
+    assert out["r_failures"][0]["reason"].startswith("docking_retry_match_refused")
+
+
 def test_the_applied_delay_is_reported():
     run = _run(600.0)
     for r in run.records:
