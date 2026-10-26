@@ -368,10 +368,14 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     if shards > 4:
         raise ValueError(f"{kind}: {slots} sessions need {shards} shards, more than a GPU's 4")
     mem = -(-(slots * k["session_gib"] + SHARED_FILE_GIB + MARGIN_GIB) // 1)
-    # no core for the SLAM bridges by default: set apart (P2c) they answered keyframes on the same curve as on a shared
-    # CPU (scans 4,500-4,999: median 0.32 s, p95 0.77-0.82 s -- the graph's size sets it, not contention), so the two
-    # CPUs go to more sessions; --bridge-cpus N with a bigger --cpus-per-task still sets one apart
-    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"], "mem_gib": int(mem)}
+    # a core for the job's SLAM bridges on top of 2 CPUs a session (the runner's --bridge-cpus auto sets it apart):
+    # with a session and its bridge on one core, 11590's array tasks lost 3 of 3 runs to slam_link_failed and the
+    # 2-slot bundles (V5, kob) about 1 in 10 run-hours; with the core apart, the S3 second round's 8 runs had 2, both
+    # R mapping graphs grown to 1.10-1.15 s and none of the normal-processing kind -- the rule fixed before counted
+    # all (2: a shared-against-split comparison); the lead's reading after the results counts the latter only and
+    # adopted the core provisionally (docs/plans/2026-10-26-ws1-isaac-array.md 5.3; weak evidence, kept counted)
+    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
+           "mem_gib": int(mem)}
     if runs:
         out["time"] = time_limit(runs, slots, jobs, run_min or k["run_min"])
     return out
