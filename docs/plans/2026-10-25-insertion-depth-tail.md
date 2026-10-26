@@ -150,3 +150,12 @@ ws1 live 기록 68 실행, 162 미션을 썼다(입력 `test_runs/live/ins_tail/
   - 실제 미끄럼 가능성 → 각도 기반 모형이 같은 시뮬에서 1–2 mm 라는 근거로 가설을 유지하되 미검증으로 표시했다.
   - 목표 깊이를 줄이는 안 → 예비 16 mm·D3 고정 지시라 제외했다.
   - 캐리지 근접 센서 → 안 C 의 하드웨어 질문으로 둔다.
+
+## 원자료 보관 위치
+
+ws1 원본은 지웠다. 보관본은 묶음마다 `.tar.zst` 와 `.files.tsv`(파일 목록) · `.tar.zst.md5` 가 함께 있다.
+
+- 배경의 금지 접촉 두 실행:
+  - `lf_67694d16_fix_line_m_s4` 는 `gdrive:forklift-archive/ws1-cleanup-20261025-q/q_lf_01`
+  - `lf_67694d16_fix_random_m_s6` 은 `gdrive:forklift-archive/ws1-cleanup-20261025-q/q_lf_02`
+- 같은 비교의 나머지 `lf_67694d16_fix_*`(line_m s0, random_m s5 · s7 · s8 · s9)와 `lf_67694d16_main_random_m_s9` 는 `gdrive:forklift-archive/ws1-cleanup-20261027-c/c27_02`
