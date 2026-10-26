@@ -144,3 +144,10 @@ runs29 를 스냅숏 `lf_67694d16` 으로 재생했다: **29/29**(ws1 10930).
 - 계획 단계 독립 검토 3 회(① 직접 재계산, ② Codex 적대 검토 11 차까지 수렴, ③ agy Flash)는 계획서 5 절에 적었다.
 - V2 · V4 판정 규칙은 실행 전에 계획서에 등록했다. V2 의 그 밖 정체 5 건은 판정에 넣지 않고 보고만 했다. V4a 집계는 V2 와 같은 도착 근거(도킹 round)를 쓴다.
 - 결과 판정은 Codex 에 따로 검토받는다.
+
+## 원자료 보관 위치
+
+ws1 원본은 지웠다. 보관본은 묶음마다 `.tar.zst` 와 `.files.tsv`(파일 목록) · `.tar.zst.md5` 가 함께 있다.
+
+- 단독 재현 `lf_67694d16_solo_fix_random_m_s7`(ws1 11119) · `lf_67694d16_solo_main_random_m_s9`(11120) 는 `gdrive:forklift-archive/ws1-cleanup-20261027-c/c27_07`
+- 금지 접촉 두 실행 `lf_67694d16_fix_line_m_s4` · `lf_67694d16_fix_random_m_s6` 은 `gdrive:forklift-archive/ws1-cleanup-20261025-q/q_lf_01` · `q_lf_02`
