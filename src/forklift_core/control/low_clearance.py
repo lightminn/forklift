@@ -125,13 +125,16 @@ def shape_clearance(pose, shape, rects, cutoff: float = math.inf) -> float:
 class LegClearance:
     """The planned clearance ``c(s)`` along one tracker path: at every path pose, the shape's distance to the low props
     of the stage that planned that part of the path (``slot_from_m``: path length from which the slot props count --
-    a transport's delivery straight; None: none). Built once when the tracker is installed."""
+    a transport's delivery straight; ``slot_to_m``: path length up to which they count -- a return's start backoff,
+    docs/plans/2026-10-27-return-start-withdraw-extension.md R5; None: none). Built once when the tracker is
+    installed."""
 
     poses: np.ndarray
     shape: object
     search_props: list
     slot_props: list
     slot_from_m: float | None = None
+    slot_to_m: float | None = None
     s: np.ndarray = field(init=False)
     c: np.ndarray = field(init=False)
 
@@ -155,7 +158,9 @@ class LegClearance:
         return float(self.s[-1])
 
     def props_at(self, s: float) -> list:
-        return self.slot_props if self.slot_from_m is not None and s >= self.slot_from_m else self.search_props
+        slot = ((self.slot_from_m is not None and s >= self.slot_from_m)
+                or (self.slot_to_m is not None and s < self.slot_to_m))
+        return self.slot_props if slot else self.search_props
 
     def pose_at(self, s: float) -> np.ndarray:
         """The planned pose at path length ``s`` (clamped), between path poses along their chord and turn."""

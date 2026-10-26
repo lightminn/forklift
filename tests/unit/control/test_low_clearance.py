@@ -232,3 +232,15 @@ def test_contact_is_a_violation_even_with_a_zero_margin():
                        end_allowance_m=0.03, stopping=STOP, config=zero)
     assert out.allowed_mps == 0.0
     assert lc.shape_clearance((0.0, 0.0, 0.0), fp, [touching], cutoff=0.0) == 0.0
+
+
+def test_the_slot_props_count_only_before_a_return_start_backoff_ends():
+    # plan 2026-10-27-return-start-withdraw-extension R5: s < slot_to_m is the slot stage
+    from forklift_core.control.low_clearance import LegClearance
+
+    poses = np.column_stack((np.linspace(0.0, -2.0, 21), np.zeros(21), np.zeros(21)))
+    a, b = [Rectangle(9.0, 0.0, 1.0, 1.0, 0.0)], [Rectangle(-9.0, 0.0, 1.0, 1.0, 0.0)]
+    leg = LegClearance(poses, Footprint(1.29, 0.17, 0.36), search_props=a, slot_props=b, slot_to_m=0.3)
+    assert leg.props_at(0.0) is b and leg.props_at(0.29) is b and leg.props_at(0.3) is a and leg.props_at(1.5) is a
+    both = LegClearance(poses, Footprint(1.29, 0.17, 0.36), search_props=a, slot_props=b, slot_from_m=1.0)
+    assert both.props_at(0.0) is a and both.props_at(1.0) is b  # the delivery straight's rule as before

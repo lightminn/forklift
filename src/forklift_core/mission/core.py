@@ -101,6 +101,28 @@ CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolera
 OBSERVE_BACKOFF_LIMIT_M = 0.30  # plan 2026-10-26-observe-start-backoff B3: the most a start backoff goes
 
 
+def moved_slot_props(prepared_destination, world) -> list:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R5: ``world``'s slot-stage props (its untagged props and
+    its @slot props; the @search ones left out) with the @slot ones moved by T = ``world``'s destination o
+    ``prepared_destination``^-1 -- the anchors were made once, from the destination at the preparation, and a release
+    moves only the destination."""
+    from forklift_core.planning.pallet_mission import SEARCH_TAG, SLOT_TAG
+
+    then_, now_ = prepared_destination, world.destination
+    move = compose((float(now_.x_m), float(now_.y_m), float(now_.yaw_rad)),
+                   invert((float(then_.x_m), float(then_.y_m), float(then_.yaw_rad))))
+    props = []
+    for p_ in world.props:
+        if p_.asset.uri.endswith(SEARCH_TAG):
+            continue
+        if p_.asset.uri.endswith(SLOT_TAG):
+            r_ = p_.rectangle
+            x_, y_, yaw_ = compose(move, (float(r_.x_m), float(r_.y_m), float(r_.yaw_rad)))
+            p_ = replace(p_, rectangle=replace(r_, x_m=x_, y_m=y_, yaw_rad=yaw_))
+        props.append(p_)
+    return props
+
+
 def note_return_backoff(state: dict, where: str, record: dict | None, adopted: bool) -> None:
     """docs/plans/2026-10-27-return-start-withdraw-extension.md R6: a return-start backoff attempt a plan came back
     with -- taken or refused (no advice, clipped, no return from its end), installed or not."""
@@ -5235,11 +5257,26 @@ class MissionCore:
                     elif np.allclose(full_poses_[-1], poses[-1], atol=1e-6):
                         slot_from = max(0.0, length - float(geometry.delivery_straight_m))
             plane = float(getattr(geometry, "lidar_plane_m", 1.05))
+            slot_props_ = low_props(options.scenario, "slot", plane)
+            slot_to = None
+            backed_ = self.paths.get("return_home") if ms.phase == "return_home" else None
+            backoff_ = getattr(backed_, "start_backoff", None)
+            if (backoff_ is not None and backoff_.get("status") == "prefix" and len(backed_.poses) == len(poses)
+                    and np.allclose(np.asarray(backed_.poses, dtype=float), poses, atol=1e-9)):
+                # plan 2026-10-27-return-start-withdraw-extension R5: the start backoff of the return this tracker
+                # follows (no other tracker -- an escape keeps paths["return_home"] and installs its own) is the slot
+                # stage, against the slot props as the backoff checked them (moved with the destination)
+                slot_to = float(backoff_["length_m"])
+                world_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", options.scenario)) \
+                    if self.slam is not None else options.scenario
+                slot_props_ = [p_.rectangle for p_ in moved_slot_props(options.scenario.destination, world_)
+                               if p_.asset.height_m <= plane]
             leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
-                               slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)
+                               slot_props=slot_props_, slot_from_m=slot_from, slot_to_m=slot_to)
             cache.clear()  # one leg at a time: the tracker being followed
             cache[key] = leg
             guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m, "slot_from_m": slot_from,
+                                  **({} if slot_to is None else {"slot_to_m": slot_to}),
                                   "min_planned_m": _finite_or_none(float(np.min(leg.c)) if len(leg.c) else None)})
         cfg = LowClearanceConfig(margin_m=float(options.low_clearance_margin_m),
                                  deviation_m=float(options.low_clearance_deviation_m))
@@ -6694,21 +6731,9 @@ class MissionCore:
         limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
         if limit <= 0.0:
             return {}
-        from forklift_core.planning.pallet_mission import SEARCH_TAG, SLOT_TAG
-
-        then_, now_ = self.options.scenario.destination, world.destination
-        move = compose((float(now_.x_m), float(now_.y_m), float(now_.yaw_rad)),
-                       invert((float(then_.x_m), float(then_.y_m), float(then_.yaw_rad))))
-        props = []
-        for p_ in world.props:
-            if p_.asset.uri.endswith(SEARCH_TAG):
-                continue
-            r_ = p_.rectangle
-            if p_.asset.uri.endswith(SLOT_TAG):
-                x_, y_, yaw_ = compose(move, (float(r_.x_m), float(r_.y_m), float(r_.yaw_rad)))
-                r_ = replace(r_, x_m=x_, y_m=y_, yaw_rad=yaw_)
-            props.append(r_)
-        return {"return_start_backoff_m": limit, "backoff_slot_props": props}
+        return {"return_start_backoff_m": limit,
+                "backoff_slot_props": [p_.rectangle for p_ in moved_slot_props(self.options.scenario.destination,
+                                                                                world)]}
 
     def _exit_prefix_kwargs(self) -> dict:
         """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;
