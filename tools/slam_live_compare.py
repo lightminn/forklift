@@ -45,6 +45,7 @@ class RunData:
     missions: list = field(default_factory=list)  # mission_end entries with ended_s and delivery_error_m
     failure: str | None = None
     failures: list = field(default_factory=list)  # result.json live_failures: the mission failures of the session
+    holds: list = field(default_factory=list)  # result.json slam_summary.holds: the session's hold / release timeline
 
 
 def failures_of(result: dict) -> list[dict]:
@@ -156,8 +157,11 @@ def metrics(run: RunData, t0=None, t1=None) -> dict:
     delays = [float(r["applied_tick_s"]) - float(r["stamp_s"]) for r in processed if r.get("applied_tick_s") is not None]
     return {"keyframes": len(processed), "keyframes_timed": timed,
             "keyframe_max_s": max(float(w) for w in walls if w is not None) if timed else None,
-            "applied_delay_s": ({"n": len(delays), "median": float(np.median(delays)), "max": float(max(delays))}
+            "applied_delay_s": ({"n": len(delays), "median": float(np.median(delays)),
+                                 "p99": float(np.percentile(delays, 99)), "max": float(max(delays))}
                                 if delays else {"n": 0}),
+            "phases": {p: sum(1 for r in processed if r.get("phase") == p)
+                       for p in sorted({r.get("phase") for r in processed if r.get("phase")})},
             "response": _stats(rp, ry), "applied": _stats(ap, ay), "correction_jumps": correction_jumps(processed),
             "missions_done": len(done), "missions_ended": len(missions),
             "delivery_error_max_m": max(errors) if errors else None}
@@ -259,6 +263,288 @@ def verdict(l_run: RunData, r_run: RunData) -> dict:
     return out
 
 
+# --- the second confirmation's criteria (plan 5c, pre-registered after S3; ``verdict`` above stays S3's) --------------
+DELIVERY_REASONS = ("Pallet missed the green destination center", "Delivered pallet is not grounded",
+                    "Fork still inside delivered pallet")  # forklift_core.mission.delivery MISSED / NOT_GROUNDED / FORK_INSIDE
+DRIFT_HALF_HOURS = 15  # V5's 0.15 m spread over an 8 h session's remaining fifteen half-hours
+COMMON_MIN_S, R_MISSIONS_MIN = 600.0, 2
+HOLD_GATE, HOLD_MIN_R, HOLD_TRAVEL_FLOOR_M, HOLD_PER_M_MIN_TRAVEL_M = 1.5, 10, 0.1, 0.3
+SLAM_FAILURE = ("slam_", "localization_")  # plan 5c item 8 (a): SLAM-attributable mission failures
+LAST_WINDOW_S = 600.0  # item 8 (d): the first hour's last ten minutes
+
+
+def _timeline_intervals(run: RunData) -> list:
+    """Closed [t_h, t_r] of the timeline: each release with the last unmatched hold event; an unclosed hold runs on."""
+    out, open_ = [], []
+    for e in sorted(run.holds, key=lambda e: e["time_s"]):
+        if e.get("event") == "hold":
+            open_.append(float(e["time_s"]))
+        elif str(e.get("event", "")).startswith("release") and open_:
+            out.append((open_.pop(), float(e["time_s"])))
+            open_.clear()
+    out += [(t, math.inf) for t in open_]
+    return out
+
+
+def tracking_mask(run: RunData) -> np.ndarray:
+    """Plan 5c item 1: a control row is tracking only outside every closed hold-to-release interval of the timeline and
+    between two records (by applied tick) that were both processed in tracking; everything else is holding."""
+    rows = np.asarray(run.control, float).reshape(-1, 7)
+    t = rows[:, 0]
+    mask = np.ones(len(t), bool)
+    for a, b in _timeline_intervals(run):
+        mask &= ~((t >= a) & (t <= b))
+    recs = sorted((r for r in run.records if r.get("applied_tick_s") is not None), key=lambda r: r["applied_tick_s"])
+    ticks = np.asarray([float(r["applied_tick_s"]) for r in recs], float)
+    tracking = np.asarray([r.get("mode") == "tracking" for r in recs], bool)
+    if len(ticks):
+        before = np.searchsorted(ticks, t, side="right") - 1
+        after = before + 1
+        ok_before = (before >= 0) & tracking[np.clip(before, 0, len(ticks) - 1)]
+        ok_after = (after < len(ticks)) & tracking[np.clip(after, 0, len(ticks) - 1)]
+        mask &= ok_before & ok_after
+    else:
+        mask[:] = False
+    return mask
+
+
+def hold_values(run: RunData) -> tuple[list, bool]:
+    """Plan 5c item 7: the per-metre values of the holds that travelled >= 0.3 m (item 8 (c)), and the completeness."""
+    holds, incomplete = hold_records(run)
+    return [h["per_m"] for h in holds if h["per_m"] is not None], incomplete
+
+
+def hold_records(run: RunData) -> tuple[list, bool]:
+    """Plan 5c items 7 and 8: each closed hold's |release jump_rad| and |jump_m|, its odometry travel and the per-metre
+    value |jump_rad| / max(travel, 0.1 m) when it travelled >= 0.3 m (else None); and whether the data is incomplete
+    (an event-less hold with no holding record to rebuild it from, or a recorded holding span no release closes, the
+    trailing unclosed one excepted)."""
+    recs = sorted((r for r in run.records if r.get("applied_tick_s") is not None), key=lambda r: r["applied_tick_s"])
+    ticks = [float(r["applied_tick_s"]) for r in recs]
+
+    def travel(a, b):
+        pts = [r["odom_base"] for r in recs if a <= float(r["applied_tick_s"]) <= b and r.get("odom_base")]
+        return sum(math.hypot(q[0] - p[0], q[1] - p[1]) for p, q in zip(pts, pts[1:]))
+
+    values, incomplete, open_, prev_release = [], False, [], -math.inf
+    closed = []
+    for e in sorted(run.holds, key=lambda e: e["time_s"]):
+        t = float(e["time_s"])
+        if e.get("event") == "hold":
+            open_.append(t)
+            continue
+        if not str(e.get("event", "")).startswith("release"):
+            continue
+        if open_:
+            t_h = open_.pop()
+            open_.clear()
+        else:  # an event-less hold (start_clear_out): its start from the first holding record after the last release
+            starts = [ti for ti, r in zip(ticks, recs) if prev_release < ti <= t and r.get("mode") == "holding"]
+            if not starts:
+                incomplete = True
+                prev_release = t
+                continue
+            t_h = starts[0]
+        closed.append((t_h, t))
+        moved = travel(t_h, t)
+        jump_rad, jump_m = abs(float(e.get("jump_rad") or 0.0)), abs(float(e.get("jump_m") or 0.0))
+        values.append({"t_h": t_h, "t_r": t, "travel_m": moved, "jump_rad": jump_rad, "jump_m": jump_m,
+                       "per_m": (jump_rad / max(moved, HOLD_TRAVEL_FLOOR_M)
+                                 if moved >= HOLD_PER_M_MIN_TRAVEL_M else None)})
+        prev_release = t
+    # every recorded holding span must meet a closed interval, the trailing unclosed one excepted
+    span_start = None
+    for ti, r in zip(ticks + [math.inf], recs + [None]):
+        holding = r is not None and r.get("mode") == "holding"
+        if holding and span_start is None:
+            span_start = ti
+        elif not holding and span_start is not None:
+            end = ti
+            trailing = r is None
+            if not trailing and not any(a <= end and b >= span_start for a, b in closed):
+                incomplete = True
+            span_start = None
+    return values, incomplete
+
+
+def _drift(run: RunData, ls) -> dict:
+    t_all, p_all, _ = _applied(run)
+    a = p_all[(t_all >= ls[0]) & (t_all < ls[0] + HALF_S)]
+    b = p_all[(t_all >= ls[0] + HALF_S) & (t_all < ls[0] + 2 * HALF_S)]
+    if not len(a) or not len(b):
+        return {"ok": False, "reason": "a half-hour without samples"}
+    last = p_all[(t_all >= ls[0] + 2 * HALF_S - LAST_WINDOW_S) & (t_all < ls[0] + 2 * HALF_S)]
+    ma, mb = float(np.median(a)), float(np.median(b))
+    mc = float(np.median(last)) if len(last) else math.inf
+    allowance = (POSITION_MAX_M - ma) / DRIFT_HALF_HOURS
+    return {"ok": mb - ma <= allowance and mc - ma <= allowance, "first_median_m": ma, "second_median_m": mb,
+            "last_ten_median_m": mc, "allowance_m": allowance}
+
+
+def _deliveries(run: RunData) -> list:
+    """Plan 5c item 3: every attempt that reached the delivery check, under 0.08 m, no delivery-check failure."""
+    problems = []
+    for m in run.missions:
+        reason, err = str(m.get("reason") or ""), m.get("delivery_error_m")
+        reached = m.get("outcome") == "done" or err is not None or reason.startswith(DELIVERY_REASONS)
+        if not reached:
+            continue
+        if reason.startswith(DELIVERY_REASONS):
+            problems.append(f"delivery check failed in {m.get('mission_id')}: {reason}")
+        if err is None or not math.isfinite(float(err)):
+            problems.append(f"delivery error missing in {m.get('mission_id')}")
+        elif not float(err) < 0.08:
+            problems.append(f"delivery {float(err):.3f} m in {m.get('mission_id')} (< 0.08 m)")
+    return problems
+
+
+def pair_verdict(l_run: RunData, r_run: RunData) -> dict:
+    """One scene/seed pair under plan 5c: L's absolute bounds always; the L <= R comparison only on a comparable pair
+    (common span >= 600 s and R done >= 2 missions in it); 'not comparable' is not a failure."""
+    failed = [f"L record: {p}" for p in record_problems(l_run)[:5]] + [f"R record: {p}" for p in record_problems(r_run)[:5]]
+    if failed:
+        return {"ok": False, "l_absolute_ok": False, "comparable": False, "failed": failed}
+    whole = metrics(l_run)
+    absolute = []
+    if not whole["keyframes_timed"] or not whole["keyframe_max_s"] < KEYFRAME_MAX_S:
+        absolute.append(f"L keyframe max {whole['keyframe_max_s']} s (< {KEYFRAME_MAX_S} s)")
+    if l_run.failure and any(str(l_run.failure).startswith(b) for b in BAD_ENDS):
+        absolute.append(f"L end: {l_run.failure}")
+    prog = progress(l_run)
+    if not prog["ok"]:
+        absolute.append(f"L progress: observed {prog['observed_s']:.0f} s, windows "
+                        f"{[w['window'] for w in prog['windows'] if not w['ok']]} short")
+    absolute += [f"L {p}" for p in _deliveries(l_run)]
+    for f in l_run.failures:  # item 8 (a): a SLAM-attributable mission failure is no pass; others are reported
+        reason = str(f.get("reason") or "")
+        if reason.startswith(SLAM_FAILURE) or "correction_out_of_bounds" in reason:
+            absolute.append(f"L SLAM mission failure at {f.get('time_s')}: {reason}")
+    mask = tracking_mask(l_run)
+    _, lp, ly = _applied(l_run)
+    if (~mask).any() and not float(ly[~mask].max()) <= YAW_MAX_RAD:
+        absolute.append(f"L holding-row applied heading max {float(ly[~mask].max()):.4f} > {YAW_MAX_RAD} rad")
+    ls, rs = _span(l_run), _span(r_run)
+    drift = _drift(l_run, ls) if ls is not None else {"ok": False, "reason": "no span"}
+    if not drift["ok"]:
+        absolute.append(f"L drift: {drift}")
+    out = {"l": whole, "progress": prog, "drift": drift, "l_failures": l_run.failures, "r_failures": r_run.failures,
+           "r_failure": r_run.failure, "common_span_s": None, "comparable": False}
+    comparison = []
+    c_end = None
+    if ls is not None and rs is not None and min(ls[1], rs[1]) > max(ls[0], rs[0]):
+        c0, c1 = max(ls[0], rs[0]), min(ls[1], rs[1])
+        out["common_span_s"] = [c0, c1]
+        r_done = {m["mission_id"] for m in r_run.missions if m.get("outcome") == "done" and c0 <= m["ended_s"] <= c1}
+        out["comparable"] = (c1 - c0) >= COMMON_MIN_S and len(r_done) >= R_MISSIONS_MIN
+        if out["comparable"]:
+            c_end = c1
+            ml, mr = metrics(l_run, c0, c1), metrics(r_run, c0, c1)
+            for label, a, b in (("applied position median", ml["applied"]["position_median_m"], mr["applied"]["position_median_m"]),
+                                ("applied position max", ml["applied"]["position_max_m"], mr["applied"]["position_max_m"]),
+                                ("response position median", ml["response"]["position_median_m"], mr["response"]["position_median_m"]),
+                                ("response position max", ml["response"]["position_max_m"], mr["response"]["position_max_m"]),
+                                ("response heading median", ml["response"]["yaw_median_rad"], mr["response"]["yaw_median_rad"]),
+                                ("response heading max", ml["response"]["yaw_max_rad"], mr["response"]["yaw_max_rad"])):
+                if a > b:
+                    comparison.append(f"{label}: L {a} > R {b}")
+            rmask = tracking_mask(r_run)
+            tl, _, yl = _applied(l_run)
+            tr, _, yr = _applied(r_run)
+            sl = mask & (tl >= c0) & (tl <= c1)
+            sr = rmask & (tr >= c0) & (tr <= c1)
+            if not sl.any() or not sr.any():
+                comparison.append("tracking rows missing on the common span")
+            else:
+                for label, a, b in (("tracking applied heading median", float(np.median(yl[sl])), float(np.median(yr[sr]))),
+                                    ("tracking applied heading max", float(yl[sl].max()), float(yr[sr].max()))):
+                    if a > b:
+                        comparison.append(f"{label}: L {a} > R {b}")
+            if ml["missions_done"] < mr["missions_done"]:
+                comparison.append(f"missions done on the common span: L {ml['missions_done']} < R {mr['missions_done']}")
+            out["comparison"] = {"l": ml, "r": mr}
+    # V5 on L where no comparison covers it: past a comparable span's end, or the whole run when not comparable
+    t_l = _applied(l_run)[0]
+    beyond = (t_l > c_end) if c_end is not None else np.ones(len(t_l), bool)
+    if beyond.any():
+        if not float(lp[beyond].max()) <= POSITION_MAX_M:
+            absolute.append(f"L applied position max {float(lp[beyond].max()):.3f} > {POSITION_MAX_M} m (V5)")
+        if not float(ly[beyond].max()) <= YAW_MAX_RAD:
+            absolute.append(f"L applied heading max {float(ly[beyond].max()):.4f} > {YAW_MAX_RAD} rad (V5)")
+    out["l_absolute_ok"] = not absolute
+    out["comparison_ok"] = not comparison if out["comparable"] else None
+    out["failed"] = absolute + comparison
+    out["ok"] = not absolute and (not out["comparable"] or not comparison)
+    return out
+
+
+def scene_gate(l_runs: list, r_runs: list) -> dict:
+    """Plan 5c item 7: pooled per-hold values of a scene's L and R runs; 'fail' when L's median or p90 (method
+    'higher') passes 1.5 x R's, 'incomplete' / 'insufficient' (no pass) when the data cannot say."""
+    pooled = {"l": {}, "r": {}}
+    incomplete = False
+    for side, runs in (("l", l_runs), ("r", r_runs)):
+        for run in runs:
+            holds, inc = hold_records(run)
+            incomplete |= inc
+            pooled[side].setdefault("per_m", []).extend(h["per_m"] for h in holds if h["per_m"] is not None)
+            pooled[side].setdefault("jump_rad", []).extend(h["jump_rad"] for h in holds)
+            pooled[side].setdefault("jump_m", []).extend(h["jump_m"] for h in holds)
+            pos, yaw = _hold_responses(run)  # item 8 (b): responses processed during holds
+            pooled[side].setdefault("hold_response_position", []).extend(pos)
+            pooled[side].setdefault("hold_response_yaw", []).extend(yaw)
+    out = {"counts": {k: [len(pooled["l"].get(k, [])), len(pooled["r"].get(k, []))] for k in pooled["r"]}}
+    if incomplete:
+        return {**out, "state": "incomplete"}
+    stats, short = {}, []
+    for key in ("per_m", "jump_rad", "jump_m", "hold_response_position", "hold_response_yaw"):
+        lv, rv = pooled["l"].get(key, []), pooled["r"].get(key, [])
+        if not lv:  # no L sample of this kind (e.g. no hold travelled 0.3 m): nothing of L's to judge
+            continue
+        if len(rv) < HOLD_MIN_R:
+            short.append(key)
+            continue
+        for name, fn in (("median", np.median), ("p90", lambda v: np.percentile(v, 90, method="higher"))):
+            a, b = float(fn(lv)), float(fn(rv))
+            if b == 0.0:
+                short.append(f"{key} {name}")
+                continue
+            stats.setdefault(key, {})[name] = {"l": a, "r": b, "ratio": a / b}
+    out["stats"] = stats
+    if short:
+        return {**out, "state": "insufficient", "short": short}
+    out["state"] = ("fail" if any(s["ratio"] > HOLD_GATE for v in stats.values() for s in v.values()) else "ok")
+    return out
+
+
+def _hold_responses(run: RunData) -> tuple[list, list]:
+    """Position and heading error of every processed response handled while holding (plan 5c item 8 (b))."""
+    pos, yaw = [], []
+    for r in run.records:
+        if r.get("status") != "processed" or r.get("mode") != "holding" or not r.get("map_from_odom"):
+            continue
+        est, truth = _compose(r["map_from_odom"], r["odom_base"]), r["truth_base"]
+        pos.append(math.hypot(est[0] - truth[0], est[1] - truth[1]))
+        yaw.append(_yaw_err(est[2], truth[2]))
+    return pos, yaw
+
+
+def overall(scenes: dict) -> dict:
+    """Plan 5c item 6: every pair's L on its absolute bounds, a comparable pair in every scene, every comparable pair
+    passing, every scene's hold gate 'ok'."""
+    failed = []
+    for name, (pairs, gate) in scenes.items():
+        if not all(p.get("l_absolute_ok") for p in pairs):
+            failed.append(f"{name}: an L outside its absolute bounds")
+        comparable = [p for p in pairs if p.get("comparable")]
+        if not comparable:
+            failed.append(f"{name}: no comparable pair (absolute bounds only)")
+        if not all(p.get("ok") for p in comparable):
+            failed.append(f"{name}: a comparable pair fails")
+        if gate.get("state") != "ok":
+            failed.append(f"{name}: hold-drift gate {gate.get('state')}")
+    return {"ok": not failed, "failed": failed}
+
+
 def load(run: Path) -> RunData:
     """An epoch's run folder: result.json's failure, the spooled slam.records / slam.control, the live log's missions."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -271,11 +557,44 @@ def load(run: Path) -> RunData:
         if end is not None:
             missions.append({**end, "delivery_error_m": entry.get("delivery_error_m")})
     return RunData(records=load_list(run / "spool", "slam.records"), control=load_list(run / "spool", "slam.control"),
-                   missions=missions, failure=result.get("failure_reason"), failures=failures_of(result))
+                   missions=missions, failure=result.get("failure_reason"), failures=failures_of(result),
+                   holds=list((result.get("slam_summary") or {}).get("holds") or []))
+
+
+def judge(spec: dict, loader=None) -> dict:
+    """The second confirmation (plan 5c): ``spec`` = {"scenes": {name: {"pairs": [[L_RUN, R_RUN], ...],
+    "extra_r": [R_RUN, ...]}}} -- the pairs as judged (a re-run R in place of a not comparable one), the replaced
+    original R runs in ``extra_r`` (their holds still count in the gate)."""
+    loader = loader or (lambda p: load(Path(p)))
+    scenes, out = {}, {"scenes": {}}
+    for name, s in spec["scenes"].items():
+        pairs = [(loader(lp), loader(rp)) for lp, rp in s["pairs"]]
+        extra = [loader(p) for p in s.get("extra_r", [])]
+        verdicts = [pair_verdict(lr, rr) for lr, rr in pairs]
+        gate = scene_gate([lr for lr, _ in pairs], [rr for _, rr in pairs] + extra)
+        scenes[name] = (verdicts, gate)
+        out["scenes"][name] = {"pairs": verdicts, "gate": gate}
+    out["overall"] = overall(scenes)
+    return out
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["judge"]:  # the second confirmation, plan 5c
+        jp = argparse.ArgumentParser(prog="slam_live_compare.py judge")
+        jp.add_argument("spec", type=Path)
+        jp.add_argument("--json", type=Path, default=None)
+        ja = jp.parse_args(argv[1:])
+        out = judge(json.loads(ja.spec.read_text()))
+        if ja.json is not None:
+            ja.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
+        print("PASS" if out["overall"]["ok"] else "FAIL", "; ".join(out["overall"]["failed"]))
+        for name, s in out["scenes"].items():
+            for i, p in enumerate(s["pairs"]):
+                print(f"  {name} pair {i}: ok {p['ok']} comparable {p['comparable']} | {'; '.join(p['failed'])[:300]}")
+            print(f"  {name} gate: {s['gate'].get('state')} {s['gate'].get('short', '')}")
+        return 0 if out["overall"]["ok"] else 1
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0] + " (two runs: S3's verdict; 'judge SPEC': 5c)")
     ap.add_argument("l_run", type=Path)
     ap.add_argument("r_run", type=Path)
     ap.add_argument("--json", type=Path, default=None)
