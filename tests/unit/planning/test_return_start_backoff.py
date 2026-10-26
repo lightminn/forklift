@@ -219,3 +219,46 @@ def test_an_unused_backoff_field_is_left_out_of_records():
     plain = PlanResult(True, "success", np.zeros((1, 3)), np.zeros(1, dtype=np.int8), np.zeros(1), 0.0, 0)
     assert "start_backoff" not in [f.name for f in recorded_fields(plain)]
     assert "start_backoff" in [f.name for f in recorded_fields(replace(plain, start_backoff={"status": "prefix"}))]
+
+
+# The follower over a backed-off return (plan C1 execution): the ideal kinematic bicycle the runner's dry runs use, the
+# tracker at the runner's return lookahead.
+def _follow(plan):
+    from forklift_core.control.path_tracking import TrackerConfig
+    from forklift_core.control.rollout import bicycle_rollout
+
+    cfg = TrackerConfig(cruise_speed_mps=0.25, max_curvature_inv_m=0.36, max_acceleration_mps2=0.3, lookahead_m=0.28,
+                        position_tolerance_m=0.03, yaw_tolerance_rad=0.03)
+    return bicycle_rollout(plan.poses, plan.directions, plan.curvatures_inv_m, cfg, plan.poses[0], max_time_s=200.0)
+
+
+def test_the_recorded_backed_off_return_is_followed_home_clear_of_the_slot_props():
+    # the return goes on reversing past the backoff (same gear): the follower steers before L (lookahead), so the swept
+    # outline is measured on the followed trajectory, not the straight
+    from forklift_core.control.low_clearance import shape_clearance
+
+    sc = recorded()
+    plan = plan_return_leg(sc, withdrawn(sc), sc.start_rear, CONFIG, geometry=GEOMETRY, return_start_backoff_m=CAP)
+    length = plan.start_backoff["length_m"]
+    assert plan.directions[np.searchsorted(travelled(plan.poses), length + 1e-6)] == -1  # no cusp at the backoff's end
+    run = _follow(plan)
+    assert run.status == "arrived"
+    trajectory = np.array(run.trajectory)
+    near = trajectory[travelled(trajectory) <= length + 0.30]
+    slot = pm.scenario_props(sc, "slot")
+    assert min(shape_clearance(p, GEOMETRY.unloaded_footprint, slot) for p in near[::3]) >= CONFIG.clearance_m
+
+
+def test_a_cusp_right_after_the_backoff_is_followed():
+    # a synthetic join (the recorded row leaves no forward way out at L): 0.20 m straight back, then 1 m forward
+    start = Pose2D(0.0, 0.0, 0.0)
+    back_ = pm._straight_plan(start, back(start, 0.20), -1, [], GEOMETRY.unloaded_footprint,
+                              Bounds(-5, 5, -5, 5), 0.10)
+    ahead = pm._straight_plan(back(start, 0.20), Pose2D(0.8, 0.0, 0.0), 1, [], GEOMETRY.unloaded_footprint,
+                              Bounds(-5, 5, -5, 5), 0.10)
+    joined = pm._join_prefix(back_, ahead, {"status": "prefix", "length_m": 0.20}, "start_backoff")
+    assert list(np.unique(joined.directions)) == [-1, 1] and joined.start_backoff["length_m"] == 0.20
+    run = _follow(joined)
+    assert run.status == "arrived" and run.position_error_m <= 0.03
+    reached = min(p[0] for p in run.trajectory)
+    assert -0.20 - 0.03 <= reached <= -0.20 + 0.03  # it stopped at the cusp before going forward
