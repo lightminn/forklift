@@ -45,31 +45,52 @@ def test_a_broken_estimate_or_margin_is_an_error(xy, margin):
         az.check(xy, ZONE, margin, stage="observe")
 
 
-def test_the_mission_rectangle_at_the_first_place_is_the_zone_itself():
-    assert az.mission_zone(at_first=True, first_zone=ZONE, put_down_xy=(9.0, 9.0)) is ZONE
+def book():
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    tb = TargetsBook()
+    tb.add_shape("epal6", 0.8, 0.6)
+    tb.add_pallet("P-1", "epal6", Pose(3.1, 0.65, 0.0), at="D-0")
+    tb.add_destination("D-2", Pose(3.0, -8.946, 0.0))
+    return tb, Pose
 
 
-def test_a_re_pick_takes_a_square_about_the_put_down_centre():
-    z = az.mission_zone(at_first=False, first_zone=ZONE, put_down_xy=(3.0, -8.946))
+def test_a_pallet_never_put_down_keeps_its_first_zone_whatever_its_pose_became():
+    # Codex implementation round 1 P2: an observation that moves the pose 2 cm must not lose the first zone.
+    tb, Pose = book()
+    tb.update_pose("P-1", Pose(3.11, 0.67, 0.0), basis="recognised", uncertainty_m=0.05)
+    assert az.mission_zone(tb.pallets["P-1"], ZONE) is ZONE
+
+
+def test_a_put_down_pallet_takes_a_square_about_where_it_was_put_down():
+    tb, Pose = book()
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(3.0, -8.946, 0.0), uncertainty_m=0.05)
+    tb.update_pose("P-1", Pose(3.07, -8.90, 0.0))  # a re-pick's observation rewrites the pose, not the snapshot
+    tb.update_destination("D-2", Pose(4.0, -8.946, 0.0))  # nor does a later estimate of the destination
+    z = az.mission_zone(tb.pallets["P-1"], ZONE)
     assert (z.x_min_m, z.x_max_m, z.y_min_m, z.y_max_m) == pytest.approx((2.9, 3.1, -9.046, -8.846))
     assert z.source == "put_down"
 
 
-def test_an_unknown_centre_has_no_rectangle():
-    assert az.mission_zone(at_first=False, first_zone=ZONE, put_down_xy=None) is None
+def test_a_recovery_put_back_counts_as_a_put_down():
+    tb, Pose = book()
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(5.0, 1.0, 0.0), state="available", uncertainty_m=0.05)
+    assert az.mission_zone(tb.pallets["P-1"], ZONE).source == "put_down"
 
 
-def test_the_put_down_centre_is_the_verified_destination_not_the_pose_a_later_observation_rewrote():
-    from forklift_core.mission.targets import Pallet, Pose
+def test_the_put_down_snapshot_moves_with_a_change_of_frame():
+    tb, Pose = book()
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(3.0, -8.946, 0.0), uncertainty_m=0.05)
+    tb.set_correction_version(1, lambda p: Pose(p.x_m + 1.0, p.y_m, p.yaw_rad))
+    assert tb.pallets["P-1"].put_down_pose == Pose(4.0, -8.946, 0.0)
 
-    destinations = {"D-2": Pose(3.0, -8.946, 0.0)}
-    delivered = Pallet("P-1", "epal6", Pose(3.07, -8.90, 0.0), state="delivered", basis="recognised", at="D-2")
-    assert az.put_down_centre(delivered, destinations) == (3.0, -8.946)
-    # moved by other means (at cleared), not delivered, or a destination that no longer exists: unknown
-    assert az.put_down_centre(Pallet("P-1", "epal6", Pose(3.0, -8.9, 0.0), state="delivered", at=None),
-                              destinations) is None
-    assert az.put_down_centre(Pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0), at="D-2"), destinations) is None
-    assert az.put_down_centre(Pallet("P-1", "epal6", None, state="delivered", at="D-9"), destinations) is None
+
+def test_without_a_first_zone_a_pallet_never_put_down_has_no_rectangle():
+    tb, _ = book()
+    assert az.mission_zone(tb.pallets["P-1"], None) is None
 
 
 def test_the_reasons():

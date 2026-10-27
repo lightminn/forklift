@@ -1237,6 +1237,16 @@ def test_near_capture_expected_needs_the_perception_planning_target() -> None:
         assert result.returncode == 2 and expected in result.stderr, (flags, result.stderr)
 
 
+def test_the_adoption_zone_check_needs_perception_and_a_valid_margin() -> None:
+    """Plan 2026-10-28-adoption-zone-check (Codex implementation round 1 P2): without perception the insert check met
+    no planned pickup; the run is refused instead."""
+    for flags, expected in ((["--adoption-zone-check", "on"], "--adoption-zone-check on needs --use-perception"),
+                            (["--adoption-zone-margin-m", "-0.1"], "--adoption-zone-margin-m must be a finite value"),
+                            (["--adoption-zone-margin-m", "nan"], "--adoption-zone-margin-m must be a finite value")):
+        result = subprocess.run([*_cli_base(), *flags], capture_output=True, text=True, check=False)
+        assert result.returncode == 2 and expected in result.stderr, (flags, result.stderr)
+
+
 def test_near_capture_redraw_lateral_is_for_the_untracked_always_redraw_only() -> None:
     """Plan 2026-10-22 task D: a wider lateral box only where no correction point follows (untracked `always`),
     and never past 0.10 m."""

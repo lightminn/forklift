@@ -38,6 +38,10 @@ class Pallet:
     # Persistent console plan D3 (3rd ed.): the destination the pallet is verified to stand at -- the first place
     # (D-0) at the start, a destination only after its delivery verdict passed, None once lifted
     at: str | None = None
+    # Plan 2026-10-28-adoption-zone-check: where it was last put down (a delivery or a recovery), re-expressed with the
+    # frame -- a re-pick's adoption rectangle sits about it; a later observation's pose does not move it. None: never
+    # put down in this session (its first place's zone applies). Not part of the targets message.
+    put_down_pose: Pose | None = None
 
 
 @dataclass
@@ -117,7 +121,8 @@ class TargetsBook:
         """Registered again where it was put down, under the same ID (basis "delivered", plan D10)."""
         if state not in STATES or state == "carried":
             raise ValueError(state)
-        return self._set(pallet_id, pose=pose, state=state, basis="delivered", uncertainty_m=uncertainty_m)
+        return self._set(pallet_id, pose=pose, state=state, basis="delivered", uncertainty_m=uncertainty_m,
+                         put_down_pose=pose)
 
     def set_correction_version(self, version: int, reexpress=None) -> bool:
         """The poses are re-expressed in a new correction (``reexpress(pose) -> pose``, the change of frame) and
@@ -128,7 +133,9 @@ class TargetsBook:
         if reexpress is not None:
             for pid, pallet in list(self.pallets.items()):
                 if pallet.pose is not None:
-                    self.pallets[pid] = replace(pallet, pose=reexpress(pallet.pose))
+                    pallet = self.pallets[pid] = replace(pallet, pose=reexpress(pallet.pose))
+                if pallet.put_down_pose is not None:
+                    self.pallets[pid] = replace(pallet, put_down_pose=reexpress(pallet.put_down_pose))
             self.destinations = {did: reexpress(pose) for did, pose in self.destinations.items()}
         self.revision += 1
         return True

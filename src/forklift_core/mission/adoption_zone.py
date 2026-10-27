@@ -45,24 +45,14 @@ class AdoptionZone:
         return [self.x_min_m, self.x_max_m, self.y_min_m, self.y_max_m]
 
 
-def mission_zone(*, at_first: bool, first_zone: AdoptionZone, put_down_xy) -> AdoptionZone | None:
-    """The mission's rectangle, fixed when it is prepared: the zone at the pallet's first place; a square of
-    REPICK_HALF_M about the put-down centre snapshot for a re-pick; None when neither is known."""
-    if at_first:
+def mission_zone(pallet, first_zone: AdoptionZone | None) -> AdoptionZone | None:
+    """The mission's rectangle, fixed when it is prepared, from the TargetsBook entry: never put down in this session
+    -> its first place's zone (an observation moving its pose does not change that); put down (a delivery or a
+    recovery) -> a square of REPICK_HALF_M about where (``put_down_pose``); None when the first zone is unknown."""
+    if pallet.put_down_pose is None:
         return first_zone
-    if put_down_xy is None:
-        return None
-    x, y = (_finite(v, "put_down_xy") for v in put_down_xy)
+    x, y = (_finite(v, "put_down_pose") for v in (pallet.put_down_pose.x_m, pallet.put_down_pose.y_m))
     return AdoptionZone(x - REPICK_HALF_M, x + REPICK_HALF_M, y - REPICK_HALF_M, y + REPICK_HALF_M, "put_down")
-
-
-def put_down_centre(pallet, destinations: dict):
-    """(x, y) of the destination a delivered pallet's delivery verdict passed at (TargetsBook ``at``), or None. The
-    pallet's own pose is not read: a re-pick's observation rewrites it while the state stays delivered."""
-    if pallet.state != "delivered" or not pallet.at:
-        return None
-    pose = destinations.get(pallet.at)
-    return None if pose is None else (float(pose.x_m), float(pose.y_m))
 
 
 def check(site_xy, zone: AdoptionZone, margin_m: float, *, stage: str) -> dict:

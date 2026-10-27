@@ -1290,6 +1290,12 @@ def arguments() -> argparse.Namespace:
             parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
     if args.near_capture_expected == "on" and not (args.use_perception and args.planning_target == "perception"):
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
+    if args.adoption_zone_check == "on" and not args.use_perception:
+        # plan 2026-10-28-adoption-zone-check: without perception nothing is adopted from an estimate (the scenario's
+        # pickup is planned directly), so there is nothing to check -- refused rather than silently passed
+        parser.error("--adoption-zone-check on needs --use-perception")
+    if not (math.isfinite(args.adoption_zone_margin_m) and args.adoption_zone_margin_m >= 0):
+        parser.error("--adoption-zone-margin-m must be a finite value >= 0")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
         parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
     if args.near_recapture_gap_m is not None:
@@ -7690,13 +7696,11 @@ def drive(S, isaac) -> None:
                 payload_ = {"world": grid_world(scenario_), "waypoints": waypoints_, "config": planner_config,
                             "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
                             "deadline": determinism.deadline(2 * len(waypoints_) * 20.0)}
-                # Plan 2026-10-28-adoption-zone-check section 2: fixed now -- the first place's zone, or about the
-                # destination where its delivery verdict passed (TargetsBook ``at``; the pose a later observation
-                # rewrites is not read), or none (the first adoption check refuses the mission).
-                adoption_zone_ = ADOPTION_ZONE.mission_zone(
-                    at_first=at_first_, first_zone=own_.get("adoption_zone"),
-                    put_down_xy=ADOPTION_ZONE.put_down_centre(core.targets.pallets[mission_.pallet_id],
-                                                              core.targets.destinations))
+                # Plan 2026-10-28-adoption-zone-check section 2: fixed now -- the first place's zone while the pallet
+                # was never put down (not at_first_: an observation moves the pose), else about where it was put down
+                # (the TargetsBook snapshot); none when unknown (the first adoption check refuses the mission).
+                adoption_zone_ = ADOPTION_ZONE.mission_zone(core.targets.pallets[mission_.pallet_id],
+                                                            own_.get("adoption_zone"))
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
                            "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
