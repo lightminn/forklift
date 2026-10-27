@@ -45,6 +45,7 @@ MISSION_KEYS = {
         # plan 2026-10-24-leg-end-budget-stands: O1's pending stand and its attempts, R1's checks and arrivals
         "observe_end_stand", "observe_end_stands", "return_loose_checks", "return_loose_arrivals",
         "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
+        "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",

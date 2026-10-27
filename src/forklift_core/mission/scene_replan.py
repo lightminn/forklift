@@ -207,6 +207,9 @@ class SceneReplan:
             return None
         r["target"], r["presteer_since"] = best["kappa"], float(t)
         r["probe_version"] = ports.correction_version()
+        box_ = getattr(ports, "box", None)
+        rec_ = r["record"]["escape_presteer"]
+        rec_["rear_start"] = None if box_ is None else [float(v) for v in box_.rear]
         return best["kappa"]
 
     def _escape_presteer(self, t: float, ports) -> StepResult | None:
@@ -226,6 +229,10 @@ class SceneReplan:
             rec["presteer"] = "timeout"
         else:
             return StepResult(owned=True, output="presteer", steer=r["target"])
+        box_ = getattr(ports, "box", None)
+        if box_ is not None and rec.get("rear_start") is not None:
+            # D2-5: how far the presteer moved the truck (tyre scrub), its anchor kept at the first stand
+            rec["rear_end"] = [float(v) for v in box_.rear]
         if ports.correction_version() != r.get("probe_version"):
             # the grid moved under the trigger's rectangles: plan again rather than mix them with the new grid
             # (Codex plan round 2 P2-2)
@@ -290,10 +297,9 @@ class SceneReplan:
                     if value == "invalid_start" and r["escapes"] < self.config.escapes_per_request:
                         path = ports.escape_plan(r["extra"], r["clearance_m"])
                         if path is None and self.config.escape_presteer:
-                            kappa = self._probe(t, ports)
-                            if kappa is not None:
+                            if self._probe(t, ports) is not None:
                                 self._go("escape_presteer", t)
-                                return StepResult(owned=True, output="presteer", steer=kappa)
+                                continue  # its own stop check runs before any steering (Codex impl round 5 P2-1)
                         if path is None:
                             return self._end("failed", f"scene_replan_failed:{trigger}:invalid_start")
                         r["escapes"] += 1

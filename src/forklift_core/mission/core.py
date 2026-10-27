@@ -7676,7 +7676,8 @@ class MissionCore:
             the driving permission; nothing installed, recorded or counted. None without the obstacle layer."""
             if obstacle is None:
                 return None
-            core._note_release_standing(box.rear, stopped())
+            # the anchor as escape_plan left it just before (the device probes only after it) -- the probe latches
+            # nothing itself (Codex impl round 5 P3)
             ev_ = escape_evaluate(extra, clearance_m, float(kappa), copy.deepcopy(obstacle["layer"].permission))
             c_ = ev_.choice
             return {"ok": bool(c_ is not None and ev_.permit is not None and ev_.permit["ok"]),
@@ -7686,7 +7687,10 @@ class MissionCore:
                     "permit": None if ev_.permit is None else ev_.permit["why"]}
 
         def correction_version():
-            return None if obstacle is None else obstacle.get("version")
+            # the grid's re-projection count and the SLAM correction applied now: a correction the grid has not been
+            # re-projected to yet changes it as well (Codex impl round 5 P2-2, the synchronous path with the obstacle
+            # scans silent)
+            return None if obstacle is None else (obstacle.get("version"), core._applied_now())
 
         def escape_install(chosen):
             poses_, direction_, leg_dir_, guard_, *rest_ = chosen
@@ -7848,6 +7852,8 @@ class MissionCore:
             return SimpleNamespace(owned=False, rear=rear)
         ports = self._scene_ports(t, rear, signed_speed, dt)
         out_ = self.scene_replan.step(t, ports)
+        if (out_.end is not None or not self.scene_replan.active()) and self.scene_escape is not None:
+            self._escape_clip_end(t, ports.box.rear, "request_ended")  # a request limit while it runs (round 5 P3)
         self.hooks.require(out_.end is None, out_.end or "")
         result = SimpleNamespace(owned=out_.owned, output=out_.output, rear=ports.box.rear, requested_speed=0.0,
                                  curvature=0.0)
@@ -7901,17 +7907,24 @@ class MissionCore:
                     if raw_ < lo_ or raw_ > hi_:
                         result.curvature = min(max(raw_, lo_), hi_)
                         clip_["clipped"] += 1
-            clip_ = self.scene_escape.get("clip")
-            if clip_ is not None and self.scene_escape["status"] in ("done", "stopped") and "end" not in clip_:
-                gx_, gy_, gyaw_ = clip_["goal"]
-                x_, y_, yaw_ = (float(v) for v in ports.box.rear)
-                c_, s_ = math.cos(gyaw_), math.sin(gyaw_)
-                clip_["end"] = {"status": self.scene_escape["status"], "along_m": (x_ - gx_) * c_ + (y_ - gy_) * s_,
-                                "across_m": -(x_ - gx_) * s_ + (y_ - gy_) * c_,
-                                "yaw_rad": math.atan2(math.sin(yaw_ - gyaw_), math.cos(yaw_ - gyaw_))}
-                self.state.setdefault("escape_presteer_drives", []).append(
-                    {"time_s": float(t), **{k_: v_ for k_, v_ in clip_.items() if k_ != "goal"}})
+            if self.scene_escape["status"] in ("done", "stopped"):
+                self._escape_clip_end(t, ports.box.rear, self.scene_escape["status"])
         return result
+
+    def _escape_clip_end(self, t: float, rear, status: str) -> None:
+        """A presteered escape's end (escape presteer plan D3): its cuts and the end pose against its goal, recorded
+        once in the mission's escape_presteer_drives."""
+        clip_ = (self.scene_escape or {}).get("clip")
+        if clip_ is None or "end" in clip_:
+            return
+        gx_, gy_, gyaw_ = clip_["goal"]
+        x_, y_, yaw_ = (float(v) for v in rear)
+        c_, s_ = math.cos(gyaw_), math.sin(gyaw_)
+        clip_["end"] = {"status": status, "along_m": (x_ - gx_) * c_ + (y_ - gy_) * s_,
+                        "across_m": -(x_ - gx_) * s_ + (y_ - gy_) * c_,
+                        "yaw_rad": math.atan2(math.sin(yaw_ - gyaw_), math.cos(yaw_ - gyaw_))}
+        self.state.setdefault("escape_presteer_drives", []).append(
+            {"time_s": float(t), **{k_: v_ for k_, v_ in clip_.items() if k_ != "goal"}})
 
     def end_reset(self, t: float) -> dict:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then

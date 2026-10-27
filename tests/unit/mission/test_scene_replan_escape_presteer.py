@@ -165,3 +165,34 @@ def test_changed_stays_as_it_was_and_an_earlier_install_keeps_the_mission_end():
     assert ("install", "path-1") in ports.log
     assert steps[-1].end == "scene_replan_failed:permit_stop:invalid_start"
     assert records[-1]["mission_end"] is True
+
+
+def test_a_stop_lost_by_the_probe_s_tick_gives_no_steering():
+    # Codex impl round 5 P2-1: the first presteer output is behind the stop check as every later one
+    dev, records = _device()
+    ports = PresteerPorts(probes={0.05: _probe(0.3)}, steer=[0.3])
+    _permit(dev)
+    t = 10.0
+    while dev.state != "wait_plan":
+        dev.step(t, ports)
+        t += 0.1
+    ports.stopped_ = False
+    out = dev.step(t, ports)
+    assert out.output == "hold" and dev.state == "wait_stop"
+
+
+def test_the_presteer_records_where_the_truck_stood_before_and_after():
+    from types import SimpleNamespace
+
+    dev, records = _device()
+    ports = PresteerPorts(probes={0.05: _probe(0.3)}, steer=[0.3, 0.01])
+    ports.box = SimpleNamespace(rear=(1.0, 2.0, 0.1))
+    _permit(dev)
+    t = 10.0
+    while dev.state != "escape_presteer":
+        dev.step(t, ports)
+        t += 0.1
+    ports.box.rear = (1.002, 2.0, 0.1)  # tyre scrub while steering
+    _run(dev, ports, t0=t, n=5)
+    rec = records[-1]["escape_presteer"]
+    assert rec["rear_start"] == [1.0, 2.0, 0.1] and rec["rear_end"] == [1.002, 2.0, 0.1]

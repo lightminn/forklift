@@ -71,6 +71,7 @@ def _running_escape(core, state, held, pose, kappa, offset_y):
     chosen = ports.escape_plan((), None, presteered=True)
     ports.escape_install(chosen)
     core.scene_replan.state = "escape"
+    core.scene_replan.request_["changed"] = True  # as the device's own install sets it
     rear = np.array(pose) + np.array([0.0, offset_y, 0.0])  # off the straight: the tracker steers back
     return rear
 
@@ -207,3 +208,34 @@ def test_a_clipped_escape_driven_on_ideal_kinematics_ends_and_never_leaves_its_r
     end = core.scene_escape["clip"]["end"]
     assert end["status"] in ("done", "stopped")
     assert state["escape_presteer_drives"][-1]["end"] == end
+
+
+def test_the_correction_key_changes_with_a_slam_correction_the_grid_has_not_taken_yet():
+    # Codex impl round 5 P2-2: the synchronous path with the obstacle scans silent applies the correction, not the grid
+    core, state, held, layer, pose = _open_core()
+    tracker = SimpleNamespace(applied=((0.0, 0.0, 0.0), 1.0))
+    core.slam = {"tracker": tracker}
+    ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
+    before = ports.correction_version()
+    tracker.applied = ((0.1, 0.0, 0.0), 2.0)
+    assert core.obstacle["version"] == 0 and ports.correction_version() != before
+
+
+def test_the_presteered_escape_drives_are_the_mission_s_record():
+    # Codex impl round 5 P2-3
+    from forklift_core.mission.baseline import MISSION_KEYS
+
+    assert "escape_presteer_drives" in MISSION_KEYS["state"]
+
+
+def test_a_request_ending_while_a_presteered_escape_runs_records_its_end():
+    # Codex impl round 5 P3: the request limit raises before the escape's own end
+    core, state, held, layer, pose = _open_core()
+    core.last_permission = (0.0, "occupied")
+    rear = _running_escape(core, state, held, pose, 0.05, 0.03)
+    try:
+        core.scene_replan_tick(100.0, rear, 0.0, DT)
+    except RuntimeError as exc:
+        assert "timeout" in str(exc)
+    drives = state["escape_presteer_drives"]
+    assert len(drives) == 1 and drives[0]["end"]["status"] == "request_ended"
