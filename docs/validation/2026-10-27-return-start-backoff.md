@@ -13,7 +13,7 @@
     - 그래서 계획서 5 장 C5 의 기본값 조건(채택·후진 완료·복귀 완료 사례)은 채워지지 않았다. 이 비교는 회귀를 점검한 자료일 뿐이고, 해가 없음을 통과했다는 판정은 아니다.
   - 켬 팔의 실패에는 후진 기록이 없고, 관측된 단계도 복귀 출발이 아니다(아래 실패 목록). 다만 이 기능은 미션 계획 때부터 호출되므로, 그것만으로 영향이 완전히 배제되지는 않는다.
 - **근본 원인은 저장 경로의 결함이 아니다**(계획서 2 장). 하역 줄에서 차의 위치 추정이 truth 에서 치우친 만큼 이웃 추정이 밀린다. 콘솔의 S3 값으로 보면 SLAM 근본 해결 A(조사 지도 위 위치 추정)에서는 이 치우침이 임계값보다 훨씬 작다(아래). live 기본이 A 로 바뀌었으므로(PR #167) 전환 뒤 첫 배치에서 치우침과 발동 빈도를 다시 잰다.
-- **리보틱스 trailer 회귀 신호를 따로 보고한다.** 두 팔 모두 0/5 다(rcf 는 3/5·4/5). 두 팔이 같은 지점에서 같은 기전으로 막혔고 후진 기록이 없어, 지금 런처 기본값의 회귀 후보로 본다(아래 절).
+- **리보틱스 trailer 0/10 은 회귀가 아니라 이 배치의 구성 누락이었다**(아래 절). trailer 는 출구 접두 `--exit-clearance-m 0.30`(PR #91)이 필요한데, riib 런처는 이것을 기본으로 주지 않는다. rcf 는 이 인자를 받았고, 이 배치는 받지 않았다. 출구 여유를 준 재실행(trx)으로 trailer 칸을 다시 채운다.
 
 ## 무엇을 넣었나
 
@@ -97,7 +97,7 @@ P-4:D-1, P-5:D-2, P-3:D-3, seed 0–9. rh 에서 이 실패가 난 장면이다.
   - 나머지 유형은 rcf 에도 있다.
 - 감시의 `slot_to` 구간이 생긴 추종기: 0(노출 0 과 같다).
 
-### 리보틱스 trailer 회귀 신호 (두 팔이 같음, 총괄 보고)
+### 리보틱스 trailer 0/10 — 구성 누락으로 판명 (두 팔이 같음, 총괄 보고)
 
 - 두 팔 10 실행이 모두 같은 양상이다(실행마다 `run/result.json` 에서 확인).
   - 꺼내기 직후 트레일러 안(후축 0.56, 0.12–0.13)에서 허가가 `occupied` 로 0 을 낸다.
@@ -125,6 +125,18 @@ P-4:D-1, P-5:D-2, P-3:D-3, seed 0–9. rh 에서 이 실패가 난 장면이다.
 - ① ≥ 3 이고 ② ≤ 1 이면 #151 전후 스냅숏으로 이분할지 총괄이 정한다.
 - 기전 확인: 실패 실행마다 운반 occupied 틱과 P6 상태를 같이 적는다. 완주했더라도 같은 정지가 있었는지(운반 occupied 틱이 수천 단위인지) 본다.
 
+#### 결과와 원인
+
+- ① `trc_fdf0e789`(11784) 0/5, ② `trd_b35d7f53`(11785) 0/5. 10 실행 모두 같은 기전이다(운반 occupied 7 923–8 290 틱, 운반 P6 `invalid_start`).
+- 규칙대로 읽으면 ①이 1 이하라 rcf 이후 코드 변경 탓이 아니고, ②도 1 이하라 D7_HOLD 탓도 아니다.
+- 원인: 보관본(`gdrive:forklift-archive/ws1-cleanup-20261026-ad/` `ad_rc_05`)에서 rcf trailer 기록을 꺼내 봤다.
+  - rcf trailer 실행의 기록 인자에 `exit_clearance_m: 0.3` 이 있고 `exit_prefix` 가 켜져 있었다. 실행 목록의 `EXTRA_ARGS` 로 받은 값이다.
+  - 이 배치(rsbr)와 진단(rsbt·trc·trd)의 목록에는 이 인자가 없었다.
+  - 장면·기본 USD·URDF·ONNX·venv·드라이버는 rcf 이후 바뀌지 않았다.
+  - rcf 에서도 출구 접두가 있는 s1 은 운반 시간 초과(occupied 8 998)였다.
+- 정정 배치: `trx_b35d7f53`(11833)이다. trailer 0–4 × F2′ off/on 이고, 둘 다 `--exit-clearance-m 0.30` 을 주며 나머지는 지금 런처 기본이다. 결과: (진행 중)
+- 런처가 trailer 에 출구 여유를 자동으로 주게 할지는 총괄에 제안했다(aisle_rack 의 KEEPOUT 0.15 와 같은 방식).
+
 ## SLAM 근본 해결 A 와의 관계 (콘솔 S3 2 차 최종값, 계획 5d `eb7610aa`)
 
 하역 도킹 첫 회의 위치 추정 − truth 다.
@@ -149,7 +161,7 @@ P-4:D-1, P-5:D-2, P-3:D-3, seed 0–9. rh 에서 이 실패가 난 장면이다.
 
 ## 실행 위치
 
-- ws1 `test_runs/live/rsbl_b35d7f53`(요약 `rsb_sum.py`, `sum_live.json`), `test_runs/riibotics/rsbr_b35d7f53`(`sum_riib.json`), `test_runs/riibotics/rsbt_b35d7f53`(trailer 진단), 스냅숏 `snapshots/rsb_b35d7f53`, 재생 게이트 `replay_gate/rsb_b35d7f53`.
+- ws1 `test_runs/live/rsbl_b35d7f53`(요약 `rsb_sum.py`, `sum_live.json`; ws1 원본은 정리됨 — `gdrive:forklift-archive/ws1-cleanup-20261027-e/` 의 `r176_live_01`–`05`, 스냅숏 `rsb_5a692fda`·`rsb_75b4fd17`·`rsb_109a2f31` 과 재생 게이트 4 개는 `r176_meta`, 묶음마다 `.files.tsv`·`.tar.zst.md5`), `test_runs/riibotics/rsbr_b35d7f53`(`sum_riib.json`), `test_runs/riibotics/rsbt_b35d7f53`(trailer 진단), 스냅숏 `snapshots/rsb_b35d7f53`, 재생 게이트 `replay_gate/rsb_b35d7f53`.
 - 기록 4 사례의 원자료: `gdrive:forklift-archive/ws1-cleanup-20261027-d/` `d27_rh_01`·`d27_rh_02`. 시험 고정 자료 `tests/fixtures/return_start_backoff_rh_s8_m3.json`.
 
 ## 자체 검토
