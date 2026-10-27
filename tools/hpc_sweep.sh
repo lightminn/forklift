@@ -16,8 +16,10 @@ set -euo pipefail
 JOBS=${1:?usage: hpc_sweep.sh jobs.tsv [partition] [cores]}
 PARTITION=${2:-cpu1}
 CORES=${3:-48}
-HOST=gate1_External
-REMOTE=forklift
+HOST=${HPC_HOST:-gate1_External}
+# HPC_REMOTE: a checkout folder of this sweep's own -- the default one is shared, and a sync while another
+# session's sweep waits in the queue would change the code that sweep runs.
+REMOTE=${HPC_REMOTE:-forklift}
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
 LOCAL_OUT="artifacts/hpc/$RUN_ID"
 
