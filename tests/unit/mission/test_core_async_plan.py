@@ -851,22 +851,27 @@ def test_a_capture_made_under_the_held_correction_is_carried():
     assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)
 
 
-@pytest.mark.parametrize("observed, snapshot_x", [(False, 3.2), (True, 3.0)])
-def test_a_deferred_release_carries_a_put_down_made_in_its_hold_but_not_an_older_one(observed, snapshot_x):
-    """Plan 2026-10-28-adoption-zone-check (Codex implementation round 3 P2): a manual recovery's ground verdict put
-    the pallet down in this hold -- its snapshot is that hold's estimate and goes with the pose; a pose an observation
-    rewrote since is a new estimate, and the snapshot stays where it was put down."""
+@pytest.mark.parametrize("in_hold, snapshot_x", [(True, 3.2), (False, 3.0)])
+def test_a_deferred_release_carries_a_put_down_made_in_its_hold_but_not_an_older_one(in_hold, snapshot_x):
+    """Plan 2026-10-28-adoption-zone-check (Codex implementation rounds 3-4 P2): a manual recovery's ground verdict
+    put the pallet down in this hold -- its snapshot is that hold's estimate and goes with the pose. A put-down from
+    before the hold stays, even when a re-observation in the hold lands on exactly the same coordinates."""
     core, slam, Pose = held_core("observe")
     core.targets.carried("P-1")
-    core.targets.put_down("P-1", Pose(3.0, 0.5, 0.0), state="available")
-    if observed:
-        core.targets.update_pose("P-1", Pose(3.05, 0.5, 0.0), basis="recognised", uncertainty_m=0.05)
+    if not in_hold:
+        slam["tracker"].mode = "tracking"
+    core.put_down_target("P-1", Pose(3.0, 0.5, 0.0), state="available")
+    if not in_hold:
+        core.release_slam(None)  # a release between that put-down and this hold
+        slam["tracker"].mode = "holding"
+        core.targets.update_pose("P-1", Pose(3.0, 0.5, 0.0), basis="recognised", uncertainty_m=0.05)
     core.end_release_due = {"pallet_id": "P-1", "destination_id": "D-1", "pallet_held": True,
                             "destination_held": False}
     core.end_release(20.0, deferred=True)
     pallet = core.targets.pallets["P-1"]
-    assert pallet.pose.x_m == pytest.approx(3.25 if observed else 3.2)
+    assert pallet.pose.x_m == pytest.approx(3.2)
     assert pallet.put_down_pose.x_m == pytest.approx(snapshot_x)
+    assert core.put_downs_in_hold == set()  # the release closes the hold's record
 
 
 def test_a_deferred_end_release_is_dropped_when_the_cargo_turns_unknown_before_standing():

@@ -256,6 +256,9 @@ class MissionCore:
         # outside every container the replay compares; a run without commands only ever submits once.
         self.targets = TargetsBook()  # M-a4: the pallets and destinations a submit names (plan D7)
         self.slam_releases = 0  # every SLAM release the core made (the targets list's correction version)
+        # Plan 2026-10-28-adoption-zone-check: the pallets put down while the current SLAM hold stands -- their put-down
+        # snapshots are that hold's estimates and go with its end release; cleared at every release.
+        self.put_downs_in_hold: set = set()
         self.commands = MissionCommands(self.targets)
         self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
         # Real-time plan D8 (docs/plans/2026-10-17-realtime-sim.md): a real-time run hands the long plans to a
@@ -934,8 +937,9 @@ class MissionCore:
             # Plan D14 (Codex design round 1 P2-7): the mission is gone; the context kept where the pallet is.
             pid = ctx["pallet_id"]
             if pid in tb.pallets and tb.pallets[pid].state == "carried":
-                tb.put_down(pid, TargetPose(*(float(v) for v in ctx["pose"])),
-                            **({} if ctx["placed"] else {"state": "available"}), uncertainty_m=RECOGNISED_MARGIN_M)
+                self.put_down_target(pid, TargetPose(*(float(v) for v in ctx["pose"])),
+                                     **({} if ctx["placed"] else {"state": "available"}),
+                                     uncertainty_m=RECOGNISED_MARGIN_M)
             return
         if mission is None or mission.pallet_id not in tb.pallets or tb.pallets[mission.pallet_id].state != "carried":
             return
@@ -944,13 +948,14 @@ class MissionCore:
             if self.slam is not None:
                 scenario_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", scenario_))
             site_ = scenario_.destination
-            tb.put_down(mission.pallet_id, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
-                        uncertainty_m=RECOGNISED_MARGIN_M)
+            self.put_down_target(mission.pallet_id, TargetPose(float(site_.x_m), float(site_.y_m),
+                                                               float(site_.yaw_rad)), uncertainty_m=RECOGNISED_MARGIN_M)
         else:
             est_ = (self.obstacle or {}).get("pickup_estimate") or (self.pocket or {}).get("planning_pickup")
             if est_ is not None:
-                tb.put_down(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m), float(est_.yaw_rad)),
-                            state="available", uncertainty_m=RECOGNISED_MARGIN_M)
+                self.put_down_target(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m),
+                                                                   float(est_.yaw_rad)),
+                                     state="available", uncertainty_m=RECOGNISED_MARGIN_M)
 
     # --- plan D14: the manual recovery after a live mission ended with the forks in a pocket --------------------
     def capture_recovery_context(self) -> None:
@@ -5275,7 +5280,14 @@ class MissionCore:
         the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
         jump = self.slam["tracker"].release(odom_from_base=odom_from_base)
         self.slam_releases += 1
+        self.put_downs_in_hold.clear()  # the hold they were put down in is over (end_release read them first)
         return jump
+
+    def put_down_target(self, pallet_id: str, pose, **kwargs) -> bool:
+        """TargetsBook.put_down, noting a put-down made under a SLAM hold (plan 2026-10-28-adoption-zone-check)."""
+        if self.slam is not None and getattr(self.slam.get("tracker"), "mode", None) == "holding":
+            self.put_downs_in_hold.add(pallet_id)
+        return self.targets.put_down(pallet_id, pose, **kwargs)
 
     def refresh_targets(self) -> None:
         """M-a4 (plan D7): the targets list follows the mission each control tick, from what the core holds (no
@@ -5307,7 +5319,7 @@ class MissionCore:
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
-                tb.put_down(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
+                self.put_down_target(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
             elif tb.pallets[pid].state == "delivered":
                 tb.update_pose(pid, site_pose, carry_put_down=True)  # this mission's own put-down, re-expressed
         elif pocket.get("planning_pickup") is not None:
@@ -7939,6 +7951,7 @@ class MissionCore:
         moving at the end), the ended mission's pallet target is carried instead, its correction version raised."""
         slam, hooks, obstacle, pocket = self.slam, self.hooks, self.obstacle, self.pocket
         before = hooks.slam_rear(t)
+        put_in_hold_ = set(self.put_downs_in_hold)  # read before the release clears it
         jump_m, jump_rad = self.release_slam(hooks.slam_odom_base())
         after = hooks.slam_rear(t)
         frame_change = compose(tuple(float(v) for v in after), invert(tuple(float(v) for v in before)))
@@ -7957,10 +7970,9 @@ class MissionCore:
                 if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
                     tb.update_pose(pid, carried(old), carry_put_down=True)  # put down in this hold
             elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].pose is not None:
-                entry_ = tb.pallets[pid]  # the near capture's hold: its pallet; or one a manual recovery put down in it
-                # plan 2026-10-28-adoption-zone-check: a pose still equal to its put-down is that put-down (made in this
-                # hold) and the snapshot goes with it; a pose an observation rewrote leaves the snapshot alone
-                tb.update_pose(pid, carried(entry_.pose), carry_put_down=entry_.put_down_pose == entry_.pose)
+                # the near capture's hold: its pallet; or one a manual recovery put down in it. Plan
+                # 2026-10-28-adoption-zone-check: a put-down made in this hold goes with it; an older one stays
+                tb.update_pose(pid, carried(tb.pallets[pid].pose), carry_put_down=pid in put_in_hold_)
             tb.set_correction_version(self.slam_releases)
         else:
             # Only what this hold found is in its frame (Codex D6 rounds 4-5): the docked destination, carried as
