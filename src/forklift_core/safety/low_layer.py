@@ -413,11 +413,13 @@ def _sweep_pieces(poses, x0: float, x1: float, hw: float) -> list:
     return out
 
 
-def _squares_touch(lo: np.ndarray, hi: np.ndarray, hull: np.ndarray, grow: float) -> np.ndarray:
+def _squares_touch(lo: np.ndarray, hi: np.ndarray, hull: np.ndarray, grow: float, *,
+                   contact: bool = False) -> np.ndarray:
     """Whether axis-aligned boxes (lo, hi corners) come within ``grow`` of a convex polygon -- strictly: a box that only
     touches the polygon's edge does not (separating-axis test over the box axes and the polygon's edge normals; with
-    ``grow`` > 0 it may say yes near a corner where the rounded growth would not -- the safe side)."""
-    eps = 1e-9
+    ``grow`` > 0 it may say yes near a corner where the rounded growth would not -- the safe side). ``contact``: a
+    box touching the edge counts too (a collision judge, where contact is a hit)."""
+    eps = -1e-9 if contact else 1e-9
     ok = (lo[:, 0] < hull[:, 0].max() + grow - eps) & (hi[:, 0] > hull[:, 0].min() - grow + eps)
     ok &= (lo[:, 1] < hull[:, 1].max() + grow - eps) & (hi[:, 1] > hull[:, 1].min() - grow + eps)
     corners = np.stack([lo, np.c_[hi[:, 0], lo[:, 1]], hi, np.c_[lo[:, 0], hi[:, 1]]], 1)

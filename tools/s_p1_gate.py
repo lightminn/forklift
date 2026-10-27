@@ -162,13 +162,14 @@ def box_overlaps(footprint: Footprint, rear_pose, rect) -> bool:
 def sweep_overlaps(footprint: Footprint, poses, rects) -> bool:
     """Whether the footprint's continuous sweep along ``poses`` overlaps any axis-aligned floor rectangle
     (cx, cy, sx, sy, ...): the sweep between neighbouring poses as the low layer bounds it (hull of the two rectangles
-    grown by the arc sagitta, a superset), so a hazard between the 1 cm samples is not missed."""
+    grown by the arc sagitta, a superset), so a hazard between the 1 cm samples is not missed; contact counts, as in
+    ``box_overlaps``."""
     if not rects:
         return False
     pieces = L._sweep_pieces(list(poses), -footprint.rear_m, footprint.front_m, footprint.half_width_m)
     lo = np.array([[r[0] - r[2] / 2, r[1] - r[3] / 2] for r in rects])
     hi = np.array([[r[0] + r[2] / 2, r[1] + r[3] / 2] for r in rects])
-    return any(bool(L._squares_touch(lo, hi, hull, grow).any()) for hull, grow in pieces)
+    return any(bool(L._squares_touch(lo, hi, hull, grow, contact=True).any()) for hull, grow in pieces)
 
 
 def approach_speed(remaining_m: float, speed: float) -> float:

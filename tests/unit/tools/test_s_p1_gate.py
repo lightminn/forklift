@@ -119,3 +119,12 @@ def test_the_overlap_judge_sees_a_hazard_between_the_samples():
     assert not any(G.box_overlaps(G.PLANNER_FOOT, p, box) for p in path)
     assert G.sweep_overlaps(G.PLANNER_FOOT, path[99:102], [box])
     assert not G.sweep_overlaps(G.PLANNER_FOOT, path[:50], [box])
+
+
+def test_the_overlap_judge_counts_contact_as_box_overlaps_does():
+    # S-P1 implementation review round 5 P2: the front edge ends on the box's face at x 1.59
+    path = L.path_poses([(0.0, 0.0, 0.0)], [(0.3, 0.0)], step_m=G.PATH_STEP_M)
+    box = (1.64, 0.0, 0.1, 0.1)
+    assert G.box_overlaps(G.PLANNER_FOOT, path[-1], box)
+    assert G.sweep_overlaps(G.PLANNER_FOOT, path, [box])
+    assert not G.sweep_overlaps(G.PLANNER_FOOT, path, [(1.641 + 0.05, 0.0, 0.1, 0.1)])
