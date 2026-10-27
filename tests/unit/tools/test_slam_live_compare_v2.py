@@ -320,26 +320,36 @@ def _end(m, o, t, e, reason=None):
     return {"seq": int(m[1:]), "mission_id": m, "outcome": o, "reason": reason, "ended_s": t, "pallet_id": "P-1"}, e
 
 
-def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None, end=None, sub="run"):
+def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None, end=None, sub="run", costs=None, extra=(),
+             folder_json=None, results=None):
     """A run folder: an ordered live log whose end summary counts ``dropped`` lost lines (and ``end``'s other
-    counters), its mission_end lines (``log_missions``) and the mission folders' result.json (``folders``), both
-    [(id, outcome, ended_s, error[, reason])]."""
+    counters; ``end`` False leaves it out), its mission_end lines (``log_missions``), a mission_end_cost line per id in
+    ``costs`` (default: the logged missions), ``extra`` lines, the mission folders' result.json (``folders``; both
+    [(id, outcome, ended_s, error[, reason])], or ``folder_json`` {id: raw}) and the session's result.json mission
+    results (``results``)."""
     log_missions = log_missions if log_missions is not None else [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None)]
     folders = folders if folders is not None else log_missions
+    costs = costs if costs is not None else [row[0] for row in log_missions]
     run = tmp_path / sub
     lines = [{"log_writer": "ordered"}]
     for row in log_missions:
         result, e = _end(*row)
         lines.append({"mission_end": result, "delivery_error_m": e, "mono": result["ended_s"]})
+    lines += [{"mission_end_cost": {"mission_id": m, "record_wall_s": 0.0}} for m in costs] + list(extra)
     if end is not False:
         lines.append({"log_end": {"dropped_lines": dropped, "line_errors": 0, "dropped_mission_files": 0,
                                   "record_errors_older": 0, **(end or {})}})
     run.mkdir(parents=True)
     (run / "live_log.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    raw = folder_json or {}
     for row in folders:
         result, e = _end(*row)
-        (run / "missions" / row[0]).mkdir(parents=True)
-        (run / "missions" / row[0] / "result.json").write_text(json.dumps({"result": result, "delivery_error_m": e}))
+        raw.setdefault(row[0], {"result": result, "delivery_error_m": e})
+    for m, body in raw.items():
+        (run / "missions" / m).mkdir(parents=True)
+        (run / "missions" / m / "result.json").write_text(json.dumps(body))
+    if results is not None:
+        (run / "result.json").write_text(json.dumps({"mission_results": results}))
     return run
 
 
@@ -377,6 +387,42 @@ def test_a_mission_lost_from_both_sides_is_refused(tmp_path):
         cmp.mission_ends(_log_run(tmp_path, log_missions=both, sub="gap"))
     with pytest.raises(ValueError, match="mission records lost"):
         cmp.mission_ends(_log_run(tmp_path, end={"record_errors_older": 1}, sub="older"))
+
+
+def test_the_last_mission_lost_from_the_log_and_its_folder_is_refused(tmp_path):
+    # Codex round 3 P2: m3's folder write failed (an archive_error, no file, no counter yet) and its mission_end line
+    # was the one lost line -- its mission_end_cost line still names it; and an archive error alone refuses too
+    kept = [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None)]
+    with pytest.raises(ValueError, match="m3"):
+        cmp.mission_ends(_log_run(tmp_path, log_missions=kept, costs=["m1", "m2", "m3"]))
+    with pytest.raises(ValueError, match="archive"):
+        cmp.mission_ends(_log_run(tmp_path, sub="err", extra=[{"archive_error": ["result.json: OSError"], "mission_id": "m2"}]))
+
+
+def test_more_lost_lines_than_a_mission_always_leaves_are_refused(tmp_path):
+    # every mission logs mission_end and mission_end_cost: with two or more lines lost a mission can vanish whole
+    with pytest.raises(ValueError, match="2 lines"):
+        cmp.mission_ends(_log_run(tmp_path, dropped=2))
+
+
+@pytest.mark.parametrize("bad", ["empty_result", "no_reason", "no_error_key", "no_counters", "results_seq"])
+def test_missing_fields_or_counters_are_refused(tmp_path, bad):
+    # Codex round 3 P2: a field only absent on the folder's side, or an absent counter, is no evidence
+    ends = [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None)]
+    result2, _ = _end(*ends[1])
+    kw = {}
+    if bad == "empty_result":
+        kw["folder_json"] = {"m2": {"result": {}, "delivery_error_m": None}}
+    elif bad == "no_reason":
+        kw["folder_json"] = {"m2": {"result": {k: v for k, v in result2.items() if k != "reason"}, "delivery_error_m": None}}
+    elif bad == "no_error_key":
+        kw["folder_json"] = {"m2": {"result": result2}}
+    elif bad == "no_counters":
+        kw["end"] = {"dropped_mission_files": None}
+    else:
+        kw["results"] = [{"seq": 3, "mission_id": "m3", "outcome": "failed"}]
+    with pytest.raises(ValueError):
+        cmp.mission_ends(_log_run(tmp_path, **kw))
 
 
 def test_only_the_lost_lines_refusal_is_read_past(tmp_path):

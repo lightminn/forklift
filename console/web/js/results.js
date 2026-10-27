@@ -285,12 +285,18 @@ export function standbyText(s) {
   return parts.length ? parts.join(" · ") : null;
 }
 
-// The state's optional slam field (contract 6): present only for a session localizing on a survey map; absent is
-// online mapping or not known. map_loaded is the session's start check, not the localization's health now.
+// The state's optional slam field (contract 6): a session localizing on a survey map, or one mapping online that
+// the launcher named (live-default plan 5d: its choice, "mapping (fallback: ...)" when no accepted survey map was
+// there); absent is online mapping or not known. map_loaded is the session's start check, not the localization's
+// health now.
 export function slamLabel(st) {
   if (!st) return { text: "—", title: "" };
   const slam = st.slam;
   if (!slam) return { text: "온라인 작성 또는 모름", title: "상태에 slam 필드가 없음" };
+  if (slam.mode === "mapping") {
+    const choice = String(slam.choice ?? "");
+    return { text: choice.startsWith("mapping (fallback:") ? "지도 작성 · 조사 지도 없음" : "지도 작성", title: choice };
+  }
   const id = String(slam.map_id ?? "");
   return { text: `지도 ${slam.mode === "localization" ? "위치추정" : slam.mode} · ${id.slice(0, 8)}`,
            title: `지도 ${id}${slam.map_loaded ? " · 세션 시작 검사 통과" : ""}` };

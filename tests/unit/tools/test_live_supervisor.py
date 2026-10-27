@@ -431,3 +431,16 @@ def test_the_live_runner_holds_slam_corrections_on_d7_re_approaches_by_default()
     runner = live[live.index('cat > "$OUT/runner.sh"'):]
     runner = runner[: runner.index("EOT\n")]
     assert runner.index('--d7-reapproach-hold "$D7_HOLD"') < runner.index("$EXTRA_ARGS")
+
+
+def test_the_live_runner_shows_the_launchers_slam_choice():
+    """Live-default plan 5d: the launcher's choice reaches the runner (the console's slam field) and the supervisor's
+    log, so a mapping session -- a fallback included -- is said on screen and in the record."""
+    from pathlib import Path
+
+    live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "printf 'SLAM_CHOICE=%q\\n' \"$SLAM_CHOICE\"" in live
+    runner = live[live.index('cat > "$OUT/runner.sh"'):]
+    runner = runner[: runner.index("EOT\n")]
+    assert '--slam-choice "$SLAM_CHOICE"' in runner
+    assert '--slam-choice "$SLAM_CHOICE"' in live[live.index('"$ROOT/tools/live_supervisor.py"'):]

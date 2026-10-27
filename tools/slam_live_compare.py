@@ -600,14 +600,39 @@ def mission_ends(run: Path) -> tuple:
     except LiveLogLostLines as exc:  # every other refusal of the reader stands
         refused, end, ends = exc, exc.end, _ends(exc.entries)
     ids = [m.get("mission_id") for m in ends]
-    folders = {}
-    for path in sorted((run / "missions").glob("*/result.json")):
-        saved = json.loads(path.read_text())
-        folders[path.parent.name] = {**(saved.get("result") or {}), "delivery_error_m": saved.get("delivery_error_m")}
     problems = []
+    counters = ("dropped_lines", "line_errors", "dropped_mission_files", "record_errors_older")
+    if not all(isinstance(end.get(k), int) and end[k] >= 0 for k in counters):
+        problems.append(f"the end summary's counters {[end.get(k) for k in counters]} are not all counts")
+    lost = sum(end.get(k) for k in counters[:2] if isinstance(end.get(k), int))
+    if lost > 1:  # every mission logs mission_end and mission_end_cost: two lost lines can take one away whole
+        problems.append(f"{lost} lines lost, more than the one a mission's two always-written lines can absorb")
     if end.get("dropped_mission_files") or end.get("record_errors_older"):
         problems.append(f"mission records lost too ({end.get('dropped_mission_files')} files, "
                         f"{end.get('record_errors_older')} record errors)")
+    named = set()  # every mission any of its log lines names (Codex round 3: the last one's end line lost too)
+    for e in refused.entries:
+        for key in ("mission_end_cost", "archive", "disposed"):
+            if isinstance(e.get(key), dict):
+                named.add(e[key].get("mission_id"))
+        if "archive_error" in e:
+            problems.append(f"archive error for {e.get('mission_id')}: {e['archive_error']}")
+    if any(m.get("record_error") for m in ends):
+        problems.append("a mission's records were not written (record_error)")
+    if named - set(ids):
+        problems.append(f"missions {sorted(named - set(ids))} named in the log without their mission_end")
+    session = json.loads((run / "result.json").read_text()) if (run / "result.json").exists() else {}
+    for r in session.get("mission_results") or []:  # the session's own result book, where it was written
+        if r.get("mission_id") not in ids or r.get("record_error"):
+            problems.append(f"the session's result {r.get('mission_id')} (seq {r.get('seq')}) is not a whole mission_end")
+    folders, required = {}, ("mission_id", "seq", "outcome", "reason", "ended_s")
+    for path in sorted((run / "missions").glob("*/result.json")):
+        saved = json.loads(path.read_text())
+        result = saved.get("result")
+        if not isinstance(result, dict) or not all(k in result for k in required) or "delivery_error_m" not in saved:
+            problems.append(f"{path.parent.name}: its result.json lacks {list(required)} or delivery_error_m")
+            result = result if isinstance(result, dict) else {}
+        folders[path.parent.name] = {**result, "delivery_error_m": saved.get("delivery_error_m")}
     if len(set(ids)) != len(ids):
         problems.append("a mission_end line twice")
     if set(ids) != set(folders):

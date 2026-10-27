@@ -1049,6 +1049,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     # Plan D8 S4c-3: the test-only near-capture heading box and stage-1 switch.
     "near_capture_box_yaw_rad",
     "near_capture_redraw",
+    # live-default plan 5d: the launcher's SLAM choice, a label (the mode itself is compared as slam_mode / map_id).
+    "slam_choice",
 )
 # Arguments added after the measurement runs, each at the value that reproduces them: a run
 # holding that value matches measurement records that predate the argument, any other value
