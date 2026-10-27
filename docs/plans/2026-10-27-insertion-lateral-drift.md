@@ -122,6 +122,12 @@ ws1 Isaac 기록 중 삽입 단계 날별 최소 가로 틈(Isaac 정답, `inser
     - 채택은 원자적이다. 거부·검출 실패면 첫 선 그대로 진행한다.
     - 유지(hold)는 그대로다. 두 번째 촬영도 같은 유지 틀에서 한다. 첫 근거리 촬영과 같은 유지 안이라 보정을 새로 받지 않는다. 지금 흐름은 `near_capture.status == "done"` 인 채 촬영하면 hold 를 풀므로(`core.py:4520`, release_at_capture), 두 번째 촬영에서는 이 해제를 하지 않는 것이 구현 요건이다. 상대 관측으로 다시 그린 선이 유지 틀 안의 차체 추정과 같은 틀에 있어야 촬영 뒤 오도메트리 누적이 0 부터 다시 쌓인다(§2 의 기전).
     - 기록: `near_capture.second`(상태·사유·오프셋·dry-run·촬영 시각).
+    - **구현에서 달라진 점(PR #177, 2026-10-27, T2 결과 전).** 옵션 이름은 `--near-recapture-gap-m`(riib 런처 `NEAR_RECAPTURE_GAP`)이다. Codex 구현 검토로 두 가지가 더해졌다.
+      - (1) 채택 전에 `redraw_docking` 충돌 검사를 더 한다. 접근·dry-run 궤적·삽입·적재 인출을 장애물·경계·보정 grid 와 대조한다(P1: 삽입·인출 경로를 통째로 옮기면 충돌 검사를 건너뛰었다). 그래서 수용은 위 "같은 수용 규칙"보다 엄격하다.
+      - (2) 첫 직선을 g 지점까지 자른 접근 경로도 실제 추종기 설정으로 dry-run 한다. 도착하지 못하면 `skipped_prefix`, 직선이 g 보다 짧으면 `skipped_short` 로 남기고 두 번째 촬영 없이 전체 직선을 탄다(P2).
+      - 그래서 위 "추가 기록"의 결과 분포는 `adopted`·`box_refused`·`dry_run_refused`·`docking_refused`·`no_detection`·`skipped_prefix`·`skipped_short` 로 센다. 판정 규칙(1–5)은 바뀌지 않는다.
+      - 건너뛰거나 거부된 실행도 C3 팔의 실행으로 판정에 그대로 들어간다(의도한 처리 원칙).
+      - 이 옵션은 batch 전용이다(`--live`·`--near-tracking`·`--pocket-check`·`--bottom-deck-check`·`--repeat-captures` 와 함께면 거부).
   - **C1**(탐색): B0 + `--odometry-heading gyro --gyro-model <실측 모형>`, 새 나이표, 그 나이표의 장애물 층 설정.
 - **장면·seed:** `aisle_rack`(RACK 사본)·`line_2_m`·`line_1_m` × seed 0–4 = 15 짝/팔, 총 45 실행.
 - **판정:** 위 T2 의 지표·대상 집합·검정군·판정 1–5 를 그대로 쓴다(C3 주 검정, C1 탐색).
