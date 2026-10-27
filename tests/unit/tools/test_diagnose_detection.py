@@ -3,6 +3,8 @@
 import dataclasses
 import hashlib
 import json
+import subprocess
+import types
 from pathlib import Path
 
 import numpy as np
@@ -139,7 +141,8 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def write_run(tmp_path, s, x, *, tamper_depth=False, mount="legacy", recorded=None, quantize=0):
+def write_run(tmp_path, s, x, *, tamper_depth=False, mount="legacy", recorded=None, quantize=0,
+              core_sha256="record"):
     """A run directory shaped like run_transport's, around a rig scene."""
     # run_transport scenes are clock_domain/provenance "synthetic".
     s = dataclasses.replace(s, clock_domain="synthetic", source_provenance="synthetic")
@@ -153,6 +156,11 @@ def write_run(tmp_path, s, x, *, tamper_depth=False, mount="legacy", recorded=No
     for name in diag.DETECTION_SOURCES:
         local = ROOT / ("src/" + name if name.startswith("forklift_core") else name)
         sources[name] = sha(local)
+    # A run records every forklift_core source; the core writes the attempt's mount (85cc50f4).
+    if core_sha256 == "record":
+        sources["forklift_core/mission/core.py"] = sha(ROOT / "src/forklift_core/mission/core.py")
+    elif core_sha256 is not None:
+        sources["forklift_core/mission/core.py"] = core_sha256
     record = {
         "arguments": {
             "perception_camera_axes": "ros",
@@ -297,6 +305,28 @@ def test_lower_stages_account_for_every_point():
         assert stages["depth_cap"] - stages["dropped_by_window"] == stages["window"]
         assert stages["window"] == entry["lower"]
     assert out["preprocessing"]["removed_by"]["nonfinite"]["points"] >= 0
+
+
+@pytest.mark.parametrize("core_sha256", [None, "0" * 64])
+def test_the_mount_gate_needs_the_core_the_run_recorded(tmp_path, core_sha256):
+    # The attempt's mount record lives in the mission core: without its recorded hash, or with one no committed
+    # core has, the named-mount gate cannot vouch for the mount.
+    out = diag.diagnose_attempt(write_run(tmp_path, scene(2.5), 2.5, core_sha256=core_sha256), 1, URDF)
+    assert out["gates"]["runner_mount"] is False
+    assert out["runner_commit"] is None
+
+
+def test_the_core_blob_search_walks_the_full_history(monkeypatch):
+    # The default `git log -- <path>` simplifies merges and misses a core blob a run recorded (Codex P3).
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return types.SimpleNamespace(stdout="" if kwargs.get("text") else b"", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert diag._blob_with_hash("src/forklift_core/mission/core.py", "0" * 64) is None
+    assert "--full-history" in calls[0] and "--all" in calls[0]
 
 
 def test_an_unverified_truth_chain_makes_the_configuration_undecidable(tmp_path):
