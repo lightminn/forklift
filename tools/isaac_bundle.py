@@ -91,6 +91,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -178,11 +179,11 @@ class Run:
         return bool(self.retry_move) or any("{attempt}" in t for t in texts)
 
 
-def load_runs(path) -> list[Run]:
+def load_runs(path, text=None) -> list[Run]:
     """The run list: one JSON object per non-empty line; refuses unknown keys, bad names, duplicate names or ports
-    and the environment names the bundle sets itself."""
+    and the environment names the bundle sets itself. ``text``: the list as already read (checked and hashed as one)."""
     runs, names, ports = [], set(), set()
-    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+    for n, line in enumerate((Path(path).read_text() if text is None else text).splitlines(), 1):
         if not line.strip():
             continue
         obj = json.loads(line)
@@ -278,7 +279,114 @@ def _end_token(token, quiet_s=0.5, limit_s=10.0):
     return False
 
 
-def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
+# --- preflight (docs/plans/2026-10-27-ws1-preflight.md) ---------------------------------------------------------------
+PREFLIGHT_SUFFIX = ".preflight.json"
+# what a run may take from the submitting shell's environment: the system's, Slurm's, and what the runner sets per run
+INHERIT_OK = re.compile(r"^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_\w+|TZ|TMPDIR|PWD|OLDPWD|TERM|SHLVL|HOSTNAME"
+                        r"|SLURM_\w+|CUDA_VISIBLE_DEVICES|SESSION_ID|BRIDGE_CPU|PORT|BUNDLE_\w+|PYTHONPATH"
+                        r"|PYTHONDONTWRITEBYTECODE|OMP_NUM_THREADS)$")
+# every name a launcher expands -- $NAME, ${NAME}, ${NAME:-x}, ${NAME:?why} ... -- is one a submitting shell could set
+# unseen (LAG in the ct1 wrapper, NEAR in riib, EXTRA_ARGS read plainly); names the launcher only sets itself are not
+# in the environment, so they never match (Codex)
+_ENV_READ = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+# the snapshot's launchers a run's wrapper may call (each checked when there)
+SNAPSHOT_LAUNCHERS = ("deploy/console/isaac_live.sbatch", "deploy/console/slam_choice.sh",
+                      "deploy/riibotics/riib_scene.sbatch")
+SNAPSHOT_INPUTS = SNAPSHOT_LAUNCHERS + ("sim/isaac/run_transport.py", "config/slam_map_bundles.yaml",
+                                        "tools/slam_bundle_registry.py")
+
+
+def launcher_files(run) -> list[str]:
+    """The shell files that decide a run's launch: the scripts its argv names (in its cwd) and the snapshot's
+    launchers there."""
+    out = []
+    for a in run.argv:
+        path = os.path.join(run.cwd or ".", a)
+        if a.endswith((".sbatch", ".sh")) and os.path.isfile(path):
+            out.append(os.path.realpath(path))
+    for rel in SNAPSHOT_LAUNCHERS:
+        path = os.path.join(run.cwd or ".", rel)
+        if os.path.isfile(path):
+            out.append(os.path.realpath(path))
+    return list(dict.fromkeys(out))
+
+
+def inherited_controls(run, environ) -> list[str]:
+    """Settings the run's launchers read from the environment that its list entry does not set but the submitting
+    environment does: they would steer the run unseen by the list and its preflight (Codex: LAG, MODE, NEAR)."""
+    names = set()
+    for path in launcher_files(run):
+        names |= set(_ENV_READ.findall(Path(path).read_text(errors="replace")))
+    return sorted(n for n in names if n in environ and n not in run.env and not INHERIT_OK.match(n))
+
+
+def _sha256_file(path) -> str | None:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def preflight_inputs(runs, runner) -> dict:
+    """path -> sha256 of every file a preflight verdict rests on: the runs' launch files, the runner, the snapshots'
+    launchers and SLAM bundle registry."""
+    paths = {os.path.realpath(runner)}
+    for run in runs:
+        paths.update(launcher_files(run))
+        rels = list(SNAPSHOT_INPUTS)
+        if run.env.get("SLAM_BUNDLE_REGISTRY"):  # the registry the run names, not only the default (Codex)
+            rels.append(run.env["SLAM_BUNDLE_REGISTRY"])
+        for rel in rels:
+            path = os.path.join(run.cwd or ".", rel)
+            if os.path.isfile(path):
+                paths.add(os.path.realpath(path))
+    return {p: _sha256_file(p) for p in sorted(paths)}
+
+
+def write_preflight(list_path, data: bytes, runs, runner, info, inputs) -> Path:
+    """The list's preflight proof beside it: the list bytes checked, the files the verdict rests on as hashed before
+    the check (``inputs``), what each run's launch chose (SLAM mode, bundle, map id)."""
+    path = Path(str(list_path) + PREFLIGHT_SUFFIX)
+    proof = {"list_sha256": hashlib.sha256(data).hexdigest(), "checked_at": time.time(),
+             "runner": os.path.realpath(runner), "inputs": inputs,
+             "runs": [{"name": r.name, **(info or {}).get(r.name, {})} for r in runs]}
+    path.write_text(json.dumps(proof, indent=1) + "\n")
+    return path
+
+
+def nonempty_lines(text) -> list[str]:
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=None) -> list[str]:
+    """Why a list may not run (empty: it may): no proof beside it, a proof of other bytes, a file the verdict rested
+    on changed since, a setting inherited from the submitting environment; with index, an array task's line that is
+    not the list's index-th non-empty line."""
+    path = Path(str(list_path) + PREFLIGHT_SUFFIX)
+    try:
+        proof = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return [f"no preflight proof {path} ({type(exc).__name__}): run isaac_bundle.py check on the list first "
+                "(or --no-preflight / PREFLIGHT=off with a reason)"]
+    problems = []
+    if proof.get("list_sha256") != hashlib.sha256(data).hexdigest():
+        problems.append(f"{path} is the proof of other list bytes: the list changed since its check")
+    for p, digest in (proof.get("inputs") or {}).items():
+        if _sha256_file(p) != digest:
+            problems.append(f"{p} changed since the check")
+    for run in runs:
+        inherited = inherited_controls(run, environ)
+        if inherited:
+            problems.append(f"{run.name}: {', '.join(inherited)} set by the submitting environment, not by the list")
+    if index is not None:
+        lines = nonempty_lines(data.decode())
+        got = Path(line).read_text().strip() if line is not None else None
+        if not 0 <= index < len(lines) or got != lines[index].strip():
+            problems.append(f"task {index}: its run line is not the list's line {index}")
+    return problems
+
+
+def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[str]:
     """Problems found before a submission: a run whose output (retry_move) already exists, has no output named, or
     whose argv does not name it (none of these is run), a launcher without a DRY_RUN mode (not run either), a DRY_RUN
     that fails, hangs or prints no RUNNER_ARGS line, and runner arguments whose --flags `runner` does not define (an
@@ -287,9 +395,15 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
     import tempfile
 
     known = defined_flags(runner)
+    environ = os.environ if environ is None else environ
     problems = []
     for n, run in enumerate(runs):
         r = run.at(1)
+        inherited = inherited_controls(r, environ)
+        if inherited:
+            problems.append(f"{r.name}: {', '.join(inherited)} set by the submitting environment, not by the list "
+                            "(put them in its env)")
+            continue
         if not r.retry_move:
             problems.append(f"{r.name}: no retry_move output named (not run: its DRY_RUN could write a real output)")
             continue
@@ -301,7 +415,7 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
             problems.append(f"{r.name}: no launcher with a DRY_RUN mode printing RUNNER_ARGS (not run)")
             continue
         with tempfile.TemporaryDirectory(prefix="bundle_check_") as scratch:
-            merged = {**os.environ, **r.env}  # what the launcher will see: the inherited environment too
+            merged = {**environ, **r.env}  # what the launcher will see: the inherited environment too
             argv = _scratch_argv(r.argv, merged, r.cwd, r.retry_move, scratch)
             if argv is None:
                 problems.append(f"{r.name}: its outputs {r.retry_move} are not each a whole argument of its argv, or "
@@ -340,6 +454,18 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
         if p.returncode != 0 or "RUNNER_ARGS" not in lines:
             problems.append(f"{r.name}: DRY_RUN exit {p.returncode}, no RUNNER_ARGS line")
             continue
+        if "ARGS_OK" not in lines:  # the runner's own checks on these arguments (run_transport --check-args)
+            problems.append(f"{r.name}: the DRY_RUN printed no ARGS_OK (its launcher does not run the runner's check)")
+            continue
+        if info is not None:
+            got = {}
+            for line in lines:
+                if line.startswith("SLAM_CHOICE "):
+                    got["slam_choice"] = line.split(" ", 1)[1]
+                elif line.startswith("SLAM_BUNDLE "):
+                    parts = line.split()
+                    got.update(map_bundle=parts[1], map_id=parts[2] if len(parts) > 2 else None)
+            info[r.name] = got
         args = " ".join(lines[lines.index("RUNNER_ARGS") + 1:]).split()
         unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
         if unknown:
@@ -997,7 +1123,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
-               siblings=_siblings, gpu_full_give_up_s=None):
+               siblings=_siblings, gpu_full_give_up_s=None, preflight=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if claim_dir is not None:
@@ -1546,6 +1672,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
                                                           "time_left_retry", "gpu_full"))
     summary = {
+        "preflight": preflight,
         "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "gpu_full_gave_up": st["gpu_full_gave_up"], "unreadable_starts": st["unreadable_starts"],
@@ -1572,15 +1699,42 @@ def main(argv=None) -> int:
         cp.add_argument("--kind", choices=sorted(KINDS), help="with --jobs: warn when the last wave is half empty")
         cp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list (--claim-dir)")
         a = cp.parse_args(argv[1:])
-        runs = load_runs(a.list)
-        problems = check_runs(runs, a.runner)
+        data = Path(a.list).read_bytes()  # read once: the bytes checked are the bytes the proof names
+        runs = load_runs(a.list, text=data.decode())
+        info = {}
+        # the files hashed before the check, compared after it: a file edited during the check would otherwise have
+        # its new contents certified by the old contents' verdict (Codex)
+        inputs = preflight_inputs(runs, a.runner)
+        problems = check_runs(runs, a.runner, info=info)
+        problems += [f"{p} changed during the check" for p, d in preflight_inputs(runs, a.runner).items()
+                     if inputs.get(p) != d]
         for line in problems:
             print(line)
         warning = wave_warning(len(runs), a.kind, a.jobs) if a.kind else None
         if warning:
             print(warning)
         print(f"{len(problems)} problems")
-        return 1 if problems else 0
+        if problems:
+            return 1
+        print(f"preflight proof: {write_preflight(a.list, data, runs, a.runner, info, inputs)}")
+        return 0
+    if argv[:1] == ["verify-preflight"]:
+        vp = argparse.ArgumentParser(prog="isaac_bundle.py verify-preflight",
+                                     description="whether a checked list may run (an array task: its own line too)")
+        vp.add_argument("list")
+        vp.add_argument("--index", type=int, help="an array task's index (non-empty lines, from 0)")
+        vp.add_argument("--line", help="the run line the task took (a file)")
+        a = vp.parse_args(argv[1:])
+        data = Path(a.list).read_bytes()
+        try:
+            runs = load_runs(a.list, text=data.decode())
+        except (OSError, ValueError) as exc:
+            print(f"refusing the run list: {exc}", file=sys.stderr)
+            return 2
+        problems = verify_preflight(a.list, data, runs, os.environ, index=a.index, line=a.line)
+        for line in problems:
+            print(f"preflight: {line}", file=sys.stderr)
+        return 2 if problems else 0
     if argv[:1] == ["collect"]:
         cp = argparse.ArgumentParser(prog="isaac_bundle.py collect",
                                      description="the final state of every task of an array (deploy/slurm/isaac_array.sbatch)")
@@ -1635,6 +1789,10 @@ def main(argv=None) -> int:
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", required=True, help="the run list (JSON lines)")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="run a list without its preflight proof (isaac_bundle.py check): tests, or an exception whose "
+                         "reason --preflight-note records")
+    ap.add_argument("--preflight-note", default=None, help="why --no-preflight (recorded in the summary)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--kind", choices=sorted(KINDS),
                     help="the sessions' kind: its measured GPU memory per session and the slots the shards hold")
@@ -1715,10 +1873,20 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     try:
-        runs = load_runs(a.list)
+        data = Path(a.list).read_bytes()  # read once: the bytes verified are the bytes run
+        runs = load_runs(a.list, text=data.decode())
     except (OSError, ValueError) as exc:
         print(f"refusing the run list: {exc}", file=sys.stderr)
         return 2
+    if a.no_preflight:
+        a.preflight = f"off: {a.preflight_note}" if a.preflight_note else "off"
+    else:
+        problems = verify_preflight(a.list, data, runs, os.environ)
+        if problems:
+            for line in problems:
+                print(f"refusing: {line}", file=sys.stderr)
+            return 2
+        a.preflight = "verified"
     probe = None if a.no_vram else nvidia_smi_probe
     if probe is not None and probe() is None:
         print("refusing: nvidia-smi cannot be read (--no-vram runs by the slots alone)", file=sys.stderr)
@@ -1764,6 +1932,7 @@ def _run_main(a, runs, slots, shards, probe, stop):
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
         gpu_full_give_up_s=60 * a.gpu_full_give_up_min or None,
+        preflight=getattr(a, "preflight", None),
     )
 
 

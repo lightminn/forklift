@@ -72,7 +72,8 @@ def test_the_array_sbatch_runs_its_own_line(tmp_path):
                               for i in range(3)).replace("\n", "\n\n", 1) + "\n")
     env = {k: v for k, v in os.environ.items() if k not in ("CUDA_VISIBLE_DEVICES", "SLURM_JOB_GPUS",
                                                              "SLURM_JOB_ID", "SLURM_JOB_END_TIME")}
-    env.update({"SLURM_ARRAY_TASK_ID": "1", "BUNDLE_PY": sys.executable,
+    env.update({"SLURM_ARRAY_TASK_ID": "1", "BUNDLE_PY": sys.executable, "PREFLIGHT": "off",
+                "PREFLIGHT_WHY": "the array script's own test",
                 "BUNDLE_ARGS": f"--no-vram --no-cleanup --node-ram-min-mib 0 --stagger-s 0 "
                                f"--list-registry-dir {tmp_path / 'reg'} --node-ledger-dir {tmp_path / 'ledger'}"})
     out = tmp_path / "out"
@@ -91,3 +92,17 @@ def test_the_array_sbatch_refuses_a_task_past_the_list(tmp_path):
     p = subprocess.run(["bash", str(ROOT / "deploy/slurm/isaac_array.sbatch"), str(runs), str(tmp_path / "o")],
                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
     assert p.returncode == 2 and "no line 5" in p.stderr
+
+
+def test_the_array_sbatch_needs_the_list_s_proof_or_a_reason(tmp_path):
+    # preflight plan: the task checks the list's proof and its own line before the runner; off needs a reason
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text(json.dumps({"name": "only", "argv": ["true"]}) + "\n")
+    base = {k: v for k, v in os.environ.items() if k not in ("PREFLIGHT", "PREFLIGHT_WHY")}
+    base.update({"SLURM_ARRAY_TASK_ID": "0", "BUNDLE_PY": sys.executable})
+    p = subprocess.run(["bash", str(ROOT / "deploy/slurm/isaac_array.sbatch"), str(runs), str(tmp_path / "o")],
+                       cwd=ROOT, env=base, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 2 and "no preflight proof" in p.stderr
+    p = subprocess.run(["bash", str(ROOT / "deploy/slurm/isaac_array.sbatch"), str(runs), str(tmp_path / "o2")],
+                       cwd=ROOT, env={**base, "PREFLIGHT": "off"}, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 2 and "PREFLIGHT_WHY" in p.stderr

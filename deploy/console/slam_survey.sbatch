@@ -91,7 +91,7 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
-exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
+ARGS=(
   --base-scene "$BASE_SCENE" \
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml \
   --forklift-urdf "$FORKLIFT_URDF" --settings config/isaac_transport_measured.yaml \
@@ -104,7 +104,16 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   $EXTRA_ARGS "${LOC[@]}" \
-  --output "$2/run" > "$2/run.log" 2>&1
+  --output "$2/run")
+if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
+  # an older runner would take --check-args for a Kit argument and start Isaac
+  grep -q -- '"--check-args"' "$ROOT/sim/isaac/run_transport.py" \
+    || { echo "preflight: $ROOT's runner has no --check-args: refused" >&2; exit 2; }
+  echo RUNNER_ARGS
+  printf '%s\n' "${ARGS[@]}"
+  exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" --check-args
+fi
+exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 json() { "$VENV_PY" -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@"; }

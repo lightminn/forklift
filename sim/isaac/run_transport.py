@@ -1098,6 +1098,13 @@ def arguments() -> argparse.Namespace:
         "the observation stop at the goal tolerances (8 mm), no overshoot "
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
+    parser.add_argument(
+        "--check-args",
+        action="store_true",
+        help="Preflight (docs/plans/2026-10-27-ws1-preflight.md): every check a run makes before Isaac -- these "
+        "arguments and their contracts, the settings and the chassis files, the output not there yet, no misspelt "
+        "--flag among the Kit arguments -- then ARGS_OK and exit 0, without importing Isaac or writing anything.",
+    )
     args, unknown = parser.parse_known_args()
     args.session = False  # a session scene file sets it below (plan 2026-10-22-rigid-session-pallets)
     if args.bottom_deck_check != "off":
@@ -9347,12 +9354,14 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
         # among the arguments (an off run would otherwise record a field no earlier record has -- Codex PR 1 review)
         and k != "deterministic_overrides"
+        # preflight plan (2026-10-27): a run never records it (it ends at its check), and the near-field contract
+        # compares every recorded argument with the measurement runs'
+        and k != "check_args"
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
         )
     }
-
 
 
 def return_start_backoff_m_of(args) -> float:
@@ -9369,25 +9378,9 @@ def return_start_backoff_kw(args) -> dict:
     return {"return_start_backoff_m": m} if m > 0.0 else {}
 
 
-def main() -> None:
-    args = arguments()
-    determinism.configure(getattr(args, "deterministic", False))
-    args.output = args.output.resolve()
-    args.output.mkdir(parents=True, exist_ok=False)
-    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
-    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
-    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
-    # output so that the replay gate's view of the output directory does not change.
-    import faulthandler
-    import signal as signal_
-
-    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
-                          all_threads=True)
-    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
-    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
-    import ctypes
-
-    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
+def validate_before_isaac(args: argparse.Namespace) -> dict:
+    """The checks a run makes before Isaac starts (the settings, the chassis files and the curvature they allow), shared
+    by the run and its preflight (--check-args) so that the two never judge apart; the settings."""
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
@@ -9420,6 +9413,53 @@ def main() -> None:
         require(0.9 * geometric_ <= args.odometry_wheel_radius_m <= 1.1 * geometric_,
                 f"--odometry-wheel-radius-m {args.odometry_wheel_radius_m} is not within 10 % of the geometric "
                 f"radius {geometric_}")
+    return settings
+
+
+def check_args_only(args: argparse.Namespace) -> int:
+    """--check-args: the run's own checks before Isaac, nothing written; 0 and ARGS_OK, else 2 and why on stderr."""
+    problems = []
+    output = Path(args.output).resolve()
+    if output.exists():
+        problems.append(f"the output {output} exists (a run refuses it)")
+    # a misspelt option of ours passes parse_known_args() as a Kit argument; Kit's own are --/path=value settings
+    stray = [a for a in args.kit_arguments if a.startswith("--") and not a.startswith("--/")]
+    if stray:
+        problems.append(f"not options of this runner (and not Kit --/settings): {' '.join(stray)}")
+    try:
+        validate_before_isaac(args)
+    except Exception as exc:  # noqa: BLE001 -- reported, as the run would end on it
+        problems.append(f"{type(exc).__name__}: {exc}")
+    for problem in problems:
+        print(f"check-args: {problem}", file=sys.stderr)
+    if problems:
+        return 2
+    print("ARGS_OK")
+    return 0
+
+
+def main() -> None:
+    args = arguments()
+    if args.check_args:
+        sys.exit(check_args_only(args))
+    determinism.configure(getattr(args, "deterministic", False))
+    args.output = args.output.resolve()
+    args.output.mkdir(parents=True, exist_ok=False)
+    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
+    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
+    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
+    # output so that the replay gate's view of the output directory does not change.
+    import faulthandler
+    import signal as signal_
+
+    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
+                          all_threads=True)
+    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
+    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
+    import ctypes
+
+    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
+    settings = validate_before_isaac(args)
     state = {
         "success": False,
         # Overwritten once the scene build starts; a result still at "startup"
