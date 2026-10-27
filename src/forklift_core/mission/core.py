@@ -75,6 +75,7 @@ from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
 from forklift_core.mission.scene_replan import SceneReplan
 from forklift_core.mission import bottom_deck_legs
+from forklift_core.mission import second_near as SECOND_NEAR
 from forklift_core.perception import bottom_deck_evidence, bottom_deck_permit
 from forklift_core.perception.bottom_deck_evidence import BottomDeckTarget
 from forklift_core.perception.pocket_detector import DetectorParams, ExpectedSite
@@ -3923,7 +3924,8 @@ class MissionCore:
     def _near_expected_on(self) -> bool:
         """Plan 2026-10-22 task A: a near capture (pending) under --near-capture-expected on."""
         return bool(getattr(self.options, "near_capture_expected", "off") == "on"
-                    and self.state.get("near_capture", {}).get("status") == "pending")
+                    and (self.state.get("near_capture", {}).get("status") == "pending"
+                         or getattr(self, "_second_capture_active", False)))  # C3: the second near capture too
 
     def _near_waiver_on(self) -> bool:
         """Plan 2026-10-22 task C: --near-capture-lower waive_far_confirmed (needs --near-capture-expected on)."""
@@ -4275,6 +4277,8 @@ class MissionCore:
                         ],
                         near_error=state["perception"]["perception_error"],
                     )
+                    # C3 (plan 2026-10-27 T2): the follower stops at the second capture's gap first (off: no change).
+                    self.second_near_split(t, rear, straight, approach_config)
                     if realign_active():
                         # Plan D8 S4c-3 stage 2: the re-capture accepted ends the
                         # realignment.
@@ -4288,6 +4292,156 @@ class MissionCore:
                 transition("approach", t)
                 if near is not None and state.get("near_capture", {}).get("status") == "done":
                     build_near_tracker(t)  # in the hold the transition began
+
+    # --- C3: the second near capture on the approach straight (docs/plans/2026-10-27-insertion-lateral-drift.md T2) ---
+    def second_near_split(self, t: float, rear, straight, approach_config) -> None:
+        """After the first near capture's straight is installed: with --near-recapture-gap-m the approach follower
+        ends where the estimated fork tip is that far before the entry face (the straight's end has it
+        approach_gap_m before), and the second capture is pending there. A final straight too short for the gap
+        (skipped_short), or a shortened straight the follower does not reach from where the truck stands
+        (skipped_prefix: the whole straight converged, the shorter one need not -- Codex C3 review P2), is
+        recorded and driven whole. Off: nothing."""
+        gap_ = getattr(self.options, "near_recapture_gap_m", None)
+        if gap_ is None:
+            return
+        keep_ = SECOND_NEAR.keep_m(gap_, self.geometry.approach_gap_m)
+        record_ = {"status": "pending", "gap_m": float(gap_), "keep_m": keep_, "split_s": float(t)}
+        prefix_ = self.hooks.final_straight_prefix(straight, keep_)
+        if prefix_ is None:
+            record_["status"] = "skipped_short"
+            self.state["near_capture"]["second"] = record_
+            return
+        record_["split_length_m"] = float(prefix_.length_m)
+        dry_ = self.hooks.bicycle_rollout(prefix_.poses, prefix_.directions, prefix_.curvatures_inv_m,
+                                          approach_config, np.asarray(rear, dtype=float))
+        record_["split_dry_run"] = SECOND_NEAR.dry_record(dry_)
+        if dry_.status != "arrived":
+            record_["status"] = "skipped_prefix"
+            self.state["near_capture"]["second"] = record_
+            return
+        line_start_, line_end_ = SECOND_NEAR.line_of(straight, self.geometry.alignment_straight_m)
+        self.second_near = {"line": (line_start_, line_end_), "config": approach_config}
+        self.trackers["approach"] = RearAxlePathTracker(prefix_.poses, prefix_.directions, prefix_.curvatures_inv_m,
+                                                        approach_config)
+        self.state["near_capture"]["second"] = record_
+
+    def second_near_due(self) -> bool:
+        """The approach follower stands at the second capture's gap (its arrival is that capture, not the insertion)."""
+        return (self.ms.phase == "approach"
+                and (self.state.get("near_capture", {}).get("second") or {}).get("status") == "pending")
+
+    def second_near_capture(self, t: float, rear, step: int) -> SimpleNamespace:
+        """The second near capture at the gap: captured as the first near capture is (the expected site, the run's
+        lower mode, the detector's parameters; the SLAM hold kept, not a far capture), its straight re-drawn with the
+        first one's acceptance (projection box, dry run). Accepted: the approach, the insertion and extraction moved
+        with the pallet and the pickup replace the old ones together. Refused or not seen: the pickup, the docking
+        paths and their followers stay, and the approach resumes on the first line from where the truck stands.
+        Returns the control ``rear`` (and its stamp) the capture took."""
+        state, hooks, options, geometry = self.state, self.hooks, self.options, self.geometry
+        paths, trackers, pocket, obstacle = self.paths, self.trackers, self.pocket, self.obstacle
+        second_ = state["near_capture"]["second"]
+        second_["stop_s"] = float(t)
+        self._second_capture_active = True
+        try:
+            captured_ = self.capture_and_detect(t, rear, step)
+        finally:
+            self._second_capture_active = False
+        now_ = float(hooks.now_s())
+        rear_now = np.asarray(captured_.rear, dtype=float)
+        observation_ = captured_.observation
+        second_.update(capture_attempt=captured_.attempt_number, capture_time_s=now_,
+                       stand_s=now_ - float(t), captured_rear=[float(v) for v in rear_now],
+                       observation={"status": observation_.status, "reason": observation_.reason})
+        old_pickup_ = pocket["planning_pickup"]
+        second_["previous_target"] = list(SECOND_NEAR.site_tuple(old_pickup_))
+        here_ = PlanningPose(float(rear_now[0]), float(rear_now[1]), float(rear_now[2]))
+        adopted_ = None
+        if observation_.status != "valid":
+            status_, reason_ = "no_detection", f"{observation_.status}:{observation_.reason}"
+        else:
+            from forklift_core.planning.pallet_mission import site_poses
+
+            adapter_ = options.adapter
+            target_ = adapter_.estimate_world_pallet_site(
+                adapter_.estimate_pallet_center_m(observation_, geometry.pallet_depth_m),
+                observation_.insertion_yaw_rad, (float(captured_.base[0]), float(captured_.base[1])),
+                float(captured_.yaw))
+            new_pickup_, _ = hooks.planning_target(target_)
+            second_["target"] = list(SECOND_NEAR.site_tuple(new_pickup_))
+            sites_ = site_poses(new_pickup_, geometry)
+            candidate_, offsets_ = hooks.straight_from_pose(
+                here_, sites_["prealign"], sites_["approach"], max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=SECOND_NEAR.BOX_MIN_LENGTH_M)
+            second_["offsets"] = offsets_
+            if candidate_ is None:
+                status_, reason_ = "box_refused", f"near_capture_misaligned:{offsets_}"
+            else:
+                acceptance_ = self.second_near["config"]
+                if options.approach_straight_speed_mps is not None:
+                    acceptance_ = replace(acceptance_, cruise_speed_mps=options.speeds["approach"])
+                dry_ = hooks.bicycle_rollout(candidate_.poses, candidate_.directions, candidate_.curvatures_inv_m,
+                                             acceptance_, rear_now)
+                second_["dry_run"] = SECOND_NEAR.dry_record(dry_)
+                if SECOND_NEAR.accepted(dry_):
+                    # The plan's acceptance passed; the docking straights are then drawn and checked as at an S4b
+                    # correction point (redraw_docking: the approach, its dry-run sweep, the insertion and the loaded
+                    # extraction against the props, the bounds and the corrected grid) -- not carried rigidly, which
+                    # skipped those checks (Codex C3 review round 2 P1).
+                    plans_, docking_, _ = hooks.redraw_docking_traced(
+                        hooks.grid_world(options.scenario), here_, new_pickup_, options.planner_config,
+                        start_rear=rear_now, dry_configs=(acceptance_,), geometry=geometry,
+                        pickup_bounds=options.pickup_bounds, max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                        max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=SECOND_NEAR.BOX_MIN_LENGTH_M,
+                        **hooks.correction_grid(new_pickup_, new_pickup_, rear_now))
+                    second_["docking"] = {"refused": docking_.get("refused"), "offsets": docking_.get("offsets"),
+                                          "dry_runs": [SECOND_NEAR.dry_record(SimpleNamespace(**d_))
+                                                       for d_ in docking_.get("dry_runs", [])]}
+                    if plans_ is None:
+                        status_, reason_ = "docking_refused", f"redraw_docking:{docking_.get('refused')}"
+                    else:
+                        status_, reason_, adopted_ = "adopted", None, (plans_, new_pickup_)
+                else:
+                    status_, reason_ = "dry_run_refused", f"near_capture_misaligned:dry_run:{second_['dry_run']}"
+        second_.setdefault("offsets", None)
+        second_.setdefault("dry_run", None)
+        second_.setdefault("target", None)
+        second_.update(status=status_, reason=reason_)
+        config_ = self.second_near["config"]
+        if adopted_ is not None:
+            plans_, new_pickup_ = adopted_
+            approach_ = plans_["approach"]
+            for name_ in ("insert", "extract"):
+                paths[name_] = plans_[name_]
+                trackers[name_] = RearAxlePathTracker(paths[name_].poses, paths[name_].directions,
+                                                      paths[name_].curvatures_inv_m, trackers[name_].config)
+            pocket["planning_pickup"] = new_pickup_
+            if obstacle is not None:
+                obstacle["pickup_estimate"] = new_pickup_
+                if obstacle["layer"].known_enabled:
+                    self.known_pallet(SECOND_NEAR.site_tuple(new_pickup_),
+                                      obstacle["layer"].known_config.get("r_fix_pickup_m", 0.05), "second_near")
+        else:
+            line_start_, line_end_ = self.second_near["line"]
+            approach_, resume_ = hooks.straight_from_pose(
+                here_, PlanningPose(*line_start_), PlanningPose(*line_end_), max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=0.0)
+            second_["resume_offsets"] = resume_
+            hooks.require(approach_ is not None, f"near_capture_second_resume:{resume_}")
+        paths["approach"] = approach_
+        trackers["approach"] = RearAxlePathTracker(approach_.poses, approach_.directions, approach_.curvatures_inv_m,
+                                                   config_)
+        trackers["approach"].restart_speed_slew(0.0)  # from the stop
+        for name_ in ("approach", "insert", "extract"):
+            state["paths"][name_] = hooks.path_record(paths[name_])
+        hooks.write_paths()
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()
+            leg_, dir_ = trackers["approach"].leg_ahead()
+            obstacle["layer"].refresh(now_, obstacle["applied"], obstacle["version"],
+                                      current_pose=tuple(float(v) for v in rear_now), path_ahead=leg_,
+                                      loaded=hooks.loaded(), direction=dir_)
+        self.ms.phase_started = t
+        return SimpleNamespace(rear=rear_now, rear_stamp=captured_.rear_stamp)
 
     def _reproject(self, t: float, applied_now, rear, loaded) -> None:
         """The grid re-projected with a new correction (the permission tick's statements)."""
@@ -4582,8 +4736,10 @@ class MissionCore:
         )
         if slam is not None:
             now_s = hooks.now_s()
+            # C3 (plan 2026-10-27 T2): the second near capture keeps the hold as the first does.
             near_pending = (
                 state.get("near_capture", {}).get("status") == "pending"
+                or getattr(self, "_second_capture_active", False)
             )
             if slam["tracker"].mode == "holding" and not near_pending:
                 # An observe leg ends held (below). Anything but the
@@ -4657,7 +4813,8 @@ class MissionCore:
         # the same call order, and stays as the reference; the mission reads the new recognition's observation.
         far_hook = getattr(hooks, "far_recognition", None)
         far_capture = (far_hook is not None and state.get("near_capture", {}).get("status") != "pending"
-                       and not (near is not None and near.get("retry_stand")))
+                       and not (near is not None and near.get("retry_stand"))
+                       and not getattr(self, "_second_capture_active", False))  # C3: a near capture, not a far one
         waive_kw = {}
         if self._bottom_deck_lower_waived():
             # Plan 2026-10-21 task C: the side faces proved the bottom deck of the pallet this near capture looks at

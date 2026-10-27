@@ -1299,6 +1299,31 @@ def test_the_plain_near_lower_waive_needs_the_expected_site_too() -> None:
     assert "--near-capture-lower waive needs --near-capture-expected on" in result.stderr
 
 
+@pytest.mark.parametrize("extra, message", [
+    ([], "--near-recapture-gap-m needs --near-capture-expected on"),
+    (["--near-recapture-gap-m", "-1"], "--near-recapture-gap-m must be a positive distance"),
+    (["--near-capture-expected", "on", "--use-perception", "--planning-target", "perception", "--live"],
+     "--near-recapture-gap-m is a batch run"),
+    (["--near-capture-expected", "on", "--use-perception", "--planning-target", "perception", "--near-tracking"],
+     "--near-recapture-gap-m is not defined with --near-tracking or --pocket-check"),
+    (["--near-capture-expected", "on", "--use-perception", "--planning-target", "perception",
+      "--bottom-deck-check", "structure"], "--near-recapture-gap-m is not defined with --bottom-deck-check"),
+])
+def test_the_second_near_capture_is_a_batch_option_of_the_near_capture(extra, message) -> None:
+    """C3 (plan 2026-10-27 insertion lateral drift, T2): the second near capture follows the expected-site near
+    capture, in a batch run without near tracking, the pocket check or the bottom-deck check."""
+    gap = [] if "--near-recapture-gap-m" in extra else ["--near-recapture-gap-m", "1.0"]
+    result = subprocess.run([*_cli_base(), *gap, *extra], capture_output=True, text=True, check=False)
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+def test_the_second_near_capture_is_off_by_default() -> None:
+    source = SCRIPT.read_text()
+    start = source.index('"--near-recapture-gap-m"')
+    assert "default=None" in source[start:source.index("help=", start)]
+
+
 def test_the_bottom_deck_check_takes_structure_and_keeps_off_as_the_default() -> None:
     """Plan 2026-10-27 §2.1 g: off / on / structure; the default stays off (every earlier record)."""
     source = SCRIPT.read_text()

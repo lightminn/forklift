@@ -398,6 +398,17 @@ def arguments() -> argparse.Namespace:
         "Needs --near-capture-expected on.",
     )
     parser.add_argument(
+        "--near-recapture-gap-m",
+        type=float,
+        default=None,
+        help="C3 (docs/plans/2026-10-27-insertion-lateral-drift.md, T2): after the near capture's straight is adopted the "
+        "approach stops where the estimated fork tip is this far before the entry face, captures the pallet again as "
+        "the near capture does (expected site, --near-capture-lower, the SLAM hold kept) and re-draws with its "
+        "acceptance (5 cm projection box, 6 mm / 0.015 rad dry run); accepted, the approach, insertion, extraction and "
+        "pickup move together, else the first line is resumed (near_capture.second). A batch run without near "
+        "tracking, the pocket check or the bottom-deck check; needs --near-capture-expected on. Unset: as before.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -1224,6 +1235,20 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
         parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
+    if args.near_recapture_gap_m is not None:
+        # C3 (plan 2026-10-27 T2): the second near capture is defined for a batch run of the near capture alone.
+        if not (math.isfinite(args.near_recapture_gap_m) and args.near_recapture_gap_m > 0.0):
+            parser.error("--near-recapture-gap-m must be a positive distance")
+        if args.near_capture_expected != "on":
+            parser.error("--near-recapture-gap-m needs --near-capture-expected on")
+        if args.live:
+            parser.error("--near-recapture-gap-m is a batch run (the live capture boundary is out of its scope)")
+        if args.near_tracking or args.pocket_check:
+            parser.error("--near-recapture-gap-m is not defined with --near-tracking or --pocket-check")
+        if args.bottom_deck_check != "off":
+            parser.error("--near-recapture-gap-m is not defined with --bottom-deck-check")
+        if args.repeat_captures:
+            parser.error("--near-recapture-gap-m is not defined with --repeat-captures")
     # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
     args.pallet_prior_loaded = None
     if args.use_perception:
@@ -5729,6 +5754,7 @@ def drive(S, isaac) -> None:
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
+                                near_recapture_gap_m=getattr(args, "near_recapture_gap_m", None),  # C3 (2026-10-27 T2)
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
@@ -8475,6 +8501,13 @@ def drive(S, isaac) -> None:
                                         else:
                                             # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
                                             core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                            elif core.second_near_due():
+                                # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): the approach stood at the
+                                # second near capture's gap -- captured and re-drawn there; the approach goes on.
+                                second_ = core.second_near_capture(t, rear, step)
+                                rear = second_.rear
+                                if second_.rear_stamp is not None:
+                                    rear_stamp = second_.rear_stamp
                             else:
                                 # M-a1 slice 2: every other arrival is the core's.
                                 arrival_ = core.arrive(t, tracking)
