@@ -150,3 +150,21 @@ def test_the_competitor_ratio_is_the_lattice_one_and_a_wandering_top_is_refused(
     walked = G.Candidate((1.4, 1.0, 0.0), 0.99, 0.95, True, (1.0, 1.0, 0.0), 0.80)
     d = G.decide(G.GlobalMatch("ok", (walked,)), e_min=0.8, r_max=0.9)
     assert not d.confirmed and d.reason == "refine_moved"
+
+
+def test_refinement_keeps_the_lattice_pose_and_score_through_the_real_path():
+    # Codex B4a round 3 P2: refine() must carry the lattice fields to decide(), which reads the ratio and the move
+    grid = _grid(*ROOM)
+    truth = (2.3, 1.7, 0.6)
+    pts = _points(grid, truth)
+    lattice = G.global_match(grid, pts)
+    refined = G.refine(grid, lattice, pts)
+    for a, b in zip(lattice.candidates, refined.candidates, strict=True):
+        assert b.lattice_pose == a.pose and b.lattice_score == a.score
+    # a candidate placed 0.25 m off the truth: the ICP pulls it home, and a 0.2 m tolerance calls that a move
+    off = G.Candidate((truth[0] + 0.25, truth[1], truth[2]), 0.5, math.nan)
+    moved = G.refine(grid, G.GlobalMatch("ok", (off,)), pts)
+    top = moved.candidates[0]
+    assert top.lattice_pose == off.pose and _close(top.pose, truth, m=0.05)
+    d = G.decide(moved, e_min=0.0, r_max=1.0, sep_m=0.2)
+    assert not d.confirmed and d.reason == "refine_moved"

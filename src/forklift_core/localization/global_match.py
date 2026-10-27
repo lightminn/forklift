@@ -23,7 +23,7 @@ Poses are the laser's in the map frame; the caller converts to and from the base
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -284,8 +284,7 @@ def endpoint_fraction(grid: Grid, pts: np.ndarray, pose, dilate_cells: int = 1) 
 
 
 def _with_fraction(grid: Grid, pts: np.ndarray, cand: Candidate, cfg: MatchConfig) -> Candidate:
-    return Candidate(cand.pose, cand.score, endpoint_fraction(grid, pts, cand.pose, cfg.endpoint_dilate_cells),
-                     cand.refined)
+    return replace(cand, endpoint_fraction=endpoint_fraction(grid, pts, cand.pose, cfg.endpoint_dilate_cells))
 
 
 def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig | None = None) -> GlobalMatch:

@@ -39,6 +39,21 @@ def world_source_mismatches(survey_sources: dict, run_sources: dict) -> list:
             if (survey_sources or {}).get(name) is None or survey_sources.get(name) != (run_sources or {}).get(name)]
 
 
+def capture_mismatches(manifest: dict, *, seed, arguments: dict | None, input_sha256: dict,
+                       scene_sha256: dict | None, run_sources: dict | None) -> list:
+    """What of a capture run differs from the survey's world: ``slam_map.run_mismatches`` with the SLAM noise seed
+    taken as the survey's -- the capture draws its own noise per scan (``noise_rng``) and runs without the SLAM link,
+    which the runner requires for --slam-noise-seed (Codex B4a round 3 P2) -- plus the world-building sources. The
+    factory layout's seed, the noise model and every other argument are compared as they are."""
+    from forklift_core.localization import slam_map  # noqa: PLC0415
+
+    survey_arguments = ((manifest.get("run") or {}).get("arguments") or {})
+    args = {**(arguments or {}), "slam_noise_seed": survey_arguments.get("slam_noise_seed")}
+    return (slam_map.run_mismatches(manifest, seed=seed, input_sha256=input_sha256, scene_sha256=scene_sha256,
+                                    arguments=args)
+            + world_source_mismatches((manifest.get("run") or {}).get("source_sha256"), run_sources))
+
+
 def shared_sent_ranges(ranges, noise, range_min_m: float, range_max_m: float) -> np.ndarray:
     """The ranges the live runner sends SLAM from the shared LiDAR: the noise on the finite REP-117 ranges only, then
     clipped to the sensor's limits (run_transport's shared_scan branch, which calls this)."""
@@ -92,6 +107,7 @@ class Engine:
     range_max_m: float
     settle_z_m: float  # the truck's base height after the start settle
     laser_xyz_m: tuple  # the mount on base_link
+    steps_per_scan: int = 12  # physics steps between scans: 120 Hz / the LiDAR's 10 Hz, as live
 
 
 def capture(engine: Engine, poses: dict) -> dict:
@@ -100,7 +116,7 @@ def capture(engine: Engine, poses: dict) -> dict:
     rows = poses["poses"]
     n, beams = len(rows), None
     out = {"id": [], "stratum": [], "base_target": [], "base_truth": [], "laser_truth": [], "valid": [], "reason": [],
-           "z_m": [], "roll_rad": [], "pitch_rad": [], "raw": [], "sent": [], "sent_sha256": []}
+           "z_m": [], "roll_rad": [], "pitch_rad": [], "raw": [], "sent": [], "sent_sha256": [], "scan_step": []}
     for k, row in enumerate(rows):
         x, y, yaw = (float(v) for v in row["base_world"])
         engine.teleport(np.array([x, y, engine.settle_z_m]), quat_from_yaw(yaw))
@@ -108,11 +124,16 @@ def capture(engine: Engine, poses: dict) -> dict:
             engine.step()
         pos0, q0 = engine.pose()
         yaw0, roll0, pitch0 = yaw_roll_pitch(q0)
-        raws, sents, hashes = [], [], []
+        raws, sents, hashes, steps, poses_ = [], [], [], [], []
+        step_count = SETTLE_STEPS
         for s in range(SCANS):
             if s:
-                engine.step()
+                for _ in range(engine.steps_per_scan):
+                    engine.step()
+                step_count += engine.steps_per_scan
             pos, q = engine.pose()
+            poses_.append((np.asarray(pos, float), yaw_roll_pitch(q)))
+            steps.append(step_count)
             distances, hits = engine.cast(pos, q)
             ranges = np.asarray(engine.ranges_from_hits(distances, hits), dtype=float)
             noise = engine.draw_noise(noise_rng(split, map_index, k, s), np.asarray(distances, dtype=float))
@@ -120,17 +141,18 @@ def capture(engine: Engine, poses: dict) -> dict:
             raws.append(ranges.astype(np.float32))
             sents.append(sent)
             hashes.append(hashlib.sha256(sent.tobytes()).hexdigest())
-        pos1, q1 = engine.pose()
-        yaw1, _, _ = yaw_roll_pitch(q1)
         reason = None
         if math.hypot(pos0[0] - x, pos0[1] - y) > POSITION_TOL_M or abs(_wrap(yaw0 - yaw)) > YAW_TOL_RAD:
             reason = "not_at_target"
-        elif abs(pos0[2] - engine.settle_z_m) > HEIGHT_TOL_M:
-            reason = "height"
-        elif max(abs(roll0), abs(pitch0)) > TILT_TOL_RAD:
-            reason = "tilt"
-        elif math.hypot(pos1[0] - pos0[0], pos1[1] - pos0[1]) > STILL_M or abs(_wrap(yaw1 - yaw0)) > STILL_RAD:
-            reason = "moved"
+        for p_, (yaw_, roll_, pitch_) in poses_:  # every scan, not only the first (Codex B4a round 3 P3)
+            if reason is not None:
+                break
+            if abs(p_[2] - engine.settle_z_m) > HEIGHT_TOL_M:
+                reason = "height"
+            elif max(abs(roll_), abs(pitch_)) > TILT_TOL_RAD:
+                reason = "tilt"
+            elif math.hypot(p_[0] - pos0[0], p_[1] - pos0[1]) > STILL_M or abs(_wrap(yaw_ - yaw0)) > STILL_RAD:
+                reason = "moved"
         lx, ly, _ = engine.laser_xyz_m
         c, s_ = math.cos(yaw0), math.sin(yaw0)
         beams = beams or len(sents[0])
@@ -147,11 +169,12 @@ def capture(engine: Engine, poses: dict) -> dict:
         out["raw"].append(np.stack(raws))
         out["sent"].append(np.stack(sents))
         out["sent_sha256"].append(hashes)
+        out["scan_step"].append(steps)
     arrays = {k: np.asarray(v) for k, v in out.items()}
     if n == 0:
         arrays["raw"] = arrays["sent"] = np.zeros((0, SCANS, 0), np.float32)
     return arrays
 
 
-__all__ = ["FORMAT", "SCANS", "WORLD_SOURCES", "Engine", "capture", "load_poses", "noise_rng", "quat_from_yaw",
+__all__ = ["FORMAT", "SCANS", "WORLD_SOURCES", "Engine", "capture", "capture_mismatches", "load_poses", "noise_rng", "quat_from_yaw",
            "shared_sent_ranges", "world_source_mismatches", "yaw_roll_pitch"]

@@ -112,3 +112,16 @@ def test_a_blocked_stratum_does_not_end_the_fill_while_another_has_room():
                           max_attempts=200_000)
     strata = {k: sum(p.stratum == k for p in out) for k in "ABC"}
     assert strata["A"] > 2 and strata["C"] > 0
+
+
+def test_the_draw_reports_why_it_stopped():
+    g = _grid()
+    rep = {}
+    S.sample_starts(g, count=3, seed=1, report=rep)
+    assert rep["stop_reason"] == "count" and rep["attempts"] >= 3
+    rep = {}
+    S.sample_starts(g, count=10_000, seed=1, fill=True, exhaust_after=300, report=rep)
+    assert rep["stop_reason"] == "exhausted" and rep["exhausted"] == ["A", "B", "C"]
+    rep = {}
+    S.sample_starts(g, count=10_000, seed=1, fill=True, max_attempts=50, report=rep)
+    assert rep["stop_reason"] == "cap"

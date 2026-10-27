@@ -2582,7 +2582,7 @@ SLAM_LIVE_REPLY_DEADLINE_S = 1.0  # real-time plan D9a: wall seconds a sent scan
 SLAM_LIVE_QUEUE_MAX = 20  # and how many scans may wait behind it (2 s of 10 Hz scans)
 
 
-def run_scan_capture(args, state: dict, world, robot, layer, settle_base) -> None:
+def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, settle_base) -> None:
     """Survey plan B4a: the stationary scans at the listed poses (sim/isaac/scan_capture.py), after the inputs were
     checked against the survey bundle's manifest; the run then ends without a mission."""
     import planar_lidar
@@ -2593,14 +2593,13 @@ def run_scan_capture(args, state: dict, world, robot, layer, settle_base) -> Non
     from forklift_core.sensors.lidar import PlanarScanPattern
 
     bundle = slam_map_module.load_bundle(args.scan_capture_bundle)
-    mismatches = slam_map_module.run_mismatches(
-        bundle.manifest, seed=args.seed, scene_sha256=state.get("scene_sha256"), arguments=state.get("arguments"),
+    mismatches = scan_capture.capture_mismatches(
+        bundle.manifest, seed=args.seed, arguments=state.get("arguments"), scene_sha256=state.get("scene_sha256"),
         input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
                               if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
                               else None)
-                      for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)})
-    mismatches += scan_capture.world_source_mismatches(bundle.manifest.get("run", {}).get("source_sha256"),
-                                                       state.get("source_sha256"))
+                      for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)},
+        run_sources=state.get("source_sha256"))
     if mismatches:
         raise SystemExit("scan capture: " + "; ".join(mismatches))
     lidar_config = yaml.safe_load(args.lidar.read_text())
@@ -2635,7 +2634,8 @@ def run_scan_capture(args, state: dict, world, robot, layer, settle_base) -> Non
     engine = scan_capture.Engine(
         teleport=teleport, step=lambda: world.step(render=False), pose=robot.get_world_pose, cast=cast,
         draw_noise=draw_noise, ranges_from_hits=pattern.ranges_from_hits, range_min_m=pattern.range_min_m,
-        range_max_m=pattern.range_max_m, settle_z_m=float(settle_base[2]), laser_xyz_m=tuple(mount.xyz_m))
+        range_max_m=pattern.range_max_m, settle_z_m=float(settle_base[2]), laser_xyz_m=tuple(mount.xyz_m),
+        steps_per_scan=int(round(float(settings["physics_hz"]) / int(lidar_config["rate_hz"]))))
     arrays = scan_capture.capture(engine, poses)
     meta = {"format": scan_capture.FORMAT, "map_id": bundle.map_id, "split": poses["split"],
             "map_index": poses["map_index"], "poses_sha256": slam_map_module.file_sha256(args.scan_capture_poses),
@@ -3876,7 +3876,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
         obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
         if args.scan_capture_poses is not None:
-            run_scan_capture(args, state, world, robot, obstacle["layer"], prime_base)
+            run_scan_capture(args, state, settings, world, robot, obstacle["layer"], prime_base)
             return
         obstacle["last_stamp"] = 0.0
         obstacle["applied"] = (0.0, 0.0, 0.0)

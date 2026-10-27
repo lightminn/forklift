@@ -78,18 +78,19 @@ def cmd_poses(a) -> int:
     world_from_map = invert(map_from_world)
     keep = keep_out_rectangles(a.keep_out) if a.keep_out else []
     taken = taken_in_map(a.taken, map_from_world)
+    report: dict = {}
     starts = S.sample_starts(grid, count=a.count if not a.fill else 1_000_000, seed=a.seed, keep_out=keep,
-                             taken=taken, sep_m=a.sep_m, max_attempts=a.max_attempts, fill=a.fill)
+                             taken=taken, sep_m=a.sep_m, max_attempts=a.max_attempts, fill=a.fill, report=report)
     record = {"format": "scan_capture_poses/1", "split": SPLITS[a.split], "map_index": a.map_index,
               "map_id": map_id, "map_from_world": list(map_from_world), "bundle": str(a.bundle),
               "keep_out": None if not a.keep_out else {"path": str(a.keep_out), "sha256": file_sha256(a.keep_out)},
               "taken": [{"path": str(f), "sha256": file_sha256(Path(f))} for f in a.taken],
-              "seed": a.seed, "sep_m": a.sep_m, "fill": a.fill,
+              "seed": a.seed, "sep_m": a.sep_m, "fill": a.fill, "draw": report,
               "poses": [{"id": f"{a.split}{a.map_index}_{p.index:03d}", "stratum": p.stratum, "base": list(p.base),
                          "base_world": list(compose(world_from_map, p.base))} for p in starts]}
     a.out.write_text(json.dumps(record, indent=1) + "\n")
     strata = {k: sum(p.stratum == k for p in starts) for k in "ABC"}
-    print(json.dumps({"out": str(a.out), "poses": len(starts), "strata": strata}))
+    print(json.dumps({"out": str(a.out), "poses": len(starts), "strata": strata, "stop": report["stop_reason"]}))
     return 0
 
 

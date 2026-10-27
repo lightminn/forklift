@@ -73,7 +73,7 @@ def test_a_settled_pose_records_its_truth_and_five_scans():
 def test_poses_the_truck_did_not_settle_on_are_invalid_not_replaced():
     assert C.capture(_engine(FakeEngine(drift=(0.03, 0.0))), POSES)["reason"].tolist() == ["not_at_target"]
     assert C.capture(_engine(FakeEngine(tilt=0.02)), POSES)["reason"].tolist() == ["tilt"]
-    assert C.capture(_engine(FakeEngine(creep=0.001)), POSES)["reason"].tolist() == ["moved"]
+    assert C.capture(_engine(FakeEngine(creep=0.0002)), POSES)["reason"].tolist() == ["moved"]  # 12 steps a scan
     assert C.capture(_engine(FakeEngine(z=0.04)), POSES)["reason"].tolist() == ["height"]
 
 
@@ -84,3 +84,24 @@ def test_the_world_building_sources_must_match_the_surveys():
     assert C.world_source_mismatches(survey, changed) == ["forklift_core/planning/factory_layout.py differs from the survey's"]
     missing = {k: v for k, v in survey.items() if k != "sim/isaac/scene.py"}
     assert C.world_source_mismatches(missing, survey) == ["sim/isaac/scene.py differs from the survey's"]
+
+
+def test_scans_are_a_lidar_period_apart_as_live():
+    # Codex B4a round 3 P3: five scans of a 10 Hz LiDAR span 0.4 s (48 steps at 120 Hz), not 4 physics steps
+    out = C.capture(_engine(FakeEngine()), POSES)
+    assert out["scan_step"].tolist() == [[2, 14, 26, 38, 50]]
+
+
+def test_the_capture_takes_the_surveys_noise_seed_and_compares_the_rest():
+    from forklift_core.localization import slam_map as sm
+    args = {"layout": "factory", "prism_colliders": True, "min_obstacle_height_m": 1.15, "slam_noise_seed": 0,
+            "slam_noise_spec": None}
+    manifest = {"seed": 0, "inputs": {n: {"sha256": "h_" + n} for n in sm.SHARED_INPUTS},
+                "run": {"arguments": args, "source_sha256": {n: "s" for n in C.WORLD_SOURCES}}}
+    same = {n: "h_" + n for n in sm.SHARED_INPUTS}
+    run_args = {**args, "slam_noise_seed": None}  # a capture runs without --slam-noise-seed
+    kw = dict(input_sha256=same, scene_sha256=None, run_sources={n: "s" for n in C.WORLD_SOURCES})
+    assert C.capture_mismatches(manifest, seed=0, arguments=run_args, **kw) == []
+    assert C.capture_mismatches(manifest, seed=1, arguments=run_args, **kw) == ["seed 1 is not the survey's 0"]
+    assert C.capture_mismatches(manifest, seed=0, arguments={**run_args, "slam_noise_spec": "a2"}, **kw) == [
+        "argument slam_noise_spec differs from the survey's"]
