@@ -124,7 +124,7 @@ def cmd_front(a) -> int:
     prior, params = detector_setup(a.shape)
     noise_sha = hashlib.sha256(TEAM_NOISE.read_bytes()).hexdigest()
     conditions = [("clean", None)] + [(n, s) for s in NOISE_SEEDS for n in ("team_frame_640", "iid_k")]
-    for x in DISTANCES_M:
+    for x in a.distances:
         for yaw in YAWS_RAD:
             for noise, seed in conditions:
                 scene = front_scene(a.shape, a.structure, x, yaw, noise, seed)
@@ -133,6 +133,50 @@ def cmd_front(a) -> int:
                 for name, lower in (("gate", True), ("waive", False)):
                     row[name] = selected_terms(scene, prior, params, lower)
                 print(json.dumps(row), flush=True)
+    return 0
+
+
+POSITIVES = ("pallet", "grounded")
+
+
+def front_table(rows) -> dict:
+    """Per (shape, noise, distance, structure) over the ``waive`` mode: valid count, cells, the valid ratio range, and
+    the per-cell margin -- how far the structure's ratio lies outside the span of the positives' ratios in the same
+    cell (distance, yaw, noise seed), negative when inside; cells where a positive or the structure is not valid are
+    not counted. ``gate_valid`` is the same count with the lower band gating."""
+    cells = {}
+    for r in rows:
+        cells.setdefault((r["shape"], r["noise"], r["x_m"], r["yaw_rad"], r["noise_seed"]), {})[r["structure"]] = r
+    out = {}
+    for r in rows:
+        key = (r["shape"], r["noise"], r["x_m"], r["structure"])
+        o = out.setdefault(key, {"cells": 0, "valid": 0, "gate_valid": 0, "ratios": [], "margins": []})
+        o["cells"] += 1
+        o["gate_valid"] += r["gate"]["status"] == "valid"
+        if r["waive"]["status"] != "valid":
+            continue
+        o["valid"] += 1
+        v = r["waive"]["upper_over_supports"]
+        o["ratios"].append(v)
+        if r["structure"] in POSITIVES:
+            continue
+        same = cells[(r["shape"], r["noise"], r["x_m"], r["yaw_rad"], r["noise_seed"])]
+        pos = [same[p]["waive"]["upper_over_supports"] for p in POSITIVES
+               if p in same and same[p]["waive"]["status"] == "valid"]
+        if pos:
+            o["margins"].append(max(min(pos) - v, v - max(pos)))
+    return {k: {"cells": o["cells"], "valid": o["valid"], "gate_valid": o["gate_valid"],
+                "ratio": [min(o["ratios"]), max(o["ratios"])] if o["ratios"] else None,
+                "min_margin": min(o["margins"]) if o["margins"] else None, "margin_cells": len(o["margins"])}
+            for k, o in sorted(out.items())}
+
+
+def cmd_front_table(a) -> int:
+    rows = [json.loads(line) for path in a.outputs for line in path.read_text().splitlines() if line.startswith("{")]
+    mismatches = sum(not r[m]["replica_matches"] for r in rows for m in ("gate", "waive"))
+    print(json.dumps({"rows": len(rows), "replica_mismatches": mismatches}))
+    for (shape, noise, x, structure), v in front_table(rows).items():
+        print(json.dumps({"shape": shape, "noise": noise, "x_m": x, "structure": structure, **v}))
     return 0
 
 
@@ -208,6 +252,11 @@ def main(argv=None) -> int:
     f = sub.add_parser("front")
     f.add_argument("--shape", choices=("epal6", "t11_06"), required=True)
     f.add_argument("--structure", choices=FRONT_STRUCTURES, required=True)
+    f.add_argument("--distances", type=float, nargs="+", default=DISTANCES_M,
+                   help="camera to pallet centre, horizontal (m); the team table's single frames meet the pose bounds "
+                        "only within 1.5 m (docs/validation/2026-10-17-recognition-measured-noise.md)")
+    t = sub.add_parser("front-table")
+    t.add_argument("outputs", type=Path, nargs="+", help="files of `front` JSON lines")
     s = sub.add_parser("side")
     s.add_argument("--group", choices=("epal6:x", "t11_06:x", "t11_06:y"), required=True)
     s.add_argument("--structure", required=True)
@@ -216,7 +265,7 @@ def main(argv=None) -> int:
     m.add_argument("--evaluation", type=Path, required=True)
     m.add_argument("--catalogue", choices=("main", "bottomless"), required=True)
     a = ap.parse_args(argv)
-    return {"front": cmd_front, "side": cmd_side, "summarise": cmd_summarise}[a.cmd](a)
+    return {"front": cmd_front, "front-table": cmd_front_table, "side": cmd_side, "summarise": cmd_summarise}[a.cmd](a)
 
 
 if __name__ == "__main__":
