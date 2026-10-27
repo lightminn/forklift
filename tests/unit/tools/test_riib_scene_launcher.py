@@ -133,6 +133,29 @@ def test_the_rack_aisle_keeps_its_uprights_wider_by_default_and_the_other_scenes
     assert contains(args_of(dry_run(tmp_path, scene="trailer")), ["--lidar-keepout-m", "0"])
 
 
+def test_the_trailer_reverses_out_by_default_and_the_other_scenes_do_not(tmp_path):
+    # PR #91's exit prefix, which the trailer needs (rsb 2026-10-27: 0/10 without it; rcf with it 3/5, 4/5)
+    out = dry_run(tmp_path, scene="trailer")
+    assert contains(args_of(out), ["--exit-clearance-m", "0.30"])
+    assert " EXIT_CLEARANCE=0.30 " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert "--exit-clearance-m" not in args_of(dry_run(tmp_path, scene="line_2"))
+    assert " EXIT_CLEARANCE=off " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert "--exit-clearance-m" not in args_of(dry_run(tmp_path, scene="aisle"))
+
+
+def test_the_exit_clearance_can_be_set_or_turned_off(tmp_path):
+    assert contains(args_of(dry_run(tmp_path, scene="trailer", EXIT_CLEARANCE="0.40")), ["--exit-clearance-m", "0.40"])
+    assert "--exit-clearance-m" not in args_of(dry_run(tmp_path, scene="trailer", EXIT_CLEARANCE="off"))
+    assert " EXIT_CLEARANCE=off " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, EXIT_CLEARANCE="0.30")), ["--exit-clearance-m", "0.30"])
+
+
+@pytest.mark.parametrize("extra", ["--exit-clearance-m 0.3", "--seed 1 --exit-clearance-m=0.3"])
+def test_the_exit_clearance_is_not_given_twice(tmp_path, extra):
+    out = dry_run(tmp_path, scene="trailer", EXTRA_ARGS=extra)
+    assert out.returncode != 0 and "EXIT_CLEARANCE" in out.stdout
+
+
 def test_the_obstacle_layer_keeps_the_constant_noise_and_draws_the_a2_spec_on_request(tmp_path):
     # P3a: const by default (user decision 2026-10-24 -- the A2 scan also feeds SLAM and the scan docking), a2 on request
     out = dry_run(tmp_path, ENCODER_MODEL="reported")
@@ -163,7 +186,8 @@ def test_the_odometry_is_the_joint_angle_model_by_default_with_its_age_table(tmp
 @pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
-                                 {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
+                                 {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"}, {"EXIT_CLEARANCE": "wide"},
+                                 {"EXIT_CLEARANCE": "-0.3"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"},
                                  {"NEAR_RECAPTURE_GAP": "-1"}, {"NEAR_RECAPTURE_GAP": "x"},
                                  {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"}])

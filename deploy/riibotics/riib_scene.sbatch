@@ -23,6 +23,11 @@
 #                  aisle's rack copy only (aisle_rack, release off, within the same batches: transports passed 0/9 at 0
 #                  against 7/14 at 0.15, docs/validation/2026-10-24-start-band-release.md); every other scene 0 (trailer:
 #                  no gain shown). KEEPOUT=<metres> overrides it for any scene
+#   EXIT_CLEARANCE=off  --exit-clearance-m: the loaded transport first reverses straight until the pallet clears the
+#                  scene's walls by this much (the exit prefix, PR #91, docs/plans/2026-10-22-riibotics-trailer-exit.md).
+#                  0.30 by default for the trailer only -- without it the truck stalls inside the trailer right after
+#                  the extract (rsb 2026-10-27: 0/10; rcf with it: 3/5 and 4/5); every other scene off.
+#                  EXIT_CLEARANCE=<metres> or off overrides it for any scene; EXTRA_ARGS may not set it as well
 #   NOISE=const    the obstacle layer config/obstacle_layer_single.yaml (sigma 0.02, cut 0.06 at every range). NOISE=a2
 #                  runs config/obstacle_layer_single_a2.yaml: LiDAR range noise and the grid's range bound from Slamtec's A2
 #                  spec rows (P3a, same plan). It also feeds SLAM and the scan docking (shared scan), whose acceptance under
@@ -61,7 +66,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [EXIT_CLEARANCE=off] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -102,6 +107,16 @@ esac
 [ "$NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
 KEEPOUT=${KEEPOUT:-0}
 [[ "$KEEPOUT" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "KEEPOUT must be a non-negative number of metres"; exit 2; }
+[ "$NAME" = trailer ] && EXIT_CLEARANCE=${EXIT_CLEARANCE:-0.30}
+EXIT_CLEARANCE=${EXIT_CLEARANCE:-off}
+[[ "$EXIT_CLEARANCE" = off || "$EXIT_CLEARANCE" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+  echo "EXIT_CLEARANCE must be off or a non-negative number of metres"; exit 2; }
+case " ${EXTRA_ARGS:-} " in
+  *" --exit-clearance-m "*|*" --exit-clearance-m="*)
+    echo "EXTRA_ARGS sets --exit-clearance-m: give it as EXIT_CLEARANCE=<metres|off> (the launcher records it)"; exit 2;;
+esac
+EXIT_ARGS=()
+[ "$EXIT_CLEARANCE" != off ] && EXIT_ARGS=(--exit-clearance-m "$EXIT_CLEARANCE")
 SCENE_FILE=$SCENE_DIR/$NAME.json
 [ -f "$SCENE_FILE" ] || { echo "no scene file $SCENE_FILE (tools/riibotics_isaac_scenes.py --slot-markers / --rack write the _m / _rack copies)"; exit 2; }
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2
@@ -112,9 +127,9 @@ fi
 mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
-echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" \
+echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT exit_clearance $EXIT_CLEARANCE noise $NOISE start_band $START_BAND $(date -Is)"
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s EXIT_CLEARANCE=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$EXIT_CLEARANCE" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
@@ -131,7 +146,7 @@ COMMON=(--base-scene "$BASE_SCENE"
   --delivery-straight-m 1.5 --alignment-straight-m 2.1 --withdrawal-m 0.55 --insertion-reserve-m 0.016
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "${SEED:-0}"
-  --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
+  --lidar-keepout-m "$KEEPOUT" "${EXIT_ARGS[@]}" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
   --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
   --video --extra-views quarter,chase --quarter-eye="$QE" --quarter-target="$QT")
 if [ "$MODE" = truth ]; then
