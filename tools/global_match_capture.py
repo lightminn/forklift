@@ -5,6 +5,7 @@ B4a), from a survey bundle's grid and the world's own low obstacles; never reads
         --seed 1027 --sep-m 1.5 --count 40 --out dev_line_m.json
     python tools/global_match_capture.py poses --bundle HALL --keep-out RESULT --split val --map-index 2 --seed 1028 \\
         --sep-m 3.0 --fill --taken dev_line_m.json --taken dev_random_m.json --out val_hall.json
+    python tools/global_match_capture.py command --bundle BUNDLE --poses P.json --out-npz CAP.npz --output RUN
 
 Starts are drawn in the bundle's map frame and written with their hall (world) pose too (the bundle's
 ``map_from_world``): the capture teleports in the world, and ``--taken`` lists from other maps are compared in the
@@ -72,6 +73,37 @@ def taken_in_map(files, map_from_world) -> list:
     return out
 
 
+def capture_argv(manifest: dict, *, bundle: Path, poses: Path, out_npz: Path, output_dir: Path) -> list:
+    """The runner arguments of a capture on the world a survey bundle saw: the input files by the paths the survey
+    recorded (so their hashes match), the world arguments as recorded (layout, scene file, seed, colliders, minimum
+    prop height, the scene's own keep-out and exit clearance), the SLAM LiDAR and the shared obstacle layer."""
+    a = manifest["run"]["arguments"]
+    inputs = manifest["inputs"]
+    argv = ["--base-scene", inputs["base_scene"]["path"], "--forklift-urdf", inputs["forklift_urdf"]["path"],
+            "--factory-layout", inputs["factory_layout"]["path"], "--lidar", inputs["lidar"]["path"],
+            "--obstacle-layer", inputs["obstacle_layer"]["path"], "--pallet-urdf", a["pallet_urdf"],
+            "--pallet-geometry", a["pallet_geometry"], "--settings", a["settings"],
+            "--encoder-model", a["encoder_model"], "--seed", str(a["seed"]), "--layout", a["layout"],
+            "--record-slam", "--output", str(output_dir),
+            "--scan-capture-poses", str(poses), "--scan-capture-out", str(out_npz), "--scan-capture-bundle", str(bundle)]
+    if a["layout"] == "scene":
+        argv += ["--scene-file", inputs["scene_file"]["path"], "--near-capture-redraw", "always"]
+    if a.get("prism_colliders"):
+        argv.append("--prism-colliders")
+    for key, flag in (("min_obstacle_height_m", "--min-obstacle-height-m"), ("lidar_keepout_m", "--lidar-keepout-m"),
+                      ("exit_clearance_m", "--exit-clearance-m")):
+        if a.get(key) is not None:
+            argv += [flag, str(a[key])]
+    return argv
+
+
+def cmd_command(a) -> int:
+    manifest = json.loads((a.bundle / "manifest.json").read_text())
+    for word in capture_argv(manifest, bundle=a.bundle, poses=a.poses, out_npz=a.out_npz, output_dir=a.output):
+        print(word)
+    return 0
+
+
 def cmd_poses(a) -> int:
     grid = Grid.from_npz(a.bundle / "grid.npz")
     map_id, map_from_world = bundle_frame(a.bundle)
@@ -109,7 +141,14 @@ def main(argv=None) -> int:
     p.add_argument("--taken", action="append", default=[], help="earlier pose lists (any map), kept apart")
     p.add_argument("--max-attempts", type=int, default=200_000)
     p.add_argument("--out", type=Path, required=True)
+    p = sub.add_parser("command", help="the runner arguments of a capture, one per line")
+    p.add_argument("--bundle", type=Path, required=True)
+    p.add_argument("--poses", type=Path, required=True)
+    p.add_argument("--out-npz", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True, help="the runner's output folder")
     a = ap.parse_args(argv)
+    if a.cmd == "command":
+        return cmd_command(a)
     if not a.fill and a.count <= 0:
         ap.error("--count or --fill")
     return cmd_poses(a)

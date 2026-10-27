@@ -1390,7 +1390,7 @@ def arguments() -> argparse.Namespace:
     if getattr(args, "session", False):
         # Plan 2026-10-22-rigid-session-pallets section 2: a session is run from the console, its near capture's
         # refusals redrawn (the neighbour sweep, 2.6); the bottom-deck legs and near tracking are not defined for it.
-        if not args.live:
+        if not args.live and args.scan_capture_poses is None:  # a scan capture ends before any mission (plan B4a)
             parser.error("a session scene file needs --live")
         if args.near_capture_redraw != "always":
             parser.error("a session scene file needs --near-capture-redraw always")

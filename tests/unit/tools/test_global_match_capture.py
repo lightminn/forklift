@@ -53,3 +53,22 @@ def test_a_later_list_keeps_apart_from_another_maps_list_in_the_hall_frame(tmp_p
     b = [tuple(r["base_world"]) for r in json.loads(second.read_text())["poses"]]
     assert b and all(S.independent(p, a, sep_m=3.0) for p in b)
     assert all(math.hypot(*np.subtract(S.laser_xy(p), S.laser_xy(q))) >= 3.0 for p in b for q in b if p != q)
+
+
+def test_the_capture_command_takes_the_surveys_world():
+    scene = {"run": {"arguments": {"layout": "scene", "seed": 0, "prism_colliders": False, "min_obstacle_height_m": None,
+                                   "encoder_model": "team_spec_quantized", "pallet_urdf": "p.urdf",
+                                   "pallet_geometry": "g.yaml", "settings": "s.yaml", "lidar_keepout_m": 0.15,
+                                   "exit_clearance_m": None}},
+             "inputs": {k: {"path": f"/in/{k}"} for k in ("base_scene", "forklift_urdf", "factory_layout", "lidar",
+                                                         "obstacle_layer", "scene_file")}}
+    argv = T.capture_argv(scene, bundle="B", poses="P", out_npz="O.npz", output_dir="R")
+    assert argv[argv.index("--scene-file") + 1] == "/in/scene_file" and "--near-capture-redraw" in argv
+    assert argv[argv.index("--lidar-keepout-m") + 1] == "0.15" and "--exit-clearance-m" not in argv
+    assert argv[argv.index("--obstacle-layer") + 1] == "/in/obstacle_layer" and "--prism-colliders" not in argv
+    hall = json.loads(json.dumps(scene))
+    hall["run"]["arguments"].update(layout="factory", prism_colliders=True, min_obstacle_height_m=1.15,
+                                    lidar_keepout_m=None)
+    argv = T.capture_argv(hall, bundle="B", poses="P", out_npz="O.npz", output_dir="R")
+    assert "--scene-file" not in argv and "--prism-colliders" in argv
+    assert argv[argv.index("--min-obstacle-height-m") + 1] == "1.15" and argv[argv.index("--layout") + 1] == "factory"
