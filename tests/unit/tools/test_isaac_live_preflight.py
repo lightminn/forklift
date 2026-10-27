@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "deploy/console/isaac_live.sbatch"
 
 
-def _launch(tmp_path, venv_py=sys.executable, **env):
+def _launch(tmp_path, venv_py=sys.executable, out=None, **env):
     bin_ = tmp_path / "bin"
     bin_.mkdir(exist_ok=True)
     for tool in ("docker",):  # anything that would start a container leaves a trace instead
@@ -21,7 +21,7 @@ def _launch(tmp_path, venv_py=sys.executable, **env):
             "FORKLIFT_URDF": str(ROOT / "sim/models/dls08_measured/forklift.urdf"), "VENV_PY": str(venv_py),
             "PYTHONPATH": str(ROOT / "src"), "MAP_BUNDLE": "none", "DRY_RUN": "1"}
     base.update(env)
-    return subprocess.run(["bash", str(LAUNCHER), str(tmp_path / "out")], cwd=ROOT, env=base, capture_output=True,
+    return subprocess.run(["bash", str(LAUNCHER), str(out or tmp_path / "out")], cwd=ROOT, env=base, capture_output=True,
                           text=True, timeout=180)
 
 
@@ -52,3 +52,10 @@ def test_a_runner_check_that_fails_ends_the_launch_before_any_container(tmp_path
     fake.chmod(0o755)
     p = _launch(tmp_path, venv_py=fake, DRY_RUN="0")
     assert p.returncode == 2 and "refused" in p.stdout and not (tmp_path / "started").exists()
+
+
+def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
+    # the lvram random_m refill (11840) died at connect: <run>/live/epoch_1/sock/slam.sock was 112 bytes
+    out = tmp_path / ("x" * max(1, 110 - len(str(tmp_path))))
+    p = _launch(tmp_path, out=out)
+    assert p.returncode == 2 and "AF_UNIX" in p.stderr, p.stdout + p.stderr

@@ -16,7 +16,7 @@ NEAR = ["--near-capture-expected", "on", "--near-capture-lower", "waive", "--nea
         "--near-capture-redraw-lateral-m", "0.10"]
 
 
-def dry_run(tmp_path, scene="line_2", **env):
+def dry_run(tmp_path, scene="line_2", out=None, **env):
     scenes = tmp_path / "scenes"
     scenes.mkdir(exist_ok=True)
     for name in ("line_2", "line_2_m", "aisle", "aisle_rack", "trailer"):
@@ -27,8 +27,7 @@ def dry_run(tmp_path, scene="line_2", **env):
             "PATH": os.environ["PATH"]}
     (tmp_path / "weights.onnx").write_bytes(b"")
     base.update(env)
-    out = subprocess.run(["bash", str(LAUNCHER), str(tmp_path / "out")], env=base, capture_output=True, text=True)
-    return out
+    return subprocess.run(["bash", str(LAUNCHER), str(out or tmp_path / "out")], env=base, capture_output=True, text=True)
 
 
 # a fake runner's answer to the launcher's preflight (--check-args): its checks pass
@@ -353,3 +352,11 @@ def test_the_second_near_capture_is_off_unless_a_gap_is_given(tmp_path):
     assert "--near-recapture-gap-m" not in args_of(dry_run(tmp_path))
     args = args_of(dry_run(tmp_path, NEAR_RECAPTURE_GAP="1.0"))
     assert contains(args, ["--near-recapture-gap-m", "1.0"])
+
+
+
+def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
+    out = tmp_path / ("x" * max(1, 100 - len(str(tmp_path))))
+    p = dry_run(tmp_path, out=out)
+    assert p.returncode == 2 and "AF_UNIX" in p.stderr, p.stdout + p.stderr
+    assert dry_run(tmp_path, out=out, MODE="truth").returncode == 0  # a truth run opens no socket
