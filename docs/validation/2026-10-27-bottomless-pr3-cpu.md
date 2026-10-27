@@ -26,6 +26,24 @@ branch `feat/bottomless-pr3-cpu`. 측정은 전부 **dev** 이고 CPU 장면 장
   - 근거리 검출기를 그대로 쓴 `baseline` 은 무잡음에서 N2 어려운 음성 89 장 중 64 장을 후보로 냈다(옛 N `shelf` 14/16, `grounded` 16/17).
   - 학습 제안기는 CPU 에서 돌지 않는다. `geometric-fit`·`oracle-fit` 은 음성 오검출을 재지 못한다(아래 "CPU 로 잴 수 없는 것").
 
+### 옆면 구조 검사(D-F)의 근거
+
+이 측정은 계획 D-F(밑판 옆면 검사 `structure` 모드, `--bottom-deck-check structure` 를 운영 기본으로)의 근거다. 범위는 CPU 장치, dev, 아래 수치다.
+
+- **진입면 증거만으로는 선반을 막을 수 없다.**
+  - 무잡음 2.0–3.5 m(자세 24 = 형상 2 × 거리 4 × yaw 3): upper/Σsupports 는 스트링거 높이 띠가 빈 선반(`shelf`·`shelf_closed`·`shelf_legs`)을 24/24 자세에서 양성보다 낮게 갈랐다(최소 여유 +0.311). `shelf_raised` 는 valid 인 EPAL 12 자세에서 12/12 갈랐다. 1.2–1.8 m 격자도 24/24 다(최소 +0.307).
+  - 앞 레일 선반(`shelf_rail`)은 "문턱보다 낮으면 거부" 판별로 **0/24** 다. 24/24 자세에서 양성보다 **높았다**(여유 +0.036 이상).
+  - 팀 잡음(frame_640)에서는 양성과 넓게 겹친다. EPAL 6 에서 띠가 빈 선반이 양성 구간 밖이었던 것은 1.2–1.6 m 뿐이다. 레일·모서리 기둥 선반과 T11 의 검출된 모든 선반 변형은 구간 안에 든 거리가 있다. 2.5 m 이상은 양성이 거의 검출되지 않았다.
+  - 근거리 검출기의 정면 관문은 선반 계열을 팔레트만큼 valid 로 냈다(EPAL 팀 잡음 1.2–1.8 m `shelf` 36/36, 팔레트 34/36). 데이터 경로 `baseline` 도 무잡음 N2 어려운 음성 89 장 중 64 장을 후보로 냈다.
+- **그래서 옆면 구조 검사(`closed_face` 거부)가 필요하다.**
+  - 팀 잡음 옆면 판정에서 막힌 옆면 선반 넷(`shelf`·`shelf_closed`·`shelf_rail`·`shelf_raised`)은 `unobserved:closed_face` 로 각 72/72 거부됐다.
+  - 정면에서 못 거르는 레일 선반도 여기서 거부된다.
+  - grounded 는 `absent:open_gaps` 72/72 로 허가됐다.
+- **옆면 검사로도 남는 것.**
+  - 다리형 선반(`shelf_legs`)은 grounded 와 같은 `absent:open_gaps` 로 72/72 허가됐다.
+  - `shelf_uprights`·`box_stand` 의 거부는 `rows_not_located` 등 블록 열을 못 찾은 거부다. 구조 판별이 아니다.
+  - 다리형 선반은 D-F 가 닫지 못한다. 다른 방어(작업 지시 구역, LiDAR 평면)로 따로 본다. `shelf_uprights`·`box_stand` 는 거부되지만, 그 거부 이유가 Isaac 렌더에서도 유지되는지 다시 본다.
+
 ## 무엇을 넣었나
 
 ### 새 음성 형상 (`tools/negative_structures.py`)
