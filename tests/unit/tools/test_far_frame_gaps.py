@@ -5,12 +5,46 @@ import pytest
 from tools import far_frame_gaps as g
 
 
-def record(times, statuses, model_ms=None, stop_status="applied", leg=0):
+def record(times, statuses, model_ms=None, stop_status="applied", leg=0, mission="m1", skipped=(), late=None):
     jobs = [{"seq": i + 1, "kind": "drive", "status": s, "model_ms": (model_ms or [50.0] * len(statuses))[i]}
             for i, s in enumerate(statuses)]
     jobs.append({"seq": len(jobs) + 1, "kind": "stop", "status": stop_status, "model_ms": 60.0})
     frames = [{"kind": "drive", "leg": leg, "pixel_t_s": t} for t in times]
-    return {"recognition": {"frames": frames, "live": {"jobs": jobs}}}
+    frames += [{"kind": "drive", "leg": leg, "pixel_t_s": t, "skipped": "no_pose"} for t in skipped]
+    live = {"mission_id": mission, "jobs": jobs}
+    if late:
+        live["late_calls"] = late
+    return {"recognition": {"frames": frames, "live": live}}
+
+
+def test_skipped_frames_do_not_hide_an_expiry_gap():
+    # Applied frames at 0.0 and 0.6 s with skipped ones between: the tracker was not updated for 0.6 s.
+    m = g.mission_metrics(record([0.0, 0.6], ["applied", "applied"], skipped=[0.2, 0.4]))
+    assert m["max_gap_s"] == pytest.approx(0.6) and m["gaps_over_expiry"] == 1 and m["skipped_frames"] == 2
+    assert not g.summarize([m])["primary_ok"]
+
+
+def test_missing_input_is_undetermined_not_a_pass(tmp_path):
+    out = tmp_path / "gaps.json"
+    assert g.main([str(tmp_path / "nowhere"), "--out", str(out)]) == 2
+    (tmp_path / "empty").mkdir()
+    assert g.main([str(tmp_path / "empty"), "--out", str(out)]) == 2
+    d = tmp_path / "bad" / "recognition_missions" / "m1"
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({"something": 1}))
+    assert g.main([str(tmp_path / "bad"), "--out", str(out)]) == 2
+
+
+def test_a_call_finished_after_its_mission_counts_in_the_round_trip():
+    rec = record([0.0, 0.2], ["applied", "applied"], model_ms=[900.0, 100.0])
+    rec["recognition"]["live"]["jobs"].append({"seq": 9, "kind": "drive", "status": "in_flight", "model_ms": None})
+    other = record([5.0], ["applied"], mission="m2", late=[{"mission": "m1", "seq": 9, "model_ms": 5000.0}])
+    missions = [g.mission_metrics(rec), g.mission_metrics(other)]
+    rt = g.summarize(missions, g.late_calls([rec, other]))["round_trip_ms"]
+    assert rt["max"] == 5000.0 and rt["in_flight_without_time"] == 0
+    assert rt["first_call_max"] == 900.0
+    rt_without = g.summarize(missions)["round_trip_ms"]
+    assert rt_without["in_flight_without_time"] == 1
 
 
 def test_one_missing_frame_is_a_watch_gap_not_an_expiry():
