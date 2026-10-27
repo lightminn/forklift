@@ -167,7 +167,7 @@ core:
 ### C4 Isaac (사전 등록, 결과 전에 이 절을 고쳐 커밋한다)
 
 - 장면:
-  - 대상: aisle_rack 0–7, trailer 0–4. trailer 는 `--exit-clearance-m 0.30` 을 준다(장면 필수 인자).
+  - 대상: aisle_rack 0–7, trailer 0–4. trailer 는 출구 0.30 을 쓴다(장면 필수 인자; 지금 riib 런처가 trailer 에 자동으로 준다).
   - 회귀: 띠가 모든 단계에 걸리므로 line_2_m 0–2, random_1 0–2 를 같이 돈다(agy 지적 6).
   - 리보틱스 3 슬롯 묶음, #181 사전 검사, 의존성 없음.
 - 두 팔: A = 지금 riib 기본, B = `START_BAND=on START_BAND_M=0.03 ESCAPE_PRESTEER=on`. 같은 seed 를 두 팔이 돈다.
@@ -191,6 +191,12 @@ core:
   5. B 의 capped 시간 초과가 0 이다(A 는 띠가 꺼져 있어 정의상 0 이다).
   6. 새 실패 유형이 없다.
 - 하나라도 못 넘으면 기능만 남기고 riib 기본은 끈다. 총괄에 보고하고 총괄이 정한다.
+- 제출(2026-10-28, 결과 전에 적음):
+  - 코드 `fb7b5246`(스냅숏 `ep_fb7b5246`). 구현 검토 8 회차 수렴, 재생 게이트·ws1 전체 pytest 통과 뒤 낸다.
+  - 목록 ws1 `test_runs/riibotics/epc_fb7b5246/RUNS.jsonl` 38 실행이다. 팔 A 는 `START_BAND=off ESCAPE_PRESTEER=off`, 팔 B 는 런처 기본이다. 두 팔 다 `VIEWS=none` 이고 나머지는 런처 기본이다. 회귀 장면은 `SCENE=line_2`·`random_1` 이며, 런처 기본으로 `_m` 사본이 돈다.
+  - 순서: 대상 장면을 먼저, seed 별로 A·B 를 번갈아 놓는다.
+  - 2 잡이 claim 디렉터리를 공유한다. M1 이 노드를 혼자 써야 하므로 `afterany` 로 M1 두 잡 뒤에 둔다(총괄 지시와 같은 방식).
+  - 판정은 위 1–6 그대로다.
 
 ## 5. 남는 것
 
