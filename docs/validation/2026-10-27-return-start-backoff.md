@@ -149,7 +149,7 @@ P-4:D-1, P-5:D-2, P-3:D-3, seed 0–9. rh 에서 이 실패가 난 장면이다.
 
 ## 실행 위치
 
-- ws1 `test_runs/live/rsbl_b35d7f53`(요약 `rsb_sum.py`, `sum_live.json`), `test_runs/riibotics/rsbr_b35d7f53`(`sum_riib.json`), `test_runs/riibotics/rsbt_b35d7f53`(trailer 진단), 스냅숏 `snapshots/rsb_b35d7f53`, 재생 게이트 `replay_gate/rsb_b35d7f53`.
+- ws1 `test_runs/live/rsbl_b35d7f53`(요약 `rsb_sum.py`, `sum_live.json`; ws1 원본은 정리됨 — `gdrive:forklift-archive/ws1-cleanup-20261027-e/` 의 `r176_live_01`–`05`, 스냅숏 `rsb_5a692fda`·`rsb_75b4fd17`·`rsb_109a2f31` 과 재생 게이트 4 개는 `r176_meta`, 묶음마다 `.files.tsv`·`.tar.zst.md5`), `test_runs/riibotics/rsbr_b35d7f53`(`sum_riib.json`), `test_runs/riibotics/rsbt_b35d7f53`(trailer 진단), 스냅숏 `snapshots/rsb_b35d7f53`, 재생 게이트 `replay_gate/rsb_b35d7f53`.
 - 기록 4 사례의 원자료: `gdrive:forklift-archive/ws1-cleanup-20261027-d/` `d27_rh_01`·`d27_rh_02`. 시험 고정 자료 `tests/fixtures/return_start_backoff_rh_s8_m3.json`.
 
 ## 자체 검토
