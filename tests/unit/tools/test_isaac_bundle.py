@@ -1594,3 +1594,18 @@ def test_a_bypass_needs_its_reason(tmp_path, capsys, monkeypatch):
                     "--out", str(tmp_path / "o"), "--no-vram", "--slots", "1"]) == 0
     assert "preflight: off -- old wrapper without DRY_RUN" in capsys.readouterr().err
     assert seen["preflight"] == "off: old wrapper without DRY_RUN"  # run_bundle writes it into summary.json
+
+
+@pytest.mark.parametrize("extra", ["--scene-requirements other.yaml", "--scene-requirements=other.yaml"])
+def test_another_requirements_file_is_refused_at_the_check(tmp_path, extra):
+    # scene requirements plan (Codex): the proof hashes the snapshot's own file, not one a run names
+    (problem,) = check_case(tmp_path, extra)
+    assert "proof does not cover" in problem
+
+
+def test_an_override_is_not_taken_for_another_requirements_file(tmp_path):
+    (tmp_path / "runner.py").write_text(RUNNER_SRC + 'ap.add_argument("--scene-requirements-override")\n')
+    (tmp_path / "launch.sh").write_text(LAUNCHER)
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / "out_a")],
+                 env={"SEED": "1", "EXTRA": "--scene-requirements-override why"}, retry_move=[str(tmp_path / "out_a")])
+    assert ib.check_runs([run], tmp_path / "runner.py") == []

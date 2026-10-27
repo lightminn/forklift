@@ -360,3 +360,61 @@ def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
     p = dry_run(tmp_path, out=out)
     assert p.returncode == 2 and "AF_UNIX" in p.stderr, p.stdout + p.stderr
     assert dry_run(tmp_path, out=out, MODE="truth").returncode == 0  # a truth run opens no socket
+
+
+def test_views_default_to_both_extra_videos_and_none_drops_them(tmp_path):
+    # lead 2026-10-27: a comparison batch that needs no videos says VIEWS=none in its list, for both arms
+    args = args_of(dry_run(tmp_path))
+    assert contains(args, ["--extra-views", "quarter,chase"]) and any(a.startswith("--quarter-eye=") for a in args)
+    assert "VIEWS=" not in (tmp_path / "out" / "riib_defaults.txt").read_text()  # the default reads as before
+    args = args_of(dry_run(tmp_path, VIEWS="none"))
+    assert "--extra-views" not in args and not any(a.startswith("--quarter-") for a in args) and "--video" in args
+    assert "--frame-log" in args  # the bundle watches run/frames.jsonl for progress (Codex)
+    assert "VIEWS=none" in (tmp_path / "out" / "riib_defaults.txt").read_text()
+    args = args_of(dry_run(tmp_path, VIEWS="chase"))
+    assert contains(args, ["--extra-views", "chase"]) and not any(a.startswith("--quarter-") for a in args)
+    assert dry_run(tmp_path, VIEWS="perception").returncode == 2
+
+
+@pytest.mark.parametrize("keepout", ["0", "0.0", "00"])
+def test_trailer_gets_its_exit_prefix_by_default(tmp_path, keepout):
+    # scene requirements plan: the batch that left it out went 0/10 (82ffffa8); 0, 0.0 and 00 are all "no keepout"
+    args = args_of(dry_run(tmp_path, scene="trailer", KEEPOUT=keepout))
+    assert contains(args, ["--exit-clearance-m", "0.30"])
+
+
+@pytest.mark.parametrize("env", [{"KEEPOUT": "0.15"}, {"EXTRA_ARGS": "--lidar-keepout-m 0.15"},
+                                 {"EXTRA_ARGS": "--exit-clearance-m=0.4"},
+                                 # Codex: tabs and newlines split the runner's words too
+                                 {"EXTRA_ARGS": "--seed 1\t--lidar-keepout-m 0.15"},
+                                 {"EXTRA_ARGS": "--seed 1\n--exit-clearance-m 0.4"}])
+def test_trailer_s_default_prefix_gives_way_to_the_keepout_s_or_an_explicit_one(tmp_path, env):
+    args = args_of(dry_run(tmp_path, scene="trailer", **env))
+    assert not contains(args, ["--exit-clearance-m", "0.30"])  # the default stays out; EXTRA_ARGS's own may be there
+
+
+def test_an_exit_clearance_a_profile_and_an_override_pass_through(tmp_path):
+    args = args_of(dry_run(tmp_path, scene="trailer", EXIT_CLEARANCE="0.40", REQUIREMENTS_PROFILE="ct_baseline",
+                           SCENE_REQUIREMENTS_OVERRIDE="a comparison"))
+    assert contains(args, ["--exit-clearance-m", "0.40"]) and contains(args, ["--requirements-profile", "ct_baseline"])
+    assert contains(args, ["--scene-requirements-override", "a comparison"])
+    assert "--exit-clearance-m" not in args_of(dry_run(tmp_path, scene="line_2"))  # other scenes plan as before
+    assert dry_run(tmp_path, scene="trailer", EXIT_CLEARANCE="x").returncode == 2
+
+
+def test_the_real_trailer_and_rack_scenes_pass_the_runner_s_check_with_the_defaults(tmp_path):
+    # the runner's own check (DRY_RUN_CHECK=1) on generated scene files, not the minimal ones above (Codex P3)
+    from tools import riibotics_isaac_scenes as tool
+
+    scenes = tmp_path / "real"
+    scenes.mkdir()
+    for name, built in (("trailer", tool.trailer_scene()), ("aisle_rack", tool.rack_scene())):
+        (scenes / f"{name}.json").write_text(json.dumps(tool.scene_record(name, built)))
+    for scene in ("trailer", "aisle"):
+        out = dry_run(tmp_path, scene=scene, out=tmp_path / f"o_{scene}", SCENE_DIR=str(scenes), MODE="truth",
+                      DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"))
+        assert out.returncode == 0 and out.stdout.splitlines()[-1] == "ARGS_OK", out.stdout[-800:] + out.stderr
+    out = dry_run(tmp_path, scene="trailer", out=tmp_path / "o_none", SCENE_DIR=str(scenes), MODE="truth",
+                  DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"),
+                  EXTRA_ARGS="--exit-clearance-m=0.30 --lidar-keepout-m=0.15")
+    assert out.returncode == 2 and "scene trailer needs one of" in out.stderr

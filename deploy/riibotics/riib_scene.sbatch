@@ -117,6 +117,27 @@ esac
 [ "$NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
 KEEPOUT=${KEEPOUT:-0}
 [[ "$KEEPOUT" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "KEEPOUT must be a non-negative number of metres"; exit 2; }
+# scene requirements (config/scene_requirements.yaml, docs/plans/2026-10-27-scene-requirements.md): trailer's loaded
+# transport needs an exit prefix -- the fixed 0.30 m (PR #91) unless the keepout builds its own, or EXTRA_ARGS sets
+# either (it comes last and decides); the runner refuses a trailer run with neither before Isaac starts
+# the extra videos beside the overview (lead 2026-10-27): quarter,chase as every earlier batch; a comparison batch that
+# needs no videos sets VIEWS=none in its list for both arms (one encoder and one camera render less per view)
+VIEWS=${VIEWS:-quarter,chase}
+case "$VIEWS" in none|quarter|chase|quarter,chase|chase,quarter) ;; *) echo "VIEWS must be none, quarter, chase or quarter,chase"; exit 2;; esac
+EXIT_CLEARANCE=${EXIT_CLEARANCE:-}
+EXTRA_SETS_EXIT=0  # EXTRA_ARGS's words, split as the runner gets them (spaces, tabs, newlines), not globbed here
+set -f
+# shellcheck disable=SC2086
+for w in ${EXTRA_ARGS:-}; do
+  case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
+done
+set +f
+if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
+    && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
+  EXIT_CLEARANCE=0.30
+fi
+[ -z "$EXIT_CLEARANCE" ] || [[ "$EXIT_CLEARANCE" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+  || { echo "EXIT_CLEARANCE must be a positive number of metres"; exit 2; }
 SCENE_FILE=$SCENE_DIR/$NAME.json
 [ -f "$SCENE_FILE" ] || { echo "no scene file $SCENE_FILE (tools/riibotics_isaac_scenes.py --slot-markers / --rack write the _m / _rack copies)"; exit 2; }
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2
@@ -133,6 +154,12 @@ printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESC
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
+# scene requirements: the same, for the exit prefix, a profile and an override reason
+[ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
+[ "$VIEWS" != quarter,chase ] && printf 'VIEWS=%s\n' "$VIEWS" >> "$OUT/riib_defaults.txt"
+[ -n "${REQUIREMENTS_PROFILE:-}" ] && printf 'REQUIREMENTS_PROFILE=%s\n' "$REQUIREMENTS_PROFILE" >> "$OUT/riib_defaults.txt"
+[ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] \
+  && printf 'SCENE_REQUIREMENTS_OVERRIDE=%q\n' "$SCENE_REQUIREMENTS_OVERRIDE" >> "$OUT/riib_defaults.txt"
 # The SLAM mode, said and recorded (live-default plan 5d): this launcher maps online. The switch to localization on an
 # accepted survey bundle is the live console's (deploy/console/slam_choice.sh); no Riibotics demo scene has one.
 if [ "$MODE" = truth ]; then RIIB_SLAM="none (MODE=truth)"
@@ -148,7 +175,15 @@ COMMON=(--base-scene "$BASE_SCENE"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
   --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
-  --video --extra-views quarter,chase --quarter-eye="$QE" --quarter-target="$QT")
+  --video)
+case "$VIEWS" in
+  none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress
+  *quarter*) COMMON+=(--extra-views "$VIEWS" --quarter-eye="$QE" --quarter-target="$QT") ;;
+  *) COMMON+=(--extra-views "$VIEWS") ;;
+esac
+[ -n "$EXIT_CLEARANCE" ] && COMMON+=(--exit-clearance-m "$EXIT_CLEARANCE")
+[ -n "${REQUIREMENTS_PROFILE:-}" ] && COMMON+=(--requirements-profile "$REQUIREMENTS_PROFILE")
+[ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && COMMON+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
 if [ "$MODE" = truth ]; then
   MODE_ARGS=(--d7-planner)
   [ "$NEAR" = on ] && echo "NEAR=on has no effect in MODE=truth (the near re-capture needs the perception target)" >&2

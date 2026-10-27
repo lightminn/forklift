@@ -110,6 +110,13 @@ ARGUMENTS_BY_DESIGN = (
     # bounds file's provenance strings are not runner inputs (EPAL 6 fork spacing plan S3).
     "near_bounds",
     "near_drive_terms",
+    # what the videos are encoded with and whether the frame log is kept (2026-10-28): records, not the run; and the
+    # scene requirements' preflight metadata
+    "video_preset",
+    "frame_log",
+    "scene_requirements",
+    "requirements_profile",
+    "scene_requirements_override",
 )
 HOLD_S = 0.5
 

@@ -90,6 +90,9 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 # reported table for a team-spec model; PR #108's team-spec table)
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
+REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
+[ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
+[ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 ARGS=(
   --base-scene "$BASE_SCENE" \
@@ -103,7 +106,7 @@ ARGS=(
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" \
+  $EXTRA_ARGS "${LOC[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac

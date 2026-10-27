@@ -1028,6 +1028,14 @@ def input_files_skipping(
 # stops) and the near-tracking options themselves.
 RUN_SPECIFIC_ARGUMENTS = (
     "output",
+    # scene requirements plan (2026-10-27): preflight metadata, not a condition of the run (the arguments the
+    # requirements name are compared as before)
+    "scene_requirements",
+    "requirements_profile",
+    "scene_requirements_override",
+    # the video encoder's preset (2026-10-27): the videos' file size and encoder CPU, not the run
+    "video_preset",
+    "frame_log",
     "slam_feedback",
     "slam_map_dir",
     "seed",

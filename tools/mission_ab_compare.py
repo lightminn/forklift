@@ -34,7 +34,7 @@ import numpy as np
 
 SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt"}
 SKIP_DIRS = ("boundary/",)
-RECORDING_ONLY_ARGUMENTS = {"record_boundary", "record_boundary_format"}  # arguments that only add records  # the M-a0 boundary record is a record of the run, not its output
+RECORDING_ONLY_ARGUMENTS = {"record_boundary", "record_boundary_format", "video_preset", "frame_log"}  # arguments that only add records  # the M-a0 boundary record is a record of the run, not its output
 # Result keys only a boundary-recording run writes (M-a1 replay plan R3: the setup snapshot's audit, a recording
 # failure note) -- skipped like the record itself.
 RECORDING_ONLY_RESULT_KEYS = {"setup_snapshot", "boundary_record_error"}
