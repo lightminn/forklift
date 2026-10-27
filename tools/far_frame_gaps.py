@@ -30,13 +30,39 @@ class RecordError(ValueError):
     """A record without the live far-recognition structure the contract reads."""
 
 
-def mission_metrics(record: dict) -> dict:
+def _finite(value, what):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise RecordError(f"{what} is not a finite number: {value!r}")
+    return float(value)
+
+
+def _validated(record) -> tuple[list, list, dict]:
+    if not isinstance(record, dict):
+        raise RecordError("the record is not an object")
     rec = record.get("recognition")
-    live = (rec or {}).get("live")
-    if not isinstance(rec, dict) or not isinstance(live, dict) or "jobs" not in live or "frames" not in rec:
-        raise RecordError("no recognition.live.jobs / recognition.frames")
-    jobs = live["jobs"] or []
-    drive_frames = [f for f in rec["frames"] or [] if f.get("kind") == "drive"]
+    live = rec.get("live") if isinstance(rec, dict) else None
+    if not isinstance(live, dict):
+        raise RecordError("no recognition.live")
+    jobs, frames = live.get("jobs"), rec.get("frames")
+    if not isinstance(jobs, list) or not isinstance(frames, list):
+        raise RecordError("recognition.live.jobs / recognition.frames are not lists")
+    for j in jobs:
+        if not isinstance(j, dict) or not isinstance(j.get("seq"), int) or not isinstance(j.get("status"), str) \
+                or j.get("kind") not in ("drive", "stop"):
+            raise RecordError(f"a malformed job: {j!r}")
+        if j.get("model_ms") is not None:
+            _finite(j["model_ms"], "model_ms")
+    for f in frames:
+        if not isinstance(f, dict):
+            raise RecordError(f"a malformed frame: {f!r}")
+        if f.get("kind") == "drive":
+            _finite(f.get("pixel_t_s"), "pixel_t_s")
+    return jobs, frames, live
+
+
+def mission_metrics(record: dict) -> dict:
+    jobs, all_frames, live = _validated(record)
+    drive_frames = [f for f in all_frames if f.get("kind") == "drive"]
     # A skipped frame (no pose, no depth or no segmentation yet) updates nothing: it does not split a gap.
     frames = [f for f in drive_frames if not f.get("skipped")]
     gaps = []
@@ -46,46 +72,61 @@ def mission_metrics(record: dict) -> dict:
     for times in legs.values():
         times.sort()
         gaps += [b - a for a, b in zip(times, times[1:])]
-    drives = sorted((j for j in jobs if j.get("kind") == "drive"), key=lambda j: j["seq"])
+    drives = sorted((j for j in jobs if j["kind"] == "drive"), key=lambda j: j["seq"])
     runs_of_two, run = 0, 0
     for j in drives:
-        if j.get("status") == "dropped":
+        if j["status"] == "dropped":
             run += 1
             if run == 2:
                 runs_of_two += 1
         else:
             run = 0
-    stops = [j for j in jobs if j.get("kind") == "stop"]
+    stops = [j for j in jobs if j["kind"] == "stop"]
     ordered = sorted(jobs, key=lambda j: j["seq"])
     return {
         "mission_id": live.get("mission_id"),
-        "first_seq": ordered[0]["seq"] if ordered else None,
         "max_gap_s": max(gaps) if gaps else None,
         "gaps_over_watch": sum(g > WATCH_GAP_S + _EPS for g in gaps),
         "gaps_over_expiry": sum(g > EXPIRY_S + _EPS for g in gaps),
         "consecutive_drop_runs": runs_of_two,
-        "dropped": sum(j.get("status") == "dropped" for j in jobs),
+        "dropped": sum(j["status"] == "dropped" for j in jobs),
         "skipped_frames": len(drive_frames) - len(frames),
-        "stop_not_applied": sum(j.get("status") != "applied" for j in stops),
-        # (seq, model_ms) of the calls this mission took in; in_flight ones get their time from the late calls
-        "calls": [(j["seq"], j["model_ms"]) for j in ordered if j.get("model_ms") is not None],
-        "in_flight": [j["seq"] for j in ordered if j.get("status") == "in_flight" and j.get("model_ms") is None],
+        "stop_not_applied": sum(j["status"] != "applied" for j in stops),
+        # the calls the worker made: with a time, or in flight at the mission's end (time from the late calls)
+        "calls": [(j["seq"], float(j["model_ms"])) for j in ordered if j.get("model_ms") is not None],
+        "in_flight": [j["seq"] for j in ordered if j["status"] == "in_flight" and j.get("model_ms") is None],
         "leg_lost_frames": sum(1 for f in frames if f.get("leg_lost")),
     }
 
 
 def late_calls(records: list) -> dict:
-    """(mission, seq) -> model_ms of the calls that finished after their mission ended, from every mission record's
-    live.late_calls and the runs' far_late_calls, without duplicates."""
+    """(mission, seq) -> model_ms of one run's calls that finished after their mission ended, from its mission
+    records' live.late_calls and the run's far_late_calls. Mission ids restart in every run: merge per run."""
     out = {}
     for r in records:
-        for c in ((r.get("recognition") or {}).get("live") or {}).get("late_calls") or []:
-            if c.get("model_ms") is not None:
-                out[(c.get("mission"), c["seq"])] = c["model_ms"]
-        for c in r.get("far_late_calls") or []:
-            if c.get("model_ms") is not None:
-                out[(c.get("mission"), c["seq"])] = c["model_ms"]
+        live = ((r.get("recognition") or {}).get("live") or {}) if isinstance(r, dict) else {}
+        for c in list(live.get("late_calls") or []) + list((r.get("far_late_calls") or []) if isinstance(r, dict) else []):
+            if isinstance(c, dict) and c.get("model_ms") is not None and isinstance(c.get("seq"), int):
+                out[(c.get("mission"), c["seq"])] = _finite(c["model_ms"], "late model_ms")
     return out
+
+
+def resolve_calls(m: dict, late: dict) -> dict:
+    """The mission's call times with its in-flight calls filled from its own run's late calls; the first model call
+    (the smallest seq that called the worker) apart."""
+    calls = dict(m["calls"])
+    unresolved = 0
+    for seq in m["in_flight"]:
+        if (m["mission_id"], seq) in late:
+            calls[seq] = late[(m["mission_id"], seq)]
+        else:
+            unresolved += 1
+    made = sorted(set(calls) | set(m["in_flight"]))
+    first_seq = made[0] if made else None
+    return {"first": calls.get(first_seq) if first_seq is not None else None,
+            "first_unresolved": first_seq is not None and first_seq not in calls,
+            "later": [ms for seq, ms in sorted(calls.items()) if seq != first_seq],
+            "unresolved": unresolved}
 
 
 def _quantile(values, p):
@@ -93,18 +134,9 @@ def _quantile(values, p):
     return v[min(len(v) - 1, math.ceil(p * len(v)) - 1)] if v else None
 
 
-def summarize(missions: list, late: dict | None = None) -> dict:
-    late = late or {}
-    later, first, unresolved = [], [], 0
-    for m in missions:
-        calls = dict(m["calls"])
-        for seq in m["in_flight"]:
-            if (m["mission_id"], seq) in late:
-                calls[seq] = late[(m["mission_id"], seq)]
-            else:
-                unresolved += 1
-        for seq, ms in sorted(calls.items()):
-            (first if seq == m["first_seq"] else later).append(ms)  # each mission's first call apart
+def summarize(missions: list, resolved: list) -> dict:
+    later = [ms for r in resolved for ms in r["later"]]
+    first = [r["first"] for r in resolved if r["first"] is not None]
     out = {
         "missions": len(missions),
         "primary_ok": all(m["gaps_over_expiry"] == 0 for m in missions),
@@ -120,10 +152,37 @@ def summarize(missions: list, late: dict | None = None) -> dict:
                           "p99": _quantile(later, .99), "max": max(later) if later else None,
                           "over_200_share": (sum(x > LATENCY_MS for x in later) / len(later)) if later else None,
                           "first_call_max": max(first) if first else None,
-                          "in_flight_without_time": unresolved},
+                          "in_flight_without_time": sum(r["unresolved"] for r in resolved)},
     }
     out["alert"] = bool(out["gaps_over_watch"] or out["consecutive_drop_runs"] or out["stop_not_applied"])
     return out
+
+
+def evaluate_dir(d: Path) -> dict:
+    """Every mission record under ``d``, its late calls merged within its own run (the run directory holding its
+    recognition_missions folder, whose result.json carries the run's far_late_calls)."""
+    if not d.is_dir():
+        raise RecordError(f"{d}: not a directory")
+    paths = sorted(d.glob("**/recognition_missions/*/result.json"))
+    if not paths:
+        raise RecordError(f"{d}: no recognition_missions/*/result.json -- undetermined, not a pass")
+    by_run: dict = {}
+    for p in paths:
+        by_run.setdefault(p.parent.parent.parent, []).append(p)
+    missions, resolved = [], []
+    for run_dir, run_paths in sorted(by_run.items()):
+        try:
+            records = [json.loads(p.read_text()) for p in run_paths]
+            run_result = run_dir / "result.json"
+            extra = [json.loads(run_result.read_text())] if run_result.exists() else []
+        except ValueError as exc:  # json.JSONDecodeError is a ValueError
+            raise RecordError(f"{run_dir}: unreadable JSON ({exc})") from exc
+        late = late_calls(records + extra)
+        for r in records:
+            m = mission_metrics(r)
+            missions.append(m)
+            resolved.append(resolve_calls(m, late))
+    return summarize(missions, resolved)
 
 
 def main(argv=None) -> int:
@@ -133,22 +192,11 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     report = {}
     for d in args.dirs:
-        if not d.is_dir():
-            print(f"{d}: not a directory", file=sys.stderr)
-            return 2
-        paths = sorted(d.glob("**/recognition_missions/*/result.json"))
-        if not paths:
-            print(f"{d}: no recognition_missions/*/result.json -- undetermined, not a pass", file=sys.stderr)
-            return 2
-        records = [json.loads(p.read_text()) for p in paths]
-        runs = [json.loads(p.read_text()) for p in sorted(d.glob("**/run/result.json"))
-                if "recognition_missions" not in p.parts]
         try:
-            missions = [mission_metrics(r) for r in records]
+            report[str(d)] = evaluate_dir(d)
         except RecordError as exc:
-            print(f"{d}: {exc}", file=sys.stderr)
+            print(str(exc), file=sys.stderr)
             return 2
-        report[str(d)] = summarize(missions, late_calls(records + runs))
     args.out.write_text(json.dumps(report, indent=1, allow_nan=False))
     for d, s in report.items():
         print(d, json.dumps({k: s[k] for k in ("missions", "primary_ok", "max_gap_s", "gaps_over_watch",
