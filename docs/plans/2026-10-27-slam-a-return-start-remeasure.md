@@ -6,7 +6,7 @@
 ## 배치
 
 - 스냅숏: #167·#176 이 들어간 main.
-- 장면·순서: `ct1_queue.sbatch`, `scenes_ct1_a770031/random_m_session.json`, SCENARIO=queue, CYCLE P-4:D-1, P-5:D-2, P-3:D-3, seed 0–9.
+- 장면·순서: `ct1_queue.sbatch`, `scenes_ct1_a770031/random_m_session.json`, SCENARIO=queue, CYCLE P-4:D-1, P-5:D-2, P-3:D-3, seed 0–11(3 슬롯 묶음의 빈 슬롯을 없애려고 12 실행).
 - 설정:
   - MAP_BUNDLE 은 기본이다(registry 위 위치 추정).
   - 런처 기본 그대로다(team-spec, D7_HOLD on).
