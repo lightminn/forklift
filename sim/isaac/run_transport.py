@@ -4127,7 +4127,8 @@ def drive(S, isaac) -> None:
         pickup_zone = _bound["pickup_zone"]
     if "adoption_zone_first" not in _bound:  # a setup recorded before the adoption zone check (2026-10-28)
         _bound["adoption_zone_first"] = None
-    adoption_zone_first = _bound["adoption_zone_first"]
+    if "adoption_zone_first" in _bound:
+        adoption_zone_first = _bound["adoption_zone_first"]
     if "plan_docking_reapproach" in _bound:
         plan_docking_reapproach = _bound["plan_docking_reapproach"]
     if "plan_observation_leg" in _bound:
