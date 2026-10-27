@@ -64,8 +64,33 @@ def test_a_run_reports_by_the_preregistered_rule():
 def test_a_refused_reverse_after_a_gear_change_is_not_driven_as_braking():
     # S-P1 implementation review P1: forward allowed (the strip ahead declared clear), reverse refused (nothing behind
     # the rear overhang was ever swept): the truck stands at the gear change instead of "braking" into reverse
-    r = G.run([(0.03, 0.0), (-0.03, 0.0)], 0.3, start_clear_m=0.3, stride=4, max_time_s=40.0)
-    assert not r["finished"] and r["travel_m"] <= 0.031
+    r = G.run([(0.03, 0.0), (-0.03, 0.0)], 0.3, start_zone=G.AHEAD_STRIP, stride=4, max_time_s=40.0)
+    assert not r["finished"] and 0.029 <= r["travel_m"] <= 0.031  # it went forward to the gear change and stood
+
+
+def test_the_approach_speed_lets_braking_end_before_a_gear_change():
+    # S-P1 implementation review round 3 P1: a refusal anywhere on the approach stops the truck before the change
+    for speed in (0.3, 0.6):
+        assert G.approach_speed(5.0, speed) == speed
+        for remaining in (0.5, 0.2, 0.05, 0.01, 0.002):
+            v = G.approach_speed(remaining, speed)
+            assert 0.0 < v <= speed
+            assert v * G.DT_S + G.braking_travel_m(v) <= remaining + 1e-12
+    assert G.approach_speed(0.0, 0.6) == 0.0
+
+
+def test_a_run_stands_at_each_gear_change_and_finishes_the_return():
+    # forward then back along the same line with the whole route declared clear: the reverse leg finishes, and the
+    # truck slowed into the gear change rather than arriving at full speed
+    zone = (-3.5, 3.5, 0.6)
+    r = G.run([(0.5, 0.0), (-0.5, 0.0)], 0.6, start_zone=zone, stride=8, max_time_s=40.0)
+    assert r["finished"] and not r["overlap"] and r["travel_m"] == 1.0
+
+
+def test_the_start_zone_is_the_body_grown_by_the_radius():
+    assert np.allclose(G.start_zone_around(G.PLANNER_FOOT, 0.3), (-0.47, 1.59, 0.66))
+    x0, x1, hw = G.AHEAD_STRIP
+    assert x0 < G.PLANNER_FOOT.front_m < x1  # it starts inside the body, so it still meets the body once shrunk
 
 
 def test_the_forks_shade_the_floor_right_ahead_of_their_tips():

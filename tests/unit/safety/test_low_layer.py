@@ -140,13 +140,40 @@ def test_evidence_of_different_times_is_not_merged_before_eroding():
     # S-P1 implementation review P1: fresh free cells next to 3 s old ones; the seam is eroded by the older error
     layer = _layer()
     layer.integrate(_floor_points(0.6, 5.0, -3.0, 3.0, **WIDE), t=0.0, origin=CAM)
-    old = layer.free_t.copy()
+    seen = layer.frames[0][1]
     left = layer.centres()[1] > 0.0
-    layer.free_t[:] = np.where(left, 2.9, old)  # the left half seen again just now (t 2.9), the right half at t 0
+    layer.frames = [(0.0, seen & ~left), (2.9, seen & left)]  # the right half seen at t 0, the left half just now
     usable = layer.usable(t=2.9, rear_pose=(0.0, 0.0, 0.0))
     # the old half may have drifted away from the fresh one: its cells at the seam are not usable, the fresh ones are
     assert not usable[layer.cell(2.0, -0.025)] and usable[layer.cell(2.0, 0.025)]
     assert usable[layer.cell(2.0, -1.0)] and usable[layer.cell(2.0, 1.0)]
+
+
+def test_straight_driving_at_any_heading_needs_nothing_beside_the_body():
+    # S-P1 implementation review round 3: the raster lies on the footprint's edges, so pixels the body's side only
+    # touches are neither exempt nor needed -- at a heading off the grid too
+    for yaw in (0.0, 0.4, -1.1):
+        layer = _layer()
+        start = (0.0, 0.0, yaw)
+        layer.mark_swept(FOOT, start, t=0.0)
+        lx, _ = L._local(np.stack(layer.centres(), -1).reshape(-1, 2), start)
+        layer.frames = [(0.0, (lx > 1.2).reshape(layer.shape))]  # seen empty ahead of the forks only, every width
+        ahead = L.path_poses([start], [(0.3, 0.0)], step_m=0.01)
+        ok, bad = L.envelope_admissible(layer, t=0.0, poses=ahead, footprint=FOOT, reverse=False)
+        assert ok, (yaw, bad)
+
+
+def test_a_gap_between_two_kinds_of_evidence_is_refused():
+    # S-P1 implementation review round 3 P1: a 2 mm strip between the swept box and the free cells is no proof
+    for front, admissible in ((1.40, True), (1.398, False)):
+        layer = _layer()
+        layer.mark_swept_box((0.0, 0.0, 0.0), -0.17, front, 0.5, t=0.0)
+        layer.frames = [(0.0, (layer.centres()[0] > 1.40).reshape(layer.shape))]  # cells from x 1.40 on
+        ahead = L.path_poses([(0.0, 0.0, 0.0)], [(0.3, 0.0)], step_m=0.01)
+        ok, bad = L.envelope_admissible(layer, t=0.0, poses=ahead, footprint=FOOT, reverse=False)
+        assert ok == admissible, (front, bad)
+        if not ok:
+            assert all(1.39 < x < 1.41 for x, _ in bad)
 
 
 def test_a_footprint_outside_the_grid_is_refused():
@@ -162,7 +189,7 @@ def test_the_evidence_must_hold_until_braking_ends():
     # plan S: judged at the end of braking, no new observation assumed in between
     layer = _layer()
     layer.mark_swept(FOOT, (0.0, 0.0, 0.0), t=0.0)
-    layer.free_t[:] = 0.0  # the whole grid seen empty at t 0 (the timing is under test, not the ray geometry)
+    layer.frames = [(0.0, np.ones(layer.shape, bool))]  # the whole grid seen empty at t 0 (timing under test)
     ahead = L.path_poses([(0.0, 0.0, 0.0)], [(0.3, 0.0)])
     assert L.envelope_admissible(layer, t=0.5, poses=ahead, footprint=FOOT, reverse=False, t_check=1.0)[0]
     assert not L.envelope_admissible(layer, t=2.0, poses=ahead, footprint=FOOT, reverse=False,

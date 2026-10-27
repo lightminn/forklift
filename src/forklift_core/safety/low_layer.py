@@ -55,7 +55,7 @@ class LowLayerConfig:
     floor_tol_m: float = 0.02  # a point this close to the floor plane is a floor hit
     max_age_s: float = 3.0  # evidence older than this is not used (plan S; the table goes to 10 s)
     depth_error_m: float = 0.02
-    sample_m: float = 0.01  # the envelope is checked at points this far apart
+    fine_m: float = 0.005  # the envelope's raster: a pixel must lie wholly inside known-clear ground
     # the floor plane check: the plane must be where the floor is expected under the mount
     plane_height_tol_m: float = 0.05
     plane_normal_tol_rad: float = math.radians(5.0)
@@ -170,6 +170,7 @@ class LowLayer:
         self.free_t = np.full(self.shape, -np.inf)
         self.occupied_t = np.full(self.shape, -np.inf)
         self.swept: list = []  # (t, rear pose, x0, x1, half width): rectangles in the truck frame of that pose
+        self.frames: list = []  # (t, cells freed by that frame): each frame's own support
 
     # --- cells -------------------------------------------------------------------------------------------------
     def cell(self, x: float, y: float) -> tuple:
@@ -225,6 +226,7 @@ class LowLayer:
         self.occupied_t[hit] = np.maximum(self.occupied_t[hit], t)
         free_now = floor_hit & verified & ~hit  # a band point in the cell in this frame overrides its floor hits
         self.free_t[free_now] = np.maximum(self.free_t[free_now], t)
+        self.frames.append((t, free_now))
         return Integration(True, plane, int(free_now.sum()), int(hit.sum()))
 
     def _crossed_columns(self, pts: np.ndarray, origin: np.ndarray, plane: Plane) -> np.ndarray:
@@ -264,26 +266,28 @@ class LowLayer:
 
     # --- use -----------------------------------------------------------------------------------------------------
     def usable(self, t: float, rear_pose=None) -> np.ndarray:
-        """Camera cells usable at ``t``: free evidence of time tau within the age limit, inside the region of free
-        evidence of that same time (one frame: one odometry error) eroded by the error after ``t - tau`` (at the cell's
-        distance from the rear axle). Evidence of different times is never merged before eroding: an older patch may
-        have drifted away from a newer neighbour and left a gap at the seam (S-P1 implementation review P1)."""
+        """Camera cells usable at ``t``: each frame within the age limit keeps its own support (the cells it freed,
+        less those a band point claimed after it), eroded by the error since that frame (at the cell's distance from
+        the rear axle); the union over frames. A newer frame never cuts an older one's support short, and evidence of
+        different frames is never merged before eroding (an older patch may have drifted away from a newer one)."""
         from scipy.ndimage import distance_transform_edt  # noqa: PLC0415
 
-        e = np.where(self.free_t > self.occupied_t, self.free_t, -np.inf)
-        good = (t - e) <= self.cfg.max_age_s
         out = np.zeros(self.shape, bool)
-        if not good.any():
-            return out
         if rear_pose is None:
             rho = np.zeros(self.shape)
         else:
             X, Y = self.centres()
             rho = np.hypot(X - rear_pose[0], Y - rear_pose[1])
-        for tau in np.unique(e[good]):
-            support = good & (e == tau)
-            dist = distance_transform_edt(support) * self.cfg.resolution_m
-            out |= good & (e == tau) & (dist >= erosion_m(self.cfg, t - tau, rho))
+        for t_f, mask in self.frames:
+            age = t - t_f
+            if age > self.cfg.max_age_s:
+                continue
+            support = mask & ~(self.occupied_t > t_f)
+            if not support.any():
+                continue
+            # outside the grid is not support (and the transform is undefined on an image with no background)
+            dist = distance_transform_edt(np.pad(support, 1))[1:-1, 1:-1] * self.cfg.resolution_m
+            out |= support & (dist >= erosion_m(self.cfg, age, rho))
         return out
 
     def _occupied_after(self, xy: np.ndarray, t0: float) -> np.ndarray:
@@ -294,38 +298,50 @@ class LowLayer:
         out[inside] = self.occupied_t[ij[inside, 0], ij[inside, 1]] > t0
         return out
 
-    def in_swept(self, xy: np.ndarray, t: float, rear_pose) -> np.ndarray:
-        """Points inside some swept rectangle within the age limit, shrunk by the odometry error since its time (at the
-        point's distance from the current rear axle), whose cell no band point claimed since."""
-        ok = np.zeros(len(xy), bool)
-        rho = np.hypot(xy[:, 0] - rear_pose[0], xy[:, 1] - rear_pose[1])
+    def squares_in_swept(self, corners: np.ndarray, t: float, rear_pose) -> np.ndarray:
+        """Squares (N, 4 corners, xy) lying wholly inside one swept rectangle within the age limit, shrunk by the
+        odometry error since its time (at each corner's distance from the current rear axle), none of whose cells -- those
+        under its bounding box -- a band point claimed since."""
+        n = len(corners)
+        flat = corners.reshape(-1, 2)
+        box = _bbox_corners(corners).reshape(-1, 2)
+        rho = np.hypot(flat[:, 0] - rear_pose[0], flat[:, 1] - rear_pose[1])
+        ok = np.zeros(n, bool)
         for t0, pose, x0, x1, hw in self.swept:
             age = t - t0
             if age > self.cfg.max_age_s:
                 continue
-            r = odometry_error_m(self.cfg, age, rho)
-            lx, ly = _local(xy, pose)
+            r = odometry_error_m(self.cfg, age, rho) - 1e-9  # rounding of the raster's edges
+            lx, ly = _local(flat, pose)
             inside = (lx >= x0 + r) & (lx <= x1 - r) & (np.abs(ly) <= hw - r)
-            ok |= inside & ~self._occupied_after(xy, t0)
+            ok |= inside.reshape(n, 4).all(axis=1) & ~self._occupied_after(box, t0).reshape(n, 4).any(axis=1)
         return ok
+
+    def squares_in_cells(self, corners: np.ndarray, usable: np.ndarray) -> np.ndarray:
+        """Squares (smaller than a cell, any rotation) whose every overlapped cell -- the cells under the corners of
+        their bounding box -- is usable; a corner outside the grid has none."""
+        flat = _bbox_corners(corners).reshape(-1, 2)
+        ij = np.floor((flat - self.origin) / self.cfg.resolution_m).astype(int)
+        inside = (ij[:, 0] >= 0) & (ij[:, 0] < self.shape[0]) & (ij[:, 1] >= 0) & (ij[:, 1] < self.shape[1])
+        good = np.zeros(len(flat), bool)
+        good[inside] = usable[ij[inside, 0], ij[inside, 1]]
+        return good.reshape(-1, 4).all(axis=1)
 
     def prune(self, t: float) -> None:
         self.swept = [s for s in self.swept if t - s[0] <= self.cfg.max_age_s]
+        self.frames = [f for f in self.frames if t - f[0] <= self.cfg.max_age_s]
 
 
-def footprint_points(footprint: Footprint, poses, step_m: float) -> np.ndarray:
-    """Points every ``step_m`` covering the footprint rectangle at each pose (its boundary included)."""
-    xs = np.linspace(-footprint.rear_m, footprint.front_m,
-                     max(2, int(math.ceil((footprint.front_m + footprint.rear_m) / step_m)) + 1))
-    ys = np.linspace(-footprint.half_width_m, footprint.half_width_m,
-                     max(2, int(math.ceil(2 * footprint.half_width_m / step_m)) + 1))
-    LX, LY = np.meshgrid(xs, ys)
-    local = np.stack([LX.ravel(), LY.ravel()], 1)
-    out = []
-    for x, y, yaw in poses:
-        c, s = math.cos(yaw), math.sin(yaw)
-        out.append(np.stack([x + c * local[:, 0] - s * local[:, 1], y + s * local[:, 0] + c * local[:, 1]], 1))
-    return np.vstack(out) if out else np.zeros((0, 2))
+def _bbox_corners(corners: np.ndarray) -> np.ndarray:
+    """The four corners of each polygon's axis-aligned bounding box (N, 4, 2)."""
+    lo, hi = corners.min(axis=1), corners.max(axis=1)
+    return np.stack([lo, np.c_[hi[:, 0], lo[:, 1]], hi, np.c_[lo[:, 0], hi[:, 1]]], 1)
+
+
+def _rect_corners(pose, x0: float, x1: float, hw: float) -> np.ndarray:
+    x, y, yaw = pose
+    c, s = math.cos(yaw), math.sin(yaw)
+    return np.array([(x + c * a - s * b, y + s * a + c * b) for a, b in ((x0, -hw), (x0, hw), (x1, hw), (x1, -hw))])
 
 
 def path_poses(start_poses, segments, step_m: float = 0.05) -> list:
@@ -348,28 +364,113 @@ def path_poses(start_poses, segments, step_m: float = 0.05) -> list:
     return out
 
 
+def _hull(points: np.ndarray) -> np.ndarray:
+    """The convex hull of a few points, counter-clockwise (monotone chain)."""
+    pts = sorted(map(tuple, np.round(points, 12)))
+    if len(pts) <= 2:
+        return np.asarray(pts)
+
+    def half(seq):
+        out: list = []
+        for p in seq:
+            while len(out) >= 2 and ((out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
+                                     - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])) <= 0.0:
+                out.pop()
+            out.append(p)
+        return out
+
+    lower, upper = half(pts), half(reversed(pts))
+    return np.asarray(lower[:-1] + upper[:-1])
+
+
+def _sweep_pieces(poses, x0: float, x1: float, hw: float) -> list:
+    """Convex pieces covering the footprint's continuous sweep between neighbouring poses: the hull of the two
+    rectangles, grown by the largest sagitta of a body point's arc between them (zero on a straight segment, where the
+    hull of two rectangles moved along their own axis is their union). Each piece is (hull vertices, growth)."""
+    rmax = max(math.hypot(a, b) for a in (x0, x1) for b in (-hw, hw))
+    out = []
+    for p, q in zip(poses, poses[1:], strict=False):
+        dth = abs(math.atan2(math.sin(q[2] - p[2]), math.cos(q[2] - p[2])))
+        chord = math.hypot(q[0] - p[0], q[1] - p[1])
+        grow = 0.0
+        if dth > 1e-12:
+            radius = chord / (2.0 * math.sin(dth / 2.0))  # of the rear axle's arc; zero for a turn on the spot
+            grow = (radius + rmax) * (1.0 - math.cos(dth / 2.0))
+        out.append((_hull(np.vstack([_rect_corners(p, x0, x1, hw), _rect_corners(q, x0, x1, hw)])), grow))
+    return out
+
+
+def _squares_touch(lo: np.ndarray, hi: np.ndarray, hull: np.ndarray, grow: float) -> np.ndarray:
+    """Whether axis-aligned boxes (lo, hi corners) come within ``grow`` of a convex polygon -- strictly: a box that only
+    touches the polygon's edge does not (separating-axis test over the box axes and the polygon's edge normals; with
+    ``grow`` > 0 it may say yes near a corner where the rounded growth would not -- the safe side)."""
+    eps = 1e-9
+    ok = (lo[:, 0] < hull[:, 0].max() + grow - eps) & (hi[:, 0] > hull[:, 0].min() - grow + eps)
+    ok &= (lo[:, 1] < hull[:, 1].max() + grow - eps) & (hi[:, 1] > hull[:, 1].min() - grow + eps)
+    corners = np.stack([lo, np.c_[hi[:, 0], lo[:, 1]], hi, np.c_[lo[:, 0], hi[:, 1]]], 1)
+    for a, b in zip(hull, np.roll(hull, -1, axis=0), strict=True):
+        n = np.array([b[1] - a[1], a[0] - b[0]])  # outward for a counter-clockwise hull
+        length = float(np.hypot(*n))
+        if length < 1e-15:
+            continue
+        n /= length
+        ok &= (corners @ n).min(axis=1) < float(a @ n) + grow - eps
+    return ok
+
+
 def envelope_admissible(layer: LowLayer, t: float, poses, footprint: Footprint, *, reverse: bool,
                         t_check: float | None = None) -> tuple:
-    """Whether every point of the footprint along ``poses`` (the path from the current pose to the stopping distance,
-    rear axle) outside the footprint at the current pose lies in a shrunk swept rectangle or (forward only) a usable
-    camera cell; the refused points (x, y) otherwise, a few of them. A point outside the grid has no camera evidence.
-    ``t_check`` (default ``t``): the time the evidence must still hold -- the end of braking (plan S), with no new
-    observation assumed in between."""
+    """Whether the footprint along ``poses`` (the path from the current pose to the stopping distance, rear axle)
+    stays within what is known clear.
+
+    The check runs on a raster of about ``fine_m`` laid in the current footprint's frame, its lines on the footprint's
+    edges, so the footprint the truck stands in is exactly a block of pixels and is exempt. Every other pixel that
+    reaches into the sweep between neighbouring poses (``_sweep_pieces``: a pixel only partly in it counts) must lie
+    wholly inside one shrunk swept rectangle or (forward only) on usable camera cells -- the cells under its bounding
+    box. Returns (True, []) or (False, a few refused pixels' centres in the odometry frame). ``t_check`` (default
+    ``t``): the time the evidence must still hold -- the end of braking (plan S), no new observation assumed."""
     tc = t if t_check is None else t_check
-    pts = footprint_points(footprint, list(poses[1:]) or list(poses), layer.cfg.sample_m)
-    lx, ly = _local(pts, poses[0])
-    own = (lx >= -footprint.rear_m) & (lx <= footprint.front_m) & (np.abs(ly) <= footprint.half_width_m)
-    pts = pts[~own]
-    if not len(pts):
+    f = layer.cfg.fine_m
+    x0, x1, hw = -footprint.rear_m, footprint.front_m, footprint.half_width_m
+    path = list(poses)
+    if len(path) < 2:
         return True, []
-    ok = layer.in_swept(pts, tc, poses[0])
+    p0 = path[0]
+    c0, s0 = math.cos(p0[2]), math.sin(p0[2])
+
+    def to_body(xy):
+        d = xy - np.array(p0[:2])
+        return np.stack([c0 * d[..., 0] + s0 * d[..., 1], -s0 * d[..., 0] + c0 * d[..., 1]], -1)
+
+    def to_world(ab):
+        return np.stack([p0[0] + c0 * ab[..., 0] - s0 * ab[..., 1], p0[1] + s0 * ab[..., 0] + c0 * ab[..., 1]], -1)
+
+    pieces = [(to_body(h), g) for h, g in _sweep_pieces(path, x0, x1, hw)]
+    allv = np.vstack([h for h, _ in pieces])
+    gmax = max(g for _, g in pieces)
+    nx, ny = max(1, round((x1 - x0) / f)), max(1, round(2 * hw / f))
+    fx, fy = (x1 - x0) / nx, 2 * hw / ny  # pixel edges fall on the footprint's edges
+    i_lo = int(math.floor((allv[:, 0].min() - gmax - x0) / fx)) - 1
+    i_hi = int(math.ceil((allv[:, 0].max() + gmax - x0) / fx)) + 1
+    j_lo = int(math.floor((allv[:, 1].min() - gmax + hw) / fy)) - 1
+    j_hi = int(math.ceil((allv[:, 1].max() + gmax + hw) / fy)) + 1
+    ii, jj = np.meshgrid(np.arange(i_lo, i_hi), np.arange(j_lo, j_hi), indexing="ij")
+    ii, jj = ii.ravel(), jj.ravel()
+    outside = (ii < 0) | (ii >= nx) | (jj < 0) | (jj >= ny)  # not a pixel of the footprint the truck stands in
+    ii, jj = ii[outside], jj[outside]
+    lo = np.stack([x0 + ii * fx, -hw + jj * fy], 1)
+    hi = np.stack([x0 + (ii + 1) * fx, -hw + (jj + 1) * fy], 1)
+    need = np.zeros(len(lo), bool)
+    for hull, grow in pieces:
+        need |= _squares_touch(lo, hi, hull, grow)
+    if not need.any():
+        return True, []
+    lo, hi = lo[need], hi[need]
+    corners = to_world(np.stack([lo, np.c_[hi[:, 0], lo[:, 1]], hi, np.c_[lo[:, 0], hi[:, 1]]], 1))
+    ok = layer.squares_in_swept(corners, tc, p0)
     if not reverse:
-        cells = layer.usable(tc, poses[0])
-        i, j, inside = layer._cells(pts)
-        cam = np.zeros(len(pts), bool)
-        cam[np.flatnonzero(inside)] = cells[i, j]
-        ok |= cam
+        ok |= layer.squares_in_cells(corners, layer.usable(tc, p0))
     if ok.all():
         return True, []
-    bad = pts[~ok]
+    bad = to_world((lo[~ok] + hi[~ok]) / 2)
     return False, [tuple(p) for p in np.round(bad[:: max(1, len(bad) // 12)], 3).tolist()]
