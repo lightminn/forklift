@@ -63,7 +63,7 @@
   - `test_low_clearance.py`·`test_low_clearance_core.py` 의 slot_to 시험 3
   - 소스 시험(`test_isaac_transport_planning_config.py`) 이름공간 갱신
 - 재생 게이트 runs29 29/29(`replay_gate/rsb_b35d7f53`, 끔).
-- ws1 전체 pytest(`b35d7f53`): 7144 passed, 알려진 ws1 전용 실패 10 건만.
+- ws1 전체 pytest(`b35d7f53`): 7144 passed, 알려진 ws1 전용 실패 10 건만. main 위로 rebase 한 `75b4fd17`: 7259 passed, 같은 10 건만. 재생 게이트는 `rsb_75b4fd17`·최종 코드 `rsb_109a2f31` 도 29/29.
 
 ## Isaac 비교 (rsb)
 
