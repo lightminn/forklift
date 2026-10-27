@@ -76,6 +76,39 @@ def test_a_contact_makes_it_worse(tmp_path):
     assert j.judge_arm(j.load(tmp_path), "c3")["verdict"] == "더 나쁨"
 
 
+def test_a_bottom_deck_refusal_without_a_failure_reason_is_an_expected_refusal():
+    r = {"success": False, "phase": "bottom_deck_refused", "mission_result": "bottom_deck_refused"}
+    assert j.outcome(r) == "expected_refusal"
+
+
+def test_the_cycle_statistic_is_the_ratio_of_medians(tmp_path):
+    # B0 [200 x 8, 400 x 7], the arm [200 x 4, 240 x 4, 420 x 7]: ratio of medians 240/200 = 1.20 (the median of
+    # the per-pair ratios would be 1.05 and pass).
+    b0 = [200.0] * 8 + [400.0] * 7
+    arm = [200.0] * 4 + [240.0] * 4 + [420.0] * 7
+    for seed in range(15):
+        write(tmp_path, "b0", "s", seed, result(gap_mm=40.0, home=b0[seed]))
+        write(tmp_path, "c3", "s", seed, result(gap_mm=70.0, home=arm[seed]))
+    out = j.judge_arm(j.load(tmp_path), "c3")
+    assert out["cycle_median_ratio"] == pytest.approx(1.2)
+    assert out["verdict"] == "나아졌으나 시간 비용 초과"
+
+
+def test_the_partner_of_a_replaced_run_leaves_every_metric(tmp_path):
+    # Two C3 runs fail for the infrastructure; their B0 partners (the worst B0 losses) must not keep B0's tail high.
+    for seed in range(15):
+        write(tmp_path, "b0", "s", seed, result(gap_mm=0.0 if seed < 2 else 60.0))
+        write(tmp_path, "c3", "s", seed, result(gap_mm=50.0) if seed >= 2 else
+              result(success=False, phase="observe", gap_mm=None, reason="plan_worker_dead"))
+    for seed in (15, 16):  # the pairwise replacements
+        write(tmp_path, "b0", "s", seed, result(gap_mm=60.0))
+        write(tmp_path, "c3", "s", seed, result(gap_mm=50.0))
+    out = j.judge_arm(j.load(tmp_path), "c3")
+    assert out["b0"]["runs"] == 15
+    assert out["b0"]["max_mm"] == pytest.approx(26.25)
+    assert out["criteria"]["4_tail_10mm"] is False
+
+
 def test_infrastructure_pairs_are_left_out_and_too_few_valid_pairs_is_undecided(tmp_path):
     for seed in range(15):
         write(tmp_path, "b0", "s", seed, result(gap_mm=40.0))

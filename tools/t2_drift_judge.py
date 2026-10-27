@@ -32,6 +32,9 @@ def outcome(result: dict | None) -> str:
         return "infrastructure"  # no result: the run did not get to write one (crash, Slurm)
     if result.get("success") and result.get("phase") == "complete":
         return "complete"
+    # A bottom-deck refusal returns without an exception: no failure_reason, the status in mission_result / phase.
+    if "bottom_deck_refused" in (result.get("mission_result"), result.get("phase")):
+        return "expected_refusal"
     reason = str(result.get("failure_reason") or "")
     if any(reason.startswith(p) for p in REPLACEABLE):
         return "infrastructure"
@@ -116,14 +119,22 @@ def load(batch: Path) -> dict:
     return runs
 
 
+def _median(values):
+    v = sorted(values)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
 def judge_arm(runs: dict, arm: str) -> dict:
     keys = sorted({(s, n) for a, s, n in runs if a == arm} & {(s, n) for a, s, n in runs if a == "b0"})
+    # A pair with an infrastructure failure on either side is replaced as a pair: neither run enters any metric.
+    kept = [(s, n) for s, n in keys
+            if outcome(runs[(arm, s, n)]["result"]) != "infrastructure"
+            and outcome(runs[("b0", s, n)]["result"]) != "infrastructure"]
     better = worse = ties = both_missing = 0
     joint_times = []
-    for scene, seed in keys:
+    for scene, seed in kept:
         ra, rb = runs[(arm, scene, seed)]["result"], runs[("b0", scene, seed)]["result"]
-        if outcome(ra) == "infrastructure" or outcome(rb) == "infrastructure":
-            continue  # replaced pairwise, not judged
         la, lb = loss_mm(ra), loss_mm(rb)
         if la is None and lb is None:
             both_missing += 1
@@ -142,7 +153,7 @@ def judge_arm(runs: dict, arm: str) -> dict:
             joint_times.append((ca, cb))
 
     def arm_stats(a):
-        rs = [v["result"] for (x, s, n), v in runs.items() if x == a and outcome(v["result"]) != "infrastructure"]
+        rs = [runs[(a, s, n)]["result"] for s, n in kept]
         losses = [l for l in (loss_mm(r) for r in rs) if l is not None]
         return {"runs": len(rs), "complete": sum(outcome(r) == "complete" for r in rs),
                 "forbidden": sum(forbidden(r) for r in rs), "inserted": len(losses),
@@ -165,8 +176,8 @@ def judge_arm(runs: dict, arm: str) -> dict:
     c4 = (a["p95_mm"] is not None and b["p95_mm"] is not None and a["p95_mm"] <= b["p95_mm"] - 10.0
           and a["max_mm"] <= b["max_mm"] - 10.0)
     if len(joint_times) >= 8:
-        ratio = sorted(x / y for x, y in joint_times)[len(joint_times) // 2] if len(joint_times) % 2 else (
-            lambda r: (r[len(r) // 2 - 1] + r[len(r) // 2]) / 2)(sorted(x / y for x, y in joint_times))
+        # The registered statistic: the arm's median over the jointly completed pairs over B0's median there.
+        ratio = _median([x for x, _ in joint_times]) / _median([y for _, y in joint_times])
         out["cycle_median_ratio"] = ratio
         c5 = ratio <= 1.10
     else:
