@@ -72,7 +72,8 @@ def test_a_symmetric_room_keeps_the_turned_competitor_and_is_not_confirmed():
     grid = _grid(6.0, 4.0, [])
     truth = (2.0, 1.4, 0.0)
     pts = _points(grid, truth)
-    assert G.global_match(grid, pts).status == "overflow"  # an empty box at the default frontier: no answer at all
+    # an empty box overflows a small frontier: no answer at all, never a confirmation
+    assert G.global_match(grid, pts, G.MatchConfig(max_nodes=400_000)).status == "overflow"
     cfg = G.MatchConfig(max_nodes=5_000_000, yaw_step_rad=math.radians(2.0))
     match = G.refine(grid, G.global_match(grid, pts, cfg), pts, cfg)
     assert any(_close(c.pose, truth) for c in match.candidates)

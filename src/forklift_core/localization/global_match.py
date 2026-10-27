@@ -43,7 +43,8 @@ class MatchConfig:
     clearance_m: float = 0.3  # the laser stands where the truck can: this far from any occupied cell
     min_points: int = 30  # fewer endpoints is no information
     max_candidates: int = 8
-    max_nodes: int = 400_000  # a frontier larger than this is an overflow (no answer, never a confirmation)
+    max_nodes: int = 4_000_000  # a frontier larger than this is an overflow (no answer, never a confirmation);
+    # 400,000 overflowed 2 of the 3 dev smoke starts on line_m (plan B4a settings history)
     endpoint_dilate_cells: int = 1  # the endpoint fraction's tolerance, as slam_map.endpoint_fraction
 
 
