@@ -106,6 +106,12 @@ echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP sc
 printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
   "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
+# The SLAM mode, said and recorded (live-default plan 5d): this launcher maps online. The switch to localization on an
+# accepted survey bundle is the live console's (deploy/console/slam_choice.sh); no Riibotics demo scene has one.
+if [ "$MODE" = truth ]; then RIIB_SLAM="none (MODE=truth)"
+else RIIB_SLAM="mapping (riib_scene.sbatch maps online; no Riibotics demo scene has an accepted survey bundle)"; fi
+echo "slam: $RIIB_SLAM"
+printf 'SLAM=%s\n' "$RIIB_SLAM" >> "$OUT/riib_defaults.txt"
 read QE QT < <("$VENV_PY" -c "import json,sys;v=json.load(open(sys.argv[1]))['views'];print(','.join(map(str,v['quarter_eye'])),','.join(map(str,v['quarter_target'])))" "$SCENE_FILE")
 COMMON=(--base-scene "$BASE_SCENE"
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml

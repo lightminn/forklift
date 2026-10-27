@@ -189,6 +189,11 @@ test("the SLAM label says localization on a named map, or that it is not known (
   assert.deepEqual(slamLabel({ slam: { mode: "localization", map_id: id, map_loaded: true } }),
                    { text: "지도 위치추정 · abababab", title: `지도 ${id} · 세션 시작 검사 통과` });
   assert.deepEqual(slamLabel({ mode: "AUTO" }), { text: "온라인 작성 또는 모름", title: "상태에 slam 필드가 없음" });
+  // live-default plan 5d: a mapping session says so on screen, and a fallback (no accepted survey map) says why
+  const why = "mapping (fallback: no registry row for aisle_rack.json and team_spec_quantized)";
+  assert.deepEqual(slamLabel({ slam: { mode: "mapping", choice: why } }), { text: "지도 작성 · 조사 지도 없음", title: why });
+  assert.deepEqual(slamLabel({ slam: { mode: "mapping", choice: "mapping (MAP_BUNDLE=none)" } }),
+                   { text: "지도 작성", title: "mapping (MAP_BUNDLE=none)" });
   assert.deepEqual(slamLabel(null), { text: "—", title: "" });
 });
 

@@ -22,8 +22,11 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
-from frame_sync import FrameSync
-from frame_sync import rgba_of as frame_sync_rgba
+
+if str(Path(__file__).resolve().parent) not in sys.path:  # run through runpy or imported: its sibling modules too
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from frame_sync import FrameSync  # noqa: E402
+from frame_sync import rgba_of as frame_sync_rgba  # noqa: E402
 
 from forklift_core import determinism
 
@@ -806,6 +809,13 @@ def arguments() -> argparse.Namespace:
         "bundle's files and the bridge's reply must both be this map.",
     )
     parser.add_argument(
+        "--slam-choice",
+        default=None,
+        help="Live-default plan 5d: the launcher's SLAM choice and why (deploy/console/slam_choice.sh), shown on the "
+        "console in the state's slam field -- for an online-mapping session too, e.g. 'mapping (fallback: ...)' when no "
+        "accepted survey map was there -- and kept in the result. A label: the mode itself comes from the bundle.",
+    )
+    parser.add_argument(
         "--new-obstacles",
         type=Path,
         default=None,
@@ -1171,6 +1181,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--slam-map-bundle requires --slam-feedback and --expected-map-id")
     if args.expected_map_id is not None and args.slam_map_bundle is None:
         parser.error("--expected-map-id requires --slam-map-bundle")
+    if args.slam_choice is not None and args.slam_feedback is None:
+        parser.error("--slam-choice requires --slam-feedback")
     if args.odometry_heading == "gyro" and (args.gyro_model is None or args.encoder_model != "team_spec_quantized"
                                             or args.slam_feedback is None or not args.use_perception):
         parser.error("--odometry-heading gyro requires --gyro-model, --encoder-model team_spec_quantized, "
@@ -3509,7 +3521,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
                                   if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
                                   else None)
-                          for name_ in slam_map_module.SHARED_INPUTS})
+                          for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)})
         if mismatches_:
             raise SessionFailure(f"{slam_map_module.MISMATCH}: " + "; ".join(mismatches_))
         state["slam_map"] = {"mode": "localization", "map_id": slam_bundle_.map_id,
@@ -7179,7 +7191,12 @@ def drive(S, isaac) -> None:
                 slam["tracker"].max_age_s = 0.25 + SLAM_LIVE_REPLY_DEADLINE_S * args.live_factor
             if slam.get("bundle") is not None:
                 # L4 passed (the tracker leaves warming up only on the bridge's checked 7th reply, its map confirmed)
-                live.slam_info = {"mode": "localization", "map_id": slam["bundle"].map_id, "map_loaded": True}
+                live.slam_info = {"mode": "localization", "map_id": slam["bundle"].map_id, "map_loaded": True,
+                                  **({"choice": args.slam_choice} if args.slam_choice else {})}
+            elif args.slam_choice:
+                # live-default plan 5d: an online-mapping session the launcher named says so on the console (and why:
+                # "mapping (fallback: ...)" when no accepted survey map was there), never by the field's absence alone
+                live.slam_info = {"mode": "mapping", "choice": args.slam_choice}
             state["slam_async"] = {"prewarm_steps": prewarm_steps_,
                                    "prewarm_sim_s": float(world.current_time - initial_time),
                                    "prewarm_wall_s": time.monotonic() - prewarm_wall_,

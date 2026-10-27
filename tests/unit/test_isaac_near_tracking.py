@@ -1164,6 +1164,9 @@ def test_the_slam_mode_and_map_are_compared_by_meaning_not_by_the_bundle_path(tm
     assert sorted(problems(mapping, on_a)) == ["arguments map_id differs from the measurement runs",
                                                "arguments slam_mode differs from the measurement runs"]
     assert "input_files" not in str(problems(on_a, on_a))  # the bundle folder is not an input file
+    # live-default plan 5d: the launcher's choice is a label for the console and the record, not a run condition
+    named = {"arguments": {"fps": 60, "slam_choice": "mapping (fallback: no SCENE_FILE, the factory hall has no registry row)"}}
+    assert problems(mapping, named) == [] and "slam_choice" in NT.RUN_SPECIFIC_ARGUMENTS
 
 
 def test_the_d8b_reference_check_compares_the_slam_map_by_meaning_too(tmp_path):

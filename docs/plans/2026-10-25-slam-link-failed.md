@@ -24,9 +24,10 @@ CT-2 와 그 뒤의 live 실행 9 건이 `slam_link_failed: scan N: no reply wit
 | ct2_624d0616_auto_line_m_s1 | 4874 | 237 | 0.034 / 0.554, 1.121 | 487 |
 | ct2_624d0616_auto_line_m_s4 | 4898 | 237 | 0.032 / 0.604, 1.064 | 490 |
 | ct2_624d0616_fixed_line_m_s3 | 4851 | 239 | 0.031 / 0.603, 1.088 | 485 |
-| lf_67694d16_main_line_m_s0 | 5019 | 242 | 0.035 / 0.626, 1.148 | 502 |
-| reprp_occ_4c53486_random_m_s3_r1 | 5689 | 264 | 0.033 / 0.462, 1.036 | 569 |
+| lf_67694d16_main_line_m_s0 (보관 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 묶음 `c27_07`) | 5019 | 242 | 0.035 / 0.626, 1.148 | 502 |
+| reprp_occ_4c53486_random_m_s3_r1 (보관 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 묶음 `c27_07`) | 5689 | 264 | 0.033 / 0.462, 1.036 | 569 |
 
+- 두 실행과 그 스냅숏(`lf_67694d16`·`occ_4c53486`)은 2026-10-27 ws1 에서 지웠다. 보관 묶음은 `c27_07.tar.zst` 이고, 옆에 `.files.tsv`(파일 목록)·`.tar.zst.md5` 가 있다. 같은 폴더의 `c27_02` 에는 `lf_67694d16_fix_line_m_s0`·`fix_random_m_s5`·`s7`·`s8`·`s9`·`main_random_m_s9`·`newtq_occ_4c53486_line_m_s0` 이, `c27_03` 에는 `newtq_occ_4c53486_line_m_s1` 이, `c27_07` 에는 `lf_67694d16_solo_fix_random_m_s7`·`solo_main_random_m_s9` 도 있다.
 - 처리 시간은 `wall_s`(브리지가 scan 을 내보낸 때부터 /pose 를 받을 때까지)이다. keyframe 이 아닌 scan(`skipped`)은 slam_toolbox 로 가지 않는다.
 - U16(SLAM 위치 추정 계획 2.1)은 keyframe 879 개에서 같은 실패로 끝났다. 여기서는 237–275 개에서 끝났다. keyframe 수, 곧 그래프 크기만으로는 설명이 안 된다.
 - 실패한 scan 번호(4,851–5,958)가 비슷한 것은 장면과 임무 순환이 비슷해서다. line_m 넷은 sim 485–502 s, random_m 넷은 545–596 s 에서 끝났다.
@@ -214,6 +215,12 @@ E1 결과를 보기 전에 고정한다. 목표 운용 시간은 상위 계획 1
 - 완화 전 같은 실행들은 모두 2 건을 마치고 sim 485–570 s 에서 slam_link_failed 로 끝났다(keyframe 최대 1.04–1.15 s). 위치 오차는 완화 전과 같은 수준이다(같은 지표로 다시 잼: line_m 0.024 / 0.18–0.20, random_m 0.10–0.20 / 0.25–0.32).
 - auto_random r2 의 실패는 도킹 재시도 대조 거절이다. slam_link 와 무관하지만 위치 오차 최대 0.48 m 가 함께 있어 기록해 둔다.
 - line_m_s2 의 첫 두 번은 시작 직후 재제출(PR #131)이 없는 스냅숏이라 무효였다. main 을 병합한 스냅숏(90602d9a, `ENCODER_MODEL=reported` 로 원래 실행과 같은 오도메트리)으로 다시 돌렸다(묶음 11391, `test_runs/live/slamfix_90602d9a`).
+- **참고 — 완화 전, team-spec (v-g2 escb, ws1 `test_runs/live/escb_fc653387_*` — 보관 `gdrive:forklift-archive/ws1-cleanup-20261026-ag/` 의 `ag_escb_01`·`ag_escb_02`, 총괄 전달 2026-10-26).**
+  - 조건: CT-1 line_m 순환(미션 3 건) seed 0–9 × 출발 띠 해제 끔·켬 20 세션, team-spec 오도메트리, #145 이전 main 스냅숏(fc653387).
+  - 결과: 9 개가 sim 402–480 s 에 `slam_link_failed`(no reply within 1.00 s)로 끝났다. 끔 4, 켬 5 이고 모두 미션 2 건을 마친 뒤였다.
+  - 완주한 11 개도 keyframe 최대가 0.77–0.99 s 였다. 1 s 한계 바로 아래다.
+  - 위 확인(완화 뒤, reported, CT-2 실패 세션 넷 × 2)과 오도메트리 모형·대기열이 달라 같은 조건 비교는 아니다. 그래도 완화 전에는 team-spec 에서도 한 순환 안에 절반 가까이가 끊겼다는 표본이다.
+  - 완화 뒤 team-spec 의 같은 길이 자료는 live 위치 추정 기본 계획 S3 의 R 팔(mapping, 완화값, team-spec, sim 1 h)이 낸다.
 - **같은 값을 쓰는 설정(5 장 3, PR Codex 검토 반영).**
   - 위치 추정 변형 J(`tools/slam_localization_params.py`)는 루프 탐색 해상도·smear 를 online 설정에서 물려받고 있었다. 그래서 이 완화가 J 도 0.05/0.03 → 0.10/0.05 로 바꾼다. SLAM 그래프 크기 계획의 S2 재생은 이미 완화된 online 설정에서 돌았으므로 후보 A 의 근거가 바로 이 값이다. J 에 0.10/0.05 를 명시적으로 고정해, mapping 설정을 다시 바꿔도 J 가 따라 바뀌지 않게 한다. 거리 2.0 m·창 3.0 m 는 그대로다.
   - survey 설정(`slam_toolbox_isaac_survey.yaml`)은 완화 전 값(3.0/8.0/0.05/0.03)을 그대로 둔다. 그 설정의 V2′ 수치가 이 값으로 잰 것이고, survey 에폭은 한 순환이다. 완화를 survey 에도 넣을지는 CT-2 survey(live 위치 추정 기본 계획 S3)의 결과를 보고 정한다.

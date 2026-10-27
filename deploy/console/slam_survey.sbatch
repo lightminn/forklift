@@ -21,7 +21,8 @@
 #   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded),
 #   RIGID_RUN (a run of this scene whose scene.usda the moving check lists when the epoch exported none -- a tour
 #   plans no mission, and the runner exports its stage when a mission plans; its stage provenance must match),
-#   MAP_PARAMS (repository path of the mapping params; ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml)
+#   MAP_PARAMS (repository path of the mapping params; ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml),
+#   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene, as isaac_live.sbatch takes it; unset: the factory hall)
 #
 # Run from the repository root.
 set -u
@@ -49,9 +50,11 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'MAP_PARAMS=%q\n' "$MAP_PARAMS"
   # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
   printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
-  printf 'SCENE_FILE=\n'  # the console's runner word for word: the factory hall
+  # the scene as the console runs it: SCENE_FILE (a scene file, e.g. a CT-2 session) or, unset, the factory hall
+  printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"  # the console's runner reads it
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
+  printf 'SLAM_CHOICE=%q\n' "mapping (survey epoch)"  # the console's runner shows it (live-default plan 5d)
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -99,7 +102,8 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
-  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \
+  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
+  $EXTRA_ARGS "${LOC[@]}" \
   --output "$2/run" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"

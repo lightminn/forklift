@@ -190,6 +190,25 @@ def test_a_map_mismatch_stops_at_once_and_its_reason_reaches_the_port_file(tmp_p
     assert port["state"] == "crashed" and port["reason"] == reason
 
 
+def test_the_registrys_map_id_is_held_against_the_bundle_folder(tmp_path):
+    # live-default plan S3 D2 (Codex P2): the session's expected id came from the folder itself, so a folder naming
+    # another bundle of the same scene (one the acceptance check refused, say) passed; the registry's id is checked
+    folder, map_id = _bundle(tmp_path)
+    result = run(tmp_path / "other", runner_exiting(0), map_bundle=folder, expected_map_id="0" * 64)
+    assert result["epochs"] == 0 and result["end"] == "map_mismatch" and "map_id" in result["reason"]
+    assert not (tmp_path / "other" / "epoch_1").exists()
+    ok = run(tmp_path / "same", runner_exiting(0), map_bundle=folder, expected_map_id=map_id, max_epochs=1)
+    assert ok["codes"] == [0]
+
+
+def test_the_launchers_slam_choice_is_in_the_session_record(tmp_path):
+    # live-default plan S3 D2 (Codex P3): mapping forced, unset or for want of a registry row tell apart in the record
+    run(tmp_path / "out", runner_exiting(0), max_epochs=1, slam_choice="mapping (MAP_BUNDLE=none)")
+    events = [json.loads(x) for x in (tmp_path / "out" / "supervisor.jsonl").read_text().splitlines() if x.strip()]
+    assert {"event": "slam_choice", "choice": "mapping (MAP_BUNDLE=none)"} in [
+        {k: e[k] for k in ("event", "choice") if k in e} for e in events]
+
+
 def test_a_bundle_that_does_not_load_starts_no_epoch(tmp_path):
     folder, _ = _bundle(tmp_path)
     (folder / "map.data").write_bytes(b"changed")
@@ -412,3 +431,16 @@ def test_the_live_runner_holds_slam_corrections_on_d7_re_approaches_by_default()
     runner = live[live.index('cat > "$OUT/runner.sh"'):]
     runner = runner[: runner.index("EOT\n")]
     assert runner.index('--d7-reapproach-hold "$D7_HOLD"') < runner.index("$EXTRA_ARGS")
+
+
+def test_the_live_runner_shows_the_launchers_slam_choice():
+    """Live-default plan 5d: the launcher's choice reaches the runner (the console's slam field) and the supervisor's
+    log, so a mapping session -- a fallback included -- is said on screen and in the record."""
+    from pathlib import Path
+
+    live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "printf 'SLAM_CHOICE=%q\\n' \"$SLAM_CHOICE\"" in live
+    runner = live[live.index('cat > "$OUT/runner.sh"'):]
+    runner = runner[: runner.index("EOT\n")]
+    assert '--slam-choice "$SLAM_CHOICE"' in runner
+    assert '--slam-choice "$SLAM_CHOICE"' in live[live.index('"$ROOT/tools/live_supervisor.py"'):]

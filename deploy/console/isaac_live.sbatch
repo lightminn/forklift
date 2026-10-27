@@ -14,9 +14,12 @@
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/isaac_live.sbatch OUT
 #   optional: PORT (8798), FACTOR (0.4), SEED (0), ENCODER_MODEL (team_spec_quantized, or reported; each takes its own
-#   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (a survey map bundle,
-#   tools/slam_survey_bundle.py: every epoch localizes on it from the start, SLAM localization plan L3/L4/L7 -- unset:
-#   online mapping) with MAP_START_POSE ("x,y,yaw", map <- base_link at the scene's start, e.g. "-2.0,0.0,0.0"),
+#   obstacle-layer age table), EXTRA_ARGS (split on spaces), STANDBY_LINGER_S (300), MAP_BUNDLE (the SLAM mode,
+#   deploy/console/slam_choice.sh -- unset, the default since the user's decision of 2026-10-27 (live-default plan 5d):
+#   localization on the accepted survey bundle of SCENE_FILE and ENCODER_MODEL from config/slam_map_bundles.yaml under
+#   SLAM_BUNDLE_ROOT, its map id held against the folder, and online mapping as a recorded fallback where the registry
+#   has no row; registry: that bundle or no launch; none: mapping; a folder: that bundle with MAP_START_POSE "x,y,yaw",
+#   map <- base_link at the scene's start), SLAM_BUNDLE_ROOT (where the registry's bundle folders are),
 #   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
 #   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
 #   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
@@ -34,10 +37,6 @@ OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
-if [ -n "${MAP_BUNDLE:-}" ]; then
-  MAP_BUNDLE=$(realpath "$MAP_BUNDLE")
-  : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
-fi
 # In a bundle (deploy/slurm/isaac_bundle.sbatch) several sessions share one Slurm job: SESSION_ID names this one's
 # bridge containers and BRIDGE_CPU pins its bridge to a CPU of its own; alone, the job ID and the job's first CPU.
 # The SLAM odometry's encoders (plan 2026-10-25-team-spec-default, lead decision): the joint-angle model by default,
@@ -46,6 +45,15 @@ ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 D7_HOLD=${D7_HOLD:-on}
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
+# The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
+# registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
+. "$ROOT/deploy/console/slam_choice.sh"
+if [ -n "${MAP_BUNDLE:-}" ]; then
+  # a bundle folder that is not there stops the launch (an empty realpath would have read as mapping)
+  MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
+  : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
+fi
+echo "slam: $SLAM_CHOICE"
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -59,6 +67,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
+  printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -110,7 +119,8 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
-  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" $EXTRA_ARGS "${LOC[@]}" \
+  --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
+  $EXTRA_ARGS "${LOC[@]}" \
   --output "$2/run" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
@@ -119,10 +129,12 @@ trap 'for c in $(docker ps -aq --filter "name=slam_bridge_${JOB}_e"); do docker 
 echo "host=$(hostname) job=$JOB out=$OUT"
 SUP_LOC=()
 [ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")
+[ -n "${MAP_BUNDLE:-}" ] && [ -n "$EXPECTED_MAP_ID" ] && SUP_LOC+=(--expected-map-id "$EXPECTED_MAP_ID")
 # Between runners the supervisor serves the console's port itself (contract 6): the page and /api/v1/session, so a
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" "${SUP_LOC[@]}" \
+  --slam-choice "$SLAM_CHOICE" \
   --standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" --standby-linger-s "${STANDBY_LINGER_S:-300}" \
   --bridge "$(json bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')" \
   --bridge-stop "$(json bash "$OUT/stop.sh" '{epoch}')" \

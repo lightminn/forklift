@@ -29,7 +29,11 @@ OCCUPIED = 65  # /map values: 100 occupied, 0 free, -1 unknown (the survey's own
 # the hall, the scan and the shared scan's noise (the obstacle layer config)
 SHARED_INPUTS = ("base_scene", "forklift_urdf", "factory_layout", "lidar", "obstacle_layer")
 # the run arguments that change what the LiDAR plane sees or the SLAM noise (manifest "run" "arguments")
-SHARED_ARGUMENTS = ("prism_colliders", "slam_noise_seed", "slam_noise_spec")  # + the SLAM noise (plan L2)
+SHARED_ARGUMENTS = ("layout", "prism_colliders", "slam_noise_seed", "slam_noise_spec")  # + the SLAM noise (plan L2)
+# live-default plan S3 D3: a --layout scene run's scene file (its pallets, props and walls), compared by content; under
+# that layout the seed drives only the noise, so the seed and the noise seed need not be the survey's
+SCENE_INPUT = "scene_file"
+SEED_ONLY_NOISE = ("slam_noise_seed",)
 MAP_LOADED_MIN = 0.95  # plan L4: the /map after the first processed scan covers >= 95 % of the survey's occupied cells
 READY_MIN = 0.80  # plan L4: bootstrap scans 5-7 each put >= 80 % of their endpoints on the survey's walls
 START_POSITION_M, START_YAW_RAD = 0.10, 0.05
@@ -141,19 +145,23 @@ def run_mismatches(manifest: dict, *, seed, input_sha256: dict, scene_sha256: di
                    arguments: dict | None = None) -> list[str]:
     """What of this run differs from the survey's: its seed, its scene (every USD beside the base scene, by content),
     the shared input files (``input_sha256``: argument name -> this run's file hash, None when the run names none) and
-    the arguments that change what the LiDAR plane sees."""
+    the arguments that change what the LiDAR plane sees. A ``--layout scene`` run (live-default plan S3 D3) is held to
+    the survey's scene file by content instead of its seed: there the seed drives only the noise."""
     out = []
-    if manifest.get("seed") != seed:
+    scene_run = (arguments or {}).get("layout") == "scene"
+    if not scene_run and manifest.get("seed") != seed:
         out.append(f"seed {seed} is not the survey's {manifest.get('seed')}")
     run = manifest.get("run") if isinstance(manifest.get("run"), dict) else {}
     if scene_sha256 is not None and run.get("scene_sha256") != scene_sha256:
         out.append("the scene's USD files differ from the survey's")
     survey_arguments = run.get("arguments") if isinstance(run.get("arguments"), dict) else {}
     for name in SHARED_ARGUMENTS:
+        if scene_run and name in SEED_ONLY_NOISE:
+            continue
         if arguments is not None and (arguments or {}).get(name) != survey_arguments.get(name):
             out.append(f"argument {name} differs from the survey's")
     inputs = manifest.get("inputs") if isinstance(manifest.get("inputs"), dict) else {}
-    for name in SHARED_INPUTS:
+    for name in SHARED_INPUTS + ((SCENE_INPUT,) if scene_run else ()):
         want = (inputs.get(name) or {}).get("sha256") if isinstance(inputs.get(name), dict) else None
         if want is None or input_sha256.get(name) != want:
             out.append(f"{name} differs from the survey's")
@@ -219,5 +227,5 @@ def localized(fractions: list, poses: list, start) -> bool:
 
 
 __all__ = ["BUNDLE_FILES", "FORMAT", "Grid", "MAP_LOADED_MIN", "MISMATCH", "MapBundle", "MapBundleError", "NOT_LOADED",
-           "NOT_LOCALIZED", "READY_MIN", "REASONS", "SHARED_INPUTS", "dilated", "endpoint_fraction", "file_sha256",
+           "NOT_LOCALIZED", "READY_MIN", "REASONS", "SCENE_INPUT", "SHARED_INPUTS", "dilated", "endpoint_fraction", "file_sha256",
            "load_bundle", "localized", "map_coverage", "map_id_of", "run_mismatches", "start_pose_error"]

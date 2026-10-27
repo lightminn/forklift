@@ -74,6 +74,20 @@ def test_coverage_finds_the_farthest_path_point():
     assert sb.coverage_check(path[:2], nodes, 3.0)["ok"]
 
 
+def test_a_scene_file_survey_is_judged_by_the_reference_runs_path(monkeypatch, tmp_path):
+    # live-default plan S3: the judged region (tour config aisles, travel planner clearance) is the factory hall's; a
+    # --layout scene survey (CT-2) has no travel_planner_config and is judged by a run of the same scene's own path
+    nodes = {"x": np.array([0.0, 10.0]), "y": np.array([0.0, 0.0]), "yaw": np.zeros(2)}
+    result = {"arguments": {"layout": "scene", "rear_axle_offset_m": 0.2}}
+    monkeypatch.setattr(sb, "path_points", lambda run: np.array([[7.5, 0.0], [0.0, 2.0]]))
+    out = sb.coverage_report(result, nodes, None, tmp_path / "ref", None, None)
+    assert out["ok"] is True and out["basis"] == "reference_path" and out["reference"] == str(tmp_path / "ref")
+    monkeypatch.setattr(sb, "path_points", lambda run: np.array([[10.0, 3.5]]))
+    assert sb.coverage_report(result, nodes, None, tmp_path / "ref", None, None)["ok"] is False
+    missing = sb.coverage_report(result, nodes, {"aisles": []}, None, None, None)
+    assert missing["ok"] is False and "reference run" in missing["reason"]
+
+
 def test_the_cost_check_records_processed_keyframes_only():
     records = [{"status": "processed", "wall_s": 0.05}] * 9 + [{"status": "skipped", "wall_s": 5.0},
                                                                  {"status": "processed", "wall_s": 0.31}]
@@ -271,6 +285,18 @@ def test_the_survey_job_runs_the_consoles_runner_word_for_word():
     assert "-e SLAM_SERIALIZE=/out/bundle/map" in bridge
     assert '/run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent' in bridge
     assert "--max-epochs 1" in survey and "--end-session" in survey
+    # the runner's --slam-choice label: a survey says it maps (live-default plan 5d)
+    assert "printf 'SLAM_CHOICE=%q\\n' \"mapping (survey epoch)\"" in survey
+
+
+def test_the_survey_maps_the_scene_file_it_is_given_as_the_console_runs_it():
+    # live-default plan S3: the CT-2 surveys (SCENE_FILE=line_m_session.json) ran in the factory hall because the env
+    # file blanked SCENE_FILE; the survey writes it as the console does, so its runner sees the same scene
+    live = (ROOT / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    survey = (ROOT / "deploy" / "console" / "slam_survey.sbatch").read_text()
+    line = """printf 'SCENE_FILE=%q\\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")\""""
+    assert line in live and line in survey
+    assert "printf 'SCENE_FILE=\\n'" not in survey
 
 
 def test_the_survey_takes_the_consoles_default_odometry():

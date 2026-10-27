@@ -51,6 +51,52 @@ def test_a_run_on_another_seed_or_input_file_does_not_match_the_survey(tmp_path)
     assert sm.run_mismatches(manifest, seed=0, input_sha256={**same, "lidar": "x"}) == ["lidar differs from the survey's"]
 
 
+def _scene_manifest(manifest, *, scene_hash="h_scene", layout="scene", seed=0, noise_seed=0):
+    out = json.loads(json.dumps(manifest))
+    out["seed"] = seed
+    if scene_hash is not None:
+        out["inputs"][sm.SCENE_INPUT] = {"path": "line_m_session.json", "sha256": scene_hash}
+    out["run"] = {"arguments": {"layout": layout, "prism_colliders": False, "slam_noise_seed": noise_seed,
+                                "slam_noise_spec": "a2"}}
+    return out
+
+
+def test_a_scene_file_run_reuses_the_survey_on_another_seed_but_not_on_another_scene(tmp_path):
+    # live-default plan S3 D3: under --layout scene the seed drives only the noise, so a bundle serves every seed of
+    # the same scene file; the scene file is compared by content (it was not compared at all: a line_m bundle passed a
+    # random_m run, the base scene being the same)
+    _, base = _bundle(tmp_path, _grid())
+    manifest = _scene_manifest(base)
+    same = {name: "h_" + name for name in sm.SHARED_INPUTS}
+    args = {"layout": "scene", "prism_colliders": False, "slam_noise_seed": 0, "slam_noise_spec": "a2"}
+    inputs = {**same, sm.SCENE_INPUT: "h_scene"}
+    assert sm.run_mismatches(manifest, seed=0, input_sha256=inputs, arguments=args) == []
+    assert sm.run_mismatches(manifest, seed=2, input_sha256=inputs, arguments={**args, "slam_noise_seed": 2}) == []
+    assert sm.run_mismatches(manifest, seed=0, input_sha256={**inputs, sm.SCENE_INPUT: "h_other"},
+                             arguments=args) == ["scene_file differs from the survey's"]
+    assert sm.run_mismatches(manifest, seed=0, input_sha256=inputs, arguments={**args, "slam_noise_spec": "b"}) == [
+        "argument slam_noise_spec differs from the survey's"]
+    no_hash = _scene_manifest(base, scene_hash=None)
+    assert sm.run_mismatches(no_hash, seed=0, input_sha256=inputs, arguments=args) == [
+        "scene_file differs from the survey's"]
+
+
+def test_a_factory_run_still_needs_the_surveys_seed_and_no_scene_file(tmp_path):
+    _, base = _bundle(tmp_path, _grid())
+    factory = _scene_manifest(base, scene_hash=None, layout="factory")
+    same = {name: "h_" + name for name in sm.SHARED_INPUTS}
+    args = {"layout": "factory", "prism_colliders": False, "slam_noise_seed": 0, "slam_noise_spec": "a2"}
+    assert sm.run_mismatches(factory, seed=0, input_sha256=same, arguments=args) == []
+    assert "seed 1 is not the survey's 0" in sm.run_mismatches(factory, seed=1, input_sha256=same,
+                                                               arguments={**args, "slam_noise_seed": 1})
+    # a scene-file survey is not a factory map, nor the other way round
+    scene = _scene_manifest(base)
+    assert "argument layout differs from the survey's" in sm.run_mismatches(scene, seed=0, input_sha256=same,
+                                                                            arguments=args)
+    assert "argument layout differs from the survey's" in sm.run_mismatches(
+        factory, seed=0, input_sha256={**same, sm.SCENE_INPUT: "h_scene"}, arguments={**args, "layout": "scene"})
+
+
 def test_coverage_compares_cells_in_world_whatever_the_two_grids_origins():
     survey = _grid()
     shifted = _grid(origin=(-0.5, -0.5, 0.0), shape=(30, 30), walls=((10, slice(7, 23)),))  # the same wall
