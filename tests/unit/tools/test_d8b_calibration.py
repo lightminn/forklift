@@ -525,24 +525,27 @@ def test_a_boundary_recorded_run_is_refused_as_measurement_evidence():
 # The declared no-D5 matrix (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3) ---------------------------------
 class _FakeRun:
     def __init__(self, speed=0.08, d5=False, dwells=(), key="r", arguments=None, near="done",
-                 transitions=(("insert", "lift"),), gap_at=None):
+                 transitions=(("observe", "approach", 0.0), ("approach", "insert", 1.0), ("insert", "lift", 1.95)),
+                 gap_at=None, cut=None):
         from types import SimpleNamespace
 
         self.key = key
         self.meta = {"approach_straight_speed_mps": speed, "pocket_check": d5}
         self.dwells = [{"kind": k} for k in dwells]
-        args = {"encoder_model": "team_spec_quantized", "recognition": "far", "seed": 1,
+        args = {"encoder_model": "team_spec_quantized", "seed": 1,  # (no snapshot root here: no far run)
                 "approach_straight_speed_mps": speed, **(arguments or {})}
         # A real run records every contract field (near_tracking.CONDITION_FIELDS and the trackers').
         fields = {name: {"value": 1} for name in ("settings_synthetic", "detector_params", "planner_config",
                                                   "travel_planner_config", "lidar_synthetic")}
         self.result = {"arguments": args, "near_capture": {"status": near},
-                       "transitions": [{"from": a, "to": b} for a, b in transitions],
+                       "transitions": [{"from": a, "to": b, "time_s": ts} for a, b, ts in transitions],
                        "chassis_model": {"wheelbase_m": 0.66}, "tracker_configs": {"approach": {"lookahead_m": 0.28}},
                        **fields}
         t = np.arange(0.0, 2.0, CAL.TICK_S)
         if gap_at is not None:
             t = t[(t < gap_at) | (t > gap_at + 0.1)]
+        if cut is not None:  # truth rows gone over [lo, hi): an end of the span, not a gap inside it
+            t = t[(t < cut[0]) | (t >= cut[1])]
         phases = ["observe", "approach", "insert", "lift"]
         self.truth = SimpleNamespace(t=t, phase=np.where(t < 1.0, 1, 2), phases=phases)
         self.control = np.column_stack([np.arange(0.0, 2.0, CAL.TICK_S)] + [np.zeros(len(np.arange(0.0, 2.0, CAL.TICK_S)))] * 6)
@@ -562,6 +565,10 @@ def test_the_no_d5_matrix_needs_no_d5_run_and_refuses_one():
     assert any("D5" in m and "no-d5" in m for m in CAL.manifest(with_d5, matrix="no-d5"))
     with pytest.raises(ValueError, match="matrix"):
         CAL.manifest(full(), matrix="other")
+    # exactly the declared specs (Codex P2): a run at an unregistered speed is refused, not pooled
+    extra = full()
+    extra[1].append(_FakeRun(0.20, key="extra"))
+    assert any("extra" in m and "not in the no-d5 matrix" in m for m in CAL.manifest(extra, matrix="no-d5"))
 
 
 def test_the_no_d5_matrix_needs_one_condition_across_its_runs():
@@ -597,3 +604,8 @@ def test_a_no_d5_input_needs_the_near_capture_the_finished_insertion_and_unbroke
     assert any("near capture" in p for p in CAL.input_problems(_FakeRun(key="n", near="refused")))
     assert any("insertion did not finish" in p for p in CAL.input_problems(_FakeRun(key="i", transitions=())))
     assert any("truth" in p and "gap" in p for p in CAL.input_problems(_FakeRun(key="g", gap_at=1.5)))
+    # the span is the transitions', not the remaining rows' (Codex P2): rows gone at either end are refused
+    assert any("truth" in p and "misses an end" in p for p in CAL.input_problems(_FakeRun(key="e", cut=(1.5, 2.0))))
+    assert any("truth" in p and "misses an end" in p for p in CAL.input_problems(_FakeRun(key="s", cut=(0.0, 0.3))))
+    assert any("no approach/insert span" in p
+               for p in CAL.input_problems(_FakeRun(key="a", transitions=(("insert", "lift", 1.95),))))

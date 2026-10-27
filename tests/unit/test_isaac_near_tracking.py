@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -281,6 +282,44 @@ def test_a_far_run_is_refused_by_the_committed_terms_and_taken_by_terms_measured
     assert NT.condition_problems(far, wide) == [
         "arguments near_capture_redraw_lateral_m differs from the measurement runs"
     ]
+
+
+def test_a_far_runs_condition_compares_the_files_the_far_recognition_reads_by_fixed_path(tmp_path):
+    """Codex near-remeasure tools review P2: the far runtime reads its track bounds, the site load defaults and the
+    known shapes' geometry without an argument naming them; a far condition holds them (and what they name) by
+    content, a run without the far recognition does not."""
+    import shutil
+
+    for rel in NT.FAR_RECOGNITION_FILES + ("config/obstacle_odometry_age.json",):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, tmp_path / rel)
+    far = {"arguments": {"recognition": "far"}}
+    expected = NT.run_condition(far, tmp_path)
+    labels = set(expected["input_files"])
+    assert {f"far-recognition {rel}" for rel in NT.FAR_RECOGNITION_FILES} <= labels
+    assert "file config/obstacle_odometry_age.json" in labels  # named by the track bounds
+    assert not any(label.startswith("far-recognition") for label in NT.run_condition({"arguments": {}}, tmp_path)["input_files"])
+    def file_problems(observed):  # (the fake result records no settings: only the inputs are compared here)
+        return [p for p in NT.condition_problems(expected, observed) if p.startswith("input_files")]
+
+    assert file_problems(NT.run_condition(far, tmp_path)) == []
+    bounds = tmp_path / "config/recognition_track_bounds.yaml"
+    bounds.write_text(bounds.read_text() + "\n# changed\n")
+    assert file_problems(NT.run_condition(far, tmp_path)) == [
+        "input_files far-recognition config/recognition_track_bounds.yaml differs from the measurement runs"
+    ]
+    assert any("far-recognition" in p for p in file_problems(NT.run_condition(far, None)))
+    # every fixed path the runtime reads is listed (a new one there must join FAR_RECOGNITION_FILES)
+    source = (ROOT / "sim/isaac/far_recognition_runtime.py").read_text()
+    from forklift_core.perception.pallet_model import VARIANT_OF
+
+    sys.path.insert(0, str(ROOT / "sim/isaac"))
+    import far_recognition_runtime as FR
+
+    shapes = set(FR.SHAPES) | set(VARIANT_OF)
+    assert {f"config/pallet_geometry_{k}.yaml" for k in shapes} <= set(NT.FAR_RECOGNITION_FILES)
+    for rel in re.findall(r'"(config/[A-Za-z0-9_./-]+)"', source):
+        assert rel in NT.FAR_RECOGNITION_FILES, rel
 
 
 def test_an_argument_newer_than_the_measurement_matches_only_at_its_reproducing_value(

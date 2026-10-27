@@ -1237,6 +1237,31 @@ def slam_semantics(result: dict) -> dict:
     return {"slam_mode": "mapping", "map_id": None}
 
 
+# Files the far recognition reads by a fixed path, not through an argument (sim/isaac/far_recognition_runtime.py:
+# its track bounds, the site load defaults and every known shape's geometry, a test-article variant included): a far
+# run's condition compares them by content, with the files they name (Codex near-remeasure tools review P2). A run
+# without the far recognition records none of them, so every earlier condition reads as before.
+FAR_RECOGNITION_FILES = (
+    "config/recognition_track_bounds.yaml",
+    "config/site_load_defaults.yaml",
+    "config/pallet_geometry_epal6.yaml",
+    "config/pallet_geometry_t11_06.yaml",
+    "config/pallet_geometry_t11_06_d600.yaml",
+)
+
+
+def far_recognition_files(root: Path | None) -> dict[str, str | None]:
+    """label -> sha256 (None: missing) of FAR_RECOGNITION_FILES and, transitively, the files they name; without a
+    snapshot root none can be read, and a missing file is refused (condition_problems)."""
+    if root is None:
+        return {f"far-recognition {rel}": None for rel in FAR_RECOGNITION_FILES}
+    named =input_files_skipping({f"far {rel}": rel for rel in FAR_RECOGNITION_FILES}, root, ())
+    return {
+        ("far-recognition " + label.removeprefix("argument far ")) if label.startswith("argument far ") else label: v
+        for label, v in named.items()
+    }
+
+
 def run_condition(result: dict, root: Path | None) -> dict:
     """What a run is measured under, as tools/s4_drive_terms.py exports it and the runner
     checks it: its shared arguments, recorded settings, follower configs (speed fields
@@ -1245,6 +1270,8 @@ def run_condition(result: dict, root: Path | None) -> dict:
     arguments = {k: v for k, v in (result.get("arguments") or {}).items() if k not in SLAM_MAP_ARGUMENTS}
     arguments.update(slam_semantics(result))
     files = input_files_skipping(arguments, root, RUN_SPECIFIC_ARGUMENTS)
+    if arguments.get("recognition") == "far":
+        files.update(far_recognition_files(root))
     by_content = {
         label.removeprefix("argument ")
         for label in files

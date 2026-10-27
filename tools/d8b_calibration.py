@@ -491,6 +491,11 @@ def manifest(runs_by_seed: dict[int, list[Run]], matrix: str = "s2v3") -> list[s
         if matrix == "no-d5":
             if any(r.meta.get("pocket_check") for r in runs):
                 missing.append(f"seed {seed}: a D5-on run is not in the no-d5 matrix")
+            # exactly the declared specs (Codex P2): a run at another speed would join the frame pool and the cells
+            for r in runs:
+                v = r.meta.get("approach_straight_speed_mps")
+                if not r.meta.get("pocket_check") and (v is None or not any(abs(v - s) < 1e-9 for s in REQUIRED_SPEEDS)):
+                    missing.append(f"seed {seed}: {r.key} at {v} m/s is not in the no-d5 matrix")
         elif seed == D5_RUN[0]:
             d5 = [r for r in runs if r.meta.get("pocket_check")
                   and abs((r.meta.get("approach_straight_speed_mps") or 0.0) - D5_RUN[1]) < 1e-9]
@@ -521,16 +526,20 @@ def input_problems(run) -> list[str]:
     """Why a run is not a no-d5 matrix input (plan 5.3, Codex P2): its near capture accepted, its insertion finished
     (insert -> lift: phase_span and the D8c verdict would take an early-insert failure's prefix as a whole
     measurement) and its truth and control unbroken from the near anchor to the insertion end. A failure after the
-    insertion is admissible."""
+    insertion is admissible. The span is fixed by the mission's transitions -- the first entry into approach to the
+    last insert -> lift -- not by the truth rows it checks (Codex P2: rows missing at an end would shorten it)."""
     problems = []
     if ((run.result.get("near_capture") or {}).get("status")) != "done":
         problems.append(f"{run.key}: the near capture was not accepted")
-    if not any(t.get("from") == "insert" and t.get("to") == "lift" for t in run.result.get("transitions") or []):
+    transitions = run.result.get("transitions") or []
+    starts = [t.get("time_s") for t in transitions if t.get("to") == "approach"]
+    ends = [t.get("time_s") for t in transitions if t.get("from") == "insert" and t.get("to") == "lift"]
+    if not ends:
         problems.append(f"{run.key}: the insertion did not finish")
-    span = run.phase_span()
-    if span is None:
+    if not starts or not ends or None in (starts[0], ends[-1]):
         problems.append(f"{run.key}: no approach/insert span")
         return problems
+    span = (float(starts[0]), float(ends[-1]))
     for name, stamps in (("truth", run.truth.t), ("control", None if run.control is None else run.control[:, 0])):
         if stamps is None:
             problems.append(f"{run.key}: no {name} record")
