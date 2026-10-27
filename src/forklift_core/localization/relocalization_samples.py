@@ -118,9 +118,10 @@ def wall_band_cells(grid: Grid, band=WALL_BAND_M) -> np.ndarray:
 
 
 def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), sep_m: float = SEP_M,
-                  pattern=("A", "A", "B", "C"), max_attempts: int = 200_000) -> list:
+                  pattern=("A", "A", "B", "C"), max_attempts: int = 200_000, fill: bool = False) -> list:
     """``count`` independent start poses, the strata in ``pattern`` order (A A B C A A B C ...), independent of
-    ``taken`` too. Raises if the attempts run out (the map cannot hold that many)."""
+    ``taken`` too. When the attempts run out: raises, or with ``fill`` returns what the map held (a validation map is
+    drawn until full, plan B4a)."""
     rng = np.random.default_rng(seed)
     free_rc = np.argwhere(grid.data == 0)
     ridge_rc = np.argwhere(ridge_cells(grid))
@@ -136,6 +137,8 @@ def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), s
             raise ValueError(f"stratum {stratum} is empty")
         attempts += 1
         if attempts > max_attempts:
+            if fill:
+                return out
             raise ValueError(f"only {len(out)} of {count} independent starts after {max_attempts} attempts")
         r, c = cells[rng.integers(len(cells))]
         base = (ox + (c + rng.random()) * res, oy + (r + rng.random()) * res, float(rng.uniform(0.0, 2 * math.pi)))

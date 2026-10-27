@@ -93,3 +93,11 @@ def test_the_wall_band_lies_beside_walls_not_in_the_open():
 def test_a_map_too_small_for_the_count_raises():
     with pytest.raises(ValueError):
         S.sample_starts(_grid(), count=10_000, seed=0, max_attempts=2_000)
+
+
+def test_a_validation_map_is_drawn_until_full():
+    g = _grid()
+    full = S.sample_starts(g, count=10_000, seed=3, max_attempts=3_000, fill=True)
+    assert 0 < len(full) < 10_000
+    everything = [p.base for p in full]
+    assert all(S.independent(a, everything[:i] + everything[i + 1:]) for i, a in enumerate(everything))

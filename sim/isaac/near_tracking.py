@@ -1051,6 +1051,10 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_capture_redraw",
     # live-default plan 5d: the launcher's SLAM choice, a label (the mode itself is compared as slam_mode / map_id).
     "slam_choice",
+    # survey plan B4a: a scan capture run ends before any mission; its pose list, output and bundle are its own.
+    "scan_capture_poses",
+    "scan_capture_out",
+    "scan_capture_bundle",
 )
 # Arguments added after the measurement runs, each at the value that reproduces them: a run
 # holding that value matches measurement records that predate the argument, any other value
