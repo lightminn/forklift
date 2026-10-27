@@ -368,6 +368,13 @@
 
 **다음.** 사전 등록(5c "2 차 확인")대로 기준을 다시 고치지 않는다. (b) 예외 채택 여부를 총괄을 거쳐 사용자 판단으로 올린다. 판정 입력은 ws1 `s3conf2_3a37e216/judge_spec.json` 이고, (a) 결과는 `judge_variant_a.json` 이다.
 
+**원자료 보관(2026-10-27).** 전체 원본은 `gdrive:forklift-archive/ws1-s3conf2-3a37e216/` 에 있다. 묶음 11 개이고 모두 md5 가 일치했다. 묶음마다 `.files.tsv`·`.tar.zst.md5` 가 있다.
+- `s3c2_meta.tar.zst`: 최상위 RUNS.jsonl·judge_*·array 로그·task_*·void_not_started, void_infra_cpu2 의 로그·task, 그리고 스냅숏 `s3conf2_3a37e216`·`s3impl_8e965e9a`·`s3conf_874e44a4`.
+- `s3c2_<팔>_<장면>_s<seed>` 8 개: 각 실행 전체.
+- `s3c2_void_L_random_m_s3`·`s3c2_void_R_line_m_s3`: 기반 실패로 무효 처리한 두 실행.
+- ws1 에는 판정기 입력만 남겼다(약 1.5 GiB): 각 run 의 result.json·live_log·스풀 manifest·slam.records·slam.control·missions/*/result.json(epoch_1·epoch_2).
+- 판정기 고정본(`slam_cost_e1/slam_live_compare_00f63d6a.py`)과 운영 묶음 `artifacts/slam_bundles` 는 그대로 있다.
+
 **사용자 결정(2026-10-27, 총괄 전달): (b) 예외 채택, live 기본을 A 로 전환한다.** 받아들인 한계는 셋이다.
 1. line_m 유지 해제 yaw 점프 p90 이 R 의 1.52 배다(문턱 대비 +1.3 %).
 2. random_m 에서 비 SLAM 재계획 실패로 L 세션 하나가 일찍 끝났다(진행량·표류 미충족).
