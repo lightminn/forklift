@@ -327,6 +327,19 @@ def test_a_mission_without_a_rectangle_is_refused_as_undefined():
     assert w.names() == ["planning_target"]
 
 
+def test_a_refused_check_records_the_simulation_truth_for_the_evaluation():
+    """Plan section 8: a false refusal is one of the instructed true pallet -- the runner's truth (simulation only,
+    never read by the decision) is kept with every check, refused or not."""
+    w = zoned(World(), zone=(0.0, 1.0, 0.0, 1.0))
+    w.hooks.adoption_truth = lambda: (3.52, 2.01)
+    with pytest.raises(RuntimeError, match="^adoption_outside_zone:far$"):
+        w.succeed()
+    assert w.state["adoption_zone"]["refused"]["truth"] == [3.52, 2.01]
+    w = zoned(World())  # no truth hook (the real truck): nothing recorded
+    w.succeed()
+    assert "truth" not in w.state["adoption_zone"]["checks"][0]
+
+
 def test_the_check_off_changes_nothing():
     w = World()
     w.core.options.adoption_zone_check = "off"

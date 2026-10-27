@@ -3965,6 +3965,13 @@ class MissionCore:
                                 stage=stage)
         if raw is not None:
             check_["raw"] = [float(raw.x_m), float(raw.y_m)]
+        truth_ = getattr(self.hooks, "adoption_truth", None)
+        if truth_ is not None:
+            # the simulation's pallet truth, for the evaluation only (plan section 8: a false refusal is one of the
+            # instructed true pallet); the decision above never reads it
+            xy_ = truth_()
+            if xy_ is not None:
+                check_["truth"] = [float(xy_[0]), float(xy_[1])]
         record_["checks"].append(check_)
         if not check_["inside"]:
             record_["refused"] = check_

@@ -421,8 +421,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--adoption-zone-margin-m",
         type=float,
-        default=0.25,
-        help="The adoption rectangle's margin on every side (provisional; the plan's test 0 measures it).",
+        default=0.30,
+        help="The adoption rectangle's margin on every side: test 0's largest per-axis centre error over the fixed "
+        "record sample (0.254 m, a live near capture) rounded up to 5 cm; to be measured again on the real truck.",
     )
     parser.add_argument(
         "--near-drop-frames-from-m",
@@ -5787,6 +5788,9 @@ def drive(S, isaac) -> None:
             set_inset=set_inset,
             # M-a1 slice 4b-iv: the evaluation records, the planning target (truth under oracle), Sinks.
             record_capture_evaluation=record_capture_evaluation, set_inset_estimate=set_inset_estimate,
+            # docs/plans/2026-10-28-adoption-zone-check.md section 8: the mission's pallet truth kept with each adoption
+            # check for the evaluation (read only while the check is on; the decision never uses it)
+            adoption_truth=lambda: tuple(float(v) for v in np.asarray(pallet.get_world_pose()[0], dtype=float)[:2]),
             planning_target=lambda target_: G2.planning_target(args.planning_target, target_, scenario.pickup),
             export_scene=lambda: isaac.export_scene(),
             # M-a1 slice 4b-v: the near capture's straight, its acceptance and what it installs.
@@ -5853,7 +5857,7 @@ def drive(S, isaac) -> None:
                                 # docs/plans/2026-10-28-adoption-zone-check.md: off in a record from before the option;
                                 # a live mission replaces the rectangle with its own at each adoption
                                 adoption_zone_check=getattr(args, "adoption_zone_check", "off"),
-                                adoption_zone_margin_m=getattr(args, "adoption_zone_margin_m", 0.25),
+                                adoption_zone_margin_m=getattr(args, "adoption_zone_margin_m", 0.30),
                                 adoption_zone=adoption_zone_first,
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.

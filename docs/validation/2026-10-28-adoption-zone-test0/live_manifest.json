@@ -1,0 +1,147 @@
+[
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s3/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "9f4f02b50b73812157ca18133c916ac47a804b8640ab90832e2b592172090ecd"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s3/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "ae31e9d0a880a1c8b5a9152bb3e4337a74ca19dbcbbe67f94427aafa4d1ec27b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "254ee5f7606a9a19ba31000b4f7077e4a391c65f6b8dcd3ca0d8fa9b1290b120"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s4/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s4/live/epoch_1/run/result.json",
+  "sha256": "e20e82a8870e194f26e2b7c96aab2ae9a3b3deb335bf7e5437e476865683d9f2"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s4/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s4/live/epoch_1/run/result.json",
+  "sha256": "03a55ad5a0819bdb74defc83d580218179bf6e786fa4495765d7a653bf99073a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s4/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_auto_random_m_s4/live/epoch_1/run/result.json",
+  "sha256": "65df3f80b24b1cb2531be7f34cbc3e70bbed975006518962badd1020ac8c0499"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_fixed_random_m_s3/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_fixed_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "e882ce19675a1d697cb93f84a61eeb483253b1c8f03fa27d97eb8573fe8b0ec7"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_fixed_random_m_s3/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_fixed_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "4ac7b030c9e3ba36102badcff4dc627d4ec00b6a811157f0bb993f8b9dbbd0ca"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_fixed_random_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_07ca86aa_fixed_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "1baf704e330e72997d3d7aa4b177c0263e54f3b31ea1e19156750f1acd6c9fc8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/run/result.json",
+  "sha256": "059fb6de0191014ab155f9ab39521bdfa23850627e2d9f43f5552ec77b19ce6f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/run/result.json",
+  "sha256": "46cc8d22f6cbd20ca80374814913441c3fddf3afc62113646bd4e5e4c12c738c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/run/result.json",
+  "sha256": "2e51fde1e0c5a9d3814442d5bdea51d25857fb36a379519fb61468fa6ddb9e20"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/run/result.json",
+  "sha256": "5918af655c012feca04e8d49bed06a55be77c6d997cfc00d317265e0a6db9a99"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/run/result.json",
+  "sha256": "b696b7d7c03a8294fc8916bfd7e13386039c163cea068817280e6d53961569ca"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/run/result.json",
+  "sha256": "338619f0f58883d4df4cb30558ab60036a466b9944a2d8fe71b7f3e82e339987"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/run/result.json",
+  "sha256": "f085df43990090fdffb683773dbb3a95363d02250cc214ba9bdfc1ff641bab3d"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/run/result.json",
+  "sha256": "5aaf6d7092ab8583cf422a8aee13ed669bfd5611a51b0d01e7e14bf32cfef615"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/run/result.json",
+  "sha256": "c4d7a609cbd470b0673c3238e42e6397a2c43c2fd6aa6540e202045540e5edc0"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/run/missions/m1/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/run/result.json",
+  "sha256": "f5cd44ea7c80b197cd730d6b5ee416637e51477ae3eaf00600fa78c7acbb45cb"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/run/missions/m2/records.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/run/result.json",
+  "sha256": "6fd9b1aa70a57cad62d06eafe1e599203763dfc9617d3f95a386671fbe342850"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/run/result.json",
+  "sha256": "477df4ac5cbef505cda7763e0fa7fec69903be83455318ab68ff042c67a408b4"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_line_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_line_m_s3/live/epoch_1/run/result.json",
+  "sha256": "373b3eba7a06d189e704e68bc734bd4dbd71f779fbf5c4920091e7259e8ad223"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_line_m_s4/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_line_m_s4/live/epoch_1/run/result.json",
+  "sha256": "992c4db06bf8ac948ca5f7e70444e45b30e8077ae69ba403470baaab5dc853a0"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_random_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "c4e30b49d67ec1ea51fa84775f6a9dbb1fc9060c10107c10b48b3a4407a0d381"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_random_m_s4/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_random_m_s4/live/epoch_1/run/result.json",
+  "sha256": "096c42c9bb4a26639a9938f1d29fe04f8f09fcad7a917d1fdca2b465c85e6285"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_line_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_line_m_s3/live/epoch_1/run/result.json",
+  "sha256": "efb8b3b3678236b125f66de8835a2147d3687d46056d981d6cebd7d67821ebf4"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_line_m_s4/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_line_m_s4/live/epoch_1/run/result.json",
+  "sha256": "d5c0e596e6b99dbe2b2cfadf0fe5cc00c2e2390520e6283224cd985844ea7baa"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_random_m_s3/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_random_m_s3/live/epoch_1/run/result.json",
+  "sha256": "0f448260f6b7043fe0c2cac5ed49f776164f95f734b208f23d880efbf274ead1"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_random_m_s4/live/epoch_1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_random_m_s4/live/epoch_1/run/result.json",
+  "sha256": "10500ab68384b6b9e71826c53cafb7ca5527a8ea96104b0b4f4b6c42324842ad"
+ }
+]
