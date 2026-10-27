@@ -459,9 +459,17 @@ def check_seed(run: Run, seed: int) -> None:
         raise ValueError(f"{run.key}: recorded seed {scene} / slam noise seed {noise}, filed under {seed}")
 
 
-def manifest(runs_by_seed: dict[int, list[Run]]) -> list[str]:
+MATRICES = ("s2v3", "no-d5")
+
+
+def manifest(runs_by_seed: dict[int, list[Run]], matrix: str = "s2v3") -> list[str]:
     """What the plan's run matrix still lacks: seeds 1, 3, 5 x five speeds (the 0.055 run
-    with the nine dwells), plus the D5-on run of seed 1 at 0.08 (Codex D8b impl P1)."""
+    with the nine dwells), plus the D5-on run of seed 1 at 0.08 (Codex D8b impl P1).
+
+    ``matrix`` "no-d5" (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): the same fifteen without the D5-on run,
+    which cannot run with the far recognition or the team-spec encoders; a D5-on run there is out of the matrix."""
+    if matrix not in MATRICES:
+        raise ValueError(f"unknown matrix {matrix!r} (one of {MATRICES})")
     missing = []
     for seed in REQUIRED_SEEDS:
         runs = runs_by_seed.get(seed, [])
@@ -480,7 +488,15 @@ def manifest(runs_by_seed: dict[int, list[Run]]) -> list[str]:
                 missing.append(f"seed {seed}: dwells {kinds}, need {REQUIRED_DWELLS}")
             if speed != DWELL_SPEED and kinds:
                 missing.append(f"seed {seed}: dwells in the {speed} m/s run")
-        if seed == D5_RUN[0]:
+        if matrix == "no-d5":
+            if any(r.meta.get("pocket_check") for r in runs):
+                missing.append(f"seed {seed}: a D5-on run is not in the no-d5 matrix")
+            # exactly the declared specs (Codex P2): a run at another speed would join the frame pool and the cells
+            for r in runs:
+                v = r.meta.get("approach_straight_speed_mps")
+                if not r.meta.get("pocket_check") and (v is None or not any(abs(v - s) < 1e-9 for s in REQUIRED_SPEEDS)):
+                    missing.append(f"seed {seed}: {r.key} at {v} m/s is not in the no-d5 matrix")
+        elif seed == D5_RUN[0]:
             d5 = [r for r in runs if r.meta.get("pocket_check")
                   and abs((r.meta.get("approach_straight_speed_mps") or 0.0) - D5_RUN[1]) < 1e-9]
             if len(d5) != 1:
@@ -488,6 +504,61 @@ def manifest(runs_by_seed: dict[int, list[Run]]) -> list[str]:
     for seed in sorted(set(runs_by_seed) - set(REQUIRED_SEEDS)):
         missing.append(f"seed {seed}: not in the plan's matrix")
     return missing
+
+
+def condition_mismatches(runs: list) -> list[str]:
+    """The no-d5 matrix's one condition (plan 5.3, Codex P2): every run's near-tracking contract condition
+    (``near_tracking.run_condition``: the arguments but the run-specific ones -- seed, approach speed, dwells, the
+    recorders --, the recorded settings, the input files by content) equals the first run's. ``check_contract``
+    compares the camera and the code only, and S3 checks its own six references only."""
+    from sim.isaac.near_tracking import condition_problems, run_condition, snapshot_root
+
+    def condition(run):
+        return run_condition(run.result, snapshot_root(run.result.get("arguments") or {}))
+
+    if not runs:
+        return []
+    first = condition(runs[0])
+    return [f"{run.key}: {p}" for run in runs[1:] for p in condition_problems(first, condition(run))]
+
+
+def input_problems(run) -> list[str]:
+    """Why a run is not a no-d5 matrix input (plan 5.3, Codex P2): its near capture accepted, its insertion finished
+    (insert -> lift: phase_span and the D8c verdict would take an early-insert failure's prefix as a whole
+    measurement) and its truth and control unbroken from the near anchor to the insertion end. A failure after the
+    insertion is admissible. The span is fixed by the mission's own record, not by the truth rows it checks (Codex
+    P2: rows missing at an end would shorten it): from the accepted near capture's end (its capture_control, the
+    control sample of that instant -- a synchronous capture advances physics without control rows, so the approach
+    transition, stamped before it, would read as a gap; Codex round 2 P2) to the last insert -> lift."""
+    problems = []
+    near = run.result.get("near_capture") or {}
+    if near.get("status") != "done":
+        problems.append(f"{run.key}: the near capture was not accepted")
+    attempts = run.result.get("observation_attempts") or []
+    index = near.get("near_attempt")
+    anchor = None
+    if isinstance(index, int) and 1 <= index <= len(attempts):
+        anchor = ((attempts[index - 1] or {}).get("capture_control") or {}).get("time_s")
+    ends = [t.get("time_s") for t in run.result.get("transitions") or []
+            if t.get("from") == "insert" and t.get("to") == "lift"]
+    if not ends:
+        problems.append(f"{run.key}: the insertion did not finish")
+    if anchor is None or not ends or ends[-1] is None:
+        problems.append(f"{run.key}: no near-anchor/insertion-end span")
+        return problems
+    span = (float(anchor), float(ends[-1]))
+    for name, stamps in (("truth", run.truth.t), ("control", None if run.control is None else run.control[:, 0])):
+        if stamps is None:
+            problems.append(f"{run.key}: no {name} record")
+            continue
+        inside = stamps[(stamps >= span[0] - 1e-9) & (stamps <= span[1] + 1e-9)]
+        gaps = np.diff(inside)
+        if (len(inside) < 2 or inside[0] > span[0] + TICK_S + 1e-9 or inside[-1] < span[1] - TICK_S - 1e-9
+                or np.any(gaps > 1.5 * TICK_S)):
+            worst = float(gaps.max()) if len(gaps) else float("nan")
+            problems.append(f"{run.key}: the {name} record has a gap (up to {worst:.3f} s) or misses an end of the "
+                            f"span {span[0]:.3f}-{span[1]:.3f} s")
+    return problems
 
 
 def face_distance(truth: Truth, t: float, model: PalletModel) -> float:
@@ -894,9 +965,12 @@ def parse_seed_runs(text: str) -> tuple[int, list[Path]]:
 
 
 def analyse(seed_runs: list[tuple[int, list[Path]]], model: PalletModel,
-            geometry_sha256: str | None = None) -> tuple[dict, dict]:
+            geometry_sha256: str | None = None, matrix: str = "s2v3") -> tuple[dict, dict]:
     """The whole calibration. ``geometry_sha256``: the analysed pallet geometry file's hash,
-    checked against the runs' before any frame is evaluated."""
+    checked against the runs' before any frame is evaluated. ``matrix``: see ``manifest``; "no-d5" also requires
+    one contract condition across the runs and each run's inputs (``condition_mismatches``, ``input_problems``)."""
+    if matrix not in MATRICES:
+        raise ValueError(f"unknown matrix {matrix!r} (one of {MATRICES})")
     runs_by_seed: dict[int, list[Run]] = {}
     keys = set()
     for seed, dirs in seed_runs:
@@ -982,7 +1056,12 @@ def analyse(seed_runs: list[tuple[int, list[Path]]], model: PalletModel,
         "dwells": dwell_out, "runs": run_out, "cells": cell_out, "extra": extra,
         "analysis_missing": analysis_missing,
     }
-    result["verdict"] = verdict(dwell_out, run_out, cell_out, manifest(runs_by_seed), l_s)
+    missing = manifest(runs_by_seed, matrix)
+    if matrix != "s2v3":
+        every = [r for runs in runs_by_seed.values() for r in runs]
+        missing += condition_mismatches(every) + [p for r in every for p in input_problems(r)]
+        result["matrix"] = matrix  # a default (s2v3) record keeps its shape
+    result["verdict"] = verdict(dwell_out, run_out, cell_out, missing, l_s)
     result["verdict"]["analysis_complete"] = not analysis_missing
     return result, frames_out
 
@@ -993,12 +1072,17 @@ def main(argv=None) -> int:
                         metavar="SEED:DIR,DIR,...", help="the runs of one seed; the one with dwells gives b_k")
     parser.add_argument("--pallet-geometry", type=Path, default=ROOT / "config/pallet_geometry_epal6.yaml")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--matrix", choices=MATRICES, default="s2v3",
+                        help="s2v3: the 10-13 matrix (D5-on run included); no-d5: the same fifteen without it, with one "
+                        "contract condition and each run's inputs checked (docs/plans/2026-10-27-insertion-lateral-"
+                        "drift.md 5.3)")
     args = parser.parse_args(argv)
     from forklift_core.perception.pallet_geometry import load_pallet_geometry
 
     model = PalletModel.from_geometry(load_pallet_geometry(args.pallet_geometry))
     result, frames_out = analyse(args.seed_runs, model,
-                                 geometry_sha256=hashlib.sha256(args.pallet_geometry.read_bytes()).hexdigest())
+                                 geometry_sha256=hashlib.sha256(args.pallet_geometry.read_bytes()).hexdigest(),
+                                 matrix=args.matrix)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "d8b_calibration.json").write_text(json.dumps(result, indent=1) + "\n")
     (args.output / "d8b_frames.json").write_text(json.dumps(frames_out) + "\n")

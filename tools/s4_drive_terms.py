@@ -271,6 +271,7 @@ from sim.isaac.near_tracking import (  # noqa: E402,F401 -- shared with the runn
     SLAM_MAP_ARGUMENTS,
     condition_problems,
     config_paths,
+    far_recognition_files,
     file_sha256,
     input_files_skipping,
     run_condition,
@@ -281,8 +282,12 @@ from sim.isaac.near_tracking import (  # noqa: E402,F401 -- shared with the runn
 
 
 def input_files(arguments: dict, root: Path | None) -> dict[str, str | None]:
-    """The input files of a run against its D8b reference (by-design arguments skipped)."""
-    return input_files_skipping(arguments, root, ARGUMENTS_BY_DESIGN)
+    """The input files of a run against its D8b reference (by-design arguments skipped), with the far recognition's
+    fixed-path files for a far run (as near_tracking.run_condition holds them -- Codex near-remeasure round 2 P2)."""
+    files = input_files_skipping(arguments, root, ARGUMENTS_BY_DESIGN)
+    if arguments.get("recognition") == "far":
+        files.update(far_recognition_files(root))
+    return files
 
 
 def reference_problems(key: str, result: dict, reference: dict) -> list[str]:

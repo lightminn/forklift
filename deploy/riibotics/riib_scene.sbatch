@@ -12,6 +12,9 @@
 #                  2026-10-27-bottomless-and-bundled-pallets 2.1 c: no lower gate, a bottomless pallet is a target),
 #                  --near-capture-redraw always, --near-capture-redraw-lateral-m 0.10 (slam mode only: they need the
 #                  perception planning target)
+#   NEAR_REDRAW_LATERAL=0.10  the near re-draw's lateral box (--near-capture-redraw-lateral-m); 0.05 is the only value
+#                  --near-tracking takes (near tracking re-measure, docs/plans/2026-10-27-insertion-lateral-drift.md
+#                  5.3); needs NEAR=on
 #   NEAR_RECAPTURE_GAP=  (empty) C3: with a gap in metres, a second near capture where the estimated fork tip is that
 #                  far before the face (--near-recapture-gap-m; docs/plans/2026-10-27-insertion-lateral-drift.md T2); needs
 #                  NEAR=on
@@ -61,7 +64,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -100,6 +103,12 @@ case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exi
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
+# near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): empty = 0.10, the default before it.
+NEAR_REDRAW_LATERAL=${NEAR_REDRAW_LATERAL:-}
+if [ -n "$NEAR_REDRAW_LATERAL" ]; then
+  [[ "$NEAR_REDRAW_LATERAL" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "NEAR_REDRAW_LATERAL must be a positive number of metres"; exit 2; }
+  { [ "$MODE" = slam ] && [ "$NEAR" = on ]; } || { echo "NEAR_REDRAW_LATERAL needs MODE=slam and NEAR=on"; exit 2; }
+fi
 # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): empty = off; a gap needs the near capture it follows.
 NEAR_RECAPTURE_GAP=${NEAR_RECAPTURE_GAP:-}
 if [ -n "$NEAR_RECAPTURE_GAP" ]; then
@@ -154,6 +163,7 @@ printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESC
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
+[ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
 [ "$VIEWS" != quarter,chase ] && printf 'VIEWS=%s\n' "$VIEWS" >> "$OUT/riib_defaults.txt"
@@ -198,7 +208,7 @@ else
     --recognition-device-id 0 --recognition-threads 4)
   if [ "$NEAR" = on ]; then
     MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive
-      --near-capture-redraw always --near-capture-redraw-lateral-m 0.10)
+      --near-capture-redraw always --near-capture-redraw-lateral-m "${NEAR_REDRAW_LATERAL:-0.10}")
     # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): NEAR_RECAPTURE_GAP=<m> adds the second near capture.
     [ -n "$NEAR_RECAPTURE_GAP" ] && MODE_ARGS+=(--near-recapture-gap-m "$NEAR_RECAPTURE_GAP")
   fi
