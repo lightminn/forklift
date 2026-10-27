@@ -1099,6 +1099,27 @@ def arguments() -> argparse.Namespace:
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
     parser.add_argument(
+        "--scene-requirements",
+        type=Path,
+        default=None,
+        help="docs/plans/2026-10-27-scene-requirements.md: the requirements file (default: this checkout's "
+        "config/scene_requirements.yaml). A --scene-file whose entry applies must meet one of its argument sets, "
+        "or the run is refused before Isaac.",
+    )
+    parser.add_argument(
+        "--requirements-profile",
+        default=None,
+        help="Scene requirements plan: compare this run with a declared purpose's argument set (e.g. ct_baseline, "
+        "the live FAR+NEAR set of the CT batches); its recommends only warn. Unset: no profile is compared.",
+    )
+    parser.add_argument(
+        "--scene-requirements-override",
+        default=None,
+        metavar="REASON",
+        help="Scene requirements plan: run although the scene's or the profile's requirements are not met (a "
+        "deliberate comparison, a run that does not transport); the reason and what differed are recorded.",
+    )
+    parser.add_argument(
         "--check-args",
         action="store_true",
         help="Preflight (docs/plans/2026-10-27-ws1-preflight.md): every check a run makes before Isaac -- these "
@@ -9357,6 +9378,10 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # preflight plan (2026-10-27): a run never records it (it ends at its check), and the near-field contract
         # compares every recorded argument with the measurement runs'
         and k != "check_args"
+        # scene requirements plan: the verdict goes into its own block; the three options only when given (an override
+        # run's arguments rebuild it), the near-field contract treats them as run-specific
+        and k != "scene_requirements_report"
+        and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
@@ -9413,7 +9438,34 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
         require(0.9 * geometric_ <= args.odometry_wheel_radius_m <= 1.1 * geometric_,
                 f"--odometry-wheel-radius-m {args.odometry_wheel_radius_m} is not within 10 % of the geometric "
                 f"radius {geometric_}")
+    args.scene_requirements_report = scene_requirements_report(args)
     return settings
+
+
+def scene_requirements_report(args: argparse.Namespace) -> dict:
+    """docs/plans/2026-10-27-scene-requirements.md: this run against config/scene_requirements.yaml -- the scene's
+    entry (by the scene file's name and match), the profile it names, the warnings of that profile's recommends. A
+    mismatch refuses the run unless --scene-requirements-override gives a reason; the report goes into the result."""
+    import scene_requirements as sr
+
+    path = Path(args.scene_requirements) if args.scene_requirements is not None else sr.DEFAULT_PATH
+    data = sr.load(path)
+    record = json.loads(Path(args.scene_file).read_text()) if args.scene_file is not None else None
+    final = {"live_factor": args.live_factor if args.live else None, "encoder_model": args.encoder_model,
+             "slam": "localization" if getattr(args, "slam_map_bundle", None) is not None else "mapping"}
+    report = sr.check(vars(args), data, record, args.requirements_profile, final)
+    reason = (args.scene_requirements_override or "").strip() or None
+    report.update(file=str(path), file_sha256=sr.file_sha256(path), override=reason,
+                  scene_file_sha256=sr.file_sha256(args.scene_file) if args.scene_file is not None else None)
+    for w in report["warnings"]:
+        print(f"scene-requirements: warning: profile {w['profile']} recommends {w['recommends']} = {w['want']!r}; "
+              f"this run has {w['have']!r}", file=sys.stderr)
+    lines = [sr.describe(m) for m in report["mismatches"]]
+    if lines and reason:
+        print(f"scene-requirements: overridden ({reason}): " + "; ".join(lines), file=sys.stderr)
+    require(not lines or reason is not None,
+            f"scene requirements: {'; '.join(lines)} -- meet one, or give --scene-requirements-override REASON")
+    return report
 
 
 def check_args_only(args: argparse.Namespace) -> int:
@@ -9474,6 +9526,7 @@ def main() -> None:
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
         "settings_synthetic": settings,
+        "scene_requirements": args.scene_requirements_report,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),
         "forklift_urdf_sha256": hashlib.sha256(
