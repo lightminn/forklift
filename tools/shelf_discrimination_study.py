@@ -4,9 +4,10 @@ With bottomless pallets accepted, is there evidence that separates the shelf fam
 bottomless pallet? Three views, each printing JSON lines for tools/hpc_sweep.sh:
 
     front      the pocket detector at the near capture's settings (``DetectorParams.derived_for``) from the
-               carriage_low_measured mount, with the lower band gating and waived, and its gate terms on the front
-               plane: supports, lower, the per-opening upper counts and upper / sum(supports) (ADR 0003 B-16), over a
-               grid of distances and yaws, noise-free (1 mm rounding), the team noise table (frame_640) and, as a diagnostic, iid sigma = k d^2
+               carriage_low_measured mount, with the lower band gating and waived: its status and the gate terms of
+               the pattern it selects (supports, lower, the per-opening upper counts, upper / sum(supports) of ADR
+               0003 B-16), over a grid of distances and yaws, noise-free (1 mm rounding), the team noise table
+               (frame_640) and, as a diagnostic, iid sigma = k d^2
     side       the bottom-deck side evidence (perception.bottom_deck_evidence) on each side face from the side stand
                (tools/bottom_deck_scenes), team noise frame_640: present / absent / unobserved and why
     summarise  per-scene outcome of a dataset evaluated by tools/evaluate_recognition (--diagnostics), keyed by the
@@ -35,7 +36,7 @@ from forklift_core.perception.depth_noise import NoiseModel, apply_noise
 from forklift_core.perception.pallet_prior import load_pallet_prior
 from forklift_core.perception.pocket_detector import DetectorParams, detect_pockets
 from tools import negative_structures, scene_rig
-from tools.measure_pocket_evidence import _gate_terms, structure
+from tools.measure_pocket_evidence import structure
 from tools.recognition_scenes import _geometry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,49 +57,81 @@ def boxes_for(shape: str, kind: str):
     return negative_structures.build(g, kind, np.random.default_rng(0))
 
 
-def front_terms(scene, prior, params):
-    """Gate terms on the front plane: the candidate plane with the largest support count."""
-    points, _ = detector._base_points(scene)
+def detector_setup(shape: str):
+    prior = load_pallet_prior(ROOT / f"config/pallet_prior_{shape}.yaml")
+    return prior, DetectorParams.derived_for(prior)
+
+
+def front_scene(shape: str, kind: str, x_m: float, yaw_rad: float, noise: str, seed: int | None):
+    """One front view: clean (1 mm rounding), the team table's frame_640, or the iid sigma = k d^2 diagnostic."""
+    placed = scene_rig.place(boxes_for(shape, kind), x_m=x_m + CAMERA.xyz_m[0], yaw_rad=yaw_rad)
+    if noise == "iid_k":
+        return scene_rig.render(placed, camera=CAMERA, quantize=True, noise_k=NOISE_K, noise_seed=seed)
+    clean = scene_rig.render(placed, camera=CAMERA, quantize=True)
+    if noise == "clean":
+        return clean
+    # the team table's single-frame level: spatially correlated terms, dropout, flying pixels
+    model = NoiseModel.from_yaml(TEAM_NOISE, seed=seed, target_fx=clean.intrinsics.fx, level="frame_640")
+    return apply_noise(clean, np.zeros(np.shape(clean.depth_m), dtype=int), model)[0]
+
+
+def selected_terms(scene, prior, params, lower_evidence: bool) -> dict:
+    """Gate terms of the pattern the detector itself selects, and its status.
+
+    Replays pocket_detector._detect's selection (planes within the residual bound, their opening patterns, score =
+    (supports + deck) x (1 + behind fractions), then the nearer plane) and checks the winner against the detector's
+    diagnostics (inliers, widths, support_min, lower, per-opening upper); ``replica_matches`` False means the terms
+    are not the detector's and are left out. upper_over_supports is (upper_left + upper_right) / sum(supports), the
+    per-opening form of ADR 0003 B-16.
+    """
+    result = detect_pockets(scene, prior, params, lower_evidence=lower_evidence)
+    d = result.diagnostics
+    out = {"status": result.observation.status, "reason": result.observation.reason}
+    points, rays = detector._base_points(scene)
     cam = scene.base_from_optical.translation_m
-    workspace = detector._filter_workspace(points, cam, prior, params)
     best = None
-    for plane in detector._vertical_plane_candidates(workspace, cam, params):
-        terms = _gate_terms(plane, workspace, prior, params)
-        if terms is not None and (best is None or sum(terms[0]) > sum(best[0])):
-            best = terms
+    if np.isfinite(points).all(axis=1).sum() >= params.min_plane_points:
+        workspace = detector._filter_workspace(points, cam, prior, params)
+        for index, plane in enumerate(detector._vertical_plane_candidates(workspace, cam, params)):
+            if plane.residual_p95_m > params.max_plane_residual_m:
+                continue
+            patterns, _ = detector._opening_candidates(plane, prior, params, workspace, plane_index=index,
+                                                       lower_evidence=lower_evidence)
+            for pattern in patterns:
+                behind = sum(detector._classify_opening_rays(scene, rays, plane, gap, prior, params).behind_fraction
+                             for gap in pattern.gaps)
+                key = ((pattern.support_count + pattern.deck_count) * (1 + behind),
+                       -float(np.linalg.norm((plane.point - cam)[:2])))
+                if best is None or key > best[0]:
+                    best = (key, plane, pattern)
     if best is None:
-        return None
-    supports, lower, upper_left, upper_right = best
-    total = sum(supports)
-    return {"supports": list(supports), "lower": lower, "upper_left": upper_left, "upper_right": upper_right,
-            "upper_over_supports": (upper_left + upper_right) / total if total else None}
+        out["replica_matches"] = d.selected_lower is None
+        return out
+    _, plane, pattern = best
+    out["replica_matches"] = (
+        len(plane.points) == d.plane_inlier_count
+        and tuple(high - low for low, high in reversed(pattern.gaps)) == tuple(d.opening_width_raw_m or ())
+        and (pattern.support_min, pattern.lower, pattern.upper_left, pattern.upper_right)
+        == (d.selected_support_min, d.selected_lower, d.selected_upper_left, d.selected_upper_right))
+    if out["replica_matches"]:
+        out.update({"support_sum": pattern.support_count, "support_min": pattern.support_min, "lower": pattern.lower,
+                    "upper_left": pattern.upper_left, "upper_right": pattern.upper_right,
+                    "upper_over_supports": (pattern.upper_left + pattern.upper_right) / pattern.support_count})
+    return out
 
 
 def cmd_front(a) -> int:
-    prior = load_pallet_prior(ROOT / f"config/pallet_prior_{a.shape}.yaml")
-    params = DetectorParams.derived_for(prior)
-    boxes = boxes_for(a.shape, a.structure)
+    prior, params = detector_setup(a.shape)
     noise_sha = hashlib.sha256(TEAM_NOISE.read_bytes()).hexdigest()
+    conditions = [("clean", None)] + [(n, s) for s in NOISE_SEEDS for n in ("team_frame_640", "iid_k")]
     for x in DISTANCES_M:
         for yaw in YAWS_RAD:
-            placed = scene_rig.place(boxes, x_m=x + CAMERA.xyz_m[0], yaw_rad=yaw)
-            clean = scene_rig.render(placed, camera=CAMERA, quantize=True)
-            conditions = [("clean", None, clean)]
-            for seed in NOISE_SEEDS:
-                # the team table's single-frame level (spatially correlated terms, dropout, flying pixels) ...
-                model = NoiseModel.from_yaml(TEAM_NOISE, seed=seed, target_fx=clean.intrinsics.fx, level="frame_640")
-                noisy, _ = apply_noise(clean, np.zeros(np.shape(clean.depth_m), dtype=int), model)
-                conditions.append(("team_frame_640", seed, noisy))
-                # ... and, as a diagnostic only, independent sigma = k d^2
-                conditions.append(("iid_k", seed, scene_rig.render(placed, camera=CAMERA, quantize=True,
-                                                                   noise_k=NOISE_K, noise_seed=seed)))
-            for noise, seed, scene in conditions:
+            for noise, seed in conditions:
+                scene = front_scene(a.shape, a.structure, x, yaw, noise, seed)
                 row = {"shape": a.shape, "structure": a.structure, "x_m": x, "yaw_rad": yaw, "noise": noise,
-                       "noise_seed": seed, "noise_config_sha256": noise_sha if noise == "team_frame_640" else None,
-                       "terms": front_terms(scene, prior, params)}
+                       "noise_seed": seed, "noise_config_sha256": noise_sha if noise == "team_frame_640" else None}
                 for name, lower in (("gate", True), ("waive", False)):
-                    obs = detect_pockets(scene, prior, params, lower_evidence=lower).observation
-                    row[name] = {"status": obs.status, "reason": obs.reason}
+                    row[name] = selected_terms(scene, prior, params, lower)
                 print(json.dumps(row), flush=True)
     return 0
 

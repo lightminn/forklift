@@ -281,9 +281,9 @@ def test_n2_is_its_own_negative_population():
     meta = {**META, "case": "N2", "shape_key": "negative"}
     v = judge_scene(meta, _truth([]), NONE_IN, [], TargetDecision("selected", "ghost", ()))
     assert v.population == "negative_n2" and v.negative_fp and v.miss is None
-    gates = summarize([v], split=META["split"], render_source=META["render_source"])["gates"]
+    gates = summarize([v], split=META["split"], render_source=META["render_source"], catalogue="bottomless")["gates"]
     assert gates["negative_n2:negative_fp"]["n"] == 1
-    assert gates["negative:negative_fp"]["n"] == 0  # the old N set is not merged with N2
+    assert "negative:negative_fp" not in gates  # the old N set is not merged with N2
 
 
 def test_bottomless_positives_are_known_populations_without_a_height_gate():
@@ -292,7 +292,28 @@ def test_bottomless_positives_are_known_populations_without_a_height_gate():
     assert population_of({"case": "S8", "shape_key": "grounded_epal6"}) == "known:grounded_epal6"
     meta = {**META, "case": "S8", "shape_key": "grounded_epal6"}
     v = judge_scene(meta, _truth([_inst(0, 0.0)]), NONE_IN, [_cand("a", 0.0)], TargetDecision("selected", "a", ()))
-    gates = summarize([v], split=META["split"], render_source=META["render_source"])["gates"]
+    gates = summarize([v], split=META["split"], render_source=META["render_source"], catalogue="bottomless")["gates"]
     assert gates["known:grounded_epal6:miss"]["n"] == 1
     assert "known:grounded_epal6:pose_z_p95" not in gates
     assert "known:grounded_t11_06:miss" in gates
+
+
+def test_each_catalogue_requires_its_own_populations_only():
+    # choose_tau holds every gate summarize prints as required: a population the catalogue does not hold must not be
+    # printed (an n = 0 gate fails), and one it holds must be printed even when empty.
+    from forklift_core.perception.evaluation_multi import CATALOGUE_POPULATIONS
+
+    for catalogue, pops in CATALOGUE_POPULATIONS.items():
+        gates = summarize([], split="eval", render_source="isaac", catalogue=catalogue)["gates"]
+        assert {k.rsplit(":", 1)[0] for k in gates} == set(pops), catalogue
+        assert all(not g["pass"] for g in gates.values())
+    assert set(CATALOGUE_POPULATIONS["main"]) == {"known:epal6", "known:t11_06", "nonstandard", "negative"}
+
+
+def test_a_scene_outside_the_catalogue_is_refused():
+    meta = {**META, "case": "N2", "shape_key": "negative"}
+    v = judge_scene(meta, _truth([]), NONE_IN, [], TargetDecision("none", None, ()))
+    with pytest.raises(ValueError, match="negative_n2"):
+        summarize([v], split=META["split"], render_source=META["render_source"])
+    with pytest.raises(ValueError):
+        summarize([v], split=META["split"], render_source=META["render_source"], catalogue="unknown")

@@ -35,6 +35,13 @@ APPLICABLE = {
     "known:grounded_t11_06": ("miss", "dangerous", "extra", "target_error", "deferred_unambiguous"),
     "negative_n2": ("negative_fp",),
 }
+# The populations each catalogue holds: summarize prints exactly these, so every printed gate is required (an empty
+# one fails) and a population the catalogue does not hold is never printed (tools/choose_tau reads every printed gate
+# as required, Codex review of PR 3 round 2).
+CATALOGUE_POPULATIONS = {
+    "main": ("known:epal6", "known:t11_06", "nonstandard", "negative"),
+    "bottomless": ("known:grounded_epal6", "known:grounded_t11_06", "negative_n2"),
+}
 NEGATIVE_POPULATIONS = ("negative", "negative_n2")
 # Populations with no height-judged case: S8 places single pallets on the floor as S1 does, and z is judged only
 # where a layer or a non-standard height makes it matter (S4, S7) -- an empty z gate there would fail by n = 0.
@@ -340,10 +347,17 @@ def _p95_gate(samples, target):
     return {"n": len(samples), "p95": value, "target": target, "pass": value is not None and value <= target}
 
 
-def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: str) -> dict:
+def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: str, catalogue: str = "main") -> dict:
+    if catalogue not in CATALOGUE_POPULATIONS:
+        raise ValueError(f"catalogue must be one of {sorted(CATALOGUE_POPULATIONS)}")
+    populations = CATALOGUE_POPULATIONS[catalogue]
     chosen = [v for v in verdicts if v.split == split and v.render_source == render_source]
+    foreign = sorted({v.population for v in chosen} - set(populations))
+    if foreign:
+        raise ValueError(f"populations {foreign} are not in the {catalogue} catalogue")
     gates, cells, diagnostics = {}, {}, {}
-    for pop, names in APPLICABLE.items():
+    for pop in populations:
+        names = APPLICABLE[pop]
         mine = [v for v in chosen if v.population == pop]
         for name in names:
             gates[f"{pop}:{name}"] = _gate([getattr(v, name) for v in mine], GATES[name])
@@ -370,6 +384,6 @@ def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: st
         for case in sorted({v.case for v in mine}):
             cell = [v for v in mine if v.case == case]
             cells[f"{pop}:{case}"] = {name: _gate([getattr(v, name) for v in cell], GATES[name]) for name in names}
-    return {"split": split, "render_source": render_source, "scenes": len(chosen),
+    return {"split": split, "render_source": render_source, "catalogue": catalogue, "scenes": len(chosen),
             "official": render_source == "isaac" and bool(chosen) and all(v.noise_role == "official" for v in chosen),
             "gates": gates, "cells": cells, "diagnostics": diagnostics}
