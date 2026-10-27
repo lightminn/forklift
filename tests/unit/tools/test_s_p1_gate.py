@@ -127,4 +127,4 @@ def test_the_overlap_judge_counts_contact_as_box_overlaps_does():
     box = (1.64, 0.0, 0.1, 0.1)
     assert G.box_overlaps(G.PLANNER_FOOT, path[-1], box)
     assert G.sweep_overlaps(G.PLANNER_FOOT, path, [box])
-    assert not G.sweep_overlaps(G.PLANNER_FOOT, path, [(1.641 + 0.05, 0.0, 0.1, 0.1)])
+    assert not G.sweep_overlaps(G.PLANNER_FOOT, path, [(1.641, 0.0, 0.1, 0.1)])  # 1 mm gap
