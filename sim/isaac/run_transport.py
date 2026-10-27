@@ -4928,6 +4928,11 @@ def drive(S, isaac) -> None:
             **return_start_backoff_kw(args),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
+        # docs/plans/2026-10-27-return-start-withdraw-extension.md R6: the first mission plan's backoff attempts, as the
+        # core records its own mission plans'
+        from forklift_core.mission.core import note_trace_backoffs
+
+        note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)
         state["planning_wall_s"] = time.monotonic() - planning_start
         state["planning_status"] = plans.status
         require(plans.success, f"Mission planning failed: {plans.status}")

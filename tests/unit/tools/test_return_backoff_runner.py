@@ -33,3 +33,9 @@ def test_the_mission_planners_get_it():
     # as they add the exit prefix: the runner's hook stays a pass-through
     core = (ROOT / "src/forklift_core/mission/core.py").read_text()
     assert core.count("**self._mission_backoff_kwargs()") == 4
+
+
+def test_the_first_mission_plan_records_its_attempts():
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    first = source[source.index('        state.setdefault("planning_traces", []).append(planning_trace)\n'):][:600]
+    assert 'note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)' in first
