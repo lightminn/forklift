@@ -32,8 +32,27 @@ class Placement:
     support_z_m: float
 
 
-def instance_boxes(spec: PalletSpec, damage):
-    return apply_damage(spec_boxes(spec), damage)
+BOTTOMS = ("boards", "none")
+
+
+def instance_boxes(spec: PalletSpec, damage, bottom: str = "boards"):
+    """The instance's boxes. ``bottom`` "none" is the bottomless variant (plan 2026-10-27, case S8): the bottom
+    boards gone and every block column run down to the floor keeping its top (sim/isaac/insertion_geometry
+    .grounded_boxes does the same to a URDF); stringers and top boards unchanged."""
+    if bottom not in BOTTOMS:
+        raise ValueError(f"bottom must be one of {BOTTOMS}")
+    boxes = apply_damage(spec_boxes(spec), damage)
+    if bottom == "boards":
+        return boxes
+    out = []
+    for b in boxes:
+        if b.name.startswith("bottom_board"):
+            continue
+        if b.name.startswith("block"):
+            top = b.centre_m[2] + b.size_m[2] / 2
+            b = replace(b, size_m=(b.size_m[0], b.size_m[1], top), centre_m=(b.centre_m[0], b.centre_m[1], top / 2))
+        out.append(b)
+    return out
 
 
 def placed_boxes(boxes, placement: Placement) -> list[scene_rig.Box]:
@@ -168,13 +187,15 @@ def scene_truths(instances, setup: ForkSetup, *, distractors: Sequence[scene_rig
                  intrinsics=None, camera=instance_rig.PERCEPTION_CAMERA, back_wall=True):
     """Render the instances and their truth. `camera` and `back_wall` default to the catalogue's
     fixed rig; approach sequences (tools/recognition_sequences.py) move the scene into each robot
-    pose, so they pass their own camera tilt and a world wall instead of the base-fixed one."""
-    placed = [placed_boxes(instance_boxes(s, d), p) for s, p, d, _ in instances]
+    pose, so they pass their own camera tilt and a world wall instead of the base-fixed one. An instance is
+    (spec, placement, damage, load) or, for a bottomless variant, (spec, placement, damage, load, bottom)."""
+    instances = [tuple(i) if len(i) == 5 else (*i, "boards") for i in instances]
+    placed = [placed_boxes(instance_boxes(s, d, b), p) for s, p, d, _, b in instances]
     rendered = instance_rig.render_instances(placed, distractors=distractors, intrinsics=intrinsics, camera=camera,
                                              back_wall=back_wall)
     layers = [0] * len(instances) if layers is None else list(layers)
     truths = []
-    for k, (spec, placement, damage, load) in enumerate(instances):
+    for k, (spec, placement, damage, load, _) in enumerate(instances):
         solo = instance_rig.render_instances([placed[k]], floor=False, back_wall=False, intrinsics=intrinsics,
                                              camera=camera)
         faces = _faces(spec, placement, setup, load, _local(rendered.points_base, placement), rendered.instance_ids,

@@ -217,7 +217,7 @@ def _segmentation_summary(scenes) -> dict:
         extra = Counter()
         for s in sel:
             extra.update(s["extra"])
-        neg = [s for s in sel if s["case"] == "N"]
+        neg = [s for s in sel if s["case"] in ("N", "N2")]
         return {"scenes": len(sel), "eligible": len(inst),
                 "recall": (sum(r["matched"] for r in inst) / len(inst)) if inst else None,
                 "iou_p50": float(np.percentile(ious, 50)) if ious else None,

@@ -17,11 +17,21 @@ from forklift_core.perception.pallet_damage import DamageOp
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, PalletSpec, spec_from_geometry
 from forklift_core.perception.recognition_stats import eval_count
-from tools import measure_pocket_evidence, scene_rig
+from tools import measure_pocket_evidence, negative_structures, scene_rig
 from tools.recognition_truth import Placement, instance_boxes, placed_boxes
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "N")
+CASES = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "N", "S8", "N2")
+# S8 (bottomless positives) and N2 (the non-pallet negatives) of the 2026-10-27 plan: their own catalogue
+# (catalogue_bottomless), drawn at 1,100,000 in eval_pool -- clear of the catalogue (1,000,000-1,001,019) and of the
+# approach-sequence bands (tools/recognition_sequences, 1,500,000 up).
+PARENT_SHAPE = {"grounded_epal6": "epal6", "grounded_t11_06": "t11_06"}
+BOTTOMLESS_FIRST_SEED = 1_100_000
+BOTTOMLESS_TRAIN_FIRST_SEED = 5_100_000
+N2_SCENES = 153  # eval_count 46: one false positive still clears the 10 % bound (min_scenes(1, 0.10) = 46)
+S8_SCENES = 196  # per shape, eval_count 59 = min_scenes(0, 0.05)
+# rs.catalogue_digest(rs.catalogue()) before the S8 / N2 additions: they must leave it unchanged.
+CATALOGUE_DIGEST_2026_10_27 = "a84dc876644dc1f074ad144f3957735c3a14326e30b7b395cb84d9d51945d43a"
 # "sequence" holds the approach-sequence bands from 2B-3g on (eval_pool ran out at evaluation_g)
 SEED_BANDS = {"eval_pool": 1_000_000, "sequence": 2_000_000, "train": 5_000_000}
 BAND_WIDTH = 1_000_000
@@ -46,6 +56,7 @@ class InstanceRecipe:
     placement: Placement
     damage: tuple
     layer: int
+    bottom: str = "boards"  # "none": the bottomless variant (case S8, recognition_truth.instance_boxes)
 
 
 @dataclass(frozen=True)
@@ -76,7 +87,16 @@ class SceneRecipe:
 
 def recipe_boxes(recipe: SceneRecipe, k: int) -> list[scene_rig.Box]:
     inst = recipe.instances[k]
-    return placed_boxes(instance_boxes(inst.spec, inst.damage), inst.placement)
+    return placed_boxes(instance_boxes(inst.spec, inst.damage, inst.bottom), inst.placement)
+
+
+def parent_shape(shape_key: str) -> str:
+    """The known shape a case's shape key derives from (S8's bottomless variants), else the key itself."""
+    return PARENT_SHAPE.get(shape_key, shape_key)
+
+
+def n2_kind(rank: int) -> str:
+    return negative_structures.N2_CYCLE[rank % len(negative_structures.N2_CYCLE)]
 
 
 def _clear(groups, candidate):
@@ -234,22 +254,45 @@ def _scene(case, shape_key, seed, rank):
                 boxes = scene_rig.place(measure_pocket_evidence.structure(_geometry(("epal6", "t11_06")[rank % 2]), kind),
                                         x_m=x, y_m=y, yaw_rad=yaw)
             return [], boxes, 0.3725, rule, touching, None, instr_seq
+        if case == "N2":
+            # The redefined negatives (plan 2026-10-27 §4.2): non-pallets, mostly entry-face lookalikes; the kind by
+            # rank, the parent geometry alternating per composition cycle (not rank % 2, which tied kind to shape).
+            x, y, yaw = _base_pose(rng)
+            kind = n2_kind(rank)
+            if kind == "crates":
+                boxes = [scene_rig.Box((x, y, 0.095 + 0.19 * i), (0.45, 0.66, 0.19), yaw)
+                         for i in range(int(rng.integers(2, 5)))]
+            else:
+                parent = ("epal6", "t11_06")[(rank // len(negative_structures.N2_CYCLE)) % 2]
+                boxes = scene_rig.place(negative_structures.build(_geometry(parent), kind, rng),
+                                        x_m=x, y_m=y, yaw_rad=yaw)
+            return [], boxes, 0.3725, "N2", touching, None, instr_seq
         load = None
+        bottom = "boards"
         if case == "S7":
             spec, spacing, load = _s7_spec(rng, rank, seed)
             x, y, yaw = _base_pose(rng)
             places = [(Placement(x, y, yaw, 0.0), 0)]
+        elif case == "S8":
+            # Bottomless positives (plan 2026-10-27 §4.3): one pallet as in S1, its bottom boards gone; the square
+            # T11 turned a quarter on odd ranks so that its y faces are seen too.
+            parent = parent_shape(shape_key)
+            spec, spacing, bottom, rule = known_spec(parent), TEST_FORK_SPACING_M[parent], "none", "S1"
+            places = _place_known("S1", rng, spec, touching)
+            if parent == "t11_06" and rank % 2 == 1:
+                places = [(Placement(p.x_m, p.y_m, p.yaw_rad + math.pi / 2, p.support_z_m), layer)
+                          for p, layer in places]
         else:
             spec, spacing = known_spec(shape_key), TEST_FORK_SPACING_M[shape_key]
             places = _place_known(rule, rng, spec, touching)
         instances, groups, ok = [], [], True
         for k, (p, layer) in enumerate(places):
             damage = _damage_ops(rng, spec) if case == "S5" and k == 0 else ()
-            boxes = placed_boxes(instance_boxes(spec, damage), p)
+            boxes = placed_boxes(instance_boxes(spec, damage, bottom), p)
             if rule != "S4" and not _clear(groups, boxes):
                 ok = False
                 break
-            instances.append(InstanceRecipe(spec, p, damage, layer))
+            instances.append(InstanceRecipe(spec, p, damage, layer, bottom))
             groups.append(boxes)
         if not ok:
             continue
@@ -349,6 +392,33 @@ def training_catalogue(scale: int = 8) -> list[SceneRecipe]:
     return out
 
 
+def catalogue_bottomless() -> list[SceneRecipe]:
+    """The 2026-10-27 plan's populations (§4.2-4.3): N2, the non-pallet negatives (153, eval 46), and S8, the
+    bottomless positives per shape (196, eval 59), from BOTTOMLESS_FIRST_SEED in eval_pool. A catalogue of its
+    own: the old one (and its N set, now a record) is left as it was."""
+    out, seed = [], BOTTOMLESS_FIRST_SEED
+    out += generate("N2", "negative", N2_SCENES, band="eval_pool", first_seed=seed)
+    seed += N2_SCENES
+    for shape in ("grounded_epal6", "grounded_t11_06"):
+        out += generate("S8", shape, S8_SCENES, band="eval_pool", first_seed=seed)
+        seed += S8_SCENES
+    assert_disjoint(out, catalogue())
+    return out
+
+
+def training_catalogue_bottomless(scale: int = 8) -> list[SceneRecipe]:
+    """Training scenes of the same composition from the train band (BOTTOMLESS_TRAIN_FIRST_SEED, clear of
+    training_catalogue's seeds): N2 shapes as background, S8 as pallets. Never judged."""
+    out, seed = [], BOTTOMLESS_TRAIN_FIRST_SEED
+    out += generate("N2", "negative", N2_SCENES * scale, band="train", first_seed=seed)
+    seed += N2_SCENES * scale
+    for shape in ("grounded_epal6", "grounded_t11_06"):
+        out += generate("S8", shape, S8_SCENES * scale, band="train", first_seed=seed)
+        seed += S8_SCENES * scale
+    assert_disjoint(out)
+    return out
+
+
 def catalogue_digest(recipes) -> str:
     """sha256 over the recipes at 12 significant digits, to compare machines."""
     def norm(value):
@@ -359,5 +429,13 @@ def catalogue_digest(recipes) -> str:
         if isinstance(value, dict):
             return {k: norm(v) for k, v in value.items()}
         return value
-    payload = json.dumps([norm(asdict(r)) for r in recipes], sort_keys=True, default=str)
+    def record(r):
+        d = asdict(r)
+        # an instance's default bottom (added 2026-10-27) is left out so that earlier catalogues keep their digest
+        for inst in d["instances"]:
+            if inst.get("bottom") == "boards":
+                del inst["bottom"]
+        return d
+
+    payload = json.dumps([norm(record(r)) for r in recipes], sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
