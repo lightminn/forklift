@@ -1,0 +1,84 @@
+# 삽입 가로 드리프트 T2 결과 — C3(두 번째 근거리 관측)·C1(실측 모형 자이로)
+
+- 날짜: 2026-10-27
+- 계획: [`docs/plans/2026-10-27-insertion-lateral-drift.md`](../plans/2026-10-27-insertion-lateral-drift.md)의 "T2 사전 등록"(PR #174)과 구현 보완(PR #178). 판정 규칙은 결과 전에 고정했고, 판정 도구 `tools/t2_drift_judge.py`(PR #182)도 결과 전에 머지했다.
+- 실행
+  - ws1 잡 11848·11849(riib 묶음 2 개, GPU 당 3 세션, 두 잡이 claim 폴더로 목록을 나눔)
+  - 스냅숏 `snapshots/t2d_1b60df21`(main 1b60df21)
+  - 출력 `test_runs/riibotics/t2d_1b60df21/`
+  - 45 실행 모두 결과를 남겼다. 실행 불능(교체 대상)은 0 이다.
+  - 두 잡의 Slurm 상태가 FAILED 인 것은 묶음 안에 실패한 미션이 있으면 종료 코드가 0 이 아니기 때문이다. 실행 자체는 모두 끝났다.
+- 판정 명령: `python3 tools/t2_drift_judge.py test_runs/riibotics/t2d_1b60df21 --out t2_judge.json`(ws1, 결과는 같은 폴더의 `t2_judge.json`)
+
+## 판정 (사전 등록 규칙)
+
+| 팔 | 판정 | 1 접촉 0 | 2 완주 ≥ B0 − 1 | 3 부호 검정 | 4 꼬리 10 mm | 5 사이클 ≤ +10 % |
+|---|---|---|---|---|---|---|
+| **C3**(주 검정) | **더 나쁨** | 통과(0) | **실패**(10 대 12) | 실패(나음 6 · 나쁨 9, p 0.61) | 실패(최대 20.5 대 24.3 mm) | 통과(중앙값 비 0.99, 공동 완주 10) |
+| C1(탐색) | 차이 확인 안 됨 | 통과(0) | 통과(11 대 12) | 실패 — **방향이 반대**(나음 3 · 나쁨 12, p 0.035) | 실패(최대 59.1 대 24.3 mm) | 통과(0.97, 공동 완주 9) |
+
+- 유효 짝은 두 팔 모두 15 다. 모든 실행이 삽입했다.
+- C3 의 두 번째 촬영은 15/15 `adopted` 였다(거부·건너뜀 0).
+
+## 기록 (판정 아님)
+
+- 삽입 시작 시 정답 기준 날 끝 가로의 절댓값(중앙값 / 최대):
+
+  | 팔 | 날 끝 가로 | 상대 헤딩 |
+  |---|---|---|
+  | B0 | 11.9 / 21.2 mm | 0.20 / 0.42° |
+  | C3 | 12.5 / 16.1 mm | 0.36 / 0.54° |
+  | C1 | 7.0 / 30.4 mm | 0.27 / 0.75° |
+
+- **B0 에서 66 mm 급 드리프트가 재현되지 않았다.**
+  - 삽입 가로 여유 감소 최대가 24.3 mm 다. 계획 §1.1 의 운영 조합 최악 66.3 mm 는 다른 스냅숏(rsbr_b35d7f53)이었다. 이 15 실행에는 그 꼬리가 나오지 않았다.
+  - 그래서 C3 가 줄일 몫 자체가 작았다.
+- 실패는 모두 삽입 뒤(운반·하역·복귀)에서 났다.
+  - B0: aisle_rack 운반 추종 시간 초과 3.
+  - C3: aisle_rack 의 5 실행 모두 실패. 운반 추종 시간 초과 3, 하역 `slam_release_replan_failed: invalid_start` 2.
+  - C1: 운반 추종 시간 초과 1, 복귀 추종 실패 1, `docking_retry_match_refused` 1, 하역 위치 실패 1.
+- C3 의 추가 실패 2 건과 C3 의 관계는 확인하지 못했다.
+  - C3 는 운반 시작 해제 전의 연속 유지 시간이 약 2 s 길다. aisle_rack 에서 C3 29.9–31.5 s, B0 27.7–28.1 s 이고, 유지 구간 합계는 C3 33.0–34.8 s, B0 30.9–31.2 s 다. 첫 hold 부터 운반 시작 해제까지의 경과 시간(중간 `release_at_capture` 포함)은 C3 39–40 s, B0 37–38 s 다.
+  - 운반 시작 해제 점프는 B0 와 같은 범위다(C3 aisle_rack 3.0–50.5 mm, B0 1.1–38.9 mm). 점프 3.0 mm 인 실행도 하역에서 실패했다.
+  - aisle_rack 운반 실패는 B0 에서도 5 중 3 이라, 이 장면의 기존 약점과 겹친다.
+- C1(정지 실측 모형 자이로)은 짝 비교에서 B0 보다 나쁜 쪽으로 기울었다(12 대 3).
+  - 최대 59.1 mm 는 line_2_m s4 이고, 그 실행은 하역 위치도 벗어났다.
+  - 자이로 계획의 V-G2 불합격(가정 모형)과 같은 방향이다. 탐색 비교라 채택 판단과는 무관하다.
+
+## 실패 실행 목록 (v-g2 인계용)
+
+경로는 ws1 `/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/<이름>/` 이다. 각 폴더의 `run/result.json`(`failure_reason`·`phase`·`slam_summary`)과 `run.log`, `run/frames.jsonl`, `bridge/` 가 원자료다. 스냅숏은 `snapshots/t2d_1b60df21`(main 1b60df21)이고, 런처 인자는 `RUNS.jsonl`(riib_scene.sbatch env)에 있다.
+
+| 이름 | 끝난 단계 | 사유 | 삽입 여유 감소 (mm) |
+|---|---|---|---|
+| t2d_b0_aisle_rack_s0 | transport | Tracking timeout in transport | 14.8 |
+| t2d_b0_aisle_rack_s2 | transport | Tracking timeout in transport | 18.8 |
+| t2d_b0_aisle_rack_s3 | transport | Tracking timeout in transport | 24.3 |
+| t2d_c3_aisle_rack_s0 | settle | slam_release_replan_failed: invalid_start | 15.5 |
+| t2d_c3_aisle_rack_s1 | transport | Tracking timeout in transport | 18.0 |
+| t2d_c3_aisle_rack_s2 | transport | Tracking timeout in transport | 12.6 |
+| t2d_c3_aisle_rack_s3 | settle | slam_release_replan_failed: invalid_start | 16.8 |
+| t2d_c3_aisle_rack_s4 | transport | Tracking timeout in transport | 15.1 |
+| t2d_c1_aisle_rack_s3 | transport | Tracking timeout in transport | 27.4 |
+| t2d_c1_aisle_rack_s4 | return_home | Tracking failed in return_home: pos=0.0212,yaw=0.0869 | 27.7 |
+| t2d_c1_line_2_m_s3 | transport | docking_retry_match_refused:start_rejected:degenerate | 21.5 |
+| t2d_c1_line_2_m_s4 | complete(하역 판정 실패) | Pallet missed the green destination center | 59.1 |
+
+aisle_rack 운반 추종 시간 초과는 세 팔 모두에서 났다(B0 3/5). 공통 증상으로 v-g2 에 넘긴다(총괄 결정 2026-10-27).
+- 원인은 확인하지 않았다. 앞선 삽입·재관측이 영향을 줬는지도 배제하지 못했다.
+- 특히 aisle_rack s1·s4 는 B0 에서 완주했는데 C3 에서는 운반 시간 초과로 실패했다. 이 두 건이 C3 의 완주 순감 2 건이다.
+
+## 해석
+
+- 사전 등록 판정으로 **C3 는 채택하지 않는다.** 이 배치의 B0 는 삽입 여유를 크게 잃지 않았다. C3 는 꼬리를 4 mm 줄였지만 기준 10 mm 에 못 미쳤고, 짝 비교도 우세하지 않았으며, 완주가 둘 적었다.
+- 66 mm 사례(다른 스냅숏 rsbr_b35d7f53)는 이번 스냅숏의 B0 15 회에서 재현되지 않았다. 다만 발생 빈도와 스냅숏 변경의 영향은 모른다. 같은 모집단의 독립 표본이라 가정해도 0/15 의 단측 95 % 상한은 18.1 % 다. 빈도 측정은 하지 않는다(총괄 결정 2026-10-27).
+- 결정(총괄 2026-10-27):
+  - C3 옵션(`--near-recapture-gap-m`)은 기본 off 로 코드와 시험을 남기고, 런처 기본에 넣지 않는다.
+  - C1(실측 모형 자이로)도 런처 기본에 넣지 않는다.
+  - 브리프가 요구하는 "삽입 중 포켓 추적"은 근접 추적 재측정 (B) 경로로 간다. 첫 조건은 line_1_m 이다.
+
+## 한계
+
+- 장면 셋·seed 다섯, 이미 관찰된 어려운 사례의 스트레스 비교다. riib 전체를 대표하지 않는다.
+- 삽입 뒤 실패(aisle_rack 운반)는 이 계획의 범위 밖이다. 완주 판정 2 에는 그대로 들어갔다.
+- C1 의 모형은 책상 정지 실측이다(G4 미충족). 주행 진동·온도는 반영하지 않았다.
