@@ -2,21 +2,19 @@
 
 After the first near capture's straight is adopted the approach follower stops where the estimated fork tip is the
 given gap before the entry face; there the pallet is captured again (the hold kept) and the straight re-drawn with the
-first near capture's acceptance. Adoption is atomic: the candidate approach, the insertion and extraction moved with
-the pallet, and the pickup replace the old ones together, or nothing changes and the truck resumes the first line.
+first near capture's acceptance (projection box and dry run), then drawn and checked as at an S4b correction point
+(redraw_docking). Adoption is atomic: the new approach, insertion, extraction and pickup replace the old ones together,
+or nothing changes and the truck resumes the first line.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from math import cos, isfinite, sin
 
 import numpy as np
 
-from forklift_core.localization.slam_pose import compose, invert
-
 STATUSES = ("pending", "skipped_short", "skipped_prefix", "adopted", "box_refused", "dry_run_refused",
-            "no_detection")
+            "docking_refused", "no_detection")
 BOX_LATERAL_M = 0.05  # the first near capture's projection box (core.near_leg_or_recapture)
 BOX_MIN_LENGTH_M = 0.3
 DRY_POSITION_M, DRY_YAW_RAD = 0.006, 0.015  # the first near capture's dry-run acceptance
@@ -37,14 +35,6 @@ def line_of(path, alignment_straight_m: float):
 
 def site_tuple(site) -> tuple[float, float, float]:
     return float(site.x_m), float(site.y_m), float(site.yaw_rad)
-
-
-def moved_path(path, old_site, new_site):
-    """``path`` carried rigidly from the old pallet site to the new one (insertion and extraction are straights
-    defined relative to the site, so this is the path the new site gives)."""
-    delta = compose(site_tuple(new_site), invert(site_tuple(old_site)))
-    poses = np.array([compose(delta, p) for p in np.asarray(path.poses, dtype=float)], dtype=float)
-    return replace(path, poses=poses)
 
 
 def accepted(dry) -> bool:

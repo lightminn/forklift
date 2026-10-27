@@ -4328,7 +4328,23 @@ class MissionCore:
                                              acceptance_, rear_now)
                 second_["dry_run"] = SECOND_NEAR.dry_record(dry_)
                 if SECOND_NEAR.accepted(dry_):
-                    status_, reason_, adopted_ = "adopted", None, (candidate_, new_pickup_)
+                    # The plan's acceptance passed; the docking straights are then drawn and checked as at an S4b
+                    # correction point (redraw_docking: the approach, its dry-run sweep, the insertion and the loaded
+                    # extraction against the props, the bounds and the corrected grid) -- not carried rigidly, which
+                    # skipped those checks (Codex C3 review round 2 P1).
+                    plans_, docking_, _ = hooks.redraw_docking_traced(
+                        hooks.grid_world(options.scenario), here_, new_pickup_, options.planner_config,
+                        start_rear=rear_now, dry_configs=(acceptance_,), geometry=geometry,
+                        pickup_bounds=options.pickup_bounds, max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                        max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=SECOND_NEAR.BOX_MIN_LENGTH_M,
+                        **hooks.correction_grid(new_pickup_, new_pickup_, rear_now))
+                    second_["docking"] = {"refused": docking_.get("refused"), "offsets": docking_.get("offsets"),
+                                          "dry_runs": [SECOND_NEAR.dry_record(SimpleNamespace(**d_))
+                                                       for d_ in docking_.get("dry_runs", [])]}
+                    if plans_ is None:
+                        status_, reason_ = "docking_refused", f"redraw_docking:{docking_.get('refused')}"
+                    else:
+                        status_, reason_, adopted_ = "adopted", None, (plans_, new_pickup_)
                 else:
                     status_, reason_ = "dry_run_refused", f"near_capture_misaligned:dry_run:{second_['dry_run']}"
         second_.setdefault("offsets", None)
@@ -4337,9 +4353,10 @@ class MissionCore:
         second_.update(status=status_, reason=reason_)
         config_ = self.second_near["config"]
         if adopted_ is not None:
-            approach_, new_pickup_ = adopted_
+            plans_, new_pickup_ = adopted_
+            approach_ = plans_["approach"]
             for name_ in ("insert", "extract"):
-                paths[name_] = SECOND_NEAR.moved_path(paths[name_], old_pickup_, new_pickup_)
+                paths[name_] = plans_[name_]
                 trackers[name_] = RearAxlePathTracker(paths[name_].poses, paths[name_].directions,
                                                       paths[name_].curvatures_inv_m, trackers[name_].config)
             pocket["planning_pickup"] = new_pickup_

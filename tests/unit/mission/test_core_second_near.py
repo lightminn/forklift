@@ -16,10 +16,15 @@ from forklift_core.mission.core import MissionCore
 from forklift_core.mission.state import MissionState
 from forklift_core.perception.pallet_prior import load_pallet_prior
 from forklift_core.planning import Pose2D
+from forklift_core.control.rollout import bicycle_rollout as real_rollout
+from forklift_core.planning import Bounds, Rectangle
 from forklift_core.planning.pallet_mission import (
     PalletSite,
+    PlacedProp,
     SyntheticMissionGeometry,
+    TransportScenario,
     final_straight_prefix,
+    redraw_docking,
     site_poses,
     straight_from_pose,
 )
@@ -29,6 +34,21 @@ GEOMETRY = SyntheticMissionGeometry(alignment_straight_m=2.1)
 CONFIG = TrackerConfig(cruise_speed_mps=0.6, max_curvature_inv_m=0.36, lookahead_m=0.28, position_tolerance_m=0.008,
                        yaw_tolerance_rad=0.02, stop_speed_mps=0.012, max_cross_track_error_m=0.35)
 PICKUP = PalletSite(5.0, 0.0, 0.0)
+
+
+def scenario(*rects):
+    props = tuple(PlacedProp(SimpleNamespace(uri="post", height_m=1.0), r) for r in rects)
+    return TransportScenario(0, Pose2D(0.0, 0.0, 0.0), PICKUP, PalletSite(12.0, 0.0, 0.0), props,
+                             Bounds(-5.0, 15.0, -5.0, 5.0))
+
+
+def redraw_docking_traced(scenario_, rear_pose, target_, config_, *, start_rear, dry_configs, **kwargs):
+    """The runner's port, with real rollouts (sim/isaac/run_transport.py redraw_docking_traced)."""
+    start_ = np.asarray(start_rear, dtype=float)
+    dries = tuple((lambda c_: lambda st_: real_rollout(st_.poses, st_.directions, st_.curvatures_inv_m, c_, start_))(c)
+                  for c in dry_configs)
+    plans_, record_ = redraw_docking(scenario_, rear_pose, target_, config_, dry_runs=dries, **kwargs)
+    return plans_, record_, []
 
 
 def straight(site=PICKUP):
@@ -85,7 +105,7 @@ class World:
     """A MissionCore standing at the first near capture's adoption, with the approach straight installed."""
 
     def __init__(self, *, gap=1.0, observed_site=PalletSite(5.0, 0.02, 0.0), observation=Observation(), dry=Dry(),
-                 slam_mode="holding", rollout=None):
+                 slam_mode="holding", rollout=None, props=()):
         self.calls = []
         log_ = self.log
         self.clock = 60.0
@@ -121,7 +141,8 @@ class World:
             # The split's dry run first (arrives), then the second capture's (``dry``); or a real rollout.
             bicycle_rollout=rollout or (lambda *a, **k: (Dry() if self.splitting() else dry)),
             write_paths=lambda: log_("write_paths"), path_record=lambda p: {"length_m": float(p.length_m)},
-            show_path=lambda *a: None,
+            show_path=lambda *a: None, grid_world=lambda scenario_: scenario_, correction_grid=lambda *a: {},
+            redraw_docking_traced=redraw_docking_traced,
         )
         adapter = SimpleNamespace(
             CaptureFailure=CaptureFailure, detector_input=lambda scene, mm: "INPUT",
@@ -143,7 +164,7 @@ class World:
                 yaw_and_tilt=lambda q: (0.0, 0.0), perception_max_attempts=4, rear_axle_offset_m=-0.34,
                 pallet_prior_loaded=PRIOR, depth_quantize_mm=1, near_capture_expected="on",
                 near_capture_lower="waive", near_capture_box_yaw_rad=0.05, approach_straight_speed_mps=None,
-                near_recapture_gap_m=gap))
+                near_recapture_gap_m=gap, scenario=scenario(*props), planner_config=None, pickup_bounds=None))
 
     def splitting(self):
         return "second" not in self.state["near_capture"]
@@ -216,14 +237,17 @@ def test_an_accepted_redraw_is_adopted_with_the_pickup_and_the_docking_paths_tog
     assert second["status"] == "adopted"
     assert w.pocket["planning_pickup"].y_m == pytest.approx(0.02)
     assert w.paths["insert"] is not old_insert
-    assert np.allclose(w.paths["insert"].poses[:, 1], old_insert.poses[:, 1] + 0.02)
+    new_sites = site_poses(PalletSite(5.0, 0.02, 0.0), GEOMETRY)
+    assert w.paths["insert"].poses[0][:2] == pytest.approx([new_sites["approach"].x_m, new_sites["approach"].y_m])
+    assert w.paths["insert"].poses[-1][:2] == pytest.approx([new_sites["inserted"].x_m, new_sites["inserted"].y_m])
+    assert second["docking"]["refused"] is None
     assert w.paths["approach"].poses[-1][1] == pytest.approx(0.02)
     for name in ("approach", "insert", "extract"):
         assert np.allclose(w.trackers[name].path_arrays()[0], w.paths[name].poses)
     assert w.ms.phase == "approach" and w.ms.phase_started == w.clock
     assert not w.core.second_near_due()
     assert out.rear is not None
-    for key in ("reason", "offsets", "dry_run", "capture_attempt", "capture_time_s", "stop_s", "target",
+    for key in ("reason", "offsets", "dry_run", "docking", "capture_attempt", "capture_time_s", "stop_s", "target",
                 "previous_target"):
         assert key in second
 
@@ -256,14 +280,6 @@ def test_a_refusal_keeps_the_first_pickup_paths_and_followers(case, status):
     assert resumed[-1][0] == pytest.approx(first_end.x_m) and resumed[-1][1] == pytest.approx(first_end.y_m)
     assert resumed[0][0] == pytest.approx(w.stand[0], abs=1e-6)
     assert not w.core.second_near_due()
-
-
-def test_moved_path_carries_a_docking_path_with_the_site():
-    old, new = PalletSite(5.0, 0.0, 0.0), PalletSite(5.1, -0.03, math.radians(1.0))
-    moved = SN.moved_path(docking(old), old, new)
-    expected = site_poses(new, GEOMETRY)
-    assert moved.poses[0][:2] == pytest.approx([expected["approach"].x_m, expected["approach"].y_m], abs=1e-9)
-    assert moved.poses[-1][:2] == pytest.approx([expected["inserted"].x_m, expected["inserted"].y_m], abs=1e-9)
 
 
 def test_a_shortened_straight_the_follower_cannot_reach_keeps_the_whole_straight():
@@ -300,3 +316,19 @@ def test_a_timed_out_dry_run_is_refused_and_recorded_as_strict_json():
     assert second["status"] == "dry_run_refused"
     assert second["dry_run"] == {"status": "timeout", "position_error_m": None, "yaw_error_rad": None}
     json.dumps(w.state["near_capture"], allow_nan=False)
+
+
+def test_a_redraw_whose_extraction_meets_a_prop_is_refused_and_keeps_the_first_state():
+    # Codex C3 review round 2 P1: target (5, 0, 0) -> (5, 0.149, 0.049) passes the plan's box and dry run from the
+    # gap, but its docking meets a post at (4.6, 0.555) (Codex: the loaded extraction; redraw_docking already
+    # refuses its approach there) -- carried rigidly it was adopted, drawn and checked it is refused.
+    w = World(observed_site=PalletSite(5.0, 0.149, 0.049), props=(Rectangle(4.6, 0.555, 0.04, 0.06),),
+              rollout=real_rollout)
+    stand_at_split(w)
+    before = {name: w.paths[name] for name in ("insert", "extract")}
+    w.core.second_near_capture(w.clock, w.stand, 900)
+    second = w.state["near_capture"]["second"]
+    assert second["dry_run"]["status"] == "arrived"  # the plan's own acceptance passed
+    assert second["status"] == "docking_refused" and second["docking"]["refused"] is not None
+    assert w.pocket["planning_pickup"] is PICKUP
+    assert all(w.paths[name] is before[name] for name in before)
