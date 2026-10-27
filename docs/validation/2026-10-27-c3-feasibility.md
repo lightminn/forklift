@@ -2,7 +2,7 @@
 
 - 날짜: 2026-10-27
 - 계획: [`docs/plans/2026-10-27-insertion-lateral-drift.md`](../plans/2026-10-27-insertion-lateral-drift.md) §3 T1(판정 규칙은 결과 전에 고정)
-- 도구: `tools/c3_feasibility.py`(시험 `tests/unit/tools/test_c3_feasibility.py`), 로컬 CPU 약 1 분
+- 도구: `tools/c3_feasibility.py`(시험 `tests/unit/tools/test_c3_feasibility.py`), 로컬 CPU 약 1 분. 실행: `PYTHONPATH=src:. python -m tools.c3_feasibility --out c3.json`(작업 트리의 `forklift_core` 를 읽게 — 로컬 conda 의 editable 설치는 본 체크아웃을 가리킨다). origin/main `cf0b570d` 위에서 다시 돌려 요약이 같음을 확인했다
 
 ## 결과 요약
 
