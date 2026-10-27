@@ -150,7 +150,8 @@ def evaluate(run: Path) -> dict:
     free_stamp_t = t
     stop_len = base_cfg.stopping.distance_m(ESCAPE_SPEED_MPS) + base_cfg.step_m
 
-    def variant(band: float, zero: bool, corridor: bool) -> dict:
+    def variant(band: float, zero, corridor: bool) -> dict:
+        """``zero``: False (the held steering), True (0) or a curvature the steering is set to first."""
         cfg = replace(base_cfg, start_band_m=band)
         snap = snapshot_of(dump)
         if corridor:
@@ -158,7 +159,7 @@ def evaluate(run: Path) -> dict:
             for i, j in released:
                 fs[i, j] = free_stamp_t
             snap = replace(snap, state=corridor_state.copy(), free_stamp=fs)
-        k_now = 0.0 if zero else kappa
+        k_now = kappa if zero is False else (0.0 if zero is True else float(zero))
 
         def fresh():
             perm = DrivePermission(cfg)
@@ -197,6 +198,10 @@ def evaluate(run: Path) -> dict:
     variants[f"corridor+band{band_launcher:g}"] = variant(band_launcher, False, True)
     variants[f"corridor+zero+band{band_launcher:g}"] = variant(band_launcher, True, True)
     variants["corridor+zero"] = variant(0.0, True, True)
+    # a presteer to a set curvature (plan 2026-10-27 escape presteer): the escapes' arcs at that steering
+    for k_set in (-0.05, -0.02, 0.02, 0.05):
+        for band in (band_launcher, 0.03):
+            variants[f"steer{k_set:+g}+band{band:g}"] = variant(band, k_set, False)
     tall = [pp for pp in record["scenario"]["props"] if float(pp["asset"].get("height_m", 0.0)) > 1.05]
     truth = tuple(float(v) for v in dump["truth_rear"])
     gap = min(((footprint_rect_distance(truth, fp, Rectangle(**pp["rectangle"])), pp["asset"]["uri"]) for pp in tall),
