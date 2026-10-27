@@ -1354,11 +1354,14 @@ def arguments() -> argparse.Namespace:
         parser.error("--d7-docking retries the SLAM docking match; it needs --slam-feedback")
     if args.recognition == "far":
         # The near-field bounds were measured with the detector's far estimate: a run that changes it is
-        # outside that contract, so near tracking and the pocket check are refused with it (plan v2, Codex P1).
+        # outside that contract (plan v2, Codex P1). Near tracking is left to the drive terms' measured
+        # condition (recognition among its arguments, checked once the run is set up): the committed terms
+        # (recognition off) refuse a far run, terms measured under it take it (near tracking re-measure,
+        # docs/plans/2026-10-27-insertion-lateral-drift.md 5.3). The pocket check (D5) stays refused.
         if not args.use_perception or args.slam_feedback is None:
             parser.error("--recognition far needs --use-perception and --slam-feedback")
-        if args.near_tracking or args.pocket_check:
-            parser.error("--recognition far is not defined with --near-tracking or --pocket-check")
+        if args.pocket_check:
+            parser.error("--recognition far is not defined with --pocket-check")
         # A live run takes it too: its work on a thread of its own (docs/plans/2026-10-22-live-far-recognition.md).
         if args.recognition_frame_every <= 0 or args.recognition_pixel_lag_steps < 0:
             parser.error("--recognition-frame-every must be positive, --recognition-pixel-lag-steps nonnegative")

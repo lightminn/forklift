@@ -520,3 +520,80 @@ def test_a_boundary_recorded_run_is_refused_as_measurement_evidence():
         check(SimpleNamespace(key="c", result={"arguments": {"record_boundary": True}}))
     source = (ROOT / "tools/d8b_observations.py").read_text()
     assert "CAL.check_not_recorded(run)" in source
+
+
+# The declared no-D5 matrix (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3) ---------------------------------
+class _FakeRun:
+    def __init__(self, speed=0.08, d5=False, dwells=(), key="r", arguments=None, near="done",
+                 transitions=(("insert", "lift"),), gap_at=None):
+        from types import SimpleNamespace
+
+        self.key = key
+        self.meta = {"approach_straight_speed_mps": speed, "pocket_check": d5}
+        self.dwells = [{"kind": k} for k in dwells]
+        args = {"encoder_model": "team_spec_quantized", "recognition": "far", "seed": 1,
+                "approach_straight_speed_mps": speed, **(arguments or {})}
+        # A real run records every contract field (near_tracking.CONDITION_FIELDS and the trackers').
+        fields = {name: {"value": 1} for name in ("settings_synthetic", "detector_params", "planner_config",
+                                                  "travel_planner_config", "lidar_synthetic")}
+        self.result = {"arguments": args, "near_capture": {"status": near},
+                       "transitions": [{"from": a, "to": b} for a, b in transitions],
+                       "chassis_model": {"wheelbase_m": 0.66}, "tracker_configs": {"approach": {"lookahead_m": 0.28}},
+                       **fields}
+        t = np.arange(0.0, 2.0, CAL.TICK_S)
+        if gap_at is not None:
+            t = t[(t < gap_at) | (t > gap_at + 0.1)]
+        phases = ["observe", "approach", "insert", "lift"]
+        self.truth = SimpleNamespace(t=t, phase=np.where(t < 1.0, 1, 2), phases=phases)
+        self.control = np.column_stack([np.arange(0.0, 2.0, CAL.TICK_S)] + [np.zeros(len(np.arange(0.0, 2.0, CAL.TICK_S)))] * 6)
+
+    def phase_span(self, phases=("approach", "insert")):
+        return CAL.Run.phase_span(self, phases)
+
+
+def test_the_no_d5_matrix_needs_no_d5_run_and_refuses_one():
+    def full():
+        return {seed: [_FakeRun(0.055, dwells=CAL.REQUIRED_DWELLS)] + [_FakeRun(v) for v in CAL.REQUIRED_SPEEDS[1:]]
+                for seed in CAL.REQUIRED_SEEDS}
+    assert CAL.manifest(full(), matrix="no-d5") == []
+    assert any("D5-on" in m for m in CAL.manifest(full()))  # the default matrix still wants it
+    with_d5 = full()
+    with_d5[1].append(_FakeRun(0.08, d5=True))
+    assert any("D5" in m and "no-d5" in m for m in CAL.manifest(with_d5, matrix="no-d5"))
+    with pytest.raises(ValueError, match="matrix"):
+        CAL.manifest(full(), matrix="other")
+
+
+def test_the_no_d5_matrix_needs_one_condition_across_its_runs():
+    runs = [_FakeRun(0.055, key="a"), _FakeRun(0.60, key="b", arguments={"seed": 5})]
+    assert CAL.condition_mismatches(runs) == []  # speed and seed are run-specific
+    changed = [_FakeRun(0.055, key="a"), _FakeRun(0.60, key="b", arguments={"encoder_model": "reported"})]
+    problems = CAL.condition_mismatches(changed)
+    assert problems and "b" in problems[0] and "encoder_model" in problems[0]
+
+
+def test_the_declared_matrix_reaches_the_verdict_and_the_default_record_keeps_its_shape(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(CAL, "MIN_ELIGIBLE", 5)
+    monkeypatch.setattr(CAL, "MIN_SINGLE", 5)
+    monkeypatch.setattr(CAL, "CELL_MIN", 1)
+    slow = write_run(tmp_path / "slow" / "run", speed=0.08, delay_s=0.075, dwell=("start", 2.0), end_hold_s=2.0,
+                     start_d=1.1, end_d=0.7)
+    fast = write_run(tmp_path / "fast" / "run", speed=0.30, delay_s=0.075, start_d=1.1, end_d=0.7)
+    runs = f"1:{slow.directory},{fast.directory}"
+    assert CAL.main(["--seed-runs", runs, "--output", str(tmp_path / "default")]) == 0
+    default = json.loads((tmp_path / "default" / "d8b_calibration.json").read_text())
+    assert "matrix" not in default
+    assert CAL.main(["--seed-runs", runs, "--output", str(tmp_path / "declared"), "--matrix", "no-d5"]) == 0
+    declared = json.loads((tmp_path / "declared" / "d8b_calibration.json").read_text())
+    assert declared["matrix"] == "no-d5"
+    assert any("near capture was not accepted" in m for m in declared["verdict"]["missing"])
+    assert not any("D5-on runs" in m for m in declared["verdict"]["missing"])
+    with pytest.raises(ValueError, match="matrix"):
+        CAL.analyse([(1, [slow.directory, fast.directory])], MODEL, matrix="other")
+
+
+def test_a_no_d5_input_needs_the_near_capture_the_finished_insertion_and_unbroken_records():
+    assert CAL.input_problems(_FakeRun(key="ok")) == []
+    assert any("near capture" in p for p in CAL.input_problems(_FakeRun(key="n", near="refused")))
+    assert any("insertion did not finish" in p for p in CAL.input_problems(_FakeRun(key="i", transitions=())))
+    assert any("truth" in p and "gap" in p for p in CAL.input_problems(_FakeRun(key="g", gap_at=1.5)))

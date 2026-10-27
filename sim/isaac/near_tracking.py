@@ -1097,7 +1097,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
                               "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);
-                              # only "off" reproduces the measurement runs -- a far run is refused with near tracking.
+                              # only "off" reproduces the measurement runs before it -- a far run needs drive terms
+                              # measured under far (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3).
                               "recognition": "off", "recognition_frame_every": 24,
                               "recognition_pixel_lag_steps": 0, "recognition_no_drive_frames": False,
                               # 2026-10-19: stage 3's learned proposals (a far run only)

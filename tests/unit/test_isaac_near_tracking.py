@@ -262,6 +262,27 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
     )
 
 
+def test_a_far_run_is_refused_by_the_committed_terms_and_taken_by_terms_measured_under_it():
+    """Near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): the parser no longer refuses
+    --recognition far with --near-tracking; the drive terms' condition does. The committed terms were measured
+    without the far recognition, so a far run differs from them; terms measured under it match the same run."""
+    committed = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())["condition"]
+    assert "recognition" not in committed["arguments"]  # recorded before the argument: read as "off"
+    far = {**committed, "arguments": {**committed["arguments"], "recognition": "far",
+                                      "recognition_proposals": "learned"}}
+    assert NT.condition_problems(committed, far) == [
+        "arguments recognition differs from the measurement runs",
+        "arguments recognition_proposals differs from the measurement runs",
+    ]
+    assert NT.condition_problems(committed, committed) == []
+    assert NT.condition_problems(far, far) == []
+    # the near re-draw's lateral box the riib launcher passes by default (0.10) is another condition again
+    wide = {**far, "arguments": {**far["arguments"], "near_capture_redraw_lateral_m": 0.10}}
+    assert NT.condition_problems(far, wide) == [
+        "arguments near_capture_redraw_lateral_m differs from the measurement runs"
+    ]
+
+
 def test_an_argument_newer_than_the_measurement_matches_only_at_its_reproducing_value(
     tmp_path,
 ):
