@@ -41,6 +41,12 @@ def test_the_floor_plane_is_accepted_and_a_raised_plane_is_not():
     assert not L.fit_floor(top, CFG).ok
     # too few points to trust
     assert not L.fit_floor(pts[:50], CFG).ok
+    # S-P1 result review (N4): the foot of a box face seen without any floor -- a band of points 0.049-0.050 m up along
+    # the face at x 1.30 -- is a line, not a plane, however many points it has
+    ys, zs = np.meshgrid(np.arange(-0.4, 0.4, 0.0005), np.linspace(0.049, 0.0499, 2))
+    band = np.stack([np.full(ys.size, 1.30), ys.ravel(), zs.ravel()], 1)
+    plane = L.fit_floor(band, CFG)
+    assert len(band) >= CFG.plane_min_points and not plane.ok and plane.reason == "not_spread"
 
 
 def test_floor_hits_are_free_band_points_occupied_and_the_rest_unobserved():

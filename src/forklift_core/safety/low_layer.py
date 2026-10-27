@@ -62,6 +62,7 @@ class LowLayerConfig:
     plane_normal_tol_rad: float = math.radians(5.0)
     plane_min_points: int = 400
     plane_max_rms_m: float = 0.01
+    plane_min_spread_m: float = 0.10  # the inliers' narrower horizontal extent (std): a band along a face is no floor
     plane_iterations: int = 64
     plane_seed: int = 0
     age_table: tuple = field(default_factory=_age_table)
@@ -100,7 +101,9 @@ class Plane:
 
 def fit_floor(points: np.ndarray, cfg: LowLayerConfig, expected_z: float = 0.0) -> Plane:
     """The floor plane by RANSAC over points within ``plane_height_tol_m`` of the expected floor height, refused unless
-    it is near that height, near horizontal, supported by ``plane_min_points`` and flat to ``plane_max_rms_m``."""
+    its inliers spread over an area (the narrower horizontal standard deviation at least ``plane_min_spread_m``: a band
+    of points along the foot of a box face fixes no plane -- S-P1 result review, N4 accepted a rank-2 fit) and it is
+    near that height, near horizontal, supported by ``plane_min_points`` and flat to ``plane_max_rms_m``."""
     none = Plane(False, np.array([0.0, 0.0, 1.0]), -expected_z, math.inf, 0)
     pts = np.asarray(points, float).reshape(-1, 3)
     near = pts[np.abs(pts[:, 2] - expected_z) <= cfg.plane_height_tol_m]
@@ -125,6 +128,10 @@ def fit_floor(points: np.ndarray, cfg: LowLayerConfig, expected_z: float = 0.0) 
         return Plane(**{**none.__dict__, "reason": "degenerate"})
     n, d, _ = best
     inl = near[np.abs(near @ n + d) <= cfg.floor_tol_m]
+    if len(inl) >= 3:
+        spread = math.sqrt(max(0.0, float(np.linalg.eigvalsh(np.cov(inl[:, :2].T))[0])))
+        if spread < cfg.plane_min_spread_m:
+            return Plane(False, n, d, math.inf, len(inl), "not_spread")
     A = np.c_[inl[:, 0], inl[:, 1], np.ones(len(inl))]  # least squares on the inliers (z = a x + b y + c)
     coef, *_ = np.linalg.lstsq(A, inl[:, 2], rcond=None)
     n = np.array([-coef[0], -coef[1], 1.0])
