@@ -12,6 +12,7 @@ from forklift_core.safety import low_layer as L
 
 FOOT = Footprint(1.29, 0.17, 0.36)  # the planner's unloaded footprint: forks to the tip, rear overhang, half width
 CFG = L.LowLayerConfig()
+CAM = (0.959, 0.0, 0.27)  # carriage_low_measured in the rear-axle frame of a truck at the origin
 
 
 def _floor_points(x0, x1, y0, y1, step=0.02, z=0.0):
@@ -32,7 +33,7 @@ def _layer():
 
 
 def test_the_floor_plane_is_accepted_and_a_raised_plane_is_not():
-    pts = _floor_points(1.4, 3.0, -0.8, 0.8)
+    pts = _floor_points(1.4, 5.0, -0.8, 0.8)
     plane = L.fit_floor(pts, CFG)
     assert plane.ok and abs(plane.offset_m) < 1e-6 and plane.normal[2] > 0.999
     # only a pallet top in view (0.144 m): a horizontal plane, but not where the floor is expected -- refused
@@ -44,8 +45,8 @@ def test_the_floor_plane_is_accepted_and_a_raised_plane_is_not():
 
 def test_floor_hits_are_free_band_points_occupied_and_the_rest_unobserved():
     layer = _layer()
-    pts = np.vstack([_floor_points(1.4, 3.0, -0.8, 0.8), _box_points(2.0, 2.6, 0.2, 1.0, 0.144)])
-    assert layer.integrate(pts, t=0.0).ok
+    pts = np.vstack([_floor_points(1.4, 5.0, -0.8, 0.8), _box_points(2.0, 2.6, 0.2, 1.0, 0.144)])
+    assert layer.integrate(pts, t=0.0, origin=CAM).ok
     assert layer.state_at(1.6, 0.0) == L.FREE
     assert layer.state_at(2.3, 0.6) == L.OCCUPIED  # the box top is in the band
     assert layer.state_at(0.5, 0.0) == L.UNOBSERVED  # never seen
@@ -54,23 +55,23 @@ def test_floor_hits_are_free_band_points_occupied_and_the_rest_unobserved():
 
 def test_a_frame_whose_floor_plane_fails_marks_nothing():
     layer = _layer()
-    result = layer.integrate(_floor_points(1.4, 2.0, -0.4, 0.4, z=0.144), t=0.0)
+    result = layer.integrate(_floor_points(1.4, 2.0, -0.4, 0.4, z=0.144), t=0.0, origin=CAM)
     assert not result.ok and layer.state_at(1.6, 0.0) == L.UNOBSERVED
 
 
 def test_the_newest_evidence_wins():
     layer = _layer()
-    layer.integrate(np.vstack([_floor_points(1.4, 3.0, -0.8, 0.8), _box_points(2.0, 2.6, -0.3, 0.3, 0.2)]), t=0.0)
+    layer.integrate(np.vstack([_floor_points(1.4, 5.0, -0.8, 0.8), _box_points(2.0, 2.6, -0.3, 0.3, 0.2)]), t=0.0, origin=CAM)
     assert layer.state_at(2.3, 0.0) == L.OCCUPIED
-    layer.integrate(_floor_points(1.4, 3.0, -0.8, 0.8), t=0.5)  # the box is gone
+    layer.integrate(_floor_points(1.4, 5.0, -0.8, 0.8), t=0.5, origin=CAM)  # the box is gone
     assert layer.state_at(2.3, 0.0) == L.FREE
-    layer.integrate(np.vstack([_floor_points(1.4, 3.0, -0.8, 0.8), _box_points(2.0, 2.6, -0.3, 0.3, 0.2)]), t=1.0)
+    layer.integrate(np.vstack([_floor_points(1.4, 5.0, -0.8, 0.8), _box_points(2.0, 2.6, -0.3, 0.3, 0.2)]), t=1.0, origin=CAM)
     assert layer.state_at(2.3, 0.0) == L.OCCUPIED
 
 
 def test_evidence_ages_out_and_is_eroded_by_the_odometry_error_since_it_was_seen():
     layer = _layer()
-    layer.integrate(_floor_points(1.4, 3.0, -0.8, 0.8), t=0.0)
+    layer.integrate(_floor_points(1.4, 5.0, -0.8, 0.8), t=0.0, origin=CAM)
     here = (0.0, 0.0, 0.0)
     usable_now = layer.usable(t=0.0, rear_pose=here)
     usable_later = layer.usable(t=2.9, rear_pose=here)
@@ -89,7 +90,7 @@ def test_the_trucks_own_footprint_is_swept_and_forward_may_use_swept_or_free_cel
     layer = _layer()
     start = (0.0, 0.0, 0.0)
     layer.mark_swept(FOOT, start, t=0.0)
-    layer.integrate(_floor_points(1.25, 3.0, -0.8, 0.8), t=0.0)
+    layer.integrate(_floor_points(1.25, 5.0, -0.8, 0.8), t=0.0, origin=CAM)
     ahead = L.path_poses([start], [(1.0, 0.0)])  # 1 m straight
     ok, bad = L.envelope_admissible(layer, t=0.0, poses=ahead, footprint=FOOT, reverse=False)
     assert ok, bad
@@ -110,17 +111,50 @@ def test_the_trucks_own_footprint_is_swept_and_forward_may_use_swept_or_free_cel
 def test_an_unobserved_or_occupied_cell_in_the_envelope_refuses_it():
     layer = _layer()
     layer.mark_swept(FOOT, (0.0, 0.0, 0.0), t=0.0)
-    layer.integrate(np.vstack([_floor_points(1.25, 3.0, -0.8, 0.8), _box_points(2.0, 2.3, -0.2, 0.2, 0.144)]), t=0.0)
+    layer.integrate(np.vstack([_floor_points(1.25, 5.0, -0.8, 0.8), _box_points(2.0, 2.3, -0.2, 0.2, 0.144)]), t=0.0, origin=CAM)
     ok, bad = L.envelope_admissible(layer, t=0.0, poses=L.path_poses([(0.0, 0.0, 0.0)], [(1.0, 0.0)]), footprint=FOOT,
                                     reverse=False)
     assert not ok and any(1.9 <= x <= 2.4 for x, _ in bad)
     # a left turn sweeps beside the body, where the camera never looked
     layer2 = _layer()
     layer2.mark_swept(FOOT, (0.0, 0.0, 0.0), t=0.0)
-    layer2.integrate(_floor_points(1.25, 3.0, -0.3, 0.3), t=0.0)
+    layer2.integrate(_floor_points(1.25, 5.0, -0.3, 0.3), t=0.0, origin=CAM)
     turn = L.path_poses([(0.0, 0.0, 0.0)], [(0.6, 0.29)])
     ok, bad = L.envelope_admissible(layer2, t=0.0, poses=turn, footprint=FOOT, reverse=False)
     assert not ok
+
+
+def test_the_evidence_must_hold_until_braking_ends():
+    # plan S: judged at the end of braking, no new observation assumed in between
+    layer = _layer()
+    layer.mark_swept(FOOT, (0.0, 0.0, 0.0), t=0.0)
+    # wide enough that the rays beside the forks run far before they end: their columns are crossed up to 0.15 m
+    layer.integrate(_floor_points(1.25, 5.0, -3.0, 3.0, step=0.04), t=0.0, origin=CAM)
+    ahead = L.path_poses([(0.0, 0.0, 0.0)], [(0.3, 0.0)])
+    # 1 s old at the end of braking: the corner where the seen floor meets the swept strip (0.11 m off the envelope's
+    # nearest cell) still outlasts the erosion; at 2.5 s the heading term at 1.4 m from the axle already takes it
+    assert L.envelope_admissible(layer, t=0.5, poses=ahead, footprint=FOOT, reverse=False, t_check=1.0)[0]
+    assert not L.envelope_admissible(layer, t=0.5, poses=ahead, footprint=FOOT, reverse=False, t_check=2.5)[0]
+    assert not L.envelope_admissible(layer, t=2.0, poses=ahead, footprint=FOOT, reverse=False,
+                                     t_check=CFG.max_age_s + 0.2)[0]
+    assert L.braking_end_s(0.6) == pytest.approx(0.15 + 0.4)
+
+
+def test_a_floor_hit_without_the_crossed_column_is_not_free():
+    # every height bin from 0.03 to 0.15 m over the cell must be crossed by some ray of the frame
+    full = _layer()
+    full.integrate(_floor_points(1.4, 5.0, -0.4, 0.4), t=0.0, origin=CAM)
+    assert full.state_at(1.45, 0.0) == L.FREE
+    # with a gap in the returns (nothing between 1.8 and 3.5 m), no ray crosses 0.12-0.15 m over the cell at 1.45 m:
+    # the rays ending at 1.5-1.8 m pass it below 0.12 m and those ending at 3.5-4.0 m above 0.21 m
+    gap = _layer()
+    gap.integrate(np.vstack([_floor_points(1.4, 1.8, -0.4, 0.4), _floor_points(3.5, 4.0, -0.4, 0.4)]), t=0.0,
+                  origin=CAM)
+    assert gap.state_at(1.45, 0.0) == L.UNOBSERVED
+    # a cell whose floor hits come only from rays ending there: nothing passed over it at all
+    lone = _layer()
+    lone.integrate(_floor_points(1.4, 1.8, -0.4, 0.4), t=0.0, origin=CAM)
+    assert lone.state_at(1.75, 0.0) == L.UNOBSERVED
 
 
 def test_path_poses_follow_arcs_at_the_given_curvature():

@@ -1,15 +1,20 @@
 """The S-P1 gate (docs/plans/2026-10-27-autonomous-survey-and-relocalization.md, "S-P1 판정 규칙", pre-registered
-2026-10-27): the real low layer (forklift_core.safety.low_layer) on geometric depth from the forward camera, the truck
-following each path kinematically from a cold start -- no memory, no operator, no truth-injected free space -- and
-stopping whenever the footprint up to the stopping distance would enter a cell the layer cannot vouch for.
+2026-10-27 and revised before any result): the real low layer (forklift_core.safety.low_layer) on geometric depth from
+the forward camera, the truck following each path kinematically from a cold start -- no memory, no operator, no
+truth-injected free space -- refusing to move whenever the footprint up to the stopping distance would enter a cell the
+layer cannot vouch for at the end of braking, and braking (reaction 0.15 s, then 1.5 m/s^2) when refused while moving.
 
-- positive: paths P1-P5 on an empty floor at 0.3 and 0.6 m/s must all finish with no permanent stop (30 s sim without
-  progress) and stopped time <= 50 % of the run;
-- negative: the two turning counterexamples (Codex plan review 1 and 2) must never let the footprint overlap the
-  pallet-sized box;
+- positive: paths P1-P5 on an empty floor at 0.3 and 0.6 m/s must each finish with no permanent stop (30 s sim
+  without progress) and a stopped share <= 50 % of the run;
+- negative: N1-N6 (the two turning counterexamples, a floating box, a wrong floor plane, a depth dropout band, the
+  camera going dark) must never let the footprint -- braking included -- overlap the hazard; the negative runs start
+  with the region just ahead of the forks declared clear (``start_clear_m``) so that they move at all;
 - robustness (recorded only): pitch +-1 deg and 5 % depth dropout over 20 seeds.
 
-    python tools/s_p1_gate.py --json OUT.json [--tilt-rad 0.10] [--robustness]
+The generator's truth is used only to make depth and to judge overlap; the layer's plane and free-cell decisions are
+never bypassed.
+
+    python tools/s_p1_gate.py --json OUT.json [--tilt-rad 0.10] [--start-clear-m 0] [--robustness]
 """
 
 from __future__ import annotations
@@ -37,9 +42,10 @@ MOUNT_BASE_XYZ = (0.619, 0.0, 0.27)  # carriage_low_measured
 DEPTH_MIN_M, DEPTH_MAX_M = 0.3, 3.0
 DT_S = 0.1  # 10 Hz camera and control
 LATENCY_FRAMES = 1  # a frame is used one step after its capture
-STOP_DISTANCE_M = {0.3: 0.125, 0.6: 0.260}  # the runner's stop model at these speeds (plan S)
+STOP_MARGIN_M = 0.05  # drive_permission's stopping distance margin
 PERMANENT_STOP_S = 30.0
 STOPPED_FRACTION_MAX = 0.5
+PATH_STEP_M = 0.01
 PLANNER_FOOT = Footprint(1.29, 0.17, 0.36)
 K = 0.29
 PATHS = {
@@ -49,18 +55,23 @@ PATHS = {
     "P4": [(2.0, 0.0), (math.pi / 2 / K, K), (2.0, 0.0)],
     "P5": [(3.0, 0.0), (-3.0, 0.0)],
 }
-# Codex plan review: a left turn at 0.29 from the rear axle at the origin; the box's footprint overlaps after
-# 0.288 m (body outline) / 0.286 m (operating outline) of travel
-NEGATIVES = {
-    "N1": (Footprint(0.959, 0.17, 0.315), (0.25, 0.75)),
-    "N2": (Footprint(0.944, 0.17, 0.36), (0.25, 0.795)),
-}
 EPAL = (0.6, 0.8, 0.144)
 
 
 @dataclass
 class World:
-    boxes: list = field(default_factory=list)  # (cx, cy, sx, sy, height), axis aligned, standing on the floor
+    boxes: list = field(default_factory=list)  # (cx, cy, sx, sy, z_low, z_high), axis aligned
+    dropout: list = field(default_factory=list)  # (x0, x1, y0, y1): no valid depth returns from inside
+    hazards: list = field(default_factory=list)  # (cx, cy, sx, sy) judged for overlap only (not rendered)
+    camera_off_after_s: float | None = None
+
+
+def stopping_distance_m(speed: float) -> float:
+    return speed * L.REACTION_S + speed * speed / (2 * L.DECEL_MPS2) + STOP_MARGIN_M
+
+
+def braking_travel_m(speed: float) -> float:
+    return speed * L.REACTION_S + speed * speed / (2 * L.DECEL_MPS2)
 
 
 def camera_rotation(tilt_rad: float) -> np.ndarray:
@@ -77,10 +88,11 @@ def pixel_dirs(stride: int = 1) -> np.ndarray:
 
 
 def render_points(world: World, rear_pose, tilt_rad: float, *, pitch_rad: float = 0.0, dropout: float = 0.0,
-                  rng=None, stride: int = 1) -> np.ndarray:
-    """The valid depth points (odometry frame) a camera on the truck at ``rear_pose`` sees: rays against the floor
-    z = 0 and the boxes; depth (optical z) within 0.3-3.0 m; ``pitch_rad`` tips the camera (the truck's pitch);
-    ``dropout`` removes that share of pixels at random."""
+                  rng=None, stride: int = 1) -> tuple:
+    """The valid depth points (odometry frame) a camera on the truck at ``rear_pose`` sees, and the camera's origin:
+    rays against the floor z = 0 and the boxes; depth (optical z) within 0.3-3.0 m; ``pitch_rad`` tips the camera
+    (the truck's pitch); ``dropout`` removes that share of pixels at random; the world's dropout rectangles remove
+    every return from inside them."""
     x, y, yaw = rear_pose
     c, s = math.cos(yaw), math.sin(yaw)
     rz = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
@@ -89,14 +101,13 @@ def render_points(world: World, rear_pose, tilt_rad: float, *, pitch_rad: float 
     rot = rz @ ry @ camera_rotation(tilt_rad)
     cam = np.array([MOUNT_BASE_XYZ[0] + REAR_AXLE_OFFSET_M, MOUNT_BASE_XYZ[1], MOUNT_BASE_XYZ[2]])
     origin = np.array([x, y, 0.0]) + rz @ (ry @ cam)
-    d_opt = pixel_dirs(stride)
-    d = d_opt @ rot.T  # odometry-frame directions; the parameter along d is the optical depth (d_opt z = 1)
+    d = pixel_dirs(stride) @ rot.T  # odometry-frame directions; the parameter along d is the optical depth
     t = np.full(len(d), np.inf)
     down = d[:, 2] < -1e-9
     t[down] = -origin[2] / d[down, 2]
-    for cx, cy, sx, sy, h in world.boxes:
-        lo = np.array([cx - sx / 2, cy - sy / 2, 0.0])
-        hi = np.array([cx + sx / 2, cy + sy / 2, h])
+    for cx, cy, sx, sy, z0, z1 in world.boxes:
+        lo = np.array([cx - sx / 2, cy - sy / 2, z0])
+        hi = np.array([cx + sx / 2, cy + sy / 2, z1])
         with np.errstate(divide="ignore", invalid="ignore"):
             t1 = (lo - origin) / d
             t2 = (hi - origin) / d
@@ -107,17 +118,21 @@ def render_points(world: World, rear_pose, tilt_rad: float, *, pitch_rad: float 
     valid = (t >= DEPTH_MIN_M) & (t <= DEPTH_MAX_M)
     if dropout > 0:
         valid &= (rng or np.random.default_rng(0)).random(len(t)) >= dropout
-    return origin + d[valid] * t[valid, None]
+    pts = origin + d[valid] * t[valid, None]
+    for x0, x1, y0, y1 in world.dropout:
+        pts = pts[~((pts[:, 0] >= x0) & (pts[:, 0] <= x1) & (pts[:, 1] >= y0) & (pts[:, 1] <= y1))]
+    return pts, origin
 
 
-def box_overlaps(footprint: Footprint, rear_pose, box) -> bool:
-    """Whether the footprint rectangle at ``rear_pose`` overlaps the box's floor rectangle (separating axes)."""
+def box_overlaps(footprint: Footprint, rear_pose, rect) -> bool:
+    """Whether the footprint rectangle at ``rear_pose`` overlaps the axis-aligned floor rectangle ``rect`` =
+    (cx, cy, sx, sy, ...) (separating axes)."""
     x, y, yaw = rear_pose
     c, s = math.cos(yaw), math.sin(yaw)
     fp = [(x + c * a - s * b, y + s * a + c * b) for a, b in
           ((footprint.front_m, footprint.half_width_m), (footprint.front_m, -footprint.half_width_m),
            (-footprint.rear_m, -footprint.half_width_m), (-footprint.rear_m, footprint.half_width_m))]
-    cx, cy, sx, sy, _ = box
+    cx, cy, sx, sy = rect[:4]
     bx = [(cx - sx / 2, cy - sy / 2), (cx + sx / 2, cy - sy / 2), (cx + sx / 2, cy + sy / 2), (cx - sx / 2, cy + sy / 2)]
     for poly in (fp, bx):
         for i in range(4):
@@ -131,84 +146,124 @@ def box_overlaps(footprint: Footprint, rear_pose, box) -> bool:
 
 
 def run(segments, speed: float, *, world: World | None = None, footprint: Footprint = PLANNER_FOOT,
-        tilt_rad: float = 0.10, pitch_rad: float = 0.0, dropout: float = 0.0, seed: int = 0, stride: int = 1,
-        max_time_s: float = 600.0) -> dict:
-    """One cold-start run along ``segments``; the result of the pre-registered rule for it."""
+        tilt_rad: float = 0.10, start_clear_m: float = 0.0, pitch_rad: float = 0.0, dropout: float = 0.0,
+        seed: int = 0, stride: int = 1, max_time_s: float = 600.0) -> dict:
+    """One cold-start run along ``segments``; the result by the pre-registered rule."""
     world = world or World()
     rng = np.random.default_rng(seed)
-    cfg = L.LowLayerConfig()
-    layer = L.LowLayer(cfg, origin_xy=(-6.0, -6.0), size_cells=(320, 320))
-    path = L.path_poses([(0.0, 0.0, 0.0)], segments, step_m=0.01)
-    seg_sign = []
+    layer = L.LowLayer(L.LowLayerConfig(), origin_xy=(-6.0, -6.0), size_cells=(320, 320))
+    path = L.path_poses([(0.0, 0.0, 0.0)], segments, step_m=PATH_STEP_M)
+    sign = []
     for length, _ in segments:
-        seg_sign += [1 if length >= 0 else -1] * max(1, int(math.ceil(abs(length) / 0.01)))
-    seg_sign.append(seg_sign[-1])
-    i, t = 0, 0.0
-    layer.mark_swept(footprint, path[0], t)
-    queue = []
+        sign += [1 if length >= 0 else -1] * max(1, int(math.ceil(abs(length) / PATH_STEP_M)))
+    sign.append(sign[-1])
+    t = 0.0
+    layer.mark_swept(footprint, path[0], t)  # the truck's own body stands there
+    if start_clear_m > 0:  # the explicit start condition (alternative 3): the strip ahead of the forks declared clear
+        ahead = Footprint(footprint.front_m + start_clear_m, -footprint.front_m, footprint.half_width_m)
+        layer.mark_swept(ahead, path[0], t)
+    hazards = [b[:4] for b in world.boxes] + list(world.hazards)
+    i, moving, queue = 0, False, []
     stopped_s = moving_s = still_s = 0.0
-    first_block = None
-    overlap = False
-    stop_m = STOP_DISTANCE_M[speed]
-    step = max(1, int(round(speed * DT_S / 0.01)))
+    first_block, overlap, last_motion_t = None, False, None
+    stop_m, step = stopping_distance_m(speed), max(1, int(round(speed * DT_S / PATH_STEP_M)))
+
+    def advance(n: int) -> None:
+        nonlocal i, overlap
+        end = min(len(path) - 1, i + n)
+        end = next((m for m in range(i, end + 1) if sign[m] != sign[i]), end)
+        for m in range(i + 1, end + 1):
+            layer.mark_swept(footprint, path[m], t)
+            overlap = overlap or any(box_overlaps(footprint, path[m], h) for h in hazards)
+        i = end
+
     while i < len(path) - 1 and t < max_time_s:
-        pose = path[i]
-        pitch = pitch_rad * (1 if (rng.random() < 0.5) else -1) if pitch_rad else 0.0
-        queue.append((t, render_points(world, pose, tilt_rad, pitch_rad=pitch, dropout=dropout, rng=rng,
-                                       stride=stride)))
+        if world.camera_off_after_s is None or t <= world.camera_off_after_s:
+            pts, origin = render_points(world, path[i], tilt_rad, rng=rng, stride=stride, dropout=dropout,
+                                        pitch_rad=pitch_rad * (1 if rng.random() < 0.5 else -1) if pitch_rad else 0.0)
+            queue.append((pts, origin))
         if len(queue) > LATENCY_FRAMES:
-            _, pts = queue.pop(0)
-            layer.integrate(pts, t)
-        reverse = seg_sign[i] < 0
+            pts, origin = queue.pop(0)
+            layer.integrate(pts, t, origin=origin)
         j = min(len(path) - 1, i + step)
-        k = min(len(path) - 1, j + int(math.ceil(stop_m / 0.01)))
-        # the envelope may not run past a gear change: the stop distance is along the current direction
-        k = next((m for m in range(i, k + 1) if seg_sign[m] != seg_sign[i]), k)
-        ok, bad = L.envelope_admissible(layer, t, path[i:k + 1], footprint, reverse=reverse)
+        k = min(len(path) - 1, j + int(math.ceil(stop_m / PATH_STEP_M)))
+        k = next((m for m in range(i, k + 1) if sign[m] != sign[i]), k)  # the stop distance runs in this gear
+        t_check = t + DT_S + L.braking_end_s(speed)
+        ok, bad = L.envelope_admissible(layer, t, path[i:k + 1], footprint, reverse=sign[i] < 0, t_check=t_check)
         if ok:
-            for m in range(i + 1, j + 1):
-                layer.mark_swept(footprint, path[m], t)
-                if any(box_overlaps(footprint, path[m], b) for b in world.boxes):
-                    overlap = True
-            i = j
+            advance(step)
+            moving, still_s, last_motion_t = True, 0.0, t
             moving_s += DT_S
-            still_s = 0.0
-        else:
-            if first_block is None:
-                first_block = {"time_s": round(t, 2), "pose": [round(v, 3) for v in pose],
-                               "cells": bad[:6], "cells_total": len(bad)}
-            stopped_s += DT_S
-            still_s += DT_S
-            if still_s >= PERMANENT_STOP_S:
-                break
+            t += DT_S
+            continue
+        if first_block is None:
+            first_block = {"time_s": round(t, 2), "pose": [round(v, 3) for v in path[i]], "cells": bad[:6],
+                           "cells_total": len(bad)}
+        if moving:  # refused while moving: the truck brakes along the path, the whole braking travel judged
+            advance(int(math.ceil(braking_travel_m(speed) / PATH_STEP_M)))
+            dt_brake = L.braking_end_s(speed)
+            moving_s += dt_brake
+            t += dt_brake
+            last_motion_t = t
+            moving = False
+            continue
+        stopped_s += DT_S
+        still_s += DT_S
         t += DT_S
+        if still_s >= PERMANENT_STOP_S:
+            break
     finished = i >= len(path) - 1
     total = stopped_s + moving_s
+    share = stopped_s / total if total else 1.0
     return {"finished": finished, "permanent_stop": (not finished) and still_s >= PERMANENT_STOP_S,
-            "stopped_fraction": round(stopped_s / total, 3) if total else None, "time_s": round(t, 2),
-            "travel_m": round(i * 0.01, 2), "first_block": first_block, "overlap": overlap,
-            "pass": finished and still_s < PERMANENT_STOP_S and total > 0 and stopped_s / total <= STOPPED_FRACTION_MAX}
+            "stopped_fraction": round(share, 3), "time_s": round(t, 2), "travel_m": round(i * PATH_STEP_M, 2),
+            "first_block": first_block, "overlap": overlap,
+            "last_motion_s": None if last_motion_t is None else round(last_motion_t, 2),
+            "pass": finished and still_s < PERMANENT_STOP_S and share <= STOPPED_FRACTION_MAX}
 
 
-def gate(tilt_rad: float = 0.10, robustness: bool = False, stride: int = 1) -> dict:
-    out = {"tilt_rad": tilt_rad, "positive": {}, "negative": {}}
+def negatives(tilt_rad: float, stride: int) -> dict:
+    """N1-N6: every run must never overlap its hazard, braking included (N6: must stand still by the time the last
+    evidence it saw runs out at the end of braking)."""
+    out = {}
+    turn = [(1.0, K)]
+    for name, foot, (bx, by) in (("N1", Footprint(0.959, 0.17, 0.315), (0.25, 0.75)),
+                                 ("N2", Footprint(0.944, 0.17, 0.36), (0.25, 0.795))):
+        world = World([(bx, by, EPAL[0], EPAL[1], 0.0, EPAL[2])])
+        out[name] = run(turn, 0.3, world=world, footprint=foot, tilt_rad=tilt_rad, start_clear_m=0.3, stride=stride,
+                        max_time_s=60.0)
+    out["N3"] = run([(2.0, 0.0)], 0.3, world=World([(1.9, 0.0, 0.4, 0.8, 0.05, 0.12)]), tilt_rad=tilt_rad,
+                    start_clear_m=0.3, stride=stride, max_time_s=60.0)
+    out["N4"] = run([(1.0, 0.0)], 0.3, world=World([(3.2, 0.0, 3.6, 6.0, 0.0, EPAL[2])]), tilt_rad=tilt_rad,
+                    start_clear_m=0.1, stride=stride, max_time_s=60.0)
+    out["N5"] = run([(2.0, 0.0)], 0.3, world=World(dropout=[(1.9, 2.6, -1.0, 1.0)], hazards=[(2.25, 0.0, 0.7, 2.0)]),
+                    tilt_rad=tilt_rad, start_clear_m=0.3, stride=stride, max_time_s=60.0)
+    n6 = run([(3.0, 0.0)], 0.3, world=World(camera_off_after_s=0.5), tilt_rad=tilt_rad, start_clear_m=0.3,
+             stride=stride, max_time_s=60.0)
+    deadline = 0.5 + L.LowLayerConfig().max_age_s + DT_S
+    n6["deadline_s"] = deadline
+    n6["overlap"] = n6["finished"] or (n6["last_motion_s"] is not None and n6["last_motion_s"] > deadline)
+    out["N6"] = n6
+    for r in out.values():
+        r["pass"] = not r["overlap"]
+    return out
+
+
+def gate(tilt_rad: float = 0.10, start_clear_m: float = 0.0, robustness: bool = False, stride: int = 1) -> dict:
+    out = {"tilt_rad": tilt_rad, "start_clear_m": start_clear_m, "positive": {}, "negative": negatives(tilt_rad, stride)}
     for name, segs in PATHS.items():
         for v in (0.3, 0.6):
-            out["positive"][f"{name}@{v}"] = run(segs, v, tilt_rad=tilt_rad, stride=stride)
-    for name, (foot, (bx, by)) in NEGATIVES.items():
-        world = World([(bx, by, EPAL[0], EPAL[1], EPAL[2])])
-        r = run([(1.0, K)], 0.3, world=world, footprint=foot, tilt_rad=tilt_rad, stride=stride, max_time_s=60.0)
-        out["negative"][name] = {**r, "pass": not r["overlap"]}
+            out["positive"][f"{name}@{v}"] = run(segs, v, tilt_rad=tilt_rad, start_clear_m=start_clear_m, stride=stride)
     out["positive_pass"] = all(r["pass"] for r in out["positive"].values())
     out["negative_pass"] = all(r["pass"] for r in out["negative"].values())
+    out["negative_moved"] = {k: r["travel_m"] for k, r in out["negative"].items()}
     out["gate_pass"] = out["positive_pass"] and out["negative_pass"]
     if robustness:
-        rob = {}
-        for name, segs in PATHS.items():
-            for v in (0.3, 0.6):
-                rob[f"{name}@{v}"] = sum(run(segs, v, tilt_rad=tilt_rad, pitch_rad=math.radians(1.0), dropout=0.05,
-                                             seed=s, stride=stride)["finished"] for s in range(20))
-        out["robustness_finished_of_20"] = rob
+        out["robustness_finished_of_20"] = {
+            f"{name}@{v}": sum(run(segs, v, tilt_rad=tilt_rad, start_clear_m=start_clear_m,
+                                   pitch_rad=math.radians(1.0), dropout=0.05, seed=s, stride=stride)["finished"]
+                               for s in range(20))
+            for name, segs in PATHS.items() for v in (0.3, 0.6)}
     return out
 
 
@@ -216,12 +271,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", type=Path, required=True)
     ap.add_argument("--tilt-rad", type=float, default=0.10)
+    ap.add_argument("--start-clear-m", type=float, default=0.0, help="alternative 3: the strip ahead declared clear")
     ap.add_argument("--robustness", action="store_true")
     ap.add_argument("--stride", type=int, default=1, help="use every n-th pixel (1: full 640x480)")
     a = ap.parse_args(argv)
-    out = gate(a.tilt_rad, a.robustness, a.stride)
+    out = gate(a.tilt_rad, a.start_clear_m, a.robustness, a.stride)
     a.json.write_text(json.dumps(out, indent=1) + "\n")
-    print(json.dumps({k: v for k, v in out.items() if k.endswith("pass")}))
+    print(json.dumps({k: v for k, v in out.items() if k.endswith("pass") or k == "negative_moved"}))
     for name, r in {**out["positive"], **out["negative"]}.items():
         print(name, "PASS" if r["pass"] else "FAIL", "travel", r["travel_m"], "stopped", r["stopped_fraction"],
               "first block", (r["first_block"] or {}).get("pose"), (r["first_block"] or {}).get("cells", [])[:3])

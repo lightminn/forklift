@@ -3,7 +3,9 @@
 The 2D LiDAR plane (1.05 m) does not see an empty pallet (0.144 m) or anything else below it. This layer keeps, in the
 odometry frame, what the forward depth camera established about the floor near the truck:
 
-- ``FREE``: a valid depth ray reached the verified floor inside the cell and no point of the collision band
+- ``FREE``: a valid depth ray reached the verified floor inside the cell, the rays of the same frame crossed the cell's
+  column at every height from ``band_low_m`` to ``verify_high_m`` (the camera cannot vouch for heights no ray passed
+  through: a floor hit under a floating box is no proof), and no point of the collision band
   (``band_low_m``..``band_high_m`` above the floor) fell in it;
 - ``OCCUPIED``: a band point fell in the cell;
 - ``UNOBSERVED``: everything else -- dropouts, occlusions, the self mask, a frame whose floor plane failed.
@@ -43,6 +45,8 @@ class LowLayerConfig:
     resolution_m: float = 0.05
     band_low_m: float = 0.03  # the collision band above the floor
     band_high_m: float = 1.0
+    verify_high_m: float = 0.15  # the column rays must have crossed for a free cell (plan S H_VERIFY)
+    verify_bin_m: float = 0.03
     floor_tol_m: float = 0.02  # a point this close to the floor plane is a floor hit
     max_age_s: float = 3.0  # evidence older than this is not used (plan S)
     depth_error_m: float = 0.02
@@ -168,8 +172,10 @@ class LowLayer:
         return FREE if f > -np.inf else UNOBSERVED
 
     # --- evidence ----------------------------------------------------------------------------------------------
-    def integrate(self, points: np.ndarray, t: float, expected_floor_z: float = 0.0) -> Integration:
-        """A frame's valid depth points (odometry frame): the floor plane first; a refused plane marks nothing."""
+    def integrate(self, points: np.ndarray, t: float, *, origin, expected_floor_z: float = 0.0) -> Integration:
+        """A frame's valid depth points (odometry frame) seen from the camera at ``origin``: the floor plane first (a
+        refused plane marks nothing), then band points occupy their cells and floor hits free theirs where the frame's
+        rays crossed the whole verified column."""
         plane = fit_floor(points, self.cfg, expected_floor_z)
         if not plane.ok:
             return Integration(False, plane, 0, 0)
@@ -183,10 +189,37 @@ class LowLayer:
         hit[oi, oj] = True
         floor_hit = np.zeros(self.shape, bool)
         floor_hit[fi, fj] = True
+        verified = self._crossed_columns(pts, np.asarray(origin, float), plane)
         self.occupied_t[hit] = t
-        free_now = floor_hit & ~hit  # a band point in the cell in this frame overrides its floor hits
+        free_now = floor_hit & verified & ~hit  # a band point in the cell in this frame overrides its floor hits
         self.free_t[free_now] = t
         return Integration(True, plane, int(free_now.sum()), int(hit.sum()))
+
+    def _crossed_columns(self, pts: np.ndarray, origin: np.ndarray, plane: Plane) -> np.ndarray:
+        """Cells whose column from ``band_low_m`` to ``verify_high_m`` the frame's rays crossed in every height bin
+        (samples every half cell along each ray, stopping a cell short of its return)."""
+        cfg = self.cfg
+        edges = np.arange(cfg.band_low_m, cfg.verify_high_m + 1e-9, cfg.verify_bin_m)
+        nbins = max(1, len(edges) - 1)
+        seen = np.zeros(self.shape + (nbins,), bool)
+        vec = pts - origin
+        length = np.hypot(vec[:, 0], vec[:, 1])
+        keep = length > cfg.resolution_m
+        vec, length = vec[keep], length[keep]
+        step = 0.5 * cfg.resolution_m
+        n = int(np.ceil(length.max() / step)) if len(length) else 0
+        for k in range(1, n):
+            frac = k * step / length
+            live = frac < (length - cfg.resolution_m) / length
+            if not live.any():
+                break
+            s = origin + vec[live] * frac[live, None]
+            hz = s @ plane.normal + plane.offset_m
+            b = np.floor((hz - cfg.band_low_m) / cfg.verify_bin_m).astype(int)
+            inb = (b >= 0) & (b < nbins)
+            ci, cj, inside = self._cells(s[inb, :2])
+            seen[ci, cj, b[inb][inside]] = True
+        return seen.all(axis=2)
 
     def mark_swept(self, footprint: Footprint, rear_pose: tuple, t: float) -> None:
         """The cells the truck's footprint covers at ``rear_pose`` (its own body stands there)."""
@@ -263,13 +296,23 @@ def path_poses(start_poses, segments, step_m: float = 0.05) -> list:
     return out
 
 
-def envelope_admissible(layer: LowLayer, t: float, poses, footprint: Footprint, *, reverse: bool) -> tuple:
+REACTION_S, DECEL_MPS2 = 0.15, 1.5  # control.drive_permission's stopping model
+
+
+def braking_end_s(speed_mps: float) -> float:
+    """How long after now the truck stands still if it brakes now (reaction, then the deceleration)."""
+    return REACTION_S + abs(speed_mps) / DECEL_MPS2
+
+
+def envelope_admissible(layer: LowLayer, t: float, poses, footprint: Footprint, *, reverse: bool,
+                        t_check: float | None = None) -> tuple:
     """Whether the footprint along ``poses`` (the path from the current pose to the stopping distance, rear axle)
     lies in usable cells; the refused cells' centres (x, y) otherwise. The cells under the first pose are the truck's
-    own and are allowed."""
+    own and are allowed. ``t_check`` (default ``t``): the time the evidence must still hold -- the end of braking
+    (plan S), with no new observation assumed in between."""
     need = layer._footprint_mask(footprint, poses)
     own = layer._footprint_mask(footprint, poses[:1])
-    ok = layer.usable(t, poses[0], reverse=reverse)
+    ok = layer.usable(t if t_check is None else t_check, poses[0], reverse=reverse)
     bad = need & ~ok & ~own
     if not bad.any():
         return True, []
