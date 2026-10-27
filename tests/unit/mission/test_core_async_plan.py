@@ -858,12 +858,11 @@ def test_a_deferred_release_carries_a_put_down_made_in_its_hold_but_not_an_older
     before the hold stays, even when a re-observation in the hold lands on exactly the same coordinates."""
     core, slam, Pose = held_core("observe")
     core.targets.carried("P-1")
-    if not in_hold:
-        slam["tracker"].mode = "tracking"
+    if in_hold:
+        core.hold_slam(5.0, held_frame_pallet=True)
     core.put_down_target("P-1", Pose(3.0, 0.5, 0.0), state="available")
-    if not in_hold:
-        core.release_slam(None)  # a release between that put-down and this hold
-        slam["tracker"].mode = "holding"
+    if not in_hold:  # put down before this hold began; a re-observation in the hold lands on the same coordinates
+        core.hold_slam(6.0, held_frame_pallet=True)
         core.targets.update_pose("P-1", Pose(3.0, 0.5, 0.0), basis="recognised", uncertainty_m=0.05)
     core.end_release_due = {"pallet_id": "P-1", "destination_id": "D-1", "pallet_held": True,
                             "destination_held": False}

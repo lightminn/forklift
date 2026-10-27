@@ -259,6 +259,7 @@ class MissionCore:
         # Plan 2026-10-28-adoption-zone-check: the pallets put down while the current SLAM hold stands -- their put-down
         # snapshots are that hold's estimates and go with its end release; cleared at every release.
         self.put_downs_in_hold: set = set()
+        self.in_hold = False  # set by hold_slam, cleared by release_slam (the only hold and release sites)
         self.commands = MissionCommands(self.targets)
         self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
         # Real-time plan D8 (docs/plans/2026-10-17-realtime-sim.md): a real-time run hands the long plans to a
@@ -5280,12 +5281,14 @@ class MissionCore:
         the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
         jump = self.slam["tracker"].release(odom_from_base=odom_from_base)
         self.slam_releases += 1
+        self.in_hold = False
         self.put_downs_in_hold.clear()  # the hold they were put down in is over (end_release read them first)
         return jump
 
     def put_down_target(self, pallet_id: str, pose, **kwargs) -> bool:
-        """TargetsBook.put_down, noting a put-down made under a SLAM hold (plan 2026-10-28-adoption-zone-check)."""
-        if self.slam is not None and getattr(self.slam.get("tracker"), "mode", None) == "holding":
+        """TargetsBook.put_down, noting a put-down made under a SLAM hold (plan 2026-10-28-adoption-zone-check). The
+        hold is the core's own record (hold_slam / release_slam), not the tracker's mode: no port is read in a tick."""
+        if self.in_hold:
             self.put_downs_in_hold.add(pallet_id)
         return self.targets.put_down(pallet_id, pose, **kwargs)
 
@@ -7922,6 +7925,7 @@ class MissionCore:
         made with this very correction (the approach's hold begins at the accepted capture)."""
         slam, obstacle, pocket = self.slam, self.obstacle, self.pocket
         slam["tracker"].hold(odom_from_base=self.hooks.slam_odom_base())
+        self.in_hold = True  # the core's own record (no port read in a tick): release_slam clears it
         self.hold_basis = {
             "pallet": (_HELD, _HELD) if held_frame_pallet else (
                 pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")),
