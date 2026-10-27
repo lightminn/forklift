@@ -56,6 +56,9 @@ PATHS = {
     "P5": [(3.0, 0.0), (-3.0, 0.0)],
 }
 EPAL = (0.6, 0.8, 0.144)
+# dls08_measured forks in the rear-axle frame: root base x 0.59 -> 0.93, tip 1.29, centres +-0.18625, width 0.055,
+# thickness 0.025 about z 0.04 (sim/models/dls08_measured)
+FORK_BOXES = [((0.93, c - 0.0275, 0.0275), (1.29, c + 0.0275, 0.0525)) for c in (-0.18625, 0.18625)]
 
 
 @dataclass
@@ -115,6 +118,17 @@ def render_points(world: World, rear_pose, tilt_rad: float, *, pitch_rad: float 
         tmax = np.nanmin(np.maximum(t1, t2), axis=1)
         hit = (tmax >= np.maximum(tmin, 0.0)) & (tmin > 0)
         t = np.where(hit & (tmin < t), tmin, t)
+    # the truck's own forks (dls08_measured), in the truck frame: they shade the floor right ahead of the tips
+    o_local = rz.T @ (origin - np.array([x, y, 0.0]))
+    d_local = d @ rz
+    for lo, hi in FORK_BOXES:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t1 = (np.asarray(lo) - o_local) / d_local
+            t2 = (np.asarray(hi) - o_local) / d_local
+        tmin = np.nanmax(np.minimum(t1, t2), axis=1)
+        tmax = np.nanmin(np.maximum(t1, t2), axis=1)
+        hit = (tmax >= np.maximum(tmin, 0.0)) & (tmin > 0)
+        t = np.where(hit & (tmin < t), tmin, t)
     valid = (t >= DEPTH_MIN_M) & (t <= DEPTH_MAX_M)
     if dropout > 0:
         valid &= (rng or np.random.default_rng(0)).random(len(t)) >= dropout
@@ -148,58 +162,69 @@ def box_overlaps(footprint: Footprint, rear_pose, rect) -> bool:
 def run(segments, speed: float, *, world: World | None = None, footprint: Footprint = PLANNER_FOOT,
         tilt_rad: float = 0.10, start_clear_m: float = 0.0, pitch_rad: float = 0.0, dropout: float = 0.0,
         seed: int = 0, stride: int = 1, max_time_s: float = 600.0) -> dict:
-    """One cold-start run along ``segments``; the result by the pre-registered rule."""
+    """One cold-start run along ``segments``; the result by the pre-registered rule.
+
+    The truck stops at every gear change (the envelope never runs past one, so it must be standing there), brakes along
+    the path in its current gear when refused while moving (the braking travel rounded up to the path step, <= 1 cm
+    conservative), and uses each depth frame one step after its capture, stamped with its capture time."""
     world = world or World()
     rng = np.random.default_rng(seed)
     layer = L.LowLayer(L.LowLayerConfig(), origin_xy=(-6.0, -6.0), size_cells=(320, 320))
     path = L.path_poses([(0.0, 0.0, 0.0)], segments, step_m=PATH_STEP_M)
-    sign = []
+    sign = []  # sign[m]: the direction of the move from pose m to pose m + 1
     for length, _ in segments:
         sign += [1 if length >= 0 else -1] * max(1, int(math.ceil(abs(length) / PATH_STEP_M)))
     sign.append(sign[-1])
     t = 0.0
-    layer.mark_swept(footprint, path[0], t)  # the truck's own body stands there
     if start_clear_m > 0:  # the explicit start condition (alternative 3): the strip ahead of the forks declared clear
-        ahead = Footprint(footprint.front_m + start_clear_m, -footprint.front_m, footprint.half_width_m)
-        layer.mark_swept(ahead, path[0], t)
+        layer.mark_swept_box(path[0], footprint.front_m, footprint.front_m + start_clear_m, footprint.half_width_m, t)
     hazards = [b[:4] for b in world.boxes] + list(world.hazards)
     i, moving, queue = 0, False, []
     stopped_s = moving_s = still_s = 0.0
     first_block, overlap, last_motion_t = None, False, None
+    integrated = refused_planes = 0
     stop_m, step = stopping_distance_m(speed), max(1, int(round(speed * DT_S / PATH_STEP_M)))
+
+    def gear_end(m: int) -> int:
+        """The index where the move from ``m`` changes gear (or the path ends): the truck must stand there."""
+        return next((q for q in range(m + 1, len(path)) if q == len(path) - 1 or sign[q] != sign[m]), len(path) - 1)
 
     def advance(n: int) -> None:
         nonlocal i, overlap
-        end = min(len(path) - 1, i + n)
-        end = next((m for m in range(i, end + 1) if sign[m] != sign[i]), end)
+        end = min(i + n, gear_end(i))
         for m in range(i + 1, end + 1):
             layer.mark_swept(footprint, path[m], t)
             overlap = overlap or any(box_overlaps(footprint, path[m], h) for h in hazards)
         i = end
 
     while i < len(path) - 1 and t < max_time_s:
+        layer.mark_swept(footprint, path[i], t)  # the body stands here now
+        layer.prune(t)
         if world.camera_off_after_s is None or t <= world.camera_off_after_s:
             pts, origin = render_points(world, path[i], tilt_rad, rng=rng, stride=stride, dropout=dropout,
                                         pitch_rad=pitch_rad * (1 if rng.random() < 0.5 else -1) if pitch_rad else 0.0)
-            queue.append((pts, origin))
-        if len(queue) > LATENCY_FRAMES:
-            pts, origin = queue.pop(0)
-            layer.integrate(pts, t, origin=origin)
-        j = min(len(path) - 1, i + step)
-        k = min(len(path) - 1, j + int(math.ceil(stop_m / PATH_STEP_M)))
-        k = next((m for m in range(i, k + 1) if sign[m] != sign[i]), k)  # the stop distance runs in this gear
+            queue.append((t, pts, origin, path[i]))
+        while queue and (len(queue) > LATENCY_FRAMES or queue[0][0] < t - LATENCY_FRAMES * DT_S + 1e-9):
+            t_cap, pts, origin, pose = queue.pop(0)  # used a step after capture, stamped with the capture time
+            res = layer.integrate(pts, t_cap, origin=origin, self_mask=(PLANNER_FOOT, pose))
+            integrated += 1
+            refused_planes += not res.ok
+        stop_at = gear_end(i)
+        j = min(i + step, stop_at)
+        k = min(j + int(math.ceil(stop_m / PATH_STEP_M)), stop_at)  # the stop distance never runs past a gear change
         t_check = t + DT_S + L.braking_end_s(speed)
         ok, bad = L.envelope_admissible(layer, t, path[i:k + 1], footprint, reverse=sign[i] < 0, t_check=t_check)
         if ok:
             advance(step)
-            moving, still_s, last_motion_t = True, 0.0, t
             moving_s += DT_S
+            still_s, last_motion_t = 0.0, t
+            moving = i < stop_at  # arriving at a gear change (or the end) is a planned stop
             t += DT_S
             continue
         if first_block is None:
-            first_block = {"time_s": round(t, 2), "pose": [round(v, 3) for v in path[i]], "cells": bad[:6],
-                           "cells_total": len(bad)}
-        if moving:  # refused while moving: the truck brakes along the path, the whole braking travel judged
+            first_block = {"time_s": round(t, 2), "pose": [round(v, 3) for v in path[i]], "points": bad[:6],
+                           "points_total": len(bad)}
+        if moving:  # refused while moving: the truck brakes along the path in this gear, the whole travel judged
             advance(int(math.ceil(braking_travel_m(speed) / PATH_STEP_M)))
             dt_brake = L.braking_end_s(speed)
             moving_s += dt_brake
@@ -217,35 +242,40 @@ def run(segments, speed: float, *, world: World | None = None, footprint: Footpr
     share = stopped_s / total if total else 1.0
     return {"finished": finished, "permanent_stop": (not finished) and still_s >= PERMANENT_STOP_S,
             "stopped_fraction": round(share, 3), "time_s": round(t, 2), "travel_m": round(i * PATH_STEP_M, 2),
-            "first_block": first_block, "overlap": overlap,
+            "first_block": first_block, "overlap": overlap, "frames_integrated": integrated,
+            "frames_plane_refused": refused_planes,
             "last_motion_s": None if last_motion_t is None else round(last_motion_t, 2),
             "pass": finished and still_s < PERMANENT_STOP_S and share <= STOPPED_FRACTION_MAX}
 
 
 def negatives(tilt_rad: float, stride: int) -> dict:
-    """N1-N6: every run must never overlap its hazard, braking included (N6: must stand still by the time the last
-    evidence it saw runs out at the end of braking)."""
+    """N1-N6: no run may overlap its hazard, braking included; N3, N5 and N6 must also have moved (else the feature
+    under test was never exercised), N4 must have refused every frame's floor plane, N6 must stand still by the time
+    the last frame it saw (captured at 0.5 s) runs out (3 s)."""
     out = {}
     turn = [(1.0, K)]
     for name, foot, (bx, by) in (("N1", Footprint(0.959, 0.17, 0.315), (0.25, 0.75)),
                                  ("N2", Footprint(0.944, 0.17, 0.36), (0.25, 0.795))):
         world = World([(bx, by, EPAL[0], EPAL[1], 0.0, EPAL[2])])
-        out[name] = run(turn, 0.3, world=world, footprint=foot, tilt_rad=tilt_rad, start_clear_m=0.3, stride=stride,
-                        max_time_s=60.0)
-    out["N3"] = run([(2.0, 0.0)], 0.3, world=World([(1.9, 0.0, 0.4, 0.8, 0.05, 0.12)]), tilt_rad=tilt_rad,
-                    start_clear_m=0.3, stride=stride, max_time_s=60.0)
-    out["N4"] = run([(1.0, 0.0)], 0.3, world=World([(3.2, 0.0, 3.6, 6.0, 0.0, EPAL[2])]), tilt_rad=tilt_rad,
-                    start_clear_m=0.1, stride=stride, max_time_s=60.0)
-    out["N5"] = run([(2.0, 0.0)], 0.3, world=World(dropout=[(1.9, 2.6, -1.0, 1.0)], hazards=[(2.25, 0.0, 0.7, 2.0)]),
-                    tilt_rad=tilt_rad, start_clear_m=0.3, stride=stride, max_time_s=60.0)
-    n6 = run([(3.0, 0.0)], 0.3, world=World(camera_off_after_s=0.5), tilt_rad=tilt_rad, start_clear_m=0.3,
-             stride=stride, max_time_s=60.0)
-    deadline = 0.5 + L.LowLayerConfig().max_age_s + DT_S
-    n6["deadline_s"] = deadline
-    n6["overlap"] = n6["finished"] or (n6["last_motion_s"] is not None and n6["last_motion_s"] > deadline)
-    out["N6"] = n6
-    for r in out.values():
-        r["pass"] = not r["overlap"]
+        r = run(turn, 0.3, world=world, footprint=foot, tilt_rad=tilt_rad, start_clear_m=0.3, stride=stride,
+                max_time_s=60.0)
+        out[name] = {**r, "pass": not r["overlap"]}
+    r = run([(2.0, 0.0)], 0.3, world=World([(1.9, 0.0, 0.4, 0.8, 0.05, 0.12)]), tilt_rad=tilt_rad,
+            start_clear_m=0.3, stride=stride, max_time_s=60.0)
+    out["N3"] = {**r, "pass": not r["overlap"] and r["travel_m"] > 0}
+    r = run([(1.0, 0.0)], 0.3, world=World([(3.15, 0.0, 3.7, 6.0, 0.0, EPAL[2])]), tilt_rad=tilt_rad, stride=stride,
+            max_time_s=60.0)  # a pallet-height plane from 1.30 m: no floor in view
+    out["N4"] = {**r, "pass": (not r["overlap"]) and r["frames_integrated"] > 0
+                 and r["frames_plane_refused"] == r["frames_integrated"]}
+    r = run([(2.0, 0.0)], 0.3, world=World(dropout=[(1.9, 2.6, -1.0, 1.0)], hazards=[(2.25, 0.0, 0.7, 2.0)]),
+            tilt_rad=tilt_rad, start_clear_m=0.3, stride=stride, max_time_s=60.0)
+    out["N5"] = {**r, "pass": not r["overlap"] and r["travel_m"] > 0}
+    r = run([(3.0, 0.0)], 0.3, world=World(camera_off_after_s=0.5), tilt_rad=tilt_rad, start_clear_m=0.3,
+            stride=stride, max_time_s=60.0)
+    deadline = 0.5 + L.LowLayerConfig().max_age_s
+    moved_late = r["last_motion_s"] is not None and r["last_motion_s"] > deadline
+    out["N6"] = {**r, "deadline_s": deadline,
+                 "pass": r["travel_m"] > 0 and not r["finished"] and not moved_late}
     return out
 
 

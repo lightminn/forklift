@@ -59,3 +59,28 @@ def test_a_run_reports_by_the_preregistered_rule():
     r = G.run([(0.3, 0.0)], 0.3, stride=4, max_time_s=40.0)
     assert set(r) >= {"finished", "permanent_stop", "stopped_fraction", "first_block", "overlap", "pass"}
     assert r["pass"] == (r["finished"] and not r["permanent_stop"] and r["stopped_fraction"] <= 0.5)
+
+
+def test_a_refused_reverse_after_a_gear_change_is_not_driven_as_braking():
+    # S-P1 implementation review P1: forward allowed (the strip ahead declared clear), reverse refused (nothing behind
+    # the rear overhang was ever swept): the truck stands at the gear change instead of "braking" into reverse
+    r = G.run([(0.03, 0.0), (-0.03, 0.0)], 0.3, start_clear_m=0.3, stride=4, max_time_s=40.0)
+    assert not r["finished"] and r["travel_m"] <= 0.031
+
+
+def test_the_forks_shade_the_floor_right_ahead_of_their_tips():
+    # S-P1 implementation review P2: with a steeper mount the floor just ahead of the tips is behind the tines
+    import pytest
+    with_forks, _ = G.render_points(G.World(), (0.0, 0.0, 0.0), 0.25, stride=1)
+    mp = pytest.MonkeyPatch()
+    mp.setattr(G, "FORK_BOXES", [])
+    try:
+        bare, _ = G.render_points(G.World(), (0.0, 0.0, 0.0), 0.25, stride=1)
+    finally:
+        mp.undo()
+    floor_with = with_forks[with_forks[:, 2] < 1e-6]
+    assert len(floor_with) < len(bare)  # rays that hit a tine never reach the floor
+    near = lambda p: p[(p[:, 0] < 1.5) & (np.abs(p[:, 1]) > 0.15) & (np.abs(p[:, 1]) < 0.4)]  # noqa: E731
+    assert len(near(floor_with)) < len(near(bare))  # the shade lies just ahead of and beside the tips
+    tine_hits = with_forks[with_forks[:, 2] > 0.02]
+    assert len(tine_hits) and tine_hits[:, 0].max() <= 1.29 + 1e-6
