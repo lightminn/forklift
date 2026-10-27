@@ -145,7 +145,18 @@ def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, ka
             return "arc"
         return f"end{c.end_clearance_m:.3f}<{c.threshold_m:.3f}" if c.end_free else "end_hit"
 
+    # which rectangles hold a sweep (the separate diagnosis of the stands no variant frees): the scene props with
+    # KEEPOUT alone, the trigger's rectangles alone, and the props at their own size (KEEPOUT 0)
+    plain = scenario_props(scenario, keepout_m=0.0, plane_m=LIDAR_PLANE_M)
+    split = {}
+    for c in cands:
+        poses = esc.straight(pose, c.direction, c.length_m)
+        split[f"{c.direction:+d}x{c.length_m:g}"] = [
+            esc.rectangles_sweep_free(FootprintCollisionChecker(list(rects), fp, scenario.bounds), poses),
+            esc.rectangles_sweep_free(FootprintCollisionChecker(list(extra), fp, scenario.bounds), poses),
+            esc.rectangles_sweep_free(FootprintCollisionChecker(list(plain), fp, scenario.bounds), poses)]
     return {"candidates": {f"{c.direction:+d}x{c.length_m:g}": code(c) for c in cands},
+            "sweep_free_props_trigger_plain": split,
             "qualifying": sum(c.qualifies for c in cands),
             "chosen": None if choice is None else f"{choice.direction:+d}x{choice.length_m:g}",
             "permit": None if permit is None else permit["why"],
