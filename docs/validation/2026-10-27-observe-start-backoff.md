@@ -81,7 +81,7 @@
   - `c27_03`–`c27_06`: 실행 `osbb_a9d4c4df_*` 16 개
   - `c27_06`: `osbb_bundle`, 재생 게이트 `osb_d6fd3c27`·`obm_5e8b8926`
   - 계획서 1 장이 인용한 `lf_67694d16_*` 는 `c27_02`·`c27_07`(스냅숏 `lf_67694d16` 포함)에 있다.
-  - `rh_5d280e80_*` 는 `gdrive:forklift-archive/ws1-cleanup-20261027-d/` 로 보관 중이다(ws1 원본 유지).
+  - `rh_5d280e80_*` 는 `gdrive:forklift-archive/ws1-cleanup-20261027-d/` 에 있다(ws1 원본은 정리됨): `d27_rh_01`(off_line_m_s0, off_random_m_s5·s8·s9), `d27_rh_02`(on_random_m_s4·s6·s9, on_tq_random_m_s2).
 
 ## 자체 검토
 
