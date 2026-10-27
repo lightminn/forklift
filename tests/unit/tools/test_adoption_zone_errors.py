@@ -138,6 +138,23 @@ def test_a_live_runs_last_mission_without_its_own_records_is_read_from_the_resul
     assert s["records"] == 2 and s["stages"]["far"]["max_abs_m"] == pytest.approx(0.3)
 
 
+def test_a_file_added_after_the_manifest_does_not_change_the_sample(tmp_path):
+    # Codex test-0 round 2 P2: an unlisted mission file repeating the listed result.json made it drop out
+    last = state([attempt((0.0, 0.0, 0.0), obs(2.36, lateral=0.1))], estimate=(3.0, 0.1), handoff=(3.0, -0.2, 0.0))
+    m1 = state([attempt((0.0, 0.0, 0.0), obs(2.36))], estimate=(3.0, 0.0), handoff=(3.0, 0.0, 0.0))
+    write_run(tmp_path, "live", {**CONST, **last, "session_switches": []}, missions=[m1])
+    out, manifest = tmp_path / "e.json", tmp_path / "manifest.json"
+    assert E.main([str(tmp_path), "--out", str(out), "--manifest-out", str(manifest)]) == 0
+    before = json.loads(out.read_text())
+    late = tmp_path / "live" / "run" / "missions" / "m2"
+    late.mkdir()
+    (late / "records.json").write_text(json.dumps({"state": last}))
+    assert E.main(["--manifest-in", str(manifest), "--out", str(out)]) == 0
+    after = json.loads(out.read_text())
+    assert (after["records"], after["overall_max_abs_m"]) == (before["records"], before["overall_max_abs_m"]) == (
+        2, pytest.approx(0.3))
+
+
 def test_a_manifest_hash_is_the_files_sha256(tmp_path):
     p = tmp_path / "x.json"
     p.write_text("{}")

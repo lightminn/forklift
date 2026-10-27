@@ -132,32 +132,32 @@ def main(argv=None) -> int:
     ap.add_argument("--manifest-out", type=Path)
     ap.add_argument("--manifest-in", type=Path, help="the exact records and hashes of a fixed sample")
     args = ap.parse_args(argv)
-    listed = None
     if args.manifest_in is not None:
-        listed = json.loads(args.manifest_in.read_text())
-        for e in listed:
-            p = Path(e["path"])
-            if not p.exists() or sha256(p) != e["sha256"]:
+        # the listed records exactly, read by their own paths -- no directory search, so a file added since cannot
+        # change the sample (Codex test-0 round 2 P2)
+        triples = []
+        for e in json.loads(args.manifest_in.read_text()):
+            p, run_p = Path(e["path"]), Path(e["run"])
+            if not p.exists() or sha256(p) != e["sha256"] or not run_p.exists():
                 print(f"{p}: missing or changed since the manifest -- not the fixed sample", file=sys.stderr)
                 return 2
-        results = sorted({Path(e["run"]) for e in listed})
+            run = json.loads(run_p.read_text())
+            rec = run if p == run_p else (json.loads(p.read_text()) or {}).get("state") or {}
+            triples.append((p, rec, run, run_p))
     else:
-        results = sorted(p for d in args.dirs for p in d.glob("**/result.json") if p.parent.name == "run")
-    rows, undetermined, manifest = [], [], []
-    wanted = None if listed is None else {e["path"] for e in listed}
-    for result_path in results:
-        try:
-            records = list(_records_of(result_path))
-        except ValueError:
-            continue
-        for path, rec, run in records:
-            if wanted is not None and str(path) not in wanted:
+        triples = []
+        for result_path in sorted(p for d in args.dirs for p in d.glob("**/result.json") if p.parent.name == "run"):
+            try:
+                triples += [(path, rec, run, result_path) for path, rec, run in _records_of(result_path)]
+            except ValueError:
                 continue
-            manifest.append({"path": str(path), "run": str(result_path), "sha256": sha256(path)})
-            got, problem = record_errors(rec, run)
-            if problem is not None:
-                undetermined.append({"path": str(path), "problem": problem})
-            rows += got
+    rows, undetermined, manifest = [], [], []
+    for path, rec, run, result_path in triples:
+        manifest.append({"path": str(path), "run": str(result_path), "sha256": sha256(path)})
+        got, problem = record_errors(rec, run)
+        if problem is not None:
+            undetermined.append({"path": str(path), "problem": problem})
+        rows += got
     out = {"records": len(manifest), "undetermined": len(undetermined), "undetermined_records": undetermined,
            **summarize(rows)}
     args.out.write_text(json.dumps(out, indent=1))
