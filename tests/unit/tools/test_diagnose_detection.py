@@ -3,6 +3,8 @@
 import dataclasses
 import hashlib
 import json
+import subprocess
+import types
 from pathlib import Path
 
 import numpy as np
@@ -312,6 +314,19 @@ def test_the_mount_gate_needs_the_core_the_run_recorded(tmp_path, core_sha256):
     out = diag.diagnose_attempt(write_run(tmp_path, scene(2.5), 2.5, core_sha256=core_sha256), 1, URDF)
     assert out["gates"]["runner_mount"] is False
     assert out["runner_commit"] is None
+
+
+def test_the_core_blob_search_walks_the_full_history(monkeypatch):
+    # The default `git log -- <path>` simplifies merges and misses a core blob a run recorded (Codex P3).
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return types.SimpleNamespace(stdout="" if kwargs.get("text") else b"", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert diag._blob_with_hash("src/forklift_core/mission/core.py", "0" * 64) is None
+    assert "--full-history" in calls[0] and "--all" in calls[0]
 
 
 def test_an_unverified_truth_chain_makes_the_configuration_undecidable(tmp_path):

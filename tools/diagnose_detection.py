@@ -755,7 +755,9 @@ def _blob_with_hash(path: str, sha256: str) -> bytes | None:
     import subprocess
 
     commits = subprocess.run(
-        ["git", "log", "--format=%H", "--", path], cwd=ROOT, capture_output=True, text=True, check=True
+        # --full-history --all: the default path walk simplifies merges and skips blobs a run really used (Codex P3).
+        ["git", "log", "--all", "--full-history", "--format=%H", "--", path],
+        cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
     for commit in commits:
         shown = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=ROOT, capture_output=True)
