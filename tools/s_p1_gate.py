@@ -197,7 +197,7 @@ def pose_at(path, s: float) -> tuple:
 
 def run(segments, speed: float, *, world: World | None = None, footprint: Footprint = PLANNER_FOOT,
         tilt_rad: float = 0.10, start_zone: tuple | None = None, pitch_rad: float = 0.0, dropout: float = 0.0,
-        seed: int = 0, stride: int = 1, max_time_s: float = 600.0) -> dict:
+        seed: int = 0, stride: int = 1, max_time_s: float = 600.0, layer_cfg: L.LowLayerConfig | None = None) -> dict:
     """One cold-start run along ``segments``; the result by the pre-registered rule.
 
     The truck slows ahead of every gear change (``approach_speed``) and stands there, so the braking travel from its
@@ -208,7 +208,9 @@ def run(segments, speed: float, *, world: World | None = None, footprint: Footpr
     pose's truck frame: a zone declared clear at the start (the explicit start condition)."""
     world = world or World()
     rng = np.random.default_rng(seed)
-    layer = L.LowLayer(L.LowLayerConfig(), origin_xy=(-6.0, -6.0), size_cells=(320, 320))
+    cfg = layer_cfg or L.LowLayerConfig()
+    cells = int(round(16.0 / cfg.resolution_m))  # the pre-registered 16 m square from -6 m, at any resolution
+    layer = L.LowLayer(cfg, origin_xy=(-6.0, -6.0), size_cells=(cells, cells))
     path = L.path_poses([(0.0, 0.0, 0.0)], segments, step_m=PATH_STEP_M)
     sign = []  # sign[m]: the direction of the move from pose m to pose m + 1
     for length, _ in segments:
@@ -318,23 +320,24 @@ def start_zone_around(footprint: Footprint, radius_m: float) -> tuple:
 AHEAD_STRIP = (PLANNER_FOOT.front_m - 0.2, PLANNER_FOOT.front_m + 0.3, PLANNER_FOOT.half_width_m + 0.05)
 
 
-def negative_specs(tilt_rad: float, stride: int) -> dict:
+def negative_specs(tilt_rad: float, stride: int, strip: tuple = AHEAD_STRIP,
+                   layer_cfg: L.LowLayerConfig | None = None) -> dict:
     """N1-N6 as run arguments: the two turning counterexamples, a floating box, a pallet-height plane filling the view
     from 1.30 m (no floor in view), a depth dropout band over a hazard, the camera going dark at 0.5 s."""
-    common = {"tilt_rad": tilt_rad, "stride": stride, "max_time_s": 60.0}
+    common = {"tilt_rad": tilt_rad, "stride": stride, "max_time_s": 60.0, "layer_cfg": layer_cfg}
     turn = [(1.0, K)]
     specs = {}
     for name, foot, (bx, by) in (("N1", Footprint(0.959, 0.17, 0.315), (0.25, 0.75)),
                                  ("N2", Footprint(0.944, 0.17, 0.36), (0.25, 0.795))):
-        specs[name] = (turn, 0.3, {**common, "footprint": foot, "start_zone": AHEAD_STRIP,
+        specs[name] = (turn, 0.3, {**common, "footprint": foot, "start_zone": strip,
                                    "world": World([(bx, by, EPAL[0], EPAL[1], 0.0, EPAL[2])])})
-    specs["N3"] = ([(2.0, 0.0)], 0.3, {**common, "start_zone": AHEAD_STRIP,
+    specs["N3"] = ([(2.0, 0.0)], 0.3, {**common, "start_zone": strip,
                                        "world": World([(1.9, 0.0, 0.4, 0.8, 0.05, 0.12)])})
     specs["N4"] = ([(1.0, 0.0)], 0.3, {**common, "world": World([(3.15, 0.0, 3.7, 6.0, 0.0, EPAL[2])])})
-    specs["N5"] = ([(2.0, 0.0)], 0.3, {**common, "start_zone": AHEAD_STRIP,
+    specs["N5"] = ([(2.0, 0.0)], 0.3, {**common, "start_zone": strip,
                                        "world": World(dropout=[(1.9, 2.6, -1.0, 1.0)],
                                                       hazards=[(2.25, 0.0, 0.7, 2.0)])})
-    specs["N6"] = ([(3.0, 0.0)], 0.3, {**common, "start_zone": AHEAD_STRIP, "world": World(camera_off_after_s=0.5)})
+    specs["N6"] = ([(3.0, 0.0)], 0.3, {**common, "start_zone": strip, "world": World(camera_off_after_s=0.5)})
     return specs
 
 
@@ -360,16 +363,21 @@ def _run_spec(spec) -> dict:
 
 
 def gate(tilt_rad: float = 0.10, start_clear_m: float = 0.0, robustness: bool = False, stride: int = 1,
-         jobs: int = 1) -> dict:
+         jobs: int = 1, *, resolution_m: float = 0.05, depth_error_m: float = 0.02,
+         strip_margin_m: float = 0.05) -> dict:
+    """The pre-registered gate; ``resolution_m``, ``depth_error_m`` and ``strip_margin_m`` other than their defaults
+    make it an exploratory run (marked in the output), never the registered verdict."""
     zone = start_zone_around(PLANNER_FOOT, start_clear_m) if start_clear_m > 0 else None
-    specs = {f"neg:{k}": v for k, v in negative_specs(tilt_rad, stride).items()}
+    layer_cfg = L.LowLayerConfig(resolution_m=resolution_m, depth_error_m=depth_error_m)
+    strip = (AHEAD_STRIP[0], AHEAD_STRIP[1], PLANNER_FOOT.half_width_m + strip_margin_m)
+    specs = {f"neg:{k}": v for k, v in negative_specs(tilt_rad, stride, strip, layer_cfg).items()}
     for name, segs in PATHS.items():
         for v in (0.3, 0.6):
-            specs[f"pos:{name}@{v}"] = (segs, v, {"tilt_rad": tilt_rad, "start_zone": zone, "stride": stride})
+            base = {"tilt_rad": tilt_rad, "start_zone": zone, "stride": stride, "layer_cfg": layer_cfg}
+            specs[f"pos:{name}@{v}"] = (segs, v, base)
             if robustness:
                 for s in range(20):
-                    specs[f"rob:{name}@{v}:{s}"] = (segs, v, {"tilt_rad": tilt_rad, "start_zone": zone,
-                                                              "stride": stride, "pitch_rad": math.radians(1.0),
+                    specs[f"rob:{name}@{v}:{s}"] = (segs, v, {**base, "pitch_rad": math.radians(1.0),
                                                               "dropout": 0.05, "seed": s})
     keys = list(specs)
     if jobs > 1:
@@ -379,7 +387,9 @@ def gate(tilt_rad: float = 0.10, start_clear_m: float = 0.0, robustness: bool = 
             results = dict(zip(keys, pool.map(_run_spec, [specs[k] for k in keys]), strict=True))
     else:
         results = {k: _run_spec(specs[k]) for k in keys}
-    out = {"tilt_rad": tilt_rad, "start_clear_m": start_clear_m, "start_zone": zone,
+    exploratory = (resolution_m, depth_error_m, strip_margin_m) != (0.05, 0.02, 0.05)
+    out = {"tilt_rad": tilt_rad, "start_clear_m": start_clear_m, "start_zone": zone, "exploratory": exploratory,
+           "resolution_m": resolution_m, "depth_error_m": depth_error_m, "strip": strip,
            "positive": {k[4:]: results[k] for k in keys if k.startswith("pos:")},
            "negative": {k[4:]: judge_negative(k[4:], results[k]) for k in keys if k.startswith("neg:")}}
     out["positive_pass"] = all(r["pass"] for r in out["positive"].values())
@@ -402,8 +412,13 @@ def main(argv=None) -> int:
     ap.add_argument("--robustness", action="store_true")
     ap.add_argument("--stride", type=int, default=1, help="use every n-th pixel (1: full 640x480)")
     ap.add_argument("--jobs", type=int, default=1, help="runs in parallel processes")
+    ap.add_argument("--resolution-m", type=float, default=0.05, help="exploratory: the layer's cell")
+    ap.add_argument("--depth-error-m", type=float, default=0.02, help="exploratory: the layer's depth error")
+    ap.add_argument("--strip-margin-m", type=float, default=0.05,
+                    help="exploratory: the negatives' strip half width beyond the body's")
     a = ap.parse_args(argv)
-    out = gate(a.tilt_rad, a.start_clear_m, a.robustness, a.stride, a.jobs)
+    out = gate(a.tilt_rad, a.start_clear_m, a.robustness, a.stride, a.jobs, resolution_m=a.resolution_m,
+               depth_error_m=a.depth_error_m, strip_margin_m=a.strip_margin_m)
     a.json.write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps({k: v for k, v in out.items() if k.endswith("pass") or k == "negative_moved"}))
     for name, r in {**out["positive"], **out["negative"]}.items():
