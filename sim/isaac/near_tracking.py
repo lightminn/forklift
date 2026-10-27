@@ -1117,6 +1117,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "near_capture_expected": "off", "near_capture_redraw_lateral_m": 0.05,
                               # 2026-10-22 task C: the check-off near lower waiver; gate in every earlier run.
                               "near_capture_lower": "gate",
+                              # 2026-10-27 C3 (insertion lateral drift T2): the second near capture's gap; unset in
+                              # every earlier run (and refused with near tracking).
+                              "near_recapture_gap_m": None,
                               # 2026-10-22 trailer exit: the transport exit prefix; off in every earlier run.
                               "exit_clearance_m": None,
                               # 2026-10-23 P1c: the searches' LiDAR keepout; 0 in every earlier run.
