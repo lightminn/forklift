@@ -43,10 +43,11 @@ def recipe_record(recipe, site, intrinsics=None) -> RecipeRecord:
     def load_for(k, inst):
         if k == holder and instr.load is not None:
             return instr.load
-        return site.get(recipe.shape_key) if inst.spec.known else None
+        # S8's bottomless variants carry their parent shape's site declaration (the same pallet, no bottom boards)
+        return site.get(rs.parent_shape(recipe.shape_key)) if inst.spec.known else None
 
     truths, rendered = scene_truths(
-        [(i.spec, i.placement, i.damage, load_for(k, i)) for k, i in enumerate(recipe.instances)],
+        [(i.spec, i.placement, i.damage, load_for(k, i), i.bottom) for k, i in enumerate(recipe.instances)],
         ForkSetup(recipe.fork_spacing_m), distractors=recipe.distractors,
         layers=[i.layer for i in recipe.instances], intrinsics=intrinsics)
     meta = {"scene_id": recipe.scene_id, "case": recipe.case, "shape_key": recipe.shape_key, "split": recipe.split,
@@ -67,8 +68,10 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=None, help="first N recipes per case and shape")
     p.add_argument("--noise", choices=("default", "none"), default="default")
     p.add_argument("--digest-only", action="store_true")
+    p.add_argument("--catalogue", choices=("main", "bottomless"), default="main",
+                   help="bottomless: the 2026-10-27 plan's N2 and S8 (tools.recognition_scenes.catalogue_bottomless)")
     a = p.parse_args(argv)
-    recipes = rs.catalogue()
+    recipes = rs.catalogue_bottomless() if a.catalogue == "bottomless" else rs.catalogue()
     if a.digest_only:
         print(json.dumps({"catalogue_sha256": rs.catalogue_digest(recipes), "numpy": np.__version__}))
         return

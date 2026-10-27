@@ -217,7 +217,7 @@ def _segmentation_summary(scenes) -> dict:
         extra = Counter()
         for s in sel:
             extra.update(s["extra"])
-        neg = [s for s in sel if s["case"] == "N"]
+        neg = [s for s in sel if s["case"] in ("N", "N2")]
         return {"scenes": len(sel), "eligible": len(inst),
                 "recall": (sum(r["matched"] for r in inst) / len(inst)) if inst else None,
                 "iou_p50": float(np.percentile(ious, 50)) if ious else None,
@@ -322,6 +322,8 @@ def main(argv=None):
                    help="CPU threads for the learned model (CPU provider only when given)")
     p.add_argument("--segmentation-truth", type=Path, default=None,
                    help="the same scenes without the noise pack's label shift (depth-aligned instance ids)")
+    p.add_argument("--catalogue", choices=("main", "bottomless"), default="main",
+                   help="the catalogue the dataset was generated from: its populations are the required gates")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--source-manifest", type=Path, default=None)
     p.add_argument("--diagnostics", action="store_true", help="write candidates.jsonl (one row per candidate, "
@@ -379,7 +381,7 @@ def main(argv=None):
     if len(signatures) != 1:
         raise SystemExit(f"dataset must hold exactly one noise configuration, found {sorted(map(str, signatures))}")
     a.output.mkdir(parents=True, exist_ok=True)
-    metrics = summarize(verdicts, split=a.split, render_source=sources.pop())
+    metrics = summarize(verdicts, split=a.split, render_source=sources.pop(), catalogue=a.catalogue)
     elapsed = sorted(v.elapsed_s for v in verdicts)
     metrics.update({"detector": a.detector, "dataset_sha256": digest.hexdigest(), "source": _source(a.source_manifest),
                     "elapsed_s": {"n": len(elapsed), "p50": elapsed[len(elapsed) // 2],

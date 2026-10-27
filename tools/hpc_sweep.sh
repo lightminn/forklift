@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run a batch of measurement commands on the school HPC (gate1.hpc) instead of locally.
 #
-#   tools/hpc_sweep.sh jobs.tsv [partition] [cores]
+#   [HPC_TIME=00:20:00] tools/hpc_sweep.sh jobs.tsv [partition] [cores]
 #
 # jobs.tsv: one job per line, "<name><TAB><command>".  The command runs from the
 # repository root with PYTHONPATH=src:. and `python` bound to the remote venv.
@@ -16,8 +16,13 @@ set -euo pipefail
 JOBS=${1:?usage: hpc_sweep.sh jobs.tsv [partition] [cores]}
 PARTITION=${2:-cpu1}
 CORES=${3:-48}
-HOST=gate1_External
-REMOTE=forklift
+HOST=${HPC_HOST:-gate1_External}
+# HPC_REMOTE: a checkout folder of this sweep's own -- the default one is shared, and a sync while another
+# session's sweep waits in the queue would change the code that sweep runs.
+REMOTE=${HPC_REMOTE:-forklift}
+# HPC_TIME: the job's time limit (sbatch --time), close to the real duration -- the partition default is days,
+# which keeps a short sweep out of backfill and leaves it pending on priority.
+TIME=${HPC_TIME:-}
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
 LOCAL_OUT="artifacts/hpc/$RUN_ID"
 
@@ -37,7 +42,7 @@ JOB_ID=$(ssh -o BatchMode=yes "$HOST" \
   "mkdir -p '$REMOTE/hpc/$RUN_ID' \
    && mv '$REMOTE/hpc-jobs-$RUN_ID.tsv' '$REMOTE/hpc/$RUN_ID/jobs.tsv' \
    && cd '$REMOTE' \
-   && sbatch --parsable --partition='$PARTITION' --cpus-per-task='$CORES' \
+   && sbatch --parsable --partition='$PARTITION' --cpus-per-task='$CORES' ${TIME:+--time='$TIME'} \
         --output='hpc/$RUN_ID/slurm-%j.log' \
         --export=ALL,RUN_ID='$RUN_ID',CORES='$CORES' \
         deploy/hpc/run_sweep.sbatch")
