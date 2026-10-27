@@ -99,6 +99,48 @@ STALL_REPLANS = 2  # the stall replans per mission (transport and return; #117's
 CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
 CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
 OBSERVE_BACKOFF_LIMIT_M = 0.30  # plan 2026-10-26-observe-start-backoff B3: the most a start backoff goes
+
+
+def moved_slot_props(prepared_destination, world) -> list:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R5: ``world``'s slot-stage props (its untagged props and
+    its @slot props; the @search ones left out) with the @slot ones moved by T = ``world``'s destination o
+    ``prepared_destination``^-1 -- the anchors were made once, from the destination at the preparation, and a release
+    moves only the destination."""
+    from forklift_core.planning.pallet_mission import SEARCH_TAG, SLOT_TAG
+
+    then_, now_ = prepared_destination, world.destination
+    move = compose((float(now_.x_m), float(now_.y_m), float(now_.yaw_rad)),
+                   invert((float(then_.x_m), float(then_.y_m), float(then_.yaw_rad))))
+    props = []
+    for p_ in world.props:
+        if p_.asset.uri.endswith(SEARCH_TAG):
+            continue
+        if p_.asset.uri.endswith(SLOT_TAG):
+            r_ = p_.rectangle
+            x_, y_, yaw_ = compose(move, (float(r_.x_m), float(r_.y_m), float(r_.yaw_rad)))
+            p_ = replace(p_, rectangle=replace(r_, x_m=x_, y_m=y_, yaw_rad=yaw_))
+        props.append(p_)
+    return props
+
+
+def note_return_backoff(state: dict, where: str, record: dict | None, adopted: bool) -> None:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R6: a return-start backoff attempt a plan came back
+    with -- taken or refused (no advice, clipped, no return from its end), installed or not."""
+    if record is None:
+        return
+    state.setdefault("return_start_backoffs", []).append(
+        {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
+         "status": record.get("status"), "adopted": bool(adopted)})
+
+
+def note_trace_backoffs(state: dict, where: str, trace, success: bool) -> None:
+    """R6: the mission plan's backoff attempts from its trace (its return_home entries; a tight replan adds a second);
+    the last one is adopted when the plan was."""
+    entries = [e for e in (trace or ()) if e.get("stage") == "return_home"]
+    for i, e in enumerate(entries):
+        if "start_backoff" in e:
+            note_return_backoff(state, where, e["start_backoff"],
+                                success and i == len(entries) - 1 and e.get("status") == "success")
 OBSERVE_BACKOFF_STEP_M = 0.01  # its advice's step
 OBSERVE_BACKOFF_PAD_M = 0.03  # past the advice: the backoff tracker's 0.01 m end tolerance and the advice's step
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
@@ -661,7 +703,8 @@ class MissionCore:
                     payload = self._leg_payload("return", grid_world(sc_), start,
                                                 {**grid_kwargs("return", sc_.destination),
                                                  **return_turnaround_kwargs(frozen=True)},
-                                                retry_on=("invalid_start", "no_path"))
+                                                retry_on=("invalid_start", "no_path"),
+                                                extra_kw=self._return_backoff_kwargs(grid_world(sc_)))
                 obstacle["deadline"] = None
                 self._request("live_leg", "leg", payload, t, rear, self._applied_now(),
                               ctx={"turnaround": bool(options.return_turnaround and ms.phase == "return_home")})
@@ -677,14 +720,21 @@ class MissionCore:
                                                     **grid_kwargs(None))
             else:
                 sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+                backoff_kw_ = self._return_backoff_kwargs(grid_world(sc_))  # plan 2026-10-27 R2 3
                 live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, planner_config,
                                              geometry=geometry, travel_config=travel_config,
-                                             **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs())
+                                             **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs(),
+                                             **backoff_kw_)
+                first_live_ = live
                 if live.status in ("invalid_start", "no_path"):
                     live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,
                                                  replace(planner_config, clearance_m=0.0), geometry=geometry,
                                                  travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
-                                                 **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs())
+                                                 **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs(),
+                                                 **backoff_kw_)
+                if first_live_ is not live:  # plan 2026-10-27 R6
+                    note_return_backoff(state, "live_leg", getattr(first_live_, "start_backoff", None), False)
+                note_return_backoff(state, "live_leg", getattr(live, "start_backoff", None), live.success)
             obstacle["deadline"] = None
             obstacle.setdefault("live_plans", []).append(
                 {"phase": ms.phase, "time_s": t, "status": live.status,
@@ -1598,6 +1648,7 @@ class MissionCore:
                 target_pickup=pocket["planning_pickup"], start_rear=start,
                 return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                 trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                **self._mission_backoff_kwargs(),
             )
             mission_clearance_ = float(planner_config.clearance_m)
             if "invalid_start" in mission_again.status or "invalid_goal" in mission_again.status:
@@ -1610,6 +1661,7 @@ class MissionCore:
                     target_pickup=pocket["planning_pickup"], start_rear=start,
                     return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=tight_travel,
                     trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                    **self._mission_backoff_kwargs(),
                 )
             near_again = (
                 final_straight_prefix(mission_again.approach, geometry.alignment_straight_m)
@@ -1619,6 +1671,7 @@ class MissionCore:
                 {"time_s": t, "status": mission_again.status, "near_found": near_again is not None,
                  "trace": planning_trace}
             )
+            note_trace_backoffs(state, "mission_plan", planning_trace, mission_again.success and near_again is not None)
             if near_again is not None:
                 for name in mission_stages:
                     paths[name] = getattr(mission_again, name)
@@ -3282,7 +3335,7 @@ class MissionCore:
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                            trace=planning_trace, **grid_kwargs("mission", planning_pickup),
-                           **self._exit_prefix_kwargs())
+                           **self._mission_backoff_kwargs(), **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -3304,6 +3357,7 @@ class MissionCore:
             travel_config=travel_config,
             trace=planning_trace,
             **grid_kwargs("mission", planning_pickup),
+            **self._mission_backoff_kwargs(),
         )
         near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
         return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
@@ -3377,6 +3431,7 @@ class MissionCore:
         state.setdefault("planning_traces", []).append(
             planning_trace
         )
+        note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)
         state["planning_wall_s"] += (
             wall() - planning_start
         )
@@ -5224,11 +5279,26 @@ class MissionCore:
                     elif np.allclose(full_poses_[-1], poses[-1], atol=1e-6):
                         slot_from = max(0.0, length - float(geometry.delivery_straight_m))
             plane = float(getattr(geometry, "lidar_plane_m", 1.05))
+            slot_props_ = low_props(options.scenario, "slot", plane)
+            slot_to = None
+            backed_ = self.paths.get("return_home") if ms.phase == "return_home" else None
+            backoff_ = getattr(backed_, "start_backoff", None)
+            if (backoff_ is not None and backoff_.get("status") == "prefix" and len(backed_.poses) == len(poses)
+                    and np.allclose(np.asarray(backed_.poses, dtype=float), poses, atol=1e-9)):
+                # plan 2026-10-27-return-start-withdraw-extension R5: the start backoff of the return this tracker
+                # follows (no other tracker -- an escape keeps paths["return_home"] and installs its own) is the slot
+                # stage, against the slot props as the backoff checked them (moved with the destination)
+                slot_to = float(backoff_["length_m"])
+                world_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", options.scenario)) \
+                    if self.slam is not None else options.scenario
+                slot_props_ = [p_.rectangle for p_ in moved_slot_props(options.scenario.destination, world_)
+                               if p_.asset.height_m <= plane]
             leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
-                               slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)
+                               slot_props=slot_props_, slot_from_m=slot_from, slot_to_m=slot_to)
             cache.clear()  # one leg at a time: the tracker being followed
             cache[key] = leg
             guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m, "slot_from_m": slot_from,
+                                  **({} if slot_to is None else {"slot_to_m": slot_to}),
                                   "min_planned_m": _finite_or_none(float(np.min(leg.c)) if len(leg.c) else None)})
         cfg = LowClearanceConfig(margin_m=float(options.low_clearance_margin_m),
                                  deviation_m=float(options.low_clearance_deviation_m))
@@ -6498,6 +6568,7 @@ class MissionCore:
                 )
                 event["pallet_frame_change"] = list(frame_change)
                 slam["return_scenario"] = return_scenario  # later return recoveries too
+            backoff_kw_ = self._return_backoff_kwargs(grid_world(return_scenario))  # plan 2026-10-27 R2 2
             replanned = plan_return_leg(
                 grid_world(return_scenario),
                 start,
@@ -6506,7 +6577,9 @@ class MissionCore:
                 geometry=geometry,
                 travel_config=travel_config,
                 **grid_kwargs(None, own=after, applied=released_),
+                **backoff_kw_,
             )
+        first_ = replanned
         if replanned.status == "invalid_start" and grid_planning:
             # The released pose may sit inside the planning clearance of a grid
             # mark (L3b seed 3: transport after the extract); as for the obstacle
@@ -6522,9 +6595,13 @@ class MissionCore:
             else:
                 replanned = plan_return_leg(
                     grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,
-                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),
+                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_), **backoff_kw_,
                 )
             event["tight_retry"] = True
+        if leg == "return_home":  # plan 2026-10-27 R6: each try's backoff, the one taken marked
+            if first_ is not replanned:
+                note_return_backoff(state, "release_replan", getattr(first_, "start_backoff", None), False)
+            note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(
             replaced_path=path_record(paths[leg]),
             replanned=True,
@@ -6647,16 +6724,17 @@ class MissionCore:
     ASYNC_FRESH_DEPTH_S = 2.0
     ASYNC_STAND_CONFIRM_S = 2.0  # how long a finished plan waits for the stop detector before it is dropped
 
-    def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on) -> dict:
-        """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them."""
+    def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on, extra_kw=None) -> dict:
+        """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them; ``extra_kw`` goes to
+        both (the return-start backoff, plan 2026-10-27 R2)."""
         options = self.options
         cfg, travel = options.planner_config, options.travel_config
         tight_cfg = replace(cfg, clearance_m=0.0)
         tight_travel = replace(travel, clearance_m=0.0) if travel is not None else None
-        exit_kw = {}
+        exit_kw = dict(extra_kw or {})
         if kind == "transport":
             args, tight_args = (scenario_, start, cfg), (scenario_, start, tight_cfg)
-            exit_kw = self._exit_prefix_kwargs()
+            exit_kw.update(self._exit_prefix_kwargs())
         else:
             args = (scenario_, start, options.return_to_pose, cfg)
             tight_args = (scenario_, start, options.return_to_pose, tight_cfg)
@@ -6664,6 +6742,27 @@ class MissionCore:
                 "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw, **exit_kw),
                 "retry_on": tuple(retry_on), "tight_args": tight_args,
                 "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw, **exit_kw)}
+
+    def _mission_backoff_kwargs(self) -> dict:
+        """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 1: the mission plan's return-start backoff cap
+        for the core's plan_transport calls (sync and worker), as _exit_prefix_kwargs gives the exit prefix; none when
+        off, so the calls are as before."""
+        limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
+        return {"return_start_backoff_m": limit} if limit > 0.0 else {}
+
+    def _return_backoff_kwargs(self, world) -> dict:
+        """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 2-3 / R5: the return-start backoff for a return
+        replanned at the withdrawal end (the docking release's, the first live return), on ``world`` -- the scenario as
+        the planner gets it. The slot-stage props the straight is checked against are its untagged props and its @slot
+        props moved with the destination since the preparation, T = destination now o destination then^-1 (the anchors
+        were made once, from the destination then; a release moves only the destination); @search props, bounds and
+        grid stay. None when off."""
+        limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
+        if limit <= 0.0:
+            return {}
+        return {"return_start_backoff_m": limit,
+                "backoff_slot_props": [p_.rectangle for p_ in moved_slot_props(self.options.scenario.destination,
+                                                                                world)]}
 
     def _exit_prefix_kwargs(self) -> dict:
         """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;
@@ -6694,8 +6793,10 @@ class MissionCore:
             payload = self._leg_payload("transport", hooks.grid_world(options.scenario), start, grid_kw,
                                         retry_on=("invalid_start",) if options.grid_planning else ())
         else:
-            payload = self._leg_payload("return", hooks.grid_world(need["return_scenario"]), start, grid_kw,
-                                        retry_on=("invalid_start",) if options.grid_planning else ())
+            world_ = hooks.grid_world(need["return_scenario"])
+            payload = self._leg_payload("return", world_, start, grid_kw,
+                                        retry_on=("invalid_start",) if options.grid_planning else (),
+                                        extra_kw=self._return_backoff_kwargs(world_))
         self._request("release", "leg", payload, t, after, released_, ctx={"need": dict(need, redo=True)})
 
     def _release_finish(self, p, value, t: float, rear) -> None:
@@ -6705,6 +6806,9 @@ class MissionCore:
         replanned = value["result"]
         if value.get("tight"):
             event["tight_retry"] = True
+        if leg == "return_home":  # plan 2026-10-27 R6: the first try's backoff (replaced by the tight retry) too
+            note_return_backoff(state, "release_replan", value.get("first_backoff"), False)
+            note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
                      planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
         hooks.require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
@@ -6728,6 +6832,9 @@ class MissionCore:
         obstacle.setdefault("live_plans", []).append(
             {"phase": ms.phase, "time_s": p.t, "status": live.status, "turnaround": getattr(live, "turnaround", None),
              "async": True, "taken_s": float(t)})
+        if ms.phase == "return_home":  # plan 2026-10-27 R6
+            note_return_backoff(state, "live_leg", value.get("first_backoff"), False)
+            note_return_backoff(state, "live_leg", getattr(live, "start_backoff", None), live.success)
         if not live.success:
             tries = sum(1 for lp in obstacle["live_plans"] if lp["phase"] == ms.phase)
             hooks.require(tries < 5, f"obstacle_live_plan_failed in {ms.phase}: {live.status}")
@@ -6952,6 +7059,8 @@ class MissionCore:
         if not ok:
             cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
         elif loaded and not value["result"].success:
+            for rec_ in value.get("return_backoffs", ()):  # R6: the refused attempts too
+                note_return_backoff(self.state, "mission_plan", rec_, False)
             cmds.terminate("failed", t, f"prepare:loaded:{value['result'].status}")  # its stage and status (item 3)
         elif value["result"] is None:
             cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
@@ -6965,6 +7074,10 @@ class MissionCore:
                 return
             if loaded:
                 self.start_loaded_mission(t, value["result"], p.ctx["inputs"], ready)
+                recs_ = list(value.get("return_backoffs", ()))
+                for i_, rec_ in enumerate(recs_):  # R6, after the adoption's baseline reset
+                    note_return_backoff(self.state, "mission_plan", rec_, i_ == len(recs_) - 1
+                                        and getattr(value["result"].return_home, "start_backoff", None) is not None)
             else:
                 self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
 

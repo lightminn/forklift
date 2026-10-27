@@ -226,3 +226,35 @@ def test_the_d7_delivery_straight_is_the_slot_stage_whatever_its_length():
     core._delivery_straight_path = path
     core.low_clearance_tick(10.0, (-1.6, 0.0, 0.0), 0.0, 0.15, True)
     assert state["low_clearance"]["legs"][0]["slot_from_m"] == 0.0 and core._low_clearance_cap is None
+
+
+def _return_start_backoff_core(tracker_):
+    """A return whose start lies inside a neighbour's estimate (plan 2026-10-27-return-start-withdraw-extension R5, the
+    Codex round-3 counterexample's shape): the estimate ahead overlaps the unloaded front, its slot copy is far away;
+    paths["return_home"] is a 2 m reverse whose first 0.30 m is the start backoff."""
+    from forklift_core.control.drive_permission import StoppingModel
+
+    estimate = Rectangle(1.29 + 0.3, 0.0, 0.8, 1.0, 0.0)  # front edge 1.19: 0.10 into the outline
+    slot = Rectangle(1.29 + 0.3, 5.0, 0.8, 1.0, 0.0)
+    planned = tracker(0.0, -2.0, direction=-1)
+    path = SimpleNamespace(poses=planned.path_arrays()[0], start_backoff={"status": "prefix", "length_m": 0.30})
+    stopping = StoppingModel(0.15, 1.5, 0.05)
+    obstacle = {"layer": SimpleNamespace(permission=SimpleNamespace(config=SimpleNamespace(stopping=stopping))),
+                "permission_cap": None}
+    return make(rects=[estimate, slot], uris=["session:pallet:P-5@search", "session:pallet:P-5@slot"],
+                phase="return_home", trackers={"return_home": tracker_(planned)},
+                paths={"return_home": path}, obstacle=obstacle)
+
+
+def test_a_return_start_backoff_is_the_slot_stage_on_its_own_tracker():
+    core, state = _return_start_backoff_core(lambda planned: planned)
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, -0.15, False)
+    assert state["low_clearance"]["legs"][0]["slot_to_m"] == 0.30
+    assert core._low_clearance_cap is None or core._low_clearance_cap[1] != 0.0  # backing away is not stopped
+
+
+def test_another_tracker_on_the_same_return_keeps_the_search_props():
+    # Codex round 4 P3: an escape keeps paths["return_home"] and installs its own tracker
+    core, state = _return_start_backoff_core(lambda planned: tracker(0.0, -1.0, direction=-1))
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, -0.15, False)
+    assert "slot_to_m" not in state["low_clearance"]["legs"][0] and core._low_clearance_cap == (10.0, 0.0)

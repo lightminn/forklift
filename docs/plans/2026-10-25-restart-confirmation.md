@@ -6,6 +6,7 @@ branch `fix/zero-permit-creep`.
 ## 1. 문제
 
 원자료: ws1 `test_runs/live/newtq_occ_4c53486_line_m_s0/live/epoch_1/run`(스냅숏 `occ_4c53486`). 판정은 Codex 의 격자 재구성(덤프 1–4 의 전체 셀 상태·`free_stamp` 일치)으로 했다.
+보관(2026-10-27 ws1 정리): 실행 폴더는 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 의 `c27_02`, 스냅숏 `occ_4c53486` 은 `c27_07` 묶음에 있다. 묶음마다 `.tar.zst`·`.files.tsv`·`.tar.zst.md5` 가 함께 있다.
 
 - 복귀 첫 회전에서 허가가 D-2 칸 표지 끝의 칠한 칸(halo)을 occupied 로 보고 0 으로 막았다(450.1 s).
 - 그 뒤 13 s 동안 0.1 s(12 틱 = 스캔 한 주기)짜리 전진 펄스가 11 번 나갔다. 매번 같은 흐름이다.

@@ -1139,6 +1139,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None,
                               # 2026-10-26: the first far observation's start backoff; off in every earlier run.
                               "observe_start_backoff": "off",
+                              # 2026-10-27: the return-start backoff; off in every earlier run.
+                              "return_start_backoff": "off",
                               # 2026-10-25 re-approach hold plan H1: off in every earlier run.
                               "d7_reapproach_hold": "off",
                               # 2026-10-25: the low-clearance guard; off in every earlier run.

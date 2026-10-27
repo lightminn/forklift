@@ -155,7 +155,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         pickup_bounds=None,
         # The observation travel's bounds (persistent console plan D2): the pickup bounds in a batch run.
         observe_bounds_=None,
-        self=SimpleNamespace(observe_bounds=lambda: None),
+        # the return-start backoff off (plan 2026-10-27): the mission plans see what they always saw
+        self=SimpleNamespace(observe_bounds=lambda: None, _mission_backoff_kwargs=lambda: {}),
+        return_start_backoff_kw=lambda args: {},
         travel_config=None,
         # The initial observation loop's ladder pass (earlier, then extended).
         extended=True,

@@ -78,10 +78,15 @@ def _run(name: str, payload: dict):
         fn = {"transport": pm.plan_transport_leg, "return": pm.plan_return_leg}[payload["kind"]]
         result = fn(*payload["args"], **payload["kwargs"])
         tight = False
+        first_backoff = None
         if result.status in payload.get("retry_on", ()):
+            first_backoff = getattr(result, "start_backoff", None)
             result = fn(*payload["tight_args"], **payload["tight_kwargs"])
             tight = True
-        return {"result": result, "tight": tight}
+        # the first try's return-start backoff, replaced by the tight retry (plan 2026-10-27-return-start R6): only when
+        # there was one, so an answer without the backoff is as before
+        return {"result": result, "tight": tight,
+                **({} if first_backoff is None else {"first_backoff": first_backoff})}
     if name == "dock":  # real-time plan D9b: the delivery docking match
         from forklift_core.localization.scan_docking import dock
 
@@ -92,11 +97,18 @@ def _run(name: str, payload: dict):
         return _observe_ladder(pm, payload)
     if name == "loaded_delivery":  # persistent console plan D5 6c: a pallet already on the forks, to its destination
         started = time.monotonic()
-        result = pm.plan_loaded_delivery(*payload["args"], **payload["kwargs"])
+        kwargs = dict(payload["kwargs"])
+        trace = None
+        if kwargs.get("return_start_backoff_m", 0.0) > 0.0 and kwargs.get("trace") is None:
+            trace = kwargs["trace"] = []  # the return-start backoff's attempts, failed ones too (plan 2026-10-27 R6)
+        result = pm.plan_loaded_delivery(*payload["args"], **kwargs)
+        backoffs = [e["start_backoff"] for e in (trace or ())
+                    if e.get("stage") == "return_home" and "start_backoff" in e]
         if result.success and pm.final_straight_prefix(result.transport, payload["keep_m"]) is None:
             # no delivery straight left to arm the docking on (arm_docking's own rule, Codex 6c round 2 P2-1)
             result = pm.MissionPlan(False, "transport:no_final_straight")
-        return {"result": result, "wall_s": time.monotonic() - started}
+        return {"result": result, "wall_s": time.monotonic() - started,
+                **({"return_backoffs": backoffs} if backoffs else {})}
     if name == "next_pick":  # CT-2 D2: the next pallet and destination from a snapshot (plan 2026-10-24-ct2-next-pick)
         from forklift_core.mission.next_pick import recommend
 
