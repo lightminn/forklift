@@ -1439,10 +1439,25 @@ def test_a_run_whose_runner_is_not_running_is_not_judged(tmp_path):
     assert results(tmp_path)["between_epochs"]["status"] == "ended" and summary["stalled"] == 0
 
 
-def test_a_run_without_a_runner_for_too_long_is_a_stall(tmp_path):
-    stuck = writer("stuck_between_epochs", tmp_path, 0.1, 30)  # never a run_transport.py process
-    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6)
-    assert results(tmp_path)["stuck_between_epochs"]["status"] == "stalled" and summary["stalled"] == 1
+def test_a_run_whose_runner_is_gone_for_too_long_is_a_stall(tmp_path):
+    # a live session stuck between epochs: its runner ran, then none for no_runner_s
+    script = tmp_path / "run_transport.py"
+    script.write_text("import time; time.sleep(0.4)\n")
+    stuck = ib.Run(name="stuck_between_epochs",
+                   argv=["bash", "-c", f"{sys.executable} {script}; sleep 30"], watch=[str(tmp_path / "log")])
+    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6,
+                     first_runner_s=100.0)
+    r = results(tmp_path)["stuck_between_epochs"]
+    assert r["status"] == "stalled" and r["stall_reason"] == "no_runner" and summary["stalled"] == 1
+
+
+def test_a_run_whose_runner_never_starts_is_a_stall_even_unwatched(tmp_path):
+    # lvram (2026-10-27): the launcher ended on its first line (a required variable), the probe waited for its port
+    # file, the run had no progress file to watch -- 11 minutes holding shards, CPUs and memory, never judged
+    stuck = ib.Run(name="launch_failed", argv=["bash", "-c", "echo 'MAP_START_POSE: unset' >&2; sleep 30"])
+    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, first_runner_s=0.6)
+    r = results(tmp_path)["launch_failed"]
+    assert r["status"] == "stalled" and r["stall_reason"] == "no_runner_start" and summary["stalled"] == 1
 
 
 def test_riib_runs_are_measured_not_ended_by_default():
