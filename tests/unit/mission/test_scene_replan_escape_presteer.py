@@ -196,3 +196,27 @@ def test_the_presteer_records_where_the_truck_stood_before_and_after():
     _run(dev, ports, t0=t, n=5)
     rec = records[-1]["escape_presteer"]
     assert rec["rear_start"] == [1.0, 2.0, 0.1] and rec["rear_end"] == [1.002, 2.0, 0.1]
+
+
+def test_after_a_correction_change_the_trigger_s_rectangles_are_read_only_once_the_grid_has_followed():
+    # Codex impl round 6 P2: the runner re-projects the grid after the device's tick
+    dev, records = _device()
+    reads = []
+    ports = PresteerPorts(probes={0.05: _probe(0.3)}, steer=[0.3, 0.01],
+                          plans=[("ok_fail", "invalid_start"), ("ok", "path-2")])
+    current = {"ok": True}
+    ports.grid_current = lambda: current["ok"]
+    _ask(dev, t=10.0, trigger="permit_stop", extra_obstacles_fn=lambda: reads.append("grid") or [])
+    t = 10.0
+    while dev.state != "escape_presteer":
+        dev.step(t, ports)
+        t += 0.1
+    ports.version, current["ok"] = 1, False  # a correction applied, the grid not re-projected yet
+    for _ in range(3):
+        out = dev.step(t, ports)
+        t += 0.1
+        assert out.output == "hold" and dev.state == "escape_presteer" and len(reads) == 1
+    current["ok"] = True
+    _run(dev, ports, t0=t, n=40)
+    assert len(reads) == 2 and ("install", "path-2") in ports.log
+    assert records[-1]["escape_presteer"]["version_changed"] is True

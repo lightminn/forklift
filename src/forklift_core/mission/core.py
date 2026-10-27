@@ -822,6 +822,8 @@ class MissionCore:
         if self.scene_replan.active():
             # escape presteer plan D2-6 (Codex plan round 4): the back-out owns the truck from here -- a scene replan
             # request (its plan out, its escape) ends with the cancel instead of living on into the recovery
+            if self.scene_escape is not None:
+                self._escape_clip_end(t, rear, "cancelled")  # Codex impl round 6 P3
             self.scene_replan.abort("cancelled:clear_out")
             if self.pending is not None and self.pending.site == "scene_replan":
                 self._drop(self.pending, t, "scene_replan_ended", count=False)
@@ -7686,6 +7688,12 @@ class MissionCore:
                     "end_clearance_m": None if c_ is None else c_.end_clearance_m,
                     "permit": None if ev_.permit is None else ev_.permit["why"]}
 
+        def grid_current():
+            # the grid projected with the SLAM correction applied now (escape presteer plan D2-4, Codex impl round 6)
+            applied_ = core._applied_now()
+            return obstacle is None or applied_ is None or tuple(
+                float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0))) == tuple(applied_)
+
         def correction_version():
             # the grid's re-projection count and the SLAM correction applied now: a correction the grid has not been
             # re-projected to yet changes it as well (Codex impl round 5 P2-2, the synchronous path with the obstacle
@@ -7768,6 +7776,7 @@ class MissionCore:
                                snapshot_id=snapshot_id,
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_probe=escape_probe, correction_version=correction_version,
+                               grid_current=grid_current,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box,
                                resumable=resumable, abandon=abandon)

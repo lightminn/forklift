@@ -218,6 +218,16 @@ class SceneReplan:
         plan (the trigger's rectangles read again). None: the state changed and the tick goes on."""
         r = self.request_
         rec = r["record"]["escape_presteer"]
+        box_ = getattr(ports, "box", None)
+        if box_ is not None and rec.get("rear_start") is not None:
+            rec["rear_end"] = [float(v) for v in box_.rear]  # D2-5: the presteer's stand, also when it ends early
+        if rec.get("version_changed"):
+            # Codex impl round 6 P2: the grid must follow the correction before the trigger's rectangles are read again
+            # (the runner re-projects it after the device's tick); held until it has, the request's limit bounding it
+            if getattr(ports, "grid_current", lambda: True)():
+                self._go("plan", t)
+                return None
+            return StepResult(owned=True, output="hold")
         if not ports.stopped():
             self._go("wait_stop", t)  # nothing installed, the escape budget unspent (agy review High 1)
             return StepResult(owned=True, output="hold")
@@ -229,16 +239,11 @@ class SceneReplan:
             rec["presteer"] = "timeout"
         else:
             return StepResult(owned=True, output="presteer", steer=r["target"])
-        box_ = getattr(ports, "box", None)
-        if box_ is not None and rec.get("rear_start") is not None:
-            # D2-5: how far the presteer moved the truck (tyre scrub), its anchor kept at the first stand
-            rec["rear_end"] = [float(v) for v in box_.rear]
         if ports.correction_version() != r.get("probe_version"):
             # the grid moved under the trigger's rectangles: plan again rather than mix them with the new grid
-            # (Codex plan round 2 P2-2)
+            # (Codex plan round 2 P2-2) -- once the grid has followed the correction (above)
             rec["version_changed"] = True
-            self._go("plan", t)
-            return None
+            return self._escape_presteer(t, ports)
         path = ports.escape_plan(r["extra"], r["clearance_m"], presteered=True)
         if path is None:
             return self._end("failed", f"scene_replan_failed:{r['trigger']}:invalid_start")

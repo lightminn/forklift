@@ -239,3 +239,26 @@ def test_a_request_ending_while_a_presteered_escape_runs_records_its_end():
         assert "timeout" in str(exc)
     drives = state["escape_presteer_drives"]
     assert len(drives) == 1 and drives[0]["end"]["status"] == "request_ended"
+
+
+def test_the_grid_is_current_only_when_projected_with_the_correction_applied_now():
+    core, state, held, layer, pose = _open_core()
+    tracker = SimpleNamespace(applied=((0.0, 0.0, 0.0), 1.0))
+    core.slam = {"tracker": tracker}
+    ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
+    assert ports.grid_current()
+    tracker.applied = ((0.1, 0.0, 0.0), 2.0)
+    assert not ports.grid_current()
+    core.obstacle["applied"] = (0.1, 0.0, 0.0)  # re-projected
+    assert ports.grid_current()
+
+
+def test_a_cancel_records_the_presteered_escape_s_end():
+    # Codex impl round 6 P3
+    core, state, held, layer, pose = _open_core()
+    core.last_permission = (0.15, "ok")
+    rear = _running_escape(core, state, held, pose, 0.05, 0.03)
+    core.end_gate = lambda t, r: False
+    core.start_clear_out = lambda t, r: None
+    core.finish_cancel(0.5, rear)
+    assert state["escape_presteer_drives"][-1]["end"]["status"] == "cancelled"
