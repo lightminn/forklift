@@ -155,11 +155,11 @@ def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), s
                 raise ValueError(f"stratum {stratum} is empty")
             live = [k for k in live if k != stratum]
             continue
-        attempts += 1
-        if attempts > max_attempts:
+        if attempts >= max_attempts:
             if fill:
                 return done("cap")
             raise ValueError(f"only {len(out)} of {count} independent starts after {max_attempts} attempts")
+        attempts += 1
         r, c = cells[rng.integers(len(cells))]
         base = (ox + (c + rng.random()) * res, oy + (r + rng.random()) * res, float(rng.uniform(0.0, 2 * math.pi)))
         if not independent(base, seen, sep_m) or not footprint_free(grid, base, keep_out):

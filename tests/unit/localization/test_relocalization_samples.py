@@ -124,4 +124,4 @@ def test_the_draw_reports_why_it_stopped():
     assert rep["stop_reason"] == "exhausted" and rep["exhausted"] == ["A", "B", "C"]
     rep = {}
     S.sample_starts(g, count=10_000, seed=1, fill=True, max_attempts=50, report=rep)
-    assert rep["stop_reason"] == "cap"
+    assert rep["stop_reason"] == "cap" and rep["attempts"] == 50  # draws made, not one more (round 4 P3)
