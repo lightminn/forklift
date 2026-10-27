@@ -281,3 +281,54 @@ def test_the_paths_file_is_written_with_the_mission_just_planned():
     w.hooks.write_paths = lambda: written.append(dict(w.state["paths"]))
     w.succeed()
     assert written and set(written[0]) >= {"approach", "insert", "extract", "transport", "withdraw"}
+
+
+# Plan 2026-10-28-adoption-zone-check: the estimate's effective target against the mission's rectangle + margin.
+def zoned(world, zone=(3.0, 4.0, 1.5, 2.5), margin=0.25):
+    from forklift_core.mission.adoption_zone import AdoptionZone
+
+    world.core.options.adoption_zone_check = "on"
+    world.core.options.adoption_zone_margin_m = margin
+    world.core.options.adoption_zone = None if zone is None else AdoptionZone(*zone, "scene_layout")
+    return world
+
+
+def test_an_estimate_inside_the_zone_is_checked_and_recorded_before_it_is_used():
+    w = zoned(World())
+    w.succeed()
+    assert w.names()[:2] == ["planning_target", "set_inset_estimate"]  # the check reads the effective target first
+    (check_,) = w.state["adoption_zone"]["checks"]
+    assert check_["stage"] == "far" and check_["inside"] and check_["site"] == [3.5, 2.0] and check_["raw"] == [3.5, 2.0]
+    assert "refused" not in w.state["adoption_zone"]
+
+
+def test_an_estimate_outside_the_zone_ends_the_mission_before_any_side_effect():
+    w = zoned(World(known=True), zone=(0.0, 1.0, 0.0, 1.0))
+    with pytest.raises(RuntimeError, match="^adoption_outside_zone:far$"):
+        w.succeed()
+    assert w.names() == ["planning_target"]  # no inset, evaluation, known pallet, plan or side leg
+    assert "planning_pickup" not in w.pocket and "perception_pickup_estimate_m" not in w.state.get("perception", {})
+    assert w.state["adoption_zone"]["refused"]["edge_m"] > 0.25
+
+
+def test_a_near_capture_and_a_re_observation_are_labelled_by_their_stage():
+    w = zoned(World(near={"tracker": None}, near_capture="pending"))
+    w.succeed()
+    assert w.state["adoption_zone"]["checks"][0]["stage"] == "near"
+    w = zoned(World(near={"tracker": None}))
+    w.succeed(attempt_number=3)  # the retry stand's capture (state near_tracking.retry.capture_attempt 3)
+    assert w.state["adoption_zone"]["checks"][0]["stage"] == "retry"
+
+
+def test_a_mission_without_a_rectangle_is_refused_as_undefined():
+    w = zoned(World(), zone=None)
+    with pytest.raises(RuntimeError, match="^adoption_zone_undefined$"):
+        w.succeed()
+    assert w.names() == ["planning_target"]
+
+
+def test_the_check_off_changes_nothing():
+    w = World()
+    w.core.options.adoption_zone_check = "off"
+    w.succeed()
+    assert "adoption_zone" not in w.state and w.names()[0] == "set_inset_estimate"
