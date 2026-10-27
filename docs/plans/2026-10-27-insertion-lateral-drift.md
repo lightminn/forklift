@@ -166,6 +166,55 @@ ws1 Isaac 기록 중 삽입 단계 날별 최소 가로 틈(Isaac 정답, `inser
 - 하지 않는 것: S4 확인 배치 제출(총괄이 S2·S3 결과를 보고 정함), plant 변경, 운영 런처에서 근접 추적 켜기.
 - 상세 사양(실행 목록·조건 차이 표·결과 전 판정)은 S2 제출 전에 이 절에 덧붙이고 Codex 수렴을 받는다. T2 와 GPU 를 나눠 쓰므로 T2 뒤에 낸다.
 
+### 5.3 첫 조건 — riib line_1_m 사양 (2026-10-27, 결과 전 고정)
+
+총괄 결정: 첫 조건은 riib `line_1_m`. 그 뒤 `aisle_rack`, 그다음 CT `line_m`(위치 추정 A)을 **각각 따로** 잰다. S4 는 S2·S3 결과를 보고 총괄이 정한다.
+
+**조건.**
+- 런처는 `deploy/riibotics/riib_scene.sbatch` 의 기본값 그대로다(MODE=slam: 원거리 learned 인식, SLAM 피드백 mapping, D7 docking; NEAR=on; MARKERS=on; team-spec 엔코더; NOISE=const; D7_HOLD=on; LOW_CLEARANCE=on; RESTART_CONFIRM=3). 장면은 `SCENE=line_1_m`(T2 B0 와 같은 장면 파일 `scenes_p1c_81a007b1/line_1_m.json`)이고, 스냅숏 하나로 21 실행을 모두 돈다.
+- 바꾸는 것은 하나다. 근거리 재작도 가로 상자를 **0.05 m** 로 둔다(런처는 0.10 을 넘긴다). 근접 추적과 함께 쓸 수 있는 값이 0.05 뿐이기 때문이다(`run_transport.py:1431`). 계약도 이 인자를 비교한다(`POST_MEASUREMENT_ARGUMENTS` 0.05). 런처에 변수(`NEAR_REDRAW_LATERAL`, 기본 0.10 = 지금 동작)를 더해 넘긴다.
+
+**S2 실행 행렬(15).** seed 1·3·5 × 접근 직선 속도 0.055·0.08·0.15·0.30·0.60 m/s, 모두 `--record-pocket-frames --approach-straight-speed-mps v`. 0.055 실행은 `--record-dwell-gaps 2.25,2.0,1.75,1.5,1.25,1.0,0.75` 를 더한다(D8b 와 같은 아홉 정지: 시작·일곱 간격·도착). 10-13 s2v3 의 16 사양에서 **seed 1·0.08 m/s D5 켬 실행만 뺐다**. 원거리 인식과 team-spec 엔코더는 `--pocket-check` 와 함께 쓸 수 없기 때문이다(`run_transport.py:1294`, `:1340`).
+
+**S3 실행 행렬(6).** seed 1·3·5 × 0.055·0.08 m/s, `--record-pocket-frames --approach-straight-speed-mps v --measure-safety-stops-m 2.0,1.5,1.0,0.7`(S4a-1 ⓪ 과 같음).
+
+**도구 변경(PR 로, 시험 먼저, 기존 기본·기록 불변).**
+- `tools/d8b_calibration.py`: 행렬을 선언하는 인자(예: `--matrix no-d5`)를 더한다. 이 행렬은 D5 켬 실행을 요구하지 않고, 선언한 이름을 출력에 남긴다. 기본 행렬은 지금 그대로다(D5 켬 필수).
+  - **S2 조건 동등성(Codex P2).** 지금 `check_contract` 는 카메라 메타와 소스·자산 해시만 비교한다. 그래서 고속 실행 하나가 다른 엔코더·장면·재작도 상자로 돌아도 통과한다. S3 의 기준 대조도 0.055·0.08 실행만 본다. 그래서 선언 행렬에서는 15 실행 모두에 `near_tracking.run_condition` 을 만들어 `condition_problems` 로 첫 실행과 대조한다. 허용하는 차이는 `RUN_SPECIFIC_ARGUMENTS`(seed·접근 속도·dwell·기록 플래그)뿐이다. 하나라도 다르면 실패다. 고속 실행 하나의 조건을 바꾼 기록이 거부되는 것을 시험으로 고정한다.
+  - **S2 입력 요건(Codex P2).** 실행마다 다음을 요구한다. 하나라도 빠지면 그 실행은 측정 입력이 아니며, 행렬 실패로 남고 다시 돌리지 않는다.
+    - 근거리 촬영이 채택됐을 것(`near_capture.status == "done"`).
+    - `insert → lift` 전이가 있을 것. 삽입 완료다. 삽입 시작만으로는 모자라다: 지금 도구의 `Run.phase_span` 은 approach·insert 의 처음과 끝만 보고, D8c verdict 도 insert→lift 를 보지 않는다. 그래서 삽입 중에 끝난 실행의 앞부분이 완전한 측정처럼 들어가면, 삽입 후반 거리 칸이 빈 표가 된다.
+    - 근거리 앵커부터 삽입 완료까지 정답·제어 기록이 끊기지 않을 것.
+    - 삽입 완료 뒤(들기·운반·하역·복귀)의 미션 실패는 허용한다.
+- 내보내기는 `--odometry-supplement` 없이 한다. 지금 상한표의 보충표(seed 9–17 보정 실행)는 근접 추적을 켠 S4 시대 실행이라, 새 조건에서는 상한표가 생기기 전에는 만들 수 없다. 그래서 오도메트리 표는 S2 실행이 덮는 나이까지만이다(한계로 기록).
+- 새 파일: `config/near_field_bounds_riib_line_1_m.json`, `config/near_field_drive_terms_riib_line_1_m.json`. **지금 `config/near_field_*.json` 은 덮어쓰지 않는다.**
+- 계약: `run_transport.py:1340` 의 거부에서 `--near-tracking` 을 뺀다(`--pocket-check` 는 남긴다). 그 뒤의 허용 여부는 주행 항 파일의 측정 조건과 실행 조건의 대조(`near_tracking.condition_problems`, `run_transport.py:4221`)가 정한다. 그래서 지금 주행 항 파일로는 원거리 인식 실행이 계약에서 거부된다(`recognition` 의 측정 뒤 값 `off` 와 다름). 새 파일로는 이 조건과 같을 때만 통과한다. 이 두 경우를 시험으로 고정한다.
+
+**조건 차이 표(10-13 측정 조건 → line_1_m).** 계약이 비교하는 인자만 적는다(`RUN_SPECIFIC_ARGUMENTS`·기록 전용 인자 제외). 출처는 `config/near_field_drive_terms.json` 의 `condition.arguments` 와 T2 `t2d_b0_line_1_m_s0` 의 `arguments` 다. 새 측정에서는 이 값들이 측정 조건 자체가 된다.
+
+| 묶음 | 인자 | 10-13 | line_1_m | 계약에서 |
+|---|---|---|---|---|
+| 배치 | `layout` · `grid_planning` · `prism_colliders` · `min_obstacle_height_m` · `max_sim_seconds` · `observation_waypoints` | factory · true · true · 1.15 · 600 · bay 8 점 | scene · false · false · null · 1500 · 장면 관측 지점 | 인자 그대로 비교 |
+| 장면·자산 파일 | `scene_file` · `base_scene` · `factory_layout` · `lidar` · `settings` · `obstacle_layer` · `pallet_geometry`·`pallet_prior`·`pallet_urdf`·`forklift_urdf` | (기록 없음 또는 다른 내용) | `line_1_m.json` 등 | 파일 내용(sha256)으로 비교(`input_files`) |
+| 인식 | `recognition` · `recognition_proposals` · `recognition_onnx` · `recognition_tau` · `recognition_pixel_lag_steps` · `recognition_providers` · `recognition_learned_python` | 없음(측정 뒤 값 off) | far · learned · 학습 모델 · 0.3 · 24 · CUDA,CPU · learned venv | 측정 뒤 인자 → 새 조건에서는 값 비교 |
+| 오도메트리 | `encoder_model` | 없음(reported) | team_spec_quantized | 측정 뒤 인자 |
+| 근거리 촬영 | `near_capture_expected` · `near_capture_lower` · `near_capture_redraw_lateral_m` | 없음(off · gate · 0.05) | on · waive · **0.05(덮어씀)** | 측정 뒤 인자 |
+| 운영 규칙 | `d7_reapproach_hold` · `low_clearance_guard` · `restart_confirm_scans` | 없음(off · off · 0) | on · on · 3 | 측정 뒤 인자 |
+| 촬영·영상 | `video` · `extra_views` · `quarter_eye` · `quarter_target` | false · 없음 | true · quarter,chase · 값 | 인자 그대로 비교. 상한표 조건 `video` 도 바뀐다 |
+| SLAM | `slam_mode` · `map_id` | mapping · null | mapping · null | 같음 |
+
+**판정(결과 전 고정, 원래 기준 그대로).**
+- S2: `d8b_calibration` 의 합격 규칙 (i)–(v) 와 행렬 완비(선언한 15 사양 행렬). 그다음 D8c 진입 관문(`tools/d8c_replay.py` 의 verdict (a)–(e)) 전부. 하나라도 실패하면 S3 로 가지 않고 원인을 보고한다.
+- S3: `tools/s4_drive_terms.py` 의 출력 `status == "confirmed"`(행렬·기준 대조·여섯 실행의 조건 동일). 근접 주행 순항 속도를 찾지 못하면(`cruise_mps` 없음) 불합격으로 본다.
+- 기록(판정 아님): 축별 새 상한과 10-13 값의 차이, 픽셀 지연 대역, 오도메트리 표(나이별 e·ψ), 근거리 촬영 항, 정지 잔여 운동 d₀·φ₀, δv·δ_len·Δ_s·ε_c·순항 속도의 10-13 대비 차이.
+- 실행 불능(Isaac 크래시·RGB 없음·작업자 사망·SLAM 준비 시간 초과·Slurm 취소·노드 오류)은 같은 사양으로 다시 돌린다(사양당 최대 2 회). 미션 실패는 다시 돌리지 않는다. 그 실행이 입력 요건(위 S2 입력 요건; S3 는 s4_drive_terms 자체 요건)을 못 채우면 행렬이 불완전해져 판정이 실패로 남는다.
+
+**제출.**
+- 21 실행을 riib 묶음으로 낸다.
+- 효율화 세션의 사전 검사(#181)를 거친다: `isaac_bundle.py check --kind riib` 의 preflight 증명, 런처 DRY_RUN 의 `--check-args` ARGS_OK, 목록 env 명시.
+- 크기는 `sizes riib --runs 21 --jobs J --run-min <측정값>` 으로 정하고, BUNDLE_ARGS 에 `--claim-dir`·`--run-est-min` 을 넣는다. 대기 조건은 붙이지 않는다.
+- 출력 경로는 SLAM 소켓 경로가 108 바이트 안에 들게 짧게 짓는다.
+
 ## 6. PR 나누기
 
 | PR | 내용 |
