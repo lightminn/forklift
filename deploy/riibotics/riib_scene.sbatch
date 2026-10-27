@@ -8,7 +8,8 @@
 # One Riibotics demo scene (tools/riibotics_isaac_scenes.py) as an Isaac autonomous mission (--layout scene: the
 # scene's layout is the planner's prior map). Defaults (user decision 2026-10-22, deploy/riibotics/README.md):
 #   MODE=slam      far recognition (learned proposals), SLAM feedback through the slam_toolbox bridge, D7 docking
-#   NEAR=on        PR #88's near re-capture: --near-capture-expected on, --near-capture-lower waive_far_confirmed,
+#   NEAR=on        PR #88's near re-capture: --near-capture-expected on, --near-capture-lower waive (plan
+#                  2026-10-27-bottomless-and-bundled-pallets 2.1 c: no lower gate, a bottomless pallet is a target),
 #                  --near-capture-redraw always, --near-capture-redraw-lateral-m 0.10 (slam mode only: they need the
 #                  perception planning target)
 #   MARKERS=on     line_* / random_* run their slot-marker copy <scene>_m.json (PR #99); the other scenes have none
@@ -147,7 +148,7 @@ else
     --recognition-pixel-lag-steps 24 --recognition-providers CUDAExecutionProvider,CPUExecutionProvider
     --recognition-device-id 0 --recognition-threads 4)
   if [ "$NEAR" = on ]; then
-    MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive_far_confirmed
+    MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive
       --near-capture-redraw always --near-capture-redraw-lateral-m 0.10)
   fi
 fi

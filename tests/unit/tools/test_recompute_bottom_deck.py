@@ -32,19 +32,33 @@ def _save(run, number, case):
     return {"face": case.face, "verdict": ev.verdict, "reason": ev.reason, "npz": name}
 
 
-def _run(tmp_path, kind):
+def _run(tmp_path, kind, mode=None):
     attempts = [_save(tmp_path, 1, S.SideCase("epal6", kind, face=1)),
                 _save(tmp_path, 2, S.SideCase("epal6", kind, face=-1))]
     faces = [{"face": a["face"], "verdict": a["verdict"], "reason": a["reason"], "captures": 1} for a in attempts]
-    verdict = R.policy(faces)
+    verdict = R.policy(faces, mode or "on")
     from forklift_core.perception.bottom_deck_permit import params_digest
 
     record = {"verdict": verdict, "faces": faces, "shape": "epal6", "axis": "x", "centre_xy": list(MAP_TARGET[:2]),
               "model_yaw_rad": MAP_TARGET[2],
               "params_sha256": params_digest(E.BottomDeckParams())}
-    (tmp_path / "result.json").write_text(json.dumps({"bottom_deck": {
-        "attempts": attempts, "faces": faces, "record": record}}))
+    result = {"bottom_deck": {"attempts": attempts, "faces": faces, "record": record}}
+    if mode is not None:
+        result["arguments"] = {"bottom_deck_check": mode}
+    (tmp_path / "result.json").write_text(json.dumps(result))
     return verdict
+
+
+def test_a_structure_run_recomputes_with_the_structure_policy(tmp_path):
+    # plan 2026-10-27 §2.1 g: the run's own mode picks the policy; a grounded run keeps both absent faces
+    for kind, want in (("pallet", "present"), ("grounded", "absent")):
+        run = tmp_path / kind
+        run.mkdir()
+        assert _run(run, kind, mode="structure") == want
+        out = R.recompute(run)
+        assert out["match"] and out["mode"] == "structure" and out["policy"] == want
+    assert R.policy([{"face": 1, "verdict": "absent"}], "on") == "absent"
+    assert R.policy([{"face": 1, "verdict": "absent"}], "structure") == "unobserved"
 
 
 def test_a_pallet_run_and_a_grounded_run_recompute_exactly(tmp_path):

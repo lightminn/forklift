@@ -1102,7 +1102,7 @@ def test_the_bottom_deck_check_is_off_unless_given_and_part_of_the_near_contract
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pallet_article"] == "nominal"
     source = SCRIPT.read_text()
     block = source[source.index('"--bottom-deck-check",'): source.index('"--bottom-deck-check",') + 200]
-    assert 'choices=("off", "on")' in block and 'default="off"' in block
+    assert 'choices=("off", "on", "structure")' in block and 'default="off"' in block
 
 
 def test_the_side_legs_take_the_observe_arrival_and_end_the_loop_on_a_refusal():
@@ -1139,9 +1139,10 @@ def test_a_grounded_urdf_needs_the_grounded_article_declared(tmp_path):
 
 
 def test_the_side_check_moves_the_perception_cameras_near_plane_to_the_d435i_min_z_only_when_on():
-    # Plan 2026-10-19 task 5: Isaac's default 1.0 m near plane cut the side frames at the 1.35 m stand
+    # Plan 2026-10-19 task 5: Isaac's default 1.0 m near plane cut the side frames at the 1.35 m stand; either side
+    # check mode (on, structure -- plan 2026-10-27 section 2.1 g) runs the side legs, off keeps what it saw
     source = SCRIPT.read_text()
-    block = source[source.index('if getattr(args, "bottom_deck_check", "off") == "on":\n            # Plan 2026-10-19 task 5'):]
+    block = source[source.index('if getattr(args, "bottom_deck_check", "off") != "off":\n            # Plan 2026-10-19 task 5'):]
     block = block[: block.index("if args.recognition == \"far\":")]
     assert "perception_camera.set_clipping_range(near_distance=0.28, far_distance=perception_far_m)" in block
     assert 'state["perception_clipping_range_m"]' in block
@@ -1288,4 +1289,23 @@ def test_the_check_off_near_lower_waiver_needs_the_expected_site() -> None:
                             text=True, check=False)
     assert result.returncode == 2
     assert "--near-capture-lower waive_far_confirmed needs --near-capture-expected on" in result.stderr
+
+
+def test_the_plain_near_lower_waive_needs_the_expected_site_too() -> None:
+    """Plan 2026-10-27 (bottomless pallets) §2.1 c: waive narrows the expected site, so it needs one."""
+    result = subprocess.run([*_cli_base(), "--near-capture-lower", "waive"], capture_output=True, text=True,
+                            check=False)
+    assert result.returncode == 2
+    assert "--near-capture-lower waive needs --near-capture-expected on" in result.stderr
+
+
+def test_the_bottom_deck_check_takes_structure_and_keeps_off_as_the_default() -> None:
+    """Plan 2026-10-27 §2.1 g: off / on / structure; the default stays off (every earlier record)."""
+    source = SCRIPT.read_text()
+    start = source.index('"--bottom-deck-check"')
+    block = source[start:start + 400]
+    assert 'choices=("off", "on", "structure")' in block and 'default="off"' in block
+    start = source.index('"--near-capture-lower"')
+    block = source[start:start + 200]
+    assert 'choices=("gate", "waive_far_confirmed", "waive")' in block and 'default="gate"' in block
 

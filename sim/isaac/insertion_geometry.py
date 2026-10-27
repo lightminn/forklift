@@ -429,7 +429,7 @@ def assert_pallet_urdf_matches_named_boxes(
     swap, 18/22 under 180 degrees).
     """
     boxes = pallet_boxes(geometry)
-    if article == "grounded":  # a declared negative article: checked against its own boxes, not waived
+    if article == "grounded":  # the bottomless test article (a pick target since 2026-10-27): its own boxes, not waived
         boxes = grounded_boxes(boxes)
     elif article != "nominal":
         raise ValueError(f"unknown pallet article {article!r}")

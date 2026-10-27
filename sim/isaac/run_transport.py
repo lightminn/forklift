@@ -385,14 +385,17 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--near-capture-lower",
-        choices=("gate", "waive_far_confirmed"),
+        choices=("gate", "waive_far_confirmed", "waive"),
         default="gate",
         help="Plan 2026-10-22 task C (user decision 2026-10-22, conditional): waive_far_confirmed -- a near capture "
         "with no valid pocket in its expected site is detected once more with the lower band waived, only after a far "
         "capture that passed the full detector at its own thresholds (its detector's pallet within 0.15 m and 15 deg "
         "of the adopted far estimate) and only among candidates within 0.15 m and 15 deg of the expected site; each "
-        "case is recorded (lower_waiver). The bottom-deck check's own waiver is unchanged. Needs "
-        "--near-capture-expected on.",
+        "case is recorded (lower_waiver). waive (plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 c): the "
+        "near capture's expected-site detection runs with the lower band waived from the first call, in a site "
+        "narrowed to 0.15 m and 15 deg, with no far condition -- a pallet without a bottom deck is a pick target; "
+        "lower_evidence false is recorded on success and failure. The bottom-deck check's own waiver is unchanged. "
+        "Needs --near-capture-expected on.",
     )
     parser.add_argument(
         "--near-drop-frames-from-m",
@@ -632,18 +635,23 @@ def arguments() -> argparse.Namespace:
         "--pallet-article",
         choices=("nominal", "grounded"),
         default="nominal",
-        help="Evaluation only: grounded declares --pallet-urdf the grounded lookalike of --pallet-geometry (no bottom "
+        help="Evaluation only: grounded declares --pallet-urdf the grounded variant of --pallet-geometry (no bottom "
         "boards, blocks to the floor; tools/build_grounded_pallet.py) and checks it against those boxes. The mission "
-        "still reads --pallet-geometry: the article is what it must not pick (plan 2026-10-19 task 5).",
+        "still reads --pallet-geometry. Since the user decision of 2026-10-27 a pallet without a bottom deck is a pick "
+        "target, so the article is a bottomless positive test article (it was declared a negative in plan 2026-10-19 "
+        "task 5; docs/plans/2026-10-27-bottomless-and-bundled-pallets.md).",
     )
     parser.add_argument(
         "--bottom-deck-check",
-        choices=("off", "on"),
+        choices=("off", "on", "structure"),
         default="off",
         help="on: before a known-shape pallet is picked, see both evidence faces from side legs (x hypothesis: "
         "the two sides at 35 deg; T11 y: the back face then the entry face head on) and insert only when both "
         "read a bottom deck and the near target is the pallet judged (docs/plans/2026-10-19-bottom-deck-side-"
-        "evidence.md tasks 3-4). A batch run on the perception target.",
+        "evidence.md tasks 3-4) -- the site policy for bottom-deck pallets only. structure: the same legs, both "
+        "faces always seen, and insert when each reads present or absent (the block rows with or without bottom "
+        "boards); a face closed along its depth or not seen refuses (a shelf; plan 2026-10-27-bottomless-and-"
+        "bundled-pallets section 2.1 g). A batch run on the perception target.",
     )
     parser.add_argument("--recognition-frame-every", type=int, default=24,
                         help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
@@ -1071,18 +1079,20 @@ def arguments() -> argparse.Namespace:
     )
     args, unknown = parser.parse_known_args()
     args.session = False  # a session scene file sets it below (plan 2026-10-22-rigid-session-pallets)
-    if args.bottom_deck_check == "on":
+    if args.bottom_deck_check != "off":
         # Plan 2026-10-19 task 4: the side legs and the insert permission are defined for a batch run on the
         # perception target only (an oracle target would be permitted 0.3 m off the pallet judged -- Codex task 3).
+        # structure (plan 2026-10-27 section 2.1 g) runs the same legs under the same conditions.
+        mode_ = args.bottom_deck_check
         if not args.use_perception or args.planning_target != "perception":
-            parser.error("--bottom-deck-check on needs --use-perception and --planning-target perception")
+            parser.error(f"--bottom-deck-check {mode_} needs --use-perception and --planning-target perception")
         if args.near_tracking or args.pocket_check:
-            parser.error("--bottom-deck-check on is not defined with --near-tracking or --pocket-check")
+            parser.error(f"--bottom-deck-check {mode_} is not defined with --near-tracking or --pocket-check")
         if getattr(args, "live", False):
-            parser.error("--bottom-deck-check on is a batch run (the live capture and plan worker paths are out of "
-                         "its scope)")
+            parser.error(f"--bottom-deck-check {mode_} is a batch run (the live capture and plan worker paths are out "
+                         "of its scope)")
         if args.repeat_captures:
-            parser.error("--bottom-deck-check on is not defined with --repeat-captures")
+            parser.error(f"--bottom-deck-check {mode_} is not defined with --repeat-captures")
     # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
     # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced)
     # -- replaced before the learned inputs are checked, which it then does not need.
@@ -1203,7 +1213,7 @@ def arguments() -> argparse.Namespace:
     if args.near_capture_expected == "on" and not (args.use_perception and args.planning_target == "perception"):
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
-        parser.error("--near-capture-lower waive_far_confirmed needs --near-capture-expected on")
+        parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
     # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
     args.pallet_prior_loaded = None
     if args.use_perception:
@@ -3195,7 +3205,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
-        if getattr(args, "bottom_deck_check", "off") == "on":
+        if getattr(args, "bottom_deck_check", "off") != "off":
             # Plan 2026-10-19 task 5: Isaac's default near plane is 1.0 m, which cut the pallet's near half and the
             # floor before it out of every side frame at the 1.35 m stand (Isaac runs 85cc2fe). The D435i's min-Z,
             # as the pocket camera already uses; only with the side check on, so off runs see what they always saw.
@@ -5539,13 +5549,14 @@ def drive(S, isaac) -> None:
     def bottom_deck_options() -> dict:
         """Plan 2026-10-19 task 4: what the side legs read (the judge's parameters and the run shape's spec; the
         camera mount the stands are worked back from)."""
-        if getattr(args, "bottom_deck_check", "off") != "on":  # a replayed record from before the flag: off
+        mode_ = getattr(args, "bottom_deck_check", "off")  # a replayed record from before the flag: off
+        if mode_ == "off":
             return {"bottom_deck_check": "off"}
         from forklift_core.perception.bottom_deck_evidence import BottomDeckParams
         from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_geometry
 
         shape_ = args.pallet_geometry_loaded.geometry_version
-        return {"bottom_deck_check": "on", "bottom_deck_params": BottomDeckParams(),
+        return {"bottom_deck_check": mode_, "bottom_deck_params": BottomDeckParams(),
                 "bottom_deck_spec": spec_from_geometry(args.pallet_geometry_loaded, entry_axes=KNOWN_ENTRY_AXES[shape_]),
                 "camera_mount_x_m": float(perception_mount.translation_m[0])}
 
