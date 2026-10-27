@@ -230,7 +230,7 @@ def test_two_visible_gpus_are_refused(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--no-preflight", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--no-vram"]) == 2
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--no-vram"]) == 2
     assert "GPU" in capsys.readouterr().err
 
 
@@ -288,7 +288,7 @@ def test_main_runs_a_list(tmp_path):
     os.environ.clear()
     os.environ.update(env)
     try:
-        rc = ib.main(["--no-preflight", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+        rc = ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
                       "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0"])
     finally:
         os.environ.clear()
@@ -867,7 +867,7 @@ def test_the_runner_takes_its_slots_and_session_memory_from_the_kind(tmp_path, m
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--no-preflight", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", "--kind", "riib"]) == 0
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", "--kind", "riib"]) == 0
     assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
 
 
@@ -881,7 +881,7 @@ def test_without_a_kind_the_slots_follow_the_session_memory(tmp_path, monkeypatc
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--no-preflight", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
     assert seen["slots"] == slots and seen["session_vram_mib"] == ib.SESSION_VRAM_MIB
 
 
@@ -899,7 +899,7 @@ def test_sessions_that_do_not_fit_the_shards_are_refused(tmp_path, monkeypatch, 
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--no-preflight", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", *extra]) == 2
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", *extra]) == 2
     assert "refusing" in capsys.readouterr().err
 
 
@@ -1240,7 +1240,7 @@ def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
     other = _sleeper()
     try:
         ib.register_list(tmp_path / "reg", path, None, "1", pid=other.pid)
-        rc = ib.main(["--no-preflight", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+        rc = ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
                       "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0", "--list-registry-dir",
                       str(tmp_path / "reg")])
     finally:
@@ -1578,3 +1578,19 @@ def test_plain_expansions_are_settings_too(tmp_path):
     (tmp_path / "launch.sh").write_text('echo $EXTRA_ARGS ${MORE}\n')
     run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh")])
     assert ib.inherited_controls(run, {"EXTRA_ARGS": "--x", "MORE": "--y", "PATH": "/bin"}) == ["EXTRA_ARGS", "MORE"]
+
+
+def test_a_bypass_needs_its_reason(tmp_path, capsys, monkeypatch):
+    # lead (2026-10-27): the check is skipped only with a reason, and the reason is in the run's record
+    seen = {}
+    monkeypatch.setattr(ib, "run_bundle", lambda runs, out, **k: seen.update(k) or {"exit_code": 0})
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    for note in ([], ["--preflight-note", "  "]):
+        assert ib.main(["--no-preflight", *note, "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram",
+                        "--slots", "1"]) == 2
+        assert "needs --preflight-note" in capsys.readouterr().err and not seen
+    assert ib.main(["--no-preflight", "--preflight-note", "old wrapper without DRY_RUN", "--list", str(path),
+                    "--out", str(tmp_path / "o"), "--no-vram", "--slots", "1"]) == 0
+    assert "preflight: off -- old wrapper without DRY_RUN" in capsys.readouterr().err
+    assert seen["preflight"] == "off: old wrapper without DRY_RUN"  # run_bundle writes it into summary.json

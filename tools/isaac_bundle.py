@@ -7,7 +7,8 @@
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
-"pace_log": glob} (all but name and argv optional). Runs start in list order whenever
+"pace_log": glob, "missions": path} (all but name and argv optional; "missions" is the run's console probe report,
+by default probe.json in a retry_move folder -- see mission_verdict). Runs start in list order whenever
 
 - a slot is free: at most --slots runs at once, and never more slots than the job's shards (the rule: as many shards
   as Isaac sessions running in the job). A run holds its slot until every process it started has ended, not only its
@@ -164,13 +165,15 @@ class Run:
     retry_move: list = field(default_factory=list)
     pace_log: str | None = None
     watch: list = field(default_factory=list)
+    missions: str | None = None
 
     def at(self, attempt) -> Run:
         """This run with "{attempt}" filled in."""
         f = (lambda x: x.replace("{attempt}", str(attempt)))  # noqa: E731
         return Run(self.name, [f(a) for a in self.argv], {k: f(v) for k, v in self.env.items()}, self.cwd,
                    [f(g) for g in self.scan], [f(m) for m in self.retry_move],
-                   f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch])
+                   f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch],
+                   f(self.missions) if self.missions else None)
 
     @property
     def retryable(self) -> bool:
@@ -189,7 +192,7 @@ def load_runs(path, text=None) -> list[Run]:
         obj = json.loads(line)
         if not isinstance(obj, dict):
             raise ValueError(f"line {n}: not an object")
-        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch"}
+        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch", "missions"}
         if unknown:
             raise ValueError(f"line {n}: unknown keys {sorted(unknown)}")
         name = obj.get("name")
@@ -220,11 +223,112 @@ def load_runs(path, text=None) -> list[Run]:
             if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
                 raise ValueError(f"line {n}: {key} must be a list of strings")
             lists[key] = value
-        pace_log = obj.get("pace_log")
+        pace_log, missions = obj.get("pace_log"), obj.get("missions")
         if pace_log is not None and not isinstance(pace_log, str):
             raise ValueError(f"line {n}: pace_log must be a string")
-        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, **lists))
+        if missions is not None and not isinstance(missions, str):
+            raise ValueError(f"line {n}: missions must be a path (string)")
+        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, missions=missions, **lists))
     return runs
+
+
+PROBE_REPORT = "probe.json"  # tools/live_console_probe.py --report, as the console wrappers name it in their OUT
+TOUR_ARRIVED = "arrived"  # tools/survey_tour.py TourDriver's end at the tour's last pose; every other end stops short
+FAILED_STATUSES = ("infra_failed", "stalled", "early_mission_failure", "tour_incomplete", "no_mission_report")
+
+
+def _report_outcomes(data) -> tuple[list, dict | None]:
+    """(outcomes, tour) of a probe report: (outcome, reason) per submission -- the session's own and, after a reset,
+    the next session's (``after_reset.missions_run``, Codex) -- and the tour block. Raises on a report of another
+    shape: the caller confines that to its run."""
+    if not isinstance(data, dict):
+        raise ValueError("the report is not an object")
+    entries = []
+    for block in (data, data.get("after_reset")):
+        if block is None:
+            continue
+        if not isinstance(block, dict):
+            raise ValueError("after_reset is not an object")
+        got = block.get("missions_run")
+        if got is None:
+            continue
+        if not isinstance(got, list):  # 0, "", {} and false too: an empty value of another type is not "none asked"
+            raise ValueError("missions_run is not a list")
+        entries += got
+    outcomes = []
+    for e in entries:
+        if not isinstance(e, dict):
+            raise ValueError("a missions_run entry is not an object")
+        submit, result = e.get("submit") or {}, e.get("result") or {}
+        if not isinstance(submit, dict) or not isinstance(result, dict):
+            raise ValueError("a submit or result is not an object")
+        if submit.get("t") != "ack":
+            outcomes.append(("refused", submit.get("reason")))
+        else:
+            outcomes.append((str(result.get("outcome") or "no_result"), result.get("reason")))
+    tour = data.get("tour")
+    if tour is not None and not isinstance(tour, dict):
+        raise ValueError("tour is not an object")
+    return outcomes, tour
+
+
+def mission_verdict(run, started=None):
+    """(missions, status) for a run that ended. missions: what its console probe report says -- the submissions (the
+    session's and, after a reset, the next session's), how many ended done, each outcome's count, the first one's
+    outcome and reason, and a tour's end -- or None when there is no report. The report is the list's "missions" path,
+    else ``probe.json`` in one of the run's retry_move folders; a report older than the run's start (``started``, wall
+    seconds) is a stale one this run did not write.
+    status:
+    - "early_mission_failure": missions were asked and none ended done (rc 0 alone would count it a success: the lvram
+      pilot's random_m sessions failed all three missions in two seconds); a refused submission is not done;
+    - "tour_incomplete": the report's tour ended anywhere but its last pose (missions["tour"]: end, progress_m, the
+      last permit reason) -- the session that ran it judges its purpose from the reason, the count shows it;
+    - "no_mission_report": the list named a report that is missing, or a report is stale or cannot be read (any
+      shape error stays with this run: the bundle goes on);
+    - None: the row keeps "ended". A later mission's failure after a done one is the experiment's result, not the
+      run's (its counts are in missions)."""
+    if run.missions:
+        paths, named = [run.missions], True
+    else:
+        paths, named = [os.path.join(m, PROBE_REPORT) for m in run.retry_move], False
+    path = next((p for p in paths if os.path.isfile(p)), None)
+    if path is None:
+        return ({"report": run.missions, "error": "missing"}, "no_mission_report") if named else (None, None)
+    try:
+        if started is not None and os.path.getmtime(path) < started - 1.0:
+            return {"report": path, "error": "older than the run (a stale report)"}, "no_mission_report"
+        outcomes, tour = _report_outcomes(json.loads(Path(path).read_text()))
+        counts = {}
+        for o, _ in outcomes:
+            counts[o] = counts.get(o, 0) + 1
+        done = counts.get("done", 0)
+        missions = {"report": path, "submitted": len(outcomes), "done": done, "outcomes": counts,
+                    "first": ({"outcome": outcomes[0][0],
+                               "reason": (outcomes[0][1] or None) and str(outcomes[0][1])[:300]} if outcomes else None)}
+        if outcomes and not done:
+            return missions, "early_mission_failure"
+        if tour is not None:
+            # lead, 2026-10-27: d7oor 11832's tours stalled at 27.1 m on pallet:P-1's permit and ended rc 0
+            events = tour.get("events") or []
+            permit = next((e.get("permit") for e in reversed(events if isinstance(events, list) else [])
+                           if isinstance(e, dict) and isinstance(e.get("permit"), dict)), None)
+            missions["tour"] = {"end": tour.get("end"), "progress_m": tour.get("progress_m"),
+                                "permit_reason": (permit or {}).get("reason")}
+            if tour.get("end") != TOUR_ARRIVED:
+                return missions, "tour_incomplete"
+        return missions, None
+    except Exception as exc:  # noqa: BLE001 -- a report of any other shape is this run's problem, not the bundle's
+        return {"report": path, "error": repr(exc)[:300]}, "no_mission_report"
+
+
+def status_line(statuses) -> str:
+    """Statuses and their counts in one line a person reads first: ended first, then the rest by count."""
+    order = sorted(statuses, key=lambda k: (k != "ended", -statuses[k], k))
+    return ", ".join(f"{k} {statuses[k]}" for k in order) or "no runs"
+
+
+def _status_key(row) -> str:
+    return "ended_rc_nonzero" if row.get("status") == "ended" and row.get("rc") != 0 else str(row.get("status"))
 
 
 def defined_flags(script) -> set:
@@ -558,7 +662,7 @@ def collect(out, expect):
         except (OSError, ValueError, KeyError):
             verdict = None
         rows.append({"task": i, "name": last.get("name"), "status": last.get("status"), "rc": last.get("rc"),
-                     "attempts": len(recs), "summary_exit": verdict})
+                     "attempts": len(recs), "summary_exit": verdict, "missions": last.get("missions")})
     return rows, missing
 
 
@@ -1104,6 +1208,7 @@ class _Live:
     vram_now: int = 0
     gpus: set = field(default_factory=set)
     oom_at_start: int | None = None
+    launch_wall: float | None = None  # wall time taken before Popen: a report older than it is not this run's
     pace: _Pace | None = None
     pace_min: float | None = None
     # set when the top process has ended; the slot is held until the run's other processes are gone
@@ -1159,7 +1264,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
           "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
           "time_left": 0, "time_left_retry": [], "stall_next": 0.0, "stalled": 0,
-          "node_ram_waits": 0, "claimed_elsewhere": 0}
+          "node_ram_waits": 0, "claimed_elsewhere": 0, "early_mission_failures": 0, "tours_incomplete": 0,
+          "no_mission_reports": 0, "missions_submitted": 0, "missions_done": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
     results_path, vram_path, pace_path = out / "results.jsonl", out / "vram.jsonl", out / "pace.jsonl"
@@ -1244,9 +1350,20 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                         moved.append(dest)
             except OSError as exc:
                 move_error, retry = repr(exc), False
+        status = "infra_failed" if infra else ("stalled" if r.stalled else "ended")
+        missions = None
+        if status == "ended":
+            missions, mission_status = mission_verdict(r.run, started=r.launch_wall or r.start_wall)
+            if missions and missions.get("submitted") is not None:
+                st["missions_submitted"] += missions["submitted"]
+                st["missions_done"] += missions["done"]
+            if mission_status and x["rc"] == 0:  # a run that failed by its rc keeps that verdict
+                status = mission_status
+                st[{"early_mission_failure": "early_mission_failures", "tour_incomplete": "tours_incomplete",
+                    "no_mission_report": "no_mission_reports"}[status]] += 1
         record({
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
-            "status": "infra_failed" if infra else ("stalled" if r.stalled else "ended"), "infra": signs,
+            "status": status, "missions": missions, "infra": signs,
             "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
             "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
@@ -1282,6 +1399,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         log_path = out / "runs" / f"{run.name}.{attempt}.log"
         log = log_path.open("ab")
         argv = (["taskset", "-c", ",".join(map(str, session_cpus))] + run.argv) if bridge_set else run.argv
+        launch_wall = time.time()
         try:
             proc = subprocess.Popen(argv, cwd=run.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1295,6 +1413,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                oom_at_start=oom_counter() if oom_counter else None,
                                pace=_Pace(pace_window_s) if run.pace_log else None)
         live[proc.pid].ram_key = ram_key
+        live[proc.pid].launch_wall = launch_wall
         st["last_start"] = now
         return True
 
@@ -1667,8 +1786,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         drop_unstarted("not_started")
 
     final = [r for r in records if not r.get("retried")]  # the last attempt of each run
-    failed = sum(1 for r in final if r["status"] in ("infra_failed", "stalled")
-                 or (r["status"] == "ended" and r["rc"] != 0))
+    failed = sum(1 for r in final if r["status"] in FAILED_STATUSES or (r["status"] == "ended" and r["rc"] != 0))
+    statuses = {}
+    for r in final:
+        statuses[_status_key(r)] = statuses.get(_status_key(r), 0) + 1
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
                                                           "time_left_retry", "gpu_full"))
     summary = {
@@ -1677,6 +1798,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "gpu_full_gave_up": st["gpu_full_gave_up"], "unreadable_starts": st["unreadable_starts"],
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
+        "statuses": statuses, "status_line": status_line(statuses),
+        "early_mission_failures": st["early_mission_failures"], "tours_incomplete": st["tours_incomplete"],
+        "no_mission_reports": st["no_mission_reports"], "missions_submitted": st["missions_submitted"],
+        "missions_done": st["missions_done"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
         "stalled": st["stalled"], "stall_s": stall_s,
@@ -1747,6 +1872,12 @@ def main(argv=None) -> int:
         for i in missing:
             print(json.dumps({"task": i, "status": "missing"}))
         bad = missing + [r["task"] for r in rows if r["status"] != "ended" or r["rc"] != 0 or r["summary_exit"] != 0]
+        counts = {}
+        for r in rows:
+            counts[_status_key(r)] = counts.get(_status_key(r), 0) + 1
+        if missing:
+            counts["missing"] = len(missing)
+        print(f"statuses: {status_line(counts)}")
         print(f"{len(rows)} of {a.expect} tasks recorded, {len(missing)} missing, {len(bad)} not ended with rc 0 "
               "and a clean summary")
         return 1 if bad else 0
@@ -1792,7 +1923,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-preflight", action="store_true",
                     help="run a list without its preflight proof (isaac_bundle.py check): tests, or an exception whose "
                          "reason --preflight-note records")
-    ap.add_argument("--preflight-note", default=None, help="why --no-preflight (recorded in the summary)")
+    ap.add_argument("--preflight-note", default=None,
+                    help="why --no-preflight (required with it; recorded in the summary)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--kind", choices=sorted(KINDS),
                     help="the sessions' kind: its measured GPU memory per session and the slots the shards hold")
@@ -1879,7 +2011,13 @@ def main(argv=None) -> int:
         print(f"refusing the run list: {exc}", file=sys.stderr)
         return 2
     if a.no_preflight:
-        a.preflight = f"off: {a.preflight_note}" if a.preflight_note else "off"
+        # a bypass is allowed only with its reason, which the summary keeps for the lead to see (2026-10-27)
+        if not (a.preflight_note or "").strip():
+            print("refusing: --no-preflight needs --preflight-note (why this list runs without its check)",
+                  file=sys.stderr)
+            return 2
+        a.preflight = f"off: {a.preflight_note.strip()}"
+        print(f"preflight: off -- {a.preflight_note.strip()}", file=sys.stderr)
     else:
         problems = verify_preflight(a.list, data, runs, os.environ)
         if problems:
@@ -1911,6 +2049,8 @@ def main(argv=None) -> int:
         summary = _run_main(a, runs, slots, shards, probe, stop)
     finally:
         entry.unlink(missing_ok=True)
+    if summary.get("status_line"):
+        print(f"statuses: {summary['status_line']}", file=sys.stderr)
     print(json.dumps(summary))
     return summary["exit_code"]
 

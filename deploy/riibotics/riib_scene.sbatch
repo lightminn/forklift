@@ -168,6 +168,11 @@ else
     [ -n "$NEAR_RECAPTURE_GAP" ] && MODE_ARGS+=(--near-recapture-gap-m "$NEAR_RECAPTURE_GAP")
   fi
 fi
+# the SLAM socket is a Unix socket: its path fits in 107 bytes or the runner dies at connect (AF_UNIX path too long)
+if [ "$MODE" != truth ] && [ "$(printf %s "$OUT/sock/slam.sock" | wc -c)" -gt 107 ]; then
+  echo "preflight: the SLAM socket path $OUT/sock/slam.sock is longer than AF_UNIX allows (107 bytes): shorten OUT" >&2
+  exit 2
+fi
 # the preflight's runner must know --check-args: an older one would take it for a Kit argument and start Isaac
 if ! grep -q -- '"--check-args"' "$SNAP/sim/isaac/run_transport.py"; then
   if [ "${DRY_RUN:-0}" = 1 ] && [ "${DRY_RUN_CHECK:-1}" != 1 ]; then :; else
