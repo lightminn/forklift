@@ -297,7 +297,7 @@ def test_a_far_runs_condition_compares_the_files_the_far_recognition_reads_by_fi
     expected = NT.run_condition(far, tmp_path)
     labels = set(expected["input_files"])
     assert {f"far-recognition {rel}" for rel in NT.FAR_RECOGNITION_FILES} <= labels
-    assert "file config/obstacle_odometry_age.json" in labels  # named by the track bounds
+    assert "far-recognition file config/obstacle_odometry_age.json" in labels  # named by the track bounds
     assert not any(label.startswith("far-recognition") for label in NT.run_condition({"arguments": {}}, tmp_path)["input_files"])
     def file_problems(observed):  # (the fake result records no settings: only the inputs are compared here)
         return [p for p in NT.condition_problems(expected, observed) if p.startswith("input_files")]
@@ -317,6 +317,19 @@ def test_a_far_runs_condition_compares_the_files_the_far_recognition_reads_by_fi
     assert file_problems(NT.run_condition(far, tmp_path)) == []
     assert file_problems(NT.run_condition(far, tmp_path, far_root=runner_checkout)) == [
         "input_files far-recognition config/recognition_track_bounds.yaml differs from the measurement runs"
+    ]
+    # Codex round 4 P2: a file both sides name (the age table) is two inputs, one per root -- the working
+    # directory's, which the obstacle layer reads, is not overwritten by the runner checkout's
+    layer = {"arguments": {"recognition": "far", "obstacle_layer": str(tmp_path / "config/obstacle_layer.yaml")}}
+    (tmp_path / "config/obstacle_layer.yaml").write_text("odometry_age: config/obstacle_odometry_age.json\n")
+    measured = NT.run_condition(layer, tmp_path, far_root=runner_checkout)
+    assert {"file config/obstacle_odometry_age.json", "far-recognition file config/obstacle_odometry_age.json"} <= set(
+        measured["input_files"])
+    age = tmp_path / "config/obstacle_odometry_age.json"
+    age.write_text(age.read_text() + " ")
+    assert [p for p in NT.condition_problems(measured, NT.run_condition(layer, tmp_path, far_root=runner_checkout))
+            if p.startswith("input_files")] == [
+        "input_files file config/obstacle_odometry_age.json differs from the measurement runs"
     ]
     runner = (ROOT / "sim/isaac/run_transport.py").read_text()
     assert "far_root=Path(__file__).resolve().parents[2]" in runner

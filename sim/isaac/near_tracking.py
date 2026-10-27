@@ -1259,8 +1259,10 @@ def far_recognition_files(root: Path | None) -> dict[str, str | None]:
     if root is None:
         return {f"far-recognition {rel}": None for rel in FAR_RECOGNITION_FILES}
     named =input_files_skipping({f"far {rel}": rel for rel in FAR_RECOGNITION_FILES}, root, ())
+    # every label in its own namespace, the files they name too: with the runner's checkout as root, a file of the
+    # same relative path in the working directory is another input (Codex near-remeasure round 4 P2)
     return {
-        ("far-recognition " + label.removeprefix("argument far ")) if label.startswith("argument far ") else label: v
+        "far-recognition " + (label.removeprefix("argument far ") if label.startswith("argument far ") else label): v
         for label, v in named.items()
     }
 
