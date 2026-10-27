@@ -84,6 +84,12 @@ def pallet_pose_in_truck(gap_m: float, tip_x: float, lateral_m: float, yaw_rad: 
     return x, y, -yaw_rad
 
 
+def _finite_or_none(value):
+    """A timed-out rollout reports NaN errors; JSON has no NaN, so they are written as null."""
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 def redraw(gap_m: float, lateral_m: float, yaw_rad: float) -> dict:
     """The runner's re-draw acceptance from the true relative pose (rear axle frame of the insertion line)."""
     rear_x = -(gap_m + REAR_AXLE_TO_TIP_M * math.cos(yaw_rad))
@@ -98,7 +104,8 @@ def redraw(gap_m: float, lateral_m: float, yaw_rad: float) -> dict:
         return out
     dry = bicycle_rollout(straight.poses, straight.directions, straight.curvatures_inv_m, APPROACH_CONFIG,
                           np.array([current.x_m, current.y_m, current.yaw_rad]))
-    out["dry"] = {"status": dry.status, "position_error_m": dry.position_error_m, "yaw_error_rad": dry.yaw_error_rad}
+    out["dry"] = {"status": dry.status, "position_error_m": _finite_or_none(dry.position_error_m),
+                  "yaw_error_rad": _finite_or_none(dry.yaw_error_rad)}
     if dry.trajectory:
         # Where the fork tip ends across the line (the line is y = 0): rear lateral + lever x sin(yaw).
         xe, ye, he = dry.trajectory[-1]
@@ -170,7 +177,8 @@ def main(argv=None) -> int:
     samples = perturbations()
     results = [evaluate(g, samples) for g in GAPS_M]
     verdict = {name: judge(results, name) for name in PARAMS}
-    json.dump({"samples": samples, "results": results, "verdict_gap_m": verdict}, args.out.open("w"), indent=1)
+    json.dump({"samples": samples, "results": results, "verdict_gap_m": verdict}, args.out.open("w"), indent=1,
+              allow_nan=False)
     for r in results:
         print(json.dumps(r["summary"]))
     print("verdict", json.dumps(verdict))

@@ -33,3 +33,14 @@ def test_redraw_refuses_a_rear_offset_outside_the_box():
     # Rear lateral = tip lateral - 1.29 sin(yaw): 0.04 + 1.29 sin(1.5 deg) > 0.05.
     out = c3.redraw(0.6, 0.04, -math.radians(1.5))
     assert out["box"] is False and out["ok"] is False
+
+
+def test_a_timed_out_rollout_is_written_as_strict_json(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(c3, "bicycle_rollout", lambda *a, **k: SimpleNamespace(
+        status="timeout", position_error_m=float("nan"), yaw_error_rad=float("nan"), trajectory=()))
+    out = c3.redraw(0.6, 0.0, 0.0)
+    assert out["dry"]["position_error_m"] is None and out["dry"]["yaw_error_rad"] is None
+    json.dumps(out, allow_nan=False)
