@@ -160,6 +160,30 @@ def test_the_odometry_is_the_joint_angle_model_by_default_with_its_age_table(tmp
     assert contains(truth, ["--encoder-model", encoder or "team_spec_quantized"]) and contains(truth, ["--obstacle-layer", layer])
 
 
+GYRO_MODEL = "config/gyro_model_d435i_static_20261023.yaml"
+GYRO_LAYER = "config/obstacle_layer_single_team_spec_gyro_d435i_static.yaml"
+
+
+def test_the_gyro_heading_is_off_unless_asked_and_measured_turns_it_on_with_its_age_table(tmp_path):
+    """T2's C1 arm (docs/plans/2026-10-27-insertion-lateral-drift.md): GYRO=measured runs the gyro heading on the model
+    fitted to the 2026-10-23 static IMU record, with the age table made for that model; off by default."""
+    plain = args_of(dry_run(tmp_path))
+    assert "--odometry-heading" not in plain and "--gyro-model" not in plain
+    assert " GYRO=off" in (tmp_path / "out/riib_defaults.txt").read_text()
+    args = args_of(dry_run(tmp_path, GYRO="measured"))
+    assert contains(args, ["--odometry-heading", "gyro"]) and contains(args, ["--gyro-model", GYRO_MODEL])
+    assert contains(args, ["--obstacle-layer", GYRO_LAYER])
+    assert " GYRO=measured" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert (ROOT / GYRO_MODEL).is_file() and (ROOT / GYRO_LAYER).is_file()
+
+
+@pytest.mark.parametrize("env", [{"GYRO": "maybe"}, {"GYRO": "measured", "MODE": "truth"},
+                                 {"GYRO": "measured", "ENCODER_MODEL": "reported"}, {"GYRO": "measured", "NOISE": "a2"}])
+def test_the_gyro_heading_is_refused_where_it_is_not_defined(tmp_path, env):
+    # The runner's gyro heading needs the perception run and the team-spec encoders; the a2 noise has no gyro table.
+    assert dry_run(tmp_path, **env).returncode != 0
+
+
 @pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
@@ -173,7 +197,7 @@ def test_bad_choices_are_refused(tmp_path, env):
 
 
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
-                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}])
+                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -203,6 +227,11 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     encoder = env.get("ENCODER_MODEL", "team_spec_quantized")
     age = "" if encoder == "reported" else "_team_spec"
     layer = f"config/obstacle_layer_single{'_a2' if env.get('NOISE') == 'a2' else ''}{age}.yaml"
+    if env.get("GYRO") == "measured":
+        layer = GYRO_LAYER
+        assert parsed.odometry_heading == "gyro" and str(parsed.gyro_model).endswith(GYRO_MODEL)
+    else:
+        assert parsed.odometry_heading == "steering" and parsed.gyro_model is None
     assert str(parsed.obstacle_layer).endswith(layer) and parsed.encoder_model == encoder
     if env.get("MODE") == "truth":
         assert not parsed.use_perception and not parsed.d7_docking and parsed.recognition == "off"

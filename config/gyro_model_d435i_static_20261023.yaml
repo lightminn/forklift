@@ -1,0 +1,30 @@
+# The D435i gyro fitted to the team unit's static desk record (2026-10-23, serial 261822074539, firmware 5.15.1.55,
+# 2.2 h, gyro 400 Hz, motion correction off, no factory IMU calibration; ws1 /home/projects/forklift/data/d435i_imu_static/2026-10-23/d435i_imu_static_20261023/run1) by tools/fit_gyro_static.py.
+# A static desk measurement: no driving vibration, mast lift or temperature reading, so it does not complete the gyro
+# plan's G4 list (docs/design/2026-10-22-d435i-imu-desk-review.md 5). For T2's exploratory C1 comparison only
+# (docs/plans/2026-10-27-insertion-lateral-drift.md) -- not an adoption of gyro heading.
+format: gyro_model/1
+# scale: not measured (a static record has no rotation); kept from gyro_model_spec_typical
+scale: 0.01
+# initial_bias_dps: measured: the largest |settled mean| over the axes (/home/projects/forklift/data/d435i_imu_static/2026-10-23/d435i_imu_static_20261023/run1); each run draws U(-x, x)
+initial_bias_dps: 0.2473
+# temperature_dps: measured: |A| of the warm-up fit b(t) = settled + A exp(-t/tau) on the minute means, the axis with the steepest cold-start slope |A|/tau (y); the record has no temperature, so the warm-up stands in for it
+temperature_dps: 0.0318
+# temperature_s: measured: tau of that fit (axis y). The model's ramp temperature_dps x t / temperature_s starts at 0 and grows without bound at |A|/tau, the measured cold start's steepest slope: over a mission of minutes it bounds the measured change, past tau it overstates it; the shape (a ramp, not a settling step) is the model's, not the record's
+temperature_s: 451.4
+# random_walk_dps_rts: measured conservative bound: max over tau >= the Allan minimum of sigma sqrt(3/tau), the worst axis (z), settled part; it also stands in for the bias instability (no flicker field)
+random_walk_dps_rts: 0.000177
+# noise_dps_rthz: measured: sigma(tau) sqrt(tau) on tau 0.5-5 s, the worst axis (y), settled part
+noise_dps_rthz: 0.01177
+# lsb_dps: measured: the smallest step between sample values (motion_xyz32f output)
+lsb_dps: 0.1
+# range_dps: datasheet (D400 series 337029-017 4.11), not measured
+range_dps: 1000.0
+# mount_error_deg: assumption kept from gyro_model_spec_typical (no mount measurement)
+mount_error_deg: 1.0
+# zupt_s: algorithm setting kept from gyro_model_spec_typical
+zupt_s: 0.5
+# zupt_k: algorithm setting kept from gyro_model_spec_typical
+zupt_k: 4.0
+# gap_s: algorithm setting kept from gyro_model_spec_typical
+gap_s: 0.05
