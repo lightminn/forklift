@@ -391,9 +391,14 @@
 - Riibotics 장면 런처(`riib_scene.sbatch`)에는 위치 추정 경로가 없다. 그래서 `slam: mapping (...)` 을 출력하고 `riib_defaults.txt` 의 `SLAM=` 줄에 남긴다. 그 장면에 묶음을 쓰려면 조사·수락과 런처 경로가 따로 필요하다.
 
 **후속: 판정기의 로그 유실 조항(다음 판정용, 이번 결과는 바꾸지 않음).** `tools/slam_live_compare.py` 의 `mission_ends` 다.
-- live 로그 끝 요약이 줄 유실을 세면, 그 로그는 판정이 쓰는 `mission_end` 줄이 미션 폴더와 정확히 같을 때만 읽는다. 같다는 것은 고유 mission id 집합이 같고, id 마다 `missions/<id>/result.json` 의 outcome·ended_s·delivery_error_m 이 같다는 뜻이다.
-- 그러면 장면 결과의 `log_notes` 에 "lost N line(s); its K mission_end lines match the mission folders" 를 남긴다.
-- 하나라도 다르거나, 같은 id 가 두 번 있거나, 한쪽에만 있으면 거부한다(자료 불완전).
+- 리더가 줄 유실 "만"으로 거부한 로그(`LiveLogLostLines`, 다른 검사는 모두 통과한 뒤)만 다룬다. 끝 요약이 없거나 회전 파일이 빠진 로그는 그대로 거부한다.
+- 그 로그는 판정이 쓰는 `mission_end` 줄이 미션 폴더와 같고 폴더가 온전할 때만 읽는다. 조건은 넷이다.
+  - 끝 요약의 `dropped_mission_files`·`record_errors_older` 가 0 이다.
+  - 미션이 seq 1..N 으로 m1..mN 빈틈없이 이어진다.
+  - 고유 id 집합이 양쪽에서 같다.
+  - id 마다 `missions/<id>/result.json` 의 result 모든 필드(outcome·reason·ended_s 등)와 delivery_error_m 이 그 `mission_end` 줄과 같다.
+- 그러면 장면 결과의 `log_notes` 에 "lost N line(s); its K mission_end lines match the mission folders" 를 남긴다. 하나라도 어긋나면 거부한다(자료 불완전).
+- Codex 2 회에서 나온 반례 셋을 모두 시험으로 막았다: 양쪽 공동 누락, reason 불일치, 경로 문자열로 다른 거부를 우회하는 경우.
 - 2 차 확인의 판정은 고정본(00f63d6a)으로 낸 그대로다. 이 조항을 그 자료에 소급하지 않는다.
 
 **전환 뒤 감시(첫 배치들).** `D7_HOLD=on`(런처 기본)과 A 를 함께 쓴 확인은 아직 없다. A 로 도는 첫 배치들에서 다음을 실행마다 모아, mapping 기준(2 차 확인 R, 같은 장면)과 나란히 총괄에 보고한다.

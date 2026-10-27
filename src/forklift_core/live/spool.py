@@ -316,6 +316,15 @@ def read_live_log(run, *, allow_incomplete: bool = False) -> list[dict]:
             raise ValueError(f"{run}: the live log has no end summary (the session did not close its writer)")
         return entries  # a log from before the writer
     if end.get("dropped_lines") or end.get("line_errors"):
-        raise ValueError(f"{run}: the live log lost lines ({end['dropped_lines']} dropped, {end['line_errors']} "
-                         "failed)")
+        raise LiveLogLostLines(f"{run}: the live log lost lines ({end['dropped_lines']} dropped, {end['line_errors']} "
+                               "failed)", end=end, entries=entries)
     return entries
+
+
+class LiveLogLostLines(ValueError):
+    """``read_live_log``'s refusal for lost lines alone -- raised after every other check passed -- with the end
+    summary and the entries that are there, for a reader that can tell what it needs from what was lost."""
+
+    def __init__(self, message: str, *, end: dict, entries: list):
+        super().__init__(message)
+        self.end, self.entries = end, entries

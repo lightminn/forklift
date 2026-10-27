@@ -586,38 +586,42 @@ def _ends(entries) -> list:
 
 
 def mission_ends(run: Path) -> tuple:
-    """The live log's mission ends and the notes on how they were read. A log whose end summary counts lost lines
-    (written for the next verdict after the second confirmation, plan 5d) is read only when its mission_end lines --
-    the one thing the verdict takes from it -- are exactly the mission folders': the same unique mission ids, and for
-    each the outcome, ended_s and delivery_error_m of missions/<id>/result.json. Anything else is refused."""
+    """The live log's mission ends and the notes on how they were read. A log refused for lost lines alone (written
+    for the next verdict after the second confirmation, plan 5d) is read only when its mission_end lines -- the one
+    thing the verdict takes from it -- are exactly the mission folders' and those are whole: no mission file and no
+    record write lost (the end summary's dropped_mission_files and record_errors_older are 0), the missions numbered
+    m1..mN by their seq 1..N without a gap, the same unique ids on both sides, and for each every field of
+    missions/<id>/result.json's result plus delivery_error_m equal to its mission_end line. Anything else is refused."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    from forklift_core.live.spool import read_live_log  # noqa: PLC0415
+    from forklift_core.live.spool import LiveLogLostLines, read_live_log  # noqa: PLC0415
 
     try:
         return _ends(read_live_log(run)), []
-    except ValueError as exc:
-        if "lost lines" not in str(exc):
-            raise
-        refused = exc
-    entries = read_live_log(run, allow_incomplete=True)
-    end = next((e["log_end"] for e in reversed(entries) if "log_end" in e), {})
-    ends = _ends(entries)
+    except LiveLogLostLines as exc:  # every other refusal of the reader stands
+        refused, end, ends = exc, exc.end, _ends(exc.entries)
     ids = [m.get("mission_id") for m in ends]
     folders = {}
     for path in sorted((run / "missions").glob("*/result.json")):
         saved = json.loads(path.read_text())
         folders[path.parent.name] = {**(saved.get("result") or {}), "delivery_error_m": saved.get("delivery_error_m")}
     problems = []
+    if end.get("dropped_mission_files") or end.get("record_errors_older"):
+        problems.append(f"mission records lost too ({end.get('dropped_mission_files')} files, "
+                        f"{end.get('record_errors_older')} record errors)")
     if len(set(ids)) != len(ids):
         problems.append("a mission_end line twice")
     if set(ids) != set(folders):
         problems.append(f"mission ids {sorted(set(ids) ^ set(folders))} on one side only")
+    seqs = sorted(m.get("seq") for m in ends if isinstance(m.get("seq"), int))
+    if seqs != list(range(1, len(ends) + 1)) or any(m.get("mission_id") != f"m{m.get('seq')}" for m in ends):
+        problems.append("the missions are not m1..mN by seq without a gap")
     for m in ends:
         f = folders.get(m.get("mission_id"))
-        if f is not None and any(m.get(k) != f.get(k) for k in ("outcome", "ended_s", "delivery_error_m")):
+        if f is not None and any(m.get(k) != v for k, v in f.items()):
             problems.append(f"{m.get('mission_id')}: its end differs from its folder")
     if problems:
-        raise ValueError(f"{refused}; its mission ends do not match the mission folders: {'; '.join(problems[:5])}")
+        raise ValueError(f"{refused}; its mission ends are not the whole, matching mission folders: "
+                         f"{'; '.join(problems[:5])}")
     return ends, [f"live log lost {end.get('dropped_lines')} line(s) ({end.get('line_errors')} failed); its "
                   f"{len(ends)} mission_end lines match the mission folders"]
 

@@ -316,22 +316,30 @@ def test_overall_needs_a_comparable_pair_in_every_scene():
     assert math.isclose(cmp.DRIFT_HALF_HOURS, 15)
 
 
-def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None):
-    """A run folder: an ordered live log whose end summary counts ``dropped`` lost lines, its mission_end lines
-    (``log_missions``) and the mission folders' result.json (``folders``), both [(id, outcome, ended_s, error)]."""
+def _end(m, o, t, e, reason=None):
+    return {"seq": int(m[1:]), "mission_id": m, "outcome": o, "reason": reason, "ended_s": t, "pallet_id": "P-1"}, e
+
+
+def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None, end=None, sub="run"):
+    """A run folder: an ordered live log whose end summary counts ``dropped`` lost lines (and ``end``'s other
+    counters), its mission_end lines (``log_missions``) and the mission folders' result.json (``folders``), both
+    [(id, outcome, ended_s, error[, reason])]."""
     log_missions = log_missions if log_missions is not None else [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None)]
     folders = folders if folders is not None else log_missions
-    run = tmp_path / "run"
+    run = tmp_path / sub
     lines = [{"log_writer": "ordered"}]
-    lines += [{"mission_end": {"mission_id": m, "outcome": o, "ended_s": t}, "delivery_error_m": e, "mono": t}
-              for m, o, t, e in log_missions]
-    lines.append({"log_end": {"dropped_lines": dropped, "line_errors": 0}})
-    run.mkdir()
+    for row in log_missions:
+        result, e = _end(*row)
+        lines.append({"mission_end": result, "delivery_error_m": e, "mono": result["ended_s"]})
+    if end is not False:
+        lines.append({"log_end": {"dropped_lines": dropped, "line_errors": 0, "dropped_mission_files": 0,
+                                  "record_errors_older": 0, **(end or {})}})
+    run.mkdir(parents=True)
     (run / "live_log.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
-    for m, o, t, e in folders:
-        (run / "missions" / m).mkdir(parents=True)
-        (run / "missions" / m / "result.json").write_text(json.dumps(
-            {"result": {"mission_id": m, "outcome": o, "ended_s": t}, "delivery_error_m": e}))
+    for row in folders:
+        result, e = _end(*row)
+        (run / "missions" / row[0]).mkdir(parents=True)
+        (run / "missions" / row[0] / "result.json").write_text(json.dumps({"result": result, "delivery_error_m": e}))
     return run
 
 
@@ -352,10 +360,30 @@ def test_a_clean_log_has_no_note(tmp_path):
     [("m1", "done", 100.0, 0.02), ("m2", "done", 200.0, None)],  # outcome differs
     [("m1", "done", 100.5, 0.02), ("m2", "failed", 200.0, None)],  # ended_s differs
     [("m1", "done", 100.0, 0.03), ("m2", "failed", 200.0, None)],  # delivery error differs
+    [("m1", "done", 100.0, 0.02), ("m2", "failed", 200.0, None, "Delivered pallet is not grounded")],  # reason (Codex)
 ])
 def test_a_log_that_lost_lines_and_does_not_match_its_folders_is_refused(tmp_path, folders):
     with pytest.raises(ValueError, match="lost lines"):
         cmp.mission_ends(_log_run(tmp_path, folders=folders))
+
+
+def test_a_mission_lost_from_both_sides_is_refused(tmp_path):
+    # Codex P2: the writer can refuse a mission file and its end line together -- the counter says so, and the
+    # numbering shows a gap even where it does not
+    both = [("m1", "done", 100.0, 0.02), ("m3", "done", 300.0, 0.02)]
+    with pytest.raises(ValueError, match="mission records lost"):
+        cmp.mission_ends(_log_run(tmp_path, log_missions=both, end={"dropped_mission_files": 1}))
+    with pytest.raises(ValueError, match="m1..mN"):
+        cmp.mission_ends(_log_run(tmp_path, log_missions=both, sub="gap"))
+    with pytest.raises(ValueError, match="mission records lost"):
+        cmp.mission_ends(_log_run(tmp_path, end={"record_errors_older": 1}, sub="older"))
+
+
+def test_only_the_lost_lines_refusal_is_read_past(tmp_path):
+    # Codex P2: a path that happens to say "lost lines" does not let a log without its end summary through
+    run = _log_run(tmp_path, end=False, sub="lost lines/run")
+    with pytest.raises(ValueError, match="no end summary"):
+        cmp.mission_ends(run)
 
 
 def test_a_duplicated_mission_end_is_refused(tmp_path):
