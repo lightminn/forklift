@@ -11,10 +11,10 @@ scoring at least ``keep_ratio`` of the best, so the competitors are exact, not t
 
 The leaves are reduced by non-maximum suppression with the wrong-confirmation tolerance (``suppress``: a leaf is
 dropped only when it lies within both ``sep_m`` and ``sep_rad`` of a better kept one), refined each by point-to-line
-ICP against the occupied cells (``refine``: every kept candidate the same way, scores compared at the same stage, the
-separation checked again after the moves), and judged by ``decide``: the top's endpoint fraction at least ``e_min``,
-the best competitor's score ratio at most ``r_max``, and no evenly spaced row of competitors (``periodic``: shelf
-bays). An observation with too few endpoints is ``uninformative`` and a search whose frontier outgrows ``max_nodes``
+ICP against the occupied cells (``refine``: every kept candidate the same way; it places the pose, while the
+competitor ratio stays the exact lattice one), and judged by ``decide``: the top not moved by its refinement beyond the
+tolerance, its endpoint fraction at least ``e_min``, the best competitor's lattice score ratio at most ``r_max``, and
+no evenly spaced row of competitors (``periodic``: shelf bays). An observation with too few endpoints is ``uninformative`` and a search whose frontier outgrows ``max_nodes``
 is ``overflow``; neither is ever confirmed, and no NaN reaches a comparison.
 
 Poses are the laser's in the map frame; the caller converts to and from the base. numpy and scipy only.
@@ -53,6 +53,17 @@ class Candidate:
     score: float  # mean likelihood over the endpoints
     endpoint_fraction: float
     refined: bool = False
+    lattice_pose: tuple | None = None  # where the exact lattice search put it (None: the pose is the lattice pose)
+    lattice_score: float | None = None
+
+    @property
+    def search_score(self) -> float:
+        """The exact lattice score: what the competitor ratio and the periodic check compare."""
+        return self.score if self.lattice_score is None else self.lattice_score
+
+    @property
+    def search_pose(self) -> tuple:
+        return self.pose if self.lattice_pose is None else self.lattice_pose
 
 
 @dataclass(frozen=True)
@@ -64,7 +75,7 @@ class GlobalMatch:
 @dataclass(frozen=True)
 class Decision:
     confirmed: bool
-    reason: str  # confirmed | uninformative | overflow | low_fit | competitor | periodic
+    reason: str  # confirmed | uninformative | overflow | refine_moved | low_fit | competitor | periodic
     ratio: float | None = None  # best competitor's score / the top's
 
 
@@ -279,8 +290,10 @@ def _with_fraction(grid: Grid, pts: np.ndarray, cand: Candidate, cfg: MatchConfi
 
 def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig | None = None) -> GlobalMatch:
     """Point-to-line ICP of every kept candidate against the occupied cells near it, each rescored on the same field
-    at its refined pose (an unaccepted ICP keeps the lattice pose, unrefined), then suppressed again: candidates that
-    converged together are no longer competitors."""
+    at its refined pose (an unaccepted ICP keeps the lattice pose, unrefined). The order and the lattice scores stay:
+    the competitor ratio is read from the exact lattice search, whose kept set is complete down to ``keep_ratio``;
+    refinement only places the pose (Codex B4a re-review P2: an ICP from a weak lattice pose can climb, and
+    candidates can converge together, so refined scores would not be a complete competitor set)."""
     cfg = cfg or MatchConfig()
     if match.status != "ok":
         return match
@@ -293,20 +306,20 @@ def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig 
         res = match_scans(near, pts, cand.pose, max_correspondence_m=cfg.sep_m)
         pose = tuple(float(v) for v in res.pose) if res.accepted else cand.pose
         out.append(_with_fraction(grid, pts, Candidate(pose, _field_score(grid, field, pts, pose), math.nan,
-                                                       res.accepted), cfg))
-    return GlobalMatch("ok", tuple(suppress(out, sep_m=cfg.sep_m, sep_rad=cfg.sep_rad)))
+                                                       res.accepted, cand.search_pose, cand.search_score), cfg))
+    return GlobalMatch("ok", tuple(out))
 
 
 def periodic(candidates, *, ratio_min: float, line_tol_m: float = 0.15, spacing_tol_m: float = 0.15) -> bool:
     """Whether the top and at least two competitors scoring >= ``ratio_min`` of it lie on one line at even spacing
     (multiples of one period within ``spacing_tol_m``): a repeated structure such as shelf bays."""
-    if len(candidates) < 3 or candidates[0].score <= 0:
+    if len(candidates) < 3 or candidates[0].search_score <= 0:
         return False
     top = candidates[0]
-    strong = [c for c in candidates[1:] if c.score / top.score >= ratio_min]
+    strong = [c for c in candidates[1:] if c.search_score / top.search_score >= ratio_min]
     if len(strong) < 2:
         return False
-    vec = np.array([[c.pose[0] - top.pose[0], c.pose[1] - top.pose[1]] for c in strong])
+    vec = np.array([[c.search_pose[0] - top.search_pose[0], c.search_pose[1] - top.search_pose[1]] for c in strong])
     for a in range(len(vec)):
         u = vec[a] / (np.linalg.norm(vec[a]) or 1.0)
         along = vec @ u
@@ -321,13 +334,20 @@ def periodic(candidates, *, ratio_min: float, line_tol_m: float = 0.15, spacing_
     return False
 
 
-def decide(match: GlobalMatch, *, e_min: float, r_max: float, r_struct: float | None = None) -> Decision:
-    """Plan B2's confirmation: the top's endpoint fraction >= ``e_min``, the best competitor's score ratio <=
-    ``r_max``, and (with ``r_struct``) no evenly spaced row of competitors scoring >= ``r_struct`` of the top."""
+def decide(match: GlobalMatch, *, e_min: float, r_max: float, r_struct: float | None = None,
+           sep_m: float = 0.3, sep_rad: float = 0.1) -> Decision:
+    """Plan B2's confirmation: the top's endpoint fraction (at its refined pose) >= ``e_min``, the best competitor's
+    lattice score ratio <= ``r_max``, (with ``r_struct``) no evenly spaced row of competitors scoring >= ``r_struct``
+    of the top, and the refinement not having moved the top beyond the wrong-confirmation tolerance from its lattice
+    pose (a top that walked away is not the candidate the search scored)."""
     if match.status != "ok" or not match.candidates:
         return Decision(False, match.status if match.status != "ok" else "uninformative")
     top = match.candidates[0]
-    ratio = (match.candidates[1].score / top.score) if len(match.candidates) > 1 and top.score > 0 else 0.0
+    ratio = (match.candidates[1].search_score / top.search_score
+             if len(match.candidates) > 1 and top.search_score > 0 else 0.0)
+    lp = top.search_pose
+    if math.hypot(top.pose[0] - lp[0], top.pose[1] - lp[1]) >= sep_m or _yaw_gap(top.pose[2], lp[2]) >= sep_rad:
+        return Decision(False, "refine_moved", ratio)
     if not (top.endpoint_fraction >= e_min):  # NaN fails
         return Decision(False, "low_fit", ratio)
     if not (ratio <= r_max):

@@ -118,10 +118,13 @@ def wall_band_cells(grid: Grid, band=WALL_BAND_M) -> np.ndarray:
 
 
 def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), sep_m: float = SEP_M,
-                  pattern=("A", "A", "B", "C"), max_attempts: int = 200_000, fill: bool = False) -> list:
+                  pattern=("A", "A", "B", "C"), max_attempts: int = 200_000, fill: bool = False,
+                  exhaust_after: int = 20_000) -> list:
     """``count`` independent start poses, the strata in ``pattern`` order (A A B C A A B C ...), independent of
-    ``taken`` too. When the attempts run out: raises, or with ``fill`` returns what the map held (a validation map is
-    drawn until full, plan B4a)."""
+    ``taken`` too. When the attempts run out: raises. With ``fill`` (a validation map drawn until full, plan B4a) a
+    stratum that fails ``exhaust_after`` draws in a row is exhausted and leaves the pattern, the others go on, and the
+    map is full when every stratum is exhausted (Codex B4a re-review P3: a blocked stratum must not end the draw while
+    another still has room); ``max_attempts`` still bounds the whole draw."""
     rng = np.random.default_rng(seed)
     free_rc = np.argwhere(grid.data == 0)
     ridge_rc = np.argwhere(ridge_cells(grid))
@@ -130,11 +133,19 @@ def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), s
     out: list = []
     seen = list(taken)
     attempts = 0
+    live = list(pattern)
+    turn = 0  # position in the live pattern
+    misses = {k: 0 for k in pattern}
     while len(out) < count:
-        stratum = pattern[len(out) % len(pattern)]
+        if not live:
+            return out  # fill: every stratum exhausted
+        stratum = live[turn % len(live)]
         cells = pool[stratum]
         if not len(cells):
-            raise ValueError(f"stratum {stratum} is empty")
+            if not fill:
+                raise ValueError(f"stratum {stratum} is empty")
+            live = [k for k in live if k != stratum]
+            continue
         attempts += 1
         if attempts > max_attempts:
             if fill:
@@ -143,9 +154,14 @@ def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), s
         r, c = cells[rng.integers(len(cells))]
         base = (ox + (c + rng.random()) * res, oy + (r + rng.random()) * res, float(rng.uniform(0.0, 2 * math.pi)))
         if not independent(base, seen, sep_m) or not footprint_free(grid, base, keep_out):
+            misses[stratum] += 1
+            if fill and misses[stratum] >= exhaust_after:
+                live = [k for k in live if k != stratum]
             continue
+        misses[stratum] = 0
         out.append(StartPose(len(out), stratum, base))
         seen.append(base)
+        turn += 1
     return out
 
 

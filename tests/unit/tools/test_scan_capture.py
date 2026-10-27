@@ -75,3 +75,12 @@ def test_poses_the_truck_did_not_settle_on_are_invalid_not_replaced():
     assert C.capture(_engine(FakeEngine(tilt=0.02)), POSES)["reason"].tolist() == ["tilt"]
     assert C.capture(_engine(FakeEngine(creep=0.001)), POSES)["reason"].tolist() == ["moved"]
     assert C.capture(_engine(FakeEngine(z=0.04)), POSES)["reason"].tolist() == ["height"]
+
+
+def test_the_world_building_sources_must_match_the_surveys():
+    survey = {name: "h" for name in C.WORLD_SOURCES}
+    assert C.world_source_mismatches(survey, dict(survey)) == []
+    changed = {**survey, "forklift_core/planning/factory_layout.py": "x"}
+    assert C.world_source_mismatches(survey, changed) == ["forklift_core/planning/factory_layout.py differs from the survey's"]
+    missing = {k: v for k, v in survey.items() if k != "sim/isaac/scene.py"}
+    assert C.world_source_mismatches(missing, survey) == ["sim/isaac/scene.py differs from the survey's"]

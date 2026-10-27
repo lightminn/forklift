@@ -138,3 +138,15 @@ def test_stationary_scans_stack_in_the_first_laser_frame():
     stacked = G.stack_scans([((0.0, 0.0, 0.0), r, a0, inc), ((0.0, 0.0, 0.0), r, a0, inc)], range_min_m=0.2,
                             range_max_m=12.0)
     assert len(stacked) == len(one)  # identical scans fall in the same 5 cm voxels
+
+
+def test_the_competitor_ratio_is_the_lattice_one_and_a_wandering_top_is_refused():
+    # Codex B4a re-review P2: refinement places the pose; it neither re-ranks nor hides competitors
+    top = G.Candidate((1.0, 1.0, 0.0), 0.99, 0.95, True, (1.02, 1.0, 0.0), 0.80)
+    rival = G.Candidate((4.0, 1.0, 0.0), 0.40, 0.90, True, (4.0, 1.0, 0.0), 0.76)
+    d = G.decide(G.GlobalMatch("ok", (top, rival)), e_min=0.8, r_max=0.96)
+    assert d.confirmed and d.ratio == pytest.approx(0.76 / 0.80)  # 0.95 on the lattice, though 0.40 / 0.99 refined
+    assert not G.decide(G.GlobalMatch("ok", (top, rival)), e_min=0.8, r_max=0.94).confirmed
+    walked = G.Candidate((1.4, 1.0, 0.0), 0.99, 0.95, True, (1.0, 1.0, 0.0), 0.80)
+    d = G.decide(G.GlobalMatch("ok", (walked,)), e_min=0.8, r_max=0.9)
+    assert not d.confirmed and d.reason == "refine_moved"

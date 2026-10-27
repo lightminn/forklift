@@ -26,6 +26,19 @@ HEIGHT_TOL_M, TILT_TOL_RAD = 0.01, 0.01
 STILL_M, STILL_RAD = 0.002, 0.002  # between the first and the last scan
 
 
+# the sources that build the static world the LiDAR plane meets (the hall layout, the scene file, the base scene and the
+# ray cast): a capture compares them with the survey's (Codex B4a re-review P2); run_transport.py itself differs by the
+# capture hook and is reviewed by its diff
+WORLD_SOURCES = ("forklift_core/planning/factory_layout.py", "sim/isaac/scene_file.py", "sim/isaac/scene.py",
+                 "sim/isaac/build_base_scene.py", "sim/isaac/planar_lidar.py", "forklift_core/sensors/lidar.py")
+
+
+def world_source_mismatches(survey_sources: dict, run_sources: dict) -> list:
+    """The world-building sources whose hash differs from the survey's (one missing on either side differs too)."""
+    return [f"{name} differs from the survey's" for name in WORLD_SOURCES
+            if (survey_sources or {}).get(name) is None or survey_sources.get(name) != (run_sources or {}).get(name)]
+
+
 def shared_sent_ranges(ranges, noise, range_min_m: float, range_max_m: float) -> np.ndarray:
     """The ranges the live runner sends SLAM from the shared LiDAR: the noise on the finite REP-117 ranges only, then
     clipped to the sensor's limits (run_transport's shared_scan branch, which calls this)."""
@@ -140,5 +153,5 @@ def capture(engine: Engine, poses: dict) -> dict:
     return arrays
 
 
-__all__ = ["FORMAT", "SCANS", "Engine", "capture", "load_poses", "noise_rng", "quat_from_yaw", "shared_sent_ranges",
-           "yaw_roll_pitch"]
+__all__ = ["FORMAT", "SCANS", "WORLD_SOURCES", "Engine", "capture", "load_poses", "noise_rng", "quat_from_yaw",
+           "shared_sent_ranges", "world_source_mismatches", "yaw_roll_pitch"]

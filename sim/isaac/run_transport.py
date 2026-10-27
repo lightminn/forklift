@@ -2599,6 +2599,8 @@ def run_scan_capture(args, state: dict, world, robot, layer, settle_base) -> Non
                               if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
                               else None)
                       for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)})
+    mismatches += scan_capture.world_source_mismatches(bundle.manifest.get("run", {}).get("source_sha256"),
+                                                       state.get("source_sha256"))
     if mismatches:
         raise SystemExit("scan capture: " + "; ".join(mismatches))
     lidar_config = yaml.safe_load(args.lidar.read_text())

@@ -162,3 +162,15 @@ def test_another_scene_or_scene_argument_does_not_match_the_survey(tmp_path):
     assert sm.run_mismatches(manifest, **noise) == ["argument slam_noise_seed differs from the survey's"]  # Codex r2
     assert "obstacle_layer differs from the survey's" in sm.run_mismatches(
         manifest, **{**ok, "input_sha256": {**same, "obstacle_layer": "x"}})
+
+
+def test_a_factory_run_with_another_minimum_prop_height_does_not_match():
+    # Codex B-P1 pre-registration re-review P2: the factory layout drops props below min_obstacle_height_m
+    manifest = {"seed": 0, "inputs": {n: {"sha256": "h_" + n} for n in sm.SHARED_INPUTS},
+                "run": {"arguments": {"layout": "factory", "prism_colliders": True, "min_obstacle_height_m": 1.15,
+                                      "slam_noise_seed": 0, "slam_noise_spec": None}}}
+    same = {n: "h_" + n for n in sm.SHARED_INPUTS}
+    args = dict(manifest["run"]["arguments"])
+    assert sm.run_mismatches(manifest, seed=0, input_sha256=same, arguments=args) == []
+    assert sm.run_mismatches(manifest, seed=0, input_sha256=same, arguments={**args, "min_obstacle_height_m": 1.3}) == [
+        "argument min_obstacle_height_m differs from the survey's"]

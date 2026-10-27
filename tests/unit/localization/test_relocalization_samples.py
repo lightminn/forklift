@@ -101,3 +101,14 @@ def test_a_validation_map_is_drawn_until_full():
     assert 0 < len(full) < 10_000
     everything = [p.base for p in full]
     assert all(S.independent(a, everything[:i] + everything[i + 1:]) for i, a in enumerate(everything))
+
+
+def test_a_blocked_stratum_does_not_end_the_fill_while_another_has_room():
+    # Codex B4a re-review P3: B (the crest) blocked by earlier starts must not stop A and C
+    g = _grid()
+    ridge = S.ridge_cells(g)
+    crest = [(g.origin[0] + (c + 0.5) * RES, g.origin[1] + (r + 0.5) * RES, 0.0) for r, c in np.argwhere(ridge)[::7]]
+    out = S.sample_starts(g, count=10_000, seed=4, taken=crest, sep_m=1.0, fill=True, exhaust_after=500,
+                          max_attempts=200_000)
+    strata = {k: sum(p.stratum == k for p in out) for k in "ABC"}
+    assert strata["A"] > 2 and strata["C"] > 0
