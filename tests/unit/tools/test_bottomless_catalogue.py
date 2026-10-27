@@ -33,12 +33,31 @@ def test_n2_is_mostly_hard_lookalikes_in_each_split(bottomless):
         assert sum(k in ns.HARD for k in kinds) / len(kinds) >= 2 / 3, split
 
 
-def test_s8_has_enough_eval_scenes_per_shape(bottomless):
+def test_s8_has_enough_eval_scenes_per_shape_for_every_gate(bottomless):
+    # Every S8 gate's own denominator: miss / dangerous / extra count every eval scene, target_error and
+    # deferred_unambiguous only the instructed ones -- each needs min_scenes(0, 0.05) for zero failures to pass.
     need = min_scenes(0, 0.05)
     for shape in ("grounded_epal6", "grounded_t11_06"):
         s8 = [r for r in bottomless if r.case == "S8" and r.shape_key == shape]
-        assert sum(r.split == "eval" for r in s8) >= need, shape
+        ev = [r for r in s8 if r.split == "eval"]
+        assert len(ev) >= need, shape
+        assert sum(r.instruction.kind == "unambiguous" for r in ev) >= need, shape
         assert all(len(r.instances) == 1 and r.instances[0].bottom == "none" for r in s8)
+
+
+def test_a_sequence_render_keeps_the_bottomless_variant(bottomless):
+    from tools import recognition_sequences as rseq
+    from tools.generate_recognition_scenes import load_site
+
+    r = next(x for x in bottomless if x.shape_key == "grounded_epal6")
+    site = load_site()
+    pose = rseq.Pose(0.0, 0.0, 0.0)
+    truths, rendered = rseq.render(r, site, pose)
+    plain = r.__class__(**{**r.__dict__, "instances": tuple(
+        i.__class__(i.spec, i.placement, i.damage, i.layer) for i in r.instances)})
+    _, boards = rseq.render(plain, site, pose)
+    assert (rendered.instance_ids != boards.instance_ids).any()  # the bottom boards are gone in the S8 render
+    assert truths[0].faces and truths[0].eligible
 
 
 def test_s8_t11_shows_both_faces(bottomless):

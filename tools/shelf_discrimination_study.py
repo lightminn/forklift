@@ -6,7 +6,7 @@ bottomless pallet? Three views, each printing JSON lines for tools/hpc_sweep.sh:
     front      the pocket detector at the near capture's settings (``DetectorParams.derived_for``) from the
                carriage_low_measured mount, with the lower band gating and waived, and its gate terms on the front
                plane: supports, lower, the per-opening upper counts and upper / sum(supports) (ADR 0003 B-16), over a
-               grid of distances and yaws, noise-free (1 mm rounding) and with sigma = k d^2 noise
+               grid of distances and yaws, noise-free (1 mm rounding), the team noise table (frame_640) and, as a diagnostic, iid sigma = k d^2
     side       the bottom-deck side evidence (perception.bottom_deck_evidence) on each side face from the side stand
                (tools/bottom_deck_scenes), team noise frame_640: present / absent / unobserved and why
     summarise  per-scene outcome of a dataset evaluated by tools/evaluate_recognition (--diagnostics), keyed by the
@@ -22,7 +22,7 @@ The learned proposer is not run here (CPU rig, no RGB model); the geometric path
 from __future__ import annotations
 
 import argparse
-import dataclasses
+import hashlib
 import json
 import sys
 from collections import Counter
@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from forklift_core.perception import pocket_detector as detector
+from forklift_core.perception.depth_noise import NoiseModel, apply_noise
 from forklift_core.perception.pallet_prior import load_pallet_prior
 from forklift_core.perception.pocket_detector import DetectorParams, detect_pockets
 from tools import negative_structures, scene_rig
@@ -41,7 +42,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CAMERA = scene_rig.Camera((0.619, 0.0, 0.27), 0.10)  # carriage_low_measured
 DISTANCES_M = (2.0, 2.5, 3.0, 3.5)  # camera to pallet centre, horizontal
 YAWS_RAD = (0.0, 0.13, 0.26)
-NOISE_K = 0.006  # sigma = k d^2, near the team table's frame k (0.0055-0.0065, config/depth_noise_d435i_team.yaml)
+TEAM_NOISE = ROOT / "config/depth_noise_d435i_team.yaml"  # level frame_640: the team's single-frame measurement
+NOISE_K = 0.006  # the iid diagnostic: sigma = k d^2, near the team table's frame k (0.0055-0.0065)
 NOISE_SEEDS = (0, 1, 2)
 FRONT_STRUCTURES = ("pallet", "grounded", "shelf", "shelf_closed", "shelf_rail", "shelf_raised", "shelf_legs",
                     "shelf_uprights", "box_stand")
@@ -76,14 +78,24 @@ def cmd_front(a) -> int:
     prior = load_pallet_prior(ROOT / f"config/pallet_prior_{a.shape}.yaml")
     params = DetectorParams.derived_for(prior)
     boxes = boxes_for(a.shape, a.structure)
-    noises = [(0.0, None)] + [(NOISE_K, s) for s in NOISE_SEEDS]
+    noise_sha = hashlib.sha256(TEAM_NOISE.read_bytes()).hexdigest()
     for x in DISTANCES_M:
         for yaw in YAWS_RAD:
-            for k, seed in noises:
-                scene = scene_rig.render(scene_rig.place(boxes, x_m=x + CAMERA.xyz_m[0], yaw_rad=yaw), camera=CAMERA,
-                                         quantize=True, noise_k=k, noise_seed=seed)
-                row = {"shape": a.shape, "structure": a.structure, "x_m": x, "yaw_rad": yaw, "noise_k": k,
-                       "noise_seed": seed, "terms": front_terms(scene, prior, params)}
+            placed = scene_rig.place(boxes, x_m=x + CAMERA.xyz_m[0], yaw_rad=yaw)
+            clean = scene_rig.render(placed, camera=CAMERA, quantize=True)
+            conditions = [("clean", None, clean)]
+            for seed in NOISE_SEEDS:
+                # the team table's single-frame level (spatially correlated terms, dropout, flying pixels) ...
+                model = NoiseModel.from_yaml(TEAM_NOISE, seed=seed, target_fx=clean.intrinsics.fx, level="frame_640")
+                noisy, _ = apply_noise(clean, np.zeros(np.shape(clean.depth_m), dtype=int), model)
+                conditions.append(("team_frame_640", seed, noisy))
+                # ... and, as a diagnostic only, independent sigma = k d^2
+                conditions.append(("iid_k", seed, scene_rig.render(placed, camera=CAMERA, quantize=True,
+                                                                   noise_k=NOISE_K, noise_seed=seed)))
+            for noise, seed, scene in conditions:
+                row = {"shape": a.shape, "structure": a.structure, "x_m": x, "yaw_rad": yaw, "noise": noise,
+                       "noise_seed": seed, "noise_config_sha256": noise_sha if noise == "team_frame_640" else None,
+                       "terms": front_terms(scene, prior, params)}
                 for name, lower in (("gate", True), ("waive", False)):
                     obs = detect_pockets(scene, prior, params, lower_evidence=lower).observation
                     row[name] = {"status": obs.status, "reason": obs.reason}

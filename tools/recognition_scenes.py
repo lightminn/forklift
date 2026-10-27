@@ -29,7 +29,9 @@ PARENT_SHAPE = {"grounded_epal6": "epal6", "grounded_t11_06": "t11_06"}
 BOTTOMLESS_FIRST_SEED = 1_100_000
 BOTTOMLESS_TRAIN_FIRST_SEED = 5_100_000
 N2_SCENES = 153  # eval_count 46: one false positive still clears the 10 % bound (min_scenes(1, 0.10) = 46)
-S8_SCENES = 196  # per shape, eval_count 59 = min_scenes(0, 0.05)
+# per shape: eval_count 80, of which the S1 instruction rule leaves 60 instructed (ranks with rank % 4 != 3) -- the
+# target_error / deferred gates need min_scenes(0, 0.05) = 59 instructed scenes, not 59 scenes
+S8_SCENES = 266
 # rs.catalogue_digest(rs.catalogue()) before the S8 / N2 additions: they must leave it unchanged.
 CATALOGUE_DIGEST_2026_10_27 = "a84dc876644dc1f074ad144f3957735c3a14326e30b7b395cb84d9d51945d43a"
 # "sequence" holds the approach-sequence bands from 2B-3g on (eval_pool ran out at evaluation_g)

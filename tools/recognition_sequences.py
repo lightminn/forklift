@@ -94,7 +94,7 @@ def _loads(recipe, site):
     instr = recipe.instruction
     holder = instr.target if instr.target is not None else 0
     return [instr.load if (k == holder and instr.load is not None)
-            else (site.get(recipe.shape_key) if inst.spec.known else None)
+            else (site.get(rs.parent_shape(recipe.shape_key)) if inst.spec.known else None)
             for k, inst in enumerate(recipe.instances)]
 
 
@@ -104,7 +104,7 @@ def render(recipe, site, pose: Pose, *, tilt_rad: float = 0.0):
     for inst, load in zip(recipe.instances, _loads(recipe, site)):
         x, y = pose.to_base((inst.placement.x_m, inst.placement.y_m))
         placement = Placement(x, y, _wrap(inst.placement.yaw_rad - pose.yaw), inst.placement.support_z_m)
-        instances.append((inst.spec, placement, inst.damage, load))
+        instances.append((inst.spec, placement, inst.damage, load, inst.bottom))
     boxes = []
     for b in (*recipe.distractors, WALL):
         x, y = pose.to_base(b.centre_m[:2])
