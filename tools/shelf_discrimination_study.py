@@ -141,12 +141,15 @@ POSITIVES = ("pallet", "grounded")
 
 def front_table(rows) -> dict:
     """Per (shape, noise, distance, structure) over the ``waive`` mode: valid count, cells, the valid ratio range, and
-    the per-cell margin -- how far the structure's ratio lies outside the span of the positives' ratios in the same
-    cell (distance, yaw, noise seed), negative when inside; cells where a positive or the structure is not valid are
-    not counted. ``gate_valid`` is the same count with the lower band gating."""
-    cells = {}
+    the per-pose margin -- how far each valid ratio of the structure lies outside the span of the positives' valid
+    ratios at the same pose (distance, yaw) over every noise seed, negative when inside. Seeds are pooled because an
+    observation does not know its noise draw (Codex doc review 1: a same-seed pairing showed +0.04 where the seed
+    pool overlapped). Poses with no valid positive are not counted. ``gate_valid`` counts with the lower band gating."""
+    poses = {}
     for r in rows:
-        cells.setdefault((r["shape"], r["noise"], r["x_m"], r["yaw_rad"], r["noise_seed"]), {})[r["structure"]] = r
+        if r["structure"] in POSITIVES and r["waive"]["status"] == "valid":
+            poses.setdefault((r["shape"], r["noise"], r["x_m"], r["yaw_rad"]), []).append(
+                r["waive"]["upper_over_supports"])
     out = {}
     for r in rows:
         key = (r["shape"], r["noise"], r["x_m"], r["structure"])
@@ -160,9 +163,7 @@ def front_table(rows) -> dict:
         o["ratios"].append(v)
         if r["structure"] in POSITIVES:
             continue
-        same = cells[(r["shape"], r["noise"], r["x_m"], r["yaw_rad"], r["noise_seed"])]
-        pos = [same[p]["waive"]["upper_over_supports"] for p in POSITIVES
-               if p in same and same[p]["waive"]["status"] == "valid"]
+        pos = poses.get((r["shape"], r["noise"], r["x_m"], r["yaw_rad"]))
         if pos:
             o["margins"].append(max(min(pos) - v, v - max(pos)))
     return {k: {"cells": o["cells"], "valid": o["valid"], "gate_valid": o["gate_valid"],

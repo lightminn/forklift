@@ -43,17 +43,22 @@ def test_front_terms_are_the_detectors_own_selected_pattern(lower):
         (terms["upper_left"] + terms["upper_right"]) / terms["support_sum"])
 
 
-def test_the_front_table_margin_is_outside_the_positives_span_in_the_same_cell():
-    def row(structure, ratio, seed=0, valid=True):
+def test_the_front_table_margin_pools_every_noise_seed_of_a_pose():
+    # An observation does not know its noise draw: a negative is compared with the positives over every seed at the
+    # same distance and yaw (Codex doc review 1), not only with the positives of its own seed.
+    def row(structure, ratio, seed=0, yaw=0.0, valid=True):
         status = "valid" if valid else "no_pallet"
-        return {"shape": "epal6", "noise": "team_frame_640", "x_m": 1.2, "yaw_rad": 0.0, "noise_seed": seed,
+        return {"shape": "epal6", "noise": "team_frame_640", "x_m": 1.2, "yaw_rad": yaw, "noise_seed": seed,
                 "structure": structure, "gate": {"status": status, "replica_matches": True},
                 "waive": {"status": status, "upper_over_supports": ratio, "replica_matches": True}}
 
-    rows = [row("pallet", 0.8), row("grounded", 0.7), row("shelf", 0.4), row("shelf_rail", 0.75),
-            row("pallet", 0.9, seed=1, valid=False), row("grounded", 0.9, seed=1, valid=False), row("shelf", 0.2, seed=1)]
+    rows = [row("pallet", 0.8), row("grounded", 0.7), row("shelf", 0.4), row("shelf_rail", 0.85),
+            row("pallet", 0.45, seed=1), row("grounded", 0.9, seed=1, valid=False), row("shelf", 0.2, seed=1),
+            row("shelf", 0.1, yaw=0.13), row("pallet", 0.9, yaw=0.13, valid=False)]
     t = st.front_table(rows)
     shelf = t[("epal6", "team_frame_640", 1.2, "shelf")]
-    assert shelf["valid"] == 2 and shelf["ratio"] == [0.2, 0.4]
-    assert shelf["min_margin"] == pytest.approx(0.3) and shelf["margin_cells"] == 1  # seed 1 has no valid positive
-    assert t[("epal6", "team_frame_640", 1.2, "shelf_rail")]["min_margin"] == pytest.approx(-0.05)  # inside the span
+    assert shelf["valid"] == 3 and shelf["ratio"] == [0.1, 0.4]
+    # seed 0's own positives span 0.7-0.8 (+0.3), but seed 1's pallet at 0.45 is the same pose: 0.4 lies 0.05 below it
+    assert shelf["min_margin"] == pytest.approx(0.05) and shelf["margin_cells"] == 2  # yaw 0.13 has no valid positive
+    # 0.85 lies 0.05 above the pose's span 0.45-0.8
+    assert t[("epal6", "team_frame_640", 1.2, "shelf_rail")]["min_margin"] == pytest.approx(0.05)
