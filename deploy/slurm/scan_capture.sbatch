@@ -16,6 +16,7 @@
 set -u
 OUT=$(realpath -m "${1:?the output folder}")
 ROOT=$(pwd)
+export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src  # this checkout's package, not the venv's
 : "${BUNDLE:?the survey bundle}" "${POSES:?the pose list}" "${VENV_PY:?the python}"
 BUNDLE=$(realpath -e "$BUNDLE") || { echo "no bundle folder $BUNDLE"; exit 2; }
 POSES=$(realpath -e "$POSES") || { echo "no pose list $POSES"; exit 2; }
