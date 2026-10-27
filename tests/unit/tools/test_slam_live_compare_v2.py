@@ -334,7 +334,8 @@ def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None, end=None, 
     lines = [{"log_writer": "ordered"}]
     for row in log_missions:
         result, e = _end(*row)
-        lines.append({"mission_end": result, "delivery_error_m": e, "mono": result["ended_s"]})
+        # delivery_error_m only where the delivery was judged, as the runner writes it (Codex round 4)
+        lines.append({"mission_end": result, **({} if e is None else {"delivery_error_m": e}), "mono": result["ended_s"]})
     lines += [{"mission_end_cost": {"mission_id": m, "record_wall_s": 0.0}} for m in costs] + list(extra)
     if end is not False:
         lines.append({"log_end": {"dropped_lines": dropped, "line_errors": 0, "dropped_mission_files": 0,
@@ -344,7 +345,7 @@ def _log_run(tmp_path, *, dropped=1, folders=None, log_missions=None, end=None, 
     raw = folder_json or {}
     for row in folders:
         result, e = _end(*row)
-        raw.setdefault(row[0], {"result": result, "delivery_error_m": e})
+        raw.setdefault(row[0], {"result": result, **({} if e is None else {"delivery_error_m": e})})
     for m, body in raw.items():
         (run / "missions" / m).mkdir(parents=True)
         (run / "missions" / m / "result.json").write_text(json.dumps(body))
@@ -358,6 +359,13 @@ def test_a_log_that_lost_lines_is_read_when_its_mission_ends_match_the_mission_f
     missions, notes = cmp.mission_ends(_log_run(tmp_path))
     assert [m["mission_id"] for m in missions] == ["m1", "m2"] and missions[0]["delivery_error_m"] == 0.02
     assert len(notes) == 1 and "lost 1" in notes[0] and "2 mission_end" in notes[0]
+
+
+def test_an_end_before_the_delivery_verdict_has_no_delivery_error_on_either_side(tmp_path):
+    # Codex round 4 P2: a prepare timeout, a cancel or a session end writes no delivery_error_m at all
+    ends = [("m1", "done", 100.0, 0.02), ("m2", "cancelled", 150.0, None, "operator"), ("m3", "failed", 200.0, None, "prepare:timeout")]
+    missions, notes = cmp.mission_ends(_log_run(tmp_path, log_missions=ends))
+    assert [m["mission_id"] for m in missions] == ["m1", "m2", "m3"] and missions[1]["delivery_error_m"] is None
 
 
 def test_a_clean_log_has_no_note(tmp_path):
@@ -412,11 +420,11 @@ def test_missing_fields_or_counters_are_refused(tmp_path, bad):
     result2, _ = _end(*ends[1])
     kw = {}
     if bad == "empty_result":
-        kw["folder_json"] = {"m2": {"result": {}, "delivery_error_m": None}}
+        kw["folder_json"] = {"m2": {"result": {}}}
     elif bad == "no_reason":
-        kw["folder_json"] = {"m2": {"result": {k: v for k, v in result2.items() if k != "reason"}, "delivery_error_m": None}}
-    elif bad == "no_error_key":
-        kw["folder_json"] = {"m2": {"result": result2}}
+        kw["folder_json"] = {"m2": {"result": {k: v for k, v in result2.items() if k != "reason"}}}
+    elif bad == "no_error_key":  # the folder without the delivery error its end line has
+        kw["folder_json"] = {"m1": {"result": _end(*ends[0])[0]}}
     elif bad == "no_counters":
         kw["end"] = {"dropped_mission_files": None}
     else:

@@ -285,6 +285,8 @@ def test_the_survey_job_runs_the_consoles_runner_word_for_word():
     assert "-e SLAM_SERIALIZE=/out/bundle/map" in bridge
     assert '/run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent' in bridge
     assert "--max-epochs 1" in survey and "--end-session" in survey
+    # the runner's --slam-choice label: a survey says it maps (live-default plan 5d)
+    assert "printf 'SLAM_CHOICE=%q\\n' \"mapping (survey epoch)\"" in survey
 
 
 def test_the_survey_maps_the_scene_file_it_is_given_as_the_console_runs_it():

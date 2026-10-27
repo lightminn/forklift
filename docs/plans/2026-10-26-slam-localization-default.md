@@ -392,11 +392,15 @@
 
 **후속: 판정기의 로그 유실 조항(다음 판정용, 이번 결과는 바꾸지 않음).** `tools/slam_live_compare.py` 의 `mission_ends` 다.
 - 리더가 줄 유실 "만"으로 거부한 로그(`LiveLogLostLines`, 다른 검사는 모두 통과한 뒤)만 다룬다. 끝 요약이 없거나 회전 파일이 빠진 로그는 그대로 거부한다.
-- 그 로그는 판정이 쓰는 `mission_end` 줄이 미션 폴더와 같고 폴더가 온전할 때만 읽는다. 조건은 넷이다.
-  - 끝 요약의 `dropped_mission_files`·`record_errors_older` 가 0 이다.
-  - 미션이 seq 1..N 으로 m1..mN 빈틈없이 이어진다.
-  - 고유 id 집합이 양쪽에서 같다.
-  - id 마다 `missions/<id>/result.json` 의 result 모든 필드(outcome·reason·ended_s 등)와 delivery_error_m 이 그 `mission_end` 줄과 같다.
+- 그 로그는 판정이 쓰는 `mission_end` 줄이 미션 폴더와 같고 폴더가 온전할 때만 읽는다. 조건은 다음과 같다.
+  - 유실 줄(`dropped_lines` + `line_errors`)은 1 이하다. 정상 종료 처리된 미션은 `mission_end`·`mission_end_cost` 두 줄을 늘 남긴다. 그래서 한 줄을 잃어도 그 미션의 id 가 어느 한 줄에는 남는다.
+  - `mission_end_cost`·`archive`·`disposed` 가 이름을 댄 모든 미션에 `mission_end` 줄이 있다.
+  - `archive_error` 줄이 없고, `mission_end` 에 `record_error` 가 없다. 세션 result.json 의 `mission_results`(있으면)도 모두 `mission_end` 에 있고 `record_error` 가 없다.
+  - 끝 요약의 네 계수가 모두 있고, `dropped_mission_files`·`record_errors_older` 가 0 이다.
+  - 미션이 seq 1..N 으로 m1..mN 빈틈없이 이어지고, 고유 id 집합이 양쪽에서 같다.
+  - 폴더 result 에 mission_id·seq·outcome·reason·ended_s 가 있고, 그 모든 필드가 `mission_end` 줄과 같다.
+  - delivery_error_m 은 하역 판정에 이른 미션만 양쪽에 쓰인다. 있음·없음과 값이 같아야 한다.
+- 세션 실패(예: slam_link_failed)로 끝날 때 진행 중이던 미션은 종료 처리 없이 사라진다. 이것은 로그 유실과 별개로, 판정기가 세션의 `failure_reason` 으로 따로 본다.
 - 그러면 장면 결과의 `log_notes` 에 "lost N line(s); its K mission_end lines match the mission folders" 를 남긴다. 하나라도 어긋나면 거부한다(자료 불완전).
 - Codex 2 회에서 나온 반례 셋을 모두 시험으로 막았다: 양쪽 공동 누락, reason 불일치, 경로 문자열로 다른 거부를 우회하는 경우.
 - 2 차 확인의 판정은 고정본(00f63d6a)으로 낸 그대로다. 이 조항을 그 자료에 소급하지 않는다.

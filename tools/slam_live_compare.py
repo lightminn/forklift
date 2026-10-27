@@ -629,8 +629,8 @@ def mission_ends(run: Path) -> tuple:
     for path in sorted((run / "missions").glob("*/result.json")):
         saved = json.loads(path.read_text())
         result = saved.get("result")
-        if not isinstance(result, dict) or not all(k in result for k in required) or "delivery_error_m" not in saved:
-            problems.append(f"{path.parent.name}: its result.json lacks {list(required)} or delivery_error_m")
+        if not isinstance(result, dict) or not all(k in result for k in required):
+            problems.append(f"{path.parent.name}: its result.json lacks one of {list(required)}")
             result = result if isinstance(result, dict) else {}
         folders[path.parent.name] = {**result, "delivery_error_m": saved.get("delivery_error_m")}
     if len(set(ids)) != len(ids):
