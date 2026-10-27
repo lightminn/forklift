@@ -224,7 +224,9 @@ class SceneReplan:
         if rec.get("version_changed"):
             # Codex impl round 6 P2: the grid must follow the correction before the trigger's rectangles are read again
             # (the runner re-projects it after the device's tick); held until it has, the request's limit bounding it
-            if getattr(ports, "grid_current", lambda: True)():
+            # -- and standing (Codex impl round 7 P2): a plan is submitted only from a stop, so a stop lost while it
+            # waits holds here as well (wait_stop would read the trigger's rectangles before the grid follows)
+            if getattr(ports, "grid_current", lambda: True)() and ports.stopped():
                 self._go("plan", t)
                 return None
             return StepResult(owned=True, output="hold")
