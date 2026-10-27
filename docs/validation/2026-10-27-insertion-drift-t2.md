@@ -45,11 +45,35 @@
   - 최대 59.1 mm 는 line_2_m s4 이고, 그 실행은 하역 위치도 벗어났다.
   - 자이로 계획의 V-G2 불합격(가정 모형)과 같은 방향이다. 탐색 비교라 채택 판단과는 무관하다.
 
+## 실패 실행 목록 (v-g2 인계용)
+
+경로는 ws1 `/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/<이름>/` 이다. 각 폴더의 `run/result.json`(`failure_reason`·`phase`·`slam_summary`)과 `run.log`, `run/frames.jsonl`, `bridge/` 가 원자료다. 스냅숏은 `snapshots/t2d_1b60df21`(main 1b60df21)이고, 런처 인자는 `RUNS.jsonl`(riib_scene.sbatch env)에 있다.
+
+| 이름 | 끝난 단계 | 사유 | 삽입 여유 감소 (mm) |
+|---|---|---|---|
+| t2d_b0_aisle_rack_s0 | transport | Tracking timeout in transport | 14.8 |
+| t2d_b0_aisle_rack_s2 | transport | Tracking timeout in transport | 18.8 |
+| t2d_b0_aisle_rack_s3 | transport | Tracking timeout in transport | 24.3 |
+| t2d_c3_aisle_rack_s0 | settle | slam_release_replan_failed: invalid_start | 15.5 |
+| t2d_c3_aisle_rack_s1 | transport | Tracking timeout in transport | 18.0 |
+| t2d_c3_aisle_rack_s2 | transport | Tracking timeout in transport | 12.6 |
+| t2d_c3_aisle_rack_s3 | settle | slam_release_replan_failed: invalid_start | 16.8 |
+| t2d_c3_aisle_rack_s4 | transport | Tracking timeout in transport | 15.1 |
+| t2d_c1_aisle_rack_s3 | transport | Tracking timeout in transport | 27.4 |
+| t2d_c1_aisle_rack_s4 | return_home | Tracking failed in return_home: pos=0.0212,yaw=0.0869 | 27.7 |
+| t2d_c1_line_2_m_s3 | transport | docking_retry_match_refused:start_rejected:degenerate | 21.5 |
+| t2d_c1_line_2_m_s4 | complete(하역 판정 실패) | Pallet missed the green destination center | 59.1 |
+
+aisle_rack 운반 추종 시간 초과는 세 팔 모두에서 났다(B0 3/5). 삽입과 무관한 이 장면의 운반 경로 문제로 보이며, v-g2 에 넘긴다(총괄 결정 2026-10-27).
+
 ## 해석
 
 - 사전 등록 판정으로 **C3 는 채택하지 않는다.** 이 배치의 B0 는 삽입 여유를 크게 잃지 않았다. C3 는 꼬리를 4 mm 줄였지만 기준 10 mm 에 못 미쳤고, 짝 비교도 우세하지 않았으며, 완주가 둘 적었다.
-- 66 mm 사례는 이 조건에서 드문 꼬리로 보인다. 그 빈도를 B0 만으로 재려면 더 큰 표본이 필요하다.
-- 브리프가 요구하는 "삽입 중 포켓 추적"은 여전히 근접 추적(B) 경로로 남는다.
+- 66 mm 사례는 다른 스냅숏(rsbr_b35d7f53)의 드문 꼬리로 보이며, 이 배치에서는 재현되지 않았다. 빈도 측정은 하지 않는다(총괄 결정 2026-10-27).
+- 결정(총괄 2026-10-27):
+  - C3 옵션(`--near-recapture-gap-m`)은 기본 off 로 코드와 시험을 남기고, 런처 기본에 넣지 않는다.
+  - C1(실측 모형 자이로)도 런처 기본에 넣지 않는다.
+  - 브리프가 요구하는 "삽입 중 포켓 추적"은 근접 추적 재측정 (B) 경로로 간다. 첫 조건은 line_1_m 이다.
 
 ## 한계
 
