@@ -49,6 +49,7 @@ export const REASONS = {
   "Perception display clipping range": "인식 카메라 표시 범위가 잘못됐습니다",
   "Perception camera local pose differs": "인식 카메라 장착 자세가 다릅니다",
   "--odometry-wheel-radius-m": "주행기록 바퀴 반지름 설정이 잘못됐습니다",
+  "scene requirements:": "이 장면에 필요한 실행 설정이 빠졌습니다",
   "recognition label target": "장면에 인식 라벨 대상이 없습니다",
   // the delivery verdict (simulation truth): the mission fails, the session goes on
   "Pallet missed the green destination center": "팔레트가 목적지 중심을 벗어났습니다",

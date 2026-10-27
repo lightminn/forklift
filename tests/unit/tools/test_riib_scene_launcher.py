@@ -376,6 +376,20 @@ def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
     assert dry_run(tmp_path, out=out, MODE="truth").returncode == 0  # a truth run opens no socket
 
 
+def test_views_default_to_both_extra_videos_and_none_drops_them(tmp_path):
+    # lead 2026-10-27: a comparison batch that needs no videos says VIEWS=none in its list, for both arms
+    args = args_of(dry_run(tmp_path))
+    assert contains(args, ["--extra-views", "quarter,chase"]) and any(a.startswith("--quarter-eye=") for a in args)
+    assert "VIEWS=" not in (tmp_path / "out" / "riib_defaults.txt").read_text()  # the default reads as before
+    args = args_of(dry_run(tmp_path, VIEWS="none"))
+    assert "--extra-views" not in args and not any(a.startswith("--quarter-") for a in args) and "--video" in args
+    assert "--frame-log" in args  # the bundle watches run/frames.jsonl for progress (Codex)
+    assert "VIEWS=none" in (tmp_path / "out" / "riib_defaults.txt").read_text()
+    args = args_of(dry_run(tmp_path, VIEWS="chase"))
+    assert contains(args, ["--extra-views", "chase"]) and not any(a.startswith("--quarter-") for a in args)
+    assert dry_run(tmp_path, VIEWS="perception").returncode == 2
+
+
 @pytest.mark.parametrize("keepout", ["0", "0.0", "00"])
 def test_trailer_gets_its_exit_prefix_by_default(tmp_path, keepout):
     # scene requirements plan: the batch that left it out went 0/10 (82ffffa8); 0, 0.0 and 00 are all "no keepout"
