@@ -515,6 +515,17 @@ def test_a_prepared_mission_is_adopted_with_its_start_processing():
                                         "mission_id": core.commands.mission_id}
 
 
+@pytest.mark.parametrize("given", [{"adoption_zone": "THIS_MISSIONS"}, {}])
+def test_the_adoption_takes_this_missions_rectangle_or_none(given):
+    """Plan 2026-10-28-adoption-zone-check section 2: fixed at preparation, never the last mission's."""
+    core, ms, state, started, inputs = preparing_core()
+    core.options.adoption_zone = "LAST_MISSIONS"
+    core.prepare_request(11.0, REAR, {**inputs, **given}, {"waypoints": inputs["waypoints"]})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert ms.phase == "observe" and core.options.adoption_zone == given.get("adoption_zone")
+
+
 @pytest.mark.parametrize("answer, reason", [
     ((True, ladder(timed_out=True)), "prepare:timeout"),
     ((True, ladder(statuses=("no_path", "invalid_start"))), "prepare:all_candidates_failed:no_path;invalid_start"),
@@ -838,6 +849,28 @@ def test_a_capture_made_under_the_held_correction_is_carried():
     slam["tracker"].mode = "holding"
     core.end_reset(12.0)
     assert core.targets.pallets["P-1"].pose.x_m == pytest.approx(3.2)
+
+
+@pytest.mark.parametrize("in_hold, snapshot_x", [(True, 3.2), (False, 3.0)])
+def test_a_deferred_release_carries_a_put_down_made_in_its_hold_but_not_an_older_one(in_hold, snapshot_x):
+    """Plan 2026-10-28-adoption-zone-check (Codex implementation rounds 3-4 P2): a manual recovery's ground verdict
+    put the pallet down in this hold -- its snapshot is that hold's estimate and goes with the pose. A put-down from
+    before the hold stays, even when a re-observation in the hold lands on exactly the same coordinates."""
+    core, slam, Pose = held_core("observe")
+    core.targets.carried("P-1")
+    if in_hold:
+        core.hold_slam(5.0, held_frame_pallet=True)
+    core.put_down_target("P-1", Pose(3.0, 0.5, 0.0), state="available")
+    if not in_hold:  # put down before this hold began; a re-observation in the hold lands on the same coordinates
+        core.hold_slam(6.0, held_frame_pallet=True)
+        core.targets.update_pose("P-1", Pose(3.0, 0.5, 0.0), basis="recognised", uncertainty_m=0.05)
+    core.end_release_due = {"pallet_id": "P-1", "destination_id": "D-1", "pallet_held": True,
+                            "destination_held": False}
+    core.end_release(20.0, deferred=True)
+    pallet = core.targets.pallets["P-1"]
+    assert pallet.pose.x_m == pytest.approx(3.2)
+    assert pallet.put_down_pose.x_m == pytest.approx(snapshot_x)
+    assert core.put_downs_in_hold == set()  # the release closes the hold's record
 
 
 def test_a_deferred_end_release_is_dropped_when_the_cargo_turns_unknown_before_standing():

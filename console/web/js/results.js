@@ -102,6 +102,9 @@ export const REASONS = {
   "not_pickable:": "포크 간격이 이 팔레트의 구멍에 맞지 않아 집지 않았습니다",
   "recognition_error:": "팔레트 인식 처리 중 오류가 났습니다",
   "recognition_timeout": "팔레트 인식 판단이 제때 끝나지 않았습니다",
+  // docs/plans/2026-10-28-adoption-zone-check.md
+  "adoption_outside_zone": "찾은 팔레트가 지시한 구역 밖에 있어 집지 않았습니다",
+  "adoption_zone_undefined": "이 팔레트를 집을 구역을 정할 수 없어 집지 않았습니다",
   // the preparation (the first leg, planned when the mission is submitted)
   "prepare:all_candidates_failed": "첫 구간을 계획하지 못했습니다",
   "prepare:timeout": "첫 구간 계획 시간이 지났습니다",

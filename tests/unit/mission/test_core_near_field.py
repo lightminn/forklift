@@ -203,6 +203,28 @@ def test_a_correction_point_opens_waits_for_a_standing_observation_and_installs_
     assert near["corrections"][0]["closed_s"] == 10.7 and near["correction"].next_index == 1
 
 
+@pytest.mark.parametrize("zone, installed", [((4.5, 5.5, -0.5, 0.5), True), ((0.0, 1.0, -0.5, 0.5), False)])
+def test_a_correction_redraw_is_checked_against_the_zone_before_it_is_installed(zone, installed):
+    """Plan 2026-10-28-adoption-zone-check: the redraw's target (5.1, 0.0) against the rectangle + 0.25 m."""
+    from forklift_core.mission.adoption_zone import AdoptionZone
+
+    core, near, calls = make(Geometry(face_m=0.95))
+    core.options.adoption_zone_check, core.options.adoption_zone_margin_m = "on", 0.25
+    core.options.adoption_zone = AdoptionZone(*zone, "scene_layout")
+    tick(core, 10.0)
+    core.slam["stop_now"] = True
+    tick(core, 10.1)
+    near["tracker"].latest.stamp_s = 10.5
+    if installed:
+        tick(core, 10.6)
+        assert [c[0] for c in calls if c[0] != "require"] == ["near_redraw", "install"]
+        assert core.state["adoption_zone"]["checks"][0]["stage"] == "tracked_redraw"
+    else:
+        with pytest.raises(RuntimeError, match="^adoption_outside_zone:tracked_redraw$"):
+            tick(core, 10.6)
+        assert "install" not in [c[0] for c in calls]
+
+
 def test_a_correction_from_the_roof_detector_or_another_hold_is_refused_into_a_terminal_stop():
     core, near, calls = make(Geometry(face_m=0.95), tracker=Tracker(source="roof"), standing=True,
                              correction=NT.CorrectionState(0, 1.0, 9.0, 9.0))

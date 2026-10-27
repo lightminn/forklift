@@ -57,8 +57,10 @@ def test_the_loaded_plan_is_adopted_into_transport_without_a_transition():
     cargo_before = (core.cargo.relation, core.cargo.pallet_id)
     arms = []
     core.arm_docking = lambda: arms.append(ms.phase)
+    core.options.adoption_zone = "LAST_MISSIONS"
     plan = delivery()
     adopt(core, inputs, plan)
+    assert core.options.adoption_zone is None  # a loaded start adopts no pickup (plan 2026-10-28-adoption-zone-check)
     cmds = core.commands
     assert cmds.status == "running" and cmds.adopted_id == cmds.mission_id
     assert ms.phase == "transport" and ms.phase_started == 12.0 and state["phase"] == "transport"

@@ -1059,6 +1059,9 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_capture_redraw",
     # live-default plan 5d: the launcher's SLAM choice, a label (the mode itself is compared as slam_mode / map_id).
     "slam_choice",
+    # docs/plans/2026-10-28-adoption-zone-check.md: the check only ends a mission (recorded), never moves the truck
+    "adoption_zone_check",
+    "adoption_zone_margin_m",
 )
 # Arguments added after the measurement runs, each at the value that reproduces them: a run
 # holding that value matches measurement records that predate the argument, any other value

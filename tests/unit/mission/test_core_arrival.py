@@ -238,3 +238,53 @@ def test_with_the_check_off_the_record_is_not_read():
     core, ms, state = _bottom_deck("absent", check="off")
     assert core.arrive(21.0, track()).stop is False and ms.phase == "insert"
     assert set(state["bottom_deck"]) == {"record"}
+
+
+# --- plan 2026-10-28-adoption-zone-check: the planned pickup (and the latest tracked one) before the insertion ---
+
+def _zoned(zone, *, pickup=(3.0, 1.0, 0.3), near=None):
+    from forklift_core.mission.adoption_zone import AdoptionZone
+    from forklift_core.planning import Pose2D
+
+    core, ms, state, log = make("approach", near=near)
+    core.options.adoption_zone_check = "on"
+    core.options.adoption_zone_margin_m = 0.25
+    core.options.adoption_zone = AdoptionZone(*zone, "scene_layout")
+    core.pocket["planning_pickup"] = Pose2D(*pickup)
+    # the tracked target as near_redraw reads it: the observation's centre placed with its own pose
+    core.options.adapter = SimpleNamespace(estimate_pallet_center_m=lambda obs, depth: (obs.x, 0.0),
+                                           estimate_world_pallet_site=lambda xy, yaw_, base, yaw: Pose2D(
+                                               base[0] + xy[0], base[1], yaw))
+    core.options.G2 = SimpleNamespace(planning_target=lambda mode, site, nominal: (site, "perception"))
+    core.options.planning_target, core.options.scenario = "perception", SimpleNamespace(pickup=None)
+    core.geometry = SimpleNamespace(pallet_depth_m=0.8)
+    return core, ms, state
+
+
+def tracked(x_ahead, pose=(2.0, 1.0, 0.0)):
+    """A near record whose tracker's latest observation places the pallet x_ahead in front of ``pose``."""
+    return {"tracker": SimpleNamespace(latest=SimpleNamespace(
+        observation=SimpleNamespace(insertion_yaw_rad=0.0, x=x_ahead), pose=pose))}
+
+
+def test_a_planned_pickup_inside_the_zone_starts_the_insertion_and_is_recorded():
+    core, ms, state = _zoned((2.5, 3.5, 0.5, 1.5))
+    assert core.arrive(21.0, track()).stop is False and ms.phase == "insert"
+    assert [c["stage"] for c in state["adoption_zone"]["checks"]] == ["insert"]
+
+
+def test_a_planned_pickup_outside_the_zone_ends_the_mission_before_the_insertion():
+    core, ms, state = _zoned((0.0, 1.0, 0.0, 1.0))
+    with pytest.raises(RuntimeError, match="^adoption_outside_zone:insert$"):
+        core.arrive(21.0, track())
+    assert ms.phase == "approach" and state["transitions"] == []
+
+
+def test_with_near_tracking_the_latest_tracked_target_is_checked_too():
+    core, ms, state = _zoned((2.5, 3.5, 0.5, 1.5), near=tracked(1.0))  # placed at (3.0, 1.0): inside
+    core.arrive(21.0, track())
+    assert [c["stage"] for c in state["adoption_zone"]["checks"]] == ["insert", "insert_tracked"]
+    assert state["adoption_zone"]["checks"][1]["site"] == [3.0, 1.0]
+    core, ms, state = _zoned((2.5, 3.5, 0.5, 1.5), near=tracked(2.0))  # at (4.0, 1.0): 0.5 m past x_max
+    with pytest.raises(RuntimeError, match="^adoption_outside_zone:insert_tracked$"):
+        core.arrive(21.0, track())
