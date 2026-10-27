@@ -743,6 +743,9 @@ MOUNT_SNIPPETS_NAMED = (
     'attempt["base_from_optical"] = {',
     "camera_axes=args.perception_camera_axes,",
 )
+# Since M-a1 slice 4b (85cc50f4, 2026-10-15) the capture's attempt record -- its mount included -- is written by the
+# mission core, not the runner: a snippet missing from the runner is looked for in these files at the same commit.
+RUNNER_COMPANIONS = ("src/forklift_core/mission/core.py",)
 _RUNNER_CACHE: dict[tuple, str | None] = {}
 
 
@@ -779,8 +782,14 @@ def runner_mount_commit(
                 check=True,
             ).stdout
             if hashlib.sha256(blob).hexdigest() == script_sha256:
-                text = blob.decode()
-                if all(snippet in text for snippet in snippets):
+                texts = [blob.decode()]
+                for companion in RUNNER_COMPANIONS:
+                    shown = subprocess.run(
+                        ["git", "show", f"{commit}:{companion}"], cwd=ROOT, capture_output=True
+                    )
+                    if shown.returncode == 0:  # absent at older commits: the runner alone
+                        texts.append(shown.stdout.decode())
+                if all(any(snippet in text for text in texts) for snippet in snippets):
                     found = commit
                 break
     except (OSError, subprocess.CalledProcessError):
