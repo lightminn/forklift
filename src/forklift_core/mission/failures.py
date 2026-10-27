@@ -36,6 +36,7 @@ PREFIXES = {
     "base scene built from another forklift URDF": SESSION, "pocket camera intrinsics differ": SESSION,
     "live video camera intrinsics differ": SESSION, "Perception display clipping range": SESSION,
     "Perception camera local pose differs": SESSION, "--odometry-wheel-radius-m": SESSION,
+    "scene requirements:": SESSION,  # docs/plans/2026-10-27-scene-requirements.md: refused before Isaac
     # the anchored neighbours block the unaligned delivery straight (plan 2026-10-22-slot-anchored-neighbours 2.3)
     "session_anchor_unaligned:": MISSION,
     # the scene-mode replan device ends a mission it could not recover (docs/plans/2026-10-23-scene-replan.md 2.1)

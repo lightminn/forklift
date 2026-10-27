@@ -1,0 +1,44 @@
+# Scene requirements (docs/plans/2026-10-27-scene-requirements.md; read by sim/isaac/scene_requirements.py).
+# Keys are run_transport.py argparse dests. Scene entries are found by the scene file's "name" and apply when every
+# `match` path holds; one `any_of` set must hold or the runner refuses the run before Isaac (an override reason,
+# --scene-requirements-override, lets it run and is recorded). Profiles apply only when a run names one.
+# Values: a number, a quoted string, null (not given) or {gt: x}. Quote choice values: YAML reads on/off as booleans.
+format: scene_requirements_v1
+scenes:
+  trailer:
+    any_of:
+      # the fixed exit prefix (PR #91) without the keepout -- the two together are refused by the runner after Isaac
+      # starts (the keepout's search needs 1.5 (G + clearance) + 0.01 m)
+      - {exit_clearance_m: 0.30, lidar_keepout_m: 0.0}
+      # or the P1c keepout's own exit prefix (supported by the runner; not yet run on trailer)
+      - {exit_clearance_m: null, lidar_keepout_m: {gt: 0.0}}
+    why: >-
+      the loaded transport needs an exit prefix: without one the riib trailer batch went 0/10 (docs 82ffffa8; the
+      rerun with it is trx 11833). 0.30 is the trailer-exit plan's experimental value (D1), not a guarantee.
+  aisle_rack:
+    match:
+      # the rack copy with posts at their size (5125518c on); the PR #106 copy widened them (upright_keepout_m 0.20)
+      # and the first rack copy wrote no key: neither is matched
+      source.upright_keepout_m: 0.0
+    any_of:
+      - {lidar_keepout_m: 0.15}
+    why: "P1c: the posts are their size and the planner keeps the LiDAR-visible props 0.15 m wider (riib default)"
+profiles:
+  ct_baseline:
+    args:
+      recognition: far
+      recognition_proposals: learned
+      recognition_tau: 0.3
+      recognition_conf: 0.05
+      recognition_pixel_lag_steps: 12
+      near_capture_redraw: always
+      near_capture_redraw_lateral_m: 0.10
+      near_capture_expected: "on"
+      near_capture_lower: waive_far_confirmed
+    recommends:
+      live_factor: 0.4
+      encoder_model: team_spec_quantized
+      slam: localization
+    why: >-
+      the live FAR+NEAR set the S3, CT-2 and CT-1 batches ran (console, 2026-10-27); a riib batch runs pixel lag 24
+      and is not this profile

@@ -397,7 +397,8 @@ _ENV_READ = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 SNAPSHOT_LAUNCHERS = ("deploy/console/isaac_live.sbatch", "deploy/console/slam_choice.sh",
                       "deploy/riibotics/riib_scene.sbatch")
 SNAPSHOT_INPUTS = SNAPSHOT_LAUNCHERS + ("sim/isaac/run_transport.py", "config/slam_map_bundles.yaml",
-                                        "tools/slam_bundle_registry.py")
+                                        "tools/slam_bundle_registry.py", "config/scene_requirements.yaml",
+                                        "sim/isaac/scene_requirements.py")
 
 
 def launcher_files(run) -> list[str]:
@@ -571,6 +572,11 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
                     got.update(map_bundle=parts[1], map_id=parts[2] if len(parts) > 2 else None)
             info[r.name] = got
         args = " ".join(lines[lines.index("RUNNER_ARGS") + 1:]).split()
+        if any(a == "--scene-requirements" or a.startswith("--scene-requirements=") for a in args):
+            # the proof hashes the snapshot's config/scene_requirements.yaml, not another file (Codex)
+            problems.append(f"{r.name}: --scene-requirements names another requirements file, which the preflight "
+                            "proof does not cover: use the snapshot's config/scene_requirements.yaml")
+            continue
         unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
