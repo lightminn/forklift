@@ -41,6 +41,17 @@ def test_damaged_values_are_undetermined(bad):
         g.mission_metrics(bad)
 
 
+@pytest.mark.parametrize("damage", [{"kind": None}, {"kind": "drvie"}, {"leg": None}, {"leg": "0"}])
+def test_a_damaged_frame_cannot_hide_a_gap(damage):
+    # [0.0, 0.2, 0.8] fails at 0.6 s; damaging the last frame's kind or leg must not turn that into a pass.
+    r = record([0.0, 0.2, 0.8], ["applied"] * 3)
+    r["recognition"]["frames"][2].update(damage)
+    if damage.get("kind", "drive") is None:
+        del r["recognition"]["frames"][2]["kind"]
+    with pytest.raises(g.RecordError):
+        g.mission_metrics(r)
+
+
 def test_late_calls_of_different_runs_do_not_collide(tmp_path):
     # Mission ids restart in every run: run A's slow late call must not be replaced by run B's fast one.
     def rec(late_ms):

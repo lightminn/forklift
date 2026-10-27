@@ -53,7 +53,9 @@ def _validated(record) -> tuple[list, list, dict]:
         if j.get("model_ms") is not None:
             _finite(j["model_ms"], "model_ms")
     for f in frames:
-        if not isinstance(f, dict):
+        # a frame with a damaged kind or leg would silently leave the gaps, or split them into another leg
+        if not isinstance(f, dict) or f.get("kind") not in ("drive", "stop") \
+                or isinstance(f.get("leg"), bool) or not isinstance(f.get("leg"), int):
             raise RecordError(f"a malformed frame: {f!r}")
         if f.get("kind") == "drive":
             _finite(f.get("pixel_t_s"), "pixel_t_s")
