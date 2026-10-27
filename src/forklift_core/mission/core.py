@@ -4223,7 +4223,7 @@ class MissionCore:
                         near_error=state["perception"]["perception_error"],
                     )
                     # C3 (plan 2026-10-27 T2): the follower stops at the second capture's gap first (off: no change).
-                    self.second_near_split(t, straight, approach_config)
+                    self.second_near_split(t, rear, straight, approach_config)
                     if realign_active():
                         # Plan D8 S4c-3 stage 2: the re-capture accepted ends the
                         # realignment.
@@ -4239,11 +4239,13 @@ class MissionCore:
                     build_near_tracker(t)  # in the hold the transition began
 
     # --- C3: the second near capture on the approach straight (docs/plans/2026-10-27-insertion-lateral-drift.md T2) ---
-    def second_near_split(self, t: float, straight, approach_config) -> None:
+    def second_near_split(self, t: float, rear, straight, approach_config) -> None:
         """After the first near capture's straight is installed: with --near-recapture-gap-m the approach follower
         ends where the estimated fork tip is that far before the entry face (the straight's end has it
         approach_gap_m before), and the second capture is pending there. A final straight too short for the gap
-        is recorded and driven whole. Off: nothing."""
+        (skipped_short), or a shortened straight the follower does not reach from where the truck stands
+        (skipped_prefix: the whole straight converged, the shorter one need not -- Codex C3 review P2), is
+        recorded and driven whole. Off: nothing."""
         gap_ = getattr(self.options, "near_recapture_gap_m", None)
         if gap_ is None:
             return
@@ -4255,6 +4257,13 @@ class MissionCore:
             self.state["near_capture"]["second"] = record_
             return
         record_["split_length_m"] = float(prefix_.length_m)
+        dry_ = self.hooks.bicycle_rollout(prefix_.poses, prefix_.directions, prefix_.curvatures_inv_m,
+                                          approach_config, np.asarray(rear, dtype=float))
+        record_["split_dry_run"] = SECOND_NEAR.dry_record(dry_)
+        if dry_.status != "arrived":
+            record_["status"] = "skipped_prefix"
+            self.state["near_capture"]["second"] = record_
+            return
         line_start_, line_end_ = SECOND_NEAR.line_of(straight, self.geometry.alignment_straight_m)
         self.second_near = {"line": (line_start_, line_end_), "config": approach_config}
         self.trackers["approach"] = RearAxlePathTracker(prefix_.poses, prefix_.directions, prefix_.curvatures_inv_m,
@@ -4317,8 +4326,7 @@ class MissionCore:
                     acceptance_ = replace(acceptance_, cruise_speed_mps=options.speeds["approach"])
                 dry_ = hooks.bicycle_rollout(candidate_.poses, candidate_.directions, candidate_.curvatures_inv_m,
                                              acceptance_, rear_now)
-                second_["dry_run"] = {"status": dry_.status, "position_error_m": float(dry_.position_error_m),
-                                      "yaw_error_rad": float(dry_.yaw_error_rad)}
+                second_["dry_run"] = SECOND_NEAR.dry_record(dry_)
                 if SECOND_NEAR.accepted(dry_):
                     status_, reason_, adopted_ = "adopted", None, (candidate_, new_pickup_)
                 else:

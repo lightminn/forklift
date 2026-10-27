@@ -85,7 +85,7 @@ class World:
     """A MissionCore standing at the first near capture's adoption, with the approach straight installed."""
 
     def __init__(self, *, gap=1.0, observed_site=PalletSite(5.0, 0.02, 0.0), observation=Observation(), dry=Dry(),
-                 slam_mode="holding"):
+                 slam_mode="holding", rollout=None):
         self.calls = []
         log_ = self.log
         self.clock = 60.0
@@ -118,7 +118,8 @@ class World:
             save_capture=lambda number, scene: None, now_s=lambda: self.clock,
             planning_target=lambda target: (target, "perception"),
             straight_from_pose=straight_from_pose, final_straight_prefix=final_straight_prefix,
-            bicycle_rollout=lambda *a, **k: log_("dry_run") or dry,
+            # The split's dry run first (arrives), then the second capture's (``dry``); or a real rollout.
+            bicycle_rollout=rollout or (lambda *a, **k: (Dry() if self.splitting() else dry)),
             write_paths=lambda: log_("write_paths"), path_record=lambda p: {"length_m": float(p.length_m)},
             show_path=lambda *a: None,
         )
@@ -144,14 +145,18 @@ class World:
                 near_capture_lower="waive", near_capture_box_yaw_rad=0.05, approach_straight_speed_mps=None,
                 near_recapture_gap_m=gap))
 
+    def splitting(self):
+        return "second" not in self.state["near_capture"]
+
     def log(self, name, *args):
         self.calls.append((name, args))
 
     def names(self):
         return [c[0] for c in self.calls]
 
-    def split(self):
-        return self.core.second_near_split(self.clock, self.paths["approach"], CONFIG)
+    def split(self, rear=None):
+        start = self.paths["approach"].poses[0] if rear is None else rear
+        return self.core.second_near_split(self.clock, np.asarray(start, dtype=float), self.paths["approach"], CONFIG)
 
 
 def test_option_off_leaves_the_approach_whole():
@@ -259,3 +264,39 @@ def test_moved_path_carries_a_docking_path_with_the_site():
     expected = site_poses(new, GEOMETRY)
     assert moved.poses[0][:2] == pytest.approx([expected["approach"].x_m, expected["approach"].y_m], abs=1e-9)
     assert moved.poses[-1][:2] == pytest.approx([expected["inserted"].x_m, expected["inserted"].y_m], abs=1e-9)
+
+
+def test_a_shortened_straight_the_follower_cannot_reach_keeps_the_whole_straight():
+    # Codex C3 review P2: from 9.9 cm and -0.0595 rad off the line (inside the untracked re-draw's 0.10 m box) the
+    # whole 2.1 m straight converges, but the 1.19 m cut for g = 1.0 ends in an endpoint heading failure.
+    from forklift_core.control.rollout import bicycle_rollout
+
+    riib = TrackerConfig(cruise_speed_mps=0.6, max_curvature_inv_m=0.36, max_acceleration_mps2=0.3, lookahead_m=0.28,
+                         position_tolerance_m=0.008, yaw_tolerance_rad=0.02, stop_speed_mps=0.012,
+                         max_cross_track_error_m=0.35, cusp_position_tolerance_m=0.03, cusp_yaw_tolerance_rad=0.05,
+                         cusp_brake_window_m=0.008, overshoot_tolerance_m=0.03)
+    w = World(rollout=bicycle_rollout)
+    poses = site_poses(PICKUP, GEOMETRY)
+    rear = np.array([poses["prealign"].x_m, poses["prealign"].y_m - 0.099, -0.0595])
+    whole, _ = straight_from_pose(Pose2D(*rear), poses["prealign"], poses["approach"], max_lateral_m=0.10,
+                                  max_yaw_rad=0.12, min_length_m=0.3)
+    assert bicycle_rollout(whole.poses, whole.directions, whole.curvatures_inv_m, riib, rear).status == "arrived"
+    w.paths["approach"] = whole
+    w.trackers["approach"] = full = RearAxlePathTracker(whole.poses, whole.directions, whole.curvatures_inv_m, riib)
+    w.core.second_near_split(w.clock, rear, whole, riib)
+    second = w.state["near_capture"]["second"]
+    assert second["status"] == "skipped_prefix" and second["split_dry_run"]["status"] != "arrived"
+    assert w.trackers["approach"] is full
+    assert not w.core.second_near_due()
+
+
+def test_a_timed_out_dry_run_is_refused_and_recorded_as_strict_json():
+    import json
+
+    w = World(dry=Dry(status="timeout", position_error_m=float("nan"), yaw_error_rad=float("nan")))
+    stand_at_split(w)
+    w.core.second_near_capture(w.clock, w.stand, 900)
+    second = w.state["near_capture"]["second"]
+    assert second["status"] == "dry_run_refused"
+    assert second["dry_run"] == {"status": "timeout", "position_error_m": None, "yaw_error_rad": None}
+    json.dumps(w.state["near_capture"], allow_nan=False)

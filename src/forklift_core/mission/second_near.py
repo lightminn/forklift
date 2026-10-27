@@ -9,13 +9,14 @@ the pallet, and the pickup replace the old ones together, or nothing changes and
 from __future__ import annotations
 
 from dataclasses import replace
-from math import cos, sin
+from math import cos, isfinite, sin
 
 import numpy as np
 
 from forklift_core.localization.slam_pose import compose, invert
 
-STATUSES = ("pending", "skipped_short", "adopted", "box_refused", "dry_run_refused", "no_detection")
+STATUSES = ("pending", "skipped_short", "skipped_prefix", "adopted", "box_refused", "dry_run_refused",
+            "no_detection")
 BOX_LATERAL_M = 0.05  # the first near capture's projection box (core.near_leg_or_recapture)
 BOX_MIN_LENGTH_M = 0.3
 DRY_POSITION_M, DRY_YAW_RAD = 0.006, 0.015  # the first near capture's dry-run acceptance
@@ -49,3 +50,14 @@ def moved_path(path, old_site, new_site):
 def accepted(dry) -> bool:
     """The first near capture's dry-run acceptance."""
     return dry.status == "arrived" and dry.position_error_m <= DRY_POSITION_M and abs(dry.yaw_error_rad) <= DRY_YAW_RAD
+
+
+def dry_record(dry) -> dict:
+    """A dry run for the record: a timed-out rollout reports NaN errors, written as null (result.json is strict
+    JSON -- Codex C3 review P2); the status stays."""
+    def finite(value):
+        value = float(value)
+        return value if isfinite(value) else None
+
+    return {"status": dry.status, "position_error_m": finite(dry.position_error_m),
+            "yaw_error_rad": finite(dry.yaw_error_rad)}
