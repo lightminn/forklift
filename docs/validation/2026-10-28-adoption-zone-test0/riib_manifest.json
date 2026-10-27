@@ -1,0 +1,767 @@
+[
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_aisle_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_aisle_s0/run/result.json",
+  "sha256": "7b03d21bfe44e4705b45a47dbf000a2feb054cc25a99c8e76c966ee84da7b78f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_line_2_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_line_2_s0/run/result.json",
+  "sha256": "b336f2ed7ca4f30cd2dd0cd6795c46cc446688ebe3a3ebf17e37f2070727d804"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_line_2_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_line_2_s1/run/result.json",
+  "sha256": "061407f0f357711ddd7f37635da20ffbe166ba3a18e7a351b98961c17e52fdd0"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_line_2_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_line_2_s2/run/result.json",
+  "sha256": "562729fb0c6c5e4d17460cec12f2c32e7661660446177208e86f2e6a84f51bd6"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_trailer_s0/run/result.json",
+  "sha256": "0c0ed529bdafd387f69b36354d64daa74152f8a0be30ccce78e330c55466e4a3"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_trailer_s1/run/result.json",
+  "sha256": "fe5e5d34e3b1b2e06b57251173ba4e44285aa457c4738d5e4a22f6b9fcdf8e17"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_a2_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_a2_trailer_s2/run/result.json",
+  "sha256": "da8499b652c274dda12542aac759093ff3c95d13cb793042d41a2ccb3514c6e1"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_const_line_2_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_const_line_2_s0/run/result.json",
+  "sha256": "1ee2bd8be7e987b0f416ae687b737e70a1b699026e9854554a426a8e92ea07c5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_const_line_2_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_const_line_2_s1/run/result.json",
+  "sha256": "502d023bf8501ac34a2db125fb29334c4c75a444ed3aca5c5b2dcd2332f830a0"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/p3a_const_line_2_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/p3a_const_line_2_s2/run/result.json",
+  "sha256": "2d8e122f6eab1fa359ac482c04499e108b3f30a1fd9fbfe027b9f225cbe1fed8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_line_1_default/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_line_1_default/run/result.json",
+  "sha256": "b023967d4200653e7a1f4265e888b044562ddeaf5c2d9b1b53d076ea52e9a78a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_line_1_fast/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_line_1_fast/run/result.json",
+  "sha256": "f1fc74487e372366baa6fdecfb8fea5504bb251464a654cb583f5a6e0d4359a5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_random_1_default/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_random_1_default/run/result.json",
+  "sha256": "adb88438c563c2ab512e59a61a73f685221eedfb2c5d5c3f5670a4e786ef3111"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_random_1_fast/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_random_1_fast/run/result.json",
+  "sha256": "384d8ab26c205868727db49eccd3e165f40be810330f997fdd81b3a16d7a8df3"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_trailer_default/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_trailer_default/run/result.json",
+  "sha256": "5eb9f5e2ada954126c6b32ed7602243b6f9835bf2a817ec5bc228b9acfa38c7f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_trailer_fast/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rp_c9fad6e8/rp_trailer_fast/run/result.json",
+  "sha256": "83be7fce686ba33be38b6d464801d4dc0c0fe0d99a2abee5997b4044fb295a43"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s0/run/result.json",
+  "sha256": "5e203eb88dca992b8ff4ab665c633fca7a1ccaf0a20efde7306ef9ddab5d9dcb"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s1/run/result.json",
+  "sha256": "36729bf50016cf85592b6888b21100dc045ecddc9a603f6fa426721847955a4a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s2/run/result.json",
+  "sha256": "c9becaa71fb2f7a53c83eb4fbedda3633ef72412c1fad44ddeb3161b64a5994a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s3/run/result.json",
+  "sha256": "f79f8cbb84a668a0823972f5b99e79f3b24e77380e8445e7b9260097d5eef3ef"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s4/run/result.json",
+  "sha256": "ceb91d61df6fd5e52239c5faae5bae133ac3550003d8f2c0d6fb9ebb1e309ac6"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s5/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s5/run/result.json",
+  "sha256": "326d7f223eefc62e4c9d959e6b7a3598b4dbfc74a7616c713ee648b73c34a62b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s6/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s6/run/result.json",
+  "sha256": "d343c114302076e9ad2cbdccd81ac38bba6e2756b90cc9d1eea7ef3c5a83f026"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s7/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_aisle_rack_s7/run/result.json",
+  "sha256": "3bff943af87eb66969b3d0703cc5f70a6bcd48a15c4b240cf8b936292092be19"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_line_2_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_line_2_m_s0/run/result.json",
+  "sha256": "0d9ca307cbcecdbbe5138b63b7e4e90639ad31888bd2b95ce94dc6bbbdfa0a14"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_line_2_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_line_2_m_s1/run/result.json",
+  "sha256": "018315f975ab7481c6cf753f47606fb713ebcbcb6f861797cd90de33d19d5432"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_line_2_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_line_2_m_s2/run/result.json",
+  "sha256": "e4636a8e8f48a91c494b696a81d30a196bd7a40a4805cf8224070f7d2669b045"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s0/run/result.json",
+  "sha256": "78203ce819bfc426533045d0499f31fa7bfae44c82b28e220c88adbe3ddb1018"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s1/run/result.json",
+  "sha256": "fc4268ce14b6349bf4e00692fd32a15fe351410418b62304ee9efb230a4de390"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s2/run/result.json",
+  "sha256": "a0522c1e08a17f93fc2081dae7b3d56671564f5dccfa01518b4cadbf1854e32d"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s3/run/result.json",
+  "sha256": "341e7d7ef48f67a3577f830b74ef0a4eb56b70ac4ea5b600bb8e5449a2bb44ed"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_off_trailer_s4/run/result.json",
+  "sha256": "8cacfc1afdd30fc661d08173f9e9edb1c8dba3ee25d7b505e033456a75275b9b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s0/run/result.json",
+  "sha256": "f66f206d14d22d82382f01400aa9c6ee1c25decb085ddcc423f568a88ecadb33"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s1/run/result.json",
+  "sha256": "72c8293500d4d07b55d046de1796c51493eef39b47dc242c31bb105561566dc9"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s2/run/result.json",
+  "sha256": "72132e535da3ce8c592025a9ec726aa62de82965aa9894c66335b99437dd9d25"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s3/run/result.json",
+  "sha256": "bf1c76e9f0e61acf406c357bc136ff81248300af868d906908468a53abae2339"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s4/run/result.json",
+  "sha256": "58416ea0f24c85521297a3994451d6f09facf6d8a8d8dc4987ea489476489926"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s5/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s5/run/result.json",
+  "sha256": "63ad221a6304ac60f9fa5a0701d59a6ba4ba68fa39a1c9e4b2b6ab92180407ed"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s6/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s6/run/result.json",
+  "sha256": "eaa1424430ddd8e1af67dbf86e64fb63888d7e5a26a9ca61ed17b98734303dbf"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s7/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_aisle_rack_s7/run/result.json",
+  "sha256": "2fd7f4af2eaadc0e0176441d9d454b64ead3ab5f8d416ed94580581aea118337"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_line_2_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_line_2_m_s0/run/result.json",
+  "sha256": "3337308f63f72e687ac2e2462d2f4134b130e91a4c26b83608e0728e4a888643"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_line_2_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_line_2_m_s1/run/result.json",
+  "sha256": "b872b4dc1273018978f8134cb35c76499e781b85eda22e79d78230e175374138"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_line_2_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_line_2_m_s2/run/result.json",
+  "sha256": "fbda40b5b6006933186309816e47e75670b29e8d9cf8fb03ec01b3dd0d155ea2"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s0/run/result.json",
+  "sha256": "9e4a02b66d188329aa90bf3369919244bf3c3ac49ae76e206744fe2f2b00ebc6"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s1/run/result.json",
+  "sha256": "58e3e70fb5d36debbaec69a8d525c3fbe272a299098e67f042e9c7111a4a83bd"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s2/run/result.json",
+  "sha256": "406c6362061efd8b347bec97b843d9d7aefd7ff3db89f8985ca3b012abc06688"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s3/run/result.json",
+  "sha256": "a0501ba6d69257c6c2c66e004b82a6c26134fdda2fbad4f8df5105c28ecb620a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbr_b35d7f53/rsbr_on_trailer_s4/run/result.json",
+  "sha256": "a8fd580bf91f50964ac337dc59b0de6e43cfc12c3636f695e5dd236c2f0d0266"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s0/run/result.json",
+  "sha256": "49059d53b4a2693b7649ee8dd8c91c10c53e3d8788ab091a2706a216743407e1"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s1/run/result.json",
+  "sha256": "f528c98021490a8434a2769b6d559db5aa0f75e8d9407ddf8671b5a6b7cbea92"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s2/run/result.json",
+  "sha256": "cdc4440fb9662e34ac9ed5316e27f6ab42667ef4151b02a50795f5a124c7e133"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s3/run/result.json",
+  "sha256": "396d82d554907e98204b69b413e5edcd13c2c58764e3b36b63c4fc626bea6ff5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/rsbt_b35d7f53/rsbt_reported_trailer_s4/run/result.json",
+  "sha256": "aaedea316a660438ec872d32865c607ea8f056837d5d08111979f7a09f4b9f73"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s0/run/result.json",
+  "sha256": "01a943a653b13e1ecd914c924eb4f02d6c8d62a739359b652c4d907265e374d9"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s1/run/result.json",
+  "sha256": "3e9829d109bf39cab8d1f2071bf9bab580a91d6ec07ce4ea40a865c73d0df14a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s2/run/result.json",
+  "sha256": "a286c7911bae279342d7ee4131932a892cdf82bf0914799b632cec45b125a96b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s3/run/result.json",
+  "sha256": "8f99127fafc93d2895055dd6b96d1422a0f1c4e3e5f3fc49066f2636c9c49796"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_aisle_rack_s4/run/result.json",
+  "sha256": "ba68a8de3acd6e5dd7fd44f82a0f00c4d2f3b31a1ab17c35154008d27a6b8c52"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s0/run/result.json",
+  "sha256": "c321c46edcdb1def152e36986ea47cb6eab421a8384e24e105d395a98eb8da9c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s1/run/result.json",
+  "sha256": "70ea50fa13043ae97e28d67f1ceadf913818b6f0f30ed774b6fb6b274946e672"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s2/run/result.json",
+  "sha256": "1d0f30f34189132d265104f1a2b30921c5747648bbe4fe4e8bd6ca36c5e451fd"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s3/run/result.json",
+  "sha256": "c172efcea589be034cab96abd06bcae84fb7f98f7d003bcc26a678db245f2a8c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_1_m_s4/run/result.json",
+  "sha256": "804cb42cff4b52cf9245fa3f573e63888ee7d8fa9f51c55ad45a61ccac755f25"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s0/run/result.json",
+  "sha256": "5c1ac9c9275562d98fccd1711bb03aeb74b14f5b8de3e39721a4c8a66e2c303e"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s1/run/result.json",
+  "sha256": "d48df5edfa39ae522ceda39b136ed9a0190ce462c44a866941f8bcfcf2674cbc"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s2/run/result.json",
+  "sha256": "a7a1895634d34036256e9fb95f54e0d6effe15fb3e593d6e525f45ab52efa102"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s3/run/result.json",
+  "sha256": "a6f61ff3a4fbf3c65f8511c7e13ab29906b9e540c6e9638bccc8926207764b70"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_b0_line_2_m_s4/run/result.json",
+  "sha256": "ced741796cb1d3297bbbca5d4a142810034f555cf7a7b3e54f8aa2cf4609672c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s0/run/result.json",
+  "sha256": "0e8743f569768d1ff8ec03f286152a8dcc94090f16e9b429840776bcce58bfe5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s1/run/result.json",
+  "sha256": "b653d7b1453786e50d871cff103b64ff4c287c662b5b9c13309ea6dad8efbdbb"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s2/run/result.json",
+  "sha256": "f03870eac69b403d4e0de6c6153572d5e45fd61ea5fd7ff059067125d9fcb1ba"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s3/run/result.json",
+  "sha256": "fe5cdcdaa1c5803f111e0ad4006f573ba4890320008569da104c75f1968357c6"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_aisle_rack_s4/run/result.json",
+  "sha256": "365526134bde8877c0c59c1bd94d64231a20541028568906809f58b7447c849a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s0/run/result.json",
+  "sha256": "8e789518ac28817afc5d0fa06e63d33c08dfeb29584ea2e32818e2472a22449c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s1/run/result.json",
+  "sha256": "21c1b9d8d9ed51b8246b561776cd46ec8126cd80547a13cf8eee3828b5bb90d5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s2/run/result.json",
+  "sha256": "8f8a8521c55fd7235a44f43078ff25475722b62663fc2b7400d2081649046cb2"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s3/run/result.json",
+  "sha256": "3388040a3d3d55c6ceb7ba61feeeb095a035326794a22f1c1c09a0389203039b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_1_m_s4/run/result.json",
+  "sha256": "8830c968bc467f8b2f23251de4cddcbdc25527b401e215766da71faab81a10e8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s0/run/result.json",
+  "sha256": "30f0fee75401c2f98585c57f0f563002ce685d85a63437f8a8042bb034e2f54d"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s1/run/result.json",
+  "sha256": "d9abb7e5cf845519210418812c8431ca7fb3de46d8faabaf74b421dd7a407283"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s2/run/result.json",
+  "sha256": "556a5d4884211e2d30b75066bc1981530363503b1f3821e7d6deb94376b0ccf4"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s3/run/result.json",
+  "sha256": "c9ad33573fdd3f656e01056d382a910f8fcb61f17dccf17a62002941b5ee4557"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c1_line_2_m_s4/run/result.json",
+  "sha256": "3262162bba2b678206498317118eb08d3c5ae987aa02dd134a475318406b20f5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s0/run/result.json",
+  "sha256": "0de6139ca0b39168615eaafea0bb3329ef633048c9165759d106ed21e8662ebd"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s1/run/result.json",
+  "sha256": "270eb50818006ae56b789ea68461b57c04f3d824fa7f077c669d28bfa467ee0f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s2/run/result.json",
+  "sha256": "c509e696c9f19837a218d07b78751940971e986a79947f42e07718e0598793b6"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s3/run/result.json",
+  "sha256": "085e4d443bf9a6be10754c3892efbe554f85c9c548db52d43a0d6a6b5bd1338f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_aisle_rack_s4/run/result.json",
+  "sha256": "2c4b928019fd7848a6a9cfb975d7945c751da168909e8cf9bfd99c82f985c828"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s0/run/result.json",
+  "sha256": "50ac196abef6416d9aa197c10f5b89a35d0a37e002bcb6d1c5e90311811fc6cd"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s1/run/result.json",
+  "sha256": "cc33d56cce46a3c49dbc57e40594678f4f9f9fdd342289161c96953a8e325098"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s2/run/result.json",
+  "sha256": "67f5221f52d69837b74411e43c266f227adcb8214247730c5396c42483ebb8f9"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s3/run/result.json",
+  "sha256": "f8c9c5d1f081d8fee8d38f1039647baa3ad142d10b4d3029f35505f32f032093"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_1_m_s4/run/result.json",
+  "sha256": "67ead70376fcfb49660f31d9886f37d4a518b8ee9b780e8b76f21a4c56ac8ffc"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s0/run/result.json",
+  "sha256": "04309e5f4becfe957b4f2a19582afefeab4efe93baee063510b530dc751c5160"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s1/run/result.json",
+  "sha256": "32d914436019a6a64abe6eabf56a58372ffd5df0ea814572ab7482ea445e6750"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s2/run/result.json",
+  "sha256": "e7da759991e8a11bd3cc7ba3ae38492848192180196ef97c70fd08a0f7226c44"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s3/run/result.json",
+  "sha256": "8d23c7d4f75ed9b3a319c107089c7a9bbc57680824139adfe59e75d0f40b141a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/t2d_1b60df21/t2d_c3_line_2_m_s4/run/result.json",
+  "sha256": "85913afe3bdd3e7185e265189bb5e77ad8f8daef117b72e7513d670ac5929357"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s0/run/result.json",
+  "sha256": "b3a0ddf2fd06d84e47c4b90b19be64461499737436d559bb431a770944d4e9cf"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s1/run/result.json",
+  "sha256": "6fe396b166e802b663fbb1bbbf0bf513a8cd6608d2fbb8df7d28dfdc919387ee"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s2/run/result.json",
+  "sha256": "66a00890f5758079ffb0267a71c9b65fde0dfc6f99edaae715ebe0e1a1151876"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s3/run/result.json",
+  "sha256": "1288c11a1f4ad3e35e2b6769c2f0640f876cf49a859c532306756c4545e65c0f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s4/run/result.json",
+  "sha256": "d101efb0c9fd7bbc030c3b14c9f365ebf86e381f92eb7822e9a5d51e12e6525f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s5/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s5/run/result.json",
+  "sha256": "8c5860a5a78fb244c6b8175641f238404ab44c6a4028edfcf74afc96ab73df02"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s6/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s6/run/result.json",
+  "sha256": "3c2744d474a9f4ef410b9982f48016e11aaebc995e9f9f769f313bdd6a4bf9d1"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s7/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s7/run/result.json",
+  "sha256": "3badf0c3bc04c5338c60e5ad7ce45a23cc8d67967b6a08e161db76e7e2b662a8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s8/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s8/run/result.json",
+  "sha256": "c0cc87bbbd16261d691cff2df5ab446c42e7659da1479a74807793ad46d7f489"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s9/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/tra_fdf0e789/tra_trailer_s9/run/result.json",
+  "sha256": "eeb5ea76839eb2a5ff269427e13d10fd57df25f2a1b54ed93a8790834835da36"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s0/run/result.json",
+  "sha256": "9e2632a1d852d744c35c16d0b1f26cd6876249c972cad14b43f876d56fe68bee"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s1/run/result.json",
+  "sha256": "a4049efb2d71452a3a9ea7becce9e9e3aa980f4d1b784fc2f3aa7f3970add116"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s2/run/result.json",
+  "sha256": "862b31bcd43fade7ca94b030a4d052c2fbb08caccd5839d38944dc034b6d213b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s3/run/result.json",
+  "sha256": "aed21dbcc35d777182c35af3997545d5d380a0d7fc3697a2fc1c9f1e35b7fe33"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s4/run/result.json",
+  "sha256": "15b4fc0f8afc358fec9b61238dcf6bdddad2c220bab0e38200f2b7acb605d30b"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s5/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s5/run/result.json",
+  "sha256": "99ab47e3f1464e04cd8f1a5ea95cd333b2426cf6739ea1d4d5e2413799d5a67d"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s6/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s6/run/result.json",
+  "sha256": "0adf2e80833a0527525c841ff347e0e3f613654762f64fa286f282b9d9c73fe8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s7/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s7/run/result.json",
+  "sha256": "b9fe4081018c8eff5993337d8248936511b30cf752ca2a30b8e81e6624419fa4"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s8/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s8/run/result.json",
+  "sha256": "c1606308707fcaf2f0b486830685d5d9a6b1adecef6cf6d83c4b2c860739fa8f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s9/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trb_e560bc00/trb_trailer_s9/run/result.json",
+  "sha256": "d406a362b7f94b4bed50589eed18e808d6513cb0be498fd54b17042a9b33e7e1"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s0/run/result.json",
+  "sha256": "b64d6c37eaec7f0d6a371aceeea3294e7883efbbc456b7c3af77d1434113b56f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s1/run/result.json",
+  "sha256": "0abe2a40b13f89821bbaa77fee1a915c1b69275e96cdcd098247c79645bdd343"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s2/run/result.json",
+  "sha256": "4b9b74e6f02e27842f68da415074edd7558abc169038b0ac9465d7128a9f2e87"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s3/run/result.json",
+  "sha256": "bf7ffd84d94fe36d3c1b03b0fc9960a41aa09c39df56af7a8806cbc9bfb29e9d"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trc_fdf0e789/trc_trailer_s4/run/result.json",
+  "sha256": "d3ebaa944a36b8d84008934aabf9da7c4d31cc2eb8fba7725c56504909daf262"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s0/run/result.json",
+  "sha256": "c675d470ebac469d95ee9bbff92140a824c5f72b53f12cb697d0059e11e4b5a5"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s1/run/result.json",
+  "sha256": "b39a3560c0524e552cecc24405ddd3766ab2bed76da453d8ed233bd1731878f0"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s2/run/result.json",
+  "sha256": "49b967471db1b60ac5af5e579f457d21c31a875c8ec8ce111843478fb336e028"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s3/run/result.json",
+  "sha256": "b0acc727f0a13cd44e744c9f2c9d9bfc1f4c904c9af1b986c672a9d8e46beab3"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trd_b35d7f53/trd_trailer_s4/run/result.json",
+  "sha256": "5f7c5344e80ff2abd91f542a02c0842acf3075a31405bb5fc03579b5a171c9b8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_D_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_D_trailer_s0/run/result.json",
+  "sha256": "dfdaccf3e5b4f8d65db3ea4d13ac816a5d271244cb64ed493dad6409b28e3723"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_D_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_D_trailer_s1/run/result.json",
+  "sha256": "e95d27ccc60da4f25f5a822e16542a46a5ce05c865c9ab14b5c59a67ebf2457f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_D_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_D_trailer_s2/run/result.json",
+  "sha256": "2241b971655c30689df3569a486da041df48a9466b33abd1a9c3ac18ee30908c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s0/run/result.json",
+  "sha256": "38a78ac2c14f2f2626673cffebd87d12da241ec39ed588cebb28b9a6d023aca8"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s1/run/result.json",
+  "sha256": "c38fcb6109affff078a6dd09dacebbd844b1abc36dfdc3c9b4339997bc660def"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s2/run/result.json",
+  "sha256": "a589d31f8a17d48f422d0565b6d03990138f68d831a5e208aa7d12c2c3db6d6a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_E_trailer_s3/run/result.json",
+  "sha256": "854d6965d0518a37db6cc934ad8e1d86347003dcd6a40c5cf68fd600d832c821"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s0/run/result.json",
+  "sha256": "931bba254b4866f422a8335c84118dcb35eb543b4de9b65ace3fe641b588f63a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s1/run/result.json",
+  "sha256": "c13c63306bdc8710c8b394ca499a140135ed00a703452c63666dec0dfbcd8d4f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s2/run/result.json",
+  "sha256": "f2f646ebf76a9ce16505599eb5a26457474db216f4a3ed28d30f91d9fbec2f7e"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_K_trailer_s3/run/result.json",
+  "sha256": "15ce476d2a96f0df3d30cda7f75cd8ac1fcbdde9d7a181a00d28bc01e7130d5d"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s0/run/result.json",
+  "sha256": "30b5b9eb96fed9c5ee8ac1ac0083608f0cfa5c2424af766de25f68843ce9ca41"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s1/run/result.json",
+  "sha256": "f40545991533826cd4d219a70d3965647177c9aa281c5e0f4a5790ba5112177c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s2/run/result.json",
+  "sha256": "d354c09351a1518fbc160dbe22dd2f09802c578b3589a0e28c06de0f4d37aa11"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trf_36b9b7de/trf_R_trailer_s3/run/result.json",
+  "sha256": "397df2675cc9c9fb48abadfb34f328287f789b59751b8aabbdafff56e59ecd10"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s0/run/result.json",
+  "sha256": "325dd8799069a42539c0e6b7032c425743316d9675d514b954072483567bdcad"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s1/run/result.json",
+  "sha256": "b7ea9b15e2fd92113a480bcdf8a6962011b88258982163e342c119cbcbd1bd8a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s2/run/result.json",
+  "sha256": "343ecb70dc2c770bbe601901fab272ae95cd1bd7a3dc75f72d8bbfd189dc096f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s3/run/result.json",
+  "sha256": "cd7d553d8c213582dce114841eb2d05c2af9a803ea014f03563cccac57b5a52f"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_off_trailer_s4/run/result.json",
+  "sha256": "c50a046f89f411b319153ecedb69a81a12ebf62678cb7961277579e8325cad69"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s0/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s0/run/result.json",
+  "sha256": "c95c00cfb01c348cd7d16909c0e4fea15ac78e865e97f78640098b920bad136c"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s1/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s1/run/result.json",
+  "sha256": "b41cb38a52098c3fbd7ac919c3411d7fe888c3eae92d9776b6e77e95accba314"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s2/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s2/run/result.json",
+  "sha256": "9e9d4949916d285f584678eebd87720daedc702fde155fb5f5a3fe72d9fabef2"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s3/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s3/run/result.json",
+  "sha256": "a50d16d45a242ea5412b6d64eeff45311fc3f0f3846cef2a576b075efc77720a"
+ },
+ {
+  "path": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s4/run/result.json",
+  "run": "/home/projects/forklift/test_runs/riibotics/trx_b35d7f53/trx_on_trailer_s4/run/result.json",
+  "sha256": "b70a0e31a772c062aaa698c1b8d1ddbb1b5596b0eb8ca9b37c5df113a7edcc5a"
+ }
+]

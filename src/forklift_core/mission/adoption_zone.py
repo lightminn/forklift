@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 OUTSIDE = "adoption_outside_zone"
 UNDEFINED = "adoption_zone_undefined"
-DEFAULT_MARGIN_M = 0.25  # provisional until test 0 measures the per-stage centre error (plan section 5)
+DEFAULT_MARGIN_M = 0.30  # plan section 5 test 0: the largest per-axis centre error 0.254 m, rounded up to 5 cm
 REPICK_HALF_M = 0.10  # Isaac unloading error 0.02-0.10 m (docs/validation/2026-10-22-session-scene-pallet-props.md)
 
 
