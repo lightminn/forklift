@@ -155,7 +155,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         pickup_bounds=None,
         # The observation travel's bounds (persistent console plan D2): the pickup bounds in a batch run.
         observe_bounds_=None,
-        self=SimpleNamespace(observe_bounds=lambda: None),
+        # the return-start backoff off (plan 2026-10-27): the mission plans see what they always saw
+        self=SimpleNamespace(observe_bounds=lambda: None, _mission_backoff_kwargs=lambda: {}),
+        return_start_backoff_kw=lambda args: {},
         travel_config=None,
         # The initial observation loop's ladder pass (earlier, then extended).
         extended=True,
@@ -920,8 +922,11 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     # 2026-10-19 task 4, Codex design round 2 P2): one more.
     side = replan.index("    def _bottom_deck_install(self, ")
     assert 'obstacle.setdefault("progress", {}).clear()' in replan[side : replan.index("\n    def ", side + 10)]
+    # ... and the C3 second near capture's installed approach (plan 2026-10-27 insertion lateral drift T2).
+    second = replan.index("    def second_near_capture(self, ")
+    assert 'obstacle.setdefault("progress", {}).clear()' in replan[second : replan.index("\n    def ", second + 10)]
     assert source.count('obstacle.setdefault("progress", {}).clear()') + replan.count(
-        'obstacle.setdefault("progress", {}).clear()') == 8  # + the re-observation's, before the near leg
+        'obstacle.setdefault("progress", {}).clear()') == 9  # + the re-observation's, before the near leg
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():

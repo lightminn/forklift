@@ -168,14 +168,16 @@ def test_the_odometry_is_the_joint_angle_model_by_default_with_its_age_table(tmp
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
                                  {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
-                                 {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"}])
+                                 {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"},
+                                 {"NEAR_RECAPTURE_GAP": "-1"}, {"NEAR_RECAPTURE_GAP": "x"},
+                                 {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)
     assert out.returncode != 0
 
 
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
-                                 {"ENCODER_MODEL": "reported"}])
+                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -217,6 +219,8 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(0.10)
     else:
         assert parsed.near_capture_expected == "off" and parsed.near_capture_lower == "gate"
+    # C3: the second near capture only when asked
+    assert parsed.near_recapture_gap_m == (float(env["NEAR_RECAPTURE_GAP"]) if "NEAR_RECAPTURE_GAP" in env else None)
 
 
 def test_paths_are_made_absolute_before_the_cd(tmp_path):
@@ -314,3 +318,9 @@ def test_a_slam_run_s_arguments_are_checked_before_its_bridge_starts(tmp_path):
     refuse.chmod(0o755)
     out = dry_run(tmp_path, DRY_RUN="0", MODE="slam", VENV_PY=str(refuse), PATH=f"{bin_}:{os.environ['PATH']}")
     assert out.returncode == 2 and "nope" in out.stdout and not (tmp_path / "docker_calls").exists()
+
+
+def test_the_second_near_capture_is_off_unless_a_gap_is_given(tmp_path):
+    assert "--near-recapture-gap-m" not in args_of(dry_run(tmp_path))
+    args = args_of(dry_run(tmp_path, NEAR_RECAPTURE_GAP="1.0"))
+    assert contains(args, ["--near-recapture-gap-m", "1.0"])

@@ -398,6 +398,17 @@ def arguments() -> argparse.Namespace:
         "Needs --near-capture-expected on.",
     )
     parser.add_argument(
+        "--near-recapture-gap-m",
+        type=float,
+        default=None,
+        help="C3 (docs/plans/2026-10-27-insertion-lateral-drift.md, T2): after the near capture's straight is adopted the "
+        "approach stops where the estimated fork tip is this far before the entry face, captures the pallet again as "
+        "the near capture does (expected site, --near-capture-lower, the SLAM hold kept) and re-draws with its "
+        "acceptance (5 cm projection box, 6 mm / 0.015 rad dry run); accepted, the approach, insertion, extraction and "
+        "pickup move together, else the first line is resumed (near_capture.second). A batch run without near "
+        "tracking, the pocket check or the bottom-deck check; needs --near-capture-expected on. Unset: as before.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -566,6 +577,16 @@ def arguments() -> argparse.Namespace:
         help="docs/plans/2026-10-26-observe-start-backoff.md: the first far observation's replan that comes back "
         "invalid_start (the stop within the planner clearance of the pickup prior) backs off straight by the start "
         "check's own advice (at most 0.30 m, once per observe leg) and plans the same target again. Off: as every "
+        "earlier run.",
+    )
+    parser.add_argument(
+        "--return-start-backoff",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-27-return-start-withdraw-extension.md: a return planned from the withdrawal end whose "
+        "start is invalid (the mission plan's return_home, the docking release's replan, the first live return) backs "
+        "straight off first -- the first distance the return's start check accepts while the straight keeps the "
+        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. Off: as every "
         "earlier run.",
     )
     parser.add_argument(
@@ -1221,6 +1242,20 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
         parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
+    if args.near_recapture_gap_m is not None:
+        # C3 (plan 2026-10-27 T2): the second near capture is defined for a batch run of the near capture alone.
+        if not (math.isfinite(args.near_recapture_gap_m) and args.near_recapture_gap_m > 0.0):
+            parser.error("--near-recapture-gap-m must be a positive distance")
+        if args.near_capture_expected != "on":
+            parser.error("--near-recapture-gap-m needs --near-capture-expected on")
+        if args.live:
+            parser.error("--near-recapture-gap-m is a batch run (the live capture boundary is out of its scope)")
+        if args.near_tracking or args.pocket_check:
+            parser.error("--near-recapture-gap-m is not defined with --near-tracking or --pocket-check")
+        if args.bottom_deck_check != "off":
+            parser.error("--near-recapture-gap-m is not defined with --bottom-deck-check")
+        if args.repeat_captures:
+            parser.error("--near-recapture-gap-m is not defined with --repeat-captures")
     # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
     args.pallet_prior_loaded = None
     if args.use_perception:
@@ -4932,8 +4967,14 @@ def drive(S, isaac) -> None:
             trace=planning_trace,
             **grid_kwargs("mission"),
             **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+            **return_start_backoff_kw(args),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
+        # docs/plans/2026-10-27-return-start-withdraw-extension.md R6: the first mission plan's backoff attempts, as the
+        # core records its own mission plans'
+        from forklift_core.mission.core import note_trace_backoffs
+
+        note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)
         state["planning_wall_s"] = time.monotonic() - planning_start
         state["planning_status"] = plans.status
         require(plans.success, f"Mission planning failed: {plans.status}")
@@ -5700,6 +5741,9 @@ def drive(S, isaac) -> None:
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
                                 observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
+                                # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
+                                # before the option
+                                return_start_backoff_m=return_start_backoff_m_of(args),
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -5717,6 +5761,7 @@ def drive(S, isaac) -> None:
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
+                                near_recapture_gap_m=getattr(args, "near_recapture_gap_m", None),  # C3 (2026-10-27 T2)
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
@@ -7586,7 +7631,8 @@ def drive(S, isaac) -> None:
                             "kwargs": {"config": planner_config, "geometry": geometry,
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
                                        "occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0),
-                                       **({} if transport_exit is None else {"exit_prefix": transport_exit})},
+                                       **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+                                       **return_start_backoff_kw(args)},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
                            "pickup_bounds": None, "pickup_zone": None,
@@ -8462,6 +8508,13 @@ def drive(S, isaac) -> None:
                                         else:
                                             # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
                                             core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                            elif core.second_near_due():
+                                # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): the approach stood at the
+                                # second near capture's gap -- captured and re-drawn there; the approach goes on.
+                                second_ = core.second_near_capture(t, rear, step)
+                                rear = second_.rear
+                                if second_.rear_stamp is not None:
+                                    rear_stamp = second_.rear_stamp
                             else:
                                 # M-a1 slice 2: every other arrival is the core's.
                                 arrival_ = core.arrive(t, tracking)
@@ -9309,6 +9362,20 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
             or (v is not None and (k != "quarter_focal" or v != 2.5))
         )
     }
+
+
+def return_start_backoff_m_of(args) -> float:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R1: the backoff cap the planners get, 0 when off (and in a
+    record from before the option)."""
+    from forklift_core.planning.pallet_mission import RETURN_START_BACKOFF_CAP_M
+
+    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") == "on" else 0.0
+
+
+def return_start_backoff_kw(args) -> dict:
+    """The mission planners' keyword for the return-start backoff: none when off, so their calls are as before."""
+    m = return_start_backoff_m_of(args)
+    return {"return_start_backoff_m": m} if m > 0.0 else {}
 
 
 def validate_before_isaac(args: argparse.Namespace) -> dict:

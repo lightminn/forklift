@@ -170,6 +170,10 @@ class PlanResult:
     # reverse put before a loaded transport search, its length and why. None when no exit prefix was asked for --
     # and then not recorded, so a boundary record from before the field replays unchanged (replay_codec).
     exit_prefix: dict | None = field(default=None, metadata={"record_omit_default": True})
+    # Return-start backoff (pallet_mission.return_start_backoff, docs/plans/2026-10-27-return-start-withdraw-extension.md):
+    # the straight reverse put before a return whose start was invalid, or why none was -- on a failed result too. None
+    # when no backoff was tried, and then not recorded (replay_codec), as exit_prefix.
+    start_backoff: dict | None = field(default=None, metadata={"record_omit_default": True})
 
 
 def _wrap(angle):

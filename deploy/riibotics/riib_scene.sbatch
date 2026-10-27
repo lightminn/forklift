@@ -12,6 +12,9 @@
 #                  2026-10-27-bottomless-and-bundled-pallets 2.1 c: no lower gate, a bottomless pallet is a target),
 #                  --near-capture-redraw always, --near-capture-redraw-lateral-m 0.10 (slam mode only: they need the
 #                  perception planning target)
+#   NEAR_RECAPTURE_GAP=  (empty) C3: with a gap in metres, a second near capture where the estimated fork tip is that
+#                  far before the face (--near-recapture-gap-m; docs/plans/2026-10-27-insertion-lateral-drift.md T2); needs
+#                  NEAR=on
 #   MARKERS=on     line_* / random_* run their slot-marker copy <scene>_m.json (PR #99); the other scenes have none
 #   RACK=on        aisle / aisle_out run their rack copy <scene>_rack.json: rack uprights, wider slot gaps and the
 #                  0.20 m back gap (user decision 2026-10-22, docs/plans/2026-10-22-riibotics-aisle.md D-A, D-C)
@@ -82,6 +85,12 @@ case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exi
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
+# C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): empty = off; a gap needs the near capture it follows.
+NEAR_RECAPTURE_GAP=${NEAR_RECAPTURE_GAP:-}
+if [ -n "$NEAR_RECAPTURE_GAP" ]; then
+  [[ "$NEAR_RECAPTURE_GAP" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "NEAR_RECAPTURE_GAP must be a positive number of metres"; exit 2; }
+  { [ "$MODE" = slam ] && [ "$NEAR" = on ]; } || { echo "NEAR_RECAPTURE_GAP needs MODE=slam and NEAR=on"; exit 2; }
+fi
 NAME=$SCENE
 case "$SCENE" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
@@ -107,6 +116,8 @@ echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP sc
 printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
   "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
+# C3: recorded only when set, so every earlier run's record reads as before
+[ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
 # The SLAM mode, said and recorded (live-default plan 5d): this launcher maps online. The switch to localization on an
 # accepted survey bundle is the live console's (deploy/console/slam_choice.sh); no Riibotics demo scene has one.
 if [ "$MODE" = truth ]; then RIIB_SLAM="none (MODE=truth)"
@@ -138,6 +149,8 @@ else
   if [ "$NEAR" = on ]; then
     MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive
       --near-capture-redraw always --near-capture-redraw-lateral-m 0.10)
+    # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): NEAR_RECAPTURE_GAP=<m> adds the second near capture.
+    [ -n "$NEAR_RECAPTURE_GAP" ] && MODE_ARGS+=(--near-recapture-gap-m "$NEAR_RECAPTURE_GAP")
   fi
 fi
 # the preflight's runner must know --check-args: an older one would take it for a Kit argument and start Isaac

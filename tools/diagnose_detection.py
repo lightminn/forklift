@@ -743,25 +743,50 @@ MOUNT_SNIPPETS_NAMED = (
     'attempt["base_from_optical"] = {',
     "camera_axes=args.perception_camera_axes,",
 )
+# Since M-a1 slice 4b (85cc50f4, 2026-10-15) the capture's attempt record -- its mount included -- is written by the
+# mission core, not the runner. A snippet missing from the runner is looked for in these files, as the run recorded
+# them: the git blob whose SHA-256 is the run's source_sha256 entry (repository path, recorded key).
+RUNNER_COMPANIONS = (("src/forklift_core/mission/core.py", "forklift_core/mission/core.py"),)
 _RUNNER_CACHE: dict[tuple, str | None] = {}
 
 
+def _blob_with_hash(path: str, sha256: str) -> bytes | None:
+    """The content of ``path`` at any commit whose blob has this SHA-256, else None."""
+    import subprocess
+
+    commits = subprocess.run(
+        # --full-history --all: the default path walk simplifies merges and skips blobs a run really used (Codex P3).
+        ["git", "log", "--all", "--full-history", "--format=%H", "--", path],
+        cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    for commit in commits:
+        shown = subprocess.run(["git", "show", f"{commit}:{path}"], cwd=ROOT, capture_output=True)
+        if shown.returncode == 0 and hashlib.sha256(shown.stdout).hexdigest() == sha256:
+            return shown.stdout
+    return None
+
+
 def runner_mount_commit(
-    script_sha256: str | None, snippets: tuple = MOUNT_SNIPPETS
+    script_sha256: str | None, snippets: tuple = MOUNT_SNIPPETS, sources: dict | None = None
 ) -> str | None:
     """The commit whose run_transport.py has this hash and applies the nominal mount.
 
     The run record keeps only the runner's hash, so the mount the runner applied
     is checked in git history: the matching revision must set the perception
     camera from the adapter's default_base_from_optical with the rig's optical
-    quaternion. None when no revision matches or the mount code differs.
+    quaternion. A snippet the runner does not have must be in a companion file
+    exactly as the run recorded it (``sources``: the record's source_sha256);
+    a missing or unmatched companion hash fails. None when no revision matches
+    or the mount code differs.
     """
     import subprocess
 
     if script_sha256 is None:
         return None
-    if (script_sha256, snippets) in _RUNNER_CACHE:
-        return _RUNNER_CACHE[(script_sha256, snippets)]
+    companion_hashes = tuple((sources or {}).get(key) for _, key in RUNNER_COMPANIONS)
+    cache_key = (script_sha256, snippets, companion_hashes)
+    if cache_key in _RUNNER_CACHE:
+        return _RUNNER_CACHE[cache_key]
     found = None
     try:
         commits = subprocess.run(
@@ -779,13 +804,21 @@ def runner_mount_commit(
                 check=True,
             ).stdout
             if hashlib.sha256(blob).hexdigest() == script_sha256:
-                text = blob.decode()
-                if all(snippet in text for snippet in snippets):
+                runner = blob.decode()
+                missing = [snippet for snippet in snippets if snippet not in runner]
+                if missing:
+                    texts = []
+                    for (path, _), sha in zip(RUNNER_COMPANIONS, companion_hashes, strict=True):
+                        companion = None if sha is None else _blob_with_hash(path, sha)
+                        if companion is not None:
+                            texts.append(companion.decode())
+                    missing = [s for s in missing if not any(s in text for text in texts)]
+                if not missing:
                     found = commit
                 break
     except (OSError, subprocess.CalledProcessError):
         found = None
-    _RUNNER_CACHE[(script_sha256, snippets)] = found
+    _RUNNER_CACHE[cache_key] = found
     return found
 
 
@@ -972,7 +1005,7 @@ def diagnose_attempt(run_dir: Path, number: int, pallet_urdf: Path) -> dict:
     )
     if "base_from_optical" in attempt:
         out["runner_commit"] = runner_mount_commit(
-            result.get("script_sha256"), MOUNT_SNIPPETS_NAMED
+            result.get("script_sha256"), MOUNT_SNIPPETS_NAMED, result.get("source_sha256")
         )
         out["gates"]["runner_mount"] = out[
             "runner_commit"

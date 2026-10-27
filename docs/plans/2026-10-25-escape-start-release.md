@@ -6,6 +6,7 @@ branch `feat/escape-start-release`.
 ## 1. 문제
 
 원자료: ws1 `test_runs/live/newtq_occ_4c53486_line_m_s0/live/epoch_1/run`(스냅숏 `occ_4c53486`), `missions/m3/records.json` 의 `state.scene_replans`·`state.scene_escape_candidates`.
+보관(2026-10-27 ws1 정리): 실행 폴더는 `gdrive:forklift-archive/ws1-cleanup-20261027-c/` 의 `c27_02`, 스냅숏 `occ_4c53486` 은 `c27_07` 묶음에 있다. 묶음마다 `.tar.zst`·`.files.tsv`·`.tar.zst.md5` 가 함께 있다.
 
 - 463.733 s P6 정지 감시가 장면 재계획을 요청했다. 계획 여유 0.20 에서 `invalid_start` 로 실패했고, 장치의 직선 탈출 후보 8 개도 모두 탈락했다.
 - 후진 후보 4 개(0.3·0.6·1.0·1.5 m)의 기록은 같다. 쓸림(`sweep_free`)만 거짓이고, 허가 경로 검사(`path`·`path_ramped`)와 세 정지 원호는 모두 통과다.
