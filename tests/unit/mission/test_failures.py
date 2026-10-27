@@ -104,6 +104,8 @@ KNOWN = {
         "observe:stall_exhausted",  # the first far observation's stall with no candidate or replan left (scene replan 2.3)
         # plan 2026-10-26-observe-start-backoff: the start backoff ends short of a valid start, or its guard stopped it
         "observe_start_backoff_short", "observe_start_backoff_stopped",
+        # C3 (plan 2026-10-27 insertion lateral drift T2): a refused second near capture cannot rejoin the first line
+        "near_capture_second_resume:",
     },
 }
 

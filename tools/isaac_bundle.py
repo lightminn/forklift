@@ -7,7 +7,8 @@
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
-"pace_log": glob} (all but name and argv optional). Runs start in list order whenever
+"pace_log": glob, "missions": path} (all but name and argv optional; "missions" is the run's console probe report,
+by default probe.json in a retry_move folder -- see mission_verdict). Runs start in list order whenever
 
 - a slot is free: at most --slots runs at once, and never more slots than the job's shards (the rule: as many shards
   as Isaac sessions running in the job). A run holds its slot until every process it started has ended, not only its
@@ -91,6 +92,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -163,13 +165,15 @@ class Run:
     retry_move: list = field(default_factory=list)
     pace_log: str | None = None
     watch: list = field(default_factory=list)
+    missions: str | None = None
 
     def at(self, attempt) -> Run:
         """This run with "{attempt}" filled in."""
         f = (lambda x: x.replace("{attempt}", str(attempt)))  # noqa: E731
         return Run(self.name, [f(a) for a in self.argv], {k: f(v) for k, v in self.env.items()}, self.cwd,
                    [f(g) for g in self.scan], [f(m) for m in self.retry_move],
-                   f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch])
+                   f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch],
+                   f(self.missions) if self.missions else None)
 
     @property
     def retryable(self) -> bool:
@@ -178,17 +182,17 @@ class Run:
         return bool(self.retry_move) or any("{attempt}" in t for t in texts)
 
 
-def load_runs(path) -> list[Run]:
+def load_runs(path, text=None) -> list[Run]:
     """The run list: one JSON object per non-empty line; refuses unknown keys, bad names, duplicate names or ports
-    and the environment names the bundle sets itself."""
+    and the environment names the bundle sets itself. ``text``: the list as already read (checked and hashed as one)."""
     runs, names, ports = [], set(), set()
-    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+    for n, line in enumerate((Path(path).read_text() if text is None else text).splitlines(), 1):
         if not line.strip():
             continue
         obj = json.loads(line)
         if not isinstance(obj, dict):
             raise ValueError(f"line {n}: not an object")
-        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch"}
+        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch", "missions"}
         if unknown:
             raise ValueError(f"line {n}: unknown keys {sorted(unknown)}")
         name = obj.get("name")
@@ -219,11 +223,112 @@ def load_runs(path) -> list[Run]:
             if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
                 raise ValueError(f"line {n}: {key} must be a list of strings")
             lists[key] = value
-        pace_log = obj.get("pace_log")
+        pace_log, missions = obj.get("pace_log"), obj.get("missions")
         if pace_log is not None and not isinstance(pace_log, str):
             raise ValueError(f"line {n}: pace_log must be a string")
-        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, **lists))
+        if missions is not None and not isinstance(missions, str):
+            raise ValueError(f"line {n}: missions must be a path (string)")
+        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, missions=missions, **lists))
     return runs
+
+
+PROBE_REPORT = "probe.json"  # tools/live_console_probe.py --report, as the console wrappers name it in their OUT
+TOUR_ARRIVED = "arrived"  # tools/survey_tour.py TourDriver's end at the tour's last pose; every other end stops short
+FAILED_STATUSES = ("infra_failed", "stalled", "early_mission_failure", "tour_incomplete", "no_mission_report")
+
+
+def _report_outcomes(data) -> tuple[list, dict | None]:
+    """(outcomes, tour) of a probe report: (outcome, reason) per submission -- the session's own and, after a reset,
+    the next session's (``after_reset.missions_run``, Codex) -- and the tour block. Raises on a report of another
+    shape: the caller confines that to its run."""
+    if not isinstance(data, dict):
+        raise ValueError("the report is not an object")
+    entries = []
+    for block in (data, data.get("after_reset")):
+        if block is None:
+            continue
+        if not isinstance(block, dict):
+            raise ValueError("after_reset is not an object")
+        got = block.get("missions_run")
+        if got is None:
+            continue
+        if not isinstance(got, list):  # 0, "", {} and false too: an empty value of another type is not "none asked"
+            raise ValueError("missions_run is not a list")
+        entries += got
+    outcomes = []
+    for e in entries:
+        if not isinstance(e, dict):
+            raise ValueError("a missions_run entry is not an object")
+        submit, result = e.get("submit") or {}, e.get("result") or {}
+        if not isinstance(submit, dict) or not isinstance(result, dict):
+            raise ValueError("a submit or result is not an object")
+        if submit.get("t") != "ack":
+            outcomes.append(("refused", submit.get("reason")))
+        else:
+            outcomes.append((str(result.get("outcome") or "no_result"), result.get("reason")))
+    tour = data.get("tour")
+    if tour is not None and not isinstance(tour, dict):
+        raise ValueError("tour is not an object")
+    return outcomes, tour
+
+
+def mission_verdict(run, started=None):
+    """(missions, status) for a run that ended. missions: what its console probe report says -- the submissions (the
+    session's and, after a reset, the next session's), how many ended done, each outcome's count, the first one's
+    outcome and reason, and a tour's end -- or None when there is no report. The report is the list's "missions" path,
+    else ``probe.json`` in one of the run's retry_move folders; a report older than the run's start (``started``, wall
+    seconds) is a stale one this run did not write.
+    status:
+    - "early_mission_failure": missions were asked and none ended done (rc 0 alone would count it a success: the lvram
+      pilot's random_m sessions failed all three missions in two seconds); a refused submission is not done;
+    - "tour_incomplete": the report's tour ended anywhere but its last pose (missions["tour"]: end, progress_m, the
+      last permit reason) -- the session that ran it judges its purpose from the reason, the count shows it;
+    - "no_mission_report": the list named a report that is missing, or a report is stale or cannot be read (any
+      shape error stays with this run: the bundle goes on);
+    - None: the row keeps "ended". A later mission's failure after a done one is the experiment's result, not the
+      run's (its counts are in missions)."""
+    if run.missions:
+        paths, named = [run.missions], True
+    else:
+        paths, named = [os.path.join(m, PROBE_REPORT) for m in run.retry_move], False
+    path = next((p for p in paths if os.path.isfile(p)), None)
+    if path is None:
+        return ({"report": run.missions, "error": "missing"}, "no_mission_report") if named else (None, None)
+    try:
+        if started is not None and os.path.getmtime(path) < started - 1.0:
+            return {"report": path, "error": "older than the run (a stale report)"}, "no_mission_report"
+        outcomes, tour = _report_outcomes(json.loads(Path(path).read_text()))
+        counts = {}
+        for o, _ in outcomes:
+            counts[o] = counts.get(o, 0) + 1
+        done = counts.get("done", 0)
+        missions = {"report": path, "submitted": len(outcomes), "done": done, "outcomes": counts,
+                    "first": ({"outcome": outcomes[0][0],
+                               "reason": (outcomes[0][1] or None) and str(outcomes[0][1])[:300]} if outcomes else None)}
+        if outcomes and not done:
+            return missions, "early_mission_failure"
+        if tour is not None:
+            # lead, 2026-10-27: d7oor 11832's tours stalled at 27.1 m on pallet:P-1's permit and ended rc 0
+            events = tour.get("events") or []
+            permit = next((e.get("permit") for e in reversed(events if isinstance(events, list) else [])
+                           if isinstance(e, dict) and isinstance(e.get("permit"), dict)), None)
+            missions["tour"] = {"end": tour.get("end"), "progress_m": tour.get("progress_m"),
+                                "permit_reason": (permit or {}).get("reason")}
+            if tour.get("end") != TOUR_ARRIVED:
+                return missions, "tour_incomplete"
+        return missions, None
+    except Exception as exc:  # noqa: BLE001 -- a report of any other shape is this run's problem, not the bundle's
+        return {"report": path, "error": repr(exc)[:300]}, "no_mission_report"
+
+
+def status_line(statuses) -> str:
+    """Statuses and their counts in one line a person reads first: ended first, then the rest by count."""
+    order = sorted(statuses, key=lambda k: (k != "ended", -statuses[k], k))
+    return ", ".join(f"{k} {statuses[k]}" for k in order) or "no runs"
+
+
+def _status_key(row) -> str:
+    return "ended_rc_nonzero" if row.get("status") == "ended" and row.get("rc") != 0 else str(row.get("status"))
 
 
 def defined_flags(script) -> set:
@@ -278,7 +383,114 @@ def _end_token(token, quiet_s=0.5, limit_s=10.0):
     return False
 
 
-def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
+# --- preflight (docs/plans/2026-10-27-ws1-preflight.md) ---------------------------------------------------------------
+PREFLIGHT_SUFFIX = ".preflight.json"
+# what a run may take from the submitting shell's environment: the system's, Slurm's, and what the runner sets per run
+INHERIT_OK = re.compile(r"^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_\w+|TZ|TMPDIR|PWD|OLDPWD|TERM|SHLVL|HOSTNAME"
+                        r"|SLURM_\w+|CUDA_VISIBLE_DEVICES|SESSION_ID|BRIDGE_CPU|PORT|BUNDLE_\w+|PYTHONPATH"
+                        r"|PYTHONDONTWRITEBYTECODE|OMP_NUM_THREADS)$")
+# every name a launcher expands -- $NAME, ${NAME}, ${NAME:-x}, ${NAME:?why} ... -- is one a submitting shell could set
+# unseen (LAG in the ct1 wrapper, NEAR in riib, EXTRA_ARGS read plainly); names the launcher only sets itself are not
+# in the environment, so they never match (Codex)
+_ENV_READ = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+# the snapshot's launchers a run's wrapper may call (each checked when there)
+SNAPSHOT_LAUNCHERS = ("deploy/console/isaac_live.sbatch", "deploy/console/slam_choice.sh",
+                      "deploy/riibotics/riib_scene.sbatch")
+SNAPSHOT_INPUTS = SNAPSHOT_LAUNCHERS + ("sim/isaac/run_transport.py", "config/slam_map_bundles.yaml",
+                                        "tools/slam_bundle_registry.py")
+
+
+def launcher_files(run) -> list[str]:
+    """The shell files that decide a run's launch: the scripts its argv names (in its cwd) and the snapshot's
+    launchers there."""
+    out = []
+    for a in run.argv:
+        path = os.path.join(run.cwd or ".", a)
+        if a.endswith((".sbatch", ".sh")) and os.path.isfile(path):
+            out.append(os.path.realpath(path))
+    for rel in SNAPSHOT_LAUNCHERS:
+        path = os.path.join(run.cwd or ".", rel)
+        if os.path.isfile(path):
+            out.append(os.path.realpath(path))
+    return list(dict.fromkeys(out))
+
+
+def inherited_controls(run, environ) -> list[str]:
+    """Settings the run's launchers read from the environment that its list entry does not set but the submitting
+    environment does: they would steer the run unseen by the list and its preflight (Codex: LAG, MODE, NEAR)."""
+    names = set()
+    for path in launcher_files(run):
+        names |= set(_ENV_READ.findall(Path(path).read_text(errors="replace")))
+    return sorted(n for n in names if n in environ and n not in run.env and not INHERIT_OK.match(n))
+
+
+def _sha256_file(path) -> str | None:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def preflight_inputs(runs, runner) -> dict:
+    """path -> sha256 of every file a preflight verdict rests on: the runs' launch files, the runner, the snapshots'
+    launchers and SLAM bundle registry."""
+    paths = {os.path.realpath(runner)}
+    for run in runs:
+        paths.update(launcher_files(run))
+        rels = list(SNAPSHOT_INPUTS)
+        if run.env.get("SLAM_BUNDLE_REGISTRY"):  # the registry the run names, not only the default (Codex)
+            rels.append(run.env["SLAM_BUNDLE_REGISTRY"])
+        for rel in rels:
+            path = os.path.join(run.cwd or ".", rel)
+            if os.path.isfile(path):
+                paths.add(os.path.realpath(path))
+    return {p: _sha256_file(p) for p in sorted(paths)}
+
+
+def write_preflight(list_path, data: bytes, runs, runner, info, inputs) -> Path:
+    """The list's preflight proof beside it: the list bytes checked, the files the verdict rests on as hashed before
+    the check (``inputs``), what each run's launch chose (SLAM mode, bundle, map id)."""
+    path = Path(str(list_path) + PREFLIGHT_SUFFIX)
+    proof = {"list_sha256": hashlib.sha256(data).hexdigest(), "checked_at": time.time(),
+             "runner": os.path.realpath(runner), "inputs": inputs,
+             "runs": [{"name": r.name, **(info or {}).get(r.name, {})} for r in runs]}
+    path.write_text(json.dumps(proof, indent=1) + "\n")
+    return path
+
+
+def nonempty_lines(text) -> list[str]:
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=None) -> list[str]:
+    """Why a list may not run (empty: it may): no proof beside it, a proof of other bytes, a file the verdict rested
+    on changed since, a setting inherited from the submitting environment; with index, an array task's line that is
+    not the list's index-th non-empty line."""
+    path = Path(str(list_path) + PREFLIGHT_SUFFIX)
+    try:
+        proof = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return [f"no preflight proof {path} ({type(exc).__name__}): run isaac_bundle.py check on the list first "
+                "(or --no-preflight / PREFLIGHT=off with a reason)"]
+    problems = []
+    if proof.get("list_sha256") != hashlib.sha256(data).hexdigest():
+        problems.append(f"{path} is the proof of other list bytes: the list changed since its check")
+    for p, digest in (proof.get("inputs") or {}).items():
+        if _sha256_file(p) != digest:
+            problems.append(f"{p} changed since the check")
+    for run in runs:
+        inherited = inherited_controls(run, environ)
+        if inherited:
+            problems.append(f"{run.name}: {', '.join(inherited)} set by the submitting environment, not by the list")
+    if index is not None:
+        lines = nonempty_lines(data.decode())
+        got = Path(line).read_text().strip() if line is not None else None
+        if not 0 <= index < len(lines) or got != lines[index].strip():
+            problems.append(f"task {index}: its run line is not the list's line {index}")
+    return problems
+
+
+def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[str]:
     """Problems found before a submission: a run whose output (retry_move) already exists, has no output named, or
     whose argv does not name it (none of these is run), a launcher without a DRY_RUN mode (not run either), a DRY_RUN
     that fails, hangs or prints no RUNNER_ARGS line, and runner arguments whose --flags `runner` does not define (an
@@ -287,9 +499,15 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
     import tempfile
 
     known = defined_flags(runner)
+    environ = os.environ if environ is None else environ
     problems = []
     for n, run in enumerate(runs):
         r = run.at(1)
+        inherited = inherited_controls(r, environ)
+        if inherited:
+            problems.append(f"{r.name}: {', '.join(inherited)} set by the submitting environment, not by the list "
+                            "(put them in its env)")
+            continue
         if not r.retry_move:
             problems.append(f"{r.name}: no retry_move output named (not run: its DRY_RUN could write a real output)")
             continue
@@ -301,7 +519,7 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
             problems.append(f"{r.name}: no launcher with a DRY_RUN mode printing RUNNER_ARGS (not run)")
             continue
         with tempfile.TemporaryDirectory(prefix="bundle_check_") as scratch:
-            merged = {**os.environ, **r.env}  # what the launcher will see: the inherited environment too
+            merged = {**environ, **r.env}  # what the launcher will see: the inherited environment too
             argv = _scratch_argv(r.argv, merged, r.cwd, r.retry_move, scratch)
             if argv is None:
                 problems.append(f"{r.name}: its outputs {r.retry_move} are not each a whole argument of its argv, or "
@@ -340,6 +558,18 @@ def check_runs(runs, runner, timeout_s=120.0) -> list[str]:
         if p.returncode != 0 or "RUNNER_ARGS" not in lines:
             problems.append(f"{r.name}: DRY_RUN exit {p.returncode}, no RUNNER_ARGS line")
             continue
+        if "ARGS_OK" not in lines:  # the runner's own checks on these arguments (run_transport --check-args)
+            problems.append(f"{r.name}: the DRY_RUN printed no ARGS_OK (its launcher does not run the runner's check)")
+            continue
+        if info is not None:
+            got = {}
+            for line in lines:
+                if line.startswith("SLAM_CHOICE "):
+                    got["slam_choice"] = line.split(" ", 1)[1]
+                elif line.startswith("SLAM_BUNDLE "):
+                    parts = line.split()
+                    got.update(map_bundle=parts[1], map_id=parts[2] if len(parts) > 2 else None)
+            info[r.name] = got
         args = " ".join(lines[lines.index("RUNNER_ARGS") + 1:]).split()
         unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
         if unknown:
@@ -432,7 +662,7 @@ def collect(out, expect):
         except (OSError, ValueError, KeyError):
             verdict = None
         rows.append({"task": i, "name": last.get("name"), "status": last.get("status"), "rc": last.get("rc"),
-                     "attempts": len(recs), "summary_exit": verdict})
+                     "attempts": len(recs), "summary_exit": verdict, "missions": last.get("missions")})
     return rows, missing
 
 
@@ -966,6 +1196,8 @@ class _Live:
     silence_max: float = 0.0
     stack_term_at: float | None = None  # a stalled run's TERM, stack_wait_s after its SIGUSR1
     no_runner_since: float | None = None
+    runner_seen: bool = False  # its runner (run_transport) has run at some point
+    stall_reason: str | None = None
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -976,6 +1208,7 @@ class _Live:
     vram_now: int = 0
     gpus: set = field(default_factory=set)
     oom_at_start: int | None = None
+    launch_wall: float | None = None  # wall time taken before Popen: a report older than it is not this run's
     pace: _Pace | None = None
     pace_min: float | None = None
     # set when the top process has ended; the slot is held until the run's other processes are gone
@@ -992,10 +1225,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
-               diag_wait_s=60.0, no_runner_s=900.0,
+               diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
-               siblings=_siblings, gpu_full_give_up_s=None):
+               siblings=_siblings, gpu_full_give_up_s=None, preflight=None):
     """Run the list; return the summary (also written to out/summary.json)."""
     out = Path(out)
     if claim_dir is not None:
@@ -1031,7 +1264,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
           "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
           "time_left": 0, "time_left_retry": [], "stall_next": 0.0, "stalled": 0,
-          "node_ram_waits": 0, "claimed_elsewhere": 0}
+          "node_ram_waits": 0, "claimed_elsewhere": 0, "early_mission_failures": 0, "tours_incomplete": 0,
+          "no_mission_reports": 0, "missions_submitted": 0, "missions_done": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
     results_path, vram_path, pace_path = out / "results.jsonl", out / "vram.jsonl", out / "pace.jsonl"
@@ -1116,10 +1350,22 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                         moved.append(dest)
             except OSError as exc:
                 move_error, retry = repr(exc), False
+        status = "infra_failed" if infra else ("stalled" if r.stalled else "ended")
+        missions = None
+        if status == "ended":
+            missions, mission_status = mission_verdict(r.run, started=r.launch_wall or r.start_wall)
+            if missions and missions.get("submitted") is not None:
+                st["missions_submitted"] += missions["submitted"]
+                st["missions_done"] += missions["done"]
+            if mission_status and x["rc"] == 0:  # a run that failed by its rc keeps that verdict
+                status = mission_status
+                st[{"early_mission_failure": "early_mission_failures", "tour_incomplete": "tours_incomplete",
+                    "no_mission_report": "no_mission_reports"}[status]] += 1
         record({
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
-            "status": "infra_failed" if infra else ("stalled" if r.stalled else "ended"), "infra": signs,
-            "retried": retry, "stalled": r.stalled, "silence_max_s": round(r.silence_max, 1),
+            "status": status, "missions": missions, "infra": signs,
+            "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
+            "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
             "timeout": r.timeout, "killed": r.killed, "session_id": r.env["SESSION_ID"],
@@ -1153,6 +1399,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         log_path = out / "runs" / f"{run.name}.{attempt}.log"
         log = log_path.open("ab")
         argv = (["taskset", "-c", ",".join(map(str, session_cpus))] + run.argv) if bridge_set else run.argv
+        launch_wall = time.time()
         try:
             proc = subprocess.Popen(argv, cwd=run.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1166,6 +1413,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                oom_at_start=oom_counter() if oom_counter else None,
                                pace=_Pace(pace_window_s) if run.pace_log else None)
         live[proc.pid].ram_key = ram_key
+        live[proc.pid].launch_wall = launch_wall
         st["last_start"] = now
         return True
 
@@ -1360,26 +1608,34 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
+                watched = bool(watch_globs(r.run, watch_rel))
                 if (not r.stalled and r.term_at is None and now >= st["stall_next"]
-                        and watch_globs(r.run, watch_rel)):
-                    # measured for every watched run (silence_max_s), acted on with stall_s; judged only while its
-                    # runner (run_transport) runs, from that runner's start
+                        and (watched or (stack_match and (no_runner_s or first_runner_s)))):
+                    # progress silence: measured for every watched run (silence_max_s), acted on with stall_s, judged
+                    # only while its runner (run_transport) runs, from that runner's start. Runner absence needs no
+                    # progress file: lvram (2026-10-27) had none, its launcher ended on its first line and the probe
+                    # waited for a port file with the run's shard, CPUs and memory held -- never judged.
                     started = _runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match else 0.0
-                    silence, limit = None, stall_s
+                    silence, limit, reason = None, stall_s, "progress"
                     if started is not None:
-                        r.no_runner_since = None
-                        silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
-                        r.silence_max = max(r.silence_max, silence)
-                    elif no_runner_s:
+                        r.no_runner_since, r.runner_seen = None, True
+                        if watched:
+                            silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
+                            r.silence_max = max(r.silence_max, silence)
+                    elif not r.runner_seen and first_runner_s:
+                        # no runner yet: a session's first runner comes once its bridge is up (at most ~2 min after
+                        # the start, 60 s apart in a bundle); none after first_runner_s is a launch that failed
+                        silence, limit, reason = now - r.start, first_runner_s, "no_runner_start"
+                    elif r.runner_seen and no_runner_s:
                         # no runner: a live session between epochs (backoff, bridge start, standby: ~7 min at most)
                         # is no stall, a run stuck without a runner is, after no_runner_s
                         r.no_runner_since = now if r.no_runner_since is None else r.no_runner_since
-                        silence, limit = now - r.no_runner_since, no_runner_s
-                    if stall_s and silence is not None:
+                        silence, limit, reason = now - r.no_runner_since, no_runner_s, "no_runner"
+                    if (stall_s or reason == "no_runner_start") and silence is not None:
                         if silence >= limit:
                             # first what it was doing: diagnostics in a thread (py-spy, /proc, nvidia-smi -- they
                             # must not hold up the other runs), at most diag_wait_s
-                            r.stalled = True
+                            r.stalled, r.stall_reason = True, reason
                             r.stack_pids = [p for p in token_pids(r.env["BUNDLE_TOKEN"])
                                             if stack_match and stack_match in _cmdline(p)]
                             r.diag_thread = threading.Thread(target=lambda r=r: setattr(
@@ -1530,15 +1786,22 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         drop_unstarted("not_started")
 
     final = [r for r in records if not r.get("retried")]  # the last attempt of each run
-    failed = sum(1 for r in final if r["status"] in ("infra_failed", "stalled")
-                 or (r["status"] == "ended" and r["rc"] != 0))
+    failed = sum(1 for r in final if r["status"] in FAILED_STATUSES or (r["status"] == "ended" and r["rc"] != 0))
+    statuses = {}
+    for r in final:
+        statuses[_status_key(r)] = statuses.get(_status_key(r), 0) + 1
     not_started = sum(1 for r in final if r["status"] in ("not_started", "start_failed", "aborted", "time_left",
                                                           "time_left_retry", "gpu_full"))
     summary = {
+        "preflight": preflight,
         "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "gpu_full_gave_up": st["gpu_full_gave_up"], "unreadable_starts": st["unreadable_starts"],
         "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
+        "statuses": statuses, "status_line": status_line(statuses),
+        "early_mission_failures": st["early_mission_failures"], "tours_incomplete": st["tours_incomplete"],
+        "no_mission_reports": st["no_mission_reports"], "missions_submitted": st["missions_submitted"],
+        "missions_done": st["missions_done"],
         "infra_failed_attempts": st["infra"], "retries": retries, "backoffs": st["backoffs"], "stepups": st["stepups"],
         "time_left": st["time_left"], "time_left_retry": st["time_left_retry"], "run_est_s": run_est_s,
         "stalled": st["stalled"], "stall_s": stall_s,
@@ -1561,15 +1824,42 @@ def main(argv=None) -> int:
         cp.add_argument("--kind", choices=sorted(KINDS), help="with --jobs: warn when the last wave is half empty")
         cp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list (--claim-dir)")
         a = cp.parse_args(argv[1:])
-        runs = load_runs(a.list)
-        problems = check_runs(runs, a.runner)
+        data = Path(a.list).read_bytes()  # read once: the bytes checked are the bytes the proof names
+        runs = load_runs(a.list, text=data.decode())
+        info = {}
+        # the files hashed before the check, compared after it: a file edited during the check would otherwise have
+        # its new contents certified by the old contents' verdict (Codex)
+        inputs = preflight_inputs(runs, a.runner)
+        problems = check_runs(runs, a.runner, info=info)
+        problems += [f"{p} changed during the check" for p, d in preflight_inputs(runs, a.runner).items()
+                     if inputs.get(p) != d]
         for line in problems:
             print(line)
         warning = wave_warning(len(runs), a.kind, a.jobs) if a.kind else None
         if warning:
             print(warning)
         print(f"{len(problems)} problems")
-        return 1 if problems else 0
+        if problems:
+            return 1
+        print(f"preflight proof: {write_preflight(a.list, data, runs, a.runner, info, inputs)}")
+        return 0
+    if argv[:1] == ["verify-preflight"]:
+        vp = argparse.ArgumentParser(prog="isaac_bundle.py verify-preflight",
+                                     description="whether a checked list may run (an array task: its own line too)")
+        vp.add_argument("list")
+        vp.add_argument("--index", type=int, help="an array task's index (non-empty lines, from 0)")
+        vp.add_argument("--line", help="the run line the task took (a file)")
+        a = vp.parse_args(argv[1:])
+        data = Path(a.list).read_bytes()
+        try:
+            runs = load_runs(a.list, text=data.decode())
+        except (OSError, ValueError) as exc:
+            print(f"refusing the run list: {exc}", file=sys.stderr)
+            return 2
+        problems = verify_preflight(a.list, data, runs, os.environ, index=a.index, line=a.line)
+        for line in problems:
+            print(f"preflight: {line}", file=sys.stderr)
+        return 2 if problems else 0
     if argv[:1] == ["collect"]:
         cp = argparse.ArgumentParser(prog="isaac_bundle.py collect",
                                      description="the final state of every task of an array (deploy/slurm/isaac_array.sbatch)")
@@ -1582,6 +1872,12 @@ def main(argv=None) -> int:
         for i in missing:
             print(json.dumps({"task": i, "status": "missing"}))
         bad = missing + [r["task"] for r in rows if r["status"] != "ended" or r["rc"] != 0 or r["summary_exit"] != 0]
+        counts = {}
+        for r in rows:
+            counts[_status_key(r)] = counts.get(_status_key(r), 0) + 1
+        if missing:
+            counts["missing"] = len(missing)
+        print(f"statuses: {status_line(counts)}")
         print(f"{len(rows)} of {a.expect} tasks recorded, {len(missing)} missing, {len(bad)} not ended with rc 0 "
               "and a clean summary")
         return 1 if bad else 0
@@ -1624,6 +1920,11 @@ def main(argv=None) -> int:
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--list", required=True, help="the run list (JSON lines)")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="run a list without its preflight proof (isaac_bundle.py check): tests, or an exception whose "
+                         "reason --preflight-note records")
+    ap.add_argument("--preflight-note", default=None,
+                    help="why --no-preflight (required with it; recorded in the summary)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--kind", choices=sorted(KINDS),
                     help="the sessions' kind: its measured GPU memory per session and the slots the shards hold")
@@ -1704,10 +2005,26 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     try:
-        runs = load_runs(a.list)
+        data = Path(a.list).read_bytes()  # read once: the bytes verified are the bytes run
+        runs = load_runs(a.list, text=data.decode())
     except (OSError, ValueError) as exc:
         print(f"refusing the run list: {exc}", file=sys.stderr)
         return 2
+    if a.no_preflight:
+        # a bypass is allowed only with its reason, which the summary keeps for the lead to see (2026-10-27)
+        if not (a.preflight_note or "").strip():
+            print("refusing: --no-preflight needs --preflight-note (why this list runs without its check)",
+                  file=sys.stderr)
+            return 2
+        a.preflight = f"off: {a.preflight_note.strip()}"
+        print(f"preflight: off -- {a.preflight_note.strip()}", file=sys.stderr)
+    else:
+        problems = verify_preflight(a.list, data, runs, os.environ)
+        if problems:
+            for line in problems:
+                print(f"refusing: {line}", file=sys.stderr)
+            return 2
+        a.preflight = "verified"
     probe = None if a.no_vram else nvidia_smi_probe
     if probe is not None and probe() is None:
         print("refusing: nvidia-smi cannot be read (--no-vram runs by the slots alone)", file=sys.stderr)
@@ -1732,6 +2049,8 @@ def main(argv=None) -> int:
         summary = _run_main(a, runs, slots, shards, probe, stop)
     finally:
         entry.unlink(missing_ok=True)
+    if summary.get("status_line"):
+        print(f"statuses: {summary['status_line']}", file=sys.stderr)
     print(json.dumps(summary))
     return summary["exit_code"]
 
@@ -1753,6 +2072,7 @@ def _run_main(a, runs, slots, shards, probe, stop):
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
         gpu_full_give_up_s=60 * a.gpu_full_give_up_min or None,
+        preflight=getattr(a, "preflight", None),
     )
 
 

@@ -730,14 +730,15 @@ def exit_prefix_length_m(start: Pose2D, footprint: Footprint, exit_prefix: ExitP
     return None
 
 
-def _join_prefix(prefix: PlanResult, search: PlanResult, record: dict) -> PlanResult:
-    """The straight reverse then the search from its end, the search's own records kept."""
+def _join_prefix(prefix: PlanResult, search: PlanResult, record: dict, field_: str = "exit_prefix") -> PlanResult:
+    """The straight reverse then the search from its end, the search's own records kept; ``record`` goes in
+    ``field_`` (exit_prefix, or start_backoff for the return-start backoff)."""
     poses = np.concatenate((prefix.poses, search.poses[1:]))
     directions = np.concatenate((prefix.directions, search.directions[1:]))
     curvatures = np.concatenate((prefix.curvatures_inv_m, search.curvatures_inv_m[1:]))
     directions[0], curvatures[0] = directions[1], curvatures[1]
     return replace(search, poses=poses, directions=directions, curvatures_inv_m=curvatures,
-                   length_m=prefix.length_m + search.length_m, exit_prefix=record)
+                   length_m=prefix.length_m + search.length_m, **{field_: record})
 
 
 def _transport_search(start, goal, props, footprint, bounds, config, *, occupancy=None, deadline=None,
@@ -769,6 +770,76 @@ def _transport_search(start, goal, props, footprint, bounds, config, *, occupanc
         return replace(plain(), exit_prefix={**record, "status": f"unmet:search_{search.status}"})
     return _join_prefix(straight, search, {**record, "status": "prefix", "length_m": distance,
                                             "min_clearance_m": footprint_clearance_m(end, footprint, exit_prefix.obstacles)})
+
+
+# Return-start backoff (docs/plans/2026-10-27-return-start-withdraw-extension.md R3): the step the distances are tried
+# at, how far past the first clear one the truck goes, and the cap the runner's switch passes when on. Policy values.
+RETURN_START_BACKOFF_STEP_M = 0.01
+RETURN_START_BACKOFF_PAD_M = 0.03
+RETURN_START_BACKOFF_CAP_M = 0.30
+
+
+def return_start_backoff(start: Pose2D, obstacles, footprint: Footprint, bounds: Bounds, clearance_m: float,
+                         slot_props, straight_clearance_m: float, limit_m: float, *, occupancy=None,
+                         step_m: float = RETURN_START_BACKOFF_STEP_M, pad_m: float = RETURN_START_BACKOFF_PAD_M) -> dict:
+    """R3: straight back from ``start`` along its heading, ``step_m`` at a time up to ``limit_m``. A distance d is clear
+    when (a) the pose d back passes the return's own start check (``obstacles``, bounds and grid at ``clearance_m``) and
+    (b) the straight from ``start`` to it keeps ``straight_clearance_m`` from ``slot_props``, the bounds and the grid --
+    the props in the start's own frame, so a start already inside a grown estimate can still back away (agy review 5).
+    The advice is the first clear d, ``last_m`` the end of the run of clear distances from it; the backoff is
+    min(advice + pad, last, limit), taken only when it reaches advice + one step ("prefix"), else "unmet:clipped";
+    no clear d within the limit is "unmet:no_advice"."""
+    checker = make_checker(obstacles, footprint, bounds, occupancy)
+    record = {"start": [float(start.x_m), float(start.y_m), float(start.yaw_rad)], "limit_m": float(limit_m),
+              "step_m": float(step_m), "pad_m": float(pad_m), "advice_m": None, "last_m": None, "length_m": 0.0}
+    advice = last = None
+    for k in range(1, int(floor(limit_m / step_m + 1e-9)) + 1):
+        d = round(k * step_m, 6)
+        end = _reversed_by(start, d)
+        clear = checker.free((end.x_m, end.y_m, end.yaw_rad), clearance_m) and _straight_plan(
+            start, end, -1, slot_props, footprint, bounds, straight_clearance_m, occupancy).success
+        if clear:
+            advice = d if advice is None else advice
+            last = d
+        elif advice is not None:
+            break
+    if advice is None:
+        return {**record, "status": "unmet:no_advice"}
+    length = round(min(advice + pad_m, last, limit_m), 6)
+    record.update(advice_m=advice, last_m=last)
+    if length < advice + step_m - 1e-9:
+        return {**record, "status": "unmet:clipped"}
+    return {**record, "status": "prefix", "length_m": length}
+
+
+def _return_search(start, goal, props, footprint, bounds, config, *, occupancy=None, deadline=None, slot_props=(),
+                   straight_clearance_m: float = 0.0, backoff_m: float = 0.0) -> PlanResult:
+    """The mission plan's return_home search from the withdrawal end; with ``backoff_m`` > 0 an invalid start backs
+    straight off first (_backed_off, R2 1). With 0 it is the plain search."""
+    def plan_from(start_: Pose2D) -> PlanResult:
+        return _search(start_, goal, props, footprint, bounds, config, occupancy=occupancy, deadline=deadline)
+
+    return _backed_off(start, plan_from(start), plan_from, props, footprint, bounds, config.clearance_m,
+                       list(slot_props), straight_clearance_m, backoff_m, occupancy)
+
+
+def _backed_off(start: Pose2D, direct: PlanResult, plan_from, obstacles, footprint, bounds, clearance_m, slot_props,
+                straight_clearance_m, limit_m, occupancy) -> PlanResult:
+    """R4: ``direct`` (the return planned from ``start``) when it is not an invalid start or no backoff is asked for;
+    else the straight reverse R3 gives, then ``plan_from(end)`` joined after it. A backoff not found keeps ``direct``,
+    and a failed return from its end gives that failure; both carry the record in ``start_backoff``."""
+    if limit_m <= 0.0 or direct.status != "invalid_start":
+        return direct
+    record = return_start_backoff(start, obstacles, footprint, bounds, clearance_m, slot_props, straight_clearance_m,
+                                  limit_m, occupancy=occupancy)
+    if record["status"] != "prefix":
+        return replace(direct, start_backoff=record)
+    end = _reversed_by(start, record["length_m"])
+    straight = _straight_plan(start, end, -1, slot_props, footprint, bounds, straight_clearance_m, occupancy)
+    rest = plan_from(end)
+    if not rest.success:
+        return replace(rest, start_backoff={**record, "status": f"unmet:search_{rest.status}", "length_m": 0.0})
+    return _join_prefix(straight, rest, record, "start_backoff")
 
 
 def keepout_exit_prefix(scenario: TransportScenario, geometry: SyntheticMissionGeometry, clearance_m: float,
@@ -1360,6 +1431,8 @@ def plan_return_leg(
     deadline=None,
     forward_turnaround: bool = False,
     turnaround_check=None,
+    return_start_backoff_m: float = 0.0,
+    backoff_slot_props=None,
 ) -> PlanResult:
     """The unloaded return leg alone, as plan_transport's return_home stage.
 
@@ -1373,28 +1446,39 @@ def plan_return_leg(
     turnaround arc from start_rear, returns None when the arc may be driven now or the
     reason it may not (the runner: the drive permission's snapshot). Off, the result is
     the direct plan exactly as before.
+
+    return_start_backoff_m > 0 (docs/plans/2026-10-27-return-start-withdraw-extension.md R2-R4, only for a return
+    from the withdrawal end): an invalid start backs straight off first, up to that far -- return_start_backoff,
+    the straight checked against ``backoff_slot_props`` (the scenario's slot-stage props when None) -- and the
+    return, turnaround included, is planned from the backoff's end.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
     obstacles, footprint, bounds = leg_obstacles("return", scenario, geometry)
-    started = time.monotonic()
-    direct = _search(
-        start_rear,
-        return_to,
-        obstacles,
-        footprint,
-        bounds,
-        travel_config,
-        occupancy=occupancy,
-        deadline=deadline,
-    )
-    if not forward_turnaround:
-        return direct
-    return _return_turnaround(
-        start_rear, return_to, obstacles, footprint, bounds, travel_config, direct,
-        occupancy=occupancy, deadline=deadline, check=turnaround_check, started=started,
-    )
+
+    def plan_from(start: Pose2D) -> PlanResult:
+        started = time.monotonic()
+        direct = _search(
+            start,
+            return_to,
+            obstacles,
+            footprint,
+            bounds,
+            travel_config,
+            occupancy=occupancy,
+            deadline=deadline,
+        )
+        if not forward_turnaround:
+            return direct
+        return _return_turnaround(
+            start, return_to, obstacles, footprint, bounds, travel_config, direct,
+            occupancy=occupancy, deadline=deadline, check=turnaround_check, started=started,
+        )
+
+    slot_props = scenario_props(scenario, "slot") if backoff_slot_props is None else list(backoff_slot_props)
+    return _backed_off(start_rear, plan_from(start_rear), plan_from, obstacles, footprint, bounds,
+                       travel_config.clearance_m, slot_props, config.clearance_m, return_start_backoff_m, occupancy)
 
 
 # Return-leg forward preference (2026-10-12, user: prefer driving forward; plan
@@ -1624,6 +1708,7 @@ def plan_loaded_delivery(
     docking_occupancy=None,
     deadline=None,
     exit_prefix: ExitPrefix | None = None,
+    return_start_backoff_m: float = 0.0,
 ) -> MissionPlan:
     """The delivery of a pallet already on the forks (persistent console plan D5 6c): from ``start_rear`` the same
     steps plan_transport takes from its extracted pose on -- the transport search with the loaded footprint (on a
@@ -1641,7 +1726,8 @@ def plan_loaded_delivery(
                           "expansions": int(result.expanded_nodes),
                           "analytic_expansion_interval": result.analytic_expansion_interval,
                           "search_attempts": [list(entry) for entry in result.search_attempts],
-                          "gear_changes": int(np.count_nonzero(np.diff(directions))) if directions.size else 0})
+                          "gear_changes": int(np.count_nonzero(np.diff(directions))) if directions.size else 0,
+                          **({} if result.start_backoff is None else {"start_backoff": result.start_backoff})})
         return result
 
     props = scenario_props(scenario)
@@ -1677,9 +1763,11 @@ def plan_loaded_delivery(
         return MissionPlan(True, "success", None, None, None, transport, withdraw)
     delivered = Rectangle(scenario.destination.x_m, scenario.destination.y_m, geometry.pallet_depth_m,
                           geometry.pallet_width_m, scenario.destination.yaw_rad)
-    return_home = note("return_home", _search(destination["withdrawn"], return_to, search_props + [delivered],
-                                              geometry.unloaded_footprint, scenario.bounds, travel_config,
-                                              occupancy=grid, deadline=deadline))
+    return_home = note("return_home", _return_search(destination["withdrawn"], return_to, search_props + [delivered],
+                                                     geometry.unloaded_footprint, scenario.bounds, travel_config,
+                                                     occupancy=grid, deadline=deadline, slot_props=slot_props,
+                                                     straight_clearance_m=config.clearance_m,
+                                                     backoff_m=return_start_backoff_m))
     if not return_home.success:
         return MissionPlan(False, f"return_home:{return_home.status}")
     return MissionPlan(True, "success", None, None, None, transport, withdraw, return_home)
@@ -1701,6 +1789,7 @@ def plan_transport(
     docking_occupancy=None,
     deadline=None,
     exit_prefix: ExitPrefix | None = None,
+    return_start_backoff_m: float = 0.0,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -1756,6 +1845,7 @@ def plan_transport(
                     "gear_changes": int(np.count_nonzero(np.diff(directions)))
                     if directions.size
                     else 0,
+                    **({} if result.start_backoff is None else {"start_backoff": result.start_backoff}),
                 }
             )
         return result
@@ -1930,7 +2020,7 @@ def plan_transport(
     )
     return_home = note(
         "return_home",
-        _search(
+        _return_search(
             destination["withdrawn"],
             return_to,
             search_props + [delivered],
@@ -1939,6 +2029,9 @@ def plan_transport(
             travel_config,
             occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
             deadline=deadline,
+            slot_props=slot_props,
+            straight_clearance_m=config.clearance_m,
+            backoff_m=return_start_backoff_m,
         ),
     )
     if not return_home.success:

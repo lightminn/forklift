@@ -22,6 +22,9 @@
 #   BUNDLE_ARGS="--run-est-min M" (the same M; more options as for isaac_bundle.sbatch). M is the batch's own longest
 #   normal run: one kind's runs differ by hours (S3: 21-209 min). Afterwards: isaac_bundle.py collect OUT --expect N.
 #
+# Before submitting: isaac_bundle.py check --list RUNS --runner SNAP/sim/isaac/run_transport.py (its proof is required;
+# PREFLIGHT=off PREFLIGHT_WHY=... for an exception).
+#
 # Records: OUT/task_<i>/run.jsonl (the line), OUT/task_<i>/bundle/{results.jsonl,summary.json,runs/}. A task asked for
 # again needs its OUT/task_<i>/bundle moved aside first (the runner refuses an output that holds results).
 #
@@ -43,11 +46,26 @@ if [ ! -s "$TASK/run.jsonl" ]; then
 fi
 echo "host=$(hostname) job=${SLURM_JOB_ID:-} array=${SLURM_ARRAY_JOB_ID:-}_$I shards=${SLURM_SHARDS_ON_NODE:-?}" \
   "node_gpu=${SLURM_JOB_GPUS:-?} cpus=$(taskset -cp $$ | awk -F': ' '{print $2}') list=$LIST out=$TASK $(date -Is)"
+# Preflight (docs/plans/2026-10-27-ws1-preflight.md): the list's proof from isaac_bundle.py check, and this task's line
+# the list's own I-th line -- before the runner, which gets the task's one-line list and so is told it was verified.
+# PREFLIGHT=off (a reason in PREFLIGHT_WHY) runs without; BUNDLE_ARGS=--no-preflight would not reach this check.
+if [ "${PREFLIGHT:-on}" = off ]; then
+  if [ -z "${PREFLIGHT_WHY:-}" ]; then
+    echo "PREFLIGHT=off needs PREFLIGHT_WHY (why this list runs without its check)" >&2
+    exit 2
+  fi
+  echo "preflight: off -- $PREFLIGHT_WHY"
+  PF=(--no-preflight --preflight-note "off: $PREFLIGHT_WHY")
+else
+  "${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" verify-preflight "$LIST" --index "$I" --line "$TASK/run.jsonl" \
+    || exit 2
+  PF=(--no-preflight --preflight-note "verified: $LIST task $I")
+fi
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design
 # a GPU that stays full while this task runs nothing is held by someone else: give up after GPU_FULL_GIVE_UP_MIN
 # (status gpu_full, resubmit the task) instead of holding the shard, CPUs and memory until time_left
 "${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" --list "$TASK/run.jsonl" --out "$TASK/bundle" --slots 1 \
-  --gpu-full-give-up-min "${GPU_FULL_GIVE_UP_MIN:-10}" "${KIND_ARGS[@]}" ${BUNDLE_ARGS:-} &
+  --gpu-full-give-up-min "${GPU_FULL_GIVE_UP_MIN:-10}" "${KIND_ARGS[@]}" "${PF[@]}" ${BUNDLE_ARGS:-} &
 RUNNER=$!
 trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # Slurm's TERM: the runner ends its run
 wait "$RUNNER"

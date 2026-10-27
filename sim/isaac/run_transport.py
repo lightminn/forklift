@@ -385,14 +385,28 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--near-capture-lower",
-        choices=("gate", "waive_far_confirmed"),
+        choices=("gate", "waive_far_confirmed", "waive"),
         default="gate",
         help="Plan 2026-10-22 task C (user decision 2026-10-22, conditional): waive_far_confirmed -- a near capture "
         "with no valid pocket in its expected site is detected once more with the lower band waived, only after a far "
         "capture that passed the full detector at its own thresholds (its detector's pallet within 0.15 m and 15 deg "
         "of the adopted far estimate) and only among candidates within 0.15 m and 15 deg of the expected site; each "
-        "case is recorded (lower_waiver). The bottom-deck check's own waiver is unchanged. Needs "
-        "--near-capture-expected on.",
+        "case is recorded (lower_waiver). waive (plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 c): the "
+        "near capture's expected-site detection runs with the lower band waived from the first call, in a site "
+        "narrowed to 0.15 m and 15 deg, with no far condition -- a pallet without a bottom deck is a pick target; "
+        "lower_evidence false is recorded on success and failure. The bottom-deck check's own waiver is unchanged. "
+        "Needs --near-capture-expected on.",
+    )
+    parser.add_argument(
+        "--near-recapture-gap-m",
+        type=float,
+        default=None,
+        help="C3 (docs/plans/2026-10-27-insertion-lateral-drift.md, T2): after the near capture's straight is adopted the "
+        "approach stops where the estimated fork tip is this far before the entry face, captures the pallet again as "
+        "the near capture does (expected site, --near-capture-lower, the SLAM hold kept) and re-draws with its "
+        "acceptance (5 cm projection box, 6 mm / 0.015 rad dry run); accepted, the approach, insertion, extraction and "
+        "pickup move together, else the first line is resumed (near_capture.second). A batch run without near "
+        "tracking, the pocket check or the bottom-deck check; needs --near-capture-expected on. Unset: as before.",
     )
     parser.add_argument(
         "--near-drop-frames-from-m",
@@ -566,6 +580,16 @@ def arguments() -> argparse.Namespace:
         "earlier run.",
     )
     parser.add_argument(
+        "--return-start-backoff",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-27-return-start-withdraw-extension.md: a return planned from the withdrawal end whose "
+        "start is invalid (the mission plan's return_home, the docking release's replan, the first live return) backs "
+        "straight off first -- the first distance the return's start check accepts while the straight keeps the "
+        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. Off: as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--escape-start-release",
         choices=("on", "off"),
         default="off",
@@ -632,18 +656,23 @@ def arguments() -> argparse.Namespace:
         "--pallet-article",
         choices=("nominal", "grounded"),
         default="nominal",
-        help="Evaluation only: grounded declares --pallet-urdf the grounded lookalike of --pallet-geometry (no bottom "
+        help="Evaluation only: grounded declares --pallet-urdf the grounded variant of --pallet-geometry (no bottom "
         "boards, blocks to the floor; tools/build_grounded_pallet.py) and checks it against those boxes. The mission "
-        "still reads --pallet-geometry: the article is what it must not pick (plan 2026-10-19 task 5).",
+        "still reads --pallet-geometry. Since the user decision of 2026-10-27 a pallet without a bottom deck is a pick "
+        "target, so the article is a bottomless positive test article (it was declared a negative in plan 2026-10-19 "
+        "task 5; docs/plans/2026-10-27-bottomless-and-bundled-pallets.md).",
     )
     parser.add_argument(
         "--bottom-deck-check",
-        choices=("off", "on"),
+        choices=("off", "on", "structure"),
         default="off",
         help="on: before a known-shape pallet is picked, see both evidence faces from side legs (x hypothesis: "
         "the two sides at 35 deg; T11 y: the back face then the entry face head on) and insert only when both "
         "read a bottom deck and the near target is the pallet judged (docs/plans/2026-10-19-bottom-deck-side-"
-        "evidence.md tasks 3-4). A batch run on the perception target.",
+        "evidence.md tasks 3-4) -- the site policy for bottom-deck pallets only. structure: the same legs, both "
+        "faces always seen, and insert when each reads present or absent (the block rows with or without bottom "
+        "boards); a face closed along its depth or not seen refuses (a shelf; plan 2026-10-27-bottomless-and-"
+        "bundled-pallets section 2.1 g). A batch run on the perception target.",
     )
     parser.add_argument("--recognition-frame-every", type=int, default=24,
                         help="Physics steps between driving frames for the far tracker (24 = 0.2 s).")
@@ -1069,20 +1098,29 @@ def arguments() -> argparse.Namespace:
         "the observation stop at the goal tolerances (8 mm), no overshoot "
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
+    parser.add_argument(
+        "--check-args",
+        action="store_true",
+        help="Preflight (docs/plans/2026-10-27-ws1-preflight.md): every check a run makes before Isaac -- these "
+        "arguments and their contracts, the settings and the chassis files, the output not there yet, no misspelt "
+        "--flag among the Kit arguments -- then ARGS_OK and exit 0, without importing Isaac or writing anything.",
+    )
     args, unknown = parser.parse_known_args()
     args.session = False  # a session scene file sets it below (plan 2026-10-22-rigid-session-pallets)
-    if args.bottom_deck_check == "on":
+    if args.bottom_deck_check != "off":
         # Plan 2026-10-19 task 4: the side legs and the insert permission are defined for a batch run on the
         # perception target only (an oracle target would be permitted 0.3 m off the pallet judged -- Codex task 3).
+        # structure (plan 2026-10-27 section 2.1 g) runs the same legs under the same conditions.
+        mode_ = args.bottom_deck_check
         if not args.use_perception or args.planning_target != "perception":
-            parser.error("--bottom-deck-check on needs --use-perception and --planning-target perception")
+            parser.error(f"--bottom-deck-check {mode_} needs --use-perception and --planning-target perception")
         if args.near_tracking or args.pocket_check:
-            parser.error("--bottom-deck-check on is not defined with --near-tracking or --pocket-check")
+            parser.error(f"--bottom-deck-check {mode_} is not defined with --near-tracking or --pocket-check")
         if getattr(args, "live", False):
-            parser.error("--bottom-deck-check on is a batch run (the live capture and plan worker paths are out of "
-                         "its scope)")
+            parser.error(f"--bottom-deck-check {mode_} is a batch run (the live capture and plan worker paths are out "
+                         "of its scope)")
         if args.repeat_captures:
-            parser.error("--bottom-deck-check on is not defined with --repeat-captures")
+            parser.error(f"--bottom-deck-check {mode_} is not defined with --repeat-captures")
     # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9), and the learned proposer
     # reads RGB; a deterministic run takes the oracle instance masks (segmentation, identical once the frame is synced)
     # -- replaced before the learned inputs are checked, which it then does not need.
@@ -1203,7 +1241,21 @@ def arguments() -> argparse.Namespace:
     if args.near_capture_expected == "on" and not (args.use_perception and args.planning_target == "perception"):
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
-        parser.error("--near-capture-lower waive_far_confirmed needs --near-capture-expected on")
+        parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
+    if args.near_recapture_gap_m is not None:
+        # C3 (plan 2026-10-27 T2): the second near capture is defined for a batch run of the near capture alone.
+        if not (math.isfinite(args.near_recapture_gap_m) and args.near_recapture_gap_m > 0.0):
+            parser.error("--near-recapture-gap-m must be a positive distance")
+        if args.near_capture_expected != "on":
+            parser.error("--near-recapture-gap-m needs --near-capture-expected on")
+        if args.live:
+            parser.error("--near-recapture-gap-m is a batch run (the live capture boundary is out of its scope)")
+        if args.near_tracking or args.pocket_check:
+            parser.error("--near-recapture-gap-m is not defined with --near-tracking or --pocket-check")
+        if args.bottom_deck_check != "off":
+            parser.error("--near-recapture-gap-m is not defined with --bottom-deck-check")
+        if args.repeat_captures:
+            parser.error("--near-recapture-gap-m is not defined with --repeat-captures")
     # Read by the mission options whether or not the detector runs (a run without --use-perception has none).
     args.pallet_prior_loaded = None
     if args.use_perception:
@@ -3195,7 +3247,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
-        if getattr(args, "bottom_deck_check", "off") == "on":
+        if getattr(args, "bottom_deck_check", "off") != "off":
             # Plan 2026-10-19 task 5: Isaac's default near plane is 1.0 m, which cut the pallet's near half and the
             # floor before it out of every side frame at the 1.35 m stand (Isaac runs 85cc2fe). The D435i's min-Z,
             # as the pocket camera already uses; only with the side check on, so off runs see what they always saw.
@@ -4915,8 +4967,14 @@ def drive(S, isaac) -> None:
             trace=planning_trace,
             **grid_kwargs("mission"),
             **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+            **return_start_backoff_kw(args),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
+        # docs/plans/2026-10-27-return-start-withdraw-extension.md R6: the first mission plan's backoff attempts, as the
+        # core records its own mission plans'
+        from forklift_core.mission.core import note_trace_backoffs
+
+        note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)
         state["planning_wall_s"] = time.monotonic() - planning_start
         state["planning_status"] = plans.status
         require(plans.success, f"Mission planning failed: {plans.status}")
@@ -5539,13 +5597,14 @@ def drive(S, isaac) -> None:
     def bottom_deck_options() -> dict:
         """Plan 2026-10-19 task 4: what the side legs read (the judge's parameters and the run shape's spec; the
         camera mount the stands are worked back from)."""
-        if getattr(args, "bottom_deck_check", "off") != "on":  # a replayed record from before the flag: off
+        mode_ = getattr(args, "bottom_deck_check", "off")  # a replayed record from before the flag: off
+        if mode_ == "off":
             return {"bottom_deck_check": "off"}
         from forklift_core.perception.bottom_deck_evidence import BottomDeckParams
         from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_geometry
 
         shape_ = args.pallet_geometry_loaded.geometry_version
-        return {"bottom_deck_check": "on", "bottom_deck_params": BottomDeckParams(),
+        return {"bottom_deck_check": mode_, "bottom_deck_params": BottomDeckParams(),
                 "bottom_deck_spec": spec_from_geometry(args.pallet_geometry_loaded, entry_axes=KNOWN_ENTRY_AXES[shape_]),
                 "camera_mount_x_m": float(perception_mount.translation_m[0])}
 
@@ -5682,6 +5741,9 @@ def drive(S, isaac) -> None:
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
                                 observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
+                                # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
+                                # before the option
+                                return_start_backoff_m=return_start_backoff_m_of(args),
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -5699,6 +5761,7 @@ def drive(S, isaac) -> None:
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
+                                near_recapture_gap_m=getattr(args, "near_recapture_gap_m", None),  # C3 (2026-10-27 T2)
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
@@ -7568,7 +7631,8 @@ def drive(S, isaac) -> None:
                             "kwargs": {"config": planner_config, "geometry": geometry,
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
                                        "occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0),
-                                       **({} if transport_exit is None else {"exit_prefix": transport_exit})},
+                                       **({} if transport_exit is None else {"exit_prefix": transport_exit}),
+                                       **return_start_backoff_kw(args)},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
                            "pickup_bounds": None, "pickup_zone": None,
@@ -8444,6 +8508,13 @@ def drive(S, isaac) -> None:
                                         else:
                                             # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
                                             core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                            elif core.second_near_due():
+                                # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): the approach stood at the
+                                # second near capture's gap -- captured and re-drawn there; the approach goes on.
+                                second_ = core.second_near_capture(t, rear, step)
+                                rear = second_.rear
+                                if second_.rear_stamp is not None:
+                                    rear_stamp = second_.rear_stamp
                             else:
                                 # M-a1 slice 2: every other arrival is the core's.
                                 arrival_ = core.arrive(t, tracking)
@@ -9283,6 +9354,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
         # among the arguments (an off run would otherwise record a field no earlier record has -- Codex PR 1 review)
         and k != "deterministic_overrides"
+        # preflight plan (2026-10-27): a run never records it (it ends at its check), and the near-field contract
+        # compares every recorded argument with the measurement runs'
+        and k != "check_args"
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
@@ -9290,25 +9364,23 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
     }
 
 
-def main() -> None:
-    args = arguments()
-    determinism.configure(getattr(args, "deterministic", False))
-    args.output = args.output.resolve()
-    args.output.mkdir(parents=True, exist_ok=False)
-    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
-    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
-    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
-    # output so that the replay gate's view of the output directory does not change.
-    import faulthandler
-    import signal as signal_
+def return_start_backoff_m_of(args) -> float:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R1: the backoff cap the planners get, 0 when off (and in a
+    record from before the option)."""
+    from forklift_core.planning.pallet_mission import RETURN_START_BACKOFF_CAP_M
 
-    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
-                          all_threads=True)
-    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
-    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
-    import ctypes
+    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") == "on" else 0.0
 
-    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
+
+def return_start_backoff_kw(args) -> dict:
+    """The mission planners' keyword for the return-start backoff: none when off, so their calls are as before."""
+    m = return_start_backoff_m_of(args)
+    return {"return_start_backoff_m": m} if m > 0.0 else {}
+
+
+def validate_before_isaac(args: argparse.Namespace) -> dict:
+    """The checks a run makes before Isaac starts (the settings, the chassis files and the curvature they allow), shared
+    by the run and its preflight (--check-args) so that the two never judge apart; the settings."""
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
@@ -9341,6 +9413,53 @@ def main() -> None:
         require(0.9 * geometric_ <= args.odometry_wheel_radius_m <= 1.1 * geometric_,
                 f"--odometry-wheel-radius-m {args.odometry_wheel_radius_m} is not within 10 % of the geometric "
                 f"radius {geometric_}")
+    return settings
+
+
+def check_args_only(args: argparse.Namespace) -> int:
+    """--check-args: the run's own checks before Isaac, nothing written; 0 and ARGS_OK, else 2 and why on stderr."""
+    problems = []
+    output = Path(args.output).resolve()
+    if output.exists():
+        problems.append(f"the output {output} exists (a run refuses it)")
+    # a misspelt option of ours passes parse_known_args() as a Kit argument; Kit's own are --/path=value settings
+    stray = [a for a in args.kit_arguments if a.startswith("--") and not a.startswith("--/")]
+    if stray:
+        problems.append(f"not options of this runner (and not Kit --/settings): {' '.join(stray)}")
+    try:
+        validate_before_isaac(args)
+    except Exception as exc:  # noqa: BLE001 -- reported, as the run would end on it
+        problems.append(f"{type(exc).__name__}: {exc}")
+    for problem in problems:
+        print(f"check-args: {problem}", file=sys.stderr)
+    if problems:
+        return 2
+    print("ARGS_OK")
+    return 0
+
+
+def main() -> None:
+    args = arguments()
+    if args.check_args:
+        sys.exit(check_args_only(args))
+    determinism.configure(getattr(args, "deterministic", False))
+    args.output = args.output.resolve()
+    args.output.mkdir(parents=True, exist_ok=False)
+    # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
+    # 11119 silent for 34 min while carrying P-3). The stall watchdogs (tools/isaac_bundle.py, tools/stall_watch.py)
+    # send SIGUSR1 before they end a run: every thread's Python stack goes to <output>.stall_stack.txt, beside the
+    # output so that the replay gate's view of the output directory does not change.
+    import faulthandler
+    import signal as signal_
+
+    faulthandler.register(signal_.SIGUSR1, file=args.output.with_name(args.output.name + ".stall_stack.txt").open("w"),
+                          all_threads=True)
+    # and py-spy --native from the watchdog, which Yama (ptrace_scope 1) refuses without this: the watchdog's py-spy is
+    # not this process's ancestor. Any process of this user may attach from here on; other users still may not.
+    import ctypes
+
+    ctypes.CDLL(None).prctl(0x59616D61, ctypes.c_ulong(2 ** 64 - 1), 0, 0, 0)  # PR_SET_PTRACER, PR_SET_PTRACER_ANY
+    settings = validate_before_isaac(args)
     state = {
         "success": False,
         # Overwritten once the scene build starts; a result still at "startup"

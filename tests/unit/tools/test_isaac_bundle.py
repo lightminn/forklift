@@ -230,7 +230,7 @@ def test_two_visible_gpus_are_refused(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--no-vram"]) == 2
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--no-vram"]) == 2
     assert "GPU" in capsys.readouterr().err
 
 
@@ -288,7 +288,7 @@ def test_main_runs_a_list(tmp_path):
     os.environ.clear()
     os.environ.update(env)
     try:
-        rc = ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+        rc = ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
                       "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0"])
     finally:
         os.environ.clear()
@@ -867,7 +867,7 @@ def test_the_runner_takes_its_slots_and_session_memory_from_the_kind(tmp_path, m
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", "--kind", "riib"]) == 0
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", "--kind", "riib"]) == 0
     assert seen["slots"] == 3 and seen["shards"] == 4 and seen["session_vram_mib"] == 4500
 
 
@@ -881,7 +881,7 @@ def test_without_a_kind_the_slots_follow_the_session_memory(tmp_path, monkeypatc
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram"]) == 0
     assert seen["slots"] == slots and seen["session_vram_mib"] == ib.SESSION_VRAM_MIB
 
 
@@ -899,7 +899,7 @@ def test_sessions_that_do_not_fit_the_shards_are_refused(tmp_path, monkeypatch, 
     monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
     path = tmp_path / "runs.jsonl"
     path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
-    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", *extra]) == 2
+    assert ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram", *extra]) == 2
     assert "refusing" in capsys.readouterr().err
 
 
@@ -907,7 +907,8 @@ def test_sessions_that_do_not_fit_the_shards_are_refused(tmp_path, monkeypatch, 
 
 RUNNER_SRC = 'ap.add_argument("--seed")\nap.add_argument("--scene-file")\n'
 LAUNCHER = ('mkdir -p "$1"; echo touched > "$1/defaults.txt"\n'
-            'if [ "$DRY_RUN" = 1 ]; then echo RUNNER_ARGS; printf "%s\\n" --seed "$SEED" $EXTRA; exit 0; fi; exit 9\n')
+            'if [ "$DRY_RUN" = 1 ]; then echo RUNNER_ARGS; printf "%s\\n" --seed "$SEED" $EXTRA; echo ARGS_OK; exit 0; fi;'
+            ' exit 9\n')
 
 
 def check_case(tmp_path, extra, out_exists=False):
@@ -1040,7 +1041,7 @@ def test_an_output_named_in_the_env_is_refused(tmp_path):
 def test_a_child_forked_at_the_end_is_ended(tmp_path):
     (tmp_path / "runner.py").write_text(RUNNER_SRC)
     # the launcher ends at once, leaving a child that would fork a grandchild in its own session a moment later
-    script = ('# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\n'
+    script = ('# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\necho ARGS_OK\n'
               '(echo $BASHPID > "$0.pid"; sleep 0.3; setsid sleep 30 & echo $! > "$0.grand"; wait) &\nexit 0\n')
     (tmp_path / "f.sh").write_text(script)
     run = ib.Run(name="x", argv=["bash", str(tmp_path / "f.sh"), str(tmp_path / "o")], retry_move=[str(tmp_path / "o")])
@@ -1239,7 +1240,7 @@ def test_main_refuses_a_second_job_on_a_list_without_claim_dir(tmp_path):
     other = _sleeper()
     try:
         ib.register_list(tmp_path / "reg", path, None, "1", pid=other.pid)
-        rc = ib.main(["--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
+        rc = ib.main(["--no-preflight", "--preflight-note", "unit test", "--list", str(path), "--out", str(tmp_path / "out"), "--slots", "1", "--stagger-s", "0",
                       "--no-vram", "--no-cleanup", "--node-ram-min-mib", "0", "--list-registry-dir",
                       str(tmp_path / "reg")])
     finally:
@@ -1261,7 +1262,7 @@ def test_a_half_empty_last_wave_is_warned():
 def test_check_prints_the_wave_warning(tmp_path, capsys, monkeypatch):
     path = tmp_path / "runs.jsonl"
     path.write_text("".join(json.dumps({"name": f"r{i}", "argv": py("pass")}) + "\n" for i in range(4)))
-    monkeypatch.setattr(ib, "check_runs", lambda runs, runner: [])
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: [])
     rc = ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py"), "--kind", "live"])
     out = capsys.readouterr().out
     assert rc == 0 and "1 of 3" in out and "0 problems" in out
@@ -1439,10 +1440,25 @@ def test_a_run_whose_runner_is_not_running_is_not_judged(tmp_path):
     assert results(tmp_path)["between_epochs"]["status"] == "ended" and summary["stalled"] == 0
 
 
-def test_a_run_without_a_runner_for_too_long_is_a_stall(tmp_path):
-    stuck = writer("stuck_between_epochs", tmp_path, 0.1, 30)  # never a run_transport.py process
-    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6)
-    assert results(tmp_path)["stuck_between_epochs"]["status"] == "stalled" and summary["stalled"] == 1
+def test_a_run_whose_runner_is_gone_for_too_long_is_a_stall(tmp_path):
+    # a live session stuck between epochs: its runner ran, then none for no_runner_s
+    script = tmp_path / "run_transport.py"
+    script.write_text("import time; time.sleep(0.4)\n")
+    stuck = ib.Run(name="stuck_between_epochs",
+                   argv=["bash", "-c", f"{sys.executable} {script}; sleep 30"], watch=[str(tmp_path / "log")])
+    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, no_runner_s=0.6,
+                     first_runner_s=100.0)
+    r = results(tmp_path)["stuck_between_epochs"]
+    assert r["status"] == "stalled" and r["stall_reason"] == "no_runner" and summary["stalled"] == 1
+
+
+def test_a_run_whose_runner_never_starts_is_a_stall_even_unwatched(tmp_path):
+    # lvram (2026-10-27): the launcher ended on its first line (a required variable), the probe waited for its port
+    # file, the run had no progress file to watch -- 11 minutes holding shards, CPUs and memory, never judged
+    stuck = ib.Run(name="launch_failed", argv=["bash", "-c", "echo 'MAP_START_POSE: unset' >&2; sleep 30"])
+    summary = bundle(tmp_path, [stuck], stall_s=100.0, stall_check_s=0.1, grace_s=1.0, first_runner_s=0.6)
+    r = results(tmp_path)["launch_failed"]
+    assert r["status"] == "stalled" and r["stall_reason"] == "no_runner_start" and summary["stalled"] == 1
 
 
 def test_riib_runs_are_measured_not_ended_by_default():
@@ -1461,3 +1477,120 @@ def test_the_pace_stall_default_clears_healthy_silences():
     # escb (2026-10-26) stepped back four times on 36.6-42.5 s without a tick in runs that were at pace
     import inspect
     assert inspect.signature(ib.run_bundle).parameters["pace_stall_s"].default == 120.0
+
+
+# --- preflight (docs/plans/2026-10-27-ws1-preflight.md) -------------------------------------------------------------
+
+PF_LAUNCHER = ('mkdir -p "$1"\n'
+               'if [ "$DRY_RUN" = 1 ]; then echo RUNNER_ARGS; printf "%s\\n" --seed "${SEED:-0}" --lag "${LAG:-12}";'
+               ' echo "SLAM_CHOICE mapping (MAP_BUNDLE=none)"; echo ARGS_OK; exit 0; fi; exit 9\n')
+
+
+def _pf_list(tmp_path, env=None, launcher=PF_LAUNCHER):
+    (tmp_path / "runner.py").write_text('ap.add_argument("--seed")\nap.add_argument("--lag")\n')
+    (tmp_path / "launch.sh").write_text(launcher)
+    path = tmp_path / "runs.jsonl"
+    path.write_text("".join(json.dumps({"name": f"r{i}", "argv": ["bash", str(tmp_path / "launch.sh"),
+                                                                   str(tmp_path / f"out_{i}")],
+                                        "env": dict(env or {"SEED": str(i)}), "retry_move": [str(tmp_path / f"out_{i}")]})
+                            + "\n" for i in range(2)))
+    return path
+
+
+def test_a_dry_run_without_the_runner_s_verdict_is_a_problem(tmp_path):
+    path = _pf_list(tmp_path, launcher=PF_LAUNCHER.replace(" echo ARGS_OK;", ""))
+    problems = ib.check_runs(ib.load_runs(path), tmp_path / "runner.py", environ={})
+    assert len(problems) == 2 and all("ARGS_OK" in p for p in problems)
+
+
+def test_a_setting_inherited_from_the_shell_is_refused_and_one_in_the_list_is_not(tmp_path):
+    # Codex (preflight review): LAG read by the ct1 wrapper as ${LAG:-12} -- set in the shell, it steers the run unseen
+    path = _pf_list(tmp_path)
+    runs = ib.load_runs(path)
+    (problem, _) = ib.check_runs(runs, tmp_path / "runner.py", environ={"LAG": "oops", "PATH": "/bin"})
+    assert "LAG" in problem and "submitting environment" in problem
+    path = _pf_list(tmp_path, env={"SEED": "1", "LAG": "12"})
+    assert ib.check_runs(ib.load_runs(path), tmp_path / "runner.py", environ={"LAG": "oops", "PATH": "/bin"}) == []
+
+
+def test_the_check_writes_a_proof_the_runner_verifies(tmp_path, capsys, monkeypatch):
+    path = _pf_list(tmp_path)
+    monkeypatch.delenv("LAG", raising=False)
+    monkeypatch.delenv("SEED", raising=False)
+    assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 0
+    proof = json.loads((tmp_path / "runs.jsonl.preflight.json").read_text())
+    assert proof["runs"][0]["slam_choice"] == "mapping (MAP_BUNDLE=none)"
+    assert str(tmp_path / "launch.sh") in proof["inputs"]
+    data = path.read_bytes()
+    runs = ib.load_runs(path)
+    assert ib.verify_preflight(path, data, runs, {}) == []
+    # the list, a launch file or the submitting environment changed since: refused
+    assert any("other list bytes" in p for p in ib.verify_preflight(path, data + b"\n", runs, {}))
+    assert any("LAG" in p for p in ib.verify_preflight(path, data, runs, {"LAG": "1"}))
+    (tmp_path / "launch.sh").write_text(PF_LAUNCHER + "# edited\n")
+    assert any("launch.sh changed" in p for p in ib.verify_preflight(path, data, runs, {}))
+
+
+def test_an_array_task_must_hold_the_list_s_own_line(tmp_path, monkeypatch):
+    path = _pf_list(tmp_path)
+    monkeypatch.delenv("LAG", raising=False)
+    monkeypatch.delenv("SEED", raising=False)
+    assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 0
+    lines = [x for x in path.read_text().splitlines() if x.strip()]
+    line = tmp_path / "task.jsonl"
+    line.write_text(lines[1] + "\n")
+    assert ib.main(["verify-preflight", str(path), "--index", "1", "--line", str(line)]) == 0
+    assert ib.main(["verify-preflight", str(path), "--index", "0", "--line", str(line)]) == 2
+
+
+def test_the_runner_refuses_a_list_without_its_proof(tmp_path, capsys):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    assert ib.main(["--list", str(path), "--out", str(tmp_path / "o"), "--slots", "1", "--no-vram"]) == 2
+    assert "no preflight proof" in capsys.readouterr().err and not (tmp_path / "o" / "results.jsonl").exists()
+
+
+def test_a_file_edited_during_the_check_is_not_certified(tmp_path, monkeypatch, capsys):
+    # Codex: hashes taken after the check would put the new contents under the old contents' verdict
+    path = _pf_list(tmp_path)
+    monkeypatch.delenv("LAG", raising=False)
+    monkeypatch.delenv("SEED", raising=False)
+
+    def edit(runs, runner, **k):
+        (tmp_path / "launch.sh").write_text(PF_LAUNCHER + "# edited during the check\n")
+        return []
+
+    monkeypatch.setattr(ib, "check_runs", edit)
+    assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 1
+    assert "changed during the check" in capsys.readouterr().out
+    assert not (tmp_path / "runs.jsonl.preflight.json").exists()
+
+
+def test_the_registry_a_run_names_is_among_the_inputs(tmp_path):
+    (tmp_path / "reg.yaml").write_text("bundles: []\n")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SLAM_BUNDLE_REGISTRY": "reg.yaml"})
+    (tmp_path / "runner.py").write_text("")
+    assert os.path.realpath(tmp_path / "reg.yaml") in ib.preflight_inputs([run], tmp_path / "runner.py")
+
+
+def test_plain_expansions_are_settings_too(tmp_path):
+    # Codex: EXTRA_ARGS read as $EXTRA_ARGS or ${EXTRA_ARGS} steers the run as much as ${EXTRA_ARGS:-}
+    (tmp_path / "launch.sh").write_text('echo $EXTRA_ARGS ${MORE}\n')
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh")])
+    assert ib.inherited_controls(run, {"EXTRA_ARGS": "--x", "MORE": "--y", "PATH": "/bin"}) == ["EXTRA_ARGS", "MORE"]
+
+
+def test_a_bypass_needs_its_reason(tmp_path, capsys, monkeypatch):
+    # lead (2026-10-27): the check is skipped only with a reason, and the reason is in the run's record
+    seen = {}
+    monkeypatch.setattr(ib, "run_bundle", lambda runs, out, **k: seen.update(k) or {"exit_code": 0})
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "a", "argv": ["true"]}) + "\n")
+    for note in ([], ["--preflight-note", "  "]):
+        assert ib.main(["--no-preflight", *note, "--list", str(path), "--out", str(tmp_path / "o"), "--no-vram",
+                        "--slots", "1"]) == 2
+        assert "needs --preflight-note" in capsys.readouterr().err and not seen
+    assert ib.main(["--no-preflight", "--preflight-note", "old wrapper without DRY_RUN", "--list", str(path),
+                    "--out", str(tmp_path / "o"), "--no-vram", "--slots", "1"]) == 0
+    assert "preflight: off -- old wrapper without DRY_RUN" in capsys.readouterr().err
+    assert seen["preflight"] == "off: old wrapper without DRY_RUN"  # run_bundle writes it into summary.json

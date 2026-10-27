@@ -108,7 +108,7 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
-exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
+ARGS=(
   --base-scene "$BASE_SCENE" \
   --pallet-urdf sim/models/epal6_pallet/pallet.urdf --pallet-geometry config/pallet_geometry_epal6.yaml \
   --forklift-urdf "$FORKLIFT_URDF" --settings config/isaac_transport_measured.yaml \
@@ -121,9 +121,50 @@ exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   $EXTRA_ARGS "${LOC[@]}" \
-  --output "$2/run" > "$2/run.log" 2>&1
+  --output "$2/run")
+if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
+  # an older runner would take --check-args for a Kit argument and start Isaac
+  grep -q -- '"--check-args"' "$ROOT/sim/isaac/run_transport.py" \
+    || { echo "preflight: $ROOT's runner has no --check-args: refused" >&2; exit 2; }
+  echo RUNNER_ARGS
+  printf '%s\n' "${ARGS[@]}"
+  exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" --check-args
+fi
+exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
+# Preflight (docs/plans/2026-10-27-ws1-preflight.md): the session's SLAM bundle as the supervisor will load it, and the
+# runner's own checks on the arguments runner.sh builds -- before any container, supervisor or Isaac. DRY_RUN=1 ends
+# here with their verdict (tools/isaac_bundle.py check); a real run goes on only when they pass, so a launch refused
+# here ends the job in seconds instead of leaving the console probe waiting for a port file (lvram, d7oor 2026-10-27).
+preflight() {
+  local map_id="" sock="$OUT/epoch_999/sock/slam.sock"
+  # an epoch's SLAM socket is a Unix socket: its path fits in 107 bytes or the runner dies at connect (AF_UNIX path
+  # too long -- the lvram random_m refill, 11840, at 112)
+  if [ "$(printf %s "$sock" | wc -c)" -gt 107 ]; then
+    echo "preflight: the SLAM socket path $sock is $(printf %s "$sock" | wc -c) bytes (AF_UNIX allows 107): shorten OUT" >&2
+    return 2
+  fi
+  if [ -n "${MAP_BUNDLE:-}" ]; then
+    map_id=$("$VENV_PY" -c 'import sys; from pathlib import Path
+from forklift_core.localization.slam_map import load_bundle
+print(load_bundle(Path(sys.argv[1]), sys.argv[2] or None).map_id)' "$MAP_BUNDLE" "${EXPECTED_MAP_ID:-}") \
+      || { echo "preflight: the SLAM bundle $MAP_BUNDLE does not load as map ${EXPECTED_MAP_ID:-(any)}" >&2; return 2; }
+    echo "SLAM_BUNDLE $MAP_BUNDLE $map_id"
+  fi
+  echo "SLAM_CHOICE $SLAM_CHOICE"
+  mkdir -p "$OUT/preflight"
+  RUNNER_CHECK=1 bash "$OUT/runner.sh" 0 "$OUT/preflight" "$OUT/preflight/live_port.json" "$map_id" "${MAP_BUNDLE:-}"
+}
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  preflight
+  exit $?
+fi
+if ! preflight > "$OUT/preflight.log" 2>&1; then
+  echo "preflight: the launch is refused (its log follows)"
+  cat "$OUT/preflight.log"
+  exit 2
+fi
 json() { "$VENV_PY" -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@"; }
 trap 'for c in $(docker ps -aq --filter "name=slam_bridge_${JOB}_e"); do docker rm -f "$c" >/dev/null; done' EXIT
 echo "host=$(hostname) job=$JOB out=$OUT"

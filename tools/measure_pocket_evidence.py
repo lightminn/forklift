@@ -60,9 +60,11 @@ def structure(geometry: PalletGeometry, kind: str) -> list[Box]:
     ``deckless``  the same, with the bottom boards removed. The blocks still
                   start at deck_bottom_m, so the openings keep their height but
                   nothing spans beneath them.
-    ``grounded``  no bottom boards and the block columns extended to the floor.
-                  This is a rack or a stack of crates, and it is the structure
-                  the detector cannot currently tell from a pallet.
+    ``grounded``  no bottom boards and the block columns extended to the floor:
+                  a pallet without a bottom deck (a nestable or single-faced
+                  pallet). Since the user decision of 2026-10-27 it is a pick
+                  target, not a lookalike (plan 2026-10-27-bottomless-and-
+                  bundled-pallets).
     ``shelf``     front-open: full-depth columns to the floor and a solid top
                   deck, with no stringers or bottom boards.
     ``blocks``    nine free-standing blocks, no decks at all.

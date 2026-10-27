@@ -36,9 +36,11 @@ FAR_PENDING = ("depth", "lane_bounds", "top_layout")
 # A non-standard pallet with openings on two sides shows no far-range evidence of which face is the
 # entry face (Codex review A round 3): the near range checks it on the top-board direction.
 PARAMETRIC_PENDING = FAR_PENDING + ("entry_axis",)
-# A known shape's entry face does not tell a pallet from its grounded lookalike (no bottom boards): the side
-# evidence (plan 2026-10-19 task 1) does, and the insert permission checks it (task 3).
-KNOWN_FAR_PENDING = FAR_PENDING + ("bottom_deck",)
+# A known shape's entry face does not tell a pallet from its grounded variant (no bottom boards), and since the user
+# decision of 2026-10-27 it need not: a pallet without a bottom deck is a pick target, so a known shape no longer
+# waits for "bottom_deck" (plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 a). The side legs, when a run
+# turns them on, keep their own record and insert permission; pocket_candidate still accepts the item for old objects.
+KNOWN_FAR_PENDING = FAR_PENDING
 
 
 @dataclass(frozen=True)

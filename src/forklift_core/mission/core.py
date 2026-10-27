@@ -75,6 +75,7 @@ from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
 from forklift_core.mission.scene_replan import SceneReplan
 from forklift_core.mission import bottom_deck_legs
+from forklift_core.mission import second_near as SECOND_NEAR
 from forklift_core.perception import bottom_deck_evidence, bottom_deck_permit
 from forklift_core.perception.bottom_deck_evidence import BottomDeckTarget
 from forklift_core.perception.pocket_detector import DetectorParams, ExpectedSite
@@ -99,6 +100,48 @@ STALL_REPLANS = 2  # the stall replans per mission (transport and return; #117's
 CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
 CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
 OBSERVE_BACKOFF_LIMIT_M = 0.30  # plan 2026-10-26-observe-start-backoff B3: the most a start backoff goes
+
+
+def moved_slot_props(prepared_destination, world) -> list:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R5: ``world``'s slot-stage props (its untagged props and
+    its @slot props; the @search ones left out) with the @slot ones moved by T = ``world``'s destination o
+    ``prepared_destination``^-1 -- the anchors were made once, from the destination at the preparation, and a release
+    moves only the destination."""
+    from forklift_core.planning.pallet_mission import SEARCH_TAG, SLOT_TAG
+
+    then_, now_ = prepared_destination, world.destination
+    move = compose((float(now_.x_m), float(now_.y_m), float(now_.yaw_rad)),
+                   invert((float(then_.x_m), float(then_.y_m), float(then_.yaw_rad))))
+    props = []
+    for p_ in world.props:
+        if p_.asset.uri.endswith(SEARCH_TAG):
+            continue
+        if p_.asset.uri.endswith(SLOT_TAG):
+            r_ = p_.rectangle
+            x_, y_, yaw_ = compose(move, (float(r_.x_m), float(r_.y_m), float(r_.yaw_rad)))
+            p_ = replace(p_, rectangle=replace(r_, x_m=x_, y_m=y_, yaw_rad=yaw_))
+        props.append(p_)
+    return props
+
+
+def note_return_backoff(state: dict, where: str, record: dict | None, adopted: bool) -> None:
+    """docs/plans/2026-10-27-return-start-withdraw-extension.md R6: a return-start backoff attempt a plan came back
+    with -- taken or refused (no advice, clipped, no return from its end), installed or not."""
+    if record is None:
+        return
+    state.setdefault("return_start_backoffs", []).append(
+        {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
+         "status": record.get("status"), "adopted": bool(adopted)})
+
+
+def note_trace_backoffs(state: dict, where: str, trace, success: bool) -> None:
+    """R6: the mission plan's backoff attempts from its trace (its return_home entries; a tight replan adds a second);
+    the last one is adopted when the plan was."""
+    entries = [e for e in (trace or ()) if e.get("stage") == "return_home"]
+    for i, e in enumerate(entries):
+        if "start_backoff" in e:
+            note_return_backoff(state, where, e["start_backoff"],
+                                success and i == len(entries) - 1 and e.get("status") == "success")
 OBSERVE_BACKOFF_STEP_M = 0.01  # its advice's step
 OBSERVE_BACKOFF_PAD_M = 0.03  # past the advice: the backoff tracker's 0.01 m end tolerance and the advice's step
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
@@ -469,9 +512,10 @@ class MissionCore:
                 }
                 transition("near_tracking_stopped", t)
                 return SimpleNamespace(stop=True, rear=rear)
-            if getattr(self.options, "bottom_deck_check", "off") == "on":
+            if self.bottom_deck_on():
                 # Plan 2026-10-19 task 3: the side evidence permits this insertion only when it read present and
                 # was taken of the pallet the near capture now targets (the planned pickup: where the forks go).
+                # structure (plan 2026-10-27 section 2.1 g): present or absent on both faces.
                 pickup_ = self.pocket["planning_pickup"]
                 deck_ = state.setdefault("bottom_deck", {})
                 shape_ = self.pallet_geometry.geometry_version
@@ -479,7 +523,7 @@ class MissionCore:
                 record_ = deck_.get("record")  # kept as JSON (BottomDeckRecord.to_record)
                 refusal_ = bottom_deck_permit.insert_refusal(
                     None if record_ is None else bottom_deck_permit.BottomDeckRecord.from_record(record_),
-                    (pickup_.x_m, pickup_.y_m), pickup_.yaw_rad, shape_)
+                    (pickup_.x_m, pickup_.y_m), pickup_.yaw_rad, shape_, mode=self.bottom_deck_mode())
                 if refusal_ is not None:
                     deck_["refused"] = {"reason": refusal_, "time_s": t, **at_}
                     state["mission_result"] = "bottom_deck_refused"
@@ -660,7 +704,8 @@ class MissionCore:
                     payload = self._leg_payload("return", grid_world(sc_), start,
                                                 {**grid_kwargs("return", sc_.destination),
                                                  **return_turnaround_kwargs(frozen=True)},
-                                                retry_on=("invalid_start", "no_path"))
+                                                retry_on=("invalid_start", "no_path"),
+                                                extra_kw=self._return_backoff_kwargs(grid_world(sc_)))
                 obstacle["deadline"] = None
                 self._request("live_leg", "leg", payload, t, rear, self._applied_now(),
                               ctx={"turnaround": bool(options.return_turnaround and ms.phase == "return_home")})
@@ -676,14 +721,21 @@ class MissionCore:
                                                     **grid_kwargs(None))
             else:
                 sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
+                backoff_kw_ = self._return_backoff_kwargs(grid_world(sc_))  # plan 2026-10-27 R2 3
                 live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose, planner_config,
                                              geometry=geometry, travel_config=travel_config,
-                                             **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs())
+                                             **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs(),
+                                             **backoff_kw_)
+                first_live_ = live
                 if live.status in ("invalid_start", "no_path"):
                     live = hooks.plan_return_leg(grid_world(sc_), start, options.return_to_pose,
                                                  replace(planner_config, clearance_m=0.0), geometry=geometry,
                                                  travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
-                                                 **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs())
+                                                 **grid_kwargs("return", sc_.destination), **return_turnaround_kwargs(),
+                                                 **backoff_kw_)
+                if first_live_ is not live:  # plan 2026-10-27 R6
+                    note_return_backoff(state, "live_leg", getattr(first_live_, "start_backoff", None), False)
+                note_return_backoff(state, "live_leg", getattr(live, "start_backoff", None), live.success)
             obstacle["deadline"] = None
             obstacle.setdefault("live_plans", []).append(
                 {"phase": ms.phase, "time_s": t, "status": live.status,
@@ -1597,6 +1649,7 @@ class MissionCore:
                 target_pickup=pocket["planning_pickup"], start_rear=start,
                 return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                 trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                **self._mission_backoff_kwargs(),
             )
             mission_clearance_ = float(planner_config.clearance_m)
             if "invalid_start" in mission_again.status or "invalid_goal" in mission_again.status:
@@ -1609,6 +1662,7 @@ class MissionCore:
                     target_pickup=pocket["planning_pickup"], start_rear=start,
                     return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=tight_travel,
                     trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
+                    **self._mission_backoff_kwargs(),
                 )
             near_again = (
                 final_straight_prefix(mission_again.approach, geometry.alignment_straight_m)
@@ -1618,6 +1672,7 @@ class MissionCore:
                 {"time_s": t, "status": mission_again.status, "near_found": near_again is not None,
                  "trace": planning_trace}
             )
+            note_trace_backoffs(state, "mission_plan", planning_trace, mission_again.success and near_again is not None)
             if near_again is not None:
                 for name in mission_stages:
                     paths[name] = getattr(mission_again, name)
@@ -3281,7 +3336,7 @@ class MissionCore:
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                            trace=planning_trace, **grid_kwargs("mission", planning_pickup),
-                           **self._exit_prefix_kwargs())
+                           **self._mission_backoff_kwargs(), **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -3303,6 +3358,7 @@ class MissionCore:
             travel_config=travel_config,
             trace=planning_trace,
             **grid_kwargs("mission", planning_pickup),
+            **self._mission_backoff_kwargs(),
         )
         near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
         return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
@@ -3376,6 +3432,7 @@ class MissionCore:
         state.setdefault("planning_traces", []).append(
             planning_trace
         )
+        note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)
         state["planning_wall_s"] += (
             wall() - planning_start
         )
@@ -3444,8 +3501,13 @@ class MissionCore:
         self._refresh_for_new_leg(t, rear)  # the new leg's path check before the first move
 
     # --- plan 2026-10-19 task 4: the bottom-deck side legs (design rounds 1-5, Codex converged) ---
+    def bottom_deck_mode(self) -> str:
+        """off | on (bottom boards required) | structure (the block rows on both faces, plan 2026-10-27 2.1 g)."""
+        return getattr(self.options, "bottom_deck_check", "off")
+
     def bottom_deck_on(self) -> bool:
-        return getattr(self.options, "bottom_deck_check", "off") == "on"
+        """The side legs run (either mode)."""
+        return self.bottom_deck_mode() != "off"
 
     def bottom_deck_leg_active(self) -> bool:
         """A bottom-deck leg (a stand, a retake's retreat, or the return to the far observation point) is the observe
@@ -3726,7 +3788,8 @@ class MissionCore:
                                "captures": leg_["captures"]})
         deck_["leg"] = None
         rest_ = [f for f in deck_["order"] if f not in [x["face"] for x in deck_["faces"]]]
-        if verdict != "absent" and rest_:
+        # on ends at the first absent face (no bottom deck); structure must see both faces (plan 2026-10-27 2.1 g)
+        if (verdict != "absent" or self.bottom_deck_mode() == "structure") and rest_:
             rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_next_face")
             rear = rear if rear_ is None else rear_
             plan_ = self._bottom_deck_plan(rear, rest_[0])
@@ -3744,10 +3807,8 @@ class MissionCore:
         # (a release after it would move the pickup away from the record -- found with Codex round 2).
         rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_done")
         rear = rear if rear_ is None else rear_
-        verdicts_ = [f["verdict"] for f in deck_["faces"]]
-        faces_seen_ = {f["face"] for f in deck_["faces"] if f["verdict"] == "present"}
-        verdict = ("absent" if "absent" in verdicts_ else
-                   "present" if len(faces_seen_) == 2 and set(verdicts_) == {"present"} else "unobserved")
+        mode_ = self.bottom_deck_mode()
+        verdict = bottom_deck_permit.two_face_verdict(deck_["faces"], mode_)
         tg_ = deck_["target"]
         applied_ = None if self.slam is None else self.slam["tracker"].applied
         deck_["record"] = bottom_deck_permit.BottomDeckRecord(
@@ -3758,7 +3819,7 @@ class MissionCore:
             correction_s=None if applied_ is None else float(applied_[1]),
             params_sha256=bottom_deck_permit.params_digest(options.bottom_deck_params)).to_record()
         deck_["status"] = "judged"
-        if verdict != "present":
+        if verdict != "present" and not (mode_ == "structure" and verdict == "absent"):
             return self._bottom_deck_refuse(t, "no_bottom_deck" if verdict == "absent" else "bottom_deck_unobserved",
                                             rear)
         # Two faces present: back to the far observation point, observe again there and go on as without the side
@@ -3841,7 +3902,8 @@ class MissionCore:
                   else self.pallet_geometry.geometry_version)
         refusal_ = bottom_deck_permit.insert_refusal(
             bottom_deck_permit.BottomDeckRecord.from_record(deck_["record"]),
-            (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_)
+            (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_,
+            mode=self.bottom_deck_mode())
         deck_["reobservation"] = {"time_s": t, "target": [float(target_pickup.x_m), float(target_pickup.y_m),
                                                           float(target_pickup.yaw_rad)],
                                   "shape": shape_, "refusal": refusal_,
@@ -3862,11 +3924,17 @@ class MissionCore:
     def _near_expected_on(self) -> bool:
         """Plan 2026-10-22 task A: a near capture (pending) under --near-capture-expected on."""
         return bool(getattr(self.options, "near_capture_expected", "off") == "on"
-                    and self.state.get("near_capture", {}).get("status") == "pending")
+                    and (self.state.get("near_capture", {}).get("status") == "pending"
+                         or getattr(self, "_second_capture_active", False)))  # C3: the second near capture too
 
     def _near_waiver_on(self) -> bool:
         """Plan 2026-10-22 task C: --near-capture-lower waive_far_confirmed (needs --near-capture-expected on)."""
         return getattr(self.options, "near_capture_lower", "gate") == "waive_far_confirmed"
+
+    def _near_lower_waived(self) -> bool:
+        """Plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 c: --near-capture-lower waive -- a pallet
+        without a bottom deck is a pick target, so the expected-site detection does not gate on the lower band."""
+        return getattr(self.options, "near_capture_lower", "gate") == "waive"
 
     def _expected_record(self, site: ExpectedSite, candidates_) -> dict:
         pickup_ = self.pocket["planning_pickup"]
@@ -3946,8 +4014,9 @@ class MissionCore:
     def _bottom_deck_lower_waived(self) -> bool:
         """The near capture after a present bottom-deck record and its checked re-observation (plan 2026-10-21 task C)."""
         deck_ = self.state.get("bottom_deck") or {}
+        permitted_ = ("present", "absent") if self.bottom_deck_mode() == "structure" else ("present",)
         return bool(self.bottom_deck_on() and self.state.get("near_capture", {}).get("status") == "pending"
-                    and deck_.get("status") == "done" and (deck_.get("record") or {}).get("verdict") == "present")
+                    and deck_.get("status") == "done" and (deck_.get("record") or {}).get("verdict") in permitted_)
 
     def _bottom_deck_near_check(self, t: float, rear, target_pickup):
         """The near capture's estimate against the record, before adoption (plan 2026-10-21 task C): the insert gate's
@@ -3958,7 +4027,8 @@ class MissionCore:
         if deck_.get("record") is not None:
             refusal_ = bottom_deck_permit.insert_refusal(
                 bottom_deck_permit.BottomDeckRecord.from_record(deck_["record"]),
-                (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_)
+                (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_,
+                mode=self.bottom_deck_mode())
         deck_["near_check"] = {"time_s": t, "target": [float(target_pickup.x_m), float(target_pickup.y_m),
                                                        float(target_pickup.yaw_rad)],
                                "shape": shape_, "refusal": refusal_}
@@ -4207,6 +4277,8 @@ class MissionCore:
                         ],
                         near_error=state["perception"]["perception_error"],
                     )
+                    # C3 (plan 2026-10-27 T2): the follower stops at the second capture's gap first (off: no change).
+                    self.second_near_split(t, rear, straight, approach_config)
                     if realign_active():
                         # Plan D8 S4c-3 stage 2: the re-capture accepted ends the
                         # realignment.
@@ -4220,6 +4292,156 @@ class MissionCore:
                 transition("approach", t)
                 if near is not None and state.get("near_capture", {}).get("status") == "done":
                     build_near_tracker(t)  # in the hold the transition began
+
+    # --- C3: the second near capture on the approach straight (docs/plans/2026-10-27-insertion-lateral-drift.md T2) ---
+    def second_near_split(self, t: float, rear, straight, approach_config) -> None:
+        """After the first near capture's straight is installed: with --near-recapture-gap-m the approach follower
+        ends where the estimated fork tip is that far before the entry face (the straight's end has it
+        approach_gap_m before), and the second capture is pending there. A final straight too short for the gap
+        (skipped_short), or a shortened straight the follower does not reach from where the truck stands
+        (skipped_prefix: the whole straight converged, the shorter one need not -- Codex C3 review P2), is
+        recorded and driven whole. Off: nothing."""
+        gap_ = getattr(self.options, "near_recapture_gap_m", None)
+        if gap_ is None:
+            return
+        keep_ = SECOND_NEAR.keep_m(gap_, self.geometry.approach_gap_m)
+        record_ = {"status": "pending", "gap_m": float(gap_), "keep_m": keep_, "split_s": float(t)}
+        prefix_ = self.hooks.final_straight_prefix(straight, keep_)
+        if prefix_ is None:
+            record_["status"] = "skipped_short"
+            self.state["near_capture"]["second"] = record_
+            return
+        record_["split_length_m"] = float(prefix_.length_m)
+        dry_ = self.hooks.bicycle_rollout(prefix_.poses, prefix_.directions, prefix_.curvatures_inv_m,
+                                          approach_config, np.asarray(rear, dtype=float))
+        record_["split_dry_run"] = SECOND_NEAR.dry_record(dry_)
+        if dry_.status != "arrived":
+            record_["status"] = "skipped_prefix"
+            self.state["near_capture"]["second"] = record_
+            return
+        line_start_, line_end_ = SECOND_NEAR.line_of(straight, self.geometry.alignment_straight_m)
+        self.second_near = {"line": (line_start_, line_end_), "config": approach_config}
+        self.trackers["approach"] = RearAxlePathTracker(prefix_.poses, prefix_.directions, prefix_.curvatures_inv_m,
+                                                        approach_config)
+        self.state["near_capture"]["second"] = record_
+
+    def second_near_due(self) -> bool:
+        """The approach follower stands at the second capture's gap (its arrival is that capture, not the insertion)."""
+        return (self.ms.phase == "approach"
+                and (self.state.get("near_capture", {}).get("second") or {}).get("status") == "pending")
+
+    def second_near_capture(self, t: float, rear, step: int) -> SimpleNamespace:
+        """The second near capture at the gap: captured as the first near capture is (the expected site, the run's
+        lower mode, the detector's parameters; the SLAM hold kept, not a far capture), its straight re-drawn with the
+        first one's acceptance (projection box, dry run). Accepted: the approach, the insertion and extraction moved
+        with the pallet and the pickup replace the old ones together. Refused or not seen: the pickup, the docking
+        paths and their followers stay, and the approach resumes on the first line from where the truck stands.
+        Returns the control ``rear`` (and its stamp) the capture took."""
+        state, hooks, options, geometry = self.state, self.hooks, self.options, self.geometry
+        paths, trackers, pocket, obstacle = self.paths, self.trackers, self.pocket, self.obstacle
+        second_ = state["near_capture"]["second"]
+        second_["stop_s"] = float(t)
+        self._second_capture_active = True
+        try:
+            captured_ = self.capture_and_detect(t, rear, step)
+        finally:
+            self._second_capture_active = False
+        now_ = float(hooks.now_s())
+        rear_now = np.asarray(captured_.rear, dtype=float)
+        observation_ = captured_.observation
+        second_.update(capture_attempt=captured_.attempt_number, capture_time_s=now_,
+                       stand_s=now_ - float(t), captured_rear=[float(v) for v in rear_now],
+                       observation={"status": observation_.status, "reason": observation_.reason})
+        old_pickup_ = pocket["planning_pickup"]
+        second_["previous_target"] = list(SECOND_NEAR.site_tuple(old_pickup_))
+        here_ = PlanningPose(float(rear_now[0]), float(rear_now[1]), float(rear_now[2]))
+        adopted_ = None
+        if observation_.status != "valid":
+            status_, reason_ = "no_detection", f"{observation_.status}:{observation_.reason}"
+        else:
+            from forklift_core.planning.pallet_mission import site_poses
+
+            adapter_ = options.adapter
+            target_ = adapter_.estimate_world_pallet_site(
+                adapter_.estimate_pallet_center_m(observation_, geometry.pallet_depth_m),
+                observation_.insertion_yaw_rad, (float(captured_.base[0]), float(captured_.base[1])),
+                float(captured_.yaw))
+            new_pickup_, _ = hooks.planning_target(target_)
+            second_["target"] = list(SECOND_NEAR.site_tuple(new_pickup_))
+            sites_ = site_poses(new_pickup_, geometry)
+            candidate_, offsets_ = hooks.straight_from_pose(
+                here_, sites_["prealign"], sites_["approach"], max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=SECOND_NEAR.BOX_MIN_LENGTH_M)
+            second_["offsets"] = offsets_
+            if candidate_ is None:
+                status_, reason_ = "box_refused", f"near_capture_misaligned:{offsets_}"
+            else:
+                acceptance_ = self.second_near["config"]
+                if options.approach_straight_speed_mps is not None:
+                    acceptance_ = replace(acceptance_, cruise_speed_mps=options.speeds["approach"])
+                dry_ = hooks.bicycle_rollout(candidate_.poses, candidate_.directions, candidate_.curvatures_inv_m,
+                                             acceptance_, rear_now)
+                second_["dry_run"] = SECOND_NEAR.dry_record(dry_)
+                if SECOND_NEAR.accepted(dry_):
+                    # The plan's acceptance passed; the docking straights are then drawn and checked as at an S4b
+                    # correction point (redraw_docking: the approach, its dry-run sweep, the insertion and the loaded
+                    # extraction against the props, the bounds and the corrected grid) -- not carried rigidly, which
+                    # skipped those checks (Codex C3 review round 2 P1).
+                    plans_, docking_, _ = hooks.redraw_docking_traced(
+                        hooks.grid_world(options.scenario), here_, new_pickup_, options.planner_config,
+                        start_rear=rear_now, dry_configs=(acceptance_,), geometry=geometry,
+                        pickup_bounds=options.pickup_bounds, max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                        max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=SECOND_NEAR.BOX_MIN_LENGTH_M,
+                        **hooks.correction_grid(new_pickup_, new_pickup_, rear_now))
+                    second_["docking"] = {"refused": docking_.get("refused"), "offsets": docking_.get("offsets"),
+                                          "dry_runs": [SECOND_NEAR.dry_record(SimpleNamespace(**d_))
+                                                       for d_ in docking_.get("dry_runs", [])]}
+                    if plans_ is None:
+                        status_, reason_ = "docking_refused", f"redraw_docking:{docking_.get('refused')}"
+                    else:
+                        status_, reason_, adopted_ = "adopted", None, (plans_, new_pickup_)
+                else:
+                    status_, reason_ = "dry_run_refused", f"near_capture_misaligned:dry_run:{second_['dry_run']}"
+        second_.setdefault("offsets", None)
+        second_.setdefault("dry_run", None)
+        second_.setdefault("target", None)
+        second_.update(status=status_, reason=reason_)
+        config_ = self.second_near["config"]
+        if adopted_ is not None:
+            plans_, new_pickup_ = adopted_
+            approach_ = plans_["approach"]
+            for name_ in ("insert", "extract"):
+                paths[name_] = plans_[name_]
+                trackers[name_] = RearAxlePathTracker(paths[name_].poses, paths[name_].directions,
+                                                      paths[name_].curvatures_inv_m, trackers[name_].config)
+            pocket["planning_pickup"] = new_pickup_
+            if obstacle is not None:
+                obstacle["pickup_estimate"] = new_pickup_
+                if obstacle["layer"].known_enabled:
+                    self.known_pallet(SECOND_NEAR.site_tuple(new_pickup_),
+                                      obstacle["layer"].known_config.get("r_fix_pickup_m", 0.05), "second_near")
+        else:
+            line_start_, line_end_ = self.second_near["line"]
+            approach_, resume_ = hooks.straight_from_pose(
+                here_, PlanningPose(*line_start_), PlanningPose(*line_end_), max_lateral_m=SECOND_NEAR.BOX_LATERAL_M,
+                max_yaw_rad=options.near_capture_box_yaw_rad, min_length_m=0.0)
+            second_["resume_offsets"] = resume_
+            hooks.require(approach_ is not None, f"near_capture_second_resume:{resume_}")
+        paths["approach"] = approach_
+        trackers["approach"] = RearAxlePathTracker(approach_.poses, approach_.directions, approach_.curvatures_inv_m,
+                                                   config_)
+        trackers["approach"].restart_speed_slew(0.0)  # from the stop
+        for name_ in ("approach", "insert", "extract"):
+            state["paths"][name_] = hooks.path_record(paths[name_])
+        hooks.write_paths()
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()
+            leg_, dir_ = trackers["approach"].leg_ahead()
+            obstacle["layer"].refresh(now_, obstacle["applied"], obstacle["version"],
+                                      current_pose=tuple(float(v) for v in rear_now), path_ahead=leg_,
+                                      loaded=hooks.loaded(), direction=dir_)
+        self.ms.phase_started = t
+        return SimpleNamespace(rear=rear_now, rear_stamp=captured_.rear_stamp)
 
     def _reproject(self, t: float, applied_now, rear, loaded) -> None:
         """The grid re-projected with a new correction (the permission tick's statements)."""
@@ -4514,8 +4736,10 @@ class MissionCore:
         )
         if slam is not None:
             now_s = hooks.now_s()
+            # C3 (plan 2026-10-27 T2): the second near capture keeps the hold as the first does.
             near_pending = (
                 state.get("near_capture", {}).get("status") == "pending"
+                or getattr(self, "_second_capture_active", False)
             )
             if slam["tracker"].mode == "holding" and not near_pending:
                 # An observe leg ends held (below). Anything but the
@@ -4589,7 +4813,8 @@ class MissionCore:
         # the same call order, and stays as the reference; the mission reads the new recognition's observation.
         far_hook = getattr(hooks, "far_recognition", None)
         far_capture = (far_hook is not None and state.get("near_capture", {}).get("status") != "pending"
-                       and not (near is not None and near.get("retry_stand")))
+                       and not (near is not None and near.get("retry_stand"))
+                       and not getattr(self, "_second_capture_active", False))  # C3: a near capture, not a far one
         waive_kw = {}
         if self._bottom_deck_lower_waived():
             # Plan 2026-10-21 task C: the side faces proved the bottom deck of the pallet this near capture looks at
@@ -4604,6 +4829,12 @@ class MissionCore:
             # planned pickup in the control base this capture was placed with -- not for the strongest pattern in
             # view (aisle_out picked the neighbour 0.94 m away). Continuity of the far choice, not identity.
             site = self._near_expected_site(base, yaw)
+            if self._near_lower_waived():
+                # Plan 2026-10-27 section 2.1 c/c': the lower band off from the first call, in the site narrowed to
+                # 0.15 m / 15 deg (call and record alike), no far condition; recorded on success and failure.
+                site = ExpectedSite(site.x_m, site.y_m, site.yaw_rad, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
+                attempt["lower_evidence"] = False
+                waive_kw = {"lower_evidence": False}
             detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, params, site, **waive_kw)
             attempt["expected"] = self._expected_record(site, candidates_)
             if not waive_kw and detection.observation.status != "valid" and self._near_waiver_on():
@@ -5205,11 +5436,26 @@ class MissionCore:
                     elif np.allclose(full_poses_[-1], poses[-1], atol=1e-6):
                         slot_from = max(0.0, length - float(geometry.delivery_straight_m))
             plane = float(getattr(geometry, "lidar_plane_m", 1.05))
+            slot_props_ = low_props(options.scenario, "slot", plane)
+            slot_to = None
+            backed_ = self.paths.get("return_home") if ms.phase == "return_home" else None
+            backoff_ = getattr(backed_, "start_backoff", None)
+            if (backoff_ is not None and backoff_.get("status") == "prefix" and len(backed_.poses) == len(poses)
+                    and np.allclose(np.asarray(backed_.poses, dtype=float), poses, atol=1e-9)):
+                # plan 2026-10-27-return-start-withdraw-extension R5: the start backoff of the return this tracker
+                # follows (no other tracker -- an escape keeps paths["return_home"] and installs its own) is the slot
+                # stage, against the slot props as the backoff checked them (moved with the destination)
+                slot_to = float(backoff_["length_m"])
+                world_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", options.scenario)) \
+                    if self.slam is not None else options.scenario
+                slot_props_ = [p_.rectangle for p_ in moved_slot_props(options.scenario.destination, world_)
+                               if p_.asset.height_m <= plane]
             leg = LegClearance(poses, shape, search_props=low_props(options.scenario, "search", plane),
-                               slot_props=low_props(options.scenario, "slot", plane), slot_from_m=slot_from)
+                               slot_props=slot_props_, slot_from_m=slot_from, slot_to_m=slot_to)
             cache.clear()  # one leg at a time: the tracker being followed
             cache[key] = leg
             guard["legs"].append({"t": float(t), "phase": ms.phase, "length_m": leg.length_m, "slot_from_m": slot_from,
+                                  **({} if slot_to is None else {"slot_to_m": slot_to}),
                                   "min_planned_m": _finite_or_none(float(np.min(leg.c)) if len(leg.c) else None)})
         cfg = LowClearanceConfig(margin_m=float(options.low_clearance_margin_m),
                                  deviation_m=float(options.low_clearance_deviation_m))
@@ -6479,6 +6725,7 @@ class MissionCore:
                 )
                 event["pallet_frame_change"] = list(frame_change)
                 slam["return_scenario"] = return_scenario  # later return recoveries too
+            backoff_kw_ = self._return_backoff_kwargs(grid_world(return_scenario))  # plan 2026-10-27 R2 2
             replanned = plan_return_leg(
                 grid_world(return_scenario),
                 start,
@@ -6487,7 +6734,9 @@ class MissionCore:
                 geometry=geometry,
                 travel_config=travel_config,
                 **grid_kwargs(None, own=after, applied=released_),
+                **backoff_kw_,
             )
+        first_ = replanned
         if replanned.status == "invalid_start" and grid_planning:
             # The released pose may sit inside the planning clearance of a grid
             # mark (L3b seed 3: transport after the extract); as for the obstacle
@@ -6503,9 +6752,13 @@ class MissionCore:
             else:
                 replanned = plan_return_leg(
                     grid_world(return_scenario), start, return_to_pose, tight_cfg, geometry=geometry,
-                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_),
+                    travel_config=tight_travel_cfg, **grid_kwargs(None, own=after, applied=released_), **backoff_kw_,
                 )
             event["tight_retry"] = True
+        if leg == "return_home":  # plan 2026-10-27 R6: each try's backoff, the one taken marked
+            if first_ is not replanned:
+                note_return_backoff(state, "release_replan", getattr(first_, "start_backoff", None), False)
+            note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(
             replaced_path=path_record(paths[leg]),
             replanned=True,
@@ -6628,16 +6881,17 @@ class MissionCore:
     ASYNC_FRESH_DEPTH_S = 2.0
     ASYNC_STAND_CONFIRM_S = 2.0  # how long a finished plan waits for the stop detector before it is dropped
 
-    def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on) -> dict:
-        """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them."""
+    def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on, extra_kw=None) -> dict:
+        """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them; ``extra_kw`` goes to
+        both (the return-start backoff, plan 2026-10-27 R2)."""
         options = self.options
         cfg, travel = options.planner_config, options.travel_config
         tight_cfg = replace(cfg, clearance_m=0.0)
         tight_travel = replace(travel, clearance_m=0.0) if travel is not None else None
-        exit_kw = {}
+        exit_kw = dict(extra_kw or {})
         if kind == "transport":
             args, tight_args = (scenario_, start, cfg), (scenario_, start, tight_cfg)
-            exit_kw = self._exit_prefix_kwargs()
+            exit_kw.update(self._exit_prefix_kwargs())
         else:
             args = (scenario_, start, options.return_to_pose, cfg)
             tight_args = (scenario_, start, options.return_to_pose, tight_cfg)
@@ -6645,6 +6899,27 @@ class MissionCore:
                 "kwargs": dict(geometry=self.geometry, travel_config=travel, **grid_kw, **exit_kw),
                 "retry_on": tuple(retry_on), "tight_args": tight_args,
                 "tight_kwargs": dict(geometry=self.geometry, travel_config=tight_travel, **grid_kw, **exit_kw)}
+
+    def _mission_backoff_kwargs(self) -> dict:
+        """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 1: the mission plan's return-start backoff cap
+        for the core's plan_transport calls (sync and worker), as _exit_prefix_kwargs gives the exit prefix; none when
+        off, so the calls are as before."""
+        limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
+        return {"return_start_backoff_m": limit} if limit > 0.0 else {}
+
+    def _return_backoff_kwargs(self, world) -> dict:
+        """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 2-3 / R5: the return-start backoff for a return
+        replanned at the withdrawal end (the docking release's, the first live return), on ``world`` -- the scenario as
+        the planner gets it. The slot-stage props the straight is checked against are its untagged props and its @slot
+        props moved with the destination since the preparation, T = destination now o destination then^-1 (the anchors
+        were made once, from the destination then; a release moves only the destination); @search props, bounds and
+        grid stay. None when off."""
+        limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
+        if limit <= 0.0:
+            return {}
+        return {"return_start_backoff_m": limit,
+                "backoff_slot_props": [p_.rectangle for p_ in moved_slot_props(self.options.scenario.destination,
+                                                                                world)]}
 
     def _exit_prefix_kwargs(self) -> dict:
         """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;
@@ -6675,8 +6950,10 @@ class MissionCore:
             payload = self._leg_payload("transport", hooks.grid_world(options.scenario), start, grid_kw,
                                         retry_on=("invalid_start",) if options.grid_planning else ())
         else:
-            payload = self._leg_payload("return", hooks.grid_world(need["return_scenario"]), start, grid_kw,
-                                        retry_on=("invalid_start",) if options.grid_planning else ())
+            world_ = hooks.grid_world(need["return_scenario"])
+            payload = self._leg_payload("return", world_, start, grid_kw,
+                                        retry_on=("invalid_start",) if options.grid_planning else (),
+                                        extra_kw=self._return_backoff_kwargs(world_))
         self._request("release", "leg", payload, t, after, released_, ctx={"need": dict(need, redo=True)})
 
     def _release_finish(self, p, value, t: float, rear) -> None:
@@ -6686,6 +6963,9 @@ class MissionCore:
         replanned = value["result"]
         if value.get("tight"):
             event["tight_retry"] = True
+        if leg == "return_home":  # plan 2026-10-27 R6: the first try's backoff (replaced by the tight retry) too
+            note_return_backoff(state, "release_replan", value.get("first_backoff"), False)
+            note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
                      planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
         hooks.require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
@@ -6709,6 +6989,9 @@ class MissionCore:
         obstacle.setdefault("live_plans", []).append(
             {"phase": ms.phase, "time_s": p.t, "status": live.status, "turnaround": getattr(live, "turnaround", None),
              "async": True, "taken_s": float(t)})
+        if ms.phase == "return_home":  # plan 2026-10-27 R6
+            note_return_backoff(state, "live_leg", value.get("first_backoff"), False)
+            note_return_backoff(state, "live_leg", getattr(live, "start_backoff", None), live.success)
         if not live.success:
             tries = sum(1 for lp in obstacle["live_plans"] if lp["phase"] == ms.phase)
             hooks.require(tries < 5, f"obstacle_live_plan_failed in {ms.phase}: {live.status}")
@@ -6933,6 +7216,8 @@ class MissionCore:
         if not ok:
             cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
         elif loaded and not value["result"].success:
+            for rec_ in value.get("return_backoffs", ()):  # R6: the refused attempts too
+                note_return_backoff(self.state, "mission_plan", rec_, False)
             cmds.terminate("failed", t, f"prepare:loaded:{value['result'].status}")  # its stage and status (item 3)
         elif value["result"] is None:
             cmds.terminate("failed", t, "prepare:timeout" if value["timed_out"] else
@@ -6946,6 +7231,10 @@ class MissionCore:
                 return
             if loaded:
                 self.start_loaded_mission(t, value["result"], p.ctx["inputs"], ready)
+                recs_ = list(value.get("return_backoffs", ()))
+                for i_, rec_ in enumerate(recs_):  # R6, after the adoption's baseline reset
+                    note_return_backoff(self.state, "mission_plan", rec_, i_ == len(recs_) - 1
+                                        and getattr(value["result"].return_home, "start_backoff", None) is not None)
             else:
                 self.start_mission(t, value["result"], p.ctx["inputs"], value, ready)
 

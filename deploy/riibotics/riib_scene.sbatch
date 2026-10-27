@@ -8,9 +8,13 @@
 # One Riibotics demo scene (tools/riibotics_isaac_scenes.py) as an Isaac autonomous mission (--layout scene: the
 # scene's layout is the planner's prior map). Defaults (user decision 2026-10-22, deploy/riibotics/README.md):
 #   MODE=slam      far recognition (learned proposals), SLAM feedback through the slam_toolbox bridge, D7 docking
-#   NEAR=on        PR #88's near re-capture: --near-capture-expected on, --near-capture-lower waive_far_confirmed,
+#   NEAR=on        PR #88's near re-capture: --near-capture-expected on, --near-capture-lower waive (plan
+#                  2026-10-27-bottomless-and-bundled-pallets 2.1 c: no lower gate, a bottomless pallet is a target),
 #                  --near-capture-redraw always, --near-capture-redraw-lateral-m 0.10 (slam mode only: they need the
 #                  perception planning target)
+#   NEAR_RECAPTURE_GAP=  (empty) C3: with a gap in metres, a second near capture where the estimated fork tip is that
+#                  far before the face (--near-recapture-gap-m; docs/plans/2026-10-27-insertion-lateral-drift.md T2); needs
+#                  NEAR=on
 #   MARKERS=on     line_* / random_* run their slot-marker copy <scene>_m.json (PR #99); the other scenes have none
 #   RACK=on        aisle / aisle_out run their rack copy <scene>_rack.json: rack uprights, wider slot gaps and the
 #                  0.20 m back gap (user decision 2026-10-22, docs/plans/2026-10-22-riibotics-aisle.md D-A, D-C)
@@ -57,7 +61,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -76,11 +80,32 @@ case "$ENCODER_MODEL" in reported) AGE=;; team_spec_quantized) AGE=_team_spec;;
   *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 case "$NOISE" in a2) LAYER=config/obstacle_layer_single_a2$AGE.yaml;; const) LAYER=config/obstacle_layer_single$AGE.yaml;;
   *) echo "NOISE must be a2 or const"; exit 2;; esac
+# GYRO=measured (T2's C1 arm, docs/plans/2026-10-27-insertion-lateral-drift.md): the odometry heading from the simulated
+# D435i gyro on the model fitted to the 2026-10-23 static IMU record, with the age table made for that model -- an
+# exploratory comparison, not an adoption (the gyro plan's G4 is open). It needs the perception run (MODE=slam), the
+# team-spec encoders and the constant noise (no a2 gyro table).
+GYRO=${GYRO:-off}
+GYRO_ARGS=()
+case "$GYRO" in
+  off) ;;
+  measured)
+    [ "$MODE" = slam ] || { echo "GYRO=measured needs MODE=slam (the runner's gyro heading needs --use-perception)"; exit 2; }
+    [ "$ENCODER_MODEL" = team_spec_quantized ] || { echo "GYRO=measured needs ENCODER_MODEL=team_spec_quantized"; exit 2; }
+    [ "$NOISE" = const ] || { echo "GYRO=measured has no NOISE=$NOISE age table"; exit 2; }
+    LAYER=config/obstacle_layer_single_team_spec_gyro_d435i_static.yaml
+    GYRO_ARGS=(--odometry-heading gyro --gyro-model config/gyro_model_d435i_static_20261023.yaml) ;;
+  *) echo "GYRO must be off or measured"; exit 2;; esac
 case "$START_BAND" in on|off) ;; *) echo "START_BAND must be on or off"; exit 2;; esac
 case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exit 2;; esac
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
+# C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): empty = off; a gap needs the near capture it follows.
+NEAR_RECAPTURE_GAP=${NEAR_RECAPTURE_GAP:-}
+if [ -n "$NEAR_RECAPTURE_GAP" ]; then
+  [[ "$NEAR_RECAPTURE_GAP" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "NEAR_RECAPTURE_GAP must be a positive number of metres"; exit 2; }
+  { [ "$MODE" = slam ] && [ "$NEAR" = on ]; } || { echo "NEAR_RECAPTURE_GAP needs MODE=slam and NEAR=on"; exit 2; }
+fi
 NAME=$SCENE
 case "$SCENE" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
@@ -103,9 +128,11 @@ mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
 echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" \
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" "$GYRO" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
+# C3: recorded only when set, so every earlier run's record reads as before
+[ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
 # The SLAM mode, said and recorded (live-default plan 5d): this launcher maps online. The switch to localization on an
 # accepted survey bundle is the live console's (deploy/console/slam_choice.sh); no Riibotics demo scene has one.
 if [ "$MODE" = truth ]; then RIIB_SLAM="none (MODE=truth)"
@@ -118,7 +145,7 @@ COMMON=(--base-scene "$BASE_SCENE"
   --forklift-urdf "$FORKLIFT_URDF" --settings config/isaac_transport_measured.yaml
   --delivery-straight-m 1.5 --alignment-straight-m 2.1 --withdrawal-m 0.55 --insertion-reserve-m 0.016
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
-  --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "${SEED:-0}"
+  --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
   --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
   --video --extra-views quarter,chase --quarter-eye="$QE" --quarter-target="$QT")
@@ -127,7 +154,52 @@ if [ "$MODE" = truth ]; then
   [ "$NEAR" = on ] && echo "NEAR=on has no effect in MODE=truth (the near re-capture needs the perception target)" >&2
 else
   : "${ONNX:?the learned proposal weights (MODE=slam)}" "${LEARNED_PY:?the python with onnxruntime (MODE=slam)}"
-  if [ "${DRY_RUN:-0}" != 1 ]; then
+  MODE_ARGS=(--use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception
+    --perception-mount carriage_low_measured --depth-quantize-mm 1
+    --slam-feedback "$OUT/sock/slam.sock" --slam-map-dir "$OUT/bridge" --slam-noise-seed "${SEED:-0}"
+    --d7-planner --d7-docking --recognition far --recognition-proposals learned
+    --recognition-onnx "$ONNX" --recognition-learned-python "$LEARNED_PY" --recognition-tau 0.3 --recognition-conf 0.05
+    --recognition-pixel-lag-steps 24 --recognition-providers CUDAExecutionProvider,CPUExecutionProvider
+    --recognition-device-id 0 --recognition-threads 4)
+  if [ "$NEAR" = on ]; then
+    MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive
+      --near-capture-redraw always --near-capture-redraw-lateral-m 0.10)
+    # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): NEAR_RECAPTURE_GAP=<m> adds the second near capture.
+    [ -n "$NEAR_RECAPTURE_GAP" ] && MODE_ARGS+=(--near-recapture-gap-m "$NEAR_RECAPTURE_GAP")
+  fi
+fi
+# the SLAM socket is a Unix socket: its path fits in 107 bytes or the runner dies at connect (AF_UNIX path too long)
+if [ "$MODE" != truth ] && [ "$(printf %s "$OUT/sock/slam.sock" | wc -c)" -gt 107 ]; then
+  echo "preflight: the SLAM socket path $OUT/sock/slam.sock is longer than AF_UNIX allows (107 bytes): shorten OUT" >&2
+  exit 2
+fi
+# the preflight's runner must know --check-args: an older one would take it for a Kit argument and start Isaac
+if ! grep -q -- '"--check-args"' "$SNAP/sim/isaac/run_transport.py"; then
+  if [ "${DRY_RUN:-0}" = 1 ] && [ "${DRY_RUN_CHECK:-1}" != 1 ]; then :; else
+    echo "preflight: $SNAP's runner has no --check-args (an older snapshot): refused" >&2
+    exit 2
+  fi
+fi
+# shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  echo RUNNER_ARGS
+  printf '%s\n' "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-}
+  # preflight (docs/plans/2026-10-27-ws1-preflight.md): the runner's own checks on these arguments, ARGS_OK or exit 2;
+  # DRY_RUN_CHECK=0 prints the arguments alone (this launcher's tests of how it builds them)
+  [ "${DRY_RUN_CHECK:-1}" = 1 ] || exit 0
+  exec "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \
+    --output "$OUT/run" --check-args
+fi
+# the same check before the runner starts: arguments it would refuse end the job here, in seconds
+# shellcheck disable=SC2086
+if ! "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} --output "$OUT/run" \
+    --check-args > "$OUT/check_args.log" 2>&1; then
+  echo "preflight: the runner refuses these arguments (its check follows)"
+  cat "$OUT/check_args.log"
+  exit 2
+fi
+# the SLAM bridge only after the check: arguments refused above start no container
+if [ "$MODE" != truth ]; then
   NAME_B=slam_bridge_${SESSION_ID:-${SLURM_JOB_ID:-$$}}_riib
   CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)}
   docker run -d --name "$NAME_B" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 -u "$(id -u):$(id -g)" \
@@ -138,24 +210,6 @@ else
   trap 'docker stop -t "${BRIDGE_STOP_S:-60}" "$NAME_B" >/dev/null 2>&1; docker rm -f "$NAME_B" >/dev/null 2>&1' EXIT
   for i in $(seq 1 120); do [ -f "$OUT/bridge/bridge_ready" ] && break; sleep 1; done
   [ -f "$OUT/bridge/bridge_ready" ] || { echo "bridge not ready"; exit 1; }
-  fi
-  MODE_ARGS=(--use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception
-    --perception-mount carriage_low_measured --depth-quantize-mm 1
-    --slam-feedback "$OUT/sock/slam.sock" --slam-map-dir "$OUT/bridge" --slam-noise-seed "${SEED:-0}"
-    --d7-planner --d7-docking --recognition far --recognition-proposals learned
-    --recognition-onnx "$ONNX" --recognition-learned-python "$LEARNED_PY" --recognition-tau 0.3 --recognition-conf 0.05
-    --recognition-pixel-lag-steps 24 --recognition-providers CUDAExecutionProvider,CPUExecutionProvider
-    --recognition-device-id 0 --recognition-threads 4)
-  if [ "$NEAR" = on ]; then
-    MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive_far_confirmed
-      --near-capture-redraw always --near-capture-redraw-lateral-m 0.10)
-  fi
-fi
-if [ "${DRY_RUN:-0}" = 1 ]; then
-  # shellcheck disable=SC2086
-  echo RUNNER_ARGS
-  printf '%s\n' "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-}
-  exit 0
 fi
 # shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
 timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \

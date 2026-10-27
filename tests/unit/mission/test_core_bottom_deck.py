@@ -792,3 +792,77 @@ def test_other_not_pickable_reasons_still_look_again():
     assert w.core.observe_failed(30.0, REAR, reobserve_attempt("not_pickable", "lift_alignment_needed"), 2,
                                  SimpleNamespace(status="no_pallet", reason="lift_alignment_needed")) is False
     assert w.ms.next_candidate_index == 2
+
+
+# --- plan 2026-10-27 (bottomless pallets) §2.1 g: --bottom-deck-check structure --------------------------------------
+
+def structure_world(verdicts):
+    w = World(verdicts=verdicts)
+    w.core.options.bottom_deck_check = "structure"
+    return w
+
+
+def test_structure_sees_the_second_face_after_an_absent_first_one_and_returns():
+    w = structure_world(["absent", "absent"])
+    w.begin()
+    first, second = w.deck["order"]
+    out = w.arrive()
+    assert (out.stop, w.deck["leg"]["face"], w.deck["leg"]["kind"]) == (False, second, "stand")
+    out = w.arrive(30.0)
+    assert out.stop is False and w.deck["status"] == "returning" and w.deck["leg"]["kind"] == "return"
+    rec = w.deck["record"]
+    assert rec["verdict"] == "absent" and [f["verdict"] for f in rec["faces"]] == ["absent", "absent"]
+    assert "refused" not in w.deck
+
+
+@pytest.mark.parametrize("verdicts", [["present", "absent"], ["absent", "present"]])
+def test_structure_takes_rows_with_and_without_bottom_boards(verdicts):
+    w = structure_world(verdicts)
+    w.begin()
+    w.arrive()
+    out = w.arrive(30.0)
+    assert out.stop is False and w.deck["status"] == "returning" and w.deck["record"]["verdict"] == "absent"
+
+
+def test_structure_refuses_a_face_it_could_not_see_even_after_an_absent_one():
+    w = structure_world(["absent", "unobserved", "unobserved", "unobserved"])
+    w.begin()
+    w.arrive()
+    w.arrive(21.0)  # the second face: unobserved, retreat, again
+    for k in range(2):
+        w.core.bottom_deck_capture(22.0 + 2 * k, np.asarray(w.core.paths["observe"].poses[-1]), 700 + k)
+        out = w.arrive(23.0 + 2 * k)
+    assert out.stop is True and w.ms.phase == "bottom_deck_refused"
+    assert w.deck["refused"]["reason"] == "bottom_deck_unobserved" and w.deck["record"]["verdict"] == "unobserved"
+
+
+def test_structure_permits_the_insert_on_an_absent_record_of_the_pallet_judged():
+    w = structure_world(["absent", "absent"])
+    w.begin()
+    w.arrive()
+    w.arrive(30.0)
+    assert w.core._bottom_deck_reobserved(35.0, REAR, {}, Pose2D(3.05, 0.02, 0.01)) is None
+    w.ms.phase = "approach"
+    w.core.near = None
+    w.core.options.near_tracking_stop_at = None
+    w.core.pocket["planning_pickup"] = Pose2D(3.05, 0.02, 0.01)
+    w.core.arrive(40.0, SimpleNamespace(position_error_m=0.0, yaw_error_rad=0.0))
+    assert w.ms.phase == "insert" and w.deck["permitted"]["shape"] == "epal6"
+
+
+def test_structure_waives_the_near_lower_band_on_an_absent_record_too():
+    w = structure_world(["absent", "absent"])
+    w.begin()
+    w.arrive()
+    w.arrive(30.0)
+    w.core._bottom_deck_reobserved(35.0, REAR, {}, Pose2D(3.05, 0.02, 0.01))
+    w.state["near_capture"] = {"status": "pending"}
+    assert w.core._bottom_deck_lower_waived() is True
+
+
+def test_on_still_ends_at_the_first_absent_face():
+    w = World(verdicts=["absent"])
+    assert w.core.options.bottom_deck_check == "on"
+    w.begin()
+    out = w.arrive()
+    assert out.stop is True and w.deck["refused"]["reason"] == "no_bottom_deck" and len(w.deck["faces"]) == 1

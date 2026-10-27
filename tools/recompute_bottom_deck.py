@@ -52,11 +52,12 @@ def judge(z, spec) -> tuple[str, str]:
     return ev.verdict, ev.reason
 
 
-def policy(faces: list) -> str:
-    verdicts = [f["verdict"] for f in faces]
-    seen = {f["face"] for f in faces if f["verdict"] == "present"}
-    return "absent" if "absent" in verdicts else "present" if len(seen) == 2 and set(verdicts) == {"present"} \
-        else "unobserved"
+def policy(faces: list, mode: str = "on") -> str:
+    """The two-face verdict the mission writes (bottom_deck_permit.two_face_verdict): ``on`` -- bottom boards
+    required; ``structure`` -- both faces present or absent (plan 2026-10-27-bottomless-and-bundled-pallets 2.1 g)."""
+    from forklift_core.perception.bottom_deck_permit import two_face_verdict  # noqa: PLC0415
+
+    return two_face_verdict(faces, mode)
 
 
 def recompute(run: Path) -> dict:
@@ -67,7 +68,10 @@ def recompute(run: Path) -> dict:
     frames, not against itself)."""
     from forklift_core.perception.bottom_deck_permit import params_digest  # noqa: PLC0415
 
-    deck = json.loads((run / "result.json").read_text())["bottom_deck"]
+    result = json.loads((run / "result.json").read_text())
+    deck = result["bottom_deck"]
+    # the run's mode; a record from before structure ran on
+    mode = (result.get("arguments") or {}).get("bottom_deck_check", "on")
     record = deck.get("record") or {}
     specs: dict = {}
     rows, problems, per_face = [], [], {}
@@ -114,7 +118,7 @@ def recompute(run: Path) -> dict:
         faces.append({"face": int(f["face"]), "verdict": verdict})
         if verdict != f["verdict"]:
             problems.append(f"face {f['face']}: recorded {f['verdict']}, recomputed {verdict}")
-    verdict = policy(faces)
+    verdict = policy(faces, mode)
     if record and record.get("centre_xy") is not None:
         want = (*record["centre_xy"], record["model_yaw_rad"])
         for n, pose in carried:  # the record binds the target that was judged (the insert gate reads it)
@@ -126,7 +130,7 @@ def recompute(run: Path) -> dict:
     if record and [(int(f["face"]), f["verdict"]) for f in record.get("faces", [])] != [
             (f["face"], f["verdict"]) for f in faces]:
         problems.append("the record's faces differ from the recomputed ones")
-    return {"captures": rows, "faces": faces, "policy": verdict, "record_verdict": record.get("verdict"),
+    return {"captures": rows, "faces": faces, "mode": mode, "policy": verdict, "record_verdict": record.get("verdict"),
             "problems": problems, "match": all(r["match"] for r in rows) and not problems}
 
 
