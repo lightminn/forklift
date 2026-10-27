@@ -7957,7 +7957,10 @@ class MissionCore:
                 if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
                     tb.update_pose(pid, carried(old), carry_put_down=True)  # put down in this hold
             elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].pose is not None:
-                tb.update_pose(pid, carried(tb.pallets[pid].pose))  # the near capture's hold: its pallet
+                entry_ = tb.pallets[pid]  # the near capture's hold: its pallet; or one a manual recovery put down in it
+                # plan 2026-10-28-adoption-zone-check: a pose still equal to its put-down is that put-down (made in this
+                # hold) and the snapshot goes with it; a pose an observation rewrote leaves the snapshot alone
+                tb.update_pose(pid, carried(entry_.pose), carry_put_down=entry_.put_down_pose == entry_.pose)
             tb.set_correction_version(self.slam_releases)
         else:
             # Only what this hold found is in its frame (Codex D6 rounds 4-5): the docked destination, carried as
