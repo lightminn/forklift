@@ -54,7 +54,107 @@ from forklift_core.control.start_release import cell_distances, footprint_rect_d
 from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot  # noqa: E402
 from forklift_core.planning import Footprint, Rectangle  # noqa: E402
 
-ESCAPE_SPEED_MPS = 0.1
+# the scene replan's escape speed: options.backoff_speed_mps = run_transport.BACKOFF_SPEED_MPS (Codex diagnosis
+# review P2: 0.10 here before, a shorter stop arc and path extension than the runner checks)
+ESCAPE_SPEED_MPS = 0.15
+
+
+def threshold_args(record: dict):
+    """(planner clearance, psi, cell) that give the record's escape end thresholds (escape.end_threshold_m is linear in
+    the length: clearance + 2 sin(psi/2) L + cell); None without a recorded escape evaluation."""
+    events = record.get("scene_escape_candidates") or []
+    if not events:
+        return None
+    by_len = sorted({float(c["length_m"]): float(c["threshold_m"]) for c in events[0]["candidates"]}.items())
+    (l0, t0), (l1, t1) = by_len[0], by_len[-1]
+    slope = (t1 - t0) / (l1 - l0)
+    cell = 0.05
+    return t0 - slope * l0 - cell, 2.0 * math.asin(slope / 2.0), cell
+
+
+def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, kappa_measured: float) -> dict:
+    """The scene replan's escape_plan (src/forklift_core/mission/core.py) on the dump: the trigger's rectangles
+    (permit_stop.current_blocked_rectangles at the held steering), the transport leg's rectangles (the scene props with
+    the run's KEEPOUT), the start-band split of the trigger's rectangles with the release on, every check of
+    escape.evaluate at ``kappa_arc`` (the stop arcs at kappa, kappa/2, 0), the choice, and candidate_permit at the
+    measured steering ``kappa_measured`` -- the escape is installed only when that permit is ok."""
+    from forklift_core.mission.permit_stop import current_blocked_rectangles
+    from forklift_core.planning.geometry import FootprintCollisionChecker
+    from forklift_core.planning.pallet_mission import LIDAR_PLANE_M, scenario_props
+    from obstacle_layer import ObstacleLayer
+    from scene_file import scenario_from_record
+
+    cfg = replace(base_cfg, start_band_m=band)
+    snap = snapshot_of(dump)
+    pose = tuple(float(v) for v in dump["rear"])
+    leg = np.asarray(dump["leg"], dtype=float)
+    direction = int(dump["direction"]) or -1
+    layer = ObstacleLayer.__new__(ObstacleLayer)  # the layer's check methods on the dump's processed snapshot
+    layer.permission, layer.snapshot, layer.last_scan_s = DrivePermission(cfg), snap, {}
+    layer.loaded = layer.unloaded = layer.body = layer.unloaded_shape = fp
+    layer.shape_mode = "hull"
+    layer.permission.update(snap, leg, fp, fp, current_pose=pose, direction=direction)
+    if band > 0:
+        layer.permission.note_standing(True, pose, int(dump["version"]))  # the device's _note_release_standing
+    cruise_ = (record.get("tracker_configs") or {}).get("transport", 0.3)
+    cruise = float(cruise_["cruise_speed_mps"] if isinstance(cruise_, dict) else cruise_)  # the trigger's arc cap
+    extra = current_blocked_rectangles(layer, rear=pose, leg=leg, direction=direction, loaded=True,
+                                       kappa=float(dump["kappa"]), speed_cap_mps=cruise)
+    scenario = scenario_from_record(record["scenario"])
+    rects = scenario_props(scenario, keepout_m=float(record["geometry"].get("lidar_keepout_m", 0.0)),
+                           plane_m=LIDAR_PLANE_M)
+    checker = FootprintCollisionChecker(list(rects) + list(extra), fp, scenario.bounds)
+    if band > 0:
+        near, far = esc.start_band_rectangles(list(extra), fp, pose)
+        sweep_checker = FootprintCollisionChecker(list(rects) + far, fp, scenario.bounds)
+    else:
+        near, sweep_checker = [], checker
+    targs = threshold_args(record)
+    if targs is None:
+        return {"error": "no recorded escape evaluation"}
+    clear, psi, cell = targs
+    stop_len = cfg.stopping.distance_m(ESCAPE_SPEED_MPS) + cfg.step_m
+    cands = esc.evaluate(
+        pose,
+        sweep_free=lambda poses, d: esc.rectangles_sweep_free(sweep_checker, poses, near, fp),
+        path_blocked=lambda poses, d, x, r: layer.check_candidate(
+            poses, current_pose=pose, direction=d, loaded=True, extra_margin_m=x, extra_ramp_m=r).blocked,
+        arc_blocked=lambda k, d: layer.check_arc_candidate(
+            current_pose=pose, curvature_inv_m=k, direction=d, loaded=True, cap_mps=ESCAPE_SPEED_MPS).blocked,
+        end_clearance=lambda region: (lambda v: (min(v) >= 0.0, min(v)))(
+            [esc.clearance_m(checker.free, p) for p in region]),
+        kappa_now=kappa_arc, stop_length_m=stop_len, planner_clearance_m=clear, psi_rad=psi, cell_m=cell)
+    choice = esc.choose(cands, direction)
+    permit = None
+    if choice is not None:
+        permit = layer.candidate_permit(
+            float(dump["t"]), esc.straight(pose, choice.direction, choice.length_m), current_pose=pose,
+            direction=int(choice.direction), loaded=True, curvature_inv_m=0.0,
+            measured_curvature_inv_m=kappa_measured, cap_mps=ESCAPE_SPEED_MPS)
+
+    def code(c):
+        if c.qualifies:
+            return "ok"
+        if not c.sweep_free:
+            return "sweep"
+        if c.path is not None:
+            return "path"
+        if c.path_ramped is not None:
+            return "ramped"
+        if any(b is not None for _, b in c.arcs):
+            return "arc"
+        return f"end{c.end_clearance_m:.3f}<{c.threshold_m:.3f}" if c.end_free else "end_hit"
+
+    return {"candidates": {f"{c.direction:+d}x{c.length_m:g}": code(c) for c in cands},
+            "qualifying": sum(c.qualifies for c in cands),
+            "chosen": None if choice is None else f"{choice.direction:+d}x{choice.length_m:g}",
+            "permit": None if permit is None else permit["why"],
+            "installs": bool(permit is not None and permit["ok"]),
+            "extra_rects": len(extra), "released_rects": len(near),
+            # the recorded evaluation's checks, to compare the off variant with (the record's pose and time may differ)
+            "record": {f"{c['direction']:+d}x{c['length_m']:g}": [c["sweep_free"], c["path"], c["path_ramped"],
+                                                                   [b for _, b in c["arcs"]]]
+                       for c in (record.get("scene_escape_candidates") or [{}])[0].get("candidates", [])}}
 
 
 def layer_permission_config(path: Path) -> PermissionConfig:
@@ -149,6 +249,8 @@ def evaluate(run: Path) -> dict:
         corridor_state[i, j] = FREE
     free_stamp_t = t
     stop_len = base_cfg.stopping.distance_m(ESCAPE_SPEED_MPS) + base_cfg.step_m
+    # the driving tick's cap: max(|requested|, |truth speed|) (core.py; Codex diagnosis review P2)
+    stand_cap = max(abs(float(dump["requested"])), abs(float(dump["truth_speed"])))
 
     def variant(band: float, zero, corridor: bool) -> dict:
         """``zero``: False (the held steering), True (0) or a curvature the steering is set to first."""
@@ -170,7 +272,7 @@ def evaluate(run: Path) -> dict:
         perm = fresh()
         perm.update(snap, leg, fp, fp, current_pose=pose, direction=direction)
         allowed, why = perm.allowed_speed(t, {}, current_pose=pose, curvature_inv_m=k_now, direction=direction,
-                                          footprint=fp, own_footprint=fp, speed_cap_mps=0.12)
+                                          footprint=fp, own_footprint=fp, speed_cap_mps=stand_cap)
         escapes = {}
         for d in (1, -1):
             arcs = [fresh().check_arc(snap, pose, k, d, fp, fp, ESCAPE_SPEED_MPS).blocked
@@ -202,6 +304,15 @@ def evaluate(run: Path) -> dict:
     for k_set in (-0.05, -0.02, 0.02, 0.05):
         for band in (band_launcher, 0.03):
             variants[f"steer{k_set:+g}+band{band:g}"] = variant(band, k_set, False)
+    # the full escape_plan (escape.evaluate with the rectangle sweep and the end region, and the install permit)
+    full = {}
+    for name_, band_, k_arc_, k_meas_ in (
+            ("off", 0.0, kappa, kappa), (f"band{band_launcher:g}", band_launcher, kappa, kappa),
+            ("band0.03", 0.03, kappa, kappa), ("zero+band0.03", 0.03, 0.0, 0.0),
+            ("steer-0.05", 0.0, -0.05, -0.05), ("steer+0.05", 0.0, 0.05, 0.05),
+            ("steer-0.02+band0.03", 0.03, -0.02, -0.02), ("steer+0.02+band0.03", 0.03, 0.02, 0.02),
+            ("steer-0.05+band0.03", 0.03, -0.05, -0.05), ("steer+0.05+band0.03", 0.03, 0.05, 0.05)):
+        full[name_] = full_escape(dump, record, base_cfg, fp, band=band_, kappa_arc=k_arc_, kappa_measured=k_meas_)
     tall = [pp for pp in record["scenario"]["props"] if float(pp["asset"].get("height_m", 0.0)) > 1.05]
     truth = tuple(float(v) for v in dump["truth_rear"])
     gap = min(((footprint_rect_distance(truth, fp, Rectangle(**pp["rectangle"])), pp["asset"]["uri"]) for pp in tall),
@@ -213,7 +324,8 @@ def evaluate(run: Path) -> dict:
             "direction": direction, "band_launcher_m": band_launcher, "corridor": corridor_stats,
             "corridor_released": int(len(released)), "tall_gap_truth_m": [round(gap[0], 4), gap[1]],
             "permit_threshold_m": base_cfg.envelope_offset_m + base_cfg.stopping.margin_m,
-            "record_sweep_free": record_sweep, "variants": variants}
+            "record_sweep_free": record_sweep, "variants": variants, "full": full,
+            "record_escape_t": (record.get("scene_escape_candidates") or [{}])[0].get("time_s")}
 
 
 def main(argv=None) -> int:
@@ -235,6 +347,13 @@ def main(argv=None) -> int:
               f"(covered {r['corridor']['covered']}, new {r['corridor']['covered_new']}) gap {r['tall_gap_truth_m']}")
         for name, v in r["variants"].items():
             print(f"  {name:22s} stand {v['stand']} escapes_ok {v['escapes_ok']}/8 start->occ {v['start_to_occupied_m']}")
+        print(f"  full escape_plan (record escape at t {r['record_escape_t']}):")
+        for name, v in r["full"].items():
+            if "error" in v:
+                print(f"    {name:22s} {v['error']}")
+                continue
+            print(f"    {name:22s} qualifying {v['qualifying']}/8 chosen {v['chosen']} permit {v['permit']} "
+                  f"installs {v['installs']} extra {v['extra_rects']} released {v['released_rects']} {v['candidates']}")
     if args.json:
         args.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
     return 0
