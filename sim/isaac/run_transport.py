@@ -4336,7 +4336,9 @@ def drive(S, isaac) -> None:
                 "slam_map": state.get("slam_map"),  # slam_mode / map_id, not the bundle's path (plan L7)
             }))
             run_["detector_params"] = json.loads(record_json(asdict(DetectorParams.derived_for(args.pallet_prior_loaded))))
-            observed_condition = near_tracking.run_condition(run_, Path.cwd())
+            # the far recognition's fixed files from this checkout, where far_recognition_runtime reads them
+            observed_condition = near_tracking.run_condition(run_, Path.cwd(),
+                                                             far_root=Path(__file__).resolve().parents[2])
             problems_ += near_tracking.condition_problems(
                 near["terms"].condition, observed_condition, skip=("tracker_configs",)
             )

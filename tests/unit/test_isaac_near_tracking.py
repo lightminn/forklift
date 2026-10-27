@@ -309,6 +309,19 @@ def test_a_far_runs_condition_compares_the_files_the_far_recognition_reads_by_fi
         "input_files far-recognition config/recognition_track_bounds.yaml differs from the measurement runs"
     ]
     assert any("far-recognition" in p for p in file_problems(NT.run_condition(far, None)))
+    # Codex round 3 P2: the runner hashes them where the far runtime reads them (its own checkout), not in its
+    # working directory -- a checkout whose bounds differ is refused though the working directory's match
+    runner_checkout = tmp_path / "runner"
+    shutil.copytree(tmp_path / "config", runner_checkout / "config")
+    bounds.write_text(bounds.read_text().replace("\n# changed\n", ""))  # the working directory's: as measured
+    assert file_problems(NT.run_condition(far, tmp_path)) == []
+    assert file_problems(NT.run_condition(far, tmp_path, far_root=runner_checkout)) == [
+        "input_files far-recognition config/recognition_track_bounds.yaml differs from the measurement runs"
+    ]
+    runner = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert "far_root=Path(__file__).resolve().parents[2]" in runner
+    # the far runtime's own root, the same checkout
+    assert "ROOT = Path(__file__).resolve().parents[2]" in (ROOT / "sim/isaac/far_recognition_runtime.py").read_text()
     # every fixed path the runtime reads is listed (a new one there must join FAR_RECOGNITION_FILES)
     source = (ROOT / "sim/isaac/far_recognition_runtime.py").read_text()
     from forklift_core.perception.pallet_model import VARIANT_OF

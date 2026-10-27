@@ -1265,16 +1265,19 @@ def far_recognition_files(root: Path | None) -> dict[str, str | None]:
     }
 
 
-def run_condition(result: dict, root: Path | None) -> dict:
+def run_condition(result: dict, root: Path | None, far_root: Path | None = None) -> dict:
     """What a run is measured under, as tools/s4_drive_terms.py exports it and the runner
     checks it: its shared arguments, recorded settings, follower configs (speed fields
     aside) and input files by content -- an argument naming a file is compared by that
-    file's content, not by how its path is written (Codex S4a-1 2nd review P3)."""
+    file's content, not by how its path is written (Codex S4a-1 2nd review P3). The far
+    recognition's fixed files are read from ``far_root`` (default ``root``): the runner
+    passes its own checkout, where far_recognition_runtime reads them, which need not be
+    its working directory (Codex near-remeasure round 3 P2)."""
     arguments = {k: v for k, v in (result.get("arguments") or {}).items() if k not in SLAM_MAP_ARGUMENTS}
     arguments.update(slam_semantics(result))
     files = input_files_skipping(arguments, root, RUN_SPECIFIC_ARGUMENTS)
     if arguments.get("recognition") == "far":
-        files.update(far_recognition_files(root))
+        files.update(far_recognition_files(root if far_root is None else far_root))
     by_content = {
         label.removeprefix("argument ")
         for label in files
