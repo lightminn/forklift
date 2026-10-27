@@ -966,6 +966,8 @@ class _Live:
     silence_max: float = 0.0
     stack_term_at: float | None = None  # a stalled run's TERM, stack_wait_s after its SIGUSR1
     no_runner_since: float | None = None
+    runner_seen: bool = False  # its runner (run_transport) has run at some point
+    stall_reason: str | None = None
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -992,7 +994,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
-               diag_wait_s=60.0, no_runner_s=900.0,
+               diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings, gpu_full_give_up_s=None):
@@ -1119,7 +1121,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         record({
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": "infra_failed" if infra else ("stalled" if r.stalled else "ended"), "infra": signs,
-            "retried": retry, "stalled": r.stalled, "silence_max_s": round(r.silence_max, 1),
+            "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
+            "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
             "timeout": r.timeout, "killed": r.killed, "session_id": r.env["SESSION_ID"],
@@ -1360,26 +1363,34 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 if run_timeout_s is not None and r.term_at is None and now - r.start > run_timeout_s:
                     r.timeout, r.term_at = True, now
                     _kill([r.proc.pid], signal.SIGTERM)
+                watched = bool(watch_globs(r.run, watch_rel))
                 if (not r.stalled and r.term_at is None and now >= st["stall_next"]
-                        and watch_globs(r.run, watch_rel)):
-                    # measured for every watched run (silence_max_s), acted on with stall_s; judged only while its
-                    # runner (run_transport) runs, from that runner's start
+                        and (watched or (stack_match and (no_runner_s or first_runner_s)))):
+                    # progress silence: measured for every watched run (silence_max_s), acted on with stall_s, judged
+                    # only while its runner (run_transport) runs, from that runner's start. Runner absence needs no
+                    # progress file: lvram (2026-10-27) had none, its launcher ended on its first line and the probe
+                    # waited for a port file with the run's shard, CPUs and memory held -- never judged.
                     started = _runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match else 0.0
-                    silence, limit = None, stall_s
+                    silence, limit, reason = None, stall_s, "progress"
                     if started is not None:
-                        r.no_runner_since = None
-                        silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
-                        r.silence_max = max(r.silence_max, silence)
-                    elif no_runner_s:
+                        r.no_runner_since, r.runner_seen = None, True
+                        if watched:
+                            silence = progress_silence(r.run, r.start_wall, watch_rel, runner_start=started)
+                            r.silence_max = max(r.silence_max, silence)
+                    elif not r.runner_seen and first_runner_s:
+                        # no runner yet: a session's first runner comes once its bridge is up (at most ~2 min after
+                        # the start, 60 s apart in a bundle); none after first_runner_s is a launch that failed
+                        silence, limit, reason = now - r.start, first_runner_s, "no_runner_start"
+                    elif r.runner_seen and no_runner_s:
                         # no runner: a live session between epochs (backoff, bridge start, standby: ~7 min at most)
                         # is no stall, a run stuck without a runner is, after no_runner_s
                         r.no_runner_since = now if r.no_runner_since is None else r.no_runner_since
-                        silence, limit = now - r.no_runner_since, no_runner_s
-                    if stall_s and silence is not None:
+                        silence, limit, reason = now - r.no_runner_since, no_runner_s, "no_runner"
+                    if (stall_s or reason == "no_runner_start") and silence is not None:
                         if silence >= limit:
                             # first what it was doing: diagnostics in a thread (py-spy, /proc, nvidia-smi -- they
                             # must not hold up the other runs), at most diag_wait_s
-                            r.stalled = True
+                            r.stalled, r.stall_reason = True, reason
                             r.stack_pids = [p for p in token_pids(r.env["BUNDLE_TOKEN"])
                                             if stack_match and stack_match in _cmdline(p)]
                             r.diag_thread = threading.Thread(target=lambda r=r: setattr(

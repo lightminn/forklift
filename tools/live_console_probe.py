@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import signal
 import struct
 import sys
@@ -1485,6 +1486,38 @@ async def tour_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:  # a zombie (ended, not yet reaped by its parent) counts as ended
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
+
+
+def wait_port(port_file: Path, wait_s: float, launcher_pid=None, sleep=time.sleep, clock=time.monotonic):
+    """The port file of a running session, or (None, why): ``launcher_ended`` when the launcher (isaac_live.sbatch)
+    exits before its session runs -- lvram (2026-10-27): it ended on its first line (a required variable) and the
+    probe waited out its 900 s holding the job -- else ``no_port_file`` at the deadline."""
+    end = clock() + wait_s
+    info = None
+    while clock() < end:
+        # the launcher first: a "running" port file an earlier session left in the output is not this one's (Codex)
+        if launcher_pid is not None and not pid_alive(launcher_pid):
+            return None, "launcher_ended"
+        if port_file.exists():
+            info = json.loads(port_file.read_text())
+            if info.get("state") == "running":
+                return info, None
+        sleep(1.0)
+    return None, "no_port_file"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port-file", type=Path, required=True)
@@ -1552,6 +1585,8 @@ def main():
     ap.add_argument("--auto-s", type=float, default=15.0)
     ap.add_argument("--mission-timeout-s", type=float, default=900.0)
     ap.add_argument("--wait-port-s", type=float, default=900.0)
+    ap.add_argument("--launcher-pid", type=int, default=None,
+                    help="the session launcher's pid: its end before the session runs ends the probe at once (exit 3)")
     ap.add_argument("--tour-path", type=Path, default=None, help="tour scenario: tools/survey_tour.py's path (.npz)")
     ap.add_argument("--tour-cruise-mps", type=float, default=0.30)
     ap.add_argument("--tour-stall-s", type=float, default=60.0, help="tour scenario: no progress this long (wall s)")
@@ -1563,14 +1598,11 @@ def main():
         ap.error("--queue-resume-not-stopped is superseded by the queue's own start resubmit (plan D5 exception)")
     # The job's timeout ends a stuck probe with SIGTERM: leave through the finally below, so the report is written.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
-    end = time.monotonic() + args.wait_port_s
-    info = None
-    while time.monotonic() < end:
-        if args.port_file.exists():
-            info = json.loads(args.port_file.read_text())
-            if info.get("state") == "running":
-                break
-        time.sleep(1.0)
+    info, why = wait_port(args.port_file, args.wait_port_s, args.launcher_pid)
+    if info is None:
+        args.report.write_text(json.dumps({"port_file": None, "error": why}, indent=1) + "\n")
+        print(f"probe: no running session ({why})", file=sys.stderr)
+        sys.exit(3)
     report = {"port_file": info}
     p = Probe(info["port"], report)
     try:
