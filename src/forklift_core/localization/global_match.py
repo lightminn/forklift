@@ -37,7 +37,7 @@ class MatchConfig:
     match_range_m: float = 8.0  # plan B1 R_MATCH: 0.5 deg is 0.105 m at 12 m
     sigma_m: float = 0.05
     levels: int = 5  # the coarsest block is 2^levels cells (1.6 m at 5 cm)
-    keep_ratio: float = 0.6  # every leaf scoring >= this share of the best is kept (below any useful r_max)
+    keep_ratio: float = 0.4  # every leaf scoring >= this share of the best is kept: 0.10 below the lowest r_max (B4a)
     sep_m: float = 0.3  # plan B1: the wrong-confirmation tolerance
     sep_rad: float = 0.1
     clearance_m: float = 0.3  # the laser stands where the truck can: this far from any occupied cell
