@@ -5309,7 +5309,7 @@ class MissionCore:
             if tb.pallets[pid].state == "carried":
                 tb.put_down(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
             elif tb.pallets[pid].state == "delivered":
-                tb.update_pose(pid, site_pose)
+                tb.update_pose(pid, site_pose, carry_put_down=True)  # this mission's own put-down, re-expressed
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
             tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
@@ -7955,7 +7955,7 @@ class MissionCore:
                 old = tb.destinations[did]
                 tb.update_destination(did, carried(old))
                 if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
-                    tb.update_pose(pid, carried(old))
+                    tb.update_pose(pid, carried(old), carry_put_down=True)  # put down in this hold
             elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].pose is not None:
                 tb.update_pose(pid, carried(tb.pallets[pid].pose))  # the near capture's hold: its pallet
             tb.set_correction_version(self.slam_releases)
@@ -7978,7 +7978,8 @@ class MissionCore:
                 entry = tb.pallets.get(mission.pallet_id)
                 held = destination_held if entry is not None and entry.state == "delivered" else pallet_held
                 if held and entry is not None and entry.pose is not None:
-                    tb.update_pose(mission.pallet_id, carried(entry.pose))
+                    # the put-back was made in this hold: its snapshot goes with it
+                    tb.update_pose(mission.pallet_id, carried(entry.pose), carry_put_down=True)
         if obstacle is not None and slam["tracker"].applied is not None:
             self._reproject(t, tuple(float(v) for v in slam["tracker"].applied[0]), after, False)
         slam["holds"].append({"phase": self.ms.phase, "time_s": float(t), "event": "release", "reason": "mission_end",

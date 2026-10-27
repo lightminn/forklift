@@ -90,12 +90,16 @@ class TargetsBook:
         return True
 
     def update_pose(self, pallet_id: str, pose: Pose, *, basis: str | None = None,
-                    uncertainty_m: float | None = None) -> bool:
+                    uncertainty_m: float | None = None, carry_put_down: bool = False) -> bool:
         """A new estimate of a pallet on the floor; a carried pallet keeps no pose. ``basis``/``uncertainty_m``:
-        what the estimate rests on, when it says (plan D10); else they stay."""
+        what the estimate rests on, when it says (plan D10); else they stay. ``carry_put_down``: the same put-down
+        expressed again (its own hold released, its delivering mission's refresh) -- the snapshot moves with it; an
+        observation's estimate leaves the snapshot where it was put down."""
         if self.pallets[pallet_id].state == "carried":
             return False
         changes = {"pose": pose}
+        if carry_put_down and self.pallets[pallet_id].put_down_pose is not None:
+            changes["put_down_pose"] = pose
         if basis is not None:
             changes.update(basis=basis, uncertainty_m=uncertainty_m)
         return self._set(pallet_id, **changes)
