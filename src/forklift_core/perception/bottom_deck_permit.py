@@ -21,6 +21,9 @@ TARGET_TOLERANCE_M = 0.15
 # axes, wide against the candidate error the evaluator draws (+-5 deg) and the near estimate's own.
 AXIS_TOLERANCE_RAD = math.radians(15.0)
 REFUSALS = ("no_bottom_deck", "bottom_deck_unobserved", "bottom_deck_target_mismatch")
+# on: bottom boards required (the site policy for bottom-deck pallets only); structure: the block rows seen on both
+# faces, with or without bottom boards (plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 g).
+MODES = ("on", "structure")
 AXES = ("x", "y")
 
 
@@ -74,12 +77,40 @@ def _axis_error(a: float, b: float) -> float:
     return min(d, math.pi - d)
 
 
-def insert_refusal(record: BottomDeckRecord | None, target_xy, target_yaw_rad: float, shape: str) -> str | None:
+def two_face_verdict(faces, mode: str = "on") -> str:
+    """The record's verdict over the faces seen (each a dict with ``face`` and ``verdict``).
+
+    ``on`` (plan 2026-10-19): any absent face is absent; present needs two distinct faces, both present.
+    ``structure`` (plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 g): two distinct faces must each read
+    present or absent -- the block rows seen, with or without bottom boards; present when both are present, absent
+    when either is absent; anything else (a face not seen, closed along its depth, or one face twice) unobserved."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    verdicts = [f["verdict"] for f in faces]
+    if mode == "on":
+        seen = {f["face"] for f in faces if f["verdict"] == "present"}
+        return ("absent" if "absent" in verdicts else
+                "present" if len(seen) == 2 and set(verdicts) == {"present"} else "unobserved")
+    seen = {f["face"] for f in faces if f["verdict"] in ("present", "absent")}
+    if len(seen) != 2 or not set(verdicts) <= {"present", "absent"} or len(verdicts) != 2:
+        return "unobserved"
+    return "present" if set(verdicts) == {"present"} else "absent"
+
+
+def insert_refusal(record: BottomDeckRecord | None, target_xy, target_yaw_rad: float, shape: str,
+                   mode: str = "on") -> str | None:
     """None when the record permits inserting into this target, else the refusal (one of REFUSALS). The verdict
-    is read first: an absent record is "no bottom deck" whatever it was taken of."""
+    is read first: under ``on`` an absent record is "no bottom deck" whatever it was taken of; under ``structure``
+    present and absent both permit, read again from the record's own faces (an on record's single absent face is
+    not two faces seen)."""
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
     if record is None or record.verdict == "unobserved":
         return "bottom_deck_unobserved"
-    if record.verdict == "absent":
+    if mode == "structure":
+        if two_face_verdict(record.faces, "structure") != record.verdict:
+            return "bottom_deck_unobserved"
+    elif record.verdict == "absent":
         return "no_bottom_deck"
     if (record.shape != shape
             or math.hypot(target_xy[0] - record.centre_xy[0], target_xy[1] - record.centre_xy[1]) > TARGET_TOLERANCE_M

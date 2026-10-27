@@ -1289,3 +1289,22 @@ def test_the_check_off_near_lower_waiver_needs_the_expected_site() -> None:
     assert result.returncode == 2
     assert "--near-capture-lower waive_far_confirmed needs --near-capture-expected on" in result.stderr
 
+
+def test_the_plain_near_lower_waive_needs_the_expected_site_too() -> None:
+    """Plan 2026-10-27 (bottomless pallets) §2.1 c: waive narrows the expected site, so it needs one."""
+    result = subprocess.run([*_cli_base(), "--near-capture-lower", "waive"], capture_output=True, text=True,
+                            check=False)
+    assert result.returncode == 2
+    assert "--near-capture-lower waive needs --near-capture-expected on" in result.stderr
+
+
+def test_the_bottom_deck_check_takes_structure_and_keeps_off_as_the_default() -> None:
+    """Plan 2026-10-27 §2.1 g: off / on / structure; the default stays off (every earlier record)."""
+    source = SCRIPT.read_text()
+    start = source.index('"--bottom-deck-check"')
+    block = source[start:start + 400]
+    assert 'choices=("off", "on", "structure")' in block and 'default="off"' in block
+    start = source.index('"--near-capture-lower"')
+    block = source[start:start + 200]
+    assert 'choices=("gate", "waive_far_confirmed", "waive")' in block and 'default="gate"' in block
+

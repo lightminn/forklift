@@ -469,9 +469,10 @@ class MissionCore:
                 }
                 transition("near_tracking_stopped", t)
                 return SimpleNamespace(stop=True, rear=rear)
-            if getattr(self.options, "bottom_deck_check", "off") == "on":
+            if self.bottom_deck_on():
                 # Plan 2026-10-19 task 3: the side evidence permits this insertion only when it read present and
                 # was taken of the pallet the near capture now targets (the planned pickup: where the forks go).
+                # structure (plan 2026-10-27 section 2.1 g): present or absent on both faces.
                 pickup_ = self.pocket["planning_pickup"]
                 deck_ = state.setdefault("bottom_deck", {})
                 shape_ = self.pallet_geometry.geometry_version
@@ -479,7 +480,7 @@ class MissionCore:
                 record_ = deck_.get("record")  # kept as JSON (BottomDeckRecord.to_record)
                 refusal_ = bottom_deck_permit.insert_refusal(
                     None if record_ is None else bottom_deck_permit.BottomDeckRecord.from_record(record_),
-                    (pickup_.x_m, pickup_.y_m), pickup_.yaw_rad, shape_)
+                    (pickup_.x_m, pickup_.y_m), pickup_.yaw_rad, shape_, mode=self.bottom_deck_mode())
                 if refusal_ is not None:
                     deck_["refused"] = {"reason": refusal_, "time_s": t, **at_}
                     state["mission_result"] = "bottom_deck_refused"
@@ -3444,8 +3445,13 @@ class MissionCore:
         self._refresh_for_new_leg(t, rear)  # the new leg's path check before the first move
 
     # --- plan 2026-10-19 task 4: the bottom-deck side legs (design rounds 1-5, Codex converged) ---
+    def bottom_deck_mode(self) -> str:
+        """off | on (bottom boards required) | structure (the block rows on both faces, plan 2026-10-27 2.1 g)."""
+        return getattr(self.options, "bottom_deck_check", "off")
+
     def bottom_deck_on(self) -> bool:
-        return getattr(self.options, "bottom_deck_check", "off") == "on"
+        """The side legs run (either mode)."""
+        return self.bottom_deck_mode() != "off"
 
     def bottom_deck_leg_active(self) -> bool:
         """A bottom-deck leg (a stand, a retake's retreat, or the return to the far observation point) is the observe
@@ -3726,7 +3732,8 @@ class MissionCore:
                                "captures": leg_["captures"]})
         deck_["leg"] = None
         rest_ = [f for f in deck_["order"] if f not in [x["face"] for x in deck_["faces"]]]
-        if verdict != "absent" and rest_:
+        # on ends at the first absent face (no bottom deck); structure must see both faces (plan 2026-10-27 2.1 g)
+        if (verdict != "absent" or self.bottom_deck_mode() == "structure") and rest_:
             rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_next_face")
             rear = rear if rear_ is None else rear_
             plan_ = self._bottom_deck_plan(rear, rest_[0])
@@ -3744,10 +3751,8 @@ class MissionCore:
         # (a release after it would move the pickup away from the record -- found with Codex round 2).
         rear_ = self._bottom_deck_release_if_held(t, "bottom_deck_done")
         rear = rear if rear_ is None else rear_
-        verdicts_ = [f["verdict"] for f in deck_["faces"]]
-        faces_seen_ = {f["face"] for f in deck_["faces"] if f["verdict"] == "present"}
-        verdict = ("absent" if "absent" in verdicts_ else
-                   "present" if len(faces_seen_) == 2 and set(verdicts_) == {"present"} else "unobserved")
+        mode_ = self.bottom_deck_mode()
+        verdict = bottom_deck_permit.two_face_verdict(deck_["faces"], mode_)
         tg_ = deck_["target"]
         applied_ = None if self.slam is None else self.slam["tracker"].applied
         deck_["record"] = bottom_deck_permit.BottomDeckRecord(
@@ -3758,7 +3763,7 @@ class MissionCore:
             correction_s=None if applied_ is None else float(applied_[1]),
             params_sha256=bottom_deck_permit.params_digest(options.bottom_deck_params)).to_record()
         deck_["status"] = "judged"
-        if verdict != "present":
+        if verdict != "present" and not (mode_ == "structure" and verdict == "absent"):
             return self._bottom_deck_refuse(t, "no_bottom_deck" if verdict == "absent" else "bottom_deck_unobserved",
                                             rear)
         # Two faces present: back to the far observation point, observe again there and go on as without the side
@@ -3841,7 +3846,8 @@ class MissionCore:
                   else self.pallet_geometry.geometry_version)
         refusal_ = bottom_deck_permit.insert_refusal(
             bottom_deck_permit.BottomDeckRecord.from_record(deck_["record"]),
-            (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_)
+            (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_,
+            mode=self.bottom_deck_mode())
         deck_["reobservation"] = {"time_s": t, "target": [float(target_pickup.x_m), float(target_pickup.y_m),
                                                           float(target_pickup.yaw_rad)],
                                   "shape": shape_, "refusal": refusal_,
@@ -3867,6 +3873,11 @@ class MissionCore:
     def _near_waiver_on(self) -> bool:
         """Plan 2026-10-22 task C: --near-capture-lower waive_far_confirmed (needs --near-capture-expected on)."""
         return getattr(self.options, "near_capture_lower", "gate") == "waive_far_confirmed"
+
+    def _near_lower_waived(self) -> bool:
+        """Plan 2026-10-27-bottomless-and-bundled-pallets section 2.1 c: --near-capture-lower waive -- a pallet
+        without a bottom deck is a pick target, so the expected-site detection does not gate on the lower band."""
+        return getattr(self.options, "near_capture_lower", "gate") == "waive"
 
     def _expected_record(self, site: ExpectedSite, candidates_) -> dict:
         pickup_ = self.pocket["planning_pickup"]
@@ -3946,8 +3957,9 @@ class MissionCore:
     def _bottom_deck_lower_waived(self) -> bool:
         """The near capture after a present bottom-deck record and its checked re-observation (plan 2026-10-21 task C)."""
         deck_ = self.state.get("bottom_deck") or {}
+        permitted_ = ("present", "absent") if self.bottom_deck_mode() == "structure" else ("present",)
         return bool(self.bottom_deck_on() and self.state.get("near_capture", {}).get("status") == "pending"
-                    and deck_.get("status") == "done" and (deck_.get("record") or {}).get("verdict") == "present")
+                    and deck_.get("status") == "done" and (deck_.get("record") or {}).get("verdict") in permitted_)
 
     def _bottom_deck_near_check(self, t: float, rear, target_pickup):
         """The near capture's estimate against the record, before adoption (plan 2026-10-21 task C): the insert gate's
@@ -3958,7 +3970,8 @@ class MissionCore:
         if deck_.get("record") is not None:
             refusal_ = bottom_deck_permit.insert_refusal(
                 bottom_deck_permit.BottomDeckRecord.from_record(deck_["record"]),
-                (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_)
+                (float(target_pickup.x_m), float(target_pickup.y_m)), float(target_pickup.yaw_rad), shape_,
+                mode=self.bottom_deck_mode())
         deck_["near_check"] = {"time_s": t, "target": [float(target_pickup.x_m), float(target_pickup.y_m),
                                                        float(target_pickup.yaw_rad)],
                                "shape": shape_, "refusal": refusal_}
@@ -4604,6 +4617,12 @@ class MissionCore:
             # planned pickup in the control base this capture was placed with -- not for the strongest pattern in
             # view (aisle_out picked the neighbour 0.94 m away). Continuity of the far choice, not identity.
             site = self._near_expected_site(base, yaw)
+            if self._near_lower_waived():
+                # Plan 2026-10-27 section 2.1 c/c': the lower band off from the first call, in the site narrowed to
+                # 0.15 m / 15 deg (call and record alike), no far condition; recorded on success and failure.
+                site = ExpectedSite(site.x_m, site.y_m, site.yaw_rad, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
+                attempt["lower_evidence"] = False
+                waive_kw = {"lower_evidence": False}
             detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, params, site, **waive_kw)
             attempt["expected"] = self._expected_record(site, candidates_)
             if not waive_kw and detection.observation.status != "valid" and self._near_waiver_on():

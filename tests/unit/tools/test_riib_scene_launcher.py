@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "deploy/riibotics/riib_scene.sbatch"
-NEAR = ["--near-capture-expected", "on", "--near-capture-lower", "waive_far_confirmed", "--near-capture-redraw", "always",
+NEAR = ["--near-capture-expected", "on", "--near-capture-lower", "waive", "--near-capture-redraw", "always",
         "--near-capture-redraw-lateral-m", "0.10"]
 
 
@@ -209,7 +209,7 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         assert (parsed.recognition, parsed.recognition_proposals) == ("far", "learned")
         assert parsed.perception_mount == "carriage_low_measured"
     if env.get("MODE") != "truth" and env.get("NEAR", "on") == "on":
-        assert parsed.near_capture_expected == "on" and parsed.near_capture_lower == "waive_far_confirmed"
+        assert parsed.near_capture_expected == "on" and parsed.near_capture_lower == "waive"
         assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(0.10)
     else:
         assert parsed.near_capture_expected == "off" and parsed.near_capture_lower == "gate"

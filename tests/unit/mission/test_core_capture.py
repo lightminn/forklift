@@ -432,3 +432,34 @@ def test_the_check_on_waiver_is_not_this_one():
     out = w.run()
     (_, _, kw), = [c for c in w.calls_c if c[0] == "restricted"]
     assert kw == {"lower_evidence": False} and "lower_waiver" not in out.attempt
+
+
+# --- plan 2026-10-27 (bottomless pallets) §2.1 c/c': --near-capture-lower waive -- the near capture's expected-site
+# detection runs with the lower band waived from the first call, in the narrowed 0.15 m / 15 deg site, no far condition
+
+
+@pytest.mark.parametrize("first", ["valid", "no_pallet"])
+def test_waive_detects_once_with_the_lower_band_off_in_the_narrowed_site(first):
+    w = waiver_c_world(lower="waive", first=first, second=first)
+    out = w.run()
+    (only,) = [c for c in w.calls_c if c[0] == "restricted"]
+    assert only[2] == {"lower_evidence": False}
+    assert (only[1].radius_m, only[1].axis_tolerance_rad) == (0.15, pytest.approx(math.radians(15.0)))
+    assert out.attempt["lower_evidence"] is False  # on success and on failure
+    assert out.attempt["expected"]["radius_m"] == 0.15
+    assert out.attempt["expected"]["axis_tolerance_rad"] == pytest.approx(math.radians(15.0))
+    assert "lower_waiver" not in out.attempt and out.observation.status == first
+
+
+def test_waive_has_no_far_condition():
+    # the far capture's detector failed: waive_far_confirmed would refuse; waive does not look
+    w = waiver_c_world(lower="waive", far={"pocket_observation": {"status": "no_pallet"}, "detector_site": None})
+    out = w.run()
+    assert out.observation.status == "valid" and out.attempt["lower_evidence"] is False
+
+
+def test_waive_leaves_the_far_capture_alone():
+    w = waiver_c_world(lower="waive", near_capture=None)
+    out = w.run()
+    assert [c[0] for c in w.calls_c] == ["plain"] and w.calls_c[0][2] == {}
+    assert "lower_evidence" not in out.attempt and "detector_site" not in out.attempt

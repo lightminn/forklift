@@ -44,6 +44,9 @@ JUDGE_SHA256 = hashlib.sha256(Path(B.__file__).read_bytes()).hexdigest()
 TOOLS_SHA256 = hashlib.sha256(Path(__file__).read_bytes() + Path(S.__file__).read_bytes()).hexdigest()
 GROUPS = ("epal6:x", "t11_06:x", "t11_06:y")
 THETA_E = {"x": 35.0, "y": 0.0}
+# The negatives of the bottom-deck-required policy (--bottom-deck-check on, the site policy for bottom-deck pallets
+# only). Not the general negative population: since 2026-10-27 grounded is a pick target (plan 2026-10-27-
+# bottomless-and-bundled-pallets section 2.1 o); do not mix these counts with the recognition negatives.
 NEG_KINDS = ("grounded", "shelf", "deckless", "grounded+nb", "grounded+plate", "grounded+ledge1", "grounded+ledge2",
              "grounded+ledge4")
 REAL_KINDS = ("pallet", "pallet+nb")
