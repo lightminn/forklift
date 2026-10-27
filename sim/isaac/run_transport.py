@@ -629,6 +629,19 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
+    parser.add_argument(
+        "--frame-log",
+        action="store_true",
+        help="Write frames.jsonl (a pose line per video frame) without --extra-views too: a riib run without the extra "
+        "videos (VIEWS=none) keeps the file its bundle watches for progress. Recorded only when given.",
+    )
+    parser.add_argument(
+        "--video-preset",
+        choices=VIDEO_PRESETS,
+        default=VIDEO_PRESET_DEFAULT,
+        help="The videos' x264 preset (crf 20 either way: the same quality, another file size and encoder CPU). "
+        "Runs before the option encoded with medium; recorded in the result's camera block.",
+    )
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
     parser.add_argument("--quarter-eye", type=quarter_vector, metavar="X,Y,Z")
     parser.add_argument("--quarter-target", type=quarter_vector, metavar="X,Y,Z")
@@ -1822,7 +1835,21 @@ FONT_PATH = next(
 )
 
 
-def open_encoder(path: Path, width: int, height: int, fps: int) -> subprocess.Popen:
+# x264's presets trade encoder CPU for file size at the same quality (crf 20 kept for the deck's Isaac videos); the
+# encoders shared the job's cores with Isaac -- three per riib session, about 3.5 cores a job (lead, 2026-10-27). medium
+# is x264's own default, what every run before the option encoded with.
+VIDEO_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
+VIDEO_PRESET_DEFAULT = "veryfast"
+
+
+def video_preset_of(args) -> str:
+    """The preset a run encodes with: medium for a Namespace from before the option (a boundary replay restores the
+    recorded one as it was -- Codex)."""
+    return getattr(args, "video_preset", None) or "medium"
+
+
+def open_encoder(path: Path, width: int, height: int, fps: int,
+                 preset: str = VIDEO_PRESET_DEFAULT) -> subprocess.Popen:
     """H.264 encoder fed raw RGB24 frames on stdin, timed by simulation frames."""
     return subprocess.Popen(
         [
@@ -1844,6 +1871,8 @@ def open_encoder(path: Path, width: int, height: int, fps: int) -> subprocess.Po
             "-an",
             "-c:v",
             "libx264",
+            "-preset",
+            preset,
             "-threads",
             "2",
             "-crf",
@@ -3105,6 +3134,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         "target_m": center.tolist(),
         "fps": args.fps,
         "resolution": [1280, 720],
+        # the encoder, recorded with the camera (lead 2026-10-27): crf 20 throughout, the preset from the option
+        "encoder": {"codec": "libx264", "crf": 20, "preset": video_preset_of(args)},
     }
     extra_cameras = {}
     if args.extra_views:
@@ -5924,6 +5955,8 @@ def drive(S, isaac) -> None:
                     "-an",
                     "-c:v",
                     "libx264",
+                    "-preset",
+                    video_preset_of(args),
                     "-threads",
                     "2",
                     "-crf",
@@ -5940,10 +5973,11 @@ def drive(S, isaac) -> None:
             size = (perception_calibration.width, perception_calibration.height)
             for name in ("rgb", "depth"):
                 extra_encoders[name] = open_encoder(
-                    args.output / f"camera_{name}.mp4", *size, args.fps
+                    args.output / f"camera_{name}.mp4", *size, args.fps, video_preset_of(args)
                 )
-        if args.extra_views:
+        if args.extra_views or getattr(args, "frame_log", False):
             frame_log = (args.output / "frames.jsonl").open("w", encoding="utf-8")
+        if args.extra_views:
             for name in args.extra_views:
                 height = 480 if name == "perception" else 720
                 extra_encoders[name] = subprocess.Popen(
@@ -5966,6 +6000,8 @@ def drive(S, isaac) -> None:
                         "-an",
                         "-c:v",
                         "libx264",
+                        "-preset",
+                        video_preset_of(args),
                         "-threads",
                         "2",
                         "-crf",
@@ -6124,6 +6160,7 @@ def drive(S, isaac) -> None:
                             axis=1,
                         )
                     extra_encoders[name].stdin.write(view_rgb.tobytes())
+            if frame_log is not None:
                 frame_base, frame_q = robot.get_world_pose()
                 frame_pallet, frame_pq = pallet.get_world_pose()
                 frame_log.write(
@@ -9382,6 +9419,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # run's arguments rebuild it), the near-field contract treats them as run-specific
         and k != "scene_requirements_report"
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
+        # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
+        and (k != "frame_log" or v)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
