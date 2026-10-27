@@ -193,14 +193,17 @@ def test_the_gyro_heading_is_refused_where_it_is_not_defined(tmp_path, env):
                                  {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"},
                                  {"NEAR_RECAPTURE_GAP": "-1"}, {"NEAR_RECAPTURE_GAP": "x"},
-                                 {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"}])
+                                 {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"},
+                                 {"NEAR_REDRAW_LATERAL": "-0.05"}, {"NEAR_REDRAW_LATERAL": "x"},
+                                 {"NEAR_REDRAW_LATERAL": "0.05", "NEAR": "off"}, {"NEAR_REDRAW_LATERAL": "0.05", "MODE": "truth"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)
     assert out.returncode != 0
 
 
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
-                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"}])
+                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"},
+                                 {"NEAR_REDRAW_LATERAL": "0.05"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -244,7 +247,8 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         assert parsed.perception_mount == "carriage_low_measured"
     if env.get("MODE") != "truth" and env.get("NEAR", "on") == "on":
         assert parsed.near_capture_expected == "on" and parsed.near_capture_lower == "waive"
-        assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(0.10)
+        lateral = float(env.get("NEAR_REDRAW_LATERAL", "0.10"))
+        assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(lateral)
     else:
         assert parsed.near_capture_expected == "off" and parsed.near_capture_lower == "gate"
     # C3: the second near capture only when asked
@@ -352,6 +356,16 @@ def test_the_second_near_capture_is_off_unless_a_gap_is_given(tmp_path):
     assert "--near-recapture-gap-m" not in args_of(dry_run(tmp_path))
     args = args_of(dry_run(tmp_path, NEAR_RECAPTURE_GAP="1.0"))
     assert contains(args, ["--near-recapture-gap-m", "1.0"])
+
+
+def test_the_near_redraw_lateral_box_stays_0_10_unless_given(tmp_path):
+    # near tracking re-measure (plan 2026-10-27-insertion-lateral-drift 5.3): 0.05 is the value --near-tracking takes
+    assert contains(args_of(dry_run(tmp_path)), ["--near-capture-redraw-lateral-m", "0.10"])
+    assert "NEAR_REDRAW_LATERAL" not in (tmp_path / "out/riib_defaults.txt").read_text()  # earlier records unchanged
+    args = args_of(dry_run(tmp_path, NEAR_REDRAW_LATERAL="0.05"))
+    assert contains(args, ["--near-capture-redraw-lateral-m", "0.05"])
+    assert "--near-capture-redraw-lateral-m" in args and args.count("--near-capture-redraw-lateral-m") == 1
+    assert "\nNEAR_REDRAW_LATERAL=0.05\n" in (tmp_path / "out/riib_defaults.txt").read_text()
 
 
 
