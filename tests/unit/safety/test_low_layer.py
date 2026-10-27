@@ -176,6 +176,24 @@ def test_a_gap_between_two_kinds_of_evidence_is_refused():
             assert all(1.39 < x < 1.41 for x, _ in bad)
 
 
+def test_a_large_turn_between_neighbouring_poses_is_refused_not_folded():
+    # S-P1 implementation review round 4 P2: (0, 0, 0) -> (0, 0, 2 pi) is a full turn on the spot, not no motion
+    layer = _layer()
+    with pytest.raises(ValueError):
+        L.envelope_admissible(layer, t=0.0, poses=[(0.0, 0.0, 0.0), (0.0, 0.0, 2 * math.pi)], footprint=FOOT,
+                              reverse=False)
+
+
+def test_cells_are_read_only_for_polygons_smaller_than_a_cell():
+    # S-P1 implementation review round 4 P3: a 40 mm square turned 45 deg spans 3x3 cells; its corner cells miss the
+    # middle one, so such a probe is refused rather than answered
+    layer = _layer()
+    h = 0.02 * math.sqrt(2)
+    square = np.array([[[1.025 - h, 0.025], [1.025, 0.025 - h], [1.025 + h, 0.025], [1.025, 0.025 + h]]])
+    with pytest.raises(ValueError):
+        layer.squares_in_cells(square, np.ones(layer.shape, bool))
+
+
 def test_a_footprint_outside_the_grid_is_refused():
     # S-P1 implementation review P1: nothing is known outside the grid
     layer = L.LowLayer(CFG, origin_xy=(-2.0, -3.0), size_cells=(160, 120))  # x up to 6 m

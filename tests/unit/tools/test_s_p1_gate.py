@@ -109,3 +109,13 @@ def test_the_forks_shade_the_floor_right_ahead_of_their_tips():
     assert len(near(floor_with)) < len(near(bare))  # the shade lies just ahead of and beside the tips
     tine_hits = with_forks[with_forks[:, 2] > 0.02]
     assert len(tine_hits) and tine_hits[:, 0].max() <= 1.29 + 1e-6
+
+
+def test_the_overlap_judge_sees_a_hazard_between_the_samples():
+    # S-P1 implementation review round 4 P2: a 1 cm box 0.1 mm inside the body's sweep at s 1.005 m on a 0.29 arc,
+    # missed by every 1 cm sample
+    path = L.path_poses([(0.0, 0.0, 0.0)], [(1.2, G.K)], step_m=G.PATH_STEP_M)
+    box = (2.334772617, 0.166375554, 0.01, 0.01)
+    assert not any(G.box_overlaps(G.PLANNER_FOOT, p, box) for p in path)
+    assert G.sweep_overlaps(G.PLANNER_FOOT, path[99:102], [box])
+    assert not G.sweep_overlaps(G.PLANNER_FOOT, path[:50], [box])

@@ -38,6 +38,7 @@ from forklift_core.planning.geometry import Footprint
 UNOBSERVED, FREE, OCCUPIED = 0, 1, 2
 _AGE_TABLE = Path(__file__).resolve().parents[3] / "config" / "obstacle_odometry_age_team_spec.json"
 REACTION_S, DECEL_MPS2 = 0.15, 1.5  # control.drive_permission's stopping model
+MAX_POSE_TURN_RAD = 0.1  # neighbouring envelope poses may turn at most this far apart
 
 
 def _age_table(path: Path = _AGE_TABLE) -> tuple:
@@ -298,13 +299,22 @@ class LowLayer:
         out[inside] = self.occupied_t[ij[inside, 0], ij[inside, 1]] > t0
         return out
 
+    def _cell_probe(self, corners: np.ndarray) -> np.ndarray:
+        """The corners of each polygon's bounding box, whose cells are every cell the polygon overlaps -- true only
+        while the bounding box is smaller than a cell, which is enforced."""
+        box = _bbox_corners(corners)
+        extent = float((box[:, 2] - box[:, 0]).max()) if len(box) else 0.0
+        if extent >= self.cfg.resolution_m:
+            raise ValueError(f"a {extent:.4f} m bounding box spans more than the cells of its corners")
+        return box
+
     def squares_in_swept(self, corners: np.ndarray, t: float, rear_pose) -> np.ndarray:
         """Squares (N, 4 corners, xy) lying wholly inside one swept rectangle within the age limit, shrunk by the
         odometry error since its time (at each corner's distance from the current rear axle), none of whose cells -- those
         under its bounding box -- a band point claimed since."""
         n = len(corners)
         flat = corners.reshape(-1, 2)
-        box = _bbox_corners(corners).reshape(-1, 2)
+        box = self._cell_probe(corners).reshape(-1, 2)
         rho = np.hypot(flat[:, 0] - rear_pose[0], flat[:, 1] - rear_pose[1])
         ok = np.zeros(n, bool)
         for t0, pose, x0, x1, hw in self.swept:
@@ -320,7 +330,7 @@ class LowLayer:
     def squares_in_cells(self, corners: np.ndarray, usable: np.ndarray) -> np.ndarray:
         """Squares (smaller than a cell, any rotation) whose every overlapped cell -- the cells under the corners of
         their bounding box -- is usable; a corner outside the grid has none."""
-        flat = _bbox_corners(corners).reshape(-1, 2)
+        flat = self._cell_probe(corners).reshape(-1, 2)
         ij = np.floor((flat - self.origin) / self.cfg.resolution_m).astype(int)
         inside = (ij[:, 0] >= 0) & (ij[:, 0] < self.shape[0]) & (ij[:, 1] >= 0) & (ij[:, 1] < self.shape[1])
         good = np.zeros(len(flat), bool)
@@ -386,11 +396,14 @@ def _hull(points: np.ndarray) -> np.ndarray:
 def _sweep_pieces(poses, x0: float, x1: float, hw: float) -> list:
     """Convex pieces covering the footprint's continuous sweep between neighbouring poses: the hull of the two
     rectangles, grown by the largest sagitta of a body point's arc between them (zero on a straight segment, where the
-    hull of two rectangles moved along their own axis is their union). Each piece is (hull vertices, growth)."""
+    hull of two rectangles moved along their own axis is their union). Each piece is (hull vertices, growth). The
+    poses must be sampled finely (at most ``MAX_POSE_TURN_RAD`` apart), the hull argument holding for small turns."""
     rmax = max(math.hypot(a, b) for a in (x0, x1) for b in (-hw, hw))
     out = []
     for p, q in zip(poses, poses[1:], strict=False):
-        dth = abs(math.atan2(math.sin(q[2] - p[2]), math.cos(q[2] - p[2])))
+        dth = abs(q[2] - p[2])  # as given: a path's heading is continuous, so a full turn is not folded away
+        if dth > MAX_POSE_TURN_RAD:
+            raise ValueError(f"neighbouring poses turn {dth:.3f} rad apart (> {MAX_POSE_TURN_RAD}): sample the path finer")
         chord = math.hypot(q[0] - p[0], q[1] - p[1])
         grow = 0.0
         if dth > 1e-12:
