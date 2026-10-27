@@ -138,7 +138,13 @@ chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 # here with their verdict (tools/isaac_bundle.py check); a real run goes on only when they pass, so a launch refused
 # here ends the job in seconds instead of leaving the console probe waiting for a port file (lvram, d7oor 2026-10-27).
 preflight() {
-  local map_id=""
+  local map_id="" sock="$OUT/epoch_999/sock/slam.sock"
+  # an epoch's SLAM socket is a Unix socket: its path fits in 107 bytes or the runner dies at connect (AF_UNIX path
+  # too long -- the lvram random_m refill, 11840, at 112)
+  if [ "$(printf %s "$sock" | wc -c)" -gt 107 ]; then
+    echo "preflight: the SLAM socket path $sock is $(printf %s "$sock" | wc -c) bytes (AF_UNIX allows 107): shorten OUT" >&2
+    return 2
+  fi
   if [ -n "${MAP_BUNDLE:-}" ]; then
     map_id=$("$VENV_PY" -c 'import sys; from pathlib import Path
 from forklift_core.localization.slam_map import load_bundle

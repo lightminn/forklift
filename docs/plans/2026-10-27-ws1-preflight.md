@@ -126,3 +126,26 @@ PR #172 는 이런 잡을 실행 중에 끝낸다(runner 미기동 600 s, probe 
 **③ agy 독립 검토(Gemini 3.8 Flash, 문제 상황만 보여 줌).** 방향은 같았다(런처 자체 방어와 제출 전 게이트).
 - 반영한 것: 검사는 스냅숏 안 파일로 한다는 점, 상속 env 오염 위험(→ 제어 변수 거부), 옛 스냅숏에는 정적 검사로 물러나되 통과시키지 않는다는 점
 - 반영하지 않은 것: 런처 실패 시 스스로 `scancel` 하는 안. 런처가 실패하면 잡이 끝나고, 래퍼 쪽은 #172 의 `--launcher-pid` 가 맡는다.
+
+## 7. 후속: 끝난 실행의 결과 판정(미션·순회)
+
+사전 검사는 내기 전의 일이다. 그런데 rc 0 으로 끝난 실행이 성공으로 묻히는 일이 있었다.
+- lvram 시범의 random_m 세션은 막힌 P-1 을 받아 세 미션이 2 초 만에 모두 실패했는데, 1 분 안에 rc 0 으로 끝났다.
+- d7oor 11832 의 순회는 27.1 m 에서 `pallet:P-1` 근접 허용 0 에 막혀 멈췄는데, rc 0 이었다.
+
+그래서 묶음 실행기가 콘솔 probe 보고를 읽어 판정하게 한다(총괄 결정 2026-10-27).
+
+- **보고 위치.** 목록 줄의 `"missions": 경로`(`{attempt}` 치환), 없으면 `retry_move` 폴더의 `probe.json`(`tools/live_console_probe.py --report`). 보고가 없는 배치 실행(riib·게이트)은 지금처럼 rc 로만 판정한다.
+- **상태**(rc 0 으로 끝난 실행에만 적용하며, rc 가 0 이 아니면 그 판정을 유지한다)
+  - `early_mission_failure`: 미션을 하나 이상 냈는데 done 이 0 이다. 거부된 제출도 done 이 아니다.
+  - `tour_incomplete`: 순회의 end 가 `arrived` 가 아니다. 사유로 end, progress_m, 마지막 permit reason 을 남긴다. 실행이 목적을 이뤘는지는 그 실행을 낸 세션이 사유를 보고 판단한다.
+  - `no_mission_report`: 목록이 지정한 보고가 없거나, 보고를 읽을 수 없다.
+  - done 이 하나라도 있으면 `ended` 이다. 뒤 미션의 실패는 실험 결과이고, 수는 행의 `missions` 에 남는다.
+- **집계.**
+  - 위 세 상태는 `failed` 로 센다. 재시도하지 않는다(목록이나 장면 문제라 다시 돌려도 같다).
+  - summary 에 `statuses`(상태별 개수), `status_line`(한 줄), `early_mission_failures`·`tours_incomplete`·`no_mission_reports`·`missions_submitted`·`missions_done` 를 둔다.
+  - 실행기는 끝에 `statuses: ended 4, early_mission_failure 2, ...` 를 stderr 에 찍는다.
+  - array 의 `collect` 는 태스크마다 `missions` 를 내고 같은 한 줄을 찍는다. 빠진 태스크는 `missing` 으로 센다.
+- **시험.** `tests/unit/tools/test_isaac_bundle_missions.py` 13 건.
+- **우회에는 이유를 반드시 남긴다**(총괄 2026-10-27). `--no-preflight` 를 `--preflight-note` 없이(또는 빈 이유로) 주면 실행기가 exit 2 로 거부한다. 이유는 stderr 에 `preflight: off -- <이유>` 로 찍히고, summary 의 `preflight` 에 `off: <이유>` 로 남는다. array 는 이미 `PREFLIGHT_WHY` 를 요구한다.
+- **SLAM 소켓 경로 길이.** isaac_live 의 사전 검사(DRY_RUN·실행 전)와 riib 런처(MODE≠truth)가 `<OUT>/…/sock/slam.sock` 이 107 바이트를 넘으면 거부한다. lvram random_m 재실행 11840 이 긴 폴더 이름 때문에 112 바이트가 되어, connect 에서 `AF_UNIX path too long` 으로 세 세션이 15 분씩 쓰고 죽었다. isaac_live 는 epoch 세 자리(`epoch_999`)까지 셈한다.
