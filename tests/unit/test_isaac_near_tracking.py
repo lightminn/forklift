@@ -1243,3 +1243,29 @@ def test_the_d8b_reference_check_compares_the_slam_map_by_meaning_too(tmp_path):
     other = {**run, "slam_map": {"mode": "localization", "map_id": "b" * 64}}
     assert s4_drive_terms.reference_problems("k", run, elsewhere) == []
     assert s4_drive_terms.reference_problems("k", run, other) == ["k: argument map_id differs from the D8b run"]
+
+
+def test_the_d8b_reference_check_compares_the_far_recognitions_fixed_files(tmp_path):
+    """Codex near-remeasure round 2 P2: an S3 run's far track bounds changed from its S2 reference's is a difference
+    (the S3 runs agreeing among themselves would otherwise link S2 bounds and S3 terms of two far conditions)."""
+    import shutil
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "tools"))
+    import s4_drive_terms
+
+    snaps = {}
+    for name in ("s2", "s3"):
+        snap = tmp_path / "snapshots" / name
+        for rel in NT.FAR_RECOGNITION_FILES + ("config/obstacle_odometry_age.json",):
+            (snap / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(root / rel, snap / rel)
+        snaps[name] = {"arguments": {"recognition": "far", "lidar": str(snap / "config/site_load_defaults.yaml")},
+                       "slam_feedback": {"x": 1}}
+    assert s4_drive_terms.reference_problems("k", snaps["s3"], snaps["s2"]) == []
+    bounds = tmp_path / "snapshots/s3/config/recognition_track_bounds.yaml"
+    bounds.write_text(bounds.read_text() + "\n# changed\n")
+    assert s4_drive_terms.reference_problems("k", snaps["s3"], snaps["s2"]) == [
+        "k: far-recognition config/recognition_track_bounds.yaml differs from the D8b run"
+    ]

@@ -526,20 +526,27 @@ def input_problems(run) -> list[str]:
     """Why a run is not a no-d5 matrix input (plan 5.3, Codex P2): its near capture accepted, its insertion finished
     (insert -> lift: phase_span and the D8c verdict would take an early-insert failure's prefix as a whole
     measurement) and its truth and control unbroken from the near anchor to the insertion end. A failure after the
-    insertion is admissible. The span is fixed by the mission's transitions -- the first entry into approach to the
-    last insert -> lift -- not by the truth rows it checks (Codex P2: rows missing at an end would shorten it)."""
+    insertion is admissible. The span is fixed by the mission's own record, not by the truth rows it checks (Codex
+    P2: rows missing at an end would shorten it): from the accepted near capture's end (its capture_control, the
+    control sample of that instant -- a synchronous capture advances physics without control rows, so the approach
+    transition, stamped before it, would read as a gap; Codex round 2 P2) to the last insert -> lift."""
     problems = []
-    if ((run.result.get("near_capture") or {}).get("status")) != "done":
+    near = run.result.get("near_capture") or {}
+    if near.get("status") != "done":
         problems.append(f"{run.key}: the near capture was not accepted")
-    transitions = run.result.get("transitions") or []
-    starts = [t.get("time_s") for t in transitions if t.get("to") == "approach"]
-    ends = [t.get("time_s") for t in transitions if t.get("from") == "insert" and t.get("to") == "lift"]
+    attempts = run.result.get("observation_attempts") or []
+    index = near.get("near_attempt")
+    anchor = None
+    if isinstance(index, int) and 1 <= index <= len(attempts):
+        anchor = ((attempts[index - 1] or {}).get("capture_control") or {}).get("time_s")
+    ends = [t.get("time_s") for t in run.result.get("transitions") or []
+            if t.get("from") == "insert" and t.get("to") == "lift"]
     if not ends:
         problems.append(f"{run.key}: the insertion did not finish")
-    if not starts or not ends or None in (starts[0], ends[-1]):
-        problems.append(f"{run.key}: no approach/insert span")
+    if anchor is None or not ends or ends[-1] is None:
+        problems.append(f"{run.key}: no near-anchor/insertion-end span")
         return problems
-    span = (float(starts[0]), float(ends[-1]))
+    span = (float(anchor), float(ends[-1]))
     for name, stamps in (("truth", run.truth.t), ("control", None if run.control is None else run.control[:, 0])):
         if stamps is None:
             problems.append(f"{run.key}: no {name} record")

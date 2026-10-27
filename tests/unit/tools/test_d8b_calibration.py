@@ -525,8 +525,8 @@ def test_a_boundary_recorded_run_is_refused_as_measurement_evidence():
 # The declared no-D5 matrix (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3) ---------------------------------
 class _FakeRun:
     def __init__(self, speed=0.08, d5=False, dwells=(), key="r", arguments=None, near="done",
-                 transitions=(("observe", "approach", 0.0), ("approach", "insert", 1.0), ("insert", "lift", 1.95)),
-                 gap_at=None, cut=None):
+                 transitions=(("observe", "approach", 0.2), ("approach", "insert", 1.0), ("insert", "lift", 1.95)),
+                 gap_at=None, cut=None, anchor=0.32, near_attempt=2):
         from types import SimpleNamespace
 
         self.key = key
@@ -537,18 +537,25 @@ class _FakeRun:
         # A real run records every contract field (near_tracking.CONDITION_FIELDS and the trackers').
         fields = {name: {"value": 1} for name in ("settings_synthetic", "detector_params", "planner_config",
                                                   "travel_planner_config", "lidar_synthetic")}
-        self.result = {"arguments": args, "near_capture": {"status": near},
+        # The accepted near capture is synchronous: physics advances 0.2-0.32 s with no control or truth rows, the
+        # approach transition stamped at its start (run_transport.py capture_and_detect) and its end in
+        # capture_control (Codex round 2 P2).
+        attempts = [{"capture_control": {"time_s": 0.05}}, {"capture_control": {"time_s": anchor}}]
+        self.result = {"arguments": args, "near_capture": {"status": near, "near_attempt": near_attempt},
+                       "observation_attempts": attempts,
                        "transitions": [{"from": a, "to": b, "time_s": ts} for a, b, ts in transitions],
                        "chassis_model": {"wheelbase_m": 0.66}, "tracker_configs": {"approach": {"lookahead_m": 0.28}},
                        **fields}
         t = np.arange(0.0, 2.0, CAL.TICK_S)
+        t = t[(t < 0.2 - 1e-9) | (t >= 0.32 - 1e-9)]
+        control_t = t.copy()
         if gap_at is not None:
             t = t[(t < gap_at) | (t > gap_at + 0.1)]
         if cut is not None:  # truth rows gone over [lo, hi): an end of the span, not a gap inside it
             t = t[(t < cut[0]) | (t >= cut[1])]
         phases = ["observe", "approach", "insert", "lift"]
         self.truth = SimpleNamespace(t=t, phase=np.where(t < 1.0, 1, 2), phases=phases)
-        self.control = np.column_stack([np.arange(0.0, 2.0, CAL.TICK_S)] + [np.zeros(len(np.arange(0.0, 2.0, CAL.TICK_S)))] * 6)
+        self.control = np.column_stack([control_t] + [np.zeros(len(control_t))] * 6)
 
     def phase_span(self, phases=("approach", "insert")):
         return CAL.Run.phase_span(self, phases)
@@ -606,6 +613,8 @@ def test_a_no_d5_input_needs_the_near_capture_the_finished_insertion_and_unbroke
     assert any("truth" in p and "gap" in p for p in CAL.input_problems(_FakeRun(key="g", gap_at=1.5)))
     # the span is the transitions', not the remaining rows' (Codex P2): rows gone at either end are refused
     assert any("truth" in p and "misses an end" in p for p in CAL.input_problems(_FakeRun(key="e", cut=(1.5, 2.0))))
-    assert any("truth" in p and "misses an end" in p for p in CAL.input_problems(_FakeRun(key="s", cut=(0.0, 0.3))))
-    assert any("no approach/insert span" in p
-               for p in CAL.input_problems(_FakeRun(key="a", transitions=(("insert", "lift", 1.95),))))
+    assert any("truth" in p and "misses an end" in p for p in CAL.input_problems(_FakeRun(key="s", cut=(0.32, 0.6))))
+    # the synchronous capture's own pause is not a gap: the span starts at its end, not at the approach transition
+    assert any("control" in p and "gap" in p for p in CAL.input_problems(_FakeRun(key="c", anchor=0.2)))
+    assert any("no near-anchor/insertion-end span" in p for p in CAL.input_problems(_FakeRun(key="a", near_attempt=None)))
+    assert any("no near-anchor/insertion-end span" in p for p in CAL.input_problems(_FakeRun(key="b", near_attempt=3)))
