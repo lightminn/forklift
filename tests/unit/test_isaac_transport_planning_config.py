@@ -1347,7 +1347,9 @@ def test_the_cause_separation_settings_are_probe_only_and_recorded():
     --steering-probe (friction correlation distance, PGS, stabilization, the tyre's damping combine mode,
     the wheel drive damping) are refused for any other run, applied after the World exists and recorded."""
     source = SCRIPT.read_text()
-    main = source[source.index("def main() -> None:"):]
+    # the guard runs before Isaac, in the checks main and --check-args share
+    main = source[source.index("def validate_before_isaac("):]
+    assert "settings = validate_before_isaac(args)" in source[source.index("def main() -> None:"):]
     guard = main.index("DIAGNOSTIC_PROBE_SETTINGS")
     assert "args.steering_probe or not any(k in settings for k in DIAGNOSTIC_PROBE_SETTINGS)" in main[guard - 200: guard + 200]
     namespace = {}

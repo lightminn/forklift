@@ -23,12 +23,16 @@ def dry_run(tmp_path, scene="line_2", **env):
         (scenes / f"{name}.json").write_text(json.dumps({"views": {"quarter_eye": [1, 2, 3], "quarter_target": [4, 5, 6]}}))
     base = {"SNAP": str(ROOT), "SCENE_DIR": str(scenes), "SCENE": scene, "BASE_SCENE": "scene.usda",
             "FORKLIFT_URDF": str(ROOT / "sim/models/dls08_measured/forklift.urdf"), "VENV_PY": sys.executable,
-            "ONNX": str(tmp_path / "weights.onnx"), "LEARNED_PY": sys.executable, "DRY_RUN": "1",
+            "ONNX": str(tmp_path / "weights.onnx"), "LEARNED_PY": sys.executable, "DRY_RUN": "1", "DRY_RUN_CHECK": "0",
             "PATH": os.environ["PATH"]}
     (tmp_path / "weights.onnx").write_bytes(b"")
     base.update(env)
     out = subprocess.run(["bash", str(LAUNCHER), str(tmp_path / "out")], env=base, capture_output=True, text=True)
     return out
+
+
+# a fake runner's answer to the launcher's preflight (--check-args): its checks pass
+FAKE_CHECK = 'for a in "$@"; do [ "$a" = --check-args ] && { echo ARGS_OK; exit 0; }; done\n'
 
 
 def args_of(out):
@@ -222,6 +226,32 @@ def test_paths_are_made_absolute_before_the_cd(tmp_path):
     assert Path(args[args.index("--scene-file") + 1]).is_absolute()
 
 
+def test_the_dry_run_ends_with_the_runner_s_own_check(tmp_path):
+    # preflight plan: DRY_RUN prints the arguments, then the runner checks them (ARGS_OK, or its refusal and exit 2)
+    fake = tmp_path / "fakepy"
+    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n"
+                    'for a in "$@"; do [ "$a" = --check-args ] && { echo "$@" > "$0.argv"; echo ARGS_OK; exit 0; }; done\n'
+                    "exit 9\n")
+    fake.chmod(0o755)
+    out = dry_run(tmp_path, MODE="truth", VENV_PY=str(fake), DRY_RUN_CHECK="1")
+    assert out.returncode == 0 and out.stdout.strip().splitlines()[-1] == "ARGS_OK", out.stdout + out.stderr
+    assert f"--output {tmp_path / 'out' / 'run'}" in (tmp_path / "fakepy.argv").read_text()
+    refuse = tmp_path / "refuse"
+    refuse.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\necho refused >&2; exit 2\n")
+    refuse.chmod(0o755)
+    assert dry_run(tmp_path, MODE="truth", VENV_PY=str(refuse), DRY_RUN_CHECK="1").returncode == 2
+
+
+def test_a_run_whose_arguments_the_runner_refuses_ends_before_it_starts(tmp_path):
+    refuse = tmp_path / "refuse"
+    refuse.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n"
+                      'for a in "$@"; do [ "$a" = --check-args ] && { echo "check-args: nope" >&2; exit 2; }; done\n'
+                      "touch \"$0.started\"; exit 0\n")
+    refuse.chmod(0o755)
+    out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(refuse))
+    assert out.returncode == 2 and "nope" in out.stdout and not (tmp_path / "refuse.started").exists()
+
+
 def test_a_used_run_directory_is_refused(tmp_path):
     (tmp_path / "out/run").mkdir(parents=True)
     env = {"DRY_RUN": "0", "MODE": "truth"}
@@ -232,7 +262,7 @@ def test_a_used_run_directory_is_refused(tmp_path):
 def test_the_runner_exit_code_is_the_jobs(tmp_path):
     # a fake runner that fails: the launcher must not report success
     fake = tmp_path / "fakepy"
-    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\nexit 7\n")
+    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n" + FAKE_CHECK + "exit 7\n")
     fake.chmod(0o755)
     out = dry_run(tmp_path, DRY_RUN="0", MODE="truth", VENV_PY=str(fake))
     assert out.returncode == 7, (out.returncode, out.stdout, out.stderr)
@@ -242,7 +272,7 @@ def test_the_runner_exit_code_is_the_jobs(tmp_path):
 def test_the_runners_recorded_code_counts_when_the_process_ended_with_zero(tmp_path, recorded, expected):
     # Codex re-review P2: the runner writes run/exit_code as JSON {"code": .., "reason": ..}
     fake = tmp_path / "fakepy"
-    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n"
+    fake.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n" + FAKE_CHECK +
                     "for a in \"$@\"; do if [ \"$prev\" = --output ]; then mkdir -p \"$a\"; "
                     f"echo '{{\"code\": {recorded}, \"reason\": null}}' > \"$a/exit_code\"; fi; prev=$a; done\nexit 0\n")
     fake.chmod(0o755)
@@ -257,3 +287,30 @@ def test_a_bundle_names_and_pins_each_run_s_bridge():
     assert "NAME_B=slam_bridge_${SESSION_ID:-${SLURM_JOB_ID:-$$}}_riib" in text
     assert "CPU0=${BRIDGE_CPU:-$(taskset -cp $$" in text
     assert 'trap \'kill -TERM "$RUNNER" 2>/dev/null\' TERM INT' in text
+
+
+def test_a_snapshot_whose_runner_has_no_check_is_refused(tmp_path):
+    # Codex: an older runner takes --check-args for a Kit argument and would start Isaac on the login node
+    snap = tmp_path / "snap"
+    for rel in ("config", "sim/models", "src"):
+        (snap / rel).parent.mkdir(parents=True, exist_ok=True)
+        (snap / rel).symlink_to(ROOT / rel)
+    (snap / "sim/isaac").mkdir(parents=True)
+    (snap / "sim/isaac/run_transport.py").write_text("print('an older runner')\n")
+    out = dry_run(tmp_path, MODE="truth", SNAP=str(snap), DRY_RUN_CHECK="1")
+    assert out.returncode == 2 and "no --check-args" in out.stderr, out.stdout + out.stderr
+
+
+def test_a_slam_run_s_arguments_are_checked_before_its_bridge_starts(tmp_path):
+    # Codex: the check came after the container and its 120 s wait; refused arguments now start no container
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "docker").write_text(f"#!/bin/bash\necho \"$*\" >> {tmp_path / 'docker_calls'}\n")
+    (bin_ / "docker").chmod(0o755)
+    refuse = tmp_path / "refuse"
+    refuse.write_text("#!/bin/bash\nif [ \"$1\" = -c ]; then exec python3 \"$@\"; fi\n"
+                      'for a in "$@"; do [ "$a" = --check-args ] && { echo "check-args: nope" >&2; exit 2; }; done\n'
+                      "exit 0\n")
+    refuse.chmod(0o755)
+    out = dry_run(tmp_path, DRY_RUN="0", MODE="slam", VENV_PY=str(refuse), PATH=f"{bin_}:{os.environ['PATH']}")
+    assert out.returncode == 2 and "nope" in out.stdout and not (tmp_path / "docker_calls").exists()

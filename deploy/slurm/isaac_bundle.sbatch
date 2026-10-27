@@ -20,7 +20,9 @@
 #   optional: BUNDLE_PY (python3; the runner needs only the standard library), BUNDLE_ARGS (more tools/isaac_bundle.py
 #   options, split on spaces: --stagger-s, --run-timeout-s, --slots, --session-vram-mib ...)
 #
-# The list (before submitting): python3 tools/isaac_bundle.py check --list RUNS --runner SNAP/sim/isaac/run_transport.py
+# The list (before submitting, required: the runner refuses a list without the proof check writes beside it --
+# docs/plans/2026-10-27-ws1-preflight.md; BUNDLE_ARGS="--no-preflight --preflight-note WHY" for an exception):
+#   python3 tools/isaac_bundle.py check --list RUNS --runner SNAP/sim/isaac/run_transport.py
 #   --kind KIND --jobs J. Two or more jobs on one list share BUNDLE_ARGS="--claim-dir OUT/claims" (the runner refuses
 #   a second job on a list without the same claim dir). Put the longest runs first, and make the number of runs a
 #   multiple of J x the kind's slots (live 3, riib 3 per job; the node holds 6 of either): a last wave of half the
