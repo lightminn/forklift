@@ -8003,6 +8003,7 @@ class MissionCore:
         options.observation_waypoints[:] = inputs["waypoints"]
         options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
         options.pickup_zone = inputs["pickup_zone"]
+        options.adoption_zone = inputs.get("adoption_zone")  # plan 2026-10-28-adoption-zone-check: this mission's
         ms.next_candidate_index = ladder["selected"] + 1
         ms.lift_command = float(self.hooks.lift_position())
         state["observation_candidates"] = list(ladder["candidates"])
@@ -8039,6 +8040,7 @@ class MissionCore:
         options.observation_waypoints[:] = inputs["waypoints"]
         options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
         options.pickup_zone = inputs["pickup_zone"]
+        options.adoption_zone = None  # a loaded start adopts no pickup (plan 2026-10-28-adoption-zone-check)
         ms.lift_command = float(self.hooks.lift_position())  # the ramp starts from the measured lift (item 5)
         state["planning_status"] = plan.status
         paths.clear()

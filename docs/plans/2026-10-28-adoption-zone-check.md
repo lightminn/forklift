@@ -17,8 +17,8 @@
 | 배치 실행, 장면 파일 있음 | `scene_layout.pickup_zone` 의 `[x_min, x_max] × [y_min, y_max]` |
 | 배치 실행, 장면 파일 없음(bay·factory) | `planning/observation_viewpoints.BAY_PICKUP_ZONE` 의 중심 범위(러너 `_ZONE`, `run_transport.py:3857`) |
 | 세션, 팔레트가 처음 자리에 있음 | 그 팔레트의 `SessionZone` 중심 범위 |
-| 세션, 하역된 팔레트를 다시 집음(`delivered`, 처음 자리 아님) | 내려놓은 중심을 가운데로 하는 정사각형, 반폭 0.10 m(Isaac 하역 오차 0.02–0.10 m, `docs/validation/2026-10-22-session-scene-pallet-props.md:28`). 내려놓은 중심은 **정상 하역 때 따로 남기는 스냅숏**(`put_down_xy`: 그 하역의 목적지 추정, `core.py:5261` 에서 `TargetsBook` 에 쓰는 값)이다. `TargetsBook.pallets[pid].pose` 를 그대로 읽지 않는다. 그 값은 재집기 관측 뒤 새 인식 추정으로 바뀌는데 `state="delivered"` 는 남아(`core.py:5266`, `targets.py:88`) 실패 뒤 재제출 때 마지막 내려놓은 중심이 아니게 된다. truth 실측 중심도 아니다 |
-| 그 밖(복구 뒤 재제출 등으로 중심을 모름) | 사각형을 정하지 않는다. 검사 켬이면 그 미션은 시작 전에 `adoption_zone_undefined` 로 거부된다 |
+| 세션, 하역된 팔레트를 다시 집음(`delivered`, 처음 자리 아님) | 내려놓은 중심을 가운데로 하는 정사각형, 반폭 0.10 m(Isaac 하역 오차 0.02–0.10 m, `docs/validation/2026-10-22-session-scene-pallet-props.md:28`). 내려놓은 중심은 **하역 판정이 통과한 목적지**(`TargetsBook` 의 `at` 이 가리키는 `destinations[at]`, `adoption_zone.put_down_centre`)다. 새 필드를 두지 않는다: `at` 은 하역 판정 통과 때만 정해지고 다른 수단으로 옮기면 지워지며, 목적지 추정은 좌표계가 바뀌면 함께 다시 표현된다. `TargetsBook.pallets[pid].pose` 를 그대로 읽지 않는다. 그 값은 재집기 관측 뒤 새 인식 추정으로 바뀌는데 `state="delivered"` 는 남아(`core.py:5266`, `targets.py:88`) 실패 뒤 재제출 때 마지막 내려놓은 중심이 아니게 된다. truth 실측 중심도 아니다 |
+| 그 밖(복구 뒤 재제출 등으로 중심을 모름) | 사각형을 정하지 않는다. 검사 켬이면 그 미션은 첫 채택 검사에서 `adoption_zone_undefined` 로 끝난다(추정을 쓰기 전) |
 
 yaw 범위는 기록만 하고 거부 조건에 넣지 않는다. 지도 축 사각형은 구역 정의 그대로다(`SessionZone` 의 `yaw_centre_rad` 는 heading 범위의 중심이지 사각형의 회전이 아니다).
 
@@ -33,7 +33,7 @@ yaw 범위는 기록만 하고 거부 조건에 넣지 않는다. 지도 축 사
 
 `near_capture_redraw`(8421)는 채택 지점이 아니다. 재작도는 이미 채택된 `pocket["planning_pickup"]`(8443)을 쓰고, `raw_`(8445)는 진단 기록에만 쓰인다. live 의 `observation_take` 결과도 `observe_succeeded` 로 들어간다(`run_transport.py:8285`, Codex 확인).
 
-검사는 순수 함수(`forklift_core/mission/adoption_zone.py`: `check(site_xy, zone, margin_m) -> record`)로 두고 위 네 곳에서 부른다. 통과도 기록한다(단계·유효 목표·원시 추정·사각형·m·경계까지의 부호 거리). 비교는 계획기가 쓰는 같은 제어 좌표(SLAM hold 중이면 hold 된 지도 추정)에서 한다. hold 동안의 오도메트리 드리프트는 4 의 오차 예산에 들어간다.
+검사는 순수 함수(`forklift_core/mission/adoption_zone.py`: `check(site_xy, zone, margin_m) -> record`)로 두고 위 네 곳에서 부른다. 기록의 단계 이름은 `far`·`near`·`retry`·`realign`(observe_succeeded), `second_near`, `tracked_redraw`, `insert`·`insert_tracked` 이고, 거부 사유는 `adoption_outside_zone:<단계>` 다. 통과도 기록한다(단계·유효 목표·원시 추정·사각형·m·경계까지의 부호 거리). 비교는 계획기가 쓰는 같은 제어 좌표(SLAM hold 중이면 hold 된 지도 추정)에서 한다. hold 동안의 오도메트리 드리프트는 4 의 오차 예산에 들어간다.
 
 ## 4. 거부 처리 계약
 

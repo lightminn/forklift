@@ -56,6 +56,15 @@ def mission_zone(*, at_first: bool, first_zone: AdoptionZone, put_down_xy) -> Ad
     return AdoptionZone(x - REPICK_HALF_M, x + REPICK_HALF_M, y - REPICK_HALF_M, y + REPICK_HALF_M, "put_down")
 
 
+def put_down_centre(pallet, destinations: dict):
+    """(x, y) of the destination a delivered pallet's delivery verdict passed at (TargetsBook ``at``), or None. The
+    pallet's own pose is not read: a re-pick's observation rewrites it while the state stays delivered."""
+    if pallet.state != "delivered" or not pallet.at:
+        return None
+    pose = destinations.get(pallet.at)
+    return None if pose is None else (float(pose.x_m), float(pose.y_m))
+
+
 def check(site_xy, zone: AdoptionZone, margin_m: float, *, stage: str) -> dict:
     """The record of one adoption: ``edge_m`` is the signed distance past the rectangle's nearest violated edge
     (negative inside: the distance to the nearest edge); inside when it is at most the margin."""

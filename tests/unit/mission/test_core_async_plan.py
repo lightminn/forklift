@@ -515,6 +515,17 @@ def test_a_prepared_mission_is_adopted_with_its_start_processing():
                                         "mission_id": core.commands.mission_id}
 
 
+@pytest.mark.parametrize("given", [{"adoption_zone": "THIS_MISSIONS"}, {}])
+def test_the_adoption_takes_this_missions_rectangle_or_none(given):
+    """Plan 2026-10-28-adoption-zone-check section 2: fixed at preparation, never the last mission's."""
+    core, ms, state, started, inputs = preparing_core()
+    core.options.adoption_zone = "LAST_MISSIONS"
+    core.prepare_request(11.0, REAR, {**inputs, **given}, {"waypoints": inputs["waypoints"]})
+    core.jobs.answers[core.pending.job] = (True, ladder(Plan("success"), 0, statuses=("success",)))
+    core.job_hold(12.0, REAR, 0.0, False)
+    assert ms.phase == "observe" and core.options.adoption_zone == given.get("adoption_zone")
+
+
 @pytest.mark.parametrize("answer, reason", [
     ((True, ladder(timed_out=True)), "prepare:timeout"),
     ((True, ladder(statuses=("no_path", "invalid_start"))), "prepare:all_candidates_failed:no_path;invalid_start"),

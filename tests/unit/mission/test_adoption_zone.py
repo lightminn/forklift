@@ -59,5 +59,18 @@ def test_an_unknown_centre_has_no_rectangle():
     assert az.mission_zone(at_first=False, first_zone=ZONE, put_down_xy=None) is None
 
 
+def test_the_put_down_centre_is_the_verified_destination_not_the_pose_a_later_observation_rewrote():
+    from forklift_core.mission.targets import Pallet, Pose
+
+    destinations = {"D-2": Pose(3.0, -8.946, 0.0)}
+    delivered = Pallet("P-1", "epal6", Pose(3.07, -8.90, 0.0), state="delivered", basis="recognised", at="D-2")
+    assert az.put_down_centre(delivered, destinations) == (3.0, -8.946)
+    # moved by other means (at cleared), not delivered, or a destination that no longer exists: unknown
+    assert az.put_down_centre(Pallet("P-1", "epal6", Pose(3.0, -8.9, 0.0), state="delivered", at=None),
+                              destinations) is None
+    assert az.put_down_centre(Pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0), at="D-2"), destinations) is None
+    assert az.put_down_centre(Pallet("P-1", "epal6", None, state="delivered", at="D-9"), destinations) is None
+
+
 def test_the_reasons():
     assert az.OUTSIDE == "adoption_outside_zone" and az.UNDEFINED == "adoption_zone_undefined"
