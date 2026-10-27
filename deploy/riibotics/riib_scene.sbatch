@@ -31,10 +31,14 @@
 #                  plan 2026-10-25-team-spec-default, lead decision); reported on request -- the engine's joint velocities, the
 #                  model of every Riibotics result before 2026-10-25 (never mixed with the default's). The obstacle layer
 #                  takes the model's own odometry age table (the runner refuses a mismatched one)
-#   START_BAND=off --start-band-release: an occupied cell the stopped truck already stands within the permission's own
-#                  start inflation of does not block moving away from it (docs/plans/2026-10-24-start-band-release.md);
-#                  off: no gain on the trailer and one actual load overlap in the rack aisle with it on
-#                  (docs/validation/2026-10-24-start-band-release.md)
+#   START_BAND=on --start-band-release: an occupied cell the stopped truck already stands within START_BAND_M of does
+#                  not block moving away from it (docs/plans/2026-10-24-start-band-release.md); START_BAND_M=0.03
+#                  --start-band-m. On at 0.03 with ESCAPE_PRESTEER=on: the transport-start stall in a tight slot
+#                  (docs/plans/2026-10-27-escape-presteer.md; a CPU replay frees 13 of 16 recorded stalls with both, none
+#                  with either alone); the default follows that plan's Isaac comparison (C4). START_BAND=off as before
+#   ESCAPE_PRESTEER=on --escape-presteer: no escape qualifying at the held steering, the steering is set standing to
+#                  the side whose escape qualifies and the escape evaluated again at the measured steering
+#                  (docs/plans/2026-10-27-escape-presteer.md D2, D3); ESCAPE_PRESTEER=off as before
 #   ESCAPE_START=off --escape-start-release: the P6 escape's sweep alone passes the trigger's rectangles the stop
 #                  already stands within the sweep pad of while it moves away; the permission keeps its own start rule
 #                  (docs/plans/2026-10-25-escape-start-release.md); the default follows its Isaac comparison
@@ -61,7 +65,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=on|off] [START_BAND_M=0.03] [ESCAPE_PRESTEER=on|off] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -70,7 +74,7 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-on}; START_BAND_M=${START_BAND_M:-0.03}; ESCAPE_PRESTEER=${ESCAPE_PRESTEER:-on}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
@@ -96,6 +100,9 @@ case "$GYRO" in
     GYRO_ARGS=(--odometry-heading gyro --gyro-model config/gyro_model_d435i_static_20261023.yaml) ;;
   *) echo "GYRO must be off or measured"; exit 2;; esac
 case "$START_BAND" in on|off) ;; *) echo "START_BAND must be on or off"; exit 2;; esac
+[[ "$START_BAND_M" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v b="$START_BAND_M" 'BEGIN{exit !(b > 0)}' \
+  || { echo "START_BAND_M must be a positive number of metres"; exit 2; }
+case "$ESCAPE_PRESTEER" in on|off) ;; *) echo "ESCAPE_PRESTEER must be on or off"; exit 2;; esac
 case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exit 2;; esac
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
@@ -149,8 +156,8 @@ mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
 echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" "$GYRO" \
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s START_BAND_M=%s ESCAPE_PRESTEER=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$START_BAND_M" "$ESCAPE_PRESTEER" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" "$GYRO" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
@@ -174,6 +181,7 @@ COMMON=(--base-scene "$BASE_SCENE"
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
+  --escape-presteer "$ESCAPE_PRESTEER"
   --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
   --video)
 case "$VIEWS" in
@@ -182,6 +190,7 @@ case "$VIEWS" in
   *) COMMON+=(--extra-views "$VIEWS") ;;
 esac
 [ -n "$EXIT_CLEARANCE" ] && COMMON+=(--exit-clearance-m "$EXIT_CLEARANCE")
+[ "$START_BAND" = on ] && COMMON+=(--start-band-m "$START_BAND_M")  # the runner takes a width only with the release
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && COMMON+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && COMMON+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
 if [ "$MODE" = truth ]; then

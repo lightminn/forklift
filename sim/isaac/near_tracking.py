@@ -1158,7 +1158,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "low_clearance_guard": "off", "low_clearance_margin_m": 0.05,
                               "low_clearance_deviation_m": 0.02,
                               # 2026-10-25: the restart confirmation after an occupied stop; off in every earlier run.
-                              "restart_confirm_scans": 0}
+                              "restart_confirm_scans": 0,
+                              # 2026-10-27 escape presteer plan D1, D2: the start band's width (unset: the
+                              # envelope + half a step) and the presteer before an escape; unset / off before.
+                              "start_band_m": None, "escape_presteer": "off"}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

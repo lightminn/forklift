@@ -590,6 +590,22 @@ def arguments() -> argparse.Namespace:
         "earlier run.",
     )
     parser.add_argument(
+        "--start-band-m",
+        type=float,
+        default=None,
+        help="docs/plans/2026-10-27-escape-presteer.md D1: the start band's width (m) with --start-band-release on; "
+        "unset: the permission's own start inflation (envelope + half a sample step), as every earlier run.",
+    )
+    parser.add_argument(
+        "--escape-presteer",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-27-escape-presteer.md D2, D3: when the scene replan's escape qualifies at none of its "
+        "candidates at the held steering, the steering is set standing to the side (+-0.05 1/m) whose escape (its "
+        "install permit included) qualifies, the escape is evaluated again at the measured steering and installed "
+        "only then, and its curvature stays between that steering and 0. Off: as every earlier run.",
+    )
+    parser.add_argument(
         "--escape-start-release",
         choices=("on", "off"),
         default="off",
@@ -1162,6 +1178,8 @@ def arguments() -> argparse.Namespace:
     learned_replaced = bool(args.deterministic and args.recognition_proposals == "learned")
     if learned_replaced:
         args.recognition_proposals = "oracle"
+    if args.start_band_m is not None and (args.start_band_release != "on" or not args.start_band_m > 0.0):
+        parser.error("--start-band-m needs --start-band-release on and a positive width (escape presteer plan D1)")
     if args.deterministic and args.record_boundary:
         parser.error("--deterministic is not combined with --record-boundary: a boundary record keeps RGB by content "
                      "hash, which the strict comparison cannot leave out (plan D1b)")
@@ -3674,8 +3692,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the
             # envelope plus half a sample step); the candidate and teleop permissions copy this config
             pconf_ = obstacle["layer"].permission.config
+            band_ = getattr(args, "start_band_m", None)  # D1 of the escape presteer plan: unset as before
             obstacle["layer"].permission.config = replace(
-                pconf_, start_band_m=float(pconf_.envelope_offset_m) + float(pconf_.step_m) / 2.0)
+                pconf_, start_band_m=float(band_) if band_ is not None
+                else float(pconf_.envelope_offset_m) + float(pconf_.step_m) / 2.0)
         if slam_bundle_ is not None and obstacle["layer"].memory is not None:
             # SLAM localization plan L3: occupancy dated 1 s before the run's first stamp (0), so every live clear
             # may remove it; set into the layer's own memory before any plan (a scratch copy inherits it)
@@ -5820,6 +5840,8 @@ def drive(S, isaac) -> None:
                                 start_band_release=getattr(args, "start_band_release", "off"),
                                 # docs/plans/2026-10-25-escape-start-release.md: off in a record from before the option
                                 escape_start_release=getattr(args, "escape_start_release", "off"),
+                                # docs/plans/2026-10-27-escape-presteer.md D2: off in a record from before the option
+                                escape_presteer=getattr(args, "escape_presteer", "off"),
                                 # leg-failures B1/B2: a record from before the options ran without the caps
                                 d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),

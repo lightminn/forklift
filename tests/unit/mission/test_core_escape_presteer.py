@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 import test_core_pause as cp
 from test_core_scene_replan import DT, _real_layer, make
@@ -179,3 +180,30 @@ def test_a_cancel_that_backs_out_ends_the_scene_request_and_its_escape():
     assert core.finish_cancel(12.0, cp.REAR) is False and started == [12.0]
     assert not core.scene_replan.active() and core.scene_escape is None and "backoff" not in obs
     assert core.state["scene_replans"][-1]["reason"] == "cancelled:clear_out"
+
+
+@pytest.mark.parametrize("kappa", [0.05, -0.05, 0.025, -0.025])
+@pytest.mark.parametrize("dyaw", [0.03, -0.03])
+def test_a_clipped_escape_driven_on_ideal_kinematics_ends_and_never_leaves_its_range(kappa, dyaw):
+    """agy review High 2, Codex plan round 2 P2-3: the escape the presteer started, driven from a heading 0.03 rad off
+    with the steering following the command at once, ends (done or stopped) with every command in the range; its end
+    error is recorded."""
+    import math
+
+    core, state, held, layer, pose = _open_core()
+    core.last_permission = (0.15, "ok")
+    rear = np.array(_running_escape(core, state, held, pose, kappa, 0.0), dtype=float)
+    rear[2] += dyaw
+    lo, hi = min(kappa, 0.0), max(kappa, 0.0)
+    t, v = 0.3, 0.0
+    for _ in range(4000):
+        if core.scene_escape["status"] != "running":
+            break
+        out = core.scene_replan_tick(t, rear.copy(), v, DT)
+        assert lo - 1e-12 <= out.curvature <= hi + 1e-12
+        v = out.requested_speed
+        rear += np.array([v * math.cos(rear[2]), v * math.sin(rear[2]), v * out.curvature]) * DT
+        t += DT
+    end = core.scene_escape["clip"]["end"]
+    assert end["status"] in ("done", "stopped")
+    assert state["escape_presteer_drives"][-1]["end"] == end
