@@ -540,3 +540,70 @@ def test_a_failure_before_localization_is_a_relocalization_stage(tmp_path):
                   reloc_wait_s=1.0, max_epochs=1, grace_s=2.0)
     port = json.loads((out2 / "live_port.json").read_text())
     assert port["stage"] == "relocalize"
+
+
+# --- Codex B-P2a review ----------------------------------------------------------------------------------------------
+
+POSE_NOW = (
+    "import json,os,sys,time,pathlib; d=pathlib.Path(sys.argv[1]); port=pathlib.Path(sys.argv[2]); mode=sys.argv[3];"
+    "tmp=d/'reloc_pose.json.tmp'; tmp.write_text(json.dumps({'base':[1.5,-2.0,0.25],'source':'matcher',"
+    "'generation':0,'attempts':1,'record':{}})); os.replace(tmp, d/'reloc_pose.json')\n"
+    "if mode == 'die': sys.exit(1)\n"
+    "end=time.monotonic()+20\n"
+    "while not (d/'bridge_go').exists() and time.monotonic()<end: time.sleep(0.05)\n"
+    "if mode == 'flash':\n"
+    " port.write_text(json.dumps({'state':'running','localized_wall':time.time()}));"
+    " port.write_text(json.dumps({'state':'closed','localized_wall':time.time()})); sys.exit(1)\n"
+    "port.write_text(json.dumps({'state':'running'})); time.sleep(0.3); sys.exit(0 if (d/'bridge_go').exists() else 1)"
+)
+
+
+def _pose_now(mode="ok"):
+    return [PY, "-c", POSE_NOW, "{epoch_dir}", "{port_file}", mode]
+
+
+def test_an_estimate_written_at_once_is_not_cleared_by_the_supervisor(tmp_path):
+    marks = tmp_path / "marks.txt"
+    result = run(tmp_path, _pose_now(), bridge=_reloc_bridge(marks), relocalize=True,
+                 bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0)
+    assert result["end"] == "ended" and marks.read_text().splitlines() == ["bridge 1.5,-2.0,0.25"]
+
+
+def test_a_runner_that_died_after_its_estimate_gets_no_bridge(tmp_path):
+    marks = tmp_path / "marks.txt"
+    run(tmp_path, _pose_now("die"), bridge=_reloc_bridge(marks), relocalize=True,
+        bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0, max_epochs=1)
+    assert not marks.exists() and not (tmp_path / "epoch_1" / "bridge_go").exists()
+
+
+def test_a_failing_bridge_command_ends_the_runner_at_once(tmp_path):
+    import time
+
+    t0 = time.monotonic()
+    run(tmp_path, _pose_now(), bridge=[PY, "-c", "import sys; sys.exit(3)"], relocalize=True,
+        bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0, max_epochs=1,
+        grace_s=30.0)
+    assert time.monotonic() - t0 < 10.0  # terminated, not waited out for the 30 s grace
+    exits = [e for e in _log_events(tmp_path) if e["event"] == "exit"]
+    assert exits[0]["reason"] == "bridge_start_failed"
+    assert json.loads((tmp_path / "live_port.json").read_text())["stage"] == "relocalize"
+
+
+def test_the_relocalization_wait_bounds_the_bridge_wait_too(tmp_path):
+    import time
+
+    marks = tmp_path / "marks.txt"
+    t0 = time.monotonic()
+    run(tmp_path, _pose_now(), bridge=_reloc_bridge(marks, ready=False), relocalize=True,
+        bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=30.0, reloc_wait_s=1.0, max_epochs=1,
+        grace_s=2.0)
+    assert time.monotonic() - t0 < 10.0
+    assert [e for e in _log_events(tmp_path) if e["event"] == "exit"][0]["reason"] == "reloc_wait_timeout"
+
+
+def test_localization_ready_is_read_from_the_port_files_record_not_only_its_state(tmp_path):
+    marks = tmp_path / "marks.txt"
+    run(tmp_path, _pose_now("flash"), bridge=_reloc_bridge(marks), relocalize=True,
+        bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0, max_epochs=1)
+    assert [e for e in _log_events(tmp_path) if e["event"] == "localization_ready"]
+    assert json.loads((tmp_path / "live_port.json").read_text())["stage"] == "run"

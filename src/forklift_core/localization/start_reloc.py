@@ -83,29 +83,45 @@ class StartRelocalizer:
         self.deadline_at: float | None = None
         self.estimate: Estimate | None = None
         self.shown: tuple = ()
-        self._pool: tuple = ()  # the best candidates any attempt of this generation produced
+        self._pool: list = []  # the pickable candidates every attempt of this generation produced, one per place
         self._picked: tuple | None = None
 
     def start(self) -> None:
-        """The first scan of this generation is being collected: the session deadline starts now."""
-        if self.state == "relocalizing" and self.attempts == 0:
+        """The first scan of this generation is being collected: the session deadline starts now (once)."""
+        if self.state == "relocalizing" and self.deadline_at is None:
             self.deadline_at = self.clock() + self.cfg.deadline_s
+
+    def _keep(self, candidates) -> None:
+        """Pool the pickable candidates (E_MIN, not moved by refinement) across attempts; the same place twice (both
+        within the separation) keeps the better lattice score (Codex B-P2a review: by raw top an attempt's pickable
+        candidate could be lost)."""
+        for c in candidates:
+            if not (c.endpoint_fraction >= self.cfg.e_min) or _moved(c, self.cfg):
+                continue
+            same = [k for k, p in enumerate(self._pool)
+                    if math.hypot(p.pose[0] - c.pose[0], p.pose[1] - c.pose[1]) < self.cfg.sep_m
+                    and abs(math.atan2(math.sin(p.pose[2] - c.pose[2]), math.cos(p.pose[2] - c.pose[2])))
+                    < self.cfg.sep_rad]
+            if not same:
+                self._pool.append(c)
+            elif c.search_score > self._pool[same[0]].search_score:
+                self._pool[same[0]] = c
 
     def record(self, match: GlobalMatch, decision: Decision) -> str:
         """One attempt's result; returns what follows: rescan, chosen, awaiting_pick or reloc_failed."""
         if self.state != "relocalizing":
             return self.state
+        if self.deadline_at is None:
+            raise RuntimeError("record() before start(): an attempt has no session deadline")
         self.attempts += 1
-        if match.candidates and (not self._pool or match.candidates[0].search_score > self._pool[0].search_score):
-            self._pool = match.candidates
-        late = self.deadline_at is not None and self.clock() > self.deadline_at
+        self._keep(match.candidates)
+        late = self.clock() > self.deadline_at
         if decision.confirmed and not late:
             self._choose(base_from_laser(match.candidates[0].pose), "matcher")
             return self.state
         if self.attempts < self.cfg.attempts and not late:
             return "rescan"
-        self.shown = tuple(c for c in self._pool
-                           if c.endpoint_fraction >= self.cfg.e_min and not _moved(c, self.cfg))[:self.cfg.max_shown]
+        self.shown = tuple(sorted(self._pool, key=lambda c: -c.search_score))[:self.cfg.max_shown]
         self.generation += 1
         self.state = "awaiting_pick" if self.shown else "reloc_failed"
         return self.state
@@ -128,7 +144,7 @@ class StartRelocalizer:
             return False, "reloc_not_awaiting"
         if generation != self.generation:
             return False, "reloc_stale_pick"
-        self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), ()
+        self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []
         self.generation += 1
         self.deadline_at = None
         return True, ""
@@ -137,8 +153,11 @@ class StartRelocalizer:
         self.state, self.shown = "cancelled", ()
 
     def _choose(self, base: tuple, source: str) -> None:
+        """The estimate keeps the generation it was chosen in; the generation then moves on, so any later pick of the
+        old set is stale (plan 1.2 step 7)."""
         self.estimate = Estimate(tuple(float(v) for v in base), source, self.generation, self.attempts)
         self.state, self.shown = "chosen", ()
+        self.generation += 1
 
 
 def _write_atomic(path: Path, text: str) -> None:

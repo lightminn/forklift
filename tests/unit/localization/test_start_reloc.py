@@ -158,3 +158,50 @@ def test_a_half_written_file_reads_as_absent(tmp_path):
     (tmp_path / R.RELOC_POSE).write_text('{"base": [1.0')
     assert R.read_reloc_pose(tmp_path) is None
     json.loads("{}")
+
+
+# --- Codex B-P2a review ----------------------------------------------------------------------------------------------
+
+
+def test_a_result_before_start_is_a_programming_error_and_start_is_idempotent():
+    clock = Clock()
+    r = R.StartRelocalizer(R.RelocConfig(e_min=0.8, r_max=0.95, r_struct=0.8), clock)
+    with pytest.raises(RuntimeError, match="start"):
+        r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(True, "confirmed", 0.0))
+    r.start()
+    first = r.deadline_at
+    clock.t += 5.0
+    r.start()  # a second call before any result does not extend the deadline
+    assert r.deadline_at == first
+
+
+def test_a_choice_bumps_the_generation_so_old_picks_are_stale():
+    r = _reloc(attempts=1)
+    a, b = _cand((3.0, 1.0, 0.5)), _cand((9.0, 4.0, 2.0))
+    r.record(_match(a, b), G.Decision(False, "competitor", 0.99))
+    gen = r.generation
+    assert r.pick(gen, 0) == (True, "")
+    assert r.estimate.generation == gen and r.generation == gen + 1
+    assert r.pick(gen, 0) == (True, "duplicate")
+
+
+def test_pickable_candidates_survive_across_attempts_whatever_the_raw_top():
+    # Codex: attempt 1 only a moved 0.99 top; attempt 2 a moved 0.98 top and a good 0.97 -- the good one must stay
+    r = _reloc(attempts=2)
+    moved1 = G.Candidate((1.0, 1.0, 0.0), 0.99, 0.97, True, (1.5, 1.0, 0.0), 0.99)
+    moved2 = G.Candidate((4.0, 1.0, 0.0), 0.98, 0.97, True, (4.5, 1.0, 0.0), 0.98)
+    good = _cand((9.0, 4.0, 2.0), score=0.97)
+    refused = G.Decision(False, "refine_moved", 0.0)
+    assert r.record(_match(moved1), refused) == "rescan"
+    assert r.record(_match(moved2, good), refused) == "awaiting_pick"
+    assert [c.pose for c in r.shown] == [good.pose]
+
+
+def test_the_same_place_from_two_attempts_is_shown_once_with_its_better_score():
+    r = _reloc(attempts=2)
+    a1, a2 = _cand((3.0, 1.0, 0.5), score=0.90), _cand((3.05, 1.0, 0.52), score=0.93)
+    b = _cand((9.0, 4.0, 2.0), score=0.91)
+    refused = G.Decision(False, "competitor", 0.99)
+    r.record(_match(a1, b), refused)
+    r.record(_match(a2), refused)
+    assert [c.pose for c in r.shown] == [a2.pose, b.pose]
