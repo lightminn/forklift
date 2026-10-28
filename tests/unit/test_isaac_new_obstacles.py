@@ -270,3 +270,48 @@ def test_the_rules_load_the_face_gap():
     (ev,) = MODULE.load_events(Path(fh.name))
     assert ev.face_gap_m == 0.15
     assert MODULE.Event("x", "spawn", "transport", 0.0).face_gap_m is None
+
+
+def test_a_face_gap_spawn_takes_the_first_crossing_and_checks_the_gap_it_placed():
+    # Codex review of the placement P2: a path that comes back (an arc of 1 1/m, 6.2 m) ends near the truck again;
+    # the box goes at the first place the gap reaches the target, and a truck already farther than the target from
+    # the path's start gets no box (a 0.15 m request had been placed 0.25 m away)
+    from forklift_core.control.drive_permission import arc_poses
+    from forklift_core.planning import Footprint
+
+    fp = Footprint(1.56, 0.17, 0.40)
+    loop = arc_poses((0.0, 0.0, 0.0), 1.0, -1, 6.2, 0.01)[0]
+    gap = _gap_from((0.0, 0.0, 0.0), fp)
+    ev = MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)
+    (spawn,) = MODULE.Schedule([ev]).update(1.0, "transport", 0.0, loop, leg_direction=-1, gap_test=gap)
+    _, _, x, y, yaw, size = spawn
+    assert abs(gap((x, y, yaw, size)) - 0.15) <= 0.001
+    s_along = np.argmin(np.hypot(loop[:, 0] - x, loop[:, 1] - y)) * 0.01
+    assert s_along < 1.0  # the first crossing, not one past the turn
+    straight = np.column_stack((-np.linspace(0, 3, 301), np.zeros(301), np.zeros(301)))
+    far = MODULE.Schedule([MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)])
+    assert far.update(1.0, "transport", 0.0, straight, leg_direction=-1, gap_test=_gap_from((0.0, 0.8, 0.0), fp)) == []
+
+
+def test_a_face_gap_rule_with_another_placement_condition_is_refused(tmp_path):
+    import json as _json
+
+    import pytest
+
+    for extra in ({"min_curvature_inv_m": 0.3}, {"sweep": True}, {"inside": True}, {"beyond_end_m": 0.5},
+                  {"frame": "pallet"}):
+        path = tmp_path / "r.yaml"
+        path.write_text(_json.dumps({"events": [{"id": "b", "action": "spawn", "phase": "transport", "after_m": 0.1,
+                                                 "face_gap_m": 0.15, **extra}]}))
+        with pytest.raises(ValueError):
+            MODULE.load_events(path)
+
+
+def test_a_rule_without_a_face_gap_records_as_before():
+    # Codex review of the placement P2: the field is left out of a record while it holds its default
+    from forklift_core.mission.replay_codec import recorded_fields
+
+    names = [f.name for f in recorded_fields(MODULE.Event("x", "spawn", "transport", 0.0))]
+    assert "face_gap_m" not in names
+    assert "face_gap_m" in [f.name for f in recorded_fields(MODULE.Event("x", "spawn", "transport", 0.0,
+                                                                        face_gap_m=0.15))]
