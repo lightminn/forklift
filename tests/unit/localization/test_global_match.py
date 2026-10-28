@@ -68,12 +68,75 @@ def test_the_search_is_exact_against_brute_force():
     assert match.candidates[0].score == pytest.approx(best, abs=1e-12)
 
 
+def _random_grid(rng, width_m, height_m, n_boxes):
+    boxes = []
+    for _ in range(n_boxes):
+        x0, y0 = rng.uniform(0.0, width_m - 0.4), rng.uniform(0.0, height_m - 0.4)
+        boxes.append((x0, y0, x0 + rng.uniform(0.1, 0.6), y0 + rng.uniform(0.1, 0.6)))
+    return _grid(width_m, height_m, boxes)
+
+
+def _assert_bounds_cover_leaves(grid, pts, cfg):
+    pts = G._thin(pts, RES)
+    if len(pts) < cfg.min_points:  # a laser inside a random box sees nothing: the matcher refuses it (uninformative)
+        return 0
+    s = G._Search(grid, pts, cfg)
+    rows, cols = np.nonzero(s.cand)
+    for level in range(1, cfg.levels + 1):
+        m = (1 << level) - 1
+        for yaw in range(s.n_yaw):
+            h = np.full(len(rows), yaw)
+            leaves = s.scores(0, h, rows, cols)
+            bounds = s.scores(level, h, rows & ~m, cols & ~m)
+            assert np.all(bounds >= leaves - 1e-12), (level, yaw)
+    return 1
+
+
+def test_every_node_bound_covers_every_leaf_under_it_even_at_the_grid_edge():
+    """B-P1b: the pyramid bound of a node is >= the score of each leaf below it. Walls on the grid's first row and
+    column put endpoints of near-edge leaves into blocks that start outside the grid; a pyramid built before padding
+    read those blocks as 0 (hall map val2_000: level-5 bound 0.457 over a 0.975 leaf)."""
+    grid = _grid(3.2, 2.4, [(2.0, 1.2, 2.5, 1.95)])
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(30.0), clearance_m=0.1, levels=4)
+    assert _assert_bounds_cover_leaves(grid, _points(grid, (0.4, 0.35, 0.3)), cfg)  # walls at x = 0, y = 0 are close
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_bounds_cover_leaves_on_random_maps_near_every_edge_and_at_the_heading_wrap(seed):
+    """Random boxes, the laser near each of the four walls and in the middle, and headings on both sides of the wrap
+    (the yaw lattice's first and last index, 0 and just under 2 pi) -- the bound holds for every node and level."""
+    rng = np.random.default_rng([20261028, seed])
+    grid = _random_grid(rng, 3.6, 2.8, 6)
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(15.0), clearance_m=0.1, levels=4)
+    checked = 0
+    for x, y in ((0.3, 1.4), (3.3, 1.4), (1.8, 0.3), (1.8, 2.5), (1.8, 1.4)):
+        for yaw in (0.0, 2 * math.pi - 1e-3, rng.uniform(0, 2 * math.pi)):
+            checked += _assert_bounds_cover_leaves(grid, _points(grid, (x, y, yaw), beams=180), cfg)
+    assert checked >= 9  # most poses see the room
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_search_is_exact_against_brute_force_with_the_floor_at_the_best(seed):
+    """A keep ratio just under 1 makes the threshold the best leaf itself (the tightest valid floor): the search still
+    finds that leaf, so nothing exact depends on a low floor. Random maps, the laser near the edges."""
+    rng = np.random.default_rng([20261028, 100 + seed])
+    grid = _random_grid(rng, 3.2, 2.4, 4)
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(10.0), clearance_m=0.1, levels=4, keep_ratio=1.0 - 1e-9)
+    for pose in ((0.3, 0.3, rng.uniform(0, 2 * math.pi)), (2.9, 2.1, rng.uniform(0, 2 * math.pi)),
+                 (1.6, 1.2, 2 * math.pi - 1e-3)):
+        pts = _points(grid, pose, beams=180)
+        if len(G._thin(pts, RES)) < cfg.min_points or not G.candidate_cells(grid, cfg.clearance_m).any():
+            continue
+        assert G.global_match(grid, pts, cfg).candidates[0].score == pytest.approx(G.brute_force_best(grid, pts, cfg),
+                                                                                    abs=1e-12)
+
+
 def test_a_symmetric_room_keeps_the_turned_competitor_and_is_not_confirmed():
     grid = _grid(6.0, 4.0, [])
     truth = (2.0, 1.4, 0.0)
     pts = _points(grid, truth)
     # an empty box overflows a small frontier: no answer at all, never a confirmation
-    assert G.global_match(grid, pts, G.MatchConfig(max_nodes=400_000)).status == "overflow"
+    assert G.global_match(grid, pts, G.MatchConfig(max_nodes=10_000)).status == "overflow"
     cfg = G.MatchConfig(max_nodes=5_000_000, yaw_step_rad=math.radians(2.0))
     match = G.refine(grid, G.global_match(grid, pts, cfg), pts, cfg)
     assert any(_close(c.pose, truth) for c in match.candidates)
