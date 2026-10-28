@@ -531,6 +531,22 @@ def test_the_pallet_deliverable_as_carried_reaches_the_submit(tmp_path):
     assert captured[-1].loaded_pallet is None
 
 
+def test_the_repick_judge_reaches_the_submit(tmp_path):
+    """2026-10-28: the runner's judgement of a manual re-pick (next_pick.pair_blockers) is the submit's to call."""
+    rt, core, did, clock = runtime(tmp_path)
+    captured = []
+    real_apply = core.commands.apply
+    core.commands.apply = lambda t, context: captured.append(context) or real_apply(t, context)
+
+    def judge(pid, did_):
+        return []
+
+    rt.tick_start(1.0, False, repick_blockers=judge)
+    assert captured[-1].repick_blockers is judge
+    rt.tick_start(2.0, False)
+    assert captured[-1].repick_blockers is None
+
+
 def test_a_preparation_ended_after_the_apply_is_collected_before_the_next_one(tmp_path):
     """Codex stage 2 design round 2 P2: a job_hold failure (timeout, no candidate) comes after the tick's apply; the
     next apply frees the slot first, so it is collected before it -- exactly once, at the end log's time."""

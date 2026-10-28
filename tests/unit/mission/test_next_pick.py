@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from forklift_core.mission.next_pick import PickSnapshot, recommend
+from forklift_core.mission.next_pick import PickSnapshot, pair_blockers, recommend
 from forklift_core.mission.targets import Pose, TargetsBook
 from forklift_core.planning import Pose2D
 from forklift_core.planning.geometry import Bounds, Rectangle
@@ -164,3 +164,35 @@ def test_five_pallets_three_slots_in_well_under_a_tick():
     r = recommend(snap(tb, truck=(-2.1, 0.0, 0.0), home=(-2.1, 0.0, 0.0)))
     assert time.perf_counter() - started < 0.5
     assert r["missions"] == 3
+
+
+def test_a_repick_behind_a_delivered_pallet_is_blocked_by_it():
+    # the az8 line_m queue (2026-10-28): P-1 put down at D-1, then P-2 at D-2 in front of it on the approach line;
+    # picking P-1 again runs its alignment and insertion through P-2
+    tb = book(LINE_P, LINE_D)
+    deliver(tb, "P-1", "D-1")
+    deliver(tb, "P-2", "D-2")
+    assert pair_blockers(snap(tb), "P-1", "D-3") == ["pickup:P-2"]
+    # the same re-pick with nothing in front is open
+    tb2 = book(LINE_P, LINE_D)
+    deliver(tb2, "P-1", "D-1")
+    assert pair_blockers(snap(tb2), "P-1", "D-3") == []
+
+
+def test_a_delivery_past_a_delivered_pallet_is_blocked_by_it():
+    tb = book(LINE_P, LINE_D)
+    deliver(tb, "P-1", "D-2")
+    assert pair_blockers(snap(tb), "P-2", "D-1") == ["delivery:P-1"]  # P-2's approach is clear with P-1 gone
+
+
+def test_pair_blockers_agree_with_the_recommendation():
+    tb = book(LINE_P, LINE_D)
+    r = recommend(snap(tb))
+    assert pair_blockers(snap(tb), "P-1", "D-1") == []
+    assert pair_blockers(snap(tb), "P-2", "D-1") == r["blocked"]["P-2"]
+
+
+def test_pair_blockers_name_a_static_prop():
+    prop = PlacedProp(AssetSpec("scene:post", 0.2, 0.2, 1.3), Rectangle(-1.2, 0.0, 0.2, 0.2, 0.0))
+    tb = book(LINE_P, LINE_D)
+    assert "props" in pair_blockers(snap(tb, props=[prop]), "P-1", "D-1")

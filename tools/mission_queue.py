@@ -280,7 +280,8 @@ class MissionQueue:
                 item["uncertain_destination_id"] = c.get("destination_id")
         self.current, self.phase = None, "waiting"
         self.early.clear()
-        return self.stop(f"거부: {reason}", now_ms)
+        detail = (answer or {}).get("detail")  # a blocked re-pick's blockers (2026-10-28), as queue.js keeps them
+        return self.stop(f"거부: {reason}" + (f" ({detail})" if detail else ""), now_ms)
 
     def on_pick(self, key, msg, now_ms, targets_revision) -> dict:
         """CT-2: the vehicle's answer to a pick_request, matched by its key (queue.js onPick)."""

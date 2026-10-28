@@ -19,8 +19,11 @@ the budget and the records only:
   failure-free braking previewed one tick further, the leg actually started; ``steer`` the first command's steering
   target, opaque here);
 - ``install(result)``;
-- ``escape_plan(extra, clearance_m)`` -> path | None, ``escape_install(path)``, ``escape_state()`` ->
-  "running" | "done" | "stopped", ``escape_clear()``;
+- ``escape_plan(extra, clearance_m[, presteered=True])`` -> path | None, ``escape_install(path)``, ``escape_state()``
+  -> "running" | "done" | "stopped", ``escape_clear()``;
+- with ``escape_presteer`` on (docs/plans/2026-10-27-escape-presteer.md D2): ``escape_probe(extra, clearance_m,
+  kappa)`` -> None | {"ok", "end_clearance_m", ...} (the escape evaluated as if the steering held kappa, nothing
+  installed or recorded) and ``correction_version()``;
 - ``steering_error(target)`` -> the largest wheel's gap to it (rad); ``steer_gap(a, b)`` -> the largest wheel's
   gap between two targets;
 - ``resumable()`` (optional) -> whether the follower's own tracker still follows from the pose after the release (a
@@ -48,6 +51,11 @@ class SceneReplanConfig:
     # that ends before anything was installed hands the tick back standing instead of ending the mission, and gives
     # its share of the mission's total back (the follower's own trigger budget is not spent on it).
     standing_safe_triggers: tuple = ("permit_stop",)
+    # docs/plans/2026-10-27-escape-presteer.md D2: no escape qualifying at the held steering, the steering is set to the
+    # side whose escape qualifies (a probe at each of these curvatures) and the escape is evaluated again at the
+    # measured steering before it is installed
+    escape_presteer: bool = False
+    escape_presteer_kappas: tuple = (0.05, -0.05)
 
 
 @dataclass
@@ -112,6 +120,8 @@ class SceneReplan:
                 "detail": detail, "outcome": None, "drops": 0, "escape": None, "presteer": None, "permit_waits": [],
                 "presteer_error_rad": None, "represteers": 0, "candidate": None, "preview": None, "ignored": [],
                 "states": []}
+        if self.config.escape_presteer:
+            line["escape_presteer"] = None  # the key only with the feature on: an off run's record is as before
         if (self.used_total >= self.config.budget_total
                 or self.used_by_trigger.get(trigger, 0) >= self.config.budget_per_trigger):
             line.update(outcome="exhausted", budget_left=self._left(trigger))
@@ -178,6 +188,75 @@ class SceneReplan:
         self._go(back_to, t)
         return None
 
+    def _probe(self, t: float, ports):
+        """D2-2: the side to steer to before the escape -- each curvature's probe (the escape at that steering, its install
+        permit included); of those that qualify, the one whose chosen escape ends with the most clearance. None: no
+        side qualifies."""
+        r = self.request_
+        probes = []
+        for kappa in self.config.escape_presteer_kappas:
+            answer = ports.escape_probe(r["extra"], r["clearance_m"], float(kappa))
+            probes.append({"kappa": float(kappa), "answer": answer})
+        ok = [p for p in probes if p["answer"] is not None and p["answer"].get("ok")]
+        best = max(ok, key=lambda p: float(p["answer"].get("end_clearance_m") or 0.0)) if ok else None
+        earlier = r["record"].get("escape_presteer")
+        r["record"]["escape_presteer"] = {
+            "earlier": ([] if earlier is None else earlier.pop("earlier", []) + [earlier]), "probes": probes, "kappa": None if best is None else best["kappa"], "presteer": None, "error_rad": None,
+            "version_changed": False, "installed": False, "since_s": float(t)}
+        if best is None:
+            return None
+        r["target"], r["presteer_since"] = best["kappa"], float(t)
+        r["probe_version"] = ports.correction_version()
+        box_ = getattr(ports, "box", None)
+        rec_ = r["record"]["escape_presteer"]
+        rec_["rear_start"] = None if box_ is None else [float(v) for v in box_.rear]
+        return best["kappa"]
+
+    def _escape_presteer(self, t: float, ports) -> StepResult | None:
+        """D2-3, D2-4: steer standing to the probe's side, then the escape evaluated again at the measured steering
+        (installed only when it qualifies there); a stop lost goes back to wait_stop, a correction change back to
+        plan (the trigger's rectangles read again). None: the state changed and the tick goes on."""
+        r = self.request_
+        rec = r["record"]["escape_presteer"]
+        box_ = getattr(ports, "box", None)
+        if box_ is not None and rec.get("rear_start") is not None:
+            rec["rear_end"] = [float(v) for v in box_.rear]  # D2-5: the presteer's stand, also when it ends early
+        if rec.get("version_changed"):
+            # Codex impl round 6 P2: the grid must follow the correction before the trigger's rectangles are read again
+            # (the runner re-projects it after the device's tick); held until it has, the request's limit bounding it
+            # -- and standing (Codex impl round 7 P2): a plan is submitted only from a stop, so a stop lost while it
+            # waits holds here as well (wait_stop would read the trigger's rectangles before the grid follows)
+            if getattr(ports, "grid_current", lambda: True)() and ports.stopped():
+                self._go("plan", t)
+                return None
+            return StepResult(owned=True, output="hold")
+        if not ports.stopped():
+            self._go("wait_stop", t)  # nothing installed, the escape budget unspent (agy review High 1)
+            return StepResult(owned=True, output="hold")
+        error = abs(float(ports.steering_error(r["target"])))
+        rec["error_rad"] = error
+        if error <= self.config.presteer_tolerance_rad:
+            rec["presteer"] = "aligned"
+        elif t - r["presteer_since"] >= self.config.presteer_timeout_s:
+            rec["presteer"] = "timeout"
+        else:
+            return StepResult(owned=True, output="presteer", steer=r["target"])
+        if ports.correction_version() != r.get("probe_version"):
+            # the grid moved under the trigger's rectangles: plan again rather than mix them with the new grid
+            # (Codex plan round 2 P2-2) -- once the grid has followed the correction (above)
+            rec["version_changed"] = True
+            return self._escape_presteer(t, ports)
+        path = ports.escape_plan(r["extra"], r["clearance_m"], presteered=True)
+        if path is None:
+            return self._end("failed", f"scene_replan_failed:{r['trigger']}:invalid_start")
+        rec["installed"] = True
+        r["escapes"] += 1
+        r["changed"] = True
+        ports.escape_install(path)
+        r["record"]["escape"] = "running"
+        self._go("escape", t)
+        return StepResult(owned=True, output="escape")
+
     def step(self, t: float, ports) -> StepResult:
         self._ports = ports  # the end of a standing-safe request asks whether the follower can resume
         r = self.request_
@@ -224,6 +303,10 @@ class SceneReplan:
                     r["record"]["plan_status"] = value
                     if value == "invalid_start" and r["escapes"] < self.config.escapes_per_request:
                         path = ports.escape_plan(r["extra"], r["clearance_m"])
+                        if path is None and self.config.escape_presteer:
+                            if self._probe(t, ports) is not None:
+                                self._go("escape_presteer", t)
+                                continue  # its own stop check runs before any steering (Codex impl round 5 P2-1)
                         if path is None:
                             return self._end("failed", f"scene_replan_failed:{trigger}:invalid_start")
                         r["escapes"] += 1
@@ -281,6 +364,10 @@ class SceneReplan:
                 r["record"]["escape"] = "done"
                 self._go("wait_stop", t)
                 return hold
+            elif state == "escape_presteer":
+                out = self._escape_presteer(t, ports)
+                if out is not None:
+                    return out
             elif state == "presteer":
                 error = abs(float(ports.steering_error(r["target"])))
                 r["record"]["presteer_error_rad"] = error

@@ -372,12 +372,14 @@ class ObstacleLayer:
 
     def check_candidate(self, path_ahead, *, current_pose, direction: int, loaded: bool, extra_margin_m: float = 0.0,
                         extra_ramp_m: float | None = None, unknown_passes: bool = False,
-                        lookahead_m: float | None = None):
+                        lookahead_m: float | None = None, permission=None):
         """Obstacle recovery v4 D1: a candidate path checked on the snapshot the permission uses
         (shadow memory, known pallets and exemptions applied), leaving the permission as it is.
-        lookahead_m: DrivePermission.check_path's walk length for this check (None: the config's)."""
+        lookahead_m: DrivePermission.check_path's walk length for this check (None: the config's).
+        permission: the permission to judge with (None: the layer's own) -- the escape probe's copy, so its start-band
+        walk leaves the driving permission's anchor and counts alone (docs/plans/2026-10-27-escape-presteer.md D2-2)."""
         footprint, own = self.footprints(loaded, direction)
-        return self.permission.check_path(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
+        return (permission or self.permission).check_path(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                           direction=direction, extra_margin_m=extra_margin_m,
                                           extra_ramp_m=extra_ramp_m, unknown_passes=unknown_passes,
                                           lookahead_m=lookahead_m)
@@ -410,7 +412,7 @@ class ObstacleLayer:
 
     def candidate_permit(self, now_s: float, path_ahead, *, current_pose, direction: int, loaded: bool,
                          curvature_inv_m: float, measured_curvature_inv_m: float, cap_mps: float,
-                         strict: bool = True, strict_from_m: float = 0.0) -> dict:
+                         strict: bool = True, strict_from_m: float = 0.0, permission=None) -> dict:
         """The scene-mode replan's check before a candidate is installed (docs/plans/2026-10-23-scene-replan.md
         2.1 step 6, 7판): ``path_ahead`` -- the candidate tracker's first gear leg -- on the processed snapshot, in a
         fresh DrivePermission so the layer's own (its path check, the distance driven since, its last stop arc) is
@@ -429,16 +431,17 @@ class ObstacleLayer:
             out["why"] = "no_snapshot"
             return out
         footprint, own = self.footprints(loaded, direction)
-        candidate = DrivePermission(self.permission.config)
-        if self.permission.release_anchor is not None:
+        base = permission or self.permission  # the escape probe's copy (escape presteer plan D2-2), else the layer's
+        candidate = DrivePermission(base.config)
+        if base.release_anchor is not None:
             # the start-band release's anchor (docs/plans/2026-10-24-start-band-release.md): the same truck standing at
             # the same place; a copy, so the candidate's checks never move the driving permission's best distances
             import copy as _copy
 
-            candidate.release_anchor = _copy.deepcopy(self.permission.release_anchor)
+            candidate.release_anchor = _copy.deepcopy(base.release_anchor)
         check = candidate.update(self.snapshot, poses, footprint, own, current_pose=current_pose, direction=direction)
         length = float(np.sum(np.hypot(np.diff(poses[:, 0]), np.diff(poses[:, 1])))) if len(poses) > 1 else 0.0
-        need = min(float(self.permission.config.lookahead_m), length)
+        need = min(float(base.config.lookahead_m), length)
         zone_from = max(0.0, float(strict_from_m))
         zone_len = max(0.0, need - zone_from) if strict else 0.0
         allowed = [candidate.allowed_speed(now_s, self.last_scan_s, current_pose=current_pose, curvature_inv_m=k,
@@ -450,14 +453,14 @@ class ObstacleLayer:
         if zone_len > 0.0 and zone_from > 0.0:
             # the zone's part of the leg alone, its own walk over just that stretch (no lookahead re-applied past it);
             # its arc starts at 0, so it walks with the full envelope rather than re-ramping it (Codex plan round 4 P3)
-            zone_permission = DrivePermission(replace(self.permission.config, envelope_ramp_m=0.0))
+            zone_permission = DrivePermission(replace(base.config, envelope_ramp_m=0.0))
             zone_permission.release_anchor = candidate.release_anchor
             zone_check = zone_permission.check_path(self.snapshot, _arc_slice(poses, zone_from, need), footprint, own,
                                                     current_pose=current_pose, direction=direction,
                                                     lookahead_m=zone_len)
             zone_verified = float(zone_check.verified_m)
             # the driving permission ages only its own prefix and stop arc: the zone's evidence is aged here (P2)
-            zone_stale = now_s - float(zone_check.oldest_free_s) > float(self.permission.config.evidence_max_age_s)
+            zone_stale = now_s - float(zone_check.oldest_free_s) > float(base.config.evidence_max_age_s)
         else:
             zone_check, zone_verified = check, float(check.verified_m)  # from the truck: the walk above, as before
             zone_stale = False  # its age is allowed_speed's (the candidate's own path check)
@@ -483,11 +486,12 @@ class ObstacleLayer:
         return out
 
     def check_arc_candidate(self, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
-                            cap_mps: float):
-        """The emergency-stop arc the permission would walk at this curvature and direction."""
+                            cap_mps: float, permission=None):
+        """The emergency-stop arc the permission would walk at this curvature and direction (``permission``: as
+        check_candidate's)."""
         footprint, own = self.footprints(loaded, direction)
-        return self.permission.check_arc(self.snapshot, current_pose, curvature_inv_m, direction, footprint, own,
-                                         cap_mps)
+        return (permission or self.permission).check_arc(self.snapshot, current_pose, curvature_inv_m, direction,
+                                                         footprint, own, cap_mps)
 
     def certify_withdrawal(self, path, shape, until_m: float, gaps_m) -> bool:
         """Plan v10 D5 withdrawal corridor: certified only when the smallest of the

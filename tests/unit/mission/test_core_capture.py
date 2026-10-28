@@ -386,6 +386,7 @@ def test_a_near_capture_valid_on_the_first_pass_waives_nothing():
     ({"detector_reference": {"status": "invalid"}}, "far_detector:invalid"),
     ({"lower_evidence": False}, "far_lower_waived"),
     ({"expected": {"site": [0, 0, 0]}}, "far_restricted"),
+    ({"far_expected": {"site": [0, 0, 0]}}, "far_restricted"),  # F1's far site (far-target-binding, Codex P3)
     ({"detector_site": None}, "far_detector_site_missing"),
     ({"detector_site": [3.6, 6.1, 1.6]}, "far_link"),
     ({"detector_site": [3.4, 6.1, 1.95]}, "far_link"),
@@ -463,3 +464,105 @@ def test_waive_leaves_the_far_capture_alone():
     out = w.run()
     assert [c[0] for c in w.calls_c] == ["plain"] and w.calls_c[0][2] == {}
     assert "lower_evidence" not in out.attempt and "detector_site" not in out.attempt
+
+
+# --- docs/plans/2026-10-28-far-target-binding.md F1: the far capture bound to the mission's adoption rectangle ---
+
+@dataclass
+class ValidObs:  # the PocketObservation fields the core replaces
+    status: str = "valid"
+    left: object = "L"
+    right: object = "R"
+    insertion_yaw_rad: float | None = 0.0
+    position_sigma_m: float | None = None
+    yaw_sigma_rad: float | None = None
+    reason: str | None = None
+
+
+@dataclass
+class Detection:
+    observation: object
+    diagnostics: object
+
+
+def f1_world(*, zone=(2.9, 3.1, 6.9, 7.1), near_capture=None, far_hook=False, returning=False, site=(3.0, 7.0),
+             yaw_half=0.21):
+    """A far capture at base (3, 4) facing +y; the zone's centre (3, 7) is 3 m ahead. ``site``: where the adapter
+    places the detected pallet in the map (inside the rectangle by default)."""
+    from forklift_core.mission.adoption_zone import AdoptionZone
+    from forklift_core.planning.pallet_mission import PalletSite
+
+    w = World(near_capture=near_capture, observation=ValidObs())
+    w.expected_calls = []
+
+    def detect_pockets_expected(inp, prior, params, expected, **kw):
+        w.expected_calls.append(expected)
+        return Detection(ValidObs(), DetectionDiag()), ()
+
+    w.hooks.detect_pockets_expected = detect_pockets_expected
+    if far_hook:
+        w.hooks.far_recognition = lambda *a: (ValidObs(), {})
+    o = w.core.options
+    o.far_capture_expected, o.adoption_zone_margin_m = "on", 0.10
+    o.adoption_zone = None if zone is None else AdoptionZone(*zone, "session_zone", yaw_centre_rad=math.pi / 2,
+                                                             yaw_half_rad=yaw_half)
+    o.adapter.estimate_pallet_center_m = lambda obs, depth: (3.0, 0.0)
+    o.adapter.estimate_world_pallet_site = lambda xy, yaw_, base, yaw: PalletSite(site[0], site[1], math.pi / 2)
+    w.core.bottom_deck_returning = lambda: returning
+    return w
+
+
+def test_with_the_option_on_and_recognition_off_the_far_capture_looks_in_the_mission_rectangle():
+    w = f1_world()
+    out = w.run()
+    assert "detect_pockets" not in w.names()
+    (site,) = w.expected_calls
+    assert (site.x_m, site.y_m, site.yaw_rad) == pytest.approx((3.0, 0.0, 0.0), abs=1e-9)
+    assert site.radius_m == pytest.approx(math.hypot(0.2, 0.2)) and site.axis_tolerance_rad == pytest.approx(
+        0.21 + math.radians(5))
+    assert out.observation.status == "valid" and out.attempt["far_expected"]["radius_m"] == site.radius_m
+
+
+def test_a_far_estimate_inside_the_circle_but_outside_rectangle_plus_margin_fails_the_observation_only():
+    w = f1_world(site=(3.25, 7.0))  # 0.15 m past x_max: outside rectangle + 0.10, inside the circle
+    out = w.run()
+    assert out.observation.status == "no_pallet" and out.observation.reason == "no_expected_candidate:outside_zone"
+    assert out.attempt["far_expected"]["outside_zone"]["inside"] is False
+    assert out.attempt["pocket_observation"]["status"] == "no_pallet"
+
+
+@pytest.mark.parametrize("case", ["near", "recognition_far"])
+def test_the_near_capture_and_far_recognition_are_left_alone(case):
+    w = f1_world(near_capture="pending" if case == "near" else None, far_hook=case == "recognition_far")
+    try:
+        w.run()
+    except Exception:
+        pass  # the far recognition's own path needs more stand-ins; only the detector choice matters here
+    assert w.expected_calls == [] and "detect_pockets" in w.names()
+
+
+def test_the_bottom_deck_return_a_second_near_capture_and_a_retry_stand_are_not_far_captures():
+    w = f1_world()
+    assert w.core._far_expected_on(None)
+    assert not w.core._far_expected_on(lambda *a: None)  # recognition far
+    w.core.bottom_deck_returning = lambda: True
+    assert not w.core._far_expected_on(None)
+    w = f1_world()
+    w.core._second_capture_active = True
+    assert not w.core._far_expected_on(None)
+    w = f1_world()
+    w.core.near = {"retry_stand": True}
+    assert not w.core._far_expected_on(None)
+
+
+def test_without_a_mission_rectangle_the_far_capture_ends_the_mission_as_undefined():
+    w = f1_world(zone=None)
+    with pytest.raises(RuntimeError, match="^adoption_zone_undefined$"):
+        w.run()
+
+
+def test_the_option_off_keeps_the_far_capture_as_before():
+    w = f1_world()
+    w.core.options.far_capture_expected = "off"
+    w.run()
+    assert w.expected_calls == [] and "detect_pockets" in w.names()

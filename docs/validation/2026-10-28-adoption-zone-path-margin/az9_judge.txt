@@ -1,0 +1,40 @@
+## az9_far_line_m_s3 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 enc=team_spec_quantized recog=far
+   slam: ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   ends: [('m1', 'P-1', 'D-1', 'done', None), ('m2', 'P-2', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_far_line_m_s4 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 enc=team_spec_quantized recog=far
+   slam: ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   ends: [('m1', 'P-1', 'D-1', 'done', None), ('m2', 'P-2', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_far_line_m_s5 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 enc=team_spec_quantized recog=far
+   slam: ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   ends: [('m1', 'P-1', 'D-1', 'done', None), ('m2', 'P-2', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_far_random_m_s3 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 enc=team_spec_quantized recog=far
+   slam: ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   ends: [('m1', 'P-4', 'D-1', 'done', None), ('m2', 'P-5', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_far_random_m_s4 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 enc=team_spec_quantized recog=far
+   slam: ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   ends: [('m1', 'P-4', 'D-1', 'done', None), ('m2', 'P-5', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_far_random_m_s5 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 enc=team_spec_quantized recog=far
+   slam: ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   ends: [('m1', 'P-4', 'D-1', 'done', None), ('m2', 'P-5', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_off_line_m_s3 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 enc=team_spec_quantized recog=off
+   slam: ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   ends: [('m1', 'P-1', 'D-1', 'done', None), ('m2', 'P-2', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_off_line_m_s4 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 enc=team_spec_quantized recog=off
+   slam: ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   ends: [('m1', 'P-1', 'D-1', 'done', None), ('m2', 'P-2', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_off_line_m_s5 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 enc=team_spec_quantized recog=off
+   slam: ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   ends: [('m1', 'P-1', 'D-1', 'done', None), ('m2', 'P-2', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_off_random_m_s3 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 enc=team_spec_quantized recog=off
+   slam: ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   ends: [('m1', 'P-4', 'D-1', 'done', None), ('m2', 'P-5', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_off_random_m_s4 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 enc=team_spec_quantized recog=off
+   slam: ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   ends: [('m1', 'P-4', 'D-1', 'done', None), ('m2', 'P-5', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+## az9_off_random_m_s5 epoch_1 margin=0.1 bundle=/home/projects/forklift/artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 enc=team_spec_quantized recog=off
+   slam: ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   ends: [('m1', 'P-4', 'D-1', 'done', None), ('m2', 'P-5', 'D-2', 'done', None), ('m3', 'P-3', 'D-3', 'done', None)]
+instructed-pallet checks per stage n / max axis err / max edge_m: {'far': (36, 0.0374, -0.145), 'near': (36, 0.0661, -0.1139), 'insert': (36, 0.0661, -0.1139)}
+missions reaching (instructed pallet): {'far': 36, 'near': 36, 'insert': 36}
+false_refusal 0 other_object_refused 0 other_object_accepted 0
+undetermined 0 []

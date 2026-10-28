@@ -133,6 +133,9 @@ CASES = {
         standing(400, last_result={"mission_id": "m1", "outcome": "failed", "reason": "x"}), nxt(2000, standing(2000))),
     "refusal_busy_uncertain": scenario_base({"op": "answer", "answer": {"t": "reject", "reason": "busy"}}),
     "refusal_not_stopped": scenario_base({"op": "answer", "answer": {"t": "reject", "reason": "not_stopped"}}),
+    # 2026-10-28: a blocked re-pick keeps what blocks it in the stop reason (Codex repick review P3)
+    "refusal_blocked_detail": scenario_base(
+        {"op": "answer", "answer": {"t": "reject", "reason": "blocked", "detail": "pickup:P-2"}}),
     "feedback_loss_recovered_after_600ms": scenario_base(
         {"op": "answer", "answer": {"t": "ack", "mission_id": "m1"}}, running(200, "m1"),
         {"op": "state", "now": 300, "state": {**running(300, "m1")["state"], "feedback_ok": False}},

@@ -76,10 +76,18 @@ def test_the_aisle_runs_its_rack_copy_by_default_and_the_plain_scene_with_rack_o
     assert plain[plain.index("--scene-file") + 1].endswith("aisle.json")
 
 
-def test_the_start_band_release_is_off_unless_asked(tmp_path):
-    assert contains(args_of(dry_run(tmp_path)), ["--start-band-release", "off"])
-    assert " START_BAND=off " in (tmp_path / "out/riib_defaults.txt").read_text()
-    assert contains(args_of(dry_run(tmp_path, START_BAND="on")), ["--start-band-release", "on"])
+def test_the_start_band_release_and_the_escape_presteer_are_off_unless_asked(tmp_path):
+    # docs/validation/2026-10-28-escape-presteer.md: off after the C4 comparison; on gives the width (0.03 by default)
+    off = args_of(dry_run(tmp_path))
+    assert contains(off, ["--start-band-release", "off"]) and "--start-band-m" not in off
+    assert contains(off, ["--escape-presteer", "off"])
+    defaults = (tmp_path / "out/riib_defaults.txt").read_text()
+    assert " START_BAND=off " in defaults and " START_BAND_M=0.03 " in defaults and " ESCAPE_PRESTEER=off " in defaults
+    on = args_of(dry_run(tmp_path, START_BAND="on", ESCAPE_PRESTEER="on", out=tmp_path / "on"))
+    assert contains(on, ["--start-band-release", "on"]) and contains(on, ["--start-band-m", "0.03"])
+    assert contains(on, ["--escape-presteer", "on"])
+    width = args_of(dry_run(tmp_path, START_BAND="on", START_BAND_M="0.02", out=tmp_path / "w"))
+    assert contains(width, ["--start-band-m", "0.02"])
 
 
 def test_the_escape_start_release_is_off_unless_asked(tmp_path):
@@ -190,17 +198,21 @@ def test_the_gyro_heading_is_refused_where_it_is_not_defined(tmp_path, env):
 @pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
+                                 {"START_BAND_M": "0"}, {"START_BAND_M": "x"}, {"ESCAPE_PRESTEER": "maybe"},
                                  {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"},
                                  {"NEAR_RECAPTURE_GAP": "-1"}, {"NEAR_RECAPTURE_GAP": "x"},
-                                 {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"}])
+                                 {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"},
+                                 {"NEAR_REDRAW_LATERAL": "-0.05"}, {"NEAR_REDRAW_LATERAL": "x"},
+                                 {"NEAR_REDRAW_LATERAL": "0.05", "NEAR": "off"}, {"NEAR_REDRAW_LATERAL": "0.05", "MODE": "truth"}])
 def test_bad_choices_are_refused(tmp_path, env):
     out = dry_run(tmp_path, **env)
     assert out.returncode != 0
 
 
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
-                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"}])
+                                 {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"},
+                                 {"NEAR_REDRAW_LATERAL": "0.05"}, {"VIDEO": "off"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -223,6 +235,8 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         sys.argv = argv
         os.chdir(cwd)
     assert parsed.layout == "scene" and parsed.kit_arguments == []  # every argument is the runner's own
+    video_on = env.get("VIDEO", "on") == "on"
+    assert parsed.video is video_on and parsed.frame_log is not video_on and bool(parsed.extra_views) is video_on
     # the settings every Riibotics run had before the defaults (the earlier riib.sbatch / riib_truth.sbatch)
     assert (parsed.fps, parsed.max_sim_seconds, parsed.delivery_straight_m, parsed.alignment_straight_m,
             parsed.withdrawal_m, parsed.insertion_reserve_m) == (60, 1500.0, 1.5, 2.1, 0.55, 0.016)
@@ -244,7 +258,8 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         assert parsed.perception_mount == "carriage_low_measured"
     if env.get("MODE") != "truth" and env.get("NEAR", "on") == "on":
         assert parsed.near_capture_expected == "on" and parsed.near_capture_lower == "waive"
-        assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(0.10)
+        lateral = float(env.get("NEAR_REDRAW_LATERAL", "0.10"))
+        assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(lateral)
     else:
         assert parsed.near_capture_expected == "off" and parsed.near_capture_lower == "gate"
     # C3: the second near capture only when asked
@@ -354,9 +369,92 @@ def test_the_second_near_capture_is_off_unless_a_gap_is_given(tmp_path):
     assert contains(args, ["--near-recapture-gap-m", "1.0"])
 
 
+def test_the_near_redraw_lateral_box_stays_0_10_unless_given(tmp_path):
+    # near tracking re-measure (plan 2026-10-27-insertion-lateral-drift 5.3): 0.05 is the value --near-tracking takes
+    assert contains(args_of(dry_run(tmp_path)), ["--near-capture-redraw-lateral-m", "0.10"])
+    assert "NEAR_REDRAW_LATERAL" not in (tmp_path / "out/riib_defaults.txt").read_text()  # earlier records unchanged
+    args = args_of(dry_run(tmp_path, NEAR_REDRAW_LATERAL="0.05"))
+    assert contains(args, ["--near-capture-redraw-lateral-m", "0.05"])
+    assert "--near-capture-redraw-lateral-m" in args and args.count("--near-capture-redraw-lateral-m") == 1
+    assert "\nNEAR_REDRAW_LATERAL=0.05\n" in (tmp_path / "out/riib_defaults.txt").read_text()
+
+
 
 def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
     out = tmp_path / ("x" * max(1, 100 - len(str(tmp_path))))
     p = dry_run(tmp_path, out=out)
     assert p.returncode == 2 and "AF_UNIX" in p.stderr, p.stdout + p.stderr
     assert dry_run(tmp_path, out=out, MODE="truth").returncode == 0  # a truth run opens no socket
+
+
+def test_video_stays_on_unless_video_off_drops_every_render_but_the_progress_log(tmp_path):
+    # lead 2026-10-28 (near tracking re-measure): VIDEO=off renders no video, so only the near camera renders
+    args = args_of(dry_run(tmp_path))
+    assert "--video" in args and "--frame-log" not in args
+    assert "VIDEO=" not in (tmp_path / "out" / "riib_defaults.txt").read_text()  # the default reads as before
+    args = args_of(dry_run(tmp_path, VIDEO="off"))
+    assert "--video" not in args and "--extra-views" not in args and not any(a.startswith("--quarter-") for a in args)
+    assert "--frame-log" in args  # the bundle's progress watch (run/frames.jsonl) keeps its lines
+    record = (tmp_path / "out" / "riib_defaults.txt").read_text()
+    assert "\nVIEWS=none\n" in record and "\nVIDEO=off\n" in record
+    assert dry_run(tmp_path, VIDEO="off", VIEWS="none").returncode == 0
+    for env in ({"VIDEO": "off", "VIEWS": "chase"}, {"VIDEO": "maybe"}):
+        assert dry_run(tmp_path, **env).returncode == 2
+
+
+def test_views_default_to_both_extra_videos_and_none_drops_them(tmp_path):
+    # lead 2026-10-27: a comparison batch that needs no videos says VIEWS=none in its list, for both arms
+    args = args_of(dry_run(tmp_path))
+    assert contains(args, ["--extra-views", "quarter,chase"]) and any(a.startswith("--quarter-eye=") for a in args)
+    assert "VIEWS=" not in (tmp_path / "out" / "riib_defaults.txt").read_text()  # the default reads as before
+    args = args_of(dry_run(tmp_path, VIEWS="none"))
+    assert "--extra-views" not in args and not any(a.startswith("--quarter-") for a in args) and "--video" in args
+    assert "--frame-log" in args  # the bundle watches run/frames.jsonl for progress (Codex)
+    assert "VIEWS=none" in (tmp_path / "out" / "riib_defaults.txt").read_text()
+    args = args_of(dry_run(tmp_path, VIEWS="chase"))
+    assert contains(args, ["--extra-views", "chase"]) and not any(a.startswith("--quarter-") for a in args)
+    assert dry_run(tmp_path, VIEWS="perception").returncode == 2
+
+
+@pytest.mark.parametrize("keepout", ["0", "0.0", "00"])
+def test_trailer_gets_its_exit_prefix_by_default(tmp_path, keepout):
+    # scene requirements plan: the batch that left it out went 0/10 (82ffffa8); 0, 0.0 and 00 are all "no keepout"
+    args = args_of(dry_run(tmp_path, scene="trailer", KEEPOUT=keepout))
+    assert contains(args, ["--exit-clearance-m", "0.30"])
+
+
+@pytest.mark.parametrize("env", [{"KEEPOUT": "0.15"}, {"EXTRA_ARGS": "--lidar-keepout-m 0.15"},
+                                 {"EXTRA_ARGS": "--exit-clearance-m=0.4"},
+                                 # Codex: tabs and newlines split the runner's words too
+                                 {"EXTRA_ARGS": "--seed 1\t--lidar-keepout-m 0.15"},
+                                 {"EXTRA_ARGS": "--seed 1\n--exit-clearance-m 0.4"}])
+def test_trailer_s_default_prefix_gives_way_to_the_keepout_s_or_an_explicit_one(tmp_path, env):
+    args = args_of(dry_run(tmp_path, scene="trailer", **env))
+    assert not contains(args, ["--exit-clearance-m", "0.30"])  # the default stays out; EXTRA_ARGS's own may be there
+
+
+def test_an_exit_clearance_a_profile_and_an_override_pass_through(tmp_path):
+    args = args_of(dry_run(tmp_path, scene="trailer", EXIT_CLEARANCE="0.40", REQUIREMENTS_PROFILE="ct_baseline",
+                           SCENE_REQUIREMENTS_OVERRIDE="a comparison"))
+    assert contains(args, ["--exit-clearance-m", "0.40"]) and contains(args, ["--requirements-profile", "ct_baseline"])
+    assert contains(args, ["--scene-requirements-override", "a comparison"])
+    assert "--exit-clearance-m" not in args_of(dry_run(tmp_path, scene="line_2"))  # other scenes plan as before
+    assert dry_run(tmp_path, scene="trailer", EXIT_CLEARANCE="x").returncode == 2
+
+
+def test_the_real_trailer_and_rack_scenes_pass_the_runner_s_check_with_the_defaults(tmp_path):
+    # the runner's own check (DRY_RUN_CHECK=1) on generated scene files, not the minimal ones above (Codex P3)
+    from tools import riibotics_isaac_scenes as tool
+
+    scenes = tmp_path / "real"
+    scenes.mkdir()
+    for name, built in (("trailer", tool.trailer_scene()), ("aisle_rack", tool.rack_scene())):
+        (scenes / f"{name}.json").write_text(json.dumps(tool.scene_record(name, built)))
+    for scene in ("trailer", "aisle"):
+        out = dry_run(tmp_path, scene=scene, out=tmp_path / f"o_{scene}", SCENE_DIR=str(scenes), MODE="truth",
+                      DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"))
+        assert out.returncode == 0 and out.stdout.splitlines()[-1] == "ARGS_OK", out.stdout[-800:] + out.stderr
+    out = dry_run(tmp_path, scene="trailer", out=tmp_path / "o_none", SCENE_DIR=str(scenes), MODE="truth",
+                  DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"),
+                  EXTRA_ARGS="--exit-clearance-m=0.30 --lidar-keepout-m=0.15")
+    assert out.returncode == 2 and "scene trailer needs one of" in out.stderr

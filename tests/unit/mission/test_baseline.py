@@ -87,6 +87,16 @@ def test_the_leg_end_records_go_with_their_mission_and_the_next_starts_empty():
     assert base.restore(core)["state"].keys().isdisjoint(made)  # the next mission's hand-over has none of them
 
 
+def test_the_adoption_checks_go_with_their_mission_and_the_next_starts_empty():
+    """Plan 2026-10-28-adoption-zone-check section 4: the record is the mission's (Codex plan round 1 P2)."""
+    core = fake_core()
+    base = MissionBaseline.capture(core)
+    core.state["adoption_zone"] = {"checks": [{"stage": "far", "inside": False}], "refused": {"stage": "far"}}
+    records = base.restore(core)
+    assert records["state"]["adoption_zone"]["refused"] == {"stage": "far"}
+    assert "adoption_zone" not in core.state and "adoption_zone" not in base.restore(core)["state"]
+
+
 def test_a_mission_value_that_is_not_plain_data_is_refused_at_capture():
     core = fake_core()
     core.pocket["planning_pickup"] = object()

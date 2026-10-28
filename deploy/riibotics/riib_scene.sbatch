@@ -12,6 +12,9 @@
 #                  2026-10-27-bottomless-and-bundled-pallets 2.1 c: no lower gate, a bottomless pallet is a target),
 #                  --near-capture-redraw always, --near-capture-redraw-lateral-m 0.10 (slam mode only: they need the
 #                  perception planning target)
+#   NEAR_REDRAW_LATERAL=0.10  the near re-draw's lateral box (--near-capture-redraw-lateral-m); 0.05 is the only value
+#                  --near-tracking takes (near tracking re-measure, docs/plans/2026-10-27-insertion-lateral-drift.md
+#                  5.3); needs NEAR=on
 #   NEAR_RECAPTURE_GAP=  (empty) C3: with a gap in metres, a second near capture where the estimated fork tip is that
 #                  far before the face (--near-recapture-gap-m; docs/plans/2026-10-27-insertion-lateral-drift.md T2); needs
 #                  NEAR=on
@@ -31,10 +34,13 @@
 #                  plan 2026-10-25-team-spec-default, lead decision); reported on request -- the engine's joint velocities, the
 #                  model of every Riibotics result before 2026-10-25 (never mixed with the default's). The obstacle layer
 #                  takes the model's own odometry age table (the runner refuses a mismatched one)
-#   START_BAND=off --start-band-release: an occupied cell the stopped truck already stands within the permission's own
-#                  start inflation of does not block moving away from it (docs/plans/2026-10-24-start-band-release.md);
-#                  off: no gain on the trailer and one actual load overlap in the rack aisle with it on
-#                  (docs/validation/2026-10-24-start-band-release.md)
+#   START_BAND=off --start-band-release: an occupied cell the stopped truck already stands within START_BAND_M of
+#                  does not block moving away from it (docs/plans/2026-10-24-start-band-release.md); START_BAND_M=0.03
+#                  --start-band-m when on. Off: its Isaac comparison with ESCAPE_PRESTEER (C4,
+#                  docs/validation/2026-10-28-escape-presteer.md) did not pass
+#   ESCAPE_PRESTEER=off --escape-presteer: no escape qualifying at the held steering, the steering is set standing to
+#                  the side whose escape qualifies and the escape evaluated again at the measured steering
+#                  (docs/plans/2026-10-27-escape-presteer.md D2, D3); off as the C4 comparison decided
 #   ESCAPE_START=off --escape-start-release: the P6 escape's sweep alone passes the trigger's rectangles the stop
 #                  already stands within the sweep pad of while it moves away; the permission keeps its own start rule
 #                  (docs/plans/2026-10-25-escape-start-release.md); the default follows its Isaac comparison
@@ -61,7 +67,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -70,7 +76,7 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; START_BAND_M=${START_BAND_M:-0.03}; ESCAPE_PRESTEER=${ESCAPE_PRESTEER:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
@@ -96,10 +102,19 @@ case "$GYRO" in
     GYRO_ARGS=(--odometry-heading gyro --gyro-model config/gyro_model_d435i_static_20261023.yaml) ;;
   *) echo "GYRO must be off or measured"; exit 2;; esac
 case "$START_BAND" in on|off) ;; *) echo "START_BAND must be on or off"; exit 2;; esac
+[[ "$START_BAND_M" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v b="$START_BAND_M" 'BEGIN{exit !(b > 0)}' \
+  || { echo "START_BAND_M must be a positive number of metres"; exit 2; }
+case "$ESCAPE_PRESTEER" in on|off) ;; *) echo "ESCAPE_PRESTEER must be on or off"; exit 2;; esac
 case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exit 2;; esac
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
+# near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): empty = 0.10, the default before it.
+NEAR_REDRAW_LATERAL=${NEAR_REDRAW_LATERAL:-}
+if [ -n "$NEAR_REDRAW_LATERAL" ]; then
+  [[ "$NEAR_REDRAW_LATERAL" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "NEAR_REDRAW_LATERAL must be a positive number of metres"; exit 2; }
+  { [ "$MODE" = slam ] && [ "$NEAR" = on ]; } || { echo "NEAR_REDRAW_LATERAL needs MODE=slam and NEAR=on"; exit 2; }
+fi
 # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): empty = off; a gap needs the near capture it follows.
 NEAR_RECAPTURE_GAP=${NEAR_RECAPTURE_GAP:-}
 if [ -n "$NEAR_RECAPTURE_GAP" ]; then
@@ -117,6 +132,36 @@ esac
 [ "$NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
 KEEPOUT=${KEEPOUT:-0}
 [[ "$KEEPOUT" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "KEEPOUT must be a non-negative number of metres"; exit 2; }
+# scene requirements (config/scene_requirements.yaml, docs/plans/2026-10-27-scene-requirements.md): trailer's loaded
+# transport needs an exit prefix -- the fixed 0.30 m (PR #91) unless the keepout builds its own, or EXTRA_ARGS sets
+# either (it comes last and decides); the runner refuses a trailer run with neither before Isaac starts
+# the extra videos beside the overview (lead 2026-10-27): quarter,chase as every earlier batch; a comparison batch that
+# needs no videos sets VIEWS=none in its list for both arms (one encoder and one camera render less per view)
+# VIDEO=off (lead 2026-10-28, near tracking re-measure): no video at all -- no overview and no extra views, so
+# nothing but the near camera renders (with video the near camera's frame period wandered 10-15 ticks; a real truck
+# renders no video either). The bundle still watches run/frames.jsonl: --frame-log writes its pose line per frame tick.
+VIDEO=${VIDEO:-on}
+case "$VIDEO" in on|off) ;; *) echo "VIDEO must be on or off"; exit 2;; esac
+if [ "$VIDEO" = off ]; then
+  case "${VIEWS:-none}" in none) ;; *) echo "VIDEO=off has no extra views: VIEWS must be none or unset"; exit 2;; esac
+  VIEWS=none
+fi
+VIEWS=${VIEWS:-quarter,chase}
+case "$VIEWS" in none|quarter|chase|quarter,chase|chase,quarter) ;; *) echo "VIEWS must be none, quarter, chase or quarter,chase"; exit 2;; esac
+EXIT_CLEARANCE=${EXIT_CLEARANCE:-}
+EXTRA_SETS_EXIT=0  # EXTRA_ARGS's words, split as the runner gets them (spaces, tabs, newlines), not globbed here
+set -f
+# shellcheck disable=SC2086
+for w in ${EXTRA_ARGS:-}; do
+  case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
+done
+set +f
+if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
+    && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
+  EXIT_CLEARANCE=0.30
+fi
+[ -z "$EXIT_CLEARANCE" ] || [[ "$EXIT_CLEARANCE" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+  || { echo "EXIT_CLEARANCE must be a positive number of metres"; exit 2; }
 SCENE_FILE=$SCENE_DIR/$NAME.json
 [ -f "$SCENE_FILE" ] || { echo "no scene file $SCENE_FILE (tools/riibotics_isaac_scenes.py --slot-markers / --rack write the _m / _rack copies)"; exit 2; }
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2
@@ -128,11 +173,19 @@ mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
 echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" "$GYRO" \
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s START_BAND_M=%s ESCAPE_PRESTEER=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$START_BAND_M" "$ESCAPE_PRESTEER" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" "$GYRO" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
+[ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
+# scene requirements: the same, for the exit prefix, a profile and an override reason
+[ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
+[ "$VIEWS" != quarter,chase ] && printf 'VIEWS=%s\n' "$VIEWS" >> "$OUT/riib_defaults.txt"
+[ "$VIDEO" = off ] && printf 'VIDEO=off\n' >> "$OUT/riib_defaults.txt"
+[ -n "${REQUIREMENTS_PROFILE:-}" ] && printf 'REQUIREMENTS_PROFILE=%s\n' "$REQUIREMENTS_PROFILE" >> "$OUT/riib_defaults.txt"
+[ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] \
+  && printf 'SCENE_REQUIREMENTS_OVERRIDE=%q\n' "$SCENE_REQUIREMENTS_OVERRIDE" >> "$OUT/riib_defaults.txt"
 # The SLAM mode, said and recorded (live-default plan 5d): this launcher maps online. The switch to localization on an
 # accepted survey bundle is the live console's (deploy/console/slam_choice.sh); no Riibotics demo scene has one.
 if [ "$MODE" = truth ]; then RIIB_SLAM="none (MODE=truth)"
@@ -147,8 +200,18 @@ COMMON=(--base-scene "$BASE_SCENE"
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
-  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
-  --video --extra-views quarter,chase --quarter-eye="$QE" --quarter-target="$QT")
+  --escape-presteer "$ESCAPE_PRESTEER"
+  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD")
+[ "$VIDEO" = on ] && COMMON+=(--video)
+case "$VIEWS" in
+  none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress
+  *quarter*) COMMON+=(--extra-views "$VIEWS" --quarter-eye="$QE" --quarter-target="$QT") ;;
+  *) COMMON+=(--extra-views "$VIEWS") ;;
+esac
+[ -n "$EXIT_CLEARANCE" ] && COMMON+=(--exit-clearance-m "$EXIT_CLEARANCE")
+[ "$START_BAND" = on ] && COMMON+=(--start-band-m "$START_BAND_M")  # the runner takes a width only with the release
+[ -n "${REQUIREMENTS_PROFILE:-}" ] && COMMON+=(--requirements-profile "$REQUIREMENTS_PROFILE")
+[ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && COMMON+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
 if [ "$MODE" = truth ]; then
   MODE_ARGS=(--d7-planner)
   [ "$NEAR" = on ] && echo "NEAR=on has no effect in MODE=truth (the near re-capture needs the perception target)" >&2
@@ -163,7 +226,7 @@ else
     --recognition-device-id 0 --recognition-threads 4)
   if [ "$NEAR" = on ]; then
     MODE_ARGS+=(--near-capture-expected on --near-capture-lower waive
-      --near-capture-redraw always --near-capture-redraw-lateral-m 0.10)
+      --near-capture-redraw always --near-capture-redraw-lateral-m "${NEAR_REDRAW_LATERAL:-0.10}")
     # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): NEAR_RECAPTURE_GAP=<m> adds the second near capture.
     [ -n "$NEAR_RECAPTURE_GAP" ] && MODE_ARGS+=(--near-recapture-gap-m "$NEAR_RECAPTURE_GAP")
   fi

@@ -487,3 +487,52 @@ def test_a_loaded_submit_names_the_carried_pallet_and_marks_the_mission_loaded()
     m3.queue(Submit("P-1", "D-1", 0))
     assert m3.apply(1.0, Context(submit_refusal="recovery_required", loaded_pallet="P-1"))[-1]["reason"] == \
         "recovery_required"
+
+
+def _book_with_a_put_down_pallet():
+    from forklift_core.mission.targets import Pose, TargetsBook
+
+    b = TargetsBook()
+    b.add_shape("epal6", 0.6, 0.8)
+    b.add_pallet("P-1", "epal6", Pose(0.0, 0.0, 0.0), depth_m=0.6, width_m=0.8)
+    b.add_pallet("P-2", "epal6", Pose(0.0, 3.0, 0.0), depth_m=0.6, width_m=0.8)
+    for did, x in (("D-1", 9.0), ("D-2", 9.0), ("D-3", 9.0)):
+        b.add_destination(did, Pose(x, {"D-1": -4.0, "D-2": -6.0, "D-3": -8.0}[did], 0.0))
+    b.carried("P-1")
+    b.put_down("P-1", Pose(9.0, -4.0, 0.0), uncertainty_m=0.2)
+    b.verify_at("P-1", "D-1")
+    return b
+
+
+def test_a_repick_the_pick_judges_blocked_is_refused_with_what_blocks_it():
+    # the az8 line_m queue (2026-10-28): a manual re-pick of a put-down pallet runs the pick's own blocking judgement
+    # first; refused "blocked", the blockers in the record's detail (the arbiter's reject carries it)
+    b = _book_with_a_put_down_pallet()
+    asked = []
+
+    def blockers(pid, did):
+        asked.append((pid, did))
+        return ["pickup:P-2"]
+
+    m = MissionCommands(targets=b)
+    m.queue(Submit("P-1", "D-3", b.revision, request_id="r1"))
+    (rec,) = m.apply(0.0, Context(repick_blockers=blockers))
+    assert (rec["accepted"], rec["reason"], rec["detail"]) == (False, "blocked", "pickup:P-2")
+    assert asked == [("P-1", "D-3")] and m.status == "idle"
+    # nothing blocks it: accepted, no detail
+    m.queue(Submit("P-1", "D-3", b.revision, request_id="r2"))
+    (rec,) = m.apply(1.0, Context(repick_blockers=lambda pid, did: []))
+    assert rec["accepted"] and "detail" not in rec
+
+
+def test_only_a_put_down_pallet_is_judged_and_without_the_judge_nothing_changes():
+    b = _book_with_a_put_down_pallet()
+    called = []
+    m = MissionCommands(targets=b)
+    m.queue(Submit("P-2", "D-3", b.revision))  # P-2 waits where it was first placed: the planner judges it, as before
+    (rec,) = m.apply(0.0, Context(repick_blockers=lambda pid, did: called.append(pid) or ["pickup:P-1"]))
+    assert rec["accepted"] and called == []
+    m2 = MissionCommands(targets=_book_with_a_put_down_pallet())
+    m2.queue(Submit("P-1", "D-3", m2.targets.revision))
+    (rec,) = m2.apply(0.0, Context())  # no judge (a batch run): accepted as before
+    assert rec["accepted"]

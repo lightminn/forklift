@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[3]
     ("near_field_frame_released", "session"),
     ("Excessive body tilt in lift: 0.2", "scene"),
     ("slam_link_failed: reply late", "session"),
+    ("adoption_outside_zone:near", "mission"),  # plan 2026-10-28-adoption-zone-check: the session goes on
+    ("adoption_zone_undefined", "mission"),
     ("something nobody wrote down", "session"),
     ("", "session"),
 ])
@@ -71,7 +73,7 @@ KNOWN = {
         "Settings must be positive finite values", "Camera render product prim is missing",
         "Perception camera intrinsics mismatch (G1a)", "base scene built from another forklift URDF",
         "pocket_check_without_capture", "pocket_check_refused:", "Mission planning failed: ",
-        "Mission exceeded simulation time budget", "--odometry-wheel-radius-m ",
+        "Mission exceeded simulation time budget", "--odometry-wheel-radius-m ", "scene requirements: ",
         "Perception camera intrinsics check failed: ", "pocket camera intrinsics differ from the perception camera's",
         "live video camera intrinsics differ from the scaled perception camera's (the page's camera_model)",
         "Perception display clipping range did not preserve the far plane",

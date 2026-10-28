@@ -102,8 +102,8 @@ export function queueStopText(reason) {
   if (pickRefused) return `자동 선택 거부: ${rejectText(pickRefused[1])}`;
   const failed = /^실패: (.+)$/.exec(reason);
   if (failed) return `실패: ${reasonText(failed[1]).text}`;
-  const refused = /^거부: (.+)$/.exec(reason);
-  if (refused) return `거부: ${rejectText(refused[1])}`;
+  const refused = /^거부: (\S+)(?: \((.+)\))?$/.exec(reason); // "(detail)": a blocked re-pick's blockers
+  if (refused) return `거부: ${rejectText(refused[1], refused[2] ?? null)}`;
   return reason;
 }
 

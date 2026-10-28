@@ -169,6 +169,44 @@ def test_the_destination_and_the_delivered_pallet_follow_the_cores_estimate():
     core.refresh_targets()
     assert core.targets.pallets["P-1"].pose == Pose(9.1, 0.0, 0.0) == core.targets.destinations["D-1"]
     assert core.targets.pallets["P-1"].state == "delivered"
+    # plan 2026-10-28-adoption-zone-check (Codex implementation round 2 P2): the put-down snapshot is the delivering
+    # mission's own estimate, so it follows that mission's release; a later mission's observation does not move it
+    assert core.targets.pallets["P-1"].put_down_pose == Pose(9.1, 0.0, 0.0)
+
+
+def test_a_re_picks_observation_moves_the_pose_but_not_the_put_down_snapshot():
+    from types import SimpleNamespace
+
+    from forklift_core.mission.commands import Submit
+
+    core, pocket = core_with()
+    core.ms.phase = "lift"
+    core.refresh_targets()
+    core.ms.phase = "withdraw"
+    core.refresh_targets()
+    assert core.targets.pallets["P-1"].put_down_pose == Pose(9.0, 0.5, 0.1)
+    core.targets.add_destination("D-2", Pose(1.0, 0.0, 0.0))
+    core.commands.queue(Submit("P-1", "D-2", core.targets.revision))
+    core.commands.apply(5.0)
+    core.commands.start()
+    core.ms.phase = "observe"
+    pocket["planning_pickup"] = SimpleNamespace(x_m=9.08, y_m=0.52, yaw_rad=0.1)
+    core.refresh_targets()
+    assert core.targets.pallets["P-1"].pose == Pose(9.08, 0.52, 0.1)
+    assert core.targets.pallets["P-1"].put_down_pose == Pose(9.0, 0.5, 0.1)
+
+
+def test_a_frame_carried_update_moves_the_snapshot_only_when_asked():
+    book = TargetsBook()
+    book.add_pallet("P-1", "epal6", Pose(1.0, 0.0, 0.0))
+    book.update_pose("P-1", Pose(1.1, 0.0, 0.0), carry_put_down=True)  # never put down: nothing to carry
+    assert book.pallets["P-1"].put_down_pose is None
+    book.carried("P-1")
+    book.put_down("P-1", Pose(9.0, 0.0, 0.0))
+    book.update_pose("P-1", Pose(9.5, 0.0, 0.0), carry_put_down=True)  # the hold it was put down in, released
+    assert book.pallets["P-1"].put_down_pose == Pose(9.5, 0.0, 0.0)
+    book.update_pose("P-1", Pose(9.6, 0.0, 0.0))  # an observation
+    assert book.pallets["P-1"].put_down_pose == Pose(9.5, 0.0, 0.0)
 
 
 def test_every_slam_release_goes_through_the_one_counting_method():

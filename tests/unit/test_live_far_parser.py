@@ -32,14 +32,27 @@ def test_a_live_run_takes_the_far_recognition():
     assert args.live and args.recognition == "far"
 
 
+LAYER = ("--obstacle-layer", str(ROOT / "config/obstacle_layer_single.yaml"), "--obstacle-act")
+
+
 @pytest.mark.parametrize("extra, message", [
-    (("--live", "--near-tracking"), "--recognition far is not defined with --near-tracking or --pocket-check"),
+    (("--live", "--pocket-check", *LAYER), "--recognition far is not defined with --pocket-check"),
+    (("--pocket-check", *LAYER), "--recognition far is not defined with --pocket-check"),
     (("--live", "--bottom-deck-check", "on"), "--bottom-deck-check on is a batch run"),
 ])
 def test_the_refused_combinations_stay_refused_live(extra, message, capsys):
     with pytest.raises(SystemExit):
         _args(*extra)
     assert message in capsys.readouterr().err
+
+
+def test_near_tracking_with_the_far_recognition_is_left_to_the_drive_terms_condition():
+    # Near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): the parser takes the pair; the
+    # drive terms' measured condition decides at run time (tests/unit/test_isaac_near_tracking.py).
+    args = _args("--near-tracking", "--near-bounds", str(ROOT / "config/near_field_bounds_measured.json"),
+                 "--near-drive-terms", str(ROOT / "config/near_field_drive_terms.json"),
+                 "--approach-straight-speed-mps", "0.08")
+    assert args.near_tracking and args.recognition == "far"
 
 
 def test_the_live_far_failures_are_the_missions_and_the_console_names_them():

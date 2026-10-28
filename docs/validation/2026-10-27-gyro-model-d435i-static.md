@@ -55,6 +55,7 @@ LSB 는 세 축 모두 0.1 °/s 다(motion_xyz32f 출력). 가정 모형의 0.03
 - **입력:** 가정 모형 나이표와 같은 V-G2 team-spec 조향 순회 seed 0–2.
   - 원래 경로 `test_runs/live/vg2/steer_s*` 는 ws1 정리로 지워져 있었다.
   - 보관본 `gdrive:forklift-archive/ws1-cleanup-20261022/live_vg2.tar.zst`(md5 일치)에서 ws1 `test_runs/c1_gyro_fit/inputs/` 로 그 세 실행만 풀었다. 그래서 나이표의 `runs` 경로가 이 위치를 가리킨다.
+  - **ws1 사본은 2026-10-28 정리로 지워졌다.** 나이표의 `runs` 경로는 생성 당시의 기록으로 그대로 둔다. 입력 원본은 위 `live_vg2.tar.zst` 안의 `vg2/steer_s0`·`steer_s1`·`steer_s2` 다. 맞춤 결과(`out/`: `fit.json`, 나이표, `age_repro_spec_typical.json`)와 잡 로그·sbatch·스냅숏 사본은 ws1 정리 때 `inputs/` 와 함께 통째로 `gdrive:forklift-archive/ws1-cleanup-20261028-e/e28_c1_gyro_fit.tar.zst` 에 보관했다.
 - **riib 실행은 입력으로 쓸 수 없다.** 자이로 빌드 러너는 첫 정지 편향까지 차를 붙잡아 두는데, 그 전에 움직인 기록은 재생이 거부한다(`the truck moved at 0.450 s before the first standstill bias`).
 - **재현 확인:** 같은 입력·같은 명령에 가정 모형을 넣으면 기존 `config/obstacle_odometry_age_team_spec_gyro.json`(b5f3831d)과 숫자·잡음 기록이 그대로 같다.
 - **결과 — 누적 상한, 후축:**

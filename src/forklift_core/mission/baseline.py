@@ -28,6 +28,7 @@ MISSION_KEYS = {
         "return_start_backoffs",  # plan 2026-10-27-return-start-withdraw-extension R6
         "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
+        "adoption_zone",  # plan 2026-10-28-adoption-zone-check: each adoption's check, the refusal
         "cusp_replans", "stall_replans", "docking_retries", "cusp_heading_watch", "cusp_stalls", "cusp_heading_hold",
         "async_plans", "async_plan_drops",
         "delivery_docking", "insertion_error", "insertion_measured", "insertion_truth_yaw_rad",
@@ -45,6 +46,7 @@ MISSION_KEYS = {
         # plan 2026-10-24-leg-end-budget-stands: O1's pending stand and its attempts, R1's checks and arrivals
         "observe_end_stand", "observe_end_stands", "return_loose_checks", "return_loose_arrivals",
         "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
+        "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",

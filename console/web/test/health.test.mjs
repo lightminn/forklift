@@ -167,6 +167,9 @@ test("a queue stop reason reads in words, its code kept beside it (Isaac live ru
   const code = "observe:all_candidates_exhausted:perception_no_pallet:no_candidate_in_radius:success;success";
   assert.match(queueStopText(`실패: ${code}`), /^실패: .*팔레트를 찾지 못해/);
   assert.match(queueStopText("거부: already_there"), /^거부: 그 팔레트는 이미/);
+  // a blocked re-pick's detail, kept by the queue, reads in words too (Codex repick re-review P3)
+  assert.equal(queueStopText("거부: blocked (pickup:P-2,props)"),
+    "거부: 다른 팔레트나 소품이 집거나 내려놓는 길을 막습니다 (집는 길: P-2 · 고정 소품)");
   assert.equal(queueStopText("연결 끊김"), "연결 끊김");
   assert.equal(queueStopText(null), "—");
   const r = row(healthRows(input({ queue: { run: "stopped", stopReason: `실패: ${code}`, items: 1 } })), "queue");
