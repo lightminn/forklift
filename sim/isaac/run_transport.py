@@ -421,9 +421,10 @@ def arguments() -> argparse.Namespace:
     parser.add_argument(
         "--adoption-zone-margin-m",
         type=float,
-        default=0.30,
-        help="The adoption rectangle's margin on every side: test 0's largest per-axis centre error over the fixed "
-        "record sample (0.254 m, a live near capture) rounded up to 5 cm; to be measured again on the real truck.",
+        default=None,
+        help="The adoption rectangle's margin on every side. Unset: by path (docs/plans/2026-10-28-adoption-zone-check.md "
+        "8a, provisional) -- 0.10 m when localizing on a survey bundle (--slam-map-bundle, whatever the encoders), "
+        "else 0.30 m (test 0's live mapping runs); to be measured again on the real truck.",
     )
     parser.add_argument(
         "--near-drop-frames-from-m",
@@ -1314,6 +1315,11 @@ def arguments() -> argparse.Namespace:
         # plan 2026-10-28-adoption-zone-check: without perception nothing is adopted from an estimate (the scenario's
         # pickup is planned directly), so there is nothing to check -- refused rather than silently passed
         parser.error("--adoption-zone-check on needs --use-perception")
+    if args.adoption_zone_margin_m is None:
+        # plan 2026-10-28-adoption-zone-check 8a: by path, fixed now so the record carries the value used
+        from forklift_core.mission.adoption_zone import default_margin
+
+        args.adoption_zone_margin_m = default_margin(localized=bool(getattr(args, "slam_map_bundle", None)))
     if not (math.isfinite(args.adoption_zone_margin_m) and args.adoption_zone_margin_m >= 0):
         parser.error("--adoption-zone-margin-m must be a finite value >= 0")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":

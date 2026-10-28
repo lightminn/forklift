@@ -15,6 +15,16 @@ from dataclasses import dataclass
 OUTSIDE = "adoption_outside_zone"
 UNDEFINED = "adoption_zone_undefined"
 DEFAULT_MARGIN_M = 0.30  # plan section 5 test 0: the largest per-axis centre error 0.254 m, rounded up to 5 cm
+# Plan section 8a (lead 2026-10-28, provisional: observed maxima rounded up, no established bound): a run localizing on
+# a survey bundle 0.10 m whatever its encoders (largest error 0.053 m), a run without a bundle 0.30 m (test 0's live
+# mapping runs, which used the reported encoders)
+MARGIN_LOCALIZED_M = 0.10
+MARGIN_MAPPING_M = DEFAULT_MARGIN_M
+
+
+def default_margin(*, localized: bool) -> float:
+    """The margin when none is given: by whether the run localizes on a survey bundle."""
+    return MARGIN_LOCALIZED_M if localized else MARGIN_MAPPING_M
 REPICK_HALF_M = 0.10  # Isaac unloading error 0.02-0.10 m (docs/validation/2026-10-22-session-scene-pallet-props.md)
 
 
