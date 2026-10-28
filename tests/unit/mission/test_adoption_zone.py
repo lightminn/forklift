@@ -93,5 +93,11 @@ def test_without_a_first_zone_a_pallet_never_put_down_has_no_rectangle():
     assert az.mission_zone(tb.pallets["P-1"], None) is None
 
 
+def test_the_default_margin_follows_the_localization_path():
+    # plan section 8a, lead 2026-10-28: localizing on a survey bundle 0.10 m, mapping (and reported) 0.30 m
+    assert az.default_margin(localized=True) == pytest.approx(0.10)
+    assert az.default_margin(localized=False) == pytest.approx(0.30)
+
+
 def test_the_reasons():
     assert az.OUTSIDE == "adoption_outside_zone" and az.UNDEFINED == "adoption_zone_undefined"
