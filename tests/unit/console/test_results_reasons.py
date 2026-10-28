@@ -114,3 +114,16 @@ def test_every_classified_head_has_its_own_entry():
     """A classified head explained only by a shorter generic one would lose its meaning (near_field_contract is a
     session failure, near_field_ a mission's)."""
     assert not sorted(set(PREFIXES) - set(table_heads()))
+
+
+def test_a_far_capture_bound_to_its_zone_has_its_own_explanation():
+    """Far target binding F1 (console session, 2026-10-28): a mission whose every stand found nothing inside its
+    adoption rectangle ends with this reason (Isaac f1chk blocked queue); the longest head results.js picks
+    (HEADS sorted by length) must name the zone, not the generic recognition shortfall."""
+    reason = ("observe:all_candidates_exhausted:perception_no_pallet:no_expected_candidate:"
+              "success;success;success;invalid_goal;success;success")
+    heads = sorted(table_heads(), key=len, reverse=True)
+    head = next(h for h in heads if reason.startswith(h))
+    assert head == "observe:all_candidates_exhausted:perception_no_pallet:no_expected_candidate"
+    # the inside-the-circle, outside-the-rectangle variant (core: no_expected_candidate:outside_zone) too
+    assert next(h for h in heads if (reason.replace("candidate:", "candidate:outside_zone:")).startswith(h)) == head

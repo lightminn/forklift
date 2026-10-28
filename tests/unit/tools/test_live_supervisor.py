@@ -433,6 +433,21 @@ def test_the_live_runner_holds_slam_corrections_on_d7_re_approaches_by_default()
     assert runner.index('--d7-reapproach-hold "$D7_HOLD"') < runner.index("$EXTRA_ARGS")
 
 
+def test_the_live_runner_binds_the_far_capture_to_the_mission_by_default():
+    """Far target binding F1 (lead's exception decision 2026-10-28, docs/validation/2026-10-28-far-target-binding.md):
+    the live launcher runs --far-capture-expected on by default and FAR_EXPECTED=off turns it off; EXTRA_ARGS come
+    after it, so a run's own option still wins (and with --recognition far the runner leaves F1 inert)."""
+    from pathlib import Path
+
+    live = (Path(__file__).resolve().parents[3] / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "FAR_EXPECTED=${FAR_EXPECTED:-on}" in live
+    assert 'case "$FAR_EXPECTED" in on|off) ;;' in live
+    assert "printf 'FAR_EXPECTED=%q\\n' \"$FAR_EXPECTED\"" in live
+    runner = live[live.index('cat > "$OUT/runner.sh"'):]
+    runner = runner[: runner.index("EOT\n")]
+    assert runner.index('--far-capture-expected "$FAR_EXPECTED"') < runner.index("$EXTRA_ARGS")
+
+
 def test_the_live_runner_shows_the_launchers_slam_choice():
     """Live-default plan 5d: the launcher's choice reaches the runner (the console's slam field) and the supervisor's
     log, so a mapping session -- a fallback included -- is said on screen and in the record."""
