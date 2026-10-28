@@ -63,6 +63,8 @@ PREFIXES = {
     # the live far recognition (plan 2026-10-22-live-far-recognition): its work failed, or its stop decision did not
     # come within 30 s -- that mission ends, the session goes on
     "recognition_error:": MISSION, "recognition_timeout": MISSION,
+    # an estimate outside the mission's adoption rectangle, or no rectangle (docs/plans/2026-10-28-adoption-zone-check.md)
+    "adoption_outside_zone": MISSION, "adoption_zone_undefined": MISSION,
 }
 
 # The require sites whose reason is made at run time, by (file, expression), with what their values are.

@@ -752,6 +752,10 @@ def test_observe_succeeded_checks_the_near_capture_before_any_adoption():
     for later in ("hooks.set_inset_estimate(", "hooks.planning_target(", "known_pallet(", 'pocket["planning_pickup"] ='):
         assert check < source.index(later)
     assert source.index("self._bottom_deck_reobserved(") < check
+    # plan 2026-10-28-adoption-zone-check: the zone check reads the estimate before anything adopts it as well
+    zone = source.index("self.adoption_check_estimate(")
+    for later in ("hooks.set_inset_estimate(", "hooks.planning_target(", "known_pallet(", 'pocket["planning_pickup"] ='):
+        assert zone < source.index(later)
 
 
 def test_a_pallet_the_fork_spacing_does_not_fit_ends_by_name_without_wandering():

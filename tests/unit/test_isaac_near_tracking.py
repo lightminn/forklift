@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -260,6 +261,91 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
         "input_files file config/age.json" in p
         for p in NT.condition_problems(expected, NT.run_condition(result, tmp_path))
     )
+
+
+def test_a_far_run_is_refused_by_the_committed_terms_and_taken_by_terms_measured_under_it():
+    """Near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): the parser no longer refuses
+    --recognition far with --near-tracking; the drive terms' condition does. The committed terms were measured
+    without the far recognition, so a far run differs from them; terms measured under it match the same run."""
+    committed = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())["condition"]
+    assert "recognition" not in committed["arguments"]  # recorded before the argument: read as "off"
+    far = {**committed, "arguments": {**committed["arguments"], "recognition": "far",
+                                      "recognition_proposals": "learned"}}
+    assert NT.condition_problems(committed, far) == [
+        "arguments recognition differs from the measurement runs",
+        "arguments recognition_proposals differs from the measurement runs",
+    ]
+    assert NT.condition_problems(committed, committed) == []
+    assert NT.condition_problems(far, far) == []
+    # the near re-draw's lateral box the riib launcher passes by default (0.10) is another condition again
+    wide = {**far, "arguments": {**far["arguments"], "near_capture_redraw_lateral_m": 0.10}}
+    assert NT.condition_problems(far, wide) == [
+        "arguments near_capture_redraw_lateral_m differs from the measurement runs"
+    ]
+
+
+def test_a_far_runs_condition_compares_the_files_the_far_recognition_reads_by_fixed_path(tmp_path):
+    """Codex near-remeasure tools review P2: the far runtime reads its track bounds, the site load defaults and the
+    known shapes' geometry without an argument naming them; a far condition holds them (and what they name) by
+    content, a run without the far recognition does not."""
+    import shutil
+
+    for rel in NT.FAR_RECOGNITION_FILES + ("config/obstacle_odometry_age.json",):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, tmp_path / rel)
+    far = {"arguments": {"recognition": "far"}}
+    expected = NT.run_condition(far, tmp_path)
+    labels = set(expected["input_files"])
+    assert {f"far-recognition {rel}" for rel in NT.FAR_RECOGNITION_FILES} <= labels
+    assert "far-recognition file config/obstacle_odometry_age.json" in labels  # named by the track bounds
+    assert not any(label.startswith("far-recognition") for label in NT.run_condition({"arguments": {}}, tmp_path)["input_files"])
+    def file_problems(observed):  # (the fake result records no settings: only the inputs are compared here)
+        return [p for p in NT.condition_problems(expected, observed) if p.startswith("input_files")]
+
+    assert file_problems(NT.run_condition(far, tmp_path)) == []
+    bounds = tmp_path / "config/recognition_track_bounds.yaml"
+    bounds.write_text(bounds.read_text() + "\n# changed\n")
+    assert file_problems(NT.run_condition(far, tmp_path)) == [
+        "input_files far-recognition config/recognition_track_bounds.yaml differs from the measurement runs"
+    ]
+    assert any("far-recognition" in p for p in file_problems(NT.run_condition(far, None)))
+    # Codex round 3 P2: the runner hashes them where the far runtime reads them (its own checkout), not in its
+    # working directory -- a checkout whose bounds differ is refused though the working directory's match
+    runner_checkout = tmp_path / "runner"
+    shutil.copytree(tmp_path / "config", runner_checkout / "config")
+    bounds.write_text(bounds.read_text().replace("\n# changed\n", ""))  # the working directory's: as measured
+    assert file_problems(NT.run_condition(far, tmp_path)) == []
+    assert file_problems(NT.run_condition(far, tmp_path, far_root=runner_checkout)) == [
+        "input_files far-recognition config/recognition_track_bounds.yaml differs from the measurement runs"
+    ]
+    # Codex round 4 P2: a file both sides name (the age table) is two inputs, one per root -- the working
+    # directory's, which the obstacle layer reads, is not overwritten by the runner checkout's
+    layer = {"arguments": {"recognition": "far", "obstacle_layer": str(tmp_path / "config/obstacle_layer.yaml")}}
+    (tmp_path / "config/obstacle_layer.yaml").write_text("odometry_age: config/obstacle_odometry_age.json\n")
+    measured = NT.run_condition(layer, tmp_path, far_root=runner_checkout)
+    assert {"file config/obstacle_odometry_age.json", "far-recognition file config/obstacle_odometry_age.json"} <= set(
+        measured["input_files"])
+    age = tmp_path / "config/obstacle_odometry_age.json"
+    age.write_text(age.read_text() + " ")
+    assert [p for p in NT.condition_problems(measured, NT.run_condition(layer, tmp_path, far_root=runner_checkout))
+            if p.startswith("input_files")] == [
+        "input_files file config/obstacle_odometry_age.json differs from the measurement runs"
+    ]
+    runner = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert "far_root=Path(__file__).resolve().parents[2]" in runner
+    # the far runtime's own root, the same checkout
+    assert "ROOT = Path(__file__).resolve().parents[2]" in (ROOT / "sim/isaac/far_recognition_runtime.py").read_text()
+    # every fixed path the runtime reads is listed (a new one there must join FAR_RECOGNITION_FILES)
+    source = (ROOT / "sim/isaac/far_recognition_runtime.py").read_text()
+    from forklift_core.perception.pallet_model import VARIANT_OF
+
+    sys.path.insert(0, str(ROOT / "sim/isaac"))
+    import far_recognition_runtime as FR
+
+    shapes = set(FR.SHAPES) | set(VARIANT_OF)
+    assert {f"config/pallet_geometry_{k}.yaml" for k in shapes} <= set(NT.FAR_RECOGNITION_FILES)
+    for rel in re.findall(r'"(config/[A-Za-z0-9_./-]+)"', source):
+        assert rel in NT.FAR_RECOGNITION_FILES, rel
 
 
 def test_an_argument_newer_than_the_measurement_matches_only_at_its_reproducing_value(
@@ -1183,3 +1269,29 @@ def test_the_d8b_reference_check_compares_the_slam_map_by_meaning_too(tmp_path):
     other = {**run, "slam_map": {"mode": "localization", "map_id": "b" * 64}}
     assert s4_drive_terms.reference_problems("k", run, elsewhere) == []
     assert s4_drive_terms.reference_problems("k", run, other) == ["k: argument map_id differs from the D8b run"]
+
+
+def test_the_d8b_reference_check_compares_the_far_recognitions_fixed_files(tmp_path):
+    """Codex near-remeasure round 2 P2: an S3 run's far track bounds changed from its S2 reference's is a difference
+    (the S3 runs agreeing among themselves would otherwise link S2 bounds and S3 terms of two far conditions)."""
+    import shutil
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "tools"))
+    import s4_drive_terms
+
+    snaps = {}
+    for name in ("s2", "s3"):
+        snap = tmp_path / "snapshots" / name
+        for rel in NT.FAR_RECOGNITION_FILES + ("config/obstacle_odometry_age.json",):
+            (snap / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(root / rel, snap / rel)
+        snaps[name] = {"arguments": {"recognition": "far", "lidar": str(snap / "config/site_load_defaults.yaml")},
+                       "slam_feedback": {"x": 1}}
+    assert s4_drive_terms.reference_problems("k", snaps["s3"], snaps["s2"]) == []
+    bounds = tmp_path / "snapshots/s3/config/recognition_track_bounds.yaml"
+    bounds.write_text(bounds.read_text() + "\n# changed\n")
+    assert s4_drive_terms.reference_problems("k", snaps["s3"], snaps["s2"]) == [
+        "k: far-recognition config/recognition_track_bounds.yaml differs from the D8b run"
+    ]

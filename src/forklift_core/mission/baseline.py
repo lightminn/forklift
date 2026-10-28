@@ -28,6 +28,7 @@ MISSION_KEYS = {
         "return_start_backoffs",  # plan 2026-10-27-return-start-withdraw-extension R6
         "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
+        "adoption_zone",  # plan 2026-10-28-adoption-zone-check: each adoption's check, the refusal
         "cusp_replans", "stall_replans", "docking_retries", "cusp_heading_watch", "cusp_stalls", "cusp_heading_hold",
         "async_plans", "async_plan_drops",
         "delivery_docking", "insertion_error", "insertion_measured", "insertion_truth_yaw_rad",
