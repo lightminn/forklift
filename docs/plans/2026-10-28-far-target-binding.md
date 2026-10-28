@@ -29,6 +29,7 @@
     - 처음 자리: 세션은 `SessionZone.yaw_centre_rad`·`yaw_half_rad`, 배치는 `PickupZone` 의 0 중심·`yaw_max_rad` 를 쓴다(PickupZone 은 0 중심 범위이고, 필드 이름이 `SessionZone` 의 `yaw_half_rad` 와 다르다).
     - 재집기: `put_down_pose.yaw` ± 15°.
     - 이를 위해 `AdoptionZone` 에 yaw 중심·반폭을 더한다. 구역 검사의 판정에는 쓰지 않는다(기록만).
+    - 축 허용의 상한은 89° 다(`FAR_AXIS_MAX_RAD`, 검출기 `ExpectedSite` 의 열린 상한 90° 아래). 그래서 yaw 반폭이 84° 를 넘는 구역은 지원 범위 밖이다. 그런 구역이면 허용 범위가 반폭보다 좁아진다(Codex 구현 2차 P3: 중심 −90°·반폭 90° 이면 yaw 0° 후보가 걸러진다). 지금 장면의 반폭은 12° 다.
   - 배치 실행의 `scenario.pickup` 은 truth 이므로 쓰지 않는다.
   - 사각형이 없으면(구역 검사의 `adoption_zone_undefined` 경우) 원거리 캡처도 그 사유로 미션을 끝낸다. 검사 끔이어도 F1 이 켜져 있으면 같다.
 - **안에 후보가 없으면:** `no_expected_candidate` 다. 그 관측은 실패하고 관측 사다리의 다음 자리로 간다. 모두 실패하면 미션이 `perception_no_pallet` 으로 끝난다. 이웃을 채택하지 않는다. 원거리 캡처의 `expected` 기록(후보·안/밖)을 시도 기록에 남긴다.
@@ -44,7 +45,7 @@ line_m 의 `uncertain_in_radius` 는 막힌 배치에서 옳은 동작이다. ra
 
 ### F3. 막힌 수동 재집기의 사전 거부 — 콘솔 세션 담당
 
-콘솔 세션이 맡는다. 사유는 `reject(blocked)` 이고, `detail` 에 막는 쪽을 싣는다(예: `pickup:D-2`, `delivery:P-3`). 표기는 `next_pick` 의 blocked 목록과 같다. 범위는 `mission_submit` 의 pallet_id 가 delivered(재집기)일 때만이다. 정본은 `docs/interfaces/2026-10-13-operator-console-contract-draft.md` 의 mission_submit 행이다. 이 계획과는 별개로 진행한다.
+콘솔 세션이 맡는다. 사유는 `reject(blocked)` 이고, `detail` 에 막는 쪽을 **팔레트 ID** 로 싣는다. `pickup:<팔레트>` 는 그 팔레트가 집는 직선을 막는다는 뜻이고(line_m 사례는 `pickup:P-2`), `delivery:<팔레트>` 는 목적지의 내려놓는 직선을 막는다는 뜻이다. 고정 소품이면 `props` 이고, 여럿이면 쉼표로 잇는다. 표기는 `next_pick` 의 blocked 목록과 같다(콘솔 세션 구현 `feat/repick-blocked`). 범위는 `mission_submit` 의 pallet_id 가 delivered(재집기)일 때만이다. 정본은 `docs/interfaces/2026-10-13-operator-console-contract-draft.md` 의 mission_submit 행이다. 이 계획과는 별개로 진행한다.
 
 ### D2·D3 진단 (수정 전)
 
@@ -76,7 +77,7 @@ line_m 의 `uncertain_in_radius` 는 막힌 배치에서 옳은 동작이다. ra
 - **막힌 대기열 회귀(A-off 만):** line_m `P-1:D-1,P-2:D-2,P-1:D-3` seed 6–8 의 3 세션.
   - **F1 성공**은 다음 셋이 모두 기록에 있을 때만이다: m3 의 원거리 캡처에 도달했고, `expected` 기록이 남았고, 이웃(P-2 자리) 후보가 그 기록에서 밖(`inside: false`)으로 걸러졌다.
   - 구역 검사의 거부만 있는 실행은 F1 성공으로 세지 않는다. 8a 의 세 건은 F1 없이도 `edge_m` 0.96 m 라서 m 0.10 의 구역 검사만으로 거부된다(Codex P2).
-  - 콘솔 사전 거부(F3)로 캡처에 도달하지 않은 실행도 F1 성공으로 세지 않는다.
+  - 콘솔 사전 거부(F3)로 캡처에 도달하지 않은 실행도 F1 성공으로 세지 않는다. 대기열 수동 항목도 같은 `mission_submit` 을 거치므로, 이 팔은 F3 이 들어가지 않은 스냅숏(F1 브랜치 끝)으로 돌린다(콘솔 세션 안내).
   - P-2 를 채택하면 F1 실패다.
 - **판정**(모두 기술 통계다. 대기열·seed 가 8a 와 달라서 F1 의 효과만 떼어 낼 수 없다 — Codex P3):
   - 재집기 집계는 미션 순번이 아니라 `put_down` 사각형을 쓴 미션으로 한다. line_m 새 대기열의 재집기는 m2 다.
@@ -87,6 +88,11 @@ line_m 의 `uncertain_in_radius` 는 막힌 배치에서 옳은 동작이다. ra
   - 오거절에는 구역 검사의 `adoption_outside_zone` 뿐 아니라 **F1 의 `no_expected_candidate` 거절**도 넣는다. 지시된 팔레트가 시야에 있었는데(근거리·truth 로 확인) 원거리 기대 위치가 그것을 걸러냈으면 오거절이다. 판단할 수 없으면 판정 불가로 센다.
   - 구역 검사의 재집기(`put_down`) 단계: **도달한 세션 3 개 이상**, 그 검사에 판정 불가 0, 오거절 0 이면 그 단계를 확인한 것으로 본다. 모자라면 운영 런처 기본 on 은 미루고 재집기 표본을 늘린다(agy).
 - 크기: live 묶음, 15 세션.
+- **스냅숏:**
+  - 재집기 가능한 대기열 12 세션은 F1 머지 뒤 main(F3 `bfa160ef` 포함)에서 돈다. 운영 조합 F1 + F3 다.
+  - 막힌 대기열 회귀 3 세션은 F3 이전인 F1 브랜치 끝에서 돈다. F3 는 이 순서를 제출 단계에서 거부한다.
+  - 콘솔 세션이 F3 의 순수 함수(`next_pick.pair_blockers`)로 CPU 확인을 했다(2026-10-28). 재집기 가능한 두 대기열은 모든 쌍이 빈 목록으로 통과했고, 막힌 순서는 `pickup:P-2` 로 거부됐다.
+  - 이 CPU 확인은 live 가 내려놓은 이웃을 칸 기준으로도 고정하는 것까지는 넣지 않았다. 그래서 Isaac 에서 F3 가 재집기 가능한 대기열을 거부하면 그 세션은 F1 판정에서 빼고 따로 센다.
 
 ## 5. 남는 위험
 
