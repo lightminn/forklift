@@ -2871,11 +2871,24 @@ def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, set
     state["success"] = True
 
 
+def reloc_mount_problem(xyz_m, yaw_rad: float) -> str | None:
+    """Why the LiDAR mount does not fit start_reloc's frames (laser = base + LASER_X_M ahead, the same heading), or
+    None: a turned or side-shifted LiDAR would turn the matcher's laser pose into a wrong base pose (Codex B-P2b P2)."""
+    from forklift_core.localization import start_reloc as R
+
+    if abs(float(xyz_m[0]) - R.LASER_X_M) > 1e-9 or abs(float(xyz_m[1])) > 1e-9 or abs(float(yaw_rad)) > 1e-9:
+        return f"the LiDAR mount {tuple(xyz_m)} yaw {yaw_rad} is not start_reloc's ({R.LASER_X_M}, 0, yaw 0)"
+    return None
+
+
 def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple:
     """B-P2b: the shared SLAM LiDAR's stationary-scan engine and its (angle_min, angle_increment)."""
     if not layer.shared_with_slam:
         raise SessionFailure("reloc_invalid_input: the obstacle layer does not share the SLAM LiDAR (the live send path)")
-    engine, pattern, _ = shared_lidar_engine(args, settings, world, robot, layer, settle_base)
+    engine, pattern, mount = shared_lidar_engine(args, settings, world, robot, layer, settle_base)
+    problem = reloc_mount_problem(mount.xyz_m, mount.yaw_rad)
+    if problem is not None:
+        raise SessionFailure(f"reloc_invalid_input: {problem}")
     return engine, (pattern.angle_min_rad, pattern.angle_increment_rad)
 
 
@@ -7012,10 +7025,10 @@ def drive(S, isaac) -> None:
                 state["slam_map"]["confirmed_by_bridge"] = True
                 state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
                 if start_reloc is not None:
-                    # Plan 1.2 step 11: the verdict's record -- this tick's SLAM pose against the same tick's truth
-                    # and the estimate; nothing reads it back
+                    # The start check's tick, kept beside the verdict (which is taken when the warm-up ends: a gyro
+                    # bias can hold it after this reply -- Codex B-P2b review P2); nothing reads it back
                     truth_yaw_v_, _ = yaw_and_tilt(now_q)
-                    start_reloc["verdict"] = {
+                    start_reloc["bootstrap_check"] = {
                         "scan_id": slam["scan_id"], "stamp_s": float(stamp_now), "slam_base": [float(v) for v in at_],
                         "truth_base": [float(now_base[0]), float(now_base[1]), float(truth_yaw_v_)],
                         "estimate_base": list(start_reloc["estimate"])}
@@ -7685,6 +7698,17 @@ def drive(S, isaac) -> None:
                                    "prewarm_wall_s": time.monotonic() - prewarm_wall_,
                                    "reply_deadline_s": SLAM_LIVE_REPLY_DEADLINE_S, "queue_max": SLAM_LIVE_QUEUE_MAX,
                                    "tracker_max_age_s": slam["tracker"].max_age_s, "max_depth": 0}
+            if start_reloc is not None:
+                # B-P2 plan 1.2 step 11: the verdict's record at the tick the session is ready (every warm-up done,
+                # no step before the server opens) -- the SLAM pose against the same tick's truth and the estimate;
+                # nothing reads it back
+                verdict_base_, verdict_q_ = robot.get_world_pose()
+                start_reloc["verdict"] = {
+                    "sim_s": float(world.current_time - initial_time),
+                    "slam_base": [float(v) for v in compose(slam["tracker"].applied[0], slam_odom_base())],
+                    "truth_base": [float(verdict_base_[0]), float(verdict_base_[1]),
+                                   float(yaw_and_tilt(verdict_q_)[0])],
+                    "estimate_base": list(start_reloc["estimate"])}
         if live is not None:
             # Real-time plan D9d: what was built so far (the stage, the scene, the planners' tables) is frozen out of
             # the garbage collector's walks; a full collection then walks only what the run makes (d9d_2/3/sc: a 0.30-

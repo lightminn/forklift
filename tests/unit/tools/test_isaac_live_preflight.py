@@ -108,12 +108,12 @@ def _supervisor(tmp_path) -> str:
 def test_a_start_pose_relocalizes_the_session(tmp_path):
     # B-P2b (start relocalization plan 1.2): the runner placed and relocalizing, the supervisor running it first, the
     # bridge started at the runner's estimate
-    p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0")
+    p = _relocalizing(tmp_path, START_POSE="-4.0,3.0,-2.0")
     assert p.returncode == 0, p.stdout + p.stderr
     out = tmp_path / "out"
     preflight = (out / "preflight.log").read_text().splitlines()
-    i = preflight.index("--start-pose")
-    assert preflight[i:i + 5] == ["--start-pose", "4.0,3.0,-2.0", "--start-relocalize", "--reloc-dir",
+    i = preflight.index("--start-pose=-4.0,3.0,-2.0")  # one word: a negative x is no option (Codex B-P2b P2)
+    assert preflight[i:i + 4] == ["--start-pose=-4.0,3.0,-2.0", "--start-relocalize", "--reloc-dir",
                                   str(out / "preflight")]
     supervisor = _supervisor(tmp_path)
     assert "--relocalize" in supervisor.split() and '"{map_start_pose}"' in supervisor

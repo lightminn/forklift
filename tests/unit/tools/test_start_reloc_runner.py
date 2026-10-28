@@ -47,6 +47,25 @@ def test_the_start_relocalization_is_off_by_default_and_not_recorded_off(tmp_pat
     assert not set(NEW) & set(run_transport.recorded_arguments(args))  # an off run records what it always did
 
 
+def test_a_placed_pose_with_a_negative_x_parses_as_one_word(tmp_path):
+    args = _runner_args(_live(tmp_path, "--start-pose=-1.5,2.0,0.5", "--start-relocalize", "--reloc-dir",
+                              str(tmp_path)))
+    assert args.start_pose == (-1.5, 2.0, 0.5)
+
+
+@pytest.mark.parametrize("xyz, yaw, ok", [
+    ((-0.12, 0.0, 1.05), 0.0, True),
+    ((-0.12, 0.0, 0.40), 0.0, True),  # the height is the scan plane's, not a frame offset
+    ((-0.10, 0.0, 1.05), 0.0, False),
+    ((-0.12, 0.02, 1.05), 0.0, False),
+    ((-0.12, 0.0, 1.05), 0.3, False),  # a turned LiDAR: base_from_laser would keep its yaw (Codex B-P2b P2)
+])
+def test_the_lidar_mount_must_be_start_relocs(xyz, yaw, ok):
+    import run_transport
+
+    assert (run_transport.reloc_mount_problem(xyz, yaw) is None) == ok
+
+
 def test_a_relocalizing_live_run_takes_its_placed_pose(tmp_path):
     import run_transport
 
@@ -134,6 +153,10 @@ def test_the_setup_and_the_drive_start_from_map_start_rear():
     assert "slam_start=map_start_rear(scenario,start_reloc)" in drive_.replace(" ", "")  # odometry, start check
     assert "base_start=spawn_base_pose(args, scenario)" not in run_  # (it builds the array from it)
     assert "spawn_base_pose(args, scenario)" in run_
+    # the verdict is taken when every warm-up is done, before the server opens (Codex B-P2b review P2)
+    prewarm = drive_.index('raise SessionFailure("slam_prewarm_timeout")')
+    verdict = drive_.index('start_reloc["verdict"] = {')
+    assert prewarm < verdict < drive_.index("live.start()")
     # every new call of the setup is behind the option (plan 1.4): the phase runs only when it is on
     assert re.search(r"\n(\s+)if args\.start_relocalize:\n\1    start_reloc = start_relocalization\(", run_)
 

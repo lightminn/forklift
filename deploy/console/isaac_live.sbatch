@@ -130,7 +130,8 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
-[ -n "${START_POSE:-}" ] && RELOC=(--start-pose "$START_POSE" --start-relocalize --reloc-dir "$2")
+# one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
+[ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2")
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
