@@ -684,6 +684,22 @@
   - G0 은 보완 없이 계획했다. 이 차이는 seed 4 배치에 맞춘 조사 방법 선택이고, 검증 결과를 보기 전에 정했다.
 - 조사: ws1 12371. 배치 seed 4, 자이로 방향, SLAM 잡음 seed 0(`EXTRA_ARGS` 가 런처의 seed 를 덮는다). 런처·장면·URDF·자이로 인자는 G0 과 같다.
 
+**2 차 동결 기록(2026-10-29, 검증 수집 전).**
+- 조사 결과(ws1 12371, 1 h 47 m): 첫 조사에서 V2′ 를 통과했다. 대체 순서는 쓰지 않았다.
+  - world: 위치 최대 0.062 m(RMSE 0.038), yaw 최대 0.0043 rad, 노드 1,045.
+  - 덮개: 판정 영역 9,630 칸 모두 덮였다. 가장 먼 칸 2.79 m, 반경 2.82 m.
+  - 순회: 도착했다.
+  - 움직임 검사는 돌지 않았다(강체 목록 없음). B4a 의 홀 조사들과 같다.
+- 검증 지도: map ID `9a5cefd5fbfdbce7d98a0b8a6cd7955fa87bd1003b7cecaa4049fce48c6a941b`, `map_from_world` (0, 0, 0).
+  - 묶음 `manifest.json` sha256 `97404be5…`, `grid.npz` `44346331…`.
+  - 순회 `hall_tour_s4r.npz` `61b677b3…`.
+- keep-out: 조사 실행의 `result.json` sha256 `8d5763b3…`.
+- 검증 시작 목록 `docs/validation/assets/b-p1b/val3_s4.json` sha256 `22b16416dcd1987da56d16efc37758198534a4c65788457d8b2d9af50fb66eab`.
+  - 93 곳(층 A 46·B 21·C 26), 추출 seed 1029, 분할 1, 지도 번호 3, laser 3 m.
+  - 세 층 모두 소진해 멈췄다(시도 125,245). 이전 세계 시작과는 떼지 않았다(계획대로).
+- 수집: 스냅숏 `bp1b_1589e676` 의 `deploy/slurm/scan_capture.sbatch` 로 한다. DRY_RUN 은 통과했다.
+- 평가: `val3_eval.sbatch` 로 한다. `run --choice dev_choice.json` 에 `match_config.json` 을 쓰고, 1 CPU 프로세스 하나로 돈다. 이어서 정합 입력 겹침(개발 148 곳 대비), B4b `judge` 를 돌린다.
+
 ## C. 단계와 PR 나눔
 
 1. **S-P1 저상 안전 관측**(시험 먼저): 저상 층(유효 깊이 관측 빔·평면 검증·시간 오차 침식)·쓸림 실행 가능성 검사·후진 규칙. 시험은 둘이다.
