@@ -250,7 +250,9 @@ def pair_blockers(snap: PickSnapshot, pallet_id: str, destination_id: str) -> li
     pickup straights), ``delivery:<q>`` (q blocks the slot's). A put-down pallet is judged as if it were waiting to be
     picked where it lies (the pick itself never offers one: only the available are candidates); its own slot is
     freed by the move. The slot's occupancy is the submit check's (TargetsBook.check_submit), not repeated here.
-    Empty: nothing blocks the pair."""
+    Empty: nothing blocks the pair. A conservative pre-filter, not the planner's verdict: the pick holds the planner's
+    clearance on every straight (0.10 m on the extraction, where the grid planner keeps 0), so a pair it calls
+    blocked may still plan (Codex repick review P3: two put-down pallets 1.06 m apart, each 0.21 m uncertain)."""
     import copy
 
     book = copy.deepcopy(snap.targets)
