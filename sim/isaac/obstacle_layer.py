@@ -116,15 +116,23 @@ def exempt_region(snapshot, region):
     return replace(snapshot, state=state, free_stamp=stamp)
 
 
-def stop_arc_hits(layer, arc, rects, *, loaded: bool, direction: int, margin_m: float, skip=()) -> tuple[list, list]:
+def moving_shape(hull_shape, parts_shape, *, loaded: bool, direction: int, mode: str):
+    """The shape the permission drives with in ``direction`` (``ObstacleLayer.footprints(loaded, direction)``'s first,
+    from the hull it gives without a direction and the body-and-blades parts): reversing unloaded under hull_forward,
+    the parts; otherwise the hull shape as given (under ``parts`` it already is the parts). The truth evaluator takes it
+    so: a second call to the layer would be a boundary call the recorded runs do not have."""
+    if not loaded and direction < 0 and mode == "hull_forward" and parts_shape is not None:
+        return parts_shape
+    return hull_shape
+
+
+def stop_arc_hits(arc, rects, hull_shape, moving_shape_, *, margin_m: float, skip=()) -> tuple[list, list]:
     """The truth evaluator's check (sim/isaac/run_transport.py; docs/interfaces/2026-10-28-obstacle-truth-evaluation.md):
     the indices of ``rects`` the stop arc ``arc`` (poses from the truck, the first its own) meets with the envelope
-    ``margin_m`` -- (with the hull, every tick's shape since L0b; with the shape the permission drives with in
-    ``direction``: the body and the blades reversing unloaded under hull_forward, else the same hull). ``skip``: indices
-    left out. A bounding-circle prefilter per shape (exact: a rectangle farther than the shape's reach plus its own half
-    diagonal from every pose cannot meet it)."""
-    hull_shape, _ = layer.footprints(loaded)
-    moving_shape, _ = layer.footprints(loaded, direction)
+    ``margin_m`` -- with ``hull_shape`` (``footprints(loaded)``, every tick's shape since L0b) and with
+    ``moving_shape_`` (``moving_shape``: the body and the blades reversing unloaded under hull_forward, else the same
+    hull). ``skip``: indices left out. A bounding-circle prefilter per shape (exact: a rectangle farther than the
+    shape's reach plus its own half diagonal from every pose cannot meet it)."""
     poses = [tuple(float(v) for v in p) for p in arc[1:]]
     xy = np.asarray(arc, dtype=float)[1:, :2]
 
@@ -146,7 +154,7 @@ def stop_arc_hits(layer, arc, rects, *, loaded: bool, direction: int, margin_m: 
         return out
 
     hull = hits(hull_shape)
-    return hull, (list(hull) if moving_shape is hull_shape else hits(moving_shape))
+    return hull, (list(hull) if moving_shape_ is hull_shape else hits(moving_shape_))
 
 
 class ObstacleLayer:
