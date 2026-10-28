@@ -19,7 +19,7 @@ from forklift_core.perception.depth_noise import NoiseModel, apply_noise
 from forklift_core.perception.pallet_geometry import load_pallet_geometry
 from forklift_core.perception.pallet_model import PalletSpec, spec_boxes
 from forklift_core.sensors.rgbd import PinholeIntrinsics
-from tools import instance_rig, scene_rig
+from tools import instance_rig, negative_structures, scene_rig
 from tools import measure_pocket_evidence as mpe
 from tools import recognition_scenes as rs
 
@@ -29,6 +29,7 @@ TILT_RAD = 0.10                                   # carriage_low_measured mount
 CAMERA = scene_rig.Camera((0.619, 0.0, 0.27), TILT_RAD)
 VERTICAL_FIELDS = ("deck_bottom_m", "block_height_m", "stringer_m", "top_board_thickness_m")
 STRUCTURES = ("pallet", "grounded", "shelf", "slab", "deckless", "damaged")
+NEGATIVE_KINDS = tuple(k for k in negative_structures.KINDS if k not in STRUCTURES)
 D435I_640 = PinholeIntrinsics(width=640, height=480, fx=388.81207275390625, fy=388.81207275390625, cx=320.0, cy=240.0,
                               frame_id=scene_rig.OPTICAL_FRAME_ID)   # the team noise grid's source_fx
 
@@ -181,7 +182,7 @@ def view_face(case: SideCase) -> int:
 
 def render_side(case: SideCase):
     """-> (SceneInput with the nominal extrinsic, BottomDeckTarget, RenderedScene)."""
-    if case.structure not in STRUCTURES:
+    if case.structure not in STRUCTURES + tuple(NEGATIVE_KINDS):
         raise ValueError(f"unknown structure {case.structure!r}")
     g = geometry(case.shape)
     if case.dims_delta_m:
@@ -195,6 +196,9 @@ def render_side(case: SideCase):
     spec = rs.known_spec(case.shape) if case.spec is None else case.spec
     if case.structure == "damaged":
         built = _damaged(mpe.structure(g, "pallet"), g, case.damaged_face)
+    elif case.structure in NEGATIVE_KINDS:
+        # the 2026-10-27 plan's non-pallet negatives (tools/negative_structures), drawn once per shape
+        built = negative_structures.build(g, case.structure, np.random.default_rng(0))
     else:
         built = mpe.structure(g, case.structure) if case.spec is None else spec_structure(spec, case.structure)
     target_boxes = scene_rig.place(built, x_m=cx, y_m=cy, yaw_rad=myaw)

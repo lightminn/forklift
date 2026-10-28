@@ -29,7 +29,23 @@ APPLICABLE = {
     "known:t11_06": ("miss", "dangerous", "extra", "target_error", "deferred_unambiguous"),
     "nonstandard": ("miss", "dangerous", "extra", "target_error", "deferred_unambiguous", "fit_error"),
     "negative": ("negative_fp",),
+    # The 2026-10-27 plan (bottomless pallets are positives): S8's bottomless variants are judged as known shapes,
+    # N2 is the redefined non-pallet negative population, apart from the old N set (now a record).
+    "known:grounded_epal6": ("miss", "dangerous", "extra", "target_error", "deferred_unambiguous"),
+    "known:grounded_t11_06": ("miss", "dangerous", "extra", "target_error", "deferred_unambiguous"),
+    "negative_n2": ("negative_fp",),
 }
+# The populations each catalogue holds: summarize prints exactly these, so every printed gate is required (an empty
+# one fails) and a population the catalogue does not hold is never printed (tools/choose_tau reads every printed gate
+# as required, Codex review of PR 3 round 2).
+CATALOGUE_POPULATIONS = {
+    "main": ("known:epal6", "known:t11_06", "nonstandard", "negative"),
+    "bottomless": ("known:grounded_epal6", "known:grounded_t11_06", "negative_n2"),
+}
+NEGATIVE_POPULATIONS = ("negative", "negative_n2")
+# Populations with no height-judged case: S8 places single pallets on the floor as S1 does, and z is judged only
+# where a layer or a non-standard height makes it matter (S4, S7) -- an empty z gate there would fail by n = 0.
+NO_Z_GATE = ("known:grounded_epal6", "known:grounded_t11_06")
 POSE_P95 = {"lateral": 0.020, "axial": 0.020, "yaw": math.radians(2.0), "z": 0.005}
 
 
@@ -99,6 +115,8 @@ class SceneVerdict:
 def population_of(meta: dict) -> str:
     if meta["case"] == "N":
         return "negative"
+    if meta["case"] == "N2":
+        return "negative_n2"
     if meta["case"] == "S7":
         return "nonstandard"
     return f"known:{meta['shape_key']}"
@@ -235,7 +253,7 @@ def _check_truth(population, truth, instruction_input) -> None:
         raise ValueError("truth must hold instruction_truth with a known kind")
     for inst in truth["instances"]:
         _check_instance_truth(inst)
-    if population != "negative" and not truth["instances"]:
+    if population not in NEGATIVE_POPULATIONS and not truth["instances"]:
         raise ValueError("a positive scene's truth must list at least one instance")
     present = bool(instruction_input.get("present"))
     if present != (itruth["kind"] != "none"):
@@ -266,7 +284,7 @@ def judge_scene(meta, truth, instruction_input, candidates: Sequence[CandidateVi
         # Auto-selection may only pick a fitted, identified candidate (design 7.5):
         # picking an unidentified or nonexistent one is unsafe whatever the instruction.
         dangerous = True
-    negative = population == "negative"
+    negative = population in NEGATIVE_POPULATIONS
     miss = None if negative else any(inst["eligible"] and k not in matched_inst for k, inst in enumerate(instances))
     target_error = deferred = fit_error = None
     itruth = truth["instruction_truth"]
@@ -329,20 +347,29 @@ def _p95_gate(samples, target):
     return {"n": len(samples), "p95": value, "target": target, "pass": value is not None and value <= target}
 
 
-def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: str) -> dict:
+def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: str, catalogue: str = "main") -> dict:
+    if catalogue not in CATALOGUE_POPULATIONS:
+        raise ValueError(f"catalogue must be one of {sorted(CATALOGUE_POPULATIONS)}")
+    populations = CATALOGUE_POPULATIONS[catalogue]
     chosen = [v for v in verdicts if v.split == split and v.render_source == render_source]
+    foreign = sorted({v.population for v in chosen} - set(populations))
+    if foreign:
+        raise ValueError(f"populations {foreign} are not in the {catalogue} catalogue")
     gates, cells, diagnostics = {}, {}, {}
-    for pop, names in APPLICABLE.items():
+    for pop in populations:
+        names = APPLICABLE[pop]
         mine = [v for v in chosen if v.population == pop]
         for name in names:
             gates[f"{pop}:{name}"] = _gate([getattr(v, name) for v in mine], GATES[name])
-        if pop != "negative":
+        if pop not in NEGATIVE_POPULATIONS:
             gates[f"{pop}:dangerous_observed_zero"] = {"n": len(mine), "failures": sum(v.dangerous for v in mine),
                                                        "pass": bool(mine) and not any(v.dangerous for v in mine)}
             errs = [e for v in mine for e in v.errors]
             for j, axis in enumerate(("lateral", "axial", "yaw")):
                 gates[f"{pop}:pose_{axis}_p95"] = _p95_gate([e[j] for e in errs], POSE_P95[axis])
-            gates[f"{pop}:pose_z_p95"] = _p95_gate([e[3] for v in mine if v.z_judged for e in v.errors], POSE_P95["z"])
+            if pop not in NO_Z_GATE:
+                gates[f"{pop}:pose_z_p95"] = _p95_gate([e[3] for v in mine if v.z_judged for e in v.errors],
+                                                       POSE_P95["z"])
         checked = [v for v in mine if v.pose_dangerous is not None]
         diagnostics[pop] = {"pose_dangerous": {
             "n": len(checked), "failures": sum(bool(v.pose_dangerous) for v in checked),
@@ -357,6 +384,6 @@ def summarize(verdicts: Sequence[SceneVerdict], *, split: str, render_source: st
         for case in sorted({v.case for v in mine}):
             cell = [v for v in mine if v.case == case]
             cells[f"{pop}:{case}"] = {name: _gate([getattr(v, name) for v in cell], GATES[name]) for name in names}
-    return {"split": split, "render_source": render_source, "scenes": len(chosen),
+    return {"split": split, "render_source": render_source, "catalogue": catalogue, "scenes": len(chosen),
             "official": render_source == "isaac" and bool(chosen) and all(v.noise_role == "official" for v in chosen),
             "gates": gates, "cells": cells, "diagnostics": diagnostics}

@@ -409,6 +409,23 @@ def arguments() -> argparse.Namespace:
         "tracking, the pocket check or the bottom-deck check; needs --near-capture-expected on. Unset: as before.",
     )
     parser.add_argument(
+        "--adoption-zone-check",
+        choices=("off", "on"),
+        default="off",
+        help="docs/plans/2026-10-28-adoption-zone-check.md: on -- wherever a pallet estimate becomes the planned pickup "
+        "(far, near and re-observation captures, an adopted second near capture, a tracked correction, approach -> "
+        "insert) its centre must lie in the mission's placement rectangle grown by --adoption-zone-margin-m (the "
+        "scene's or session zone's centre range at the pallet's first place, 0.10 m about its verified destination "
+        "for a re-pick), else the mission ends as adoption_outside_zone (a mission failure).",
+    )
+    parser.add_argument(
+        "--adoption-zone-margin-m",
+        type=float,
+        default=0.30,
+        help="The adoption rectangle's margin on every side: test 0's largest per-axis centre error over the fixed "
+        "record sample (0.254 m, a live near capture) rounded up to 5 cm; to be measured again on the real truck.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -629,6 +646,19 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--fps", type=camera_hz, default=60)
     parser.add_argument("--video", action="store_true")
+    parser.add_argument(
+        "--frame-log",
+        action="store_true",
+        help="Write frames.jsonl (a pose line per video frame) without --extra-views too: a riib run without the extra "
+        "videos (VIEWS=none) keeps the file its bundle watches for progress. Recorded only when given.",
+    )
+    parser.add_argument(
+        "--video-preset",
+        choices=VIDEO_PRESETS,
+        default=VIDEO_PRESET_DEFAULT,
+        help="The videos' x264 preset (crf 20 either way: the same quality, another file size and encoder CPU). "
+        "Runs before the option encoded with medium; recorded in the result's camera block.",
+    )
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
     parser.add_argument("--quarter-eye", type=quarter_vector, metavar="X,Y,Z")
     parser.add_argument("--quarter-target", type=quarter_vector, metavar="X,Y,Z")
@@ -1099,6 +1129,27 @@ def arguments() -> argparse.Namespace:
         "allowance. For the G2b diagnosis; current keeps today's rules.",
     )
     parser.add_argument(
+        "--scene-requirements",
+        type=Path,
+        default=None,
+        help="docs/plans/2026-10-27-scene-requirements.md: the requirements file (default: this checkout's "
+        "config/scene_requirements.yaml). A --scene-file whose entry applies must meet one of its argument sets, "
+        "or the run is refused before Isaac.",
+    )
+    parser.add_argument(
+        "--requirements-profile",
+        default=None,
+        help="Scene requirements plan: compare this run with a declared purpose's argument set (e.g. ct_baseline, "
+        "the live FAR+NEAR set of the CT batches); its recommends only warn. Unset: no profile is compared.",
+    )
+    parser.add_argument(
+        "--scene-requirements-override",
+        default=None,
+        metavar="REASON",
+        help="Scene requirements plan: run although the scene's or the profile's requirements are not met (a "
+        "deliberate comparison, a run that does not transport); the reason and what differed are recorded.",
+    )
+    parser.add_argument(
         "--check-args",
         action="store_true",
         help="Preflight (docs/plans/2026-10-27-ws1-preflight.md): every check a run makes before Isaac -- these "
@@ -1240,6 +1291,12 @@ def arguments() -> argparse.Namespace:
             parser.error("--perception-mount carriage_low_measured is defined for dls08_measured only")
     if args.near_capture_expected == "on" and not (args.use_perception and args.planning_target == "perception"):
         parser.error("--near-capture-expected on needs --use-perception and --planning-target perception")
+    if args.adoption_zone_check == "on" and not args.use_perception:
+        # plan 2026-10-28-adoption-zone-check: without perception nothing is adopted from an estimate (the scenario's
+        # pickup is planned directly), so there is nothing to check -- refused rather than silently passed
+        parser.error("--adoption-zone-check on needs --use-perception")
+    if not (math.isfinite(args.adoption_zone_margin_m) and args.adoption_zone_margin_m >= 0):
+        parser.error("--adoption-zone-margin-m must be a finite value >= 0")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
         parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
     if args.near_recapture_gap_m is not None:
@@ -1333,11 +1390,14 @@ def arguments() -> argparse.Namespace:
         parser.error("--d7-docking retries the SLAM docking match; it needs --slam-feedback")
     if args.recognition == "far":
         # The near-field bounds were measured with the detector's far estimate: a run that changes it is
-        # outside that contract, so near tracking and the pocket check are refused with it (plan v2, Codex P1).
+        # outside that contract (plan v2, Codex P1). Near tracking is left to the drive terms' measured
+        # condition (recognition among its arguments, checked once the run is set up): the committed terms
+        # (recognition off) refuse a far run, terms measured under it take it (near tracking re-measure,
+        # docs/plans/2026-10-27-insertion-lateral-drift.md 5.3). The pocket check (D5) stays refused.
         if not args.use_perception or args.slam_feedback is None:
             parser.error("--recognition far needs --use-perception and --slam-feedback")
-        if args.near_tracking or args.pocket_check:
-            parser.error("--recognition far is not defined with --near-tracking or --pocket-check")
+        if args.pocket_check:
+            parser.error("--recognition far is not defined with --pocket-check")
         # A live run takes it too: its work on a thread of its own (docs/plans/2026-10-22-live-far-recognition.md).
         if args.recognition_frame_every <= 0 or args.recognition_pixel_lag_steps < 0:
             parser.error("--recognition-frame-every must be positive, --recognition-pixel-lag-steps nonnegative")
@@ -1801,7 +1861,21 @@ FONT_PATH = next(
 )
 
 
-def open_encoder(path: Path, width: int, height: int, fps: int) -> subprocess.Popen:
+# x264's presets trade encoder CPU for file size at the same quality (crf 20 kept for the deck's Isaac videos); the
+# encoders shared the job's cores with Isaac -- three per riib session, about 3.5 cores a job (lead, 2026-10-27). medium
+# is x264's own default, what every run before the option encoded with.
+VIDEO_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow")
+VIDEO_PRESET_DEFAULT = "veryfast"
+
+
+def video_preset_of(args) -> str:
+    """The preset a run encodes with: medium for a Namespace from before the option (a boundary replay restores the
+    recorded one as it was -- Codex)."""
+    return getattr(args, "video_preset", None) or "medium"
+
+
+def open_encoder(path: Path, width: int, height: int, fps: int,
+                 preset: str = VIDEO_PRESET_DEFAULT) -> subprocess.Popen:
     """H.264 encoder fed raw RGB24 frames on stdin, timed by simulation frames."""
     return subprocess.Popen(
         [
@@ -1823,6 +1897,8 @@ def open_encoder(path: Path, width: int, height: int, fps: int) -> subprocess.Po
             "-an",
             "-c:v",
             "libx264",
+            "-preset",
+            preset,
             "-threads",
             "2",
             "-crf",
@@ -3084,6 +3160,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         "target_m": center.tolist(),
         "fps": args.fps,
         "resolution": [1280, 720],
+        # the encoder, recorded with the camera (lead 2026-10-27): crf 20 throughout, the preset from the option
+        "encoder": {"codec": "libx264", "crf": 20, "preset": video_preset_of(args)},
     }
     extra_cameras = {}
     if args.extra_views:
@@ -3807,6 +3885,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     if scene_layout is not None:  # a scene file's own zone
         _ZONE = scene_layout.pickup_zone
 
+    from forklift_core.mission.adoption_zone import AdoptionZone
+
+    # Plan 2026-10-28-adoption-zone-check: the same placement range, as a pallet-centre range (never grown)
+    adoption_zone_first = AdoptionZone(_ZONE.x_min_m, _ZONE.x_max_m, _ZONE.y_min_m, _ZONE.y_max_m,
+                                       "bay" if scene_layout is None else "scene_layout")
     zone_grow = math.hypot(geometry.pallet_depth_m, geometry.pallet_width_m) / 2
     pickup_zone = Rectangle(
         (_ZONE.x_min_m + _ZONE.x_max_m) / 2,
@@ -4043,6 +4126,10 @@ def drive(S, isaac) -> None:
         pickup_bounds = _bound["pickup_bounds"]
     if "pickup_zone" in _bound:
         pickup_zone = _bound["pickup_zone"]
+    if "adoption_zone_first" not in _bound:  # a setup recorded before the adoption zone check (2026-10-28)
+        _bound["adoption_zone_first"] = None
+    if "adoption_zone_first" in _bound:
+        adoption_zone_first = _bound["adoption_zone_first"]
     if "plan_docking_reapproach" in _bound:
         plan_docking_reapproach = _bound["plan_docking_reapproach"]
     if "plan_observation_leg" in _bound:
@@ -4281,7 +4368,9 @@ def drive(S, isaac) -> None:
                 "slam_map": state.get("slam_map"),  # slam_mode / map_id, not the bundle's path (plan L7)
             }))
             run_["detector_params"] = json.loads(record_json(asdict(DetectorParams.derived_for(args.pallet_prior_loaded))))
-            observed_condition = near_tracking.run_condition(run_, Path.cwd())
+            # the far recognition's fixed files from this checkout, where far_recognition_runtime reads them
+            observed_condition = near_tracking.run_condition(run_, Path.cwd(),
+                                                             far_root=Path(__file__).resolve().parents[2])
             problems_ += near_tracking.condition_problems(
                 near["terms"].condition, observed_condition, skip=("tracker_configs",)
             )
@@ -5699,6 +5788,9 @@ def drive(S, isaac) -> None:
             set_inset=set_inset,
             # M-a1 slice 4b-iv: the evaluation records, the planning target (truth under oracle), Sinks.
             record_capture_evaluation=record_capture_evaluation, set_inset_estimate=set_inset_estimate,
+            # docs/plans/2026-10-28-adoption-zone-check.md section 8: the mission's pallet truth kept with each adoption
+            # check for the evaluation (read only while the check is on; the decision never uses it)
+            adoption_truth=lambda: tuple(float(v) for v in np.asarray(pallet.get_world_pose()[0], dtype=float)[:2]),
             planning_target=lambda target_: G2.planning_target(args.planning_target, target_, scenario.pickup),
             export_scene=lambda: isaac.export_scene(),
             # M-a1 slice 4b-v: the near capture's straight, its acceptance and what it installs.
@@ -5762,6 +5854,11 @@ def drive(S, isaac) -> None:
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
                                 near_recapture_gap_m=getattr(args, "near_recapture_gap_m", None),  # C3 (2026-10-27 T2)
+                                # docs/plans/2026-10-28-adoption-zone-check.md: off in a record from before the option;
+                                # a live mission replaces the rectangle with its own at each adoption
+                                adoption_zone_check=getattr(args, "adoption_zone_check", "off"),
+                                adoption_zone_margin_m=getattr(args, "adoption_zone_margin_m", 0.30),
+                                adoption_zone=adoption_zone_first,
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
@@ -5903,6 +6000,8 @@ def drive(S, isaac) -> None:
                     "-an",
                     "-c:v",
                     "libx264",
+                    "-preset",
+                    video_preset_of(args),
                     "-threads",
                     "2",
                     "-crf",
@@ -5919,10 +6018,11 @@ def drive(S, isaac) -> None:
             size = (perception_calibration.width, perception_calibration.height)
             for name in ("rgb", "depth"):
                 extra_encoders[name] = open_encoder(
-                    args.output / f"camera_{name}.mp4", *size, args.fps
+                    args.output / f"camera_{name}.mp4", *size, args.fps, video_preset_of(args)
                 )
-        if args.extra_views:
+        if args.extra_views or getattr(args, "frame_log", False):
             frame_log = (args.output / "frames.jsonl").open("w", encoding="utf-8")
+        if args.extra_views:
             for name in args.extra_views:
                 height = 480 if name == "perception" else 720
                 extra_encoders[name] = subprocess.Popen(
@@ -5945,6 +6045,8 @@ def drive(S, isaac) -> None:
                         "-an",
                         "-c:v",
                         "libx264",
+                        "-preset",
+                        video_preset_of(args),
                         "-threads",
                         "2",
                         "-crf",
@@ -6103,6 +6205,7 @@ def drive(S, isaac) -> None:
                             axis=1,
                         )
                     extra_encoders[name].stdin.write(view_rgb.tobytes())
+            if frame_log is not None:
                 frame_base, frame_q = robot.get_world_pose()
                 frame_pallet, frame_pq = pallet.get_world_pose()
                 frame_log.write(
@@ -7277,6 +7380,8 @@ def drive(S, isaac) -> None:
             # Persistent console plan D2: what every mission of this session starts from. The candidates and the
             # pickup's prior are copied now (options.observation_waypoints is changed in place at each adoption).
             from forklift_core.mission.baseline import MissionBaseline
+            from forklift_core.mission import adoption_zone as ADOPTION_ZONE
+            from forklift_core.mission.adoption_zone import AdoptionZone
             from forklift_core.planning import Pose2D as LivePose
             from forklift_core.planning.observation_viewpoints import relocate_waypoints
             from forklift_core.planning.pallet_mission import PalletSite as LiveSite
@@ -7289,7 +7394,7 @@ def drive(S, isaac) -> None:
                 "pallets": {"P-1": {
                     "template": [tuple(float(v) for v in w) for w in args.observation_waypoints],
                     "reference": (float(scenario.pickup.x_m), float(scenario.pickup.y_m), float(scenario.pickup.yaw_rad)),
-                    "zone": pickup_zone, "bounds": pickup_bounds}},
+                    "zone": pickup_zone, "bounds": pickup_bounds, "adoption_zone": adoption_zone_first}},
                 "nominal": {},  # a session's drawn slots, id -> (x, y, yaw); none for P-1 alone
                 "shape": (float(geometry.pallet_depth_m), float(geometry.pallet_width_m),
                           float(args.pallet_geometry_loaded.overall_height_m)),
@@ -7312,7 +7417,10 @@ def drive(S, isaac) -> None:
                                    "reference": (float(p_.registered.x_m), float(p_.registered.y_m),
                                                  float(p_.registered.yaw_rad)),
                                    "zone": session_zone_rect(p_.zone, geometry.pallet_depth_m, geometry.pallet_width_m),
-                                   "bounds": None}
+                                   "bounds": None,
+                                   # plan 2026-10-28-adoption-zone-check: the zone's own centre range, not grown
+                                   "adoption_zone": AdoptionZone(p_.zone.x_min_m, p_.zone.x_max_m, p_.zone.y_min_m,
+                                                                 p_.zone.y_max_m, "session_zone")}
                     for p_ in session.pallets}
                 live_session_["nominal"] = {p_.pallet_id: (p_.nominal.x_m, p_.nominal.y_m, p_.nominal.yaw_rad)
                                             for p_ in session.pallets}
@@ -7593,11 +7701,16 @@ def drive(S, isaac) -> None:
                 payload_ = {"world": grid_world(scenario_), "waypoints": waypoints_, "config": planner_config,
                             "geometry": geometry, "pickup_bounds": None, "grid_kwargs": grid_,
                             "deadline": determinism.deadline(2 * len(waypoints_) * 20.0)}
+                # Plan 2026-10-28-adoption-zone-check section 2: fixed now -- the first place's zone while the pallet
+                # was never put down (not at_first_: an observation moves the pose), else about where it was put down
+                # (the TargetsBook snapshot); none when unknown (the first adoption check refuses the mission).
+                adoption_zone_ = ADOPTION_ZONE.mission_zone(core.targets.pallets[mission_.pallet_id],
+                                                            own_.get("adoption_zone"))
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": waypoints_,
                            "pickup_bounds": own_["bounds"] if at_first_ else None, "pickup_zone": zone_,
                            "truth_destination": live_session_["truth"].get(mission_.destination_id, dest_),
                            "pallet_id": mission_.pallet_id, "destination_id": mission_.destination_id,
-                           "slot_anchors": anchors_}
+                           "slot_anchors": anchors_, "adoption_zone": adoption_zone_}
                 if far_live is not None:
                     # Plan 2026-10-22-live-far-recognition task 7: a prior pallet is looked for in the scene's zone, a
                     # recognised or delivered one around its estimate, the same radius (not at its first place).
@@ -9357,6 +9470,12 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # preflight plan (2026-10-27): a run never records it (it ends at its check), and the near-field contract
         # compares every recorded argument with the measurement runs'
         and k != "check_args"
+        # scene requirements plan: the verdict goes into its own block; the three options only when given (an override
+        # run's arguments rebuild it), the near-field contract treats them as run-specific
+        and k != "scene_requirements_report"
+        and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
+        # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
+        and (k != "frame_log" or v)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
@@ -9413,7 +9532,34 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
         require(0.9 * geometric_ <= args.odometry_wheel_radius_m <= 1.1 * geometric_,
                 f"--odometry-wheel-radius-m {args.odometry_wheel_radius_m} is not within 10 % of the geometric "
                 f"radius {geometric_}")
+    args.scene_requirements_report = scene_requirements_report(args)
     return settings
+
+
+def scene_requirements_report(args: argparse.Namespace) -> dict:
+    """docs/plans/2026-10-27-scene-requirements.md: this run against config/scene_requirements.yaml -- the scene's
+    entry (by the scene file's name and match), the profile it names, the warnings of that profile's recommends. A
+    mismatch refuses the run unless --scene-requirements-override gives a reason; the report goes into the result."""
+    import scene_requirements as sr
+
+    path = Path(args.scene_requirements) if args.scene_requirements is not None else sr.DEFAULT_PATH
+    data = sr.load(path)
+    record = json.loads(Path(args.scene_file).read_text()) if args.scene_file is not None else None
+    final = {"live_factor": args.live_factor if args.live else None, "encoder_model": args.encoder_model,
+             "slam": "localization" if getattr(args, "slam_map_bundle", None) is not None else "mapping"}
+    report = sr.check(vars(args), data, record, args.requirements_profile, final)
+    reason = (args.scene_requirements_override or "").strip() or None
+    report.update(file=str(path), file_sha256=sr.file_sha256(path), override=reason,
+                  scene_file_sha256=sr.file_sha256(args.scene_file) if args.scene_file is not None else None)
+    for w in report["warnings"]:
+        print(f"scene-requirements: warning: profile {w['profile']} recommends {w['recommends']} = {w['want']!r}; "
+              f"this run has {w['have']!r}", file=sys.stderr)
+    lines = [sr.describe(m) for m in report["mismatches"]]
+    if lines and reason:
+        print(f"scene-requirements: overridden ({reason}): " + "; ".join(lines), file=sys.stderr)
+    require(not lines or reason is not None,
+            f"scene requirements: {'; '.join(lines)} -- meet one, or give --scene-requirements-override REASON")
+    return report
 
 
 def check_args_only(args: argparse.Namespace) -> int:
@@ -9474,6 +9620,7 @@ def main() -> None:
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
         "settings_synthetic": settings,
+        "scene_requirements": args.scene_requirements_report,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),
         "forklift_urdf_sha256": hashlib.sha256(

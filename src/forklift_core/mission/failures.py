@@ -36,6 +36,7 @@ PREFIXES = {
     "base scene built from another forklift URDF": SESSION, "pocket camera intrinsics differ": SESSION,
     "live video camera intrinsics differ": SESSION, "Perception display clipping range": SESSION,
     "Perception camera local pose differs": SESSION, "--odometry-wheel-radius-m": SESSION,
+    "scene requirements:": SESSION,  # docs/plans/2026-10-27-scene-requirements.md: refused before Isaac
     # the anchored neighbours block the unaligned delivery straight (plan 2026-10-22-slot-anchored-neighbours 2.3)
     "session_anchor_unaligned:": MISSION,
     # the scene-mode replan device ends a mission it could not recover (docs/plans/2026-10-23-scene-replan.md 2.1)
@@ -62,6 +63,8 @@ PREFIXES = {
     # the live far recognition (plan 2026-10-22-live-far-recognition): its work failed, or its stop decision did not
     # come within 30 s -- that mission ends, the session goes on
     "recognition_error:": MISSION, "recognition_timeout": MISSION,
+    # an estimate outside the mission's adoption rectangle, or no rectangle (docs/plans/2026-10-28-adoption-zone-check.md)
+    "adoption_outside_zone": MISSION, "adoption_zone_undefined": MISSION,
 }
 
 # The require sites whose reason is made at run time, by (file, expression), with what their values are.

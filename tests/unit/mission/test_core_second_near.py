@@ -332,3 +332,38 @@ def test_a_redraw_whose_extraction_meets_a_prop_is_refused_and_keeps_the_first_s
     assert second["status"] == "docking_refused" and second["docking"]["refused"] is not None
     assert w.pocket["planning_pickup"] is PICKUP
     assert all(w.paths[name] is before[name] for name in before)
+
+
+# Plan 2026-10-28-adoption-zone-check: the second near capture's pickup is checked only when it is adopted.
+def zoned(w, zone):
+    from forklift_core.mission.adoption_zone import AdoptionZone
+
+    w.core.options.adoption_zone_check = "on"
+    w.core.options.adoption_zone_margin_m = 0.25
+    w.core.options.adoption_zone = AdoptionZone(*zone, "scene_layout")
+    return w
+
+
+def test_an_adopted_second_capture_inside_the_zone_is_checked():
+    w = zoned(World(observed_site=PalletSite(5.0, 0.02, 0.0)), (4.5, 5.5, -0.5, 0.5))
+    stand_at_split(w)
+    w.core.second_near_capture(w.clock, w.stand, 900)
+    assert w.state["near_capture"]["second"]["status"] == "adopted"
+    (check_,) = w.state["adoption_zone"]["checks"]
+    assert check_["stage"] == "second_near" and check_["inside"] and check_["site"] == pytest.approx([5.0, 0.02])
+
+
+def test_an_adopted_second_capture_outside_the_zone_ends_the_mission_before_it_replaces_anything():
+    w = zoned(World(observed_site=PalletSite(5.0, 0.02, 0.0)), (0.0, 1.0, -0.5, 0.5))
+    stand_at_split(w)
+    before = {name: w.paths[name] for name in ("insert", "extract")}
+    with pytest.raises(RuntimeError, match="^adoption_outside_zone:second_near$"):
+        w.core.second_near_capture(w.clock, w.stand, 900)
+    assert w.pocket["planning_pickup"] is PICKUP and all(w.paths[n] is before[n] for n in before)
+
+
+def test_a_second_capture_that_is_not_adopted_is_not_checked():
+    w = zoned(World(observed_site=PalletSite(5.0, 0.20, 0.0)), (0.0, 1.0, -0.5, 0.5))  # box refusal, far outside
+    stand_at_split(w)
+    w.core.second_near_capture(w.clock, w.stand, 900)
+    assert w.state["near_capture"]["second"]["status"] == "box_refused" and "adoption_zone" not in w.state

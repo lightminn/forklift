@@ -1028,6 +1028,14 @@ def input_files_skipping(
 # stops) and the near-tracking options themselves.
 RUN_SPECIFIC_ARGUMENTS = (
     "output",
+    # scene requirements plan (2026-10-27): preflight metadata, not a condition of the run (the arguments the
+    # requirements name are compared as before)
+    "scene_requirements",
+    "requirements_profile",
+    "scene_requirements_override",
+    # the video encoder's preset (2026-10-27): the videos' file size and encoder CPU, not the run
+    "video_preset",
+    "frame_log",
     "slam_feedback",
     "slam_map_dir",
     "seed",
@@ -1051,6 +1059,9 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_capture_redraw",
     # live-default plan 5d: the launcher's SLAM choice, a label (the mode itself is compared as slam_mode / map_id).
     "slam_choice",
+    # docs/plans/2026-10-28-adoption-zone-check.md: the check only ends a mission (recorded), never moves the truck
+    "adoption_zone_check",
+    "adoption_zone_margin_m",
 )
 # Arguments added after the measurement runs, each at the value that reproduces them: a run
 # holding that value matches measurement records that predate the argument, any other value
@@ -1092,7 +1103,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
                               "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);
-                              # only "off" reproduces the measurement runs -- a far run is refused with near tracking.
+                              # only "off" reproduces the measurement runs before it -- a far run needs drive terms
+                              # measured under far (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3).
                               "recognition": "off", "recognition_frame_every": 24,
                               "recognition_pixel_lag_steps": 0, "recognition_no_drive_frames": False,
                               # 2026-10-19: stage 3's learned proposals (a far run only)
@@ -1231,14 +1243,46 @@ def slam_semantics(result: dict) -> dict:
     return {"slam_mode": "mapping", "map_id": None}
 
 
-def run_condition(result: dict, root: Path | None) -> dict:
+# Files the far recognition reads by a fixed path, not through an argument (sim/isaac/far_recognition_runtime.py:
+# its track bounds, the site load defaults and every known shape's geometry, a test-article variant included): a far
+# run's condition compares them by content, with the files they name (Codex near-remeasure tools review P2). A run
+# without the far recognition records none of them, so every earlier condition reads as before.
+FAR_RECOGNITION_FILES = (
+    "config/recognition_track_bounds.yaml",
+    "config/site_load_defaults.yaml",
+    "config/pallet_geometry_epal6.yaml",
+    "config/pallet_geometry_t11_06.yaml",
+    "config/pallet_geometry_t11_06_d600.yaml",
+)
+
+
+def far_recognition_files(root: Path | None) -> dict[str, str | None]:
+    """label -> sha256 (None: missing) of FAR_RECOGNITION_FILES and, transitively, the files they name; without a
+    snapshot root none can be read, and a missing file is refused (condition_problems)."""
+    if root is None:
+        return {f"far-recognition {rel}": None for rel in FAR_RECOGNITION_FILES}
+    named =input_files_skipping({f"far {rel}": rel for rel in FAR_RECOGNITION_FILES}, root, ())
+    # every label in its own namespace, the files they name too: with the runner's checkout as root, a file of the
+    # same relative path in the working directory is another input (Codex near-remeasure round 4 P2)
+    return {
+        "far-recognition " + (label.removeprefix("argument far ") if label.startswith("argument far ") else label): v
+        for label, v in named.items()
+    }
+
+
+def run_condition(result: dict, root: Path | None, far_root: Path | None = None) -> dict:
     """What a run is measured under, as tools/s4_drive_terms.py exports it and the runner
     checks it: its shared arguments, recorded settings, follower configs (speed fields
     aside) and input files by content -- an argument naming a file is compared by that
-    file's content, not by how its path is written (Codex S4a-1 2nd review P3)."""
+    file's content, not by how its path is written (Codex S4a-1 2nd review P3). The far
+    recognition's fixed files are read from ``far_root`` (default ``root``): the runner
+    passes its own checkout, where far_recognition_runtime reads them, which need not be
+    its working directory (Codex near-remeasure round 3 P2)."""
     arguments = {k: v for k, v in (result.get("arguments") or {}).items() if k not in SLAM_MAP_ARGUMENTS}
     arguments.update(slam_semantics(result))
     files = input_files_skipping(arguments, root, RUN_SPECIFIC_ARGUMENTS)
+    if arguments.get("recognition") == "far":
+        files.update(far_recognition_files(root if far_root is None else far_root))
     by_content = {
         label.removeprefix("argument ")
         for label in files

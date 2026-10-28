@@ -68,6 +68,8 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
+  printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
+    "${SCENE_REQUIREMENTS_OVERRIDE:-}"  # scene requirements plan
 } > "$OUT/env.sh"
 
 cat > "$OUT/bridge.sh" <<'EOT'
@@ -107,6 +109,9 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 # reported table for a team-spec model; PR #108's team-spec table)
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
+REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
+[ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
+[ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
 # shellcheck disable=SC2086 -- EXTRA_ARGS is a list of words by design
 ARGS=(
   --base-scene "$BASE_SCENE" \
@@ -120,7 +125,7 @@ ARGS=(
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" \
+  $EXTRA_ARGS "${LOC[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac
@@ -138,7 +143,13 @@ chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 # here with their verdict (tools/isaac_bundle.py check); a real run goes on only when they pass, so a launch refused
 # here ends the job in seconds instead of leaving the console probe waiting for a port file (lvram, d7oor 2026-10-27).
 preflight() {
-  local map_id=""
+  local map_id="" sock="$OUT/epoch_999/sock/slam.sock"
+  # an epoch's SLAM socket is a Unix socket: its path fits in 107 bytes or the runner dies at connect (AF_UNIX path
+  # too long -- the lvram random_m refill, 11840, at 112)
+  if [ "$(printf %s "$sock" | wc -c)" -gt 107 ]; then
+    echo "preflight: the SLAM socket path $sock is $(printf %s "$sock" | wc -c) bytes (AF_UNIX allows 107): shorten OUT" >&2
+    return 2
+  fi
   if [ -n "${MAP_BUNDLE:-}" ]; then
     map_id=$("$VENV_PY" -c 'import sys; from pathlib import Path
 from forklift_core.localization.slam_map import load_bundle

@@ -1,0 +1,48 @@
+{
+ "records": 29,
+ "undetermined": 7,
+ "undetermined_records": [
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_line_m_s3/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  },
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_line_m_s4/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  },
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_random_m_s3/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  },
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_L_random_m_s4/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  },
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_line_m_s3/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  },
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_random_m_s3/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  },
+  {
+   "path": "/home/projects/forklift/test_runs/live/s3conf2_3a37e216/s3b_R_random_m_s4/live/epoch_1/run/result.json",
+   "problem": "no recorded estimate to verify the reconstruction"
+  }
+ ],
+ "stages": {
+  "far": {
+   "n": 22,
+   "max_abs_m": 0.2246455671885388,
+   "p99_abs_m": 0.2246455671885388
+  },
+  "near": {
+   "n": 22,
+   "max_abs_m": 0.25404448978288696,
+   "p99_abs_m": 0.25404448978288696
+  }
+ },
+ "overall_max_abs_m": 0.25404448978288696,
+ "margin_m": 0.30000000000000004
+}

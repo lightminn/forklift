@@ -76,6 +76,7 @@ from forklift_core.mission.state import MissionState
 from forklift_core.mission.scene_replan import SceneReplan
 from forklift_core.mission import bottom_deck_legs
 from forklift_core.mission import second_near as SECOND_NEAR
+from forklift_core.mission import adoption_zone as ADOPTION
 from forklift_core.perception import bottom_deck_evidence, bottom_deck_permit
 from forklift_core.perception.bottom_deck_evidence import BottomDeckTarget
 from forklift_core.perception.pocket_detector import DetectorParams, ExpectedSite
@@ -255,6 +256,10 @@ class MissionCore:
         # outside every container the replay compares; a run without commands only ever submits once.
         self.targets = TargetsBook()  # M-a4: the pallets and destinations a submit names (plan D7)
         self.slam_releases = 0  # every SLAM release the core made (the targets list's correction version)
+        # Plan 2026-10-28-adoption-zone-check: the pallets put down while the current SLAM hold stands -- their put-down
+        # snapshots are that hold's estimates and go with its end release; cleared at every release.
+        self.put_downs_in_hold: set = set()
+        self.in_hold = False  # set by hold_slam, cleared by release_slam (the only hold and release sites)
         self.commands = MissionCommands(self.targets)
         self.last_permission: tuple | None = None  # (allowed, why) of the latest permission or watch (E8)
         # Real-time plan D8 (docs/plans/2026-10-17-realtime-sim.md): a real-time run hands the long plans to a
@@ -512,6 +517,14 @@ class MissionCore:
                 }
                 transition("near_tracking_stopped", t)
                 return SimpleNamespace(stop=True, rear=rear)
+            if self.adoption_check_on():
+                # Plan 2026-10-28-adoption-zone-check: the planned pickup the forks go to, and under near tracking
+                # the tracker's latest target too (the insertion follows the tracked pockets).
+                self.adoption_check("insert", self.pocket["planning_pickup"])
+                latest_ = getattr((near or {}).get("tracker"), "latest", None)
+                if latest_ is not None:
+                    site_, target_ = self.tracked_target(latest_)
+                    self.adoption_check("insert_tracked", target_, raw=site_)
             if self.bottom_deck_on():
                 # Plan 2026-10-19 task 3: the side evidence permits this insertion only when it read present and
                 # was taken of the pallet the near capture now targets (the planned pickup: where the forks go).
@@ -925,8 +938,9 @@ class MissionCore:
             # Plan D14 (Codex design round 1 P2-7): the mission is gone; the context kept where the pallet is.
             pid = ctx["pallet_id"]
             if pid in tb.pallets and tb.pallets[pid].state == "carried":
-                tb.put_down(pid, TargetPose(*(float(v) for v in ctx["pose"])),
-                            **({} if ctx["placed"] else {"state": "available"}), uncertainty_m=RECOGNISED_MARGIN_M)
+                self.put_down_target(pid, TargetPose(*(float(v) for v in ctx["pose"])),
+                                     **({} if ctx["placed"] else {"state": "available"}),
+                                     uncertainty_m=RECOGNISED_MARGIN_M)
             return
         if mission is None or mission.pallet_id not in tb.pallets or tb.pallets[mission.pallet_id].state != "carried":
             return
@@ -935,13 +949,14 @@ class MissionCore:
             if self.slam is not None:
                 scenario_ = self.slam.get("return_scenario", self.slam.get("transport_scenario", scenario_))
             site_ = scenario_.destination
-            tb.put_down(mission.pallet_id, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
-                        uncertainty_m=RECOGNISED_MARGIN_M)
+            self.put_down_target(mission.pallet_id, TargetPose(float(site_.x_m), float(site_.y_m),
+                                                               float(site_.yaw_rad)), uncertainty_m=RECOGNISED_MARGIN_M)
         else:
             est_ = (self.obstacle or {}).get("pickup_estimate") or (self.pocket or {}).get("planning_pickup")
             if est_ is not None:
-                tb.put_down(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m), float(est_.yaw_rad)),
-                            state="available", uncertainty_m=RECOGNISED_MARGIN_M)
+                self.put_down_target(mission.pallet_id, TargetPose(float(est_.x_m), float(est_.y_m),
+                                                                   float(est_.yaw_rad)),
+                                     state="available", uncertainty_m=RECOGNISED_MARGIN_M)
 
     # --- plan D14: the manual recovery after a live mission ended with the forks in a pocket --------------------
     def capture_recovery_context(self) -> None:
@@ -3270,6 +3285,12 @@ class MissionCore:
              and (state["near_tracking"].get(k_) or {}).get("capture_attempt") == attempt_number),
             None)
         retry_capture_ = stand_key_ is not None
+        if self.adoption_check_on():
+            # Plan 2026-10-28-adoption-zone-check: before anything uses the estimate (records, the side legs, the
+            # known pallet, the plan) -- the effective target the plan would take, the raw estimate recorded.
+            stage_ = (stand_key_ if retry_capture_
+                      else "near" if state.get("near_capture", {}).get("status") == "pending" else "far")
+            self.adoption_check_estimate(stage_, target_pickup)
         if retry_capture_:
             # Plan D8 S4c-2 / S4c-3: the re-observation as placed and its target.
             state["near_tracking"][stand_key_].update(
@@ -3921,6 +3942,42 @@ class MissionCore:
             self.obstacle.setdefault("progress", {}).clear()
         return None
 
+    def adoption_check_on(self) -> bool:
+        """Plan 2026-10-28-adoption-zone-check: --adoption-zone-check on (off in a record from before the option)."""
+        return getattr(self.options, "adoption_zone_check", "off") == "on"
+
+    def adoption_check_estimate(self, stage: str, raw) -> None:
+        """The check on a capture's raw estimate: the effective target is what the plan would take of it (a pure
+        read of the planning target's rule; the plan's own call comes later, unchanged)."""
+        self.adoption_check(stage, self.hooks.planning_target(raw)[0], raw=raw)
+
+    def adoption_check(self, stage: str, effective, raw=None) -> None:
+        """The adopted estimate's effective target against the mission's rectangle + margin, recorded either way;
+        outside, or with no rectangle, the mission ends (MISSION class) before the estimate is used."""
+        require = self.hooks.require
+        record_ = self.state.setdefault("adoption_zone", {"checks": []})
+        zone_ = getattr(self.options, "adoption_zone", None)
+        if zone_ is None:
+            record_["refused"] = {"stage": stage, "reason": ADOPTION.UNDEFINED}
+            reason_ = ADOPTION.UNDEFINED
+            require(False, reason_)
+        check_ = ADOPTION.check((effective.x_m, effective.y_m), zone_, self.options.adoption_zone_margin_m,
+                                stage=stage)
+        if raw is not None:
+            check_["raw"] = [float(raw.x_m), float(raw.y_m)]
+        truth_ = getattr(self.hooks, "adoption_truth", None)
+        if truth_ is not None:
+            # the simulation's pallet truth, for the evaluation only (plan section 8: a false refusal is one of the
+            # instructed true pallet); the decision above never reads it
+            xy_ = truth_()
+            if xy_ is not None:
+                check_["truth"] = [float(xy_[0]), float(xy_[1])]
+        record_["checks"].append(check_)
+        if not check_["inside"]:
+            record_["refused"] = check_
+            reason_ = f"{ADOPTION.OUTSIDE}:{stage}"
+            require(False, reason_)
+
     def _near_expected_on(self) -> bool:
         """Plan 2026-10-22 task A: a near capture (pending) under --near-capture-expected on."""
         return bool(getattr(self.options, "near_capture_expected", "off") == "on"
@@ -4407,6 +4464,9 @@ class MissionCore:
         second_.setdefault("target", None)
         second_.update(status=status_, reason=reason_)
         config_ = self.second_near["config"]
+        if adopted_ is not None and self.adoption_check_on():
+            # Plan 2026-10-28-adoption-zone-check: only an adopted pickup -- a refused one leaves the first in place.
+            self.adoption_check("second_near", adopted_[1], raw=target_)
         if adopted_ is not None:
             plans_, new_pickup_ = adopted_
             approach_ = plans_["approach"]
@@ -5228,7 +5288,16 @@ class MissionCore:
         the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
         jump = self.slam["tracker"].release(odom_from_base=odom_from_base)
         self.slam_releases += 1
+        self.in_hold = False
+        self.put_downs_in_hold.clear()  # the hold they were put down in is over (end_release read them first)
         return jump
+
+    def put_down_target(self, pallet_id: str, pose, **kwargs) -> bool:
+        """TargetsBook.put_down, noting a put-down made under a SLAM hold (plan 2026-10-28-adoption-zone-check). The
+        hold is the core's own record (hold_slam / release_slam), not the tracker's mode: no port is read in a tick."""
+        if self.in_hold:
+            self.put_downs_in_hold.add(pallet_id)
+        return self.targets.put_down(pallet_id, pose, **kwargs)
 
     def refresh_targets(self) -> None:
         """M-a4 (plan D7): the targets list follows the mission each control tick, from what the core holds (no
@@ -5260,9 +5329,9 @@ class MissionCore:
             tb.carried(pid)
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
-                tb.put_down(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
+                self.put_down_target(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
             elif tb.pallets[pid].state == "delivered":
-                tb.update_pose(pid, site_pose)
+                tb.update_pose(pid, site_pose, carry_put_down=True)  # this mission's own put-down, re-expressed
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
             tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
@@ -7863,6 +7932,7 @@ class MissionCore:
         made with this very correction (the approach's hold begins at the accepted capture)."""
         slam, obstacle, pocket = self.slam, self.obstacle, self.pocket
         slam["tracker"].hold(odom_from_base=self.hooks.slam_odom_base())
+        self.in_hold = True  # the core's own record (no port read in a tick): release_slam clears it
         self.hold_basis = {
             "pallet": (_HELD, _HELD) if held_frame_pallet else (
                 pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")),
@@ -7892,6 +7962,7 @@ class MissionCore:
         moving at the end), the ended mission's pallet target is carried instead, its correction version raised."""
         slam, hooks, obstacle, pocket = self.slam, self.hooks, self.obstacle, self.pocket
         before = hooks.slam_rear(t)
+        put_in_hold_ = set(self.put_downs_in_hold)  # read before the release clears it
         jump_m, jump_rad = self.release_slam(hooks.slam_odom_base())
         after = hooks.slam_rear(t)
         frame_change = compose(tuple(float(v) for v in after), invert(tuple(float(v) for v in before)))
@@ -7908,9 +7979,11 @@ class MissionCore:
                 old = tb.destinations[did]
                 tb.update_destination(did, carried(old))
                 if pid in tb.pallets and tb.pallets[pid].state == "delivered" and tb.pallets[pid].pose == old:
-                    tb.update_pose(pid, carried(old))
+                    tb.update_pose(pid, carried(old), carry_put_down=True)  # put down in this hold
             elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].pose is not None:
-                tb.update_pose(pid, carried(tb.pallets[pid].pose))  # the near capture's hold: its pallet
+                # the near capture's hold: its pallet; or one a manual recovery put down in it. Plan
+                # 2026-10-28-adoption-zone-check: a put-down made in this hold goes with it; an older one stays
+                tb.update_pose(pid, carried(tb.pallets[pid].pose), carry_put_down=pid in put_in_hold_)
             tb.set_correction_version(self.slam_releases)
         else:
             # Only what this hold found is in its frame (Codex D6 rounds 4-5): the docked destination, carried as
@@ -7931,7 +8004,8 @@ class MissionCore:
                 entry = tb.pallets.get(mission.pallet_id)
                 held = destination_held if entry is not None and entry.state == "delivered" else pallet_held
                 if held and entry is not None and entry.pose is not None:
-                    tb.update_pose(mission.pallet_id, carried(entry.pose))
+                    # the put-back was made in this hold: its snapshot goes with it
+                    tb.update_pose(mission.pallet_id, carried(entry.pose), carry_put_down=True)
         if obstacle is not None and slam["tracker"].applied is not None:
             self._reproject(t, tuple(float(v) for v in slam["tracker"].applied[0]), after, False)
         slam["holds"].append({"phase": self.ms.phase, "time_s": float(t), "event": "release", "reason": "mission_end",
@@ -7956,6 +8030,7 @@ class MissionCore:
         options.observation_waypoints[:] = inputs["waypoints"]
         options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
         options.pickup_zone = inputs["pickup_zone"]
+        options.adoption_zone = inputs.get("adoption_zone")  # plan 2026-10-28-adoption-zone-check: this mission's
         ms.next_candidate_index = ladder["selected"] + 1
         ms.lift_command = float(self.hooks.lift_position())
         state["observation_candidates"] = list(ladder["candidates"])
@@ -7992,6 +8067,7 @@ class MissionCore:
         options.observation_waypoints[:] = inputs["waypoints"]
         options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
         options.pickup_zone = inputs["pickup_zone"]
+        options.adoption_zone = None  # a loaded start adopts no pickup (plan 2026-10-28-adoption-zone-check)
         ms.lift_command = float(self.hooks.lift_position())  # the ramp starts from the measured lift (item 5)
         state["planning_status"] = plan.status
         paths.clear()
@@ -8285,6 +8361,8 @@ class MissionCore:
             if plans_ is None:
                 terminal = "replan_rejected"
             else:
+                if self.adoption_check_on():
+                    self.adoption_check("tracked_redraw", target_)  # plan 2026-10-28-adoption-zone-check
                 corr_record["revision"] = near_install(now_s, plans_, target_, corr.point_m, rear_now)["revision"]
                 corr = near_tracking.correction_installed(corr, now_s)
         if corr_act["event"] == "closed" and corr_record is not None:
@@ -8358,16 +8436,23 @@ class MissionCore:
             require(False, f"near_field_{current.reason}")
         return action["hold"], action["released"], action["arrive"]
 
+    def tracked_target(self, latest_):
+        """(site, target): the tracker's latest observation placed with its own pose, and the plan's target of it."""
+        options, adapter = self.options, self.options.adapter
+        obs_, pose_ = latest_.observation, latest_.pose
+        base_xy_ = adapter.estimate_pallet_center_m(obs_, self.geometry.pallet_depth_m)
+        site_ = adapter.estimate_world_pallet_site(base_xy_, obs_.insertion_yaw_rad, (pose_[0], pose_[1]), pose_[2])
+        target_, _ = options.G2.planning_target(options.planning_target, site_, options.scenario.pickup)
+        return site_, target_
+
     def near_redraw(self, latest_, rear_now):
         """Plan D8 S4b: the docking straights re-drawn from the tracker's latest accepted
         observation, placed with its own pose (the near capture's path to a target), from
         where the truck stands: redraw_docking with the near capture's acceptance dry run
         (baseline cruise) and one at the driven cruise. Returns (plans or None, record,
         target)."""
-        G2 = self.options.G2  # a runner module-level name
         near_tracking = self.options.near_tracking  # a runner module-level name
         options = self.options
-        adapter = self.options.adapter
         bicycle_rollout = self.hooks.bicycle_rollout
         correction_grid = self.hooks.correction_grid
         geometry = self.geometry
@@ -8380,10 +8465,7 @@ class MissionCore:
         scenario = self.options.scenario
         speeds = self.options.speeds
         trackers = self.trackers
-        obs_, pose_ = latest_.observation, latest_.pose
-        base_xy_ = adapter.estimate_pallet_center_m(obs_, geometry.pallet_depth_m)
-        site_ = adapter.estimate_world_pallet_site(base_xy_, obs_.insertion_yaw_rad, (pose_[0], pose_[1]), pose_[2])
-        target_, _ = G2.planning_target(options.planning_target, site_, scenario.pickup)
+        site_, target_ = self.tracked_target(latest_)
         driven_ = trackers["approach"].config
         acceptance_ = driven_
         if options.approach_straight_speed_mps is not None:
