@@ -69,6 +69,8 @@ export const REASONS = {
   "near_capture_": "근접 촬영에 실패했습니다",
   "pocket_check_refused": "포켓 확인에서 삽입을 거절했습니다",
   "near_field_": "근접 추적에 실패했습니다",
+  // docs/plans/2026-10-28-near-front-range.md R2: the front's range ran out before the roof took the tracking over
+  "near_field_handoff_missed": "포크가 포켓에 들어가기 전에 상판 추적으로 넘기지 못해 멈췄습니다",
   "observe:": "관찰 경로를 계획하지 못했습니다",
   // the recognition never confirmed the pallet and no observation point is left -- the last ones may also have failed
   // to plan or timed out (core.py: observe:all_candidates_exhausted:perception_<status>:<reason>:<plan statuses>)

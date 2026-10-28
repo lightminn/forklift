@@ -4550,6 +4550,10 @@ def drive(S, isaac) -> None:
         if result_.unbounded and not near.get("unbounded"):
             near["unbounded"] = True
             near["events"].append({"time_s": now_s, "event": "unbounded", "stamp_s": stamp})
+        if getattr(result_, "handoff_missed", False) and not near.get("handoff_missed"):
+            # plan 2026-10-28-near-front-range R2: terminal, no retry
+            near["handoff_missed"] = True
+            near["events"].append({"time_s": now_s, "event": "handoff_missed", "stamp_s": stamp})
 
     def read_pocket_frame() -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the

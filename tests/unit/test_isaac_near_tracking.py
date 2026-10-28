@@ -1024,7 +1024,7 @@ def test_the_correction_heading_box_covers_the_followers_transient_after_the_fir
 def test_a_retry_needs_a_mismatch_or_refusal_before_the_protection_far_enough_and_once():
     assert NT.retry_allowed("mismatch", 0, False, 2.2)
     assert NT.retry_allowed("replan_rejected", 0, False, 0.59)
-    for reason in ("lost", "unbounded", "stuck", "correction_missed", None):
+    for reason in ("lost", "unbounded", "stuck", "correction_missed", "handoff_missed", None):
         assert not NT.retry_allowed(reason, 0, False, 2.2), reason
     assert not NT.retry_allowed("mismatch", 1, False, 2.2)  # at most one per pickup
     assert not NT.retry_allowed("mismatch", 0, True, 2.2)  # the protection had started

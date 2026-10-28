@@ -241,9 +241,9 @@ def test_a_new_tracker_starts_with_clean_latches_and_keeps_the_earlier_episodes_
     core, near, _ = near_build()
     monkeypatch.setattr("forklift_core.mission.core.asdict", lambda v: {"obs": 1})
     earlier = {"start_s": 3.0, "episode": 1, "reason": "mismatch"}
-    near.update(mismatch=True, unbounded=True, stop_events=[earlier])  # left by the episode a retry closed
+    near.update(mismatch=True, unbounded=True, handoff_missed=True, stop_events=[earlier])  # a closed episode's
     core.build_near_tracker(11.0)
-    assert near["mismatch"] is False and near["unbounded"] is False
+    assert near["mismatch"] is False and near["unbounded"] is False and near["handoff_missed"] is False
     assert near["stop_events"] == [earlier]
 
 

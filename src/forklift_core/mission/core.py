@@ -8387,7 +8387,9 @@ class MissionCore:
         vbar = near["commands"].vbar(now_s, terms_.delta_v_mps, pending_mps=requested_mps)
         budget = near_tracking.travel_budget(path, age, tau, vbar, terms_)
         terminal = ("lost" if status_.failed else "mismatch" if near.get("mismatch")
-                    else "unbounded" if near.get("unbounded") else None)
+                    else "unbounded" if near.get("unbounded")
+                    # plan 2026-10-28-near-front-range R2: no roof handoff before the front's range ran out
+                    else "handoff_missed" if near.get("handoff_missed") else None)
         waits = []
         if tracker_.armed:
             if status_.lost:
@@ -8853,7 +8855,7 @@ class MissionCore:
         near["events"].append({"time_s": now_s, "event": "retry_start", "reason": reason, "episode": episode_})
         near["retries"] = near.get("retries", 0) + 1
         near["tracker"] = None  # frames stop reaching it and near_tick stops
-        near["mismatch"] = near["unbounded"] = False
+        near["mismatch"] = near["unbounded"] = near["handoff_missed"] = False
         near["stale_waits"], near["protect"], near["arrival"] = {}, None, None
         near["stop_state"] = near_tracking.StopState()
         near.pop("terminal_standing_since", None)
@@ -9057,7 +9059,7 @@ class MissionCore:
                     correction=near_tracking.CorrectionState(), first_target=pocket["planning_pickup"],
                     # Plan D8 S4c-2: an episode's execution latches start clean; its records
                     # (stop records, events, corrections, revisions, tick rows) accumulate.
-                    mismatch=False, unbounded=False, path_revision=0)
+                    mismatch=False, unbounded=False, handoff_missed=False, path_revision=0)
         near.setdefault("stop_events", [])
         near.pop("terminal_standing_since", None)
         near["history"].clear()

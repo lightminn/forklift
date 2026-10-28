@@ -648,3 +648,38 @@ def test_the_terminal_hold_ends_exactly_at_its_length():
     tick(core, 0.0)
     tick(core, NT.TERMINAL_HOLD_S - 1e-9)
     assert ("retry", "mismatch") in calls
+
+
+# docs/plans/2026-10-28-near-front-range.md R2: a missed handoff is a terminal stop, never a retry ---------------
+def test_a_missed_handoff_ends_the_run_after_its_hold_and_is_not_retried():
+    core, near, calls = make(Geometry(face_m=0.8), standing=True)  # far enough and no retry yet: still none
+    near["handoff_missed"] = True
+    tick(core, 10.0)
+    with pytest.raises(RuntimeError, match="near_field_handoff_missed"):
+        tick(core, 10.0 + NT.TERMINAL_HOLD_S)
+    assert "retry" not in [c[0] for c in calls]
+    assert core.state["near_tracking"]["outcome"] == "near_field_handoff_missed"
+
+
+@pytest.mark.parametrize("flags,reason", [
+    ({"mismatch": True, "handoff_missed": True}, "mismatch"),
+    ({"unbounded": True, "handoff_missed": True}, "unbounded"),
+    ({"handoff_missed": True}, "handoff_missed"),
+])
+def test_the_terminal_reasons_keep_their_order(flags, reason):
+    core, near, _ = make(Geometry(face_m=0.8), standing=True, retries=1)
+    near.update(flags)
+    tick(core, 10.0)
+    assert near["stop_state"].reason == reason
+
+
+def test_a_lost_failure_comes_before_a_missed_handoff_and_a_terminal_before_a_lost_wait():
+    core, near, _ = make(Geometry(face_m=0.8), tracker=Tracker(armed=True, lost=True, failed=True), standing=True,
+                         retries=1)
+    near["handoff_missed"] = True
+    tick(core, 10.0)
+    assert near["stop_state"].reason == "lost"
+    core, near, _ = make(Geometry(face_m=0.8), tracker=Tracker(armed=True, lost=True), standing=True, retries=1)
+    near["handoff_missed"] = True
+    tick(core, 10.0)
+    assert near["stop_state"].reason == "handoff_missed" and near["stop_state"].terminal
