@@ -556,7 +556,28 @@ def extract_extension(run: Path) -> dict:
             first_all = round(float(s_), 2)
         if ok_any and first_any is None:
             first_any = round(float(s_), 2)
-    return {"run": run.name, "first_all_m": first_all, "first_any_m": first_any, "rows": rows}
+    plan = {}
+    if first_all is not None:
+        from forklift_core.planning import Pose2D
+        from forklift_core.planning.hybrid_astar import PlannerConfig
+        from forklift_core.planning.pallet_mission import ExitPrefix, SyntheticMissionGeometry, plan_transport_leg
+
+        g = record["geometry"]
+        geometry = SyntheticMissionGeometry(
+            unloaded_footprint=Footprint(**g["unloaded_footprint"]), **{
+                k: g[k] for k in ("pallet_depth_m", "pallet_width_m", "axle_to_fork_tip_m", "approach_gap_m",
+                                  "alignment_straight_m", "delivery_straight_m", "extraction_m", "withdrawal_m",
+                                  "spawn_clearance_m", "carriage_limit_m", "insertion_reserve_m", "lidar_keepout_m")
+                if k in g})
+        config = PlannerConfig(**record["planner_config"])
+        ex = record.get("exit_prefix")
+        exit_prefix = None if not ex else ExitPrefix(tuple(Rectangle(**w) for w in ex["walls"]), float(ex["clearance_m"]),
+                                                   float(ex.get("step_m", 0.05)), float(ex.get("cap_m", 1.0)))
+        for s_ in (0.0, first_all, round(first_all + 0.2, 2)):
+            end = tuple(esc.straight(pose, -1, float(s_))[-1]) if s_ > 0 else pose
+            res = plan_transport_leg(scenario, Pose2D(*end), config, geometry=geometry, exit_prefix=exit_prefix)
+            plan[f"{s_:g}"] = res.status
+    return {"run": run.name, "first_all_m": first_all, "first_any_m": first_any, "plan": plan, "rows": rows}
 
 
 def main(argv=None) -> int:
