@@ -195,3 +195,39 @@ def test_a_call_without_any_scan_verifies_nothing():
     st = lay.exit_exempt_status()
     assert st["empty_calls"] == 1 and st.get("verified_s") is None and st["skipped"] == "unverified"
     assert lay.limit(10.05, current_pose=P0, curvature_inv_m=0.0, direction=-1, loaded=True, cap_mps=0.18)[0] == 0.0
+
+
+def _with_beam(raw, beam, value, own=False):
+    out = {}
+    for name, (dist, hit, own_, *rest) in raw.items():
+        dist, hit, own_ = dist.copy(), hit.copy(), own_.copy()
+        dist[beam], hit[beam], own_[beam] = value, True, own
+        out[name] = (dist, hit, own_, *rest)
+    return out
+
+
+def test_a_non_own_return_inside_the_minimum_range_rings():
+    # Codex impl review round 2 P1: ranges() turns it into -inf, the grid marks near occupancy; the watch dropped it
+    lay = layer()
+    for k in range(3):
+        lay.add_scans(9.7 + 0.1 * k, scan(lay), odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    set_region(lay)
+    lay.add_scans(10.0, _with_beam(scan(lay), 800, 0.10), odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0),
+                  version=0)
+    st = lay.exit_exempt_status()
+    assert st["rang"]["near"] and st["rang"]["hits"] == 1 and lay.exit_verified is None
+    lay2 = layer()
+    set_region(lay2)
+    lay2.add_scans(10.0, _with_beam(scan(lay2), 800, 0.10, own=True), odom_rear=P0, loaded=True,
+                   correction=(0.0, 0.0, 0.0), version=0)
+    assert lay2.exit_exempt_status().get("rang") is None and lay2.exit_verified is not None  # its own part
+
+
+def test_a_scan_with_beams_that_read_nothing_verifies_nothing():
+    lay = layer()
+    set_region(lay)
+    raw = {name: (d, h, o, np.full(len(d), np.inf), np.full(len(d), np.nan))
+           for name, (d, h, o) in scan(lay).items()}
+    lay.add_scans(10.0, raw, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    st = lay.exit_exempt_status()
+    assert st["invalid_scans"] == 1 and st.get("verified_s") is None and lay.exit_verified is None

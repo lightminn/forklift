@@ -399,6 +399,21 @@ class ObstacleLayer:
         rel = np.asarray(self.exit_region_rel, dtype=float).reshape(-1, 3)
         region = np.column_stack((pose[0] + rel[:, 0] * c - rel[:, 1] * s, pose[1] + rel[:, 0] * s + rel[:, 1] * c,
                                   pose[2] + rel[:, 2]))
+        if any(np.isnan(np.asarray(r_, dtype=float)).any() for _, r_, _ in seen):
+            # a beam with no reading is no evidence either way: the scan verifies nothing (Codex impl round 2 P1)
+            st["invalid_scans"] = st.get("invalid_scans", 0) + 1
+            return
+        near = [(sensor.name, int(i)) for sensor, r_, own_ in seen
+                for i in np.flatnonzero(np.isneginf(np.asarray(r_, dtype=float)) & ~np.asarray(own_, dtype=bool))]
+        if near:
+            # a non-own return closer than the sensor's minimum range: the grid marks it as near occupancy, and the
+            # sensor sits inside the loaded outline, so it is inside the region -- it rings (Codex impl round 2 P1)
+            self.exit_verified = None
+            st["scans"] = st.get("scans", 0) + 1
+            if st.get("rang") is None:
+                st["rang"] = {"stamp_s": stamp_s, "hits": len(near), "near": True,
+                              "first": [{"sensor": n, "beam": i} for n, i in near[:5]]}
+            return
         pts, owns, info = [], [], []
         for sensor, ranges_, own_ in seen:
             ok = np.isfinite(ranges_) & (ranges_ > 0)
