@@ -72,7 +72,8 @@ def threshold_args(record: dict):
     return t0 - slope * l0 - cell, 2.0 * math.asin(slope / 2.0), cell
 
 
-def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, kappa_measured: float) -> dict:
+def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, kappa_measured: float,
+                shift=None, anchor_at_shift: bool = False) -> dict:
     """The scene replan's escape_plan (src/forklift_core/mission/core.py) on the dump: the trigger's rectangles
     (permit_stop.current_blocked_rectangles at the held steering), the transport leg's rectangles (the scene props with
     the run's KEEPOUT), the start-band split of the trigger's rectangles with the release on, every check of
@@ -86,7 +87,12 @@ def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, ka
 
     cfg = replace(base_cfg, start_band_m=band)
     snap = snapshot_of(dump)
-    pose = tuple(float(v) for v in dump["rear"])
+    anchor = tuple(float(v) for v in dump["rear"])
+    # an escape presteer's stand (escape presteer C4): evaluated from the stand shifted by the presteer's own move, the
+    # start-band anchor at the first stand (the implementation) or at the shifted one (re-latched)
+    pose = anchor if shift is None else tuple(a + d for a, d in zip(anchor, shift))
+    if anchor_at_shift:
+        anchor = pose
     leg = np.asarray(dump["leg"], dtype=float)
     direction = int(dump["direction"]) or -1
     layer = ObstacleLayer.__new__(ObstacleLayer)  # the layer's check methods on the dump's processed snapshot
@@ -95,7 +101,7 @@ def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, ka
     layer.shape_mode = "hull"
     layer.permission.update(snap, leg, fp, fp, current_pose=pose, direction=direction)
     if band > 0:
-        layer.permission.note_standing(True, pose, int(dump["version"]))  # the device's _note_release_standing
+        layer.permission.note_standing(True, anchor, int(dump["version"]))  # the device's _note_release_standing
     cruise_ = (record.get("tracker_configs") or {}).get("transport", 0.3)
     cruise = float(cruise_["cruise_speed_mps"] if isinstance(cruise_, dict) else cruise_)  # the trigger's arc cap
     extra = current_blocked_rectangles(layer, rear=pose, leg=leg, direction=direction, loaded=True,
@@ -324,6 +330,24 @@ def evaluate(run: Path) -> dict:
             ("steer-0.02+band0.03", 0.03, -0.02, -0.02), ("steer+0.02+band0.03", 0.03, 0.02, 0.02),
             ("steer-0.05+band0.03", 0.03, -0.05, -0.05), ("steer+0.05+band0.03", 0.03, 0.05, 0.05)):
         full[name_] = full_escape(dump, record, base_cfg, fp, band=band_, kappa_arc=k_arc_, kappa_measured=k_meas_)
+    # an escape presteer's record (C4 runs): its move while steering and the steering measured after it
+    presteer = {}
+    for r_ in record.get("scene_replans") or []:
+        ep_ = r_.get("escape_presteer") or {}
+        if r_.get("phase") == "transport" and ep_.get("rear_start") and ep_.get("rear_end"):
+            shift_ = [b - a for a, b in zip(ep_["rear_start"], ep_["rear_end"])]
+            k_m_ = next((e.get("kappa_measured") for e in record.get("scene_escape_candidates") or []
+                         if e.get("presteered")), None)
+            if k_m_ is None:
+                continue
+            presteer = {"shift": shift_, "kappa_measured": k_m_,
+                        "anchor_first": full_escape(dump, record, base_cfg, fp, band=0.03, kappa_arc=k_m_,
+                                                    kappa_measured=k_m_, shift=shift_),
+                        "anchor_relatched": full_escape(dump, record, base_cfg, fp, band=0.03, kappa_arc=k_m_,
+                                                        kappa_measured=k_m_, shift=shift_, anchor_at_shift=True),
+                        "no_move": full_escape(dump, record, base_cfg, fp, band=0.03, kappa_arc=k_m_,
+                                               kappa_measured=k_m_)}
+            break
     tall = [pp for pp in record["scenario"]["props"] if float(pp["asset"].get("height_m", 0.0)) > 1.05]
     truth = tuple(float(v) for v in dump["truth_rear"])
     gap = min(((footprint_rect_distance(truth, fp, Rectangle(**pp["rectangle"])), pp["asset"]["uri"]) for pp in tall),
@@ -336,7 +360,7 @@ def evaluate(run: Path) -> dict:
             "corridor_released": int(len(released)), "tall_gap_truth_m": [round(gap[0], 4), gap[1]],
             "permit_threshold_m": base_cfg.envelope_offset_m + base_cfg.stopping.margin_m,
             "record_sweep_free": record_sweep, "variants": variants, "full": full,
-            "record_escape_t": (record.get("scene_escape_candidates") or [{}])[0].get("time_s")}
+            "record_escape_t": (record.get("scene_escape_candidates") or [{}])[0].get("time_s"), "presteer": presteer}
 
 
 def main(argv=None) -> int:
@@ -358,6 +382,12 @@ def main(argv=None) -> int:
               f"(covered {r['corridor']['covered']}, new {r['corridor']['covered_new']}) gap {r['tall_gap_truth_m']}")
         for name, v in r["variants"].items():
             print(f"  {name:22s} stand {v['stand']} escapes_ok {v['escapes_ok']}/8 start->occ {v['start_to_occupied_m']}")
+        if r.get("presteer"):
+            ps = r["presteer"]
+            print(f"  presteer replay: shift {[round(v, 5) for v in ps['shift']]} kappa_measured {ps['kappa_measured']:.4f}")
+            for k in ("no_move", "anchor_first", "anchor_relatched"):
+                v = ps[k]
+                print(f"    {k:18s} qualifying {v.get('qualifying')}/8 installs {v.get('installs')} {v.get('candidates')}")
         print(f"  full escape_plan (record escape at t {r['record_escape_t']}):")
         for name, v in r["full"].items():
             if "error" in v:
