@@ -4072,7 +4072,7 @@ class MissionCore:
             return f"far_detector:{detector_.get('status')}", record_
         if far_.get("lower_evidence", True) is not True:
             return "far_lower_waived", record_
-        if far_.get("expected") is not None:
+        if far_.get("expected") is not None or far_.get("far_expected") is not None:  # F1's far site restricts too
             return "far_restricted", record_
         site_ = far_.get("detector_site")
         if site_ is None:

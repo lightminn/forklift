@@ -386,6 +386,7 @@ def test_a_near_capture_valid_on_the_first_pass_waives_nothing():
     ({"detector_reference": {"status": "invalid"}}, "far_detector:invalid"),
     ({"lower_evidence": False}, "far_lower_waived"),
     ({"expected": {"site": [0, 0, 0]}}, "far_restricted"),
+    ({"far_expected": {"site": [0, 0, 0]}}, "far_restricted"),  # F1's far site (far-target-binding, Codex P3)
     ({"detector_site": None}, "far_detector_site_missing"),
     ({"detector_site": [3.6, 6.1, 1.6]}, "far_link"),
     ({"detector_site": [3.4, 6.1, 1.95]}, "far_link"),

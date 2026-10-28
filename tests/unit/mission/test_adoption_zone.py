@@ -145,6 +145,13 @@ def test_a_put_down_square_carries_the_put_down_heading():
     assert z.yaw_centre_rad == pytest.approx(0.3) and z.yaw_half_rad == pytest.approx(az.REPICK_YAW_HALF_RAD)
 
 
+@pytest.mark.parametrize("deg", [85.0, 90.0, 180.0])
+def test_a_wide_heading_range_is_capped_below_the_detectors_bound(deg):
+    # Codex F1 implementation P3: 85 deg + 5 deg reached ExpectedSite's open bound pi/2 and raised mid-capture
+    zone = az.AdoptionZone(-0.25, 0.25, -0.25, 0.25, "session_zone", yaw_half_rad=math.radians(deg))
+    assert az.far_site(zone, 0.10, base_xy=(-3.0, 0.0), base_yaw=0.0).axis_tolerance_rad < math.pi / 2
+
+
 @pytest.mark.parametrize("half", [-0.1, float("nan")])
 def test_a_broken_yaw_range_is_an_error(half):
     with pytest.raises(ValueError):

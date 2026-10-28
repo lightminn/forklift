@@ -28,6 +28,7 @@ REPICK_HALF_M = 0.10  # Isaac unloading error 0.02-0.10 m (docs/validation/2026-
 REPICK_YAW_HALF_RAD = math.radians(15.0)
 FAR_AXIS_EXTRA_RAD = math.radians(5.0)
 FAR_AXIS_DEFAULT_RAD = math.radians(15.0)
+FAR_AXIS_MAX_RAD = math.radians(89.0)
 
 
 def default_margin(*, localized: bool) -> float:
@@ -92,6 +93,7 @@ def far_site(zone: AdoptionZone, margin_m: float, *, base_xy, base_yaw: float):
     rel = zone.yaw_centre_rad - float(base_yaw)
     radius = math.hypot((zone.x_max_m - zone.x_min_m) / 2 + margin_m, (zone.y_max_m - zone.y_min_m) / 2 + margin_m)
     axis = FAR_AXIS_DEFAULT_RAD if zone.yaw_half_rad is None else zone.yaw_half_rad + FAR_AXIS_EXTRA_RAD
+    axis = min(axis, FAR_AXIS_MAX_RAD)  # ExpectedSite's open bound (pi/2): a heading range that wide restricts nothing
     return ExpectedSite(c * dx + s * dy, -s * dx + c * dy, math.atan2(math.sin(rel), math.cos(rel)), radius, axis)
 
 
