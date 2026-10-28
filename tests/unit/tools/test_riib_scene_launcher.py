@@ -203,7 +203,7 @@ def test_bad_choices_are_refused(tmp_path, env):
 
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
                                  {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"},
-                                 {"NEAR_REDRAW_LATERAL": "0.05"}])
+                                 {"NEAR_REDRAW_LATERAL": "0.05"}, {"VIDEO": "off"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))
@@ -226,6 +226,8 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         sys.argv = argv
         os.chdir(cwd)
     assert parsed.layout == "scene" and parsed.kit_arguments == []  # every argument is the runner's own
+    video_on = env.get("VIDEO", "on") == "on"
+    assert parsed.video is video_on and parsed.frame_log is not video_on and bool(parsed.extra_views) is video_on
     # the settings every Riibotics run had before the defaults (the earlier riib.sbatch / riib_truth.sbatch)
     assert (parsed.fps, parsed.max_sim_seconds, parsed.delivery_straight_m, parsed.alignment_straight_m,
             parsed.withdrawal_m, parsed.insertion_reserve_m) == (60, 1500.0, 1.5, 2.1, 0.55, 0.016)
@@ -374,6 +376,21 @@ def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
     p = dry_run(tmp_path, out=out)
     assert p.returncode == 2 and "AF_UNIX" in p.stderr, p.stdout + p.stderr
     assert dry_run(tmp_path, out=out, MODE="truth").returncode == 0  # a truth run opens no socket
+
+
+def test_video_stays_on_unless_video_off_drops_every_render_but_the_progress_log(tmp_path):
+    # lead 2026-10-28 (near tracking re-measure): VIDEO=off renders no video, so only the near camera renders
+    args = args_of(dry_run(tmp_path))
+    assert "--video" in args and "--frame-log" not in args
+    assert "VIDEO=" not in (tmp_path / "out" / "riib_defaults.txt").read_text()  # the default reads as before
+    args = args_of(dry_run(tmp_path, VIDEO="off"))
+    assert "--video" not in args and "--extra-views" not in args and not any(a.startswith("--quarter-") for a in args)
+    assert "--frame-log" in args  # the bundle's progress watch (run/frames.jsonl) keeps its lines
+    record = (tmp_path / "out" / "riib_defaults.txt").read_text()
+    assert "\nVIEWS=none\n" in record and "\nVIDEO=off\n" in record
+    assert dry_run(tmp_path, VIDEO="off", VIEWS="none").returncode == 0
+    for env in ({"VIDEO": "off", "VIEWS": "chase"}, {"VIDEO": "maybe"}):
+        assert dry_run(tmp_path, **env).returncode == 2
 
 
 def test_views_default_to_both_extra_videos_and_none_drops_them(tmp_path):
