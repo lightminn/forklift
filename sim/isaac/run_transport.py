@@ -6176,7 +6176,8 @@ def drive(S, isaac) -> None:
                     video_frames[-1]["slam_last_scan_id"] = slam["scan_id"] - 1
                     video_frames[-1]["slam_mode"] = slam["tracker"].mode
             if obstacle is not None:
-                record_video_overlay(t)
+                # The frame's own sim time: a live session draws frames before the main loop binds its tick time
+                record_video_overlay(stamp)
             state["frames"] += 1
             if args.extra_views:
                 for name in args.extra_views:
