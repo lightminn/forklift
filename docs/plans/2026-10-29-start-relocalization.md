@@ -234,15 +234,20 @@
 - 그러나 **런처 기본으로 켜거나 실차에 쓰는 것**은 출발 세션 분모의 조건부 상한이 5 % 이하가 된 뒤에만 한다.
   - 조건: 합친 출발 세션 ≥ 59 이고 틀린 출발 0 이다. 0/59 의 단측 95 % 상한은 4.95 %, 0/58 은 5.03 % 다.
   - 근거(총괄): 실제 위험은 "출발했는데 틀린 위치" 다. 출발하지 않는 세션은 정의상 안전하므로, 유효 분모만 쓰면 출발이 적을수록 상한이 좋아 보인다.
-- **합칠 수 있는 배치의 조건**(모두 같아야 한다):
-  - 정합기 코드(`global_match.py` sha256)와 설정(`match_config.json`)·문턱(`dev_choice.json`)
-  - 시작 재위치 경로의 코드: 상태 기계, 러너 재위치 경로, 감독자 재위치 모드. B-P2 동결 커밋과 바이트가 같아야 한다.
-  - 판정 자세 정의(`running` 틱의 SLAM 자세 대 같은 틱 참값)와 성공·부정확·틀림 경계
-  - 세션 분류(4.0)와 판정 스크립트
-  - 정착 구간·무효 한계·재시도 수·마감
+- **합칠 수 있는 배치의 조건**: 아래 **판정 경로 지문**이 B-P2 동결본과 같아야 한다(Codex 재검토 P2).
+  - 지문은 관측 입력에서 정합·정밀화, bootstrap 수락을 거쳐 판정 자세까지 영향을 주는 소스·설정·이미지 전부의 sha256 목록이다. 판정 스크립트가 실행 첫머리에 계산해 결과에 남긴다.
+  - `global_match.py` 만 고정하면 모자란다. 의존 함수를 바꾸면 이 파일의 해시는 같은데 확정 자세가 0.20 m 달라진다(Codex 반례).
+  - 지문에 드는 것:
+    - 정합: `src/forklift_core/localization/global_match.py`, `scan_match.py`, `slam_map.py`(격자·지도 묶음·시작 판정), `slam_pose.py`(tracker·적용 자세), `slam_link.py`(KeyframeGate·링크)
+    - 설정: `match_config.json`, `dev_choice.json`
+    - 시작 재위치: `start_reloc.py`, `sim/isaac/run_transport.py`, `sim/isaac/scan_capture.py`(공유 송신 거리), `tools/live_supervisor.py`
+    - 스캔·잡음: `config/isaac_slam_lidar.yaml`, 공유 LiDAR 와 잡음을 정하는 장애물 층 설정
+    - SLAM 브리지: `ros2/src/forklift_ros/forklift_ros/isaac_slam_bridge.py`, `tools/slam_bridge_container.sh`, `tools/slam_localization_params.py`, `ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml`, 브리지 컨테이너 이미지 digest
+    - 런처: `deploy/console/isaac_live.sbatch` 와 그 `env.sh` 작성 부분
+    - 판정: 판정 스크립트, 판정 자세 정의(`running` 틱의 SLAM 자세 대 같은 틱 참값), 성공·부정확·틀림 경계, 세션 분류(4.0), 정착 구간·무효 한계·재시도 수·마감
+  - 달라도 되는 것(허용 목록): 세계(공장 배치 seed·장면 파일·장면 종류), 그 세계의 조사 지도 묶음, 시작 목록. 세계별 수치를 따로 적는다.
   - 시작은 개발에 쓰지 않은 세계 또는 새 시작 집합이어야 한다. 같은 세계에서 이미 쓴 시작 자리는 다시 쓰지 않는다.
-  - 다른 세계·다른 장면 종류(공장 배치, 리보틱스 장면)는 합칠 수 있다. 세계별 수치를 따로 적는다.
-- 위 가운데 하나라도 바뀌면 합계를 다시 0 부터 센다.
+- 지문이 하나라도 다르면 합계를 다시 0 부터 센다. `run_transport.py` 는 자주 바뀌므로, 그때마다 0 부터 다시 센다는 뜻이다. 의도한 엄격함이다.
 
 ### 4.5 동결
 
