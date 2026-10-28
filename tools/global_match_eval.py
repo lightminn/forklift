@@ -93,6 +93,7 @@ def cmd_run(a) -> int:
     built = {"build_s": time.perf_counter() - t0,
              "bytes": int(sum(x.nbytes for x in (index.field, index.cand, index.walls, *index.L, *index.C)))}
     Path(f"{a.out}.index.json").write_text(json.dumps(built) + "\n")
+    choice = json.loads(Path(a.choice).read_text())["choice"] if a.choice else None
     with open(a.out, "w") as f:
         for k in range(len(cap["id"])):
             row = {"id": str(cap["id"][k]), "split": meta["split"], "map_index": meta["map_index"],
@@ -103,11 +104,16 @@ def cmd_run(a) -> int:
             if row["valid"]:
                 pts = capture_points(cap, k)
                 t0 = time.monotonic()
-                deadline = None if cfg.deadline_s is None else t0 + cfg.deadline_s
-                match = G.global_match(grid, pts, cfg, index=index, clock=time.monotonic, deadline=deadline)
-                match = G.refine(grid, match, pts, cfg, index=index, clock=time.monotonic, deadline=deadline)
-                if deadline is not None and time.monotonic() > deadline:  # as relocalize(): nothing comes out late
-                    match = G.GlobalMatch("timeout", work=match.work)
+                if choice is not None:  # the whole request with the frozen choice (B4b: search + refine + decide)
+                    match, decision = G.relocalize(grid, pts, cfg, e_min=choice["e_min"], r_max=choice["r_max"],
+                                                   r_struct=choice["r_struct"], index=index, clock=time.monotonic)
+                    row["decision"] = decision.reason
+                else:  # dev: no thresholds yet; the decision is negligible next to the search
+                    deadline = None if cfg.deadline_s is None else t0 + cfg.deadline_s
+                    match = G.global_match(grid, pts, cfg, index=index, clock=time.monotonic, deadline=deadline)
+                    match = G.refine(grid, match, pts, cfg, index=index, clock=time.monotonic, deadline=deadline)
+                    if deadline is not None and time.monotonic() > deadline:  # as relocalize(): nothing comes late
+                        match = G.GlobalMatch("timeout", work=match.work)
                 row["wall_s"] = time.monotonic() - t0
                 row["points"] = int(len(pts))
                 row["status"] = match.status
@@ -184,9 +190,9 @@ def cmd_select(a) -> int:
              and (not b4b or t["e_min"] >= t["w"] + MARGIN - 1e-9)]
     clean.sort(key=lambda t: (-t["success"], -t["e_min"], t["r_max"], t["r_struct"]))
     choice = clean[0] if clean else None
-    out = {"rules": a.rules, "dev_starts": len(rows), "choice": choice, "clean_combinations": len(clean),
-           "table": table}
-    if b4b:
+    out = {"dev_starts": len(rows), "choice": choice, "clean_combinations": len(clean), "table": table}
+    if b4b:  # B4a's output keeps its keys
+        out = {"rules": a.rules, **out}
         out["opened_rows"] = list(a.opened_rows or [])
         out["margin"] = {"delta": MARGIN, "w": choice["w"] if choice else None, "wrong_tops": [
             {"id": r["id"], "endpoint_fraction": r["candidates"][0]["endpoint_fraction"],
@@ -211,11 +217,14 @@ def cmd_judge(a) -> int:
     per = [judge_row(r, choice["e_min"], choice["r_max"], choice["r_struct"]) for r in valid]
     b4b = a.rules == "b4b"
     late = 0
-    if b4b:  # a confirmation that came out after the deadline is dropped: a timeout, not a confirmation
+    if b4b:  # anything that came out after the deadline is a timeout; a confirmation among them is dropped
         for r, p in zip(valid, per, strict=True):
-            if p["reason"] == "confirmed" and r.get("wall_s", 0.0) > DEADLINE_S:
+            wall = r.get("wall_s")
+            if not isinstance(wall, (int, float)) or not math.isfinite(wall) or wall < 0:
+                raise SystemExit(f"{r['id']}: a valid row needs a finite, non-negative wall_s")
+            if wall > DEADLINE_S and p["reason"] != "timeout":
+                late += p["reason"] == "confirmed"
                 p.update(outcome="request", reason="timeout")
-                late += 1
     counts = {k: sum(p["outcome"] == k for p in per) for k in ("success", "wrong", "imprecise", "request")}
     by_map = {}
     for p in per:
@@ -295,7 +304,7 @@ def cmd_overlap(a) -> int:
     rows = [{"id": str(cap["id"][k]), "shared_share": shared_share(points(cap, k), reference)}
             for k in range(len(cap["id"])) if cap["valid"][k]]
     shares = [r["shared_share"] for r in rows]
-    out = {"rules": a.rules, "radius_m": 0.05, "starts": rows,
+    out = {**({"rules": a.rules} if a.rules == "b4b" else {}), "radius_m": 0.05, "starts": rows,
            "summary": {"median": float(np.median(shares)), "max": float(np.max(shares))} if shares else None}
     Path(a.out).write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps(out["summary"]))
@@ -309,6 +318,8 @@ def main(argv=None) -> int:
     p.add_argument("--capture", type=Path, required=True)
     p.add_argument("--bundle", type=Path, required=True)
     p.add_argument("--config", default=None, help="MatchConfig fields as JSON (dev only)")
+    p.add_argument("--choice", type=Path, default=None,
+                   help="B4b validation: the frozen choice; each start runs as one relocalize() request")
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("select")
     p.add_argument("--rules", choices=("b4a", "b4b"), default="b4b")

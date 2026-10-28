@@ -234,3 +234,59 @@ def test_b4b_run_records_the_index_the_work_and_a_timeout(tmp_path):
             "--config", json.dumps({"yaw_step_rad": math.radians(2.0), "deadline_s": 0.0})])
     row = json.loads(rows.read_text())
     assert row["status"] == "timeout" and row["candidates"] == []
+
+
+def test_b4b_judge_counts_any_late_request_as_a_timeout(tmp_path):
+    # Codex implementation review P2: 60 overflow rows that each took 31 s passed before
+    late = [dict(_val(i), status="overflow", candidates=[], wall_s=31.0) for i in range(60)]
+    v = _judge(tmp_path, late)
+    assert v["timeouts"] == 60 and not v["time_pass"] and not v["pass"]
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), -1.0])
+def test_b4b_judge_refuses_a_valid_row_without_a_finite_time(tmp_path, bad):
+    rows = [_val(i) for i in range(60)]
+    if bad is None:
+        rows[3].pop("wall_s")
+    else:
+        rows[3]["wall_s"] = bad
+    with pytest.raises(SystemExit, match="wall_s"):
+        _judge(tmp_path, rows)
+
+
+def test_b4a_outputs_keep_their_old_keys(tmp_path):
+    out = tmp_path / "choice.json"
+    E.main(["select", "--rules", "b4a", "--rows", _write(tmp_path / "dev.jsonl", [_row("a", 0)]), "--out", str(out)])
+    assert "rules" not in json.loads(out.read_text())
+
+
+def test_b4b_run_with_a_choice_times_the_whole_request_and_drops_a_late_decision(tmp_path, monkeypatch):
+    # Codex implementation review P2: the request is search + refine + decide; with --choice, run goes through
+    # relocalize() and a deadline crossed in decide turns the row into a timeout
+    grid = TG._grid(*TG.ROOM)
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    np.savez(bundle / "grid.npz", data=grid.data, origin=np.array(grid.origin), resolution_m=grid.resolution_m)
+    (bundle / "manifest.json").write_text(json.dumps({"map_id": "m" * 64, "map_from_world": [0, 0, 0]}))
+    cap = _capture(tmp_path / "cap.npz", [(2.42, 1.7, 0.6)], 1, grid)
+    choice = tmp_path / "c.json"
+    choice.write_text(json.dumps({"choice": {"e_min": 0.8, "r_max": 0.95, "r_struct": 0.8}}))
+    rows = tmp_path / "rows.jsonl"
+    args = ["run", "--capture", str(cap), "--bundle", str(bundle), "--out", str(rows), "--choice", str(choice),
+            "--config", json.dumps({"yaw_step_rad": math.radians(2.0)})]
+    E.main(args)
+    row = json.loads(rows.read_text())
+    assert row["status"] == "ok" and row["decision"] == "confirmed"
+    t = [1000.0]
+    monkeypatch.setattr(E.time, "monotonic", lambda: t[0])
+    real = E.G.decide
+
+    def late(*a, **k):
+        d = real(*a, **k)
+        t[0] += 31.0
+        return d
+
+    monkeypatch.setattr(E.G, "decide", late)
+    E.main(args)
+    row = json.loads(rows.read_text())
+    assert row["status"] == "timeout" and row["decision"] == "timeout" and row["wall_s"] >= 31.0

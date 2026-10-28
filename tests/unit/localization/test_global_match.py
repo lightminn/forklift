@@ -338,9 +338,13 @@ def test_a_deadline_crossed_in_the_last_scoring_chunk_is_a_timeout(monkeypatch):
     clock = _Clock()
     real = G._Search.scores
 
+    calls = []
+
     def scores(self, level, *a, **k):
-        if level == 0:  # the leaves: the last chunk of the search
-            clock.t += 31.0
+        if level == 0:
+            calls.append(level)
+            if len(calls) == 2:  # the first level-0 scores are the beam's; the second, the search's last leaves
+                clock.t += 31.0
         return real(self, level, *a, **k)
 
     monkeypatch.setattr(G._Search, "scores", scores)
