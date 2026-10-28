@@ -1270,6 +1270,11 @@ def far_recognition_files(root: Path | None) -> dict[str, str | None]:
     }
 
 
+# The travel_planner_config of a run whose layout has no travel config of its own (bay, scene): its travel legs plan
+# with planner_config (run_transport.py, travel_config None). Near tracking re-measure, riib line_1_m.
+NO_TRAVEL_PLANNER_CONFIG = {"absent": "the layout's travel legs plan with planner_config"}
+
+
 def run_condition(result: dict, root: Path | None, far_root: Path | None = None) -> dict:
     """What a run is measured under, as tools/s4_drive_terms.py exports it and the runner
     checks it: its shared arguments, recorded settings, follower configs (speed fields
@@ -1295,6 +1300,10 @@ def run_condition(result: dict, root: Path | None, far_root: Path | None = None)
             if k not in by_content
         },
         **{name: result.get(name) for name in CONDITION_FIELDS},
+        # Only the factory layout records a travel config of its own; a bay or scene run's travel legs plan with
+        # planner_config (compared above), so its absence is that run's condition, not an unrecorded field.
+        **({"travel_planner_config": NO_TRAVEL_PLANNER_CONFIG}
+           if result.get("travel_planner_config") is None and arguments.get("layout") in ("bay", "scene") else {}),
         # The URDF by content (input_files), not by its path string.
         "chassis_model": {
             k: v
