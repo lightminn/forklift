@@ -650,7 +650,8 @@ def arguments() -> argparse.Namespace:
         "--frame-log",
         action="store_true",
         help="Write frames.jsonl (a pose line per video frame) without --extra-views too: a riib run without the extra "
-        "videos (VIEWS=none) keeps the file its bundle watches for progress. Recorded only when given.",
+        "videos (VIEWS=none) keeps the file its bundle watches for progress. Without --video (riib VIDEO=off) the line "
+        "is written at each frame's tick, nothing rendered. Recorded only when given.",
     )
     parser.add_argument(
         "--video-preset",
@@ -6207,26 +6208,7 @@ def drive(S, isaac) -> None:
                         )
                     extra_encoders[name].stdin.write(view_rgb.tobytes())
             if frame_log is not None:
-                frame_base, frame_q = robot.get_world_pose()
-                frame_pallet, frame_pq = pallet.get_world_pose()
-                frame_log.write(
-                    record_json(
-                        {
-                            "frame": state["frames"] - 1,
-                            "simulation_time_s": world.current_time - initial_time,
-                            "phase": ms.phase,
-                            "base_position_m": frame_base,
-                            "base_orientation_wxyz": frame_q,
-                            "pallet_position_m": frame_pallet,
-                            "pallet_orientation_wxyz": frame_pq,
-                            **({} if session is None else {"pallet_id": pallet.current}),
-                            "lift_m": float(
-                                robot.get_joint_positions()[lift_index[0]]
-                            ),
-                        }
-                    )
-                    + "\n"
-                )
+                write_frame_log(state["frames"] - 1)
             frame_audit.append(
                 {
                     "simulation_time_s": world.current_time - initial_time,
@@ -6235,6 +6217,31 @@ def drive(S, isaac) -> None:
             )
             if state["frames"] == 1:
                 snapshot("start")
+
+        def write_frame_log(frame: int) -> None:
+            """frames.jsonl: the truck's and the pallet's pose at a video frame -- or, in a run without video
+            (--frame-log, riib VIDEO=off), at the tick a frame would have been, so the bundle still sees progress.
+            Poses are read only; nothing is rendered."""
+            frame_base, frame_q = robot.get_world_pose()
+            frame_pallet, frame_pq = pallet.get_world_pose()
+            frame_log.write(
+                record_json(
+                    {
+                        "frame": frame,
+                        "simulation_time_s": world.current_time - initial_time,
+                        "phase": ms.phase,
+                        "base_position_m": frame_base,
+                        "base_orientation_wxyz": frame_q,
+                        "pallet_position_m": frame_pallet,
+                        "pallet_orientation_wxyz": frame_pq,
+                        **({} if session is None else {"pallet_id": pallet.current}),
+                        "lift_m": float(
+                            robot.get_joint_positions()[lift_index[0]]
+                        ),
+                    }
+                )
+                + "\n"
+            )
 
         silence_ = getattr(args, "live_test_scan_silence", None)  # a recorded run's args predate it
         silence_ = tuple(float(v) for v in silence_.split(":")) if silence_ else None
@@ -6434,6 +6441,8 @@ def drive(S, isaac) -> None:
             tick = stepper["tick"]
             stepper["tick"] = tick + 1
             frame_due = args.video and tick % fps_divisor == 0
+            # without video (--frame-log alone): the pose line at the frame's tick, nothing rendered
+            pose_due = frame_log is not None and not args.video and tick % fps_divisor == 0
             if mission_stop_kinds and stop_kind_at(world.current_time - initial_time) == "preempt":
                 # M-a3 (plan E7): a preempt stops the wheels at this physics step, a capture's steps included; the
                 # steering stays where it is. The applied command, its slew and the stop detector's command say so.
@@ -6461,6 +6470,8 @@ def drive(S, isaac) -> None:
             if slam_log is None:
                 if frame_due:
                     write_video_frame(stamp_now)
+                elif pose_due:
+                    write_frame_log(tick // fps_divisor)
                 return
             now_base, now_q = robot.get_world_pose()
             rates_true = robot.get_joint_velocities()[wheels]
@@ -6563,6 +6574,8 @@ def drive(S, isaac) -> None:
             if frame_due:
                 # After this tick's odometry, so the annotation matches the image.
                 write_video_frame(stamp_now)
+            elif pose_due:
+                write_frame_log(tick // fps_divisor)
             if tick % scan_every:
                 return
             origin, directions = planar_lidar.laser_rays_world(
