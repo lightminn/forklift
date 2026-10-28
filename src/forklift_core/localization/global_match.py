@@ -160,7 +160,8 @@ class _Search:
         self.yaws = np.arange(self.n_yaw) * (2 * math.pi / self.n_yaw)
         field = likelihood_field(grid, cfg.sigma_m)
         cand = candidate_cells(grid, cfg.clearance_m)
-        reach = int(math.ceil(np.abs(pts).max() / self.res)) + 2 if len(pts) else 2
+        # an endpoint's distance, not its largest coordinate: a heading can turn it onto one axis (Codex B-P1b review)
+        reach = int(math.ceil(np.hypot(pts[:, 0], pts[:, 1]).max() / self.res)) + 2 if len(pts) else 2
         self.pad = reach + (1 << cfg.levels) + 1
         # pad first: a block starting outside the grid must still pool the cells inside it (B-P1b; pooling before
         # padding read such blocks as 0 and the bound fell below leaves near walls on the grid's first rows/columns)

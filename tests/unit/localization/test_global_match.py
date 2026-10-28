@@ -116,9 +116,10 @@ def test_bounds_cover_leaves_on_random_maps_near_every_edge_and_at_the_heading_w
 
 
 @pytest.mark.parametrize("seed", range(4))
-def test_the_search_is_exact_against_brute_force_with_the_floor_at_the_best(seed):
-    """A keep ratio just under 1 makes the threshold the best leaf itself (the tightest valid floor): the search still
-    finds that leaf, so nothing exact depends on a low floor. Random maps, the laser near the edges."""
+def test_the_search_is_exact_against_brute_force_with_a_keep_ratio_near_one(seed):
+    """A keep ratio just under 1 sets the threshold at the greedy floor itself (not at the best leaf -- the floor can
+    be well below it): the search still finds the brute-force best. Random maps, the laser near the edges; all fail
+    with the pyramid pooled before padding."""
     rng = np.random.default_rng([20261028, 100 + seed])
     grid = _random_grid(rng, 3.2, 2.4, 4)
     cfg = G.MatchConfig(yaw_step_rad=math.radians(10.0), clearance_m=0.1, levels=4, keep_ratio=1.0 - 1e-9)
@@ -167,6 +168,17 @@ def test_points_beyond_the_match_range_are_dropped():
     ranges = np.array([1.0, 7.9, 8.1, 11.0, np.inf, -np.inf])
     pts = G.scan_points(ranges, 0.0, 0.1, range_min_m=0.2, range_max_m=12.0, match_range_m=8.0)
     assert len(pts) == 2
+
+
+def test_the_padding_reaches_every_rotated_endpoint():
+    """Codex review (B-P1b): the pad was sized from the largest unrotated coordinate, but a heading turns an endpoint
+    at (5.4, 5.5) to 7.7 m along one axis; a scan of only that far wall segment indexed past the padded field."""
+    grid = _grid(10.0, 10.0, [])
+    ys = np.arange(4.0, 5.6, RES)
+    pts = np.stack([np.full(len(ys), 5.4), ys], 1)  # 32 endpoints, the farthest 7.7 m away
+    s = G._Search(grid, G._thin(pts, RES), G.MatchConfig())
+    assert s.pad > max(np.abs(s.oc).max(), np.abs(s.orow).max()) + (1 << G.MatchConfig().levels)
+    assert G.global_match(grid, pts).status in ("ok", "overflow")
 
 
 def test_competitors_are_suppressed_only_inside_both_tolerances():
