@@ -8980,6 +8980,17 @@ def drive(S, isaac) -> None:
                 if new_obstacles is not None and ms.phase in trackers:
                     leg, leg_direction = trackers[ms.phase].leg_ahead()
                     driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()
+                    def n_gap_test(box, loaded_=loaded):
+                        # a face_gap_m spawn (docs/plans/2026-10-28-exit-prefix-extract-rules.md C4): the box's
+                        # straight-line distance from the truck's true outline now
+                        from forklift_core.control.start_release import footprint_rect_distance
+
+                        bx_, by_, byaw_, bsize_ = box
+                        fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
+                        return footprint_rect_distance(tuple(float(v) for v in truth_rear), fp_,
+                                                       Rectangle(float(bx_), float(by_), float(bsize_[0]),
+                                                                 float(bsize_[1]), float(byaw_)))
+
                     pallet_face = None
                     if "approach" in paths and ms.phase in ("approach", "insert"):
                         # N11/N12/N14 place bars in the pallet frame: the approach
@@ -9013,17 +9024,6 @@ def drive(S, isaac) -> None:
                                  for d_ in np.arange(0.0, min(4.0, seg_[-1]) + 1e-9, 0.025)]
                         meets_line_ = any(not chk_.free(p_) for p_ in line_)
                         return meets_path_, meets_line_
-
-                    def n_gap_test(box, loaded_=loaded):
-                        # a face_gap_m spawn (docs/plans/2026-10-28-exit-prefix-extract-rules.md C4): the box's
-                        # straight-line distance from the truck's true outline now
-                        from forklift_core.control.start_release import footprint_rect_distance
-
-                        bx_, by_, byaw_, bsize_ = box
-                        fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
-                        return footprint_rect_distance(tuple(float(v) for v in truth_rear), fp_,
-                                                       Rectangle(float(bx_), float(by_), float(bsize_[0]),
-                                                                 float(bsize_[1]), float(byaw_)))
 
                     due_ = new_obstacles["schedule"].update(
                         t, ms.phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
