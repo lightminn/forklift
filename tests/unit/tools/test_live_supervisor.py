@@ -607,3 +607,13 @@ def test_localization_ready_is_read_from_the_port_files_record_not_only_its_stat
         bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0, max_epochs=1)
     assert [e for e in _log_events(tmp_path) if e["event"] == "localization_ready"]
     assert json.loads((tmp_path / "live_port.json").read_text())["stage"] == "run"
+
+
+def test_a_bridge_command_past_the_whole_wait_gets_no_bridge_go(tmp_path):
+    # Codex B-P2a re-review: a bridge command that returns ready at 2.5 s with a 1 s whole wait must not let it go
+    slow = [PY, "-c", "import sys,time,pathlib; time.sleep(2.5); d=pathlib.Path(sys.argv[1]); d.mkdir(parents=True,"
+            "exist_ok=True); (d/'bridge_ready').write_text('1')", "{epoch_dir}/bridge"]
+    run(tmp_path, _pose_now(), bridge=slow, relocalize=True, bridge_ready="{epoch_dir}/bridge/bridge_ready",
+        ready_timeout_s=30.0, reloc_wait_s=1.0, max_epochs=1, grace_s=2.0)
+    assert not (tmp_path / "epoch_1" / "bridge_go").exists()
+    assert [e for e in _log_events(tmp_path) if e["event"] == "exit"][0]["reason"] == "reloc_wait_timeout"

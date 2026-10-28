@@ -19,10 +19,15 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from forklift_core.localization.global_match import Candidate, Decision, GlobalMatch
+from forklift_core.localization.global_match import (
+    Candidate,
+    Decision,
+    GlobalMatch,
+    suppress,
+)
 from forklift_core.localization.relocalization_samples import (
     LASER_X_M,
     REAR_AXLE_OFFSET_M,
@@ -92,20 +97,17 @@ class StartRelocalizer:
             self.deadline_at = self.clock() + self.cfg.deadline_s
 
     def _keep(self, candidates) -> None:
-        """Pool the pickable candidates (E_MIN, not moved by refinement) across attempts; the same place twice (both
-        within the separation) keeps the better lattice score (Codex B-P2a review: by raw top an attempt's pickable
-        candidate could be lost)."""
-        for c in candidates:
-            if not (c.endpoint_fraction >= self.cfg.e_min) or _moved(c, self.cfg):
-                continue
-            same = [k for k, p in enumerate(self._pool)
-                    if math.hypot(p.pose[0] - c.pose[0], p.pose[1] - c.pose[1]) < self.cfg.sep_m
-                    and abs(math.atan2(math.sin(p.pose[2] - c.pose[2]), math.cos(p.pose[2] - c.pose[2])))
-                    < self.cfg.sep_rad]
-            if not same:
-                self._pool.append(c)
-            elif c.search_score > self._pool[same[0]].search_score:
-                self._pool[same[0]] = c
+        """Pool the pickable candidates (E_MIN, not moved by refinement) of every attempt (Codex B-P2a review: by
+        raw top an attempt's pickable candidate could be lost); duplicates go when the pool is shown."""
+        self._pool += [c for c in candidates if c.endpoint_fraction >= self.cfg.e_min and not _moved(c, self.cfg)]
+
+    def _shown(self) -> tuple:
+        """The pool by lattice score, one per place (the matcher's suppression over the whole pool, so a better
+        candidate between two pooled ones removes both -- Codex B-P2a re-review), at most ``max_shown``."""
+        ranked = [replace(c, score=c.search_score) for c in self._pool]  # suppress orders by .score
+        kept = suppress(ranked, sep_m=self.cfg.sep_m, sep_rad=self.cfg.sep_rad)[:self.cfg.max_shown]
+        by_id = {id(r): c for r, c in zip(ranked, self._pool, strict=True)}
+        return tuple(by_id[id(k)] for k in kept)
 
     def record(self, match: GlobalMatch, decision: Decision) -> str:
         """One attempt's result; returns what follows: rescan, chosen, awaiting_pick or reloc_failed."""
@@ -121,7 +123,7 @@ class StartRelocalizer:
             return self.state
         if self.attempts < self.cfg.attempts and not late:
             return "rescan"
-        self.shown = tuple(sorted(self._pool, key=lambda c: -c.search_score))[:self.cfg.max_shown]
+        self.shown = self._shown()
         self.generation += 1
         self.state = "awaiting_pick" if self.shown else "reloc_failed"
         return self.state

@@ -274,10 +274,14 @@ class _RelocBridge:
             _log(self.out, {"event": "localization_ready", "epoch": self.values["epoch"]})
             self.localized, self.phase = True, "done"
 
-    def step(self) -> str | None:
-        """While the runner runs: start the bridge at its estimate, let it go when ready, or say why to end."""
-        now = time.monotonic()
-        if self.phase in ("pose", "ready") and self.total_until is not None and now > self.total_until:
+    def _late(self) -> bool:
+        return self.total_until is not None and time.monotonic() > self.total_until
+
+    def step(self, alive=lambda: True, asked=lambda: False) -> str | None:
+        """While the runner runs (``alive``) and no TERM came (``asked``): start the bridge at its estimate, let it go
+        when ready, or say why to end. Every check reads the clock afresh (Codex B-P2a re-review: a bridge command
+        that returned after the whole wait must not be let go)."""
+        if self.phase in ("pose", "ready") and self._late():
             return "reloc_wait_timeout"  # the whole wait is bounded, a found estimate or a slow bridge too
         if self.phase == "pose":
             data = self.lib.read_reloc_pose(self.epoch_dir)
@@ -288,18 +292,26 @@ class _RelocBridge:
                             "generation": data.get("generation"), "attempts": data.get("attempts")})
             if self.bridge is not None:
                 pose = ",".join(repr(v) for v in self.pose)
+                left = None if self.total_until is None else max(0.1, self.total_until - time.monotonic())
                 try:
-                    subprocess.run(_fill(self.bridge, map_start_pose=pose, **self.values), check=True)
+                    subprocess.run(_fill(self.bridge, map_start_pose=pose, **self.values), check=True, timeout=left)
+                except subprocess.TimeoutExpired:
+                    _log(self.out, {"event": "bridge_start_timeout"})
+                    return "reloc_wait_timeout"
                 except (OSError, subprocess.SubprocessError) as exc:
                     _log(self.out, {"event": "bridge_start_failed", "error": f"{type(exc).__name__}: {exc}"})
                     return "bridge_start_failed"
-            self.phase, self.ready_until = "ready", now + self.ready_timeout_s
+            self.phase, self.ready_until = "ready", time.monotonic() + self.ready_timeout_s
         if self.phase == "ready":
+            if self._late():
+                return "reloc_wait_timeout"
             flag = None if self.bridge_ready is None else Path(_fill([self.bridge_ready], **self.values)[0])
             if flag is not None and not flag.exists():
-                if now > self.ready_until:
+                if time.monotonic() > self.ready_until:
                     _log(self.out, {"event": "bridge_not_ready", "epoch": self.values["epoch"]})
                     return "bridge_not_ready"
+                return None
+            if asked() or not alive():  # the runner is ending: nothing is let go to it
                 return None
             self.lib.write_bridge_go(self.epoch_dir, {"map_start_pose": self.pose})
             _log(self.out, {"event": "bridge_go", "map_start_pose": self.pose})
@@ -408,7 +420,9 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                                 if stop.asked:
                                     process = _end_child(stop.child, grace_s)
                                     break
-                                ended_by = reloc.step() if reloc is not None else None
+                                ended_by = None if reloc is None else reloc.step(
+                                    alive=lambda: stop.child is not None and stop.child.poll() is None,
+                                    asked=lambda: stop.asked)
                                 if ended_by is not None:  # B-P2: no estimate in time, or no bridge for it
                                     stop.child.terminate()
                                     process = _end_child(stop.child, grace_s)

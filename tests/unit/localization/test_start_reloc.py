@@ -205,3 +205,14 @@ def test_the_same_place_from_two_attempts_is_shown_once_with_its_better_score():
     r.record(_match(a1, b), refused)
     r.record(_match(a2), refused)
     assert [c.pose for c in r.shown] == [a2.pose, b.pose]
+
+
+def test_the_shown_candidates_are_suppressed_over_the_whole_pool():
+    # Codex B-P2a re-review: a better x=0.25 between pooled x=0 and x=0.5 must suppress both, freeing a slot for x=4
+    r = _reloc(attempts=2)
+    first = [_cand((x, 0.0, 0.0), score=s) for x, s in ((0.0, 0.90), (0.5, 0.89), (10.0, 0.88), (2.0, 0.87),
+                                                       (4.0, 0.86))]
+    refused = G.Decision(False, "competitor", 0.99)
+    r.record(_match(*first), refused)
+    r.record(_match(_cand((0.25, 0.0, 0.0), score=0.95)), refused)
+    assert [c.pose[0] for c in r.shown] == [0.25, 10.0, 2.0, 4.0]
