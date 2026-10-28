@@ -99,6 +99,8 @@ branch `feat/escape-presteer`(진단 브랜치 `diag/transport-start-stall` 위)
 
 riib 런처만 바꾼다: `START_BAND=on`, `START_BAND_M=0.03`, `ESCAPE_PRESTEER=on`. 러너 기본은 모두 off 다. 재생 게이트와 옛 기록은 그대로다.
 
+C4 결과(2026-10-28, `docs/validation/2026-10-28-escape-presteer.md`): 불합격이다. 등록한 처리대로 riib 런처 기본도 끈다(`START_BAND=off`, `ESCAPE_PRESTEER=off`, `START_BAND_M` 은 켤 때의 폭으로 0.03 을 둔다).
+
 ## 3. 안전 근거
 
 - 출발 띠 해제의 실제 계약(`drive_permission.py` `_start_release`, `start_release.py`; Codex 2 판 지적 4 로 고침):

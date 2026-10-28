@@ -76,17 +76,17 @@ def test_the_aisle_runs_its_rack_copy_by_default_and_the_plain_scene_with_rack_o
     assert plain[plain.index("--scene-file") + 1].endswith("aisle.json")
 
 
-def test_the_start_band_release_is_on_at_three_centimetres_with_the_escape_presteer_unless_turned_off(tmp_path):
-    # docs/plans/2026-10-27-escape-presteer.md D1-D4: the riib launcher only (the runner's defaults stay off)
-    on = args_of(dry_run(tmp_path))
-    assert contains(on, ["--start-band-release", "on"]) and contains(on, ["--start-band-m", "0.03"])
-    assert contains(on, ["--escape-presteer", "on"])
-    defaults = (tmp_path / "out/riib_defaults.txt").read_text()
-    assert " START_BAND=on " in defaults and " START_BAND_M=0.03 " in defaults and " ESCAPE_PRESTEER=on " in defaults
-    off = args_of(dry_run(tmp_path, START_BAND="off", ESCAPE_PRESTEER="off", out=tmp_path / "off"))
+def test_the_start_band_release_and_the_escape_presteer_are_off_unless_asked(tmp_path):
+    # docs/validation/2026-10-28-escape-presteer.md: off after the C4 comparison; on gives the width (0.03 by default)
+    off = args_of(dry_run(tmp_path))
     assert contains(off, ["--start-band-release", "off"]) and "--start-band-m" not in off
     assert contains(off, ["--escape-presteer", "off"])
-    width = args_of(dry_run(tmp_path, START_BAND_M="0.02", out=tmp_path / "w"))
+    defaults = (tmp_path / "out/riib_defaults.txt").read_text()
+    assert " START_BAND=off " in defaults and " START_BAND_M=0.03 " in defaults and " ESCAPE_PRESTEER=off " in defaults
+    on = args_of(dry_run(tmp_path, START_BAND="on", ESCAPE_PRESTEER="on", out=tmp_path / "on"))
+    assert contains(on, ["--start-band-release", "on"]) and contains(on, ["--start-band-m", "0.03"])
+    assert contains(on, ["--escape-presteer", "on"])
+    width = args_of(dry_run(tmp_path, START_BAND="on", START_BAND_M="0.02", out=tmp_path / "w"))
     assert contains(width, ["--start-band-m", "0.02"])
 
 
@@ -94,7 +94,7 @@ def test_the_escape_start_release_is_off_unless_asked(tmp_path):
     # docs/plans/2026-10-25-escape-start-release.md: the escape's sweep alone, apart from START_BAND
     assert contains(args_of(dry_run(tmp_path)), ["--escape-start-release", "off"])
     assert " ESCAPE_START=off " in (tmp_path / "out/riib_defaults.txt").read_text()
-    on = args_of(dry_run(tmp_path, ESCAPE_START="on", START_BAND="off"))
+    on = args_of(dry_run(tmp_path, ESCAPE_START="on"))
     assert contains(on, ["--escape-start-release", "on"]) and contains(on, ["--start-band-release", "off"])
 
 

@@ -34,14 +34,13 @@
 #                  plan 2026-10-25-team-spec-default, lead decision); reported on request -- the engine's joint velocities, the
 #                  model of every Riibotics result before 2026-10-25 (never mixed with the default's). The obstacle layer
 #                  takes the model's own odometry age table (the runner refuses a mismatched one)
-#   START_BAND=on --start-band-release: an occupied cell the stopped truck already stands within START_BAND_M of does
-#                  not block moving away from it (docs/plans/2026-10-24-start-band-release.md); START_BAND_M=0.03
-#                  --start-band-m. On at 0.03 with ESCAPE_PRESTEER=on: the transport-start stall in a tight slot
-#                  (docs/plans/2026-10-27-escape-presteer.md; a CPU replay frees 13 of 16 recorded stalls with both, none
-#                  with either alone); the default follows that plan's Isaac comparison (C4). START_BAND=off as before
-#   ESCAPE_PRESTEER=on --escape-presteer: no escape qualifying at the held steering, the steering is set standing to
+#   START_BAND=off --start-band-release: an occupied cell the stopped truck already stands within START_BAND_M of
+#                  does not block moving away from it (docs/plans/2026-10-24-start-band-release.md); START_BAND_M=0.03
+#                  --start-band-m when on. Off: its Isaac comparison with ESCAPE_PRESTEER (C4,
+#                  docs/validation/2026-10-28-escape-presteer.md) did not pass
+#   ESCAPE_PRESTEER=off --escape-presteer: no escape qualifying at the held steering, the steering is set standing to
 #                  the side whose escape qualifies and the escape evaluated again at the measured steering
-#                  (docs/plans/2026-10-27-escape-presteer.md D2, D3); ESCAPE_PRESTEER=off as before
+#                  (docs/plans/2026-10-27-escape-presteer.md D2, D3); off as the C4 comparison decided
 #   ESCAPE_START=off --escape-start-release: the P6 escape's sweep alone passes the trigger's rectangles the stop
 #                  already stands within the sweep pad of while it moves away; the permission keeps its own start rule
 #                  (docs/plans/2026-10-25-escape-start-release.md); the default follows its Isaac comparison
@@ -68,7 +67,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=on|off] [START_BAND_M=0.03] [ESCAPE_PRESTEER=on|off] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -77,7 +76,7 @@ OUT=${1:?the run directory}
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
-MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-on}; START_BAND_M=${START_BAND_M:-0.03}; ESCAPE_PRESTEER=${ESCAPE_PRESTEER:-on}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
+MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; START_BAND_M=${START_BAND_M:-0.03}; ESCAPE_PRESTEER=${ESCAPE_PRESTEER:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
 case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; esac
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
