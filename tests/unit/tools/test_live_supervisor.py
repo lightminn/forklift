@@ -617,3 +617,23 @@ def test_a_bridge_command_past_the_whole_wait_gets_no_bridge_go(tmp_path):
         ready_timeout_s=30.0, reloc_wait_s=1.0, max_epochs=1, grace_s=2.0)
     assert not (tmp_path / "epoch_1" / "bridge_go").exists()
     assert [e for e in _log_events(tmp_path) if e["event"] == "exit"][0]["reason"] == "reloc_wait_timeout"
+
+
+def test_a_term_during_the_bridge_command_ends_the_runner_without_waiting_for_the_command(tmp_path):
+    # Codex B-P2a re-review: a TERM while the bridge command ran waited for it (up to the whole wait) before the
+    # runner's grace and KILL; the command is cancelled at once instead
+    import os
+    import signal
+    import threading
+    import time
+
+    runner = [PY, "-c", "import json,os,signal,sys,time,pathlib; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+              "d=pathlib.Path(sys.argv[1]); t=d/'reloc_pose.json.tmp'; t.write_text(json.dumps({'base':[1,2,0]}));"
+              "os.replace(t, d/'reloc_pose.json'); time.sleep(60)", "{epoch_dir}"]
+    slow_bridge = [PY, "-c", "import time; time.sleep(60)"]
+    threading.Timer(1.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    t0 = time.monotonic()
+    result = run(tmp_path, runner, bridge=slow_bridge, relocalize=True,
+                 bridge_ready="{epoch_dir}/bridge/bridge_ready", reloc_wait_s=600.0, grace_s=0.5)
+    assert result["end"] == "terminated" and time.monotonic() - t0 < 10.0
+    assert not (tmp_path / "epoch_1" / "bridge_go").exists()

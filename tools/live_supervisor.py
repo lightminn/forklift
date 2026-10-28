@@ -292,14 +292,23 @@ class _RelocBridge:
                             "generation": data.get("generation"), "attempts": data.get("attempts")})
             if self.bridge is not None:
                 pose = ",".join(repr(v) for v in self.pose)
-                left = None if self.total_until is None else max(0.1, self.total_until - time.monotonic())
                 try:
-                    subprocess.run(_fill(self.bridge, map_start_pose=pose, **self.values), check=True, timeout=left)
-                except subprocess.TimeoutExpired:
-                    _log(self.out, {"event": "bridge_start_timeout"})
-                    return "reloc_wait_timeout"
+                    command = subprocess.Popen(_fill(self.bridge, map_start_pose=pose, **self.values))
                 except (OSError, subprocess.SubprocessError) as exc:
                     _log(self.out, {"event": "bridge_start_failed", "error": f"{type(exc).__name__}: {exc}"})
+                    return "bridge_start_failed"
+                while True:  # short waits: a TERM or the whole wait cancels the command (Codex B-P2a re-review)
+                    try:
+                        returned = command.wait(timeout=0.2)
+                        break
+                    except subprocess.TimeoutExpired:
+                        if asked() or self._late():
+                            command.terminate()
+                            _end_child(command, 2.0)
+                            _log(self.out, {"event": "bridge_start_cancelled", "term": asked()})
+                            return None if asked() else "reloc_wait_timeout"
+                if returned != 0:
+                    _log(self.out, {"event": "bridge_start_failed", "code": returned})
                     return "bridge_start_failed"
             self.phase, self.ready_until = "ready", time.monotonic() + self.ready_timeout_s
         if self.phase == "ready":
