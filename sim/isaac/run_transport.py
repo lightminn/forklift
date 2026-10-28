@@ -6463,8 +6463,10 @@ def drive(S, isaac) -> None:
                 obstacle["version"] += 1
                 obstacle["applied"] = correction
             # the correction and version this scan goes into the grid with: the exit-prefix watch places it there
-            layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now, correction=obstacle["applied"],
-                            version=obstacle["version"])
+            # (on only -- the call's request stays as every recorded run made it otherwise)
+            layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now,
+                            **({"correction": obstacle["applied"], "version": obstacle["version"]}
+                               if getattr(args, "exit_prefix_exempt", "off") == "on" else {}))
             obstacle["last_stamp"] = float(stamp)
             obstacle["last_raw"] = (raw, np.asarray(base, dtype=float), np.asarray(q, dtype=float))
             leg_direction = 0

@@ -1,6 +1,7 @@
 """The runner's ``--exit-prefix-exempt`` (docs/plans/2026-10-28-exit-prefix-extract-rules.md D1, D6): off by default and
 registered off in the near-field contract, read by the core with getattr, scene layout with the obstacle layer only,
-refused with --near-tracking; the obstacle scans carry their correction and version to the layer."""
+refused with --near-tracking; the obstacle scans carry their correction and version to the layer
+(on only: off, every boundary call stays as the recorded runs made it)."""
 
 import json
 import sys
@@ -42,5 +43,5 @@ def test_on_is_refused_outside_a_scene_run_or_with_near_tracking(tmp_path, extra
 
 def test_the_obstacle_scans_carry_their_correction_and_version():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
-    assert ('layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now, correction=obstacle["applied"],\n'
-            '                            version=obstacle["version"])') in source
+    assert ('**({"correction": obstacle["applied"], "version": obstacle["version"]}\n'
+            '                               if getattr(args, "exit_prefix_exempt", "off") == "on" else {})') in source
