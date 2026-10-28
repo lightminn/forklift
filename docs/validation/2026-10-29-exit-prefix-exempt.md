@@ -97,8 +97,8 @@ A 는 riib 기본이고, B 는 `--exit-prefix-exempt on` 이다. 두 팔 모두 
 | 3 안전 | 면제 키 4 개 모두 0, seed 별 `unpermitted_dir_entries` B ≤ A(모두 0), hull 0, "Actual truck/load footprint overlap" 실패 0, 키 누락 없음 | 통과 |
 | 4 회귀 | line_2 3 대 3, random_1 3 대 2 → s0 두 팔 재실행(둘 다 완주) → s0 두 번 합 A 2·B 1 | **불합격**(아래) |
 | 5 감시 오경보 | C5 의 B 실행에서 울림 0 | 통과 |
-| 6 새 실패 유형 | 아래 | (재실행 뒤) |
-| 7 C4 주입 | 유효 13 건 합격, 무효 3 건 재실행 | (재실행 뒤) |
+| 6 새 실패 유형 | B 의 settle `slam_release_replan_failed` 는 면제 없던 이전 배치에도 있던 유형, B random_1 s0 은 latch 전 관측 단계 | 통과(설명, 아래) |
+| 7 C4 주입 | 면 거리 0.15 m 유효 상자 17 건(1 건 진행 중) 모두 울림·이동 ≤ 0.0074 m·면제 키 0, 무응답 4 건 모두 정지. 원래 배치 17 건은 사후 무효(아래) | 통과(마지막 1 건 확인 뒤 확정) |
 
 규칙 6:
 - B 의 settle `slam_release_replan_failed`(3 건): 같은 유형이 A s7(`no_path`)에도 있다. `invalid_start` 는 면제 기능이 없던 이전 배치에도 있었다(t2d c3 aisle s0·s3, epc7 B aisle s5, 모두 settle `slam_release_replan_failed: invalid_start`).
