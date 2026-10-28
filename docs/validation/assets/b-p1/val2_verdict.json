@@ -1,0 +1,512 @@
+{
+ "choice": {
+  "e_min": 0.8,
+  "r_max": 0.95,
+  "r_struct": 0.8,
+  "success": 69,
+  "wrong": 0,
+  "imprecise": 0,
+  "request": 11
+ },
+ "starts": 68,
+ "invalid_captures": 8,
+ "success": 22,
+ "wrong": 0,
+ "imprecise": 0,
+ "request": 46,
+ "pass": true,
+ "bound_95": 0.043098564820088336,
+ "by_map": {
+  "2": {
+   "starts": 68,
+   "wrong": 0,
+   "bound_95": 0.043098564820088336
+  }
+ },
+ "request_reasons": {
+  "overflow": 45,
+  "competitor": 1
+ },
+ "wall_s": {
+  "median": 18.970832478022203,
+  "p90": 39.277008031029254
+ },
+ "starts_detail": [
+  {
+   "id": "val2_000",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7455092053533451
+  },
+  {
+   "id": "val2_001",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_002",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_003",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_004",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7779027568960946
+  },
+  {
+   "id": "val2_005",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_006",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_007",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7246873078193731
+  },
+  {
+   "id": "val2_008",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_009",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_010",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_011",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_012",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_013",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_014",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_015",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_016",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_017",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7960573981786645
+  },
+  {
+   "id": "val2_018",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.579241310836075
+  },
+  {
+   "id": "val2_019",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8013186409917016
+  },
+  {
+   "id": "val2_020",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.747402601167497
+  },
+  {
+   "id": "val2_021",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_023",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_024",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_025",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7120129046995574
+  },
+  {
+   "id": "val2_026",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_027",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_028",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_029",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_030",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.6854192629000115
+  },
+  {
+   "id": "val2_032",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_033",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_034",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_035",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_036",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.6955461530131716
+  },
+  {
+   "id": "val2_037",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.768036704803302
+  },
+  {
+   "id": "val2_038",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_039",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7006961003382018
+  },
+  {
+   "id": "val2_040",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_041",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7510601985300908
+  },
+  {
+   "id": "val2_042",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_043",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7617218853588934
+  },
+  {
+   "id": "val2_044",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_045",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.6718295950545575
+  },
+  {
+   "id": "val2_046",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_047",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_048",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.6700720699471293
+  },
+  {
+   "id": "val2_049",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_050",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_051",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7836009696672339
+  },
+  {
+   "id": "val2_052",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.657959980799845
+  },
+  {
+   "id": "val2_053",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_054",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_055",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_057",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_060",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_061",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8693395095204506
+  },
+  {
+   "id": "val2_062",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7601114024156631
+  },
+  {
+   "id": "val2_064",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_065",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_067",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_068",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_069",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.6302800740965185
+  },
+  {
+   "id": "val2_070",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_072",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_073",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 0.9995935870043101
+  },
+  {
+   "id": "val2_074",
+   "map_index": 2,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val2_075",
+   "map_index": 2,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.7973022580505047
+  }
+ ]
+}

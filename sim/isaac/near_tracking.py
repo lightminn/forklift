@@ -1059,6 +1059,10 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_capture_redraw",
     # live-default plan 5d: the launcher's SLAM choice, a label (the mode itself is compared as slam_mode / map_id).
     "slam_choice",
+    # survey plan B4a: a scan capture run ends before any mission; its pose list, output and bundle are its own.
+    "scan_capture_poses",
+    "scan_capture_out",
+    "scan_capture_bundle",
     # docs/plans/2026-10-28-adoption-zone-check.md: the check only ends a mission (recorded), never moves the truck
     "adoption_zone_check",
     "adoption_zone_margin_m",

@@ -903,6 +903,18 @@ def arguments() -> argparse.Namespace:
         "accepted survey map was there -- and kept in the result. A label: the mode itself comes from the bundle.",
     )
     parser.add_argument(
+        "--scan-capture-poses",
+        type=Path,
+        default=None,
+        help="Survey plan B4a: after the start settle, move the truck to each base pose of this list (scan_capture_poses/1), "
+        "take five stationary scans of the shared SLAM LiDAR there as the live runner sends them, write them to "
+        "--scan-capture-out and end the run (no mission). Needs --record-slam, the shared obstacle layer and "
+        "--scan-capture-bundle (the survey bundle the inputs are checked against).",
+    )
+    parser.add_argument("--scan-capture-out", type=Path, default=None, help="Survey plan B4a: the capture's .npz.")
+    parser.add_argument("--scan-capture-bundle", type=Path, default=None,
+                        help="Survey plan B4a: the survey bundle whose manifest this capture's inputs must match.")
+    parser.add_argument(
         "--new-obstacles",
         type=Path,
         default=None,
@@ -1300,6 +1312,15 @@ def arguments() -> argparse.Namespace:
         parser.error("--slam-map-bundle requires --slam-feedback and --expected-map-id")
     if args.expected_map_id is not None and args.slam_map_bundle is None:
         parser.error("--expected-map-id requires --slam-map-bundle")
+    if args.scan_capture_poses is not None:
+        if args.scan_capture_out is None or args.scan_capture_bundle is None:
+            parser.error("--scan-capture-poses needs --scan-capture-out and --scan-capture-bundle")
+        if not args.record_slam or args.obstacle_layer is None:
+            parser.error("--scan-capture-poses needs --record-slam and the shared --obstacle-layer (the live send path)")
+        if args.live or args.slam_feedback is not None:
+            parser.error("--scan-capture-poses is a batch capture: not with --live or --slam-feedback")
+    elif args.scan_capture_out is not None or args.scan_capture_bundle is not None:
+        parser.error("--scan-capture-out and --scan-capture-bundle go with --scan-capture-poses")
     if args.slam_choice is not None and args.slam_feedback is None:
         parser.error("--slam-choice requires --slam-feedback")
     if args.odometry_heading == "gyro" and (args.gyro_model is None or args.encoder_model != "team_spec_quantized"
@@ -1464,7 +1485,7 @@ def arguments() -> argparse.Namespace:
     if getattr(args, "session", False):
         # Plan 2026-10-22-rigid-session-pallets section 2: a session is run from the console, its near capture's
         # refusals redrawn (the neighbour sweep, 2.6); the bottom-deck legs and near tracking are not defined for it.
-        if not args.live:
+        if not args.live and args.scan_capture_poses is None:  # a scan capture ends before any mission (plan B4a)
             parser.error("a session scene file needs --live")
         if args.near_capture_redraw != "always":
             parser.error("a session scene file needs --near-capture-redraw always")
@@ -1619,7 +1640,13 @@ def age_table_problem(table: dict, args) -> str | None:
 
     heading = getattr(args, "odometry_heading", "steering")
     gyro = {}
-    if heading == "gyro":  # the table must have drawn this run's gyro model, in this run's camera mount
+    if getattr(args, "scan_capture_poses", None) is not None:
+        # B-P1 (plan B4a): a scan capture teleports and integrates no odometry; its obstacle layer is the survey's
+        # (matched to the bundle by content), so the heading is the table's own. Model and radius are still checked.
+        noise = table.get("noise") or {}
+        heading = noise.get("odometry_heading", "steering")
+        gyro = {k: noise.get(k) for k in ("gyro_model_sha256", "gyro_mount")} if heading == "gyro" else {}
+    elif heading == "gyro":  # the table must have drawn this run's gyro model, in this run's camera mount
         from forklift_core.localization.gyro import GyroModel
 
         gyro = {"gyro_model_sha256": GyroModel.load(args.gyro_model)[1], "gyro_mount": args.perception_mount}
@@ -2677,6 +2704,72 @@ def close_boundary_record(state: dict, exc: BaseException | None = None, final_s
 
 SLAM_LIVE_REPLY_DEADLINE_S = 1.0  # real-time plan D9a: wall seconds a sent scan may wait for its reply
 SLAM_LIVE_QUEUE_MAX = 20  # and how many scans may wait behind it (2 s of 10 Hz scans)
+
+
+def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, settle_base) -> None:
+    """Survey plan B4a: the stationary scans at the listed poses (sim/isaac/scan_capture.py), after the inputs were
+    checked against the survey bundle's manifest; the run then ends without a mission."""
+    import planar_lidar
+    import scan_capture
+    import yaml
+
+    from forklift_core.localization import slam_map as slam_map_module
+    from forklift_core.sensors.lidar import PlanarScanPattern
+
+    bundle = slam_map_module.load_bundle(args.scan_capture_bundle)
+    mismatches = scan_capture.capture_mismatches(
+        bundle.manifest, seed=args.seed, arguments=state.get("arguments"), scene_sha256=state.get("scene_sha256"),
+        input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
+                              if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
+                              else None)
+                      for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)},
+        run_sources=state.get("source_sha256"))
+    if mismatches:
+        raise SystemExit("scan capture: " + "; ".join(mismatches))
+    lidar_config = yaml.safe_load(args.lidar.read_text())
+    pattern = PlanarScanPattern(lidar_config["beam_count"], float(lidar_config["range_min_m"]),
+                                float(lidar_config["range_max_m"]))
+    mount = planar_lidar.LaserMount(tuple(map(float, lidar_config["mount_xyz_m"])), float(lidar_config["mount_yaw_rad"]))
+    beam_angles = pattern.beam_angles_rad()
+    if not layer.shared_with_slam:
+        raise SystemExit("scan capture needs the obstacle layer that shares the SLAM LiDAR (the live send path)")
+
+    def teleport(position, q):
+        robot.set_world_pose(position=np.asarray(position, float), orientation=np.asarray(q, float))
+        robot.set_linear_velocity(np.zeros(3))
+        robot.set_angular_velocity(np.zeros(3))
+        robot.set_joint_velocities(np.zeros(robot.num_dof))
+
+    def cast(position, q):
+        origin, directions = planar_lidar.laser_rays_world(np.asarray(position, float), np.asarray(q, float), mount,
+                                                           beam_angles)
+        distances, hits, _ = planar_lidar.cast_scan_flags(origin, directions, pattern.range_max_m)
+        return distances, hits
+
+    def draw_noise(rng, distances):
+        kept = layer.rng
+        layer.rng = rng
+        try:
+            return layer.beam_noise(len(distances), distances)
+        finally:
+            layer.rng = kept
+
+    poses = scan_capture.load_poses(args.scan_capture_poses)
+    engine = scan_capture.Engine(
+        teleport=teleport, step=lambda: world.step(render=False), pose=robot.get_world_pose, cast=cast,
+        draw_noise=draw_noise, ranges_from_hits=pattern.ranges_from_hits, range_min_m=pattern.range_min_m,
+        range_max_m=pattern.range_max_m, settle_z_m=float(settle_base[2]), laser_xyz_m=tuple(mount.xyz_m),
+        steps_per_scan=int(round(float(settings["physics_hz"]) / int(lidar_config["rate_hz"]))))
+    arrays = scan_capture.capture(engine, poses)
+    meta = {"format": scan_capture.FORMAT, "map_id": bundle.map_id, "split": poses["split"],
+            "map_index": poses["map_index"], "poses_sha256": slam_map_module.file_sha256(args.scan_capture_poses),
+            "noise_model": layer.range_noise_model, "angle_min_rad": pattern.angle_min_rad,
+            "angle_increment_rad": pattern.angle_increment_rad, "range_min_m": pattern.range_min_m,
+            "range_max_m": pattern.range_max_m, "mount_xyz_m": list(mount.xyz_m)}
+    np.savez_compressed(args.scan_capture_out, meta=json.dumps(meta), **arrays)
+    state["scan_capture"] = {**meta, "poses": int(len(arrays["id"])), "valid": int(arrays["valid"].sum()),
+                             "out": str(args.scan_capture_out)}
+    state["success"] = True
 
 
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
@@ -3910,6 +4003,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             )
         start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
         obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
+        if args.scan_capture_poses is not None:
+            run_scan_capture(args, state, settings, world, robot, obstacle["layer"], prime_base)
+            return
         obstacle["last_stamp"] = 0.0
         obstacle["applied"] = (0.0, 0.0, 0.0)
         obstacle["replans"] = []
@@ -6666,10 +6762,9 @@ def drive(S, isaac) -> None:
                 return
             link = slam["module"]
             if shared_scan:
-                sent = ranges.astype(float).copy()
-                measured_ = np.isfinite(sent)
-                sent[measured_] = np.clip(sent[measured_] + noise_[measured_],
-                                          scan_pattern.range_min_m, scan_pattern.range_max_m)
+                from scan_capture import shared_sent_ranges  # the capture tool sends the same (plan B4a)
+
+                sent = shared_sent_ranges(ranges, noise_, scan_pattern.range_min_m, scan_pattern.range_max_m)
             else:
                 sent = slam["noise"].ranges(
                     ranges,

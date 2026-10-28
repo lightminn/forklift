@@ -29,7 +29,10 @@ OCCUPIED = 65  # /map values: 100 occupied, 0 free, -1 unknown (the survey's own
 # the hall, the scan and the shared scan's noise (the obstacle layer config)
 SHARED_INPUTS = ("base_scene", "forklift_urdf", "factory_layout", "lidar", "obstacle_layer")
 # the run arguments that change what the LiDAR plane sees or the SLAM noise (manifest "run" "arguments")
-SHARED_ARGUMENTS = ("layout", "prism_colliders", "slam_noise_seed", "slam_noise_spec")  # + the SLAM noise (plan L2)
+# min_obstacle_height_m: the factory layout drops props below it, so it changes what stands in the LiDAR plane
+# (Codex B-P1 pre-registration re-review P2: 1.15 -> 1.30 removed 1.21 m props and the check said nothing)
+SHARED_ARGUMENTS = ("layout", "prism_colliders", "min_obstacle_height_m", "slam_noise_seed",
+                    "slam_noise_spec")  # + the SLAM noise (plan L2)
 # live-default plan S3 D3: a --layout scene run's scene file (its pallets, props and walls), compared by content; under
 # that layout the seed drives only the noise, so the seed and the noise seed need not be the survey's
 SCENE_INPUT = "scene_file"

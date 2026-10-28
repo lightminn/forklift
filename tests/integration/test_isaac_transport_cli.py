@@ -397,6 +397,11 @@ def test_slam_feedback_options_validate_before_startup(tmp_path) -> None:
         # gyro-heading plan G2 (A): the gyro needs its model, the team encoders, the SLAM link and the camera mount
         (["--odometry-heading", "gyro"], "--odometry-heading gyro requires --gyro-model"),
         (["--gyro-model", str(tmp_path)], "--gyro-model and --gyro-fault-at require --odometry-heading gyro"),
+        # survey plan B4a: the scan capture needs its output, the bundle, the SLAM LiDAR and the shared layer
+        (["--scan-capture-poses", str(tmp_path)], "--scan-capture-poses needs --scan-capture-out and"),
+        (["--scan-capture-poses", str(tmp_path), "--scan-capture-out", "o.npz", "--scan-capture-bundle",
+          str(tmp_path)], "--scan-capture-poses needs --record-slam and the shared --obstacle-layer"),
+        (["--scan-capture-out", "o.npz"], "--scan-capture-out and --scan-capture-bundle go with"),
     ):
         result = subprocess.run(
             [
