@@ -3822,6 +3822,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "reasons": {},
             "events": 0,
             "unpermitted": [],
+            "events_dir": 0,  # the same truth check with the moving direction's shape (stop_arc_hits)
+            "unpermitted_dir": [],
             "min_allowed": {},
         }
         if getattr(args, "start_band_release", "off") == "on":
@@ -8848,35 +8850,26 @@ def drive(S, isaac) -> None:
                     if acting and abs(truth_speed) > 0.05:
                         pconf = obstacle["layer"].permission.config
                         stop_len = pconf.stopping.distance_m(truth_speed)
-                        arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
-                        shape_now, _ = obstacle["layer"].footprints(loaded)
-                        # A bounding-circle prefilter (exact: a rectangle farther than
-                        # the shape's reach plus its own half diagonal from every
-                        # pose cannot meet it) -- this evaluator was a sixth of the
-                        # wall time (L3c v50 profile).
-                        arc_xy = np.asarray(arc, dtype=float)[1:, :2]
-                        # The margin inflates length and width both: it goes inside the hypot.
-                        reach_now = max(
-                            math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m) + pconf.envelope_offset_m,
-                                       abs(lat_) + fp_.half_width_m + pconf.envelope_offset_m)
-                            for fp_, lat_, lon_ in PARTS_OF(shape_now)
-                        )
-                        for oid, rect in enumerate(checked_obstacles):
-                            if len(arc_xy) and float(np.min(np.hypot(arc_xy[:, 0] - rect.x_m, arc_xy[:, 1] - rect.y_m))) > (
-                                reach_now + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6
-                            ):
-                                continue
-                            if pocket_phase and rect is pickup_obstacle:
-                                # Blades in the pockets meet the pallet's 2D outline by
-                                # design; fork/pallet contact is the 3D insertion guard's.
-                                continue
-                            # The shape the permission checks (body + blades unloaded).
-                            if any(SHAPE_MEETS(rect, shape_now, tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
-                                obstacle["events"] += 1
-                                per = obstacle.setdefault("event_objects", {})
+                        moving_dir_ = 1 if truth_speed > 0 else -1
+                        arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, moving_dir_, stop_len, 0.025)[0]
+                        # Blades in the pockets meet the pallet's 2D outline by design; fork/pallet contact is the 3D
+                        # insertion guard's.
+                        skip_ = {i_ for i_, r_ in enumerate(checked_obstacles) if pocket_phase and r_ is pickup_obstacle}
+                        # Two counts (docs/interfaces/2026-10-28-obstacle-truth-evaluation.md): the hull, as every
+                        # record since L0b ("events", "unpermitted"), and the shape the permission drives with in the
+                        # moving direction ("events_dir", "unpermitted_dir": the body and the blades reversing unloaded)
+                        # -- the hull fills the space beside the blades the permission never checks reversing (the
+                        # return-home "object 9" ticks of 2026-10-28 were that band, with no contact)
+                        hull_hits_, moving_hits_ = obstacle_module.stop_arc_hits(
+                            obstacle["layer"], arc, checked_obstacles, loaded=loaded, direction=moving_dir_,
+                            margin_m=pconf.envelope_offset_m, skip=skip_)
+                        for key_, hits_ in (("", hull_hits_), ("_dir", moving_hits_)):
+                            for oid in hits_:
+                                obstacle["events" + key_] = obstacle.get("events" + key_, 0) + 1
+                                per = obstacle.setdefault("event_objects" + key_, {})
                                 per[oid] = per.get(oid, 0) + 1
                                 if allowed >= abs(truth_speed) - 1e-9:
-                                    obstacle["unpermitted"].append(
+                                    obstacle.setdefault("unpermitted" + key_, []).append(
                                         {"time_s": t, "phase": ms.phase, "speed_mps": truth_speed, "allowed_mps": allowed,
                                          "reason": why, "object": oid}
                                     )
@@ -9422,6 +9415,14 @@ def drive(S, isaac) -> None:
                         "unpermitted_entries": len(obstacle["unpermitted"]),
                         "unpermitted": obstacle["unpermitted"][:50],
                         "event_objects": len(obstacle.get("event_objects", {})),
+                        # docs/interfaces/2026-10-28-obstacle-truth-evaluation.md: the list keeps its first 50 entries
+                        # (the count above is all of them); the same check with the shape the permission drives with
+                        "unpermitted_truncated": len(obstacle["unpermitted"]) > 50,
+                        "truth_events_dir": obstacle.get("events_dir", 0),
+                        "unpermitted_dir_entries": len(obstacle.get("unpermitted_dir", [])),
+                        "unpermitted_dir": obstacle.get("unpermitted_dir", [])[:50],
+                        "unpermitted_dir_truncated": len(obstacle.get("unpermitted_dir", [])) > 50,
+                        "event_objects_dir": len(obstacle.get("event_objects_dir", {})),
                         "reprojections": obstacle.get("reprojections", 0),
                         "grid_planning": grid_planning,
                         "replans": obstacle.get("replans", []),
