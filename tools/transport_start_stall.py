@@ -1,0 +1,404 @@
+"""The transport-start stall in a tight slot (riib aisle_rack, trailer), reproduced on the CPU from a run's obstacle dump
+and grid frames, with the existing counter-measures and two candidate additions put in (diagnosis, 2026-10-27; no
+runner change).
+
+A failing run stands right after the extract with its loaded outline within a few centimetres of the LiDAR marks of a
+tall prop's halo (a rack upright, a trailer wall) whose real surface is about 0.2 m away: the permission holds the
+transport at 0 ("occupied"), the P6 scene replan's start is invalid and every escape candidate is refused on its grid
+checks. From the first transport-phase dump this tool rebuilds the permission (the run's layer config and loaded
+outline) and reports, for each variant:
+
+- ``stand``: the permission at the stand (the transport leg ahead, the stop arc at the steering used) -- m/s and reason;
+- ``escapes``: the P6 escape candidates' grid checks (``escape.evaluate``'s path, ramped path and the three stop arcs
+  at kappa, kappa/2, 0) -- each candidate ``ok`` or which check holds it; ``ok`` here leaves out the rectangle sweep and
+  the end region, which the grid variants below do not change (the record's sweep values are printed beside them);
+- ``start_to_occupied_m``: the outline's distance to the nearest occupied cell left (the P6 replan's grid start).
+
+Variants:
+
+- ``off``: every counter-measure off, as the run;
+- ``band``: the start-band release (#128, docs/plans/2026-10-24-start-band-release.md) at the launcher's width
+  (envelope + step / 2) and wider;
+- ``zero``: (i) the steering set to 0 before the start (the stop arcs at kappa 0; a stand-still presteer), with the band;
+- ``corridor``: (ii) the extract leg's swept outline as known-clear: an occupied cell is read as free when the truck's
+  outline covered it during the extract and the cell was already occupied at that moment (a mark the truck stood in is
+  not an obstacle); a cell first marked after the outline left it is kept (it may be new);
+- ``corridor+band``, ``corridor+zero``: the two together.
+
+The escape-start release (#151 E2) acts on the rectangle sweep only, so it changes none of these grid checks; its row is
+the ``off`` row by construction.
+
+    python tools/transport_start_stall.py RUN_DIR [RUN_DIR ...] [--json OUT]
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import math
+import sys
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+for p in (ROOT / "src", ROOT / "sim/isaac"):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+
+from forklift_core.control import escape as esc  # noqa: E402
+from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel, in_shape  # noqa: E402
+from forklift_core.control.start_release import cell_distances, footprint_rect_distance  # noqa: E402
+from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, GridSnapshot  # noqa: E402
+from forklift_core.planning import Footprint, Rectangle  # noqa: E402
+
+# the scene replan's escape speed: options.backoff_speed_mps = run_transport.BACKOFF_SPEED_MPS (Codex diagnosis
+# review P2: 0.10 here before, a shorter stop arc and path extension than the runner checks)
+ESCAPE_SPEED_MPS = 0.15
+
+
+def threshold_args(record: dict):
+    """(planner clearance, psi, cell) that give the record's escape end thresholds (escape.end_threshold_m is linear in
+    the length: clearance + 2 sin(psi/2) L + cell); None without a recorded escape evaluation."""
+    events = record.get("scene_escape_candidates") or []
+    if not events:
+        return None
+    by_len = sorted({float(c["length_m"]): float(c["threshold_m"]) for c in events[0]["candidates"]}.items())
+    (l0, t0), (l1, t1) = by_len[0], by_len[-1]
+    slope = (t1 - t0) / (l1 - l0)
+    cell = 0.05
+    return t0 - slope * l0 - cell, 2.0 * math.asin(slope / 2.0), cell
+
+
+def full_escape(dump, record, base_cfg, fp, *, band: float, kappa_arc: float, kappa_measured: float,
+                shift=None, anchor_at_shift: bool = False) -> dict:
+    """The scene replan's escape_plan (src/forklift_core/mission/core.py) on the dump: the trigger's rectangles
+    (permit_stop.current_blocked_rectangles at the held steering), the transport leg's rectangles (the scene props with
+    the run's KEEPOUT), the start-band split of the trigger's rectangles with the release on, every check of
+    escape.evaluate at ``kappa_arc`` (the stop arcs at kappa, kappa/2, 0), the choice, and candidate_permit at the
+    measured steering ``kappa_measured`` -- the escape is installed only when that permit is ok."""
+    from forklift_core.mission.permit_stop import current_blocked_rectangles
+    from forklift_core.planning.geometry import FootprintCollisionChecker
+    from forklift_core.planning.pallet_mission import LIDAR_PLANE_M, scenario_props
+    from obstacle_layer import ObstacleLayer
+    from scene_file import scenario_from_record
+
+    cfg = replace(base_cfg, start_band_m=band)
+    snap = snapshot_of(dump)
+    anchor = tuple(float(v) for v in dump["rear"])
+    # an escape presteer's stand (escape presteer C4): evaluated from the stand shifted by the presteer's own move, the
+    # start-band anchor at the first stand (the implementation) or at the shifted one (re-latched)
+    pose = anchor if shift is None else tuple(a + d for a, d in zip(anchor, shift))
+    if anchor_at_shift:
+        anchor = pose
+    leg = np.asarray(dump["leg"], dtype=float)
+    direction = int(dump["direction"]) or -1
+    layer = ObstacleLayer.__new__(ObstacleLayer)  # the layer's check methods on the dump's processed snapshot
+    layer.permission, layer.snapshot, layer.last_scan_s = DrivePermission(cfg), snap, {}
+    layer.loaded = layer.unloaded = layer.body = layer.unloaded_shape = fp
+    layer.shape_mode = "hull"
+    layer.permission.update(snap, leg, fp, fp, current_pose=pose, direction=direction)
+    if band > 0:
+        layer.permission.note_standing(True, anchor, int(dump["version"]))  # the device's _note_release_standing
+    cruise_ = (record.get("tracker_configs") or {}).get("transport", 0.3)
+    cruise = float(cruise_["cruise_speed_mps"] if isinstance(cruise_, dict) else cruise_)  # the trigger's arc cap
+    extra = current_blocked_rectangles(layer, rear=pose, leg=leg, direction=direction, loaded=True,
+                                       kappa=float(dump["kappa"]), speed_cap_mps=cruise)
+    scenario = scenario_from_record(record["scenario"])
+    rects = scenario_props(scenario, keepout_m=float(record["geometry"].get("lidar_keepout_m", 0.0)),
+                           plane_m=LIDAR_PLANE_M)
+    checker = FootprintCollisionChecker(list(rects) + list(extra), fp, scenario.bounds)
+    if band > 0:
+        near, far = esc.start_band_rectangles(list(extra), fp, pose)
+        sweep_checker = FootprintCollisionChecker(list(rects) + far, fp, scenario.bounds)
+    else:
+        near, sweep_checker = [], checker
+    targs = threshold_args(record)
+    if targs is None:
+        return {"error": "no recorded escape evaluation"}
+    clear, psi, cell = targs
+    stop_len = cfg.stopping.distance_m(ESCAPE_SPEED_MPS) + cfg.step_m
+    cands = esc.evaluate(
+        pose,
+        sweep_free=lambda poses, d: esc.rectangles_sweep_free(sweep_checker, poses, near, fp),
+        path_blocked=lambda poses, d, x, r: layer.check_candidate(
+            poses, current_pose=pose, direction=d, loaded=True, extra_margin_m=x, extra_ramp_m=r).blocked,
+        arc_blocked=lambda k, d: layer.check_arc_candidate(
+            current_pose=pose, curvature_inv_m=k, direction=d, loaded=True, cap_mps=ESCAPE_SPEED_MPS).blocked,
+        end_clearance=lambda region: (lambda v: (min(v) >= 0.0, min(v)))(
+            [esc.clearance_m(checker.free, p) for p in region]),
+        kappa_now=kappa_arc, stop_length_m=stop_len, planner_clearance_m=clear, psi_rad=psi, cell_m=cell)
+    choice = esc.choose(cands, direction)
+    permit = None
+    if choice is not None:
+        permit = layer.candidate_permit(
+            float(dump["t"]), esc.straight(pose, choice.direction, choice.length_m), current_pose=pose,
+            direction=int(choice.direction), loaded=True, curvature_inv_m=0.0,
+            measured_curvature_inv_m=kappa_measured, cap_mps=ESCAPE_SPEED_MPS)
+
+    def code(c):
+        if c.qualifies:
+            return "ok"
+        if not c.sweep_free:
+            return "sweep"
+        if c.path is not None:
+            return "path"
+        if c.path_ramped is not None:
+            return "ramped"
+        if any(b is not None for _, b in c.arcs):
+            return "arc"
+        return f"end{c.end_clearance_m:.3f}<{c.threshold_m:.3f}" if c.end_free else "end_hit"
+
+    # which rectangles hold a sweep (the separate diagnosis of the stands no variant frees): the scene props with
+    # KEEPOUT alone, the trigger's rectangles alone, and the props at their own size (KEEPOUT 0)
+    plain = scenario_props(scenario, keepout_m=0.0, plane_m=LIDAR_PLANE_M)
+    split = {}
+    for c in cands:
+        poses = esc.straight(pose, c.direction, c.length_m)
+        split[f"{c.direction:+d}x{c.length_m:g}"] = [
+            esc.rectangles_sweep_free(FootprintCollisionChecker(list(rects), fp, scenario.bounds), poses),
+            esc.rectangles_sweep_free(FootprintCollisionChecker(list(extra), fp, scenario.bounds), poses),
+            esc.rectangles_sweep_free(FootprintCollisionChecker(list(plain), fp, scenario.bounds), poses)]
+    return {"candidates": {f"{c.direction:+d}x{c.length_m:g}": code(c) for c in cands},
+            "sweep_free_props_trigger_plain": split,
+            "qualifying": sum(c.qualifies for c in cands),
+            "chosen": None if choice is None else f"{choice.direction:+d}x{choice.length_m:g}",
+            "permit": None if permit is None else permit["why"],
+            "installs": bool(permit is not None and permit["ok"]),
+            "extra_rects": len(extra), "released_rects": len(near),
+            # the recorded evaluation's checks, to compare the off variant with (the record's pose and time may differ)
+            "record": {f"{c['direction']:+d}x{c['length_m']:g}": [c["sweep_free"], c["path"], c["path_ramped"],
+                                                                   [b for _, b in c["arcs"]]]
+                       for c in (record.get("scene_escape_candidates") or [{}])[0].get("candidates", [])}}
+
+
+def layer_permission_config(path: Path) -> PermissionConfig:
+    """The permission config the run's obstacle layer built (sim/isaac/obstacle_layer.py)."""
+    cfg = yaml.safe_load(path.read_text())
+    p, g = cfg["permission"], cfg["grid"]
+    return PermissionConfig(StoppingModel(float(p["latency_s"]), float(p["decel_mps2"]), float(p["margin_m"])),
+                            envelope_offset_m=float(p["envelope_m"]), evidence_max_age_s=float(g["free_max_age_s"]),
+                            envelope_ramp_m=float(p["envelope_ramp_m"]), sensor_timeout_s=float(p["sensor_timeout_s"]),
+                            lookahead_m=float(p["lookahead_m"]), shadow_band_m=float(p.get("shadow_band_m", 0.0)))
+
+
+def first_transport_dump(run: Path):
+    for f in sorted(glob.glob(str(run / "run/obstacle_dump_*.npz")), key=lambda s: int(s.split("_")[-1][:-4])):
+        d = np.load(f, allow_pickle=True)
+        if str(d["phase"]) == "transport":
+            return d
+    return None
+
+
+def snapshot_of(dump, state=None) -> GridSnapshot:
+    return GridSnapshot(state=np.asarray(dump["state"]).copy() if state is None else state,
+                        free_stamp=np.asarray(dump["free_stamp"]), stamp_s=float(dump["t"]),
+                        correction=tuple(float(v) for v in dump["correction"]),
+                        correction_version=int(dump["version"]), scans_used=1,
+                        origin_x_m=float(dump["origin"][0]), origin_y_m=float(dump["origin"][1]),
+                        resolution_m=float(dump["res"]))
+
+
+def extract_corridor_release(run: Path, record: dict, dump, footprint: Footprint) -> tuple[np.ndarray, dict]:
+    """(ii): the dump's occupied cells to read as free -- covered by the loaded outline at some pose of the extract
+    and already occupied in the grid frame at that moment. The extract's poses are its planned path, timed linearly
+    between the extract's and the transport's start transitions (the truck drives it at a near-constant speed)."""
+    times_ = {(t.get("phase") or t.get("to")): float(t.get("time_s", t.get("t", 0.0))) for t in record["transitions"]}
+    t0, t1 = times_["extract"], times_["transport"]
+    poses = np.asarray(record["paths"]["extract"]["poses"], dtype=float)
+    seg = np.r_[0.0, np.cumsum(np.hypot(*np.diff(poses[:, :2], axis=0).T))]
+    when = t0 + (t1 - t0) * (seg / seg[-1] if seg[-1] > 0 else np.zeros_like(seg))
+    frames = np.load(run / "run/obstacle_grid_frames.npz", allow_pickle=True)
+    ftimes, forigins, fres, offs, fcells = (frames["times"], frames["origins"], frames["resolution"], frames["offsets"],
+                                            frames["cells"])
+    state = np.asarray(dump["state"])
+    ox, oy, res = float(dump["origin"][0]), float(dump["origin"][1]), float(dump["res"])
+    occ = np.argwhere(state == OCCUPIED)
+    cx, cy = ox + (occ[:, 0] + 0.5) * res, oy + (occ[:, 1] + 0.5) * res
+    release = np.zeros(len(occ), dtype=bool)
+    stats = {"occupied": int(len(occ)), "covered": 0, "covered_new": 0}
+
+    def occupied_in_frame(k, x, y):
+        cells = fcells[offs[k]:offs[k + 1]]
+        if not len(cells):
+            return np.zeros(len(x), dtype=bool)
+        r = float(fres[k])
+        i = np.floor((x - forigins[k][0]) / r).astype(int)
+        j = np.floor((y - forigins[k][1]) / r).astype(int)
+        have = set(map(tuple, cells.tolist()))
+        return np.array([(a, b) in have for a, b in zip(i, j)])
+
+    covered_at = np.full(len(occ), np.nan)
+    for pose, t in zip(poses, when):
+        inside = in_shape(cx, cy, tuple(pose), footprint)
+        covered_at[inside] = t  # the last moment the outline covered the cell's centre
+    covered = ~np.isnan(covered_at)
+    stats["covered"] = int(covered.sum())
+    for idx in np.flatnonzero(covered):
+        k = int(np.searchsorted(ftimes, covered_at[idx], side="right") - 1)
+        if k < 0:
+            continue
+        if occupied_in_frame(k, cx[idx:idx + 1], cy[idx:idx + 1])[0]:
+            release[idx] = True
+        else:
+            stats["covered_new"] += 1  # first marked after the outline left: kept
+    return occ[release], stats
+
+
+def evaluate(run: Path) -> dict:
+    record = json.loads((run / "run/result.json").read_text())
+    dump = first_transport_dump(run)
+    if dump is None:
+        return {"run": run.name, "error": "no transport-phase dump"}
+    base_cfg = layer_permission_config(ROOT / record["obstacle_layer"]["config"])
+    lf = record["geometry"]["loaded_footprint"]
+    fp = Footprint(float(lf["front_m"]), float(lf["rear_m"]), float(lf["half_width_m"]))
+    pose = tuple(float(v) for v in dump["rear"])
+    leg = np.asarray(dump["leg"], dtype=float)
+    direction, kappa, t = int(dump["direction"]), float(dump["kappa"]), float(dump["t"])
+    version = int(dump["version"])
+    band_launcher = base_cfg.envelope_offset_m + base_cfg.step_m / 2.0
+    released, corridor_stats = extract_corridor_release(run, record, dump, fp)
+    corridor_state = np.asarray(dump["state"]).copy()
+    for i, j in released:
+        corridor_state[i, j] = FREE
+    free_stamp_t = t
+    stop_len = base_cfg.stopping.distance_m(ESCAPE_SPEED_MPS) + base_cfg.step_m
+    # the driving tick's cap: max(|requested|, |truth speed|) (core.py; Codex diagnosis review P2)
+    stand_cap = max(abs(float(dump["requested"])), abs(float(dump["truth_speed"])))
+
+    def variant(band: float, zero, corridor: bool) -> dict:
+        """``zero``: False (the held steering), True (0) or a curvature the steering is set to first."""
+        cfg = replace(base_cfg, start_band_m=band)
+        snap = snapshot_of(dump)
+        if corridor:
+            fs = np.asarray(dump["free_stamp"]).copy()
+            for i, j in released:
+                fs[i, j] = free_stamp_t
+            snap = replace(snap, state=corridor_state.copy(), free_stamp=fs)
+        k_now = kappa if zero is False else (0.0 if zero is True else float(zero))
+
+        def fresh():
+            perm = DrivePermission(cfg)
+            if band > 0:
+                perm.note_standing(True, pose, version)
+            return perm
+
+        perm = fresh()
+        perm.update(snap, leg, fp, fp, current_pose=pose, direction=direction)
+        allowed, why = perm.allowed_speed(t, {}, current_pose=pose, curvature_inv_m=k_now, direction=direction,
+                                          footprint=fp, own_footprint=fp, speed_cap_mps=stand_cap)
+        escapes = {}
+        for d in (1, -1):
+            arcs = [fresh().check_arc(snap, pose, k, d, fp, fp, ESCAPE_SPEED_MPS).blocked
+                    for k in (k_now, k_now / 2.0, 0.0)]
+            for length in esc.LENGTHS_M:
+                ahead = esc.straight(pose, d, length + stop_len)
+                path = fresh().check_path(snap, ahead, fp, fp, current_pose=pose, direction=d).blocked
+                ramped = fresh().check_path(snap, ahead, fp, fp, current_pose=pose, direction=d,
+                                            extra_margin_m=esc.EXTRA_MARGIN_M, extra_ramp_m=length).blocked
+                ok = path is None and ramped is None and all(a is None for a in arcs)
+                escapes[f"{d:+d}x{length:g}"] = "ok" if ok else (
+                    "path" if path else "ramped" if ramped else "arc")
+        occ = np.argwhere(np.asarray(snap.state) == OCCUPIED)
+        near = occ[np.hypot(snap.origin_x_m + (occ[:, 0] + 0.5) * snap.resolution_m - pose[0],
+                            snap.origin_y_m + (occ[:, 1] + 0.5) * snap.resolution_m - pose[1]) < 4.0]
+        start_d = float(cell_distances(snap, near, pose, fp).min()) if len(near) else math.inf
+        return {"stand": [round(float(allowed), 3), why], "escapes": escapes,
+                "escapes_ok": sum(v == "ok" for v in escapes.values()), "start_to_occupied_m": round(start_d, 4)}
+
+    variants = {"off": variant(0.0, False, False)}
+    for band in (band_launcher, 0.03):
+        variants[f"band{band:g}"] = variant(band, False, False)
+        variants[f"zero+band{band:g}"] = variant(band, True, False)
+    variants["corridor"] = variant(0.0, False, True)
+    variants[f"corridor+band{band_launcher:g}"] = variant(band_launcher, False, True)
+    variants[f"corridor+zero+band{band_launcher:g}"] = variant(band_launcher, True, True)
+    variants["corridor+zero"] = variant(0.0, True, True)
+    # a presteer to a set curvature (plan 2026-10-27 escape presteer): the escapes' arcs at that steering
+    for k_set in (-0.05, -0.02, 0.02, 0.05):
+        for band in (band_launcher, 0.03):
+            variants[f"steer{k_set:+g}+band{band:g}"] = variant(band, k_set, False)
+    # the full escape_plan (escape.evaluate with the rectangle sweep and the end region, and the install permit)
+    full = {}
+    for name_, band_, k_arc_, k_meas_ in (
+            ("off", 0.0, kappa, kappa), (f"band{band_launcher:g}", band_launcher, kappa, kappa),
+            ("band0.03", 0.03, kappa, kappa), ("zero+band0.03", 0.03, 0.0, 0.0),
+            ("steer-0.05", 0.0, -0.05, -0.05), ("steer+0.05", 0.0, 0.05, 0.05),
+            ("steer-0.02+band0.03", 0.03, -0.02, -0.02), ("steer+0.02+band0.03", 0.03, 0.02, 0.02),
+            ("steer-0.05+band0.03", 0.03, -0.05, -0.05), ("steer+0.05+band0.03", 0.03, 0.05, 0.05)):
+        full[name_] = full_escape(dump, record, base_cfg, fp, band=band_, kappa_arc=k_arc_, kappa_measured=k_meas_)
+    # an escape presteer's record (C4 runs): its move while steering and the steering measured after it
+    presteer = {}
+    for r_ in record.get("scene_replans") or []:
+        ep_ = r_.get("escape_presteer") or {}
+        if r_.get("phase") == "transport" and ep_.get("rear_start") and ep_.get("rear_end"):
+            shift_ = [b - a for a, b in zip(ep_["rear_start"], ep_["rear_end"])]
+            k_m_ = next((e.get("kappa_measured") for e in record.get("scene_escape_candidates") or []
+                         if e.get("presteered")), None)
+            if k_m_ is None:
+                continue
+            presteer = {"shift": shift_, "kappa_measured": k_m_,
+                        "anchor_first": full_escape(dump, record, base_cfg, fp, band=0.03, kappa_arc=k_m_,
+                                                    kappa_measured=k_m_, shift=shift_),
+                        "anchor_relatched": full_escape(dump, record, base_cfg, fp, band=0.03, kappa_arc=k_m_,
+                                                        kappa_measured=k_m_, shift=shift_, anchor_at_shift=True),
+                        "no_move": full_escape(dump, record, base_cfg, fp, band=0.03, kappa_arc=k_m_,
+                                               kappa_measured=k_m_)}
+            break
+    tall = [pp for pp in record["scenario"]["props"] if float(pp["asset"].get("height_m", 0.0)) > 1.05]
+    truth = tuple(float(v) for v in dump["truth_rear"])
+    gap = min(((footprint_rect_distance(truth, fp, Rectangle(**pp["rectangle"])), pp["asset"]["uri"]) for pp in tall),
+              default=(math.inf, None))
+    record_sweep = {}
+    for e in (record.get("scene_escape_candidates") or [])[:1]:
+        record_sweep = {f"{c['direction']:+d}x{c['length_m']:g}": c.get("sweep_free") for c in e["candidates"]}
+    return {"run": run.name, "t": round(t, 2), "rear": [round(v, 3) for v in pose], "kappa": round(kappa, 4),
+            "direction": direction, "band_launcher_m": band_launcher, "corridor": corridor_stats,
+            "corridor_released": int(len(released)), "tall_gap_truth_m": [round(gap[0], 4), gap[1]],
+            "permit_threshold_m": base_cfg.envelope_offset_m + base_cfg.stopping.margin_m,
+            "record_sweep_free": record_sweep, "variants": variants, "full": full,
+            "record_escape_t": (record.get("scene_escape_candidates") or [{}])[0].get("time_s"), "presteer": presteer}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("runs", nargs="+", type=Path)
+    parser.add_argument("--json", type=Path)
+    args = parser.parse_args(argv)
+    out = []
+    for run in args.runs:
+        try:
+            out.append(evaluate(run))
+        except Exception as exc:  # noqa: BLE001 -- one run's failure is reported, the others go on
+            out.append({"run": run.name, "error": repr(exc)})
+        r = out[-1]
+        if "error" in r:
+            print(r)
+            continue
+        print(f"{r['run']}: kappa {r['kappa']} corridor released {r['corridor_released']} "
+              f"(covered {r['corridor']['covered']}, new {r['corridor']['covered_new']}) gap {r['tall_gap_truth_m']}")
+        for name, v in r["variants"].items():
+            print(f"  {name:22s} stand {v['stand']} escapes_ok {v['escapes_ok']}/8 start->occ {v['start_to_occupied_m']}")
+        if r.get("presteer"):
+            ps = r["presteer"]
+            print(f"  presteer replay: shift {[round(v, 5) for v in ps['shift']]} kappa_measured {ps['kappa_measured']:.4f}")
+            for k in ("no_move", "anchor_first", "anchor_relatched"):
+                v = ps[k]
+                print(f"    {k:18s} qualifying {v.get('qualifying')}/8 installs {v.get('installs')} {v.get('candidates')}")
+        print(f"  full escape_plan (record escape at t {r['record_escape_t']}):")
+        for name, v in r["full"].items():
+            if "error" in v:
+                print(f"    {name:22s} {v['error']}")
+                continue
+            print(f"    {name:22s} qualifying {v['qualifying']}/8 chosen {v['chosen']} permit {v['permit']} "
+                  f"installs {v['installs']} extra {v['extra_rects']} released {v['released_rects']} {v['candidates']}")
+    if args.json:
+        args.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

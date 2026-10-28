@@ -177,7 +177,7 @@ P-4:D-1, P-5:D-2, P-3:D-3, seed 0–9. rh 에서 이 실패가 난 장면이다.
   - trailer 실패는 aisle_rack 의 운반 출발 정지와 같은 기전이다. 그래서 그 수정(`docs/plans/2026-10-27-escape-presteer.md`)의 Isaac 비교에서 trailer 0–4 를 함께 본다.
   - 그 계획의 CPU 전체 판정에서는 trailer 실패 10 건(trx 5·tra 3·trb 2)이 모두 띠 0.03 + 조향 +0.05 로 탈출 설치까지 간다.
 - (b) 는 규칙대로 읽지 않는다. 참고로만 적는다. rcf 플래그(reported, RESTART_CONFIRM 0, D7_HOLD off)를 준 (b) 는 7/10 이고, riib 기본 플래그의 trx 는 1/10 이다(둘 다 출구 0.30). 다만 두 배치는 코드가 다르다(trb `e560bc00`, trx `b35d7f53`). 그 사이 런처의 다른 기본값도 바뀌었다. 그래서 이 차이의 후보는 플래그, 코드와 다른 기본값의 차이, 비결정성이다. 이 자료로는 가르지 않는다. 총괄에 보고했다.
-- 런처의 trailer 출구 여유 자동 부여(`feat/riib-trailer-exit`)는 보류를 유지한다. trailer 를 riib 런처로 돌릴 때는 `EXTRA_ARGS="--exit-clearance-m 0.30"` 을 준다.
+- 런처의 trailer 출구 여유 자동 부여(`feat/riib-trailer-exit`)는 #187 로 대체됐다(장면 필수 인자; riib 런처가 trailer 에 출구 0.30 을 자동으로 준다). 그 브랜치는 머지하지 않고 남겨 둔다.
 
 #### 셋째 진단: 플래그 하나씩 (2026-10-28 총괄 결정, 결과 전에 적음)
 

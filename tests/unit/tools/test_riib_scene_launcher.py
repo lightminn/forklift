@@ -76,10 +76,18 @@ def test_the_aisle_runs_its_rack_copy_by_default_and_the_plain_scene_with_rack_o
     assert plain[plain.index("--scene-file") + 1].endswith("aisle.json")
 
 
-def test_the_start_band_release_is_off_unless_asked(tmp_path):
-    assert contains(args_of(dry_run(tmp_path)), ["--start-band-release", "off"])
-    assert " START_BAND=off " in (tmp_path / "out/riib_defaults.txt").read_text()
-    assert contains(args_of(dry_run(tmp_path, START_BAND="on")), ["--start-band-release", "on"])
+def test_the_start_band_release_and_the_escape_presteer_are_off_unless_asked(tmp_path):
+    # docs/validation/2026-10-28-escape-presteer.md: off after the C4 comparison; on gives the width (0.03 by default)
+    off = args_of(dry_run(tmp_path))
+    assert contains(off, ["--start-band-release", "off"]) and "--start-band-m" not in off
+    assert contains(off, ["--escape-presteer", "off"])
+    defaults = (tmp_path / "out/riib_defaults.txt").read_text()
+    assert " START_BAND=off " in defaults and " START_BAND_M=0.03 " in defaults and " ESCAPE_PRESTEER=off " in defaults
+    on = args_of(dry_run(tmp_path, START_BAND="on", ESCAPE_PRESTEER="on", out=tmp_path / "on"))
+    assert contains(on, ["--start-band-release", "on"]) and contains(on, ["--start-band-m", "0.03"])
+    assert contains(on, ["--escape-presteer", "on"])
+    width = args_of(dry_run(tmp_path, START_BAND="on", START_BAND_M="0.02", out=tmp_path / "w"))
+    assert contains(width, ["--start-band-m", "0.02"])
 
 
 def test_the_escape_start_release_is_off_unless_asked(tmp_path):
@@ -190,6 +198,7 @@ def test_the_gyro_heading_is_refused_where_it_is_not_defined(tmp_path, env):
 @pytest.mark.parametrize("env", [{"RESTART_CONFIRM": "-1"}, {"RESTART_CONFIRM": "x"}, {"LOW_CLEARANCE": "maybe"}, {"MODE": "fast"}, {"NEAR": "maybe"}, {"KEEPOUT": "-0.1"}, {"KEEPOUT": "abc"}, {"SCENE": "line_2_m", "MARKERS": "off"},
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
+                                 {"START_BAND_M": "0"}, {"START_BAND_M": "x"}, {"ESCAPE_PRESTEER": "maybe"},
                                  {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"},
                                  {"NEAR_RECAPTURE_GAP": "-1"}, {"NEAR_RECAPTURE_GAP": "x"},

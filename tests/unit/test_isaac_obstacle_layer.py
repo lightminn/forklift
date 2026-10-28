@@ -920,3 +920,48 @@ def test_a_candidate_permit_leaves_an_unknown_beyond_the_verified_distance_to_th
     lay.snapshot = dc_replace(snap, state=band(snap.state, 0.9, 1.1, UNKNOWN))
     start = lay.candidate_permit(0.2, path, strict=False, **kw)  # unknown inside the stopping distance: no start
     assert not start["ok"] and start["why"].startswith("start:")
+
+
+def test_the_escape_probe_checks_run_on_a_permission_passed_in_leaving_the_layer_s_own_alone():
+    """docs/plans/2026-10-27-escape-presteer.md D2-2 (Codex plan round 2): the probe's path, arc and install-permit
+    checks take a permission copy -- the layer's own start-band anchor (its best distances) and release counts do not
+    move -- and a permission passed in is the one judged with."""
+    import copy
+    from dataclasses import replace
+
+    lay = layer()
+    lay.permission.config = replace(lay.permission.config, start_band_m=0.03)
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _wall_raw(lay, 1.31), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    lay.permission.note_standing(True, pose, 0)
+    anchor, stats = copy.deepcopy(lay.permission.release_anchor), dict(lay.permission.release_stats)
+    probe = copy.deepcopy(lay.permission)
+    back = np.column_stack((np.linspace(0, -0.5, 26), np.zeros(26), np.zeros(26)))
+    a = lay.check_candidate(path, current_pose=pose, direction=1, loaded=False, permission=probe)
+    b = lay.check_arc_candidate(current_pose=pose, curvature_inv_m=0.05, direction=1, loaded=False, cap_mps=0.15,
+                                permission=probe)
+    c = lay.candidate_permit(0.2, back, current_pose=pose, direction=-1, loaded=False, curvature_inv_m=0.0,
+                             measured_curvature_inv_m=0.05, cap_mps=0.15, permission=probe)
+    assert probe.release_stats["checks"] > 0  # the start-band walk ran on the copy
+    assert lay.permission.release_anchor == anchor and lay.permission.release_stats == stats
+    # the same answers as the layer's own permission gives
+    own = copy.deepcopy(lay.permission)
+    assert a == own.check_path(lay.snapshot, path, *lay.footprints(False, 1), current_pose=pose, direction=1)
+    assert b.blocked == lay.check_arc_candidate(current_pose=pose, curvature_inv_m=0.05, direction=1, loaded=False,
+                                                cap_mps=0.15).blocked
+    assert c["ok"] == lay.candidate_permit(0.2, back, current_pose=pose, direction=-1, loaded=False,
+                                           curvature_inv_m=0.0, measured_curvature_inv_m=0.05, cap_mps=0.15)["ok"]
+    # and a permission passed in is the one judged with: a 0.1 m lookahead verifies 0.1 m of a reverse the layer's
+    # own permission verifies whole
+    far = layer()
+    for k in range(3):
+        far.add_scans(0.1 * k, _wall_raw(far, 1.62), odom_rear=pose, loaded=False)
+    far.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    short = copy.deepcopy(far.permission)
+    short.config = replace(short.config, lookahead_m=0.1)
+    assert far.check_candidate(back, current_pose=pose, direction=-1, loaded=False).verified_m == pytest.approx(0.5)
+    assert far.check_candidate(back, current_pose=pose, direction=-1, loaded=False,
+                               permission=short).verified_m == pytest.approx(0.1)

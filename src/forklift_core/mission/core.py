@@ -73,7 +73,7 @@ from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
 from forklift_core.mission.targets import TargetsBook
 from forklift_core.mission.state import MissionState
-from forklift_core.mission.scene_replan import SceneReplan
+from forklift_core.mission.scene_replan import SceneReplan, SceneReplanConfig
 from forklift_core.mission import bottom_deck_legs
 from forklift_core.mission import second_near as SECOND_NEAR
 from forklift_core.mission import adoption_zone as ADOPTION
@@ -302,7 +302,9 @@ class MissionCore:
         # The scene-mode replan device (docs/plans/2026-10-23-scene-replan.md): one request at a time ahead of the
         # follower; its records are the mission's (state["scene_replans"], made at the first request -- a run without
         # one keeps its state as it was), its budget reset at each mission's end.
-        self.scene_replan = SceneReplan(None)
+        self.scene_replan = SceneReplan(None, SceneReplanConfig(
+            # docs/plans/2026-10-27-escape-presteer.md D2; off (and an options object from before it): as before
+            escape_presteer=getattr(options, "escape_presteer", "off") == "on"))
         # Plan 2026-10-24-goal-creep-stall G2: the final goal's creep watch (a mission's own: CORE_FIELDS).
         self.goal_creep_watch = {"key": None, "last_t": None, "window": [], "latched": False}
         # docs/plans/2026-10-26-observe-start-backoff.md B4/B8: the first far observation's start backoff in progress and
@@ -830,6 +832,18 @@ class MissionCore:
             return True
         if cmds.status == "cancelling":
             cmds.begin_recovery(t)
+        if self.scene_replan.active():
+            # escape presteer plan D2-6 (Codex plan round 4): the back-out owns the truck from here -- a scene replan
+            # request (its plan out, its escape) ends with the cancel instead of living on into the recovery
+            if self.scene_escape is not None:
+                self._escape_clip_end(t, rear, "cancelled")  # Codex impl round 6 P3
+            self.scene_replan.abort("cancelled:clear_out")
+            if self.pending is not None and self.pending.site == "scene_replan":
+                self._drop(self.pending, t, "scene_replan_ended", count=False)
+            self.scene_mail = None
+            if self.obstacle is not None and self.obstacle.get("backoff", {}).get("scene"):
+                self.obstacle.pop("backoff", None)
+            self.scene_escape = None
         self.clear_out_used_m = 0.0
         self.start_clear_out(t, rear)
         return False
@@ -5123,6 +5137,23 @@ class MissionCore:
             cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
             cmds.pause_hold_count = self.hold_count()
 
+        def finish():
+            length = cmds.resumed(t)
+            check["step"] = "running"
+            if obstacle is not None and "live_retry_after_s" in obstacle:
+                obstacle["live_retry_after_s"] += length  # E4: a deadline-type anchor moves by the pause
+            monitor = self.hooks.cusp_monitor() if hasattr(self.hooks, "cusp_monitor") else None
+            if monitor is not None:
+                monitor.shift_time(length)
+            self.scene_replan.shift_time(length)
+            if self.scene_escape is not None and self.scene_escape.get("zero_since") is not None:
+                # escape presteer plan D2-6 (Codex plan round 3 P2-2): the escape's 1 s zero wait does not count the
+                # pause either
+                self.scene_escape["zero_since"] += length
+            if ms.phase in trackers:
+                trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
+            return rear
+
         check["step"] = "state_verified"
         if self.near_active():
             # M-b B5: a stop inside the near-field contract (an arbiter STOP; a pause is refused there) is not resumed
@@ -5141,6 +5172,14 @@ class MissionCore:
                 return refuse("state_verified:hold_episode_changed")
         if ms.phase == "observe" and holding_now and self.realign_active():
             return refuse("no_resume:realign_held")  # R3x: no recovery runs held in a realignment
+        request_ = self.scene_replan.request_
+        if (request_ is not None and ms.phase in ("transport", "return_home")
+                and request_["record"].get("phase") == ms.phase):
+            # escape presteer plan D2-6 (Codex plan rounds 2-4): this phase's scene replan request owns the ticks after
+            # the resume -- its states check the stop and the permission again -- so neither the docking retry (R11)
+            # nor the path recheck's own recovery changes the path under it
+            check["step"] = "scene_request"
+            return finish()
         docking_ = slam["docking"] if slam is not None else {}
         recovering_ = obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase
         straight_row = (ms.phase == "transport" and holding_now and not docking_.get("reapproach")
@@ -5265,17 +5304,7 @@ class MissionCore:
                 if lp_ <= 0.0:
                     check["reason"] = f"path_blocked:pocket:{wp_}"
                     return rear
-        length = cmds.resumed(t)
-        check["step"] = "running"
-        if obstacle is not None and "live_retry_after_s" in obstacle:
-            obstacle["live_retry_after_s"] += length  # E4: a deadline-type anchor moves by the pause
-        monitor = self.hooks.cusp_monitor() if hasattr(self.hooks, "cusp_monitor") else None
-        if monitor is not None:
-            monitor.shift_time(length)
-        self.scene_replan.shift_time(length)
-        if ms.phase in trackers:
-            trackers[ms.phase].restart_speed_slew(0.0)  # from standing, not from the held cruise
-        return rear
+        return finish()
 
     def near_active(self) -> bool:
         """The near-field contract applies this tick: a near tracker exists and the phase is one ``near_tick`` runs in
@@ -7614,23 +7643,22 @@ class MissionCore:
             ms.phase_started = t
             core._refresh_for_new_leg(t, box.rear)
 
-        def escape_plan(extra, clearance_m):
-            if obstacle is None:
-                return None
-            core._note_release_standing(box.rear, stopped())  # re-latched after the release's correction, if any
+        def escape_evaluate(extra, clearance_m, kappa_now_, permission_=None):
+            """The escape's candidates, choice and install permit at the steering kappa_now_ (escape_plan's at the held
+            steering; the escape presteer probe's at a set one, on a permission copy so the driving permission's
+            start-band anchor and counts stay as they are -- docs/plans/2026-10-27-escape-presteer.md D2-2)."""
             _, _, _, (rects_, footprint_, bounds_) = core.escape_leg(ms.phase)
             checker_ = FootprintCollisionChecker(list(rects_) + list(extra), footprint_, bounds_)
             layer_ = obstacle["layer"]
             loaded_ = bool(hooks.loaded())
             pose_ = tuple(float(v) for v in box.rear)
-            pconf_ = layer_.permission.config
+            pconf_ = (permission_ or layer_.permission).config
             speed_ = options.backoff_speed_mps
             stop_len_ = pconf_.stopping.distance_m(speed_) + pconf_.step_m
             psi_ = float(layer_.error_table.at(layer_.grid_config.occupied_max_age_s)[1])
             clear_ = float(clearance_m) if clearance_m is not None else float(
                 (options.travel_config or options.planner_config).clearance_m)
             cell_ = float(layer_.snapshot.resolution_m) if layer_.snapshot is not None else 0.05
-            kappa_now_ = float(hooks.held_kappa())
             if (getattr(options, "start_band_release", "off") == "on"
                     or getattr(options, "escape_start_release", "off") == "on"):
                 # start-band release (docs/plans/2026-10-24-start-band-release.md): the trigger's rectangles the stop
@@ -7645,17 +7673,40 @@ class MissionCore:
                 pose_,
                 sweep_free=lambda poses_, d_: esc.rectangles_sweep_free(sweep_checker_, poses_, near_, footprint_),
                 path_blocked=lambda poses_, d_, x_, r_: layer_.check_candidate(
-                    poses_, current_pose=pose_, direction=d_, loaded=loaded_, extra_margin_m=x_, extra_ramp_m=r_).blocked,
+                    poses_, current_pose=pose_, direction=d_, loaded=loaded_, extra_margin_m=x_, extra_ramp_m=r_,
+                    permission=permission_).blocked,
                 arc_blocked=lambda k_, d_: layer_.check_arc_candidate(
-                    current_pose=pose_, curvature_inv_m=k_, direction=d_, loaded=loaded_, cap_mps=speed_).blocked,
+                    current_pose=pose_, curvature_inv_m=k_, direction=d_, loaded=loaded_, cap_mps=speed_,
+                    permission=permission_).blocked,
                 end_clearance=lambda region_: (lambda v_: (min(v_) >= 0.0, min(v_)))(
                     [esc.clearance_m(checker_.free, p_) for p_ in region_]),
                 kappa_now=kappa_now_, stop_length_m=stop_len_, planner_clearance_m=clear_, psi_rad=psi_, cell_m=cell_)
             leg_dir_ = trackers[ms.phase].leg_ahead()[1]
             choice_ = esc.choose(candidates_, int(leg_dir_))
+            poses_, permit_ = None, None
+            if choice_ is not None:
+                poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
+                permit_ = layer_.candidate_permit(t, poses_, current_pose=pose_, direction=int(choice_.direction),
+                                                  loaded=loaded_, curvature_inv_m=0.0,
+                                                  measured_curvature_inv_m=kappa_now_, cap_mps=speed_,
+                                                  permission=permission_)
+            return SimpleNamespace(candidates=candidates_, choice=choice_, permit=permit_, poses=poses_, near=near_,
+                                   pose=pose_, checker=checker_, rects=rects_, footprint=footprint_, bounds=bounds_,
+                                   stop_len=stop_len_, leg_dir=leg_dir_)
+
+        def escape_plan(extra, clearance_m, presteered=False):
+            if obstacle is None:
+                return None
+            core._note_release_standing(box.rear, stopped())  # re-latched after the release's correction, if any
+            kappa_now_ = float(hooks.held_kappa())
+            ev_ = escape_evaluate(extra, clearance_m, kappa_now_)
+            candidates_, choice_, near_, pose_ = ev_.candidates, ev_.choice, ev_.near, ev_.pose
             state.setdefault("scene_escape_candidates", []).append(
                 {"time_s": float(t), "candidates": [c_.record() for c_ in candidates_],
                  "chosen": None if choice_ is None else choice_.record()})
+            if presteered:
+                # after the escape presteer (D2-4): evaluated at the steering measured now
+                state["scene_escape_candidates"][-1].update(presteered=True, kappa_measured=kappa_now_)
             if near_:
                 # the start-band release's rectangles (the device's author: a pass by the moving-away rule is told
                 # apart in the record); the key is absent with the release off or nothing released
@@ -7666,10 +7717,7 @@ class MissionCore:
                     core._escape_release_count("escapes_released")
             if choice_ is None:
                 return None
-            poses_ = esc.straight(pose_, choice_.direction, choice_.length_m)
-            permit_ = layer_.candidate_permit(t, poses_, current_pose=pose_, direction=int(choice_.direction),
-                                              loaded=loaded_, curvature_inv_m=0.0,
-                                              measured_curvature_inv_m=kappa_now_, cap_mps=speed_)
+            poses_, permit_ = ev_.poses, ev_.permit
             state["scene_escape_candidates"][-1]["permit"] = permit_
             if not permit_["ok"]:
                 return None  # the prefix itself must start (Codex counterexample: an end clear, a start held at 0)
@@ -7679,18 +7727,51 @@ class MissionCore:
                 # rectangles and the end criterion go with the escape, watched on the pose it is driven from
                 from forklift_core.control.start_release import footprint_rect_distance
 
+                footprint_ = ev_.footprint
                 guard_ = {"rects": list(near_), "d0": [float(footprint_rect_distance(pose_, footprint_, r_))
                                                        for r_ in near_],
-                          "footprint": footprint_, "checker": checker_, "threshold_m": float(choice_.threshold_m),
+                          "footprint": footprint_, "checker": ev_.checker, "threshold_m": float(choice_.threshold_m),
                           # the stop ahead of each watched pose (the escape's own speed), and what a correction
                           # change re-expresses: the trigger's rectangles come from the grid (Codex re-review P2-2)
-                          "direction": int(choice_.direction), "stop_m": float(stop_len_),
-                          "scene": list(rects_), "extra": list(extra), "bounds": bounds_,
+                          "direction": int(choice_.direction), "stop_m": float(ev_.stop_len),
+                          "scene": list(ev_.rects), "extra": list(extra), "bounds": ev_.bounds,
                           "applied": tuple(float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0)))}
-            return poses_, int(choice_.direction), int(leg_dir_), guard_
+            chosen_ = (poses_, int(choice_.direction), int(ev_.leg_dir), guard_)
+            if presteered:
+                # D3: an escape the presteer set the steering for keeps its command between the measured steering and 0
+                chosen_ += ((min(kappa_now_, 0.0), max(kappa_now_, 0.0)),)
+            return chosen_
+
+        def escape_probe(extra, clearance_m, kappa):
+            """D2-2: the escape as if the steering held kappa -- its install permit at that steering too -- on a copy of
+            the driving permission; nothing installed, recorded or counted. None without the obstacle layer."""
+            if obstacle is None:
+                return None
+            # the anchor as escape_plan left it just before (the device probes only after it) -- the probe latches
+            # nothing itself (Codex impl round 5 P3)
+            ev_ = escape_evaluate(extra, clearance_m, float(kappa), copy.deepcopy(obstacle["layer"].permission))
+            c_ = ev_.choice
+            return {"ok": bool(c_ is not None and ev_.permit is not None and ev_.permit["ok"]),
+                    "qualifying": sum(1 for x_ in ev_.candidates if x_.qualifies),
+                    "chosen": None if c_ is None else f"{c_.direction:+d}x{c_.length_m:g}",
+                    "end_clearance_m": None if c_ is None else c_.end_clearance_m,
+                    "permit": None if ev_.permit is None else ev_.permit["why"]}
+
+        def grid_current():
+            # the grid projected with the SLAM correction applied now (escape presteer plan D2-4, Codex impl round 6)
+            applied_ = core._applied_now()
+            return obstacle is None or applied_ is None or tuple(
+                float(v) for v in (obstacle.get("applied") or (0.0, 0.0, 0.0))) == tuple(applied_)
+
+        def correction_version():
+            # the grid's re-projection count and the SLAM correction applied now: a correction the grid has not been
+            # re-projected to yet changes it as well (Codex impl round 5 P2-2, the synchronous path with the obstacle
+            # scans silent)
+            return None if obstacle is None else (obstacle.get("version"), core._applied_now())
 
         def escape_install(chosen):
-            poses_, direction_, leg_dir_, guard_ = chosen
+            poses_, direction_, leg_dir_, guard_, *rest_ = chosen
+            kappa_range_ = rest_[0] if rest_ else None
             leg_tracker_ = trackers[ms.phase]
             config0_ = leg_tracker_.config
             n_ = len(poses_)
@@ -7709,6 +7790,10 @@ class MissionCore:
             if guard_ is not None:
                 core.scene_escape["guard"] = guard_
                 core._escape_release_count("installed")
+            if kappa_range_ is not None:
+                # escape presteer plan D3: the command kept within the evaluated steering, its cuts and end recorded
+                core.scene_escape["clip"] = {"range": [float(v) for v in kappa_range_], "clipped": 0,
+                                             "raw_min": None, "raw_max": None, "goal": [float(v) for v in poses_[-1]]}
             ms.phase_started = t
             core._refresh_for_new_leg(t, box.rear)
 
@@ -7759,6 +7844,8 @@ class MissionCore:
         return SimpleNamespace(stopped=stopped, busy=busy, release_hold=release_hold, submit=submit, poll=poll,
                                snapshot_id=snapshot_id,
                                candidate=candidate, install=install, escape_plan=escape_plan,
+                               escape_probe=escape_probe, correction_version=correction_version,
+                               grid_current=grid_current,
                                escape_install=escape_install, escape_state=escape_state, escape_clear=escape_clear,
                                steering_error=steering_error, steer_gap=steer_gap, preview=preview, box=box,
                                resumable=resumable, abandon=abandon)
@@ -7843,6 +7930,8 @@ class MissionCore:
             return SimpleNamespace(owned=False, rear=rear)
         ports = self._scene_ports(t, rear, signed_speed, dt)
         out_ = self.scene_replan.step(t, ports)
+        if (out_.end is not None or not self.scene_replan.active()) and self.scene_escape is not None:
+            self._escape_clip_end(t, ports.box.rear, "request_ended")  # a request limit while it runs (round 5 P3)
         self.hooks.require(out_.end is None, out_.end or "")
         result = SimpleNamespace(owned=out_.owned, output=out_.output, rear=ports.box.rear, requested_speed=0.0,
                                  curvature=0.0)
@@ -7886,7 +7975,34 @@ class MissionCore:
                 else:
                     self.scene_escape["zero_since"] = None
                 result.requested_speed, result.curvature = tracking.speed_mps, tracking.curvature_inv_m
+                clip_ = self.scene_escape.get("clip")
+                if clip_ is not None:
+                    # escape presteer plan D3: between the measured steering the escape was evaluated at and 0
+                    raw_ = float(result.curvature)
+                    lo_, hi_ = clip_["range"]
+                    clip_["raw_min"] = raw_ if clip_["raw_min"] is None else min(clip_["raw_min"], raw_)
+                    clip_["raw_max"] = raw_ if clip_["raw_max"] is None else max(clip_["raw_max"], raw_)
+                    if raw_ < lo_ or raw_ > hi_:
+                        result.curvature = min(max(raw_, lo_), hi_)
+                        clip_["clipped"] += 1
+            if self.scene_escape["status"] in ("done", "stopped"):
+                self._escape_clip_end(t, ports.box.rear, self.scene_escape["status"])
         return result
+
+    def _escape_clip_end(self, t: float, rear, status: str) -> None:
+        """A presteered escape's end (escape presteer plan D3): its cuts and the end pose against its goal, recorded
+        once in the mission's escape_presteer_drives."""
+        clip_ = (self.scene_escape or {}).get("clip")
+        if clip_ is None or "end" in clip_:
+            return
+        gx_, gy_, gyaw_ = clip_["goal"]
+        x_, y_, yaw_ = (float(v) for v in rear)
+        c_, s_ = math.cos(gyaw_), math.sin(gyaw_)
+        clip_["end"] = {"status": status, "along_m": (x_ - gx_) * c_ + (y_ - gy_) * s_,
+                        "across_m": -(x_ - gx_) * s_ + (y_ - gy_) * c_,
+                        "yaw_rad": math.atan2(math.sin(yaw_ - gyaw_), math.cos(yaw_ - gyaw_))}
+        self.state.setdefault("escape_presteer_drives", []).append(
+            {"time_s": float(t), **{k_: v_ for k_, v_ in clip_.items() if k_ != "goal"}})
 
     def end_reset(self, t: float) -> dict:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
