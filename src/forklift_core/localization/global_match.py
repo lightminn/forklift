@@ -76,7 +76,7 @@ class Candidate:
 
 @dataclass(frozen=True)
 class GlobalMatch:
-    status: str  # ok | uninformative | overflow | timeout
+    status: str  # ok | uninformative | overflow | timeout | cancelled
     candidates: tuple = ()  # the best first, then the competitors beyond the separation
     work: int = 0  # node x endpoint scores the search spent
 
@@ -84,7 +84,7 @@ class GlobalMatch:
 @dataclass(frozen=True)
 class Decision:
     confirmed: bool
-    reason: str  # confirmed | uninformative | overflow | timeout | refine_moved | low_fit | competitor | periodic
+    reason: str  # confirmed | uninformative | overflow | timeout | cancelled | refine_moved | low_fit | competitor | periodic
     ratio: float | None = None  # best competitor's score / the top's
 
 
@@ -191,10 +191,13 @@ class _Budget:
     """The work cap (node x endpoint scores, deterministic) and the wall deadline (``clock`` seconds), checked per
     scoring chunk and by the refinement around each ICP (plan B4b)."""
 
-    def __init__(self, cfg: MatchConfig, clock=None, deadline: float | None = None):
+    def __init__(self, cfg: MatchConfig, clock=None, deadline: float | None = None, cancel=None):
         self.max_work, self.clock, self.deadline, self.work = cfg.max_work, clock, deadline, 0
+        self.cancel = cancel
 
     def check(self) -> None:
+        if self.cancel is not None and self.cancel():  # B-P2: STOP or session end while a request runs
+            raise _Stop("cancelled")
         if self.deadline is not None and self.clock is not None and self.clock() > self.deadline:
             raise _Stop("timeout")
 
@@ -284,7 +287,7 @@ def _beam_floor(s: _Search, h, r, c, bounds, width: int) -> float:
 
 
 def global_match(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None, *, index: MapIndex | None = None,
-                 clock=None, deadline: float | None = None) -> GlobalMatch:
+                 clock=None, deadline: float | None = None, cancel=None) -> GlobalMatch:
     """The kept candidates (lattice poses, before refinement) or why there are none. With ``clock`` and ``deadline``
     a search still running at the deadline ends as ``timeout``; ``max_work`` ends it as ``overflow``."""
     cfg = cfg or MatchConfig()
@@ -293,7 +296,7 @@ def global_match(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None,
     cand = index.cand if index is not None else candidate_cells(grid, cfg.clearance_m)
     if len(pts) < cfg.min_points or not cand.any() or not grid.occupied().any():
         return GlobalMatch("uninformative")
-    budget = _Budget(cfg, clock, deadline)
+    budget = _Budget(cfg, clock, deadline, cancel)
     try:
         s = _Search(grid, pts, cfg, index, budget)
         h, r, c = s.top()
@@ -364,7 +367,7 @@ def _with_fraction(grid: Grid, pts: np.ndarray, cand: Candidate, cfg: MatchConfi
 
 
 def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig | None = None, *,
-           index: MapIndex | None = None, clock=None, deadline: float | None = None) -> GlobalMatch:
+           index: MapIndex | None = None, clock=None, deadline: float | None = None, cancel=None) -> GlobalMatch:
     """Point-to-line ICP of every kept candidate against the occupied cells near it, each rescored on the same field
     at its refined pose (an unaccepted ICP keeps the lattice pose, unrefined). The order and the lattice scores stay:
     the competitor ratio is read from the exact lattice search, whose kept set is complete down to ``keep_ratio``;
@@ -377,7 +380,7 @@ def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig 
     pts = _thin(np.asarray(points, float).reshape(-1, 2), grid.resolution_m)
     field = index.field if index is not None else likelihood_field(grid, cfg.sigma_m)
     walls = index.walls if index is not None else grid.cell_centres(grid.occupied())
-    budget = _Budget(replace(cfg, max_work=None), clock, deadline)
+    budget = _Budget(replace(cfg, max_work=None), clock, deadline, cancel)
     out = []
     try:
         for cand in match.candidates:
@@ -394,15 +397,21 @@ def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig 
 
 
 def relocalize(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None, *, e_min: float, r_max: float,
-               r_struct: float | None = None, index: MapIndex | None = None, clock=time.monotonic):
-    """One relocalization request (plan B4b): search, refine, decide, all against one deadline ``cfg.deadline_s``
-    after the call. A confirmation is checked against the deadline right before it is returned, so none comes out
-    late: past the deadline the request is a ``timeout``, never confirmed. Returns (refined match, decision)."""
+               r_struct: float | None = None, index: MapIndex | None = None, clock=time.monotonic,
+               deadline_at: float | None = None, cancel=None):
+    """One relocalization request (plan B4b): search, refine, decide, all against one deadline -- ``deadline_at``
+    (a ``clock`` time shared by several requests, B-P2's session deadline) or else ``cfg.deadline_s`` after the call.
+    A confirmation is checked against the deadline (and ``cancel``) right before it is returned, so none comes out
+    late: past the deadline the request is a ``timeout``, a cancelled one ``cancelled``; neither is confirmed.
+    Returns (refined match, decision)."""
     cfg = cfg or MatchConfig()
-    deadline = None if cfg.deadline_s is None else clock() + cfg.deadline_s
-    match = global_match(grid, points, cfg, index=index, clock=clock, deadline=deadline)
-    match = refine(grid, match, points, cfg, index=index, clock=clock, deadline=deadline)
+    deadline = deadline_at if deadline_at is not None else (
+        None if cfg.deadline_s is None else clock() + cfg.deadline_s)
+    match = global_match(grid, points, cfg, index=index, clock=clock, deadline=deadline, cancel=cancel)
+    match = refine(grid, match, points, cfg, index=index, clock=clock, deadline=deadline, cancel=cancel)
     decision = decide(match, e_min=e_min, r_max=r_max, r_struct=r_struct, sep_m=cfg.sep_m, sep_rad=cfg.sep_rad)
+    if cancel is not None and cancel():
+        return GlobalMatch("cancelled", work=match.work), Decision(False, "cancelled")
     if deadline is not None and clock() > deadline:
         match = GlobalMatch("timeout", work=match.work)
         decision = Decision(False, "timeout")
