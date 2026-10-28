@@ -27,7 +27,8 @@
 #   FAR_EXPECTED (on: --far-capture-expected on, the far capture without far recognition looks only in the mission's
 #   adoption rectangle, so a neighbouring pallet is not adopted -- the lead's exception decision of 2026-10-28 after
 #   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
-#   --recognition far; off as before; an EXTRA_ARGS --far-capture-expected comes later and wins),
+#   --recognition far; off as before; an EXTRA_ARGS --far-capture-expected comes later and wins; live records made
+#   before this default -- CT-1, D7 and console baselines -- ran with it off: do not mix them with later ones),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
