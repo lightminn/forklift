@@ -570,9 +570,16 @@ def extract_extension(run: Path) -> dict:
                                   "spawn_clearance_m", "carriage_limit_m", "insertion_reserve_m", "lidar_keepout_m")
                 if k in g})
         config = PlannerConfig(**record["planner_config"])
+        from forklift_core.planning.pallet_mission import keepout_exit_prefix
+
         ex = record.get("exit_prefix")
-        exit_prefix = None if not ex else ExitPrefix(tuple(Rectangle(**w) for w in ex["walls"]), float(ex["clearance_m"]),
-                                                   float(ex.get("step_m", 0.05)), float(ex.get("cap_m", 1.0)))
+        if not ex:
+            exit_prefix = None
+        elif ex.get("source") == "lidar_keepout":  # the keepout's own prefix, as the runner builds it
+            exit_prefix = keepout_exit_prefix(scenario, geometry, float(config.clearance_m))
+        else:
+            exit_prefix = ExitPrefix(tuple(Rectangle(**w) for w in ex["walls"]), float(ex["clearance_m"]),
+                                     float(ex.get("step_m", 0.05)), float(ex.get("cap_m", 1.0)))
         for s_ in (0.0, first_all, round(first_all + 0.2, 2)):
             end = tuple(esc.straight(pose, -1, float(s_))[-1]) if s_ > 0 else pose
             res = plan_transport_leg(scenario, Pose2D(*end), config, geometry=geometry, exit_prefix=exit_prefix)
