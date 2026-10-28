@@ -1,0 +1,27 @@
+## az9_far_line_m_s3 margin=0.1 bundle=Y enc=team_spec_quantized recog=far
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_far_line_m_s4 margin=0.1 bundle=Y enc=team_spec_quantized recog=far
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_far_line_m_s5 margin=0.1 bundle=Y enc=team_spec_quantized recog=far
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_far_random_m_s3 margin=0.1 bundle=Y enc=team_spec_quantized recog=far
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_far_random_m_s4 margin=0.1 bundle=Y enc=team_spec_quantized recog=far
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_far_random_m_s5 margin=0.1 bundle=Y enc=team_spec_quantized recog=far
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_off_line_m_s3 margin=0.1 bundle=Y enc=team_spec_quantized recog=off
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_off_line_m_s4 margin=0.1 bundle=Y enc=team_spec_quantized recog=off
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_off_line_m_s5 margin=0.1 bundle=Y enc=team_spec_quantized recog=off
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_off_random_m_s3 margin=0.1 bundle=Y enc=team_spec_quantized recog=off
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_off_random_m_s4 margin=0.1 bundle=Y enc=team_spec_quantized recog=off
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+## az9_off_random_m_s5 margin=0.1 bundle=Y enc=team_spec_quantized recog=off
+   ends: [["m1", "done", null], ["m2", "done", null], ["m3", "done", null]]
+stages n/max_err/max_edge: {'far': (36, 0.037, -0.145), 'near': (36, 0.066, -0.114), 'insert': (36, 0.066, -0.114)}
+missions reaching: {'far': 36, 'near': 36, 'insert': 36}
+false_refusal 0 refused_other 0 undetermined 0
