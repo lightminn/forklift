@@ -379,3 +379,40 @@ def test_a_deadline_crossed_after_the_decision_drops_the_confirmation(monkeypatc
     monkeypatch.setattr(G, "decide", late)
     match, decision = _relocalize(grid, _points(grid, (2.3, 1.7, 0.6)), clock)
     assert match.status == "timeout" and not decision.confirmed and decision.reason == "timeout"
+
+
+# --- B-P2 (docs/plans/2026-10-29-start-relocalization.md 1.2): one session deadline, cooperative cancel ---------
+
+
+def test_a_shared_absolute_deadline_holds_across_requests():
+    """Codex B-P2 review P2: relocalize() made a fresh deadline per call, so a second attempt could confirm at 58 s.
+    With deadline_at both attempts share one; a second request starting past it is a timeout."""
+    grid = _grid(*ROOM)
+    pts = _points(grid, (2.3, 1.7, 0.6))
+    clock = _Clock()
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(2.0))
+    deadline = clock() + 30.0
+    match, decision = G.relocalize(grid, pts, cfg, e_min=0.8, r_max=0.9, r_struct=0.8, clock=clock,
+                                   deadline_at=deadline)
+    assert decision.confirmed
+    clock.t += 31.0  # the second attempt starts after the shared deadline
+    match, decision = G.relocalize(grid, pts, cfg, e_min=0.8, r_max=0.9, r_struct=0.8, clock=clock,
+                                   deadline_at=deadline)
+    assert match.status == "timeout" and not decision.confirmed
+
+
+def test_a_cancel_ends_the_request_without_a_confirmation(monkeypatch):
+    grid = _grid(*ROOM)
+    pts = _points(grid, (2.3, 1.7, 0.6))
+    flag = {"stop": False}
+    real = G._Search.scores
+
+    def scores(self, level, *a, **k):
+        if level == 0:
+            flag["stop"] = True  # STOP arrives while the leaves are scored
+        return real(self, level, *a, **k)
+
+    monkeypatch.setattr(G._Search, "scores", scores)
+    match, decision = G.relocalize(grid, pts, G.MatchConfig(yaw_step_rad=math.radians(2.0)), e_min=0.8, r_max=0.9,
+                                   r_struct=0.8, clock=_Clock(), cancel=lambda: flag["stop"])
+    assert match.status == "cancelled" and not decision.confirmed and decision.reason == "cancelled"
