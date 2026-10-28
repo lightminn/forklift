@@ -36,6 +36,8 @@ ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 D7_HOLD=${D7_HOLD:-on}  # the console's runner reads it: a TOUR has no D7 docking, a CYCLE survey holds as the console does
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
+FAR_EXPECTED=${FAR_EXPECTED:-on}  # the console's runner reads it: a TOUR has no far capture, a CYCLE binds it as the console does
+case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exit 2;; esac
 JOB=${SLURM_JOB_ID:-local$$}
 # the survey's mapping params, relative to the repository (the bridge container sees it under /workspace)
 MAP_PARAMS=${MAP_PARAMS:-ros2/src/forklift_bringup/config/slam_toolbox_isaac_survey.yaml}
@@ -54,6 +56,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"  # the console's runner reads it
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
+  printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
   printf 'SLAM_CHOICE=%q\n' "mapping (survey epoch)"  # the console's runner shows it (live-default plan 5d)
 } > "$OUT/env.sh"
 
@@ -104,7 +107,8 @@ ARGS=(
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
   --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
-  --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
+  --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
+  --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   $EXTRA_ARGS "${LOC[@]}" "${REQ[@]}" \
   --output "$2/run")
