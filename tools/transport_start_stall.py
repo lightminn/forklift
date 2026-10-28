@@ -645,6 +645,44 @@ def low_overlap(run: Path, prop_index: int) -> dict:
     return out
 
 
+def prefix_exempt(run: Path) -> dict:
+    """(c) as the transport's exit prefix driven under the extract's rules: from the planned transport path, the pose
+    where the prefix ends (and 0.1 m steps past it, to 0.6 m), the permission's start on the planned path ahead from there
+    at the path's own curvature (band off, the first transport dump's grid)."""
+    record = json.loads((run / "run/result.json").read_text())
+    dump = first_transport_dump(run)
+    tp = (record.get("paths") or {}).get("transport") or {}
+    if dump is None or not tp.get("poses"):
+        return {"run": run.name, "error": "no dump or transport path"}
+    base_cfg = layer_permission_config(ROOT / record["obstacle_layer"]["config"])
+    lf = record["geometry"]["loaded_footprint"]
+    fp = Footprint(float(lf["front_m"]), float(lf["rear_m"]), float(lf["half_width_m"]))
+    poses = np.asarray(tp["poses"], dtype=float)
+    dirs = np.asarray(tp["directions"], dtype=int)
+    kap = np.asarray(tp["curvatures_inv_m"], dtype=float)
+    arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(poses[:, :2], axis=0).T))]
+    prefix_len = float((tp.get("exit_prefix") or {}).get("length_m") or 0.0)
+    snap = snapshot_of(dump)
+    t = float(dump["t"])
+    rows = {}
+    for s_ in sorted({round(prefix_len, 2)} | {round(v, 2) for v in np.arange(0.0, 0.61, 0.1)}):
+        i = int(np.searchsorted(arc, s_))
+        if i >= len(poses):
+            break
+        d = int(dirs[i]) or -1
+        j = i
+        while j + 1 < len(poses) and int(dirs[j + 1]) == d and arc[j + 1] - arc[i] <= 3.0:
+            j += 1
+        leg = poses[i:j + 1]
+        perm = DrivePermission(base_cfg)
+        check = perm.update(snap, leg, fp, fp, current_pose=tuple(poses[i]), direction=d)
+        a_, why_ = perm.allowed_speed(t, {}, current_pose=tuple(poses[i]), curvature_inv_m=float(kap[i]),
+                                      direction=d, footprint=fp, own_footprint=fp, speed_cap_mps=0.3)
+        rows[f"{s_:g}"] = [round(float(a_), 3), why_, round(float(check.verified_m), 2), round(float(kap[i]), 3)]
+    first_ok = next((float(k) for k, v in rows.items() if v[0] > 0), None)
+    return {"run": run.name, "prefix_m": round(prefix_len, 3), "first_start_m": first_ok, "rows": rows}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runs", nargs="+", type=Path)
@@ -655,10 +693,23 @@ def main(argv=None) -> int:
                         help="(c) under the extract's own rules: scene sweep and the start permit at the end")
     parser.add_argument("--low-overlap", type=int, default=None, metavar="PROP",
                         help="the return-home overlap with a low prop: truth/control hull and parts distances")
+    parser.add_argument("--prefix-exempt", action="store_true",
+                        help="(c) as the exit prefix under the extract's rules: the planned path's start past the prefix")
     parser.add_argument("--escape-replay", action="store_true",
                         help="re-check an installed presteered escape that stopped (C4') instead of the stand")
     args = parser.parse_args(argv)
     out = []
+    if args.prefix_exempt:
+        for run in args.runs:
+            try:
+                r = prefix_exempt(run)
+            except Exception as exc:  # noqa: BLE001
+                r = {"run": run.name, "error": repr(exc)}
+            out.append(r)
+            print(json.dumps(r, default=str))
+        if args.json:
+            args.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
+        return 0
     if args.low_overlap is not None:
         for run in args.runs:
             try:
