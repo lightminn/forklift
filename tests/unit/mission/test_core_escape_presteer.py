@@ -262,3 +262,50 @@ def test_a_cancel_records_the_presteered_escape_s_end():
     core.start_clear_out = lambda t, r: None
     core.finish_cancel(0.5, rear)
     assert state["escape_presteer_drives"][-1]["end"]["status"] == "cancelled"
+
+
+def _anchored(band=0.03):
+    core, state, held, layer, pose = _open_core(band=band)
+    core.options.escape_presteer = "on"
+    layer.permission.note_standing(True, pose, 0)
+    return core, state, held, layer, pose
+
+
+@pytest.mark.parametrize("move, relatch", [((0.0007, 0.0, 0.0), True), ((0.003, 0.003, 0.009), True),
+                                           ((0.006, 0.0, 0.0), False), ((0.0, 0.0, 0.011), False)])
+def test_the_presteered_evaluation_re_latches_the_anchor_after_a_small_move_only(move, relatch):
+    # plan v6 D2-5 (C4: a 0.7 mm presteer move against the first-stand anchor held every re-evaluation)
+    core, state, held, layer, pose = _anchored()
+    moved = tuple(p + d for p, d in zip(pose, move))
+    ports = core._scene_ports(0.2, np.array(moved), 0.0, DT)
+    core.hooks.truth_velocity = lambda: np.zeros(3)
+    ports.escape_plan((), None, presteered=True)
+    anchor = layer.permission.release_anchor
+    assert (tuple(anchor["pose"]) == tuple(moved)) is relatch
+    rec = state["scene_escape_candidates"][-1]["anchor_relatched"]
+    assert rec["relatched"] is relatch
+    assert abs(rec["move_m"] - float(np.hypot(move[0], move[1]))) < 1e-9 and abs(rec["yaw_rad"] - move[2]) < 1e-9
+
+
+def test_an_evaluation_without_the_presteer_never_re_latches():
+    core, state, held, layer, pose = _anchored()
+    moved = (pose[0] + 0.0007, pose[1], pose[2])
+    ports = core._scene_ports(0.2, np.array(moved), 0.0, DT)
+    ports.escape_plan((), None)
+    assert tuple(layer.permission.release_anchor["pose"]) == tuple(pose)
+    assert "anchor_relatched" not in state["scene_escape_candidates"][-1]
+
+
+def test_with_the_presteer_on_every_escape_evaluation_records_its_pose_and_the_trigger_s_rectangles():
+    # plan v6 D2-7: what held a sweep is told apart afterwards
+    from forklift_core.planning import Rectangle
+
+    core, state, held, layer, pose = _open_core()
+    ports = core._scene_ports(0.2, np.array(pose), 0.0, DT)
+    rect = Rectangle(3.5, 0.3, 0.2, 0.2, 0.0)
+    ports.escape_plan((rect,), None)
+    assert "pose" not in state["scene_escape_candidates"][-1]  # off: the record as before
+    core.options.escape_presteer = "on"
+    ports.escape_plan((rect,), None)
+    line = state["scene_escape_candidates"][-1]
+    assert line["pose"] == list(pose) and line["extra"] == [[3.5, 0.3, 0.2, 0.2, 0.0]]

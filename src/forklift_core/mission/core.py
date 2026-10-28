@@ -146,6 +146,10 @@ def note_trace_backoffs(state: dict, where: str, trace, success: bool) -> None:
 OBSERVE_BACKOFF_STEP_M = 0.01  # its advice's step
 OBSERVE_BACKOFF_PAD_M = 0.03  # past the advice: the backoff tracker's 0.01 m end tolerance and the advice's step
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
+# docs/plans/2026-10-27-escape-presteer.md v6 D2-5: the most an escape presteer may move the truck (tyre scrub) for its
+# re-evaluation to latch the start-band anchor again where it stands (C4 measured 0.67-0.77 mm and 1-3e-5 rad)
+PRESTEER_RELATCH_MOVE_M = 0.005
+PRESTEER_RELATCH_YAW_RAD = 0.01
 RECOVERY_PHASE_LIMIT_S = 20.0
 MANUAL_GROUND_HOLD_S = 1.0  # plan D14: the manual ground verdict holds this long before the reverse opens
 ALIGN_HEADING_RAD = 0.02  # plan D14: the straight reverse's heading tolerance to the pocket axis  # plan D4: each recovery phase's work-clock limit
@@ -7697,6 +7701,19 @@ class MissionCore:
         def escape_plan(extra, clearance_m, presteered=False):
             if obstacle is None:
                 return None
+            relatch_ = None
+            anchor_ = getattr(obstacle["layer"].permission, "release_anchor", None) if presteered else None
+            if anchor_ is not None:
+                # escape presteer plan v6 D2-5: the presteer's own move (tyre scrub, 0.67-0.77 mm in C4) must not read as
+                # coming nearer the released cells -- the anchor latched again here when that move is small
+                ax_, ay_, ayaw_ = (float(v) for v in anchor_["pose"])
+                x_, y_, yaw_ = (float(v) for v in box.rear)
+                move_ = math.hypot(x_ - ax_, y_ - ay_)
+                dyaw_ = math.atan2(math.sin(yaw_ - ayaw_), math.cos(yaw_ - ayaw_))
+                small_ = move_ <= PRESTEER_RELATCH_MOVE_M and abs(dyaw_) <= PRESTEER_RELATCH_YAW_RAD
+                if small_:
+                    obstacle["layer"].permission.release_anchor = None  # latched at the pose now just below
+                relatch_ = {"move_m": move_, "yaw_rad": dyaw_, "relatched": bool(small_)}
             core._note_release_standing(box.rear, stopped())  # re-latched after the release's correction, if any
             kappa_now_ = float(hooks.held_kappa())
             ev_ = escape_evaluate(extra, clearance_m, kappa_now_)
@@ -7704,6 +7721,14 @@ class MissionCore:
             state.setdefault("scene_escape_candidates", []).append(
                 {"time_s": float(t), "candidates": [c_.record() for c_ in candidates_],
                  "chosen": None if choice_ is None else choice_.record()})
+            if getattr(options, "escape_presteer", "off") == "on":
+                # plan v6 D2-7: the pose and the trigger's rectangles each evaluation saw (what held a sweep, later)
+                state["scene_escape_candidates"][-1].update(
+                    pose=[float(v) for v in pose_],
+                    extra=[[float(r_.x_m), float(r_.y_m), float(r_.length_m), float(r_.width_m), float(r_.yaw_rad)]
+                           for r_ in extra])
+            if relatch_ is not None:
+                state["scene_escape_candidates"][-1]["anchor_relatched"] = relatch_
             if presteered:
                 # after the escape presteer (D2-4): evaluated at the steering measured now
                 state["scene_escape_candidates"][-1].update(presteered=True, kappa_measured=kappa_now_)
