@@ -284,6 +284,27 @@ def test_a_far_run_is_refused_by_the_committed_terms_and_taken_by_terms_measured
     ]
 
 
+def test_a_layout_without_travel_legs_records_their_absence_as_its_condition(tmp_path):
+    """Near tracking re-measure (riib line_1_m): only the factory layout plans its travel legs with a config of its
+    own (travel_planner_config); a bay or scene run plans them with planner_config and records none. That absence is
+    the run's condition, compared like a value -- not a field the measurement failed to record."""
+    fields = {name: {"value": 1} for name in NT.CONDITION_FIELDS if name != "travel_planner_config"}
+
+    def condition(layout, travel=None):
+        return NT.run_condition({"arguments": {"layout": layout}, **fields, "travel_planner_config": travel}, tmp_path)
+
+    scene = condition("scene")
+    assert scene["travel_planner_config"] == NT.NO_TRAVEL_PLANNER_CONFIG
+    assert not any("travel_planner_config" in p for p in NT.condition_problems(scene, condition("scene")))
+    assert not any("travel_planner_config" in p for p in NT.condition_problems(condition("bay"), condition("bay")))
+    # a factory run that recorded none still cannot be checked; a factory measurement does not match a scene run
+    assert any("travel_planner_config" in p for p in NT.condition_problems(condition("factory"), condition("factory")))
+    factory = condition("factory", {"clearance_m": 0.1})
+    assert any("travel_planner_config" in p for p in NT.condition_problems(factory, scene))
+    # a record from before the layout argument is read as it always was
+    assert NT.run_condition({"arguments": {}, **fields}, tmp_path)["travel_planner_config"] is None
+
+
 def test_a_far_runs_condition_compares_the_files_the_far_recognition_reads_by_fixed_path(tmp_path):
     """Codex near-remeasure tools review P2: the far runtime reads its track bounds, the site load defaults and the
     known shapes' geometry without an argument naming them; a far condition holds them (and what they name) by
