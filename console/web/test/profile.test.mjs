@@ -240,3 +240,11 @@ test("plan D14: the recovery reasons and the straight reverse are said in Korean
   assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "manual_clear" } }), /구역/);
   assert.equal(recoveryNote({ drive_mode: "normal", recovery: null }), "");
 });
+
+test("a blocked re-pick names what blocks it in the operator's words", () => {
+  assert.equal(rejectText("blocked"), "다른 팔레트나 소품이 집거나 내려놓는 길을 막습니다");
+  assert.equal(rejectText("blocked", "pickup:P-2"), "다른 팔레트나 소품이 집거나 내려놓는 길을 막습니다 (집는 길: P-2)");
+  assert.equal(rejectText("blocked", "pickup:P-2,delivery:P-1,props"),
+    "다른 팔레트나 소품이 집거나 내려놓는 길을 막습니다 (집는 길: P-2 · 내려놓는 길: P-1 · 고정 소품)");
+  assert.equal(rejectText("stale_targets", null), "대상 목록이 바뀌었습니다 · 다시 고르세요"); // no detail: as before
+});

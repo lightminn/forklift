@@ -84,6 +84,10 @@ class Context:
     # live: the pallet on the forks a submit may deliver as it is carried (plan D5 6c; the runner's conditions
     # met), else None -- a cargo_held refusal lets that one submit through as a loaded submit
     loaded_pallet: str | None = None
+    # live: the pick's own blocking judgement for a manual re-pick of a put-down pallet (next_pick.pair_blockers on
+    # this tick's snapshot): (pallet id, destination id) -> the blockers, empty when the pair is open; None (a batch
+    # run) judges nothing more -- the az8 line_m queue sent P-1 back for behind P-2 (2026-10-28)
+    repick_blockers: object = None
 
 
 class MissionCommands:
@@ -97,6 +101,7 @@ class MissionCommands:
         self._issued = 0
         self._queue: list = []
         self.log: list[dict] = []  # every command with its tick, outcome and reason
+        self._detail: str | None = None  # a refusal's detail, set by the handler for its record (blocked: the blockers)
         self.pauses: list[list] = []  # [start, end-or-None] of every pause (the work clock's stops)
         self.waits: list[list] = []  # [start, end-or-None] of every wait for a plan in a real-time run (plan D8c)
         self.paused_since: float | None = None
@@ -143,9 +148,12 @@ class MissionCommands:
             records.append(record)
             self.log.append(record)
         for command in commands:
+            self._detail = None
             reason = getattr(self, f"_{command.kind}")(t, command, context)
             record = {"t": t, "command": command.kind, "accepted": reason is None, "reason": reason,
                       "mission_id": self.mission_id, "status": self.status}
+            if reason is not None and self._detail is not None:
+                record["detail"] = self._detail
             if command.request_id is not None:
                 record["request_id"] = command.request_id
             records.append(record)
@@ -175,6 +183,12 @@ class MissionCommands:
                                                 loaded=loaded)
             if refused is not None:
                 return refused
+            pallet = self.targets.pallets.get(command.pallet_id)
+            if context.repick_blockers is not None and pallet is not None and pallet.state == "delivered":
+                blockers = list(context.repick_blockers(command.pallet_id, command.destination_id))
+                if blockers:
+                    self._detail = ",".join(blockers)
+                    return "blocked"
         self._issued += 1
         self.mission_id, self.mission, self.status = f"m{self._issued}", command, "accepted"
         self.mission_loaded = loaded

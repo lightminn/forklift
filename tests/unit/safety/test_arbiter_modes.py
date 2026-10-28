@@ -400,3 +400,22 @@ def test_a_live_fork_relation_decides_teleop_in_a_pocket(relation, allowed, reas
                   fork_in_pocket={"value": True, "basis": "phase+cargo", "relation": relation})
     policy = teleop_policy(safety, feedback_ok=True, standing=True)
     assert (policy.drive_allowed, policy.reason, policy.loaded) == (allowed, reason, loaded)
+
+
+def test_a_refusal_with_a_detail_carries_it_in_the_reject():
+    # the manual re-pick check (2026-10-28): the lifecycle's record names the blockers; the reject passes them on
+    r = Rig()
+    r.stand()
+    msg = r.msg("mission_submit", pallet_id="P-1", destination_id="D-3", targets_revision=0)
+    assert r.a.handle("op", msg, r.t) is None
+    record = {"t": r.t, "command": "submit", "accepted": False, "reason": "blocked", "detail": "pickup:P-2",
+              "mission_id": None, "status": "idle", "request_id": msg["request_id"]}
+    (reply,) = [x for x in r.a.resolve(r.t, [record]) if x["request_id"] == msg["request_id"]]
+    assert (reply["t"], reply["reason"], reply["detail"]) == ("reject", "blocked", "pickup:P-2")
+    # a refusal without one keeps its old shape
+    msg2 = r.msg("mission_submit", pallet_id="P-1", destination_id="D-3", targets_revision=0)
+    r.a.handle("op", msg2, r.t)
+    record2 = dict(record, request_id=msg2["request_id"], reason="stale_targets")
+    record2.pop("detail")
+    (reply2,) = [x for x in r.a.resolve(r.t, [record2]) if x["request_id"] == msg2["request_id"]]
+    assert reply2["reason"] == "stale_targets" and "detail" not in reply2

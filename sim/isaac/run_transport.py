@@ -7609,6 +7609,14 @@ def drive(S, isaac) -> None:
             live.enable_next_pick(PickService(next_pick_snapshot_, worker=core.jobs, pose=next_pick_pose_),
                                   PICK_DEADLINE_MS)
 
+            def live_repick_blockers_(pallet_id_, destination_id_):
+                """A manual re-pick of a put-down pallet, judged as the pick judges a pair, on this tick's snapshot
+                (2026-10-28: the az8 line_m queue sent P-1 back for from behind P-2). In the tick: a submit is taken
+                only from PAUSED with the truck standing, so the search's few hundred milliseconds stall nothing."""
+                from forklift_core.mission.next_pick import pair_blockers
+
+                return pair_blockers(next_pick_snapshot_(), pallet_id_, destination_id_)
+
             def unaligned_delivery_refusal_():
                 """Plan 2.3: the delivery straight about to be driven with no accepted docking -- checked as before
                 the anchors (the search stage's props, the delivery straight and the withdraw); the anchored pallets
@@ -7977,7 +7985,8 @@ def drive(S, isaac) -> None:
                         submit_refusal=core.cargo.submit_refusal(),  # the forks' state at the last tick's end (D5a)
                         # plan D3: a submit before the tracker tracks is localization_lost
                         localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"),
-                        loaded_pallet=live_loaded_pallet())  # plan D5 6c: the carried pallet a submit may deliver
+                        loaded_pallet=live_loaded_pallet(),  # plan D5 6c: the carried pallet a submit may deliver
+                        repick_blockers=live_repick_blockers_)  # a re-pick's blockers (2026-10-28)
                 elif mission_schedule is not None:
                     # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                     # control tick's start.

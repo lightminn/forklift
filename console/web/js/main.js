@@ -404,7 +404,7 @@ const inputs = createInputs({
 });
 
 function report(r) {
-  if (r && r.t === "reject") log(`거부 · ${rejectText(r.reason)}`, "warn");
+  if (r && r.t === "reject") log(`거부 · ${rejectText(r.reason, r.detail)}`, "warn");
   return r;
 }
 
@@ -521,8 +521,8 @@ $("m-start").onclick = () => {
   // not req(): this handler logs its own refusal (one line, not two)
   m.session.request("mission_submit", { pallet_id: pallet, destination_id: $("dest").value, targets_revision: targets.targets_revision }).then((r) => {
     if (r && r.t === "reject") {
-      m.wz.note = `거부 · ${rejectText(r.reason)}`;
-      log(`작업 지시 거부 · ${rejectText(r.reason)}`, "warn");
+      m.wz.note = `거부 · ${rejectText(r.reason, r.detail)}`;
+      log(`작업 지시 거부 · ${rejectText(r.reason, r.detail)}`, "warn");
       if (r.reason === "stale_targets") wizardGo(2); // the list changed: pick again
       else refreshWizard();
     } else if (r) closeWizard();

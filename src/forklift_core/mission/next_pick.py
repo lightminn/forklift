@@ -242,3 +242,22 @@ def recommend(snap: PickSnapshot, *, open_pairs: bool = False) -> dict:
     if open_pairs:
         out["open"] = [[p, d] for p in candidates for d in destinations if is_open(p, d, frozenset(), frozenset())]
     return out
+
+
+def pair_blockers(snap: PickSnapshot, pallet_id: str, destination_id: str) -> list:
+    """What blocks moving ``pallet_id`` to ``destination_id`` now, by the pick's own judgement: ``props`` (a static
+    prop on its pickup or that slot's delivery straights), ``pickup:<q>`` (pallet q, where it stands, blocks the
+    pickup straights), ``delivery:<q>`` (q blocks the slot's). A put-down pallet is judged as if it were waiting to be
+    picked where it lies (the pick itself never offers one: only the available are candidates); its own slot is
+    freed by the move. The slot's occupancy is the submit check's (TargetsBook.check_submit), not repeated here.
+    Empty: nothing blocks the pair."""
+    import copy
+
+    book = copy.deepcopy(snap.targets)
+    pallet = book.pallets[pallet_id]
+    book.pallets[pallet_id] = replace(pallet, state="available", at=None)
+    blocked = recommend(replace(snap, targets=book))["blocked"]
+    out = [b for b in blocked.get(pallet_id, []) if b == "props" or b.startswith("pickup:")]
+    out += [b for b in blocked.get(destination_id, [])
+            if b == "props" or (b.startswith("delivery:") and b != f"delivery:{pallet_id}")]
+    return out
