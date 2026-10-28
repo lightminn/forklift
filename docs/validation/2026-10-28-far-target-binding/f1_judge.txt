@@ -1,0 +1,233 @@
+## f1_far_line_m_s6 epoch_1 recog=far fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      check far src=session_zone err=0.009 edge=-0.1989 inside=True OK
+      check near src=session_zone err=0.054 edge=-0.1360 inside=True OK
+      check insert src=session_zone err=0.054 edge=-0.1360 inside=True OK
+   m2 P-1->D-2 done None
+      check far src=put_down err=0.054 edge=-0.0702 inside=True OK
+      check near src=put_down err=0.052 edge=-0.0727 inside=True OK
+      check insert src=put_down err=0.052 edge=-0.0727 inside=True OK
+   m3 P-2->D-3 done None
+      check far src=session_zone err=0.007 edge=-0.1941 inside=True OK
+      check near src=session_zone err=0.012 edge=-0.1883 inside=True OK
+      check insert src=session_zone err=0.012 edge=-0.1883 inside=True OK
+## f1_far_line_m_s7 epoch_1 recog=far fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      check far src=session_zone err=0.009 edge=-0.1994 inside=True OK
+      check near src=session_zone err=0.052 edge=-0.1376 inside=True OK
+      check insert src=session_zone err=0.052 edge=-0.1376 inside=True OK
+   m2 P-1->D-2 done None
+      check far src=put_down err=0.046 edge=-0.0734 inside=True OK
+      check near src=put_down err=0.037 edge=-0.0824 inside=True OK
+      check insert src=put_down err=0.037 edge=-0.0824 inside=True OK
+   m3 P-2->D-3 done None
+      check far src=session_zone err=0.008 edge=-0.1997 inside=True OK
+      check near src=session_zone err=0.022 edge=-0.1779 inside=True OK
+      check insert src=session_zone err=0.022 edge=-0.1779 inside=True OK
+## f1_far_line_m_s8 epoch_1 recog=far fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      check far src=session_zone err=0.012 edge=-0.2017 inside=True OK
+      check near src=session_zone err=0.021 edge=-0.1689 inside=True OK
+      check insert src=session_zone err=0.021 edge=-0.1689 inside=True OK
+   m2 P-1->D-2 done None
+      check far src=put_down err=0.055 edge=-0.0872 inside=True OK
+      check near src=put_down err=0.060 edge=-0.0818 inside=True OK
+      check insert src=put_down err=0.060 edge=-0.0818 inside=True OK
+   m3 P-2->D-3 done None
+      check far src=session_zone err=0.013 edge=-0.1872 inside=True OK
+      check near src=session_zone err=0.016 edge=-0.1840 inside=True OK
+      check insert src=session_zone err=0.016 edge=-0.1840 inside=True OK
+## f1_far_random_m_s6 epoch_1 recog=far fce=on azc=on m=0.1 ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   m1 P-4->D-1 done None
+      check far src=session_zone err=0.014 edge=-0.1822 inside=True OK
+      check near src=session_zone err=0.013 edge=-0.1821 inside=True OK
+      check insert src=session_zone err=0.013 edge=-0.1821 inside=True OK
+   m2 P-5->D-2 done None
+      check far src=session_zone err=0.024 edge=-0.1563 inside=True OK
+      check near src=session_zone err=0.023 edge=-0.1570 inside=True OK
+      check insert src=session_zone err=0.023 edge=-0.1570 inside=True OK
+   m3 P-4->D-3 done None
+      check far src=put_down err=0.045 edge=-0.0765 inside=True OK
+      check near src=put_down err=0.033 edge=-0.0887 inside=True OK
+      check insert src=put_down err=0.033 edge=-0.0887 inside=True OK
+## f1_far_random_m_s7 epoch_1 recog=far fce=on azc=on m=0.1 ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   m1 P-4->D-1 done None
+      check far src=session_zone err=0.018 edge=-0.1806 inside=True OK
+      check near src=session_zone err=0.019 edge=-0.1513 inside=True OK
+      check insert src=session_zone err=0.019 edge=-0.1513 inside=True OK
+   m2 P-5->D-2 done None
+      check far src=session_zone err=0.025 edge=-0.1575 inside=True OK
+      check near src=session_zone err=0.038 edge=-0.1592 inside=True OK
+      check insert src=session_zone err=0.038 edge=-0.1592 inside=True OK
+   m3 P-4->D-3 done None
+      check far src=put_down err=0.025 edge=-0.0938 inside=True OK
+      check near src=put_down err=0.026 edge=-0.0962 inside=True OK
+      check insert src=put_down err=0.026 edge=-0.0962 inside=True OK
+## f1_far_random_m_s8 epoch_1 recog=far fce=on azc=on m=0.1 ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   m1 P-4->D-1 done None
+      check far src=session_zone err=0.012 edge=-0.1747 inside=True OK
+      check near src=session_zone err=0.024 edge=-0.1463 inside=True OK
+      check insert src=session_zone err=0.024 edge=-0.1463 inside=True OK
+   m2 P-5->D-2 done None
+      check far src=session_zone err=0.023 edge=-0.1572 inside=True OK
+      check near src=session_zone err=0.052 edge=-0.1483 inside=True OK
+      check insert src=session_zone err=0.052 edge=-0.1483 inside=True OK
+   m3 P-4->D-3 failed Tracking timeout in transport
+      check far src=put_down err=0.025 edge=-0.0904 inside=True OK
+      check near src=put_down err=0.025 edge=-0.0923 inside=True OK
+      check insert src=put_down err=0.025 edge=-0.0923 inside=True OK
+## f1_off_line_m_s6 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.008 near=[] w=(0.83,-0.05)']
+      check far src=session_zone err=0.008 edge=-0.1983 inside=True OK
+      check near src=session_zone err=0.047 edge=-0.1433 inside=True OK
+      check insert src=session_zone err=0.047 edge=-0.1433 inside=True OK
+   m2 P-1->D-2 done None
+      far_expected[0] src=put_down obs=valid:None cands=['inside=True err=0.053 near=[] w=(3.01,-9.01)']
+      check far src=put_down err=0.053 edge=-0.0674 inside=True OK
+      check near src=put_down err=0.040 edge=-0.0806 inside=True OK
+      check insert src=put_down err=0.040 edge=-0.0806 inside=True OK
+   m3 P-2->D-3 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.006 near=[] w=(1.80,0.05)']
+      check far src=session_zone err=0.006 edge=-0.2010 inside=True OK
+      check near src=session_zone err=0.019 edge=-0.1810 inside=True OK
+      check insert src=session_zone err=0.019 edge=-0.1810 inside=True OK
+## f1_off_line_m_s7 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.007 near=[] w=(0.83,-0.05)']
+      check far src=session_zone err=0.007 edge=-0.1975 inside=True OK
+      check near src=session_zone err=0.016 edge=-0.1744 inside=True OK
+      check insert src=session_zone err=0.016 edge=-0.1744 inside=True OK
+   m2 P-1->D-2 done None
+      far_expected[0] src=put_down obs=valid:None cands=['inside=True err=0.047 near=[] w=(3.00,-9.00)', 'inside=False err=0.518 near=[] w=(3.00,-8.43)']
+      check far src=put_down err=0.047 edge=-0.0749 inside=True OK
+      check near src=put_down err=0.043 edge=-0.0784 inside=True OK
+      check insert src=put_down err=0.043 edge=-0.0784 inside=True OK
+   m3 P-2->D-3 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.003 near=[] w=(1.81,0.05)']
+      check far src=session_zone err=0.003 edge=-0.1970 inside=True OK
+      check near src=session_zone err=0.006 edge=-0.1948 inside=True OK
+      check insert src=session_zone err=0.006 edge=-0.1948 inside=True OK
+## f1_off_line_m_s8 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.011 near=[] w=(0.83,-0.05)']
+      check far src=session_zone err=0.011 edge=-0.2009 inside=True OK
+      check near src=session_zone err=0.003 edge=-0.1896 inside=True OK
+      check insert src=session_zone err=0.003 edge=-0.1896 inside=True OK
+   m2 P-1->D-2 done None
+      far_expected[0] src=put_down obs=valid:None cands=['inside=True err=0.026 near=[] w=(3.01,-8.98)', 'inside=False err=0.539 near=[] w=(3.01,-8.42)']
+      check far src=put_down err=0.026 edge=-0.0954 inside=True OK
+      check near src=put_down err=0.047 edge=-0.0750 inside=True OK
+      check insert src=put_down err=0.047 edge=-0.0750 inside=True OK
+   m3 P-2->D-3 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.020 near=[] w=(1.80,0.03)']
+      check far src=session_zone err=0.020 edge=-0.2037 inside=True OK
+      check near src=session_zone err=0.009 edge=-0.1912 inside=True OK
+      check insert src=session_zone err=0.009 edge=-0.1912 inside=True OK
+## f1_off_random_m_s6 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   m1 P-4->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.017 near=[] w=(0.67,1.21)', "inside=False err=1.262 near=['P-3'] w=(1.95,-0.06)"]
+      check far src=session_zone err=0.017 edge=-0.1776 inside=True OK
+      check near src=session_zone err=0.038 edge=-0.1322 inside=True OK
+      check insert src=session_zone err=0.038 edge=-0.1322 inside=True OK
+   m2 P-5->D-2 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.024 near=[] w=(0.93,-1.45)', "inside=False err=1.394 near=['P-3'] w=(1.95,-0.07)"]
+      check far src=session_zone err=0.024 edge=-0.1565 inside=True OK
+      check near src=session_zone err=0.022 edge=-0.1577 inside=True OK
+      check insert src=session_zone err=0.022 edge=-0.1577 inside=True OK
+   m3 P-4->D-3 done None
+      far_expected[0] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.915 near=['P-5'] w=(3.38,-8.07) F1_CORRECT_REFUSAL", 'inside=False err=0.430 near=[] w=(3.38,-7.59) F1_FALSE_REFUSAL']
+      far_expected[1] src=put_down obs=no_pallet:no_expected_candidate cands=['inside=False err=0.426 near=[] w=(3.38,-7.58) F1_FALSE_REFUSAL']
+      far_expected[2] src=put_down obs=valid:None cands=["inside=False err=1.363 near=['P-5'] w=(3.38,-8.52)", "inside=False err=0.933 near=['P-5'] w=(3.38,-8.09)", 'inside=True err=0.027 near=[] w=(3.38,-7.18)']
+      check far src=put_down err=0.027 edge=-0.0920 inside=True OK
+      check near src=put_down err=0.027 edge=-0.0917 inside=True OK
+      check insert src=put_down err=0.027 edge=-0.0917 inside=True OK
+## f1_off_random_m_s7 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   m1 P-4->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.020 near=[] w=(0.67,1.21)', "inside=False err=1.265 near=['P-3'] w=(1.94,-0.07)"]
+      check far src=session_zone err=0.020 edge=-0.1817 inside=True OK
+      check near src=session_zone err=0.017 edge=-0.1604 inside=True OK
+      check insert src=session_zone err=0.017 edge=-0.1604 inside=True OK
+   m2 P-5->D-2 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.026 near=[] w=(0.93,-1.44)', "inside=False err=1.405 near=['P-3'] w=(1.95,-0.06)", "inside=False err=1.301 near=['P-3'] w=(1.97,-0.16)"]
+      check far src=session_zone err=0.026 edge=-0.1544 inside=True OK
+      check near src=session_zone err=0.044 edge=-0.1553 inside=True OK
+      check insert src=session_zone err=0.044 edge=-0.1553 inside=True OK
+   m3 P-4->D-3 done None
+      far_expected[0] src=put_down obs=valid:None cands=['inside=True err=0.042 near=[] w=(3.38,-7.22)', "inside=False err=0.917 near=['P-5'] w=(3.38,-8.09)"]
+      check far src=put_down err=0.042 edge=-0.0812 inside=True OK
+      check near src=put_down err=0.058 edge=-0.0656 inside=True OK
+      check insert src=put_down err=0.058 edge=-0.0656 inside=True OK
+## f1_off_random_m_s8 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: random_m_team_spec_quantized_0facac3eea66)']
+   m1 P-4->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.020 near=[] w=(0.67,1.21)', "inside=False err=1.260 near=['P-3'] w=(1.94,-0.06)"]
+      check far src=session_zone err=0.020 edge=-0.1821 inside=True OK
+      check near src=session_zone err=0.038 edge=-0.1318 inside=True OK
+      check insert src=session_zone err=0.038 edge=-0.1318 inside=True OK
+   m2 P-5->D-2 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.024 near=[] w=(0.93,-1.48)', "inside=False err=1.354 near=['P-3'] w=(1.96,-0.11)"]
+      check far src=session_zone err=0.024 edge=-0.1563 inside=True OK
+      check near src=session_zone err=0.021 edge=-0.1593 inside=True OK
+      check insert src=session_zone err=0.021 edge=-0.1593 inside=True OK
+   m3 P-4->D-3 done None
+      far_expected[0] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.928 near=['P-5'] w=(3.37,-8.10) F1_CORRECT_REFUSAL", 'inside=False err=0.458 near=[] w=(3.37,-7.63) F1_FALSE_REFUSAL', "inside=False err=1.254 near=['P-5'] w=(3.37,-8.43) F1_CORRECT_REFUSAL", "inside=False err=1.257 near=['P-5'] w=(3.56,-8.43) F1_CORRECT_REFUSAL"]
+      far_expected[1] src=put_down obs=valid:None cands=["inside=False err=0.885 near=['P-5'] w=(3.38,-8.06)", 'inside=False err=0.415 near=[] w=(3.38,-7.59)', 'inside=True err=0.026 near=[] w=(3.37,-7.16)', "inside=False err=1.210 near=['P-5'] w=(3.38,-8.38)", "inside=False err=1.538 near=['P-5'] w=(3.80,-8.71)"]
+      check far src=put_down err=0.026 edge=-0.0722 inside=True OK
+      check near src=put_down err=0.058 edge=-0.0625 inside=True OK
+      check insert src=put_down err=0.058 edge=-0.0625 inside=True OK
+## f1_blocked_off_line_m_s6 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.009 near=[] w=(0.83,-0.05)']
+      check far src=session_zone err=0.009 edge=-0.1989 inside=True OK
+      check near src=session_zone err=0.042 edge=-0.1481 inside=True OK
+      check insert src=session_zone err=0.042 edge=-0.1481 inside=True OK
+   m2 P-2->D-2 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.008 near=[] w=(1.80,0.04)']
+      check far src=session_zone err=0.008 edge=-0.2028 inside=True OK
+      check near src=session_zone err=0.009 edge=-0.1926 inside=True OK
+      check insert src=session_zone err=0.009 edge=-0.1926 inside=True OK
+   m3 P-1->D-3 failed observe:all_candidates_exhausted:perception_no_pallet:no_expected_candidate:success;success;success;invalid_goal;success;success
+      far_expected[0] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=1.054 near=['P-2'] w=(1.95,-8.99) F1_CORRECT_REFUSAL"]
+      far_expected[1] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.682 near=['P-2'] w=(2.32,-9.00) F1_CORRECT_REFUSAL"]
+      far_expected[2] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=1.051 near=['P-2'] w=(1.95,-9.02) F1_CORRECT_REFUSAL"]
+      far_expected[4] src=put_down obs=no_pallet:no_opening_pattern cands=[]
+      far_expected[5] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.910 near=['P-2'] w=(2.09,-8.92) F1_CORRECT_REFUSAL"]
+      no adoption checks (sources [])
+## f1_blocked_off_line_m_s7 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.005 near=[] w=(0.83,-0.06)']
+      check far src=session_zone err=0.005 edge=-0.1950 inside=True OK
+      check near src=session_zone err=0.009 edge=-0.1808 inside=True OK
+      check insert src=session_zone err=0.009 edge=-0.1808 inside=True OK
+   m2 P-2->D-2 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.006 near=[] w=(1.80,0.05)']
+      check far src=session_zone err=0.006 edge=-0.1987 inside=True OK
+      check near src=session_zone err=0.020 edge=-0.1797 inside=True OK
+      check insert src=session_zone err=0.020 edge=-0.1797 inside=True OK
+   m3 P-1->D-3 failed observe:all_candidates_exhausted:perception_no_pallet:no_expected_candidate:success;success;success;invalid_goal;success;success
+      far_expected[0] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=1.049 near=['P-2'] w=(1.95,-8.98) F1_CORRECT_REFUSAL"]
+      far_expected[1] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.678 near=['P-2'] w=(2.32,-8.98) F1_CORRECT_REFUSAL"]
+      far_expected[2] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=1.051 near=['P-2'] w=(1.95,-8.96) F1_CORRECT_REFUSAL"]
+      far_expected[4] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.912 near=['P-2'] w=(2.09,-9.06) F1_CORRECT_REFUSAL"]
+      far_expected[5] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.906 near=['P-2'] w=(2.09,-8.92) F1_CORRECT_REFUSAL"]
+      no adoption checks (sources [])
+## f1_blocked_off_line_m_s8 epoch_1 recog=off fce=on azc=on m=0.1 ['slam: localization (registry: line_m_team_spec_quantized_0ff9e3bdff13)']
+   m1 P-1->D-1 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.012 near=[] w=(0.83,-0.05)']
+      check far src=session_zone err=0.012 edge=-0.2024 inside=True OK
+      check near src=session_zone err=0.046 edge=-0.1444 inside=True OK
+      check insert src=session_zone err=0.046 edge=-0.1444 inside=True OK
+   m2 P-2->D-2 done None
+      far_expected[0] src=session_zone obs=valid:None cands=['inside=True err=0.006 near=[] w=(1.80,0.04)']
+      check far src=session_zone err=0.006 edge=-0.2052 inside=True OK
+      check near src=session_zone err=0.023 edge=-0.1768 inside=True OK
+      check insert src=session_zone err=0.023 edge=-0.1768 inside=True OK
+   m3 P-1->D-3 failed observe:all_candidates_exhausted:perception_no_pallet:no_expected_candidate:success;success;success;invalid_goal;success;success
+      far_expected[0] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=1.055 near=['P-2'] w=(1.95,-9.00) F1_CORRECT_REFUSAL"]
+      far_expected[1] src=put_down obs=no_pallet:no_expected_candidate cands=['inside=False err=0.666 near=[] w=(2.34,-9.61) F1_UNDETERMINED', "inside=False err=0.676 near=['P-2'] w=(2.32,-9.01) F1_CORRECT_REFUSAL"]
+      far_expected[2] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=1.052 near=['P-2'] w=(1.95,-9.00) F1_CORRECT_REFUSAL"]
+      far_expected[4] src=put_down obs=no_pallet:no_front_plane cands=[]
+      far_expected[5] src=put_down obs=no_pallet:no_expected_candidate cands=["inside=False err=0.904 near=['P-2'] w=(2.10,-8.96) F1_CORRECT_REFUSAL"]
+      no adoption checks (sources [])
+adoption checks: undetermined 0 []
+F1 refusals (no_expected_candidate, outside candidates): false 3 [('f1_off_random_m_s6', 'epoch_1', 'm3', 0, 0.4302), ('f1_off_random_m_s6', 'epoch_1', 'm3', 1, 0.4261), ('f1_off_random_m_s8', 'epoch_1', 'm3', 0, 0.4582)] correct 17 undetermined 1 [('f1_blocked_off_line_m_s8', 'epoch_1', 'm3', 1, 0.6657)]
