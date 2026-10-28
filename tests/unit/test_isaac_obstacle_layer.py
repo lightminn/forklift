@@ -983,21 +983,49 @@ def test_the_truth_stop_arc_check_counts_the_hull_and_the_shape_the_permission_d
     from forklift_core.planning import Rectangle
 
     lay = _bladed_layer()
+
+    def check(arc, rects, loaded, direction, **kw):
+        hull_shape, _ = lay.footprints(loaded)
+        return MODULE.stop_arc_hits(arc, rects, hull_shape,
+                                    MODULE.moving_shape(hull_shape, lay.parts_shape, loaded=loaded, direction=direction,
+                                                        mode=lay.shape_mode), margin_m=0.01, **kw)
+
     arc = arc_poses((0.0, 0.0, 0.0), 0.0, -1, 0.2, 0.025)[0]
     beside = Rectangle(1.1, 0.30, 0.2, 0.06, 0.0)  # beside the left blade (|y| 0.27-0.33), inside the hull's band
     far = Rectangle(3.0, 2.0, 0.2, 0.2, 0.0)
-    hull, moving = MODULE.stop_arc_hits(lay, arc, [far, beside], loaded=False, direction=-1, margin_m=0.01)
+    hull, moving = check(arc, [far, beside], False, -1)
     assert hull == [1] and moving == []
     # forward the permission checks the hull (hull_forward): both counts agree
     arc_f = arc_poses((0.0, 0.0, 0.0), 0.0, 1, 0.2, 0.025)[0]
-    assert MODULE.stop_arc_hits(lay, arc_f, [far, beside], loaded=False, direction=1, margin_m=0.01) == ([1], [1])
+    assert check(arc_f, [far, beside], False, 1) == ([1], [1])
     # loaded: the loaded outline either way
-    assert MODULE.stop_arc_hits(lay, arc, [far, beside], loaded=True, direction=-1, margin_m=0.01) == ([1], [1])
+    assert check(arc, [far, beside], True, -1) == ([1], [1])
     # a rectangle on the blade itself meets both
     on_blade = Rectangle(1.1, 0.15, 0.1, 0.05, 0.0)
-    assert MODULE.stop_arc_hits(lay, arc, [on_blade], loaded=False, direction=-1, margin_m=0.01) == ([0], [0])
+    assert check(arc, [on_blade], False, -1) == ([0], [0])
     # skipped ids are not checked
-    assert MODULE.stop_arc_hits(lay, arc, [beside], loaded=False, direction=-1, margin_m=0.01, skip={0}) == ([], [])
+    assert check(arc, [beside], False, -1, skip={0}) == ([], [])
+
+
+def test_the_evaluators_moving_shape_is_the_layers_own_without_a_second_layer_call():
+    """2026-10-28: the runner takes the moving shape from its parts and the config's mode -- the same shape
+    footprints(loaded, direction) gives, for every mode, load and direction."""
+    for mode in ("hull_forward", "hull", "parts"):
+        cfg = {**CONFIG, "permission": {**CONFIG["permission"], "shape": mode}}
+        lay = MODULE.ObstacleLayer(
+            cfg, hall=Bounds(-5, 10, -5, 5), error_table=TABLE,
+            unloaded=Footprint(1.29, 0.17, 0.36), loaded=Footprint(1.53, 0.17, 0.40),
+            body_front_m=0.884, rear_axle_x_in_base_m=-0.34, noise_seed=1,
+            blades_rear_m=((0.884, 1.29, 0.10, 0.21), (0.884, 1.29, -0.21, -0.10)))
+        runner_parts = [(Footprint(0.884, 0.17, 0.36), 0.0, 0.0)] + [
+            (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2)
+            for x0, x1, y0, y1 in ((0.884, 1.29, 0.10, 0.21), (0.884, 1.29, -0.21, -0.10))]
+        assert runner_parts == lay.parts_shape
+        for loaded in (False, True):
+            for direction in (-1, 0, 1):
+                hull_shape, _ = lay.footprints(loaded)
+                got = MODULE.moving_shape(hull_shape, runner_parts, loaded=loaded, direction=direction, mode=mode)
+                assert got == lay.footprints(loaded, direction)[0]
 
 
 def test_the_runner_records_both_counts_and_whether_the_lists_were_cut():
@@ -1005,5 +1033,36 @@ def test_the_runner_records_both_counts_and_whether_the_lists_were_cut():
     for key in ('"truth_events": obstacle["events"]', '"unpermitted": obstacle["unpermitted"][:50]',
                 '"unpermitted_truncated":', '"truth_events_dir":', '"unpermitted_dir_entries":',
                 '"unpermitted_dir": obstacle.get("unpermitted_dir", [])[:50]', '"unpermitted_dir_truncated":',
-                '"event_objects_dir":', "obstacle_module.stop_arc_hits("):
+                '"event_objects_dir":', "obstacle_module.stop_arc_hits(", "obstacle_module.moving_shape("):
         assert key in source
+    # the evaluator calls the layer once per tick, as before the new counts (the replay gate's records)
+    start = source.index("if acting and abs(truth_speed) > 0.05:")
+    block = source[start:source.index("if paused_:", start)]
+    assert block.count('obstacle["layer"].footprints(') == 1 and 'obstacle["layer"].footprints(loaded)' in block
+
+
+def test_the_evaluation_only_keys_are_left_out_of_the_replay_end_state(tmp_path):
+    """2026-10-28: the gate's format 2 records predate the direction-shaped counts and the truncation flags (#218);
+    the end-state projection leaves them out of the obstacle container and of state.obstacle_layer's digest, and
+    compares every other key as ever (Codex review of the fix: the projection digests each key's value)."""
+    import importlib.util
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_eval_keys", ROOT / "sim/isaac/run_transport.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ms = MissionState(phase="transport")
+    old_layer = {"truth_events": 3, "unpermitted_entries": 1, "unpermitted": [{"time_s": 1.0}], "event_objects": 1}
+    old = {"state": {"obstacle_layer": dict(old_layer)}, "obstacle": {"events": 3, "unpermitted": [{"time_s": 1.0}]}}
+    new = {"state": {"obstacle_layer": {**old_layer, "unpermitted_truncated": False, "truth_events_dir": 0,
+                                        "unpermitted_dir_entries": 0, "unpermitted_dir": [],
+                                        "unpermitted_dir_truncated": False, "event_objects_dir": 0}},
+           "obstacle": {"events": 3, "unpermitted": [{"time_s": 1.0}], "events_dir": 0, "unpermitted_dir": [],
+                        "event_objects_dir": {}}}
+    assert module.final_projection(old, ms, tmp_path) == module.final_projection(new, ms, tmp_path)
+    changed = {"state": {"obstacle_layer": {**new["state"]["obstacle_layer"], "truth_events": 4}},
+               "obstacle": new["obstacle"]}
+    assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
+    changed = {"state": new["state"], "obstacle": {**new["obstacle"], "events": 4}}
+    assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)

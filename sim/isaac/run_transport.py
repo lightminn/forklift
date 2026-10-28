@@ -2499,7 +2499,18 @@ PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
 # the last physics step ran on; Codex implementation round 2 P2).
 PROJECTION_NOT_COMPARED = {"slam": ("applied_speed",),
                            # plan 2026-10-25-slip-check-relative: the slip watch's record, from each tick's truth
-                           "state": ("slip_watch",)}
+                           "state": ("slip_watch",),
+                           # docs/interfaces/2026-10-28-obstacle-truth-evaluation.md (PR #218): the truth evaluation's
+                           # direction-shaped counts and the exempt share, from each tick's truth like slip_watch
+                           "obstacle": ("events_dir", "event_objects_dir", "unpermitted_dir", "exempt_eval")}
+# Keys inside a compared container key that are left out of its digest, for the same reason (added after the format 2
+# records, evaluation only): the rest of the value is compared as ever.
+PROJECTION_INNER_NOT_COMPARED = {
+    ("state", "obstacle_layer"): ("unpermitted_truncated", "truth_events_dir", "unpermitted_dir_entries",
+                                  "unpermitted_dir", "unpermitted_dir_truncated", "event_objects_dir",
+                                  "exempt_events", "exempt_events_dir", "exempt_unpermitted_entries",
+                                  "exempt_unpermitted_dir_entries"),
+}
 # Objects a container holds for a service, which the service changes inside its recorded calls (the physics step
 # runs the SLAM bridge's odometry, stop detector and noise): a replay never runs them, so they are compared by
 # their logical id only -- their effects on the mission reach it through the watched keys (Codex P2).
@@ -2681,6 +2692,9 @@ def final_projection(containers: dict, ms, output: Path) -> dict:
                 continue
             if key in PROJECTION_SERVICE_OWNED.get(name, {}):
                 continue  # a port's own object: never compared (a replay may not even hold it)
+            inner_ = PROJECTION_INNER_NOT_COMPARED.get((name, key))
+            if inner_ and isinstance(value, dict):
+                value = {k_: v_ for k_, v_ in value.items() if k_ not in inner_}
             try:
                 node = projection_node(value, services, roots)
             except TypeError as exc:
@@ -5089,6 +5103,10 @@ def drive(S, isaac) -> None:
         if recorder is not None:  # the pocket frames recorder: its phase, its closing statistics
             recorder = RecordingProxy(recorder, "PocketRecorder", boundary)
     state["phase"] = "planning"
+    # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
+    # once -- never from the layer, whose every call and attribute is a recorded boundary
+    eval_shape_mode_ = (str((obstacle_module.load_layer_config(args.obstacle_layer).get("permission") or {})
+                            .get("shape", "hull_forward")) if getattr(args, "obstacle_layer", None) is not None else None)
     if boundary is not None:
         boundary.recorder.tick_begin(-1, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")  # the initial plans
     if args.use_perception:
@@ -8906,8 +8924,13 @@ def drive(S, isaac) -> None:
                         # moving direction ("events_dir", "unpermitted_dir": the body and the blades reversing unloaded)
                         # -- the hull fills the space beside the blades the permission never checks reversing (the
                         # return-home "object 9" ticks of 2026-10-28 were that band, with no contact)
+                        # one boundary call, as every recorded run made it; the moving shape from the runner's own
+                        # parts and the config's shape mode (a second layer call broke the replay gate, 2026-10-28)
+                        shape_now, _ = obstacle["layer"].footprints(loaded)
                         hull_hits_, moving_hits_ = obstacle_module.stop_arc_hits(
-                            obstacle["layer"], arc, checked_obstacles, loaded=loaded, direction=moving_dir_,
+                            arc, checked_obstacles, shape_now,
+                            obstacle_module.moving_shape(shape_now, unloaded_shape, loaded=loaded,
+                                                         direction=moving_dir_, mode=eval_shape_mode_),
                             margin_m=pconf.envelope_offset_m, skip=skip_)
                         for key_, hits_ in (("", hull_hits_), ("_dir", moving_hits_)):
                             for oid in hits_:
