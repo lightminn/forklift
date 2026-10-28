@@ -44,7 +44,7 @@ line_m 의 `uncertain_in_radius` 는 막힌 배치에서 옳은 동작이다. ra
 
 ### F3. 막힌 수동 재집기의 사전 거부 — 콘솔 세션 담당
 
-콘솔 세션이 맡는다. 사유는 `reject(blocked)` 이고, `detail` 에 막는 쪽을 싣는다(예: `pickup:D-2`, `delivery:P-3`). 표기는 `next_pick` 의 blocked 목록과 같다. 범위는 `mission_submit` 의 pallet_id 가 delivered(재집기)일 때만이다. 정본은 `docs/interfaces/2026-10-13-operator-console-contract-draft.md` 의 mission_submit 행이다. 이 계획과는 별개로 진행한다.
+콘솔 세션이 맡는다. 사유는 `reject(blocked)` 이고, `detail` 에 막는 쪽을 **팔레트 ID** 로 싣는다. `pickup:<팔레트>` 는 그 팔레트가 집는 직선을 막는다는 뜻이고(line_m 사례는 `pickup:P-2`), `delivery:<팔레트>` 는 목적지의 내려놓는 직선을 막는다는 뜻이다. 고정 소품이면 `props` 이고, 여럿이면 쉼표로 잇는다. 표기는 `next_pick` 의 blocked 목록과 같다(콘솔 세션 구현 `feat/repick-blocked`). 범위는 `mission_submit` 의 pallet_id 가 delivered(재집기)일 때만이다. 정본은 `docs/interfaces/2026-10-13-operator-console-contract-draft.md` 의 mission_submit 행이다. 이 계획과는 별개로 진행한다.
 
 ### D2·D3 진단 (수정 전)
 

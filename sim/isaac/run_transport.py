@@ -409,6 +409,16 @@ def arguments() -> argparse.Namespace:
         "tracking, the pocket check or the bottom-deck check; needs --near-capture-expected on. Unset: as before.",
     )
     parser.add_argument(
+        "--far-capture-expected",
+        choices=("off", "on"),
+        default="off",
+        help="docs/plans/2026-10-28-far-target-binding.md F1: on -- with --recognition off the far capture looks only "
+        "in the mission's adoption rectangle (the circle around rectangle + --adoption-zone-margin-m, the zone's "
+        "heading range + 5 deg; a re-pick about its put-down pose +-15 deg); a pattern outside fails that observation "
+        "and the ladder goes on, so a neighbouring pallet is not adopted. Not the near capture, a second near "
+        "capture, a re-observation stand or the bottom-deck return.",
+    )
+    parser.add_argument(
         "--adoption-zone-check",
         choices=("off", "on"),
         default="off",
@@ -3916,7 +3926,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     # Plan 2026-10-28-adoption-zone-check: the same placement range, as a pallet-centre range (never grown)
     adoption_zone_first = AdoptionZone(_ZONE.x_min_m, _ZONE.x_max_m, _ZONE.y_min_m, _ZONE.y_max_m,
-                                       "bay" if scene_layout is None else "scene_layout")
+                                       "bay" if scene_layout is None else "scene_layout",
+                                       # a PickupZone's heading range is centred at 0 (far-target-binding F1)
+                                       yaw_half_rad=getattr(_ZONE, "yaw_max_rad", None))
     zone_grow = math.hypot(geometry.pallet_depth_m, geometry.pallet_width_m) / 2
     pickup_zone = Rectangle(
         (_ZONE.x_min_m + _ZONE.x_max_m) / 2,
@@ -5886,6 +5898,8 @@ def drive(S, isaac) -> None:
                                 adoption_zone_check=getattr(args, "adoption_zone_check", "off"),
                                 adoption_zone_margin_m=getattr(args, "adoption_zone_margin_m", 0.30),
                                 adoption_zone=adoption_zone_first,
+                                # docs/plans/2026-10-28-far-target-binding.md F1: off in a record from before the option
+                                far_capture_expected=getattr(args, "far_capture_expected", "off"),
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
@@ -7462,7 +7476,9 @@ def drive(S, isaac) -> None:
                                    "bounds": None,
                                    # plan 2026-10-28-adoption-zone-check: the zone's own centre range, not grown
                                    "adoption_zone": AdoptionZone(p_.zone.x_min_m, p_.zone.x_max_m, p_.zone.y_min_m,
-                                                                 p_.zone.y_max_m, "session_zone")}
+                                                                 p_.zone.y_max_m, "session_zone",
+                                                                 yaw_centre_rad=p_.zone.yaw_centre_rad,
+                                                                 yaw_half_rad=p_.zone.yaw_half_rad)}
                     for p_ in session.pallets}
                 live_session_["nominal"] = {p_.pallet_id: (p_.nominal.x_m, p_.nominal.y_m, p_.nominal.yaw_rad)
                                             for p_ in session.pallets}

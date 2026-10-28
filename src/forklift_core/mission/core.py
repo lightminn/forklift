@@ -3992,6 +3992,46 @@ class MissionCore:
             reason_ = f"{ADOPTION.OUTSIDE}:{stage}"
             require(False, reason_)
 
+    def _far_expected_on(self, far_hook) -> bool:
+        """docs/plans/2026-10-28-far-target-binding.md F1: --far-capture-expected on, recognition off (no far hook), a
+        far capture (not the near capture, a second near capture, a re-observation stand or the bottom-deck return)."""
+        near = self.near
+        return bool(getattr(self.options, "far_capture_expected", "off") == "on" and far_hook is None
+                    and self.state.get("near_capture", {}).get("status") != "pending"
+                    and not getattr(self, "_second_capture_active", False)
+                    and not (near is not None and near.get("retry_stand"))
+                    and not self.bottom_deck_returning())
+
+    def _far_expected_detection(self, attempt: dict, detector_input, prior, params, base, yaw: float, waive_kw):
+        """F1: the far capture looks in the mission's adoption rectangle (the circle around rectangle + margin, the
+        zone's heading range); a detection inside the circle but outside rectangle + margin fails this observation --
+        the ladder goes on -- rather than being adopted and refused by the adoption check."""
+        options, hooks = self.options, self.hooks
+        zone_ = getattr(options, "adoption_zone", None)
+        if zone_ is None:
+            reason_ = ADOPTION.UNDEFINED
+            hooks.require(False, reason_)
+        margin_ = float(getattr(options, "adoption_zone_margin_m", ADOPTION.DEFAULT_MARGIN_M))
+        site_ = ADOPTION.far_site(zone_, margin_, base_xy=(float(base[0]), float(base[1])), base_yaw=float(yaw))
+        detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, params, site_, **waive_kw)
+        record_ = {"site": [site_.x_m, site_.y_m, site_.yaw_rad], "radius_m": site_.radius_m,
+                   "axis_tolerance_rad": site_.axis_tolerance_rad, "zone": zone_.bounds(),
+                   "zone_source": zone_.source, "candidates": [asdict(c_) for c_ in candidates_]}
+        attempt["far_expected"] = record_
+        observation_ = detection.observation
+        if observation_.status == "valid":
+            depth_ = float(options.pallet_prior_loaded.overall_depth_m)
+            world_ = options.adapter.estimate_world_pallet_site(
+                options.adapter.estimate_pallet_center_m(observation_, depth_), observation_.insertion_yaw_rad,
+                (float(base[0]), float(base[1])), float(yaw))
+            check_ = ADOPTION.check((world_.x_m, world_.y_m), zone_, margin_, stage="far_expected")
+            if not check_["inside"]:
+                record_["outside_zone"] = check_
+                detection = replace(detection, observation=replace(
+                    observation_, status="no_pallet", left=None, right=None, insertion_yaw_rad=None,
+                    position_sigma_m=None, yaw_sigma_rad=None, reason="no_expected_candidate:outside_zone"))
+        return detection
+
     def _near_expected_on(self) -> bool:
         """Plan 2026-10-22 task A: a near capture (pending) under --near-capture-expected on."""
         return bool(getattr(self.options, "near_capture_expected", "off") == "on"
@@ -4913,6 +4953,8 @@ class MissionCore:
             attempt["expected"] = self._expected_record(site, candidates_)
             if not waive_kw and detection.observation.status != "valid" and self._near_waiver_on():
                 detection = self._near_lower_waiver(attempt, detection, site, detector_input, prior, params)
+        elif self._far_expected_on(far_hook):
+            detection = self._far_expected_detection(attempt, detector_input, prior, params, base, yaw, waive_kw)
         else:
             detection = detect_pockets(detector_input, prior, params, **waive_kw)
             if self._near_waiver_on() and detection.observation.status == "valid":

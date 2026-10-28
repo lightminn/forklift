@@ -284,6 +284,17 @@ def test_a_far_run_is_refused_by_the_committed_terms_and_taken_by_terms_measured
     ]
 
 
+def test_the_far_capture_expected_site_is_a_measurement_condition():
+    """docs/plans/2026-10-28-far-target-binding.md F1 (Codex plan round 1 P2): it changes what is adopted, so a run
+    with it on differs from the committed terms (recorded before the argument: off), and off matches them."""
+    committed = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())["condition"]
+    assert "far_capture_expected" not in committed["arguments"]
+    on = {**committed, "arguments": {**committed["arguments"], "far_capture_expected": "on"}}
+    off = {**committed, "arguments": {**committed["arguments"], "far_capture_expected": "off"}}
+    assert NT.condition_problems(committed, on) == ["arguments far_capture_expected differs from the measurement runs"]
+    assert NT.condition_problems(committed, off) == []
+
+
 def test_a_layout_without_travel_legs_records_their_absence_as_its_condition(tmp_path):
     """Near tracking re-measure (riib line_1_m): only the factory layout plans its travel legs with a config of its
     own (travel_planner_config); a bay or scene run plans them with planner_config and records none. That absence is

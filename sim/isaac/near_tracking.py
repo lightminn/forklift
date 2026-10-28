@@ -1127,6 +1127,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-22: the near capture's expected site and the untracked re-draw's lateral box
                               # (docs/plans/2026-10-22-near-recapture-scenes.md); off / 0.05 in every earlier run.
                               "near_capture_expected": "off", "near_capture_redraw_lateral_m": 0.05,
+                              # 2026-10-28 far-target-binding F1: changes what is adopted -- a condition
+                              "far_capture_expected": "off",
                               # 2026-10-22 task C: the check-off near lower waiver; gate in every earlier run.
                               "near_capture_lower": "gate",
                               # 2026-10-27 C3 (insertion lateral drift T2): the second near capture's gap; unset in

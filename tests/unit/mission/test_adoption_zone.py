@@ -99,5 +99,57 @@ def test_the_default_margin_follows_the_localization_path():
     assert az.default_margin(localized=False) == pytest.approx(0.30)
 
 
+# --- docs/plans/2026-10-28-far-target-binding.md F1: the far capture's expected site from the adoption rectangle ---
+
+def test_the_far_site_is_the_circle_around_the_rectangle_plus_margin():
+    zone = az.AdoptionZone(2.6, 3.6, -0.2, 1.5, "session_zone", yaw_centre_rad=0.0, yaw_half_rad=0.2094)
+    site = az.far_site(zone, 0.10, base_xy=(0.0, 0.0), base_yaw=0.0)
+    assert (site.x_m, site.y_m) == pytest.approx((3.1, 0.65))
+    assert site.radius_m == pytest.approx(math.hypot(0.5 + 0.10, 0.85 + 0.10))
+    assert site.axis_tolerance_rad == pytest.approx(0.2094 + math.radians(5))
+
+
+def test_the_corner_cases_codex_raised_lie_inside_the_far_site():
+    # a 0.5 x 0.5 zone at m 0.10: (0.349, 0.349) from the centre passes the adoption check, so it must lie in the site
+    zone = az.AdoptionZone(-0.25, 0.25, -0.25, 0.25, "session_zone")
+    site = az.far_site(zone, 0.10, base_xy=(0.0, 0.0), base_yaw=0.0)
+    assert site.radius_m == pytest.approx(0.495, abs=1e-3) and math.hypot(0.349, 0.349) <= site.radius_m
+    assert az.check((0.349, 0.349), zone, 0.10, stage="far")["inside"]
+    repick = az.AdoptionZone(-0.1, 0.1, -0.1, 0.1, "put_down", yaw_centre_rad=0.0, yaw_half_rad=az.REPICK_YAW_HALF_RAD)
+    assert az.far_site(repick, 0.10, base_xy=(0.0, 0.0), base_yaw=0.0).radius_m == pytest.approx(0.283, abs=1e-3)
+
+
+def test_the_far_site_is_placed_in_the_capture_base():
+    zone = az.AdoptionZone(4.9, 5.1, 1.9, 2.1, "put_down", yaw_centre_rad=math.pi / 2, yaw_half_rad=0.26)
+    site = az.far_site(zone, 0.10, base_xy=(5.0, 0.0), base_yaw=math.pi / 2)  # the base faces +y, 2 m short
+    assert (site.x_m, site.y_m, site.yaw_rad) == pytest.approx((2.0, 0.0, 0.0), abs=1e-9)
+
+
+def test_the_relative_yaw_wraps_at_pi():
+    zone = az.AdoptionZone(-0.1, 0.1, -0.1, 0.1, "put_down", yaw_centre_rad=math.pi - 0.01, yaw_half_rad=0.26)
+    site = az.far_site(zone, 0.10, base_xy=(-2.0, 0.0), base_yaw=-math.pi + 0.01)
+    assert abs(site.yaw_rad) == pytest.approx(0.02, abs=1e-9)
+
+
+def test_a_zone_without_a_yaw_range_takes_the_default_axis_tolerance():
+    zone = az.AdoptionZone(-0.25, 0.25, -0.25, 0.25, "bay")
+    assert az.far_site(zone, 0.10, base_xy=(-3.0, 0.0), base_yaw=0.0).axis_tolerance_rad == pytest.approx(
+        az.FAR_AXIS_DEFAULT_RAD)
+
+
+def test_a_put_down_square_carries_the_put_down_heading():
+    tb, Pose = book()
+    tb.carried("P-1")
+    tb.put_down("P-1", Pose(3.0, -8.946, 0.3), uncertainty_m=0.05)
+    z = az.mission_zone(tb.pallets["P-1"], ZONE)
+    assert z.yaw_centre_rad == pytest.approx(0.3) and z.yaw_half_rad == pytest.approx(az.REPICK_YAW_HALF_RAD)
+
+
+@pytest.mark.parametrize("half", [-0.1, float("nan")])
+def test_a_broken_yaw_range_is_an_error(half):
+    with pytest.raises(ValueError):
+        az.AdoptionZone(0.0, 1.0, 0.0, 1.0, "bay", yaw_half_rad=half)
+
+
 def test_the_reasons():
     assert az.OUTSIDE == "adoption_outside_zone" and az.UNDEFINED == "adoption_zone_undefined"
