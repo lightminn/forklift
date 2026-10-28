@@ -380,6 +380,9 @@ class ObstacleLayer:
         from forklift_core.perception.obstacle_grid import compose
 
         st = self.exit_status
+        if not seen:  # no sensor delivered (silenced, or nothing in raw): nothing was observed, nothing is verified
+            st["empty_calls"] = st.get("empty_calls", 0) + 1
+            return
         if correction is None or version is None:
             st["unplaced_scans"] = st.get("unplaced_scans", 0) + 1
             return

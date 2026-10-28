@@ -182,3 +182,16 @@ def test_clear_ends_it_and_a_new_latch_starts_clean():
     assert lay.exit_exempt_status() == {"closed": "watch"}  # untransformed, nothing recorded
     set_region(lay)
     assert lay.exit_exempt_status() == {} and lay.exit_verified is None
+
+
+def test_a_call_without_any_scan_verifies_nothing():
+    # Codex impl review P1-1: an empty raw (a silenced sensor) is not an observation
+    lay = layer()
+    for k in range(3):
+        lay.add_scans(9.7 + 0.1 * k, scan(lay), odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    set_region(lay)
+    lay.add_scans(10.0, {}, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    lay.refresh(10.05, (0.0, 0.0, 0.0), 0, current_pose=P0, path_ahead=PATH, loaded=True, direction=-1)
+    st = lay.exit_exempt_status()
+    assert st["empty_calls"] == 1 and st.get("verified_s") is None and st["skipped"] == "unverified"
+    assert lay.limit(10.05, current_pose=P0, curvature_inv_m=0.0, direction=-1, loaded=True, cap_mps=0.18)[0] == 0.0

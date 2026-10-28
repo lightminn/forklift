@@ -1185,7 +1185,7 @@ class MissionCore:
         latch = getattr(self, "_exit_latch", None)
         return latch is not None and latch["state"] in ("armed", "active")
 
-    def exit_exempt_boundary(self, t: float, rear, loaded: bool, path: str) -> None:
+    def exit_exempt_boundary(self, t: float, rear, loaded: bool, path: str) -> str | None:
         """Plan D1's common closing boundary, at the head of every obstacle control path ("permission", "watch",
         "paused"): a pending latch is armed at the transport's first permission tick (after the install's
         arm_docking split, so the tracker it holds is the one driven); an open one is closed for leaving the
@@ -1195,7 +1195,7 @@ class MissionCore:
         permission tick's end instead (``exit_exempt_tick_end``)."""
         latch = getattr(self, "_exit_latch", None)
         if latch is None or latch["state"] == "closed":
-            return
+            return None
         ms, obstacle = self.ms, self.obstacle
         tracker = self.trackers.get("transport")
         if latch["state"] == "pending":
@@ -1205,12 +1205,18 @@ class MissionCore:
                 prefix = float(self.exit_prefix_m())
                 if prefix <= 0.0:
                     self._exit_close(t, rear, loaded, "no_prefix", layer=False)
-                    return
-                latch.update(state="armed", prefix_m=prefix, length_m=min(prefix, self.EXIT_EXEMPT_CAP_M),
-                             opened_s=float(t), tracker=tracker, progress0_m=float(tracker.progress_m()),
-                             driven_m=0.0, last_rear=[float(v) for v in rear][:2], lapse_since=None,
-                             transformed_now=False, ticks=0, transformed_ticks=0, skipped={}, max_freed=0)
-            return
+                    return None
+                # the exempt part is the path's first min(prefix, 0.6 m), from the path's start (Codex impl P2-3): a
+                # tracker already past its start when armed has only the rest of it, by distance driven too
+                end_m = min(prefix, self.EXIT_EXEMPT_CAP_M)
+                progress0 = float(tracker.progress_m())
+                latch.update(state="armed", prefix_m=prefix, length_m=end_m, opened_s=float(t), tracker=tracker,
+                             progress0_m=progress0, budget_m=max(0.0, end_m - progress0), driven_m=0.0,
+                             last_rear=[float(v) for v in rear][:2], lapse_since=None, transformed_now=False,
+                             ticks=0, transformed_ticks=0, skipped={}, max_freed=0)
+                if progress0 >= end_m:
+                    self._exit_close(t, rear, loaded, "length")
+            return None
         r = [float(v) for v in rear][:2]
         latch["driven_m"] += math.hypot(r[0] - latch["last_rear"][0], r[1] - latch["last_rear"][1])
         latch["last_rear"] = r
@@ -1235,9 +1241,9 @@ class MissionCore:
             reason = "paused"
         elif status.get("rang") is not None:
             reason = "watch"
-        elif float(tracker.progress_m()) - latch["progress0_m"] >= latch["length_m"]:
+        elif float(tracker.progress_m()) >= latch["length_m"]:
             reason = "length"
-        elif latch["driven_m"] >= latch["length_m"]:
+        elif latch["driven_m"] >= latch["budget_m"]:
             reason = "driven"
         elif t - latch["opened_s"] > self.EXIT_EXEMPT_TIME_S:
             reason = "time"
@@ -1247,12 +1253,13 @@ class MissionCore:
             reason = "verification_lapsed"
         if reason is not None:
             self._exit_close(t, rear, loaded, reason, status=status)
-            return
+            return reason
         latch["ticks"] += 1
         latch["transformed_ticks"] += int(latch["transformed_now"])
         if status.get("skipped") is not None:
             latch["skipped"][status["skipped"]] = latch["skipped"].get(status["skipped"], 0) + 1
         latch["max_freed"] = max(latch["max_freed"], int(status.get("freed") or 0))
+        return None
 
     def exit_exempt_set_region(self, rear, kappa: float) -> None:
         """Plan D1, D2: the watch input for the next scans -- the remaining exempt path (the transport tracker's from
@@ -1263,7 +1270,7 @@ class MissionCore:
         tracker = latch["tracker"]
         poses, directions, _ = tracker.path_arrays()
         progress = float(tracker.progress_m())
-        window = path_window(poses, progress, latch["progress0_m"] + latch["length_m"])
+        window = path_window(poses, progress, latch["length_m"])
         d = int(directions[min(len(directions) - 1, int(np.searchsorted(
             np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(np.asarray(poses)[:, :2], axis=0).T)))), progress)))])
         self.obstacle["layer"].exit_exempt_set(
@@ -1304,7 +1311,8 @@ class MissionCore:
             tracker = latch["tracker"]
             record.update(
                 prefix_m=latch["prefix_m"], length_m=latch["length_m"], opened_s=latch["opened_s"],
-                active_s=latch.get("active_s"), progress_m=float(tracker.progress_m()) - latch["progress0_m"],
+                active_s=latch.get("active_s"), progress0_m=latch["progress0_m"],
+                progress_m=float(tracker.progress_m()),
                 driven_m=latch["driven_m"], ticks=latch["ticks"], transformed_ticks=latch["transformed_ticks"],
                 skipped=dict(latch["skipped"]), max_freed=latch["max_freed"],
                 scans=(status or {}).get("scans"), verified_s=(status or {}).get("verified_s"),
@@ -1380,8 +1388,9 @@ class MissionCore:
             direction = cusp_handed_.hand_direction
         else:
             direction = 1 if truth_speed > 0 else -1
+        exit_closed_ = None
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
-            self.exit_exempt_boundary(t, rear, loaded, "permission")
+            exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "permission")
             if self.exit_exempt_open():
                 self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
@@ -1391,6 +1400,10 @@ class MissionCore:
         )
         if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
             allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
+        if exit_closed_ == "watch":
+            # plan D2: the tick the watch rang stops the wheels, whatever the general limit allows beyond the stop arc
+            # (Codex impl P1-2)
+            allowed, why = 0.0, "exit_watch"
         dumped_phases = obstacle.setdefault("dumped_phases", set())
         if allowed == 0.0 and why in ("unknown", "occupied") and t > 5.0 and (
             obstacle.get("dumps", 0) < 4 or ms.phase not in dumped_phases
@@ -5217,13 +5230,16 @@ class MissionCore:
                 leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
             obstacle["layer"].refresh(t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
                                       path_ahead=leg_now, loaded=loaded, direction=leg_dir_now)
+        exit_closed_ = None
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
-            self.exit_exempt_boundary(t, rear, loaded, "watch")
+            exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        if exit_closed_ == "watch":
+            allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
         acting = False
         gate_applies_ = False
         if ms.phase in trackers:

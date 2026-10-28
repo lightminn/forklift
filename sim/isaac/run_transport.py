@@ -8854,10 +8854,6 @@ def drive(S, isaac) -> None:
                 # the permission, the stop itself and the probe all use this one.
                 kappa = held_kappa()
                 truth_speed = float(np.dot(velocity[:2], forward))
-                # docs/plans/2026-10-28-exit-prefix-extract-rules.md D5: the ticks the truth evaluation books to the
-                # exemption (on the exempt snapshot, then after an active latch closed until the truck stands)
-                exempt_tick_ = (getattr(args, "exit_prefix_exempt", "off") == "on" and obstacle is not None
-                                and core.exit_exempt_counts(truth_speed))
                 obstacle_hold = False
                 pocket_phase = False
                 # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
@@ -8870,6 +8866,9 @@ def drive(S, isaac) -> None:
                 # Real-time plan D8b: a tick standing for a plan has the paused tick's watch instead (no work counters,
                 # no replan), and the truth evaluation below with what it allows; so does a loaded start wait (6c).
                 plan_watch_ = (plan_wait_ or loaded_wait_) and not paused_ and obstacle is not None
+                exit_on_ = getattr(args, "exit_prefix_exempt", "off") == "on" and obstacle is not None
+                if exit_on_ and not (permission_tick_ or plan_watch_):
+                    core.exit_exempt_counts(truth_speed)  # the settling after a close sees the stands outside them
                 if permission_tick_ or plan_watch_:
                     if plan_watch_:
                         watch_ = core.permission_watch(t, rear, kappa, loaded)
@@ -8887,6 +8886,10 @@ def drive(S, isaac) -> None:
                             rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
                             if ms.phase == "bottom_deck_refused":
                                 break  # plan 2026-10-19 task 4: a blocked side leg ended the mission
+                    # docs/plans/2026-10-28-exit-prefix-extract-rules.md D5: the ticks the truth evaluation books to the
+                    # exemption (on the exempt snapshot, then after an active latch closed until the truck stands) --
+                    # asked after this tick's permission decided them (Codex impl P2-4)
+                    exempt_tick_ = exit_on_ and core.exit_exempt_counts(truth_speed)
                     # Evaluation only (truth): every moving tick, each ground-truth
                     # obstacle in the steering-held stopping volume (with the envelope)
                     # while the permission allowed this speed (Codex L0b P2).

@@ -191,7 +191,27 @@ def test_a_ring_closes_it_at_the_head_so_this_tick_judges_on_the_general_snapsho
     out = tick(core, 10.2)
     assert closed(core)[0]["reason"] == "watch" and closed(core)[0]["ring"]["hits"] == 3
     assert names(calls[n:])[:3] == ["exit_exempt_clear", "refresh", "limit"]
-    assert out.allowed == pytest.approx(0.3)  # no exempt cap after it closed (the general limit stands)
+    # Codex impl review P1-2: the ringing tick stops the wheels though the general limit beyond the arc is positive
+    assert (out.allowed, out.why, out.requested_speed, out.obstacle_hold) == (0.0, "exit_watch", 0.0, True)
+    assert core.obstacle["permission_cap"] == (10.2, 0.0)
+    assert tick(core, 10.3).allowed == pytest.approx(0.3)  # the next tick: the general limit, no exempt cap
+
+
+def test_the_exempt_part_is_measured_from_the_paths_start():
+    # Codex impl review P2-3: a tracker projected 0.03 m along when armed keeps the end at 0.35 m, not 0.38 m
+    core, layer, tracker, calls = make()
+    tracker.progress = 0.03
+    tick(core, 10.0)
+    (window,), _ = next((c[1], c[2]) for c in calls if c[0] == "exit_exempt_set")
+    assert window[0][0] == pytest.approx(-0.03) and window[-1][0] == pytest.approx(-0.35)  # 0.03..0.35 along the path
+    assert core._exit_latch["budget_m"] == pytest.approx(0.32)
+    tracker.progress = 0.35
+    tick(core, 10.1)
+    assert closed(core)[0]["reason"] == "length"
+    core, layer, tracker, calls = make()
+    tracker.progress = 0.36  # armed past the end: nothing exempt
+    tick(core, 10.0)
+    assert closed(core)[0]["reason"] == "length" and "exit_exempt_set" not in names(calls)
 
 
 @pytest.mark.parametrize("change, reason", [

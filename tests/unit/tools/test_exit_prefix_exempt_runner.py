@@ -45,3 +45,12 @@ def test_the_obstacle_scans_carry_their_correction_and_version():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
     assert ('**({"correction": obstacle["applied"], "version": obstacle["version"]}\n'
             '                               if getattr(args, "exit_prefix_exempt", "off") == "on" else {})') in source
+
+
+def test_the_evaluation_books_the_tick_after_the_permission_decided_it():
+    # Codex impl review P2-4: asked before the permission call, the first exempt tick was booked to the general one
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    perm = source.index("perm_tick_ = core.permission(t, rear, kappa, requested_speed, loaded, cusp_handed_)")
+    booked = source.index("exempt_tick_ = exit_on_ and core.exit_exempt_counts(truth_speed)")
+    evaluated = source.index("if acting and abs(truth_speed) > 0.05:")
+    assert perm < booked < evaluated
