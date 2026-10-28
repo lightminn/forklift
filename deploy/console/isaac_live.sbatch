@@ -24,6 +24,10 @@
 #   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
 #   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
 #   --d7-reapproach-hold comes later and wins),
+#   FAR_EXPECTED (on: --far-capture-expected on, the far capture without far recognition looks only in the mission's
+#   adoption rectangle, so a neighbouring pallet is not adopted -- the lead's exception decision of 2026-10-28 after
+#   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
+#   --recognition far; off as before; an EXTRA_ARGS --far-capture-expected comes later and wins),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -45,6 +49,8 @@ ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported|team_spec_quantized) ;; *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
 D7_HOLD=${D7_HOLD:-on}
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
+FAR_EXPECTED=${FAR_EXPECTED:-on}
+case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exit 2;; esac
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
@@ -67,6 +73,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
+  printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
   printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
     "${SCENE_REQUIREMENTS_OVERRIDE:-}"  # scene requirements plan
@@ -123,7 +130,8 @@ ARGS=(
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
   --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
-  --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
+  --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
+  --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   $EXTRA_ARGS "${LOC[@]}" "${REQ[@]}" \
   --output "$2/run")

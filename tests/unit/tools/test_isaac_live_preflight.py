@@ -34,6 +34,20 @@ def test_the_dry_run_prints_the_arguments_and_the_runner_s_verdict_and_starts_no
     assert not (tmp_path / "started").exists() and not (tmp_path / "out" / "live_port.json").exists()
 
 
+def test_the_far_capture_is_bound_to_the_mission_by_default(tmp_path):
+    # far target binding F1 (lead's exception decision 2026-10-28): on unless FAR_EXPECTED=off; anything else refused
+    def far(lines):
+        i = lines.index("--far-capture-expected")
+        return lines[i + 1]
+
+    p = _launch(tmp_path)
+    assert p.returncode == 0 and far(p.stdout.splitlines()) == "on", p.stdout + p.stderr
+    p = _launch(tmp_path, FAR_EXPECTED="off")
+    assert p.returncode == 0 and far(p.stdout.splitlines()) == "off", p.stdout + p.stderr
+    p = _launch(tmp_path, FAR_EXPECTED="maybe")
+    assert p.returncode == 2 and "FAR_EXPECTED must be on or off" in p.stdout + p.stderr
+
+
 def test_the_dry_run_refuses_what_the_launch_would(tmp_path):
     # a registry bundle asked for without a scene file, and a bundle folder without its start pose (lvram's end)
     p = _launch(tmp_path, MAP_BUNDLE="registry")
