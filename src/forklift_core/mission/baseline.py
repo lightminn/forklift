@@ -47,6 +47,7 @@ MISSION_KEYS = {
         "observe_end_stand", "observe_end_stands", "return_loose_checks", "return_loose_arrivals",
         "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
         "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
+        "exit_prefix_exempt",  # the exit-prefix latches' records (plan 2026-10-28-exit-prefix-extract-rules D5)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
@@ -83,7 +84,7 @@ SESSION_KEYS = {
               "command_speed", "preempt_seen_s", "frames", "tracker_configs", "near_tracking"),
     "obstacle": ("layer", "version", "applied", "control_rear", "last_stamp", "last_raw", "ticks", "min_allowed",
                  "slowed", "reasons", "unpermitted", "events", "event_objects", "run_wall_start", "scans", "plans",
-                 "unpermitted_dir", "events_dir", "event_objects_dir",
+                 "unpermitted_dir", "events_dir", "event_objects_dir", "exempt_eval",
                  "reprojections", "silence_trace", "plan_cache", "memory_events"),
     "slam": ("link", "async_link", "tracker", "holds", "records", "control", "scan_id", "stop", "stop_now"),
     "near": ("bounds", "episode", "history", "commands"),

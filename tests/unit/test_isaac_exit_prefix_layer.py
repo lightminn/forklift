@@ -69,14 +69,13 @@ def scan(lay, *, y_wall=WALL_Y, box=None, given_shift=None, own_box=False):
     return raw
 
 
-def region(length=0.4):
-    return xe.region_poses(PATH[: int(round(length / 0.02)) + 5], P0, measured_kappa=0.0, commanded_kappa=0.0,
-                           direction=-1, stop_m=0.088, scan_m=0.018)
+def set_region(lay, length=0.4):
+    lay.exit_exempt_set(PATH[: int(round(length / 0.02)) + 1], measured_kappa=0.0, commanded_kappa=0.0, direction=-1)
 
 
 def run(lay, *, exempt=True, correction=(0.0, 0.0, 0.0), version=0, refresh_at=9.95, refresh_version=0, **kw):
     if exempt:
-        lay.exit_exempt_set(region())
+        set_region(lay)
     for k in range(3):
         lay.add_scans(9.7 + 0.1 * k, scan(lay, **kw), odom_rear=P0, loaded=True, correction=correction,
                       version=version)
@@ -140,7 +139,7 @@ def test_the_watch_reads_the_ranges_the_grid_got_not_the_true_distances():
 
 def test_a_scan_without_its_correction_verifies_nothing():
     lay = layer()
-    lay.exit_exempt_set(region())
+    set_region(lay)
     for k in range(3):
         lay.add_scans(9.7 + 0.1 * k, scan(lay), odom_rear=P0, loaded=True)
     lay.refresh(9.95, (0.0, 0.0, 0.0), 0, current_pose=P0, path_ahead=PATH, loaded=True, direction=-1)
@@ -162,7 +161,7 @@ def test_the_scan_is_placed_with_its_own_correction():
     # the same scan under a correction that moves it 0.3 m sideways: the region goes with it (same verification),
     # and the refresh with that correction frees the same cells relative to the truck
     lay = layer()
-    lay.exit_exempt_set(region())
+    set_region(lay)
     for k in range(3):
         lay.add_scans(9.7 + 0.1 * k, scan(lay), odom_rear=P0, loaded=True, correction=(0.0, 0.3, 0.0), version=4)
     lay.refresh(9.95, (0.0, 0.3, 0.0), 4, current_pose=(0.0, 0.3, 0.0), path_ahead=PATH + [0.0, 0.3, 0.0],
@@ -181,5 +180,5 @@ def test_clear_ends_it_and_a_new_latch_starts_clean():
     assert lay.exit_exempt_status() == {"closed": "watch"}
     lay.refresh(9.96, (0.0, 0.0, 0.0), 0, current_pose=P0, path_ahead=PATH, loaded=True, direction=-1)
     assert lay.exit_exempt_status() == {"closed": "watch"}  # untransformed, nothing recorded
-    lay.exit_exempt_set(region())
+    set_region(lay)
     assert lay.exit_exempt_status() == {} and lay.exit_verified is None

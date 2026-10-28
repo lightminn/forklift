@@ -415,13 +415,28 @@ class ObstacleLayer:
 
     exit_margin_m = 0.06  # the watch's margin and the corridor's: the noise cut (plan D2)
 
-    def exit_exempt_set(self, region_rel) -> None:
-        """The core's watch region for the exit-prefix exemption, as rear-frame poses relative to the truck now
-        (plan D1); set each permission tick while the latch is armed or active."""
+    exit_speed_mps = 0.18  # the exemption's speed (the extract's cruise): the stop length the region adds
+    exit_scan_m = 0.018  # one scan's travel at that speed (10 Hz)
+
+    def exit_exempt_set(self, window_rel, *, measured_kappa: float, commanded_kappa: float, direction: int) -> None:
+        """The core's watch input for the exit-prefix exemption (plan D1, D2), set each permission tick while the
+        latch is armed or active: the remaining exempt path as rear-frame poses relative to the truck now, the
+        measured and commanded curvature and the direction. The region adds this layer's stop length at the
+        exemption's speed and one scan's travel, along the path's end and both stop arcs."""
+        from forklift_core.control.drive_permission import arc_poses
+        from forklift_core.control.exit_prefix_exempt import region_poses
+
         if self.exit_region_rel is None:  # a new latch: nothing from an earlier one carries over
             self.exit_verified = None
             self.exit_status = {}
-        self.exit_region_rel = np.asarray(region_rel, dtype=float).reshape(-1, 3).copy()
+        stop_m = float(self.permission.config.stopping.distance_m(self.exit_speed_mps))
+        window = np.asarray(window_rel, dtype=float).reshape(-1, 3)
+        d = int(direction) or -1
+        tail = arc_poses(tuple(float(v) for v in window[-1]), 0.0, d, stop_m, 0.02)[0]  # past the window's end
+        self.exit_region_rel = region_poses(np.vstack((window, tail)), (0.0, 0.0, 0.0),
+                                            measured_kappa=float(measured_kappa),
+                                            commanded_kappa=float(commanded_kappa), direction=d, stop_m=stop_m,
+                                            scan_m=self.exit_scan_m)
 
     def exit_exempt_status(self) -> dict:
         """What the core reads back each tick: the last verification, the last refresh's transform and the ring."""

@@ -25,12 +25,16 @@
 | `unpermitted_dir_entries` | 같은 모양의 허가 항목 총수 | 이동 방향 모양 |
 | `unpermitted_dir` | 그 목록, 처음 50 건 | 이동 방향 모양 |
 | `unpermitted_dir_truncated` | 그 목록이 잘렸는지 | — |
+| `exempt_events`·`exempt_events_dir` | 위 두 검사 중 출구 접두 면제 틱의 몫((틱, 물체) 수) | hull / 이동 방향 모양 |
+| `exempt_unpermitted_entries`·`exempt_unpermitted_dir_entries` | 그중 바퀴에 건 허가가 그 속도를 허용한 몫 | hull / 이동 방향 모양 |
 
 - 기존 키(`truth_events`·`event_objects`·`unpermitted_entries`·`unpermitted`)는 뜻과 값이 바뀌지 않는다. hull 은 이동 방향 모양을 포함하므로 `_dir` 수는 hull 수보다 크지 않다.
 - 위 표의 "hull" 은 장애물층 기본 모양 설정(`permission.shape: hull_forward`, riib·CT·콘솔 설정 모두)일 때다. `shape: parts` 로 돌린 실행에서는 `footprints(loaded)` 자체가 차체 + 날이라 기존 키도 차체 + 날을 세고, `_dir` 키와 같아진다.
 - `_dir` ⊆ hull 은 (틱, 물체) 수와 총수에 대한 관계다. 각각 처음 50 건으로 자른 두 목록(`unpermitted`·`unpermitted_dir`)은 서로 부분집합이라는 보장이 없다.
 - 기존 키를 읽는 도구(2026-10-28 grep): `tools/s4_judge.py`(`unpermitted`·`unpermitted_entries`), `tools/slam_async_ab.py`(`unpermitted` 목록 길이), `tools/branch_coverage.py`(경계 기록의 `obstacle.unpermitted` 증가 — `obstacle.unpermitted_dir` 도 같은 정규식에 걸리지만, `_dir` 항목이 생긴 틱에는 hull 항목도 생기므로 hull 목록이 그 틱에(50 건이 찼으면 그 전에) 이미 늘어, 항목 판정은 같다), `tools/summarise_p0b.py`·`tools/p0b_sensor_study.py`(자기 집계의 같은 이름 키, 이 결과 키가 아니다). 모두 기존 키만 읽으므로 영향이 없다.
 - 2026-10-28 이전 기록에는 `_dir`·`_truncated` 키가 없다. 그런 기록에서는 `unpermitted_entries > len(unpermitted)` 이면 잘린 것이다.
+
+- `exempt_*` 네 키는 `--exit-prefix-exempt on` 실행에만 있다(`docs/plans/2026-10-28-exit-prefix-extract-rules.md` D5). 면제 틱은 변환된 스냅숏으로 판정한 틱과, 열린(active) latch 가 닫힌 틱부터 truth 속도가 0.01 m/s 아래로 처음 떨어질 때까지의 틱이다. 면제 중 허가는 계속 작용하므로 비교값(`allowed`)은 바퀴에 건 값 그대로다.
 
 ## 왜 둘인가
 

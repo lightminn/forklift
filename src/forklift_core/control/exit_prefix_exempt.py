@@ -46,6 +46,30 @@ def region_poses(path_ahead, current_pose, *, measured_kappa: float, commanded_k
     return np.vstack(out)
 
 
+def path_window(poses, start_m: float, end_m: float, step_m: float = 0.02) -> np.ndarray:
+    """The polyline ``poses`` between arc lengths ``start_m`` and ``end_m`` (clamped to it), every ``step_m``."""
+    p = np.asarray(poses, dtype=float).reshape(-1, 3)
+    if len(p) < 2:
+        return p.copy()
+    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(p[:, :2], axis=0).T))))
+    a, b = max(0.0, float(start_m)), min(float(end_m), float(s[-1]))
+    if b <= a:
+        return np.array([[np.interp(a, s, p[:, 0]), np.interp(a, s, p[:, 1]), np.interp(a, s, np.unwrap(p[:, 2]))]])
+    q = np.arange(a, b + 1e-9, step_m)
+    if q[-1] < b - 1e-9:
+        q = np.append(q, b)
+    return np.column_stack((np.interp(q, s, p[:, 0]), np.interp(q, s, p[:, 1]), np.interp(q, s, np.unwrap(p[:, 2]))))
+
+
+def relative_to(pose, poses) -> np.ndarray:
+    """``poses`` in the frame of ``pose`` (x forward, y left)."""
+    x0, y0, a0 = (float(v) for v in pose)
+    p = np.asarray(poses, dtype=float).reshape(-1, 3)
+    c, s = math.cos(a0), math.sin(a0)
+    dx, dy = p[:, 0] - x0, p[:, 1] - y0
+    return np.column_stack((dx * c + dy * s, -dx * s + dy * c, p[:, 2] - a0))
+
+
 def watch_hits(points_xy, own, poses, footprint, margin_m: float) -> np.ndarray:
     """Indices of the non-own points inside the footprint, grown by ``margin_m``, at any of ``poses``."""
     pts = np.asarray(points_xy, dtype=float).reshape(-1, 2)
@@ -102,4 +126,5 @@ def apply_verified(snapshot, verified: VerifiedCorridor | None, footprint, margi
     return replace(snapshot, state=state, free_stamp=stamp), int(len(cells)), None
 
 
-__all__ = ["VerifiedCorridor", "apply_verified", "corridor_cells", "region_poses", "watch_hits"]
+__all__ = ["VerifiedCorridor", "apply_verified", "corridor_cells", "path_window", "region_poses", "relative_to",
+           "watch_hits"]
