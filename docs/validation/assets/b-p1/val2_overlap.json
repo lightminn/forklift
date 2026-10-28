@@ -1,0 +1,281 @@
+{
+ "radius_m": 0.05,
+ "starts": [
+  {
+   "id": "val2_000",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_001",
+   "shared_share": 0.14078947368421052
+  },
+  {
+   "id": "val2_002",
+   "shared_share": 0.012861736334405145
+  },
+  {
+   "id": "val2_003",
+   "shared_share": 0.031408308004052685
+  },
+  {
+   "id": "val2_004",
+   "shared_share": 0.03707865168539326
+  },
+  {
+   "id": "val2_005",
+   "shared_share": 0.915129151291513
+  },
+  {
+   "id": "val2_006",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_007",
+   "shared_share": 0.04467680608365019
+  },
+  {
+   "id": "val2_008",
+   "shared_share": 0.3772819472616633
+  },
+  {
+   "id": "val2_009",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_010",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_011",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_012",
+   "shared_share": 0.6823751178133836
+  },
+  {
+   "id": "val2_013",
+   "shared_share": 0.10852713178294573
+  },
+  {
+   "id": "val2_014",
+   "shared_share": 0.17647058823529413
+  },
+  {
+   "id": "val2_015",
+   "shared_share": 0.019367991845056064
+  },
+  {
+   "id": "val2_016",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_017",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_018",
+   "shared_share": 0.15414507772020725
+  },
+  {
+   "id": "val2_019",
+   "shared_share": 0.0064516129032258064
+  },
+  {
+   "id": "val2_020",
+   "shared_share": 0.0858257477243173
+  },
+  {
+   "id": "val2_021",
+   "shared_share": 0.18151540383014156
+  },
+  {
+   "id": "val2_023",
+   "shared_share": 0.9266600594648167
+  },
+  {
+   "id": "val2_024",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_025",
+   "shared_share": 0.07135470527404343
+  },
+  {
+   "id": "val2_026",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_027",
+   "shared_share": 0.21458046767537828
+  },
+  {
+   "id": "val2_028",
+   "shared_share": 0.004128819157720892
+  },
+  {
+   "id": "val2_029",
+   "shared_share": 0.018274111675126905
+  },
+  {
+   "id": "val2_030",
+   "shared_share": 0.004916420845624385
+  },
+  {
+   "id": "val2_032",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_033",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_034",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_035",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_036",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_037",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_038",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_039",
+   "shared_share": 0.16561656165616562
+  },
+  {
+   "id": "val2_040",
+   "shared_share": 0.03286384976525822
+  },
+  {
+   "id": "val2_041",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_042",
+   "shared_share": 0.8062442607897153
+  },
+  {
+   "id": "val2_043",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_044",
+   "shared_share": 0.6820754716981132
+  },
+  {
+   "id": "val2_045",
+   "shared_share": 0.1012514220705347
+  },
+  {
+   "id": "val2_046",
+   "shared_share": 0.5746478873239437
+  },
+  {
+   "id": "val2_047",
+   "shared_share": 0.222509702457956
+  },
+  {
+   "id": "val2_048",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_049",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_050",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_051",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_052",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_053",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_054",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_055",
+   "shared_share": 0.007337526205450734
+  },
+  {
+   "id": "val2_057",
+   "shared_share": 0.03815028901734104
+  },
+  {
+   "id": "val2_060",
+   "shared_share": 0.006986027944111776
+  },
+  {
+   "id": "val2_061",
+   "shared_share": 0.017051153460381142
+  },
+  {
+   "id": "val2_062",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_064",
+   "shared_share": 0.43054187192118226
+  },
+  {
+   "id": "val2_065",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_067",
+   "shared_share": 0.05336179295624333
+  },
+  {
+   "id": "val2_068",
+   "shared_share": 0.783349101229896
+  },
+  {
+   "id": "val2_069",
+   "shared_share": 0.16500711237553342
+  },
+  {
+   "id": "val2_070",
+   "shared_share": 0.941929974380871
+  },
+  {
+   "id": "val2_072",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_073",
+   "shared_share": 0.47935548841893255
+  },
+  {
+   "id": "val2_074",
+   "shared_share": 0.0
+  },
+  {
+   "id": "val2_075",
+   "shared_share": 0.1834774255523535
+  }
+ ],
+ "summary": {
+  "median": 0.010099631269927939,
+  "max": 0.941929974380871
+ }
+}

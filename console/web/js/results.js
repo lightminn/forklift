@@ -76,6 +76,8 @@ export const REASONS = {
   // to plan or timed out (core.py: observe:all_candidates_exhausted:perception_<status>:<reason>:<plan statuses>)
   "observe:all_candidates_exhausted:": "인식이 팔레트를 확정하지 못해 관찰 후보를 다 썼습니다",
   "observe:all_candidates_exhausted:perception_no_pallet": "팔레트를 찾지 못해 관찰 후보를 다 썼습니다",
+  // far target binding F1 (--far-capture-expected on): no pattern inside the mission's adoption rectangle at any stand
+  "observe:all_candidates_exhausted:perception_no_pallet:no_expected_candidate": "지시한 구역 안에서 팔레트를 찾지 못해 관찰 후보를 다 썼습니다",
   "observe_replan_failed": "관찰 경로를 다시 계획하지 못했습니다",
   // docs/plans/2026-10-26-observe-start-backoff.md: the start backoff ended short of a valid start, or its guard stopped it
   "observe_start_backoff_": "관찰 출발 자리에서 비켜선 뒤에도 다시 출발하지 못했습니다",
