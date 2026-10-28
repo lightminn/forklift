@@ -40,6 +40,8 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
+전체 시험은 직렬로 30 분 가까이 걸린다. `dev` extra 의 pytest-xdist 로 `-n 4` 처럼 병렬 실행할 수 있다. 2026-10-27 측정에서 n1·n4·n8 의 결과는 같았고 걸린 시간은 30.6·13.6·9.8 분이었다. 다만 시간에 민감한 묶음 실행기 시험 하나가 n4 에서 한 번 흔들렸으므로, 병렬에서만 실패한 시험은 직렬로 다시 확인한다.
+
 첫 pytest 명령은 코어 시험과 원격 제출 도구의 로컬 시험을 함께 실행한다. Ruff는
 `pyproject.toml`의 제외 목록을 적용해 `src/`, `examples/`, `tests/`, `tools/`뿐 아니라
 `ros2/`, `sim/`의 Python도 검사한다. 경로를 일부만 지정하면 새 코드가 검사에서
