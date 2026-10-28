@@ -271,8 +271,8 @@ def _anchored(band=0.03):
     return core, state, held, layer, pose
 
 
-@pytest.mark.parametrize("move, relatch", [((0.0007, 0.0, 0.0), True), ((0.003, 0.003, 0.009), True),
-                                           ((0.006, 0.0, 0.0), False), ((0.0, 0.0, 0.011), False)])
+@pytest.mark.parametrize("move, relatch", [((0.0007, 0.0, 0.0), True), ((0.003, 0.003, 0.0019), True),
+                                           ((0.006, 0.0, 0.0), False), ((0.0, 0.0, 0.0021), False)])
 def test_the_presteered_evaluation_re_latches_the_anchor_after_a_small_move_only(move, relatch):
     # plan v6 D2-5 (C4: a 0.7 mm presteer move against the first-stand anchor held every re-evaluation)
     core, state, held, layer, pose = _anchored()

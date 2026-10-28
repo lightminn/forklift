@@ -147,9 +147,10 @@ OBSERVE_BACKOFF_STEP_M = 0.01  # its advice's step
 OBSERVE_BACKOFF_PAD_M = 0.03  # past the advice: the backoff tracker's 0.01 m end tolerance and the advice's step
 CLEAR_OUT_STEP_M = 0.05  # a final check that fails at the end backs out this much more (within the budget)
 # docs/plans/2026-10-27-escape-presteer.md v6 D2-5: the most an escape presteer may move the truck (tyre scrub) for its
-# re-evaluation to latch the start-band anchor again where it stands (C4 measured 0.67-0.77 mm and 1-3e-5 rad)
+# re-evaluation to latch the start-band anchor again where it stands (C4 measured 0.67-0.77 mm and 1-3e-5 rad); an outline
+# point moves at most the rear axle's move + 2 R sin(yaw / 2), about 8 mm at the loaded outline's 1.58 m
 PRESTEER_RELATCH_MOVE_M = 0.005
-PRESTEER_RELATCH_YAW_RAD = 0.01
+PRESTEER_RELATCH_YAW_RAD = 0.002
 RECOVERY_PHASE_LIMIT_S = 20.0
 MANUAL_GROUND_HOLD_S = 1.0  # plan D14: the manual ground verdict holds this long before the reverse opens
 ALIGN_HEADING_RAD = 0.02  # plan D14: the straight reverse's heading tolerance to the pocket axis  # plan D4: each recovery phase's work-clock limit
