@@ -109,4 +109,6 @@ A 는 riib 기본이고, B 는 `--exit-prefix-exempt on` 이다. 두 팔 모두 
 ## C3 — on 기록 재생
 
 - 처음 계획한 두 기록(`xpc_B_aisle_rack_s0`, `xpi_box15_aisle_rack_s0`)은 재생 도구가 시작부터 거부했다. 사유는 "the setup snapshot holds opaque values: far_runtime"이다. riib slam 모드는 원거리 인식 런타임을 쓰고, 재생 도구는 그것을 다루지 않는다. 면제와 무관한 도구의 한계다.
-- 대신 같은 장면·seed 를 `MODE=truth`(원거리 인식·SLAM 없음)로 면제를 켜고 경계를 기록해 재생한다(12465). 보정은 0 이지만, latch 열기·닫기와 층 호출(`exit_exempt_set`·`_status`·`_clear`) 순서는 그대로 거친다. (결과는 받은 뒤 적는다.)
+- 대신 같은 장면·seed 를 `MODE=truth`(원거리 인식·SLAM 없음)로 면제를 켜고 경계를 기록해 재생했다(기록 12468, 재생 12526). 두 기록 모두 미션은 정상이었다(B s0 truth 완주·면제 `driven` 닫힘, box15 truth 울림).
+- 재생은 두 건 모두 틱 6929 호출 6 에서 어긋났다: "OverviewCamera.get_rgba where Vehicle.get_joint_positions was recorded". 그 자리는 접근 → 삽입 전환(57.74 s)의 `hooks.snapshot(ms.phase)`(단계 사진)이다. 면제 latch 가 열리는 75.50 s 보다 앞이다. 기록된 실행은 이 사진의 카메라 호출을 경계에 남기지 않았는데, 재생은 그 호출을 한다. 재생 도구와 riib 러너의 사진 경로가 맞지 않는 것이고, 면제와 무관하다.
+- 결론: **C3 는 지금 재생 도구로 할 수 없다.** 걸림돌은 둘이다. slam 모드는 setup 의 `far_runtime` 에서, truth 모드는 단계 사진 카메라 호출에서 막힌다. core 쪽 latch 판단은 단위 시험(실제 `ObstacleLayer` 와 `MissionCore.permission` 연결, 반례 포함)으로만 확인했다. 런처 기본 켬 배치 전에 재생 도구를 riib 장면 기록에 맞추는 일을 먼저 한다(§ 다음 배치 조건, 계획 §5).
