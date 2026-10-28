@@ -144,7 +144,7 @@ class NearFieldBounds:
     condition: dict = field(default_factory=dict)  # the contract the bounds hold under
     # plan 2026-10-28-near-front-range 3.2: the front's lowest camera-face distance; None (a file without
     # front_range) keeps the tracker's range watch off
-    front_min_distance_m: float | None = None
+    front_min_distance_m: float | None = field(default=None, metadata={"record_omit_default": True})
 
     @classmethod
     def from_dict(cls, data: dict) -> NearFieldBounds:

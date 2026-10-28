@@ -13,7 +13,7 @@ from the D8b measurements (forklift_core.perception.near_field_bounds), not from
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -256,9 +256,9 @@ class FrameResult:
     roof_reason: str | None = None
     # plan 2026-10-28-near-front-range R1: armed in front mode, the target's camera-face distance may already be
     # below the front's range -- the front is not evaluated and the runner stops (near_field_handoff_missed)
-    handoff_missed: bool = False
+    handoff_missed: bool = field(default=False, metadata={"record_omit_default": True})
     # R1's lower bound on the target's camera-face distance at this frame (None: not computed)
-    front_range_lower_m: float | None = None
+    front_range_lower_m: float | None = field(default=None, metadata={"record_omit_default": True})
 
 
 @dataclass(frozen=True)

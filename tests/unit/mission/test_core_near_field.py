@@ -330,7 +330,7 @@ def test_a_pickup_retry_closes_the_episode_releases_and_stands_in_observe():
     core, near, _ = make()
     near["ticks"] = [{"episode": 1, "face_distance_m": 0.9}, {"episode": 1, "face_distance_m": 0.7},
                      {"episode": 0, "face_distance_m": 0.1}]
-    near.update(mismatch=True, terminal_standing_since=9.0, protect={"x": 1})
+    near.update(mismatch=True, handoff_missed=True, terminal_standing_since=9.0, protect={"x": 1})
     core.state["near_capture"] = {"status": "accepted"}
     order = []
     core.release_and_stand = lambda now, event: order.append(("release", near["tracker"], event)) or {"jump_m": 0.0}
@@ -340,6 +340,7 @@ def test_a_pickup_retry_closes_the_episode_releases_and_stands_in_observe():
     assert retry["min_face_distance_m"] == 0.7 and retry["jump_m"] == 0.0 and near["retries"] == 1
     assert order == [("release", None, "release_pickup_retry")]  # the tracker is gone before the release
     assert near["mismatch"] is False and near["protect"] is None and "terminal_standing_since" not in near
+    assert "handoff_missed" not in near
     assert core.state["near_capture_history"] == [{"status": "accepted"}] and "near_capture" not in core.state
     assert core.ms.phase == "observe" and near["stand_record"] == "retry"
 
