@@ -197,6 +197,15 @@ test("every reject stops; busy and stale also mark the item uncertain; nothing i
   }
 });
 
+test("a blocked refusal keeps what blocks it in the stop reason", () => {
+  const q = running([item()]);
+  const s = submitOnce(q, 10_000);
+  q.onAnswer({ epoch: 3, item_id: s.item_id, request_id: s.request_id },
+    { t: "reject", reason: "blocked", detail: "pickup:P-2,props" });
+  assert.equal(q.run, "stopped");
+  assert.equal(q.stopReason, "거부: blocked (pickup:P-2,props)");
+});
+
 test("operator actions stop at once, and a later done does not submit the next (cancel right after completion)", () => {
   for (const kind of ["cancel", "pause", "stop", "manual_submit"]) {
     const q = running([item("P-1", "D-1"), item("P-2", "D-0")]);

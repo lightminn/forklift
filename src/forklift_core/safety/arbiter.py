@@ -650,6 +650,8 @@ class Arbiter:
                 took_auto |= p["kind"] in ("mission_submit", "mission_resume")
             else:
                 reply = self._reply(p["kind"], p["request_id"], rec["reason"])
+                if rec.get("detail") is not None:  # the lifecycle's detail goes with it (a re-pick's blockers)
+                    reply["detail"] = rec["detail"]
             self._settle(p, reply)
         self.pending = []
         status = self.mission.status if self.mission is not None else "idle"

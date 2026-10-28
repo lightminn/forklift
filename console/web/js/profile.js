@@ -236,6 +236,7 @@ export const REJECT = {
   localization_lost: "위치 추정 준비 중입니다",
   already_there: "그 팔레트는 이미 그 목적지에 있습니다",
   destination_occupied: "목적지를 다른 팔레트가 차지하고 있습니다",
+  blocked: "다른 팔레트나 소품이 집거나 내려놓는 길을 막습니다", // a manual re-pick (2026-10-28), the blockers in detail
   held: "수동 조종으로 보류 중입니다",
   not_running: "실행 중인 미션이 없습니다",
   not_paused: "일시정지된 미션이 없습니다",
@@ -247,9 +248,22 @@ export const REJECT = {
   load_present: "포크에 짐이 실려 있습니다",
   resume_failed: "재개 확인에 실패했습니다",
 };
-export function rejectText(reason) {
+// a blocked submit's detail, "pickup:P-2,delivery:P-1,props" (the vehicle's next_pick.pair_blockers)
+const BLOCKER = { pickup: "집는 길", delivery: "내려놓는 길" };
+function blockersText(detail) {
+  return String(detail).split(",").filter(Boolean).map((b) => {
+    if (b === "props") return "고정 소품";
+    const [kind, id] = b.split(":");
+    return BLOCKER[kind] ? `${BLOCKER[kind]}: ${id}` : b;
+  }).join(" · ");
+}
+export function rejectText(reason, detail = null) {
   if (!reason) return reason;
-  if (REJECT[reason]) return REJECT[reason];
-  const head = Object.keys(REJECT).find((k) => k.endsWith(":") && reason.startsWith(k));
-  return head ? `${REJECT[head]} (${reason.slice(head.length)})` : reason;
+  let text;
+  if (REJECT[reason]) text = REJECT[reason];
+  else {
+    const head = Object.keys(REJECT).find((k) => k.endsWith(":") && reason.startsWith(k));
+    text = head ? `${REJECT[head]} (${reason.slice(head.length)})` : reason;
+  }
+  return reason === "blocked" && detail ? `${text} (${blockersText(detail)})` : text;
 }

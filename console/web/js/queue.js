@@ -325,7 +325,8 @@ export class MissionQueue {
     this.current = null;
     this.phase = "waiting";
     this.early.clear();
-    return this.stop(`거부: ${reason}`);
+    // a refusal's detail (a blocked re-pick's blockers, 2026-10-28) stays with it
+    return this.stop(`거부: ${reason}${answer?.detail ? ` (${answer.detail})` : ""}`);
   }
 
   // CT-2: the vehicle's answer to a pick_request (contract D3), matched by its key; targetsRevision is the list the
