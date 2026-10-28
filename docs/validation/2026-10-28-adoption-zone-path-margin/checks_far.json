@@ -1,0 +1,34 @@
+{
+ "sessions": 6,
+ "missions": 14,
+ "put_down_sessions": 2,
+ "undetermined_checks": 0,
+ "excluded_runs": [],
+ "stages": {
+  "far": {
+   "n": 14,
+   "max_abs_m": 0.029964726129256825,
+   "max_edge_over_m": 0.0
+  },
+  "near": {
+   "n": 13,
+   "max_abs_m": 0.053075738053381255,
+   "max_edge_over_m": 0.0
+  },
+  "insert": {
+   "n": 13,
+   "max_abs_m": 0.053075738053381255,
+   "max_edge_over_m": 0.0
+  }
+ },
+ "max_abs_m": 0.053075738053381255,
+ "max_edge_over_m": 0.0,
+ "margin_m": 0.1,
+ "edge_margin_m": 0.0,
+ "refused_at": {
+  "0.10": 0,
+  "0.15": 0,
+  "0.20": 0,
+  "0.30": 0
+ }
+}
