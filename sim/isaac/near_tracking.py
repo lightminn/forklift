@@ -1054,6 +1054,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_inject_lateral_m",
     "near_inject_yaw_rad",
     "near_drop_frames_from_m",
+    # docs/plans/2026-10-28-near-front-range.md 3.4: the roof-off injection (the missed-handoff stop)
+    "near_inject_roof_off",
     # Plan D8 S4c-3: the test-only near-capture heading box and stage-1 switch.
     "near_capture_box_yaw_rad",
     "near_capture_redraw",

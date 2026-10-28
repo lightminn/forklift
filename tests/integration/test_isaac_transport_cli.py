@@ -671,6 +671,8 @@ def test_s4_near_tracking_options_validate_before_startup() -> None:
         (["--near-inject-yaw-rad", "0.015"], "need --near-inject"),
         (["--near-inject-lateral-m", "nan"], "must be finite"),
         (["--near-drop-frames-from-m", "0.3"], "--near-drop-frames-from-m needs --near-tracking"),
+        # docs/plans/2026-10-28-near-front-range.md 3.4: the roof-off injection needs the tracker too
+        (["--near-inject-roof-off"], "--near-inject-roof-off needs --near-tracking"),
         # Plan D8 S4c-3: the test-only near-capture heading box, narrower only.
         (["--near-capture-box-yaw-rad", "0.01"], "--near-capture-box-yaw-rad needs --near-tracking"),
     ):
@@ -815,8 +817,12 @@ def test_s4c1_injections_bias_only_the_captures_before_the_tracker_and_drop_befo
     tick_fn = functions["near_tick"]
     assert "face_distance <= options.near_drop_frames_from_m" in tick_fn and "'face_distance_m': face_distance" in tick_fn
     assert "known pallet would carry the injected bias" in functions["check_near_contract"]
+    # docs/plans/2026-10-28-near-front-range.md 3.4: the roof-off injection invalidates every roof the tracker asks for
+    config_fn = functions["near_tracker_config"]
+    assert "if args.near_inject_roof_off:" in config_fn and "'injected_roof_off'" in config_fn
     near_tracking = (ROOT / "sim/isaac/near_tracking.py").read_text()
-    for name in ("near_inject", "near_inject_lateral_m", "near_inject_yaw_rad", "near_drop_frames_from_m"):
+    for name in ("near_inject", "near_inject_lateral_m", "near_inject_yaw_rad", "near_drop_frames_from_m",
+                 "near_inject_roof_off"):
         assert f'    "{name}",\n' in near_tracking[near_tracking.index("RUN_SPECIFIC_ARGUMENTS = ("):], name
 
 

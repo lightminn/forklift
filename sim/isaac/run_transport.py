@@ -437,6 +437,13 @@ def arguments() -> argparse.Namespace:
         "else 0.30 m (test 0's live mapping runs); to be measured again on the real truck.",
     )
     parser.add_argument(
+        "--near-inject-roof-off",
+        action="store_true",
+        help="docs/plans/2026-10-28-near-front-range.md 3.4 (test injection): every roof the tracker asks for is "
+        "invalid (injected_roof_off), so the handoff never comes and the front's range runs out -- the missed-"
+        "handoff stop on a real truck. Needs --near-tracking.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -1526,6 +1533,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--near-capture-redraw-lateral-m needs --near-capture-redraw always without --near-tracking")
         if not (math.isfinite(args.near_capture_redraw_lateral_m) and 0.05 <= args.near_capture_redraw_lateral_m <= 0.10):
             parser.error("--near-capture-redraw-lateral-m must be in [0.05, 0.10] m")
+    if args.near_inject_roof_off and not args.near_tracking:
+        parser.error("--near-inject-roof-off needs --near-tracking")
     if args.near_drop_frames_from_m is not None:
         if not args.near_tracking:
             parser.error("--near-drop-frames-from-m needs --near-tracking")
@@ -4445,8 +4454,13 @@ def drive(S, isaac) -> None:
             return detect_pockets(scene_, prior_, front_params).observation
 
         def roof_fn(scene_, xy_, yaw_):
-            return track_roof(scene_, pallet_geo, (xy_[0], xy_[1], pallet_geo.opening_centre_height_m),
-                              yaw_).observation
+            observation_ = track_roof(scene_, pallet_geo, (xy_[0], xy_[1], pallet_geo.opening_centre_height_m),
+                                      yaw_).observation
+            if args.near_inject_roof_off:
+                # plan 2026-10-28-near-front-range 3.4: the handoff never comes (a test injection)
+                return replace(observation_, status="no_pallet", left=None, right=None, insertion_yaw_rad=None,
+                               position_sigma_m=None, yaw_sigma_rad=None, reason='injected_roof_off')
+            return observation_
 
         return SimpleNamespace(config=config, frame_geo=frame_geo, front_fn=front_fn, roof_fn=roof_fn)
 
