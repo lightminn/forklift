@@ -114,5 +114,17 @@ def test_a_failed_query_or_an_unknown_load_is_a_missing_sample(monkeypatch):
     assert r["pairs"][1]["excluded"] is True and r["kept_pairs"] == 3
 
 
+def test_the_gpu_is_numbered_as_nvidia_smi_inside_the_job_sees_it(monkeypatch):
+    # P0 12080: inside the job nvidia-smi lists only the job's GPU, as 0; the node-wide SLURM_JOB_GPUS=1 failed
+    import subprocess
+    import types
+
+    monkeypatch.setenv("SLURM_JOB_GPUS", "1")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout="GPU 0: RTX (UUID: x)\n"))
+    assert P.gpu_index() == "0"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout="GPU 0: a\nGPU 1: b\n"))
+    assert P.gpu_index() == "1"
+
+
 def test_the_expected_calls_follow_the_ticks():
     assert P.expected_calls(2.0, 90.0) == 180 and P.expected_calls(2.0, 0.4) == 1

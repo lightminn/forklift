@@ -99,6 +99,8 @@ def test_serial_mode_runs_one_call_at_a_time_and_reports_the_wait(server):
         t.join(10)
     assert echo.max_active == 1 and max(waits) >= 40  # the last of three waited for the others
     assert all(c.last_infer_ms >= 45 for c in clients)
+    for c in clients:
+        c.close()
 
 
 def test_concurrent_mode_lets_calls_overlap(server):
@@ -111,6 +113,8 @@ def test_concurrent_mode_lets_calls_overlap(server):
     for t in threads:
         t.join(10)
     assert echo.max_active >= 2
+    for c in clients:
+        c.close()
 
 
 @pytest.mark.parametrize("change, word", [({"model_sha256": "cd" * 32}, "model_sha256"), ({"conf": 0.8}, "conf"),
@@ -142,6 +146,7 @@ def test_a_broken_connection_ends_only_itself(server):
     W._recv(f)
     f.write((10 ** 6).to_bytes(8, "little") + b"x" * 100)
     f.flush()
+    f.close()  # the file object holds the descriptor too
     raw.close()
     slow = W.SocketProposer(path, INFO)
     import io
@@ -161,8 +166,11 @@ def test_a_lost_server_raises_learned_server_lost(server):
     assert c.propose(Scene(1))
     stop.set()
     time.sleep(0.5)  # the server ends and closes its connections
-    with pytest.raises(RuntimeError, match="learned_server_lost"):
-        c.propose(Scene(2))
+    try:
+        with pytest.raises(RuntimeError, match="learned_server_lost"):
+            c.propose(Scene(2))
+    finally:
+        c.close()
 
 
 def test_no_server_raises_learned_server_lost(tmp_path):

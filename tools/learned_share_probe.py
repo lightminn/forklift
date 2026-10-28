@@ -43,6 +43,15 @@ class Scene:
 
 
 def gpu_index() -> str:
+    """The job's GPU as nvidia-smi inside the job numbers it. Under the job's device constraint nvidia-smi lists only
+    the allocated GPU, as index 0 -- the node-wide SLURM_JOB_GPUS (1 for the second GPU) made every query fail with
+    exit 6 in the first P0 run (12080). With one GPU listed, that one; else the node-wide number."""
+    try:
+        listed = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=10).stdout
+        if len([ln for ln in listed.splitlines() if ln.startswith("GPU ")]) == 1:
+            return "0"
+    except (OSError, subprocess.SubprocessError):
+        pass
     gpus = [g for g in (os.environ.get("SLURM_JOB_GPUS") or "0").split(",") if g.strip()]
     return gpus[0]
 
