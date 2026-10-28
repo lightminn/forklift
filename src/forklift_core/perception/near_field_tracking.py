@@ -276,17 +276,16 @@ def front_distance_lower_m(
     target. along_m / across_m are the camera-to-face-midpoint vector on the carried insertion
     axis and its normal; the true axis is that one turned by at most yaw_error_rad and the true
     midpoint lies within along_error_m of the carried one along the true axis (the bounds are
-    measured on the true axis). The true distance is along cos e + across sin e - x, whose least
-    value is this (for along > 0 and a turn under 90 deg); the lateral error does not enter."""
-    if yaw_error_rad >= math.pi / 2:
-        return -math.inf
-    if along_m <= 0:
-        return along_m - along_error_m
-    return (
-        along_m * math.cos(yaw_error_rad)
-        - abs(across_m) * math.sin(yaw_error_rad)
-        - along_error_m
-    )
+    measured on the true axis). The true distance is along cos e + across sin e - x; its least
+    value over |e| <= yaw_error_rad is at an end of the range or, when the range holds it, at
+    the turn where it is -hypot(along, across). For along > 0 and a turn under 90 deg that is
+    along cos d - |across| sin d - x. The lateral error does not enter."""
+    d = min(abs(yaw_error_rad), math.pi)
+    ends = [along_m * math.cos(e) + across_m * math.sin(e) for e in (-d, d)]
+    lowest = _wrap(math.atan2(across_m, along_m) + math.pi)
+    if abs(lowest) <= d:
+        ends.append(-math.hypot(along_m, across_m))
+    return min(ends) - along_error_m
 
 
 def wall_erosion_m(

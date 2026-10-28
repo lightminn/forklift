@@ -186,6 +186,8 @@ def test_below_the_floor_is_outside_the_range_not_missing():
     rows = [cell(0.5), cell(0.6)]
     assert interval_bound(rows, 0.405, floor_m=0.4) is not None
     assert interval_bound(rows, 0.405) is None  # floor 0: as today
+    # floor 0 keeps the clipping at the face plane: a roof read just past the face still has its bound (Codex P2)
+    assert interval_bound([cell(0.2, along=0.004), cell(0.1, along=0.004)], -0.001) is not None
     assert interval_bound(rows, 0.395, floor_m=0.4) is None  # below the floor: no bin can hold it
     # a hole above the floor is still a hole
     assert interval_bound([cell(0.7), cell(0.5)], 0.505, floor_m=0.4) is None

@@ -568,6 +568,11 @@ def test_the_lower_bound_takes_the_truth_axis_error_and_the_axis_turn():
     # the lateral offset only matters through the axis turn
     assert front_distance_lower_m(0.9, 0.2, 0.001, 0.0) == pytest.approx(0.899)
     assert front_distance_lower_m(0.9, 0.2, 0.001, 0.01) < front_distance_lower_m(0.9, 0.0, 0.001, 0.01)
+    # behind the camera too (Codex P3): the least over the turn, not the carried value
+    assert front_distance_lower_m(-0.01, 1.0, 0.0, 0.1) == pytest.approx(-0.01 * math.cos(0.1) - math.sin(0.1))
+    # a turn wide enough to hold the least direction gives -|m|
+    assert front_distance_lower_m(-0.3, 0.0, 0.0, 0.2) == pytest.approx(-0.3)
+    assert front_distance_lower_m(0.3, 0.4, 0.0, math.pi) == pytest.approx(-0.5)
 
 
 def test_the_lower_bound_never_exceeds_the_truth_distance():
@@ -575,8 +580,8 @@ def test_the_lower_bound_never_exceeds_the_truth_distance():
 
     rng = random.Random(7)
     for _ in range(20000):
-        ma, mn = rng.uniform(0.3, 2.5), rng.uniform(-0.3, 0.3)
-        u, d = rng.uniform(0, 0.06), rng.uniform(0, 0.2)
+        ma, mn = rng.uniform(-0.5, 2.5), rng.uniform(-0.6, 0.6)
+        u, d = rng.uniform(0, 0.06), rng.uniform(0, 1.0)
         eps, xa, xl = rng.uniform(-d, d), rng.uniform(-u, u), rng.uniform(-0.1, 0.1)
         at, nt = (math.cos(eps), math.sin(eps)), (-math.sin(eps), math.cos(eps))
         x = (xa * at[0] + xl * nt[0], xa * at[1] + xl * nt[1])

@@ -120,6 +120,10 @@ def front_excluded(summary: dict, floor_m: float, rows_by_run: dict | None = Non
                     "along_m": max(abs(errors[s]["along_m"]) for s in ("left", "right")),
                     "lateral_m": max(abs(errors[s]["lateral_m"]) for s in ("left", "right")),
                 })
+        if len(listed) != valid:
+            raise ValueError(
+                f"front_range: {valid} valid observations below {floor_m} m in the summary, {len(listed)} in the rows"
+            )
         out["valid_observations"] = listed
     return out
 
@@ -936,7 +940,9 @@ def main(argv=None) -> int:
     rows = {}
     for key, run_ in observations["runs"].items():
         file_ = args.observations.parent / Path(run_.get("file") or "").name
-        rows[key] = json.loads(file_.read_text())["rows"] if run_.get("file") and file_.is_file() else []
+        if not run_.get("file") or not file_.is_file():
+            raise SystemExit(f"{key}: its observation rows ({file_}) are not beside the summary")
+        rows[key] = json.loads(file_.read_text())["rows"]
     try:
         commit = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"],

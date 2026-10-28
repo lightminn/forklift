@@ -59,8 +59,8 @@ def interval_bound(
     the tracker never evaluates the front there), so it is not missing; an observed
     distance below it has no bound."""
     measured = [c for c in rows if not c.get("unbounded")]
-    if not measured or distance_m < floor_m:
-        return None
+    if not measured or (floor_m > 0 and distance_m < floor_m):
+        return None  # a floor of 0 keeps today's clipping at the face plane
     reach = max(c["along_m"] for c in measured) + margin_m
     candidates = [
         c

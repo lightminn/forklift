@@ -562,3 +562,6 @@ def test_the_excluded_front_observations_are_counted_and_the_valid_ones_listed()
     assert out["observed"] == 606 and out["valid"] == 1 and out["invalid"] == 605
     assert out["valid_observations"] == [{"run": "run0", "index": 138, "distance_m": 0.0188,
                                           "along_m": 1.0242, "lateral_m": 0.0281}]
+    # the rows must hold every valid one the summary counts (Codex P3)
+    with pytest.raises(ValueError, match="front_range"):
+        EX.front_excluded(summary([[far, mid, near]]), 0.4, {"run0": rows["run0"][1:]})
