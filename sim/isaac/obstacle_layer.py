@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel
+from forklift_core.control.drive_permission import DrivePermission, PermissionConfig, StoppingModel, parts_of, shape_meets
 from forklift_core.control.shadow_memory import ShadowMemory
 from forklift_core.perception.obstacle_grid import (
     A2_SPEC_MEASURED_FACTOR,
@@ -114,6 +114,39 @@ def exempt_region(snapshot, region):
     state[inside] = FREE
     stamp[inside] = snapshot.stamp_s
     return replace(snapshot, state=state, free_stamp=stamp)
+
+
+def stop_arc_hits(layer, arc, rects, *, loaded: bool, direction: int, margin_m: float, skip=()) -> tuple[list, list]:
+    """The truth evaluator's check (sim/isaac/run_transport.py; docs/interfaces/2026-10-28-obstacle-truth-evaluation.md):
+    the indices of ``rects`` the stop arc ``arc`` (poses from the truck, the first its own) meets with the envelope
+    ``margin_m`` -- (with the hull, every tick's shape since L0b; with the shape the permission drives with in
+    ``direction``: the body and the blades reversing unloaded under hull_forward, else the same hull). ``skip``: indices
+    left out. A bounding-circle prefilter per shape (exact: a rectangle farther than the shape's reach plus its own half
+    diagonal from every pose cannot meet it)."""
+    hull_shape, _ = layer.footprints(loaded)
+    moving_shape, _ = layer.footprints(loaded, direction)
+    poses = [tuple(float(v) for v in p) for p in arc[1:]]
+    xy = np.asarray(arc, dtype=float)[1:, :2]
+
+    def reach(shape):
+        return max(math.hypot(abs(lon) + max(fp.front_m, fp.rear_m) + margin_m, abs(lat) + fp.half_width_m + margin_m)
+                   for fp, lat, lon in parts_of(shape))
+
+    def hits(shape):
+        r = reach(shape)
+        out = []
+        for oid, rect in enumerate(rects):
+            if oid in skip or not len(xy):
+                continue
+            if float(np.min(np.hypot(xy[:, 0] - rect.x_m, xy[:, 1] - rect.y_m))) > (
+                    r + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6):
+                continue
+            if any(shape_meets(rect, shape, p, margin_m) for p in poses):
+                out.append(oid)
+        return out
+
+    hull = hits(hull_shape)
+    return hull, (list(hull) if moving_shape is hull_shape else hits(moving_shape))
 
 
 class ObstacleLayer:

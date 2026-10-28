@@ -527,3 +527,41 @@ def test_table_misses_finds_a_pair_past_the_end_or_over_its_row():
     past = (np.array([2 * TICK + 1e-6]), np.array([0.0]), np.array([0.0]))
     over = (np.array([TICK]), np.array([0.0015]), np.array([0.0]))
     assert len(EX.table_misses(grid, [past, over])) == 2
+
+
+# docs/plans/2026-10-28-near-front-range.md 3.2 / 3.4: the front's range --------------------------------------
+def test_the_front_floor_is_the_fork_tip_distance_up_to_the_bin_grid():
+    assert EX.front_floor_m(0.950, 0.619) == pytest.approx(0.4)  # riib line_1_m: 0.331 m
+    assert EX.front_floor_m(0.950, 0.550) == pytest.approx(0.4)  # exactly on the grid stays there
+    assert EX.front_floor_m(1.000, 0.550) == pytest.approx(0.5)
+
+
+def test_front_bins_below_the_floor_leave_the_table_and_the_roof_keeps_its_own():
+    near = {"bin_m": [0.1, 0.0], "frames": 3, "front": entry(1, left=side(0.02, 1.02, 0.0025, 0.02)), "roof": entry(1)}
+    far = {"bin_m": [0.5, 0.4], "frames": 3, "front": entry(3), "roof": entry(3)}
+    out = EX.observation_bounds(summary([[far, near]]), floor_m=0.4)
+    assert [c["bin_m"] for c in out["front"]] == [[0.5, 0.4]]
+    assert [c["bin_m"] for c in out["roof"]] == [[0.5, 0.4], [0.1, 0.0]]
+    assert max(c["along_m"] for c in out["front"]) < 0.01  # the 1.02 m along error is not in the table
+    # no floor: as before
+    assert [c["bin_m"] for c in EX.observation_bounds(summary([[far, near]]))["front"]] == [[0.5, 0.4], [0.1, 0.0]]
+
+
+def test_the_excluded_front_observations_are_counted_and_the_valid_ones_listed():
+    near = {"bin_m": [0.1, 0.0], "frames": 336, "front": {**entry(1), "observed": 336}, "roof": entry(1)}
+    mid = {"bin_m": [0.4, 0.3], "frames": 270, "front": entry(0) | {"observed": 270}, "roof": entry(1)}
+    far = {"bin_m": [0.5, 0.4], "frames": 3, "front": entry(3), "roof": entry(3)}
+    rows = {"run0": [
+        {"index": 138, "distance_m": 0.0188, "front": {"errors": {
+            "left": {"along_m": 1.0242, "lateral_m": 0.0255}, "right": {"along_m": 1.0127, "lateral_m": 0.0281}}}},
+        {"index": 139, "distance_m": 0.012, "front": {"errors": None}},
+        {"index": 10, "distance_m": 0.45, "front": {"errors": {
+            "left": {"along_m": 0.0003, "lateral_m": 0.001}, "right": {"along_m": 0.0002, "lateral_m": 0.001}}}},
+    ]}
+    out = EX.front_excluded(summary([[far, mid, near]]), 0.4, rows)
+    assert out["observed"] == 606 and out["valid"] == 1 and out["invalid"] == 605
+    assert out["valid_observations"] == [{"run": "run0", "index": 138, "distance_m": 0.0188,
+                                          "along_m": 1.0242, "lateral_m": 0.0281}]
+    # the rows must hold every valid one the summary counts (Codex P3)
+    with pytest.raises(ValueError, match="front_range"):
+        EX.front_excluded(summary([[far, mid, near]]), 0.4, {"run0": rows["run0"][1:]})

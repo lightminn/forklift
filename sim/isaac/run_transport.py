@@ -437,6 +437,13 @@ def arguments() -> argparse.Namespace:
         "else 0.30 m (test 0's live mapping runs); to be measured again on the real truck.",
     )
     parser.add_argument(
+        "--near-inject-roof-off",
+        action="store_true",
+        help="docs/plans/2026-10-28-near-front-range.md 3.4 (test injection): every roof the tracker asks for is "
+        "invalid (injected_roof_off), so the handoff never comes and the front's range runs out -- the missed-"
+        "handoff stop on a real truck. Needs --near-tracking.",
+    )
+    parser.add_argument(
         "--near-drop-frames-from-m",
         type=float,
         default=None,
@@ -1547,6 +1554,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--near-capture-redraw-lateral-m needs --near-capture-redraw always without --near-tracking")
         if not (math.isfinite(args.near_capture_redraw_lateral_m) and 0.05 <= args.near_capture_redraw_lateral_m <= 0.10):
             parser.error("--near-capture-redraw-lateral-m must be in [0.05, 0.10] m")
+    if args.near_inject_roof_off and not args.near_tracking:
+        parser.error("--near-inject-roof-off needs --near-tracking")
     if args.near_drop_frames_from_m is not None:
         if not args.near_tracking:
             parser.error("--near-drop-frames-from-m needs --near-tracking")
@@ -3822,6 +3831,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "reasons": {},
             "events": 0,
             "unpermitted": [],
+            "events_dir": 0,  # the same truth check with the moving direction's shape (stop_arc_hits)
+            "unpermitted_dir": [],
             "min_allowed": {},
         }
         if getattr(args, "start_band_release", "off") == "on":
@@ -4541,8 +4552,13 @@ def drive(S, isaac) -> None:
             return detect_pockets(scene_, prior_, front_params).observation
 
         def roof_fn(scene_, xy_, yaw_):
-            return track_roof(scene_, pallet_geo, (xy_[0], xy_[1], pallet_geo.opening_centre_height_m),
-                              yaw_).observation
+            observation_ = track_roof(scene_, pallet_geo, (xy_[0], xy_[1], pallet_geo.opening_centre_height_m),
+                                      yaw_).observation
+            if args.near_inject_roof_off:
+                # plan 2026-10-28-near-front-range 3.4: the handoff never comes (a test injection)
+                return replace(observation_, status="no_pallet", left=None, right=None, insertion_yaw_rad=None,
+                               position_sigma_m=None, yaw_sigma_rad=None, reason='injected_roof_off')
+            return observation_
 
         return SimpleNamespace(config=config, frame_geo=frame_geo, front_fn=front_fn, roof_fn=roof_fn)
 
@@ -4646,6 +4662,10 @@ def drive(S, isaac) -> None:
         if result_.unbounded and not near.get("unbounded"):
             near["unbounded"] = True
             near["events"].append({"time_s": now_s, "event": "unbounded", "stamp_s": stamp})
+        if getattr(result_, "handoff_missed", False) and not near.get("handoff_missed"):
+            # plan 2026-10-28-near-front-range R2: terminal, no retry
+            near["handoff_missed"] = True
+            near["events"].append({"time_s": now_s, "event": "handoff_missed", "stamp_s": stamp})
 
     def read_pocket_frame() -> None:
         """One 10 Hz carriage depth frame for the pocket check, placed at the
@@ -8848,35 +8868,26 @@ def drive(S, isaac) -> None:
                     if acting and abs(truth_speed) > 0.05:
                         pconf = obstacle["layer"].permission.config
                         stop_len = pconf.stopping.distance_m(truth_speed)
-                        arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, 1 if truth_speed > 0 else -1, stop_len, 0.025)[0]
-                        shape_now, _ = obstacle["layer"].footprints(loaded)
-                        # A bounding-circle prefilter (exact: a rectangle farther than
-                        # the shape's reach plus its own half diagonal from every
-                        # pose cannot meet it) -- this evaluator was a sixth of the
-                        # wall time (L3c v50 profile).
-                        arc_xy = np.asarray(arc, dtype=float)[1:, :2]
-                        # The margin inflates length and width both: it goes inside the hypot.
-                        reach_now = max(
-                            math.hypot(abs(lon_) + max(fp_.front_m, fp_.rear_m) + pconf.envelope_offset_m,
-                                       abs(lat_) + fp_.half_width_m + pconf.envelope_offset_m)
-                            for fp_, lat_, lon_ in PARTS_OF(shape_now)
-                        )
-                        for oid, rect in enumerate(checked_obstacles):
-                            if len(arc_xy) and float(np.min(np.hypot(arc_xy[:, 0] - rect.x_m, arc_xy[:, 1] - rect.y_m))) > (
-                                reach_now + math.hypot(rect.length_m, rect.width_m) / 2 + 1e-6
-                            ):
-                                continue
-                            if pocket_phase and rect is pickup_obstacle:
-                                # Blades in the pockets meet the pallet's 2D outline by
-                                # design; fork/pallet contact is the 3D insertion guard's.
-                                continue
-                            # The shape the permission checks (body + blades unloaded).
-                            if any(SHAPE_MEETS(rect, shape_now, tuple(pose_), pconf.envelope_offset_m) for pose_ in arc[1:]):
-                                obstacle["events"] += 1
-                                per = obstacle.setdefault("event_objects", {})
+                        moving_dir_ = 1 if truth_speed > 0 else -1
+                        arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, moving_dir_, stop_len, 0.025)[0]
+                        # Blades in the pockets meet the pallet's 2D outline by design; fork/pallet contact is the 3D
+                        # insertion guard's.
+                        skip_ = {i_ for i_, r_ in enumerate(checked_obstacles) if pocket_phase and r_ is pickup_obstacle}
+                        # Two counts (docs/interfaces/2026-10-28-obstacle-truth-evaluation.md): the hull, as every
+                        # record since L0b ("events", "unpermitted"), and the shape the permission drives with in the
+                        # moving direction ("events_dir", "unpermitted_dir": the body and the blades reversing unloaded)
+                        # -- the hull fills the space beside the blades the permission never checks reversing (the
+                        # return-home "object 9" ticks of 2026-10-28 were that band, with no contact)
+                        hull_hits_, moving_hits_ = obstacle_module.stop_arc_hits(
+                            obstacle["layer"], arc, checked_obstacles, loaded=loaded, direction=moving_dir_,
+                            margin_m=pconf.envelope_offset_m, skip=skip_)
+                        for key_, hits_ in (("", hull_hits_), ("_dir", moving_hits_)):
+                            for oid in hits_:
+                                obstacle["events" + key_] = obstacle.get("events" + key_, 0) + 1
+                                per = obstacle.setdefault("event_objects" + key_, {})
                                 per[oid] = per.get(oid, 0) + 1
                                 if allowed >= abs(truth_speed) - 1e-9:
-                                    obstacle["unpermitted"].append(
+                                    obstacle.setdefault("unpermitted" + key_, []).append(
                                         {"time_s": t, "phase": ms.phase, "speed_mps": truth_speed, "allowed_mps": allowed,
                                          "reason": why, "object": oid}
                                     )
@@ -9422,6 +9433,14 @@ def drive(S, isaac) -> None:
                         "unpermitted_entries": len(obstacle["unpermitted"]),
                         "unpermitted": obstacle["unpermitted"][:50],
                         "event_objects": len(obstacle.get("event_objects", {})),
+                        # docs/interfaces/2026-10-28-obstacle-truth-evaluation.md: the list keeps its first 50 entries
+                        # (the count above is all of them); the same check with the shape the permission drives with
+                        "unpermitted_truncated": len(obstacle["unpermitted"]) > 50,
+                        "truth_events_dir": obstacle.get("events_dir", 0),
+                        "unpermitted_dir_entries": len(obstacle.get("unpermitted_dir", [])),
+                        "unpermitted_dir": obstacle.get("unpermitted_dir", [])[:50],
+                        "unpermitted_dir_truncated": len(obstacle.get("unpermitted_dir", [])) > 50,
+                        "event_objects_dir": len(obstacle.get("event_objects_dir", {})),
                         "reprojections": obstacle.get("reprojections", 0),
                         "grid_planning": grid_planning,
                         "replans": obstacle.get("replans", []),

@@ -177,3 +177,10 @@ def test_the_start_digest_takes_dicts_with_keys_json_cannot():
     core = fake_core()
     core.obstacle["replans"] = {("transport", 1): 2, "leg": 1}
     assert start_digest(core)["obstacle.replans"] != "absent"
+
+
+def test_the_missed_handoff_latch_is_the_missions():
+    """docs/plans/2026-10-28-near-front-range.md R2 (Codex implementation P3): restored and digested with the mission."""
+    from forklift_core.mission.baseline import MISSION_KEYS
+
+    assert "handoff_missed" in MISSION_KEYS["near"]
