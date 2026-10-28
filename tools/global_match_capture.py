@@ -112,12 +112,15 @@ def cmd_poses(a) -> int:
     taken = taken_in_map(a.taken, map_from_world)
     report: dict = {}
     starts = S.sample_starts(grid, count=a.count if not a.fill else 1_000_000, seed=a.seed, keep_out=keep,
-                             taken=taken, sep_m=a.sep_m, max_attempts=a.max_attempts, fill=a.fill, report=report)
+                             taken=taken, sep_m=a.sep_m, max_attempts=a.max_attempts, fill=a.fill, report=report,
+                             exclude_xy=[compose(map_from_world, (x, y, 0.0))[:2] for x, y in a.exclude_xy],
+                             exclude_m=a.exclude_m)
     record = {"format": "scan_capture_poses/1", "split": SPLITS[a.split], "map_index": a.map_index,
               "map_id": map_id, "map_from_world": list(map_from_world), "bundle": str(a.bundle),
               "keep_out": None if not a.keep_out else {"path": str(a.keep_out), "sha256": file_sha256(a.keep_out)},
               "taken": [{"path": str(f), "sha256": file_sha256(Path(f))} for f in a.taken],
               "seed": a.seed, "sep_m": a.sep_m, "fill": a.fill, "draw": report,
+              "exclude_xy_world": [list(p) for p in a.exclude_xy], "exclude_m": a.exclude_m,
               "poses": [{"id": f"{a.split}{a.map_index}_{p.index:03d}", "stratum": p.stratum, "base": list(p.base),
                          "base_world": list(compose(world_from_map, p.base))} for p in starts]}
     a.out.write_text(json.dumps(record, indent=1) + "\n")
@@ -140,6 +143,9 @@ def main(argv=None) -> int:
     p.add_argument("--fill", action="store_true", help="draw until the map holds no more")
     p.add_argument("--taken", action="append", default=[], help="earlier pose lists (any map), kept apart")
     p.add_argument("--max-attempts", type=int, default=200_000)
+    p.add_argument("--exclude-xy", action="append", default=[], type=lambda v: tuple(float(c) for c in v.split(",")),
+                   help="x,y in the hall frame: no laser within --exclude-m of it")
+    p.add_argument("--exclude-m", type=float, default=0.0)
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("command", help="the runner arguments of a capture, one per line")
     p.add_argument("--bundle", type=Path, required=True)

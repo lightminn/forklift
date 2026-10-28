@@ -125,3 +125,16 @@ def test_the_draw_reports_why_it_stopped():
     rep = {}
     S.sample_starts(g, count=10_000, seed=1, fill=True, max_attempts=50, report=rep)
     assert rep["stop_reason"] == "cap" and rep["attempts"] == 50  # draws made, not one more (round 4 P3)
+
+
+def test_starts_keep_away_from_excluded_points():
+    # lead decision 2026-10-28 (after the gyro survey's result): no validation start within 3 m of its one
+    # uncovered judged cell
+    g = _grid()
+    point = (3.0, 4.0)
+    out = S.sample_starts(g, count=10_000, seed=5, sep_m=1.0, fill=True, exhaust_after=2_000,
+                          exclude_xy=[point], exclude_m=3.0)
+    assert out
+    for p in out:
+        lx, ly = S.laser_xy(p.base)
+        assert math.hypot(lx - point[0], ly - point[1]) >= 3.0

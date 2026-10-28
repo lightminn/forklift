@@ -119,13 +119,15 @@ def wall_band_cells(grid: Grid, band=WALL_BAND_M) -> np.ndarray:
 
 def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), sep_m: float = SEP_M,
                   pattern=("A", "A", "B", "C"), max_attempts: int = 200_000, fill: bool = False,
-                  exhaust_after: int = 20_000, report: dict | None = None) -> list:
+                  exhaust_after: int = 20_000, report: dict | None = None, exclude_xy=(),
+                  exclude_m: float = 0.0) -> list:
     """``count`` independent start poses, the strata in ``pattern`` order (A A B C A A B C ...), independent of
     ``taken`` too. When the attempts run out: raises. With ``fill`` (a validation map drawn until full, plan B4a) a
     stratum that fails ``exhaust_after`` draws in a row is exhausted and leaves the pattern, the others go on, and the
     map is full when every stratum is exhausted (Codex B4a re-review P3: a blocked stratum must not end the draw while
     another still has room); ``max_attempts`` still bounds the whole draw. ``report`` (a dict) receives why the draw
-    stopped (``count`` | ``exhausted`` | ``cap``), the attempts and the exhausted strata."""
+    stopped (``count`` | ``exhausted`` | ``cap``), the attempts and the exhausted strata. ``exclude_xy``: points
+    no laser may stand within ``exclude_m`` of (plan B4a, the gyro survey's uncovered cell)."""
     rng = np.random.default_rng(seed)
     free_rc = np.argwhere(grid.data == 0)
     ridge_rc = np.argwhere(ridge_cells(grid))
@@ -162,7 +164,9 @@ def sample_starts(grid: Grid, *, count: int, seed: int, keep_out=(), taken=(), s
         attempts += 1
         r, c = cells[rng.integers(len(cells))]
         base = (ox + (c + rng.random()) * res, oy + (r + rng.random()) * res, float(rng.uniform(0.0, 2 * math.pi)))
-        if not independent(base, seen, sep_m) or not footprint_free(grid, base, keep_out):
+        lx_, ly_ = laser_xy(base)
+        near_excluded = any(math.hypot(lx_ - ex, ly_ - ey) < exclude_m for ex, ey in exclude_xy)
+        if near_excluded or not independent(base, seen, sep_m) or not footprint_free(grid, base, keep_out):
             misses[stratum] += 1
             if fill and misses[stratum] >= exhaust_after:
                 live = [k for k in live if k != stratum]
