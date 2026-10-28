@@ -277,35 +277,6 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
     return types.SimpleNamespace(**values), adapters, snap
 
 
-# Result keys added after the gate records (docs/interfaces/2026-10-28-obstacle-truth-evaluation.md, PR #218): a
-# record whose final state lacks one ran before the key existed, so the replayed projection drops it there -- only
-# where the record lacks it; every key the record has is compared as ever.
-FINAL_STATE_KEYS_ADDED = {
-    ("containers", "state", "obstacle_layer"): (
-        "unpermitted_truncated", "truth_events_dir", "unpermitted_dir_entries", "unpermitted_dir",
-        "unpermitted_dir_truncated", "event_objects_dir"),
-}
-
-
-def drop_added_keys(recorded, replayed) -> list[str]:
-    """Remove from ``replayed`` (an encoded projection) the FINAL_STATE_KEYS_ADDED its ``recorded`` one lacks; the
-    keys dropped, as paths."""
-    dropped = []
-    for path, keys in FINAL_STATE_KEYS_ADDED.items():
-        r, q = recorded, replayed
-        for key in path:
-            r = r.get("$map", {}).get(key) if isinstance(r, dict) and isinstance(r.get("$map"), dict) else None
-            q = q.get("$map", {}).get(key) if isinstance(q, dict) and isinstance(q.get("$map"), dict) else None
-        if not (isinstance(r, dict) and isinstance(r.get("$map"), dict) and isinstance(q, dict)
-                and isinstance(q.get("$map"), dict)):
-            continue
-        for key in keys:
-            if key not in r["$map"] and key in q["$map"]:
-                del q["$map"][key]
-                dropped.append(".".join(path + (key,)))
-    return dropped
-
-
 def final_state_differences(boundary: Path, session: ReplaySession, final_state) -> list[str]:
     """Where the replayed end-state projection differs from the recorded one (map keys, three levels down)."""
     from forklift_core.mission.replay_codec import Encoder
@@ -313,7 +284,6 @@ def final_state_differences(boundary: Path, session: ReplaySession, final_state)
     recorded = json.loads((boundary / "final_state.json").read_text())
     replayed = json.loads(json.dumps(Encoder(opaque_ok=True, value_types=session.value_types, hash_arrays=True,
                                              identity=False).encode(final_state), sort_keys=True, allow_nan=True))
-    drop_added_keys(recorded, replayed)
     out: list[str] = []
 
     def walk(a, b, path, depth):

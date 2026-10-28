@@ -1039,3 +1039,30 @@ def test_the_runner_records_both_counts_and_whether_the_lists_were_cut():
     start = source.index("if acting and abs(truth_speed) > 0.05:")
     block = source[start:source.index("if paused_:", start)]
     assert block.count('obstacle["layer"].footprints(') == 1 and 'obstacle["layer"].footprints(loaded)' in block
+
+
+def test_the_evaluation_only_keys_are_left_out_of_the_replay_end_state(tmp_path):
+    """2026-10-28: the gate's format 2 records predate the direction-shaped counts and the truncation flags (#218);
+    the end-state projection leaves them out of the obstacle container and of state.obstacle_layer's digest, and
+    compares every other key as ever (Codex review of the fix: the projection digests each key's value)."""
+    import importlib.util
+
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_eval_keys", ROOT / "sim/isaac/run_transport.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ms = MissionState(phase="transport")
+    old_layer = {"truth_events": 3, "unpermitted_entries": 1, "unpermitted": [{"time_s": 1.0}], "event_objects": 1}
+    old = {"state": {"obstacle_layer": dict(old_layer)}, "obstacle": {"events": 3, "unpermitted": [{"time_s": 1.0}]}}
+    new = {"state": {"obstacle_layer": {**old_layer, "unpermitted_truncated": False, "truth_events_dir": 0,
+                                        "unpermitted_dir_entries": 0, "unpermitted_dir": [],
+                                        "unpermitted_dir_truncated": False, "event_objects_dir": 0}},
+           "obstacle": {"events": 3, "unpermitted": [{"time_s": 1.0}], "events_dir": 0, "unpermitted_dir": [],
+                        "event_objects_dir": {}}}
+    assert module.final_projection(old, ms, tmp_path) == module.final_projection(new, ms, tmp_path)
+    changed = {"state": {"obstacle_layer": {**new["state"]["obstacle_layer"], "truth_events": 4}},
+               "obstacle": new["obstacle"]}
+    assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
+    changed = {"state": new["state"], "obstacle": {**new["obstacle"], "events": 4}}
+    assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
