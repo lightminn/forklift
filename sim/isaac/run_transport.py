@@ -423,8 +423,8 @@ def arguments() -> argparse.Namespace:
         type=float,
         default=None,
         help="The adoption rectangle's margin on every side. Unset: by path (docs/plans/2026-10-28-adoption-zone-check.md "
-        "8a, provisional) -- 0.10 m when localizing on a survey bundle (--slam-map-bundle), else 0.30 m (mapping and "
-        "the reported encoders, test 0); to be measured again on the real truck.",
+        "8a, provisional) -- 0.10 m when localizing on a survey bundle (--slam-map-bundle, whatever the encoders), "
+        "else 0.30 m (test 0's live mapping runs); to be measured again on the real truck.",
     )
     parser.add_argument(
         "--near-drop-frames-from-m",
