@@ -373,6 +373,13 @@ def replay_run(key: str, calibration: dict, bounds_data: dict, args) -> dict:
         roof_seen[scene.stamp_ns] = track_roof(
             scene, geometry, (xy[0], xy[1], geometry.opening_centre_height_m), yaw
         ).observation
+        if getattr(args, "roof_off", False):
+            # plan 2026-10-28-near-front-range 3.4: the roof-suppressed replay (no handoff can come)
+            return dataclasses.replace(
+                roof_seen[scene.stamp_ns], status="no_pallet", left=None, right=None,
+                insertion_yaw_rad=None, position_sigma_m=None, yaw_sigma_rad=None,
+                reason="injected_roof_off",
+            )
         return roof_seen[scene.stamp_ns]
 
     tracker = NearFieldTracker(
@@ -416,7 +423,10 @@ def replay_run(key: str, calibration: dict, bounds_data: dict, args) -> dict:
     handoff = None
     armed_at = None
     next_read = 0
+    stopped = False  # the roof-suppressed replay ends at its first missed handoff
     for t in ticks:
+        if stopped:
+            break
         while next_read < len(reads) and reads[next_read]["read_s"] <= t + 1e-9:
             read = reads[next_read]
             next_read += 1
@@ -471,6 +481,11 @@ def replay_run(key: str, calibration: dict, bounds_data: dict, args) -> dict:
                     "front_mid_x_m": mid_x,
                 }
             frames.append(row)
+            if getattr(args, "roof_off", False) and result.handoff_missed:
+                stopped = True
+                break
+        if stopped:
+            break
         base_now = OBS.control_base(run, float(t))
         if armed_at is None:
             est = estimate_walls(tracker.latest, base_now)
@@ -535,6 +550,9 @@ def replay_run(key: str, calibration: dict, bounds_data: dict, args) -> dict:
         tracker.anchor.stamp_s + bounds.read_delay_s,
     )
     out["checkpoints"] = checkpoints
+    out["front_range"] = range_summary(
+        [f for f in frames if "skipped" not in f], bounds.front_min_distance_m
+    )
     out["provenance"] = provenance(key, calibration, bounds_data, args)
     missing = uncovered_modules(out["provenance"]["sources_sha256"])
     if missing:
@@ -563,6 +581,7 @@ def provenance(key: str, calibration: dict, bounds_data: dict, args) -> dict:
         "forklift_urdf_sha256": recorded_urdf_sha(key),
         "speed_mps": recorded.get("approach_straight_speed_mps"),
         "pocket_check": recorded.get("pocket_check"),
+        "roof_off": bool(getattr(args, "roof_off", False)),
     }
 
 
@@ -653,7 +672,47 @@ def summarise(
     }
 
 
-def verdict(results: list[dict]) -> dict:
+def range_summary(rows: list[dict], floor_m: float | None) -> dict | None:
+    """Plan 2026-10-28-near-front-range 3.4 (f)/(g): over the delivered rows, the tracker's
+    front evaluations whose true camera-face distance lies below F (out_of_range is not one),
+    the missed handoffs and the first of them, and the rows where R1's lower bound exceeds the
+    true distance; None for bounds without a front range."""
+    if floor_m is None:
+        return None
+    missed = [r for r in rows if r.get("handoff_missed")]
+    return {
+        "floor_m": floor_m,
+        "front_eval_below": sum(
+            1 for r in rows
+            if r.get("front_eval") not in (None, "out_of_range") and r["distance_m"] < floor_m
+        ),
+        "lower_violations": sum(
+            1 for r in rows
+            if r.get("front_range_lower_m") is not None
+            and r["front_range_lower_m"] > r["distance_m"] + 1e-9
+        ),
+        "handoff_missed": len(missed),
+        "first_handoff_missed": None if not missed
+        else {"index": missed[0]["index"], "distance_m": missed[0]["distance_m"]},
+    }
+
+
+def verdict(results: list[dict], roof_off: bool = False) -> dict:
+    ranges = [r.get("front_range") for r in results]
+    g = all(fr is None or fr["lower_violations"] == 0 for fr in ranges)
+    if roof_off:
+        # plan 2026-10-28-near-front-range 3.4: every run stops on a missed handoff, no front below F before it
+        checks = {
+            "i_missed": all(fr is not None and fr["handoff_missed"] >= 1 for fr in ranges),
+            "ii_front_above_floor": all(fr is not None and fr["front_eval_below"] == 0 for fr in ranges),
+            "iii_stop_above_floor": all(
+                fr is not None and fr["first_handoff_missed"] is not None
+                and fr["first_handoff_missed"]["distance_m"] >= fr["floor_m"]
+                for fr in ranges
+            ),
+            "g_lower_bound": g,
+        }
+        return {"pass": all(checks.values()), "checks": checks, "runs": len(results)}
     checks = {
         "a_no_mismatch": all(r["mismatches"] == 0 for r in results),
         # every recorded run reaches the gate (the D5 run stops at camera-face 0.171 m)
@@ -670,6 +729,9 @@ def verdict(results: list[dict]) -> dict:
             for r in results
         ),
         "e_start": all(r["start"]["ok"] for r in results),
+        # plan 2026-10-28-near-front-range 3.4: no front evaluated below F, no missed handoff; R1's bound holds
+        "f_range": all(fr is None or (fr["front_eval_below"] == 0 and fr["handoff_missed"] == 0) for fr in ranges),
+        "g_lower_bound": g,
     }
     return {"pass": all(checks.values()), "checks": checks, "runs": len(results)}
 
@@ -691,6 +753,12 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runs", nargs="*")
     parser.add_argument("--collect", action="store_true")
+    parser.add_argument(
+        "--roof-off",
+        action="store_true",
+        help="docs/plans/2026-10-28-near-front-range.md 3.4: every roof invalid, each run replayed to its first "
+        "missed handoff and judged by (i)-(iii) and (g)",
+    )
     args = parser.parse_args(argv)
     calibration = json.loads(args.calibration.read_text())
     bounds_data = json.loads(args.bounds.read_text())
@@ -744,7 +812,7 @@ def main(argv=None) -> int:
             )
         results.append(result)
     summary = {
-        "verdict": verdict(results),
+        "verdict": verdict(results, roof_off=args.roof_off),
         "runs": results,
         "bounds_sha256": EX.sha256(args.bounds),
         "tool_sha256": EX.sha256(Path(__file__)),

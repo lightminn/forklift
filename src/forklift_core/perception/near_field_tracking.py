@@ -257,6 +257,8 @@ class FrameResult:
     # plan 2026-10-28-near-front-range R1: armed in front mode, the target's camera-face distance may already be
     # below the front's range -- the front is not evaluated and the runner stops (near_field_handoff_missed)
     handoff_missed: bool = False
+    # R1's lower bound on the target's camera-face distance at this frame (None: not computed)
+    front_range_lower_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -384,14 +386,14 @@ class NearFieldTracker:
     def _lever_m(self, centre) -> float:
         return math.hypot(centre[0] - self.config.rear_axle_x_m, centre[1])
 
-    def _below_front_range(self, pose, aligned_s: float) -> bool:
+    def _front_range_lower(self, pose, aligned_s: float) -> float | None:
         """Plan 2026-10-28-near-front-range R1: armed, with a front range in the bounds, the
-        latest accepted target carried to this frame's aligned pose may already sit below it
-        (front_distance_lower_m with the latest's measured along and yaw bounds and the
-        odometry since). Raises UnboundedAge past the odometry table."""
-        floor = self.bounds.front_min_distance_m
-        if floor is None or not self.armed:
-            return False
+        least camera-face distance the latest accepted target carried to this frame's aligned
+        pose can have (front_distance_lower_m with the latest's measured along and yaw bounds
+        and the odometry since); None without the watch. Raises UnboundedAge past the
+        odometry table."""
+        if self.bounds.front_min_distance_m is None or not self.armed:
+            return None
         ref = self.latest
         dt = aligned_s - ref.aligned_s
         odometry = self.bounds.odometry(max(dt, 0.0))
@@ -408,8 +410,7 @@ class NearFieldTracker:
         along = vx * math.cos(yaw) + vy * math.sin(yaw)
         across = -vx * math.sin(yaw) + vy * math.cos(yaw)
         u = ref.bound["along_m"] + e + lever * psi + self.config.pallet_term_m
-        lower = front_distance_lower_m(along, across, u, ref.bound["yaw_rad"] + psi)
-        return lower < floor
+        return front_distance_lower_m(along, across, u, ref.bound["yaw_rad"] + psi)
 
     # Checks --------------------------------------------------------------------------------
     def _compare(
@@ -557,6 +558,7 @@ class NearFieldTracker:
         front_eval = front_reason = roof_eval = roof_reason = None
         chosen = None
         unbounded = handoff_missed = False
+        range_lower = None
         evaluating = (
             None  # the source being evaluated (an unbounded age is its verdict)
         )
@@ -566,7 +568,8 @@ class NearFieldTracker:
                 front = self._front_fn(scene)
                 front_status = front.status
                 # plan 2026-10-28-near-front-range R1: after the detection, before its validity and _evaluate
-                if self._below_front_range(pose, aligned):
+                range_lower = self._front_range_lower(pose, aligned)
+                if range_lower is not None and range_lower < self.bounds.front_min_distance_m:
                     status, reason, chosen = "invalid", "out_of_range", None
                     handoff_missed = True
                 else:
@@ -645,6 +648,7 @@ class NearFieldTracker:
             roof_eval,
             roof_reason,
             handoff_missed,
+            range_lower,
         )
 
     @property

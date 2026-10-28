@@ -592,6 +592,7 @@ def test_in_range_the_tracker_is_unchanged():
         t.arm(0.0)
         r = frame(t, 1, pose)
         assert r.accepted and not r.handoff_missed and r.front_eval == "accepted"
+        assert (r.front_range_lower_m is None) is (not front_range)
 
 
 def test_below_the_range_in_front_mode_the_handoff_is_missed_and_the_front_not_evaluated(monkeypatch):
@@ -602,6 +603,7 @@ def test_below_the_range_in_front_mode_the_handoff_is_missed_and_the_front_not_e
     monkeypatch.setattr(t, "_evaluate", lambda *a, **k: calls.append(a) or ("accepted", None, None))
     r = frame(t, 1, pose)
     assert r.handoff_missed and not r.accepted and r.front_eval == "out_of_range" and not calls
+    assert r.front_range_lower_m < F_MIN < r.front_range_lower_m + 0.02
     assert r.mode == "front" and not r.unbounded
 
 
