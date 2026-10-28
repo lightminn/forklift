@@ -23,6 +23,7 @@ Poses are the laser's in the map frame; the caller converts to and from the base
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -37,15 +38,21 @@ class MatchConfig:
     match_range_m: float = 8.0  # plan B1 R_MATCH: 0.5 deg is 0.105 m at 12 m
     sigma_m: float = 0.05
     levels: int = 5  # the coarsest block is 2^levels cells (1.6 m at 5 cm)
-    keep_ratio: float = 0.4  # every leaf scoring >= this share of the best is kept: 0.10 below the lowest r_max (B4a)
+    # every leaf scoring >= this share of the best is kept. Plan B4b: 0.80 = the lowest r_struct of the selection grid
+    # (decide reads only the top, a competitor above r_max > r_struct and candidates >= r_struct); B4a had 0.40
+    keep_ratio: float = 0.8
     sep_m: float = 0.3  # plan B1: the wrong-confirmation tolerance
     sep_rad: float = 0.1
     clearance_m: float = 0.3  # the laser stands where the truck can: this far from any occupied cell
     min_points: int = 30  # fewer endpoints is no information
     max_candidates: int = 8
-    max_nodes: int = 4_000_000  # a frontier larger than this is an overflow (no answer, never a confirmation);
-    # 400,000 overflowed 2 of the 3 dev smoke starts on line_m (plan B4a settings history)
+    # a level's frontier larger than this is an overflow (no answer, never a confirmation); a frontier guard, not a
+    # time bound. B4a: 400,000 -> 4,000,000 (dev smoke overflow); B4b: 1,000,000 (dev maximum ~89,000 with the beam)
+    max_nodes: int = 1_000_000
     endpoint_dilate_cells: int = 1  # the endpoint fraction's tolerance, as slam_map.endpoint_fraction
+    beam_width: int = 64  # the floor's descent keeps this many bounds per level (B4b; 1 is the old greedy leaf)
+    max_work: int | None = None  # node x endpoint scores per search before overflow (B4b: set on dev, then frozen)
+    deadline_s: float | None = 30.0  # relocalize(): no confirmation after this many seconds (B4b, console wait)
 
 
 @dataclass(frozen=True)
@@ -69,14 +76,15 @@ class Candidate:
 
 @dataclass(frozen=True)
 class GlobalMatch:
-    status: str  # ok | uninformative | overflow
+    status: str  # ok | uninformative | overflow | timeout
     candidates: tuple = ()  # the best first, then the competitors beyond the separation
+    work: int = 0  # node x endpoint scores the search spent
 
 
 @dataclass(frozen=True)
 class Decision:
     confirmed: bool
-    reason: str  # confirmed | uninformative | overflow | refine_moved | low_fit | competitor | periodic
+    reason: str  # confirmed | uninformative | overflow | timeout | refine_moved | low_fit | competitor | periodic
     ratio: float | None = None  # best competitor's score / the top's
 
 
@@ -153,21 +161,72 @@ def _pyramid(base: np.ndarray, levels: int, op) -> list:
     return out
 
 
+def _reach_cells(reach_m: float, res: float) -> int:
+    return int(math.ceil(reach_m / res)) + 2
+
+
+class MapIndex:
+    """What a search needs from one survey grid, built once per bundle (plan B4b): the likelihood field, its max
+    pyramid on a field padded for endpoints up to ``match_range_m``, the candidate cells and their pyramid, and the
+    occupied cell centres the refinement fits to. Searches with or without it give the same poses and scores."""
+
+    def __init__(self, grid: Grid, cfg: MatchConfig | None = None):
+        cfg = cfg or MatchConfig()
+        _check_grid(grid)
+        self.grid, self.cfg = grid, cfg
+        self.field = likelihood_field(grid, cfg.sigma_m)
+        self.cand = candidate_cells(grid, cfg.clearance_m)
+        self.reach = _reach_cells(cfg.match_range_m, grid.resolution_m)
+        self.pad = self.reach + (1 << cfg.levels) + 1
+        self.L = _pyramid(np.pad(self.field, self.pad), cfg.levels, np.maximum)
+        self.C = _pyramid(self.cand, cfg.levels, np.logical_or)
+        self.walls = grid.cell_centres(grid.occupied())
+
+
+class _Stop(Exception):
+    """The search's budget ran out: ``overflow`` (work) or ``timeout`` (the deadline)."""
+
+
+class _Budget:
+    """The work cap (node x endpoint scores, deterministic) and the wall deadline (``clock`` seconds), checked per
+    scoring chunk and by the refinement around each ICP (plan B4b)."""
+
+    def __init__(self, cfg: MatchConfig, clock=None, deadline: float | None = None):
+        self.max_work, self.clock, self.deadline, self.work = cfg.max_work, clock, deadline, 0
+
+    def check(self) -> None:
+        if self.deadline is not None and self.clock is not None and self.clock() > self.deadline:
+            raise _Stop("timeout")
+
+    def spend(self, n: int) -> None:
+        self.work += n
+        if self.max_work is not None and self.work > self.max_work:
+            raise _Stop("overflow")
+        self.check()
+
+
 class _Search:
-    def __init__(self, grid: Grid, pts: np.ndarray, cfg: MatchConfig):
+    def __init__(self, grid: Grid, pts: np.ndarray, cfg: MatchConfig, index: MapIndex | None = None,
+                 budget: _Budget | None = None):
         self.grid, self.cfg, self.res = grid, cfg, grid.resolution_m
+        self.budget = budget or _Budget(replace(cfg, max_work=None))
         self.n_yaw = max(1, int(round(2 * math.pi / cfg.yaw_step_rad)))
         self.yaws = np.arange(self.n_yaw) * (2 * math.pi / self.n_yaw)
-        field = likelihood_field(grid, cfg.sigma_m)
-        cand = candidate_cells(grid, cfg.clearance_m)
         # an endpoint's distance, not its largest coordinate: a heading can turn it onto one axis (Codex B-P1b review)
-        reach = int(math.ceil(np.hypot(pts[:, 0], pts[:, 1]).max() / self.res)) + 2 if len(pts) else 2
-        self.pad = reach + (1 << cfg.levels) + 1
-        # pad first: a block starting outside the grid must still pool the cells inside it (B-P1b; pooling before
-        # padding read such blocks as 0 and the bound fell below leaves near walls on the grid's first rows/columns)
-        self.L = _pyramid(np.pad(field, self.pad), cfg.levels, np.maximum)
-        self.C = _pyramid(cand, cfg.levels, np.logical_or)
-        self.cand = cand
+        reach = _reach_cells(float(np.hypot(pts[:, 0], pts[:, 1]).max()), self.res) if len(pts) else 2
+        if index is not None:
+            if reach > index.reach:
+                raise ValueError("endpoints beyond the map index's reach (match_range_m)")
+            self.pad, self.L, self.C, self.cand = index.pad, index.L, index.C, index.cand
+        else:
+            field = likelihood_field(grid, cfg.sigma_m)
+            cand = candidate_cells(grid, cfg.clearance_m)
+            self.pad = reach + (1 << cfg.levels) + 1
+            # pad first: a block starting outside the grid must still pool the cells inside it (B-P1b; pooling before
+            # padding read such blocks as 0 and the bound fell below leaves near walls on the grid's first rows/columns)
+            self.L = _pyramid(np.pad(field, self.pad), cfg.levels, np.maximum)
+            self.C = _pyramid(cand, cfg.levels, np.logical_or)
+            self.cand = cand
         c, s = np.cos(self.yaws)[:, None], np.sin(self.yaws)[:, None]
         qx = c * pts[:, 0] - s * pts[:, 1]
         qy = s * pts[:, 0] + c * pts[:, 1]
@@ -182,6 +241,7 @@ class _Search:
             hh, rr, cc = h[a:a + chunk], r[a:a + chunk], c[a:a + chunk]
             vals = lv[rr[:, None] + self.orow[hh] + self.pad, cc[:, None] + self.oc[hh] + self.pad]
             out[a:a + chunk] = vals.mean(axis=1)
+            self.budget.spend(len(hh) * self.oc.shape[1])
         return out
 
     def children(self, level: int, h, r, c):
@@ -210,40 +270,52 @@ class _Search:
         return (ox + (c + 0.5) * self.res, oy + (r + 0.5) * self.res, float(self.yaws[h]))
 
 
-def global_match(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None) -> GlobalMatch:
-    """The kept candidates (lattice poses, before refinement) or why there are none."""
+def _beam_floor(s: _Search, h, r, c, bounds, width: int) -> float:
+    """The best leaf score reached by descending the ``width`` highest bounds at every level: a real leaf's score, so
+    at most the best, and with a wide beam usually the best itself (plan B4b; one greedy leaf could sit far below)."""
+    i = np.argsort(-bounds, kind="stable")[:width]
+    gh, gr, gc = h[i], r[i], c[i]
+    for level in range(s.cfg.levels, 0, -1):
+        gh, gr, gc = s.children(level, gh, gr, gc)
+        b = s.scores(level - 1, gh, gr, gc)
+        j = np.argsort(-b, kind="stable")[:width]
+        gh, gr, gc, b = gh[j], gr[j], gc[j], b[j]
+    return float(b.max())
+
+
+def global_match(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None, *, index: MapIndex | None = None,
+                 clock=None, deadline: float | None = None) -> GlobalMatch:
+    """The kept candidates (lattice poses, before refinement) or why there are none. With ``clock`` and ``deadline``
+    a search still running at the deadline ends as ``timeout``; ``max_work`` ends it as ``overflow``."""
     cfg = cfg or MatchConfig()
     _check_grid(grid)
     pts = _thin(np.asarray(points, float).reshape(-1, 2), grid.resolution_m)
-    if len(pts) < cfg.min_points or not candidate_cells(grid, cfg.clearance_m).any() or not grid.occupied().any():
+    cand = index.cand if index is not None else candidate_cells(grid, cfg.clearance_m)
+    if len(pts) < cfg.min_points or not cand.any() or not grid.occupied().any():
         return GlobalMatch("uninformative")
-    s = _Search(grid, pts, cfg)
-    h, r, c = s.top()
-    bounds = s.scores(cfg.levels, h, r, c)
-    # a first leaf by greedy descent gives a floor for the threshold
-    i = int(np.argmax(bounds))
-    gh, gr, gc = h[i:i + 1], r[i:i + 1], c[i:i + 1]
-    for level in range(cfg.levels, 0, -1):
-        gh, gr, gc = s.children(level, gh, gr, gc)
-        b = s.scores(level - 1, gh, gr, gc)
-        j = int(np.argmax(b))
-        gh, gr, gc = gh[j:j + 1], gr[j:j + 1], gc[j:j + 1]
-    floor = float(s.scores(0, gh, gr, gc)[0])
-    thr = cfg.keep_ratio * floor
-    for level in range(cfg.levels, 0, -1):
-        keep = bounds >= thr
-        h, r, c = h[keep], r[keep], c[keep]
-        if len(h) * 4 > cfg.max_nodes:
-            return GlobalMatch("overflow")
-        h, r, c = s.children(level, h, r, c)
-        bounds = s.scores(level - 1, h, r, c)
+    budget = _Budget(cfg, clock, deadline)
+    try:
+        s = _Search(grid, pts, cfg, index, budget)
+        h, r, c = s.top()
+        bounds = s.scores(cfg.levels, h, r, c)
+        floor = _beam_floor(s, h, r, c, bounds, max(1, cfg.beam_width))
+        thr = cfg.keep_ratio * floor
+        for level in range(cfg.levels, 0, -1):
+            keep = bounds >= thr
+            h, r, c = h[keep], r[keep], c[keep]
+            if len(h) * 4 > cfg.max_nodes:
+                return GlobalMatch("overflow", work=budget.work)
+            h, r, c = s.children(level, h, r, c)
+            bounds = s.scores(level - 1, h, r, c)
+    except _Stop as stop:
+        return GlobalMatch(str(stop), work=budget.work)
     best = float(bounds.max()) if len(bounds) else floor
     keep = bounds >= cfg.keep_ratio * best
     h, r, c, sc = h[keep], r[keep], c[keep], bounds[keep]
     order = np.argsort(-sc, kind="stable")
     leaves = [Candidate(s.pose(h[k], r[k], c[k]), float(sc[k]), math.nan) for k in order]
     kept = suppress(leaves, sep_m=cfg.sep_m, sep_rad=cfg.sep_rad)[:cfg.max_candidates]
-    return GlobalMatch("ok", tuple(_with_fraction(grid, pts, k, cfg) for k in kept))
+    return GlobalMatch("ok", tuple(_with_fraction(grid, pts, k, cfg) for k in kept), work=budget.work)
 
 
 def brute_force_best(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None) -> float:
@@ -291,26 +363,50 @@ def _with_fraction(grid: Grid, pts: np.ndarray, cand: Candidate, cfg: MatchConfi
     return replace(cand, endpoint_fraction=endpoint_fraction(grid, pts, cand.pose, cfg.endpoint_dilate_cells))
 
 
-def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig | None = None) -> GlobalMatch:
+def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig | None = None, *,
+           index: MapIndex | None = None, clock=None, deadline: float | None = None) -> GlobalMatch:
     """Point-to-line ICP of every kept candidate against the occupied cells near it, each rescored on the same field
     at its refined pose (an unaccepted ICP keeps the lattice pose, unrefined). The order and the lattice scores stay:
     the competitor ratio is read from the exact lattice search, whose kept set is complete down to ``keep_ratio``;
     refinement only places the pose (Codex B4a re-review P2: an ICP from a weak lattice pose can climb, and
-    candidates can converge together, so refined scores would not be a complete competitor set)."""
+    candidates can converge together, so refined scores would not be a complete competitor set). With ``clock`` and
+    ``deadline`` the deadline is checked before and after each ICP; past it the match is a ``timeout``."""
     cfg = cfg or MatchConfig()
     if match.status != "ok":
         return match
     pts = _thin(np.asarray(points, float).reshape(-1, 2), grid.resolution_m)
-    field = likelihood_field(grid, cfg.sigma_m)
-    walls = grid.cell_centres(grid.occupied())
+    field = index.field if index is not None else likelihood_field(grid, cfg.sigma_m)
+    walls = index.walls if index is not None else grid.cell_centres(grid.occupied())
+    budget = _Budget(replace(cfg, max_work=None), clock, deadline)
     out = []
-    for cand in match.candidates:
-        near = walls[np.hypot(walls[:, 0] - cand.pose[0], walls[:, 1] - cand.pose[1]) <= cfg.match_range_m + 0.5]
-        res = match_scans(near, pts, cand.pose, max_correspondence_m=cfg.sep_m)
-        pose = tuple(float(v) for v in res.pose) if res.accepted else cand.pose
-        out.append(_with_fraction(grid, pts, Candidate(pose, _field_score(grid, field, pts, pose), math.nan,
-                                                       res.accepted, cand.search_pose, cand.search_score), cfg))
-    return GlobalMatch("ok", tuple(out))
+    try:
+        for cand in match.candidates:
+            budget.check()
+            near = walls[np.hypot(walls[:, 0] - cand.pose[0], walls[:, 1] - cand.pose[1]) <= cfg.match_range_m + 0.5]
+            res = match_scans(near, pts, cand.pose, max_correspondence_m=cfg.sep_m)
+            budget.check()
+            pose = tuple(float(v) for v in res.pose) if res.accepted else cand.pose
+            out.append(_with_fraction(grid, pts, Candidate(pose, _field_score(grid, field, pts, pose), math.nan,
+                                                           res.accepted, cand.search_pose, cand.search_score), cfg))
+    except _Stop as stop:
+        return GlobalMatch(str(stop), work=match.work)
+    return GlobalMatch("ok", tuple(out), work=match.work)
+
+
+def relocalize(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None, *, e_min: float, r_max: float,
+               r_struct: float | None = None, index: MapIndex | None = None, clock=time.monotonic):
+    """One relocalization request (plan B4b): search, refine, decide, all against one deadline ``cfg.deadline_s``
+    after the call. A confirmation is checked against the deadline right before it is returned, so none comes out
+    late: past the deadline the request is a ``timeout``, never confirmed. Returns (refined match, decision)."""
+    cfg = cfg or MatchConfig()
+    deadline = None if cfg.deadline_s is None else clock() + cfg.deadline_s
+    match = global_match(grid, points, cfg, index=index, clock=clock, deadline=deadline)
+    match = refine(grid, match, points, cfg, index=index, clock=clock, deadline=deadline)
+    decision = decide(match, e_min=e_min, r_max=r_max, r_struct=r_struct, sep_m=cfg.sep_m, sep_rad=cfg.sep_rad)
+    if deadline is not None and clock() > deadline:
+        match = GlobalMatch("timeout", work=match.work)
+        decision = Decision(False, "timeout")
+    return match, decision
 
 
 def periodic(candidates, *, ratio_min: float, line_tol_m: float = 0.15, spacing_tol_m: float = 0.15) -> bool:
@@ -360,6 +456,6 @@ def decide(match: GlobalMatch, *, e_min: float, r_max: float, r_struct: float | 
     return Decision(True, "confirmed", ratio)
 
 
-__all__ = ["Candidate", "Decision", "GlobalMatch", "MatchConfig", "brute_force_best", "candidate_cells", "decide",
-           "endpoint_fraction", "global_match", "likelihood_field", "periodic", "refine", "scan_points",
+__all__ = ["Candidate", "Decision", "GlobalMatch", "MapIndex", "MatchConfig", "brute_force_best", "candidate_cells", "decide",
+           "endpoint_fraction", "global_match", "likelihood_field", "periodic", "refine", "relocalize", "scan_points",
            "stack_scans", "suppress"]
