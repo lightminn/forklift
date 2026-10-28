@@ -529,3 +529,120 @@ def test_an_unbounded_age_is_the_evaluated_sources_verdict():
         "unbounded_age",
         None,
     )
+
+
+# ---- docs/plans/2026-10-28-near-front-range.md 3.3: the front's range and the missed handoff ----
+from forklift_core.perception.near_field_tracking import front_distance_lower_m  # noqa: E402
+
+F_MIN = 0.4
+
+
+def _ranged_bounds(front_range=True):
+    import copy
+    import dataclasses
+
+    rows = [r for r in BOUNDS.observation_rows["front"] if r["bin_m"][1] >= F_MIN - 1e-9]
+    out = dataclasses.replace(BOUNDS, observation_rows={**BOUNDS.observation_rows, "front": copy.deepcopy(rows)})
+    return dataclasses.replace(out, front_min_distance_m=F_MIN if front_range else None)
+
+
+def ranged_tracker(front, roof=None, front_range=True, face_x=FACE_X):
+    fronts, roofs = iter(front), iter(roof or [])
+    return NearFieldTracker(
+        CONFIG,
+        _ranged_bounds(front_range),
+        pockets(0, x=face_x),
+        (0.0, 0.0, 0.0),
+        0.0,
+        front_fn=lambda scene: next(fronts),
+        roof_fn=lambda scene, xy, yaw: next(roofs),
+        frame_version="hold-1",
+    )
+
+
+def test_the_lower_bound_takes_the_truth_axis_error_and_the_axis_turn():
+    # Codex's round-2 counter-example: truth 0.3999248 m on the bounds' truth-axis definition
+    assert front_distance_lower_m(0.4622172864, 0.1, 0.05005, 0.1) == pytest.approx(0.3998748, abs=1e-7)
+    # aligned, no error: the distance itself
+    assert front_distance_lower_m(0.9, 0.0, 0.0, 0.0) == pytest.approx(0.9)
+    # the lateral offset only matters through the axis turn
+    assert front_distance_lower_m(0.9, 0.2, 0.001, 0.0) == pytest.approx(0.899)
+    assert front_distance_lower_m(0.9, 0.2, 0.001, 0.01) < front_distance_lower_m(0.9, 0.0, 0.001, 0.01)
+
+
+def test_the_lower_bound_never_exceeds_the_truth_distance():
+    import random
+
+    rng = random.Random(7)
+    for _ in range(20000):
+        ma, mn = rng.uniform(0.3, 2.5), rng.uniform(-0.3, 0.3)
+        u, d = rng.uniform(0, 0.06), rng.uniform(0, 0.2)
+        eps, xa, xl = rng.uniform(-d, d), rng.uniform(-u, u), rng.uniform(-0.1, 0.1)
+        at, nt = (math.cos(eps), math.sin(eps)), (-math.sin(eps), math.cos(eps))
+        x = (xa * at[0] + xl * nt[0], xa * at[1] + xl * nt[1])
+        truth = (ma - x[0]) * at[0] + (mn - x[1]) * at[1]
+        assert front_distance_lower_m(ma, mn, u, d) <= truth + 1e-12
+
+
+def test_in_range_the_tracker_is_unchanged():
+    # armed, the carried face 0.95 m from the camera (before the handoff gate): the same verdict either way
+    pose = (FACE_X - CAM_X - 0.95, 0.0, 0.0)
+    for front_range in (True, False):
+        t = ranged_tracker([pockets(1, x=FACE_X - pose[0])], front_range=front_range)
+        t.arm(0.0)
+        r = frame(t, 1, pose)
+        assert r.accepted and not r.handoff_missed and r.front_eval == "accepted"
+
+
+def test_below_the_range_in_front_mode_the_handoff_is_missed_and_the_front_not_evaluated(monkeypatch):
+    pose = (FACE_X - CAM_X - 0.39, 0.0, 0.0)  # the carried face 0.39 m from the camera
+    t = ranged_tracker([pockets(1, x=FACE_X - pose[0])])
+    t.arm(0.0)
+    calls = []
+    monkeypatch.setattr(t, "_evaluate", lambda *a, **k: calls.append(a) or ("accepted", None, None))
+    r = frame(t, 1, pose)
+    assert r.handoff_missed and not r.accepted and r.front_eval == "out_of_range" and not calls
+    assert r.mode == "front" and not r.unbounded
+
+
+def test_an_invalid_front_below_the_range_is_a_missed_handoff_too():
+    pose = (FACE_X - CAM_X - 0.39, 0.0, 0.0)
+    r = frame(ranged_tracker([pockets(1, status="no_pallet")]), 1, pose)  # not armed: no range watch
+    assert not r.handoff_missed
+    t = ranged_tracker([pockets(1, status="no_pallet")])
+    t.arm(0.0)
+    assert frame(t, 1, pose).handoff_missed
+
+
+def test_the_error_terms_move_the_watch_before_the_carried_face_reaches_the_range():
+    # the carried face 0.405 m away, but the latest accepted is old: its odometry age widens u past 5 mm
+    pose = (FACE_X - CAM_X - 0.405, 0.0, 0.0)
+    t = ranged_tracker([pockets(9, x=FACE_X - pose[0])])
+    t.arm(0.0)
+    r = frame(t, 9, pose)  # 0.9 s after the near capture: e(1.0 s) = 14.2 mm
+    assert r.handoff_missed
+
+
+def test_without_a_range_or_before_arming_nothing_new_happens():
+    pose = (FACE_X - CAM_X - 0.30, 0.0, 0.0)
+    t = ranged_tracker([pockets(1, x=FACE_X - pose[0])], front_range=False)
+    t.arm(0.0)
+    assert not frame(t, 1, pose).handoff_missed
+    # Codex plan round 1: an unarmed tracker with an invalid front far past the odometry table stays bounded
+    t = ranged_tracker([pockets(800, status="no_pallet")])
+    r = t.on_frame(None, 80.0 + L_ALIGN, (0.0, 0.0, 0.0), 80.0 + L_ALIGN + A, "hold-1")
+    assert not r.unbounded and not r.handoff_missed
+
+
+def test_the_roof_never_falls_back_to_the_front():
+    def no_front(scene):
+        raise AssertionError("the front was called in roof mode")
+
+    t = NearFieldTracker(CONFIG, _ranged_bounds(), pockets(0), (0.0, 0.0, 0.0), 0.0,
+                         front_fn=no_front, roof_fn=lambda scene, xy, yaw: pockets(1, status="no_pallet"),
+                         frame_version="hold-1")
+    t.arm(0.0)
+    t.mode = "roof"
+    for k in range(1, 5):
+        r = frame(t, k)
+        assert r.mode == "roof" and not r.accepted and not r.handoff_missed

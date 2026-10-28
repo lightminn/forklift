@@ -47,13 +47,19 @@ def bin_containing(rows: list[dict], distance_m: float) -> dict | None:
 
 
 def interval_bound(
-    rows: list[dict], distance_m: float, margin_m: float = DISTANCE_MARGIN_M
+    rows: list[dict],
+    distance_m: float,
+    margin_m: float = DISTANCE_MARGIN_M,
+    floor_m: float = 0.0,
 ) -> dict | None:
     """The component-wise maximum over every measured bin the observed distance can come
     from (see the module docstring); None when an unmeasured bin or the space outside
-    the grid is within reach, or when no measured bin is."""
+    the grid is within reach, or when no measured bin is. Below floor_m is outside the
+    operating range, as below the face plane is (plan 2026-10-28-near-front-range 3.2:
+    the tracker never evaluates the front there), so it is not missing; an observed
+    distance below it has no bound."""
     measured = [c for c in rows if not c.get("unbounded")]
-    if not measured:
+    if not measured or distance_m < floor_m:
         return None
     reach = max(c["along_m"] for c in measured) + margin_m
     candidates = [
@@ -63,7 +69,7 @@ def interval_bound(
         <= distance_m
         < c["bin_m"][0] + c["along_m"] + margin_m
     ]
-    lo, hi = max(distance_m - reach, 0.0), distance_m + reach
+    lo, hi = max(distance_m - reach, floor_m), distance_m + reach
     # Unmeasured: unbounded bins, gaps between bins and the space past either end.
     edges = sorted((c["bin_m"][1], c["bin_m"][0]) for c in rows)
     holes = [(c["bin_m"][1], c["bin_m"][0]) for c in rows if c.get("unbounded")]
@@ -108,6 +114,22 @@ def _check_rows(source: str, rows: list) -> list[dict]:
     return rows
 
 
+def _front_range(entry, rows: list[dict]) -> float | None:
+    """Plan 2026-10-28-near-front-range 3.2: the front's lowest distance F, on the bin grid,
+    with no front row below it; None when the file has no front_range."""
+    if entry is None:
+        return None
+    try:
+        value = _finite_non_negative(entry.get("min_distance_m"), "front_range min_distance_m")
+    except ValueError as exc:
+        raise ValueError(f"front_range: {exc}") from None
+    if not math.isclose(value / BIN_M, round(value / BIN_M), abs_tol=1e-6):
+        raise ValueError(f"front_range: {value} m is not on the {BIN_M} m grid")
+    if any(float(c["bin_m"][1]) < value - 1e-9 for c in rows):
+        raise ValueError(f"front_range: a front row lies below {value} m")
+    return value
+
+
 @dataclass(frozen=True)
 class NearFieldBounds:
     align_latency_s: float  # L: pixels this much older than the frame stamp (aligned)
@@ -120,6 +142,9 @@ class NearFieldBounds:
     odometry_psi_rad: tuple
     near_capture: dict  # component -> bound of the near-capture observation
     condition: dict = field(default_factory=dict)  # the contract the bounds hold under
+    # plan 2026-10-28-near-front-range 3.2: the front's lowest camera-face distance; None (a file without
+    # front_range) keeps the tracker's range watch off
+    front_min_distance_m: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> NearFieldBounds:
@@ -146,6 +171,7 @@ class NearFieldBounds:
                 )
             tables[name] = values
         rows = {s: _check_rows(s, data["observation"][s]) for s in ("front", "roof")}
+        front_min = _front_range(data["observation"].get("front_range"), rows["front"])
         near = data["near_capture"]["bound"]
         near = {
             k: _finite_non_negative(near.get(k), f"near capture {k}")
@@ -162,6 +188,7 @@ class NearFieldBounds:
             tables["psi_rad"],
             near,
             dict(data.get("condition", {})),
+            front_min,
         )
 
     @classmethod
@@ -169,7 +196,10 @@ class NearFieldBounds:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def observation(self, source: str, distance_m: float) -> dict | None:
-        return interval_bound(self.observation_rows[source], float(distance_m))
+        floor = self.front_min_distance_m if source == "front" else None
+        return interval_bound(
+            self.observation_rows[source], float(distance_m), floor_m=floor or 0.0
+        )
 
     def odometry(self, age_s: float) -> tuple[float, float] | None:
         if not math.isfinite(age_s) or age_s < 0:
