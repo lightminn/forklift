@@ -110,71 +110,78 @@ class Engine:
     steps_per_scan: int = 12  # physics steps between scans: 120 Hz / the LiDAR's 10 Hz, as live
 
 
+def scan_set(engine: Engine, target, noise_for, settle_steps: int = SETTLE_STEPS) -> dict:
+    """At the truck's current place: ``settle_steps`` physics steps, then ``SCANS`` scans a LiDAR period apart, each
+    the live shared send path's ranges with the noise of ``noise_for(scan_index)`` (a generator, or None for the
+    obstacle layer's own). Validity against ``target`` (x, y, yaw world base) and the settle height: at the target,
+    level and still over every scan. The truth (``base_truth``, ``laser_truth``) is the simulator's, for records and
+    validity only. Used per pose by ``capture`` and by the start relocalization (B-P2) at its one start."""
+    x, y, yaw = (float(v) for v in target)
+    for _ in range(settle_steps):
+        engine.step()
+    pos0, q0 = engine.pose()
+    yaw0, roll0, pitch0 = yaw_roll_pitch(q0)
+    raws, sents, hashes, steps, poses_ = [], [], [], [], []
+    step_count = settle_steps
+    for s in range(SCANS):
+        if s:
+            for _ in range(engine.steps_per_scan):
+                engine.step()
+            step_count += engine.steps_per_scan
+        pos, q = engine.pose()
+        poses_.append((np.asarray(pos, float), yaw_roll_pitch(q)))
+        steps.append(step_count)
+        distances, hits = engine.cast(pos, q)
+        ranges = np.asarray(engine.ranges_from_hits(distances, hits), dtype=float)
+        noise = engine.draw_noise(noise_for(s), np.asarray(distances, dtype=float))
+        sent = shared_sent_ranges(ranges, noise, engine.range_min_m, engine.range_max_m).astype(np.float32)
+        raws.append(ranges.astype(np.float32))
+        sents.append(sent)
+        hashes.append(hashlib.sha256(sent.tobytes()).hexdigest())
+    reason = None
+    if math.hypot(pos0[0] - x, pos0[1] - y) > POSITION_TOL_M or abs(_wrap(yaw0 - yaw)) > YAW_TOL_RAD:
+        reason = "not_at_target"
+    for p_, (yaw_, roll_, pitch_) in poses_:  # every scan, not only the first (Codex B4a round 3 P3)
+        if reason is not None:
+            break
+        if abs(p_[2] - engine.settle_z_m) > HEIGHT_TOL_M:
+            reason = "height"
+        elif max(abs(roll_), abs(pitch_)) > TILT_TOL_RAD:
+            reason = "tilt"
+        elif math.hypot(p_[0] - pos0[0], p_[1] - pos0[1]) > STILL_M or abs(_wrap(yaw_ - yaw0)) > STILL_RAD:
+            reason = "moved"
+    lx, ly, _ = engine.laser_xyz_m
+    c, s_ = math.cos(yaw0), math.sin(yaw0)
+    return {"base_truth": (float(pos0[0]), float(pos0[1]), yaw0),
+            "laser_truth": (float(pos0[0]) + c * lx - s_ * ly, float(pos0[1]) + s_ * lx + c * ly, yaw0),
+            "valid": reason is None, "reason": reason or "", "z_m": float(pos0[2]), "roll_rad": roll0,
+            "pitch_rad": pitch0, "raw": raws, "sent": sents, "sent_sha256": hashes, "scan_step": steps}
+
+
 def capture(engine: Engine, poses: dict) -> dict:
     """Every listed pose: the truth, validity and the scans, as arrays for one npz."""
     split, map_index = int(poses["split"]), int(poses["map_index"])
     rows = poses["poses"]
-    n, beams = len(rows), None
+    n = len(rows)
     out = {"id": [], "stratum": [], "base_target": [], "base_truth": [], "laser_truth": [], "valid": [], "reason": [],
            "z_m": [], "roll_rad": [], "pitch_rad": [], "raw": [], "sent": [], "sent_sha256": [], "scan_step": []}
     for k, row in enumerate(rows):
         x, y, yaw = (float(v) for v in row["base_world"])
         engine.teleport(np.array([x, y, engine.settle_z_m]), quat_from_yaw(yaw))
-        for _ in range(SETTLE_STEPS):
-            engine.step()
-        pos0, q0 = engine.pose()
-        yaw0, roll0, pitch0 = yaw_roll_pitch(q0)
-        raws, sents, hashes, steps, poses_ = [], [], [], [], []
-        step_count = SETTLE_STEPS
-        for s in range(SCANS):
-            if s:
-                for _ in range(engine.steps_per_scan):
-                    engine.step()
-                step_count += engine.steps_per_scan
-            pos, q = engine.pose()
-            poses_.append((np.asarray(pos, float), yaw_roll_pitch(q)))
-            steps.append(step_count)
-            distances, hits = engine.cast(pos, q)
-            ranges = np.asarray(engine.ranges_from_hits(distances, hits), dtype=float)
-            noise = engine.draw_noise(noise_rng(split, map_index, k, s), np.asarray(distances, dtype=float))
-            sent = shared_sent_ranges(ranges, noise, engine.range_min_m, engine.range_max_m).astype(np.float32)
-            raws.append(ranges.astype(np.float32))
-            sents.append(sent)
-            hashes.append(hashlib.sha256(sent.tobytes()).hexdigest())
-        reason = None
-        if math.hypot(pos0[0] - x, pos0[1] - y) > POSITION_TOL_M or abs(_wrap(yaw0 - yaw)) > YAW_TOL_RAD:
-            reason = "not_at_target"
-        for p_, (yaw_, roll_, pitch_) in poses_:  # every scan, not only the first (Codex B4a round 3 P3)
-            if reason is not None:
-                break
-            if abs(p_[2] - engine.settle_z_m) > HEIGHT_TOL_M:
-                reason = "height"
-            elif max(abs(roll_), abs(pitch_)) > TILT_TOL_RAD:
-                reason = "tilt"
-            elif math.hypot(p_[0] - pos0[0], p_[1] - pos0[1]) > STILL_M or abs(_wrap(yaw_ - yaw0)) > STILL_RAD:
-                reason = "moved"
-        lx, ly, _ = engine.laser_xyz_m
-        c, s_ = math.cos(yaw0), math.sin(yaw0)
-        beams = beams or len(sents[0])
+        got = scan_set(engine, (x, y, yaw), lambda s, k=k: noise_rng(split, map_index, k, s))
         out["id"].append(str(row["id"]))
         out["stratum"].append(str(row.get("stratum", "")))
         out["base_target"].append((x, y, yaw))
-        out["base_truth"].append((float(pos0[0]), float(pos0[1]), yaw0))
-        out["laser_truth"].append((float(pos0[0]) + c * lx - s_ * ly, float(pos0[1]) + s_ * lx + c * ly, yaw0))
-        out["valid"].append(reason is None)
-        out["reason"].append(reason or "")
-        out["z_m"].append(float(pos0[2]))
-        out["roll_rad"].append(roll0)
-        out["pitch_rad"].append(pitch0)
-        out["raw"].append(np.stack(raws))
-        out["sent"].append(np.stack(sents))
-        out["sent_sha256"].append(hashes)
-        out["scan_step"].append(steps)
+        for key in ("base_truth", "laser_truth", "valid", "reason", "z_m", "roll_rad", "pitch_rad", "sent_sha256",
+                    "scan_step"):
+            out[key].append(got[key])
+        out["raw"].append(np.stack(got["raw"]))
+        out["sent"].append(np.stack(got["sent"]))
     arrays = {k: np.asarray(v) for k, v in out.items()}
     if n == 0:
         arrays["raw"] = arrays["sent"] = np.zeros((0, SCANS, 0), np.float32)
     return arrays
 
 
-__all__ = ["FORMAT", "SCANS", "WORLD_SOURCES", "Engine", "capture", "capture_mismatches", "load_poses", "noise_rng", "quat_from_yaw",
+__all__ = ["FORMAT", "SCANS", "WORLD_SOURCES", "Engine", "capture", "capture_mismatches", "load_poses", "noise_rng", "quat_from_yaw", "scan_set",
            "shared_sent_ranges", "world_source_mismatches", "yaw_roll_pitch"]
