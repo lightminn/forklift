@@ -67,7 +67,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -137,6 +137,15 @@ KEEPOUT=${KEEPOUT:-0}
 # either (it comes last and decides); the runner refuses a trailer run with neither before Isaac starts
 # the extra videos beside the overview (lead 2026-10-27): quarter,chase as every earlier batch; a comparison batch that
 # needs no videos sets VIEWS=none in its list for both arms (one encoder and one camera render less per view)
+# VIDEO=off (lead 2026-10-28, near tracking re-measure): no video at all -- no overview and no extra views, so
+# nothing but the near camera renders (with video the near camera's frame period wandered 10-15 ticks; a real truck
+# renders no video either). The bundle still watches run/frames.jsonl: --frame-log writes its pose line per frame tick.
+VIDEO=${VIDEO:-on}
+case "$VIDEO" in on|off) ;; *) echo "VIDEO must be on or off"; exit 2;; esac
+if [ "$VIDEO" = off ]; then
+  case "${VIEWS:-none}" in none) ;; *) echo "VIDEO=off has no extra views: VIEWS must be none or unset"; exit 2;; esac
+  VIEWS=none
+fi
 VIEWS=${VIEWS:-quarter,chase}
 case "$VIEWS" in none|quarter|chase|quarter,chase|chase,quarter) ;; *) echo "VIEWS must be none, quarter, chase or quarter,chase"; exit 2;; esac
 EXIT_CLEARANCE=${EXIT_CLEARANCE:-}
@@ -173,6 +182,7 @@ printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s STA
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
 [ "$VIEWS" != quarter,chase ] && printf 'VIEWS=%s\n' "$VIEWS" >> "$OUT/riib_defaults.txt"
+[ "$VIDEO" = off ] && printf 'VIDEO=off\n' >> "$OUT/riib_defaults.txt"
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && printf 'REQUIREMENTS_PROFILE=%s\n' "$REQUIREMENTS_PROFILE" >> "$OUT/riib_defaults.txt"
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] \
   && printf 'SCENE_REQUIREMENTS_OVERRIDE=%q\n' "$SCENE_REQUIREMENTS_OVERRIDE" >> "$OUT/riib_defaults.txt"
@@ -191,8 +201,8 @@ COMMON=(--base-scene "$BASE_SCENE"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
   --escape-presteer "$ESCAPE_PRESTEER"
-  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
-  --video)
+  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD")
+[ "$VIDEO" = on ] && COMMON+=(--video)
 case "$VIEWS" in
   none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress
   *quarter*) COMMON+=(--extra-views "$VIEWS" --quarter-eye="$QE" --quarter-target="$QT") ;;

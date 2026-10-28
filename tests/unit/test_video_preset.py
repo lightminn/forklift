@@ -82,5 +82,16 @@ def test_the_comparers_treat_the_encoder_and_the_frame_log_as_records():
 def test_the_frame_log_has_its_own_guard():
     # Codex: without the extra views the riib bundle's progress watch (run/frames.jsonl) would see nothing
     assert 'if args.extra_views or getattr(args, "frame_log", False):' in SOURCE
-    block = SOURCE[SOURCE.index('            if frame_log is not None:\n                frame_base'):]
-    assert block.index("frame_log.write(") < block.index("frame_audit.append(")
+    block = SOURCE[SOURCE.index('            if frame_log is not None:\n                write_frame_log(state["frames"] - 1)'):]
+    assert block.index("write_frame_log(") < block.index("frame_audit.append(")
+    assert "frame_log.write(" in SOURCE[SOURCE.index("def write_frame_log("):]
+
+
+def test_without_video_the_frame_log_still_gets_a_line_per_frame_tick():
+    # riib VIDEO=off (lead 2026-10-28): nothing renders for video, the bundle still watches run/frames.jsonl
+    assert "pose_due = frame_log is not None and not args.video and tick % fps_divisor == 0" in SOURCE
+    step = SOURCE[SOURCE.index("        def step_world(render: bool) -> None:"):]
+    step = step[: step.index("\n        def ", 10)]
+    assert step.count("elif pose_due:\n") == 2 and step.count("write_frame_log(tick // fps_divisor)") == 2
+    # the video path is unchanged: with --video every frame tick writes the video frame (and its line) as before
+    assert step.count("if frame_due:\n") == 2

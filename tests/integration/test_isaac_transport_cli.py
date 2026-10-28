@@ -1344,3 +1344,17 @@ def test_the_bottom_deck_check_takes_structure_and_keeps_off_as_the_default() ->
     block = source[start:start + 200]
     assert 'choices=("gate", "waive_far_confirmed", "waive")' in block and 'default="gate"' in block
 
+
+
+def test_a_video_frame_reads_its_own_stamp_not_the_main_loops_tick_time() -> None:
+    """A live session with --video and the obstacle layer wrote its first frame before the main loop had bound the
+    tick time ``t`` (NameError "cannot access free variable 't'", ws1 dk9a_36b9b7de): the frame's overlay record is
+    stamped with the frame's own sim time, the ``stamp`` it is called with."""
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text())
+    frame = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "write_video_frame")
+    loaded = {n.id for n in ast.walk(frame) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    assert "t" not in loaded
+    calls = [n for n in ast.walk(frame) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "record_video_overlay"]
+    assert calls and all(ast.unparse(c.args[0]) == "stamp" for c in calls)
