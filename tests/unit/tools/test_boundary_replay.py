@@ -201,3 +201,24 @@ def test_every_added_setup_name_is_one_drive_binds_and_the_setup_always_binds():
     for name, (_flag, _off, value) in H.SETUP_NAMES_ADDED.items():
         assert name in prologue and name in unconditional, name
         assert unconditional[name] == value and type(unconditional[name]) is type(value), name  # Codex P3
+
+
+def test_result_keys_added_after_a_record_are_dropped_from_the_replay_only_where_the_record_lacks_them():
+    """PR #218 added truth-evaluation keys to obstacle_layer; the gate's records predate them (2026-10-28)."""
+    def state(layer):
+        return {"$map": {"containers": {"$map": {"state": {"$map": {"obstacle_layer": {"$map": layer}}}}}}}
+
+    recorded = state({"truth_events": 3, "unpermitted": []})
+    replayed = state({"truth_events": 3, "unpermitted": [], "truth_events_dir": 1, "unpermitted_dir": []})
+    assert sorted(H.drop_added_keys(recorded, replayed)) == [
+        "containers.state.obstacle_layer.truth_events_dir", "containers.state.obstacle_layer.unpermitted_dir"]
+    assert replayed == recorded
+    # a record that has the key compares it
+    recorded = state({"truth_events": 3, "truth_events_dir": 1})
+    replayed = state({"truth_events": 3, "truth_events_dir": 2})
+    assert H.drop_added_keys(recorded, replayed) == [] and replayed != recorded
+    # a recorded key that changed is never dropped
+    recorded = state({"truth_events": 3})
+    replayed = state({"truth_events": 4, "truth_events_dir": 1})
+    H.drop_added_keys(recorded, replayed)
+    assert replayed == state({"truth_events": 4})
