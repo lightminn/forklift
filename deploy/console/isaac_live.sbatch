@@ -29,6 +29,10 @@
 #   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
 #   --recognition far; off as before; an EXTRA_ARGS --far-capture-expected comes later and wins; live records made
 #   before this default -- CT-1, D7 and console baselines -- ran with it off: do not mix them with later ones),
+#   START_POSE (B-P2 start relocalization, docs/plans/2026-10-29-start-relocalization.md: "x,y,yaw" world base_link --
+#   the truck is placed there and the session finds itself on the survey map before its SLAM link opens: the runner
+#   gets --start-pose/--start-relocalize, the supervisor --relocalize, the bridge the runner's estimate as its
+#   map_start_pose instead of MAP_START_POSE; needs a survey map; unattended until the console's pick, B-P2c),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -60,6 +64,10 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
+if [ -n "${START_POSE:-}" ] && [ -z "${MAP_BUNDLE:-}" ]; then
+  echo "START_POSE relocalizes on a survey map: it needs one (slam: $SLAM_CHOICE)" >&2
+  exit 2
+fi
 echo "slam: $SLAM_CHOICE"
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
@@ -75,6 +83,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
+  printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
   printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
     "${SCENE_REQUIREMENTS_OVERRIDE:-}"  # scene requirements plan
@@ -83,12 +92,15 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
 cat > "$OUT/bridge.sh" <<'EOT'
 #!/bin/bash
 # epoch $1, its directory $2: the SLAM bridge takes one connection, so each epoch has its own; with MAP_BUNDLE the
-# session's map id $3 and bundle $4 (the supervisor's) -- the bundle mounted read-only, localization (plan L4)
+# session's map id $3 and bundle $4 (the supervisor's) -- the bundle mounted read-only, localization (plan L4); with
+# START_POSE the runner's estimate $5 (B-P2: the supervisor's {map_start_pose}) is the bridge's start pose
 . "$(dirname "$0")/env.sh"
 mkdir -p "$2/bridge" "$2/sock"
 LOC=()
+START=$MAP_START_POSE
+[ -n "${START_POSE:-}" ] && START=${5:?the estimate x,y,yaw from the runner}
 [ -n "${MAP_BUNDLE:-}" ] && LOC=(-v "$4:/bundle:ro" -e SLAM_MAP_BUNDLE=/bundle -e SLAM_EXPECTED_MAP_ID="$3"
-                                 -e SLAM_MAP_START_POSE="$MAP_START_POSE")
+                                 -e SLAM_MAP_START_POSE="$START")
 docker run -d --name "slam_bridge_${JOB}_e$1" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" "${LOC[@]}" \
   forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
@@ -117,6 +129,8 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 # reported table for a team-spec model; PR #108's team-spec table)
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
+RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
+[ -n "${START_POSE:-}" ] && RELOC=(--start-pose "$START_POSE" --start-relocalize --reloc-dir "$2")
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
@@ -134,7 +148,7 @@ ARGS=(
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" "${REQ[@]}" \
+  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac
@@ -185,13 +199,16 @@ echo "host=$(hostname) job=$JOB out=$OUT"
 SUP_LOC=()
 [ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")
 [ -n "${MAP_BUNDLE:-}" ] && [ -n "$EXPECTED_MAP_ID" ] && SUP_LOC+=(--expected-map-id "$EXPECTED_MAP_ID")
+# B-P2: the runner first, the bridge at its estimate
+BRIDGE=(bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')
+[ -n "${START_POSE:-}" ] && SUP_LOC+=(--relocalize) && BRIDGE+=('{map_start_pose}')
 # Between runners the supervisor serves the console's port itself (contract 6): the page and /api/v1/session, so a
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" "${SUP_LOC[@]}" \
   --slam-choice "$SLAM_CHOICE" \
   --standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" --standby-linger-s "${STANDBY_LINGER_S:-300}" \
-  --bridge "$(json bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')" \
+  --bridge "$(json "${BRIDGE[@]}")" \
   --bridge-stop "$(json bash "$OUT/stop.sh" '{epoch}')" \
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
   --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}' '{expected_map_id}' '{map_bundle}')" &

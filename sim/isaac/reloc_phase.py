@@ -10,6 +10,8 @@ needs an operator ends the phase; the operator's pick comes with the console (B-
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -38,6 +40,7 @@ class RelocInputs:
     unattended: bool = True
     clock: object = time.monotonic
     cancel: threading.Event = field(default_factory=threading.Event)
+    noise_for: object = lambda attempt, scan: None  # noqa: E731 -- the generator of an attempt's scan (None: the engine's)
 
 
 def _points(inputs: RelocInputs, sent) -> object:
@@ -96,7 +99,7 @@ def run(inputs: RelocInputs) -> dict:
     for _ in range(inputs.settle_steps):  # settle where it was placed (plan 1.2 step 3)
         inputs.engine.step()
     relocalizer.start()  # the first scan is being collected: the session deadline starts (plan 1.2 step 6)
-    first = scan_capture.scan_set(inputs.engine, inputs.target, _own_noise, settle_steps=0)
+    first = scan_capture.scan_set(inputs.engine, inputs.target, lambda s: inputs.noise_for(0, s), settle_steps=0)
     out["truth"] = list(first["base_truth"])
     if not first["valid"]:  # judged before any matching (plan 1.2 step 4)
         out["status"], out["reason"] = "invalid", first["reason"]
@@ -112,8 +115,10 @@ def run(inputs: RelocInputs) -> dict:
         out["attempts"].append({"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
                                 "work": int(match.work), "wall_s": round(wall_s, 3),
                                 "top": _candidate(match.candidates[0]) if match.candidates else None})
-        if step == "rescan":  # a static rescan: the truck stays where it is
-            sent = scan_capture.scan_set(inputs.engine, inputs.target, _own_noise, settle_steps=0)["sent"]
+        if step == "rescan":  # a static rescan: the truck stays where it is, the noise is new
+            k = len(out["attempts"])
+            sent = scan_capture.scan_set(inputs.engine, inputs.target, lambda s, k=k: inputs.noise_for(k, s),
+                                         settle_steps=0)["sent"]
     out["generation"] = relocalizer.generation
     if step != "chosen":
         out["status"] = {"awaiting_pick": "needs_operator", "cancelled": "cancelled"}.get(step, "failed")
@@ -130,9 +135,38 @@ def run(inputs: RelocInputs) -> dict:
     return out
 
 
-def _own_noise(scan_index: int):
-    """None: the obstacle layer's own generator draws the scan noise, as on the live send path."""
-    return None
+def failure_reason(out: dict) -> str | None:
+    """The session failure an ending other than ``chosen`` is (plan 1.2's reasons; ``reloc_needs_operator`` is the
+    unattended B-P2b ending of what the console's pick resolves from B-P2c on)."""
+    status = out["status"]
+    if status == "chosen":
+        return None
+    if status == "invalid":
+        return f"reloc_invalid_input: {out.get('reason')}"
+    if status == "needs_operator":
+        return f"reloc_needs_operator: {len(out.get('shown') or ())} candidates, no operator (unattended)"
+    if status == "failed":
+        return "reloc_failed: no candidate an operator could pick"
+    if status == "bridge_timeout":
+        return "reloc_bridge_timeout: no bridge_go within the wait"
+    return "reloc_cancelled"
 
 
-__all__ = ["RelocInputs", "run"]
+MATCH_CONFIG = "docs/validation/assets/b-p1b/match_config.json"
+DEV_CHOICE = "docs/validation/assets/b-p1b/dev_choice.json"
+
+
+def frozen_settings(root: Path) -> tuple:
+    """B-P1b's frozen search budget and choice (plan 1.2 step 5), with the files' hashes for the record."""
+    files = {"match_config": Path(root) / MATCH_CONFIG, "dev_choice": Path(root) / DEV_CHOICE}
+    raw = {name: path.read_bytes() for name, path in files.items()}
+    cfg = G.MatchConfig(**json.loads(raw["match_config"]))
+    choice = json.loads(raw["dev_choice"])["choice"]
+    reloc = R.RelocConfig(e_min=float(choice["e_min"]), r_max=float(choice["r_max"]),
+                          r_struct=float(choice["r_struct"]))
+    record = {name: {"file": str(files[name].relative_to(root)), "sha256": hashlib.sha256(data).hexdigest()}
+              for name, data in raw.items()}
+    return cfg, reloc, record
+
+
+__all__ = ["DEV_CHOICE", "MATCH_CONFIG", "RelocInputs", "failure_reason", "frozen_settings", "run"]

@@ -123,3 +123,34 @@ def test_the_epoch_record_names_every_attempt(tmp_path):
     record = R.read_reloc_pose(tmp_path)["record"]
     assert record["attempts"][0]["reason"] == "confirmed" and "wall_s" in record["attempts"][0]
     assert json.dumps(out)  # the result is what the runner records: plain JSON
+
+
+def test_each_attempt_draws_its_own_noise(tmp_path):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 1.4, 0.0)
+    asked = []
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base,
+                        match_cfg=G.MatchConfig(yaw_step_rad=math.radians(2.0), max_nodes=5_000_000),
+                        noise_for=lambda a, s: asked.append((a, s))))
+    assert len(out["attempts"]) == 3
+    assert asked == [(a, s) for a in range(3) for s in range(C.SCANS)]  # a static rescan: new noise, same place
+
+
+@pytest.mark.parametrize("out, reason", [
+    ({"status": "chosen"}, None),
+    ({"status": "invalid", "reason": "moved"}, "reloc_invalid_input: moved"),
+    ({"status": "needs_operator", "shown": [1, 2]}, "reloc_needs_operator: 2 candidates, no operator (unattended)"),
+    ({"status": "failed"}, "reloc_failed: no candidate an operator could pick"),
+    ({"status": "bridge_timeout"}, "reloc_bridge_timeout: no bridge_go within the wait"),
+    ({"status": "cancelled"}, "reloc_cancelled"),
+])
+def test_every_ending_but_chosen_is_a_session_failure_reason(out, reason):
+    assert P.failure_reason(out) == reason
+
+
+def test_the_frozen_settings_are_b_p1bs():
+    cfg, reloc, record = P.frozen_settings(ROOT)
+    assert cfg.max_work == 2_700_000_000 and cfg == G.MatchConfig(max_work=2_700_000_000)
+    assert (reloc.e_min, reloc.r_max, reloc.r_struct) == (0.8, 0.95, 0.8)
+    assert reloc.attempts == 3 and reloc.deadline_s == 30.0
+    assert set(record) == {"match_config", "dev_choice"} and all(len(v["sha256"]) == 64 for v in record.values())
