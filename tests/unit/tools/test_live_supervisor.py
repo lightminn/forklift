@@ -459,3 +459,84 @@ def test_the_live_runner_shows_the_launchers_slam_choice():
     runner = runner[: runner.index("EOT\n")]
     assert '--slam-choice "$SLAM_CHOICE"' in runner
     assert '--slam-choice "$SLAM_CHOICE"' in live[live.index('"$ROOT/tools/live_supervisor.py"'):]
+
+
+# --- B-P2 start relocalization (docs/plans/2026-10-29-start-relocalization.md 1.2): the runner first, the bridge at
+# the estimate -------------------------------------------------------------------------------------------------------
+
+RELOC_RUNNER = (
+    "import json,os,sys,time,pathlib; d=pathlib.Path(sys.argv[1]); port=pathlib.Path(sys.argv[2]);"
+    "marks=pathlib.Path(sys.argv[3]); mode=sys.argv[4];"
+    "marks.open('a').write('runner start\\n');"
+    "port.write_text(json.dumps({'state':'relocalizing'}));"
+    "time.sleep(0.3)\n"
+    "if mode == 'silent':\n time.sleep(30); sys.exit(1)\n"
+    "tmp=d/'reloc_pose.json.tmp'; tmp.write_text(json.dumps({'base':[1.5,-2.0,0.25],'source':'matcher',"
+    "'generation':0,'attempts':1,'record':{}})); os.replace(tmp, d/'reloc_pose.json')\n"
+    "end=time.monotonic()+20\n"
+    "while not (d/'bridge_go').exists() and time.monotonic()<end: time.sleep(0.05)\n"
+    "go=json.loads((d/'bridge_go').read_text()) if (d/'bridge_go').exists() else None\n"
+    "marks.open('a').write('runner go %s\\n' % (go and go['map_start_pose']))\n"
+    "port.write_text(json.dumps({'state':'running'})); time.sleep(0.3)\n"
+    "sys.exit(0 if mode == 'ok' else 1)"
+)
+
+
+def _reloc_runner(marks, mode="ok"):
+    return [PY, "-c", RELOC_RUNNER, "{epoch_dir}", "{port_file}", str(marks), mode]
+
+
+def _reloc_bridge(marks, ready=True):
+    flag = "pathlib.Path(sys.argv[2]).mkdir(parents=True,exist_ok=True); (pathlib.Path(sys.argv[2])/'bridge_ready').write_text('1')"
+    return [PY, "-c", "import sys,pathlib; pathlib.Path(sys.argv[1]).open('a').write('bridge %s\\n' % sys.argv[3]);"
+            + (flag if ready else "pass"), str(marks), "{epoch_dir}/bridge", "{map_start_pose}"]
+
+
+def _log_events(tmp_path):
+    return [json.loads(line) for line in (tmp_path / "supervisor.jsonl").read_text().splitlines()]
+
+
+def test_relocalization_starts_the_runner_first_and_the_bridge_at_its_estimate(tmp_path):
+    marks = tmp_path / "marks.txt"
+    result = run(tmp_path, _reloc_runner(marks), bridge=_reloc_bridge(marks), relocalize=True,
+                 bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0)
+    assert result["end"] == "ended"
+    lines = marks.read_text().splitlines()
+    assert lines == ["runner start", "bridge 1.5,-2.0,0.25", "runner go [1.5, -2.0, 0.25]"]
+    events = [e["event"] for e in _log_events(tmp_path)]
+    assert events.index("reloc_pose") < events.index("bridge_go") < events.index("localization_ready")
+
+
+def test_no_estimate_in_time_ends_the_epoch_without_a_bridge(tmp_path):
+    marks = tmp_path / "marks.txt"
+    result = run(tmp_path, _reloc_runner(marks, "silent"), bridge=_reloc_bridge(marks), relocalize=True,
+                 bridge_ready="{epoch_dir}/bridge/bridge_ready", reloc_wait_s=1.0, max_epochs=1, grace_s=2.0)
+    assert result["codes"] == [1]
+    assert "bridge" not in marks.read_text()
+    exits = [e for e in _log_events(tmp_path) if e["event"] == "exit"]
+    assert exits[0]["reason"] == "reloc_wait_timeout"
+
+
+def test_a_bridge_that_never_gets_ready_ends_the_epoch_without_bridge_go(tmp_path):
+    marks = tmp_path / "marks.txt"
+    result = run(tmp_path, _reloc_runner(marks), bridge=_reloc_bridge(marks, ready=False), relocalize=True,
+                 bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=0.5, reloc_wait_s=10.0,
+                 max_epochs=1, grace_s=2.0)
+    assert result["codes"] == [1]
+    assert not (tmp_path / "epoch_1" / "bridge_go").exists()
+    assert [e for e in _log_events(tmp_path) if e["event"] == "exit"][0]["reason"] == "bridge_not_ready"
+
+
+def test_a_failure_before_localization_is_a_relocalization_stage(tmp_path):
+    marks = tmp_path / "marks.txt"
+    run(tmp_path, _reloc_runner(marks, "fail"), bridge=_reloc_bridge(marks), relocalize=True,
+        bridge_ready="{epoch_dir}/bridge/bridge_ready", ready_timeout_s=10.0, reloc_wait_s=10.0, max_epochs=1)
+    # the fake runner wrote running before it failed: a run-stage failure, localization was ready
+    assert [e for e in _log_events(tmp_path) if e["event"] == "localization_ready"]
+    marks2 = tmp_path / "m2"
+    out2 = tmp_path / "second"
+    sup.supervise(out=out2, runner=_reloc_runner(marks2, "silent"), port_file=out2 / "live_port.json", backoff_s=0.0,
+                  bridge=_reloc_bridge(marks2), relocalize=True, bridge_ready="{epoch_dir}/bridge/bridge_ready",
+                  reloc_wait_s=1.0, max_epochs=1, grace_s=2.0)
+    port = json.loads((out2 / "live_port.json").read_text())
+    assert port["stage"] == "relocalize"
