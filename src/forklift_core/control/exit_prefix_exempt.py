@@ -14,6 +14,7 @@ missing, of another correction or older than the evidence age are left alone.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -77,13 +78,16 @@ def apply_verified(snapshot, verified: VerifiedCorridor | None, footprint, margi
                    max_age_s: float):
     """(snapshot, cells freed, why skipped): the OCCUPIED cells the verified region (the footprint grown by
     ``margin_m`` at its poses) overlaps on this snapshot read FREE with its stamp. Skipped -- the snapshot returned as
-    it is -- without a verification ("unverified"), for another correction than the snapshot's ("version") or one
-    older than ``max_age_s`` ("stale")."""
+    it is -- without a verification ("unverified"), for another correction than the snapshot's ("version"), with a
+    stamp or a now that is not finite or a stamp after now ("invalid"), or one older than ``max_age_s`` ("stale")."""
     if verified is None:
         return snapshot, 0, "unverified"
     if int(verified.correction_version) != int(snapshot.correction_version):
         return snapshot, 0, "version"
-    if float(now_s) - float(verified.stamp_s) > float(max_age_s):
+    stamp_s, now = float(verified.stamp_s), float(now_s)
+    if not (math.isfinite(stamp_s) and math.isfinite(now)) or now - stamp_s < 0.0:
+        return snapshot, 0, "invalid"  # never written as evidence: NaN or a future stamp would pass the age test
+    if now - stamp_s > float(max_age_s):
         return snapshot, 0, "stale"
     cells = corridor_cells(snapshot, verified.poses, footprint, margin_m)
     nx, ny = snapshot.state.shape

@@ -112,8 +112,11 @@ def test_only_the_occupied_cells_of_the_verified_corridor_are_read_free_with_the
 
 
 @pytest.mark.parametrize("ver, stamp, now, reason", [(None, 10.0, 10.0, "unverified"), (1, 10.0, 10.0, "version"),
-                                                     (0, 10.0, 10.21, "stale")])
+                                                     (0, 10.0, 10.21, "stale"), (0, float("nan"), 10.0, "invalid"),
+                                                     (0, 10.5, 10.0, "invalid"), (0, 10.0, float("nan"), "invalid"),
+                                                     (0, float("inf"), 10.0, "invalid")])
 def test_no_cell_is_freed_without_a_fresh_verification_of_this_correction(ver, stamp, now, reason):
+    # Codex 4th review P2-3: a NaN or future stamp passed the age test and was written as fresh evidence
     inside = cell_at(-0.5, 0.0)
     snap = grid([inside], version=0)
     v = None if ver is None else verified(stamp=stamp, version=ver)
