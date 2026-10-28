@@ -231,3 +231,36 @@ def test_a_scan_with_beams_that_read_nothing_verifies_nothing():
     lay.add_scans(10.0, raw, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
     st = lay.exit_exempt_status()
     assert st["invalid_scans"] == 1 and st.get("verified_s") is None and lay.exit_verified is None
+
+
+def test_a_beam_that_read_nothing_does_not_hide_a_danger_in_the_same_scan_nor_keep_the_last_verification():
+    # Codex impl review round 3 P1: NaN on one beam and a near or in-region hit on another, after a valid verification
+    lay = layer()
+    set_region(lay)
+    lay.add_scans(10.0, scan(lay), odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    assert lay.exit_verified is not None
+    raw = _with_beam(_with_beam(scan(lay), 800, 0.10), 100, np.nan)
+    raw = {n: (d, h, o, np.full(len(d), np.inf), np.where(np.arange(len(d)) == 100, np.nan,
+                                                         np.where(h, np.where(np.arange(len(d)) == 800, -np.inf, d), np.inf)))
+           for n, (d, h, o) in raw.items()}
+    lay.add_scans(10.1, raw, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    assert lay.exit_exempt_status()["rang"]["near"] and lay.exit_verified is None
+    # a box in the region with a NaN beam rings too
+    lay = layer()
+    set_region(lay)
+    lay.add_scans(10.0, scan(lay), odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    boxed = scan(lay, box=(-0.47, -0.32, -0.15, 0.15))
+    raw = {n: (d, h, o, np.full(len(d), np.inf), np.where(np.arange(len(d)) == 100, np.nan, np.where(h, d, np.inf)))
+           for n, (d, h, o) in boxed.items()}
+    lay.add_scans(10.1, raw, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    assert lay.exit_exempt_status()["rang"]["hits"] > 0 and lay.exit_verified is None
+    # NaN alone: no ring, and the last verification is dropped
+    lay = layer()
+    set_region(lay)
+    lay.add_scans(10.0, scan(lay), odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    clean = scan(lay)
+    raw = {n: (d, h, o, np.full(len(d), np.inf), np.where(np.arange(len(d)) == 100, np.nan, np.where(h, d, np.inf)))
+           for n, (d, h, o) in clean.items()}
+    lay.add_scans(10.1, raw, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
+    st = lay.exit_exempt_status()
+    assert st.get("rang") is None and st["invalid_scans"] == 1 and lay.exit_verified is None

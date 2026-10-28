@@ -399,10 +399,6 @@ class ObstacleLayer:
         rel = np.asarray(self.exit_region_rel, dtype=float).reshape(-1, 3)
         region = np.column_stack((pose[0] + rel[:, 0] * c - rel[:, 1] * s, pose[1] + rel[:, 0] * s + rel[:, 1] * c,
                                   pose[2] + rel[:, 2]))
-        if any(np.isnan(np.asarray(r_, dtype=float)).any() for _, r_, _ in seen):
-            # a beam with no reading is no evidence either way: the scan verifies nothing (Codex impl round 2 P1)
-            st["invalid_scans"] = st.get("invalid_scans", 0) + 1
-            return
         near = [(sensor.name, int(i)) for sensor, r_, own_ in seen
                 for i in np.flatnonzero(np.isneginf(np.asarray(r_, dtype=float)) & ~np.asarray(own_, dtype=bool))]
         if near:
@@ -428,6 +424,13 @@ class ObstacleLayer:
         own_all = np.concatenate(owns) if owns else np.zeros(0, dtype=bool)
         hits = watch_hits(points, own_all, region, self.loaded, self.exit_margin_m)
         st["scans"] = st.get("scans", 0) + 1
+        if not len(hits) and any(np.isnan(np.asarray(r_, dtype=float)).any() for _, r_, _ in seen):
+            # a beam that read nothing is no evidence of free space: no verification from this scan, and the last one
+            # goes too -- after the danger checks above, which the beams that did read still answer (Codex impl
+            # rounds 2 and 3 P1)
+            self.exit_verified = None
+            st["invalid_scans"] = st.get("invalid_scans", 0) + 1
+            return
         if len(hits):
             self.exit_verified = None
             if st.get("rang") is None:
