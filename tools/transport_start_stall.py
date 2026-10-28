@@ -587,6 +587,64 @@ def extract_extension(run: Path) -> dict:
     return {"run": run.name, "first_all_m": first_all, "first_any_m": first_any, "plan": plan, "rows": rows}
 
 
+def low_overlap(run: Path, prop_index: int) -> dict:
+    """The return-home overlap with a low prop (2026-10-28 lead, priority): around each unpermitted tick, the truth pose
+    (frames.jsonl) and the control pose (samples) against the prop -- the hull the truth evaluator checks, the body and
+    the fork blades (what can touch a 0.144 m block) -- and the control pose's distance from the planned return path."""
+    from insertion_geometry import read_chassis_reference_m, read_fork_blades_m
+
+    record = json.loads((run / "run/result.json").read_text())
+    args_ = record.get("arguments") or {}
+    urdf = Path(args_.get("forklift_urdf") or "")
+    rect = Rectangle(**record["scenario"]["props"][prop_index]["rectangle"])
+    g = record["geometry"]
+    hull = Footprint(**g["unloaded_footprint"])
+    tip, offset = read_chassis_reference_m(urdf)
+    body = Footprint(float(g["axle_to_fork_tip_m"]) - float(g["carriage_limit_m"]), hull.rear_m, hull.half_width_m)
+    blades = [(x0 + abs(offset), x1 + abs(offset), y0, y1) for x0, x1, y0, y1 in read_fork_blades_m(urdf)]
+    blade_fps = [(Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + x1) / 2)
+                 for x0, x1, y0, y1 in blades]
+
+    def parts_distance(pose):
+        c, s_ = math.cos(pose[2]), math.sin(pose[2])
+        d = [footprint_rect_distance(pose, body, rect)]
+        for fp_, lat, lon in blade_fps:
+            d.append(footprint_rect_distance((pose[0] + lon * c - lat * s_, pose[1] + lon * s_ + lat * c, pose[2]),
+                                             fp_, rect))
+        return min(d)
+
+    u = record["obstacle_layer"]["unpermitted"]
+    if not u:
+        return {"run": run.name, "error": "no unpermitted ticks"}
+    t0, t1 = float(u[0]["time_s"]), float(u[-1]["time_s"])
+    truth = []
+    for line in (run / "run/frames.jsonl").read_text().splitlines():
+        f = json.loads(line)
+        ts = float(f["simulation_time_s"])
+        if t0 - 2.0 <= ts <= t1 + 2.0:
+            w, qx, qy, qz = f["base_orientation_wxyz"]
+            yaw = math.atan2(2 * (w * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+            bx, by = f["base_position_m"][:2]
+            rear = (bx - abs(offset) * math.cos(yaw), by - abs(offset) * math.sin(yaw), yaw)
+            truth.append((ts, rear))
+    path = np.asarray((record.get("paths") or {}).get("return_home", {}).get("poses") or [], dtype=float)
+    ctrl = [(float(x["time_s"]), tuple(x["rear_pose"])) for x in record["samples"]
+            if t0 - 2.0 <= float(x["time_s"]) <= t1 + 2.0]
+    out = {"run": run.name, "prop": record["scenario"]["props"][prop_index]["asset"], "rect": [round(v, 3) for v in
+           (rect.x_m, rect.y_m, rect.length_m, rect.width_m, rect.yaw_rad)], "unpermitted_t": [round(t0, 2), round(t1, 2)],
+           "truth_min": {"hull": min((footprint_rect_distance(p, hull, rect), t) for t, p in truth),
+                         "parts": min((parts_distance(p), t) for t, p in truth)},
+           "ctrl_min": {"hull": min((footprint_rect_distance(p, hull, rect), t) for t, p in ctrl),
+                        "parts": min((parts_distance(p), t) for t, p in ctrl)},
+           "max_cross_track_m": None}
+    if len(path):
+        dev = [float(np.min(np.hypot(path[:, 0] - p[0], path[:, 1] - p[1]))) for _, p in ctrl]
+        out["max_cross_track_m"] = round(max(dev), 3)
+        out["path_hull_min"] = round(min(footprint_rect_distance(tuple(p), hull, rect) for p in path), 3)
+        out["path_parts_min"] = round(min(parts_distance(tuple(p)) for p in path), 3)
+    return out
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runs", nargs="+", type=Path)
@@ -595,10 +653,20 @@ def main(argv=None) -> int:
                         help="the lead's comparison: (b) tall props by their shape, (c) the extract carried on")
     parser.add_argument("--extract-extension", action="store_true",
                         help="(c) under the extract's own rules: scene sweep and the start permit at the end")
+    parser.add_argument("--low-overlap", type=int, default=None, metavar="PROP",
+                        help="the return-home overlap with a low prop: truth/control hull and parts distances")
     parser.add_argument("--escape-replay", action="store_true",
                         help="re-check an installed presteered escape that stopped (C4') instead of the stand")
     args = parser.parse_args(argv)
     out = []
+    if args.low_overlap is not None:
+        for run in args.runs:
+            try:
+                r = low_overlap(run, args.low_overlap)
+            except Exception as exc:  # noqa: BLE001
+                r = {"run": run.name, "error": repr(exc)}
+            print(json.dumps(r, default=str))
+        return 0
     if args.extract_extension:
         for run in args.runs:
             try:
