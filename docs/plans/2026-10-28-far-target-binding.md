@@ -29,6 +29,7 @@
     - 처음 자리: 세션은 `SessionZone.yaw_centre_rad`·`yaw_half_rad`, 배치는 `PickupZone` 의 0 중심·`yaw_max_rad` 를 쓴다(PickupZone 은 0 중심 범위이고, 필드 이름이 `SessionZone` 의 `yaw_half_rad` 와 다르다).
     - 재집기: `put_down_pose.yaw` ± 15°.
     - 이를 위해 `AdoptionZone` 에 yaw 중심·반폭을 더한다. 구역 검사의 판정에는 쓰지 않는다(기록만).
+    - 축 허용의 상한은 89° 다(`FAR_AXIS_MAX_RAD`, 검출기 `ExpectedSite` 의 열린 상한 90° 아래). 그래서 yaw 반폭이 84° 를 넘는 구역은 지원 범위 밖이다. 그런 구역이면 허용 범위가 반폭보다 좁아진다(Codex 구현 2차 P3: 중심 −90°·반폭 90° 이면 yaw 0° 후보가 걸러진다). 지금 장면의 반폭은 12° 다.
   - 배치 실행의 `scenario.pickup` 은 truth 이므로 쓰지 않는다.
   - 사각형이 없으면(구역 검사의 `adoption_zone_undefined` 경우) 원거리 캡처도 그 사유로 미션을 끝낸다. 검사 끔이어도 F1 이 켜져 있으면 같다.
 - **안에 후보가 없으면:** `no_expected_candidate` 다. 그 관측은 실패하고 관측 사다리의 다음 자리로 간다. 모두 실패하면 미션이 `perception_no_pallet` 으로 끝난다. 이웃을 채택하지 않는다. 원거리 캡처의 `expected` 기록(후보·안/밖)을 시도 기록에 남긴다.
