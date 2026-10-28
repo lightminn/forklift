@@ -1545,7 +1545,13 @@ def age_table_problem(table: dict, args) -> str | None:
 
     heading = getattr(args, "odometry_heading", "steering")
     gyro = {}
-    if heading == "gyro":  # the table must have drawn this run's gyro model, in this run's camera mount
+    if getattr(args, "scan_capture_poses", None) is not None:
+        # B-P1 (plan B4a): a scan capture teleports and integrates no odometry; its obstacle layer is the survey's
+        # (matched to the bundle by content), so the heading is the table's own. Model and radius are still checked.
+        noise = table.get("noise") or {}
+        heading = noise.get("odometry_heading", "steering")
+        gyro = {k: noise.get(k) for k in ("gyro_model_sha256", "gyro_mount")} if heading == "gyro" else {}
+    elif heading == "gyro":  # the table must have drawn this run's gyro model, in this run's camera mount
         from forklift_core.localization.gyro import GyroModel
 
         gyro = {"gyro_model_sha256": GyroModel.load(args.gyro_model)[1], "gyro_mount": args.perception_mount}

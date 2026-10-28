@@ -1545,6 +1545,30 @@ def test_the_obstacle_layers_age_table_must_match_the_runs_odometry():
     assert "table_problem_ = age_table_problem(age_table, args)" in source
 
 
+def test_a_scan_capture_integrates_no_odometry_so_any_age_table_of_the_survey_layer_is_accepted():
+    """B-P1 (plan B4a): a capture on a gyro-heading survey's map passes that survey's obstacle layer (matched to the
+    bundle by content), whose age table is a gyro one; the capture teleports and never integrates odometry, and the
+    runner refuses --odometry-heading gyro without --slam-feedback, which a capture refuses. Outside a capture the
+    heading still has to match."""
+    from types import SimpleNamespace
+
+    problem = _probe_helpers()["age_table_problem"]
+    geometry = SimpleNamespace(wheel_radius_m=0.125)
+    gyro_table = {"noise": {"encoder_model": "team_spec_quantized", "gaussian": None, "odometry_heading": "gyro",
+                            "gyro_model_sha256": "a" * 64, "gyro_mount": "carriage_low_measured"},
+                  "odometry_wheel_radius_m": 0.125}
+
+    def run(capture, model="team_spec_quantized", radius=None):
+        return SimpleNamespace(encoder_model=model, odometry_wheel_radius_m=radius, drive_geometry=geometry,
+                               odometry_heading="steering", scan_capture_poses="poses.json" if capture else None)
+
+    assert "gyro heading" in problem(gyro_table, run(capture=False))
+    assert problem(gyro_table, run(capture=True)) is None
+    # Only the heading is the survey's: the encoder model and the wheel radius are still checked.
+    assert "encoder model" in problem(gyro_table, run(capture=True, model="reported"))
+    assert "wheel radius" in problem(gyro_table, run(capture=True, radius=0.1245))
+
+
 def test_the_boundary_record_closes_an_exit_tick_with_its_branches_and_the_propagating_failure(tmp_path):
     """M-a0 (Codex round 3, P2): the run's finally closes the record before main() sets failure_reason, so
     the closer takes the reason from the exception propagating through that finally."""
