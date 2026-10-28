@@ -363,12 +363,94 @@ def evaluate(run: Path) -> dict:
             "record_escape_t": (record.get("scene_escape_candidates") or [{}])[0].get("time_s"), "presteer": presteer}
 
 
+def escape_replay(run: Path) -> dict:
+    """An installed presteered escape that stopped at once (C4'): the driving permission re-checked where it stood.
+    The grid at that moment is approximated -- the first transport dump's grid frame with every occupied cell cleared to
+    fresh free and the occupied cells of the stored grid frame nearest the stop (0.5 s frames) marked again -- and the
+    permission walks the escape's straight from the stop pose with the start-band anchor where the re-evaluation latched
+    it (the presteered evaluation's pose). Reported per variant: the allowed speed and its reason, the walk's verified
+    length and blocked cells, the release counts."""
+    record = json.loads((run / "run/result.json").read_text())
+    drives = record.get("escape_presteer_drives") or []
+    evals = [e for e in record.get("scene_escape_candidates") or [] if e.get("presteered") and e.get("pose")]
+    dump = first_transport_dump(run)
+    if not drives or not evals or dump is None:
+        return {"run": run.name, "error": "no presteered escape drive, evaluation or dump"}
+    ev, drive = evals[-1], drives[-1]
+    anchor = tuple(float(v) for v in ev["pose"])
+    kappa_m = float(ev["kappa_measured"])
+    chosen = ev["chosen"]
+    base_cfg = replace(layer_permission_config(ROOT / record["obstacle_layer"]["config"]), start_band_m=0.03)
+    lf = record["geometry"]["loaded_footprint"]
+    fp = Footprint(float(lf["front_m"]), float(lf["rear_m"]), float(lf["half_width_m"]))
+    t_eval = float(ev["time_s"])
+    # where it stood: the samples (10 Hz) between the install and the drive's end
+    samples = [x for x in record.get("samples") or [] if t_eval <= float(x["time_s"]) <= float(drive["time_s"])]
+    moved = [x for x in samples if abs(float(x.get("signed_speed_mps", 0.0))) > 1e-3]
+    stop = samples[-1] if samples else None
+    frames = np.load(run / "run/obstacle_grid_frames.npz", allow_pickle=True)
+    ftimes = np.asarray(frames["times"], dtype=float)
+    out = {"run": run.name, "anchor": [round(v, 4) for v in anchor], "kappa_measured": kappa_m,
+           "chosen": [chosen["direction"], chosen["length_m"]], "t_eval": round(t_eval, 2),
+           "drive_end": drive["end"], "samples_moving": len(moved), "variants": {}}
+    for label, t_at in (("eval", t_eval), ("stop", float(drive["time_s"]) - 1.0)):
+        k = int(np.searchsorted(ftimes, t_at, side="right") - 1)
+        if k < 0:
+            continue
+        cells = frames["cells"][frames["offsets"][k]:frames["offsets"][k + 1]]
+        fres, forg = float(frames["resolution"][k]), frames["origins"][k]
+        state = np.asarray(dump["state"]).copy()
+        state[state == OCCUPIED] = FREE
+        free_stamp = np.full(state.shape, t_at)
+        ox, oy, res = float(dump["origin"][0]), float(dump["origin"][1]), float(dump["res"])
+        for i, j in np.asarray(cells, dtype=int).reshape(-1, 2):
+            x, y = forg[0] + (i + 0.5) * fres, forg[1] + (j + 0.5) * fres
+            a, b = int(np.floor((x - ox) / res)), int(np.floor((y - oy) / res))
+            if 0 <= a < state.shape[0] and 0 <= b < state.shape[1]:
+                state[a, b] = OCCUPIED
+        snap = replace(snapshot_of(dump, state=state), free_stamp=free_stamp, stamp_s=t_at)
+        for where, pose in (("at_anchor", anchor),
+                            ("at_stop", tuple(float(v) for v in stop["rear_pose"]) if stop else anchor)):
+            for band in (0.0, 0.03):
+                perm = DrivePermission(replace(base_cfg, start_band_m=band))
+                if band > 0:
+                    perm.note_standing(True, anchor, int(dump["version"]))
+                    perm.note_standing(False, anchor, int(dump["version"]))  # moving off: the anchor stays
+                leg = esc.straight(pose, int(chosen["direction"]), float(chosen["length_m"]))
+                check = perm.update(snap, leg, fp, fp, current_pose=pose, direction=int(chosen["direction"]))
+                allowed, why = perm.allowed_speed(t_at, {}, current_pose=pose, curvature_inv_m=kappa_m,
+                                                  direction=int(chosen["direction"]), footprint=fp,
+                                                  own_footprint=fp, speed_cap_mps=ESCAPE_SPEED_MPS)
+                occ = np.argwhere(state == OCCUPIED)
+                near = occ[np.hypot(ox + (occ[:, 0] + 0.5) * res - pose[0], oy + (occ[:, 1] + 0.5) * res - pose[1]) < 4.0]
+                d = cell_distances(snap, near, pose, fp) if len(near) else np.zeros(0)
+                out["variants"][f"{label}_grid/{where}/band{band:g}"] = {
+                    "allowed": round(float(allowed), 3), "why": why, "verified_m": round(float(check.verified_m), 3),
+                    "blocked": check.blocked, "release": dict(getattr(perm, "release_stats", {})),
+                    "nearest_occ_m": round(float(d.min()), 4) if len(d) else None,
+                    "pose": [round(v, 4) for v in pose], "frame_t": round(float(ftimes[k]), 2)}
+    return out
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runs", nargs="+", type=Path)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--escape-replay", action="store_true",
+                        help="re-check an installed presteered escape that stopped (C4') instead of the stand")
     args = parser.parse_args(argv)
     out = []
+    if args.escape_replay:
+        for run in args.runs:
+            try:
+                r = escape_replay(run)
+            except Exception as exc:  # noqa: BLE001
+                r = {"run": run.name, "error": repr(exc)}
+            out.append(r)
+            print(json.dumps(r, indent=1, default=str))
+        if args.json:
+            args.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
+        return 0
     for run in args.runs:
         try:
             out.append(evaluate(run))
