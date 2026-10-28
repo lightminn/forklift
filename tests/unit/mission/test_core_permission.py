@@ -270,3 +270,21 @@ def test_without_the_option_nothing_of_the_confirmation_is_read():
     obstacle["layer"].answer = (0.15, "occupied")
     out = core.permission(10.1, REAR, 0.0, 0.2, False, None)  # the stand-in layer has no sensors: none was read
     assert out.allowed == 0.15 and "restart_confirm" not in obstacle
+
+
+def test_with_the_escape_presteer_on_a_running_scene_escape_s_first_stop_is_dumped_once_more():
+    # escape presteer C4' (2026-10-28): an installed escape stopped at once and the phase's dumps were used up
+    core, obstacle, _, calls = make(limit=(0.0, "occupied"))
+    for k in range(4):
+        core.permission(6.0 + k, REAR, 0.0, 0.0, False, None)
+    core.scene_escape = {"status": "running"}
+    core.permission(11.0, REAR, 0.0, 0.0, False, None)
+    assert len([c for c in calls if c[0] == "save_npz"]) == 4  # off: as before
+    core.options.escape_presteer = "on"
+    obstacle["layer"].permission.release_stats = {"checks": 3, "passed": 1, "capped": 2}
+    obstacle["layer"].permission.release_anchor = {"pose": (1.0, 2.0, 0.1)}
+    core.permission(12.0, REAR, 0.0, 0.0, False, None)
+    core.permission(13.0, REAR, 0.0, 0.0, False, None)
+    dumps = [c for c in calls if c[0] == "save_npz"]
+    assert len(dumps) == 5 and dumps[-1][2]["escape"] is True
+    assert list(dumps[-1][2]["release_stats"]) == [3, 1, 2] and list(dumps[-1][2]["anchor_pose"]) == [1.0, 2.0, 0.1]

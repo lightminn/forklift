@@ -1236,9 +1236,15 @@ class MissionCore:
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
         )
         dumped_phases = obstacle.setdefault("dumped_phases", set())
+        # escape presteer C4' (2026-10-28): the first stop of a running scene escape too, with the presteer on only (an
+        # off run's port calls stay as they were) -- an installed escape stopped at once and no dump showed why
+        escape_dump_ = (getattr(options, "escape_presteer", "off") == "on" and self.scene_escape is not None
+                        and self.scene_escape.get("status") == "running" and not obstacle.get("escape_dumped"))
         if allowed == 0.0 and why in ("unknown", "occupied") and t > 5.0 and (
-            obstacle.get("dumps", 0) < 4 or ms.phase not in dumped_phases
+            obstacle.get("dumps", 0) < 4 or ms.phase not in dumped_phases or escape_dump_
         ):
+            if escape_dump_:
+                obstacle["escape_dumped"] = True
             dumped_phases.add(ms.phase)
             # Diagnostics: the snapshot and the check inputs of the first unknown stops.
             obstacle["dumps"] = obstacle.get("dumps", 0) + 1
@@ -1268,6 +1274,11 @@ class MissionCore:
                 },
                 raw_base=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[1],
                 raw_q=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[2],
+                **({"escape": True, "release_stats": np.asarray(
+                    [obstacle["layer"].permission.release_stats.get(k_, 0) for k_ in ("checks", "passed", "capped")]),
+                    "anchor_pose": np.asarray((getattr(obstacle["layer"].permission, "release_anchor", None)
+                                               or {"pose": (np.nan, np.nan, np.nan)})["pose"], dtype=float)}
+                   if escape_dump_ else {}),
             )
         ticks = obstacle["ticks"]
         ticks[ms.phase] = ticks.get(ms.phase, 0) + 1
