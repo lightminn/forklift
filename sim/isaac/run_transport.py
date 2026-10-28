@@ -4338,6 +4338,10 @@ def drive(S, isaac) -> None:
         truth_destination = _bound["truth_destination"]
     if "unloaded_shape" in _bound:
         unloaded_shape = _bound["unloaded_shape"]
+    # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
+    # once -- never from the layer, whose every call and attribute is a recorded boundary
+    eval_shape_mode_ = (str((obstacle_module.load_layer_config(args.obstacle_layer).get("permission") or {})
+                            .get("shape", "hull_forward")) if getattr(args, "obstacle_layer", None) is not None else None)
     if "v" in _bound:
         v = _bound["v"]
     if "wheel_lock" in _bound:
@@ -8878,8 +8882,13 @@ def drive(S, isaac) -> None:
                         # moving direction ("events_dir", "unpermitted_dir": the body and the blades reversing unloaded)
                         # -- the hull fills the space beside the blades the permission never checks reversing (the
                         # return-home "object 9" ticks of 2026-10-28 were that band, with no contact)
+                        # one boundary call, as every recorded run made it; the moving shape from the runner's own
+                        # parts and the config's shape mode (a second layer call broke the replay gate, 2026-10-28)
+                        shape_now, _ = obstacle["layer"].footprints(loaded)
                         hull_hits_, moving_hits_ = obstacle_module.stop_arc_hits(
-                            obstacle["layer"], arc, checked_obstacles, loaded=loaded, direction=moving_dir_,
+                            arc, checked_obstacles, shape_now,
+                            obstacle_module.moving_shape(shape_now, unloaded_shape, loaded=loaded,
+                                                         direction=moving_dir_, mode=eval_shape_mode_),
                             margin_m=pconf.envelope_offset_m, skip=skip_)
                         for key_, hits_ in (("", hull_hits_), ("_dir", moving_hits_)):
                             for oid in hits_:
