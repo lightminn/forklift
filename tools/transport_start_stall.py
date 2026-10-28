@@ -509,16 +509,79 @@ def alternatives(run: Path) -> dict:
     return out
 
 
+def extract_extension(run: Path) -> dict:
+    """(c) under the extract's own rules (Codex comparison review P2: the drive permission does not act on the extract):
+    the extract carried on straight back by s, its sweep against the scene props at their size and with the run's
+    KEEPOUT (the smallest clearance over 1 cm samples), and at its end the transport direction's start permit on the dump
+    grid (band off) at the planner's largest curvature both ways and at 0, the leg ahead a straight of 1 m. The first s
+    whose end permits a start at every one of the three curvatures, and the first at any."""
+    record = json.loads((run / "run/result.json").read_text())
+    dump = first_transport_dump(run)
+    if dump is None:
+        return {"run": run.name, "error": "no transport-phase dump"}
+    base_cfg = layer_permission_config(ROOT / record["obstacle_layer"]["config"])
+    lf = record["geometry"]["loaded_footprint"]
+    fp = Footprint(float(lf["front_m"]), float(lf["rear_m"]), float(lf["half_width_m"]))
+    pose = tuple(float(v) for v in dump["rear"])
+    t = float(dump["t"])
+    direction = int(dump["direction"]) or -1
+    kmax = float((record.get("planner_config") or {}).get("curvature_limit_inv_m", 0.29))
+    keepout = float(record["geometry"].get("lidar_keepout_m", 0.0))
+    from forklift_core.planning.pallet_mission import LIDAR_PLANE_M, scenario_props
+    from scene_file import scenario_from_record
+
+    scenario = scenario_from_record(record["scenario"])
+    plain = scenario_props(scenario, keepout_m=0.0, plane_m=LIDAR_PLANE_M)
+    grown = scenario_props(scenario, keepout_m=keepout, plane_m=LIDAR_PLANE_M)
+    snap = snapshot_of(dump)
+    rows, first_all, first_any = [], None, None
+    for s_ in np.arange(0.0, 3.01, 0.1):
+        poses = esc.straight(pose, -1, float(s_), step_m=0.01) if s_ > 0 else np.asarray([pose])
+        clear_plain = min(min(footprint_rect_distance(tuple(p_), fp, r) for r in plain) for p_ in poses)
+        clear_grown = min(min(footprint_rect_distance(tuple(p_), fp, r) for r in grown) for p_ in poses) if grown \
+            else math.inf
+        end = tuple(poses[-1])
+        allowed = {}
+        for k in (-kmax, 0.0, kmax):
+            perm = DrivePermission(base_cfg)
+            perm.update(snap, esc.straight(end, direction, 1.0), fp, fp, current_pose=end, direction=direction)
+            a_, why_ = perm.allowed_speed(t, {}, current_pose=end, curvature_inv_m=k, direction=direction,
+                                          footprint=fp, own_footprint=fp, speed_cap_mps=0.3)
+            allowed[f"{k:+.2f}"] = [round(float(a_), 3), why_]
+        ok_all = all(v[0] > 0 for v in allowed.values()) and clear_plain > 0
+        ok_any = any(v[0] > 0 for v in allowed.values()) and clear_plain > 0
+        rows.append({"s": round(float(s_), 2), "clear_plain_m": round(float(clear_plain), 3),
+                     "clear_keepout_m": round(float(clear_grown), 3), "start": allowed})
+        if ok_all and first_all is None:
+            first_all = round(float(s_), 2)
+        if ok_any and first_any is None:
+            first_any = round(float(s_), 2)
+    return {"run": run.name, "first_all_m": first_all, "first_any_m": first_any, "rows": rows}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runs", nargs="+", type=Path)
     parser.add_argument("--json", type=Path)
     parser.add_argument("--alternatives", action="store_true",
                         help="the lead's comparison: (b) tall props by their shape, (c) the extract carried on")
+    parser.add_argument("--extract-extension", action="store_true",
+                        help="(c) under the extract's own rules: scene sweep and the start permit at the end")
     parser.add_argument("--escape-replay", action="store_true",
                         help="re-check an installed presteered escape that stopped (C4') instead of the stand")
     args = parser.parse_args(argv)
     out = []
+    if args.extract_extension:
+        for run in args.runs:
+            try:
+                r = extract_extension(run)
+            except Exception as exc:  # noqa: BLE001
+                r = {"run": run.name, "error": repr(exc)}
+            out.append(r)
+            print(json.dumps({k: v for k, v in r.items() if k != "rows"}, default=str))
+        if args.json:
+            args.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
+        return 0
     if args.alternatives:
         for run in args.runs:
             try:
