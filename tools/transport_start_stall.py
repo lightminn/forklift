@@ -432,14 +432,104 @@ def escape_replay(run: Path) -> dict:
     return out
 
 
+def _rect_point_distance(rect, x, y):
+    """Distance from points (x, y) to a Rectangle's area (0 inside)."""
+    c, s_ = math.cos(rect.yaw_rad), math.sin(rect.yaw_rad)
+    dx, dy = x - rect.x_m, y - rect.y_m
+    u, v = np.abs(c * dx + s_ * dy) - rect.length_m / 2.0, np.abs(-s_ * dx + c * dy) - rect.width_m / 2.0
+    return np.hypot(np.maximum(u, 0.0), np.maximum(v, 0.0))
+
+
+def alternatives(run: Path) -> dict:
+    """The lead's comparison (2026-10-28) on a failing stand's first transport dump:
+    (b) the known tall props judged by their shape -- every occupied cell within ``halo`` of a tall prop cleared, the prop
+        grown by a margin m marked occupied -- and the transport leg's stand permit at the held steering;
+    (c) the extract carried on straight from the stand: the shortest extension s whose straight (plus the stop length) the
+        permission passes with the band off, at whose end the outline is at least ``clear`` from every occupied cell and
+        the props at their size are not met.
+    Also the stand's control-frame and truth distances to the nearest tall prop."""
+    record = json.loads((run / "run/result.json").read_text())
+    dump = first_transport_dump(run)
+    if dump is None:
+        return {"run": run.name, "error": "no transport-phase dump"}
+    base_cfg = layer_permission_config(ROOT / record["obstacle_layer"]["config"])
+    lf = record["geometry"]["loaded_footprint"]
+    fp = Footprint(float(lf["front_m"]), float(lf["rear_m"]), float(lf["half_width_m"]))
+    pose = tuple(float(v) for v in dump["rear"])
+    truth = tuple(float(v) for v in dump["truth_rear"])
+    leg = np.asarray(dump["leg"], dtype=float)
+    direction, kappa, t = int(dump["direction"]) or -1, float(dump["kappa"]), float(dump["t"])
+    props = record["scenario"]["props"]
+    tall = [Rectangle(**pp["rectangle"]) for pp in props if float(pp["asset"].get("height_m", 0.0)) > 1.05]
+    plain = [Rectangle(**pp["rectangle"]) for pp in props]
+    out = {"run": run.name,
+           "tall_ctrl_m": round(min((footprint_rect_distance(pose, fp, r) for r in tall), default=math.inf), 4),
+           "tall_truth_m": round(min((footprint_rect_distance(truth, fp, r) for r in tall), default=math.inf), 4),
+           "b": {}, "c": None}
+    state0 = np.asarray(dump["state"])
+    ox, oy, res = float(dump["origin"][0]), float(dump["origin"][1]), float(dump["res"])
+    ii, jj = np.meshgrid(np.arange(state0.shape[0]), np.arange(state0.shape[1]), indexing="ij")
+    cx, cy = ox + (ii + 0.5) * res, oy + (jj + 0.5) * res
+    near_tall = np.zeros(state0.shape, dtype=bool)
+    for r in tall:
+        near_tall |= _rect_point_distance(r, cx, cy) <= 0.30
+    cap = max(abs(float(dump["requested"])), abs(float(dump["truth_speed"])), 0.15)
+    for m in (0.03, 0.05, 0.10):
+        state = state0.copy()
+        state[near_tall & (state0 == OCCUPIED)] = FREE
+        for r in tall:
+            state[_rect_point_distance(r, cx, cy) <= m] = OCCUPIED
+        snap = replace(snapshot_of(dump, state=state), free_stamp=np.where(state != state0, t, dump["free_stamp"]))
+        perm = DrivePermission(base_cfg)
+        check = perm.update(snap, leg, fp, fp, current_pose=pose, direction=direction)
+        allowed, why = perm.allowed_speed(t, {}, current_pose=pose, curvature_inv_m=kappa, direction=direction,
+                                          footprint=fp, own_footprint=fp, speed_cap_mps=cap)
+        out["b"][f"m{m:g}"] = {"allowed": round(float(allowed), 3), "why": why,
+                               "verified_m": round(float(check.verified_m), 3), "blocked": check.blocked}
+    # (c): the extract straight carried on, band off, on the dump's own grid
+    snap = snapshot_of(dump)
+    ext_dir = -1  # the extract backs out; its continuation is straight back along the heading
+    stop_len = base_cfg.stopping.distance_m(ESCAPE_SPEED_MPS) + base_cfg.step_m
+    occ = np.argwhere(state0 == OCCUPIED)
+    for s_ in np.arange(0.1, 3.01, 0.1):
+        straight_ = esc.straight(pose, ext_dir, float(s_) + stop_len)
+        perm = DrivePermission(base_cfg)
+        blocked = perm.check_path(snap, straight_, fp, fp, current_pose=pose, direction=ext_dir).blocked
+        end = tuple(esc.straight(pose, ext_dir, float(s_))[-1])
+        near = occ[np.hypot(ox + (occ[:, 0] + 0.5) * res - end[0], oy + (occ[:, 1] + 0.5) * res - end[1]) < 4.0]
+        d_cells = float(cell_distances(snap, near, end, fp).min()) if len(near) else math.inf
+        sweep_ok = all(min((footprint_rect_distance(tuple(p_), fp, r) for r in plain), default=math.inf) > 0.0
+                       for p_ in esc.straight(pose, ext_dir, float(s_)))
+        if d_cells >= 0.10 and blocked is None and sweep_ok:
+            out["c"] = {"extension_m": round(float(s_), 2), "end_to_cells_m": round(d_cells, 3)}
+            break
+    if out["c"] is None:
+        out["c"] = {"extension_m": None, "note": "no extension up to 3 m with the straight permitted, the end 0.10 m "
+                                                 "from every mark and the props at their size not met"}
+    return out
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runs", nargs="+", type=Path)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--alternatives", action="store_true",
+                        help="the lead's comparison: (b) tall props by their shape, (c) the extract carried on")
     parser.add_argument("--escape-replay", action="store_true",
                         help="re-check an installed presteered escape that stopped (C4') instead of the stand")
     args = parser.parse_args(argv)
     out = []
+    if args.alternatives:
+        for run in args.runs:
+            try:
+                r = alternatives(run)
+            except Exception as exc:  # noqa: BLE001
+                r = {"run": run.name, "error": repr(exc)}
+            out.append(r)
+            print(json.dumps(r, default=str))
+        if args.json:
+            args.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
+        return 0
     if args.escape_replay:
         for run in args.runs:
             try:
