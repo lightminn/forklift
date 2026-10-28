@@ -226,6 +226,15 @@ latch 가 armed·active 인 동안(층에 구역 입력이 있는 동안) 장애
   6. 새 실패 유형이 없다. B 에만 나온 실패 유형은 실행 기록으로 원인을 대고, 면제와 무관하다고 보이지 못하면 불합격이다.
   7. C4 의 주입 통과 조건 전부.
 - 모두 넘으면 riib 런처 기본을 켜는 PR 을 낸다. 하나라도 못 넘으면 끈 채로 두고 총괄에 보고한다.
+- 제출(2026-10-28, 결과 전에 적음):
+  - 코드 `b3b26aca`(스냅숏 `xp_b3b26aca`). Codex 구현 리뷰 4 회차 수렴(새 P1/P2 없음), 재생 게이트 runs29·ws1 전체 시험 통과 뒤 낸다.
+  - 목록 ws1 `test_runs/riibotics/xpc_b3b26aca/RUNS.jsonl` 62 실행이다.
+    - C5: 대상 장면 aisle_rack 0–7·trailer 0–4 를 seed 별 A·B 로 번갈아 놓고, 회귀 line_2·random_1 0–2 의 A·B 를 뒤에 둔다(38 실행).
+    - C4: aisle_rack·trailer s0–s2 에 주입 규칙 넷(box02·box15·box25·silence, 같은 폴더의 `rules/`)을 B 설정으로 돈다(24 실행).
+  - 팔 A 는 riib 기본이고, 팔 B 는 `EXTRA_ARGS="--exit-prefix-exempt on"` 이다. C4 는 여기에 `--new-obstacles <rule>` 를 더한다. 모든 실행이 `VIEWS=none` 이다.
+  - C3 의 on 기록 재생용으로, `xpc_B_aisle_rack_s0` 와 `xpi_box15_aisle_rack_s0` 에 `--record-boundary --record-boundary-format 2` 를 더한다.
+  - 상자 위치: 적재 외곽 뒤 길이 0.17 m(dls08_measured) + 앞면 간격 0.15 + 상자 반 0.15 = ahead_m 0.47, lateral 0, 크기 0.3 × 0.3 × 1.4 m.
+  - 묶음 잡 2 개가 claim 디렉터리를 공유한다(`isaac_bundle.py check` 통과 뒤).
 
 ## 5. 남는 것
 
