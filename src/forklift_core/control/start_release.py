@@ -172,19 +172,26 @@ def dense_poses(samples, arc):
     return np.concatenate(out), np.concatenate(s_out)
 
 
-def release_length(snapshot, cells, floor, cap, samples, arc, shape) -> tuple[float, np.ndarray]:
+def release_length(snapshot, cells, floor, cap, samples, arc, shape, *, budget_m: float = 0.0,
+                   floor_min_m: float = 0.0) -> tuple[float, np.ndarray]:
     """(the arc length of the last safe dense pose, the cells that end it) of a start-band release along the walk.
 
     ``floor`` (m, P): each part's best distance to each cell since the anchor; ``cap`` (m, P): the most a part is held
     to (the band for a part that started within it, the band plus the stopping margin for one that started farther).
     Along the dense sweep no part may come nearer than the largest distance it has reached -- since the anchor and
-    along the sweep so far -- capped at its ``cap``. inf: the whole walk keeps away."""
+    along the sweep so far -- capped at its ``cap``. inf: the whole walk keeps away.
+
+    ``budget_m`` (escape presteer C4'', the lead's (a')): a part may come that much nearer than that held distance -- a
+    fixed allowance against the largest distance reached, so moving away and back never earns more -- but never nearer
+    than ``floor_min_m`` (the release's own min_d0, the continuous sweep's error between dense poses). 0: as before."""
     if not len(cells):
         return np.inf, np.zeros((0, 2), dtype=int)
     poses, s = dense_poses(samples, arc)
     d = part_distances(snapshot, cells, poses, shape)  # (n, m, P)
     run = np.maximum.accumulate(np.concatenate([np.asarray(floor, dtype=float)[None], d], axis=0), axis=0)[1:]
     thr = np.minimum(run, np.asarray(cap, dtype=float)[None])
+    if budget_m > 0.0:
+        thr = np.maximum(thr - float(budget_m), float(floor_min_m))
     bad = (d < thr - 1e-9).any(axis=2)  # (n, m)
     hit = np.nonzero(bad.any(axis=1))[0]
     if not len(hit):

@@ -292,3 +292,74 @@ def test_the_release_counts_the_walks_it_passed_and_the_ones_it_cut():
     off.check_path(snap, path(-1), FOOT, FOOT, current_pose=P0, direction=-1)
     assert on.release_stats == {"checks": 2, "passed": 1, "capped": 1}
     assert off.release_stats == {"checks": 0, "passed": 0, "capped": 0}
+
+
+# ---- a fixed approach budget (docs/plans/2026-10-27-escape-presteer.md, C4'' -- the lead's (a')) ----
+
+AHEAD = cell_at(1.06, 0.0)  # the cell [1.05, 1.10) x: 12 mm ahead of the front face at the anchor below
+ANCHOR = (0.038, 0.0, 0.0)
+
+
+def _toward(approach_m, n=11, start=ANCHOR):
+    """Poses moving forward by approach_m from start toward AHEAD."""
+    xs = start[0] + np.linspace(0.0, approach_m, n)
+    return np.column_stack((xs, np.zeros(n), np.zeros(n))), xs - start[0]
+
+
+def _band():
+    snap = grid({AHEAD})
+    cells, d0 = sr.start_band_cells(snap, ANCHOR, FOOT, 0.03)
+    assert len(cells) == 1 and d0.min() == pytest.approx(0.012, abs=1e-6)
+    return snap, cells, d0, np.full_like(d0, 0.03)
+
+
+def test_without_a_budget_the_walk_is_cut_at_the_first_approach():
+    snap, cells, d0, cap = _band()
+    poses, arc = _toward(0.0004)
+    first, _ = sr.release_length(snap, cells, d0, cap, poses, arc, FOOT)
+    assert np.isfinite(first) and first < 0.0004
+
+
+def test_a_budget_lets_the_outline_come_that_much_nearer_and_no_more():
+    snap, cells, d0, cap = _band()
+    poses, arc = _toward(0.0015)  # 1.5 mm nearer: within a 2 mm budget
+    assert sr.release_length(snap, cells, d0, cap, poses, arc, FOOT, budget_m=0.002)[0] == np.inf
+    poses, arc = _toward(0.004, n=41)  # 4 mm: cut past the budget
+    first, _ = sr.release_length(snap, cells, d0, cap, poses, arc, FOOT, budget_m=0.002)
+    assert np.isfinite(first) and 0.0015 <= first <= 0.0021
+
+
+def test_the_budget_counts_from_the_farthest_the_outline_has_been_and_never_goes_below_min_d0():
+    snap, cells, d0, cap = _band()
+    # back 5 mm then forward 6 mm: 1 mm nearer than the anchor but 6 mm nearer than the farthest -- cut
+    xs = ANCHOR[0] + np.r_[np.linspace(0.0, -0.005, 11), np.linspace(-0.005, 0.001, 13)[1:]]
+    poses = np.column_stack((xs, np.zeros_like(xs), np.zeros_like(xs)))
+    arc = np.r_[0.0, np.cumsum(np.abs(np.diff(xs)))]
+    first, _ = sr.release_length(snap, cells, d0, cap, poses, arc, FOOT, budget_m=0.002)
+    assert np.isfinite(first)
+    # 4.5 mm ahead: a 2 mm budget would allow 2.5 mm, below min_d0 (3.24 mm here) -- min_d0 holds
+    anchor2 = (0.0455, 0.0, 0.0)
+    cells2, d02 = sr.start_band_cells(snap, anchor2, FOOT, 0.03)
+    floor_min = sr.min_d0_m(FOOT)
+    assert d02.min() - 0.002 < floor_min < d02.min()
+    poses, arc = _toward(0.004, n=81, start=anchor2)
+    first2, _ = sr.release_length(snap, cells2, d02, np.full_like(d02, 0.03), poses, arc, FOOT, budget_m=0.002,
+                                  floor_min_m=floor_min)
+    assert np.isfinite(first2)
+    reached = float(sr.part_distances(snap, cells2, [tuple(poses[np.searchsorted(arc, first2)])], FOOT).min())
+    assert reached >= floor_min - 1e-6
+
+
+def test_the_permission_passes_the_budget_from_its_config():
+    snap = grid({AHEAD}, version=0)
+    base = PermissionConfig(StoppingModel(0.0, 1.5, 0.0), 0.0, 5.0, envelope_ramp_m=0.0, start_band_m=0.03,
+                            lookahead_m=0.3)
+    moved = (ANCHOR[0] + 0.0004, 0.0, 0.0)  # crept 0.4 mm toward the cell while standing
+    path_ = np.column_stack((np.linspace(moved[0], moved[0] - 0.3, 31), np.zeros(31), np.zeros(31)))
+    results = {}
+    for budget in (0.0, 0.002):
+        p = DrivePermission(dataclasses.replace(base, start_band_approach_m=budget))
+        p.note_standing(True, ANCHOR, 0)
+        p.note_standing(False, ANCHOR, 0)
+        results[budget] = p.check_path(snap, path_, FOOT, FOOT, current_pose=moved, direction=-1).blocked
+    assert results[0.0] == "occupied" and results[0.002] is None

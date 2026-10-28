@@ -614,6 +614,14 @@ def arguments() -> argparse.Namespace:
         "unset: the permission's own start inflation (envelope + half a sample step), as every earlier run.",
     )
     parser.add_argument(
+        "--start-band-approach-m",
+        type=float,
+        default=None,
+        help="docs/plans/2026-10-27-escape-presteer.md C4'': with --start-band-release on, how much nearer than its "
+        "farthest distance since the anchor an outline part may come to a released cell (never below min_d0); unset: "
+        "not at all, as every earlier run.",
+    )
+    parser.add_argument(
         "--escape-presteer",
         choices=("on", "off"),
         default="off",
@@ -1197,6 +1205,9 @@ def arguments() -> argparse.Namespace:
         args.recognition_proposals = "oracle"
     if args.start_band_m is not None and (args.start_band_release != "on" or not args.start_band_m > 0.0):
         parser.error("--start-band-m needs --start-band-release on and a positive width (escape presteer plan D1)")
+    if args.start_band_approach_m is not None and (args.start_band_release != "on"
+                                                   or not 0.0 < args.start_band_approach_m <= 0.005):
+        parser.error("--start-band-approach-m needs --start-band-release on and a budget in (0, 0.005] m")
     if args.deterministic and args.record_boundary:
         parser.error("--deterministic is not combined with --record-boundary: a boundary record keeps RGB by content "
                      "hash, which the strict comparison cannot leave out (plan D1b)")
@@ -3719,9 +3730,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # envelope plus half a sample step); the candidate and teleop permissions copy this config
             pconf_ = obstacle["layer"].permission.config
             band_ = getattr(args, "start_band_m", None)  # D1 of the escape presteer plan: unset as before
+            approach_ = getattr(args, "start_band_approach_m", None)  # C4'': unset as before
             obstacle["layer"].permission.config = replace(
                 pconf_, start_band_m=float(band_) if band_ is not None
-                else float(pconf_.envelope_offset_m) + float(pconf_.step_m) / 2.0)
+                else float(pconf_.envelope_offset_m) + float(pconf_.step_m) / 2.0,
+                start_band_approach_m=float(approach_) if approach_ is not None else 0.0)
         if slam_bundle_ is not None and obstacle["layer"].memory is not None:
             # SLAM localization plan L3: occupancy dated 1 s before the run's first stamp (0), so every live clear
             # may remove it; set into the layer's own memory before any plan (a scratch copy inherits it)

@@ -70,6 +70,9 @@ class PermissionConfig:
     # Start-band release (docs/plans/2026-10-24-start-band-release.md): an occupied cell outside the outline at the
     # start but within this distance of it does not block while the swept outline stays as far from it; 0: off.
     start_band_m: float = 0.0
+    # escape presteer C4'' (the lead's (a')): how much nearer than its farthest distance since the anchor a part may come
+    # to a released cell, never below min_d0 (start_release.release_length); 0: not at all, as before
+    start_band_approach_m: float = 0.0
 
 
 @dataclass
@@ -806,7 +809,9 @@ class DrivePermission:
         # a part that started within the band is held to the band, one that started farther to the band plus the
         # stopping margin (the walk's own lateral and stopping inflation, never more than its best so far)
         cap = np.where(d0 > band, band + float(self.config.stopping.margin_m), band)
-        first, hit = sr.release_length(snapshot, cells, np.minimum(best, cap), cap, samples, arc, footprint)
+        budget = float(getattr(self.config, "start_band_approach_m", 0.0))
+        first, hit = sr.release_length(snapshot, cells, np.minimum(best, cap), cap, samples, arc, footprint,
+                                       budget_m=budget, floor_min_m=sr.min_d0_m(footprint) if budget > 0.0 else 0.0)
         for k, d in zip(keys, np.maximum(best, now)):
             anchor["best"][k] = d
         walked = sr.released(snapshot, cells)
