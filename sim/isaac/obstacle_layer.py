@@ -242,6 +242,12 @@ class ObstacleLayer:
         # frame; set only while the depth pocket check gates every tick.
         self.exempt = None
         self.depth_support = None  # callable(snapshot, now) -> {cell: certification time}, set with exempt
+        # Exit-prefix exemption (docs/plans/2026-10-28-exit-prefix-extract-rules.md D1, D2): the watch region the
+        # mission core set (rear-frame poses relative to the truck), the latest region a scan verified (map frame)
+        # and what the core reads back each tick. None: off.
+        self.exit_region_rel = None
+        self.exit_verified = None
+        self.exit_status: dict = {}
         # Planning-only memory and SLAM static layer (D2/D3 delta 2026-10-06):
         # never seen by the permission.
         self.memory = None
@@ -336,26 +342,96 @@ class ObstacleLayer:
         out[finite & (out < self.range_min_m)] = -np.inf
         return out
 
-    def add_scans(self, stamp_s: float, raw: dict, *, odom_rear, loaded: bool) -> None:
-        """raw: sensor name -> (distances, hits, own) from planar_lidar.cast_scan_flags."""
+    def add_scans(self, stamp_s: float, raw: dict, *, odom_rear, loaded: bool, correction=None,
+                  version: int | None = None) -> None:
+        """raw: sensor name -> (distances, hits, own) from planar_lidar.cast_scan_flags. correction / version: the
+        map-from-odom correction (and its version) this scan goes into the grid with -- the exit-prefix watch places
+        the scan there, as the grid marks it; without them the watch does not verify this scan."""
         _, own_outline = self.footprints(loaded)
+        seen = []
         for sensor in self.sensors:
             if sensor.name not in raw:
                 continue  # a silent sensor (L4 N9/N13): its last stamp ages
             distances, hits, own, *rest = raw[sensor.name]
             limit = rest[0] if rest else None
             given = rest[1] if len(rest) > 1 else None  # ranges already drawn for the shared scan
+            ranges_ = self.ranges(distances, hits) if given is None else np.asarray(given, dtype=float)
+            own_ = np.asarray(own, dtype=bool)
             self.grid.add_scan(
                 ObstacleScan(
                     float(stamp_s), sensor.name, tuple(float(v) for v in odom_rear),
                     (sensor.xyz_m[0] - self.rear_x, sensor.xyz_m[1], sensor.yaw_rad),
-                    self.beam_angles, self.ranges(distances, hits) if given is None else np.asarray(given, dtype=float),
-                    np.asarray(own, dtype=bool),
+                    self.beam_angles, ranges_, own_,
                     sensor.may_clear, (own_outline.front_m, own_outline.rear_m, own_outline.half_width_m),
                     None if limit is None else np.asarray(limit, dtype=float),
                 )
             )
             self.last_scan_s[sensor.name] = float(stamp_s)
+            seen.append((sensor, ranges_, own_))
+        if self.exit_region_rel is not None:
+            self._exit_watch(float(stamp_s), seen, odom_rear, correction, version)
+
+    def _exit_watch(self, stamp_s: float, seen, odom_rear, correction, version) -> None:
+        """The exit-prefix raw watch (plan D2): this scan's ranges -- the ones the grid got -- placed where the grid
+        marks them (the correction composed with the scan's odometry pose), against the region the core set, carried
+        to the same pose. No non-own hit inside: the region, in the map frame, is this scan's verification. A hit:
+        the verification goes and the ring is kept for the core."""
+        from forklift_core.control.exit_prefix_exempt import VerifiedCorridor, watch_hits
+        from forklift_core.perception.obstacle_grid import compose
+
+        st = self.exit_status
+        if correction is None or version is None:
+            st["unplaced_scans"] = st.get("unplaced_scans", 0) + 1
+            return
+        pose = compose(tuple(float(v) for v in correction), tuple(float(v) for v in odom_rear))
+        c, s = math.cos(pose[2]), math.sin(pose[2])
+        rel = np.asarray(self.exit_region_rel, dtype=float).reshape(-1, 3)
+        region = np.column_stack((pose[0] + rel[:, 0] * c - rel[:, 1] * s, pose[1] + rel[:, 0] * s + rel[:, 1] * c,
+                                  pose[2] + rel[:, 2]))
+        pts, owns, info = [], [], []
+        for sensor, ranges_, own_ in seen:
+            ok = np.isfinite(ranges_) & (ranges_ > 0)
+            ang = self.beam_angles[ok] + sensor.yaw_rad
+            r = ranges_[ok]
+            x = (sensor.xyz_m[0] - self.rear_x) + r * np.cos(ang)
+            y = sensor.xyz_m[1] + r * np.sin(ang)
+            pts.append(np.column_stack((pose[0] + x * c - y * s, pose[1] + x * s + y * c)))
+            owns.append(own_[ok])
+            info.extend((sensor.name, float(xx), float(yy), float(rr)) for xx, yy, rr in zip(x, y, r))
+        points = np.vstack(pts) if pts else np.zeros((0, 2))
+        own_all = np.concatenate(owns) if owns else np.zeros(0, dtype=bool)
+        hits = watch_hits(points, own_all, region, self.loaded, self.exit_margin_m)
+        st["scans"] = st.get("scans", 0) + 1
+        if len(hits):
+            self.exit_verified = None
+            if st.get("rang") is None:
+                st["rang"] = {"stamp_s": stamp_s, "hits": len(hits),
+                              "first": [{"sensor": n, "x_m": round(x_, 4), "y_m": round(y_, 4), "range_m": round(r_, 4)}
+                                        for n, x_, y_, r_ in (info[i] for i in hits[:5])]}
+            return
+        if st.get("rang") is None:
+            self.exit_verified = VerifiedCorridor(stamp_s, int(version), region)
+            st["verified_s"], st["verified_version"] = stamp_s, int(version)
+
+    exit_margin_m = 0.06  # the watch's margin and the corridor's: the noise cut (plan D2)
+
+    def exit_exempt_set(self, region_rel) -> None:
+        """The core's watch region for the exit-prefix exemption, as rear-frame poses relative to the truck now
+        (plan D1); set each permission tick while the latch is armed or active."""
+        if self.exit_region_rel is None:  # a new latch: nothing from an earlier one carries over
+            self.exit_verified = None
+            self.exit_status = {}
+        self.exit_region_rel = np.asarray(region_rel, dtype=float).reshape(-1, 3).copy()
+
+    def exit_exempt_status(self) -> dict:
+        """What the core reads back each tick: the last verification, the last refresh's transform and the ring."""
+        return {k: (dict(v) if isinstance(v, dict) else v) for k, v in self.exit_status.items()}
+
+    def exit_exempt_clear(self, reason: str) -> None:
+        """The latch closed: no region, no verification, later refreshes untransformed."""
+        self.exit_region_rel = None
+        self.exit_verified = None
+        self.exit_status = {"closed": str(reason)}
 
     def refresh(self, now_s: float, correction, version: int, *, current_pose, path_ahead, loaded: bool,
                 direction: int = 0):
@@ -400,6 +476,13 @@ class ObstacleLayer:
             )
         if self.exempt is not None:
             self.snapshot = exempt_region(self.snapshot, self.exempt)
+        if self.exit_region_rel is not None:
+            from forklift_core.control.exit_prefix_exempt import apply_verified
+
+            self.snapshot, freed, skipped = apply_verified(
+                self.snapshot, self.exit_verified, self.loaded, self.exit_margin_m, now_s=now_s,
+                max_age_s=float(self.grid_config.free_max_age_s))
+            self.exit_status.update(transformed=skipped is None, skipped=skipped, freed=freed, refresh_s=float(now_s))
         return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
                                       direction=direction)
 
