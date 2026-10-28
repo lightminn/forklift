@@ -233,3 +233,52 @@ def test_the_capture_pose_is_recovered_from_the_map_estimate():
     assert got == pytest.approx(pose, abs=1e-12)
     assert RP.start_check(got, (pose[0] + 0.0008, pose[1], pose[2]))["ok"]
     assert not RP.start_check(got, (pose[0] + 0.002, pose[1], pose[2]))["ok"]
+
+
+# docs/plans/2026-10-28-near-front-range.md 3.4: (f), (g) and the roof-suppressed replay -----------------------
+def frow(index, distance, front_eval=None, missed=False, lower=None):
+    return {"index": index, "distance_m": distance, "front_eval": front_eval, "handoff_missed": missed,
+            "front_range_lower_m": lower}
+
+
+def test_the_range_summary_counts_front_evaluations_below_the_floor_and_lower_bound_violations():
+    rows = [frow(1, 0.9, "accepted", lower=0.88), frow(2, 0.5, "invalid", lower=0.49),
+            frow(3, 0.39, "rejected", lower=0.395),  # a front evaluated below F, its lower bound above the truth
+            frow(4, 0.38, "out_of_range", missed=True, lower=0.379), frow(5, 0.2, None)]
+    out = RP.range_summary(rows, 0.4)
+    assert out["floor_m"] == 0.4 and out["front_eval_below"] == 1 and out["lower_violations"] == 1
+    assert out["handoff_missed"] == 1 and out["first_handoff_missed"] == {"index": 4, "distance_m": 0.38}
+    assert RP.range_summary(rows, None) is None  # bounds without a front range
+
+
+def ranged(**range_):
+    good = {
+        "mismatches": 0, "handoff": {"index": 1}, "handoff_ok": True, "provenance": {"speed_mps": 0.08},
+        "lost_ticks_after_arm": 0, "armed": {"lost": False}, "wall_violations": 0, "wall_unbounded_ticks": 0,
+        "start": {"ok": True},
+        "front_range": {"floor_m": 0.4, "front_eval_below": 0, "lower_violations": 0, "handoff_missed": 0,
+                        "first_handoff_missed": None, **range_},
+    }
+    return good
+
+
+def test_the_verdict_adds_f_and_g_when_the_bounds_carry_a_front_range():
+    assert RP.verdict([ranged()])["pass"]
+    for change in ({"front_eval_below": 1}, {"handoff_missed": 1}, {"lower_violations": 1}):
+        assert not RP.verdict([ranged(**change)])["pass"], change
+    old = ranged()
+    old["front_range"] = None  # bounds without a range: (f) and (g) do not apply
+    assert RP.verdict([old])["pass"]
+
+
+def test_the_roof_suppressed_verdict_needs_a_missed_handoff_at_or_above_the_floor_in_every_run():
+    hit = ranged(handoff_missed=1, first_handoff_missed={"index": 9, "distance_m": 0.41})
+    hit.update(handoff=None, handoff_ok=None)  # no handoff can come
+    v = RP.verdict([hit], roof_off=True)
+    assert v["pass"] and set(v["checks"]) == {"i_missed", "ii_front_above_floor", "iii_stop_above_floor",
+                                               "g_lower_bound"}
+    for change in ({"handoff_missed": 0, "first_handoff_missed": None},
+                   {"first_handoff_missed": {"index": 9, "distance_m": 0.39}},
+                   {"front_eval_below": 1}, {"lower_violations": 1}):
+        bad = ranged(**{**hit["front_range"], **change})
+        assert not RP.verdict([bad], roof_off=True)["pass"], change

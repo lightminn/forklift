@@ -58,7 +58,7 @@ MISSION_KEYS = {
     "slam": ("docking", "transport_scenario", "return_scenario", "transport_config"),
     "near": (
         "tracker", "start", "stop_state", "correction", "path_revision", "first_target", "retries", "retry_stand",
-        "mismatch", "unbounded", "protect", "arrival", "drop_latch", "stale_waits", "last_stamp", "last_fed_stamp",
+        "mismatch", "unbounded", "handoff_missed", "protect", "arrival", "drop_latch", "stale_waits", "last_stamp", "last_fed_stamp",
         "injection_closed", "stand_record", "terminal_standing_since",
         # Plan D8 (Codex D8 design review P2-3): the near-field record is the mission's -- a tick per control tick
         # while tracking (~6 MB a minute) -- handed to its record at the end, so a long session does not keep them.

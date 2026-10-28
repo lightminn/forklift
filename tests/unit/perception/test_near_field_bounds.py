@@ -171,3 +171,43 @@ def test_the_committed_bounds_load_with_the_d8b_values():
     assert b.observation("front", 0.39) is None and b.observation("roof", 1.76) is None
     assert b.near_capture["lateral_m"] == pytest.approx(0.006191, abs=1e-6)
     assert b.condition["video"] is False
+
+
+# docs/plans/2026-10-28-near-front-range.md 3.2: the front's operating range ------------------------------------
+def ranged(min_m=0.4, **extra):
+    d = data()
+    d["observation"]["front"] = [cell(0.6), cell(0.5)]
+    d["observation"]["front_range"] = {"min_distance_m": min_m, "rule": "fork tip, up to the grid",
+                                       "inputs": {"fork_tip_x_m": 0.95, "camera_x_m": 0.619}, "excluded": {}, **extra}
+    return d
+
+
+def test_below_the_floor_is_outside_the_range_not_missing():
+    rows = [cell(0.5), cell(0.6)]
+    assert interval_bound(rows, 0.405, floor_m=0.4) is not None
+    assert interval_bound(rows, 0.405) is None  # floor 0: as today
+    # floor 0 keeps the clipping at the face plane: a roof read just past the face still has its bound (Codex P2)
+    assert interval_bound([cell(0.2, along=0.004), cell(0.1, along=0.004)], -0.001) is not None
+    assert interval_bound(rows, 0.395, floor_m=0.4) is None  # below the floor: no bin can hold it
+    # a hole above the floor is still a hole
+    assert interval_bound([cell(0.7), cell(0.5)], 0.505, floor_m=0.4) is None
+
+
+def test_the_front_range_is_read_and_applied_to_the_front_only():
+    b = NearFieldBounds.from_dict(ranged())
+    assert b.front_min_distance_m == pytest.approx(0.4)
+    assert b.observation("front", 0.405) is not None
+    assert NearFieldBounds.from_dict(data()).front_min_distance_m is None  # no range: no range watch
+
+
+@pytest.mark.parametrize("min_m", [0.35, 0.6, -0.1, float("nan")])
+def test_a_front_range_off_the_grid_or_above_the_first_row_is_refused(min_m):
+    with pytest.raises(ValueError, match="front_range"):
+        NearFieldBounds.from_dict(ranged(min_m=min_m))
+
+
+def test_a_front_row_below_the_range_is_refused():
+    d = ranged()
+    d["observation"]["front"].append(cell(0.4))  # the 0.3-0.4 bin under a 0.4 m range
+    with pytest.raises(ValueError, match="front_range"):
+        NearFieldBounds.from_dict(d)

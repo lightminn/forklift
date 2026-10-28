@@ -87,7 +87,48 @@ def sha256(path: Path) -> str:
 
 
 # Observation bounds ------------------------------------------------------------------------
-def observation_bounds(summary: dict, key: str = "bins") -> dict:
+def front_floor_m(fork_tip_x_m: float, camera_x_m: float) -> float:
+    """Plan 2026-10-28-near-front-range 3.1: F, the camera-face distance at which the fork
+    tips reach the face, rounded up to the 0.1 m bin grid -- the front is not used below it."""
+    return math.ceil(round((fork_tip_x_m - camera_x_m) / BIN_M, 9)) * BIN_M
+
+
+def front_excluded(summary: dict, floor_m: float, rows_by_run: dict | None = None) -> dict:
+    """Plan 2026-10-28-near-front-range 3.2: the front observations whose true distance lies
+    below F, left out of the table -- counted from the summary's bins, and the valid ones
+    listed from the runs' observation rows (run, index, true distance, the larger along and
+    lateral error of the two pockets) when the rows are given."""
+    observed = valid = 0
+    for run in summary["runs"].values():
+        for cell in run["bins"]:
+            if cell["bin_m"][1] < floor_m - 1e-9:
+                entry = cell.get("front") or {}
+                observed += int(entry.get("observed", 0))
+                valid += int(entry.get("valid", 0))
+    out = {"observed": observed, "valid": valid, "invalid": observed - valid}
+    if rows_by_run is not None:
+        listed = []
+        for key, rows in rows_by_run.items():
+            for row in rows:
+                errors = (row.get("front") or {}).get("errors")
+                if errors is None or row["distance_m"] >= floor_m:
+                    continue
+                listed.append({
+                    "run": key,
+                    "index": row["index"],
+                    "distance_m": row["distance_m"],
+                    "along_m": max(abs(errors[s]["along_m"]) for s in ("left", "right")),
+                    "lateral_m": max(abs(errors[s]["lateral_m"]) for s in ("left", "right")),
+                })
+        if len(listed) != valid:
+            raise ValueError(
+                f"front_range: {valid} valid observations below {floor_m} m in the summary, {len(listed)} in the rows"
+            )
+        out["valid_observations"] = listed
+    return out
+
+
+def observation_bounds(summary: dict, key: str = "bins", floor_m: float | None = None) -> dict:
     """Per source, the bins (high edge first) with the largest absolute error of each
     component over both pockets and every run; ``key`` picks the clean bins or the noisy
     reference (``noisy_reference.bins``). Runs cover different distance ranges (a run
@@ -111,6 +152,8 @@ def observation_bounds(summary: dict, key: str = "bins") -> dict:
     for source in SOURCES:
         rows = []
         for edges in sorted(per_edges, key=lambda e: -e[0]):
+            if source == "front" and floor_m is not None and edges[1] < floor_m - 1e-9:
+                continue  # plan 2026-10-28-near-front-range 3.2: below the front's range (front_excluded counts it)
             cell = {"bin_m": list(edges), "valid": 0}
             comp = {"lateral_m": 0.0, "along_m": 0.0, "yaw_rad": 0.0, "wall_m": 0.0}
             if source == "front":
@@ -511,7 +554,7 @@ def frame_manifest(run) -> dict:
 
 
 # Near capture -------------------------------------------------------------------------------
-def near_capture_check(run: CAL.Run, geometry, front_rows: list[dict]) -> dict:
+def near_capture_check(run: CAL.Run, geometry, front_rows: list[dict], floor_m: float = 0.0) -> dict:
     """The runner's near-capture observation against the truth at both ends of its capture
     window [t_before_capture, anchor] (the truck is meant to stand; the truth's motion over
     the window is reported as the timing uncertainty), with the front bound of its bin."""
@@ -557,7 +600,7 @@ def near_capture_check(run: CAL.Run, geometry, front_rows: list[dict]) -> dict:
         distance = CAL.face_distance(run.truth, t, model)
     _, p0 = CAL.pose_at(run.truth.t, run.truth.base, ends[0])
     _, p1 = CAL.pose_at(run.truth.t, run.truth.base, ends[1])
-    bound = interval_bound(front_rows, distance)
+    bound = interval_bound(front_rows, distance, floor_m=floor_m)
     if bound is None:
         raise ValueError(
             f"{run.key}: the near capture at {distance:.3f} m has no front bound"
@@ -648,6 +691,7 @@ def build(
     commit: str | None,
     calibration_mtime: float,
     supplement_runs: list | None = None,
+    observation_rows: dict | None = None,
 ) -> dict:
     if not calibration.get("verdict", {}).get("pass"):
         raise ValueError("the calibration did not pass")
@@ -670,7 +714,23 @@ def build(
         # ones it used, by content.
         OBS.check_calibration(run, run.key, calibration)
         OBS.check_assets(run, geometry_path, ROOT / run.meta["forklift_urdf"])
-    observation = observation_bounds(observations)
+    # Plan 2026-10-28-near-front-range 3.1-3.2: the front's range from the chassis and the camera (every run alike)
+    from sim.isaac.insertion_geometry import tracking_frame
+
+    tips = {tracking_frame(ROOT / r.meta["forklift_urdf"], geometry).fork_tip_x_m for r in runs}
+    cameras = {float(r.truth.mount.translation_m[0]) for r in runs}
+    if len(tips) != 1 or len(cameras) != 1:
+        raise ValueError(f"the runs differ in fork tip {sorted(tips)} or camera {sorted(cameras)}")
+    tip, camera = tips.pop(), cameras.pop()
+    floor = front_floor_m(tip, camera)
+    observation = observation_bounds(observations, floor_m=floor)
+    observation["front_range"] = {
+        "min_distance_m": floor,
+        "rule": "the camera-face distance at which the fork tips reach the face, rounded up to the 0.1 m bin "
+        "grid; the tracker never evaluates the front below it (docs/plans/2026-10-28-near-front-range.md)",
+        "inputs": {"fork_tip_x_m": tip, "camera_x_m": camera},
+        "excluded": front_excluded(observations, floor, observation_rows),
+    }
     rate = cadence({r.key: r.reads for r in runs})
     tables_e, tables_psi, files, raw_pairs = [], [], {}, []
     for run in runs:
@@ -736,7 +796,7 @@ def build(
     uncovered = table_misses(odometry, raw_pairs)
     if uncovered:
         raise ValueError(f"the odometry table does not cover its own pairs: {uncovered[:3]}")
-    checks = [near_capture_check(run, geometry, observation["front"]) for run in runs]
+    checks = [near_capture_check(run, geometry, observation["front"], floor) for run in runs]
     standing_runs = {}
     l_hi = float(calibration["band_s"][1])
     for run in runs:
@@ -795,7 +855,7 @@ def build(
         # The same chain on sigma(z) = 0.0036 z^2 noisy depth (one noise seed): the plan's
         # boundary for D8g, never read by the tracker.
         "observation_noisy_reference": observation_bounds(
-            observations, "noisy_reference.bins"
+            observations, "noisy_reference.bins", floor_m=floor
         ),
         "odometry": {
             "tick_s": TICK_S,
@@ -876,6 +936,13 @@ def main(argv=None) -> int:
     calibration = json.loads(args.calibration.read_text())
     observations = json.loads(args.observations.read_text())
     runs = [CAL.Run.load(Path(k)) for k in calibration["inputs"]]
+    # each run's observation rows, beside the summary (d8b_observations writes them there): the excluded list
+    rows = {}
+    for key, run_ in observations["runs"].items():
+        file_ = args.observations.parent / Path(run_.get("file") or "").name
+        if not run_.get("file") or not file_.is_file():
+            raise SystemExit(f"{key}: its observation rows ({file_}) are not beside the summary")
+        rows[key] = json.loads(file_.read_text())["rows"]
     try:
         commit = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
@@ -898,6 +965,7 @@ def main(argv=None) -> int:
         [CAL.Run.load(p) for p in args.odometry_supplement]
         if args.odometry_supplement
         else None,
+        rows,
     )
     out["provenance"]["calibration"]["path"] = artifact_path(args.calibration)
     out["provenance"]["observations"]["path"] = artifact_path(args.observations)

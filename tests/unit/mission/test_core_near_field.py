@@ -330,7 +330,7 @@ def test_a_pickup_retry_closes_the_episode_releases_and_stands_in_observe():
     core, near, _ = make()
     near["ticks"] = [{"episode": 1, "face_distance_m": 0.9}, {"episode": 1, "face_distance_m": 0.7},
                      {"episode": 0, "face_distance_m": 0.1}]
-    near.update(mismatch=True, terminal_standing_since=9.0, protect={"x": 1})
+    near.update(mismatch=True, handoff_missed=True, terminal_standing_since=9.0, protect={"x": 1})
     core.state["near_capture"] = {"status": "accepted"}
     order = []
     core.release_and_stand = lambda now, event: order.append(("release", near["tracker"], event)) or {"jump_m": 0.0}
@@ -340,6 +340,7 @@ def test_a_pickup_retry_closes_the_episode_releases_and_stands_in_observe():
     assert retry["min_face_distance_m"] == 0.7 and retry["jump_m"] == 0.0 and near["retries"] == 1
     assert order == [("release", None, "release_pickup_retry")]  # the tracker is gone before the release
     assert near["mismatch"] is False and near["protect"] is None and "terminal_standing_since" not in near
+    assert "handoff_missed" not in near
     assert core.state["near_capture_history"] == [{"status": "accepted"}] and "near_capture" not in core.state
     assert core.ms.phase == "observe" and near["stand_record"] == "retry"
 
@@ -648,3 +649,38 @@ def test_the_terminal_hold_ends_exactly_at_its_length():
     tick(core, 0.0)
     tick(core, NT.TERMINAL_HOLD_S - 1e-9)
     assert ("retry", "mismatch") in calls
+
+
+# docs/plans/2026-10-28-near-front-range.md R2: a missed handoff is a terminal stop, never a retry ---------------
+def test_a_missed_handoff_ends_the_run_after_its_hold_and_is_not_retried():
+    core, near, calls = make(Geometry(face_m=0.8), standing=True)  # far enough and no retry yet: still none
+    near["handoff_missed"] = True
+    tick(core, 10.0)
+    with pytest.raises(RuntimeError, match="near_field_handoff_missed"):
+        tick(core, 10.0 + NT.TERMINAL_HOLD_S)
+    assert "retry" not in [c[0] for c in calls]
+    assert core.state["near_tracking"]["outcome"] == "near_field_handoff_missed"
+
+
+@pytest.mark.parametrize("flags,reason", [
+    ({"mismatch": True, "handoff_missed": True}, "mismatch"),
+    ({"unbounded": True, "handoff_missed": True}, "unbounded"),
+    ({"handoff_missed": True}, "handoff_missed"),
+])
+def test_the_terminal_reasons_keep_their_order(flags, reason):
+    core, near, _ = make(Geometry(face_m=0.8), standing=True, retries=1)
+    near.update(flags)
+    tick(core, 10.0)
+    assert near["stop_state"].reason == reason
+
+
+def test_a_lost_failure_comes_before_a_missed_handoff_and_a_terminal_before_a_lost_wait():
+    core, near, _ = make(Geometry(face_m=0.8), tracker=Tracker(armed=True, lost=True, failed=True), standing=True,
+                         retries=1)
+    near["handoff_missed"] = True
+    tick(core, 10.0)
+    assert near["stop_state"].reason == "lost"
+    core, near, _ = make(Geometry(face_m=0.8), tracker=Tracker(armed=True, lost=True), standing=True, retries=1)
+    near["handoff_missed"] = True
+    tick(core, 10.0)
+    assert near["stop_state"].reason == "handoff_missed" and near["stop_state"].terminal
