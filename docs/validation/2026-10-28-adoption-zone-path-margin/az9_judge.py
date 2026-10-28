@@ -2,7 +2,8 @@
 
     python3 az9_judge.py RUNS.jsonl
 
-Every mission a session reports must have a records.json with adoption checks; a missing record, a mission with no
+Every epoch directory must hold a result.json, every records.json must belong to a reported mission, and every
+mission a session reports must have a records.json with adoption checks; a missing record, a mission with no
 check, or a check without truth is undetermined. A check whose axis error to the mission pallet's truth is <= 0.50 m
 is about the instructed pallet (only these count toward stage reach); above that it must lie within 0.50 m of another
 object's position (another pallet's start truth or a destination centre) to count as another object, else it is
@@ -32,11 +33,18 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     objects.update({d["destination_id"]: (d["x_m"], d["y_m"]) for d in scene["destinations"]})
     log = (run_dir / "live.log").read_text(errors="replace").splitlines()
     slam = sorted({x.strip() for x in log if x.startswith("slam: ")})
-    results = sorted(run_dir.glob("live/epoch_*/run/result.json"))
-    if not results:
-        undet.append((name, "-", "no result.json"))
-        print(f"## {name}: NO RESULT")
+    epochs = sorted(p for p in run_dir.glob("live/epoch_*") if p.is_dir())
+    if not epochs:
+        undet.append((name, "-", "no epoch"))
+        print(f"## {name}: NO EPOCH")
         continue
+    results = []
+    for ep in epochs:
+        if (ep / "run" / "result.json").exists():
+            results.append(ep / "run" / "result.json")
+        else:
+            undet.append((name, ep.name, "no result.json"))
+            print(f"## {name} {ep.name}: NO RESULT")
     for res_p in results:
         res = json.loads(res_p.read_text())
         a = res["arguments"]
@@ -48,6 +56,10 @@ for line in Path(sys.argv[1]).read_text().splitlines():
         print("   ends:", [(m["mission_id"], m["pallet_id"], m["destination_id"], m["outcome"], m["reason"]) for m in mr])
         if not mr:
             undet.append((name, epoch, "no mission_results"))
+        reported = {m["mission_id"] for m in mr}
+        for extra in sorted(p.parent.name for p in (res_p.parent / "missions").glob("*/records.json")):
+            if extra not in reported:
+                undet.append((name, epoch, extra, "records.json without a mission_results entry"))
         for m in mr:
             key = (name, epoch, m["mission_id"])
             rec = res_p.parent / "missions" / m["mission_id"] / "records.json"
