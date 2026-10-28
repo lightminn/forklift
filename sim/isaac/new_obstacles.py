@@ -51,6 +51,9 @@ class Event:
     inside: bool = False  # path frame: lateral_m measured to the inside of that curve
     outside: bool = False  # path frame: lateral_m measured to the outside of that curve (N3)
     sweep: bool = False  # path frame: place only where the path's sweep meets it and a straight's does not
+    # path frame: instead of ahead_m, the place along the path where the box's straight-line distance from the truck's
+    # true outline at the spawn is this (the runner's gap_test; docs/plans/2026-10-28-exit-prefix-extract-rules.md C4)
+    face_gap_m: float | None = None
     fired: bool = False
     fired_s: float | None = None
 
@@ -71,6 +74,7 @@ def load_events(path: Path) -> list[Event]:
                 leg=str(e.get("leg", "reverse" if e.get("on_reverse") else "any")), group=e.get("group"),
                 min_curvature_inv_m=float(e.get("min_curvature_inv_m", 0.0)), inside=bool(e.get("inside", False)),
                 outside=bool(e.get("outside", False)), sweep=bool(e.get("sweep", False)),
+                face_gap_m=None if e.get("face_gap_m") is None else float(e["face_gap_m"]),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
@@ -135,7 +139,7 @@ class Schedule:
     log: list = field(default_factory=list)
 
     def update(self, t: float, phase: str, driven_m: float, path_ahead: np.ndarray | None, *,
-               leg_direction: int = 1, pallet_face: tuple | None = None, sweep_test=None) -> list[tuple]:
+               leg_direction: int = 1, pallet_face: tuple | None = None, sweep_test=None, gap_test=None) -> list[tuple]:
         """Actions due now: ('spawn', id, x, y, yaw, size) / ('remove', id) / ('silence', sensor).
 
         ``pallet_face`` is (x, y, insertion yaw) of the approach face centre."""
@@ -165,6 +169,28 @@ class Schedule:
                     continue
                 elif leg != "any" and e.beyond_end_m is None and _length(path_ahead) < e.ahead_m + 0.5:
                     continue  # a leg too short would clamp the box to its end (Codex checkpoint 9 P1)
+                elif e.face_gap_m is not None:
+                    # the first place along the path whose box is face_gap_m from the true outline (bisection on the
+                    # path length: the gap grows along a path leading away); none within the path -> wait
+                    if gap_test is None:
+                        continue
+                    total = _length(path_ahead)
+                    def gap_at(s_):
+                        return gap_test((*pose_along(path_ahead, s_, e.lateral_m), e.size_m))
+                    if gap_at(total) < e.face_gap_m:
+                        continue
+                    lo, hi = 0.0, total
+                    if gap_at(lo) >= e.face_gap_m:
+                        hi = lo
+                    for _ in range(40):
+                        if hi - lo <= 1e-4:
+                            break
+                        mid = (lo + hi) / 2
+                        if gap_at(mid) >= e.face_gap_m:
+                            hi = mid
+                        else:
+                            lo = mid
+                    x, y, yaw = pose_along(path_ahead, hi, e.lateral_m)
                 elif e.beyond_end_m is not None:
                     ex, ey = path_ahead[-1, 0], path_ahead[-1, 1]
                     eyaw = math.atan2(path_ahead[-1, 1] - path_ahead[-2, 1], path_ahead[-1, 0] - path_ahead[-2, 0])

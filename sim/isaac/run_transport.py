@@ -9014,9 +9014,20 @@ def drive(S, isaac) -> None:
                         meets_line_ = any(not chk_.free(p_) for p_ in line_)
                         return meets_path_, meets_line_
 
+                    def n_gap_test(box, loaded_=loaded):
+                        # a face_gap_m spawn (docs/plans/2026-10-28-exit-prefix-extract-rules.md C4): the box's
+                        # straight-line distance from the truck's true outline now
+                        from forklift_core.control.start_release import footprint_rect_distance
+
+                        bx_, by_, byaw_, bsize_ = box
+                        fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
+                        return footprint_rect_distance(tuple(float(v) for v in truth_rear), fp_,
+                                                       Rectangle(float(bx_), float(by_), float(bsize_[0]),
+                                                                 float(bsize_[1]), float(byaw_)))
+
                     due_ = new_obstacles["schedule"].update(
                         t, ms.phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
-                        sweep_test=n_sweep_test,
+                        sweep_test=n_sweep_test, gap_test=n_gap_test,
                     )
                     if boundary is not None and boundary.recorder.value_format == 2:
                         # The schedule has no port: its inputs (by digest -- the leg ahead is an array every tick) and

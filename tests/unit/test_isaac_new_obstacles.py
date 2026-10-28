@@ -207,3 +207,66 @@ def test_the_tall_and_single_lidar_scenario_files_keep_their_shapes():
                     assert b.min_curvature_inv_m == curvature
     silence = MODULE.load_events(base / "n09_single_silence.yaml")
     assert [(e.action, e.target) for e in silence] == [("silence", "high")]
+
+
+def _gap_from(truck, fp):
+    """The runner's gap test: the truck's outline at its true pose against the box (rectangle distance)."""
+    from forklift_core.control.start_release import footprint_rect_distance
+    from forklift_core.planning import Rectangle
+
+    def gap(box):
+        bx, by, byaw, size = box
+        return footprint_rect_distance(truck, fp, Rectangle(bx, by, size[0], size[1], byaw))
+    return gap
+
+
+def test_a_face_gap_spawn_puts_the_box_face_that_far_from_the_true_outline_on_the_path():
+    """2026-10-29 (lead): the exit-prefix C4 box is placed along the path where its face is face_gap_m straight-line
+    from the truck's true outline at the spawn -- not by path length, which a curve or a tracking offset shortened."""
+    from forklift_core.planning import Footprint
+
+    fp = Footprint(1.56, 0.17, 0.40)
+    rev = np.column_stack((-np.linspace(0, 3, 301), np.zeros(301), np.zeros(301)))  # reversing along -x
+    ev = MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)
+    truck = (0.01, 0.02, 0.0)  # the true pose a little off the path
+    gap = _gap_from(truck, fp)
+    (spawn,) = MODULE.Schedule([ev]).update(1.0, "transport", 0.0, rev, leg_direction=-1, gap_test=gap)
+    _, _, x, y, yaw, size = spawn
+    assert abs(gap((x, y, yaw, size)) - 0.15) <= 0.001 and abs(y) < 1e-9  # on the path, 0.15 from the outline
+    # on a curve: still on the path, still 0.15 straight-line
+    from forklift_core.control.drive_permission import arc_poses
+
+    curve = arc_poses((0.0, 0.0, 0.0), -0.25, -1, 3.0, 0.01)[0]  # reversing on -0.25 1/m
+    p0 = (0.0, 0.0, 0.0)
+    (spawn,) = MODULE.Schedule([MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4),
+                                             face_gap_m=0.15)]).update(1.0, "transport", 0.0, curve, leg_direction=-1,
+                                                                      gap_test=_gap_from(p0, fp))
+    _, _, x, y, yaw, size = spawn
+    assert abs(_gap_from(p0, fp)((x, y, yaw, size)) - 0.15) <= 0.001
+    assert np.min(np.hypot(curve[:, 0] - x, curve[:, 1] - y)) < 0.01  # on the curved path
+    # by path length the same box would sit nearer: its centre 0.47 m along (the C4 rule) gives less than 0.15
+    bx, by, byaw = MODULE.pose_along(curve, 0.47, 0.0)
+    assert _gap_from(p0, fp)((bx, by, byaw, size)) < 0.15
+
+
+def test_a_face_gap_spawn_needs_the_gap_test_and_a_path_reaching_that_far():
+    from forklift_core.planning import Footprint
+
+    fp = Footprint(1.56, 0.17, 0.40)
+    rev = np.column_stack((-np.linspace(0, 3, 301), np.zeros(301), np.zeros(301)))
+    sched = MODULE.Schedule([MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)])
+    assert sched.update(1.0, "transport", 0.0, rev, leg_direction=-1) == []  # waits for a gap test
+    short = rev[:20]  # 0.19 m: no point on it is 0.15 + half a box from the outline
+    assert sched.update(1.1, "transport", 0.0, short, leg_direction=-1, gap_test=_gap_from((0.0, 0.0, 0.0), fp)) == []
+
+
+def test_the_rules_load_the_face_gap():
+    import json as _json
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+        fh.write(_json.dumps({"events": [{"id": "b", "action": "spawn", "phase": "transport", "after_m": 0.15,
+                                          "face_gap_m": 0.15, "size_m": [0.3, 0.3, 1.4]}]}))
+    (ev,) = MODULE.load_events(Path(fh.name))
+    assert ev.face_gap_m == 0.15
+    assert MODULE.Event("x", "spawn", "transport", 0.0).face_gap_m is None
