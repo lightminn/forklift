@@ -16,6 +16,7 @@
   - 막힘(A-off 만): line_m `P-1:D-1,P-2:D-2,P-1:D-3`.
   - seed 는 6·7·8 이다.
 - 실행 목록: `2026-10-28-far-target-binding/RUNS_feasible.jsonl`·`RUNS_blocked.jsonl`. 판정: 같은 폴더의 `f1_judge.py`, 출력 `f1_judge.txt`. ws1 원본: `test_runs/live/f1chk`.
+- ws1 원본은 정리됐다. 보관본은 `gdrive:forklift-archive/ws1-cleanup-20261028-i/` 이다. 실행 15 세션과 판정기는 `i28_f1chk_01·02.tar.zst`, 스냅숏 두 개는 `i28_f1chk_snaps.tar.zst` 에 있다. records.json 45 개와 result.json 78 개가 보관 목록에 있고, md5 가 일치한다(정리 세션 확인).
 - F3 는 재집기 가능한 12 세션의 어떤 미션도 거부하지 않았다. 모든 미션이 제출되어 끝까지 갔다.
 
 ## 미션 결과
