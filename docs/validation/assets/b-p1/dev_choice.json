@@ -1,0 +1,3075 @@
+{
+ "dev_starts": 80,
+ "choice": {
+  "e_min": 0.8,
+  "r_max": 0.95,
+  "r_struct": 0.8,
+  "success": 69,
+  "wrong": 0,
+  "imprecise": 0,
+  "request": 11
+ },
+ "clean_combinations": 340,
+ "table": [
+  {
+   "e_min": 0.5,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 38,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 42
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  },
+  {
+   "e_min": 0.5,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 38,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 42
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  },
+  {
+   "e_min": 0.55,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 38,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 42
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  },
+  {
+   "e_min": 0.6,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 38,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 42
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  },
+  {
+   "e_min": 0.65,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 38,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 42
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  },
+  {
+   "e_min": 0.7,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 38,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 42
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  },
+  {
+   "e_min": 0.75,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 28,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 52
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 42,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 38
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 54,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 26
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 48,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 32
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 65,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 15
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 50,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 30
+  },
+  {
+   "e_min": 0.8,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 69,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 11
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 3,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 77
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 9,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 71
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 18,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 62
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 18,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 62
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 33,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 47
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 26,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 54
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 26,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 54
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 27,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 53
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 41,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 39
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 53,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 27
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 33,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 47
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 33,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 47
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 34,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 46
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 47,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 33
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 64,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 16
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 35,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 45
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 36,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 44
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.85,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 68,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 12
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 2,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 78
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 2,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 78
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 2,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 78
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 7,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 73
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 21,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 59
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 15,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 65
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 15,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 65
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 15,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 65
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 29,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 51
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 23,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 57
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 23,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 57
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 23,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 57
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 49,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 31
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 30,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 50
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 30,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 50
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 30,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 50
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 43,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 37
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 60,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 20
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 32,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 48
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 32,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 48
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 32,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 48
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 45,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 35
+  },
+  {
+   "e_min": 0.9,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 64,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 16
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.5,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.55,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.55,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.6,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.6,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.65,
+   "r_struct": 0.4,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.65,
+   "r_struct": 0.5,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.65,
+   "r_struct": 0.6,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.7,
+   "r_struct": 0.4,
+   "success": 1,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 79
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.7,
+   "r_struct": 0.5,
+   "success": 1,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 79
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.7,
+   "r_struct": 0.6,
+   "success": 0,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 80
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.75,
+   "r_struct": 0.4,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.75,
+   "r_struct": 0.5,
+   "success": 4,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 76
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.75,
+   "r_struct": 0.6,
+   "success": 2,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 78
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.75,
+   "r_struct": 0.7,
+   "success": 13,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 67
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.8,
+   "r_struct": 0.4,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.8,
+   "r_struct": 0.5,
+   "success": 10,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 70
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.8,
+   "r_struct": 0.6,
+   "success": 8,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 72
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.8,
+   "r_struct": 0.7,
+   "success": 19,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 61
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.85,
+   "r_struct": 0.4,
+   "success": 16,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 64
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.85,
+   "r_struct": 0.5,
+   "success": 16,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 64
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.85,
+   "r_struct": 0.6,
+   "success": 14,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 66
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.85,
+   "r_struct": 0.7,
+   "success": 26,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 54
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.85,
+   "r_struct": 0.8,
+   "success": 37,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 43
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.9,
+   "r_struct": 0.4,
+   "success": 22,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 58
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.9,
+   "r_struct": 0.5,
+   "success": 22,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 58
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.9,
+   "r_struct": 0.6,
+   "success": 20,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 60
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.9,
+   "r_struct": 0.7,
+   "success": 31,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 49
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.9,
+   "r_struct": 0.8,
+   "success": 47,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 33
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.95,
+   "r_struct": 0.4,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.95,
+   "r_struct": 0.5,
+   "success": 24,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 56
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.95,
+   "r_struct": 0.6,
+   "success": 22,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 58
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.95,
+   "r_struct": 0.7,
+   "success": 33,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 47
+  },
+  {
+   "e_min": 0.95,
+   "r_max": 0.95,
+   "r_struct": 0.8,
+   "success": 51,
+   "wrong": 0,
+   "imprecise": 0,
+   "request": 29
+  }
+ ]
+}
