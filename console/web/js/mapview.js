@@ -25,6 +25,8 @@ export function contentBounds(grid, targets, state) {
   }
   for (const p of [...(targets?.pallets ?? []), ...(targets?.destinations ?? [])]) if (p.pose) add(p.pose.x_m, p.pose.y_m, 1);
   if (state?.pose) add(state.pose.x_m, state.pose.y_m, 1);
+  // B-P2c: while the start is unknown, the start's candidates (base poses) are what is worth showing
+  for (const c of state?.slam?.reloc?.candidates ?? []) add(c.base[0], c.base[1], 1);
   for (const [x, y] of state?.plan?.poses ?? []) add(x, y);
   if (!xs.length) return { x0: 0, y0: 0, w: 14, h: 9 };
   const x0 = Math.min(...xs);

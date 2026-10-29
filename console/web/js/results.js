@@ -259,7 +259,9 @@ export class ConfirmGate {
 }
 
 function sameKey(a, b) {
-  return a.kind === b.kind && a.epoch === b.epoch && a.leaseId === b.leaseId && a.controlGen === b.controlGen;
+  // B-P2c: a start candidate's pick is the same only for the same candidate of the same set (absent elsewhere)
+  return a.kind === b.kind && a.epoch === b.epoch && a.leaseId === b.leaseId && a.controlGen === b.controlGen
+    && a.generation === b.generation && a.candidate === b.candidate;
 }
 
 // The back-off advice (contract 5.2): a guide from the pose at the failure, not a permit.

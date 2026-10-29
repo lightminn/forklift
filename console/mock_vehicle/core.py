@@ -13,7 +13,7 @@ import secrets
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from console.mock_vehicle import paths
 from forklift_core.mission.results import ResultsBook
@@ -56,6 +56,8 @@ LEASE_REQUIRED = {
     "lease_release",
     "session_end",  # persistent console plan D7/D13: as the live runner
     "sim_reset",
+    "relocalize_pick",  # B-P2c: the start relocalization, as the live arbiter
+    "relocalize_retry",
 }
 RELIABLE = LEASE_REQUIRED | {"stop", "lease_request", "targets_request", "pick_request"}
 LATEST_ONLY = {"echo", "teleop", "input_state"}
@@ -71,7 +73,11 @@ STOPPED_ALLOWED = {
     "pick_request",  # CT-2: observe-level, like targets_request
     "session_end",  # the arbiter takes them in STOPPED too (stand, feedback, no mission)
     "sim_reset",
+    "relocalize_pick",  # B-P2c: a computation; the truck stands
+    "relocalize_retry",
 }
+# B-P2c: while the start is unknown nothing may move the truck or replace the scene (the live arbiter's RELOC_REFUSED)
+RELOC_REFUSED = {"arm", "mission_submit", "mission_resume", "recovery", "sim_reset"}
 INT_FIELDS = ("session_epoch", "control_gen", "arm_gen", "seq")
 LIFT_TOP_M = 0.28
 LIFT_CARRY_M = 0.12
@@ -146,6 +152,10 @@ def _valid(msg) -> str | None:
             not isinstance(frame, dict) or not _is_int(frame.get("frame_id"))
         ):
             return "invalid"
+    if t in ("relocalize_pick", "relocalize_retry") and not _is_int(msg.get("generation")):
+        return "invalid"  # B-P2c: required plain integers, as the live validator
+    if t == "relocalize_pick" and not _is_int(msg.get("candidate")):
+        return "invalid"
     if t in ("teleop", "echo"):
         echo = msg.get("echo")
         if not isinstance(echo, dict) or not _is_int(echo.get("state_seq")):
@@ -220,6 +230,8 @@ class MockVehicle:
         self._picks: dict = {}  # CT-2: conn_id -> pick messages waiting to go out after the reply
         self._pick_override = None
         self._submit_override = None  # queue plan D5 exception: the next submit meets a settling truck
+        self.reloc = None  # B-P2c: an injected start relocalization (slam.reloc), None: the place is known
+        self._reloc_due = None  # (when, what): the next relocalization step the fake takes by itself
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -262,6 +274,10 @@ class MockVehicle:
             m["status"], m["reason"] = status, reason
 
     def _stop(self, source: str) -> None:
+        if self.reloc is not None and self.reloc["state"] in ("relocalizing", "awaiting_pick", "reloc_failed"):
+            # B-P2c: a STOP interrupts the relocalization (its candidates go, a retry may follow)
+            self.reloc.update(state="stopped", candidates=[], generation=self.reloc["generation"] + 1)
+            self._reloc_due = None
         if self.mode == "STOPPED":
             self._boundary()  # a new stop is a boundary even in the same mode
         else:
@@ -341,6 +357,7 @@ class MockVehicle:
             # CT-2 (contract D3): pick_request answered with a toy rule, for the console's screen tests only
             "next_pick": True,
             "next_pick_deadline_ms": 5000,
+            "relocalize": True,  # B-P2c: injected for the screen (the live runner's when relocalizing)
         }
         welcome = {
             "t": "welcome",
@@ -517,6 +534,12 @@ class MockVehicle:
             "stand_waiver": None,
             **(self._policy_override or {}),
             "plan": self._plan(),
+            # B-P2c: while the start is unknown the pose is null and the relocalization rides the slam field
+            **({} if self.reloc is None else {
+                "pose": None, "slam": {"mode": "localization", "map_id": "f" * 64, "map_loaded": True,
+                                       "reloc": {**self.reloc, "candidates": [dict(c) for c in self.reloc["candidates"]],
+                                                 "operator_left_s": max(0.0, self.reloc["operator_until"]
+                                                                        - self._now())}}}),
         }
 
     def _plan(self) -> dict | None:
@@ -628,6 +651,9 @@ class MockVehicle:
             return self._reply(msg, reason="session_ending")  # the session closes (as the live arbiter, D7)
         if self.mode == "STOPPED" and t not in STOPPED_ALLOWED:
             return self._reply(msg, reason="stopped_locked")
+        if self.reloc is not None and (t in RELOC_REFUSED
+                                       or (t == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
+            return self._reply(msg, reason="relocalizing")
         handler = getattr(self, "_req_" + t)
         return handler(msg)
 
@@ -955,9 +981,61 @@ class MockVehicle:
         """The picks to send on that connection, after the reply (the server's loop)."""
         return self._picks.pop(conn_id, [])
 
+    def _reloc_candidates(self) -> list:
+        """The fake's candidates: the true place and two look-alikes (B-P2c, for the screen only)."""
+        x, y, yaw = self.pose.x_m, self.pose.y_m, self.pose.yaw_rad
+        return [{"index": 0, "base": [x, y, yaw], "score": 0.91, "endpoint_fraction": 0.97},
+                {"index": 1, "base": [x + 2.4, y - 1.1, yaw + 3.1416], "score": 0.88, "endpoint_fraction": 0.95},
+                {"index": 2, "base": [x - 1.8, y + 1.5, yaw], "score": 0.84, "endpoint_fraction": 0.9}]
+
+    def _req_relocalize_pick(self, msg: dict) -> dict:
+        r = self.reloc
+        if r is None:
+            return self._reply(msg, reason="not_relocalizing")
+        if r["state"] != "awaiting_pick":
+            return self._reply(msg, reason="reloc_not_awaiting")
+        if msg["generation"] != r["generation"]:
+            return self._reply(msg, reason="reloc_stale_pick")
+        if not 0 <= msg["candidate"] < len(r["candidates"]):
+            return self._reply(msg, reason="reloc_pick_refused")
+        x, y, yaw = r["candidates"][msg["candidate"]]["base"]
+        r.update(state="localizing", candidates=[], generation=r["generation"] + 1)
+        self._reloc_due = (self._now() + 2.0, ("localized", x, y, yaw))
+        return self._reply(msg)
+
+    def _req_relocalize_retry(self, msg: dict) -> dict:
+        r = self.reloc
+        if r is None:
+            return self._reply(msg, reason="not_relocalizing")
+        if r["state"] not in ("awaiting_pick", "reloc_failed", "stopped"):
+            return self._reply(msg, reason="reloc_not_awaiting")
+        if msg["generation"] != r["generation"]:
+            return self._reply(msg, reason="reloc_stale_pick")
+        r.update(state="relocalizing", candidates=[], generation=r["generation"] + 1, attempts=0)
+        self._reloc_due = (self._now() + 2.0, ("candidates",))
+        return self._reply(msg, generation=r["generation"])
+
+    def _reloc_step(self, now: float) -> None:
+        if self._reloc_due is None or now < self._reloc_due[0] or self.reloc is None:
+            return
+        what = self._reloc_due[1]
+        self._reloc_due = None
+        if what[0] == "candidates":
+            self.reloc.update(state="awaiting_pick", attempts=3, last_reason="competitor",
+                              candidates=self._reloc_candidates())
+        else:  # localized: the place is known, the session goes on as usual
+            self.pose = replace(self.pose, x_m=what[1], y_m=what[2], yaw_rad=what[3])
+            self.reloc = None
+
     def inject(self, kind: str) -> None:
         """The screen's D13 cases without driving into them (fake vehicle only, for the page's tests)."""
         now = self._now()
+        if kind == "relocalize":
+            # B-P2c: a start the matcher could not confirm, waiting for the operator's pick (10 min to answer)
+            self.reloc = {"state": "awaiting_pick", "generation": 1, "attempts": 3, "last_reason": "competitor",
+                          "deadline_left_s": 0.0, "operator_until": now + 540.0,
+                          "candidates": self._reloc_candidates()}
+            return
         if kind in self.PICK_INJECTIONS:
             self._pick_override = kind  # the next pick only (CT-2 console plan C7)
             return
@@ -1101,6 +1179,7 @@ class MockVehicle:
     # ------------------------------------------------------------------ control
     def step(self, dt_s: float) -> None:
         now = self._now()
+        self._reloc_step(now)  # B-P2c: the fake's relocalization moves on by itself
         self.ledger.purge(now)  # D7: once a cycle, as the live arbiter
         self._book_end(now)
         if (

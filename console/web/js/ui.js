@@ -5,6 +5,7 @@ import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfter
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
+import { relocActions, relocOf, relocSummary } from "./reloc.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -193,6 +194,7 @@ export function render(m) {
   if (!st) {
     $("m-open").disabled = true;
     $("mission-gate").textContent = ""; // an old session's recovery hint (Codex U30 review round 2 P3)
+    $("reloc-banner").hidden = true; // B-P2c: an old session's relocalization does not stay either
     renderSession(m, null, lease, prof, monitor); // a new session's welcome before its first state: nothing old stays
     return;
   }
@@ -223,6 +225,18 @@ export function render(m) {
   const sl = slamLabel(m.session.state); // contract 6: absent = online mapping or not known
   $("b-slam").textContent = sl.text;
   $("b-slam").title = sl.title;
+  // B-P2c: the start relocalization over the map, with the retry the operator may ask for
+  const reloc = monitor ? null : relocOf(st);
+  $("reloc-banner").hidden = !reloc;
+  if (reloc) {
+    const sum = relocSummary(reloc);
+    const act = relocActions(reloc, lease);
+    $("reloc-text").textContent = sum.text;
+    $("reloc-banner").title = sum.title;
+    $("reloc-retry").hidden = !["awaiting_pick", "reloc_failed", "stopped"].includes(reloc.state);
+    $("reloc-retry").disabled = !act.retry.enabled;
+    $("reloc-why").textContent = act.retry.enabled ? (act.pick ? "후보를 두 번 눌러 확정" : "") : act.retry.why;
+  }
 
   // progress strip and destination
   const prog = $("d-progress");
