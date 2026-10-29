@@ -9,7 +9,15 @@ import pytest
 
 pytest.importorskip("websockets")
 
-from test_live_runtime import _MADE, DT, Clock, runtime  # noqa: E402, F401
+# _close_runtimes: the autouse fixture closes every runtime a test made (its live_log file; -W error on ws1) -- a
+# fixture applies only where it is defined or imported
+from test_live_runtime import (  # noqa: E402, F401
+    _MADE,
+    DT,
+    Clock,
+    _close_runtimes,
+    runtime,
+)
 
 from forklift_core.safety.arbiter import ArbiterConfig  # noqa: E402
 from sim.isaac import live_runtime as L  # noqa: E402
