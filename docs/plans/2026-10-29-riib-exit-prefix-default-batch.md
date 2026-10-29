@@ -50,6 +50,11 @@ branch `feat/riib-exempt-default`(main c1077f23 위).
 - 합 90 실행(경계 기록 49). 묶음 잡 2 개가 claim 디렉터리를 공유한다(`isaac_bundle.py check` 통과 뒤).
 - 시간·디스크(§6 ①): 6 슬롯이면 약 6–11 시간. 기본 약 35 GB, C4 재실행 최대치까지 약 45 GB. 제출 직전 ws1 `/home` 여유가 50 GB 이상이어야 낸다. 모자라면 디스크 정리 세션과 먼저 비운다.
 
+- 제출(2026-10-29, 결과 전에 적음):
+  - 코드는 `037ddb6f` 와 같다(이 커밋은 문서만 더한다). 그 트리에서 재생 게이트 runs29 29/29(ws1 `test_runs/replay_gate/rx_037ddb6f`), ws1 전체 시험 8 057 통과·알려진 ws1 전용 실패 10, Codex 등록 검토 3 회차 수렴(새 P1/P2 없음).
+  - 스냅숏은 이 커밋의 `rx_<commit>` 이고, 목록은 ws1 `test_runs/riibotics/rx_<commit>/RUNS.jsonl` 90 실행(경계 기록 49)이다. 생성기 `tss_diag/make_runs_rx.py`, 묶음 잡 2 개(각 12 시간, claim 공유, `--run-est-min 45`).
+  - 제출 직전 ws1 `/home` 여유 59 GB.
+
 ## 4. 판정 (결과 전 고정)
 
 정의 — 운반 출발 통과: C5 와 같다(운반 단계에 들어간 실행 중, truth 뒤축을 첫 운반 계획 경로에 투영한 진행이 장면 문턱 이상; aisle_rack 0.85 m, trailer 0.90 m).
@@ -113,6 +118,8 @@ branch `feat/riib-exempt-default`(main c1077f23 위).
   - P2 C4 닫힘 사유 무효: watch 가 울린 뒤 추종기 교체로 `tracker` 가 기록되는 경우, armed 검증 없음에서 `length` 가 먼저 기록되는 경우를 core 로 재현 → 3 판 규칙 7(무효는 운반 미진입뿐, 주입 전 닫힘은 모두 미달).
   - P3 두 자세 경로에서 `face_gap_at_spawn_m` 누락 → 곡률 조건과 분리, 시험 추가.
   - 확인: 규칙 4 상계 제거, A·B 회귀 전수 기록, 산식 기본 35.31 GB·최대 44.73 GB. runs29 setup 29 개에는 `face_gap_m` 이 없어 새 기록 필드가 게이트에 닿지 않는다.
+
+- 3 차(037ddb6f, `tmp/rx/codex_plan3.out`): **새 P1/P2 없음(수렴)**. C4 는 운반 진입 뒤 주입 전 닫힘·미개방·미발화를 모두 미달로 처리해 이전 반례를 재실행으로 지울 수 없고, 두 자세 경로 기록은 새 시험이 이전 코드에서 실패·현재 코드에서 통과함을 확인했다고 했다.
 
 ### ③ 독립 검토(agy)
 
