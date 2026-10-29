@@ -165,6 +165,10 @@ def refuse_unreplayable(values: dict) -> None:
             raise ReplayMismatch(f"a {flag}={recorded!r} record is not replayable (only {off!r} records are)")
 
 
+# Outputs a run with video fills from its video frames (written inside the physics step a replay does not run): the
+# frame audit, the robot camera's frame list, and the overlay's plan history and grid frames.
+VIDEO_DERIVED_OUTPUTS = frozenset({"frame_audit.json", "video_frames.json", "plan_history.json",
+                                   "obstacle_grid_frames.npz"})
 # Setup services that only feed the run's own outputs and that the runner never wraps as ports.
 OUTPUT_ONLY_SERVICES = ("OverviewCamera",)
 
@@ -277,6 +281,8 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
         Path(output).mkdir(parents=True, exist_ok=True)
     refuse_unreplayable(values)
     bind_added_names(values, snap["names"])
+    if getattr(values.get("args"), "video", False):  # see ReplaySession.video_sink_paths
+        gate.session.video_sink_paths = VIDEO_DERIVED_OUTPUTS
     values["RecordingProxy"] = proxy_factory
     values["recorded_function"] = BR.recorded_function
     values["boundary"] = gate

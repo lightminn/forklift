@@ -1322,3 +1322,62 @@ def test_a_physics_step_that_zeroes_the_command_is_restored_in_the_replay(tmp_pa
     slam_r = {"last_command": 0.3}
     replay_with(lambda f: f(1), watch_dicts_replay={"state": state_r, "slam": slam_r})
     assert state_r == {"applied_command": (0.0, [0.1, 0.1]), "command_speed": 0.0} and slam_r == {"last_command": 0.0}
+
+
+def _video_record(tmp_path, recorded):
+    """One tick whose Sink writes are ``recorded``: (path, payload) pairs."""
+    from forklift_core.mission.boundary_record import sink_effect
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    for path, payload in recorded:
+        sink_effect(gate, "write_text", path, payload)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+
+
+def _replay_writes(tmp_path, writes, video_paths=frozenset()):
+    from forklift_core.mission.boundary_record import sink_effect
+
+    session = ReplaySession(tmp_path)
+    session.video_sink_paths = frozenset(video_paths)
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    for path, payload in writes:
+        sink_effect(rgate, "write_text", path, payload)
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+    return session
+
+
+VIDEO = frozenset({"frame_audit.json", "plan_history.json"})
+
+
+def test_a_video_records_derived_outputs_are_matched_by_path_alone_and_may_be_absent_in_the_replay(tmp_path):
+    """2026-10-29 (riib scene records, video on): the video frames are made inside the physics step a replay does not
+    run, so what they fill (the frame audit, the overlay's plan history) is empty there -- those outputs are matched by
+    their path when the replay writes them and skipped when it does not; every other output is compared as ever."""
+    _video_record(tmp_path, [("obstacle_scans.json", "s"), ("plan_history.json", "p"), ("frame_audit.json", "f1"),
+                             ("meta.json", "m")])
+    s = _replay_writes(tmp_path, [("obstacle_scans.json", "s"), ("frame_audit.json", "f-empty"), ("meta.json", "m")],
+                       VIDEO)
+    assert s.skipped_video_sinks == ["plan_history.json"]
+    # a non-video output still compares its payload, and still must be there
+    with pytest.raises(ReplayMismatch, match="request differs"):
+        _replay_writes(tmp_path, [("obstacle_scans.json", "s2"), ("frame_audit.json", "f1"), ("meta.json", "m")], VIDEO)
+    with pytest.raises(ReplayMismatch):
+        _replay_writes(tmp_path, [("obstacle_scans.json", "s"), ("frame_audit.json", "f1")], VIDEO)
+
+
+def test_without_video_the_derived_outputs_compare_as_ever(tmp_path):
+    _video_record(tmp_path, [("plan_history.json", "p"), ("frame_audit.json", "f1")])
+    _replay_writes(tmp_path, [("plan_history.json", "p"), ("frame_audit.json", "f1")])
+    with pytest.raises(ReplayMismatch):
+        _replay_writes(tmp_path, [("frame_audit.json", "f-empty")])
+
+
+def test_a_trailing_unwritten_video_output_is_skipped_at_the_tick_end(tmp_path):
+    _video_record(tmp_path, [("meta.json", "m"), ("plan_history.json", "p")])
+    s = _replay_writes(tmp_path, [("meta.json", "m")], VIDEO)
+    assert s.skipped_video_sinks == ["plan_history.json"]

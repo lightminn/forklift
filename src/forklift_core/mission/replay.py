@@ -257,6 +257,7 @@ class ReplaySession:
             # Never set here but set in the record. (A tick the recorded run left before its times were known --
             # an exception between the clock read and tick_time -- keeps them unset in the record as well.)
             raise self.fail(f"tick {tick['tick']}: its head times were never set (tick_time)")
+        self.skip_video_sinks()
         if self._next != len(tick["calls"]):
             left = tick["calls"][self._next]
             raise self.fail(f"tick {tick['tick']}: {len(tick['calls']) - self._next} recorded calls not made, "
@@ -302,6 +303,32 @@ class ReplaySession:
         if self.tick is None or self._next >= len(self.tick["calls"]):
             return None
         return self.tick["calls"][self._next]
+
+    # Outputs a replay cannot make the same (set by the replay tool for a run recorded with video): the video frames
+    # are written inside the physics step a replay does not run, so what they fill -- the frame audit, the overlay's
+    # plan history and grid frames -- is not there. Such a Sink entry is matched by its path alone when the replay
+    # writes it, and skipped when it does not; every other entry is compared as ever.
+    video_sink_paths: frozenset = frozenset()
+
+    @staticmethod
+    def sink_path(node) -> str | None:
+        """The logical path of an encoded ``Sink`` request (``sink_effect``'s ``{"path", "sha256"}`` argument)."""
+        try:
+            return node["$map"]["args"]["$list"][0]["$map"]["path"]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+    def skip_video_sinks(self, keep: str | None = None) -> None:
+        """Pass the recorded video-derived Sink entries ahead that the replay is not writing now (``keep``)."""
+        while self.video_sink_paths:
+            entry = self.peek()
+            if entry is None or entry["port"] != "Sink":
+                return
+            path = self.sink_path(entry["request"])
+            if path not in self.video_sink_paths or path == keep:
+                return
+            self.skipped_video_sinks = getattr(self, "skipped_video_sinks", []) + [path]
+            self._next += 1
 
     def _described(self, port: str, method: str) -> bool:
         """The call just before this one, already compared, is a ``Trace.callback_spec`` describing every
@@ -390,7 +417,21 @@ class ReplayGate:
                     {"args": [descriptor], "kwargs": dict(kwargs)})), (descriptor,), kwargs, watch)
             return self._baseline_redraw(args, kwargs, hash_only, watch)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
-        entry = self.session.take(port, method, self.session.encode(raw, hash_arrays=hash_only))
+        encoded = self.session.encode(raw, hash_arrays=hash_only)
+        if port == "Sink" and self.session.video_sink_paths:
+            path = self.session.sink_path(encoded)
+            self.session.skip_video_sinks(keep=path)
+            if path in self.session.video_sink_paths:
+                ahead = self.session.peek()
+                if ahead is not None and (ahead["port"], ahead["method"]) == (port, method) \
+                        and self.session.sink_path(ahead["request"]) == path:
+                    self.session._next += 1  # the same output: its payload is the video's, not compared
+                self.depth += 1
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    self.depth -= 1
+        entry = self.session.take(port, method, encoded)
         if port == "Sink" and "exception" not in entry:
             # An output effect the record says succeeded: compared above, then made here too (the replay's own
             # output directory) -- a write that fails only here is a difference.
