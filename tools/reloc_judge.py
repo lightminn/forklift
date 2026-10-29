@@ -44,6 +44,7 @@ SUCCESS_M, SUCCESS_RAD = 0.10, 0.05
 WRONG_M, WRONG_RAD = 0.30, 0.10
 EPS = 1e-9  # the registered bounds are inclusive; a pose on one is not pushed over it by rounding
 HOLD_S = 10.0
+DEADLINE_S = 30.0  # the session deadline from the generation's first scan (RelocConfig, frozen with B-P1b)
 MAX_REPLY_GAP_S = 0.5  # the 10 Hz replies' grid: a longer silence is no shown hold
 MIN_VALID = 60
 SUCCESS_FLOOR = 0.70
@@ -51,6 +52,10 @@ DEADLINE_SHARE = 0.10
 WORKER_RETURN_S = 32.0
 OK_REPLIES = ("processed", "skipped")
 # the arguments that differ by session by design: its start, its output, its epoch folder, its ports
+# the world (plan 4.4a pools worlds under one measurement condition): kept per row, out of the argument set
+WORLD_ARGUMENTS = ("seed", "layout", "scene_file", "slam_map_bundle", "expected_map_id", "slam_choice")
+# the whole core and runner trees besides the files listed: a transitive dependency changes the verdict path too
+FINGERPRINT_TREES = ("src/forklift_core/**/*.py", "sim/isaac/*.py")
 PER_SESSION_ARGUMENTS = ("start_pose", "output", "reloc_dir", "live_port", "live_port_file", "slam_feedback",
                          "slam_map_dir", "live_epoch")
 FINGERPRINT_FILES = (
@@ -128,7 +133,8 @@ def _hold_ok(records: list | None, verdict: dict, probe: dict | None) -> bool:
     if records is None:
         return False
     t0 = float(verdict["sim_s"])
-    window = sorted((r for r in records if t0 - MAX_REPLY_GAP_S <= float(r.get("stamp_s", -1.0)) <= t0 + HOLD_S),
+    # from the running tick on: the warm-up's replies before it are the normal bootstrap (Codex round 2 P2)
+    window = sorted((r for r in records if t0 <= float(r.get("stamp_s", -1.0)) <= t0 + HOLD_S),
                     key=lambda r: float(r["stamp_s"]))
     if not window or any(r.get("status") not in OK_REPLIES or r.get("mode") != "tracking" for r in window):
         return False
@@ -142,21 +148,34 @@ def _hold_ok(records: list | None, verdict: dict, probe: dict | None) -> bool:
 def _args_signature(arguments) -> str | None:
     if not isinstance(arguments, dict):
         return None
-    kept = {k: v for k, v in arguments.items() if k not in PER_SESSION_ARGUMENTS}
+    kept = {k: v for k, v in arguments.items() if k not in PER_SESSION_ARGUMENTS + WORLD_ARGUMENTS}
     return hashlib.sha256(json.dumps(kept, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _source_mismatches(sources, fp: dict | None) -> list:
-    """The fingerprint's files whose hash the session's runner recorded differently (its keys: forklift_core/... for
-    the package, repository paths otherwise); a file the runner did not record is not compared here."""
-    if fp is None or not isinstance(sources, dict):
+    """The fingerprint's runner-tree files (the core package and sim/isaac, which the runner hashes in full) whose hash
+    the session's runner recorded differently -- or did not record: missing evidence is no match (Codex round 2 P2).
+    Its keys: forklift_core/... for the package, repository paths otherwise."""
+    if fp is None:
         return []
+    if not isinstance(sources, dict):
+        return ["source_sha256 (not recorded)"]
     out = []
     for rel, digest in fp["files"].items():
-        key = rel[len("src/"):] if rel.startswith("src/forklift_core/") else rel
-        if key in sources and sources[key] != digest:
+        if not (rel.startswith("src/forklift_core/") or rel.startswith("sim/isaac/")):
+            continue  # outside the runner's own hashing (the bridge, the launch, this judge): the fingerprint holds them
+        key = rel[len("src/"):] if rel.startswith("src/") else rel
+        if key not in sources:
+            out.append(f"{rel} (not recorded)")
+        elif sources[key] != digest:
             out.append(rel)
     return out
+
+
+def _world(arguments) -> dict | None:
+    if not isinstance(arguments, dict):
+        return None
+    return {k: arguments.get(k) for k in WORLD_ARGUMENTS}
 
 
 def _reason(row: dict, result) -> str:
@@ -168,7 +187,7 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
            "started": False, "outcome": None, "pose_class": None, "error_m": None, "error_rad": None,
            "hold_ok": None, "bridge_stage_s": None, "matcher_wall_max_s": None, "matcher_stage_max_s": None,
            "deadline_hit": False, "attempts": None, "truth_in_shown": None, "truth_in_candidates": None, "gaps": [],
-           "exit": None, "source_mismatches": [], "args_signature": None}
+           "exit": None, "source_mismatches": [], "args_signature": None, "world": None}
     result = _load(d / "epoch_1" / "run" / "result.json")
     events = _supervisor(d)
     exits = [e for e in events if e.get("event") == "exit"]
@@ -180,6 +199,7 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
     if result is not None:
         row["source_mismatches"] = _source_mismatches(result.get("source_sha256"), fp)
         row["args_signature"] = _args_signature(result.get("arguments"))
+        row["world"] = _world(result.get("arguments"))
     if (rec or {}).get("status") == "invalid" or _reason(row, result).startswith("reloc_invalid_input"):
         row["class"], row["outcome"] = "invalid", "invalid"  # by the reason, record or not (Codex P2)
         return row
@@ -199,7 +219,8 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
     row["matcher_wall_max_s"] = max(wall) if wall else None
     row["matcher_stage_max_s"] = max(stage) if stage else None
     row["deadline_hit"] = any(a.get("status") == "timeout" or a.get("reason") in ("timeout", "deadline")
-                              for a in attempts)
+                              or (a.get("stage_s") is not None and a["stage_s"] > DEADLINE_S)
+                              for a in attempts)  # any result past the shared deadline (Codex round 2 P2)
     truth = rec.get("truth")
     status = rec.get("status")
     if status == "needs_operator":
@@ -287,23 +308,32 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
     for r in rows:
         outcomes[r["outcome"]] = outcomes.get(r["outcome"], 0) + 1
     signatures = {r.get("args_signature") for r in rows if r.get("args_signature") is not None}
+    # a valid session whose matcher time is not known (it ended with no record) is no kept time (Codex round 2 P2)
+    unmeasured = sum(r.get("matcher_stage_max_s") is None and r["outcome"] != "config_error" for r in valid)
     off = sum(bool(r.get("source_mismatches")) for r in rows)
     events = wrong + imprecise
     return {
         "valid": n_valid, "invalid": sum(r["class"] == "invalid" for r in rows), "started": n_started,
         "wrong": wrong, "imprecise": imprecise, "unjudged_starts": unjudged, "success": success,
         "outcomes": outcomes,
-        "safety_upper_valid": cp_upper(events, n_valid), "safety_upper_started": cp_upper(events, n_started),
+        # an unjudged start may have been wrong: no bound then, and a conservative one counting it (Codex round 2 P2)
+        "safety_upper_valid": None if unjudged else cp_upper(events, n_valid),
+        "safety_upper_started": None if unjudged else cp_upper(events, n_started),
+        "safety_upper_valid_conservative": cp_upper(events + unjudged, n_valid),
+        "safety_upper_started_conservative": cp_upper(events + unjudged, n_started),
         "success_rate": success / n_valid if n_valid else None, "success_cp_lower": cp_lower(success, n_valid),
-        "deadline_hits": deadline, "worker_over_32s": slow,
+        "deadline_hits": deadline, "worker_over_32s": slow, "matcher_time_unmeasured": unmeasured,
         "bridge_stage_max_s": max((b for b in bridge if b is not None), default=None),
         "bridge_stage_missing": missing, "bridge_bound_s": bridge_bound_s,
         "sessions_off_fingerprint": off, "argument_sets": len(signatures),
+        "arguments_missing": sum(r.get("args_signature") is None for r in rows if r["outcome"] != "no_record"),
         "judged": judged,
         "floors": {
             "safety": None if not judged or (unjudged and not events) else events == 0,
             "success": (success / n_valid >= SUCCESS_FLOOR) if judged else None,
-            "matcher_time": (deadline <= DEADLINE_SHARE * n_valid and slow == 0) if judged else None,
+            "matcher_time": (None if not judged or (unmeasured and deadline <= DEADLINE_SHARE * n_valid
+                                                         and slow == 0)
+                             else deadline <= DEADLINE_SHARE * n_valid and slow == 0),
             "bridge_time": (None if bridge_bound_s is None or not judged or missing
                             else all(b <= bridge_bound_s for b in bridge)),
         },
@@ -315,9 +345,13 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
 
 
 def fingerprint(root: Path, image: str | None) -> dict:
+    root = Path(root)
+    names = set(FINGERPRINT_FILES)
+    for pattern in FINGERPRINT_TREES:
+        names |= {p.relative_to(root).as_posix() for p in root.glob(pattern) if "__pycache__" not in p.parts}
     files = {}
-    for rel in FINGERPRINT_FILES:
-        p = Path(root) / rel
+    for rel in sorted(names):
+        p = root / rel
         files[rel] = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
     return {"files": files, "image": image}
 
@@ -341,6 +375,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     fp = fingerprint(a.code_root, a.image)
     frozen = _load(a.frozen) if a.frozen else None
+    if a.frozen and (frozen is None or "fingerprint" not in frozen):
+        print(f"reloc_judge: the frozen record {a.frozen} is not there or has no fingerprint", file=sys.stderr)
+        return 2
     mismatches = fingerprint_mismatches(frozen["fingerprint"], fp) if frozen else None
     starts = json.loads(a.starts.read_text())["poses"]
     rows = judge_sessions(a.sessions, starts, fp)
@@ -348,7 +385,8 @@ def main(argv=None) -> int:
     out = {"fingerprint": fp, "fingerprint_mismatches": mismatches, "summary": summary, "rows": rows}
     a.out.write_text(json.dumps(out, indent=1, default=str) + "\n")
     print(json.dumps({"summary": summary, "fingerprint_mismatches": mismatches}, indent=1, default=str))
-    poolable = not mismatches and summary["sessions_off_fingerprint"] == 0 and summary["argument_sets"] <= 1
+    poolable = (not mismatches and summary["sessions_off_fingerprint"] == 0 and summary["argument_sets"] == 1
+                and summary["arguments_missing"] == 0)
     return 0 if poolable else 2
 
 

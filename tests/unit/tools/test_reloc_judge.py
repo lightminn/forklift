@@ -137,9 +137,9 @@ def test_a_missing_session_is_a_valid_failure_never_dropped(tmp_path):
 
 def test_the_summary_holds_the_registered_floors_and_bounds():
     rows = [{"class": "valid", "started": True, "outcome": "success", "pose_class": "success",
-             "matcher_wall_max_s": 3.0, "deadline_hit": False, "bridge_stage_s": 20.0, "gaps": []}] * 42
+             "matcher_wall_max_s": 3.0, "matcher_stage_max_s": 3.5, "deadline_hit": False, "bridge_stage_s": 20.0, "gaps": []}] * 42
     rows += [{"class": "valid", "started": False, "outcome": "needs_operator", "pose_class": None,
-              "matcher_wall_max_s": 9.0, "deadline_hit": False, "bridge_stage_s": None, "gaps": [],
+              "matcher_wall_max_s": 9.0, "matcher_stage_max_s": 28.0, "deadline_hit": False, "bridge_stage_s": None, "gaps": [],
               "truth_in_shown": False, "truth_in_candidates": True}] * 18
     s = J.summarize(rows, bridge_bound_s=60.0)
     assert s["valid"] == 60 and s["started"] == 42 and s["wrong"] == 0 and s["imprecise"] == 0
@@ -152,7 +152,7 @@ def test_the_summary_holds_the_registered_floors_and_bounds():
 
 def test_too_few_valid_sessions_are_not_judged():
     rows = [{"class": "valid", "started": True, "outcome": "success", "pose_class": "success",
-             "matcher_wall_max_s": 3.0, "deadline_hit": False, "bridge_stage_s": 20.0, "gaps": []}] * 59
+             "matcher_wall_max_s": 3.0, "matcher_stage_max_s": 3.5, "deadline_hit": False, "bridge_stage_s": 20.0, "gaps": []}] * 59
     s = J.summarize(rows, bridge_bound_s=60.0)
     assert s["floors"]["safety"] is None and s["judged"] is False  # plan 4.4: below 60 valid, reported, not judged
 
@@ -247,6 +247,75 @@ def test_each_session_is_held_to_the_fingerprint_and_one_argument_set(tmp_path):
     assert rows[0]["args_signature"] == rows[3]["args_signature"] != rows[2]["args_signature"]  # start/output aside
     s = J.summarize(rows, bridge_bound_s=60.0)
     assert s["sessions_off_fingerprint"] == 1 and s["argument_sets"] == 2
+
+
+# --- Codex B-P2d tooling review round 2 -------------------------------------------------------------------------------
+def test_the_warm_up_before_the_running_tick_is_not_part_of_the_hold(tmp_path):
+    # P2 1: warming_up replies before running are the normal bootstrap
+    recs = [{"scan_id": k, "stamp_s": 0.1 * k, "status": "processed", "mode": "warming_up"} for k in range(1, 7)]
+    recs += [{"scan_id": k, "stamp_s": 0.1 * k, "status": "processed", "mode": "tracking"} for k in range(7, 115)]
+    _session(tmp_path, "s1", records=recs)
+    [row] = J.judge_sessions(tmp_path, _starts("s1"))
+    assert row["hold_ok"] is True and row["outcome"] == "success"
+
+
+def test_any_attempt_past_the_shared_deadline_is_a_deadline_hit(tmp_path):
+    # P2 2: an unconfirmed result handled after the deadline is a deadline hit too
+    att = [{"reason": "competitor", "status": "ok", "wall_s": 20.0, "stage_s": 31.0, "candidates": []}]
+    _session(tmp_path, "s1", status="needs_operator", attempts=att, exit_code=1, reason="reloc_needs_operator: 0")
+    [row] = J.judge_sessions(tmp_path, _starts("s1"))
+    assert row["deadline_hit"] is True
+
+
+def test_an_unmeasured_matcher_time_leaves_the_time_floor_unjudged(tmp_path):
+    # P2 3: a session that died with no record cannot show its matcher kept the time
+    s = J.summarize([_good_row()] * 59 + [_good_row(started=False, outcome="no_record", pose_class=None,
+                                                    matcher_stage_max_s=None, bridge_stage_s=None)],
+                    bridge_bound_s=60.0)
+    assert s["matcher_time_unmeasured"] == 1 and s["floors"]["matcher_time"] is None
+
+
+def test_the_world_is_not_part_of_the_argument_set(tmp_path):
+    # P2 4: plan 4.4a pools worlds (seed, scene, map) under one measurement condition
+    _session(tmp_path, "s1")
+    _session(tmp_path, "s2", arguments={**ARGS, "seed": 3, "slam_map_bundle": "/other", "expected_map_id": "f" * 64})
+    r1, r2 = J.judge_sessions(tmp_path, _starts("s1", "s2"))
+    assert r1["args_signature"] == r2["args_signature"] and r1["world"] != r2["world"]
+
+
+def test_the_fingerprint_takes_the_whole_core_and_runner_trees():
+    # P2 5: a transitive dependency (e.g. _validation.py) changes the scan without any listed file changing
+    fp = J.fingerprint(ROOT, image="i")
+    assert "src/forklift_core/_validation.py" in fp["files"] and "sim/isaac/obstacle_layer.py" in fp["files"]
+    assert len([k for k in fp["files"] if k.startswith("src/forklift_core/")]) > 50
+
+
+def test_missing_evidence_is_not_a_match(tmp_path):
+    # P2 6: no source hashes, no arguments or a frozen file that is not there never pass as pooled
+    fp = {"files": {"sim/isaac/run_transport.py": "b" * 64}, "image": "i"}
+    _session(tmp_path, "s1", sources={"unrelated.py": "x"})
+    rows = J.judge_sessions(tmp_path, _starts("s1"), fp)
+    assert rows[0]["source_mismatches"] == ["sim/isaac/run_transport.py (not recorded)"]
+    run = tmp_path / "s2" / "epoch_1" / "run"
+    _session(tmp_path, "s2")
+    data = json.loads((run / "result.json").read_text())
+    data.pop("arguments")
+    (run / "result.json").write_text(json.dumps(data))
+    [r2] = J.judge_sessions(tmp_path, _starts("s2"), fp)
+    assert r2["args_signature"] is None and J.summarize([r2])["arguments_missing"] == 1
+    starts = tmp_path / "starts.json"
+    starts.write_text(json.dumps({"poses": _starts("s1")}))
+    rc = J.main(["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", "i",
+                 "--frozen", str(tmp_path / "missing.json"), "--out", str(tmp_path / "out.json")])
+    assert rc == 2
+
+
+def test_an_unjudged_start_leaves_the_safety_bounds_unjudged_and_gives_a_conservative_one():
+    # P2 7: an unrecorded start might have been wrong
+    rows = [_good_row()] * 59 + [_good_row(outcome="started_unrecorded", pose_class=None)]
+    s = J.summarize(rows, bridge_bound_s=60.0)
+    assert s["safety_upper_valid"] is None and s["safety_upper_started"] is None
+    assert s["safety_upper_valid_conservative"] == pytest.approx(J.cp_upper(1, 60))
 
 
 def test_the_fingerprint_covers_the_scan_odometry_and_runner_inputs():
