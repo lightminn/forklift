@@ -298,7 +298,49 @@ def test_argument_and_watched_changes_keep_the_callers_inner_objects(tmp_path):
     assert rcore["held"] is rheld and rheld == [1, 2, 3] and held == [1, 2, 3]
 
 
-def test_a_response_that_hands_back_an_argument_object_is_refused(tmp_path):
+def test_a_response_that_hands_back_an_argument_object_hands_back_the_replays_own(tmp_path):
+    replay_with = one_call(tmp_path, lambda lst: lst, lambda f: f([1]))
+    arg = [1]
+    assert replay_with(lambda f: f(arg)) is arg
+
+
+@dataclass(frozen=True)
+class Plan:
+    poses: np.ndarray
+    extra: dict | None = None
+
+
+def test_a_replaced_dataclass_keeps_the_arguments_shared_field_and_its_own_new_ones(tmp_path):
+    """Planner.final_straight_prefix: ``dataclasses.replace(path, poses=...)`` hands back ``path.extra`` itself
+    (a riib transport plan's exit_prefix dict); the replay puts the replayed argument's dict there, and only
+    there."""
+    import dataclasses
+
+    from forklift_core.mission import boundary_record as BR
+
+    def cut(plan):
+        return dataclasses.replace(plan, poses=plan.poses[:2].copy())
+
+    replay_with = one_call(tmp_path, cut, lambda f: f(Plan(np.arange(6.0).reshape(3, 2), {"status": "prefix"})))
+    arg = Plan(np.arange(6.0).reshape(3, 2), {"status": "prefix"})
+    out = replay_with(lambda f: f(arg))
+    assert out.extra is arg.extra and out.poses is not arg.poses and out.poses.tolist() == [[0.0, 1.0], [2.0, 3.0]]
+    assert BR._alias_paths(cut(arg), {"args": [arg], "kwargs": {}}) == [[["R", ".extra"], ["A", "'args'", 0, ".extra"]]]
+
+
+def test_an_argument_object_inside_a_response_tuple_comes_back_in_a_new_tuple(tmp_path):
+    replay_with = one_call(tmp_path, lambda lst: (lst, 2), lambda f: f([1]))
+    arg = [1]
+    out = replay_with(lambda f: f(arg))
+    assert type(out) is tuple and out[0] is arg and out[1] == 2
+
+
+def test_a_record_that_only_says_the_response_shares_an_argument_object_is_refused(tmp_path, monkeypatch):
+    """Records from before the alias paths (``response_aliases_request: true``), and a shared object with no
+    argument path, are still refused."""
+    from forklift_core.mission import boundary_record as BR
+
+    monkeypatch.setattr(BR, "_alias_paths", lambda response, raw: None)
     replay_with = one_call(tmp_path, lambda lst: lst, lambda f: f([1]))
     with pytest.raises(ReplayMismatch, match="argument's own object"):
         replay_with(lambda f: f([1]))
@@ -445,10 +487,10 @@ def test_a_registered_value_objects_attributes_are_restored(tmp_path):
     assert replay_with(call) == 7
 
 
-def test_a_response_sharing_a_value_objects_inner_list_is_refused(tmp_path):
+def test_a_response_sharing_a_value_objects_inner_list_hands_back_the_replays_own(tmp_path):
     replay_with = one_call(tmp_path, lambda act: act.joint, lambda f: f(Action([1])), value_types={"Action"})
-    with pytest.raises(ReplayMismatch, match="argument's own object"):
-        replay_with(lambda f: f(Action([1])))
+    act = Action([1])
+    assert replay_with(lambda f: f(act)) is act.joint
 
 
 def test_a_restoration_error_the_code_catches_still_fails_the_replay(tmp_path):
@@ -1322,3 +1364,190 @@ def test_a_physics_step_that_zeroes_the_command_is_restored_in_the_replay(tmp_pa
     slam_r = {"last_command": 0.3}
     replay_with(lambda f: f(1), watch_dicts_replay={"state": state_r, "slam": slam_r})
     assert state_r == {"applied_command": (0.0, [0.1, 0.1]), "command_speed": 0.0} and slam_r == {"last_command": 0.0}
+
+
+def _video_record(tmp_path, recorded):
+    """One tick whose Sink writes are ``recorded``: (path, payload) pairs."""
+    from forklift_core.mission.boundary_record import sink_effect
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    for path, payload in recorded:
+        sink_effect(gate, "write_text", path, payload)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+
+
+def _replay_writes(tmp_path, writes, video_paths=frozenset()):
+    from forklift_core.mission.boundary_record import sink_effect
+
+    session = ReplaySession(tmp_path)
+    session.video_sink_paths = frozenset(video_paths)
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    for path, payload in writes:
+        sink_effect(rgate, "write_text", path, payload)
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+    return session
+
+
+VIDEO = frozenset({"frame_audit.json", "plan_history.json"})
+
+
+def test_a_video_records_derived_outputs_are_matched_by_path_alone_and_may_be_absent_in_the_replay(tmp_path):
+    """2026-10-29 (riib scene records, video on): the video frames are made inside the physics step a replay does not
+    run, so what they fill (the frame audit, the overlay's plan history) is empty there -- those outputs are matched by
+    their path when the replay writes them and skipped when it does not; every other output is compared as ever."""
+    _video_record(tmp_path, [("obstacle_scans.json", "s"), ("plan_history.json", "p"), ("frame_audit.json", "f1"),
+                             ("meta.json", "m")])
+    s = _replay_writes(tmp_path, [("obstacle_scans.json", "s"), ("frame_audit.json", "f-empty"), ("meta.json", "m")],
+                       VIDEO)
+    assert s.skipped_video_sinks == ["plan_history.json"]
+    # a non-video output still compares its payload, and still must be there
+    with pytest.raises(ReplayMismatch, match="request differs"):
+        _replay_writes(tmp_path, [("obstacle_scans.json", "s2"), ("frame_audit.json", "f1"), ("meta.json", "m")], VIDEO)
+    with pytest.raises(ReplayMismatch):
+        _replay_writes(tmp_path, [("obstacle_scans.json", "s"), ("frame_audit.json", "f1")], VIDEO)
+
+
+def test_without_video_the_derived_outputs_compare_as_ever(tmp_path):
+    _video_record(tmp_path, [("plan_history.json", "p"), ("frame_audit.json", "f1")])
+    _replay_writes(tmp_path, [("plan_history.json", "p"), ("frame_audit.json", "f1")])
+    with pytest.raises(ReplayMismatch):
+        _replay_writes(tmp_path, [("frame_audit.json", "f-empty")])
+
+
+def test_a_trailing_unwritten_video_output_is_skipped_at_the_tick_end(tmp_path):
+    _video_record(tmp_path, [("meta.json", "m"), ("plan_history.json", "p")])
+    s = _replay_writes(tmp_path, [("meta.json", "m")], VIDEO)
+    assert s.skipped_video_sinks == ["plan_history.json"]
+
+
+def test_a_video_runs_frame_count_is_left_out_of_the_final_state_and_only_that(tmp_path):
+    """2026-10-29: the video frames a run counts are taken inside the physics step a replay does not run."""
+    def final(frames, other):
+        return {"containers": {"state": {"frames": frames, "result": other}}}
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.close(final_state=final(120, "a"))
+
+    def finish(state, video):
+        session = ReplaySession(tmp_path)
+        session.video_sink_paths = frozenset({"frame_audit.json"}) if video else frozenset()
+        session.finish(final_state=state)
+
+    finish(final(0, "a"), video=True)
+    with pytest.raises(ReplayMismatch, match="final state differs"):
+        finish(final(0, "b"), video=True)  # every other key still compared
+    with pytest.raises(ReplayMismatch, match="final state differs"):
+        finish(final(0, "a"), video=False)  # without video the count is compared as ever
+    finish(final(120, "a"), video=False)
+
+
+def test_a_video_output_the_record_does_not_have_fails(tmp_path):
+    """Codex review 1 P2: a video-derived output is matched by path, never let through without a recorded write."""
+    _video_record(tmp_path, [("meta.json", "m")])
+    with pytest.raises(ReplayMismatch, match="does not have"):
+        _replay_writes(tmp_path, [("frame_audit.json", "f"), ("meta.json", "m")], VIDEO)
+    _video_record(tmp_path / "two", [("frame_audit.json", "f"), ("meta.json", "m")])
+    with pytest.raises(ReplayMismatch, match="does not have"):  # one write recorded, two made
+        _replay_writes(tmp_path / "two", [("frame_audit.json", "f"), ("frame_audit.json", "f"), ("meta.json", "m")],
+                       VIDEO)
+
+
+def test_a_video_outputs_recorded_failure_comes_back_and_a_replay_only_failure_fails(tmp_path):
+    """Codex review 1 P2: the matched entry's exception is the replay's too (no write made), and a write that fails
+    only in the replay is a difference, as for every other output."""
+    from forklift_core.mission.boundary_record import sink_effect
+
+    def full_disk():
+        raise OSError(28, "No space left on device")
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises(OSError):
+        sink_effect(gate, "write_text", "frame_audit.json", "f", write=full_disk)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    session = ReplaySession(tmp_path)
+    session.video_sink_paths = VIDEO
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    wrote = []
+    with pytest.raises(OSError, match="No space"):
+        sink_effect(rgate, "write_text", "frame_audit.json", "f-empty", write=lambda: wrote.append(1))
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+    assert wrote == []
+
+    _video_record(tmp_path / "ok", [("frame_audit.json", "f")])
+    session = ReplaySession(tmp_path / "ok")
+    session.video_sink_paths = VIDEO
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="failed in the replay"):
+        try:
+            sink_effect(rgate, "write_text", "frame_audit.json", "f-empty", write=full_disk)
+        except OSError:
+            pass  # the code catching it does not hide it: the session failed
+        session.finish()
+
+
+def test_a_cyclic_response_sharing_an_argument_is_walked_once(tmp_path):
+    """Codex review 1 P2: a response list that holds itself twice and an argument -- each object walked once."""
+    import time
+
+    from forklift_core.mission import boundary_record as BR
+
+    def cyclic(arg):
+        r: list = []
+        r.extend((r, r, arg))
+        return r
+
+    arg = [1]
+    started = time.perf_counter()
+    assert BR._alias_paths(cyclic(arg), {"args": [arg], "kwargs": {}}) == [[["R", 2], ["A", "'args'", 0]]]
+    assert time.perf_counter() - started < 0.05
+    replay_with = one_call(tmp_path, cyclic, lambda f: f([1]))
+    rarg = [1]
+    out = replay_with(lambda f: f(rarg))
+    assert out[2] is rarg and out[0] is out
+
+
+def test_a_tuple_held_twice_gets_the_argument_at_both_places(tmp_path):
+    """Codex review 2 P2: the codec writes a tuple at each place it is held, so each place is its own pair."""
+    def twice(arg):
+        t = (arg,)
+        return [t, t]
+
+    replay_with = one_call(tmp_path, twice, lambda f: f([1]))
+    arg = [1]
+    out = replay_with(lambda f: f(arg))
+    assert out[0][0] is arg and out[1][0] is arg
+
+
+def test_a_skipped_video_output_whose_recorded_write_failed_fails_the_replay(tmp_path):
+    """Codex review 2 P2: a video output the replay does not make is skipped only when its recorded write succeeded,
+    mid-tick and at the tick end."""
+    from forklift_core.mission.boundary_record import sink_effect
+
+    def full_disk():
+        raise OSError(28, "No space left on device")
+
+    for name, after in (("mid", [("meta.json", "m")]), ("end", [])):
+        rec = BoundaryRecorder(tmp_path / name, value_format=2)
+        gate = RecordingGate(rec)
+        rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        try:
+            sink_effect(gate, "write_text", "plan_history.json", "p", write=full_disk)
+        except OSError:
+            pass  # the run caught it and went on
+        for path, payload in after:
+            sink_effect(gate, "write_text", path, payload)
+        rec.tick_end(outputs={}, branches=[])
+        rec.close()
+        with pytest.raises(ReplayMismatch, match="recorded write failed"):
+            _replay_writes(tmp_path / name, after, VIDEO)

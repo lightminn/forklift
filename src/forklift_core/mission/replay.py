@@ -27,6 +27,20 @@ import numpy as np
 from forklift_core.mission.replay_codec import Encoder, decode
 
 
+# End-state keys a run with video counts inside the physics step a replay does not run (its video frames).
+VIDEO_STATE_KEYS = (("containers", "state", "frames"),)
+
+
+def _drop_key(node, path) -> None:
+    """Remove the map key at ``path`` (map keys, outermost first) from an encoded node, if it is there."""
+    for key in path[:-1]:
+        if not (isinstance(node, dict) and isinstance(node.get("$map"), dict)):
+            return
+        node = node["$map"].get(key)
+    if isinstance(node, dict) and isinstance(node.get("$map"), dict):
+        node["$map"].pop(path[-1], None)
+
+
 class ReplayMismatch(AssertionError):
     """The replayed run asked something the recorded run did not, at this point."""
 
@@ -80,6 +94,45 @@ def _has_opaque(node: Any) -> bool:
     if isinstance(node, list):
         return any(_has_opaque(v) for v in node)
     return False
+
+
+def _step(node: Any, step):
+    """One step of a recorder path (boundary_record._walk): a dictionary key by its repr, a sequence index, an
+    attribute as ``.name``."""
+    if isinstance(node, dict):
+        import ast
+
+        return node[ast.literal_eval(step)]
+    if isinstance(step, str) and step.startswith("."):
+        return getattr(node, step[1:])
+    if isinstance(node, (list, tuple, collections.deque)) and isinstance(step, int):
+        return node[step]
+    raise KeyError(f"no step {step!r} into a {type(node).__name__}")
+
+
+def _put(node: Any, steps, value):
+    """``node`` with ``value`` at ``steps`` below it: in place in dictionaries, lists, deques and objects (a frozen
+    dataclass's field too -- the decoded response is the replay's own), a plain tuple rebuilt."""
+    if not steps:
+        return value
+    child = _step(node, steps[0])
+    new = _put(child, steps[1:], value)
+    if new is child:
+        return node
+    step = steps[0]
+    if isinstance(node, dict):
+        import ast
+
+        node[ast.literal_eval(step)] = new
+    elif isinstance(step, str) and step.startswith("."):
+        object.__setattr__(node, step[1:], new)
+    elif type(node) is tuple:
+        return tuple(new if i == step else v for i, v in enumerate(node))
+    elif isinstance(node, (list, collections.deque)):
+        node[step] = new
+    else:
+        raise TypeError(f"cannot put into a {type(node).__name__}")
+    return node
 
 
 def _resolve(qualname: str):
@@ -257,6 +310,7 @@ class ReplaySession:
             # Never set here but set in the record. (A tick the recorded run left before its times were known --
             # an exception between the clock read and tick_time -- keeps them unset in the record as well.)
             raise self.fail(f"tick {tick['tick']}: its head times were never set (tick_time)")
+        self.skip_video_sinks()
         if self._next != len(tick["calls"]):
             left = tick["calls"][self._next]
             raise self.fail(f"tick {tick['tick']}: {len(tick['calls']) - self._next} recorded calls not made, "
@@ -284,8 +338,14 @@ class ReplaySession:
             # Arrays by content hash (the node carries it): exact bytes, NaN included.
             node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True,
                            identity=False).encode(final_state)
-            if _canonical(node) != recorded.read_text().strip() and _canonical(node) != _canonical(
-                    json.loads(recorded.read_text())):
+            recorded_node = json.loads(recorded.read_text())
+            if self.video_sink_paths:  # a video run: the counts its frames keep are not the replay's (video_sink_paths)
+                for path in VIDEO_STATE_KEYS:
+                    _drop_key(node, path)
+                    _drop_key(recorded_node, path)
+                if _canonical(node) != _canonical(recorded_node):
+                    raise self.fail("the replay's final state differs from the recorded one")
+            elif _canonical(node) != recorded.read_text().strip() and _canonical(node) != _canonical(recorded_node):
                 raise self.fail("the replay's final state differs from the recorded one")
         if self.failure is not None:
             raise ReplayMismatch(f"the replay failed earlier: {self.failure}")
@@ -302,6 +362,35 @@ class ReplaySession:
         if self.tick is None or self._next >= len(self.tick["calls"]):
             return None
         return self.tick["calls"][self._next]
+
+    # Outputs a replay cannot make the same (set by the replay tool for a run recorded with video): the video frames
+    # are written inside the physics step a replay does not run, so what they fill -- the frame audit, the overlay's
+    # plan history and grid frames -- is not there. Such a Sink entry is matched by its path alone when the replay
+    # writes it, and skipped when it does not; every other entry is compared as ever.
+    video_sink_paths: frozenset = frozenset()
+
+    @staticmethod
+    def sink_path(node) -> str | None:
+        """The logical path of an encoded ``Sink`` request (``sink_effect``'s ``{"path", "sha256"}`` argument)."""
+        try:
+            return node["$map"]["args"]["$list"][0]["$map"]["path"]
+        except (KeyError, IndexError, TypeError):
+            return None
+
+    def skip_video_sinks(self, keep: str | None = None) -> None:
+        """Pass the recorded video-derived Sink entries ahead that the replay is not writing now (``keep``)."""
+        while self.video_sink_paths:
+            entry = self.peek()
+            if entry is None or entry["port"] != "Sink":
+                return
+            path = self.sink_path(entry["request"])
+            if path not in self.video_sink_paths or path == keep:
+                return
+            if "exception" in entry:  # the recorded run met a failure here that the replay never meets (Codex P2)
+                raise self.fail(f"Sink.{entry['method']} {path}: its recorded write failed and the replay does not "
+                                f"make it")
+            self.skipped_video_sinks = getattr(self, "skipped_video_sinks", []) + [path]
+            self._next += 1
 
     def _described(self, port: str, method: str) -> bool:
         """The call just before this one, already compared, is a ``Trace.callback_spec`` describing every
@@ -390,7 +479,20 @@ class ReplayGate:
                     {"args": [descriptor], "kwargs": dict(kwargs)})), (descriptor,), kwargs, watch)
             return self._baseline_redraw(args, kwargs, hash_only, watch)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
-        entry = self.session.take(port, method, self.session.encode(raw, hash_arrays=hash_only))
+        encoded = self.session.encode(raw, hash_arrays=hash_only)
+        entry = None
+        if port == "Sink" and self.session.video_sink_paths:
+            path = self.session.sink_path(encoded)
+            self.session.skip_video_sinks(keep=path)
+            if path in self.session.video_sink_paths:
+                ahead = self.session.peek()
+                if ahead is None or (ahead["port"], ahead["method"]) != (port, method) \
+                        or self.session.sink_path(ahead["request"]) != path:
+                    raise self.session.fail(f"Sink.{method} {path}: a video output the record does not have here")
+                self.session._next += 1  # the same output by path: its payload is the video's, not compared
+                entry = ahead  # its recorded failure, or the write and a replay-only failure, as below
+        if entry is None:
+            entry = self.session.take(port, method, encoded)
         if port == "Sink" and "exception" not in entry:
             # An output effect the record says succeeded: compared above, then made here too (the replay's own
             # output directory) -- a write that fails only here is a difference.
@@ -463,7 +565,8 @@ class ReplayGate:
         session = self.session
         where = f"{entry['port']}.{entry['method']}"
         changes = entry.get("changes") or {}
-        if changes.get("response_aliases_request"):
+        aliases = changes.get("response_aliases_request")
+        if aliases and not isinstance(aliases, list):  # a record from before the alias paths, or one with none
             raise session.fail(f"{where}: the response handed back an argument's own object (not replayable)")
         if changes.get("unsupported"):
             raise session.fail(f"{where}: a change outside the replay's model was recorded: {changes['unsupported']}")
@@ -503,9 +606,40 @@ class ReplayGate:
                 raise session.fail(f"{where}: restoring the recorded exception failed: {type(err).__name__}: {err}") from None
             raise exc
         try:
-            return session.decode(entry["response"])
+            response = session.decode(entry["response"])
         except Exception as exc:
             raise session.fail(f"{where}: restoring the recorded response failed: {type(exc).__name__}: {exc}") from None
+        if aliases:
+            response = self._own_arguments(response, aliases, args, kwargs, where)
+        return response
+
+    def _own_arguments(self, response, aliases: list, args: tuple, kwargs: dict | None, where: str):
+        """The recorded response with the replayed call's own argument objects where the recorded one handed back
+        its arguments' (``response_aliases_request`` pairs, :func:`boundary_record._alias_paths`); each is checked
+        to equal, by value, what the record decoded there."""
+        session = self.session
+        actual = {"args": list(args), "kwargs": dict(kwargs or {})}
+        try:
+            for response_path, argument_path in aliases:
+                if argument_path[:1] != ["A"] or response_path[:1] != ["R"]:
+                    raise ValueError(f"paths {response_path} {argument_path}")
+                held = actual
+                for step in argument_path[1:]:
+                    held = _step(held, step)
+                recorded = response
+                for step in response_path[1:]:
+                    recorded = _step(recorded, step)
+                if _canonical(session.encode(held, hash_arrays=True)) != _canonical(
+                        session.encode(recorded, hash_arrays=True)):
+                    raise session.fail(f"{where}: the argument at {argument_path} differs from the response's "
+                                       f"{response_path}")
+                response = _put(response, response_path[1:], held)
+        except ReplayMismatch:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- a path the record holds that this call does not
+            raise session.fail(f"{where}: restoring the response's argument objects failed: "
+                               f"{type(exc).__name__}: {exc}") from None
+        return response
 
     def _exception(self, record: dict) -> BaseException:
         if ":" not in record["type"]:

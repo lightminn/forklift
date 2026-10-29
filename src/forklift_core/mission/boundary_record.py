@@ -366,8 +366,9 @@ class RecordingGate:
         self.depth -= 1
         changes = self._changes(raw, before, hash_only, watch, marks, state)
         if self.recorder.value_format == 2 and _shares_objects(result, raw):
-            # A response that hands back an argument's own object: a replay cannot restore that identity.
-            changes = dict(changes or {}, response_aliases_request=True)
+            # A response that hands back an argument's own object: where, so a replay puts its own argument's object
+            # there (e.g. dataclasses.replace keeping a dict field); ``True`` when one has no argument path.
+            changes = dict(changes or {}, response_aliases_request=_alias_paths(result, raw) or True)
         self.recorder.call(port, method, request=None, encoded_request=before, response=result, changes=changes)
         return result
 
@@ -620,6 +621,49 @@ def _shares_objects(response: Any, raw: dict) -> bool:
         return False
     inner = _identities(raw, set()) - {id(raw), id(raw["args"]), id(raw["kwargs"])}
     return bool(inner & _identities(response, set()))
+
+
+def _alias_paths(response: Any, raw: dict) -> list | None:
+    """Where ``response`` holds an argument's own object: ``[response path, argument path]`` pairs, the outermost
+    shared objects only, response paths under ``("R",)`` and argument paths under ``("A", "'args'" | "'kwargs'")``
+    in :func:`_walk`'s steps. None when a shared object has no argument path."""
+    shared = _identities(raw, set()) - {id(raw), id(raw["args"]), id(raw["kwargs"])}
+    paths: dict = {}
+    _walk(raw["args"], ("A", "'args'"), paths, [])
+    _walk(raw["kwargs"], ("A", "'kwargs'"), paths, [])
+    where: dict = {}
+    for q, o in paths.items():
+        where.setdefault(id(o), q)
+    pairs: list = []
+    walked: set = set()  # the response's own containers: each walked once (a cycle, or one held twice -- the
+    # decoder restores that sharing, so the argument put at the first path is at the others too). Not tuples: the
+    # codec writes a tuple at each place, so each place needs its own pairs (Codex review 2 P2).
+
+    def visit(value, path, depth) -> bool:
+        if depth > 50 or _immutable(value):
+            return True
+        if id(value) in shared:  # every place, not only the first: each gets the argument's object
+            q = where.get(id(value))
+            if q is None or q in (("A", "'args'"), ("A", "'kwargs'")):
+                return False
+            pairs.append([list(path), list(q)])
+            return True
+        if not isinstance(value, tuple):
+            if id(value) in walked:
+                return True
+            walked.add(id(value))
+        if isinstance(value, dict):
+            return all(visit(v, path + (repr(k),), depth + 1) for k, v in value.items())
+        if isinstance(value, (list, tuple, collections.deque)):
+            return all(visit(v, path + (i,), depth + 1) for i, v in enumerate(value))
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            return all(visit(getattr(value, f.name), path + ("." + f.name,), depth + 1)
+                       for f in dataclasses.fields(value))
+        if hasattr(value, "__dict__") and not isinstance(value, type) and not callable(value):
+            return all(visit(v, path + ("." + k,), depth + 1) for k, v in vars(value).items() if not k.startswith("_"))
+        return True
+
+    return pairs if visit(response, ("R",), 0) and pairs else None
 
 
 def boundary_ending(exc: BaseException | None) -> dict:

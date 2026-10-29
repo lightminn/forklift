@@ -30,6 +30,8 @@ SERVICES = {
     "robot": "Vehicle", "world": "Clock", "pallet": "SimTruth", "stage": "Stage", "camera": "OverviewCamera",
     "pocket_camera": "PocketCamera", "perception_camera": "PerceptionCamera", "perception_display": "DisplayCamera",
     "perception_capture": "Capture", "boundary": "Boundary", "recorder": "PocketRecorder",
+    # the far recognition runtime (--recognition far), a port from the hand-over on (run_transport early_ports)
+    "far_runtime": "FarRecognition",
 }
 # Value types kept by their attributes (plain objects without a dataclass encoding).
 VALUE_TYPES = {"Namespace", "SimpleNamespace"}
