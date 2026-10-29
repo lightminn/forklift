@@ -72,6 +72,10 @@ class Estimate:
     attempts: int
 
 
+def _plain_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def _moved(c: Candidate, cfg: RelocConfig) -> bool:
     lp = c.search_pose
     d = math.atan2(math.sin(c.pose[2] - lp[2]), math.cos(c.pose[2] - lp[2]))
@@ -129,6 +133,8 @@ class StartRelocalizer:
         return self.state
 
     def pick(self, generation: int, index: int) -> tuple[bool, str]:
+        if not (_plain_int(generation) and _plain_int(index)):  # True is no generation 1 (Codex B-P2c design P2)
+            return False, "reloc_pick_refused"
         if self.state == "chosen" and self._picked == (generation, index):
             return True, "duplicate"
         if self.state != "awaiting_pick":
@@ -142,14 +148,23 @@ class StartRelocalizer:
         return True, ""
 
     def retry(self, generation: int) -> tuple[bool, str]:
-        if self.state not in ("awaiting_pick", "reloc_failed"):
+        if self.state not in ("awaiting_pick", "reloc_failed", "stopped"):
             return False, "reloc_not_awaiting"
-        if generation != self.generation:
+        if not _plain_int(generation) or generation != self.generation:
             return False, "reloc_stale_pick"
         self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []
         self.generation += 1
         self.deadline_at = None
         return True, ""
+
+    def interrupt(self) -> bool:
+        """A STOP before the estimate (B-P2c, Codex design P1): the attempt running or the candidates shown are
+        dropped and the generation moves on; a retry may follow. After the choice or the end it changes nothing."""
+        if self.state not in ("relocalizing", "awaiting_pick", "reloc_failed"):
+            return False
+        self.state, self.shown, self._pool = "stopped", (), []
+        self.generation += 1
+        return True
 
     def cancel(self) -> None:
         self.state, self.shown = "cancelled", ()
