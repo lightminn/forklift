@@ -94,6 +94,8 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
+  # the SLAM bridge's image: the tag by default; a judged batch names it by digest (B-P2d, Codex freeze review P2)
+  printf 'BRIDGE_IMAGE=%q\n' "${BRIDGE_IMAGE:-forklift/ros2-dev:jazzy}"
   printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
     "${SCENE_REQUIREMENTS_OVERRIDE:-}"  # scene requirements plan
 } > "$OUT/env.sh"
@@ -112,7 +114,9 @@ START=$MAP_START_POSE
                                  -e SLAM_MAP_START_POSE="$START")
 docker run -d --name "slam_bridge_${JOB}_e$1" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" "${LOC[@]}" \
-  forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
+  "$BRIDGE_IMAGE" bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
+# the image id this epoch's container runs, kept beside its records (a tag can move during a batch)
+docker inspect --format '{{.Image}}' "slam_bridge_${JOB}_e$1" > "$2/bridge/image_id"
 EOT
 cat > "$OUT/stop.sh" <<'EOT'
 #!/bin/bash

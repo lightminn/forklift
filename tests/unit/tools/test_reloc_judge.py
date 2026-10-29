@@ -20,13 +20,15 @@ TRUTH = [2.0, 1.0, 0.5]
 
 
 SOURCES = {"forklift_core/localization/global_match.py": "a" * 64, "sim/isaac/run_transport.py": "b" * 64}
+IMAGE_ID = "sha256:" + "e" * 64
+IMAGE = "forklift/ros2-dev@" + IMAGE_ID  # what a freeze names: the bridge image by digest
 ARGS = {"seed": 5, "slam_map_bundle": "/bundle", "start_pose": [2.0, 1.0, 0.5], "output": "x", "reloc_dir": "y"}
 
 
 def _session(root: Path, name: str, *, status="chosen", verdict_off=(0.02, 0.0, 0.0), hold=True, records=None,
              exit_code=0, reason=None, shown=None, attempts=None, gaps=None, estimate_source="matcher",
              probe_end=True, reloc_wall=(100.0, 103.0, 120.0), sources=None, arguments=None, result=True,
-             manifest=True):
+             manifest=True, image_id=IMAGE_ID):
     d = root / name
     run = d / "epoch_1" / "run"
     run.mkdir(parents=True)
@@ -53,6 +55,9 @@ def _session(root: Path, name: str, *, status="chosen", verdict_off=(0.02, 0.0, 
     spool.close()
     if not manifest:
         (run / "spool" / "manifest.json").unlink()
+    if image_id is not None:
+        (d / "epoch_1" / "bridge").mkdir(parents=True)
+        (d / "epoch_1" / "bridge" / "image_id").write_text(image_id + "\n")
     sup = [{"wall": 99.0, "event": "start", "epoch": 1}]
     if status == "chosen":
         sup += [{"wall": reloc_wall[0], "event": "reloc_pose"}, {"wall": reloc_wall[1], "event": "bridge_go"}]
@@ -244,7 +249,7 @@ def test_an_invalid_input_before_the_record_is_invalid_and_a_set_up_error_is_not
 def test_each_session_is_held_to_the_fingerprint_and_one_argument_set(tmp_path):
     # P2 4: the runner's own source hashes and the arguments it ran with, per session
     fp = {"files": {"src/forklift_core/localization/global_match.py": "a" * 64,
-                    "sim/isaac/run_transport.py": "b" * 64}, "image": "i"}
+                    "sim/isaac/run_transport.py": "b" * 64}, "image": IMAGE}
     _session(tmp_path, "s1")
     _session(tmp_path, "s2", sources={**SOURCES, "sim/isaac/run_transport.py": "c" * 64})
     _session(tmp_path, "s3", arguments={**ARGS, "slam_noise_seed": 7})
@@ -292,14 +297,14 @@ def test_the_world_is_not_part_of_the_argument_set(tmp_path):
 
 def test_the_fingerprint_takes_the_whole_core_and_runner_trees():
     # P2 5: a transitive dependency (e.g. _validation.py) changes the scan without any listed file changing
-    fp = J.fingerprint(ROOT, image="i")
+    fp = J.fingerprint(ROOT, image=IMAGE)
     assert "src/forklift_core/_validation.py" in fp["files"] and "sim/isaac/obstacle_layer.py" in fp["files"]
     assert len([k for k in fp["files"] if k.startswith("src/forklift_core/")]) > 50
 
 
 def test_missing_evidence_is_not_a_match(tmp_path):
     # P2 6: no source hashes, no arguments or a frozen file that is not there never pass as pooled
-    fp = {"files": {"sim/isaac/run_transport.py": "b" * 64}, "image": "i"}
+    fp = {"files": {"sim/isaac/run_transport.py": "b" * 64}, "image": IMAGE}
     _session(tmp_path, "s1", sources={"unrelated.py": "x"})
     rows = J.judge_sessions(tmp_path, _starts("s1"), fp)
     assert rows[0]["source_mismatches"] == ["sim/isaac/run_transport.py (not recorded)"]
@@ -330,14 +335,14 @@ def test_a_judgement_needs_the_frozen_record_which_has_its_own_mode(tmp_path):
     _session(tmp_path, "s1")
     starts = tmp_path / "starts.json"
     starts.write_text(json.dumps({"poses": _starts("s1")}))
-    base = ["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", "i",
+    base = ["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", IMAGE,
             "--out", str(tmp_path / "out.json")]
     assert J.main(base) == 2  # no --frozen: judged, never pooled
     frozen = tmp_path / "frozen.json"
-    assert J.main(["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", "i",
+    assert J.main(["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", IMAGE,
                    "--bridge-bound-s", "45"]) == 0
     data = json.loads(frozen.read_text())
-    assert data["bridge_bound_s"] == 45.0 and data["fingerprint"] == J.fingerprint(ROOT, "i")
+    assert data["bridge_bound_s"] == 45.0 and data["fingerprint"] == J.fingerprint(ROOT, IMAGE)
     assert not (tmp_path / "out.json").exists() or json.loads((tmp_path / "out.json").read_text())
 
 
@@ -347,3 +352,20 @@ def test_the_fingerprint_covers_the_scan_odometry_and_runner_inputs():
                 "src/forklift_core/mission/core.py", "config/obstacle_layer_single_team_spec.yaml",
                 "config/isaac_transport_measured.yaml"):
         assert rel in J.FINGERPRINT_FILES and (ROOT / rel).is_file(), rel
+
+
+def test_each_session_ran_the_frozen_bridge_image(tmp_path):
+    # Codex B-P2d freeze review P2: the image named by digest in the freeze, and each epoch's container's own image id
+    fp = {"files": {}, "image": IMAGE}
+    _session(tmp_path, "s1")
+    _session(tmp_path, "s2", image_id="sha256:" + "f" * 64)
+    _session(tmp_path, "s3", image_id=None)
+    rows = J.judge_sessions(tmp_path, _starts("s1", "s2", "s3"), fp)
+    assert rows[0]["source_mismatches"] == []
+    assert rows[1]["source_mismatches"] == ["bridge image sha256:" + "f" * 64]
+    assert rows[2]["source_mismatches"] == ["bridge image (not recorded)"]
+    tag = J.judge_sessions(tmp_path, _starts("s1"), {"files": {}, "image": "forklift/ros2-dev:jazzy"})
+    assert tag[0]["source_mismatches"] == ["bridge image (the freeze names no digest)"]
+    with pytest.raises(SystemExit):
+        J.main(["--make-frozen", str(tmp_path / "f.json"), "--code-root", str(ROOT), "--image",
+                "forklift/ros2-dev:jazzy", "--bridge-bound-s", "40"])

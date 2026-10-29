@@ -492,6 +492,27 @@ def test_the_placed_starts_height_is_judged_against_the_scene_starts_settle():
     assert run_.index("reloc_lidar(") < settled < run_.index("reloc_console = open_reloc_console(")
 
 
+def test_the_start_frames_compare_the_simulators_poses_with_the_formulas():
+    """Plan 3 (agy, Codex B-P2d freeze review P2): at a placed start, the simulator's base, rear axle (the rear wheel
+    links' midpoint) and LiDAR origin (the cast's own) against 1.1's formulas, within 1 mm in the Isaac check."""
+    import run_transport
+
+    yaw = math.pi / 2
+    base = (1.0, 2.0, yaw)
+    rear = (1.0, 2.0 - 0.34)  # base - 0.34 (cos, sin): at yaw pi/2 the axle is 0.34 m toward -y
+    wheels = {"rear_left_wheel": (rear[0] - 0.2, rear[1]), "rear_right_wheel": (rear[0] + 0.2, rear[1])}
+    laser = (1.0, 2.0 - 0.12)
+    rec = run_transport.start_frames((1.0, 2.001, yaw), base, wheels, laser, rear_axle_offset_m=0.34)
+    assert rec["base_from_target_m"] == pytest.approx(0.001)
+    assert rec["rear_error_m"] == pytest.approx(0.0, abs=1e-12)
+    assert rec["laser_error_m"] == pytest.approx(0.0, abs=1e-12)
+    flipped = run_transport.start_frames(base, base, {k: (v[0], v[1] + 0.68) for k, v in wheels.items()}, laser,
+                                         rear_axle_offset_m=0.34)
+    assert flipped["rear_error_m"] == pytest.approx(0.68)  # an axle on the wrong side is caught
+    run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
+    assert run_.index("reloc_reference_settle(") < run_.index("start_frames(") < run_.index("open_reloc_console(")
+
+
 def test_a_bundle_whose_map_is_not_the_world_is_refused(tmp_path):
     import run_transport
 

@@ -2847,6 +2847,40 @@ def reloc_reference_settle(engine, scene_start_base, target, *, spawn_z_m: float
     return replace(engine, settle_z_m=z)
 
 
+def start_frames(target, base, rear_wheels_xy: dict, laser_xy, *, rear_axle_offset_m: float) -> dict:
+    """Plan 3's frame check (plan 1.1): the simulator's base (``base``, world x, y, yaw), rear axle (the rear wheel
+    links' midpoint) and LiDAR origin (the shared cast's) against start_reloc's formulas from that base, and the base
+    against the placed ``target``. Recorded only (state ``reloc_reference.frames``); nothing reads it back."""
+    from forklift_core.localization import start_reloc as R
+
+    rear_sim = tuple(float(np.mean([xy[k] for xy in rear_wheels_xy.values()])) for k in (0, 1))
+    rear_f = R.rear_from_base(base, abs(rear_axle_offset_m))
+    laser_f = R.laser_from_base(base)
+    return {"target": [float(v) for v in target], "base": [float(v) for v in base],
+            "base_from_target_m": math.hypot(base[0] - target[0], base[1] - target[1]),
+            "rear_sim": list(rear_sim), "rear_formula": [rear_f[0], rear_f[1]],
+            "rear_error_m": math.hypot(rear_sim[0] - rear_f[0], rear_sim[1] - rear_f[1]),
+            "laser_sim": [float(laser_xy[0]), float(laser_xy[1])], "laser_formula": [laser_f[0], laser_f[1]],
+            "laser_error_m": math.hypot(laser_xy[0] - laser_f[0], laser_xy[1] - laser_f[1])}
+
+
+def sim_start_frames(args, robot, engine, target) -> dict:
+    """``start_frames`` from the simulator now: the articulation's base, its rear wheel links' poses from the physics
+    view, and the shared LiDAR cast's origin (planar_lidar, not start_reloc's formula)."""
+    import planar_lidar
+    import scan_capture
+
+    pos, q = robot.get_world_pose()
+    base = (float(pos[0]), float(pos[1]), scan_capture.yaw_roll_pitch(q)[0])
+    view = robot._articulation_view
+    links = np.asarray(view._physics_view.get_link_transforms()).reshape(-1, len(view.body_names), 7)[0]
+    wheels = {n: tuple(float(v) for v in links[view.get_body_index(n)][:2])
+              for n in ("rear_left_wheel", "rear_right_wheel")}
+    lx, ly, _ = planar_lidar.laser_pose_2d(np.asarray(pos, float), np.asarray(q, float),
+                                           planar_lidar.LaserMount(tuple(engine.laser_xyz_m), 0.0))
+    return start_frames(target, base, wheels, (lx, ly), rear_axle_offset_m=args.rear_axle_offset_m)
+
+
 RELOC_NOISE_ROOT = 20261029
 
 
@@ -4347,6 +4381,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         reloc_engine_ = reloc_reference_settle(reloc_engine_, scene_start_, spawn_base_pose(args, scenario),
                                                spawn_z_m=float(base_start[2]))
         state["reloc_reference"] = {"scene_start_base": list(scene_start_), "settle_z_m": reloc_engine_.settle_z_m}
+        try:  # plan 3's frame check, a record only: a failed read is kept as such and the session goes on
+            state["reloc_reference"]["frames"] = sim_start_frames(args, robot, reloc_engine_,
+                                                                  spawn_base_pose(args, scenario))
+        except Exception as exc:  # noqa: BLE001
+            state["reloc_reference"]["frames"] = {"error": f"{type(exc).__name__}: {exc}"}
         reloc_console = open_reloc_console(args, settings, robot, slam_bundle_, lift_index=lift_index, steers=steers,
                                            state=state)
         start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,

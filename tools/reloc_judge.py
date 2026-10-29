@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -173,6 +174,24 @@ def _source_mismatches(sources, fp: dict | None) -> list:
     return out
 
 
+def _image_digest(image: str | None) -> str | None:
+    m = re.search(r"sha256:[0-9a-f]{64}", image or "")
+    return m.group(0) if m else None
+
+
+def _image_mismatches(d: Path, fp: dict) -> list:
+    """The bridge image the session's epoch container ran (``bridge/image_id``, the launcher's ``docker inspect``)
+    against the freeze's digest: a tag can move during a batch (Codex B-P2d freeze review P2)."""
+    want = _image_digest(fp.get("image"))
+    if want is None:
+        return ["bridge image (the freeze names no digest)"]
+    try:
+        got = (d / "epoch_1" / "bridge" / "image_id").read_text().strip()
+    except OSError:
+        return ["bridge image (not recorded)"]
+    return [] if got == want else [f"bridge image {got}"]
+
+
 def _world(arguments) -> dict | None:
     if not isinstance(arguments, dict):
         return None
@@ -205,6 +224,8 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
         row["source_mismatches"] = _source_mismatches(result.get("source_sha256"), fp)
         row["args_signature"] = _args_signature(result.get("arguments"))
         row["world"] = _world(result.get("arguments"))
+    if fp is not None and (walls.get("reloc_pose") is not None or localized):  # the bridge was started
+        row["source_mismatches"] = row["source_mismatches"] + _image_mismatches(d, fp)
     if (rec or {}).get("status") == "invalid" or _reason(row, result).startswith("reloc_invalid_input"):
         row["class"], row["outcome"] = "invalid", "invalid"  # by the reason, record or not (Codex P2)
         return row
@@ -391,6 +412,8 @@ def main(argv=None) -> int:
     if a.make_frozen is not None:
         if a.bridge_bound_s is None or not math.isfinite(a.bridge_bound_s) or a.bridge_bound_s <= 0:
             ap.error("--make-frozen needs a positive --bridge-bound-s")
+        if _image_digest(a.image) is None:
+            ap.error("--make-frozen needs the bridge image by digest (...@sha256:<64 hex>)")
         a.make_frozen.write_text(json.dumps({"fingerprint": fp, "bridge_bound_s": float(a.bridge_bound_s)},
                                             indent=1) + "\n")
         return 0
