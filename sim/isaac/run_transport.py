@@ -2893,7 +2893,7 @@ def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple
 
 
 def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, frozen=None, pace_s: float = 1 / 120,
-                         clock=time.monotonic) -> dict:
+                         clock=None) -> dict:
     """B-P2b (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 3-10, unattended): the stopped truck's start
     relocalization on the survey bundle's grid with B-P1b's frozen settings (sim/isaac/reloc_phase.py). Returns the
     record (``state["start_reloc"]``) with the estimate (map base) and its rear axle, once the supervisor answered
@@ -2918,7 +2918,7 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         engine=engine, target=args.start_pose, grid=bundle.grid, index=index, match_cfg=cfg, reloc_cfg=reloc_cfg,
         angle_min_rad=float(angles[0]), angle_increment_rad=float(angles[1]), epoch_dir=Path(args.reloc_dir),
         settle_steps=0,  # the start settle (120 steps, 1 s) ran before: plan 1.2 step 3
-        pace_s=pace_s, clock=clock, noise_for=reloc_noise(args.seed)))
+        pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed)))
     record = {**out, "map_id": bundle.map_id, "settings": settings_record, "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
                                 if out["estimate"] is not None else None)}
@@ -4479,7 +4479,8 @@ def drive(S, isaac) -> None:
         transport_exit = _bound["transport_exit"]
     if "start_reloc" not in _bound:  # a setup recorded before the start relocalization (B-P2b, 2026-10-29)
         _bound["start_reloc"] = None
-    start_reloc = _bound["start_reloc"]
+    if "start_reloc" in _bound:
+        start_reloc = _bound["start_reloc"]
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     if "truth_destination" in _bound:
