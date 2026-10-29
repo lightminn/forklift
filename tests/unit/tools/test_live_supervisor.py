@@ -637,3 +637,30 @@ def test_a_term_during_the_bridge_command_ends_the_runner_without_waiting_for_th
                  bridge_ready="{epoch_dir}/bridge/bridge_ready", reloc_wait_s=600.0, grace_s=0.5)
     assert result["end"] == "terminated" and time.monotonic() - t0 < 10.0
     assert not (tmp_path / "epoch_1" / "bridge_go").exists()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("state, opened", [
+    ("relocalizing", True), ("awaiting_pick", True), ("reloc_failed", True), ("stopped", True),
+    ("localizing", True), ("running", True), ("ended", True), ("stop_failed", True), ("crashed", False)])
+def test_an_early_consoles_states_say_the_runner_opened_its_server(tmp_path, state, opened):
+    # B-P2c: a relocalizing runner opens its console before the localization; its port file says so in its own words
+    port = tmp_path / "port.json"
+    port.write_text(json.dumps({"pid": 42, "state": state, "started": 1000.0}))
+    assert sup._opened_its_server(port, since_wall=1000.0, pid=42) is opened
+
+
+def test_an_early_consoles_state_is_not_localization_ready(tmp_path):
+    # only running or localized_wall is (B-P2a); the early console never writes either before the warm-up ends
+    port = tmp_path / "port.json"
+    reloc = sup._RelocBridge(tmp_path, tmp_path, {"epoch": 1}, port, None, None, 10.0, 600.0)
+    reloc.phase = "running"
+    for state in ("relocalizing", "awaiting_pick", "stopped", "localizing"):
+        port.write_text(json.dumps({"pid": 42, "state": state, "started": 1000.0}))
+        reloc.observe()
+        assert not reloc.localized
+    port.write_text(json.dumps({"pid": 42, "state": "ended", "started": 1000.0, "localized_wall": 1010.0}))
+    reloc.observe()
+    assert reloc.localized

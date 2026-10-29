@@ -113,10 +113,13 @@ def test_a_start_pose_relocalizes_the_session(tmp_path):
     out = tmp_path / "out"
     preflight = (out / "preflight.log").read_text().splitlines()
     i = preflight.index("--start-pose=-4.0,3.0,-2.0")  # one word: a negative x is no option (Codex B-P2b P2)
-    assert preflight[i:i + 4] == ["--start-pose=-4.0,3.0,-2.0", "--start-relocalize", "--reloc-dir",
-                                  str(out / "preflight")]
+    assert preflight[i:i + 6] == ["--start-pose=-4.0,3.0,-2.0", "--start-relocalize", "--reloc-dir",
+                                  str(out / "preflight"), "--reloc-operator-timeout-s", "540"]
+    assert "--reloc-unattended" not in preflight  # B-P2c: the operator answers on the console by default
     supervisor = _supervisor(tmp_path)
     assert "--relocalize" in supervisor.split() and '"{map_start_pose}"' in supervisor
+    words = supervisor.split()
+    assert words[words.index("--reloc-wait-s") + 1] == "600"
     (tmp_path / "started").unlink()
     assert _bridge(tmp_path, "7,8,1").returncode == 0
     assert "SLAM_MAP_START_POSE=7,8,1" in (tmp_path / "started").read_text()  # the estimate, not the registry's
@@ -132,6 +135,20 @@ def test_without_a_start_pose_the_session_starts_as_before(tmp_path):
     (tmp_path / "started").unlink()
     assert _bridge(tmp_path).returncode == 0
     assert "SLAM_MAP_START_POSE=0.5,-1.0,0.3" in (tmp_path / "started").read_text()
+
+
+def test_an_unattended_relocalization_and_its_wait(tmp_path):
+    # B-P2c: unattended batches end at the operator's request; the operator's time is the supervisor's wait less 60 s
+    p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0", RELOC_UNATTENDED="1", RELOC_WAIT_S="300")
+    assert p.returncode == 0, p.stdout + p.stderr
+    preflight = (tmp_path / "out" / "preflight.log").read_text().splitlines()
+    assert "--reloc-unattended" in preflight
+    assert preflight[preflight.index("--reloc-operator-timeout-s") + 1] == "240"
+    words = _supervisor(tmp_path).split()
+    assert words[words.index("--reloc-wait-s") + 1] == "300"
+    for bad in ("60", "x", "-5"):  # (empty is unset: the 600 s default)
+        q = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0", RELOC_WAIT_S=bad)
+        assert q.returncode == 2 and "RELOC_WAIT_S" in q.stdout + q.stderr
 
 
 def test_a_start_pose_needs_a_survey_map(tmp_path):

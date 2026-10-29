@@ -57,6 +57,7 @@ class RelocConsole:
         self.notes: dict = {}
         self.gaps: list = []
         self.interrupts = 0
+        self.ended_by_operator = False
         self._last_call = None
         self._last_cycle = None
         self._stops_seen = parts.arbiter.stops
@@ -123,6 +124,7 @@ class RelocConsole:
                 self.interrupts += 1
         self._write_port(self.state)
         if arbiter.session_request == "end":
+            self.ended_by_operator = True  # whatever ends the runner after this, the session ended (Codex P2)
             raise RelocSessionEnd("the operator ended the session before the start was known")
 
     # --- helpers -----------------------------------------------------------------------------------------------------

@@ -1178,7 +1178,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "start_band_m": None, "escape_presteer": "off",
                               # 2026-10-29 B-P2b (start relocalization plan 1.4): every earlier run started at the
                               # scene's start, known; a relocalizing run from elsewhere is another condition
-                              "start_pose": None, "start_relocalize": False}
+                              "start_pose": None, "start_relocalize": False,
+                              # B-P2c: the operator's options of a relocalizing run; none before
+                              "reloc_unattended": False, "reloc_operator_timeout_s": None}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render
