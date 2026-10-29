@@ -523,6 +523,11 @@ function pickCandidate(reloc, index) {
     if (r && r.t === "ack") log(`출발 위치 후보 ${index + 1} 로 정했습니다 · SLAM 을 그 위치에서 시작합니다`);
   });
 }
+$("reloc-cands").onclick = (e) => {
+  const b = e.target.closest("button[data-candidate]");
+  const reloc = relocOf(m.session.state);
+  if (b && reloc && relocActions(reloc, m.session.hasLease).pick) pickCandidate(reloc, Number(b.dataset.candidate));
+};
 $("reloc-retry").onclick = () => {
   const reloc = relocOf(m.session.state);
   if (reloc && relocActions(reloc, m.session.hasLease).retry.enabled) req("relocalize_retry", { generation: reloc.generation });
@@ -897,6 +902,10 @@ function frame(now) {
   const agree = frameAgreement({ gridFrame: m.grid?.head.frame ?? null, poseFrame: st?.pose?.frame ?? null, scanFrame: m.scan?.frame ?? null });
   m.frameNote = agree.note;
   const scanOk = agree.scan && scanDrawable(m.scan ? { ageS: (now - m.scan.at) / 1000 } : null);
+  // B-P2c: the candidate a first click armed (drawn filled, its button says once more) until sent or timed out
+  const armedKey = m.confirm.armed?.key;
+  m.armedCandidate = armedKey?.kind === "relocalize_pick" && m.confirm.pending(armedKey, performance.now())
+    ? armedKey.candidate : null;
   drawMap(
     $("map"),
     {
@@ -908,9 +917,7 @@ function frame(now) {
       chassis: m.chassis,
       vehicleId: m.session.welcome?.vehicle_id,
       stale: m.stale,
-      // B-P2c: the candidate a first click armed (drawn filled until the second click or the confirm's time)
-      armedCandidate: m.confirm.armed?.key.kind === "relocalize_pick" && m.confirm.pending(m.confirm.armed.key, performance.now())
-        ? m.confirm.armed.key.candidate : null,
+      armedCandidate: m.armedCandidate,
     },
     tok,
     m.view,

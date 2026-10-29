@@ -155,6 +155,35 @@ def test_an_accepted_session_end_leaves_the_phase(tmp_path):
     assert rig.parts.arbiter.session_request == "end"
 
 
+def test_an_accepted_session_end_holds_even_if_the_port_file_cannot_be_written(tmp_path):
+    # Codex B-P2c impl review P2: the end is settled before anything that could fail
+    rig = Rig(tmp_path, _awaiting())
+    rig.console.open_port_file()
+    rig.service(60)
+    rig.lease()
+    rig.send("session_end")
+    rig.console.port_file = tmp_path / "missing" / "port.json"  # a write that fails
+    rig.console._port_state = None
+    with pytest.raises(RC.RelocSessionEnd):
+        rig.service(3)
+    assert rig.console.ended_by_operator
+
+
+def test_the_gate_alone_takes_a_stop_and_interrupts(tmp_path):
+    reloc = _awaiting()
+    rig = Rig(tmp_path, reloc)
+    rig.ch.message("A", "op", {"t": "stop", "request_id": "s1", "session_epoch": 5})
+    rig.console.gate("scan")
+    assert rig.parts.arbiter.mode == "STOPPED" and reloc.state == "stopped" and rig.console.interrupts == 1
+
+
+def test_a_choice_not_yet_sent_out_reads_as_localizing(tmp_path):
+    reloc = _awaiting()
+    rig = Rig(tmp_path, reloc)
+    reloc.pick(1, 0)
+    assert reloc.state == "chosen" and rig.console.state == "localizing"  # the contract has no "chosen"
+
+
 def test_a_reset_is_refused_while_the_start_is_unknown(tmp_path):
     rig = Rig(tmp_path, _awaiting())
     rig.parts.arbiter.sim_reset_allowed = True

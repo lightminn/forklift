@@ -121,6 +121,8 @@ def _run(inputs: RelocInputs) -> dict:
     engine_step = inputs.engine.step
 
     def step(stage: str) -> None:
+        if console is not None:
+            console.gate(stage)  # a STOP queued meanwhile is taken before the step (Codex B-P2c impl review P2)
         engine_step()
         if console is not None:
             console.service(stage)
@@ -130,6 +132,7 @@ def _run(inputs: RelocInputs) -> dict:
     if console is not None:
         console.attach(relocalizer)
         console.note(operator_deadline_at=inputs.operator_deadline_at)
+    relocalizer.expires_at = inputs.operator_deadline_at  # no pick or retry after it, in the handler too
     for _ in range(inputs.settle_steps):  # settle where it was placed (plan 1.2 step 3)
         step("settle")
     scan_key = 0  # every scan set of the session its own noise (a retry never reuses one, Codex B-P2c design P3)
@@ -138,10 +141,13 @@ def _run(inputs: RelocInputs) -> dict:
             relocalizer.cancel()
             out["status"] = "cancelled"
             return out
+        state = relocalizer.state
+        if state == "chosen":
+            break  # a pick taken before the operator's deadline (the handler refuses one after it)
         if inputs.operator_deadline_at is not None and inputs.clock() > inputs.operator_deadline_at:
+            relocalizer.cancel()  # nothing can be chosen from here on
             out["status"] = "operator_timeout"
             break
-        state = relocalizer.state
         if state == "relocalizing":
             relocalizer.start()  # the generation's first scan: its session deadline (plan 1.2 step 6)
             got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
@@ -154,13 +160,15 @@ def _run(inputs: RelocInputs) -> dict:
                 return out
             if relocalizer.state != "relocalizing":
                 continue  # a STOP during the scans
+            generation = relocalizer.generation
             match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, got["sent"]), step)
             if console is not None:
                 console.service("matched")  # the STOPs queued meanwhile, before the result counts
             record = {"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
                       "work": int(match.work), "wall_s": round(wall_s, 3),
                       "top": _candidate(match.candidates[0]) if match.candidates else None}
-            if relocalizer.state != "relocalizing":
+            if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
+                # a STOP (and maybe a retry since) came while it matched: the result is its old generation's
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
                 continue
             relocalizer.record(match, decision)
@@ -168,8 +176,6 @@ def _run(inputs: RelocInputs) -> dict:
             if console is not None:
                 console.note(last_reason=decision.reason)
             continue
-        if state == "chosen":
-            break
         if state in WAITING:
             if unattended:
                 break

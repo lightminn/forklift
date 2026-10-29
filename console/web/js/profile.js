@@ -249,6 +249,7 @@ export const REJECT = {
   reloc_stale_pick: "후보 목록이 바뀌었습니다 · 새 후보에서 다시 고르세요",
   reloc_pick_refused: "그 후보는 고를 수 없습니다",
   reloc_not_awaiting: "지금은 후보를 고르거나 다시 시도할 수 없습니다",
+  reloc_operator_timeout: "고르기·다시 시도 시간이 지났습니다",
   // the fake vehicle's own (console/mock_vehicle)
   fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
   load_present: "포크에 짐이 실려 있습니다",

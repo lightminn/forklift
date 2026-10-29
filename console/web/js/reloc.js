@@ -52,6 +52,17 @@ export function pickKey(reloc, index, base) {
            generation: reloc.generation, candidate: index };
 }
 
+// One button per candidate in the banner: the map's click reaches only one of two candidates on the same spot with
+// other headings (Codex B-P2c impl review P2); the heading in degrees tells them apart.
+export function candidateButtons(reloc, actions) {
+  if (reloc?.state !== "awaiting_pick") return [];
+  return (reloc.candidates ?? []).map((c) => {
+    const deg = Math.round(((c.base[2] * 180) / Math.PI + 360) % 360);
+    return { index: c.index, label: `후보 ${c.index + 1} · ${Number(c.score).toFixed(2)} · ${deg}°`,
+             enabled: Boolean(actions?.pick) };
+  });
+}
+
 export function candidateAt(view, w, h, reloc, px, py) {
   if (!reloc || !view.fitted) return null;
   let best = null;

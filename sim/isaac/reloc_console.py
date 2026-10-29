@@ -98,9 +98,17 @@ class RelocConsole:
     def state(self) -> str:
         if self._override is not None:
             return self._override
-        return self.reloc.state if self.reloc is not None else "relocalizing"
+        if self.reloc is None:
+            return "relocalizing"
+        # the pick or the matcher's choice before the estimate goes out is the contract's localizing (Codex P3)
+        return "localizing" if self.reloc.state == "chosen" else self.reloc.state
 
-    # --- the main thread's call --------------------------------------------------------------------------------------
+    # --- the main thread's calls -------------------------------------------------------------------------------------
+    def gate(self, stage: str) -> None:
+        """The STOPs only: right before a physics step (Codex B-P2c impl review P2)."""
+        self.parts.link.gate(self.clock())
+        self._interrupt_on_stop()
+
     def service(self, stage: str) -> None:
         now = self.clock()
         if self._last_call is not None and now - self._last_call > self.record_gap_s:
@@ -108,24 +116,33 @@ class RelocConsole:
         self._last_call = now
         link, arbiter = self.parts.link, self.parts.arbiter
         link.gate(now)  # every STOP before anything, at every call
+        out = None
         if self._last_cycle is None or now - self._last_cycle >= self.tick_s - 1e-9:
             self._last_cycle = now
             speed, yaw_rate, lift_m, steering_rad = self.measure()
             link.begin(now, Feedback(now, speed, yaw_rate, lift_m=lift_m, steering_rad=steering_rad))
             out = link.end(now, [], SAFE, (0.0, 0.0))
-            if link.state_due(now):
+        if arbiter.session_request == "end":
+            # accepted: the session's end, before anything below can fail (Codex B-P2c impl review P2)
+            self.ended_by_operator = True
+        self._interrupt_on_stop()
+        try:
+            if out is not None and link.state_due(now):
                 msg = state_message(arbiter, out, SAFE, now_mono=now, rear_axle_speed_mps=speed, pose=None,
                                     lift_m=lift_m)
                 msg["slam"] = {**self.slam_info, "reloc": self._reloc_info(now)}
                 self.parts.channels.put(None, msg)
+            self._write_port(self.state)
+        finally:
+            if self.ended_by_operator:
+                raise RelocSessionEnd("the operator ended the session before the start was known")
+
+    def _interrupt_on_stop(self) -> None:
+        arbiter = self.parts.arbiter
         if arbiter.stops != self._stops_seen:
             self._stops_seen = arbiter.stops
             if self.reloc is not None and self.reloc.interrupt():
                 self.interrupts += 1
-        self._write_port(self.state)
-        if arbiter.session_request == "end":
-            self.ended_by_operator = True  # whatever ends the runner after this, the session ended (Codex P2)
-            raise RelocSessionEnd("the operator ended the session before the start was known")
 
     # --- helpers -----------------------------------------------------------------------------------------------------
     def _reloc_info(self, now: float) -> dict:

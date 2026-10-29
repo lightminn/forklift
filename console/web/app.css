@@ -290,6 +290,8 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 /* B-P2c: the start relocalization over the map (the truck's place is unknown until it ends) */
 .reloc-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--accent); color: var(--fg); font-size: 12.5px; padding: 6px 10px 6px 14px; border-radius: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / 0.4); }
 .reloc-banner b { color: var(--accent); font-weight: 600; }
+.reloc-cands { display: flex; flex-wrap: wrap; gap: 6px; }
+.reloc-cands .btn[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
 .nostop { position: fixed; inset: 0; z-index: 22; /* under the top bar: its STOP stays reachable */ display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: rgb(127 16 16 / 0.92); color: #fff; text-align: center; padding: 24px; cursor: pointer; }
 .nostop b { font-size: clamp(26px, 5vw, 48px); }
 .nostop span { font-size: clamp(18px, 3vw, 28px); }

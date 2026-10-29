@@ -166,6 +166,9 @@ class FakeConsole:
     def localizing(self):
         self.state_override = "localizing"
 
+    def gate(self, stage):
+        pass
+
     def service(self, stage):
         self.calls += 1
         self.stages.append(stage)
@@ -228,6 +231,64 @@ def test_a_stop_between_the_matchers_return_and_the_estimate_drops_a_confirmed_r
                         operator_deadline_at=time.monotonic() + 3.0))
     assert out["attempts"][0]["reason"] == "interrupted" and R.read_reloc_pose(tmp_path) is None
     assert out["status"] == "operator_timeout"  # nobody retried: the operator budget ended it
+
+
+def test_a_stop_and_a_quick_retry_never_count_the_old_workers_result(tmp_path):
+    # Codex B-P2c impl review P2: the old worker's result belongs to its generation, not to the retry's attempt
+    seen = {"n": 0}
+
+    def script(console, stage):
+        r = console.reloc
+        if stage == "matching" and seen["n"] == 0:
+            seen["n"] = 1
+            assert r.interrupt()
+            assert r.retry(r.generation) == (True, "")  # both before the old worker returned
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script), unattended=False))
+    assert out["status"] == "chosen"
+    assert [a["reason"] for a in out["attempts"]] == ["interrupted", "confirmed"]
+
+
+def test_a_pick_after_the_operators_time_is_refused_and_nothing_is_committed(tmp_path):
+    # Codex B-P2c impl review P2: the operator's deadline holds for the pick itself
+    clock = {"t": 0.0}
+    tried = {}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and "pick" not in tried:
+            clock["t"] = 41.0  # the operator answers a second after the deadline
+            tried["pick"] = r.pick(r.generation, 0)
+
+    out = P.run(_symmetric(tmp_path, FakeConsole(script), clock=lambda: clock["t"], operator_deadline_at=40.0,
+                           pace_s=0.0))
+    assert tried["pick"] == (False, "reloc_operator_timeout")
+    assert out["status"] == "operator_timeout" and R.read_reloc_pose(tmp_path) is None
+
+
+def test_the_stop_gate_runs_before_every_physics_step(tmp_path):
+    # Codex B-P2c impl review P2: a STOP queued before a step is taken before that step
+    order = []
+
+    class GatedConsole(FakeConsole):
+        def gate(self, stage):
+            order.append("gate")
+
+        def service(self, stage):
+            order.append("service")
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    truck = FakeTruck(grid, base)
+    real_step = truck.step
+    truck.step = lambda: (order.append("step"), real_step())
+    _go_later(tmp_path)
+    P.run(_inputs(tmp_path, grid, truck, base, console=GatedConsole(), unattended=False))
+    steps = [i for i, x in enumerate(order) if x == "step"]
+    assert steps and all(order[i - 1] == "gate" for i in steps)
 
 
 def test_the_operator_budget_ends_a_wait_nobody_answers(tmp_path):

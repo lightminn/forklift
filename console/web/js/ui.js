@@ -5,7 +5,7 @@ import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfter
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
-import { relocActions, relocOf, relocSummary } from "./reloc.js";
+import { candidateButtons, relocActions, relocOf, relocSummary } from "./reloc.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -236,6 +236,24 @@ export function render(m) {
     $("reloc-retry").hidden = !["awaiting_pick", "reloc_failed", "stopped"].includes(reloc.state);
     $("reloc-retry").disabled = !act.retry.enabled;
     $("reloc-why").textContent = act.retry.enabled ? (act.pick ? "후보를 두 번 눌러 확정" : "") : act.retry.why;
+    // one button per candidate (two at one place with other headings both reachable); rebuilt when the set changes
+    const buttons = candidateButtons(reloc, act);
+    const armed = m.armedCandidate ?? null;
+    const sig = JSON.stringify([buttons, armed]);
+    const holder = $("reloc-cands");
+    if (holder.dataset.sig !== sig) {
+      holder.dataset.sig = sig;
+      holder.replaceChildren(...buttons.map((b) => {
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className = "btn";
+        el.dataset.candidate = String(b.index);
+        el.textContent = armed === b.index ? `${b.label} · 한 번 더` : b.label;
+        el.disabled = !b.enabled;
+        el.setAttribute("aria-pressed", String(armed === b.index));
+        return el;
+      }));
+    }
   }
 
   // progress strip and destination

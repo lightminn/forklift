@@ -2864,9 +2864,18 @@ class ServicedExchange:
 
         helper = threading.Thread(target=work, name="slam-bootstrap-exchange", daemon=True)
         helper.start()
-        while helper.is_alive():
-            self.service("prewarm_exchange")
-            helper.join(self.tick_s)
+        try:
+            while helper.is_alive():
+                self.service("prewarm_exchange")
+                helper.join(self.tick_s)
+        except BaseException:
+            # leaving with the reply outstanding (the operator's end): close the link so the helper's blocking read
+            # ends, and take the helper back (Codex B-P2c impl review P2)
+            try:
+                self.inner.close()
+            finally:
+                helper.join(2.0)
+            raise
         if "error" in box:
             raise box["error"]
         return box["reply"]
@@ -2878,11 +2887,16 @@ class ServicedExchange:
 def operator_ended(state: dict, exc) -> bool:
     """B-P2c (Codex B-P2c design P2): the operator ended the session before the start was known -- that is the
     session's end (exit 0, no restart), whatever ended the runner after it (a late SLAM reply timeout included)."""
+    console = _EARLY["console"]
+    if console is None:  # no early console: nothing to import (a batch run may not have its dependencies)
+        return bool(state.get("operator_ended"))
     import reloc_console
 
-    console = _EARLY["console"]
+    # the arbiter's own record of an accepted end counts even when what followed it failed before the console's
+    # flag was set (Codex B-P2c impl review P2)
+    accepted = getattr(getattr(getattr(console, "parts", None), "arbiter", None), "session_request", None) == "end"
     return (isinstance(exc, reloc_console.RelocSessionEnd) or bool(state.get("operator_ended"))
-            or (console is not None and getattr(console, "ended_by_operator", False)))
+            or bool(getattr(console, "ended_by_operator", False)) or accepted)
 
 
 def open_reloc_console(args, settings: dict, robot, bundle, *, lift_index, steers, state: dict):
@@ -2914,7 +2928,8 @@ def open_reloc_console(args, settings: dict, robot, bundle, *, lift_index, steer
         grid=bundle.grid)
     console.open()
     _EARLY["console"] = console
-    state["reloc_console"] = {"port": parts.server.port, "session_epoch": parts.session_epoch}
+    # the gaps from the opening on, the same list, so a phase that fails still leaves them (Codex P3)
+    state["reloc_console"] = {"port": parts.server.port, "session_epoch": parts.session_epoch, "gaps": console.gaps}
     return console
 
 
@@ -4269,7 +4284,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         start_reloc = start_relocalization(args, state, *reloc_lidar(args, settings, world, robot, obstacle["layer"],
                                                                      initial_base), slam_bundle_,
                                            console=reloc_console)
-        state["reloc_console"]["gaps"] = reloc_console.gaps  # (kept up to date: the same list)
         reloc_console.service("setup")
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
@@ -7808,16 +7822,20 @@ def drive(S, isaac) -> None:
                 reloc_console.service("prewarm")
                 slam_lockstep_ = slam["link"]
                 slam["link"] = ServicedExchange(slam_lockstep_, reloc_console.service)
-            while slam["tracker"].mode == "warming_up" or (slam.get("gyro") is not None
-                                                           and slam["gyro"]["bias"] is None):
-                step_world(False)
-                prewarm_steps_ += 1
+            try:
+                while slam["tracker"].mode == "warming_up" or (slam.get("gyro") is not None
+                                                               and slam["gyro"]["bias"] is None):
+                    if reloc_console is not None:
+                        reloc_console.gate("prewarm")  # a STOP queued meanwhile, before the step (Codex P2)
+                    step_world(False)
+                    prewarm_steps_ += 1
+                    if reloc_console is not None:
+                        reloc_console.service("prewarm")
+                    if prewarm_steps_ > 120 * 60:
+                        raise SessionFailure("slam_prewarm_timeout")
+            finally:
                 if reloc_console is not None:
-                    reloc_console.service("prewarm")
-                if prewarm_steps_ > 120 * 60:
-                    raise SessionFailure("slam_prewarm_timeout")
-            if reloc_console is not None:
-                slam["link"] = slam_lockstep_
+                    slam["link"] = slam_lockstep_
             if os.environ.get("FORKLIFT_LIVE_ASYNC_SLAM", "1") != "0":
                 # (a localization run warms up -- its map checks -- before the server opens either way, plan L4)
                 slam["async_link"] = slam["module"].AsyncSlamLink(
@@ -10186,8 +10204,12 @@ def main() -> None:
             traceback.print_exc()
     finally:
         if _EARLY["console"] is not None and not _EARLY["adopted"]:
-            # B-P2c: the early console's server and port file, when the live runtime never took them over
-            state["reloc_console"]["closed"] = _EARLY["console"].close("ended")
+            # B-P2c: the early console's server and port file, when the live runtime never took them over; a close
+            # that fails is recorded and never skips the record's end and the exit code below (Codex impl review P2)
+            try:
+                state["reloc_console"]["closed"] = _EARLY["console"].close("ended")
+            except Exception as close_exc:  # noqa: BLE001
+                state["reloc_console"]["closed"] = f"{type(close_exc).__name__}: {close_exc}"
         # Failures before the mission loop's own finally (initial planning, the bootstrap): the record's ending
         # is that exception (Codex R3/R4 review P2).
         close_boundary_record(state, failure_exc)

@@ -2,7 +2,7 @@
 // screen says, what the operator may do, the candidate a click lands on and the pick it sends.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { candidateAt, pickKey, relocActions, relocOf, relocSummary } from "../js/reloc.js";
+import { candidateAt, candidateButtons, pickKey, relocActions, relocOf, relocSummary } from "../js/reloc.js";
 import { contentBounds } from "../js/mapview.js";
 import { ConfirmGate } from "../js/results.js";
 
@@ -63,6 +63,20 @@ test("the confirm sends only a second click on the same candidate of the same se
   assert.equal(gate.click(pickKey(RELOC, 1, base), 10), "armed"); // another candidate arms it instead
   assert.equal(gate.click(pickKey({ ...RELOC, generation: 3 }, 1, base), 20), "armed"); // a newer set: again
   assert.equal(gate.click(pickKey({ ...RELOC, generation: 3 }, 1, base), 30), "send");
+});
+
+test("every candidate has its own button, also two at one place with other headings", () => {
+  // Codex B-P2c impl review P2: the map's click reaches one of two candidates on the same spot only
+  const twin = { ...RELOC, candidates: [
+    { index: 0, base: [3.0, 2.0, 0.0], score: 0.9, endpoint_fraction: 0.97 },
+    { index: 1, base: [3.0, 2.0, 3.14], score: 0.89, endpoint_fraction: 0.96 }] };
+  const buttons = candidateButtons(twin, relocActions(twin, true));
+  assert.deepEqual(buttons.map((b) => b.index), [0, 1]);
+  assert.ok(buttons.every((b) => b.enabled));
+  assert.match(buttons[1].label, /후보 2/);
+  assert.match(buttons[1].label, /180°/); // the heading tells the twins apart
+  assert.ok(candidateButtons(twin, relocActions(twin, false)).every((b) => !b.enabled));
+  assert.deepEqual(candidateButtons({ ...twin, state: "relocalizing" }, relocActions(twin, true)), []);
 });
 
 test("a click lands on the candidate under it, at the map's scale", () => {

@@ -90,6 +90,7 @@ class StartRelocalizer:
         self.cfg, self.clock = cfg, clock
         self.state, self.generation, self.attempts = "relocalizing", 0, 0
         self.deadline_at: float | None = None
+        self.expires_at: float | None = None  # B-P2c: the operator's whole time (clock time); no pick or retry after
         self.estimate: Estimate | None = None
         self.shown: tuple = ()
         self._pool: list = []  # the pickable candidates every attempt of this generation produced, one per place
@@ -132,9 +133,14 @@ class StartRelocalizer:
         self.state = "awaiting_pick" if self.shown else "reloc_failed"
         return self.state
 
+    def _expired(self) -> bool:
+        return self.expires_at is not None and self.clock() > self.expires_at
+
     def pick(self, generation: int, index: int) -> tuple[bool, str]:
         if not (_plain_int(generation) and _plain_int(index)):  # True is no generation 1 (Codex B-P2c design P2)
             return False, "reloc_pick_refused"
+        if self._expired():  # the operator's time is over (Codex B-P2c impl review P2)
+            return False, "reloc_operator_timeout"
         if self.state == "chosen" and self._picked == (generation, index):
             return True, "duplicate"
         if self.state != "awaiting_pick":
@@ -150,6 +156,8 @@ class StartRelocalizer:
     def retry(self, generation: int) -> tuple[bool, str]:
         if self.state not in ("awaiting_pick", "reloc_failed", "stopped"):
             return False, "reloc_not_awaiting"
+        if self._expired():
+            return False, "reloc_operator_timeout"
         if not _plain_int(generation) or generation != self.generation:
             return False, "reloc_stale_pick"
         self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []

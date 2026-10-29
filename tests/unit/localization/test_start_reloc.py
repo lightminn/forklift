@@ -253,6 +253,17 @@ def test_a_pick_takes_plain_integers_in_range_only(generation, index):
     assert not ok and why in ("reloc_pick_refused", "reloc_stale_pick") and r.state == "awaiting_pick"
 
 
+def test_no_pick_or_retry_after_the_operators_time():
+    # Codex B-P2c impl review P2: the operator's deadline holds in the handler, not only in the phase's loop
+    clock = Clock()
+    r = _reloc(clock, attempts=1)
+    r.record(_match(_cand((3.0, 1.0, 0.5)), _cand((9.0, 4.0, 2.0))), G.Decision(False, "competitor", 0.98))
+    r.expires_at = clock.t + 10.0
+    clock.t += 11.0
+    assert r.pick(1, 0) == (False, "reloc_operator_timeout") and r.state == "awaiting_pick"
+    assert r.retry(1) == (False, "reloc_operator_timeout")
+
+
 def test_a_retry_takes_a_plain_integer_generation():
     r = _reloc(attempts=1)
     r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(False, "low_fit", 0.9))

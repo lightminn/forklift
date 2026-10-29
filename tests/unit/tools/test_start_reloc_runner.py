@@ -194,13 +194,75 @@ def test_an_exchange_failure_and_a_session_end_both_leave_the_exchange():
         run_transport.ServicedExchange(_SlowLink("reply", delay=0.2), end, tick_s=0.005).exchange("scan")
 
 
-def test_an_operator_end_before_the_localization_is_the_sessions_end():
+def test_an_operator_end_before_the_localization_is_the_sessions_end(monkeypatch):
     import reloc_console
     import run_transport
 
+    console = SimpleNamespace(ended_by_operator=False,
+                              parts=SimpleNamespace(arbiter=SimpleNamespace(session_request=None)))
+    monkeypatch.setitem(run_transport._EARLY, "console", console)
     assert run_transport.operator_ended({}, reloc_console.RelocSessionEnd("x")) is True
     assert run_transport.operator_ended({"operator_ended": True}, RuntimeError("slam reply timeout")) is True
     assert run_transport.operator_ended({}, RuntimeError("slam reply timeout")) is False
+    # Codex B-P2c impl review P2: an accepted end counts even when what followed it failed before the flag was set
+    console.parts.arbiter.session_request = "end"
+    assert run_transport.operator_ended({}, OSError("port file")) is True
+
+
+def test_a_run_without_the_early_console_never_imports_it(monkeypatch):
+    # Codex B-P2c impl review P2: a batch failure must not meet a missing console dependency
+    import run_transport
+
+    monkeypatch.setitem(run_transport._EARLY, "console", None)
+    monkeypatch.setitem(sys.modules, "reloc_console", None)  # an import would raise
+    assert run_transport.operator_ended({}, RuntimeError("anything")) is False
+
+
+def test_a_session_end_while_the_bootstrap_waits_closes_the_link_and_ends_the_helper():
+    # Codex B-P2c impl review P2: the helper is ended on every way out, not left blocked in its socket
+    import threading
+
+    import run_transport
+
+    class Blocking:
+        def __init__(self):
+            self.released = threading.Event()
+
+        def exchange(self, scan):
+            self.released.wait(10.0)
+            raise ConnectionError("closed")
+
+        def close(self):
+            self.released.set()
+
+    class End(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def service(stage):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise End()
+
+    inner = Blocking()
+    with pytest.raises(End):
+        run_transport.ServicedExchange(inner, service, tick_s=0.005).exchange("scan")
+    assert inner.released.is_set()
+    assert not [t for t in threading.enumerate() if t.name == "slam-bootstrap-exchange"]
+
+
+def test_the_prewarm_gates_before_each_step_and_gives_the_raw_link_back_on_every_path():
+    drive_ = _source("\ndef drive(S, isaac)", "\ndef recorded_arguments(")
+    loop = drive_[drive_.index('slam["link"] = ServicedExchange('):drive_.index('raise SessionFailure("slam_prewarm_timeout")')]
+    assert loop.index('reloc_console.gate("prewarm")') < loop.index("step_world(False)")
+    assert re.search(r"finally:\n\s+if reloc_console is not None:\n\s+slam\[\"link\"\] = slam_lockstep_", drive_)
+
+
+def test_the_gaps_are_kept_from_the_consoles_opening():
+    # Codex B-P2c impl review P3: a phase that fails still leaves its gaps in the record
+    helper = _source("\ndef open_reloc_console(", "\ndef shared_lidar_engine(")
+    assert '"gaps": console.gaps' in helper
 
 
 def test_the_early_console_opens_before_the_phase_and_the_live_runtime_adopts_it():
