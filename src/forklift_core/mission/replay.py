@@ -27,6 +27,20 @@ import numpy as np
 from forklift_core.mission.replay_codec import Encoder, decode
 
 
+# End-state keys a run with video counts inside the physics step a replay does not run (its video frames).
+VIDEO_STATE_KEYS = (("containers", "state", "frames"),)
+
+
+def _drop_key(node, path) -> None:
+    """Remove the map key at ``path`` (map keys, outermost first) from an encoded node, if it is there."""
+    for key in path[:-1]:
+        if not (isinstance(node, dict) and isinstance(node.get("$map"), dict)):
+            return
+        node = node["$map"].get(key)
+    if isinstance(node, dict) and isinstance(node.get("$map"), dict):
+        node["$map"].pop(path[-1], None)
+
+
 class ReplayMismatch(AssertionError):
     """The replayed run asked something the recorded run did not, at this point."""
 
@@ -285,8 +299,14 @@ class ReplaySession:
             # Arrays by content hash (the node carries it): exact bytes, NaN included.
             node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True,
                            identity=False).encode(final_state)
-            if _canonical(node) != recorded.read_text().strip() and _canonical(node) != _canonical(
-                    json.loads(recorded.read_text())):
+            recorded_node = json.loads(recorded.read_text())
+            if self.video_sink_paths:  # a video run: the counts its frames keep are not the replay's (video_sink_paths)
+                for path in VIDEO_STATE_KEYS:
+                    _drop_key(node, path)
+                    _drop_key(recorded_node, path)
+                if _canonical(node) != _canonical(recorded_node):
+                    raise self.fail("the replay's final state differs from the recorded one")
+            elif _canonical(node) != recorded.read_text().strip() and _canonical(node) != _canonical(recorded_node):
                 raise self.fail("the replay's final state differs from the recorded one")
         if self.failure is not None:
             raise ReplayMismatch(f"the replay failed earlier: {self.failure}")

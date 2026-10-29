@@ -1381,3 +1381,24 @@ def test_a_trailing_unwritten_video_output_is_skipped_at_the_tick_end(tmp_path):
     _video_record(tmp_path, [("meta.json", "m"), ("plan_history.json", "p")])
     s = _replay_writes(tmp_path, [("meta.json", "m")], VIDEO)
     assert s.skipped_video_sinks == ["plan_history.json"]
+
+
+def test_a_video_runs_frame_count_is_left_out_of_the_final_state_and_only_that(tmp_path):
+    """2026-10-29: the video frames a run counts are taken inside the physics step a replay does not run."""
+    def final(frames, other):
+        return {"containers": {"state": {"frames": frames, "result": other}}}
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.close(final_state=final(120, "a"))
+
+    def finish(state, video):
+        session = ReplaySession(tmp_path)
+        session.video_sink_paths = frozenset({"frame_audit.json"}) if video else frozenset()
+        session.finish(final_state=state)
+
+    finish(final(0, "a"), video=True)
+    with pytest.raises(ReplayMismatch, match="final state differs"):
+        finish(final(0, "b"), video=True)  # every other key still compared
+    with pytest.raises(ReplayMismatch, match="final state differs"):
+        finish(final(0, "a"), video=False)  # without video the count is compared as ever
+    finish(final(120, "a"), video=False)
