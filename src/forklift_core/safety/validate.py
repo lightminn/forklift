@@ -34,6 +34,12 @@ def problem(msg) -> str | None:
             return "invalid"
     if "targets_revision" in msg and not is_int(msg["targets_revision"]):
         return "invalid"
+    # B-P2c (start relocalization plan 1.2 step 7): the candidate set's generation, and the candidate picked from it --
+    # required plain integers (a bool must not pick generation 1, Codex B-P2c design P2)
+    if t in ("relocalize_pick", "relocalize_retry") and not is_int(msg.get("generation")):
+        return "invalid"
+    if t == "relocalize_pick" and not is_int(msg.get("candidate")):
+        return "invalid"
     if t == "teleop":
         if not all(is_int(msg.get(k)) for k in INT_FIELDS) or not isinstance(msg.get("lease_id"), str):
             return "invalid"

@@ -260,6 +260,19 @@ class LiveServer:
             await asyncio.wait_for(h.server.wait_closed(), 2.0)
         h.executor.shutdown(wait=False, cancel_futures=True)
 
+    def reconnect_clients(self, code: int = 1012, reason: str = "session ready") -> None:
+        """Close every connection, the server listening on (B-P2c: the early console became the live runtime's; the
+        clients hello again and read the final welcome -- the page reconnects after any close but a session end)."""
+        h, loop = self.handle, self.loop
+        if h is None or loop is None or self._thread is None or not self._thread.is_alive():
+            return
+
+        def close_all():
+            for ws in [ws for ws, _ in list(h.control.values())] + [sub["ws"] for sub in list(h.media.values())]:
+                asyncio.ensure_future(ws.close(code, reason))
+
+        loop.call_soon_threadsafe(close_all)
+
     def stop(self, timeout_s: float = 5.0) -> bool:
         """True once the server thread has ended; False when it outlived ``timeout_s`` (the caller must not report
         the server ended)."""

@@ -217,8 +217,12 @@ def _opened_its_server(port_file: Path, since_wall: float, pid: int) -> bool:
         info = json.loads(port_file.read_text())
     except (OSError, ValueError):
         return False
-    return (info.get("pid") == pid and info.get("state") in ("running", "ended", "stop_failed")
+    # B-P2c: a relocalizing runner's early console opens before the localization and says where it is
+    return (info.get("pid") == pid and info.get("state") in ("running", "ended", "stop_failed", *EARLY_STATES)
             and float(info.get("started") or 0) >= since_wall - 1)
+
+
+EARLY_STATES = ("relocalizing", "awaiting_pick", "reloc_failed", "stopped", "localizing")
 
 
 class _Stop:

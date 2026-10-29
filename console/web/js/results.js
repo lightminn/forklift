@@ -30,6 +30,13 @@ export const REASONS = {
   "slam_map_not_loaded": "조사 지도를 불러오지 못했습니다",
   "slam_not_localized": "지도에서 위치를 잡지 못했습니다",
   "slam_gyro_fault": "자이로 값을 읽지 못했습니다",
+  // B-P2 start relocalization (docs/plans/2026-10-29-start-relocalization.md 1.2)
+  "reloc_invalid_input": "출발 자리에 차가 제대로 서지 않았습니다(위치 찾기 전 검사)",
+  "reloc_needs_operator": "출발 위치를 확정하지 못했고 고를 사람이 없습니다",
+  "reloc_failed": "출발 위치 후보가 없어 위치를 정할 수 없습니다",
+  "reloc_bridge_timeout": "추정 위치로 SLAM 을 시작하지 못했습니다",
+  "reloc_operator_timeout": "후보 고르기·다시 시도를 기다리는 시간이 지났습니다",
+  "reloc_cancelled": "출발 위치 찾기가 취소됐습니다",
   "sensor_silence_stopped": "센서가 멈춰 정지했습니다",
   "Camera did not produce RGB": "카메라 영상이 오지 않았습니다",
   "Perception camera did not produce depth": "깊이 영상이 오지 않았습니다",
@@ -252,7 +259,9 @@ export class ConfirmGate {
 }
 
 function sameKey(a, b) {
-  return a.kind === b.kind && a.epoch === b.epoch && a.leaseId === b.leaseId && a.controlGen === b.controlGen;
+  // B-P2c: a start candidate's pick is the same only for the same candidate of the same set (absent elsewhere)
+  return a.kind === b.kind && a.epoch === b.epoch && a.leaseId === b.leaseId && a.controlGen === b.controlGen
+    && a.generation === b.generation && a.candidate === b.candidate;
 }
 
 // The back-off advice (contract 5.2): a guide from the pose at the failure, not a permit.

@@ -329,6 +329,35 @@ export function drawMap(cv, model, tok, view, layers) {
     c.globalAlpha = 1;
   }
 
+  // B-P2c: the start's candidates while the truck's place is unknown -- numbered rings with a heading tick and the
+  // match score; the one armed by a first click is drawn filled (a second click on it sends the pick)
+  const reloc = st?.slam?.reloc;
+  if (reloc && !st?.pose) {
+    for (const cand of reloc.candidates ?? []) {
+      const [x, y] = P(cand.base[0], cand.base[1]);
+      const armed = model.armedCandidate === cand.index;
+      const r = Math.max(9, 0.3 * sc);
+      c.save();
+      c.translate(x, y);
+      c.rotate(-cand.base[2]);
+      c.strokeStyle = tok.accent;
+      c.fillStyle = armed ? tok.accent : "rgba(0,0,0,0)";
+      c.globalAlpha = armed ? 0.35 : 1;
+      c.beginPath();
+      c.arc(0, 0, r, 0, Math.PI * 2);
+      c.fill();
+      c.globalAlpha = 1;
+      c.lineWidth = armed ? 2.6 : 1.8;
+      c.stroke();
+      c.beginPath(); // the heading: base_link forward
+      c.moveTo(r * 0.2, 0);
+      c.lineTo(r * 1.6, 0);
+      c.stroke();
+      c.restore();
+      tag(c, `후보 ${cand.index + 1} · ${Number(cand.score).toFixed(2)}`, x, y + r + 8, tok.accent, tok);
+    }
+  }
+
   // scale bar, top-left
   const meters = sc > 120 ? 0.5 : sc > 40 ? 1 : sc > 12 ? 5 : 10;
   c.fillStyle = tok.fg;
