@@ -477,20 +477,19 @@ class ReplayGate:
             return self._baseline_redraw(args, kwargs, hash_only, watch)
         raw = {"args": list(args), "kwargs": dict(kwargs)}
         encoded = self.session.encode(raw, hash_arrays=hash_only)
+        entry = None
         if port == "Sink" and self.session.video_sink_paths:
             path = self.session.sink_path(encoded)
             self.session.skip_video_sinks(keep=path)
             if path in self.session.video_sink_paths:
                 ahead = self.session.peek()
-                if ahead is not None and (ahead["port"], ahead["method"]) == (port, method) \
-                        and self.session.sink_path(ahead["request"]) == path:
-                    self.session._next += 1  # the same output: its payload is the video's, not compared
-                self.depth += 1
-                try:
-                    return fn(*args, **kwargs)
-                finally:
-                    self.depth -= 1
-        entry = self.session.take(port, method, encoded)
+                if ahead is None or (ahead["port"], ahead["method"]) != (port, method) \
+                        or self.session.sink_path(ahead["request"]) != path:
+                    raise self.session.fail(f"Sink.{method} {path}: a video output the record does not have here")
+                self.session._next += 1  # the same output by path: its payload is the video's, not compared
+                entry = ahead  # its recorded failure, or the write and a replay-only failure, as below
+        if entry is None:
+            entry = self.session.take(port, method, encoded)
         if port == "Sink" and "exception" not in entry:
             # An output effect the record says succeeded: compared above, then made here too (the replay's own
             # output directory) -- a write that fails only here is a difference.

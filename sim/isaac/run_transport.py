@@ -5253,9 +5253,14 @@ def drive(S, isaac) -> None:
         if far_runtime is not None:
             # the far recognition (--recognition far): its decisions come from the learned proposer on rendered frames,
             # which a replay has neither of -- recorded as a port, the frames by hash (a record only; the run is the
-            # same)
+            # same). Its summary hands back its own frame and attempt lists, which state["recognition"] then holds
+            # and later frames and stops append to: what those calls change there is watched.
+            from forklift_core.mission.boundary_record import DictWatch as _FarWatch
+
+            far_watch_ = _FarWatch(boundary.recorder, {"state": state}, keys={"state": ["recognition"]})
             far_runtime = RecordingProxy(far_runtime, "FarRecognition", boundary,
-                                         hash_only_requests={"drive_frame", "stop"})
+                                         hash_only_requests={"drive_frame", "stop"},
+                                         watches={"drive_frame": far_watch_, "stop": far_watch_})
     state["phase"] = "planning"
     # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
     # once -- never from the layer, whose every call and attribute is a recorded boundary

@@ -635,16 +635,21 @@ def _alias_paths(response: Any, raw: dict) -> list | None:
     for q, o in paths.items():
         where.setdefault(id(o), q)
     pairs: list = []
+    walked: set = set()  # the response's own containers: each walked once (a cycle, or one held twice -- the
+    # decoder restores that sharing, so the argument put at the first path is at the others too)
 
     def visit(value, path, depth) -> bool:
         if depth > 50 or _immutable(value):
             return True
-        if id(value) in shared:
+        if id(value) in shared:  # every place, not only the first: each gets the argument's object
             q = where.get(id(value))
             if q is None or q in (("A", "'args'"), ("A", "'kwargs'")):
                 return False
             pairs.append([list(path), list(q)])
             return True
+        if id(value) in walked:
+            return True
+        walked.add(id(value))
         if isinstance(value, dict):
             return all(visit(v, path + (repr(k),), depth + 1) for k, v in value.items())
         if isinstance(value, (list, tuple, collections.deque)):

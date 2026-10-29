@@ -1444,3 +1444,74 @@ def test_a_video_runs_frame_count_is_left_out_of_the_final_state_and_only_that(t
     with pytest.raises(ReplayMismatch, match="final state differs"):
         finish(final(0, "a"), video=False)  # without video the count is compared as ever
     finish(final(120, "a"), video=False)
+
+
+def test_a_video_output_the_record_does_not_have_fails(tmp_path):
+    """Codex review 1 P2: a video-derived output is matched by path, never let through without a recorded write."""
+    _video_record(tmp_path, [("meta.json", "m")])
+    with pytest.raises(ReplayMismatch, match="does not have"):
+        _replay_writes(tmp_path, [("frame_audit.json", "f"), ("meta.json", "m")], VIDEO)
+    _video_record(tmp_path / "two", [("frame_audit.json", "f"), ("meta.json", "m")])
+    with pytest.raises(ReplayMismatch, match="does not have"):  # one write recorded, two made
+        _replay_writes(tmp_path / "two", [("frame_audit.json", "f"), ("frame_audit.json", "f"), ("meta.json", "m")],
+                       VIDEO)
+
+
+def test_a_video_outputs_recorded_failure_comes_back_and_a_replay_only_failure_fails(tmp_path):
+    """Codex review 1 P2: the matched entry's exception is the replay's too (no write made), and a write that fails
+    only in the replay is a difference, as for every other output."""
+    from forklift_core.mission.boundary_record import sink_effect
+
+    def full_disk():
+        raise OSError(28, "No space left on device")
+
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    gate = RecordingGate(rec)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises(OSError):
+        sink_effect(gate, "write_text", "frame_audit.json", "f", write=full_disk)
+    rec.tick_end(outputs={}, branches=[])
+    rec.close()
+    session = ReplaySession(tmp_path)
+    session.video_sink_paths = VIDEO
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    wrote = []
+    with pytest.raises(OSError, match="No space"):
+        sink_effect(rgate, "write_text", "frame_audit.json", "f-empty", write=lambda: wrote.append(1))
+    session.tick_end(outputs={}, branches=[])
+    session.finish()
+    assert wrote == []
+
+    _video_record(tmp_path / "ok", [("frame_audit.json", "f")])
+    session = ReplaySession(tmp_path / "ok")
+    session.video_sink_paths = VIDEO
+    rgate = ReplayGate(session)
+    session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    with pytest.raises(ReplayMismatch, match="failed in the replay"):
+        try:
+            sink_effect(rgate, "write_text", "frame_audit.json", "f-empty", write=full_disk)
+        except OSError:
+            pass  # the code catching it does not hide it: the session failed
+        session.finish()
+
+
+def test_a_cyclic_response_sharing_an_argument_is_walked_once(tmp_path):
+    """Codex review 1 P2: a response list that holds itself twice and an argument -- each object walked once."""
+    import time
+
+    from forklift_core.mission import boundary_record as BR
+
+    def cyclic(arg):
+        r: list = []
+        r.extend((r, r, arg))
+        return r
+
+    arg = [1]
+    started = time.perf_counter()
+    assert BR._alias_paths(cyclic(arg), {"args": [arg], "kwargs": {}}) == [[["R", 2], ["A", "'args'", 0]]]
+    assert time.perf_counter() - started < 0.05
+    replay_with = one_call(tmp_path, cyclic, lambda f: f([1]))
+    rarg = [1]
+    out = replay_with(lambda f: f(rarg))
+    assert out[2] is rarg and out[0] is out
