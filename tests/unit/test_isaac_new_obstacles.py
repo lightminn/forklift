@@ -315,3 +315,21 @@ def test_a_rule_without_a_face_gap_records_as_before():
     assert "face_gap_m" not in names
     assert "face_gap_m" in [f.name for f in recorded_fields(MODULE.Event("x", "spawn", "transport", 0.0,
                                                                         face_gap_m=0.15))]
+
+
+def test_a_face_gap_spawn_logs_where_it_went_and_the_curvature_there():
+    # Codex result review P2: the log read the curvature at ahead_m (0 for a face-gap rule), the path's start
+    from forklift_core.control.drive_permission import arc_poses
+    from forklift_core.planning import Footprint
+
+    fp = Footprint(1.56, 0.17, 0.40)
+    # straight for 0.3 m, then a -0.3 1/m arc: the box goes into the arc
+    straight = np.column_stack((-np.linspace(0, 0.3, 31), np.zeros(31), np.zeros(31)))
+    arc = arc_poses(tuple(straight[-1]), -0.3, -1, 2.0, 0.01)[0][1:]
+    path = np.vstack((straight, arc))
+    sched = MODULE.Schedule([MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)])
+    (spawn,) = sched.update(1.0, "transport", 0.0, path, leg_direction=-1, gap_test=_gap_from((0.0, 0.0, 0.0), fp))
+    rec = sched.log[-1]
+    assert 0.40 < rec["along_m"] < 0.60
+    assert abs(rec["curvature_inv_m"] - MODULE._curvature_at(path, rec["along_m"])) < 1e-12
+    assert abs(rec["curvature_inv_m"]) > 0.1  # in the arc, not the straight start
