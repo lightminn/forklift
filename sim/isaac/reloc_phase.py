@@ -14,7 +14,7 @@ import hashlib
 import json
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import scan_capture
@@ -41,6 +41,9 @@ class RelocInputs:
     clock: object = time.monotonic
     cancel: threading.Event = field(default_factory=threading.Event)
     noise_for: object = lambda attempt, scan: None  # noqa: E731 -- the generator of an attempt's scan (None: the engine's)
+    # B-P2c: the early console (reloc_console.RelocConsole), serviced at every step and wait; None: no operator
+    console: object = None
+    operator_deadline_at: float | None = None  # the operator's whole budget (clock time); None: none
 
 
 def _points(inputs: RelocInputs, sent) -> object:
@@ -49,22 +52,27 @@ def _points(inputs: RelocInputs, sent) -> object:
                          match_range_m=inputs.match_cfg.match_range_m)
 
 
-def _attempt(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points) -> tuple:
-    """One relocalize() on a worker; the stopped truck keeps stepping meanwhile. Returns (match, decision, wall_s)."""
+def _attempt(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points, step) -> tuple:
+    """One relocalize() on a worker; the stopped truck keeps stepping (and the console is serviced) meanwhile. The
+    worker stops at a session cancel or when a STOP interrupted the attempt. Returns (match, decision, wall_s)."""
     box = {}
+    generation = relocalizer.generation
+
+    def cancelled() -> bool:
+        return inputs.cancel.is_set() or relocalizer.generation != generation
 
     def work():
         t0 = time.monotonic()
         box["result"] = G.relocalize(inputs.grid, points, inputs.match_cfg, e_min=inputs.reloc_cfg.e_min,
                                      r_max=inputs.reloc_cfg.r_max, r_struct=inputs.reloc_cfg.r_struct,
                                      index=inputs.index, clock=inputs.clock, deadline_at=relocalizer.deadline_at,
-                                     cancel=inputs.cancel.is_set)
+                                     cancel=cancelled)
         box["wall_s"] = time.monotonic() - t0
 
     worker = threading.Thread(target=work, name="start-relocalize", daemon=True)
     worker.start()
     while worker.is_alive():
-        inputs.engine.step()
+        step("matching")
         worker.join(timeout=inputs.pace_s)
     if "result" not in box:
         raise RuntimeError("the relocalization worker ended without a result")
@@ -76,58 +84,114 @@ def _candidate(c) -> dict:
             "endpoint_fraction": c.endpoint_fraction}
 
 
-def _wait_bridge_go(inputs: RelocInputs):
+def _wait_bridge_go(inputs: RelocInputs, step):
     until = time.monotonic() + inputs.bridge_go_timeout_s
     while time.monotonic() < until and not inputs.cancel.is_set():
         go = R.read_bridge_go(inputs.epoch_dir)
         if go is not None:
             return go
-        inputs.engine.step()
+        step("bridge")
         time.sleep(max(inputs.pace_s, 0.001))
     return None
 
 
+WAITING = ("awaiting_pick", "reloc_failed", "stopped")
+
+
 def run(inputs: RelocInputs) -> dict:
-    """status: chosen (with ``bridge_go``) | invalid | needs_operator | failed | bridge_timeout | cancelled. The
-    result is plain JSON: the runner records it as is."""
+    """status: chosen (with ``bridge_go``) | invalid | needs_operator | failed | operator_timeout | bridge_timeout |
+    cancelled. The result is plain JSON: the runner records it as is. With a console the phase waits in awaiting_pick /
+    reloc_failed / stopped for the operator's pick or retry (unless unattended); the console's exception (the
+    operator's session end) leaves through here with the matcher cancelled."""
+    try:
+        return _run(inputs)
+    except BaseException:
+        inputs.cancel.set()  # a worker still matching stops at its next check
+        raise
+
+
+def _run(inputs: RelocInputs) -> dict:
     out = {"status": None, "reason": "", "estimate": None, "attempts": [], "truth": None, "bridge_go": None,
            "generation": None, "shown": []}
     if inputs.cancel.is_set():
         out["status"] = "cancelled"
         return out
+    console = inputs.console
+    unattended = inputs.unattended or console is None
+    engine_step = inputs.engine.step
+
+    def step(stage: str) -> None:
+        engine_step()
+        if console is not None:
+            console.service(stage)
+
+    engine = replace(inputs.engine, step=lambda: step("scan"))
     relocalizer = R.StartRelocalizer(inputs.reloc_cfg, inputs.clock)
+    if console is not None:
+        console.attach(relocalizer)
+        console.note(operator_deadline_at=inputs.operator_deadline_at)
     for _ in range(inputs.settle_steps):  # settle where it was placed (plan 1.2 step 3)
-        inputs.engine.step()
-    relocalizer.start()  # the first scan is being collected: the session deadline starts (plan 1.2 step 6)
-    first = scan_capture.scan_set(inputs.engine, inputs.target, lambda s: inputs.noise_for(0, s), settle_steps=0)
-    out["truth"] = list(first["base_truth"])
-    if not first["valid"]:  # judged before any matching (plan 1.2 step 4)
-        out["status"], out["reason"] = "invalid", first["reason"]
-        return out
-    sent, step = first["sent"], "rescan"
-    while step == "rescan":
+        step("settle")
+    scan_key = 0  # every scan set of the session its own noise (a retry never reuses one, Codex B-P2c design P3)
+    while True:
         if inputs.cancel.is_set():
             relocalizer.cancel()
             out["status"] = "cancelled"
             return out
-        match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, sent))
-        step = relocalizer.record(match, decision)
-        out["attempts"].append({"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
-                                "work": int(match.work), "wall_s": round(wall_s, 3),
-                                "top": _candidate(match.candidates[0]) if match.candidates else None})
-        if step == "rescan":  # a static rescan: the truck stays where it is, the noise is new
-            k = len(out["attempts"])
-            sent = scan_capture.scan_set(inputs.engine, inputs.target, lambda s, k=k: inputs.noise_for(k, s),
-                                         settle_steps=0)["sent"]
+        if inputs.operator_deadline_at is not None and inputs.clock() > inputs.operator_deadline_at:
+            out["status"] = "operator_timeout"
+            break
+        state = relocalizer.state
+        if state == "relocalizing":
+            relocalizer.start()  # the generation's first scan: its session deadline (plan 1.2 step 6)
+            got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
+                                        settle_steps=0)
+            scan_key += 1
+            if out["truth"] is None:
+                out["truth"] = list(got["base_truth"])
+            if not got["valid"]:  # judged before any matching (plan 1.2 step 3)
+                out["status"], out["reason"] = "invalid", got["reason"]
+                return out
+            if relocalizer.state != "relocalizing":
+                continue  # a STOP during the scans
+            match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, got["sent"]), step)
+            if console is not None:
+                console.service("matched")  # the STOPs queued meanwhile, before the result counts
+            record = {"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
+                      "work": int(match.work), "wall_s": round(wall_s, 3),
+                      "top": _candidate(match.candidates[0]) if match.candidates else None}
+            if relocalizer.state != "relocalizing":
+                out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
+                continue
+            relocalizer.record(match, decision)
+            out["attempts"].append(record)
+            if console is not None:
+                console.note(last_reason=decision.reason)
+            continue
+        if state == "chosen":
+            break
+        if state in WAITING:
+            if unattended:
+                break
+            step(state)  # the operator's pick or retry comes through the console
+            time.sleep(max(inputs.pace_s, 0.001))
+            continue
+        out["status"] = "cancelled"
+        return out
     out["generation"] = relocalizer.generation
-    if step != "chosen":
-        out["status"] = {"awaiting_pick": "needs_operator", "cancelled": "cancelled"}.get(step, "failed")
+    if relocalizer.state != "chosen":
+        if out["status"] is None:
+            out["status"] = {"awaiting_pick": "needs_operator", "stopped": "needs_operator"}.get(
+                relocalizer.state, "failed")
         out["shown"] = [_candidate(c) for c in relocalizer.shown]
         return out
     est = relocalizer.estimate
     out["estimate"] = list(est.base)
+    out["source"] = est.source
     R.write_reloc_pose(inputs.epoch_dir, est, {"attempts": out["attempts"]})
-    go = _wait_bridge_go(inputs)
+    if console is not None:
+        console.localizing()
+    go = _wait_bridge_go(inputs, step)
     if go is None:
         out["status"] = "cancelled" if inputs.cancel.is_set() else "bridge_timeout"
         return out
@@ -149,6 +213,8 @@ def failure_reason(out: dict) -> str | None:
         return "reloc_failed: no candidate an operator could pick"
     if status == "bridge_timeout":
         return "reloc_bridge_timeout: no bridge_go within the wait"
+    if status == "operator_timeout":
+        return "reloc_operator_timeout: no pick or retry within the operator's time"
     return "reloc_cancelled"
 
 

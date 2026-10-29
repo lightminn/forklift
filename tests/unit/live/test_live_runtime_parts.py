@@ -9,9 +9,10 @@ import pytest
 
 pytest.importorskip("websockets")
 
+from test_live_runtime import _MADE, DT, Clock, runtime  # noqa: E402, F401
+
 from forklift_core.safety.arbiter import ArbiterConfig  # noqa: E402
 from sim.isaac import live_runtime as L  # noqa: E402
-from test_live_runtime import DT, _MADE, Clock, runtime  # noqa: E402, F401
 
 
 def _parts(tmp_path, config=None, **kw):

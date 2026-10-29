@@ -57,9 +57,9 @@ def _inputs(tmp_path, grid, truck, target, **kw):
     return P.RelocInputs(**defaults)
 
 
-def _go_later(tmp_path, delay=0.2):
+def _go_later(tmp_path, delay=0.2, wait_s=10.0):
     def write():
-        end = time.monotonic() + 10
+        end = time.monotonic() + wait_s
         while R.read_reloc_pose(tmp_path) is None and time.monotonic() < end:
             time.sleep(0.02)
         time.sleep(delay)
@@ -143,9 +143,145 @@ def test_each_attempt_draws_its_own_noise(tmp_path):
     ({"status": "failed"}, "reloc_failed: no candidate an operator could pick"),
     ({"status": "bridge_timeout"}, "reloc_bridge_timeout: no bridge_go within the wait"),
     ({"status": "cancelled"}, "reloc_cancelled"),
+    ({"status": "operator_timeout"}, "reloc_operator_timeout: no pick or retry within the operator's time"),
 ])
 def test_every_ending_but_chosen_is_a_session_failure_reason(out, reason):
     assert P.failure_reason(out) == reason
+
+
+class FakeConsole:
+    """The early console's part the phase sees (B-P2c): ``service(stage)`` at every step and wait; a script acts on the
+    relocalizer at a stage (the operator's pick or retry, a STOP's interrupt, a session end)."""
+
+    def __init__(self, script=None):
+        self.reloc, self.calls, self.stages, self.notes, self.state_override = None, 0, [], {}, None
+        self.script = script or (lambda console, stage: None)
+
+    def attach(self, relocalizer):
+        self.reloc = relocalizer
+
+    def note(self, **fields):
+        self.notes.update(fields)
+
+    def localizing(self):
+        self.state_override = "localizing"
+
+    def service(self, stage):
+        self.calls += 1
+        self.stages.append(stage)
+        self.script(self, stage)
+
+
+SYMMETRIC = (6.0, 4.0, [])  # the turned twin always competes: never confirmed
+
+
+def _symmetric(tmp_path, console, **kw):
+    grid = TG._grid(*SYMMETRIC)
+    base = (2.0, 1.4, 0.0)
+    return _inputs(tmp_path, grid, FakeTruck(grid, base), base,
+                   **{"console": console, "unattended": False,
+                      "match_cfg": G.MatchConfig(yaw_step_rad=math.radians(2.0), max_nodes=5_000_000), **kw})
+
+
+def test_attended_the_phase_waits_for_the_operators_pick(tmp_path):
+    def pick_when_shown(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick":
+            assert r.pick(r.generation, 0) == (True, "")
+
+    _go_later(tmp_path)
+    out = P.run(_symmetric(tmp_path, FakeConsole(pick_when_shown)))
+    assert out["status"] == "chosen" and R.read_reloc_pose(tmp_path)["source"] == "operator"
+    assert len(out["attempts"]) == 3 and out["bridge_go"] is not None
+
+
+def test_a_stop_while_the_matcher_runs_drops_its_result_and_waits_for_a_retry(tmp_path):
+    seen = {"stopped": False, "retried": False}
+
+    def script(console, stage):
+        r = console.reloc
+        if stage == "matching" and not seen["stopped"]:
+            seen["stopped"] = r.interrupt()
+        elif r.state == "stopped" and stage == "stopped" and not seen["retried"]:
+            seen["retried"] = r.retry(r.generation)[0]
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script), unattended=False))
+    assert seen == {"stopped": True, "retried": True} and out["status"] == "chosen"
+    assert [a["reason"] for a in out["attempts"]] == ["interrupted", "confirmed"]  # the first result never counted
+
+
+def test_a_stop_between_the_matchers_return_and_the_estimate_drops_a_confirmed_result(tmp_path):
+    # Codex B-P2c design P1/P2: the phase takes the STOPs queued meanwhile before it records the result
+    state = {"n": 0}
+
+    def script(console, stage):
+        if stage == "matched" and state["n"] == 0:
+            state["n"] = 1
+            console.reloc.interrupt()
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script), unattended=False,
+                        operator_deadline_at=time.monotonic() + 3.0))
+    assert out["attempts"][0]["reason"] == "interrupted" and R.read_reloc_pose(tmp_path) is None
+    assert out["status"] == "operator_timeout"  # nobody retried: the operator budget ended it
+
+
+def test_the_operator_budget_ends_a_wait_nobody_answers(tmp_path):
+    out = P.run(_symmetric(tmp_path, FakeConsole(), operator_deadline_at=time.monotonic() + 0.5))
+    assert out["status"] == "operator_timeout" and R.read_reloc_pose(tmp_path) is None
+    assert P.failure_reason(out) == "reloc_operator_timeout: no pick or retry within the operator's time"
+
+
+def test_unattended_with_a_console_still_ends_at_the_request(tmp_path):
+    out = P.run(_symmetric(tmp_path, FakeConsole(), unattended=True))
+    assert out["status"] == "needs_operator"
+
+
+def test_the_operators_session_end_leaves_the_phase_and_cancels_the_matcher(tmp_path):
+    class End(Exception):
+        pass
+
+    def script(console, stage):
+        if stage == "matching":
+            raise End()
+
+    inputs = _symmetric(tmp_path, FakeConsole(script))
+    with pytest.raises(End):
+        P.run(inputs)
+    assert inputs.cancel.is_set() and R.read_reloc_pose(tmp_path) is None
+
+
+def test_a_retry_never_reuses_a_noise_key(tmp_path):
+    keys = []
+    retried = {"n": 0}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and retried["n"] == 0:
+            retried["n"] = 1
+            r.retry(r.generation)
+        elif r.state == "awaiting_pick" and retried["n"] == 1:
+            r.pick(r.generation, 0)
+
+    _go_later(tmp_path, wait_s=120.0)  # six attempts in the symmetric room
+    out = P.run(_symmetric(tmp_path, FakeConsole(script), noise_for=lambda k, s: keys.append((k, s))))
+    assert out["status"] == "chosen" and len(out["attempts"]) == 6
+    assert len(keys) == len(set(keys)) == 6 * C.SCANS
+
+
+def test_the_console_is_serviced_at_every_step_and_says_localizing_after_the_estimate(tmp_path):
+    console = FakeConsole()
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    truck = FakeTruck(grid, base)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, truck, base, console=console, unattended=False))
+    assert out["status"] == "chosen" and console.calls >= truck.steps and console.state_override == "localizing"
+    assert console.notes["last_reason"] == "confirmed"
 
 
 def test_the_frozen_settings_are_b_p1bs():
