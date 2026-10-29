@@ -243,6 +243,12 @@ export const REJECT = {
   recovering: "복구 중에는 취소 대신 일시정지하세요",
   not_held: "보류 중이 아닙니다",
   "permission_denied:": "주행 허가가 거절했습니다",
+  // B-P2c: the start relocalization (docs/plans/2026-10-29-start-relocalization.md 1.3)
+  relocalizing: "출발 위치를 찾는 중입니다 · 위치가 정해진 뒤에 보내세요",
+  not_relocalizing: "출발 위치를 찾는 중이 아닙니다",
+  reloc_stale_pick: "후보 목록이 바뀌었습니다 · 새 후보에서 다시 고르세요",
+  reloc_pick_refused: "그 후보는 고를 수 없습니다",
+  reloc_not_awaiting: "지금은 후보를 고르거나 다시 시도할 수 없습니다",
   // the fake vehicle's own (console/mock_vehicle)
   fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
   load_present: "포크에 짐이 실려 있습니다",

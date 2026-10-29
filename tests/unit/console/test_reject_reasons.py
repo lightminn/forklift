@@ -25,6 +25,9 @@ FLOWS = {
         "direct", None, [("src/forklift_core/mission/cargo.py", frozenset({"submit_refusal"}))]),
     ("src/forklift_core/mission/commands.py", "refused"): (
         "call", "check_submit", [("src/forklift_core/mission/targets.py", frozenset({"check_submit"}))]),
+    # B-P2c: the start relocalization's pick and retry refusals ((False, reason) returns, see ``returns``)
+    (ARBITER, "why"): ("direct", None, [("src/forklift_core/localization/start_reloc.py",
+                                         frozenset({"pick", "retry"}))]),
     (MOCK, "verdict"): ("call", "admit", "ledger"),
     (MOCK, "reason"): [("call", "_valid", [(MOCK, frozenset({"_valid"}))]),
                        ("call", "_teleop_reason", [(MOCK, frozenset({"_teleop_reason"}))])],
@@ -112,7 +115,14 @@ def returns(rel, names, unknown, pending):
         if isinstance(fn, ast.FunctionDef) and fn.name in names:
             for ret in ast.walk(fn):
                 if isinstance(ret, ast.Return) and ret.value is not None:
-                    found |= strings(ret.value, rel, fn, unknown, pending)
+                    value = ret.value
+                    if (isinstance(value, ast.Tuple) and len(value.elts) == 2 and isinstance(value.elts[0], ast.Constant)
+                            and isinstance(value.elts[0].value, bool)):
+                        # an (ok, reason) answer (B-P2c's StartRelocalizer): only a refusal's reason is a refusal
+                        if value.elts[0].value is False:
+                            found |= strings(value.elts[1], rel, fn, unknown, pending)
+                        continue
+                    found |= strings(value, rel, fn, unknown, pending)
     return found
 
 

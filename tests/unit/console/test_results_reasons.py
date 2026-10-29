@@ -116,6 +116,23 @@ def test_every_classified_head_has_its_own_entry():
     assert not sorted(set(PREFIXES) - set(table_heads()))
 
 
+def test_the_start_relocalizations_endings_are_session_failures_with_their_own_text():
+    # B-P2c (start relocalization plan 1.2): each failure reason the phase can end a session with
+    import sys
+
+    sys.path.insert(0, str(ROOT / "sim/isaac"))
+    import reloc_phase
+
+    from forklift_core.mission import failures
+
+    heads = table_heads()
+    for status in ("invalid", "needs_operator", "failed", "bridge_timeout", "operator_timeout", "cancelled"):
+        reason = reloc_phase.failure_reason({"status": status, "reason": "moved", "shown": []})
+        assert failures.classify(reason) == failures.SESSION, reason
+        head = reason.split(":", 1)[0]
+        assert head in heads, head  # its own entry, not a longer head's
+
+
 def test_a_far_capture_bound_to_its_zone_has_its_own_explanation():
     """Far target binding F1 (console session, 2026-10-28): a mission whose every stand found nothing inside its
     adoption rectangle ends with this reason (Isaac f1chk blocked queue); the longest head results.js picks
