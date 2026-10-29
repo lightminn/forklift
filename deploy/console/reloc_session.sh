@@ -17,6 +17,11 @@ ROOT=$(pwd)
 : "${START_POSE:?the placed start x,y,yaw (world base_link)}" "${VENV_PY:?the Isaac Python}"
 LAUNCHER=${RELOC_LAUNCHER:-$ROOT/deploy/console/isaac_live.sbatch}
 GRACE=${RELOC_END_GRACE_S:-300}
+if [ "${DRY_RUN:-0}" = 1 ]; then
+  # tools/isaac_bundle.py check: the launcher's own DRY_RUN (its preflight, then RUNNER_ARGS and ARGS_OK) with the
+  # session's environment; no probe, no session
+  RELOC_UNATTENDED=1 MAX_EPOCHS=1 STANDBY_LINGER_S=0 exec bash "$LAUNCHER" "$OUT"
+fi
 mkdir -p "$OUT"
 RELOC_UNATTENDED=1 MAX_EPOCHS=1 STANDBY_LINGER_S=0 bash "$LAUNCHER" "$OUT" > "$OUT/launcher.log" 2>&1 &
 L=$!
