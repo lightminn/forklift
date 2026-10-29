@@ -57,6 +57,56 @@ class EndHooks:
     judge_delivery: Callable[[], object] | None = None
 
 
+def make_welcome(session_epoch: int, *, camera_hz: float = 10.0, supervised: bool = False,
+                 camera_model: dict | None = None) -> dict:
+    """The welcome a client reads at its hello (contract 2, 3): the live runtime's and the early console's (B-P2c)."""
+    welcome = {"t": "welcome", "api": "console/1", "vehicle_id": "isaac-forklift",
+               "session_epoch": session_epoch, "backend": "isaac", "capabilities": {
+                   "control": True, "mission": True, "teleop_direct": True, "teleop_video": True,
+                   "lift": True, "recovery_actions": [],  # plan D14: the manual lift is driven
+                   # a supervisor restarts the runner on a new scene (persistent console plan D9)
+                   "sim_reset": bool(supervised),
+                   "feedback": {"rear_axle_speed": True, "steering": True, "lift_height": True,
+                                "load_state": False},
+                   "media": {"camera_rgb": {"max_hz": camera_hz}, "scan": {"max_hz": 10},
+                             "grid": {"max_hz": 1}},
+                   "chassis": dict(DLS08_MEASURED_CHASSIS),  # display only (C3)
+                   "provisional_limits": True}}
+    if camera_model is not None:
+        welcome["capabilities"]["camera_model"] = camera_model  # display only (contract 3)
+    return welcome
+
+
+@dataclass
+class ConsoleParts:
+    """B-P2c (start relocalization plan 1.2 step 4): the console a relocalizing runner opens before its mission core
+    exists -- one arbiter, link, channels, media store and server for the whole session, adopted by LiveRuntime."""
+    session_epoch: int
+    arbiter: Arbiter
+    channels: Channels
+    link: Link
+    store: MediaStore
+    welcome: dict
+    server: LiveServer
+    started_wall: float | None = None  # when the early server opened
+
+
+def make_console(*, config: ArbiterConfig, session_epoch: int | None = None, camera_hz: float = 10.0,
+                 supervised: bool = False, host: str = "127.0.0.1", port: int = 0,
+                 web_root: Path | None = None) -> ConsoleParts:
+    """The early console's parts (not started): the live runtime's own construction with no mission yet and the
+    relocalize capability said from the first hello."""
+    epoch = session_epoch if session_epoch is not None else secrets.randbits(48)
+    arbiter = Arbiter(epoch, replace(config, request_tokens=True), lambda: secrets.token_hex(16), mission=None)
+    arbiter.sim_reset_allowed = bool(supervised)
+    channels = Channels()
+    store = MediaStore()
+    welcome = make_welcome(epoch, camera_hz=camera_hz, supervised=supervised)
+    welcome["capabilities"]["relocalize"] = True
+    return ConsoleParts(epoch, arbiter, channels, Link(arbiter, channels), store, welcome,
+                        LiveServer(channels, store, welcome, host=host, port=port, web_root=web_root))
+
+
 class LiveRuntime:
     def __init__(self, core, hooks: Hooks, *, output: Path, port_file: Path | None, dt: float, factor: float = 1.0,
                  camera_hz: float = 10.0, host: str = "127.0.0.1", web_root: Path | None = None,
@@ -66,7 +116,7 @@ class LiveRuntime:
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
                  camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None,
                  port: int = 0, supervised: bool = False, log_rotate_bytes: int = 200_000_000, log_keep: int = 3,
-                 trace=None):
+                 trace=None, parts: ConsoleParts | None = None):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
         self.trace = trace  # real-time plan 5.12 D12a: a TickTrace on this clock, or None (nothing recorded)
         self.end = end or EndHooks()
@@ -83,35 +133,41 @@ class LiveRuntime:
         self.started_wall: float | None = None  # when start() opened the server (None: it never did)
         self.slam_info: dict | None = None  # SLAM localization plan L6: set by the runner for a localization session
         self.dt = dt
-        self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
-        # Reliable requests are judged by the request ledger here: a session lives long (persistent console plan D7).
-        self.arbiter = Arbiter(self.session_epoch, replace(config or ArbiterConfig(tick_s=dt), request_tokens=True),
-                               lambda: secrets.token_hex(16), mission=core.commands)
-        self.channels = Channels()
-        self.link = Link(self.arbiter, self.channels)
-        self.store = MediaStore()
+        self.parts = parts
+        self.port_extra: dict = {}  # what the runner adds to every port-file write (B-P2c: localized_wall)
+        if parts is None:
+            self.session_epoch = session_epoch if session_epoch is not None else secrets.randbits(48)  # a job, an epoch
+            # Reliable requests are judged by the request ledger here: a session lives long (persistent console D7).
+            self.arbiter = Arbiter(self.session_epoch, replace(config or ArbiterConfig(tick_s=dt), request_tokens=True),
+                                   lambda: secrets.token_hex(16), mission=core.commands)
+            self.channels = Channels()
+            self.link = Link(self.arbiter, self.channels)
+            self.store = MediaStore()
+        else:
+            # B-P2c: the console a relocalizing runner opened before its mission core existed, adopted -- its STOP,
+            # ledger and numbers live on (Codex B-P2c design round 1); its config must be this runtime's
+            if parts.arbiter.config != replace(config or ArbiterConfig(tick_s=dt), request_tokens=True):
+                raise ValueError("the early console's arbiter config is not this runtime's")
+            self.session_epoch = parts.session_epoch
+            self.arbiter, self.channels, self.link, self.store = parts.arbiter, parts.channels, parts.link, parts.store
+            self.arbiter.mission = core.commands
         self.pacer = Pacer(factor, dt, catchup_steps=catchup_steps)  # real-time plan D7
         self.plan_feed = PlanFeed()  # the followed path, for the page's map (display only)
         # Frames by sim time (plan C4a): the video limit is scaled by the declared factor like the command age, so
         # a sim-rate camera keeps the same freshness in sim terms; frames by wall time made a slower run render more
         # often and run slower still (2026-10-17).
         self.camera_every = max(1, round(1.0 / (camera_hz * dt)))
-        self.welcome = {"t": "welcome", "api": "console/1", "vehicle_id": "isaac-forklift",
-                        "session_epoch": self.session_epoch, "backend": "isaac", "capabilities": {
-                            "control": True, "mission": True, "teleop_direct": True, "teleop_video": True,
-                            "lift": True, "recovery_actions": [],  # plan D14: the manual lift is driven
-                            # a supervisor restarts the runner on a new scene (persistent console plan D9)
-                            "sim_reset": bool(supervised),
-                            "feedback": {"rear_axle_speed": True, "steering": True, "lift_height": True,
-                                         "load_state": False},
-                            "media": {"camera_rgb": {"max_hz": camera_hz}, "scan": {"max_hz": 10},
-                                      "grid": {"max_hz": 1}},
-                            "chassis": dict(DLS08_MEASURED_CHASSIS),  # display only (C3)
-                            "provisional_limits": True}}
-        if camera_model is not None:
-            self.welcome["capabilities"]["camera_model"] = camera_model  # display only (contract 3)
+        welcome = make_welcome(self.session_epoch, camera_hz=camera_hz, supervised=supervised,
+                               camera_model=camera_model)
         self.arbiter.sim_reset_allowed = bool(supervised)
-        self.server = LiveServer(self.channels, self.store, self.welcome, host=host, port=port, web_root=web_root)
+        if parts is None:
+            self.welcome = welcome
+            self.server = LiveServer(self.channels, self.store, self.welcome, host=host, port=port, web_root=web_root)
+        else:
+            welcome["capabilities"]["relocalize"] = True
+            parts.welcome.clear()  # the server holds this dict: the next hello reads the final one
+            parts.welcome.update(welcome)
+            self.welcome, self.server = parts.welcome, parts.server
         self.output, self.port_file = Path(output), port_file
         self._log = open(self.output / "live_log.jsonl", "w")  # noqa: SIM115 -- closed in close()
         # Persistent console plan D8: the log rolls over at log_rotate_bytes into live_log.jsonl.1 (the newest) ...
@@ -151,12 +207,20 @@ class LiveRuntime:
 
     # --- lifecycle -------------------------------------------------------------------------------------------------
     def start(self) -> int:
-        port = self.server.start()
-        self.started_wall = time.time()
+        if self.parts is None:
+            port = self.server.start()
+            self.started_wall = time.time()
+        else:
+            # B-P2c: the server listens since the early start; the mission opens and the clients read the final
+            # welcome on their next hello
+            port = self.server.port
+            self.started_wall = self.parts.started_wall
+            self.arbiter.reloc = None
+            self.server.reconnect_clients()
         if self.port_file is not None:
             write_port_file(self.port_file, {"host": self.server.host, "port": port,
                                              "session_epoch": self.session_epoch, "pid": os.getpid(),
-                                             "started": self.started_wall, "state": "running"})
+                                             "started": self.started_wall, "state": "running", **self.port_extra})
         self.log({"event": "start", "port": port, "session_epoch": self.session_epoch})
         return port
 
@@ -250,7 +314,7 @@ class LiveRuntime:
         ended = self.server.stop()
         if self.port_file is not None:
             info = {"host": self.server.host, "port": self.server.port, "session_epoch": self.session_epoch,
-                    "pid": os.getpid(), "state": "ended" if ended else "stop_failed"}
+                    "pid": os.getpid(), "state": "ended" if ended else "stop_failed", **self.port_extra}
             if self.started_wall is not None:  # the server opened: the supervisor tells a run's end from a start's
                 info["started"] = self.started_wall  # by it (Codex standby review P2-2)
             write_port_file(self.port_file, info)
