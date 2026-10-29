@@ -318,6 +318,22 @@ def test_an_unjudged_start_leaves_the_safety_bounds_unjudged_and_gives_a_conserv
     assert s["safety_upper_valid_conservative"] == pytest.approx(J.cp_upper(1, 60))
 
 
+def test_a_judgement_needs_the_frozen_record_which_has_its_own_mode(tmp_path):
+    # Codex round 3 P2: no frozen record, no pooled judgement; the freeze record is written by an explicit mode
+    _session(tmp_path, "s1")
+    starts = tmp_path / "starts.json"
+    starts.write_text(json.dumps({"poses": _starts("s1")}))
+    base = ["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", "i",
+            "--out", str(tmp_path / "out.json")]
+    assert J.main(base) == 2  # no --frozen: judged, never pooled
+    frozen = tmp_path / "frozen.json"
+    assert J.main(["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", "i",
+                   "--bridge-bound-s", "45"]) == 0
+    data = json.loads(frozen.read_text())
+    assert data["bridge_bound_s"] == 45.0 and data["fingerprint"] == J.fingerprint(ROOT, "i")
+    assert not (tmp_path / "out.json").exists() or json.loads((tmp_path / "out.json").read_text())
+
+
 def test_the_fingerprint_covers_the_scan_odometry_and_runner_inputs():
     for rel in ("sim/isaac/obstacle_layer.py", "sim/isaac/planar_lidar.py", "src/forklift_core/sensors/lidar.py",
                 "src/forklift_core/localization/wheel_odometry.py", "src/forklift_core/localization/gyro.py",

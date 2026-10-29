@@ -366,14 +366,28 @@ def fingerprint_mismatches(frozen: dict, now: dict) -> list:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--sessions", type=Path, required=True, help="the folder of one session folder per start id")
-    ap.add_argument("--starts", type=Path, required=True, help="the start list (scan_capture_poses/1)")
-    ap.add_argument("--code-root", type=Path, required=True, help="the snapshot the sessions ran")
-    ap.add_argument("--image", required=True, help="the SLAM bridge image id the sessions ran")
-    ap.add_argument("--frozen", type=Path, default=None, help="the first freeze's fingerprint and bridge bound")
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--sessions", type=Path, default=None, help="the folder of one session folder per start id")
+    ap.add_argument("--starts", type=Path, default=None, help="the start list (scan_capture_poses/1)")
+    ap.add_argument("--code-root", type=Path, required=True, help="the snapshot the sessions ran (or to freeze)")
+    ap.add_argument("--image", required=True, help="the SLAM bridge image id the sessions ran (or to freeze)")
+    ap.add_argument("--frozen", type=Path, default=None,
+                    help="the first freeze's record (fingerprint, bridge bound): without it a judgement is never "
+                    "pooled (exit 2)")
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--make-frozen", type=Path, default=None,
+                    help="the first freeze (plan 4.5): write the fingerprint of --code-root/--image and "
+                    "--bridge-bound-s to this record, and judge nothing")
+    ap.add_argument("--bridge-bound-s", type=float, default=None, help="with --make-frozen: the bridge stage bound")
     a = ap.parse_args(argv)
     fp = fingerprint(a.code_root, a.image)
+    if a.make_frozen is not None:
+        if a.bridge_bound_s is None or not math.isfinite(a.bridge_bound_s) or a.bridge_bound_s <= 0:
+            ap.error("--make-frozen needs a positive --bridge-bound-s")
+        a.make_frozen.write_text(json.dumps({"fingerprint": fp, "bridge_bound_s": float(a.bridge_bound_s)},
+                                            indent=1) + "\n")
+        return 0
+    if a.sessions is None or a.starts is None or a.out is None:
+        ap.error("a judgement needs --sessions, --starts and --out")
     frozen = _load(a.frozen) if a.frozen else None
     if a.frozen and (frozen is None or "fingerprint" not in frozen):
         print(f"reloc_judge: the frozen record {a.frozen} is not there or has no fingerprint", file=sys.stderr)
@@ -385,8 +399,9 @@ def main(argv=None) -> int:
     out = {"fingerprint": fp, "fingerprint_mismatches": mismatches, "summary": summary, "rows": rows}
     a.out.write_text(json.dumps(out, indent=1, default=str) + "\n")
     print(json.dumps({"summary": summary, "fingerprint_mismatches": mismatches}, indent=1, default=str))
-    poolable = (not mismatches and summary["sessions_off_fingerprint"] == 0 and summary["argument_sets"] == 1
-                and summary["arguments_missing"] == 0)
+    # pooled only against an existing frozen record whose fingerprint matches (Codex round 3 P2: no --frozen, no pool)
+    poolable = (frozen is not None and not mismatches and summary["sessions_off_fingerprint"] == 0
+                and summary["argument_sets"] == 1 and summary["arguments_missing"] == 0)
     return 0 if poolable else 2
 
 
