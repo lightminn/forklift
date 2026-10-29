@@ -147,11 +147,11 @@ def test_a_snapshot_from_before_a_setup_name_binds_it_as_the_setup_does_with_its
 
     values = {"args": SimpleNamespace(output="x")}  # a record from before the flag
     assert sorted(H.bind_added_names(values, {"args": {}})) == ["far_intrinsics", "far_runtime", "frr", "slam_bundle_",
-                                                                 "transport_exit"]
+                                                                 "start_reloc", "transport_exit"]
     assert values["far_runtime"] is None and values["far_intrinsics"] is None and values["frr"] is None
     values = {"args": SimpleNamespace(recognition="off"), "far_runtime": "kept"}
     assert H.bind_added_names(values, {"far_runtime": {}, "far_intrinsics": {}, "frr": {}, "slam_bundle_": {},
-                                       "transport_exit": {}}) == []
+                                       "transport_exit": {}, "start_reloc": {}}) == []
     assert values["far_runtime"] == "kept"
     with pytest.raises(ReplayMismatch, match="no far_runtime although recognition='far'"):
         H.bind_added_names({"args": SimpleNamespace(recognition="far")}, {"args": {}})

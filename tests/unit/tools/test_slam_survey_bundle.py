@@ -593,10 +593,13 @@ def test_the_live_job_localizes_on_a_bundle_only_when_given_one():
     live = (ROOT / "deploy" / "console" / "isaac_live.sbatch").read_text()
     bridge, runner = _heredoc(live, "bridge.sh"), _heredoc(live, "runner.sh")
     assert '[ -n "${MAP_BUNDLE:-}" ] && LOC=(-v "$4:/bundle:ro" -e SLAM_MAP_BUNDLE=/bundle' in bridge
-    assert '-e SLAM_EXPECTED_MAP_ID="$3"' in bridge and '-e SLAM_MAP_START_POSE="$MAP_START_POSE"' in bridge
+    assert '-e SLAM_EXPECTED_MAP_ID="$3"' in bridge and '-e SLAM_MAP_START_POSE="$START"' in bridge
+    # the registry's start unless a B-P2 start relocalization gives the runner's estimate
+    assert 'START=$MAP_START_POSE\n[ -n "${START_POSE:-}" ] && START=${5:?' in bridge
     assert '[ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")' in runner
     assert '$EXTRA_ARGS "${LOC[@]}"' in runner
     assert '[ -n "${MAP_BUNDLE:-}" ] && SUP_LOC=(--slam-map-bundle "$MAP_BUNDLE")' in live
     assert "'{expected_map_id}' '{map_bundle}'" in live
     survey = (ROOT / "deploy" / "console" / "slam_survey.sbatch").read_text()
     assert "printf 'MAP_BUNDLE=\\nMAP_START_POSE=\\n'" in survey  # a survey never localizes (console review P3)
+    assert "printf 'START_POSE=\\n'" in survey  # nor relocalizes (B-P2)

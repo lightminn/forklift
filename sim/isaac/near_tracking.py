@@ -1068,6 +1068,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     # docs/plans/2026-10-28-adoption-zone-check.md: the check only ends a mission (recorded), never moves the truck
     "adoption_zone_check",
     "adoption_zone_margin_m",
+    # B-P2b: the start relocalization's epoch folder (the supervisor's); the condition is start_pose/start_relocalize
+    "reloc_dir",
 )
 # Arguments added after the measurement runs, each at the value that reproduces them: a run
 # holding that value matches measurement records that predate the argument, any other value
@@ -1175,7 +1177,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # envelope + half a step) and the presteer before an escape; unset / off before.
                               "start_band_m": None, "escape_presteer": "off",
                               # 2026-10-28 exit-prefix exemption: off in every earlier run.
-                              "exit_prefix_exempt": "off"}
+                              "exit_prefix_exempt": "off",
+                              # 2026-10-29 B-P2b (start relocalization plan 1.4): every earlier run started at the
+                              # scene's start, known; a relocalizing run from elsewhere is another condition
+                              "start_pose": None, "start_relocalize": False}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

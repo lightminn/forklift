@@ -3,6 +3,7 @@ correlative search with branch and bound over every free cell the laser may stan
 wrong-confirmation tolerance, refinement of every kept candidate, and the confirmation rule."""
 
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -137,7 +138,7 @@ def test_a_symmetric_room_keeps_the_turned_competitor_and_is_not_confirmed():
     truth = (2.0, 1.4, 0.0)
     pts = _points(grid, truth)
     # an empty box overflows a small frontier: no answer at all, never a confirmation
-    assert G.global_match(grid, pts, G.MatchConfig(max_nodes=10_000)).status == "overflow"
+    assert G.global_match(grid, pts, G.MatchConfig(max_nodes=1_000)).status == "overflow"
     cfg = G.MatchConfig(max_nodes=5_000_000, yaw_step_rad=math.radians(2.0))
     match = G.refine(grid, G.global_match(grid, pts, cfg), pts, cfg)
     assert any(_close(c.pose, truth) for c in match.candidates)
@@ -244,3 +245,174 @@ def test_refinement_keeps_the_lattice_pose_and_score_through_the_real_path():
     assert top.lattice_pose == off.pose and _close(top.pose, truth, m=0.05)
     d = G.decide(moved, e_min=0.0, r_max=1.0, sep_m=0.2)
     assert not d.confirmed and d.reason == "refine_moved"
+
+
+# --- B-P1b search budget (plan B4b): beam floor, map index, work cap, deadline ---------------------------------------
+
+
+def _same_candidates(a, b):
+    assert a.status == b.status
+    assert [(c.pose, c.score) for c in a.candidates] == [(c.pose, c.score) for c in b.candidates]
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_the_beam_floor_keeps_the_exact_kept_set(seed):
+    """A beam descent only raises the floor towards the best leaf (it is a real leaf score): the kept leaves above
+    keep_ratio x best and so the candidates are those of the single greedy descent, and the best is brute force's."""
+    rng = np.random.default_rng([20261028, 200 + seed])
+    grid = _random_grid(rng, 3.2, 2.4, 4)
+    for keep in (0.4, 0.8):
+        greedy = G.MatchConfig(yaw_step_rad=math.radians(10.0), clearance_m=0.1, levels=4, keep_ratio=keep,
+                               beam_width=1)
+        beam = replace(greedy, beam_width=16)
+        for pose in ((0.4, 0.4, 0.2), (2.6, 1.9, 3.5)):
+            pts = _points(grid, pose, beams=180)
+            if len(G._thin(pts, RES)) < greedy.min_points:
+                continue
+            a, b = G.global_match(grid, pts, greedy), G.global_match(grid, pts, beam)
+            _same_candidates(a, b)
+            assert b.candidates[0].score == pytest.approx(G.brute_force_best(grid, pts, beam), abs=1e-12)
+
+
+def test_the_beam_floor_is_the_registered_default():
+    cfg = G.MatchConfig()
+    assert (cfg.beam_width, cfg.keep_ratio, cfg.max_nodes, cfg.deadline_s) == (64, 0.8, 1_000_000, 30.0)
+
+
+def test_a_map_index_gives_the_same_candidates_and_refinement():
+    """The per-map index (field, padded pyramid, candidate pyramid, wall centres) is built once; with or without it
+    the search and the refinement give the same poses and scores."""
+    grid = _grid(*ROOM)
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(2.0))
+    index = G.MapIndex(grid, cfg)
+    for truth in ((2.3, 1.7, 0.6), (0.6, 3.2, 4.0)):
+        pts = _points(grid, truth)
+        plain = G.refine(grid, G.global_match(grid, pts, cfg), pts, cfg)
+        indexed = G.refine(grid, G.global_match(grid, pts, cfg, index=index), pts, cfg, index=index)
+        _same_candidates(plain, indexed)
+        assert [c.endpoint_fraction for c in plain.candidates] == [c.endpoint_fraction for c in indexed.candidates]
+
+
+def test_a_map_index_refuses_endpoints_beyond_its_reach():
+    grid = _grid(10.0, 10.0, [])
+    index = G.MapIndex(grid, G.MatchConfig(match_range_m=2.0))
+    far = np.stack([np.full(40, 5.4), np.linspace(-1.0, 1.0, 40)], 1)
+    with pytest.raises(ValueError, match="beyond"):
+        G.global_match(grid, far, G.MatchConfig(match_range_m=2.0), index=index)
+
+
+def test_the_work_cap_ends_the_search_as_overflow_never_a_confirmation():
+    grid = _grid(*ROOM)
+    pts = _points(grid, (2.3, 1.7, 0.6))
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(2.0))
+    done = G.global_match(grid, pts, cfg)
+    assert done.status == "ok" and done.work > 0
+    capped = G.global_match(grid, pts, replace(cfg, max_work=done.work // 2))
+    assert capped.status == "overflow" and capped.candidates == ()
+    assert not G.decide(capped, e_min=0.0, r_max=1.0).confirmed
+
+
+class _Clock:
+    """A clock the test moves: monotonic seconds."""
+
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+
+def _relocalize(grid, pts, clock):
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(2.0))
+    return G.relocalize(grid, pts, cfg, e_min=0.8, r_max=0.9, r_struct=0.8, clock=clock)
+
+
+def test_relocalization_confirms_an_asymmetric_room_within_the_deadline():
+    grid = _grid(*ROOM)
+    match, decision = _relocalize(grid, _points(grid, (2.3, 1.7, 0.6)), _Clock())
+    assert decision.confirmed and _close(match.candidates[0].pose, (2.3, 1.7, 0.6))
+
+
+def test_a_deadline_crossed_in_the_last_scoring_chunk_is_a_timeout(monkeypatch):
+    grid = _grid(*ROOM)
+    clock = _Clock()
+    real = G._Search.scores
+
+    calls = []
+
+    def scores(self, level, *a, **k):
+        if level == 0:
+            calls.append(level)
+            if len(calls) == 2:  # the first level-0 scores are the beam's; the second, the search's last leaves
+                clock.t += 31.0
+        return real(self, level, *a, **k)
+
+    monkeypatch.setattr(G._Search, "scores", scores)
+    match, decision = _relocalize(grid, _points(grid, (2.3, 1.7, 0.6)), clock)
+    assert match.status == "timeout" and not decision.confirmed and decision.reason == "timeout"
+
+
+def test_a_deadline_crossed_during_the_refinement_is_a_timeout(monkeypatch):
+    grid = _grid(*ROOM)
+    clock = _Clock()
+    real = G.match_scans
+
+    def icp(*a, **k):
+        clock.t += 31.0
+        return real(*a, **k)
+
+    monkeypatch.setattr(G, "match_scans", icp)
+    match, decision = _relocalize(grid, _points(grid, (2.3, 1.7, 0.6)), clock)
+    assert match.status == "timeout" and not decision.confirmed and decision.reason == "timeout"
+
+
+def test_a_deadline_crossed_after_the_decision_drops_the_confirmation(monkeypatch):
+    grid = _grid(*ROOM)
+    clock = _Clock()
+    real = G.decide
+
+    def late(*a, **k):
+        d = real(*a, **k)
+        clock.t += 31.0
+        return d
+
+    monkeypatch.setattr(G, "decide", late)
+    match, decision = _relocalize(grid, _points(grid, (2.3, 1.7, 0.6)), clock)
+    assert match.status == "timeout" and not decision.confirmed and decision.reason == "timeout"
+
+
+# --- B-P2 (docs/plans/2026-10-29-start-relocalization.md 1.2): one session deadline, cooperative cancel ---------
+
+
+def test_a_shared_absolute_deadline_holds_across_requests():
+    """Codex B-P2 review P2: relocalize() made a fresh deadline per call, so a second attempt could confirm at 58 s.
+    With deadline_at both attempts share one; a second request starting past it is a timeout."""
+    grid = _grid(*ROOM)
+    pts = _points(grid, (2.3, 1.7, 0.6))
+    clock = _Clock()
+    cfg = G.MatchConfig(yaw_step_rad=math.radians(2.0))
+    deadline = clock() + 30.0
+    match, decision = G.relocalize(grid, pts, cfg, e_min=0.8, r_max=0.9, r_struct=0.8, clock=clock,
+                                   deadline_at=deadline)
+    assert decision.confirmed
+    clock.t += 31.0  # the second attempt starts after the shared deadline
+    match, decision = G.relocalize(grid, pts, cfg, e_min=0.8, r_max=0.9, r_struct=0.8, clock=clock,
+                                   deadline_at=deadline)
+    assert match.status == "timeout" and not decision.confirmed
+
+
+def test_a_cancel_ends_the_request_without_a_confirmation(monkeypatch):
+    grid = _grid(*ROOM)
+    pts = _points(grid, (2.3, 1.7, 0.6))
+    flag = {"stop": False}
+    real = G._Search.scores
+
+    def scores(self, level, *a, **k):
+        if level == 0:
+            flag["stop"] = True  # STOP arrives while the leaves are scored
+        return real(self, level, *a, **k)
+
+    monkeypatch.setattr(G._Search, "scores", scores)
+    match, decision = G.relocalize(grid, pts, G.MatchConfig(yaw_step_rad=math.radians(2.0)), e_min=0.8, r_max=0.9,
+                                   r_struct=0.8, clock=_Clock(), cancel=lambda: flag["stop"])
+    assert match.status == "cancelled" and not decision.confirmed and decision.reason == "cancelled"

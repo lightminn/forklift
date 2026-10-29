@@ -1,0 +1,638 @@
+{
+ "choice": {
+  "e_min": 0.8,
+  "r_max": 0.95,
+  "r_struct": 0.8,
+  "success": 125,
+  "wrong": 0,
+  "imprecise": 0,
+  "request": 23,
+  "w": 0.5397727272727273
+ },
+ "starts": 84,
+ "invalid_captures": 9,
+ "success": 69,
+ "wrong": 0,
+ "imprecise": 0,
+ "request": 15,
+ "pass": true,
+ "rules": "b4b",
+ "safety_pass": true,
+ "time_pass": true,
+ "timeouts": 0,
+ "confirmed_after_deadline": 0,
+ "over_32_s": 0,
+ "low_overlap": {
+  "threshold": 0.2,
+  "starts": 1,
+  "wrong": 0,
+  "short": true
+ },
+ "bound_95": 0.03503503060494206,
+ "by_map": {
+  "3": {
+   "starts": 84,
+   "wrong": 0,
+   "bound_95": 0.03503503060494206
+  }
+ },
+ "request_reasons": {
+  "competitor": 8,
+  "periodic": 5,
+  "overflow": 2
+ },
+ "wall_s": {
+  "median": 2.855513690970838,
+  "p90": 5.353124524001032
+ },
+ "starts_detail": [
+  {
+   "id": "val3_000",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 1.0
+  },
+  {
+   "id": "val3_001",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_002",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "periodic",
+   "ratio": 0.9164409748457988
+  },
+  {
+   "id": "val3_004",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 0.9991911386837772
+  },
+  {
+   "id": "val3_005",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_006",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8159299678285546
+  },
+  {
+   "id": "val3_007",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_008",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8764865670184085
+  },
+  {
+   "id": "val3_009",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val3_010",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8355578273904207
+  },
+  {
+   "id": "val3_011",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_012",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_013",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_014",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_015",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_016",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_017",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8148741237351819
+  },
+  {
+   "id": "val3_018",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "periodic",
+   "ratio": 0.8567199664483641
+  },
+  {
+   "id": "val3_019",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "overflow",
+   "ratio": null
+  },
+  {
+   "id": "val3_020",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_021",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_022",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_023",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8366871935887494
+  },
+  {
+   "id": "val3_024",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8106929201824606
+  },
+  {
+   "id": "val3_025",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_026",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_027",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_028",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_029",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8743118139718199
+  },
+  {
+   "id": "val3_030",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_032",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8452424611342731
+  },
+  {
+   "id": "val3_033",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_034",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8033395311126275
+  },
+  {
+   "id": "val3_036",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.9167944985591002
+  },
+  {
+   "id": "val3_037",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_038",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "periodic",
+   "ratio": 0.8458730219436784
+  },
+  {
+   "id": "val3_039",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_040",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_041",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.9145281621265362
+  },
+  {
+   "id": "val3_042",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_043",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_044",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8211202001251224
+  },
+  {
+   "id": "val3_045",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8812485432257389
+  },
+  {
+   "id": "val3_046",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_047",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 1.0
+  },
+  {
+   "id": "val3_048",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_049",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_051",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_052",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.9133612693693122
+  },
+  {
+   "id": "val3_053",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_054",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "periodic",
+   "ratio": 0.8220544652362636
+  },
+  {
+   "id": "val3_055",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_056",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.9478587362990539
+  },
+  {
+   "id": "val3_057",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8312101183818642
+  },
+  {
+   "id": "val3_058",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_059",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8431819603730568
+  },
+  {
+   "id": "val3_060",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8301366168335821
+  },
+  {
+   "id": "val3_061",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8821489916019156
+  },
+  {
+   "id": "val3_062",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_063",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_064",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_065",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_068",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_070",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8337200206495948
+  },
+  {
+   "id": "val3_071",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "periodic",
+   "ratio": 0.9382358844122192
+  },
+  {
+   "id": "val3_072",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.9232161798961199
+  },
+  {
+   "id": "val3_073",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 0.9508370159214317
+  },
+  {
+   "id": "val3_074",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8623625359286483
+  },
+  {
+   "id": "val3_075",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_076",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_077",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8079637779462472
+  },
+  {
+   "id": "val3_078",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 0.9590869413839062
+  },
+  {
+   "id": "val3_080",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8168376317172564
+  },
+  {
+   "id": "val3_081",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_083",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 1.0
+  },
+  {
+   "id": "val3_084",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 0.9983967910785017
+  },
+  {
+   "id": "val3_085",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8006990094704406
+  },
+  {
+   "id": "val3_086",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.8613019084311686
+  },
+  {
+   "id": "val3_087",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_088",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_089",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_090",
+   "map_index": 3,
+   "outcome": "request",
+   "reason": "competitor",
+   "ratio": 0.9988085557753387
+  },
+  {
+   "id": "val3_091",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.0
+  },
+  {
+   "id": "val3_092",
+   "map_index": 3,
+   "outcome": "success",
+   "reason": "confirmed",
+   "ratio": 0.9370957655863755
+  }
+ ]
+}

@@ -67,14 +67,18 @@ def _log(out: Path, entry: dict) -> None:
         log.write(json.dumps({"wall": time.time(), **entry}) + "\n")
 
 
-def _mark_crashed(port_file: Path, epoch: int, code: int, reason: str | None = None) -> None:
+def _mark_crashed(port_file: Path, epoch: int, code: int, reason: str | None = None,
+                  stage: str | None = None) -> None:
     """The runner ended without closing its port file (or failed): readers must not take it as running. ``reason``
-    (the runner's, when it wrote one) tells the console why (SLAM localization plan L4: a session start check)."""
+    (the runner's, when it wrote one) tells the console why (SLAM localization plan L4: a session start check);
+    ``stage`` (a start relocalization's, B-P2) where it ended."""
     try:
         info = json.loads(port_file.read_text()) if port_file.exists() else {}
     except (OSError, ValueError):
         info = {}
     info.update(state="crashed", epoch=epoch, exit_code=code)
+    if stage is not None:
+        info["stage"] = stage
     if reason is not None:
         info["reason"] = reason
     else:
@@ -232,6 +236,100 @@ class _Stop:
             child.terminate()
 
 
+class _RelocBridge:
+    """B-P2 start relocalization (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 8-11): the runner runs
+    first; when its estimate (``reloc_pose.json``) appears the bridge starts at it (``{map_start_pose}``), and once
+    the bridge is ready ``bridge_go`` lets the runner open its SLAM link. ``step()`` is polled while the runner runs
+    and returns why the epoch must end, or None."""
+
+    def __init__(self, out: Path, epoch_dir: Path, values: dict, port_file: Path, bridge, bridge_ready,
+                 ready_timeout_s: float, reloc_wait_s: float):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from forklift_core.localization import start_reloc
+
+        self.lib, self.out, self.epoch_dir, self.values, self.port_file = start_reloc, out, epoch_dir, values, port_file
+        self.bridge, self.bridge_ready, self.ready_timeout_s = bridge, bridge_ready, ready_timeout_s
+        self.reloc_wait_s, self.phase, self.pose, self.localized = reloc_wait_s, "pose", None, False
+        self.total_until = self.ready_until = None
+        start_reloc.clear_epoch(epoch_dir)  # before the runner starts: never a file the runner already wrote
+
+    def started(self) -> None:
+        """The runner is running: the whole wait (estimate, operator's pick and bridge, plan 1.2 steps 4-9) starts."""
+        self.total_until = time.monotonic() + self.reloc_wait_s
+
+    @property
+    def stage(self) -> str:
+        return "run" if self.localized else "relocalize"
+
+    def observe(self) -> None:
+        """Localization ready, read from the port file -- its state or the runner's own record of it, which survives
+        a running -> closed that fell between two polls. No side effects: also after the runner is gone."""
+        if self.localized:
+            return
+        try:
+            info = json.loads(self.port_file.read_text())
+        except (OSError, ValueError):
+            return
+        if self.phase in ("running", "done") and (info.get("state") == "running" or info.get("localized_wall")):
+            _log(self.out, {"event": "localization_ready", "epoch": self.values["epoch"]})
+            self.localized, self.phase = True, "done"
+
+    def _late(self) -> bool:
+        return self.total_until is not None and time.monotonic() > self.total_until
+
+    def step(self, alive=lambda: True, asked=lambda: False) -> str | None:
+        """While the runner runs (``alive``) and no TERM came (``asked``): start the bridge at its estimate, let it go
+        when ready, or say why to end. Every check reads the clock afresh (Codex B-P2a re-review: a bridge command
+        that returned after the whole wait must not be let go)."""
+        if self.phase in ("pose", "ready") and self._late():
+            return "reloc_wait_timeout"  # the whole wait is bounded, a found estimate or a slow bridge too
+        if self.phase == "pose":
+            data = self.lib.read_reloc_pose(self.epoch_dir)
+            if data is None:
+                return None
+            self.pose = [float(v) for v in data["base"]]
+            _log(self.out, {"event": "reloc_pose", "base": self.pose, "source": data.get("source"),
+                            "generation": data.get("generation"), "attempts": data.get("attempts")})
+            if self.bridge is not None:
+                pose = ",".join(repr(v) for v in self.pose)
+                try:
+                    command = subprocess.Popen(_fill(self.bridge, map_start_pose=pose, **self.values))
+                except (OSError, subprocess.SubprocessError) as exc:
+                    _log(self.out, {"event": "bridge_start_failed", "error": f"{type(exc).__name__}: {exc}"})
+                    return "bridge_start_failed"
+                while True:  # short waits: a TERM or the whole wait cancels the command (Codex B-P2a re-review)
+                    try:
+                        returned = command.wait(timeout=0.2)
+                        break
+                    except subprocess.TimeoutExpired:
+                        if asked() or self._late():
+                            command.terminate()
+                            _end_child(command, 2.0)
+                            _log(self.out, {"event": "bridge_start_cancelled", "term": asked()})
+                            return None if asked() else "reloc_wait_timeout"
+                if returned != 0:
+                    _log(self.out, {"event": "bridge_start_failed", "code": returned})
+                    return "bridge_start_failed"
+            self.phase, self.ready_until = "ready", time.monotonic() + self.ready_timeout_s
+        if self.phase == "ready":
+            if self._late():
+                return "reloc_wait_timeout"
+            flag = None if self.bridge_ready is None else Path(_fill([self.bridge_ready], **self.values)[0])
+            if flag is not None and not flag.exists():
+                if time.monotonic() > self.ready_until:
+                    _log(self.out, {"event": "bridge_not_ready", "epoch": self.values["epoch"]})
+                    return "bridge_not_ready"
+                return None
+            if asked() or not alive():  # the runner is ending: nothing is let go to it
+                return None
+            self.lib.write_bridge_go(self.epoch_dir, {"map_start_pose": self.pose})
+            _log(self.out, {"event": "bridge_go", "map_start_pose": self.pose})
+            self.phase = "running"
+        if self.phase == "running":
+            self.observe()
+        return None
+
+
 def _end_child(child, grace_s: float = 60.0) -> int:
     try:
         return child.wait(timeout=grace_s)
@@ -245,7 +343,8 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
               bridge_ready: str | None = None, ready_timeout_s: float = 120.0, exit_file: str | None = None,
               grace_s: float = 60.0, map_bundle: Path | None = None, expected_map_id: str | None = None,
               slam_choice: str | None = None,
-              standby_port: int | None = None, standby_host: str = "127.0.0.1", web_root: Path | None = None, standby_linger_s: float = 0.0) -> dict:
+              standby_port: int | None = None, standby_host: str = "127.0.0.1", web_root: Path | None = None, standby_linger_s: float = 0.0,
+              relocalize: bool = False, reloc_wait_s: float = 600.0) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     stop = _Stop()  # first: a TERM during the bundle check or a linger ends them too
@@ -291,9 +390,10 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                       **session_values}
             standby.update(phase="starting", epoch=epoch, stage="bridge", next_epoch=None, retry=None)
             code, reason, stage = 1, None, "bridge"
+            reloc, ended_by = None, None
             try:
                 ready = True
-                if bridge is not None:
+                if bridge is not None and not relocalize:  # B-P2: the bridge waits for the runner's estimate
                     subprocess.run(_fill(bridge, **values), check=True)
                     if bridge_ready is not None:
                         flag, end = Path(_fill([bridge_ready], **values)[0]), time.monotonic() + ready_timeout_s
@@ -312,8 +412,13 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                     else:
                         _log(out, {"event": "start", "epoch": epoch})
                         started_wall = time.time()
+                        if relocalize:  # its files are cleared before the runner can write one
+                            reloc = _RelocBridge(out, epoch_dir, values, port_file, bridge, bridge_ready,
+                                                 ready_timeout_s, reloc_wait_s)
                         stop.child = subprocess.Popen(_fill(runner, **values))
                         standby.update(phase="running", stage="runner")
+                        if reloc is not None:
+                            reloc.started()
                         if stop.asked:  # the TERM came as it started: end it now
                             stop.child.terminate()
                         while True:  # short waits, so a TERM arriving meanwhile turns into the grace and the KILL
@@ -322,6 +427,13 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                                 break
                             except subprocess.TimeoutExpired:
                                 if stop.asked:
+                                    process = _end_child(stop.child, grace_s)
+                                    break
+                                ended_by = None if reloc is None else reloc.step(
+                                    alive=lambda: stop.child is not None and stop.child.poll() is None,
+                                    asked=lambda: stop.asked)
+                                if ended_by is not None:  # B-P2: no estimate in time, or no bridge for it
+                                    stop.child.terminate()
                                     process = _end_child(stop.child, grace_s)
                                     break
                         pid = stop.child.pid
@@ -340,9 +452,16 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
                                 _log(out, {"event": "no_exit_file", "epoch": epoch})
                                 code, reason = 1, "no_exit_file"
                         stage = "run" if _opened_its_server(port_file, started_wall, pid) else "start"
+                        if reloc is not None:  # B-P2: the server opens before localization; ready is the split
+                            reloc.observe()  # a localization the last poll missed; nothing is started any more
+                            stage = reloc.stage
+                        if ended_by is not None:
+                            code, reason = 1, ended_by
             except (OSError, subprocess.SubprocessError) as exc:  # the bridge or the runner would not start
                 _log(out, {"event": "start_failed", "epoch": epoch, "error": f"{type(exc).__name__}: {exc}"})
                 code, reason = 1, f"start_failed: {type(exc).__name__}"
+                if reloc is not None:
+                    stage = reloc.stage
             finally:
                 if stop.child is not None:  # interrupted while waiting
                     _end_child(stop.child, grace_s)
@@ -362,14 +481,15 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             codes.append(code)
             _log(out, {"event": "exit", "epoch": epoch, "code": code, "reason": reason})
             if stop.asked:
-                _mark_crashed(port_file, epoch, code, reason) if code not in (ENDED, NEW_SCENE) else None
+                if code not in (ENDED, NEW_SCENE):
+                    _mark_crashed(port_file, epoch, code, reason, stage if relocalize else None)
                 return stopped({"epochs": epoch, "end": "terminated", "codes": codes}, False)
             if code == ENDED:
                 return stopped({"epochs": epoch, "end": "ended", "codes": codes}, False)
             if code == NEW_SCENE:
                 last_cause, repeats = None, 0
                 continue
-            _mark_crashed(port_file, epoch, code, reason)
+            _mark_crashed(port_file, epoch, code, reason, stage if relocalize else None)
             cause = _cause(code, reason)
             if cause[1] in STOP_AT_ONCE:
                 return stopped({"epochs": epoch, "end": "map_mismatch", "codes": codes, "reason": reason}, True)
@@ -416,6 +536,10 @@ def main(argv=None) -> int:
     ap.add_argument("--web-root", type=Path, default=None, help="the console's page (console/web)")
     ap.add_argument("--standby-linger-s", type=float, default=0.0,
                     help="after a failed end, how long the standby stays up so the operator reads why (s)")
+    ap.add_argument("--relocalize", action="store_true",
+                    help="B-P2 start relocalization: the runner first, the bridge at its estimate ({map_start_pose})")
+    ap.add_argument("--reloc-wait-s", type=float, default=600.0,
+                    help="with --relocalize: how long the runner may take to an estimate, an operator's pick included")
     args = ap.parse_args(argv)
     load = (lambda text: None if text is None else json.loads(text))
     result = supervise(out=args.out, runner=load(args.runner), port_file=args.port_file, backoff_s=args.backoff_s,
@@ -425,7 +549,8 @@ def main(argv=None) -> int:
                        slam_choice=args.slam_choice,
                        standby_port=args.standby_port,
                        standby_host=args.standby_host, web_root=args.web_root,
-                       standby_linger_s=args.standby_linger_s)
+                       standby_linger_s=args.standby_linger_s, relocalize=args.relocalize,
+                       reloc_wait_s=args.reloc_wait_s)
     print(json.dumps(result), flush=True)
     return 0 if result["end"] == "ended" else 1
 
