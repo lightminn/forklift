@@ -252,6 +252,55 @@ def test_a_session_end_while_the_bootstrap_waits_closes_the_link_and_ends_the_he
     assert not [t for t in threading.enumerate() if t.name == "slam-bootstrap-exchange"]
 
 
+def test_a_real_blocking_read_is_ended_by_shutting_its_socket_down():
+    # Codex B-P2c impl review round 2 P2: closing a socket does not wake a recv blocked on it in another thread
+    import socket
+    import threading
+    import time
+
+    import run_transport
+
+    a, b = socket.socketpair()
+
+    class Client:  # as slam_link.SlamLinkClient: a recv on its socket, close() closes it
+        def __init__(self, sock):
+            self.sock = sock
+
+        def exchange(self, scan):
+            data = self.sock.recv(16)
+            if not data:
+                raise ConnectionError("closed")
+            return data
+
+        def close(self):
+            self.sock.close()
+
+    class End(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def service(stage):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise End()
+
+    t0 = time.monotonic()
+    with pytest.raises(End):
+        run_transport.ServicedExchange(Client(a), service, tick_s=0.005).exchange("scan")
+    assert time.monotonic() - t0 < 1.0
+    assert not [t for t in threading.enumerate() if t.name == "slam-bootstrap-exchange"]
+    b.close()
+
+
+def test_an_operator_end_wins_over_a_failing_diagnostic_write():
+    # Codex B-P2c impl review round 2 P2: the end is decided before failure.txt is written
+    main_ = _source("\ndef main() -> None:", '\nif __name__ == "__main__":')
+    except_ = main_[main_.index("    except BaseException as exc:"):main_.index("    finally:")]
+    assert except_.index("operator_ended(state, exc)") < except_.index('"failure.txt"')
+    assert re.search(r"try:\n\s+\(Path\(str\(args\.output\)\) / \"failure\.txt\"\)\.write_text", except_)
+
+
 def test_the_prewarm_gates_before_each_step_and_gives_the_raw_link_back_on_every_path():
     drive_ = _source("\ndef drive(S, isaac)", "\ndef recorded_arguments(")
     loop = drive_[drive_.index('slam["link"] = ServicedExchange('):drive_.index('raise SessionFailure("slam_prewarm_timeout")')]

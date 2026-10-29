@@ -150,6 +150,7 @@ def _run(inputs: RelocInputs) -> dict:
             break
         if state == "relocalizing":
             relocalizer.start()  # the generation's first scan: its session deadline (plan 1.2 step 6)
+            generation = relocalizer.generation  # the scans and the match belong to it (Codex impl round 2 P2)
             got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
                                         settle_steps=0)
             scan_key += 1
@@ -158,9 +159,8 @@ def _run(inputs: RelocInputs) -> dict:
             if not got["valid"]:  # judged before any matching (plan 1.2 step 3)
                 out["status"], out["reason"] = "invalid", got["reason"]
                 return out
-            if relocalizer.state != "relocalizing":
-                continue  # a STOP during the scans
-            generation = relocalizer.generation
+            if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
+                continue  # a STOP (and maybe a retry) during the scans: they go, the new generation scans anew
             match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, got["sent"]), step)
             if console is not None:
                 console.service("matched")  # the STOPs queued meanwhile, before the result counts

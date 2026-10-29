@@ -252,6 +252,38 @@ def test_a_stop_and_a_quick_retry_never_count_the_old_workers_result(tmp_path):
     assert [a["reason"] for a in out["attempts"]] == ["interrupted", "confirmed"]
 
 
+def test_a_stop_and_a_quick_retry_during_the_scans_drop_those_scans(tmp_path):
+    # Codex B-P2c impl review round 2 P2: the scans belong to the generation they were taken for
+    seen = {"n": 0}
+
+    def script(console, stage):
+        r = console.reloc
+        if stage == "scan" and seen["n"] == 0 and r.state == "relocalizing":
+            seen["n"] = 1
+            assert r.interrupt() and r.retry(r.generation) == (True, "")
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script), unattended=False))
+    assert out["status"] == "chosen" and [a["reason"] for a in out["attempts"]] == ["confirmed"]
+
+
+def test_the_matcher_cannot_confirm_after_the_operators_time(tmp_path):
+    # Codex B-P2c impl review round 2 P2: the whole budget bounds the matcher's own choice too
+    clock = {"t": 0.0}
+
+    def script(console, stage):
+        if stage == "matching":
+            clock["t"] = 25.0  # the matcher returns past the operator's deadline, inside its own 30 s one
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script), unattended=False,
+                        clock=lambda: clock["t"], operator_deadline_at=20.0))
+    assert out["status"] == "operator_timeout" and R.read_reloc_pose(tmp_path) is None
+
+
 def test_a_pick_after_the_operators_time_is_refused_and_nothing_is_committed(tmp_path):
     # Codex B-P2c impl review P2: the operator's deadline holds for the pick itself
     clock = {"t": 0.0}

@@ -122,7 +122,9 @@ class StartRelocalizer:
             raise RuntimeError("record() before start(): an attempt has no session deadline")
         self.attempts += 1
         self._keep(match.candidates)
-        late = self.clock() > self.deadline_at
+        # past the session deadline, or past the operator's whole time (no choice of the matcher's after it either,
+        # Codex B-P2c impl review round 2 P2)
+        late = self.clock() > self.deadline_at or self._expired()
         if decision.confirmed and not late:
             self._choose(base_from_laser(match.candidates[0].pose), "matcher")
             return self.state

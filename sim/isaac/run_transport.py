@@ -2869,9 +2869,18 @@ class ServicedExchange:
                 self.service("prewarm_exchange")
                 helper.join(self.tick_s)
         except BaseException:
-            # leaving with the reply outstanding (the operator's end): close the link so the helper's blocking read
-            # ends, and take the helper back (Codex B-P2c impl review P2)
+            # leaving with the reply outstanding (the operator's end): shut the socket down so the helper's blocking
+            # read returns (a close alone does not wake it), close the link and take the helper back (Codex B-P2c
+            # impl review rounds 1-2 P2)
+            import socket
+
             try:
+                shutdown = getattr(getattr(self.inner, "sock", None), "shutdown", None)
+                if shutdown is not None:
+                    try:
+                        shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass  # already closed or not connected: nothing blocks on it
                 self.inner.close()
             finally:
                 helper.join(2.0)
@@ -10191,9 +10200,13 @@ def main() -> None:
         run(app, args, settings, state)
     except BaseException as exc:
         failure_exc = exc
+        ended_ = operator_ended(state, exc)  # decided before any diagnostic I/O (Codex B-P2c impl round 2 P2)
         # Plain path: the traceback names this source's own lines, never a recorded output (M-a1 replay).
-        (Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())
-        if operator_ended(state, exc):
+        try:
+            (Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())
+        except OSError as write_exc:  # a diagnostic only: it never decides how the run ends
+            state["failure_txt_error"] = f"{type(write_exc).__name__}: {write_exc}"
+        if ended_:
             # B-P2c: the operator ended the session before the start was known -- the session's end (exit 0, no
             # restart), whatever ended the runner after it (Codex B-P2c design P2)
             state["success"], state["live_exit_code"] = True, 0

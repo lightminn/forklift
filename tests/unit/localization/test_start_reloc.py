@@ -264,6 +264,15 @@ def test_no_pick_or_retry_after_the_operators_time():
     assert r.retry(1) == (False, "reloc_operator_timeout")
 
 
+def test_the_matcher_does_not_confirm_after_the_operators_time():
+    clock = Clock()
+    r = _reloc(clock)
+    r.expires_at = clock.t + 10.0
+    clock.t += 11.0  # inside the 30 s session deadline, past the operator's whole time
+    assert r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(True, "confirmed", 0.0)) != "chosen"
+    assert r.estimate is None
+
+
 def test_a_retry_takes_a_plain_integer_generation():
     r = _reloc(attempts=1)
     r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(False, "low_fit", 0.9))
