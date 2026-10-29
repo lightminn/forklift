@@ -21,6 +21,7 @@ branch `feat/riib-exempt-default`(main c1077f23 위).
 - 면제 끔 경로 재생(`tools/boundary_replay.py --off exit_prefix_exempt`, 이 브랜치): 면제를 켜고 찍은 B 기록을 인자만 끔으로 바꿔 재생한다.
   - 비교에서 빼는 것은 면제의 장부 둘뿐이다: 기록 분기 `state.exit_prefix_exempt[...]` 와 종단 상태 키 `state.exit_prefix_exempt`.
   - 그 밖의 모든 경계 호출·틱 출력·분기·종단 상태는 그대로 대조한다. 면제가 층에 손을 댄 실행(`Obstacles.exit_exempt_set` 등)은 그 호출 자리에서 어긋난다.
+  - 재생은 장애물층을 돌리지 않고 기록된 층 응답을 돌려준다. 그래서 "구역이 없을 때 켬 인자(`add_scans` 의 보정·버전)를 받은 층이 끔 호출과 같은 답을 낸다"는 전제는 단위 시험이 맡는다(`tests/unit/test_isaac_exit_prefix_layer.py::test_without_a_region_the_on_arguments_leave_every_layer_answer_as_the_off_call_does`: 허가·스캔 시각·스냅숏 상태·증거 시각이 바이트 단위로 같다).
   - 따라서 끔 경로 재생이 끝까지 맞는다는 것은 "같은 센서·시뮬 입력에서 면제 끔 코드가 같은 결정(단계 전환·명령·재계획)을 내린다"는 뜻이다. 총괄이 정한 절차("기록 입력을 면제 끔 경로로 재생, 실패 시점까지 미션 결정 기록이 같으면 회귀 집계에서 뺀다")를 실패 시점이 아니라 실행 끝까지로 더 엄하게 적용한다.
   - 확인(§6 ①): 면제가 한 번도 층에 닿지 않은 B 기록과 닿은 B 기록에 돌려, 앞은 끝까지 맞고 뒤는 latch 자리에서 어긋나는지 본다.
 
