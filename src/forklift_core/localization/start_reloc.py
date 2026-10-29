@@ -72,6 +72,10 @@ class Estimate:
     attempts: int
 
 
+def _plain_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def _moved(c: Candidate, cfg: RelocConfig) -> bool:
     lp = c.search_pose
     d = math.atan2(math.sin(c.pose[2] - lp[2]), math.cos(c.pose[2] - lp[2]))
@@ -86,6 +90,7 @@ class StartRelocalizer:
         self.cfg, self.clock = cfg, clock
         self.state, self.generation, self.attempts = "relocalizing", 0, 0
         self.deadline_at: float | None = None
+        self.expires_at: float | None = None  # B-P2c: the operator's whole time (clock time); no pick or retry after
         self.estimate: Estimate | None = None
         self.shown: tuple = ()
         self._pool: list = []  # the pickable candidates every attempt of this generation produced, one per place
@@ -117,7 +122,9 @@ class StartRelocalizer:
             raise RuntimeError("record() before start(): an attempt has no session deadline")
         self.attempts += 1
         self._keep(match.candidates)
-        late = self.clock() > self.deadline_at
+        # past the session deadline, or past the operator's whole time (no choice of the matcher's after it either,
+        # Codex B-P2c impl review round 2 P2)
+        late = self.clock() > self.deadline_at or self._expired()
         if decision.confirmed and not late:
             self._choose(base_from_laser(match.candidates[0].pose), "matcher")
             return self.state
@@ -128,7 +135,14 @@ class StartRelocalizer:
         self.state = "awaiting_pick" if self.shown else "reloc_failed"
         return self.state
 
+    def _expired(self) -> bool:
+        return self.expires_at is not None and self.clock() > self.expires_at
+
     def pick(self, generation: int, index: int) -> tuple[bool, str]:
+        if not (_plain_int(generation) and _plain_int(index)):  # True is no generation 1 (Codex B-P2c design P2)
+            return False, "reloc_pick_refused"
+        if self._expired():  # the operator's time is over (Codex B-P2c impl review P2)
+            return False, "reloc_operator_timeout"
         if self.state == "chosen" and self._picked == (generation, index):
             return True, "duplicate"
         if self.state != "awaiting_pick":
@@ -142,14 +156,25 @@ class StartRelocalizer:
         return True, ""
 
     def retry(self, generation: int) -> tuple[bool, str]:
-        if self.state not in ("awaiting_pick", "reloc_failed"):
+        if self.state not in ("awaiting_pick", "reloc_failed", "stopped"):
             return False, "reloc_not_awaiting"
-        if generation != self.generation:
+        if self._expired():
+            return False, "reloc_operator_timeout"
+        if not _plain_int(generation) or generation != self.generation:
             return False, "reloc_stale_pick"
         self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []
         self.generation += 1
         self.deadline_at = None
         return True, ""
+
+    def interrupt(self) -> bool:
+        """A STOP before the estimate (B-P2c, Codex design P1): the attempt running or the candidates shown are
+        dropped and the generation moves on; a retry may follow. After the choice or the end it changes nothing."""
+        if self.state not in ("relocalizing", "awaiting_pick", "reloc_failed"):
+            return False
+        self.state, self.shown, self._pool = "stopped", (), []
+        self.generation += 1
+        return True
 
     def cancel(self) -> None:
         self.state, self.shown = "cancelled", ()

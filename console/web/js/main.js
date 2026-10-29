@@ -15,6 +15,7 @@ import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
 import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
+import { candidateAt, pickKey, relocActions, relocOf } from "./reloc.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -511,6 +512,26 @@ function sessionRequest(kind) {
     }
   });
 }
+// B-P2c: the operator's pick of a start candidate (two clicks on the same candidate of the same set) and the retry
+function pickCandidate(reloc, index) {
+  const key = pickKey(reloc, index, m.confirmKey("relocalize_pick"));
+  const step = m.confirm.click(key, performance.now());
+  if (step === "armed") log(`출발 위치 후보 ${index + 1} · 한 번 더 누르면 확정합니다`);
+  if (step !== "send") return;
+  // the armed key's generation and candidate: the set the operator looked at (Codex B-P2c design P2)
+  req("relocalize_pick", { generation: key.generation, candidate: key.candidate }).then((r) => {
+    if (r && r.t === "ack") log(`출발 위치 후보 ${index + 1} 로 정했습니다 · SLAM 을 그 위치에서 시작합니다`);
+  });
+}
+$("reloc-cands").onclick = (e) => {
+  const b = e.target.closest("button[data-candidate]");
+  const reloc = relocOf(m.session.state);
+  if (b && reloc && relocActions(reloc, m.session.hasLease).pick) pickCandidate(reloc, Number(b.dataset.candidate));
+};
+$("reloc-retry").onclick = () => {
+  const reloc = relocOf(m.session.state);
+  if (reloc && relocActions(reloc, m.session.hasLease).retry.enabled) req("relocalize_retry", { generation: reloc.generation });
+};
 $("s-end").onclick = () => sessionRequest("session_end");
 $("s-reset").onclick = $("scene-reset").onclick = () => sessionRequest("sim_reset");
 $("m-start").onclick = () => {
@@ -694,8 +715,15 @@ function endPointer(e) {
   if (pointers.size < 2) pinch = null;
   if (e.type === "pointerup" && press && !press.moved && pointers.size === 0) {
     const { rc, w, h } = mapSize();
-    const p = palletAt(m.view, w, h, m.session.targets, e.clientX - rc.left, e.clientY - rc.top);
-    if (selectable(p, m.session.state?.load)) openWizard({ pallet: p.pallet_id });
+    const reloc = relocOf(m.session.state);
+    if (reloc) {
+      // B-P2c: while the start is unknown a click picks a candidate -- twice, bound to the set it was shown in
+      const k = candidateAt(m.view, w, h, reloc, e.clientX - rc.left, e.clientY - rc.top);
+      if (k !== null && relocActions(reloc, m.session.hasLease).pick) pickCandidate(reloc, k);
+    } else {
+      const p = palletAt(m.view, w, h, m.session.targets, e.clientX - rc.left, e.clientY - rc.top);
+      if (selectable(p, m.session.state?.load)) openWizard({ pallet: p.pallet_id });
+    }
   }
   if (pointers.size === 0) press = null;
 }
@@ -874,6 +902,10 @@ function frame(now) {
   const agree = frameAgreement({ gridFrame: m.grid?.head.frame ?? null, poseFrame: st?.pose?.frame ?? null, scanFrame: m.scan?.frame ?? null });
   m.frameNote = agree.note;
   const scanOk = agree.scan && scanDrawable(m.scan ? { ageS: (now - m.scan.at) / 1000 } : null);
+  // B-P2c: the candidate a first click armed (drawn filled, its button says once more) until sent or timed out
+  const armedKey = m.confirm.armed?.key;
+  m.armedCandidate = armedKey?.kind === "relocalize_pick" && m.confirm.pending(armedKey, performance.now())
+    ? armedKey.candidate : null;
   drawMap(
     $("map"),
     {
@@ -885,6 +917,7 @@ function frame(now) {
       chassis: m.chassis,
       vehicleId: m.session.welcome?.vehicle_id,
       stale: m.stale,
+      armedCandidate: m.armedCandidate,
     },
     tok,
     m.view,

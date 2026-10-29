@@ -32,7 +32,10 @@
 #   START_POSE (B-P2 start relocalization, docs/plans/2026-10-29-start-relocalization.md: "x,y,yaw" world base_link --
 #   the truck is placed there and the session finds itself on the survey map before its SLAM link opens: the runner
 #   gets --start-pose/--start-relocalize, the supervisor --relocalize, the bridge the runner's estimate as its
-#   map_start_pose instead of MAP_START_POSE; needs a survey map; unattended until the console's pick, B-P2c),
+#   map_start_pose instead of MAP_START_POSE; needs a survey map; the console shows the relocalization from the
+#   start and takes the operator's pick or retry (B-P2c); RELOC_UNATTENDED=1: a start needing the operator ends the
+#   session instead (unattended batches, B-P2d); RELOC_WAIT_S (600): the supervisor's whole wait, the operator's
+#   time 60 s less),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -64,6 +67,9 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
+RELOC_WAIT_S=${RELOC_WAIT_S:-600}
+case "$RELOC_WAIT_S" in ''|*[!0-9]*) echo "RELOC_WAIT_S must be whole seconds"; exit 2;; esac
+[ "$RELOC_WAIT_S" -gt 60 ] || { echo "RELOC_WAIT_S must be over 60 s (the operator's time is 60 s less)"; exit 2; }
 if [ -n "${START_POSE:-}" ] && [ -z "${MAP_BUNDLE:-}" ]; then
   echo "START_POSE relocalizes on a survey map: it needs one (slam: $SLAM_CHOICE)" >&2
   exit 2
@@ -84,6 +90,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
+  printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
   printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
     "${SCENE_REQUIREMENTS_OVERRIDE:-}"  # scene requirements plan
@@ -131,7 +138,9 @@ LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
 # one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
-[ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2")
+[ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
+                                  --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
+[ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
@@ -202,7 +211,7 @@ SUP_LOC=()
 [ -n "${MAP_BUNDLE:-}" ] && [ -n "$EXPECTED_MAP_ID" ] && SUP_LOC+=(--expected-map-id "$EXPECTED_MAP_ID")
 # B-P2: the runner first, the bridge at its estimate
 BRIDGE=(bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')
-[ -n "${START_POSE:-}" ] && SUP_LOC+=(--relocalize) && BRIDGE+=('{map_start_pose}')
+[ -n "${START_POSE:-}" ] && SUP_LOC+=(--relocalize --reloc-wait-s "$RELOC_WAIT_S") && BRIDGE+=('{map_start_pose}')
 # Between runners the supervisor serves the console's port itself (contract 6): the page and /api/v1/session, so a
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).

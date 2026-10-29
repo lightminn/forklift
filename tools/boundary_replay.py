@@ -46,6 +46,7 @@ SETUP_NAMES_ADDED = {
     "transport_exit": ("exit_clearance_m", None, None),
     # B-P2b start relocalization (2026-10-29): every earlier record started at the scene's start
     "start_reloc": ("start_relocalize", False, None),
+    "reloc_console": ("start_relocalize", False, None),  # B-P2c: the early console of a relocalizing run
 }
 
 

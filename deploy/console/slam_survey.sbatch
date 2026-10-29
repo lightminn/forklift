@@ -53,6 +53,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   # a survey maps: the runner's localization arguments stay off whatever the submitting shell exported (console P3)
   printf 'MAP_BUNDLE=\nMAP_START_POSE=\n'
   printf 'START_POSE=\n'  # nor does it relocalize: it starts at the scene's start (B-P2)
+  printf 'RELOC_UNATTENDED=\nRELOC_WAIT_S=600\n'  # (read by the console's runner only with START_POSE)
   # the scene as the console runs it: SCENE_FILE (a scene file, e.g. a CT-2 session) or, unset, the factory hall
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"  # the console's runner reads it
@@ -96,7 +97,9 @@ LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
 # one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
-[ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2")
+[ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
+                                  --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
+[ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")

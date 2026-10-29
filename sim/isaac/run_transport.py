@@ -31,6 +31,7 @@ from frame_sync import rgba_of as frame_sync_rgba  # noqa: E402
 from forklift_core import determinism
 
 EXIT_CLEARANCE_M = 0.08
+RUNNER_STARTED_MONO = time.monotonic()  # B-P2c: the process's start, as near as the runner can tell
 # Deterministic-run plan D1: every camera read brought to its step's time (a no-op unless --deterministic).
 frame_sync = FrameSync()
 
@@ -962,6 +963,14 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument("--reloc-dir", type=Path, default=None,
                         help="B-P2b: the epoch folder of reloc_pose.json and bridge_go (the supervisor's {epoch_dir}).")
+    parser.add_argument("--reloc-unattended", action="store_true",
+                        help="B-P2c: with --start-relocalize, a start that needs the operator's pick (or that no "
+                        "candidate can settle) ends the session as in B-P2b instead of waiting on the console -- for "
+                        "unattended validation batches (B-P2d). The console still opens (STOP, session end).")
+    parser.add_argument("--reloc-operator-timeout-s", type=float, default=None,
+                        help="B-P2c: with --start-relocalize, the operator's whole time from the runner's start "
+                        f"(unset: {RELOC_OPERATOR_TIMEOUT_S:.0f} s, inside the supervisor's 600 s --reloc-wait-s); a "
+                        "retry does not extend it. Past it the session ends reloc_operator_timeout.")
     parser.add_argument(
         "--new-obstacles",
         type=Path,
@@ -1380,8 +1389,13 @@ def arguments() -> argparse.Namespace:
         if not args.live or args.slam_map_bundle is None or args.obstacle_layer is None:
             parser.error("--start-relocalize is a live session on a survey map (--live, --slam-map-bundle) with the "
                          "shared --obstacle-layer (the live send path's LiDAR and noise)")
-    elif args.start_pose is not None or args.reloc_dir is not None:
-        parser.error("--start-pose and --reloc-dir go with --start-relocalize")
+        timeout_ = args.reloc_operator_timeout_s
+        if timeout_ is not None and not (math.isfinite(timeout_) and timeout_ > 0):
+            parser.error("--reloc-operator-timeout-s must be a positive number of seconds")
+    elif (args.start_pose is not None or args.reloc_dir is not None or args.reloc_unattended
+          or args.reloc_operator_timeout_s is not None):
+        parser.error("--start-pose, --reloc-dir, --reloc-unattended and --reloc-operator-timeout-s go with "
+                     "--start-relocalize")
     if args.slam_choice is not None and args.slam_feedback is None:
         parser.error("--slam-choice requires --slam-feedback")
     if args.odometry_heading == "gyro" and (args.gyro_model is None or args.encoder_model != "team_spec_quantized"
@@ -2809,6 +2823,145 @@ def reloc_noise(seed: int):
     return lambda attempt, scan: np.random.default_rng([RELOC_NOISE_ROOT, int(seed), int(attempt), int(scan)])
 
 
+# B-P2c: the operator's whole time from the runner's start (the supervisor's whole relocalization wait, 600 s, starts
+# with the runner too; this leaves it a minute for the bridge)
+RELOC_OPERATOR_TIMEOUT_S = 540.0
+_EARLY = {"console": None, "adopted": False}  # B-P2c: the early console until the live runtime adopts it
+
+
+def operator_deadline(args, started: float | None = None) -> float:
+    """The operator's whole time ends here (clock time): from the runner's start (RUNNER_STARTED_MONO)."""
+    timeout = getattr(args, "reloc_operator_timeout_s", None)
+    start = RUNNER_STARTED_MONO if started is None else started
+    return start + (RELOC_OPERATOR_TIMEOUT_S if timeout is None else float(timeout))
+
+
+def live_arbiter_config(args, *, lift_limit_m: float, catchup_steps: int):
+    """The live arbiter's configuration (the live runtime's and the early console's: B-P2c adopts one arbiter)."""
+    from forklift_core.safety.arbiter import ArbiterConfig
+
+    return ArbiterConfig(tick_s=1 / 120, lift_limit_m=lift_limit_m,
+                         command_max_age_s=(0.30 - catchup_steps / 120) / args.live_factor,
+                         video_max_age_s=(0.50 - catchup_steps / 120) / args.live_factor,
+                         frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
+                         lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
+                                             0.50 / args.live_factor),
+                         # The truck stops in sim time: the 10 s stop deadline is 10/f wall s here
+                         # (at f 0.08 the unscaled one took the settling start for a failed stop and
+                         # latched STOPPED before TELEOP could be entered, 2026-10-17 job 3886).
+                         not_stopped_s=ArbiterConfig.not_stopped_s / args.live_factor,
+                         # The pixels trail the render metadata in sim steps, so the wall bound
+                         # goes as 1/f (M-c evidence); the per-frame pixel age is checked as well.
+                         camera_latency_bound_s=(args.live_camera_latency_bound_s
+                                                 or (args.live_camera_pixel_lag_s + 1 / 120)
+                                                 / args.live_factor))
+
+
+class ServicedExchange:
+    """B-P2c (Codex B-P2c design P2): the lockstep SLAM exchange of a relocalizing run's warm-up, its socket on a
+    helper thread while the main thread services the early console every ``tick_s`` (no physics step: the lockstep
+    order stays one scan, its reply, then the next step). The exchange returns or raises only once the helper ended,
+    so the socket is the async link's alone afterwards; anything else is the client's (``sock`` included)."""
+
+    def __init__(self, inner, service, tick_s: float = 1 / 120):
+        self.inner, self.service, self.tick_s = inner, service, tick_s
+
+    def exchange(self, scan):
+        import threading
+
+        box = {}
+
+        def work():
+            try:
+                box["reply"] = self.inner.exchange(scan)
+            except BaseException as exc:  # noqa: BLE001 -- re-raised on the main thread
+                box["error"] = exc
+
+        helper = threading.Thread(target=work, name="slam-bootstrap-exchange", daemon=True)
+        helper.start()
+        try:
+            while helper.is_alive():
+                self.service("prewarm_exchange")
+                helper.join(self.tick_s)
+        except BaseException:
+            # leaving with the reply outstanding (the operator's end): shut the socket down so the helper's blocking
+            # read returns (a close alone does not wake it), close the link and take the helper back (Codex B-P2c
+            # impl review rounds 1-2 P2)
+            import socket
+
+            self.cleanup = {"shutdown_error": None, "helper_alive": None}
+            try:
+                shutdown = getattr(getattr(self.inner, "sock", None), "shutdown", None)
+                if shutdown is not None:
+                    try:
+                        shutdown(socket.SHUT_RDWR)
+                    except OSError as exc:  # already closed or not connected; recorded (Codex P3)
+                        self.cleanup["shutdown_error"] = f"{type(exc).__name__}: {exc}"
+                self.inner.close()
+            finally:
+                helper.join(2.0)
+                self.cleanup["helper_alive"] = helper.is_alive()
+                if self.cleanup["helper_alive"]:
+                    print(f"B-P2c: the bootstrap exchange's helper outlived its cancel: {self.cleanup}",
+                          file=sys.stderr, flush=True)
+            raise
+        if "error" in box:
+            raise box["error"]
+        return box["reply"]
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def operator_ended(state: dict, exc) -> bool:
+    """B-P2c (Codex B-P2c design P2): the operator ended the session before the start was known -- that is the
+    session's end (exit 0, no restart), whatever ended the runner after it (a late SLAM reply timeout included)."""
+    console = _EARLY["console"]
+    if console is None:  # no early console: nothing to import (a batch run may not have its dependencies)
+        return bool(state.get("operator_ended"))
+    import reloc_console
+
+    # the arbiter's own record of an accepted end counts even when what followed it failed before the console's
+    # flag was set (Codex B-P2c impl review P2)
+    accepted = getattr(getattr(getattr(console, "parts", None), "arbiter", None), "session_request", None) == "end"
+    return (isinstance(exc, reloc_console.RelocSessionEnd) or bool(state.get("operator_ended"))
+            or bool(getattr(console, "ended_by_operator", False)) or accepted)
+
+
+def open_reloc_console(args, settings: dict, robot, bundle, *, lift_index, steers, state: dict):
+    """B-P2c (plan 1.2 step 4): the early console of a relocalizing live run, opened on the live port before the
+    phase; the live runtime adopts it (one arbiter for the session). Its feedback is measured from the articulation
+    now (the standing truck)."""
+    import reloc_console
+    from live_runtime import make_console
+
+    lift_limit_m, _ = urdf_lift_limit(args.forklift_urdf)
+    config = live_arbiter_config(args, lift_limit_m=lift_limit_m,
+                                 catchup_steps=int(os.environ.get("FORKLIFT_LIVE_CATCHUP_STEPS", "0")))
+    parts = make_console(config=config, supervised=args.live_supervised, host=args.live_host, port=args.live_port,
+                         web_root=args.live_web_root)
+
+    def measure():
+        _, q_ = robot.get_world_pose()
+        yaw_ = yaw_and_tilt(q_)[0]
+        v_ = robot.get_linear_velocity()
+        speed_ = float(v_[0] * math.cos(yaw_) + v_[1] * math.sin(yaw_))
+        joints_ = robot.get_joint_positions()
+        steering_ = float(max(abs(float(joints_[i])) for i in steers))
+        return speed_, float(robot.get_angular_velocity()[2]), float(joints_[lift_index[0]]), steering_
+
+    console = reloc_console.RelocConsole(
+        parts, measure=measure, port_file=args.live_port_file, tick_s=1 / 120,
+        slam_info={"mode": "localization", "map_id": bundle.map_id, "map_loaded": True,
+                   **({"choice": args.slam_choice} if args.slam_choice else {})},
+        grid=bundle.grid)
+    console.open()
+    _EARLY["console"] = console
+    # the gaps from the opening on, the same list, so a phase that fails still leaves them (Codex P3)
+    state["reloc_console"] = {"port": parts.server.port, "session_epoch": parts.session_epoch, "gaps": console.gaps}
+    return console
+
+
 def shared_lidar_engine(args, settings: dict, world, robot, layer, settle_base) -> tuple:
     """The stationary-scan engine of the shared SLAM LiDAR (sim/isaac/scan_capture.py): the live send path's cast,
     REP-117 ranges and the obstacle layer's noise model with a given generator. B4a's capture and B-P2's start
@@ -2908,7 +3061,7 @@ def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple
 
 
 def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, frozen=None, pace_s: float = 1 / 120,
-                         clock=None) -> dict:
+                         clock=None, console=None) -> dict:
     """B-P2b (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 3-10, unattended): the stopped truck's start
     relocalization on the survey bundle's grid with B-P1b's frozen settings (sim/isaac/reloc_phase.py). Returns the
     record (``state["start_reloc"]``) with the estimate (map base) and its rear axle, once the supervisor answered
@@ -2933,7 +3086,10 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         engine=engine, target=args.start_pose, grid=bundle.grid, index=index, match_cfg=cfg, reloc_cfg=reloc_cfg,
         angle_min_rad=float(angles[0]), angle_increment_rad=float(angles[1]), epoch_dir=Path(args.reloc_dir),
         settle_steps=0,  # the start settle (120 steps, 1 s) ran before: plan 1.2 step 3
-        pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed)))
+        pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
+        # B-P2c: the early console, and the operator's whole time from the runner's start
+        console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
+        operator_deadline_at=None if console is None else operator_deadline(args)))
     record = {**out, "map_id": bundle.map_id, "settings": settings_record, "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
                                 if out["estimate"] is not None else None)}
@@ -4150,9 +4306,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "band_overlaps": new_obstacles["band_overlaps"],
         }
     start_reloc = None  # B-P2b: the start relocalization's record; None: the scene's start, known, as before
+    reloc_console = None  # B-P2c: the early console the live runtime adopts; None: the runtime opens its own
     if args.start_relocalize:
+        reloc_console = open_reloc_console(args, settings, robot, slam_bundle_, lift_index=lift_index, steers=steers,
+                                           state=state)
         start_reloc = start_relocalization(args, state, *reloc_lidar(args, settings, world, robot, obstacle["layer"],
-                                                                     initial_base), slam_bundle_)
+                                                                     initial_base), slam_bundle_,
+                                           console=reloc_console)
+        reloc_console.service("setup")
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
 
@@ -4496,6 +4657,10 @@ def drive(S, isaac) -> None:
         _bound["start_reloc"] = None
     if "start_reloc" in _bound:
         start_reloc = _bound["start_reloc"]
+    if "reloc_console" not in _bound:  # a setup recorded before the early console (B-P2c, 2026-10-29)
+        _bound["reloc_console"] = None
+    if "reloc_console" in _bound:
+        reloc_console = _bound["reloc_console"]
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     if "truth_destination" in _bound:
@@ -7082,7 +7247,6 @@ def drive(S, isaac) -> None:
         if getattr(args, "live", False):
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
             from forklift_core.control.path_tracking import ackermann_command as live_ackermann
-            from forklift_core.safety.arbiter import ArbiterConfig as LiveArbiterConfig
             from forklift_core.safety.teleop_drive import TeleopLimits as LiveTeleopLimits
             from forklift_core.safety.teleop_drive import BundlePermit as LiveBundlePermit
             from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
@@ -7278,21 +7442,10 @@ def drive(S, isaac) -> None:
                 # distance as L does on a real truck. The lease is administrative and only kept above the command age.
                 # Real-time plan D7: a catch-up burst runs at most catchup_steps / 120 sim s ahead of f x wall, so
                 # the wall limits give that much up to bound the same sim distance as before.
-                config=LiveArbiterConfig(tick_s=1 / 120, lift_limit_m=live_lift_limit_,
-                                         command_max_age_s=(0.30 - live_catchup_ / 120) / args.live_factor,
-                                         video_max_age_s=(0.50 - live_catchup_ / 120) / args.live_factor,
-                                         frame_window_s=max(5.0, 2 * 0.50 / args.live_factor),
-                                         lease_timeout_s=max(args.live_lease_timeout_s, 0.30 / args.live_factor,
-                                                             0.50 / args.live_factor),
-                                         # The truck stops in sim time: the 10 s stop deadline is 10/f wall s here
-                                         # (at f 0.08 the unscaled one took the settling start for a failed stop and
-                                         # latched STOPPED before TELEOP could be entered, 2026-10-17 job 3886).
-                                         not_stopped_s=LiveArbiterConfig.not_stopped_s / args.live_factor,
-                                         # The pixels trail the render metadata in sim steps, so the wall bound
-                                         # goes as 1/f (M-c evidence); the per-frame pixel age is checked as well.
-                                         camera_latency_bound_s=(args.live_camera_latency_bound_s
-                                                                 or (args.live_camera_pixel_lag_s + 1 / 120)
-                                                                 / args.live_factor)),
+                # (one function: B-P2c's early console builds its arbiter with it, and the runtime adopts that one)
+                config=live_arbiter_config(args, lift_limit_m=live_lift_limit_, catchup_steps=live_catchup_),
+                # B-P2c: a relocalizing run's early console -- its arbiter, link, channels and server -- adopted
+                **({} if reloc_console is None else {"parts": reloc_console.parts}),
                 camera_pixel_lag_s=args.live_camera_pixel_lag_s,
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
@@ -7306,6 +7459,8 @@ def drive(S, isaac) -> None:
                     _bound["perception_calibration"], _bound["perception_mount"],
                     rear_axle_offset_m=args.rear_axle_offset_m, sent_width=640,
                     rides_lift=args.perception_mount != "legacy"))  # legacy hangs off base_link
+            if reloc_console is not None:
+                _EARLY["adopted"] = True  # the runtime closes its server from here on
             from forklift_core import kernels as live_kernels
 
             # Real-time plan D3: a live run takes the fastest kernels (a batch run stays on the reference unless told),
@@ -7696,12 +7851,26 @@ def drive(S, isaac) -> None:
             # tracker's age limit only backs up the reply deadline (Codex D9 1st P2-2, P2-3).
             prewarm_wall_ = time.monotonic()
             prewarm_steps_ = 0
-            while slam["tracker"].mode == "warming_up" or (slam.get("gyro") is not None
-                                                           and slam["gyro"]["bias"] is None):
-                step_world(False)
-                prewarm_steps_ += 1
-                if prewarm_steps_ > 120 * 60:
-                    raise SessionFailure("slam_prewarm_timeout")
+            if reloc_console is not None:
+                # B-P2c: the lockstep replies wait with the early console serviced (Codex B-P2c design P2); the raw
+                # client is back before the async link takes its socket
+                reloc_console.service("prewarm")
+                slam_lockstep_ = slam["link"]
+                slam["link"] = ServicedExchange(slam_lockstep_, reloc_console.service)
+            try:
+                while slam["tracker"].mode == "warming_up" or (slam.get("gyro") is not None
+                                                               and slam["gyro"]["bias"] is None):
+                    if reloc_console is not None:
+                        reloc_console.gate("prewarm")  # a STOP queued meanwhile, before the step (Codex P2)
+                    step_world(False)
+                    prewarm_steps_ += 1
+                    if reloc_console is not None:
+                        reloc_console.service("prewarm")
+                    if prewarm_steps_ > 120 * 60:
+                        raise SessionFailure("slam_prewarm_timeout")
+            finally:
+                if reloc_console is not None:
+                    slam["link"] = slam_lockstep_
             if os.environ.get("FORKLIFT_LIVE_ASYNC_SLAM", "1") != "0":
                 # (a localization run warms up -- its map checks -- before the server opens either way, plan L4)
                 slam["async_link"] = slam["module"].AsyncSlamLink(
@@ -7731,6 +7900,11 @@ def drive(S, isaac) -> None:
                     "truth_base": [float(verdict_base_[0]), float(verdict_base_[1]),
                                    float(yaw_and_tilt(verdict_q_)[0])],
                     "estimate_base": list(start_reloc["estimate"])}
+                if reloc_console is not None:
+                    # B-P2c: localization ready -- kept in every later port-file write (Codex B-P2c design P2), so
+                    # the supervisor tells it from a relocalization that failed even past a quick end
+                    live.port_extra["localized_wall"] = time.time()
+                    reloc_console.service("ready")
         if live is not None:
             # Real-time plan D9d: what was built so far (the stage, the scene, the planners' tables) is frozen out of
             # the garbage collector's walks; a full collection then walks only what the run makes (d9d_2/3/sc: a 0.30-
@@ -9884,7 +10058,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
         # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
-        and (k not in ("start_pose", "start_relocalize", "reloc_dir") or v not in (None, False))
+        and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s")
+             or v not in (None, False))
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
@@ -10080,12 +10255,29 @@ def main() -> None:
         run(app, args, settings, state)
     except BaseException as exc:
         failure_exc = exc
-        state["success"] = False
-        state["failure_reason"] = str(exc)
+        ended_ = operator_ended(state, exc)  # decided before any diagnostic I/O (Codex B-P2c impl round 2 P2)
         # Plain path: the traceback names this source's own lines, never a recorded output (M-a1 replay).
-        (Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())
-        traceback.print_exc()
+        try:
+            (Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())
+        except OSError as write_exc:  # a diagnostic only: it never decides how the run ends
+            state["failure_txt_error"] = f"{type(write_exc).__name__}: {write_exc}"
+        if ended_:
+            # B-P2c: the operator ended the session before the start was known -- the session's end (exit 0, no
+            # restart), whatever ended the runner after it (Codex B-P2c design P2)
+            state["success"], state["live_exit_code"] = True, 0
+            state["ended_before_localization"] = {"by": "operator", "then": f"{type(exc).__name__}: {exc}"}
+        else:
+            state["success"] = False
+            state["failure_reason"] = str(exc)
+            traceback.print_exc()
     finally:
+        if _EARLY["console"] is not None and not _EARLY["adopted"]:
+            # B-P2c: the early console's server and port file, when the live runtime never took them over; a close
+            # that fails is recorded and never skips the record's end and the exit code below (Codex impl review P2)
+            try:
+                state["reloc_console"]["closed"] = _EARLY["console"].close("ended")
+            except Exception as close_exc:  # noqa: BLE001
+                state["reloc_console"]["closed"] = f"{type(close_exc).__name__}: {close_exc}"
         # Failures before the mission loop's own finally (initial planning, the bootstrap): the record's ending
         # is that exception (Codex R3/R4 review P2).
         close_boundary_record(state, failure_exc)

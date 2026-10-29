@@ -26,8 +26,11 @@ from .validate import problem
 
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
-          "mission_cancel", "recovery", "session_end", "sim_reset")
+          "mission_cancel", "recovery", "session_end", "sim_reset", "relocalize_pick", "relocalize_retry")
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request", "pick_request")
+# B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
+# session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
+RELOC_REFUSED = ("arm", "mission_submit", "mission_resume", "recovery", "sim_reset")
 # the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
 AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
@@ -136,6 +139,9 @@ class Arbiter:
         self.session_request: str | None = None  # "end" / "reset": the runner leaves its loop (console plan D7/D9)
         self.sim_reset_allowed = False  # a simulation back end resets its scene on request (welcome sim_reset)
         self.next_pick_allowed = False  # CT-2: the runner answers pick_request (welcome capabilities.next_pick)
+        # B-P2c: the start relocalization (a StartRelocalizer) while the start is unknown; None: localized or none
+        self.reloc = None
+        self.stops = 0  # every STOP taken (B-P2c: the relocalization drops the attempt a new one interrupts)
         self.provisional_auto = False
         self._context_gen = 0
         self._handling_conn: str | None = None
@@ -335,6 +341,9 @@ class Arbiter:
             return self._reply(kind, request_id, problem)
         if kind in LEASED and self.session_request is not None:
             return self._reply(kind, request_id, "session_ending")  # the session closes (console plan D7)
+        if self.reloc is not None and (kind in RELOC_REFUSED
+                                       or (kind == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
+            return self._reply(kind, request_id, "relocalizing")
         handler = getattr(self, f"_on_{kind}")
         return handler(client_id, request_id, msg, now_mono)
 
@@ -399,11 +408,34 @@ class Arbiter:
     def _on_recovery(self, client_id, request_id, msg, now_mono):
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice
 
+    def _on_relocalize_pick(self, client_id, request_id, msg, now_mono):
+        """B-P2c (plan 1.2 step 7): the operator's candidate of the generation shown; applied here, so the answer is
+        the applied result (never an acknowledgement of a queued wish -- Codex B-P2c design P2)."""
+        if self.reloc is None:
+            return self._reply("relocalize_pick", request_id, "not_relocalizing")
+        ok, why = self.reloc.pick(msg["generation"], msg["candidate"])
+        if not ok:
+            return self._reply("relocalize_pick", request_id, why)
+        self.events.append({"t": now_mono, "event": "relocalize_pick", "generation": msg["generation"],
+                            "candidate": msg["candidate"]})
+        return self._reply("relocalize_pick", request_id)
+
+    def _on_relocalize_retry(self, client_id, request_id, msg, now_mono):
+        """B-P2c: the attempts again from a new scan, with a new generation and session deadline."""
+        if self.reloc is None:
+            return self._reply("relocalize_retry", request_id, "not_relocalizing")
+        ok, why = self.reloc.retry(msg["generation"])
+        if not ok:
+            return self._reply("relocalize_retry", request_id, why)
+        self.events.append({"t": now_mono, "event": "relocalize_retry", "generation": msg["generation"]})
+        return self._reply("relocalize_retry", request_id, generation=self.reloc.generation)
+
     # --- stops ---------------------------------------------------------------------------------------------------
     def stop(self, now_mono: float, reason: str) -> None:
         """A safety preempt stop from any mode: STOPPED until a rearm, disarmed, a control boundary. A repeated
         STOP while stopped is a boundary too -- a rearm made after the first STOP must not run after the second
         (Codex M-b plan review P1)."""
+        self.stops += 1
         if self.mode == "STOPPED":
             self._disarm(now_mono, reason)
             self._boundary(now_mono, reason)

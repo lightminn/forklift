@@ -216,3 +216,64 @@ def test_the_shown_candidates_are_suppressed_over_the_whole_pool():
     r.record(_match(*first), refused)
     r.record(_match(_cand((0.25, 0.0, 0.0), score=0.95)), refused)
     assert [c.pose[0] for c in r.shown] == [0.25, 10.0, 2.0, 4.0]
+
+
+def test_a_stop_interrupts_an_attempt_and_leaves_a_retry():
+    # B-P2c (Codex design P1): a STOP does not end the session; the attempt's result is dropped, a retry may follow
+    r = _reloc()
+    assert r.interrupt() is True and r.state == "stopped" and r.generation == 1 and r.shown == ()
+    late = _cand((3.0, 1.0, 0.5))
+    assert r.record(_match(late), G.Decision(True, "confirmed", 0.0)) == "stopped"  # the interrupted result goes
+    assert r.estimate is None
+    assert r.retry(0) == (False, "reloc_stale_pick") and r.retry(1) == (True, "")
+    assert r.state == "relocalizing" and r.generation == 2 and r.deadline_at is None
+
+
+def test_a_stop_while_awaiting_a_pick_clears_the_candidates():
+    r = _reloc(attempts=1)
+    r.record(_match(_cand((3.0, 1.0, 0.5)), _cand((9.0, 4.0, 2.0))), G.Decision(False, "competitor", 0.98))
+    assert r.state == "awaiting_pick" and r.interrupt() is True
+    assert r.state == "stopped" and r.shown == () and r.pick(1, 0) == (False, "reloc_not_awaiting")
+
+
+def test_a_stop_after_the_choice_or_the_end_changes_nothing():
+    r = _reloc()
+    r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(True, "confirmed", 0.0))
+    assert r.interrupt() is False and r.state == "chosen" and r.estimate is not None  # the estimate stands
+    r2 = _reloc()
+    r2.cancel()
+    assert r2.interrupt() is False and r2.state == "cancelled"
+
+
+@pytest.mark.parametrize("generation, index", [(True, 0), (1, True), (1.0, 0), (1, 0.0), ("1", 0), (1, -1), (1, 2)])
+def test_a_pick_takes_plain_integers_in_range_only(generation, index):
+    r = _reloc(attempts=1)
+    r.record(_match(_cand((3.0, 1.0, 0.5)), _cand((9.0, 4.0, 2.0))), G.Decision(False, "competitor", 0.98))
+    ok, why = r.pick(generation, index)
+    assert not ok and why in ("reloc_pick_refused", "reloc_stale_pick") and r.state == "awaiting_pick"
+
+
+def test_no_pick_or_retry_after_the_operators_time():
+    # Codex B-P2c impl review P2: the operator's deadline holds in the handler, not only in the phase's loop
+    clock = Clock()
+    r = _reloc(clock, attempts=1)
+    r.record(_match(_cand((3.0, 1.0, 0.5)), _cand((9.0, 4.0, 2.0))), G.Decision(False, "competitor", 0.98))
+    r.expires_at = clock.t + 10.0
+    clock.t += 11.0
+    assert r.pick(1, 0) == (False, "reloc_operator_timeout") and r.state == "awaiting_pick"
+    assert r.retry(1) == (False, "reloc_operator_timeout")
+
+
+def test_the_matcher_does_not_confirm_after_the_operators_time():
+    clock = Clock()
+    r = _reloc(clock)
+    r.expires_at = clock.t + 10.0
+    clock.t += 11.0  # inside the 30 s session deadline, past the operator's whole time
+    assert r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(True, "confirmed", 0.0)) != "chosen"
+    assert r.estimate is None
+
+
+def test_a_retry_takes_a_plain_integer_generation():
+    r = _reloc(attempts=1)
+    r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(False, "low_fit", 0.9))
+    assert r.retry(True) == (False, "reloc_stale_pick") and r.state != "relocalizing"

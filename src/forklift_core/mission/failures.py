@@ -26,6 +26,9 @@ PREFIXES = {
     # SLAM localization plan L4: the survey map bundle at session start (slam_map_mismatch stops the supervisor at once)
     "slam_map_mismatch": SESSION, "slam_map_not_loaded": SESSION, "slam_not_localized": SESSION,
     "slam_gyro_fault": SESSION,  # gyro-heading plan G2 (A) D5: the gyro cannot be read; the session ends
+    # B-P2 start relocalization (plan 1.2): the start could not be found or confirmed; the session ends
+    "reloc_invalid_input": SESSION, "reloc_needs_operator": SESSION, "reloc_failed": SESSION,
+    "reloc_bridge_timeout": SESSION, "reloc_operator_timeout": SESSION, "reloc_cancelled": SESSION,
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
     "Mission exceeded simulation time budget": SESSION, "mission_cancelled": SESSION,
