@@ -298,7 +298,49 @@ def test_argument_and_watched_changes_keep_the_callers_inner_objects(tmp_path):
     assert rcore["held"] is rheld and rheld == [1, 2, 3] and held == [1, 2, 3]
 
 
-def test_a_response_that_hands_back_an_argument_object_is_refused(tmp_path):
+def test_a_response_that_hands_back_an_argument_object_hands_back_the_replays_own(tmp_path):
+    replay_with = one_call(tmp_path, lambda lst: lst, lambda f: f([1]))
+    arg = [1]
+    assert replay_with(lambda f: f(arg)) is arg
+
+
+@dataclass(frozen=True)
+class Plan:
+    poses: np.ndarray
+    extra: dict | None = None
+
+
+def test_a_replaced_dataclass_keeps_the_arguments_shared_field_and_its_own_new_ones(tmp_path):
+    """Planner.final_straight_prefix: ``dataclasses.replace(path, poses=...)`` hands back ``path.extra`` itself
+    (a riib transport plan's exit_prefix dict); the replay puts the replayed argument's dict there, and only
+    there."""
+    import dataclasses
+
+    from forklift_core.mission import boundary_record as BR
+
+    def cut(plan):
+        return dataclasses.replace(plan, poses=plan.poses[:2].copy())
+
+    replay_with = one_call(tmp_path, cut, lambda f: f(Plan(np.arange(6.0).reshape(3, 2), {"status": "prefix"})))
+    arg = Plan(np.arange(6.0).reshape(3, 2), {"status": "prefix"})
+    out = replay_with(lambda f: f(arg))
+    assert out.extra is arg.extra and out.poses is not arg.poses and out.poses.tolist() == [[0.0, 1.0], [2.0, 3.0]]
+    assert BR._alias_paths(cut(arg), {"args": [arg], "kwargs": {}}) == [[["R", ".extra"], ["A", "'args'", 0, ".extra"]]]
+
+
+def test_an_argument_object_inside_a_response_tuple_comes_back_in_a_new_tuple(tmp_path):
+    replay_with = one_call(tmp_path, lambda lst: (lst, 2), lambda f: f([1]))
+    arg = [1]
+    out = replay_with(lambda f: f(arg))
+    assert type(out) is tuple and out[0] is arg and out[1] == 2
+
+
+def test_a_record_that_only_says_the_response_shares_an_argument_object_is_refused(tmp_path, monkeypatch):
+    """Records from before the alias paths (``response_aliases_request: true``), and a shared object with no
+    argument path, are still refused."""
+    from forklift_core.mission import boundary_record as BR
+
+    monkeypatch.setattr(BR, "_alias_paths", lambda response, raw: None)
     replay_with = one_call(tmp_path, lambda lst: lst, lambda f: f([1]))
     with pytest.raises(ReplayMismatch, match="argument's own object"):
         replay_with(lambda f: f([1]))
@@ -445,10 +487,10 @@ def test_a_registered_value_objects_attributes_are_restored(tmp_path):
     assert replay_with(call) == 7
 
 
-def test_a_response_sharing_a_value_objects_inner_list_is_refused(tmp_path):
+def test_a_response_sharing_a_value_objects_inner_list_hands_back_the_replays_own(tmp_path):
     replay_with = one_call(tmp_path, lambda act: act.joint, lambda f: f(Action([1])), value_types={"Action"})
-    with pytest.raises(ReplayMismatch, match="argument's own object"):
-        replay_with(lambda f: f(Action([1])))
+    act = Action([1])
+    assert replay_with(lambda f: f(act)) is act.joint
 
 
 def test_a_restoration_error_the_code_catches_still_fails_the_replay(tmp_path):

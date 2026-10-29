@@ -146,6 +146,28 @@ def test_the_projection_encodes_cpu_state_by_value_refuses_unknown_objects_and_h
     assert recorded == replayed
 
 
+def test_the_projection_numbers_the_scene_replan_tracker_serials_by_first_sight(tmp_path):
+    """A scene replan's ``tracker_serial`` is ``id(tracker) % 10**6`` (a process's memory address): the projection
+    compares it by its first-seen ordinal, so the same tracker still compares and the run's own list is unchanged."""
+    from forklift_core.mission.state import MissionState
+
+    spec = importlib.util.spec_from_file_location("run_transport_projection_serial", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ms = MissionState()
+
+    def lines(a, b):
+        return {"state": {"scene_replans": [{"tracker_serial": a, "leg": 0}, {"tracker_serial": b, "leg": 1},
+                                            {"tracker_serial": None, "leg": 2}]}}
+
+    recorded = lines(576336, 576336)
+    assert module.final_projection(recorded, ms, tmp_path) == module.final_projection(lines(12, 12), ms, tmp_path)
+    assert recorded["state"]["scene_replans"][0]["tracker_serial"] == 576336  # the run's own list
+    assert module.final_projection(lines(5, 6), ms, tmp_path) != module.final_projection(lines(7, 7), ms, tmp_path)
+    assert (module.final_projection({"state": {"scene_replans": []}}, ms, tmp_path)
+            == module.final_projection({"state": {"scene_replans": []}}, ms, tmp_path))
+
+
 def test_main_writes_failure_txt_outside_the_record_and_capture_images_are_sinks():
     source = SCRIPT.read_text()
     assert '(Path(str(args.output)) / "failure.txt").write_text(traceback.format_exc())' in source

@@ -96,6 +96,45 @@ def _has_opaque(node: Any) -> bool:
     return False
 
 
+def _step(node: Any, step):
+    """One step of a recorder path (boundary_record._walk): a dictionary key by its repr, a sequence index, an
+    attribute as ``.name``."""
+    if isinstance(node, dict):
+        import ast
+
+        return node[ast.literal_eval(step)]
+    if isinstance(step, str) and step.startswith("."):
+        return getattr(node, step[1:])
+    if isinstance(node, (list, tuple, collections.deque)) and isinstance(step, int):
+        return node[step]
+    raise KeyError(f"no step {step!r} into a {type(node).__name__}")
+
+
+def _put(node: Any, steps, value):
+    """``node`` with ``value`` at ``steps`` below it: in place in dictionaries, lists, deques and objects (a frozen
+    dataclass's field too -- the decoded response is the replay's own), a plain tuple rebuilt."""
+    if not steps:
+        return value
+    child = _step(node, steps[0])
+    new = _put(child, steps[1:], value)
+    if new is child:
+        return node
+    step = steps[0]
+    if isinstance(node, dict):
+        import ast
+
+        node[ast.literal_eval(step)] = new
+    elif isinstance(step, str) and step.startswith("."):
+        object.__setattr__(node, step[1:], new)
+    elif type(node) is tuple:
+        return tuple(new if i == step else v for i, v in enumerate(node))
+    elif isinstance(node, (list, collections.deque)):
+        node[step] = new
+    else:
+        raise TypeError(f"cannot put into a {type(node).__name__}")
+    return node
+
+
 def _resolve(qualname: str):
     module, _, name = qualname.partition(":")
     obj: Any = importlib.import_module(module)
@@ -524,7 +563,8 @@ class ReplayGate:
         session = self.session
         where = f"{entry['port']}.{entry['method']}"
         changes = entry.get("changes") or {}
-        if changes.get("response_aliases_request"):
+        aliases = changes.get("response_aliases_request")
+        if aliases and not isinstance(aliases, list):  # a record from before the alias paths, or one with none
             raise session.fail(f"{where}: the response handed back an argument's own object (not replayable)")
         if changes.get("unsupported"):
             raise session.fail(f"{where}: a change outside the replay's model was recorded: {changes['unsupported']}")
@@ -564,9 +604,40 @@ class ReplayGate:
                 raise session.fail(f"{where}: restoring the recorded exception failed: {type(err).__name__}: {err}") from None
             raise exc
         try:
-            return session.decode(entry["response"])
+            response = session.decode(entry["response"])
         except Exception as exc:
             raise session.fail(f"{where}: restoring the recorded response failed: {type(exc).__name__}: {exc}") from None
+        if aliases:
+            response = self._own_arguments(response, aliases, args, kwargs, where)
+        return response
+
+    def _own_arguments(self, response, aliases: list, args: tuple, kwargs: dict | None, where: str):
+        """The recorded response with the replayed call's own argument objects where the recorded one handed back
+        its arguments' (``response_aliases_request`` pairs, :func:`boundary_record._alias_paths`); each is checked
+        to equal, by value, what the record decoded there."""
+        session = self.session
+        actual = {"args": list(args), "kwargs": dict(kwargs or {})}
+        try:
+            for response_path, argument_path in aliases:
+                if argument_path[:1] != ["A"] or response_path[:1] != ["R"]:
+                    raise ValueError(f"paths {response_path} {argument_path}")
+                held = actual
+                for step in argument_path[1:]:
+                    held = _step(held, step)
+                recorded = response
+                for step in response_path[1:]:
+                    recorded = _step(recorded, step)
+                if _canonical(session.encode(held, hash_arrays=True)) != _canonical(
+                        session.encode(recorded, hash_arrays=True)):
+                    raise session.fail(f"{where}: the argument at {argument_path} differs from the response's "
+                                       f"{response_path}")
+                response = _put(response, response_path[1:], held)
+        except ReplayMismatch:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- a path the record holds that this call does not
+            raise session.fail(f"{where}: restoring the response's argument objects failed: "
+                               f"{type(exc).__name__}: {exc}") from None
+        return response
 
     def _exception(self, record: dict) -> BaseException:
         if ":" not in record["type"]:

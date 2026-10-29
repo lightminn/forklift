@@ -2656,7 +2656,8 @@ def projection_node(value, services: dict, roots=(), _stack=()):
 def _identity_free(containers: dict) -> dict:
     """The containers with the values that are object identities (``id()``, a process's memory addresses) made
     independent of the process: the cusp heading-hold records key their tracker by ``id(tracker)`` -- replaced by
-    its first-seen ordinal, so "the same tracker" still compares -- and the new-obstacle heights are keyed by
+    its first-seen ordinal, so "the same tracker" still compares, as are the scene replans' tracker serials -- and the
+    new-obstacle heights are keyed by
     ``id(rect)`` -- listed in the order of the pallet-frame rectangles they belong to (R5: two runs of the same
     code differed only there). Shallow copies; the run's own containers are not changed."""
     import copy
@@ -2689,6 +2690,18 @@ def _identity_free(containers: dict) -> dict:
             if "tracker" in watch:
                 watch["tracker"] = ordinal(watch["tracker"])
             state_["cusp_heading_watch"] = watch
+        out["state"] = state_
+    state_ = out.get("state")
+    if isinstance(state_, dict) and any(isinstance(r_, dict) and r_.get("tracker_serial") is not None
+                                        for r_ in state_.get("scene_replans") or []):
+        # A scene replan's tracker_serial is id(tracker) % 10**6 (MissionCore's scene replan request): numbered by
+        # first sight, as the cusp trackers above.
+        serials: dict = {}
+        state_ = dict(state_)
+        state_["scene_replans"] = [
+            dict(r_, tracker_serial=f"<tracker {serials.setdefault(r_['tracker_serial'], len(serials))}>")
+            if isinstance(r_, dict) and r_.get("tracker_serial") is not None else r_
+            for r_ in state_["scene_replans"]]
         out["state"] = state_
     new_ = containers.get("new_obstacles")
     if isinstance(new_, dict) and isinstance(new_.get("heights"), dict):
