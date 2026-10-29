@@ -636,7 +636,8 @@ def _alias_paths(response: Any, raw: dict) -> list | None:
         where.setdefault(id(o), q)
     pairs: list = []
     walked: set = set()  # the response's own containers: each walked once (a cycle, or one held twice -- the
-    # decoder restores that sharing, so the argument put at the first path is at the others too)
+    # decoder restores that sharing, so the argument put at the first path is at the others too). Not tuples: the
+    # codec writes a tuple at each place, so each place needs its own pairs (Codex review 2 P2).
 
     def visit(value, path, depth) -> bool:
         if depth > 50 or _immutable(value):
@@ -647,9 +648,10 @@ def _alias_paths(response: Any, raw: dict) -> list | None:
                 return False
             pairs.append([list(path), list(q)])
             return True
-        if id(value) in walked:
-            return True
-        walked.add(id(value))
+        if not isinstance(value, tuple):
+            if id(value) in walked:
+                return True
+            walked.add(id(value))
         if isinstance(value, dict):
             return all(visit(v, path + (repr(k),), depth + 1) for k, v in value.items())
         if isinstance(value, (list, tuple, collections.deque)):

@@ -2530,6 +2530,8 @@ def install_output_observers(args) -> None:
 
 
 # The core containers the end-state projection covers (drive's names; a name the run never bound is left out).
+# The far recognition summary's lists (FarRuntime.summary hands back its own): append-only in state["recognition"].
+FAR_SUMMARY_LISTS = ("frames", "attempts", "leg_endings")
 PROJECTION_CONTAINERS = ("state", "near", "pocket", "obstacle", "slam", "paths", "new_obstacles")
 # Result keys only the recorded run has (written by run() after the setup snapshot was taken): never compared.
 PROJECTION_RECORDED_ONLY = ("setup_snapshot",)
@@ -5235,6 +5237,7 @@ def drive(S, isaac) -> None:
     # every tick head read them through the record.
     early_ports = boundary is not None and boundary.recorder.value_format == 2
     if early_ports:
+        far_recognition_ = far_watch_ = None  # the far summary's lists in the state, when recorded (below)
         # The wheel lock reads and sets the drive gains on the articulation controller the robot hands back.
         robot = RecordingProxy(robot, "Vehicle", boundary, returns={"get_articulation_controller": "Controller"})
         pallet = RecordingProxy(pallet, "SimTruth", boundary)
@@ -5253,14 +5256,18 @@ def drive(S, isaac) -> None:
         if far_runtime is not None:
             # the far recognition (--recognition far): its decisions come from the learned proposer on rendered frames,
             # which a replay has neither of -- recorded as a port, the frames by hash (a record only; the run is the
-            # same). Its summary hands back its own frame and attempt lists, which state["recognition"] then holds
-            # and later frames and stops append to: what those calls change there is watched.
+            # same). Its summary hands back its own frame, attempt and leg-ending lists, which state["recognition"]
+            # (made with the perception labels) then holds and later frames and stops append to: watched as
+            # append-only lists here, on the physics step (the driving frames are taken inside it) and on the stop.
             from forklift_core.mission.boundary_record import DictWatch as _FarWatch
 
-            far_watch_ = _FarWatch(boundary.recorder, {"state": state}, keys={"state": ["recognition"]})
+            if isinstance(state.get("recognition"), dict):
+                far_recognition_ = state["recognition"]
+                far_watch_ = _FarWatch(boundary.recorder, {"recognition": far_recognition_},
+                                       keys={"recognition": list(FAR_SUMMARY_LISTS)}, append_only=FAR_SUMMARY_LISTS)
             far_runtime = RecordingProxy(far_runtime, "FarRecognition", boundary,
                                          hash_only_requests={"drive_frame", "stop"},
-                                         watches={"drive_frame": far_watch_, "stop": far_watch_})
+                                         watches={"drive_frame": far_watch_, "stop": far_watch_} if far_watch_ else None)
     state["phase"] = "planning"
     # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
     # once -- never from the layer, whose every call and attribute is a recorded boundary
@@ -7631,11 +7638,14 @@ def drive(S, isaac) -> None:
             # Format 2 also watches the SLAM log the step fills (its lists only grow; the run writes it at the end
             # -- a replay that does not step must still hold it, M-a1 replay R5).
             watched_log_ = early_ports and slam_log is not None
+            far_lists_ = far_recognition_ if early_ports else None  # format 2 with the far recognition
             step_watch = DictWatch(
                 boundary.recorder,
                 {"slam": slam, "obstacle": obstacle, **({"slam_log": slam_log} if watched_log_ else {}),
                  # format 2: the tyre contact log the step appends to the state (an evaluation record)
-                 **({"state": state} if early_ports else {})},
+                 **({"state": state} if early_ports else {}),
+                 # the far runtime's driving frames, taken inside the step (FAR_SUMMARY_LISTS)
+                 **({"recognition": far_lists_} if far_lists_ is not None else {})},
                 keys={"slam": ["stop_now", "tracker_speed", "odom_speed", "odom_rear", "odom_yaw_rate", "scan_id",
                                "last_scan_odom_base", "last_scan_estimate_rear", "last_sent_ranges", "records",
                                "last_command",  # M-a3 (plan E9): a preempt sets it inside the step
@@ -7644,9 +7654,11 @@ def drive(S, isaac) -> None:
                       **({"slam_log": list(slam_log)} if watched_log_ else {}),
                       # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
                       **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s"]}
-                         if early_ports else {})},
+                         if early_ports else {}),
+                      **({"recognition": list(FAR_SUMMARY_LISTS)} if far_lists_ is not None else {})},
                 append_only={"records", "scans", *(slam_log if watched_log_ else ()),
-                             *(("tyre_contact_rows",) if early_ports else ())},
+                             *(("tyre_contact_rows",) if early_ports else ()),
+                             *(FAR_SUMMARY_LISTS if far_lists_ is not None else ())},
             )
             if not early_ports:  # format 2 made these ports at the hand-over
                 robot = RecordingProxy(robot, "Vehicle", boundary)

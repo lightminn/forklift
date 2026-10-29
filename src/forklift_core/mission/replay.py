@@ -386,6 +386,9 @@ class ReplaySession:
             path = self.sink_path(entry["request"])
             if path not in self.video_sink_paths or path == keep:
                 return
+            if "exception" in entry:  # the recorded run met a failure here that the replay never meets (Codex P2)
+                raise self.fail(f"Sink.{entry['method']} {path}: its recorded write failed and the replay does not "
+                                f"make it")
             self.skipped_video_sinks = getattr(self, "skipped_video_sinks", []) + [path]
             self._next += 1
 

@@ -1515,3 +1515,39 @@ def test_a_cyclic_response_sharing_an_argument_is_walked_once(tmp_path):
     rarg = [1]
     out = replay_with(lambda f: f(rarg))
     assert out[2] is rarg and out[0] is out
+
+
+def test_a_tuple_held_twice_gets_the_argument_at_both_places(tmp_path):
+    """Codex review 2 P2: the codec writes a tuple at each place it is held, so each place is its own pair."""
+    def twice(arg):
+        t = (arg,)
+        return [t, t]
+
+    replay_with = one_call(tmp_path, twice, lambda f: f([1]))
+    arg = [1]
+    out = replay_with(lambda f: f(arg))
+    assert out[0][0] is arg and out[1][0] is arg
+
+
+def test_a_skipped_video_output_whose_recorded_write_failed_fails_the_replay(tmp_path):
+    """Codex review 2 P2: a video output the replay does not make is skipped only when its recorded write succeeded,
+    mid-tick and at the tick end."""
+    from forklift_core.mission.boundary_record import sink_effect
+
+    def full_disk():
+        raise OSError(28, "No space left on device")
+
+    for name, after in (("mid", [("meta.json", "m")]), ("end", [])):
+        rec = BoundaryRecorder(tmp_path / name, value_format=2)
+        gate = RecordingGate(rec)
+        rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        try:
+            sink_effect(gate, "write_text", "plan_history.json", "p", write=full_disk)
+        except OSError:
+            pass  # the run caught it and went on
+        for path, payload in after:
+            sink_effect(gate, "write_text", path, payload)
+        rec.tick_end(outputs={}, branches=[])
+        rec.close()
+        with pytest.raises(ReplayMismatch, match="recorded write failed"):
+            _replay_writes(tmp_path / name, after, VIDEO)
