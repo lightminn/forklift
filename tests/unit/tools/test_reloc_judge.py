@@ -130,9 +130,16 @@ def test_a_bridge_refusal_is_valid_and_not_started(tmp_path):
     assert row["class"] == "valid" and not row["started"] and row["outcome"] == "bridge_refused"
 
 
-def test_a_missing_session_is_a_valid_failure_never_dropped(tmp_path):
+def test_a_start_with_no_session_folder_was_not_run_and_holds_the_judgement(tmp_path):
+    # B-P2d development: unrun starts of the list counted as valid no-record failures and so lowered the safety bound
+    # (the denominator grew with no evidence); never dropped either -- the judgement waits for every start (plan 4.4)
     rows = J.judge_sessions(tmp_path, _starts("absent"))
-    assert rows[0]["class"] == "valid" and rows[0]["outcome"] == "no_record"
+    assert rows[0]["class"] == "not_run" and rows[0]["outcome"] == "not_run"
+    s = J.summarize([_good_row()] * 60 + rows)
+    assert s["valid"] == 60 and s["not_run"] == 1 and s["judged"] is False
+    assert s["safety_upper_valid"] == pytest.approx(J.cp_upper(0, 60))
+    assert s["floors"] == {"safety": None, "success": None, "matcher_time": None, "bridge_time": None}
+    assert J.summarize([_good_row()] * 60)["not_run"] == 0
 
 
 def test_the_summary_holds_the_registered_floors_and_bounds():

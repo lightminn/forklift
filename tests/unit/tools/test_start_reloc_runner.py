@@ -432,6 +432,23 @@ def test_a_start_that_did_not_settle_ends_the_session_before_any_matching(tmp_pa
     assert state["start_reloc"]["status"] == "invalid" and state["start_reloc"]["attempts"] == []
 
 
+def test_a_relocalizing_setup_leaves_the_placed_starts_settling_to_the_phases_validity():
+    """B-P2d development (val3_003): the setup's 5 mm truck check ended a placed start the truck does not hold as a
+    generic failure before the phase's step 3 (2 cm, height, tilt, still) could call it invalid input -- plan 4.0's
+    one invalid class. With the relocalization the phase judges it; without, the setup's check is as before."""
+    import run_transport
+
+    start = np.array([1.0, 2.0, 0.0])
+    off = SimpleNamespace(start_relocalize=False)
+    assert run_transport.truck_spawn_problem(off, np.array([1.004, 2.0, 0.1]), start) is None
+    assert run_transport.truck_spawn_problem(off, np.array([1.006, 2.0, 0.1]), start) == "Truck spawn displaced"
+    on = SimpleNamespace(start_relocalize=True)
+    assert run_transport.truck_spawn_problem(on, np.array([1.3, 2.0, 0.1]), start) is None
+    run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
+    assert "truck_spawn_problem(args, initial_base, base_start)" in run_
+    assert '"Truck spawn displaced",' not in run_  # the one check is the helper's
+
+
 def test_a_bundle_whose_map_is_not_the_world_is_refused(tmp_path):
     import run_transport
 

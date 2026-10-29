@@ -7,8 +7,9 @@ One session per start (deploy/console/reloc_session.sh: one epoch, the probe's h
 
 - **Classes (4.0).** Invalid: the physical input failed before any matching -- ``reloc_invalid_input`` in the record
   or as the session's end reason, whether the record was made or not -- out of the denominator, never replaced. Valid:
-  everything else, every later failure included: a start with no record at all (``no_record``), a set-up error
-  (``config_error``). Started: a valid session that reached running -- the supervisor's ``localization_ready`` or the
+  everything else, every later failure included: a session with no record (``no_record``), a set-up error
+  (``config_error``). Not run: a start with no session folder at all -- in no denominator, and the judgement waits
+  while any start of the list is not run (plan 4.4 runs every start). Started: a valid session that reached running -- the supervisor's ``localization_ready`` or the
   port file's ``localized_wall``, or the record's running-tick verdict; a start whose verdict is lost leaves the safety
   unjudged (it cannot count as "no wrong start").
 - **Pose (4.0).** The SLAM pose at the running tick against the same tick's truth (``start_reloc.verdict``): success
@@ -188,6 +189,10 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
            "hold_ok": None, "bridge_stage_s": None, "matcher_wall_max_s": None, "matcher_stage_max_s": None,
            "deadline_hit": False, "attempts": None, "truth_in_shown": None, "truth_in_candidates": None, "gaps": [],
            "exit": None, "source_mismatches": [], "args_signature": None, "world": None}
+    if not d.is_dir():
+        # never run: no evidence either way -- out of every denominator, and the judgement waits (B-P2d development)
+        row["class"] = row["outcome"] = "not_run"
+        return row
     result = _load(d / "epoch_1" / "run" / "result.json")
     events = _supervisor(d)
     exits = [e for e in events if e.get("event") == "exit"]
@@ -302,7 +307,8 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
     slow = sum((r.get("matcher_stage_max_s") or 0.0) > WORKER_RETURN_S for r in valid)
     bridge = [r.get("bridge_stage_s") for r in started]
     missing = sum(b is None for b in bridge)
-    judged = n_valid >= MIN_VALID
+    not_run = sum(r["class"] == "not_run" for r in rows)
+    judged = n_valid >= MIN_VALID and not not_run  # every listed start run (plan 4.4)
     requests = [r for r in valid if r["outcome"] == "needs_operator"]
     outcomes: dict = {}
     for r in rows:
@@ -313,7 +319,8 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
     off = sum(bool(r.get("source_mismatches")) for r in rows)
     events = wrong + imprecise
     return {
-        "valid": n_valid, "invalid": sum(r["class"] == "invalid" for r in rows), "started": n_started,
+        "valid": n_valid, "invalid": sum(r["class"] == "invalid" for r in rows), "not_run": not_run,
+        "started": n_started,
         "wrong": wrong, "imprecise": imprecise, "unjudged_starts": unjudged, "success": success,
         "outcomes": outcomes,
         # an unjudged start may have been wrong: no bound then, and a conservative one counting it (Codex round 2 P2)
@@ -326,7 +333,8 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
         "bridge_stage_max_s": max((b for b in bridge if b is not None), default=None),
         "bridge_stage_missing": missing, "bridge_bound_s": bridge_bound_s,
         "sessions_off_fingerprint": off, "argument_sets": len(signatures),
-        "arguments_missing": sum(r.get("args_signature") is None for r in rows if r["outcome"] != "no_record"),
+        "arguments_missing": sum(r.get("args_signature") is None for r in rows
+                                 if r["outcome"] not in ("no_record", "not_run")),
         "judged": judged,
         "floors": {
             "safety": None if not judged or (unjudged and not events) else events == 0,

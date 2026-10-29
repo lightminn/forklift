@@ -2814,6 +2814,17 @@ def map_start_rear(scenario, start_reloc) -> tuple:
     return tuple(float(v) for v in start_reloc["estimate_rear"])
 
 
+def truck_spawn_problem(args, initial_base, base_start) -> str | None:
+    """The setup's truck spawn check (5 mm). A start relocalization leaves its placed start to the phase's own validity
+    (plan 1.2 step 3: 2 cm, height, tilt, still -> reloc_invalid_input, plan 4.0's invalid class): this check came
+    first and ended such a start under a generic reason (B-P2d development, val3_003)."""
+    if getattr(args, "start_relocalize", False):
+        return None
+    if np.linalg.norm(np.asarray(initial_base)[:2] - np.asarray(base_start)[:2]) < 0.005:
+        return None
+    return "Truck spawn displaced"
+
+
 RELOC_NOISE_ROOT = 20261029
 
 
@@ -4049,10 +4060,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             require(np.linalg.norm(pos_[:2] - [p_.truth.x_m, p_.truth.y_m]) < 0.005 and abs(pos_[2]) < 0.005,
                     f"Invalid pallet spawn after settling: {p_.pallet_id}")
             session_rest.rest(p_.pallet_id, pos_, q_)
-    require(
-        np.linalg.norm(initial_base[:2] - base_start[:2]) < 0.005,
-        "Truck spawn displaced",
-    )
+    spawn_problem_ = truck_spawn_problem(args, initial_base, base_start)
+    require(spawn_problem_ is None, spawn_problem_ or "")
     state["initial_pallet_m"] = initial_pallet.tolist()
     state["velocities_before_planning"] = body_velocities()
     try:
