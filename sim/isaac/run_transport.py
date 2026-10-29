@@ -652,6 +652,16 @@ def arguments() -> argparse.Namespace:
         "only then, and its curvature stays between that steering and 0. Off: as every earlier run.",
     )
     parser.add_argument(
+        "--exit-prefix-exempt",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-10-28-exit-prefix-extract-rules.md: once per extract, the loaded transport's first "
+        "min(exit prefix, 0.6 m) reads only the OCCUPIED cells of the corridor the raw scan watch verified as free "
+        "(stamped with that scan; unknown cells, silence and stale evidence still stop), at the extract's 0.18 m/s; "
+        "a non-own hit in the watch region, any zero on the exempt snapshot, a new tracker, a pause, 8 s or the "
+        "length close it for good. Scene layout only, not with --near-tracking. Off: as every earlier run.",
+    )
+    parser.add_argument(
         "--escape-start-release",
         choices=("on", "off"),
         default="off",
@@ -1304,6 +1314,11 @@ def arguments() -> argparse.Namespace:
             parser.error(f"--{name_.replace('_', '-')} must be a finite non-negative number of metres")
     if args.lidar_keepout_m > 0 and getattr(args, "grid_planning", False):
         parser.error("--lidar-keepout-m grows the scene's props, which --grid-planning plans without")
+    if getattr(args, "exit_prefix_exempt", "off") == "on" and (
+            args.layout != "scene" or args.obstacle_layer is None or args.near_tracking):
+        # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1: checked for the Riibotics scene runs (scene replan,
+        # no grid planning); the near-tracking combination waits for its own check
+        parser.error("--exit-prefix-exempt on needs --layout scene and --obstacle-layer, and not --near-tracking")
     if args.layout == "scene":
         if args.min_obstacle_height_m is not None or args.prism_colliders:
             # The scene's low pallets are part of the scenario and its boxes are their own colliders.
@@ -6174,6 +6189,8 @@ def drive(S, isaac) -> None:
                                 escape_start_release=getattr(args, "escape_start_release", "off"),
                                 # docs/plans/2026-10-27-escape-presteer.md D2: off in a record from before the option
                                 escape_presteer=getattr(args, "escape_presteer", "off"),
+                                # docs/plans/2026-10-28-exit-prefix-extract-rules.md: off in a record from before it
+                                exit_prefix_exempt=getattr(args, "exit_prefix_exempt", "off"),
                                 # leg-failures B1/B2: a record from before the options ran without the caps
                                 d7_reapproach_curvature_inv_m=getattr(args, "d7_reapproach_curvature_inv_m", None),
                                 d7_reapproach_cruise_mps=getattr(args, "d7_reapproach_cruise_mps", None),
@@ -6595,7 +6612,11 @@ def drive(S, isaac) -> None:
             if correction != obstacle["applied"]:
                 obstacle["version"] += 1
                 obstacle["applied"] = correction
-            layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now)
+            # the correction and version this scan goes into the grid with: the exit-prefix watch places it there
+            # (on only -- the call's request stays as every recorded run made it otherwise)
+            layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now,
+                            **({"correction": obstacle["applied"], "version": obstacle["version"]}
+                               if getattr(args, "exit_prefix_exempt", "off") == "on" else {}))
             obstacle["last_stamp"] = float(stamp)
             obstacle["last_raw"] = (raw, np.asarray(base, dtype=float), np.asarray(q, dtype=float))
             leg_direction = 0
@@ -9016,6 +9037,9 @@ def drive(S, isaac) -> None:
                 # Real-time plan D8b: a tick standing for a plan has the paused tick's watch instead (no work counters,
                 # no replan), and the truth evaluation below with what it allows; so does a loaded start wait (6c).
                 plan_watch_ = (plan_wait_ or loaded_wait_) and not paused_ and obstacle is not None
+                exit_on_ = getattr(args, "exit_prefix_exempt", "off") == "on" and obstacle is not None
+                if exit_on_ and not (permission_tick_ or plan_watch_):
+                    core.exit_exempt_counts(truth_speed)  # the settling after a close sees the stands outside them
                 if permission_tick_ or plan_watch_:
                     if plan_watch_:
                         watch_ = core.permission_watch(t, rear, kappa, loaded)
@@ -9033,6 +9057,10 @@ def drive(S, isaac) -> None:
                             rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
                             if ms.phase == "bottom_deck_refused":
                                 break  # plan 2026-10-19 task 4: a blocked side leg ended the mission
+                    # docs/plans/2026-10-28-exit-prefix-extract-rules.md D5: the ticks the truth evaluation books to the
+                    # exemption (on the exempt snapshot, then after an active latch closed until the truck stands) --
+                    # asked after this tick's permission decided them (Codex impl P2-4)
+                    exempt_tick_ = exit_on_ and core.exit_exempt_counts(truth_speed)
                     # Evaluation only (truth): every moving tick, each ground-truth
                     # obstacle in the steering-held stopping volume (with the envelope)
                     # while the permission allowed this speed (Codex L0b P2).
@@ -9062,11 +9090,16 @@ def drive(S, isaac) -> None:
                                 obstacle["events" + key_] = obstacle.get("events" + key_, 0) + 1
                                 per = obstacle.setdefault("event_objects" + key_, {})
                                 per[oid] = per.get(oid, 0) + 1
+                                if exempt_tick_:  # the exemption's share, counted apart (plan D5)
+                                    ex_ = obstacle.setdefault("exempt_eval", {})
+                                    ex_["events" + key_] = ex_.get("events" + key_, 0) + 1
                                 if allowed >= abs(truth_speed) - 1e-9:
                                     obstacle.setdefault("unpermitted" + key_, []).append(
                                         {"time_s": t, "phase": ms.phase, "speed_mps": truth_speed, "allowed_mps": allowed,
                                          "reason": why, "object": oid}
                                     )
+                                    if exempt_tick_:
+                                        ex_["unpermitted" + key_] = ex_.get("unpermitted" + key_, 0) + 1
                 if paused_:
                     # M-a3 (plan E3, E5, E6): the paused tick -- the permission watches every tick, the lift target
                     # follows the lift, the stop is watched; a cancel ends standing, a resume steps through its checks.
@@ -9100,6 +9133,17 @@ def drive(S, isaac) -> None:
                 if new_obstacles is not None and ms.phase in trackers:
                     leg, leg_direction = trackers[ms.phase].leg_ahead()
                     driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()
+                    def n_gap_test(box, loaded_=loaded):
+                        # a face_gap_m spawn (docs/plans/2026-10-28-exit-prefix-extract-rules.md C4): the box's
+                        # straight-line distance from the truck's true outline now
+                        from forklift_core.control.start_release import footprint_rect_distance
+
+                        bx_, by_, byaw_, bsize_ = box
+                        fp_ = geometry.loaded_footprint if loaded_ else geometry.unloaded_footprint
+                        return footprint_rect_distance(tuple(float(v) for v in truth_rear), fp_,
+                                                       Rectangle(float(bx_), float(by_), float(bsize_[0]),
+                                                                 float(bsize_[1]), float(byaw_)))
+
                     pallet_face = None
                     if "approach" in paths and ms.phase in ("approach", "insert"):
                         # N11/N12/N14 place bars in the pallet frame: the approach
@@ -9136,7 +9180,7 @@ def drive(S, isaac) -> None:
 
                     due_ = new_obstacles["schedule"].update(
                         t, ms.phase, driven, leg, leg_direction=int(leg_direction), pallet_face=pallet_face,
-                        sweep_test=n_sweep_test,
+                        sweep_test=n_sweep_test, gap_test=n_gap_test,
                     )
                     if boundary is not None and boundary.recorder.value_format == 2:
                         # The schedule has no port: its inputs (by digest -- the leg ahead is an array every tick) and
@@ -9617,6 +9661,12 @@ def drive(S, isaac) -> None:
                         "unpermitted_dir": obstacle.get("unpermitted_dir", [])[:50],
                         "unpermitted_dir_truncated": len(obstacle.get("unpermitted_dir", [])) > 50,
                         "event_objects_dir": len(obstacle.get("event_objects_dir", {})),
+                        # docs/plans/2026-10-28-exit-prefix-extract-rules.md D5: the exempt ticks' share (on only)
+                        **({"exempt_events": obstacle.get("exempt_eval", {}).get("events", 0),
+                            "exempt_events_dir": obstacle.get("exempt_eval", {}).get("events_dir", 0),
+                            "exempt_unpermitted_entries": obstacle.get("exempt_eval", {}).get("unpermitted", 0),
+                            "exempt_unpermitted_dir_entries": obstacle.get("exempt_eval", {}).get("unpermitted_dir", 0)}
+                           if getattr(args, "exit_prefix_exempt", "off") == "on" else {}),
                         "reprojections": obstacle.get("reprojections", 0),
                         "grid_planning": grid_planning,
                         "replans": obstacle.get("replans", []),

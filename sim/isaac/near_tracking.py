@@ -1176,6 +1176,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-27 escape presteer plan D1, D2: the start band's width (unset: the
                               # envelope + half a step) and the presteer before an escape; unset / off before.
                               "start_band_m": None, "escape_presteer": "off",
+                              # 2026-10-28 exit-prefix exemption: off in every earlier run.
+                              "exit_prefix_exempt": "off",
                               # 2026-10-29 B-P2b (start relocalization plan 1.4): every earlier run started at the
                               # scene's start, known; a relocalizing run from elsewhere is another condition
                               "start_pose": None, "start_relocalize": False}

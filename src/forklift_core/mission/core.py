@@ -424,6 +424,11 @@ class MissionCore:
             self.known_transition(ms.phase, next_phase, t)
         hooks.echo("TRANSITION " + hooks.record_json(state["transitions"][-1]))
         hooks.snapshot(ms.phase)
+        if (ms.phase == "extract" and next_phase == "transport" and obstacle is not None
+                and getattr(self.options, "exit_prefix_exempt", "off") == "on"):
+            # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1: once per extract, armed at the first permission
+            # tick of the transport (after the install's arm_docking split)
+            self._exit_latch = {"state": "pending", "transition_s": float(t)}
         if next_phase == "insert" and pocket["check"] is not None:
             # D5: one frame taken standing at the approach end before the forks
             # go in. From there the strip before the face is in view; driving in,
@@ -1168,6 +1173,164 @@ class MissionCore:
         self._exit_prefix_cache = (tracker, value)
         return value
 
+    # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1, D4: the exit-prefix exemption's latch limits
+    EXIT_EXEMPT_CAP_M = 0.6
+    EXIT_EXEMPT_TIME_S = 8.0
+    EXIT_EXEMPT_ARMED_S = 1.0
+    EXIT_EXEMPT_LAPSE_S = 0.5
+    EXIT_EXEMPT_SPEED_MPS = 0.18
+
+    def exit_exempt_open(self) -> bool:
+        """Whether the exit-prefix latch is armed or active (the layer has a watch region)."""
+        latch = getattr(self, "_exit_latch", None)
+        return latch is not None and latch["state"] in ("armed", "active")
+
+    def exit_exempt_boundary(self, t: float, rear, loaded: bool, path: str) -> str | None:
+        """Plan D1's common closing boundary, at the head of every obstacle control path ("permission", "watch",
+        "paused"): a pending latch is armed at the transport's first permission tick (after the install's
+        arm_docking split, so the tracker it holds is the one driven); an open one is closed for leaving the
+        transport, a new tracker, a backoff, a pause, the watch's ring, the length (progress or distance driven),
+        8 s, no verification within 1 s of arming, or a lapse of over 0.5 s once active -- the clear and the general
+        refresh come here, before this path judges anything. A zero on the transformed snapshot closes it at the
+        permission tick's end instead (``exit_exempt_tick_end``)."""
+        latch = getattr(self, "_exit_latch", None)
+        if latch is None or latch["state"] == "closed":
+            return None
+        ms, obstacle = self.ms, self.obstacle
+        tracker = self.trackers.get("transport")
+        if latch["state"] == "pending":
+            if ms.phase != "transport" or path == "paused":
+                self._exit_close(t, rear, loaded, "phase" if ms.phase != "transport" else "paused", layer=False)
+            elif path == "permission" and tracker is not None:
+                prefix = float(self.exit_prefix_m())
+                if prefix <= 0.0:
+                    self._exit_close(t, rear, loaded, "no_prefix", layer=False)
+                    return None
+                # the exempt part is the path's first min(prefix, 0.6 m), from the path's start (Codex impl P2-3): a
+                # tracker already past its start when armed has only the rest of it, by distance driven too
+                end_m = min(prefix, self.EXIT_EXEMPT_CAP_M)
+                progress0 = float(tracker.progress_m())
+                latch.update(state="armed", prefix_m=prefix, length_m=end_m, opened_s=float(t), tracker=tracker,
+                             progress0_m=progress0, budget_m=max(0.0, end_m - progress0), driven_m=0.0,
+                             last_rear=[float(v) for v in rear][:2], lapse_since=None, transformed_now=False,
+                             ticks=0, transformed_ticks=0, skipped={}, max_freed=0)
+                if progress0 >= end_m:
+                    self._exit_close(t, rear, loaded, "length")
+            return None
+        r = [float(v) for v in rear][:2]
+        latch["driven_m"] += math.hypot(r[0] - latch["last_rear"][0], r[1] - latch["last_rear"][1])
+        latch["last_rear"] = r
+        status = obstacle["layer"].exit_exempt_status()
+        if latch["state"] == "armed" and status.get("verified_s") is not None:
+            latch.update(state="active", active_s=float(t))
+        transformed = bool(status.get("transformed"))
+        latch["transformed_now"] = latch["state"] == "active" and transformed
+        if latch["state"] == "active":
+            if transformed:
+                latch["lapse_since"] = None
+            elif latch["lapse_since"] is None:
+                latch["lapse_since"] = float(t)
+        reason = None
+        if ms.phase != "transport":
+            reason = "phase"
+        elif tracker is not latch["tracker"]:
+            reason = "tracker"
+        elif obstacle.get("backoff", {}).get("phase") == "transport":
+            reason = "backoff"
+        elif path == "paused":
+            reason = "paused"
+        elif status.get("rang") is not None:
+            reason = "watch"
+        elif float(tracker.progress_m()) >= latch["length_m"]:
+            reason = "length"
+        elif latch["driven_m"] >= latch["budget_m"]:
+            reason = "driven"
+        elif t - latch["opened_s"] > self.EXIT_EXEMPT_TIME_S:
+            reason = "time"
+        elif latch["state"] == "armed" and t - latch["opened_s"] > self.EXIT_EXEMPT_ARMED_S:
+            reason = "no_verification"
+        elif latch["lapse_since"] is not None and t - latch["lapse_since"] > self.EXIT_EXEMPT_LAPSE_S:
+            reason = "verification_lapsed"
+        if reason is not None:
+            self._exit_close(t, rear, loaded, reason, status=status)
+            return reason
+        latch["ticks"] += 1
+        latch["transformed_ticks"] += int(latch["transformed_now"])
+        if status.get("skipped") is not None:
+            latch["skipped"][status["skipped"]] = latch["skipped"].get(status["skipped"], 0) + 1
+        latch["max_freed"] = max(latch["max_freed"], int(status.get("freed") or 0))
+        return None
+
+    def exit_exempt_set_region(self, rear, kappa: float) -> None:
+        """Plan D1, D2: the watch input for the next scans -- the remaining exempt path (the transport tracker's from
+        its progress to the latch's length), relative to the truck now, the measured and the commanded curvature."""
+        from forklift_core.control.exit_prefix_exempt import path_window, relative_to
+
+        latch = self._exit_latch
+        tracker = latch["tracker"]
+        poses, directions, _ = tracker.path_arrays()
+        progress = float(tracker.progress_m())
+        window = path_window(poses, progress, latch["length_m"])
+        d = int(directions[min(len(directions) - 1, int(np.searchsorted(
+            np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(np.asarray(poses)[:, :2], axis=0).T)))), progress)))])
+        self.obstacle["layer"].exit_exempt_set(
+            relative_to(tuple(float(v) for v in rear), window), measured_kappa=float(kappa),
+            commanded_kappa=float(getattr(self, "_command_curvature", kappa)), direction=d or -1)
+
+    def exit_exempt_tick_end(self, t: float, rear, loaded: bool, allowed: float, why: str, gate_only: bool) -> None:
+        """Plan D1: a zero of the permission on the transformed snapshot (not a restart confirmation's) closes the
+        latch at the end of the permission tick -- that tick decided once; the clear and the general refresh are for
+        the rest of the tick and the next one."""
+        latch = getattr(self, "_exit_latch", None)
+        if latch is None or latch["state"] != "active" or not latch.get("transformed_now"):
+            return
+        if allowed == 0.0 and not gate_only:
+            self._exit_close(t, rear, loaded, f"zero:{why}")
+
+    def exit_exempt_counts(self, truth_speed: float) -> bool:
+        """Whether the truth evaluation books this tick to the exemption (plan D5): a tick on the transformed snapshot,
+        and after an active latch closed, every tick until the truth speed first falls below 0.01 m/s."""
+        latch = getattr(self, "_exit_latch", None)
+        if latch is None:
+            return False
+        if latch["state"] == "active":
+            return bool(latch.get("transformed_now"))
+        if latch["state"] == "closed" and latch.get("settling"):
+            if abs(float(truth_speed)) < 0.01:
+                latch["settling"] = False
+                return False
+            return True
+        return False
+
+    def _exit_close(self, t: float, rear, loaded: bool, reason: str, *, layer: bool = True, status=None) -> None:
+        latch = self._exit_latch
+        was = latch["state"]
+        record = {"reason": reason, "closed_s": float(t), "state_at_close": was,
+                  "transition_s": latch.get("transition_s")}
+        if was in ("armed", "active"):
+            tracker = latch["tracker"]
+            record.update(
+                prefix_m=latch["prefix_m"], length_m=latch["length_m"], opened_s=latch["opened_s"],
+                active_s=latch.get("active_s"), progress0_m=latch["progress0_m"],
+                progress_m=float(tracker.progress_m()),
+                driven_m=latch["driven_m"], ticks=latch["ticks"], transformed_ticks=latch["transformed_ticks"],
+                skipped=dict(latch["skipped"]), max_freed=latch["max_freed"],
+                scans=(status or {}).get("scans"), verified_s=(status or {}).get("verified_s"),
+                ring=(status or {}).get("rang"))
+        latch.clear()
+        latch.update(state="closed", settling=was == "active")
+        self.state.setdefault("exit_prefix_exempt", []).append(record)
+        if layer and was in ("armed", "active"):
+            obstacle, ms, trackers = self.obstacle, self.ms, self.trackers
+            obstacle["layer"].exit_exempt_clear(reason)
+            if ms.phase in trackers:
+                leg_now, leg_dir_now = trackers[ms.phase].leg_ahead()
+            else:
+                leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
+            obstacle["layer"].refresh(t, obstacle["applied"], obstacle["version"],
+                                      current_pose=tuple(float(v) for v in rear), path_ahead=leg_now, loaded=loaded,
+                                      direction=leg_dir_now)
+
     def permission_acting(self) -> tuple[bool, bool]:
         """Whether the permission acts on this phase's command, and whether the truck is on a docking straight
         (the permission's own reading, shared by the permission tick and its watch while paused)."""
@@ -1225,11 +1388,22 @@ class MissionCore:
             direction = cusp_handed_.hand_direction
         else:
             direction = 1 if truth_speed > 0 else -1
+        exit_closed_ = None
+        if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
+            exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "permission")
+            if self.exit_exempt_open():
+                self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
         )
+        if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
+            allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
+        if exit_closed_ == "watch":
+            # plan D2: the tick the watch rang stops the wheels, whatever the general limit allows beyond the stop arc
+            # (Codex impl P1-2)
+            allowed, why = 0.0, "exit_watch"
         dumped_phases = obstacle.setdefault("dumped_phases", set())
         if allowed == 0.0 and why in ("unknown", "occupied") and t > 5.0 and (
             obstacle.get("dumps", 0) < 4 or ms.phase not in dumped_phases
@@ -1399,6 +1573,8 @@ class MissionCore:
             f"obstacle_no_progress in {ms.phase}",
         )
         self.permit_stop_tick(t, rear, allowed, why, acting, gate_only=gate_only)
+        if getattr(self, "_exit_latch", None) is not None:
+            self.exit_exempt_tick_end(t, rear, loaded, allowed, why, gate_only)
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
@@ -3019,6 +3195,7 @@ class MissionCore:
                 obstacle["force_replan"] = ms.phase
             tracking = replace(tracking, status="tracking", speed_mps=0.0)
             requested_speed = 0.0
+        self._command_curvature = float(curvature)  # the exit-prefix watch's commanded stop arc (plan D2)
         return SimpleNamespace(requested_speed=requested_speed, curvature=curvature, tracking=tracking, rear=rear,
                                dwell_hold=dwell_hold, dwell_standing=dwell_standing, safety_hold=safety_hold)
 
@@ -5053,11 +5230,16 @@ class MissionCore:
                 leg_now, leg_dir_now = np.array([tuple(float(v) for v in rear)]), 0
             obstacle["layer"].refresh(t, applied_now, obstacle["version"], current_pose=tuple(float(v) for v in rear),
                                       path_ahead=leg_now, loaded=loaded, direction=leg_dir_now)
+        exit_closed_ = None
+        if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
+            exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
         allowed, why = obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        if exit_closed_ == "watch":
+            allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
         acting = False
         gate_applies_ = False
         if ms.phase in trackers:
@@ -5089,6 +5271,8 @@ class MissionCore:
         steps through its checks. Returns ``requested_speed`` (0), ``obstacle_hold``, ``stop`` (the run ends) and
         ``rear`` (a replan inside the resume may move it)."""
         ms, slam, obstacle, hooks, cmds = self.ms, self.slam, self.obstacle, self.hooks, self.commands
+        if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): closed on a pause
+            self.exit_exempt_boundary(t, rear, loaded, "paused")
         standing = bool(slam["stop_now"]) if slam is not None else abs(float(hooks.truth_speed())) < 0.01
         if cmds.pause_hold_count is None:  # M-a3c: the stop's hold, as it began (R3, R4n, R11, R9/R14)
             cmds.pause_hold_count = self.hold_count()

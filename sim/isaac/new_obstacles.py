@@ -51,6 +51,9 @@ class Event:
     inside: bool = False  # path frame: lateral_m measured to the inside of that curve
     outside: bool = False  # path frame: lateral_m measured to the outside of that curve (N3)
     sweep: bool = False  # path frame: place only where the path's sweep meets it and a straight's does not
+    # path frame: instead of ahead_m, the place along the path where the box's straight-line distance from the truck's
+    # true outline at the spawn is this (the runner's gap_test; docs/plans/2026-10-28-exit-prefix-extract-rules.md C4)
+    face_gap_m: float | None = field(default=None, metadata={"record_omit_default": True})
     fired: bool = False
     fired_s: float | None = None
 
@@ -71,6 +74,7 @@ def load_events(path: Path) -> list[Event]:
                 leg=str(e.get("leg", "reverse" if e.get("on_reverse") else "any")), group=e.get("group"),
                 min_curvature_inv_m=float(e.get("min_curvature_inv_m", 0.0)), inside=bool(e.get("inside", False)),
                 outside=bool(e.get("outside", False)), sweep=bool(e.get("sweep", False)),
+                face_gap_m=None if e.get("face_gap_m") is None else float(e["face_gap_m"]),
             )
         )
         if out[-1].action not in ("spawn", "remove", "silence"):
@@ -81,7 +85,17 @@ def load_events(path: Path) -> list[Event]:
             raise ValueError(f"unknown leg {out[-1].leg!r}")
         if out[-1].frame not in ("path", "pallet"):
             raise ValueError(f"unknown frame {out[-1].frame!r}")
+        ev_ = out[-1]
+        if ev_.face_gap_m is not None and (ev_.frame != "path" or ev_.beyond_end_m is not None or ev_.sweep
+                                           or ev_.min_curvature_inv_m > 0 or ev_.inside or ev_.outside):
+            # face_gap_m is its own placement: it would bypass these conditions (Codex review P3)
+            raise ValueError(f"event {ev_.id!r}: face_gap_m is a path-frame placement of its own, not with "
+                             "beyond_end_m, sweep, a curvature condition or the pallet frame")
     return out
+
+
+FACE_GAP_STEP_M = 0.01  # face_gap_m: the walk out along the path before the bisection
+FACE_GAP_SEARCH_M = 3.0  # and how far it walks
 
 
 def _length(poses: np.ndarray) -> float:
@@ -135,7 +149,7 @@ class Schedule:
     log: list = field(default_factory=list)
 
     def update(self, t: float, phase: str, driven_m: float, path_ahead: np.ndarray | None, *,
-               leg_direction: int = 1, pallet_face: tuple | None = None, sweep_test=None) -> list[tuple]:
+               leg_direction: int = 1, pallet_face: tuple | None = None, sweep_test=None, gap_test=None) -> list[tuple]:
         """Actions due now: ('spawn', id, x, y, yaw, size) / ('remove', id) / ('silence', sensor).
 
         ``pallet_face`` is (x, y, insertion yaw) of the approach face centre."""
@@ -165,6 +179,38 @@ class Schedule:
                     continue
                 elif leg != "any" and e.beyond_end_m is None and _length(path_ahead) < e.ahead_m + 0.5:
                     continue  # a leg too short would clamp the box to its end (Codex checkpoint 9 P1)
+                elif e.face_gap_m is not None:
+                    # the first place along the path whose box is face_gap_m from the true outline (bisection on the
+                    # path length: the gap grows along a path leading away); none within the path -> wait
+                    if gap_test is None:
+                        continue
+                    total = min(_length(path_ahead), FACE_GAP_SEARCH_M)
+
+                    def gap_at(s_):
+                        return gap_test((*pose_along(path_ahead, s_, e.lateral_m), e.size_m))
+
+                    if gap_at(0.0) >= e.face_gap_m:
+                        continue  # the truck is not at the path's start: no place there is that gap from it
+                    # the first place the gap reaches the target, walking out from the truck (a path can come back:
+                    # bisecting over the whole of it found later crossings or none; Codex review P2), then bisected
+                    lo, hi, s_ = 0.0, None, FACE_GAP_STEP_M
+                    while s_ <= total + 1e-9:
+                        if gap_at(s_) >= e.face_gap_m:
+                            hi = s_
+                            break
+                        lo, s_ = s_, s_ + FACE_GAP_STEP_M
+                    if hi is None:
+                        continue
+                    while hi - lo > 1e-4:
+                        mid = (lo + hi) / 2
+                        if gap_at(mid) >= e.face_gap_m:
+                            hi = mid
+                        else:
+                            lo = mid
+                    if abs(gap_at(hi) - e.face_gap_m) > 1e-3:
+                        continue  # a jump past the target (a corner): not the gap asked for
+                    placed_along_ = hi
+                    x, y, yaw = pose_along(path_ahead, hi, e.lateral_m)
                 elif e.beyond_end_m is not None:
                     ex, ey = path_ahead[-1, 0], path_ahead[-1, 1]
                     eyaw = math.atan2(path_ahead[-1, 1] - path_ahead[-2, 1], path_ahead[-1, 0] - path_ahead[-2, 0])
@@ -220,7 +266,13 @@ class Schedule:
             record = {"time_s": t, "event": e.id, "action": e.action, "phase": phase,
                       "driven_m": driven_m, "detail": list(due[-1][1:])}
             if e.action == "spawn" and e.frame == "path" and path_ahead is not None and len(path_ahead) >= 3:
-                record["curvature_inv_m"] = _curvature_at(path_ahead, e.ahead_m)
+                if e.face_gap_m is not None:
+                    # where the box actually went along the path, and the curvature there (Codex result review P2:
+                    # ahead_m is unused by a face-gap spawn, so its curvature was the path's start)
+                    record["along_m"] = placed_along_
+                    record["curvature_inv_m"] = _curvature_at(path_ahead, placed_along_)
+                else:
+                    record["curvature_inv_m"] = _curvature_at(path_ahead, e.ahead_m)
             self.log.append(record)
         return due
 
