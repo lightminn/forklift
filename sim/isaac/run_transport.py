@@ -2874,16 +2874,21 @@ class ServicedExchange:
             # impl review rounds 1-2 P2)
             import socket
 
+            self.cleanup = {"shutdown_error": None, "helper_alive": None}
             try:
                 shutdown = getattr(getattr(self.inner, "sock", None), "shutdown", None)
                 if shutdown is not None:
                     try:
                         shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass  # already closed or not connected: nothing blocks on it
+                    except OSError as exc:  # already closed or not connected; recorded (Codex P3)
+                        self.cleanup["shutdown_error"] = f"{type(exc).__name__}: {exc}"
                 self.inner.close()
             finally:
                 helper.join(2.0)
+                self.cleanup["helper_alive"] = helper.is_alive()
+                if self.cleanup["helper_alive"]:
+                    print(f"B-P2c: the bootstrap exchange's helper outlived its cancel: {self.cleanup}",
+                          file=sys.stderr, flush=True)
             raise
         if "error" in box:
             raise box["error"]

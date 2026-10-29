@@ -286,9 +286,11 @@ def test_a_real_blocking_read_is_ended_by_shutting_its_socket_down():
             raise End()
 
     t0 = time.monotonic()
+    link = run_transport.ServicedExchange(Client(a), service, tick_s=0.005)
     with pytest.raises(End):
-        run_transport.ServicedExchange(Client(a), service, tick_s=0.005).exchange("scan")
+        link.exchange("scan")
     assert time.monotonic() - t0 < 1.0
+    assert link.cleanup == {"shutdown_error": None, "helper_alive": False}  # recorded either way (Codex P3)
     assert not [t for t in threading.enumerate() if t.name == "slam-bootstrap-exchange"]
     b.close()
 
