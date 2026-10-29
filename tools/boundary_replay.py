@@ -181,7 +181,7 @@ class _NoPicture:
         return lambda *a, **k: None
 
 
-def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None):
+def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None, off: str | None = None):
     snap = json.loads((run_dir / "boundary/setup_snapshot.json").read_text())
     if snap.get("opaque"):  # a value the snapshot could not keep: the replay would hand back a marker
         raise ReplayMismatch(f"the setup snapshot holds opaque values: {snap['opaque']}")
@@ -282,6 +282,8 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
         Path(output).mkdir(parents=True, exist_ok=True)
     refuse_unreplayable(values)
     bind_added_names(values, snap["names"])
+    if off is not None:
+        apply_off_path(values.get("args"), gate.session, off)
     if getattr(values.get("args"), "video", False):  # see ReplaySession.video_sink_paths
         gate.session.video_sink_paths = VIDEO_DERIVED_OUTPUTS
     values["RecordingProxy"] = proxy_factory
@@ -300,6 +302,28 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
         place_chase_camera=lambda *a, **k: None,
     )
     return types.SimpleNamespace(**values), adapters, snap
+
+
+# Off paths (--off NAME): a record made with a feature on, replayed with it off -- its argument's off value, the record
+# branches its bookkeeping adds (prefixes) and its end-state keys. Only the bookkeeping is left out: a run where the
+# feature acted (a layer call, a changed decision) still differs where it did (the next riib batch's regression rule,
+# docs/plans/2026-10-29-riib-exit-prefix-default-batch.md).
+OFF_PATHS = {
+    "exit_prefix_exempt": {"value": "off", "branches": ("state.exit_prefix_exempt[",),
+                           "state_keys": (("containers", "state", "exit_prefix_exempt"),)},
+}
+
+
+def apply_off_path(args, session: ReplaySession, name: str) -> None:
+    """Turn the recorded run's feature ``name`` off for the replay and leave its bookkeeping out of the comparison."""
+    spec = OFF_PATHS.get(name)
+    if spec is None:
+        raise ValueError(f"no off path for {name!r} (known: {sorted(OFF_PATHS)})")
+    if getattr(args, name, spec["value"]) == spec["value"]:
+        raise ValueError(f"the record has {name} already off: nothing to replay off")
+    setattr(args, name, spec["value"])
+    session.ignored_branch_prefixes = tuple(spec["branches"])
+    session.ignored_state_keys = tuple(spec["state_keys"])
 
 
 def final_state_differences(boundary: Path, session: ReplaySession, final_state) -> list[str]:
@@ -342,7 +366,7 @@ def check_ending(session: ReplaySession, raised: BaseException | None) -> None:
         session.fail("the replayed run never closed its record")
 
 
-def replay_run(run_dir: Path, output: Path | None = None) -> dict:
+def replay_run(run_dir: Path, output: Path | None = None, off: str | None = None) -> dict:
     run_dir = Path(run_dir)
     _install_isaac_value_types()
     # Callbacks by type in a Planner request only behind their Trace.callback_spec (ReplaySession._described).
@@ -358,9 +382,9 @@ def replay_run(run_dir: Path, output: Path | None = None) -> dict:
         import tempfile
 
         output = Path(tempfile.mkdtemp(prefix="boundary_replay_"))
-    S, adapters, snap = build_inputs(run_dir, gate, output)
+    S, adapters, snap = build_inputs(run_dir, gate, output, off)
     module._BOUNDARY_RECORD["gate"] = gate
-    outcome = {"run_dir": str(run_dir), "ticks_done": 0}
+    outcome = {"run_dir": str(run_dir), "ticks_done": 0, **({"off": off} if off is not None else {})}
     raised = None
     try:
         module.drive(S, adapters)
@@ -422,8 +446,11 @@ def main(argv=None) -> int:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--json", type=Path)
     parser.add_argument("--output", type=Path, help="where the replayed run writes (default: a new temporary directory)")
+    parser.add_argument("--off", choices=sorted(OFF_PATHS),
+                        help="replay a record made with this feature on with it off (OFF_PATHS: only its bookkeeping "
+                             "is left out of the comparison)")
     args = parser.parse_args(argv)
-    out = replay_run(args.run_dir, args.output)
+    out = replay_run(args.run_dir, args.output, args.off)
     text = json.dumps(out, indent=1)
     if args.json:
         args.json.write_text(text + "\n")

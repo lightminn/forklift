@@ -1551,3 +1551,32 @@ def test_a_skipped_video_output_whose_recorded_write_failed_fails_the_replay(tmp
         rec.close()
         with pytest.raises(ReplayMismatch, match="recorded write failed"):
             _replay_writes(tmp_path / name, after, VIDEO)
+
+
+def test_an_off_path_replay_leaves_out_only_the_named_bookkeeping_branches_and_state_keys(tmp_path):
+    """2026-10-29 (lead, the next riib batch's regression rule): a B record replayed with its feature off -- the
+    feature's own bookkeeping (its record branch, its end-state key) is left out, every other branch and key is
+    compared as ever."""
+    rec = BoundaryRecorder(tmp_path, value_format=2)
+    rec.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+    rec.tick_end(outputs={"v": 1}, branches=["state.tracker_versions[phase=transport]",
+                                             "state.exit_prefix_exempt[reason=no_prefix]"])
+    rec.close(final_state={"containers": {"state": {"exit_prefix_exempt": [{"reason": "no_prefix"}], "x": 1}}},
+              ending={"kind": "returned"})
+
+    def replay(branches, state, off=True):
+        session = ReplaySession(tmp_path)
+        if off:
+            session.ignored_branch_prefixes = ("state.exit_prefix_exempt[",)
+            session.ignored_state_keys = (("containers", "state", "exit_prefix_exempt"),)
+        session.tick_begin(0, tick_t=0.0, work_t=0.0, commands=[], stop_kind="none")
+        session.tick_end(outputs={"v": 1}, branches=branches)
+        session.finish({"containers": {"state": state}})
+
+    replay(["state.tracker_versions[phase=transport]"], {"x": 1})
+    with pytest.raises(ReplayMismatch, match="branches"):  # another branch still compares
+        replay(["state.tracker_versions[phase=other]"], {"x": 1})
+    with pytest.raises(ReplayMismatch, match="final state"):  # another key still compares
+        replay(["state.tracker_versions[phase=transport]"], {"x": 2})
+    with pytest.raises(ReplayMismatch, match="branches"):  # without the off path nothing is left out
+        replay(["state.tracker_versions[phase=transport]"], {"x": 1}, off=False)
