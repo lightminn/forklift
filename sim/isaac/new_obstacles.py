@@ -207,7 +207,8 @@ class Schedule:
                             hi = mid
                         else:
                             lo = mid
-                    if abs(gap_at(hi) - e.face_gap_m) > 1e-3:
+                    placed_gap_ = gap_at(hi)
+                    if abs(placed_gap_ - e.face_gap_m) > 1e-3:
                         continue  # a jump past the target (a corner): not the gap asked for
                     placed_along_ = hi
                     x, y, yaw = pose_along(path_ahead, hi, e.lateral_m)
@@ -270,6 +271,7 @@ class Schedule:
                     # where the box actually went along the path, and the curvature there (Codex result review P2:
                     # ahead_m is unused by a face-gap spawn, so its curvature was the path's start)
                     record["along_m"] = placed_along_
+                    record["face_gap_at_spawn_m"] = placed_gap_  # against the true outline the placement used
                     record["curvature_inv_m"] = _curvature_at(path_ahead, placed_along_)
                 else:
                     record["curvature_inv_m"] = _curvature_at(path_ahead, e.ahead_m)

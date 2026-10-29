@@ -230,9 +230,13 @@ def test_a_face_gap_spawn_puts_the_box_face_that_far_from_the_true_outline_on_th
     ev = MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)
     truck = (0.01, 0.02, 0.0)  # the true pose a little off the path
     gap = _gap_from(truck, fp)
-    (spawn,) = MODULE.Schedule([ev]).update(1.0, "transport", 0.0, rev, leg_direction=-1, gap_test=gap)
+    sched = MODULE.Schedule([ev])
+    (spawn,) = sched.update(1.0, "transport", 0.0, rev, leg_direction=-1, gap_test=gap)
     _, _, x, y, yaw, size = spawn
     assert abs(gap((x, y, yaw, size)) - 0.15) <= 0.001 and abs(y) < 1e-9  # on the path, 0.15 from the outline
+    # the log keeps the gap measured at the spawn itself, against the outline the placement used (the next riib
+    # batch's C4 validity, docs/plans/2026-10-29-riib-exit-prefix-default-batch.md)
+    assert abs(sched.log[-1]["face_gap_at_spawn_m"] - gap((x, y, yaw, size))) < 1e-12
     # on a curve: still on the path, still 0.15 straight-line
     from forklift_core.control.drive_permission import arc_poses
 
