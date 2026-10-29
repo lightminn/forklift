@@ -449,6 +449,49 @@ def test_a_relocalizing_setup_leaves_the_placed_starts_settling_to_the_phases_va
     assert '"Truck spawn displaced",' not in run_  # the one check is the helper's
 
 
+class _FloorTruck:
+    """A truck whose settled height is the floor's under it: ``high`` where it stands on something, 0.0 elsewhere."""
+
+    def __init__(self, high_at, high_z):
+        self.high_at, self.high_z, self.at, self.z, self.log = high_at, high_z, (0.0, 0.0, 0.0), 0.0, []
+
+    def teleport(self, position, q):
+        self.at, self.z = (float(position[0]), float(position[1]), C.yaw_roll_pitch(q)[0]), float(position[2])
+        self.log.append(("teleport", tuple(round(v, 6) for v in self.at), round(self.z, 6)))
+
+    def step(self):
+        self.z = self.high_z if math.hypot(self.at[0] - self.high_at[0], self.at[1] - self.high_at[1]) < 0.5 else 0.0
+        if not self.log or self.log[-1][0] != "steps":
+            self.log.append(("steps", 0))
+        self.log[-1] = ("steps", self.log[-1][1] + 1)
+
+    def pose(self):
+        return np.array([self.at[0], self.at[1], self.z]), C.quat_from_yaw(self.at[2])
+
+
+def test_the_placed_starts_height_is_judged_against_the_scene_starts_settle():
+    """Codex B-P2d round 5 P2: the step-3 height check took the placed start's own settled height as its reference, so
+    a truck settled on something passed. B4a's reference is the truck settled at the scene's start (clear floor); the
+    truck then goes to the placed start at that height and settles there (plan 1.2 step 3, 1 s)."""
+    import run_transport
+
+    target = (5.0, 4.0, 1.0)
+    truck = _FloorTruck(high_at=target[:2], high_z=0.04)
+    engine = C.Engine(teleport=truck.teleport, step=truck.step, pose=truck.pose, cast=None, draw_noise=None,
+                      ranges_from_hits=None, range_min_m=0.2, range_max_m=12.0, settle_z_m=0.04,
+                      laser_xyz_m=(-0.12, 0.0, 1.05))
+    out = run_transport.reloc_reference_settle(engine, (-2.0, 0.0, 0.0), target, spawn_z_m=0.015)
+    assert out.settle_z_m == 0.0  # the scene start's, not the 0.04 the placed start settles to
+    assert truck.log == [("teleport", (-2.0, 0.0, 0.0), 0.015), ("steps", run_transport.RELOC_SETTLE_STEPS),
+                         ("teleport", target, 0.0), ("steps", run_transport.RELOC_SETTLE_STEPS)]
+    assert run_transport.RELOC_SETTLE_STEPS == 120  # 1 s at 120 Hz, the setup's own settle
+    pos, q = out.pose()
+    assert abs(pos[2] - out.settle_z_m) > C.HEIGHT_TOL_M  # so scan_set calls it "height"
+    run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
+    settled = run_.index("reloc_reference_settle(")
+    assert run_.index("reloc_lidar(") < settled < run_.index("reloc_console = open_reloc_console(")
+
+
 def test_a_bundle_whose_map_is_not_the_world_is_refused(tmp_path):
     import run_transport
 

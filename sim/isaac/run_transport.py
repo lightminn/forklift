@@ -2825,6 +2825,28 @@ def truck_spawn_problem(args, initial_base, base_start) -> str | None:
     return "Truck spawn displaced"
 
 
+RELOC_SETTLE_STEPS = 120  # plan 1.2 step 3: the start settle, 1 s at 120 Hz (the setup's own)
+
+
+def reloc_reference_settle(engine, scene_start_base, target, *, spawn_z_m: float, steps: int = RELOC_SETTLE_STEPS):
+    """Plan 1.2 step 3's height reference, as B4a's (Codex B-P2d round 5 P2): the truck settled at the scene's start
+    (clear floor by construction), never at the placed start it judges -- a truck settled on something there would
+    be its own reference. The truck then goes to the placed start at that height, as B4a's capture teleports to each
+    pose, and settles there; the phase judges it (scan_capture.scan_set). Returns the engine with the reference."""
+    import scan_capture
+
+    x, y, yaw = (float(v) for v in scene_start_base)
+    engine.teleport(np.array([x, y, float(spawn_z_m)]), scan_capture.quat_from_yaw(yaw))
+    for _ in range(steps):
+        engine.step()
+    z = float(engine.pose()[0][2])
+    tx, ty, tyaw = (float(v) for v in target)
+    engine.teleport(np.array([tx, ty, z]), scan_capture.quat_from_yaw(tyaw))
+    for _ in range(steps):
+        engine.step()
+    return replace(engine, settle_z_m=z)
+
+
 RELOC_NOISE_ROOT = 20261029
 
 
@@ -3096,7 +3118,7 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
     out = reloc_phase.run(reloc_phase.RelocInputs(
         engine=engine, target=args.start_pose, grid=bundle.grid, index=index, match_cfg=cfg, reloc_cfg=reloc_cfg,
         angle_min_rad=float(angles[0]), angle_increment_rad=float(angles[1]), epoch_dir=Path(args.reloc_dir),
-        settle_steps=0,  # the start settle (120 steps, 1 s) ran before: plan 1.2 step 3
+        settle_steps=0,  # the start settle (reloc_reference_settle, 1 s) ran before: plan 1.2 step 3
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
@@ -4317,10 +4339,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     start_reloc = None  # B-P2b: the start relocalization's record; None: the scene's start, known, as before
     reloc_console = None  # B-P2c: the early console the live runtime adopts; None: the runtime opens its own
     if args.start_relocalize:
+        reloc_engine_, reloc_angles_ = reloc_lidar(args, settings, world, robot, obstacle["layer"], initial_base)
+        # plan 1.2 step 3 before the console opens (step 4): the height reference at the scene's start, then the
+        # placed start's settle (Codex B-P2d round 5 P2)
+        scene_start_ = spawn_base_pose(argparse.Namespace(start_pose=None, rear_axle_offset_m=args.rear_axle_offset_m),
+                                       scenario)
+        reloc_engine_ = reloc_reference_settle(reloc_engine_, scene_start_, spawn_base_pose(args, scenario),
+                                               spawn_z_m=float(base_start[2]))
+        state["reloc_reference"] = {"scene_start_base": list(scene_start_), "settle_z_m": reloc_engine_.settle_z_m}
         reloc_console = open_reloc_console(args, settings, robot, slam_bundle_, lift_index=lift_index, steers=steers,
                                            state=state)
-        start_reloc = start_relocalization(args, state, *reloc_lidar(args, settings, world, robot, obstacle["layer"],
-                                                                     initial_base), slam_bundle_,
+        start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,
                                            console=reloc_console)
         reloc_console.service("setup")
     if obstacle is not None:
