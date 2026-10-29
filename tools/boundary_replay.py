@@ -44,6 +44,8 @@ SETUP_NAMES_ADDED = {
     "slam_bundle_": ("slam_map_bundle", None, None),
     # Trailer exit plan (2026-10-22): every earlier record planned its transports with no exit prefix
     "transport_exit": ("exit_clearance_m", None, None),
+    # B-P2b start relocalization (2026-10-29): every earlier record started at the scene's start
+    "start_reloc": ("start_relocalize", False, None),
 }
 
 

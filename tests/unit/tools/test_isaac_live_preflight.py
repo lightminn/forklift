@@ -73,3 +73,67 @@ def test_an_out_too_long_for_the_slam_socket_is_refused(tmp_path):
     out = tmp_path / ("x" * max(1, 110 - len(str(tmp_path))))
     p = _launch(tmp_path, out=out)
     assert p.returncode == 2 and "AF_UNIX" in p.stderr, p.stdout + p.stderr
+
+
+def _fake_python(tmp_path):
+    """The Isaac Python stand-in: inline code runs (a bundle load answers a map id), the runner's check passes, and
+    anything else (the supervisor, the stall watch) is recorded instead of started."""
+    fake = tmp_path / "fakepy"
+    fake.write_text("#!/bin/bash\n"
+                    "if [ \"$1\" = -c ]; then case \"$2\" in *load_bundle*) echo " + "f" * 64 + "; exit 0;; esac;"
+                    " exec python3 \"$@\"; fi\n"
+                    'for a in "$@"; do [ "$a" = --check-args ] && { echo ARGS_OK; exit 0; }; done\n'
+                    f"printf '%s\\n' \"$*\" >> {tmp_path / 'started'}\nexit 0\n")
+    fake.chmod(0o755)
+    return fake
+
+
+def _relocalizing(tmp_path, **env):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(exist_ok=True)
+    return _launch(tmp_path, venv_py=_fake_python(tmp_path), DRY_RUN="0", MAP_BUNDLE=str(bundle),
+                   MAP_START_POSE="0.5,-1.0,0.3", **env)
+
+
+def _bridge(tmp_path, *extra):
+    return subprocess.run(["bash", str(tmp_path / "out" / "bridge.sh"), "1", str(tmp_path / "e1"), "m" * 64,
+                           str(tmp_path / "bundle"), *extra],
+                          env={**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}, capture_output=True)
+
+
+def _supervisor(tmp_path) -> str:
+    return next(line for line in (tmp_path / "started").read_text().splitlines() if "live_supervisor" in line)
+
+
+def test_a_start_pose_relocalizes_the_session(tmp_path):
+    # B-P2b (start relocalization plan 1.2): the runner placed and relocalizing, the supervisor running it first, the
+    # bridge started at the runner's estimate
+    p = _relocalizing(tmp_path, START_POSE="-4.0,3.0,-2.0")
+    assert p.returncode == 0, p.stdout + p.stderr
+    out = tmp_path / "out"
+    preflight = (out / "preflight.log").read_text().splitlines()
+    i = preflight.index("--start-pose=-4.0,3.0,-2.0")  # one word: a negative x is no option (Codex B-P2b P2)
+    assert preflight[i:i + 4] == ["--start-pose=-4.0,3.0,-2.0", "--start-relocalize", "--reloc-dir",
+                                  str(out / "preflight")]
+    supervisor = _supervisor(tmp_path)
+    assert "--relocalize" in supervisor.split() and '"{map_start_pose}"' in supervisor
+    (tmp_path / "started").unlink()
+    assert _bridge(tmp_path, "7,8,1").returncode == 0
+    assert "SLAM_MAP_START_POSE=7,8,1" in (tmp_path / "started").read_text()  # the estimate, not the registry's
+    assert _bridge(tmp_path).returncode != 0  # no estimate: no bridge
+
+
+def test_without_a_start_pose_the_session_starts_as_before(tmp_path):
+    p = _relocalizing(tmp_path)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--start-relocalize" not in (tmp_path / "out" / "preflight.log").read_text().splitlines()
+    supervisor = _supervisor(tmp_path)
+    assert "--relocalize" not in supervisor.split() and "map_start_pose" not in supervisor
+    (tmp_path / "started").unlink()
+    assert _bridge(tmp_path).returncode == 0
+    assert "SLAM_MAP_START_POSE=0.5,-1.0,0.3" in (tmp_path / "started").read_text()
+
+
+def test_a_start_pose_needs_a_survey_map(tmp_path):
+    p = _launch(tmp_path, START_POSE="4.0,3.0,-2.0")  # MAP_BUNDLE=none: online mapping
+    assert p.returncode == 2 and "START_POSE relocalizes on a survey map" in p.stderr

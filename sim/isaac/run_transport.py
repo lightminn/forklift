@@ -204,6 +204,17 @@ def quarter_vector(value: str) -> tuple[float, float, float]:
     return parts
 
 
+def _finite_triple(value: str) -> tuple[float, float, float]:
+    """Parse one finite x,y,yaw pose (B-P2 --start-pose)."""
+    try:
+        parts = tuple(float(part) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("a pose needs x,y,yaw floats") from exc
+    if len(parts) != 3 or not all(math.isfinite(part) for part in parts):
+        raise argparse.ArgumentTypeError("a pose needs three finite x,y,yaw floats")
+    return parts
+
+
 def quarter_focal(value: str) -> float:
     """Parse a positive finite focal length for Camera.set_focal_length."""
     try:
@@ -922,6 +933,26 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--scan-capture-bundle", type=Path, default=None,
                         help="Survey plan B4a: the survey bundle whose manifest this capture's inputs must match.")
     parser.add_argument(
+        "--start-pose",
+        type=_finite_triple,
+        default=None,
+        help="B-P2 start relocalization (docs/plans/2026-10-29-start-relocalization.md 1.1): place the truck's "
+        "base_link at x,y,yaw (world) instead of the scene's start. Only with --start-relocalize: the placement and "
+        "its physical validity read it, the localization never does.",
+    )
+    parser.add_argument(
+        "--start-relocalize",
+        action="store_true",
+        help="B-P2b (plan 1.2): the start is unknown to the localization -- before the SLAM link the stationary scans "
+        "go to the global matcher (B-P1b's frozen settings); a confirmed estimate is written to --reloc-dir for the "
+        "supervisor (tools/live_supervisor.py --relocalize), which starts the bridge there; the odometry, the obstacle "
+        "layer and the bridge's start check then begin at the estimate. Unattended: a start the matcher cannot "
+        "confirm ends the session (the operator's pick is B-P2c). Needs --live on a survey map, the obstacle layer "
+        "and --start-pose.",
+    )
+    parser.add_argument("--reloc-dir", type=Path, default=None,
+                        help="B-P2b: the epoch folder of reloc_pose.json and bridge_go (the supervisor's {epoch_dir}).")
+    parser.add_argument(
         "--new-obstacles",
         type=Path,
         default=None,
@@ -1328,6 +1359,14 @@ def arguments() -> argparse.Namespace:
             parser.error("--scan-capture-poses is a batch capture: not with --live or --slam-feedback")
     elif args.scan_capture_out is not None or args.scan_capture_bundle is not None:
         parser.error("--scan-capture-out and --scan-capture-bundle go with --scan-capture-poses")
+    if args.start_relocalize:  # B-P2b (plan 1.1, 1.2)
+        if args.start_pose is None or args.reloc_dir is None:
+            parser.error("--start-relocalize needs --start-pose (where the truck is placed) and --reloc-dir")
+        if not args.live or args.slam_map_bundle is None or args.obstacle_layer is None:
+            parser.error("--start-relocalize is a live session on a survey map (--live, --slam-map-bundle) with the "
+                         "shared --obstacle-layer (the live send path's LiDAR and noise)")
+    elif args.start_pose is not None or args.reloc_dir is not None:
+        parser.error("--start-pose and --reloc-dir go with --start-relocalize")
     if args.slam_choice is not None and args.slam_feedback is None:
         parser.error("--slam-choice requires --slam-feedback")
     if args.odometry_heading == "gyro" and (args.gyro_model is None or args.encoder_model != "team_spec_quantized"
@@ -2729,33 +2768,47 @@ SLAM_LIVE_REPLY_DEADLINE_S = 1.0  # real-time plan D9a: wall seconds a sent scan
 SLAM_LIVE_QUEUE_MAX = 20  # and how many scans may wait behind it (2 s of 10 Hz scans)
 
 
-def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, settle_base) -> None:
-    """Survey plan B4a: the stationary scans at the listed poses (sim/isaac/scan_capture.py), after the inputs were
-    checked against the survey bundle's manifest; the run then ends without a mission."""
+def spawn_base_pose(args, scenario) -> tuple:
+    """Where the truck's base_link is placed (world): B-P2's --start-pose, else the scene's start (its rear axle and
+    the base offset, as every earlier run)."""
+    if getattr(args, "start_pose", None) is not None:
+        return tuple(float(v) for v in args.start_pose)
+    rear, off = scenario.start_rear, abs(args.rear_axle_offset_m)
+    return (rear.x_m + off * math.cos(rear.yaw_rad), rear.y_m + off * math.sin(rear.yaw_rad), rear.yaw_rad)
+
+
+def map_start_rear(scenario, start_reloc) -> tuple:
+    """Where the odometry, the obstacle layer's first scan and the bridge's start check begin (map rear axle): a start
+    relocalization's estimate (B-P2 plan 1.1, 1.2 step 10), else the scene's start (odom = map = world, as before)."""
+    if start_reloc is None:
+        return (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
+    return tuple(float(v) for v in start_reloc["estimate_rear"])
+
+
+RELOC_NOISE_ROOT = 20261029
+
+
+def reloc_noise(seed: int):
+    """B-P2b: each attempt's scans draw the shared LiDAR's noise from their own generator of the run's seed, so a
+    session is reproducible and the obstacle layer's own stream is left as a run from the scene's start has it."""
+    return lambda attempt, scan: np.random.default_rng([RELOC_NOISE_ROOT, int(seed), int(attempt), int(scan)])
+
+
+def shared_lidar_engine(args, settings: dict, world, robot, layer, settle_base) -> tuple:
+    """The stationary-scan engine of the shared SLAM LiDAR (sim/isaac/scan_capture.py): the live send path's cast,
+    REP-117 ranges and the obstacle layer's noise model with a given generator. B4a's capture and B-P2's start
+    relocalization take the same. Returns (engine, pattern, mount)."""
     import planar_lidar
     import scan_capture
     import yaml
 
-    from forklift_core.localization import slam_map as slam_map_module
     from forklift_core.sensors.lidar import PlanarScanPattern
 
-    bundle = slam_map_module.load_bundle(args.scan_capture_bundle)
-    mismatches = scan_capture.capture_mismatches(
-        bundle.manifest, seed=args.seed, arguments=state.get("arguments"), scene_sha256=state.get("scene_sha256"),
-        input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
-                              if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
-                              else None)
-                      for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)},
-        run_sources=state.get("source_sha256"))
-    if mismatches:
-        raise SystemExit("scan capture: " + "; ".join(mismatches))
     lidar_config = yaml.safe_load(args.lidar.read_text())
     pattern = PlanarScanPattern(lidar_config["beam_count"], float(lidar_config["range_min_m"]),
                                 float(lidar_config["range_max_m"]))
     mount = planar_lidar.LaserMount(tuple(map(float, lidar_config["mount_xyz_m"])), float(lidar_config["mount_yaw_rad"]))
     beam_angles = pattern.beam_angles_rad()
-    if not layer.shared_with_slam:
-        raise SystemExit("scan capture needs the obstacle layer that shares the SLAM LiDAR (the live send path)")
 
     def teleport(position, q):
         robot.set_world_pose(position=np.asarray(position, float), orientation=np.asarray(q, float))
@@ -2777,12 +2830,35 @@ def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, set
         finally:
             layer.rng = kept
 
-    poses = scan_capture.load_poses(args.scan_capture_poses)
     engine = scan_capture.Engine(
         teleport=teleport, step=lambda: world.step(render=False), pose=robot.get_world_pose, cast=cast,
         draw_noise=draw_noise, ranges_from_hits=pattern.ranges_from_hits, range_min_m=pattern.range_min_m,
         range_max_m=pattern.range_max_m, settle_z_m=float(settle_base[2]), laser_xyz_m=tuple(mount.xyz_m),
         steps_per_scan=int(round(float(settings["physics_hz"]) / int(lidar_config["rate_hz"]))))
+    return engine, pattern, mount
+
+
+def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, settle_base) -> None:
+    """Survey plan B4a: the stationary scans at the listed poses (sim/isaac/scan_capture.py), after the inputs were
+    checked against the survey bundle's manifest; the run then ends without a mission."""
+    import scan_capture
+
+    from forklift_core.localization import slam_map as slam_map_module
+
+    bundle = slam_map_module.load_bundle(args.scan_capture_bundle)
+    mismatches = scan_capture.capture_mismatches(
+        bundle.manifest, seed=args.seed, arguments=state.get("arguments"), scene_sha256=state.get("scene_sha256"),
+        input_sha256={name_: (slam_map_module.file_sha256(Path(getattr(args, name_)))
+                              if getattr(args, name_, None) is not None and Path(getattr(args, name_)).is_file()
+                              else None)
+                      for name_ in slam_map_module.SHARED_INPUTS + (slam_map_module.SCENE_INPUT,)},
+        run_sources=state.get("source_sha256"))
+    if mismatches:
+        raise SystemExit("scan capture: " + "; ".join(mismatches))
+    if not layer.shared_with_slam:
+        raise SystemExit("scan capture needs the obstacle layer that shares the SLAM LiDAR (the live send path)")
+    engine, pattern, mount = shared_lidar_engine(args, settings, world, robot, layer, settle_base)
+    poses = scan_capture.load_poses(args.scan_capture_poses)
     arrays = scan_capture.capture(engine, poses)
     meta = {"format": scan_capture.FORMAT, "map_id": bundle.map_id, "split": poses["split"],
             "map_index": poses["map_index"], "poses_sha256": slam_map_module.file_sha256(args.scan_capture_poses),
@@ -2793,6 +2869,64 @@ def run_scan_capture(args, state: dict, settings: dict, world, robot, layer, set
     state["scan_capture"] = {**meta, "poses": int(len(arrays["id"])), "valid": int(arrays["valid"].sum()),
                              "out": str(args.scan_capture_out)}
     state["success"] = True
+
+
+def reloc_mount_problem(xyz_m, yaw_rad: float) -> str | None:
+    """Why the LiDAR mount does not fit start_reloc's frames (laser = base + LASER_X_M ahead, the same heading), or
+    None: a turned or side-shifted LiDAR would turn the matcher's laser pose into a wrong base pose (Codex B-P2b P2)."""
+    from forklift_core.localization import start_reloc as R
+
+    if abs(float(xyz_m[0]) - R.LASER_X_M) > 1e-9 or abs(float(xyz_m[1])) > 1e-9 or abs(float(yaw_rad)) > 1e-9:
+        return f"the LiDAR mount {tuple(xyz_m)} yaw {yaw_rad} is not start_reloc's ({R.LASER_X_M}, 0, yaw 0)"
+    return None
+
+
+def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple:
+    """B-P2b: the shared SLAM LiDAR's stationary-scan engine and its (angle_min, angle_increment)."""
+    if not layer.shared_with_slam:
+        raise SessionFailure("reloc_invalid_input: the obstacle layer does not share the SLAM LiDAR (the live send path)")
+    engine, pattern, mount = shared_lidar_engine(args, settings, world, robot, layer, settle_base)
+    problem = reloc_mount_problem(mount.xyz_m, mount.yaw_rad)
+    if problem is not None:
+        raise SessionFailure(f"reloc_invalid_input: {problem}")
+    return engine, (pattern.angle_min_rad, pattern.angle_increment_rad)
+
+
+def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, frozen=None, pace_s: float = 1 / 120,
+                         clock=None) -> dict:
+    """B-P2b (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 3-10, unattended): the stopped truck's start
+    relocalization on the survey bundle's grid with B-P1b's frozen settings (sim/isaac/reloc_phase.py). Returns the
+    record (``state["start_reloc"]``) with the estimate (map base) and its rear axle, once the supervisor answered
+    ``bridge_go``; any other ending is a session failure (its plan 1.2 reason). The placed pose is read here once,
+    for the physical validity only."""
+    import reloc_phase
+
+    from forklift_core.localization import global_match as G
+    from forklift_core.localization import start_reloc as R
+
+    mfw = [float(v) for v in bundle.manifest.get("map_from_world", (0.0, 0.0, 0.0))]
+    if any(abs(v) > 1e-12 for v in mfw):  # the runner's map is the world (odom = map = world at the start)
+        raise SessionFailure(f"reloc_invalid_input: the bundle's map_from_world {mfw} is not the identity")
+    lx, ly, _ = engine.laser_xyz_m
+    if abs(lx - R.LASER_X_M) > 1e-9 or abs(ly) > 1e-9:  # the matcher's laser poses become base poses by R's frames
+        raise SessionFailure(f"reloc_invalid_input: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
+    cfg, reloc_cfg, settings_record = frozen or reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
+    t0 = time.monotonic()
+    index = G.MapIndex(bundle.grid, cfg)
+    index_s = time.monotonic() - t0
+    out = reloc_phase.run(reloc_phase.RelocInputs(
+        engine=engine, target=args.start_pose, grid=bundle.grid, index=index, match_cfg=cfg, reloc_cfg=reloc_cfg,
+        angle_min_rad=float(angles[0]), angle_increment_rad=float(angles[1]), epoch_dir=Path(args.reloc_dir),
+        settle_steps=0,  # the start settle (120 steps, 1 s) ran before: plan 1.2 step 3
+        pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed)))
+    record = {**out, "map_id": bundle.map_id, "settings": settings_record, "index_build_s": round(index_s, 3),
+              "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
+                                if out["estimate"] is not None else None)}
+    state["start_reloc"] = record
+    reason = reloc_phase.failure_reason(out)
+    if reason is not None:
+        raise SessionFailure(reason)
+    return record
 
 
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
@@ -3243,16 +3377,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         pallet = PalletSwitch(session_handles, session.sequence[0][0])
     if scene_layout is not None:
         state["scene_pallets"] = add_scene_pallets(stage, app, args.output / "pallet.usd", scene_layout.visuals)
-    base_start = np.array(
-        [
-            scenario.start_rear.x_m
-            + abs(args.rear_axle_offset_m) * math.cos(scenario.start_rear.yaw_rad),
-            scenario.start_rear.y_m
-            + abs(args.rear_axle_offset_m) * math.sin(scenario.start_rear.yaw_rad),
-            0.015,
-        ]
-    )
-    start_yaw = scenario.start_rear.yaw_rad
+    # The scene's start, or B-P2's --start-pose (plan 1.1: the placement and its validity only)
+    base_start = np.array([*spawn_base_pose(args, scenario)[:2], 0.015])
+    start_yaw = spawn_base_pose(args, scenario)[2]
     robot = world.scene.add(
         Robot(
             prim_path="/World/Forklift",
@@ -4007,11 +4134,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # band's cells at spawn time is outside the scenario's validity.
             "band_overlaps": new_obstacles["band_overlaps"],
         }
+    start_reloc = None  # B-P2b: the start relocalization's record; None: the scene's start, known, as before
+    if args.start_relocalize:
+        start_reloc = start_relocalization(args, state, *reloc_lidar(args, settings, world, robot, obstacle["layer"],
+                                                                     initial_base), slam_bundle_)
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
 
         # The first obstacle scan, from the start pose, before any plan: the
-        # grid the first plan sees (priority-5 L3b). Start = map = odom.
+        # grid the first plan sees (priority-5 L3b). Start = map = odom (B-P2b: the estimate's map).
         prime_base, prime_q = robot.get_world_pose()
         prime_raw = {}
         for sensor in obstacle["layer"].sensors:
@@ -4026,7 +4157,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m,
                                              band_bottom_m=obstacle["layer"].band_bottom_m),
             )
-        start_pose = (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
+        start_pose = map_start_rear(scenario, start_reloc)  # the map start (rear axle), never the placed pose
         obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
         if args.scan_capture_poses is not None:
             run_scan_capture(args, state, settings, world, robot, obstacle["layer"], prime_base)
@@ -4346,6 +4477,10 @@ def drive(S, isaac) -> None:
         tracker_book = _bound["tracker_book"]
     if "transport_exit" in _bound:
         transport_exit = _bound["transport_exit"]
+    if "start_reloc" not in _bound:  # a setup recorded before the start relocalization (B-P2b, 2026-10-29)
+        _bound["start_reloc"] = None
+    if "start_reloc" in _bound:
+        start_reloc = _bound["start_reloc"]
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     if "truth_destination" in _bound:
@@ -5379,12 +5514,9 @@ def drive(S, isaac) -> None:
             dock = recorded_function(dock, "Planner", "dock", boundary)
         from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
 
-        # The known start (odom = map = world); the plan's v3 state machine.
-        slam_start = (
-            scenario.start_rear.x_m,
-            scenario.start_rear.y_m,
-            scenario.start_rear.yaw_rad,
-        )
+        # The known start (odom = map = world); the plan's v3 state machine. B-P2b: a start relocalization's
+        # estimate instead -- the odometry and the bridge's start check begin there (plan 1.2 step 10).
+        slam_start = map_start_rear(scenario, start_reloc)
         slam = {
             "link": isaac.slam_link_client(
                 str(args.slam_feedback), timeout_s=args.slam_reply_timeout
@@ -6880,6 +7012,8 @@ def drive(S, isaac) -> None:
                                          f"not {slam['bundle'].map_id}")
                 # The odometry starts at the world start and map = world: the first correction is the identity
                 # within the start tolerance -- a bridge told another start pose would pass its own check there.
+                # B-P2b: the start is the relocalization's estimate (slam_start), never the placed pose (plan 1.2
+                # step 10: the same tolerance and reason, no truth read).
                 offset_ = abs(args.rear_axle_offset_m)
                 start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
                                slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
@@ -6891,6 +7025,14 @@ def drive(S, isaac) -> None:
                                          f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
                 state["slam_map"]["confirmed_by_bridge"] = True
                 state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
+                if start_reloc is not None:
+                    # The start check's tick, kept beside the verdict (which is taken when the warm-up ends: a gyro
+                    # bias can hold it after this reply -- Codex B-P2b review P2); nothing reads it back
+                    truth_yaw_v_, _ = yaw_and_tilt(now_q)
+                    start_reloc["bootstrap_check"] = {
+                        "scan_id": slam["scan_id"], "stamp_s": float(stamp_now), "slam_base": [float(v) for v in at_],
+                        "truth_base": [float(now_base[0]), float(now_base[1]), float(truth_yaw_v_)],
+                        "estimate_base": list(start_reloc["estimate"])}
             truth_yaw, _ = yaw_and_tilt(now_q)
             slam["records"].append(
                 {
@@ -7557,6 +7699,17 @@ def drive(S, isaac) -> None:
                                    "prewarm_wall_s": time.monotonic() - prewarm_wall_,
                                    "reply_deadline_s": SLAM_LIVE_REPLY_DEADLINE_S, "queue_max": SLAM_LIVE_QUEUE_MAX,
                                    "tracker_max_age_s": slam["tracker"].max_age_s, "max_depth": 0}
+            if start_reloc is not None:
+                # B-P2 plan 1.2 step 11: the verdict's record at the tick the session is ready (every warm-up done,
+                # no step before the server opens) -- the SLAM pose against the same tick's truth and the estimate;
+                # nothing reads it back
+                verdict_base_, verdict_q_ = robot.get_world_pose()
+                start_reloc["verdict"] = {
+                    "sim_s": float(world.current_time - initial_time),
+                    "slam_base": [float(v) for v in compose(slam["tracker"].applied[0], slam_odom_base())],
+                    "truth_base": [float(verdict_base_[0]), float(verdict_base_[1]),
+                                   float(yaw_and_tilt(verdict_q_)[0])],
+                    "estimate_base": list(start_reloc["estimate"])}
         if live is not None:
             # Real-time plan D9d: what was built so far (the stage, the scene, the planners' tables) is frozen out of
             # the garbage collector's walks; a full collection then walks only what the run makes (d9d_2/3/sc: a 0.30-
@@ -9680,6 +9833,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
+        # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
+        and (k not in ("start_pose", "start_relocalize", "reloc_dir") or v not in (None, False))
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
