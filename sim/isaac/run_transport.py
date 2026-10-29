@@ -5237,6 +5237,12 @@ def drive(S, isaac) -> None:
                                                child_ports={"permission": "Permission", "memory": "Memory"})
         if recorder is not None:  # the pocket frames recorder: its phase, its closing statistics
             recorder = RecordingProxy(recorder, "PocketRecorder", boundary)
+        if far_runtime is not None:
+            # the far recognition (--recognition far): its decisions come from the learned proposer on rendered frames,
+            # which a replay has neither of -- recorded as a port, the frames by hash (a record only; the run is the
+            # same)
+            far_runtime = RecordingProxy(far_runtime, "FarRecognition", boundary,
+                                         hash_only_requests={"drive_frame", "stop"})
     state["phase"] = "planning"
     # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
     # once -- never from the layer, whose every call and attribute is a recorded boundary
