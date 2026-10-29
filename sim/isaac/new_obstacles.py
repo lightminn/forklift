@@ -266,15 +266,16 @@ class Schedule:
                 groups.add(e.group)
             record = {"time_s": t, "event": e.id, "action": e.action, "phase": phase,
                       "driven_m": driven_m, "detail": list(due[-1][1:])}
-            if e.action == "spawn" and e.frame == "path" and path_ahead is not None and len(path_ahead) >= 3:
+            if e.action == "spawn" and e.frame == "path" and path_ahead is not None:
                 if e.face_gap_m is not None:
-                    # where the box actually went along the path, and the curvature there (Codex result review P2:
-                    # ahead_m is unused by a face-gap spawn, so its curvature was the path's start)
+                    # where the box actually went along the path (Codex result review P2: ahead_m is unused by a
+                    # face-gap spawn) and the gap it went at, against the true outline the placement used -- on every
+                    # face-gap spawn (Codex plan review 2 P3)
                     record["along_m"] = placed_along_
-                    record["face_gap_at_spawn_m"] = placed_gap_  # against the true outline the placement used
-                    record["curvature_inv_m"] = _curvature_at(path_ahead, placed_along_)
-                else:
-                    record["curvature_inv_m"] = _curvature_at(path_ahead, e.ahead_m)
+                    record["face_gap_at_spawn_m"] = placed_gap_
+                if len(path_ahead) >= 3:  # the curvature there
+                    record["curvature_inv_m"] = _curvature_at(
+                        path_ahead, placed_along_ if e.face_gap_m is not None else e.ahead_m)
             self.log.append(record)
         return due
 

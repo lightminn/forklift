@@ -253,6 +253,21 @@ def test_a_face_gap_spawn_puts_the_box_face_that_far_from_the_true_outline_on_th
     assert _gap_from(p0, fp)((bx, by, byaw, size)) < 0.15
 
 
+def test_a_face_gap_spawn_on_a_two_pose_path_still_logs_its_gap():
+    """Codex plan review 2 P3: the gap the spawn was placed at is logged on every face-gap spawn, not only where the
+    path has the three poses the curvature needs."""
+    from forklift_core.planning import Footprint
+
+    fp = Footprint(1.56, 0.17, 0.40)
+    two = np.array([(0.0, 0.0, 0.0), (-3.0, 0.0, 0.0)])
+    sched = MODULE.Schedule([MODULE.Event("b", "spawn", "transport", 0.0, size_m=(0.3, 0.3, 1.4), face_gap_m=0.15)])
+    gap = _gap_from((0.0, 0.0, 0.0), fp)
+    (spawn,) = sched.update(1.0, "transport", 0.0, two, leg_direction=-1, gap_test=gap)
+    _, _, x, y, yaw, size = spawn
+    assert abs(sched.log[-1]["face_gap_at_spawn_m"] - gap((x, y, yaw, size))) < 1e-12
+    assert "along_m" in sched.log[-1] and "curvature_inv_m" not in sched.log[-1]
+
+
 def test_a_face_gap_spawn_needs_the_gap_test_and_a_path_reaching_that_far():
     from forklift_core.planning import Footprint
 
