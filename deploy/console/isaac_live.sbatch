@@ -68,7 +68,7 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
-case "${MAX_EPOCHS:-}" in ''|[1-9]|[1-9][0-9]*) ;; *) echo "MAX_EPOCHS must be a whole number >= 1"; exit 2;; esac
+[[ -z "${MAX_EPOCHS:-}" || "$MAX_EPOCHS" =~ ^[1-9][0-9]*$ ]] || { echo "MAX_EPOCHS must be a whole number >= 1"; exit 2; }
 RELOC_WAIT_S=${RELOC_WAIT_S:-600}
 case "$RELOC_WAIT_S" in ''|*[!0-9]*) echo "RELOC_WAIT_S must be whole seconds"; exit 2;; esac
 [ "$RELOC_WAIT_S" -gt 60 ] || { echo "RELOC_WAIT_S must be over 60 s (the operator's time is 60 s less)"; exit 2; }

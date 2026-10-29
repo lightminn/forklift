@@ -160,7 +160,7 @@ def test_max_epochs_ends_the_session_after_that_many_epochs(tmp_path):
     (tmp_path / "started").unlink()
     p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0")
     assert "--max-epochs" not in _supervisor(tmp_path).split()  # the console keeps its epochs
-    for bad in ("0", "x"):
+    for bad in ("0", "x", "12oops", "01"):
         q = _relocalizing(tmp_path, MAX_EPOCHS=bad)
         assert q.returncode == 2 and "MAX_EPOCHS" in q.stdout + q.stderr
 

@@ -3052,11 +3052,11 @@ def reloc_mount_problem(xyz_m, yaw_rad: float) -> str | None:
 def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple:
     """B-P2b: the shared SLAM LiDAR's stationary-scan engine and its (angle_min, angle_increment)."""
     if not layer.shared_with_slam:
-        raise SessionFailure("reloc_invalid_input: the obstacle layer does not share the SLAM LiDAR (the live send path)")
+        raise SessionFailure("reloc_config_error: the obstacle layer does not share the SLAM LiDAR (the live send path)")
     engine, pattern, mount = shared_lidar_engine(args, settings, world, robot, layer, settle_base)
     problem = reloc_mount_problem(mount.xyz_m, mount.yaw_rad)
     if problem is not None:
-        raise SessionFailure(f"reloc_invalid_input: {problem}")
+        raise SessionFailure(f"reloc_config_error: {problem}")
     return engine, (pattern.angle_min_rad, pattern.angle_increment_rad)
 
 
@@ -3074,10 +3074,10 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
 
     mfw = [float(v) for v in bundle.manifest.get("map_from_world", (0.0, 0.0, 0.0))]
     if any(abs(v) > 1e-12 for v in mfw):  # the runner's map is the world (odom = map = world at the start)
-        raise SessionFailure(f"reloc_invalid_input: the bundle's map_from_world {mfw} is not the identity")
+        raise SessionFailure(f"reloc_config_error: the bundle's map_from_world {mfw} is not the identity")
     lx, ly, _ = engine.laser_xyz_m
     if abs(lx - R.LASER_X_M) > 1e-9 or abs(ly) > 1e-9:  # the matcher's laser poses become base poses by R's frames
-        raise SessionFailure(f"reloc_invalid_input: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
+        raise SessionFailure(f"reloc_config_error: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
     cfg, reloc_cfg, settings_record = frozen or reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
     t0 = time.monotonic()
     index = G.MapIndex(bundle.grid, cfg)

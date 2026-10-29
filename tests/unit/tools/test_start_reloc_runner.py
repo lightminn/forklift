@@ -436,7 +436,7 @@ def test_a_bundle_whose_map_is_not_the_world_is_refused(tmp_path):
     import run_transport
 
     grid = TG._grid(*TG.ROOM)
-    with pytest.raises(run_transport.SessionFailure, match="map_from_world"):
+    with pytest.raises(run_transport.SessionFailure, match="^reloc_config_error: .*map_from_world"):
         run_transport.start_relocalization(_phase_args(tmp_path, (2.42, 1.7, 0.6)), {},
                                            _engine(FakeTruck(grid, (2.42, 1.7, 0.6))), ANGLES,
                                            _bundle(grid, (0.1, 0, 0)),

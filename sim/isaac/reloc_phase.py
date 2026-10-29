@@ -164,8 +164,12 @@ def _run(inputs: RelocInputs) -> dict:
             match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, got["sent"]), step)
             if console is not None:
                 console.service("matched")  # the STOPs queued meanwhile, before the result counts
+            # from the generation's first scan to this return: the shared session deadline's own time axis (B-P2d)
+            stage_s = (None if relocalizer.deadline_at is None  # a STOP and retry reset it: interrupted below
+                       else inputs.clock() - (relocalizer.deadline_at - inputs.reloc_cfg.deadline_s))
             record = {"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
                       "work": int(match.work), "wall_s": round(wall_s, 3),
+                      "stage_s": None if stage_s is None else round(stage_s, 3),
                       "top": _candidate(match.candidates[0]) if match.candidates else None,
                       # plan 7 F1: every candidate of the matcher (not only those shown), for B-P2d's record
                       "candidates": [_candidate(c) for c in match.candidates]}
@@ -174,6 +178,8 @@ def _run(inputs: RelocInputs) -> dict:
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
                 continue
             relocalizer.record(match, decision)
+            if decision.confirmed and relocalizer.state != "chosen":
+                record["reason"] = "deadline"  # confirmed too late: the session deadline refused it (no confirmation)
             out["attempts"].append(record)
             if console is not None:
                 console.note(last_reason=decision.reason)

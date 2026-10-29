@@ -137,6 +137,32 @@ def test_each_attempt_records_every_candidate_of_the_matcher(tmp_path):
     assert json.dumps(out)
 
 
+def test_each_attempt_records_the_stage_time_from_the_first_scan(tmp_path):
+    # Codex B-P2d tooling review P2: the shared deadline's time axis, not each attempt's own wall
+    grid = TG._grid(*SYMMETRIC)
+    base = (2.0, 1.4, 0.0)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base,
+                        match_cfg=G.MatchConfig(yaw_step_rad=math.radians(2.0), max_nodes=5_000_000)))
+    stages = [a["stage_s"] for a in out["attempts"]]
+    assert len(stages) == 3 and stages == sorted(stages) and stages[-1] >= sum(a["wall_s"] for a in out["attempts"])
+
+
+def test_a_confirmation_the_session_deadline_refused_says_so(tmp_path):
+    # Codex B-P2d tooling review P2: the matcher's "confirmed" that record() refused as late is no confirmation
+    clock = {"t": 0.0}
+
+    def script(console, stage):
+        if stage == "matched":
+            # the matcher returned a confirmation in time; the session deadline passes before record() reads it
+            clock["t"] = 31.0
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script),
+                        unattended=True, clock=lambda: clock["t"]))
+    assert out["attempts"][0]["reason"] == "deadline" and out["status"] != "chosen"
+
+
 def test_each_attempt_draws_its_own_noise(tmp_path):
     grid = TG._grid(6.0, 4.0, [])
     base = (2.0, 1.4, 0.0)

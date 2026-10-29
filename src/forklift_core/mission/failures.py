@@ -29,6 +29,7 @@ PREFIXES = {
     # B-P2 start relocalization (plan 1.2): the start could not be found or confirmed; the session ends
     "reloc_invalid_input": SESSION, "reloc_needs_operator": SESSION, "reloc_failed": SESSION,
     "reloc_bridge_timeout": SESSION, "reloc_operator_timeout": SESSION, "reloc_cancelled": SESSION,
+    "reloc_config_error": SESSION,  # the relocalization cannot run as set up (map frame, LiDAR mount, shared layer)
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
     "Mission exceeded simulation time budget": SESSION, "mission_cancelled": SESSION,
