@@ -35,7 +35,8 @@
 #   map_start_pose instead of MAP_START_POSE; needs a survey map; the console shows the relocalization from the
 #   start and takes the operator's pick or retry (B-P2c); RELOC_UNATTENDED=1: a start needing the operator ends the
 #   session instead (unattended batches, B-P2d); RELOC_WAIT_S (600): the supervisor's whole wait, the operator's
-#   time 60 s less),
+#   time 60 s less), MAX_EPOCHS (unset: epochs until the session ends; 1 for a validation session that must not be
+#   retried, B-P2d),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -67,6 +68,7 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
+case "${MAX_EPOCHS:-}" in ''|[1-9]|[1-9][0-9]*) ;; *) echo "MAX_EPOCHS must be a whole number >= 1"; exit 2;; esac
 RELOC_WAIT_S=${RELOC_WAIT_S:-600}
 case "$RELOC_WAIT_S" in ''|*[!0-9]*) echo "RELOC_WAIT_S must be whole seconds"; exit 2;; esac
 [ "$RELOC_WAIT_S" -gt 60 ] || { echo "RELOC_WAIT_S must be over 60 s (the operator's time is 60 s less)"; exit 2; }
@@ -216,6 +218,7 @@ BRIDGE=(bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" "${SUP_LOC[@]}" \
+  ${MAX_EPOCHS:+--max-epochs "$MAX_EPOCHS"} \
   --slam-choice "$SLAM_CHOICE" \
   --standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" --standby-linger-s "${STANDBY_LINGER_S:-300}" \
   --bridge "$(json "${BRIDGE[@]}")" \

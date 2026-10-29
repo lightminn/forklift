@@ -125,6 +125,18 @@ def test_the_epoch_record_names_every_attempt(tmp_path):
     assert json.dumps(out)  # the result is what the runner records: plain JSON
 
 
+def test_each_attempt_records_every_candidate_of_the_matcher(tmp_path):
+    # plan 7 F1 (B-P2d record): whether the truth is among the matcher's candidates, not only among the shown
+    grid = TG._grid(*SYMMETRIC)
+    base = (2.0, 1.4, 0.0)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base,
+                        match_cfg=G.MatchConfig(yaw_step_rad=math.radians(2.0), max_nodes=5_000_000)))
+    for a in out["attempts"]:
+        assert len(a["candidates"]) >= 2 and all(set(c) == {"base", "score", "endpoint_fraction"}
+                                                 for c in a["candidates"])
+    assert json.dumps(out)
+
+
 def test_each_attempt_draws_its_own_noise(tmp_path):
     grid = TG._grid(6.0, 4.0, [])
     base = (2.0, 1.4, 0.0)

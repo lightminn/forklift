@@ -1486,6 +1486,29 @@ async def tour_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def hold_scenario(p, args):
+    """B-P2d (start relocalization plan 4.4, 1.2 step 12): a relocalized session that reached running (the port file
+    says so only after the localization) stands for --hold-sim-s of simulated time -- wall: that over --live-factor,
+    plus a second -- and is then ended. Whether the localization held is read from the runner's own records, not
+    here; a session that closes during the hold is left as it ended."""
+    await p.open()
+    await p.until(lambda s: s is not None and s.get("pose") is not None, 30, label="localized_state")
+    hold = p.report["hold"] = {"start_mono": time.monotonic(), "hold_sim_s": args.hold_sim_s,
+                               "factor": args.live_factor}
+    end = time.monotonic() + args.hold_sim_s / args.live_factor + 1.0
+    while time.monotonic() < end and p.closed_code is None:
+        await asyncio.sleep(0.2)
+    hold["end_mono"], hold["closed_during"] = time.monotonic(), p.closed_code
+    if p.closed_code is None:
+        lease = await p.request("lease_request")
+        p.lease_id = (lease or {}).get("lease_id")
+        p.report["session_end"] = await p.request_until_standing("session_end")
+        close_by = time.monotonic() + 120
+        while p.closed_code is None and time.monotonic() < close_by:
+            await asyncio.sleep(0.1)
+    p.report["close_code"] = p.closed_code
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -1523,7 +1546,7 @@ def main():
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "queue", "lift", "reset",
-                                           "restart", "tour"),
+                                           "restart", "tour", "hold"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -1587,6 +1610,10 @@ def main():
     ap.add_argument("--wait-port-s", type=float, default=900.0)
     ap.add_argument("--launcher-pid", type=int, default=None,
                     help="the session launcher's pid: its end before the session runs ends the probe at once (exit 3)")
+    ap.add_argument("--hold-sim-s", type=float, default=10.0,
+                    help="hold scenario (B-P2d): the stand after the relocalized session runs (simulated s)")
+    ap.add_argument("--live-factor", type=float, default=0.4,
+                    help="hold scenario: the runner's --live-factor (sim s per wall s), to wait the hold in wall time")
     ap.add_argument("--tour-path", type=Path, default=None, help="tour scenario: tools/survey_tour.py's path (.npz)")
     ap.add_argument("--tour-cruise-mps", type=float, default=0.30)
     ap.add_argument("--tour-stall-s", type=float, default=60.0, help="tour scenario: no progress this long (wall s)")
@@ -1610,7 +1637,7 @@ def main():
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
                     "queue": queue_scenario,
                     "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
-                    "tour": tour_scenario}[args.scenario]
+                    "tour": tour_scenario, "hold": hold_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
         if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
                 or (args.scenario == "restart" and "killed" in report)):

@@ -151,6 +151,20 @@ def test_an_unattended_relocalization_and_its_wait(tmp_path):
         assert q.returncode == 2 and "RELOC_WAIT_S" in q.stdout + q.stderr
 
 
+def test_max_epochs_ends_the_session_after_that_many_epochs(tmp_path):
+    # B-P2d: one validation session is one epoch (a failure is the session's outcome, never retried)
+    p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0", MAX_EPOCHS="1")
+    assert p.returncode == 0, p.stdout + p.stderr
+    words = _supervisor(tmp_path).split()
+    assert words[words.index("--max-epochs") + 1] == "1"
+    (tmp_path / "started").unlink()
+    p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0")
+    assert "--max-epochs" not in _supervisor(tmp_path).split()  # the console keeps its epochs
+    for bad in ("0", "x"):
+        q = _relocalizing(tmp_path, MAX_EPOCHS=bad)
+        assert q.returncode == 2 and "MAX_EPOCHS" in q.stdout + q.stderr
+
+
 def test_a_start_pose_needs_a_survey_map(tmp_path):
     p = _launch(tmp_path, START_POSE="4.0,3.0,-2.0")  # MAP_BUNDLE=none: online mapping
     assert p.returncode == 2 and "START_POSE relocalizes on a survey map" in p.stderr

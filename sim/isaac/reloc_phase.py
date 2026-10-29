@@ -166,7 +166,9 @@ def _run(inputs: RelocInputs) -> dict:
                 console.service("matched")  # the STOPs queued meanwhile, before the result counts
             record = {"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
                       "work": int(match.work), "wall_s": round(wall_s, 3),
-                      "top": _candidate(match.candidates[0]) if match.candidates else None}
+                      "top": _candidate(match.candidates[0]) if match.candidates else None,
+                      # plan 7 F1: every candidate of the matcher (not only those shown), for B-P2d's record
+                      "candidates": [_candidate(c) for c in match.candidates]}
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 # a STOP (and maybe a retry since) came while it matched: the result is its old generation's
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
