@@ -165,6 +165,17 @@ def refuse_unreplayable(values: dict) -> None:
             raise ReplayMismatch(f"a {flag}={recorded!r} record is not replayable (only {off!r} records are)")
 
 
+# Setup services that only feed the run's own outputs and that the runner never wraps as ports.
+OUTPUT_ONLY_SERVICES = ("OverviewCamera",)
+
+
+class _NoPicture:
+    """The overview camera in a replay: every call answers None (no picture to save, nothing to draw)."""
+
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
 def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None):
     snap = json.loads((run_dir / "boundary/setup_snapshot.json").read_text())
     if snap.get("opaque"):  # a value the snapshot could not keep: the replay would hand back a marker
@@ -207,6 +218,11 @@ def build_inputs(run_dir: Path, gate: ReplayBoundary, output: Path | None = None
                 logical, gate, spec=spec_,
                 child_ports={"permission": "Permission", "memory": "Memory"} if logical == "Obstacles" else None,
                 child_specs={"permission": specs.get("Permission", {}), "memory": specs.get("Memory", {})})
+    # The overview camera feeds only the run's own pictures (phase snapshots, video frames): the runner never wraps it
+    # as a port, so a recorded run's calls to it are not in the record. The replay hands back no picture.
+    for logical in OUTPUT_ONLY_SERVICES:
+        if logical in services:
+            services[logical] = _NoPicture()
     values = {}
     shared_ids: dict = {}  # one alias numbering across the snapshot's values (one Encoder wrote them in name order)
     for name, item in sorted(snap["names"].items()):
