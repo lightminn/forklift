@@ -35,7 +35,8 @@
 #   map_start_pose instead of MAP_START_POSE; needs a survey map; the console shows the relocalization from the
 #   start and takes the operator's pick or retry (B-P2c); RELOC_UNATTENDED=1: a start needing the operator ends the
 #   session instead (unattended batches, B-P2d); RELOC_WAIT_S (600): the supervisor's whole wait, the operator's
-#   time 60 s less),
+#   time 60 s less), MAX_EPOCHS (unset: epochs until the session ends; 1 for a validation session that must not be
+#   retried, B-P2d),
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -67,6 +68,7 @@ if [ -n "${MAP_BUNDLE:-}" ]; then
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
   : "${MAP_START_POSE:?the start pose x,y,yaw the bridge tells slam_toolbox (map <- base_link)}"
 fi
+[[ -z "${MAX_EPOCHS:-}" || "$MAX_EPOCHS" =~ ^[1-9][0-9]*$ ]] || { echo "MAX_EPOCHS must be a whole number >= 1"; exit 2; }
 RELOC_WAIT_S=${RELOC_WAIT_S:-600}
 case "$RELOC_WAIT_S" in ''|*[!0-9]*) echo "RELOC_WAIT_S must be whole seconds"; exit 2;; esac
 [ "$RELOC_WAIT_S" -gt 60 ] || { echo "RELOC_WAIT_S must be over 60 s (the operator's time is 60 s less)"; exit 2; }
@@ -92,6 +94,8 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
+  # the SLAM bridge's image: the tag by default; a judged batch names it by digest (B-P2d, Codex freeze review P2)
+  printf 'BRIDGE_IMAGE=%q\n' "${BRIDGE_IMAGE:-forklift/ros2-dev:jazzy}"
   printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
     "${SCENE_REQUIREMENTS_OVERRIDE:-}"  # scene requirements plan
 } > "$OUT/env.sh"
@@ -110,7 +114,9 @@ START=$MAP_START_POSE
                                  -e SLAM_MAP_START_POSE="$START")
 docker run -d --name "slam_bridge_${JOB}_e$1" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$2/bridge:/out" -v "$2/sock:/run/slam" "${LOC[@]}" \
-  forklift/ros2-dev:jazzy bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
+  "$BRIDGE_IMAGE" bash /workspace/tools/slam_bridge_container.sh /run/slam/slam.sock /out "-0.12,0.0,1.05,0.0" persistent >/dev/null
+# the image id this epoch's container runs, kept beside its records (a tag can move during a batch)
+docker inspect --format '{{.Image}}' "slam_bridge_${JOB}_e$1" > "$2/bridge/image_id"
 EOT
 cat > "$OUT/stop.sh" <<'EOT'
 #!/bin/bash
@@ -216,6 +222,7 @@ BRIDGE=(bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" "${SUP_LOC[@]}" \
+  ${MAX_EPOCHS:+--max-epochs "$MAX_EPOCHS"} \
   --slam-choice "$SLAM_CHOICE" \
   --standby-port "${PORT:-8798}" --web-root "$ROOT/console/web" --standby-linger-s "${STANDBY_LINGER_S:-300}" \
   --bridge "$(json "${BRIDGE[@]}")" \

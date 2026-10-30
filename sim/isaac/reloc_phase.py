@@ -99,8 +99,8 @@ WAITING = ("awaiting_pick", "reloc_failed", "stopped")
 
 
 def run(inputs: RelocInputs) -> dict:
-    """status: chosen (with ``bridge_go``) | invalid | needs_operator | failed | operator_timeout | bridge_timeout |
-    cancelled. The result is plain JSON: the runner records it as is. With a console the phase waits in awaiting_pick /
+    """status: chosen (with ``bridge_go``) | invalid (the first scan set) | unsteady (a later one) | needs_operator |
+    failed | operator_timeout | bridge_timeout | cancelled. The result is plain JSON: the runner records it as is. With a console the phase waits in awaiting_pick /
     reloc_failed / stopped for the operator's pick or retry (unless unattended); the console's exception (the
     operator's session end) leaves through here with the matcher cancelled."""
     try:
@@ -156,22 +156,33 @@ def _run(inputs: RelocInputs) -> dict:
             scan_key += 1
             if out["truth"] is None:
                 out["truth"] = list(got["base_truth"])
-            if not got["valid"]:  # judged before any matching (plan 1.2 step 3)
-                out["status"], out["reason"] = "invalid", got["reason"]
+            if not got["valid"]:
+                # the session's input check is its first scan set only (plan 1.2 step 3, 4.0: fixed before any
+                # matching); a later set finding the truck moved fails a valid session (Codex B-P2d freeze review P2)
+                out["status"] = "invalid" if scan_key == 1 else "unsteady"
+                out["reason"] = got["reason"]
                 return out
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 continue  # a STOP (and maybe a retry) during the scans: they go, the new generation scans anew
             match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, got["sent"]), step)
             if console is not None:
                 console.service("matched")  # the STOPs queued meanwhile, before the result counts
+            # from the generation's first scan to this return: the shared session deadline's own time axis (B-P2d)
+            stage_s = (None if relocalizer.deadline_at is None  # a STOP and retry reset it: interrupted below
+                       else inputs.clock() - (relocalizer.deadline_at - inputs.reloc_cfg.deadline_s))
             record = {"reason": decision.reason, "ratio": decision.ratio, "status": match.status,
                       "work": int(match.work), "wall_s": round(wall_s, 3),
-                      "top": _candidate(match.candidates[0]) if match.candidates else None}
+                      "stage_s": None if stage_s is None else round(stage_s, 3),
+                      "top": _candidate(match.candidates[0]) if match.candidates else None,
+                      # plan 7 F1: every candidate of the matcher (not only those shown), for B-P2d's record
+                      "candidates": [_candidate(c) for c in match.candidates]}
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 # a STOP (and maybe a retry since) came while it matched: the result is its old generation's
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
                 continue
             relocalizer.record(match, decision)
+            if decision.confirmed and relocalizer.state != "chosen":
+                record["reason"] = "deadline"  # confirmed too late: the session deadline refused it (no confirmation)
             out["attempts"].append(record)
             if console is not None:
                 console.note(last_reason=decision.reason)
@@ -213,6 +224,8 @@ def failure_reason(out: dict) -> str | None:
         return None
     if status == "invalid":
         return f"reloc_invalid_input: {out.get('reason')}"
+    if status == "unsteady":
+        return f"reloc_unsteady: {out.get('reason')} after {len(out.get('attempts') or ())} attempt(s)"
     if status == "needs_operator":
         return f"reloc_needs_operator: {len(out.get('shown') or ())} candidates, no operator (unattended)"
     if status == "failed":

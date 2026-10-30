@@ -432,11 +432,92 @@ def test_a_start_that_did_not_settle_ends_the_session_before_any_matching(tmp_pa
     assert state["start_reloc"]["status"] == "invalid" and state["start_reloc"]["attempts"] == []
 
 
+def test_a_relocalizing_setup_leaves_the_placed_starts_settling_to_the_phases_validity():
+    """B-P2d development (val3_003): the setup's 5 mm truck check ended a placed start the truck does not hold as a
+    generic failure before the phase's step 3 (2 cm, height, tilt, still) could call it invalid input -- plan 4.0's
+    one invalid class. With the relocalization the phase judges it; without, the setup's check is as before."""
+    import run_transport
+
+    start = np.array([1.0, 2.0, 0.0])
+    off = SimpleNamespace(start_relocalize=False)
+    assert run_transport.truck_spawn_problem(off, np.array([1.004, 2.0, 0.1]), start) is None
+    assert run_transport.truck_spawn_problem(off, np.array([1.006, 2.0, 0.1]), start) == "Truck spawn displaced"
+    on = SimpleNamespace(start_relocalize=True)
+    assert run_transport.truck_spawn_problem(on, np.array([1.3, 2.0, 0.1]), start) is None
+    run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
+    # the one check is the helper's, its reason the classified literal (tests/unit/mission/test_failures.py)
+    assert 'require(truck_spawn_problem(args, initial_base, base_start) is None, "Truck spawn displaced")' in run_
+
+
+class _FloorTruck:
+    """A truck whose settled height is the floor's under it: ``high`` where it stands on something, 0.0 elsewhere."""
+
+    def __init__(self, high_at, high_z):
+        self.high_at, self.high_z, self.at, self.z, self.log = high_at, high_z, (0.0, 0.0, 0.0), 0.0, []
+
+    def teleport(self, position, q):
+        self.at, self.z = (float(position[0]), float(position[1]), C.yaw_roll_pitch(q)[0]), float(position[2])
+        self.log.append(("teleport", tuple(round(v, 6) for v in self.at), round(self.z, 6)))
+
+    def step(self):
+        self.z = self.high_z if math.hypot(self.at[0] - self.high_at[0], self.at[1] - self.high_at[1]) < 0.5 else 0.0
+        if not self.log or self.log[-1][0] != "steps":
+            self.log.append(("steps", 0))
+        self.log[-1] = ("steps", self.log[-1][1] + 1)
+
+    def pose(self):
+        return np.array([self.at[0], self.at[1], self.z]), C.quat_from_yaw(self.at[2])
+
+
+def test_the_placed_starts_height_is_judged_against_the_scene_starts_settle():
+    """Codex B-P2d round 5 P2: the step-3 height check took the placed start's own settled height as its reference, so
+    a truck settled on something passed. B4a's reference is the truck settled at the scene's start (clear floor); the
+    truck then goes to the placed start at that height and settles there (plan 1.2 step 3, 1 s)."""
+    import run_transport
+
+    target = (5.0, 4.0, 1.0)
+    truck = _FloorTruck(high_at=target[:2], high_z=0.04)
+    engine = C.Engine(teleport=truck.teleport, step=truck.step, pose=truck.pose, cast=None, draw_noise=None,
+                      ranges_from_hits=None, range_min_m=0.2, range_max_m=12.0, settle_z_m=0.04,
+                      laser_xyz_m=(-0.12, 0.0, 1.05))
+    out = run_transport.reloc_reference_settle(engine, (-2.0, 0.0, 0.0), target, spawn_z_m=0.015)
+    assert out.settle_z_m == 0.0  # the scene start's, not the 0.04 the placed start settles to
+    assert truck.log == [("teleport", (-2.0, 0.0, 0.0), 0.015), ("steps", run_transport.RELOC_SETTLE_STEPS),
+                         ("teleport", target, 0.0), ("steps", run_transport.RELOC_SETTLE_STEPS)]
+    assert run_transport.RELOC_SETTLE_STEPS == 120  # 1 s at 120 Hz, the setup's own settle
+    pos, q = out.pose()
+    assert abs(pos[2] - out.settle_z_m) > C.HEIGHT_TOL_M  # so scan_set calls it "height"
+    run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
+    settled = run_.index("reloc_reference_settle(")
+    assert run_.index("reloc_lidar(") < settled < run_.index("reloc_console = open_reloc_console(")
+
+
+def test_the_start_frames_compare_the_simulators_poses_with_the_formulas():
+    """Plan 3 (agy, Codex B-P2d freeze review P2): at a placed start, the simulator's base, rear axle (the rear wheel
+    links' midpoint) and LiDAR origin (the cast's own) against 1.1's formulas, within 1 mm in the Isaac check."""
+    import run_transport
+
+    yaw = math.pi / 2
+    base = (1.0, 2.0, yaw)
+    rear = (1.0, 2.0 - 0.34)  # base - 0.34 (cos, sin): at yaw pi/2 the axle is 0.34 m toward -y
+    wheels = {"rear_left_wheel": (rear[0] - 0.2, rear[1]), "rear_right_wheel": (rear[0] + 0.2, rear[1])}
+    laser = (1.0, 2.0 - 0.12)
+    rec = run_transport.start_frames((1.0, 2.001, yaw), base, wheels, laser, rear_axle_offset_m=0.34)
+    assert rec["base_from_target_m"] == pytest.approx(0.001)
+    assert rec["rear_error_m"] == pytest.approx(0.0, abs=1e-12)
+    assert rec["laser_error_m"] == pytest.approx(0.0, abs=1e-12)
+    flipped = run_transport.start_frames(base, base, {k: (v[0], v[1] + 0.68) for k, v in wheels.items()}, laser,
+                                         rear_axle_offset_m=0.34)
+    assert flipped["rear_error_m"] == pytest.approx(0.68)  # an axle on the wrong side is caught
+    run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
+    assert run_.index("reloc_reference_settle(") < run_.index("start_frames(") < run_.index("open_reloc_console(")
+
+
 def test_a_bundle_whose_map_is_not_the_world_is_refused(tmp_path):
     import run_transport
 
     grid = TG._grid(*TG.ROOM)
-    with pytest.raises(run_transport.SessionFailure, match="map_from_world"):
+    with pytest.raises(run_transport.SessionFailure, match="^reloc_config_error: .*map_from_world"):
         run_transport.start_relocalization(_phase_args(tmp_path, (2.42, 1.7, 0.6)), {},
                                            _engine(FakeTruck(grid, (2.42, 1.7, 0.6))), ANGLES,
                                            _bundle(grid, (0.1, 0, 0)),

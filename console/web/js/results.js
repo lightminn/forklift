@@ -37,6 +37,8 @@ export const REASONS = {
   "reloc_bridge_timeout": "추정 위치로 SLAM 을 시작하지 못했습니다",
   "reloc_operator_timeout": "후보 고르기·다시 시도를 기다리는 시간이 지났습니다",
   "reloc_cancelled": "출발 위치 찾기가 취소됐습니다",
+  "reloc_unsteady": "위치를 찾는 사이에 차가 움직였습니다",
+  "reloc_config_error": "출발 위치 찾기 설정이 맞지 않습니다(지도 좌표·LiDAR 장착·장애물 층)",
   "sensor_silence_stopped": "센서가 멈춰 정지했습니다",
   "Camera did not produce RGB": "카메라 영상이 오지 않았습니다",
   "Perception camera did not produce depth": "깊이 영상이 오지 않았습니다",

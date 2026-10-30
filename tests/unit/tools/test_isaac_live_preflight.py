@@ -126,6 +126,22 @@ def test_a_start_pose_relocalizes_the_session(tmp_path):
     assert _bridge(tmp_path).returncode != 0  # no estimate: no bridge
 
 
+def test_the_bridge_runs_the_named_image_and_records_the_one_it_ran(tmp_path):
+    # Codex B-P2d freeze review P2: a mutable tag checked before and after a collection misses A -> B -> A; the
+    # image is named by digest for a judged batch and each epoch keeps the image id its container ran
+    p = _relocalizing(tmp_path, START_POSE="-4.0,3.0,-2.0", BRIDGE_IMAGE="forklift/ros2-dev@sha256:" + "e" * 64)
+    assert p.returncode == 0, p.stdout + p.stderr
+    docker = tmp_path / "bin" / "docker"
+    docker.write_text(f"#!/bin/bash\necho \"$0 $*\" >> {tmp_path / 'started'}\n"
+                      "[ \"$1\" = inspect ] && echo sha256:" + "e" * 64 + "\nexit 0\n")
+    assert _bridge(tmp_path, "7,8,1").returncode == 0
+    runs = [line for line in (tmp_path / "started").read_text().splitlines() if " run " in line]
+    assert runs and ("forklift/ros2-dev@sha256:" + "e" * 64) in runs[-1].split()
+    assert (tmp_path / "e1" / "bridge" / "image_id").read_text().strip() == "sha256:" + "e" * 64
+    _launch(tmp_path, venv_py=_fake_python(tmp_path), out=tmp_path / "out2")  # unset: the tag, as before
+    assert "BRIDGE_IMAGE=forklift/ros2-dev:jazzy\n" in (tmp_path / "out2" / "env.sh").read_text()
+
+
 def test_without_a_start_pose_the_session_starts_as_before(tmp_path):
     p = _relocalizing(tmp_path)
     assert p.returncode == 0, p.stdout + p.stderr
@@ -149,6 +165,20 @@ def test_an_unattended_relocalization_and_its_wait(tmp_path):
     for bad in ("60", "x", "-5"):  # (empty is unset: the 600 s default)
         q = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0", RELOC_WAIT_S=bad)
         assert q.returncode == 2 and "RELOC_WAIT_S" in q.stdout + q.stderr
+
+
+def test_max_epochs_ends_the_session_after_that_many_epochs(tmp_path):
+    # B-P2d: one validation session is one epoch (a failure is the session's outcome, never retried)
+    p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0", MAX_EPOCHS="1")
+    assert p.returncode == 0, p.stdout + p.stderr
+    words = _supervisor(tmp_path).split()
+    assert words[words.index("--max-epochs") + 1] == "1"
+    (tmp_path / "started").unlink()
+    p = _relocalizing(tmp_path, START_POSE="4.0,3.0,-2.0")
+    assert "--max-epochs" not in _supervisor(tmp_path).split()  # the console keeps its epochs
+    for bad in ("0", "x", "12oops", "01"):
+        q = _relocalizing(tmp_path, MAX_EPOCHS=bad)
+        assert q.returncode == 2 and "MAX_EPOCHS" in q.stdout + q.stderr
 
 
 def test_a_start_pose_needs_a_survey_map(tmp_path):

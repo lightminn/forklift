@@ -1,0 +1,4625 @@
+{
+ "fingerprint": {
+  "files": {
+   "config/depth_noise_d435i.yaml": "cd5f1cbee957ccf8a5e8c8e7e33ad931b7a4c96188efd2c0906a9aa99b5f33f2",
+   "config/depth_noise_d435i_team.yaml": "45564d23ef2b7699ddc4232126779898c44aca0ef0ae860beb741e9a2428c6fb",
+   "config/detector_params_v1.yaml": "6bcc6ed17318aafd92221819338ed2a6d500a31b2031f03df3f4af21250bde04",
+   "config/factory_south_hall.yaml": "cdda133618fe2ff268e30497029ea59d59728475be5abb9a5ac08c31b62bb9aa",
+   "config/gyro_model_d435i_static_20261023.yaml": "fd0a7999744d5739e2326ff344ad52a03087f0a50af89c1e2d5a52570a86a119",
+   "config/gyro_model_spec_typical.yaml": "9fa678a4fa29dc4e15dcf740455a3539839162cec9ee418b18f9a67f62177ed2",
+   "config/isaac_perception_camera.yaml": "4311bcc64bd2337aa249bd4d9bb09bd3ab199c859106338e7cd40e8380a3ad36",
+   "config/isaac_perception_detector.yaml": "18cfbc7fcec63b9c4bc5226a74fa39dc39ee1c53e213631f6d5ca9a20623f31d",
+   "config/isaac_pocket_insertion.yaml": "ef4d3e3f4647c7a089a9ff294aeb342f714a9da3dbf5ea8d1eeb320e9af37de1",
+   "config/isaac_slam_lidar.yaml": "b94ddd68056b8ca90051c53fe5fcbd035035e95f4eaa826c0e8a2b54436ec367",
+   "config/isaac_transport.yaml": "51f05655888f7cc5f595e3bce2f8e43bf935c8e48015bc49b5bb13cdbb6ab2a3",
+   "config/isaac_transport_fast.yaml": "e74c4bb7d15508c5e0ed75a9b52cf61c638340ec1e8ffa7b415bbddd51ccd044",
+   "config/isaac_transport_measured.yaml": "81fd066ee28e2df47eb122fd99b9d187a4785971d4cae88bbd86d86b831e33f0",
+   "config/isaac_transport_measured_tyre.yaml": "1ec25cf0b975ff772c3063d462226dc1cfb7be28dfa14d17d03fe56dad575601",
+   "config/near_field_bounds_measured.json": "bf305fbd5cb7e8a3f16880fe69504e0839478c2731cdde56cc84f2663e4877f8",
+   "config/near_field_bounds_riib_line_1_m.json": "445c0fcf6179c841bc66709714487c4f2b2f08469c3f2c1f66c1d3a4bd84fbd8",
+   "config/near_field_drive_terms.json": "ba4421b5f2d73e95343dfc65f2164e0a7b97ba8584a654237ce19a4d3c0a9595",
+   "config/near_field_drive_terms_riib_line_1_m.json": "45b91e87a0e68ba4ef07c20ed4b2f80c686a06e8b78cf2e7cb9dcf5773db9995",
+   "config/obstacle_layer.yaml": "28b9b8e786c2f4829e3b0ccc7f3a7bb86558c57575279b5620f3fbeffa39b6b2",
+   "config/obstacle_layer_single.yaml": "fe7abc19f3a5a56286433ba6f9e4dd0ab0a514e05939b1ea9943b497cbf609f1",
+   "config/obstacle_layer_single_a2.yaml": "fb111e492f3e4fa505d72c367bcd54d2f438e97595994b2d70d110067a0a8058",
+   "config/obstacle_layer_single_a2_team_spec.yaml": "0e6c679438b92e1c52650ac83158c8b0312488e6473b2d7fa5ff3abe848c70b5",
+   "config/obstacle_layer_single_team_spec.yaml": "73e35f8fee45ad5547df851cb799528b5b25d89657bcca3697607d84af5d9db0",
+   "config/obstacle_layer_single_team_spec_gyro.yaml": "66f342cab84e36d2af63496e6be2777b0642219b33ab36bd326a7c6ceedd19eb",
+   "config/obstacle_layer_single_team_spec_gyro_d435i_static.yaml": "99435424ac7c24d22e84b9c035f7533c5a3a0b3cb6538408ca8fb3b0a2d631f2",
+   "config/obstacle_odometry_age.json": "0e07ba9441979a09c8b6bfa3495b45971f4c549633b28b140ff6888a0875d31f",
+   "config/obstacle_odometry_age_team_spec.json": "b853b34a827e1ae5d050a69273a877b7118451934808d3e7c93928e3fbfa03c3",
+   "config/obstacle_odometry_age_team_spec_gyro.json": "016a59e25c729ade206fedffd739e530e3482fe223822b7b3cb89d24b112abc5",
+   "config/obstacle_odometry_age_team_spec_gyro_d435i_static.json": "9f958f4adcea85b2a6cb311eb011c3087069b2b9c7be4a72bd0bc4254a301187",
+   "config/p0b_candidates.yaml": "baa68a6bfab28deceece05f66fa05af492012e7cdc2ebd2fd77ed49aef3ea533",
+   "config/p0b_candidates_d.yaml": "0375795ce15d18a631dbb143f040a3d493c08a83f907537bf334bb40a85c5738",
+   "config/p5_scenarios/n01_transport_box.yaml": "7f3531fc34143c22d725fa69670a6b20a625df46bfccbbda32838e692bb32dd5",
+   "config/p5_scenarios/n01_transport_box_tall.yaml": "989df9c59071b8b31aef8c8a0da526f188750db9bb339e2b53ca934f6ce9412a",
+   "config/p5_scenarios/n02_return_box.yaml": "8a3354253b1ca5985030bfb961531311c511ec14d2c6eeb68374dfd34db9837a",
+   "config/p5_scenarios/n02_return_box_tall.yaml": "022265880454ea8dd3aec15e3ae301be49dde99a541a5c64202ad7be447db02b",
+   "config/p5_scenarios/n03_side_box.yaml": "7c85c461b2ae6146b8c64c75e7e71dd51dd73eecd89adf1d01026f301d757cd4",
+   "config/p5_scenarios/n03_side_box_tall.yaml": "0f93cbde2a429a234d1b48f4098ca2f4c296a387beebf96fff8006b7afbf8e4b",
+   "config/p5_scenarios/n04_reverse_box.yaml": "95f2632cc31d31df775301afa81d00b6a3730d73c6b89cabf6b93de36ed39fb7",
+   "config/p5_scenarios/n04_reverse_box_tall.yaml": "2babc06562cb348677dbde52477aea771e04a356761614d35a11c2d8f2a1ea8f",
+   "config/p5_scenarios/n05_low_box.yaml": "a8c082a432e66ee5ed90ee4e0529436a4b7ec04e683ee46a481425e9dc89bdbf",
+   "config/p5_scenarios/n06_close_box.yaml": "2624d272eaed12f2a34b98223b68d6f3a83bd61e146ba16478ebbe1c2bb9365d",
+   "config/p5_scenarios/n06_close_box_tall.yaml": "983802a61d37fdd2404d18b4c4df96445ab8500111fbcabada8b766ad2a1a4d0",
+   "config/p5_scenarios/n07_wall.yaml": "4be59a8222526ece3bd937f653bed3bcf2c28c47624590bccb52a8767749773f",
+   "config/p5_scenarios/n07_wall_tall.yaml": "4a0a230d3cc3d2cb852ee632a2b21ce3ba04376e289a31c63fc9646262beaf40",
+   "config/p5_scenarios/n08_destination_box.yaml": "bf1a0302619f6fd337124d129dc69805869e1211e42e766e3bef7fd6880b4b42",
+   "config/p5_scenarios/n08_destination_box_tall.yaml": "39a51909d977a09cfdbcedd1fea3210eece1588f0c5d3ef58777c085fab80783",
+   "config/p5_scenarios/n09_sensor_silence.yaml": "a506104610eab56b37c4a6cfc66ff59daa44d7aaf7c8b9e20417ac357ed6be4a",
+   "config/p5_scenarios/n09_single_silence.yaml": "077c9ee645bb74a3bbac2edfb2bfeec80733bba85b963a12c69db595359f342a",
+   "config/p5_scenarios/n09b_all_sensors_silence.yaml": "1480e4138f6ce9ee23d2dd8c9307cd46d02fb77b4d35e880b11588fd2ead4625",
+   "config/p5_scenarios/n10_removed_box.yaml": "63e7b148512f0578df40d648df85e60e550a9e179de7e25ea099323e265cd785",
+   "config/p5_scenarios/n10_removed_box_tall.yaml": "3c7ca1a41a54c95b208edb11d952e98419f02977d2e741d992c94fd5e0d6ffdc",
+   "config/p5_scenarios/n11a_pocket_entrance_bar.yaml": "c5d6bc209c254aba721f71b2584ee460f7dfc596bc0f7db5f8b09a97668a45f4",
+   "config/p5_scenarios/n11b_pocket_middle_bar.yaml": "920b478d4323960e99b60bdabf2bf50de168c1eb05b428d92dfeabbe77d7392b",
+   "config/p5_scenarios/n12_face_bar.yaml": "98e67491a752d12233864c626ab80ade229809ec32938eccbd340ec15f44d5aa",
+   "config/p5_scenarios/n13_depth_silence.yaml": "94c4f800180c4c96eacbfecbc29e50b95fbb0978dbd7f4039a97436ddbebe133",
+   "config/p5_scenarios/n14a_insert_bar_early.yaml": "952cda2b47877617e280268141d290e018de8231384335fa543bcc8cc184972f",
+   "config/p5_scenarios/n14b_insert_bar_late.yaml": "5c0506ed9fc457903fc1ad520ba392959138da0b27337bed61308a5abf620c9a",
+   "config/pallet_geometry_epal6.yaml": "3e595d38bf9a18d2d0727afe7f74821fb8490d5ec6651830fba783aaeda61dfb",
+   "config/pallet_geometry_t11_06.yaml": "4f4fc0386f067d34d055657780c620485de1f94808d12a7db03109a2c0c57287",
+   "config/pallet_geometry_t11_06_d600.yaml": "4938ff6e5641ca418063afa6da779fdddefa7019a7e49b1802ca195247e2bc46",
+   "config/pallet_prior_epal6.yaml": "250546e786def3e89a33c3c60aff74d4971c2495a58f87bac557656d41c8c537",
+   "config/pallet_prior_t11_06.yaml": "4fd18abf31ef80f48c92ffa82c257c0a9a6b984c27973a2f56f212dcbefaa9d5",
+   "config/pallet_prior_t11_06_d600.yaml": "fca94466ca7fffde74fde85bdc843e845ff4c9abba357620cb939e147edae7e4",
+   "config/pallet_prior_v1.yaml": "82c4f8ac0479a3f47e8a14fa36f4bdf359261a7edc03f6d5c5b437cdfcd46ee7",
+   "config/recognition_track_bounds.yaml": "df7ed8488a1a05a2d842ce628b51df8a9d305034b407635dd3b590be32ac9090",
+   "config/scene_requirements.yaml": "26e000b2a428ea68e07f9becc9454fe31c1b8d1068dd4f8bd5f05cc37baa965d",
+   "config/site_load_defaults.yaml": "50693fc6da4ab52dc035352ca9de441a6f6c01eb58b61d68c26a2f14a4294822",
+   "config/slam_map_bundles.yaml": "464cdc89ddead9db37a1accc90d99b964e8bce41348948e4dd7ba45b876f0f6a",
+   "config/slam_survey_tour.yaml": "08d346c2609d187756764987c4a601b80b2faa84e71aaa4b7a877900c1cfa6c7",
+   "deploy/console/isaac_live.sbatch": "7a6677fc5c9f9ac50d10d07df14e9d3df89de5ac7e4615179264718cb8c6e959",
+   "deploy/console/reloc_session.sh": "7cc0e44842d05699c3467134cc881091d3a28bf649ffc507a62c40b264f04677",
+   "docs/validation/assets/b-p1b/dev_choice.json": "84377b28477a2485da33bf13e78effc62145c3efbc5c6ab683b639798df5b5a2",
+   "docs/validation/assets/b-p1b/match_config.json": "68957d13af9c3876b5e31be48ae484255268b9bdee047f9b8a3e41b75d52a40f",
+   "ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml": "701566e91be4ddbe919d62365c870cccc72bb43dd5a7d7dded25a0d2e6386bd6",
+   "ros2/src/forklift_ros/forklift_ros/isaac_slam_bridge.py": "d817987f15c8313097481c2e8974882bbd8505b0f7ff2a5c9490c4fb772e033f",
+   "sim/isaac/approach_evaluation.py": "854465ec5041340fc4d9019777dd49f0f43532d84f30995f795d3cca76b83ccc",
+   "sim/isaac/build_base_scene.py": "2b7e7c67fe1907f6dcf103c621464151e29dfeb02b60a9bf142db3cf4d5bfdfb",
+   "sim/isaac/camera_calibration.py": "8307535cd8fee6f13b3a79ba903bfe961e6da7ce18ea7a8827408349718ce8f6",
+   "sim/isaac/camera_inset.py": "764d6f5a7e42d9b53b063839affb3ee11d410fcfe0939e140906102752bb15e0",
+   "sim/isaac/chassis_contract.py": "dff5ee46ee9e4c0bebf98436ac09f533961a53a1d7cf7364cd490a87284643ee",
+   "sim/isaac/cusp_heading_hold.py": "c02ecb615061ee4163e559856bea10f86f41e81de32bf217bdba0a0f57a5b536",
+   "sim/isaac/determinism_probe.py": "0eae5a40755d6bddc56217e34ef53953e1e7ff73fb9d3a828d823f09b559fb83",
+   "sim/isaac/diagnose_layout_power.py": "72cfce0b4965ed752c5b710c5601c94822e05c68d1cd260f730c28dd5a92bb0b",
+   "sim/isaac/diagnose_rgb_drift.py": "b4554d730c208c68e0166dffb570815242a48dff6a7b4defee0cdcb9d68cf36c",
+   "sim/isaac/docking_retry.py": "de25875b8d058ca49bae687a37a87ae4e4db437c87236e5b20b862855e93b1f4",
+   "sim/isaac/estop_probe.py": "3654827fc8ebeaa94c8ac763138daf3af83bef9cde7cf4537f30f5a5a1dcd845",
+   "sim/isaac/factory_assets.py": "8528f90619e7e4ef0b449bed6ffa79a79189689f916f9066f963ec25fe6c47fa",
+   "sim/isaac/far_recognition_runtime.py": "67c77f2a42c485a942fcd70768c02ccd0abe4f4af9b0cbda962379a97a8cb1dd",
+   "sim/isaac/frame_sync.py": "f6038d38a99ce3b11d5dd2892e51993554ca5ce4af5d1173bd049112cbb012b0",
+   "sim/isaac/g2_records.py": "29f938392c6c9dad46674e3928069c6dbd1175b37616b9c2afed3db06f225a5e",
+   "sim/isaac/insertion_geometry.py": "35b04923f0d9ab7fe1846632a5f36a6ae2e05ec3f265f9640db1144f36cba8e6",
+   "sim/isaac/layout_power.py": "d642fbc1ee167b66e5665d9f3b70f4df98377af9519df9bfc0bc9909ebb26295",
+   "sim/isaac/live_records.py": "466f69eab334c47909e10754b14a8afa396ccb00923ea5f4cd054f06c35cd818",
+   "sim/isaac/live_runtime.py": "ad7d58d68162aafd695915574eeb8fdffc86d1e2cd903b1012c375d651604495",
+   "sim/isaac/mission_views.py": "20ed270cb358c3c8069c5eb537342b42b804504217d6d405ab034651cde2c734",
+   "sim/isaac/mount_render_analysis.py": "e2f76271450eafd353d910cda46379565051551bd0934fbd749cf6f1ad412e6b",
+   "sim/isaac/near_tracking.py": "5b8c896c348fd71c284dcc9b49901c2fb17bc25fefc5973e70ea3db22d4a1de7",
+   "sim/isaac/new_obstacles.py": "b64aca4ed90565ea1b0c17b963ac8a7b381508ed8912b9cb9d551118eca5b571",
+   "sim/isaac/obstacle_layer.py": "6b9236efaf7e16ff58c5cd2f375e6ad2dfa6315476b028949517e6e0ed3bcaf8",
+   "sim/isaac/perception_adapter.py": "3e46914abfaae90730baa3393c8e7eb4c6aa30d3d36b30dd93817f66009673fb",
+   "sim/isaac/perception_camera.py": "9b70e7877d756da9a684abd363d8258d8c089e67e47f399fd987a0c46c61a72d",
+   "sim/isaac/planar_lidar.py": "0455f6afd613672d3d96079694e9f6f73ec3758d652b1fee85bab186ab6a8057",
+   "sim/isaac/pocket_check.py": "c49168ef999507aece3871d3957d0876c7e34ae410cdf848baa96543bebfb60a",
+   "sim/isaac/pocket_check_v11.py": "db7a31457a34b9ef84ff884452236c02744478bfddd1db57292a3ebcdf0757f2",
+   "sim/isaac/pocket_frame_recorder.py": "d5b4e62b4073f2e3e1ccae178813a1d77259567062345e26d234a1e0893d4055",
+   "sim/isaac/pocket_tracking_handoff.py": "539b71dbdf66a1291ef6174ead7cfaf44766f00bdb3410904c7f8594288b3ee1",
+   "sim/isaac/recognition_render_core.py": "9a9db1849b179de2c7d5cb15d930478a6b7b821ea51610a9881af30ba1bb2109",
+   "sim/isaac/reloc_console.py": "44d6318d74a7b42feb0862009de1bd024c785e4fa51ae54766cfce6ff003b75c",
+   "sim/isaac/reloc_phase.py": "8020c84b7f5774eecae574ffa910ca40b45734cd61d57c2fcbcb0e6e81e9c621",
+   "sim/isaac/render_mount_check.py": "7f9ce12cf8c07f766dec5cbb4090afeacf46ee43744fc5d97b6e4a2d40735d36",
+   "sim/isaac/render_recognition_scenes.py": "3c29b089f3797a9e16ed923d2b46b3f828235c13ef1f889604e435e6665d995e",
+   "sim/isaac/replay_observers.py": "bb3b02e28c76c90b22d193a31263ef2dc93426f464ba70c535ea0bc8a0354f87",
+   "sim/isaac/replay_setup.py": "4550bba27e387c6d422e17a4ea22ee43a878f2d9f54f82e8a672cb1b9520a40d",
+   "sim/isaac/rgb_determinism_probe.py": "60ac3bb9a8f856d060d911a66dc5eaa8048f81e954f2727b5d9c9edcf7464469",
+   "sim/isaac/run_perception_approach.py": "3878e60b14c9f2a88cf713e2b51d513a28203d97aebefb4757a1f336661c29b8",
+   "sim/isaac/run_pocket_insertion.py": "5aed5a00c8831a4ffc0a52810075124a4a3e93ede09877785eed31f3daac730d",
+   "sim/isaac/run_slam_drive.py": "1b26e1eb872312c33151256c65b4afad725e887fdec4c78c21e345bea6eeefcd",
+   "sim/isaac/run_transport.py": "0b0fef15018284bd4df754a0d62f582175c25ba98660429e0a54c68751faa80b",
+   "sim/isaac/scan_capture.py": "3fbd70b683e4f93f42d2be689b5680ae76227bd73f88a7a3b93521ae79e4ad4b",
+   "sim/isaac/scene.py": "d13447add324d0200f494c294de0f921b60556ae0feeaaef63a2c294b2bf20e1",
+   "sim/isaac/scene_file.py": "a3cf02e55784bf4aed5e32e2d8bb26314731053a7391c1c5b77cfe43bcf23622",
+   "sim/isaac/scene_requirements.py": "1ff99e04a8388e0ad1c6ac6478ffe86737f495f4be7402b152e018eace34ecdd",
+   "sim/isaac/session_pallets.py": "920ce0c72e92cbd90041e236a51097bad1420d4a99f623b5abaef48c79e9109a",
+   "sim/isaac/slip_watch.py": "6822b83bbce2f46771a6ef470ab9455c36a27bb5533d180ff4aeec54f5e16709",
+   "sim/isaac/tick_trace.py": "e06fb3b8e6496fdccb021ed097a5bc6706cd7d3736e89e7691dac1dbf319005b",
+   "sim/isaac/verify_perception_camera.py": "bd8b5d4b7d0dae63bdd745b87be1aba0ea96fa73e7e8bbf7366c98e1e8d373ef",
+   "sim/isaac/video_frames.py": "c9f569256e81459f642994004ac4f6bce3ca6db51c7a1501fb9fe8167b82e8cc",
+   "src/forklift_core/__init__.py": "d03e74da370df11aa3795df0db436d0057d65f37825113f8381ff216d7a11d27",
+   "src/forklift_core/_validation.py": "5c7f5419672dc83c7c5dde59080387bb7f492edbb384cc5443b5cf696d3ecc06",
+   "src/forklift_core/control/__init__.py": "e30abbdfa7b3eb62bee04e10e3b0e48fa8f96d2b4284514b5bd36a5f3ac34958",
+   "src/forklift_core/control/cusp_stall.py": "92870cb8639850f5c5d2f65875a5528a3ed3e989eaf9add3e613f2de3690e800",
+   "src/forklift_core/control/drive_permission.py": "625e9734d1af509e37c11b28b1c5f8f491c3d183df0a9ef99ef1711c31b1ed45",
+   "src/forklift_core/control/escape.py": "4abc3a73f6b15f43fff06990a2327fbc4584a0ee7abafc63e573b8a29b3afe28",
+   "src/forklift_core/control/exit_prefix_exempt.py": "79d1a2a1ba76ce080febea4430a9f32fc117296b932ae20a279f54e822b54d33",
+   "src/forklift_core/control/low_clearance.py": "59512836aadda61b3e51b0cfbe4b21434098142b8e42d649f580adcfe0e588e6",
+   "src/forklift_core/control/path_tracking.py": "0fee85ce0935a1d1dd648571640e79b1629a1e6aacf7489fcbfd4e1a63c7192b",
+   "src/forklift_core/control/permission_numba.py": "3b6364cd581c31b58c1e6bc0c01d9fc79db7c12ed19805a8423448560e0897f7",
+   "src/forklift_core/control/pocket_insertion.py": "5d4b6a903b33a8a95d0e918ce0e0f6ae65d9c2c805adef1976817e2214e1bd39",
+   "src/forklift_core/control/restart_confirm.py": "2e9cc9a057a67fc593ab38c0fb1ac16fbefc98a98e95563275399cd2d756c68e",
+   "src/forklift_core/control/rollout.py": "84e1e21566482efc9b2a6bbe9860f9bc0a3cb624008d0ebefd87b7dfc5f68c29",
+   "src/forklift_core/control/shadow_memory.py": "1bae69f76eb8019c40f694cd953734694848ee9c8d052b8b69728bda89a701c5",
+   "src/forklift_core/control/speed_chain.py": "139f5ebe0babd10fa173bd8f24356d9f16de301b7c2314fba5df8b9f363d8a80",
+   "src/forklift_core/control/start_release.py": "812700ee7cc0684f63e824ba0819e3b0ed6bfc7506374ff39e37b4650b12edf7",
+   "src/forklift_core/control/stop_sweep.py": "a7108f4acd80491600dd2012c7a7ba0e25b75996087b79ecf9e0f43b29900770",
+   "src/forklift_core/control/turnaround_check.py": "f2dd69195f1b56af23dc6d45e07b319f9503b02f4f7995b41aa11a24271d9d88",
+   "src/forklift_core/determinism.py": "1a492ca41514319acec2281c0e98453f51d2f5333a2211c35ec434feed779082",
+   "src/forklift_core/geometry.py": "be7153dc05f823095e366d26e5901e739369be74e547c34906383b984f1b6393",
+   "src/forklift_core/kernels.py": "a6452da421d2d224b0e5f6348ea6de8dc0eba0be4698d0cfaa705903056664a2",
+   "src/forklift_core/live/__init__.py": "fd92fabbeac7bdffcc4623f8521f2b58353b960bb0e2a49f8cc27382e2d68ca3",
+   "src/forklift_core/live/io_writer.py": "4b2cc77856680abd405637a7d344c4e84bf24f2d0e85e1632fd1ab4cdb0b41ec",
+   "src/forklift_core/live/link.py": "ce03f0f44fd622956f9867048953858f20ca6978586e8afc4ccca86dbbce09dd",
+   "src/forklift_core/live/pacing.py": "9f53fa601e5ffe13e436c7c09f123bda1cb30352c8779249b406e9c811c5c783",
+   "src/forklift_core/live/pick.py": "b5fd4c67e69c6999bb1a2023b4364129303dcb3360cbc10605d7a72cab4afce8",
+   "src/forklift_core/live/spool.py": "a758abc90a765e24f1eeeb7ed0c459e9e2eb95100093435faa4ce84fb70f639f",
+   "src/forklift_core/localization/__init__.py": "1ae123999719cc5167abe1d1c37285244c3f3dc0f6bde6525ba9112a37a84020",
+   "src/forklift_core/localization/encoders.py": "bdd92a6df5b7f4810a70ee6d96ead4d3e99c594f8df54e628491f08de87658f0",
+   "src/forklift_core/localization/global_match.py": "ea076f0634482a0e918f928788beb6f83286b0c729bb08806d57731e7aacc510",
+   "src/forklift_core/localization/gyro.py": "71018273552a63a4374dd40b1297b55972a4bd63951e00db1e0618d3d4044a36",
+   "src/forklift_core/localization/relocalization_samples.py": "cc3ff1e5f2157deb918e05620f9f52196d6eaac2db85420197f1cd19f4b7d18e",
+   "src/forklift_core/localization/scan_docking.py": "3f0290f8d8726260077f1b081a1dcc923a3f8989a89db6e4d9460ddcf8787a74",
+   "src/forklift_core/localization/scan_match.py": "9f3495e22caae61e1e746dd3474585f0704dee997fe7eff4406db7319934c76e",
+   "src/forklift_core/localization/slam_link.py": "3510497a9a4c97b9c53102a49b74fed87722b658dbb2292a9d755a646f7113a1",
+   "src/forklift_core/localization/slam_map.py": "cb9aa3116297bc9c1ca4f6bb704e9c54386a9180f492b1141b1c12b808f84bec",
+   "src/forklift_core/localization/slam_pose.py": "49b82c6c8d95540edc99321abbe7b0ee2a3754da81acece815baa94ad619cf03",
+   "src/forklift_core/localization/start_reloc.py": "d0714bc90954c1328169e54b41413e88b434b5b24358e62c0195b904fa2d8c02",
+   "src/forklift_core/localization/trajectory_error.py": "1fe62c6b6ebdc7f5666dddb3621d93a8c814299351c592090188539ad49f0975",
+   "src/forklift_core/localization/wheel_odometry.py": "0e25ab16d6856a3e324509e570d5d87874952db500ae832b30dabb24f80ea334",
+   "src/forklift_core/mcu_link/__init__.py": "297d475de4f2c57ea352140017498ca22de88cb08c488ff8d73209806e5a2560",
+   "src/forklift_core/mcu_link/framing.py": "cbc3765ecebe60ce6486847d1515fc7c7c9618644cf6547ac326386b2816f7b5",
+   "src/forklift_core/mcu_link/messages.py": "9a15daf6ab4efca2d55e1c086cf6098f075e082ea007f8aae97b327514f93985",
+   "src/forklift_core/mission/__init__.py": "b06b81d865ec49693c747c4b000a6e3f1f11bd1b3e790ea9c2944cb5fa44e4fe",
+   "src/forklift_core/mission/adoption_zone.py": "a57d59375b2f348b1b1d3f0246baef764bb115c617451dcf1acfceec5b6af660",
+   "src/forklift_core/mission/baseline.py": "eabf48eff996fcf200e96a4e7ae17f3cdc499da58773a75bc5f1c1563bbe025f",
+   "src/forklift_core/mission/bottom_deck_legs.py": "44d4331cf5f156d1f675781fda65c7d021fade8641c8fa0e9c45653517199660",
+   "src/forklift_core/mission/boundary_record.py": "24509a7710a9d5bc74b25f8c338fb821f5a71166218655d63cc4564c40145e2f",
+   "src/forklift_core/mission/cargo.py": "5421e376a799739dcbef39e0b72d3a150b6ef7afb6bddc6fa297daa188c8d247",
+   "src/forklift_core/mission/commands.py": "526fb4e7b2b77d2dc6fe4d09584af2caeee8596e83e350a21490af8f15229d82",
+   "src/forklift_core/mission/core.py": "35593a00169ed19b221fa6ddf8ceb95db34dad4522a7c9f530c3231426c6aaab",
+   "src/forklift_core/mission/delivery.py": "06119cb6134d34d235d6578bf8dc010d471e2fb6cfe5d4e2302f12e021be0edb",
+   "src/forklift_core/mission/failures.py": "738b7664e06c0a8a8de8f65ea21db11b728a58d24151029ec581fc775ca6a53c",
+   "src/forklift_core/mission/next_pick.py": "ed11798fdb56ee4929b74c69642645262a925273f4a71b0aa73a4331313be9cd",
+   "src/forklift_core/mission/permit_stop.py": "400ccb8ce0d11cbc73cb6e24ab80db0343f2dc63dfa0426dc90855d80a0742fe",
+   "src/forklift_core/mission/replay.py": "85149471e7108fd55e0a77a53e9810bbf9e070fb9c1d1d5e7f7236a20b2d19dc",
+   "src/forklift_core/mission/replay_codec.py": "0469c8e3abdff030677387936d04093091b8edf865389e1f428e88b629e21c49",
+   "src/forklift_core/mission/results.py": "cd4d90b71b36163a720994aa031dcd068e36aef15d7d7e4ffcc17c112ffdcde7",
+   "src/forklift_core/mission/scene_replan.py": "226f885ff9a0a11e0c5c22759f612251db83fcf56aa1356633482061f3389da5",
+   "src/forklift_core/mission/second_near.py": "41aeb38e8554ac17dc495f051db032f8a16bcc9100065b44ee56aa3a4f73bf17",
+   "src/forklift_core/mission/state.py": "2b7ec8462fa976d1d72236faf67f1ae55ab6b60703c00c319c09945a37351ab8",
+   "src/forklift_core/mission/targets.py": "0563521b8be0b707f66d00526f18d14887ea88953ecbfcba8da113bf7b89ce9d",
+   "src/forklift_core/perception/__init__.py": "63a368add4517076a1da050d66296f68c53b9ccd6534fb7770c5b159f6e83408",
+   "src/forklift_core/perception/bottom_deck_evidence.py": "c9c45eb1181b3ab4dd40067fd5a2743e957cbcb1d17bc331202651f2b3529613",
+   "src/forklift_core/perception/bottom_deck_permit.py": "404202755541416c5d90522674c8fc793b369d33e4c1b233ee979682b27e3c1d",
+   "src/forklift_core/perception/candidate_tracking.py": "4d6fe12c6e8393f13910cb7d50b358e4f076fa9eaf45f562463d8177ea82d41a",
+   "src/forklift_core/perception/depth_noise.py": "7eaae0d3245aa653ac6ba1e2b9867cff6fdc3a06cdd3c2c07ce791ce57d696b1",
+   "src/forklift_core/perception/depth_noise_fit.py": "b8fbadad44998e83c54567aa040379aa589099ded2f7c698f7339e16e521145f",
+   "src/forklift_core/perception/evaluation.py": "bd83997ceb417a5ff76e22a1f2c1727ee30e6ac7e824083f18a7f0fd1f113021",
+   "src/forklift_core/perception/evaluation_multi.py": "369bc80444af59c3632a1c44297e0cb47d5da72711a1934fb0b6e9bb1298a890",
+   "src/forklift_core/perception/fork_fit.py": "e107417ff2af440002ee36f246cd7d9c9781dfb9c3f803a127d27af004b16311",
+   "src/forklift_core/perception/geometric_proposals.py": "d147d99d05ad16df35464dc741b500a032b79c102369cbb80ca2f55d4be274d6",
+   "src/forklift_core/perception/grid_numba.py": "3c2683ae8da00bb1cc99b055d014ce775c7b9983f790fa5a782d2da8e5b92e4b",
+   "src/forklift_core/perception/insertion_clearance.py": "7146558ec1eebc52973145dc1fe87ed965a787a692901037524e2d4db5a89259",
+   "src/forklift_core/perception/instance_fit.py": "7464d22a18d93d844523e6e9f07093e77cf390dd1e5f650657f7d14e03acf77b",
+   "src/forklift_core/perception/instance_proposals.py": "6c8efc264964380e98b2131df79a7280aa85d0765118157c0b85588246f14d30",
+   "src/forklift_core/perception/known_obstacles.py": "02f2000423fe70641fb956012a1aafa4fe5f97f0b7041b356e112334332e0feb",
+   "src/forklift_core/perception/near_field_bounds.py": "f1eb4ee16e9f8f2229aaced929e460c43049e72e2ae28759d61774c714a62ae4",
+   "src/forklift_core/perception/near_field_tracking.py": "3dc80df465ed7a0a4bf6aed013bdea3d6bb4c6ccc47dacab82cf30e27314a32e",
+   "src/forklift_core/perception/obstacle_grid.py": "23438a436c8d436645a978dcd6cccc14e7356d1b786e59306bf60a421b000e46",
+   "src/forklift_core/perception/overlay.py": "9d04b6dfbffe302e879067dbd5e61b3553264786f949a264a5d5e5526f8f41c8",
+   "src/forklift_core/perception/pallet_damage.py": "9dd11673f07147cde1e85db060a784c8fae048039dacbc5d7e5bb0e27229e39a",
+   "src/forklift_core/perception/pallet_geometry.py": "526a2be12023c0ee600a97c3761256d0c3715fec24522b22f35ec24bed2a60c1",
+   "src/forklift_core/perception/pallet_model.py": "293a36f992b220feb9b56938d67ae4999e177f01575d1f685a170e91ab6cb8b7",
+   "src/forklift_core/perception/pallet_prior.py": "572968ef9834665852c79e7f166b05f5be6bd53675c97e4b373e2ea4848a3291",
+   "src/forklift_core/perception/planning_memory.py": "c502f2dfa5b2de5f443b9b3d7043fa10f213756712fb6d0acf5c3a423fc452c0",
+   "src/forklift_core/perception/pocket_candidate.py": "94061d84b6aa11416f05f3d4522078c87cdf0c3b60fa2527fe5a9d0ed4e0996a",
+   "src/forklift_core/perception/pocket_clearance.py": "f6cdbdf1d3dad45007e72601aede8409e859abccdc221b126deb1ceb2de78738",
+   "src/forklift_core/perception/pocket_detector.py": "47f239c7899adf430aee3e36135e2f072a740fe7271387cc9bcae158b0462012",
+   "src/forklift_core/perception/pocket_observation.py": "5217d218db88f16c35a77ea0c4a162908555c510f18a98aeaf66b4765fc9e628",
+   "src/forklift_core/perception/recognition_bridge.py": "7b93a198ac04516b8064c5c77614c66192ce92b6aafb066f3660f8dd226fc9bc",
+   "src/forklift_core/perception/recognition_dataset.py": "cdef29a1c8996cb7889a9e91545b3495541f7412ffceb8de5edcfb6773da429e",
+   "src/forklift_core/perception/recognition_stats.py": "3db267ec4fdf181faccf96b31df47033b3fd20e440fa5d20db044204e53de079",
+   "src/forklift_core/perception/rgbd_snapshot.py": "fa8e40a629de75671bf2c883d169987295c038b9c295c64091f63ab6e3d55e1e",
+   "src/forklift_core/perception/roof_tracking.py": "ff9a793ebf39f392a8dc3944d1aeaa4612d5555f031b5b1ba2c41f1b887dc978",
+   "src/forklift_core/perception/scene_dataset.py": "e190b6c9bf87d34e60d125ab40a58cdd3fbebcb926e9ae3ef113fc6480ab79f4",
+   "src/forklift_core/perception/segmentation_eval.py": "d5276b5f7e6d5f2d494c88c168b387c8e2dcd18db79b84998c43f3762d3a4185",
+   "src/forklift_core/perception/target_selection.py": "387b65e3390b559d86a97377ae354645b387a5c522b19622224f6acdc968225d",
+   "src/forklift_core/perf.py": "267c8e72a78be94a508748c041a5ae4b2ea37ff98c225aee68ccd506d6e9ff4f",
+   "src/forklift_core/planning/__init__.py": "080c440830624203cbc5d4699581345a4abffd58340aeb048cd6db43a1321216",
+   "src/forklift_core/planning/factory_layout.py": "089c1b33da681cb232fd29e054960107ad474c265d623fe63d5c9cc40cd51cc8",
+   "src/forklift_core/planning/geometry.py": "0fdce3944ea7d035a015f1798a3694e5750009145d6449481304c6fb15bbee0a",
+   "src/forklift_core/planning/grid_collision.py": "14681357b597ac1dcaf4da11083f789682adc5f0e7527b6685737314e157c337",
+   "src/forklift_core/planning/hybrid_astar.py": "a8984c95e42de151c432fe59d523b38d4b276694cd7e212bb4611eb5a70868b6",
+   "src/forklift_core/planning/observation_viewpoints.py": "e822d5e21c0859270aa425a0b3c3e082af142622a75a36f5533deb59c1400940",
+   "src/forklift_core/planning/observed_approach.py": "2bea042bf79bead728b419ebc3e38941e1aebed38cd6d90081d9fa068588db4f",
+   "src/forklift_core/planning/pallet_mission.py": "cdbefbb2b364f8daf454f984762db91ed8d2fff7e78fddabb2ee33a61f0043c2",
+   "src/forklift_core/planning/plan_worker.py": "d550eb0df21b5aac665409cc10c19e2392d54b1569c74b286fd9b2aac632e2bd",
+   "src/forklift_core/planning/reeds_shepp.py": "958752743fb4cb07dcf59e0ac6af14ef01d277c03b91548950adb9b92dc43e3a",
+   "src/forklift_core/safety/__init__.py": "9d96feab9d2fdbec91da297f3da2104a04e020c354ef2bbd2d071a4a23505825",
+   "src/forklift_core/safety/arbiter.py": "4237521d5121f6538a0042ea33c5ebc358e64593a12ce4906b2793c1daa27e63",
+   "src/forklift_core/safety/generations.py": "866306c2947fd7e2c5c68276466cc9af5992b9837ae7a009991c286942baf456",
+   "src/forklift_core/safety/ledger.py": "ec7c7f11ed33e6ad069adf47406de58c41fb9e448873125c1956c85ef2330b1b",
+   "src/forklift_core/safety/low_layer.py": "f6d55cf8a96631e0aef0e83c2ff7085c7270ebf389d622939b740752cd152ce1",
+   "src/forklift_core/safety/pallet_permit.py": "8d40cdb24b4669253490807240b5dfd366b466172d50e6ae91f31da8463a66c3",
+   "src/forklift_core/safety/state.py": "3330fc499534722cc8dcbf8c98eae0aa0c4689ed4155bff962a4d7edefaf3f1a",
+   "src/forklift_core/safety/teleop_drive.py": "883b934efa34eded84dc0c25286e076562e95d61937e2b4be3f3170df7323984",
+   "src/forklift_core/safety/teleop_policy.py": "698f186e3612525ede48233002291f585c6a6cdd51aaf54e63c0ca25eab83ded",
+   "src/forklift_core/safety/validate.py": "733c6f0927c419c7ef82fcab3a3a91a177d4abed30234f491cbc18ace1065b09",
+   "src/forklift_core/sensors/__init__.py": "b7fdfa56c255330fc72088bb8f484a64744a0ce04a4e0a447fda9d2496440a4d",
+   "src/forklift_core/sensors/lidar.py": "80953646c6bc3d3a3a992b2213b52676f9b27df2ef7b44442b7d3e75982a7cc6",
+   "src/forklift_core/sensors/rgbd.py": "1b975536f3faa0ca210ba2c7621a8cf2a17e4b34a0a004872f147ff758878121",
+   "tools/live_console_probe.py": "cd2d44eadc5cdf9d0ec94a995cee28c1f65528f40c46418f13aaefa660ad3e05",
+   "tools/live_supervisor.py": "612a4b481340ed9de92f8f926d8df578dc3feffdb90019dcea3841bb588264d8",
+   "tools/reloc_judge.py": "3b9b6c6b2a69c7f5fdb48269af1672f5c1e7785e336bd911a334031a2736f496",
+   "tools/slam_bridge_container.sh": "cf66fcc95072d1e36d64851afd3a19ac9360e13e108c2f7e2380adc467b9b0f1",
+   "tools/slam_localization_params.py": "e0f0a89f20879ec5b084cb33a698a7678f090f9f39fa5ab99e05c5051705547b"
+  },
+  "image": "forklift/ros2-dev@sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659"
+ },
+ "fingerprint_mismatches": [],
+ "summary": {
+  "valid": 84,
+  "invalid": 9,
+  "not_run": 0,
+  "started": 68,
+  "wrong": 0,
+  "imprecise": 0,
+  "unjudged_starts": 0,
+  "success": 68,
+  "outcomes": {
+   "success": 68,
+   "needs_operator": 16,
+   "invalid": 9
+  },
+  "safety_upper_valid": 0.03503503060494206,
+  "safety_upper_started": 0.043098564820088336,
+  "safety_upper_valid_conservative": 0.03503503060494206,
+  "safety_upper_started_conservative": 0.043098564820088336,
+  "success_rate": 0.8095238095238095,
+  "success_cp_lower": 0.7251863390961488,
+  "deadline_hits": 2,
+  "worker_over_32s": 0,
+  "matcher_time_unmeasured": 0,
+  "bridge_stage_max_s": 19.169713258743286,
+  "bridge_stage_missing": 0,
+  "bridge_bound_s": 40.0,
+  "sessions_off_fingerprint": 0,
+  "argument_sets": 1,
+  "starts_mismatched": 0,
+  "arguments_missing": 0,
+  "judged": true,
+  "floors": {
+   "safety": true,
+   "success": true,
+   "matcher_time": true,
+   "bridge_time": true
+  },
+  "f1": {
+   "requests": 16,
+   "truth_in_shown": 12,
+   "truth_in_candidates": 14
+  },
+  "f2": {
+   "sessions_with_gaps": 68,
+   "gap_max_s": 11.847242938998534
+  }
+ },
+ "rows": [
+  {
+   "id": "val4_000",
+   "stratum": "A",
+   "start": [
+    -22.46671376927284,
+    -9.623731900627524,
+    3.6130020005228034
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.034224704125648354,
+   "error_rad": 0.00270110265330592,
+   "hold_ok": true,
+   "bridge_stage_s": 19.169713258743286,
+   "matcher_wall_max_s": 5.401,
+   "matcher_stage_max_s": 5.499,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 11.847242938998534
+    }
+   ],
+   "exit": {
+    "wall": 1793390276.6474473,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_001",
+   "stratum": "A",
+   "start": [
+    -0.668432098750305,
+    -14.679641301366132,
+    1.8572319067456284
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 7.056,
+   "matcher_stage_max_s": 20.074,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793390299.1677258,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_002",
+   "stratum": "B",
+   "start": [
+    -10.780991374391547,
+    -19.349806387798218,
+    1.157005837083207
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 6.95,
+   "matcher_stage_max_s": 20.637,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793390362.4088562,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_003",
+   "stratum": "C",
+   "start": [
+    -25.59622317517093,
+    -18.69625501036201,
+    4.975436694432634
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.048701212102752946,
+   "error_rad": 0.0030949635422499178,
+   "hold_ok": true,
+   "bridge_stage_s": 8.166980743408203,
+   "matcher_wall_max_s": 2.426,
+   "matcher_stage_max_s": 2.525,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7062569469999289
+    }
+   ],
+   "exit": {
+    "wall": 1793390452.2840958,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_004",
+   "stratum": "A",
+   "start": [
+    -21.237250869933515,
+    5.5935103656392045,
+    3.145059471748223
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.027997011817687188,
+   "error_rad": 0.0013395022633488907,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666146755218506,
+   "matcher_wall_max_s": 4.21,
+   "matcher_stage_max_s": 4.308,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6642978439995204
+    }
+   ],
+   "exit": {
+    "wall": 1793390514.1153522,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_005",
+   "stratum": "A",
+   "start": [
+    -20.006607681005534,
+    -5.772782890781244,
+    1.8741710013457833
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02239274890506652,
+   "error_rad": 0.0005359419578887525,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666360855102539,
+   "matcher_wall_max_s": 4.206,
+   "matcher_stage_max_s": 4.304,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6746457779991033
+    }
+   ],
+   "exit": {
+    "wall": 1793390574.605241,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_006",
+   "stratum": "B",
+   "start": [
+    -7.297515357783372,
+    5.277293564167891,
+    2.0118995713437178
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02034218541938338,
+   "error_rad": 0.001986907790466841,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666853189468384,
+   "matcher_wall_max_s": 1.462,
+   "matcher_stage_max_s": 1.558,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.765070982000907
+    }
+   ],
+   "exit": {
+    "wall": 1793390634.0704863,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_007",
+   "stratum": "C",
+   "start": [
+    -2.828819296519974,
+    10.846914770925785,
+    2.825344768087651
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793390651.7667363,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_008",
+   "stratum": "A",
+   "start": [
+    -7.110676081113869,
+    -13.368532800598297,
+    2.5320658279761874
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.012165071289767026,
+   "error_rad": 0.0008437866650434778,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666443347930908,
+   "matcher_wall_max_s": 1.429,
+   "matcher_stage_max_s": 1.528,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7207455779971497
+    }
+   ],
+   "exit": {
+    "wall": 1793390759.5852792,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_009",
+   "stratum": "A",
+   "start": [
+    -19.707976929326556,
+    -21.672830512987915,
+    2.8138073024574766
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.027285121108569926,
+   "error_rad": 0.0015231453115727156,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666778087615967,
+   "matcher_wall_max_s": 5.37,
+   "matcher_stage_max_s": 5.513,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7773349580020295
+    }
+   ],
+   "exit": {
+    "wall": 1793390822.350342,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_010",
+   "stratum": "B",
+   "start": [
+    -14.691405635859848,
+    -13.132221752768473,
+    2.4687157557745345
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.018893595802087017,
+   "error_rad": 0.001566360437007308,
+   "hold_ok": true,
+   "bridge_stage_s": 8.670868873596191,
+   "matcher_wall_max_s": 5.23,
+   "matcher_stage_max_s": 5.423,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7386587789987971
+    }
+   ],
+   "exit": {
+    "wall": 1793390893.0856564,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_011",
+   "stratum": "C",
+   "start": [
+    -21.361328981288832,
+    9.608568859289157,
+    2.806652233228223
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793390899.9897287,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_012",
+   "stratum": "A",
+   "start": [
+    1.8539609322299029,
+    -6.669710591408112,
+    5.050505140887603
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 5.045,
+   "matcher_stage_max_s": 14.914,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793390975.6705933,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 1 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_013",
+   "stratum": "A",
+   "start": [
+    -1.8052816375799203,
+    2.83152851986344,
+    5.411014410027251
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.0023702899333016393,
+   "error_rad": 0.0006458914629660084,
+   "hold_ok": true,
+   "bridge_stage_s": 7.866145849227905,
+   "matcher_wall_max_s": 3.349,
+   "matcher_stage_max_s": 3.447,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6721092090010643
+    }
+   ],
+   "exit": {
+    "wall": 1793391070.9746153,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_014",
+   "stratum": "B",
+   "start": [
+    -11.954283094602525,
+    2.855017695299214,
+    4.196599977389127
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.010022716554297558,
+   "error_rad": 0.0013638439222010135,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666761159896851,
+   "matcher_wall_max_s": 3.378,
+   "matcher_stage_max_s": 3.471,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6730311749997782
+    }
+   ],
+   "exit": {
+    "wall": 1793391129.7471938,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_015",
+   "stratum": "C",
+   "start": [
+    -6.7262642692467125,
+    -8.485155084059159,
+    2.465114139371176
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.032664791953954914,
+   "error_rad": 0.0005378047120210283,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66604471206665,
+   "matcher_wall_max_s": 2.071,
+   "matcher_stage_max_s": 2.161,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6490870009984064
+    }
+   ],
+   "exit": {
+    "wall": 1793391188.224632,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_016",
+   "stratum": "A",
+   "start": [
+    -10.722174711635054,
+    11.589690155912436,
+    4.222052326854131
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793391204.5638964,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_017",
+   "stratum": "A",
+   "start": [
+    -9.883858304822201,
+    7.13153556765856,
+    5.896732018164734
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.01808396011908487,
+   "error_rad": 0.0009608574914294898,
+   "hold_ok": true,
+   "bridge_stage_s": 7.6662187576293945,
+   "matcher_wall_max_s": 2.658,
+   "matcher_stage_max_s": 2.756,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6735604540008353
+    }
+   ],
+   "exit": {
+    "wall": 1793391316.0505798,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_018",
+   "stratum": "B",
+   "start": [
+    -13.597605758613689,
+    -6.405302140806018,
+    4.536413029482291
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.015268999867155127,
+   "error_rad": 0.0004129762096938272,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666274785995483,
+   "matcher_wall_max_s": 3.041,
+   "matcher_stage_max_s": 3.13,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6609923989999515
+    }
+   ],
+   "exit": {
+    "wall": 1793391376.0601323,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_019",
+   "stratum": "C",
+   "start": [
+    4.744727120903285,
+    5.742093300470785,
+    4.313439318560563
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.021277344897542,
+   "error_rad": 0.001851902828633234,
+   "hold_ok": true,
+   "bridge_stage_s": 7.61680269241333,
+   "matcher_wall_max_s": 1.971,
+   "matcher_stage_max_s": 2.065,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6420698310030275
+    }
+   ],
+   "exit": {
+    "wall": 1793391435.592813,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_020",
+   "stratum": "A",
+   "start": [
+    -22.931441126876386,
+    -1.0164788756340606,
+    4.4243387531002085
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02110016433705755,
+   "error_rad": 0.0011565157858131059,
+   "hold_ok": true,
+   "bridge_stage_s": 7.667178153991699,
+   "matcher_wall_max_s": 4.65,
+   "matcher_stage_max_s": 4.743,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6374294750021363
+    }
+   ],
+   "exit": {
+    "wall": 1793391499.9019787,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_021",
+   "stratum": "A",
+   "start": [
+    -8.343916146213772,
+    -22.199810622999845,
+    2.654845741140363
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 3.18,
+   "matcher_stage_max_s": 9.481,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": false,
+   "truth_in_candidates": false,
+   "gaps": [],
+   "exit": {
+    "wall": 1793391523.4821153,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_022",
+   "stratum": "B",
+   "start": [
+    -9.1223234603919,
+    -6.228540505767839,
+    2.5836768238904244
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.013656354271556898,
+   "error_rad": 9.084319730590094e-05,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66628360748291,
+   "matcher_wall_max_s": 2.958,
+   "matcher_stage_max_s": 3.05,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6326154589987709
+    }
+   ],
+   "exit": {
+    "wall": 1793391624.2139194,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_023",
+   "stratum": "C",
+   "start": [
+    -13.027842141041031,
+    -22.564396989531964,
+    1.990411406393021
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.026077577893399984,
+   "error_rad": 0.0014748041633747544,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666463851928711,
+   "matcher_wall_max_s": 4.75,
+   "matcher_stage_max_s": 4.841,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6800328140016063
+    }
+   ],
+   "exit": {
+    "wall": 1793391685.9921043,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_024",
+   "stratum": "A",
+   "start": [
+    -16.08128126814519,
+    7.3348393497449145,
+    1.3359474830416167
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02377837464046098,
+   "error_rad": 0.0017573431266704187,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666205883026123,
+   "matcher_wall_max_s": 1.247,
+   "matcher_stage_max_s": 1.339,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6577826569991885
+    }
+   ],
+   "exit": {
+    "wall": 1793391742.577577,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_025",
+   "stratum": "A",
+   "start": [
+    -23.46109630868067,
+    -5.653582593940406,
+    2.133501631566226
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.024101993044387177,
+   "error_rad": 0.0005528935309242478,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666337728500366,
+   "matcher_wall_max_s": 3.568,
+   "matcher_stage_max_s": 3.662,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6523377910016279
+    }
+   ],
+   "exit": {
+    "wall": 1793391804.953798,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_026",
+   "stratum": "B",
+   "start": [
+    -24.794323366632486,
+    3.595501088713064,
+    5.040003469442858
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.025242311139875552,
+   "error_rad": 0.00029033403664802115,
+   "hold_ok": true,
+   "bridge_stage_s": 7.615907669067383,
+   "matcher_wall_max_s": 3.122,
+   "matcher_stage_max_s": 3.216,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6426359779979975
+    }
+   ],
+   "exit": {
+    "wall": 1793391865.474998,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_027",
+   "stratum": "C",
+   "start": [
+    -20.110593557754974,
+    -11.842178797224488,
+    5.329266757438951
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.028395844026356774,
+   "error_rad": 0.0019129490761471413,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666253089904785,
+   "matcher_wall_max_s": 4.617,
+   "matcher_stage_max_s": 4.711,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6567811189997883
+    }
+   ],
+   "exit": {
+    "wall": 1793391926.5021863,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_028",
+   "stratum": "A",
+   "start": [
+    -7.6919520139606625,
+    -18.393914578388866,
+    3.3574876233823105
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.01591247134316909,
+   "error_rad": 0.00025150919210625844,
+   "hold_ok": true,
+   "bridge_stage_s": 7.61605978012085,
+   "matcher_wall_max_s": 7.109,
+   "matcher_stage_max_s": 7.198,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6368464209990634
+    }
+   ],
+   "exit": {
+    "wall": 1793391989.950525,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_029",
+   "stratum": "A",
+   "start": [
+    -7.680358216015044,
+    11.11873845759191,
+    4.097983124680422
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.019060642570546727,
+   "error_rad": 0.0025649365154665205,
+   "hold_ok": true,
+   "bridge_stage_s": 8.616351842880249,
+   "matcher_wall_max_s": 1.932,
+   "matcher_stage_max_s": 2.024,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6357701690030808
+    }
+   ],
+   "exit": {
+    "wall": 1793392045.3507912,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_030",
+   "stratum": "B",
+   "start": [
+    -2.818292143841145,
+    6.583521397182153,
+    1.1571768787538623
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.0027743559696433943,
+   "error_rad": 0.001258969952089961,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666297435760498,
+   "matcher_wall_max_s": 2.235,
+   "matcher_stage_max_s": 2.327,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6802314389969979
+    }
+   ],
+   "exit": {
+    "wall": 1793392105.8947346,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_031",
+   "stratum": "C",
+   "start": [
+    -2.8862020896688207,
+    -4.011903257932456,
+    5.160011897020646
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.006926484439067055,
+   "error_rad": 0.0005951334557823262,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66657567024231,
+   "matcher_wall_max_s": 1.989,
+   "matcher_stage_max_s": 2.089,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6765459880007256
+    }
+   ],
+   "exit": {
+    "wall": 1793392168.6311376,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_032",
+   "stratum": "A",
+   "start": [
+    -15.146888190290097,
+    -18.013421164308653,
+    5.987215629846575
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 12.835,
+   "matcher_stage_max_s": 30.461,
+   "deadline_hit": true,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793392216.5604312,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_033",
+   "stratum": "A",
+   "start": [
+    2.793574748428135,
+    -0.5611227161625223,
+    1.9165120498693142
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 5.191,
+   "matcher_stage_max_s": 14.9,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793392263.1708744,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_034",
+   "stratum": "B",
+   "start": [
+    3.1426434500704623,
+    -14.401682123460997,
+    5.581893699070634
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 8.2,
+   "matcher_stage_max_s": 20.233,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793392335.4811049,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_035",
+   "stratum": "C",
+   "start": [
+    2.404473872309417,
+    -22.85085036830468,
+    2.9795601595907892
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02678792942129076,
+   "error_rad": 0.0004000254252134461,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66703724861145,
+   "matcher_wall_max_s": 1.877,
+   "matcher_stage_max_s": 1.974,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.686950966999575
+    }
+   ],
+   "exit": {
+    "wall": 1793392424.8375165,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_036",
+   "stratum": "A",
+   "start": [
+    -25.449639218616923,
+    6.638381970664824,
+    5.94481743044235
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02526095284975427,
+   "error_rad": 0.0004946720367626779,
+   "hold_ok": true,
+   "bridge_stage_s": 7.667011976242065,
+   "matcher_wall_max_s": 2.006,
+   "matcher_stage_max_s": 2.1,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.667471746000956
+    }
+   ],
+   "exit": {
+    "wall": 1793392489.0187972,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_037",
+   "stratum": "A",
+   "start": [
+    -11.59899500832429,
+    -8.902184202715484,
+    0.08671136104864195
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.013195351346153822,
+   "error_rad": 0.0012493280238454751,
+   "hold_ok": true,
+   "bridge_stage_s": 8.668738842010498,
+   "matcher_wall_max_s": 4.121,
+   "matcher_stage_max_s": 4.266,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7350177739972423
+    }
+   ],
+   "exit": {
+    "wall": 1793392551.7427013,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_038",
+   "stratum": "B",
+   "start": [
+    -22.669848769938447,
+    -20.006440806127166,
+    2.32395853174856
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.03698767121907849,
+   "error_rad": 0.0030429623484735657,
+   "hold_ok": true,
+   "bridge_stage_s": 8.66722059249878,
+   "matcher_wall_max_s": 5.176,
+   "matcher_stage_max_s": 5.317,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6741566010023234
+    }
+   ],
+   "exit": {
+    "wall": 1793392616.1762948,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_039",
+   "stratum": "C",
+   "start": [
+    -18.380239676310183,
+    -1.641229599171897,
+    6.258482894747034
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.019849714304724046,
+   "error_rad": 0.0011120656828546988,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666464328765869,
+   "matcher_wall_max_s": 3.635,
+   "matcher_stage_max_s": 3.734,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6712856960002682
+    }
+   ],
+   "exit": {
+    "wall": 1793392667.9178498,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_040",
+   "stratum": "A",
+   "start": [
+    -4.627613866514043,
+    -16.917705589235837,
+    5.262723013695
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 5.774,
+   "matcher_stage_max_s": 15.721,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793392696.4697247,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_041",
+   "stratum": "A",
+   "start": [
+    -23.22880386303994,
+    -14.983009584051901,
+    1.0239072889061664
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.042690864119165915,
+   "error_rad": 0.004213837199017023,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666100740432739,
+   "matcher_wall_max_s": 3.397,
+   "matcher_stage_max_s": 3.493,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6504824040021049
+    }
+   ],
+   "exit": {
+    "wall": 1793392793.0249627,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_042",
+   "stratum": "B",
+   "start": [
+    -24.108933028398056,
+    10.500774042588354,
+    5.396745026293537
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.031157878615302535,
+   "error_rad": 0.0027311447268090205,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666196584701538,
+   "matcher_wall_max_s": 2.537,
+   "matcher_stage_max_s": 2.634,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6609348890015099
+    }
+   ],
+   "exit": {
+    "wall": 1793392852.036797,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_043",
+   "stratum": "C",
+   "start": [
+    4.68124307638222,
+    -7.307939200000156,
+    2.727658880562588
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 4.275,
+   "matcher_stage_max_s": 12.319,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": false,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793392881.7516482,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_044",
+   "stratum": "A",
+   "start": [
+    -11.050077956077129,
+    -3.70550453801156,
+    0.29942373835559394
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.012214433529856959,
+   "error_rad": 0.001725183688162657,
+   "hold_ok": true,
+   "bridge_stage_s": 7.667009353637695,
+   "matcher_wall_max_s": 3.354,
+   "matcher_stage_max_s": 3.449,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6771800780006743
+    }
+   ],
+   "exit": {
+    "wall": 1793392980.4642763,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_045",
+   "stratum": "A",
+   "start": [
+    1.3162741520224124,
+    -11.127294038433883,
+    6.086548972451615
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 6.49,
+   "matcher_stage_max_s": 17.969,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793393011.6158526,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_046",
+   "stratum": "B",
+   "start": [
+    -2.3893012535069182,
+    -10.139146199644449,
+    1.9357834162463234
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.008805881555701191,
+   "error_rad": 6.965158075122879e-05,
+   "hold_ok": true,
+   "bridge_stage_s": 8.666378498077393,
+   "matcher_wall_max_s": 1.878,
+   "matcher_stage_max_s": 1.975,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6692903129987826
+    }
+   ],
+   "exit": {
+    "wall": 1793393104.1044946,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_047",
+   "stratum": "C",
+   "start": [
+    -6.882492103679613,
+    1.4999795634886723,
+    0.1055244358329638
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.013586344799247155,
+   "error_rad": 0.000588320522003305,
+   "hold_ok": true,
+   "bridge_stage_s": 7.616156578063965,
+   "matcher_wall_max_s": 2.544,
+   "matcher_stage_max_s": 2.641,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6783266460006416
+    }
+   ],
+   "exit": {
+    "wall": 1793393163.0608206,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_048",
+   "stratum": "A",
+   "start": [
+    -10.187127381028333,
+    -15.017340506983896,
+    1.475393702350867
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.01812173704588249,
+   "error_rad": 0.0004246608298303922,
+   "hold_ok": true,
+   "bridge_stage_s": 8.166831970214844,
+   "matcher_wall_max_s": 2.211,
+   "matcher_stage_max_s": 2.309,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7161149999992631
+    }
+   ],
+   "exit": {
+    "wall": 1793393224.5684297,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_049",
+   "stratum": "A",
+   "start": [
+    -9.976708283168552,
+    0.05140410812521168,
+    6.111941648797183
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.007814990955343895,
+   "error_rad": 0.000443483976795056,
+   "hold_ok": true,
+   "bridge_stage_s": 7.667590379714966,
+   "matcher_wall_max_s": 3.562,
+   "matcher_stage_max_s": 3.68,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6541432080011873
+    }
+   ],
+   "exit": {
+    "wall": 1793393285.9538412,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_050",
+   "stratum": "B",
+   "start": [
+    -15.914721867486463,
+    0.00425213408568581,
+    5.6298539341830605
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02157365744009078,
+   "error_rad": 0.0008858128102433582,
+   "hold_ok": true,
+   "bridge_stage_s": 7.616389989852905,
+   "matcher_wall_max_s": 3.091,
+   "matcher_stage_max_s": 3.189,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6817019289992459
+    }
+   ],
+   "exit": {
+    "wall": 1793393346.0256252,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_051",
+   "stratum": "C",
+   "start": [
+    -19.228674274440493,
+    -14.680277576224706,
+    0.242993226351886
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.022863269072635296,
+   "error_rad": 0.002949641819316423,
+   "hold_ok": true,
+   "bridge_stage_s": 8.168431282043457,
+   "matcher_wall_max_s": 4.396,
+   "matcher_stage_max_s": 4.493,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6964095939983963
+    }
+   ],
+   "exit": {
+    "wall": 1793393408.44365,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_052",
+   "stratum": "A",
+   "start": [
+    -3.553079191022963,
+    -20.942669037720652,
+    4.359908363020806
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 15.589,
+   "matcher_stage_max_s": 30.006,
+   "deadline_hit": true,
+   "attempts": 2,
+   "truth_in_shown": false,
+   "truth_in_candidates": false,
+   "gaps": [],
+   "exit": {
+    "wall": 1793393451.8948615,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_053",
+   "stratum": "A",
+   "start": [
+    -16.994970592495342,
+    -5.9422828938069365,
+    2.1894795465328296
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.013986647318689753,
+   "error_rad": 0.00025799601201015315,
+   "hold_ok": true,
+   "bridge_stage_s": 8.16692066192627,
+   "matcher_wall_max_s": 3.096,
+   "matcher_stage_max_s": 3.205,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7104379039992637
+    }
+   ],
+   "exit": {
+    "wall": 1793393532.6002104,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_054",
+   "stratum": "B",
+   "start": [
+    2.8246472251079737,
+    -18.92331000885313,
+    5.4500841693497835
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.030061462688907983,
+   "error_rad": 0.0023727010646379387,
+   "hold_ok": true,
+   "bridge_stage_s": 8.167484998703003,
+   "matcher_wall_max_s": 4.491,
+   "matcher_stage_max_s": 4.596,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6759887610023725
+    }
+   ],
+   "exit": {
+    "wall": 1793393595.660363,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_055",
+   "stratum": "C",
+   "start": [
+    -13.51306223008496,
+    10.526313442678124,
+    0.7757651318037697
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.023354947794364988,
+   "error_rad": 0.0016479224779302193,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666165828704834,
+   "matcher_wall_max_s": 2.27,
+   "matcher_stage_max_s": 2.364,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6624421999986225
+    }
+   ],
+   "exit": {
+    "wall": 1793393651.4616892,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_056",
+   "stratum": "A",
+   "start": [
+    -15.010289977968784,
+    4.129378383773634,
+    1.4978793305647073
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.017703397412401293,
+   "error_rad": 0.0001787922746026016,
+   "hold_ok": true,
+   "bridge_stage_s": 7.668092250823975,
+   "matcher_wall_max_s": 1.605,
+   "matcher_stage_max_s": 1.699,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6873494899991783
+    }
+   ],
+   "exit": {
+    "wall": 1793393710.8317163,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_057",
+   "stratum": "A",
+   "start": [
+    -11.312805848776565,
+    -12.077011255163269,
+    3.438084693552362
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.01939995582740324,
+   "error_rad": 0.00045367700426490737,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666023254394531,
+   "matcher_wall_max_s": 2.355,
+   "matcher_stage_max_s": 2.443,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6266349110010196
+    }
+   ],
+   "exit": {
+    "wall": 1793393771.1217928,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_058",
+   "stratum": "B",
+   "start": [
+    -19.73011986026861,
+    1.3777351615256244,
+    3.4770676372855807
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.018365956781425538,
+   "error_rad": 0.0012863268756597712,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66606593132019,
+   "matcher_wall_max_s": 4.905,
+   "matcher_stage_max_s": 5.0,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6327653289990849
+    }
+   ],
+   "exit": {
+    "wall": 1793393832.5340273,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_059",
+   "stratum": "C",
+   "start": [
+    -13.191905143657271,
+    -1.6452003449450388,
+    6.169418817717674
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.01334801991314202,
+   "error_rad": 0.0018240703747547662,
+   "hold_ok": true,
+   "bridge_stage_s": 8.116286993026733,
+   "matcher_wall_max_s": 3.33,
+   "matcher_stage_max_s": 3.42,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6298126530018635
+    }
+   ],
+   "exit": {
+    "wall": 1793393892.6975164,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_060",
+   "stratum": "A",
+   "start": [
+    0.957106678872254,
+    4.8649995851206285,
+    3.546127119253184
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.008489116599315366,
+   "error_rad": 0.0020558153798271306,
+   "hold_ok": true,
+   "bridge_stage_s": 7.616021394729614,
+   "matcher_wall_max_s": 3.394,
+   "matcher_stage_max_s": 3.487,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6373834799996985
+    }
+   ],
+   "exit": {
+    "wall": 1793393952.0316412,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_061",
+   "stratum": "A",
+   "start": [
+    1.908077097120195,
+    8.016816035411544,
+    0.8787597370158544
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.0077362188922810065,
+   "error_rad": 3.6635218480407516e-05,
+   "hold_ok": true,
+   "bridge_stage_s": 7.616293907165527,
+   "matcher_wall_max_s": 4.018,
+   "matcher_stage_max_s": 4.112,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6343404760009435
+    }
+   ],
+   "exit": {
+    "wall": 1793394012.5152562,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_062",
+   "stratum": "B",
+   "start": [
+    -25.384923438304273,
+    -22.181067700969106,
+    5.113736069241208
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.04584687569901628,
+   "error_rad": 0.0034665786868601778,
+   "hold_ok": true,
+   "bridge_stage_s": 7.6662750244140625,
+   "matcher_wall_max_s": 2.338,
+   "matcher_stage_max_s": 2.432,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6322865879992605
+    }
+   ],
+   "exit": {
+    "wall": 1793394071.5189142,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_063",
+   "stratum": "C",
+   "start": [
+    -5.279541764559454,
+    8.223231431278798,
+    4.7123083153838765
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394087.2069376,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_064",
+   "stratum": "A",
+   "start": [
+    -18.54076276148643,
+    -18.30881582777207,
+    4.680944709144023
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.026633084270620663,
+   "error_rad": 0.001286010855840125,
+   "hold_ok": true,
+   "bridge_stage_s": 7.6161603927612305,
+   "matcher_wall_max_s": 3.494,
+   "matcher_stage_max_s": 3.588,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6425141259969678
+    }
+   ],
+   "exit": {
+    "wall": 1793394198.5042598,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_065",
+   "stratum": "A",
+   "start": [
+    -0.29100052434004553,
+    -1.1359061540543571,
+    4.678185808925042
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.007427861687762388,
+   "error_rad": 0.00012652274411362185,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666029453277588,
+   "matcher_wall_max_s": 3.487,
+   "matcher_stage_max_s": 3.58,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6342363170006138
+    }
+   ],
+   "exit": {
+    "wall": 1793394258.2852435,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_066",
+   "stratum": "B",
+   "start": [
+    -0.755153760299951,
+    15.735999512704481,
+    3.9587308029282045
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394272.5639167,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_067",
+   "stratum": "C",
+   "start": [
+    4.772381227854314,
+    11.55797628470328,
+    1.4716764419516957
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394338.0972884,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_068",
+   "stratum": "A",
+   "start": [
+    -5.45272289135232,
+    -1.7526750431030038,
+    5.871939440304905
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.011771471604312264,
+   "error_rad": 0.0007248649469501767,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66638445854187,
+   "matcher_wall_max_s": 4.058,
+   "matcher_stage_max_s": 4.155,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6854849390001618
+    }
+   ],
+   "exit": {
+    "wall": 1793394450.4461963,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_069",
+   "stratum": "A",
+   "start": [
+    4.176448088817587,
+    -4.322419342463139,
+    2.723571722742538
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 3.722,
+   "matcher_stage_max_s": 10.957,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394475.5318146,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_070",
+   "stratum": "B",
+   "start": [
+    -25.53165776397693,
+    0.7795537195249373,
+    1.1356299256632358
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.0216470314501037,
+   "error_rad": 0.00014225122947819635,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666208744049072,
+   "matcher_wall_max_s": 2.398,
+   "matcher_stage_max_s": 2.493,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6529357899999013
+    }
+   ],
+   "exit": {
+    "wall": 1793394576.5118508,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_071",
+   "stratum": "C",
+   "start": [
+    -11.100825244146375,
+    15.711154749196524,
+    5.031682585037509
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394591.5409951,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_072",
+   "stratum": "A",
+   "start": [
+    -1.5652209663433503,
+    -18.066170864716426,
+    1.8997796704436207
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.019347866584750708,
+   "error_rad": 1.0238513561189322e-05,
+   "hold_ok": true,
+   "bridge_stage_s": 8.666485786437988,
+   "matcher_wall_max_s": 5.298,
+   "matcher_stage_max_s": 5.395,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6733155200017791
+    }
+   ],
+   "exit": {
+    "wall": 1793394707.1535842,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_073",
+   "stratum": "A",
+   "start": [
+    -0.6635437532101633,
+    -22.090020850193074,
+    1.0629454953355613
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.024953072657389237,
+   "error_rad": 0.0008543945358714389,
+   "hold_ok": true,
+   "bridge_stage_s": 8.166565418243408,
+   "matcher_wall_max_s": 2.934,
+   "matcher_stage_max_s": 8.762,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6937308000015037
+    }
+   ],
+   "exit": {
+    "wall": 1793394769.9049652,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_074",
+   "stratum": "B",
+   "start": [
+    -25.497730631148336,
+    -8.376745953460887,
+    4.907256982489568
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.027814117658143754,
+   "error_rad": 0.00015968998801985101,
+   "hold_ok": true,
+   "bridge_stage_s": 7.66682767868042,
+   "matcher_wall_max_s": 2.685,
+   "matcher_stage_max_s": 2.785,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6998636639982578
+    }
+   ],
+   "exit": {
+    "wall": 1793394828.2162967,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_075",
+   "stratum": "C",
+   "start": [
+    4.656790708141084,
+    -11.445579479774027,
+    4.0705888089697755
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 7.8,
+   "matcher_stage_max_s": 21.852,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": false,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394865.316903,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_076",
+   "stratum": "A",
+   "start": [
+    -12.980295831223739,
+    7.549310431251122,
+    0.92735810386824
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.020337499627727934,
+   "error_rad": 0.0005392748003759663,
+   "hold_ok": true,
+   "bridge_stage_s": 8.168104887008667,
+   "matcher_wall_max_s": 2.936,
+   "matcher_stage_max_s": 3.034,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7054440410029201
+    }
+   ],
+   "exit": {
+    "wall": 1793394949.7513788,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_077",
+   "stratum": "A",
+   "start": [
+    -3.63587930009243,
+    -13.359589736251003,
+    1.099793678003173
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 3.39,
+   "matcher_stage_max_s": 10.302,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793394975.1782165,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 4 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_078",
+   "stratum": "B",
+   "start": [
+    -15.618499922573271,
+    -9.193569138336235,
+    1.1170825467015897
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.017153676834858578,
+   "error_rad": 0.00047200054306406614,
+   "hold_ok": true,
+   "bridge_stage_s": 9.170604944229126,
+   "matcher_wall_max_s": 4.295,
+   "matcher_stage_max_s": 4.449,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 1.197339264999755
+    }
+   ],
+   "exit": {
+    "wall": 1793395081.2013795,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_079",
+   "stratum": "C",
+   "start": [
+    -25.44894483872826,
+    -12.022120042715416,
+    0.2607178544984815
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.04667662580945334,
+   "error_rad": 0.0037529802403217793,
+   "hold_ok": true,
+   "bridge_stage_s": 8.16784119606018,
+   "matcher_wall_max_s": 4.072,
+   "matcher_stage_max_s": 4.186,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.7391619620029815
+    }
+   ],
+   "exit": {
+    "wall": 1793395140.674429,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_080",
+   "stratum": "A",
+   "start": [
+    -5.3883226287860175,
+    -5.86423296432395,
+    3.085476592627864
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02716267884252515,
+   "error_rad": 0.0010614829212722832,
+   "hold_ok": true,
+   "bridge_stage_s": 8.667823553085327,
+   "matcher_wall_max_s": 3.217,
+   "matcher_stage_max_s": 3.359,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.839658070999576
+    }
+   ],
+   "exit": {
+    "wall": 1793395199.7204404,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_081",
+   "stratum": "A",
+   "start": [
+    -16.690021879337507,
+    -20.89668328437709,
+    2.1529634683206678
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 8.56,
+   "matcher_stage_max_s": 24.616,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793395235.2582872,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 3 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_082",
+   "stratum": "B",
+   "start": [
+    4.225965066422322,
+    2.572251220562709,
+    1.167959921278302
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.008534763415391817,
+   "error_rad": 0.0024529434027191765,
+   "hold_ok": true,
+   "bridge_stage_s": 7.667400598526001,
+   "matcher_wall_max_s": 2.524,
+   "matcher_stage_max_s": 2.624,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6747111149998091
+    }
+   ],
+   "exit": {
+    "wall": 1793395319.0242894,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_083",
+   "stratum": "C",
+   "start": [
+    0.4668143085327472,
+    11.646848431180935,
+    2.297520614723744
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793395333.6333802,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_084",
+   "stratum": "A",
+   "start": [
+    -25.499798596433717,
+    -3.290689924683331,
+    4.292740205551164
+   ],
+   "class": "valid",
+   "started": false,
+   "outcome": "needs_operator",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": 3.266,
+   "matcher_stage_max_s": 9.829,
+   "deadline_hit": false,
+   "attempts": 3,
+   "truth_in_shown": true,
+   "truth_in_candidates": true,
+   "gaps": [],
+   "exit": {
+    "wall": 1793395405.5012312,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_needs_operator: 3 candidates, no operator (unattended)"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_085",
+   "stratum": "A",
+   "start": [
+    -1.078012819232896,
+    -7.114049362332917,
+    5.77507799055237
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.01909955660281845,
+   "error_rad": 0.0006503045186941891,
+   "hold_ok": true,
+   "bridge_stage_s": 7.616164207458496,
+   "matcher_wall_max_s": 3.293,
+   "matcher_stage_max_s": 3.386,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6624815299983311
+    }
+   ],
+   "exit": {
+    "wall": 1793395506.1651754,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_086",
+   "stratum": "B",
+   "start": [
+    -25.673359404877647,
+    13.94384573253432,
+    1.7632171911275163
+   ],
+   "class": "invalid",
+   "started": false,
+   "outcome": "invalid",
+   "pose_class": null,
+   "error_m": null,
+   "error_rad": null,
+   "hold_ok": null,
+   "bridge_stage_s": null,
+   "matcher_wall_max_s": null,
+   "matcher_stage_max_s": null,
+   "deadline_hit": false,
+   "attempts": null,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [],
+   "exit": {
+    "wall": 1793395520.308724,
+    "event": "exit",
+    "epoch": 1,
+    "code": 1,
+    "reason": "reloc_invalid_input: not_at_target"
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false
+  },
+  {
+   "id": "val4_087",
+   "stratum": "C",
+   "start": [
+    -17.656731620688,
+    10.379961733999608,
+    0.6652812346667716
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.029946510922574717,
+   "error_rad": 0.0032165897766901486,
+   "hold_ok": true,
+   "bridge_stage_s": 7.615998029708862,
+   "matcher_wall_max_s": 1.593,
+   "matcher_stage_max_s": 1.685,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6393869370003813
+    }
+   ],
+   "exit": {
+    "wall": 1793395630.8428597,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_088",
+   "stratum": "A",
+   "start": [
+    1.0824967130854013,
+    1.862237972321175,
+    0.026245113673404964
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.010680916572611252,
+   "error_rad": 0.0010345979627998103,
+   "hold_ok": true,
+   "bridge_stage_s": 8.167468309402466,
+   "matcher_wall_max_s": 5.46,
+   "matcher_stage_max_s": 9.519,
+   "deadline_hit": false,
+   "attempts": 2,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6648341979998804
+    }
+   ],
+   "exit": {
+    "wall": 1793395697.7698915,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_089",
+   "stratum": "A",
+   "start": [
+    0.10253710648199288,
+    -4.063396928334527,
+    3.5830128762749043
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.010774532657188727,
+   "error_rad": 0.0011382525241563357,
+   "hold_ok": true,
+   "bridge_stage_s": 7.618387937545776,
+   "matcher_wall_max_s": 4.627,
+   "matcher_stage_max_s": 4.718,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6422850759990979
+    }
+   ],
+   "exit": {
+    "wall": 1793395754.1768653,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_090",
+   "stratum": "A",
+   "start": [
+    -3.1898628254520425,
+    0.3219648557476482,
+    0.43258954519513515
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.004428838160651077,
+   "error_rad": 0.0002467310130981337,
+   "hold_ok": true,
+   "bridge_stage_s": 7.666754722595215,
+   "matcher_wall_max_s": 2.012,
+   "matcher_stage_max_s": 2.103,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6431698220003454
+    }
+   ],
+   "exit": {
+    "wall": 1793395811.8939674,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_091",
+   "stratum": "C",
+   "start": [
+    4.769140257855856,
+    -20.94115844091421,
+    2.862495388615999
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.02887810248647009,
+   "error_rad": 0.001798899817342381,
+   "hold_ok": true,
+   "bridge_stage_s": 7.6659510135650635,
+   "matcher_wall_max_s": 2.178,
+   "matcher_stage_max_s": 2.273,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.644681033998495
+    }
+   ],
+   "exit": {
+    "wall": 1793395872.4099026,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  },
+  {
+   "id": "val4_092",
+   "stratum": "C",
+   "start": [
+    4.9518056513805035,
+    -16.667241728332076,
+    1.559284764546109
+   ],
+   "class": "valid",
+   "started": true,
+   "outcome": "success",
+   "pose_class": "success",
+   "error_m": 0.025473376381951525,
+   "error_rad": 0.0011241023046286713,
+   "hold_ok": true,
+   "bridge_stage_s": 8.616621732711792,
+   "matcher_wall_max_s": 1.607,
+   "matcher_stage_max_s": 1.699,
+   "deadline_hit": false,
+   "attempts": 1,
+   "truth_in_shown": null,
+   "truth_in_candidates": null,
+   "gaps": [
+    {
+     "stage": "prewarm",
+     "gap_s": 0.6520499890029896
+    }
+   ],
+   "exit": {
+    "wall": 1793395932.7753623,
+    "event": "exit",
+    "epoch": 1,
+    "code": 0,
+    "reason": null
+   },
+   "source_mismatches": [],
+   "args_signature": "90896131bae7ec5dc94d2ad0441e3f9b37b7c3a34552e5e2600b1dc6ad3b1cc6",
+   "world": {
+    "seed": 5,
+    "layout": "factory",
+    "scene_file": null,
+    "slam_map_bundle": "/home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle",
+    "expected_map_id": "3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7",
+    "slam_choice": "localization (given: /home/projects/forklift/test_runs/live/bp2d_survey/hall_s5b_G0/bundle)"
+   },
+   "start_mismatch": false,
+   "source": "matcher"
+  }
+ ]
+}

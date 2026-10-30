@@ -2832,6 +2832,73 @@ def map_start_rear(scenario, start_reloc) -> tuple:
     return tuple(float(v) for v in start_reloc["estimate_rear"])
 
 
+def truck_spawn_problem(args, initial_base, base_start) -> str | None:
+    """The setup's truck spawn check (5 mm). A start relocalization leaves its placed start to the phase's own validity
+    (plan 1.2 step 3: 2 cm, height, tilt, still -> reloc_invalid_input, plan 4.0's invalid class): this check came
+    first and ended such a start under a generic reason (B-P2d development, val3_003)."""
+    if getattr(args, "start_relocalize", False):
+        return None
+    if np.linalg.norm(np.asarray(initial_base)[:2] - np.asarray(base_start)[:2]) < 0.005:
+        return None
+    return "Truck spawn displaced"
+
+
+RELOC_SETTLE_STEPS = 120  # plan 1.2 step 3: the start settle, 1 s at 120 Hz (the setup's own)
+
+
+def reloc_reference_settle(engine, scene_start_base, target, *, spawn_z_m: float, steps: int = RELOC_SETTLE_STEPS):
+    """Plan 1.2 step 3's height reference, as B4a's (Codex B-P2d round 5 P2): the truck settled at the scene's start
+    (clear floor by construction), never at the placed start it judges -- a truck settled on something there would
+    be its own reference. The truck then goes to the placed start at that height, as B4a's capture teleports to each
+    pose, and settles there; the phase judges it (scan_capture.scan_set). Returns the engine with the reference."""
+    import scan_capture
+
+    x, y, yaw = (float(v) for v in scene_start_base)
+    engine.teleport(np.array([x, y, float(spawn_z_m)]), scan_capture.quat_from_yaw(yaw))
+    for _ in range(steps):
+        engine.step()
+    z = float(engine.pose()[0][2])
+    tx, ty, tyaw = (float(v) for v in target)
+    engine.teleport(np.array([tx, ty, z]), scan_capture.quat_from_yaw(tyaw))
+    for _ in range(steps):
+        engine.step()
+    return replace(engine, settle_z_m=z)
+
+
+def start_frames(target, base, rear_wheels_xy: dict, laser_xy, *, rear_axle_offset_m: float) -> dict:
+    """Plan 3's frame check (plan 1.1): the simulator's base (``base``, world x, y, yaw), rear axle (the rear wheel
+    links' midpoint) and LiDAR origin (the shared cast's) against start_reloc's formulas from that base, and the base
+    against the placed ``target``. Recorded only (state ``reloc_reference.frames``); nothing reads it back."""
+    from forklift_core.localization import start_reloc as R
+
+    rear_sim = tuple(float(np.mean([xy[k] for xy in rear_wheels_xy.values()])) for k in (0, 1))
+    rear_f = R.rear_from_base(base, abs(rear_axle_offset_m))
+    laser_f = R.laser_from_base(base)
+    return {"target": [float(v) for v in target], "base": [float(v) for v in base],
+            "base_from_target_m": math.hypot(base[0] - target[0], base[1] - target[1]),
+            "rear_sim": list(rear_sim), "rear_formula": [rear_f[0], rear_f[1]],
+            "rear_error_m": math.hypot(rear_sim[0] - rear_f[0], rear_sim[1] - rear_f[1]),
+            "laser_sim": [float(laser_xy[0]), float(laser_xy[1])], "laser_formula": [laser_f[0], laser_f[1]],
+            "laser_error_m": math.hypot(laser_xy[0] - laser_f[0], laser_xy[1] - laser_f[1])}
+
+
+def sim_start_frames(args, robot, engine, target) -> dict:
+    """``start_frames`` from the simulator now: the articulation's base, its rear wheel links' poses from the physics
+    view, and the shared LiDAR cast's origin (planar_lidar, not start_reloc's formula)."""
+    import planar_lidar
+    import scan_capture
+
+    pos, q = robot.get_world_pose()
+    base = (float(pos[0]), float(pos[1]), scan_capture.yaw_roll_pitch(q)[0])
+    view = robot._articulation_view
+    links = np.asarray(view._physics_view.get_link_transforms()).reshape(-1, len(view.body_names), 7)[0]
+    wheels = {n: tuple(float(v) for v in links[view.get_body_index(n)][:2])
+              for n in ("rear_left_wheel", "rear_right_wheel")}
+    lx, ly, _ = planar_lidar.laser_pose_2d(np.asarray(pos, float), np.asarray(q, float),
+                                           planar_lidar.LaserMount(tuple(engine.laser_xyz_m), 0.0))
+    return start_frames(target, base, wheels, (lx, ly), rear_axle_offset_m=args.rear_axle_offset_m)
+
+
 RELOC_NOISE_ROOT = 20261029
 
 
@@ -3070,11 +3137,11 @@ def reloc_mount_problem(xyz_m, yaw_rad: float) -> str | None:
 def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple:
     """B-P2b: the shared SLAM LiDAR's stationary-scan engine and its (angle_min, angle_increment)."""
     if not layer.shared_with_slam:
-        raise SessionFailure("reloc_invalid_input: the obstacle layer does not share the SLAM LiDAR (the live send path)")
+        raise SessionFailure("reloc_config_error: the obstacle layer does not share the SLAM LiDAR (the live send path)")
     engine, pattern, mount = shared_lidar_engine(args, settings, world, robot, layer, settle_base)
     problem = reloc_mount_problem(mount.xyz_m, mount.yaw_rad)
     if problem is not None:
-        raise SessionFailure(f"reloc_invalid_input: {problem}")
+        raise SessionFailure(f"reloc_config_error: {problem}")
     return engine, (pattern.angle_min_rad, pattern.angle_increment_rad)
 
 
@@ -3092,10 +3159,10 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
 
     mfw = [float(v) for v in bundle.manifest.get("map_from_world", (0.0, 0.0, 0.0))]
     if any(abs(v) > 1e-12 for v in mfw):  # the runner's map is the world (odom = map = world at the start)
-        raise SessionFailure(f"reloc_invalid_input: the bundle's map_from_world {mfw} is not the identity")
+        raise SessionFailure(f"reloc_config_error: the bundle's map_from_world {mfw} is not the identity")
     lx, ly, _ = engine.laser_xyz_m
     if abs(lx - R.LASER_X_M) > 1e-9 or abs(ly) > 1e-9:  # the matcher's laser poses become base poses by R's frames
-        raise SessionFailure(f"reloc_invalid_input: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
+        raise SessionFailure(f"reloc_config_error: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
     cfg, reloc_cfg, settings_record = frozen or reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
     t0 = time.monotonic()
     index = G.MapIndex(bundle.grid, cfg)
@@ -3103,7 +3170,7 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
     out = reloc_phase.run(reloc_phase.RelocInputs(
         engine=engine, target=args.start_pose, grid=bundle.grid, index=index, match_cfg=cfg, reloc_cfg=reloc_cfg,
         angle_min_rad=float(angles[0]), angle_increment_rad=float(angles[1]), epoch_dir=Path(args.reloc_dir),
-        settle_steps=0,  # the start settle (120 steps, 1 s) ran before: plan 1.2 step 3
+        settle_steps=0,  # the start settle (reloc_reference_settle, 1 s) ran before: plan 1.2 step 3
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
@@ -4067,10 +4134,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             require(np.linalg.norm(pos_[:2] - [p_.truth.x_m, p_.truth.y_m]) < 0.005 and abs(pos_[2]) < 0.005,
                     f"Invalid pallet spawn after settling: {p_.pallet_id}")
             session_rest.rest(p_.pallet_id, pos_, q_)
-    require(
-        np.linalg.norm(initial_base[:2] - base_start[:2]) < 0.005,
-        "Truck spawn displaced",
-    )
+    # the reason stays a literal at the call: every require reason is classified (mission/failures.py)
+    require(truck_spawn_problem(args, initial_base, base_start) is None, "Truck spawn displaced")
     state["initial_pallet_m"] = initial_pallet.tolist()
     state["velocities_before_planning"] = body_velocities()
     try:
@@ -4326,10 +4391,22 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     start_reloc = None  # B-P2b: the start relocalization's record; None: the scene's start, known, as before
     reloc_console = None  # B-P2c: the early console the live runtime adopts; None: the runtime opens its own
     if args.start_relocalize:
+        reloc_engine_, reloc_angles_ = reloc_lidar(args, settings, world, robot, obstacle["layer"], initial_base)
+        # plan 1.2 step 3 before the console opens (step 4): the height reference at the scene's start, then the
+        # placed start's settle (Codex B-P2d round 5 P2)
+        scene_start_ = spawn_base_pose(argparse.Namespace(start_pose=None, rear_axle_offset_m=args.rear_axle_offset_m),
+                                       scenario)
+        reloc_engine_ = reloc_reference_settle(reloc_engine_, scene_start_, spawn_base_pose(args, scenario),
+                                               spawn_z_m=float(base_start[2]))
+        state["reloc_reference"] = {"scene_start_base": list(scene_start_), "settle_z_m": reloc_engine_.settle_z_m}
+        try:  # plan 3's frame check, a record only: a failed read is kept as such and the session goes on
+            state["reloc_reference"]["frames"] = sim_start_frames(args, robot, reloc_engine_,
+                                                                  spawn_base_pose(args, scenario))
+        except Exception as exc:  # noqa: BLE001
+            state["reloc_reference"]["frames"] = {"error": f"{type(exc).__name__}: {exc}"}
         reloc_console = open_reloc_console(args, settings, robot, slam_bundle_, lift_index=lift_index, steers=steers,
                                            state=state)
-        start_reloc = start_relocalization(args, state, *reloc_lidar(args, settings, world, robot, obstacle["layer"],
-                                                                     initial_base), slam_bundle_,
+        start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,
                                            console=reloc_console)
         reloc_console.service("setup")
     if obstacle is not None:
