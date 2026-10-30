@@ -1493,6 +1493,11 @@ async def hold_scenario(p, args):
     here; a session that closes during the hold is left as it ended."""
     await p.open()
     await p.until(lambda s: s is not None and s.get("pose") is not None, 30, label="localized_state")
+    await _hold_and_end(p, args)
+
+
+async def _hold_and_end(p, args):
+    """Stand --hold-sim-s of simulated time once localized, then end the session (unless it closed meanwhile)."""
     hold = p.report["hold"] = {"start_mono": time.monotonic(), "hold_sim_s": args.hold_sim_s,
                                "factor": args.live_factor}
     end = time.monotonic() + args.hold_sim_s / args.live_factor + 1.0
@@ -1506,6 +1511,54 @@ async def hold_scenario(p, args):
         close_by = time.monotonic() + 120
         while p.closed_code is None and time.monotonic() < close_by:
             await asyncio.sleep(0.1)
+    p.report["close_code"] = p.closed_code
+
+
+async def place_scenario(p, args):
+    """F1 (docs/plans/2026-10-31-operator-placed-start.md 4.2 b): the probe is the operator. While the candidates are
+    shown and placements are left, it places the click model's draw around the truth (--truth, the placed start; the
+    seed and the start's index fix the draws, as tools/f1_place_eval.py's sessions), and confirms the first preview it
+    sees (the plan's fixed policy). Once localized it stands the hold and ends the session, as the hold scenario; a
+    session that never localizes is left to the operator's time."""
+    from f1_place_eval import (
+        click as place_click,  # noqa: PLC0415 -- the same click model as the offline sessions
+    )
+
+
+    await p.open()
+    lease = await p.request("lease_request")
+    p.lease_id = (lease or {}).get("lease_id")
+    places = p.report["places"] = []
+    sent = 0
+    acked = 0  # placements the vehicle took: the next one waits until its state shows them
+    end = time.monotonic() + args.place_wait_s
+    while time.monotonic() < end and p.closed_code is None and sent < 10:
+        st = p.state or {}
+        if st.get("pose") is not None:
+            break
+        r = (st.get("slam") or {}).get("reloc") or {}
+        state, done = r.get("state"), r.get("places") or 0
+        if state in ("awaiting_pick", "reloc_failed") and done >= acked and done < (r.get("max_places") or 0):
+            c = place_click(args.click_seed, args.click_index, done, args.truth)
+            reply = await p.request("relocalize_place", generation=r["generation"], pose=[float(v) for v in c]) or {}
+            sent += 1
+            places.append({"k": done, "click": list(c), "reply": reply.get("t"), "reason": reply.get("reason"),
+                           "mono": time.monotonic()})
+            if reply.get("t") == "ack":
+                acked = done + 1
+        elif state == "place_preview" and "confirm" not in p.report:
+            reply = await p.request("relocalize_place_confirm", generation=r["generation"],
+                                    preview_id=r["preview_id"]) or {}
+            sent += 1
+            p.report["confirm"] = {"preview_id": r["preview_id"], "reply": reply.get("t"),
+                                   "reason": reply.get("reason"), "mono": time.monotonic()}
+        await asyncio.sleep(0.2)
+    p.report["localized"] = bool((p.state or {}).get("pose") is not None)
+    if p.report["localized"]:
+        await _hold_and_end(p, args)
+        return
+    while p.closed_code is None and time.monotonic() < end:  # the operator's time ends the session
+        await asyncio.sleep(0.5)
     p.report["close_code"] = p.closed_code
 
 
@@ -1523,7 +1576,13 @@ def pid_alive(pid: int) -> bool:
         return True
 
 
-def wait_port(port_file: Path, wait_s: float, launcher_pid=None, sleep=time.sleep, clock=time.monotonic):
+# F1: the early console's port-file states (the start still unknown) and running: the place scenario connects then
+RELOC_PORT_STATES = ("relocalizing", "awaiting_pick", "reloc_failed", "stopped", "placing", "place_preview",
+                     "localizing", "running")
+
+
+def wait_port(port_file: Path, wait_s: float, launcher_pid=None, sleep=time.sleep, clock=time.monotonic,
+              states=("running",)):
     """The port file of a running session, or (None, why): ``launcher_ended`` when the launcher (isaac_live.sbatch)
     exits before its session runs -- lvram (2026-10-27): it ended on its first line (a required variable) and the
     probe waited out its 900 s holding the job -- else ``no_port_file`` at the deadline."""
@@ -1535,7 +1594,7 @@ def wait_port(port_file: Path, wait_s: float, launcher_pid=None, sleep=time.slee
             return None, "launcher_ended"
         if port_file.exists():
             info = json.loads(port_file.read_text())
-            if info.get("state") == "running":
+            if info.get("state") in states:
                 return info, None
         sleep(1.0)
     return None, "no_port_file"
@@ -1546,7 +1605,7 @@ def main():
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "queue", "lift", "reset",
-                                           "restart", "tour", "hold"),
+                                           "restart", "tour", "hold", "place"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -1614,6 +1673,12 @@ def main():
                     help="hold scenario (B-P2d): the stand after the relocalized session runs (simulated s)")
     ap.add_argument("--live-factor", type=float, default=0.4,
                     help="hold scenario: the runner's --live-factor (sim s per wall s), to wait the hold in wall time")
+    ap.add_argument("--truth", type=lambda v: tuple(float(c) for c in v.split(",")), default=None,
+                    help="place scenario (F1): the placed start x,y,yaw (world = map), the click model's centre")
+    ap.add_argument("--click-seed", type=int, default=0, help="place scenario: the click model's seed")
+    ap.add_argument("--click-index", type=int, default=0, help="place scenario: the start's index in its list")
+    ap.add_argument("--place-wait-s", type=float, default=600.0,
+                    help="place scenario: how long to act as the operator (wall s; the operator budget ends it too)")
     ap.add_argument("--tour-path", type=Path, default=None, help="tour scenario: tools/survey_tour.py's path (.npz)")
     ap.add_argument("--tour-cruise-mps", type=float, default=0.30)
     ap.add_argument("--tour-stall-s", type=float, default=60.0, help="tour scenario: no progress this long (wall s)")
@@ -1625,7 +1690,10 @@ def main():
         ap.error("--queue-resume-not-stopped is superseded by the queue's own start resubmit (plan D5 exception)")
     # The job's timeout ends a stuck probe with SIGTERM: leave through the finally below, so the report is written.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(124))
-    info, why = wait_port(args.port_file, args.wait_port_s, args.launcher_pid)
+    if args.scenario == "place" and args.truth is None:
+        ap.error("the place scenario needs --truth x,y,yaw")
+    info, why = wait_port(args.port_file, args.wait_port_s, args.launcher_pid,
+                          states=RELOC_PORT_STATES if args.scenario == "place" else ("running",))
     if info is None:
         args.report.write_text(json.dumps({"port_file": None, "error": why}, indent=1) + "\n")
         print(f"probe: no running session ({why})", file=sys.stderr)
@@ -1637,7 +1705,7 @@ def main():
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
                     "queue": queue_scenario,
                     "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
-                    "tour": tour_scenario, "hold": hold_scenario}[args.scenario]
+                    "tour": tour_scenario, "hold": hold_scenario, "place": place_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
         if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
                 or (args.scenario == "restart" and "killed" in report)):

@@ -68,3 +68,26 @@ def test_a_dry_run_is_the_launchers_with_the_sessions_environment_and_no_probe(t
 def test_a_launcher_that_outlives_a_normal_end_is_ended_after_the_grace(tmp_path):
     p, took, out = _run(tmp_path, probe_rc=0, launcher_s=60, grace="1")
     assert took < 15 and (out / "launcher_term").exists()
+
+
+def test_a_place_session_is_attended_and_its_probe_places_around_the_truth(tmp_path):
+    # F1 (plan 2026-10-31-operator-placed-start 4.2 b): the console waits for the operator, the probe is the operator
+    launcher, python = _fakes(tmp_path, probe_rc=0, launcher_s=1)
+    env = {**os.environ, "START_POSE": "1,2,3", "VENV_PY": str(python), "RELOC_LAUNCHER": str(launcher),
+           "RELOC_END_GRACE_S": "1", "FACTOR": "0.3", "RELOC_PROBE": "place", "CLICK_SEED": "11", "CLICK_INDEX": "4"}
+    p = subprocess.run(["bash", str(WRAPPER), str(tmp_path / "out")], cwd=ROOT, env=env, capture_output=True,
+                       text=True, timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (tmp_path / "out" / "launcher_env").read_text().split() == ["1", "1,2,3"]  # no RELOC_UNATTENDED
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--scenario") + 1] == "place" and args[args.index("--truth") + 1] == "1,2,3"
+    assert args[args.index("--click-seed") + 1] == "11" and args[args.index("--click-index") + 1] == "4"
+
+
+def test_an_unknown_probe_mode_is_refused(tmp_path):
+    launcher, python = _fakes(tmp_path, probe_rc=0, launcher_s=1)
+    env = {**os.environ, "START_POSE": "1,2,3", "VENV_PY": str(python), "RELOC_LAUNCHER": str(launcher),
+           "RELOC_PROBE": "both"}
+    p = subprocess.run(["bash", str(WRAPPER), str(tmp_path / "out")], cwd=ROOT, env=env, capture_output=True,
+                       text=True, timeout=60)
+    assert p.returncode == 2 and "RELOC_PROBE" in p.stdout + p.stderr

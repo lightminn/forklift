@@ -9,6 +9,9 @@
 #
 #   START_POSE=x,y,yaw <isaac_live.sbatch's environment> bash deploy/console/reloc_session.sh OUT
 #   optional: HOLD_SIM_S (10), WAIT_PORT_S (1500), RELOC_END_GRACE_S (300); RELOC_LAUNCHER (tests only)
+#   RELOC_PROBE (hold): place -- F1 (docs/plans/2026-10-31-operator-placed-start.md 4.2 b): the session is attended
+#   (no RELOC_UNATTENDED: the console waits for the operator) and the probe is the operator, placing the click model's
+#   draws around START_POSE (CLICK_SEED, CLICK_INDEX: the start's index in its list) and confirming the first preview
 #
 # Run from the repository root.
 set -u
@@ -16,14 +19,21 @@ OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
 : "${START_POSE:?the placed start x,y,yaw (world base_link)}" "${VENV_PY:?the Isaac Python}"
 LAUNCHER=${RELOC_LAUNCHER:-$ROOT/deploy/console/isaac_live.sbatch}
+PROBE_MODE=${RELOC_PROBE:-hold}
+case "$PROBE_MODE" in
+  hold) UNATTENDED=1; PROBE_ARGS=(--scenario hold) ;;
+  place) UNATTENDED=; PROBE_ARGS=(--scenario place --truth "$START_POSE" --click-seed "${CLICK_SEED:-0}"
+                                  --click-index "${CLICK_INDEX:-0}" --place-wait-s "${PLACE_WAIT_S:-600}") ;;
+  *) echo "RELOC_PROBE must be hold or place" >&2; exit 2 ;;
+esac
 GRACE=${RELOC_END_GRACE_S:-300}
 if [ "${DRY_RUN:-0}" = 1 ]; then
   # tools/isaac_bundle.py check: the launcher's own DRY_RUN (its preflight, then RUNNER_ARGS and ARGS_OK) with the
   # session's environment; no probe, no session
-  RELOC_UNATTENDED=1 MAX_EPOCHS=1 STANDBY_LINGER_S=0 exec bash "$LAUNCHER" "$OUT"
+  RELOC_UNATTENDED=$UNATTENDED MAX_EPOCHS=1 STANDBY_LINGER_S=0 exec bash "$LAUNCHER" "$OUT"
 fi
 mkdir -p "$OUT"
-RELOC_UNATTENDED=1 MAX_EPOCHS=1 STANDBY_LINGER_S=0 bash "$LAUNCHER" "$OUT" > "$OUT/launcher.log" 2>&1 &
+RELOC_UNATTENDED=$UNATTENDED MAX_EPOCHS=1 STANDBY_LINGER_S=0 bash "$LAUNCHER" "$OUT" > "$OUT/launcher.log" 2>&1 &
 L=$!
 end_launcher() {
   kill -TERM "$L" 2>/dev/null
@@ -32,7 +42,7 @@ end_launcher() {
 }
 trap 'end_launcher; exit 143' TERM INT
 "$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
-  --scenario hold --hold-sim-s "${HOLD_SIM_S:-10}" --live-factor "${FACTOR:-0.4}" --launcher-pid "$L" \
+  "${PROBE_ARGS[@]}" --hold-sim-s "${HOLD_SIM_S:-10}" --live-factor "${FACTOR:-0.4}" --launcher-pid "$L" \
   --wait-port-s "${WAIT_PORT_S:-1500}" > "$OUT/probe.log" 2>&1
 prc=$?
 echo "probe exit $prc $(date -Is)"
