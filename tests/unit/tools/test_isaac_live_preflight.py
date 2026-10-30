@@ -82,6 +82,7 @@ def _fake_python(tmp_path):
     fake.write_text("#!/bin/bash\n"
                     "if [ \"$1\" = -c ]; then case \"$2\" in *load_bundle*) echo " + "f" * 64 + "; exit 0;; esac;"
                     " exec python3 \"$@\"; fi\n"
+                    'case "$1" in */slam_bundle_registry.py) exec python3 "$@";; esac\n'  # the registry's lookup runs
                     'for a in "$@"; do [ "$a" = --check-args ] && { echo ARGS_OK; exit 0; }; done\n'
                     f"printf '%s\\n' \"$*\" >> {tmp_path / 'started'}\nexit 0\n")
     fake.chmod(0o755)
@@ -90,7 +91,7 @@ def _fake_python(tmp_path):
 
 def _relocalizing(tmp_path, **env):
     bundle = tmp_path / "bundle"
-    bundle.mkdir(exist_ok=True)
+    bundle.mkdir(parents=True, exist_ok=True)
     return _launch(tmp_path, venv_py=_fake_python(tmp_path), DRY_RUN="0", MAP_BUNDLE=str(bundle),
                    MAP_START_POSE="0.5,-1.0,0.3", **env)
 
@@ -184,3 +185,64 @@ def test_max_epochs_ends_the_session_after_that_many_epochs(tmp_path):
 def test_a_start_pose_needs_a_survey_map(tmp_path):
     p = _launch(tmp_path, START_POSE="4.0,3.0,-2.0")  # MAP_BUNDLE=none: online mapping
     assert p.returncode == 2 and "START_POSE relocalizes on a survey map" in p.stderr
+
+
+# --- the start relocalization as the operator console's default (lead 2026-10-31, start relocalization plan 7.1) ---
+def _registry_launch(tmp_path, **env):
+    """A launch on the registry's survey map of a scene file (deploy/console/slam_choice.sh's default path)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_slam_choice import _registry
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    scene, book = _registry(tmp_path)  # its row's start: [1.5, -2.0, 0.25]
+    (tmp_path / "root" / "line_m_tsq_aaaaaaaaaaaa").mkdir(parents=True, exist_ok=True)
+    base = {"SCENE_FILE": str(scene), "SLAM_BUNDLE_ROOT": str(tmp_path / "root"), "SLAM_BUNDLE_REGISTRY": str(book)}
+    base.update(env)
+    base.setdefault("MAP_BUNDLE", "")  # empty: slam_choice.sh's default, the registry
+    p = _launch(tmp_path, venv_py=_fake_python(tmp_path), DRY_RUN="0", **base)
+    env_sh = tmp_path / "out" / "env.sh"
+    return p, env_sh.read_text() if env_sh.exists() else ""
+
+
+def _preflight(tmp_path) -> list:
+    return (tmp_path / "out" / "preflight.log").read_text().splitlines()
+
+
+def test_the_operator_console_relocalizes_by_default_from_the_registrys_scene_start(tmp_path):
+    p, env_sh = _registry_launch(tmp_path, MAP_BUNDLE="")
+    assert p.returncode == 0, p.stdout + p.stderr
+    pre = _preflight(tmp_path)
+    assert "--start-relocalize" in pre and "--start-pose=1.5,-2.0,0.25" in pre  # placed at the survey's own start
+    assert "start: relocalization (default: placed at the registry's scene start)" in p.stdout
+    assert "START_MODE=" in env_sh and "--relocalize" in _supervisor(tmp_path).split()
+
+
+def test_a_bundles_run_keeps_the_known_start_unless_its_start_pose_says_otherwise(tmp_path):
+    p, _ = _registry_launch(tmp_path, BUNDLE_TOKEN="tok")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--start-relocalize" not in _preflight(tmp_path)
+    assert "start: known (a bundle's run: unattended)" in p.stdout
+    p, _ = _registry_launch(tmp_path / "b", BUNDLE_TOKEN="tok", START_POSE="-4.0,3.0,-2.0")  # B-P2d's sessions
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--start-pose=-4.0,3.0,-2.0" in _preflight(tmp_path / "b")
+    assert "start: relocalization (START_POSE)" in p.stdout
+
+
+def test_the_start_choice_refuses_what_it_cannot_do(tmp_path):
+    p, _ = _registry_launch(tmp_path, START_RELOC="maybe")
+    assert p.returncode == 2 and "START_RELOC must be on or off" in p.stdout + p.stderr
+    p, _ = _registry_launch(tmp_path / "b", START_RELOC="off", START_POSE="-4.0,3.0,-2.0")
+    assert p.returncode == 2 and "contradicts START_POSE" in p.stdout + p.stderr
+    p, _ = _registry_launch(tmp_path / "c", START_RELOC="off")
+    assert p.returncode == 0 and "start: known (START_RELOC=off)" in p.stdout
+    # asked for by name where no registry map is there to relocalize on: no launch
+    p = _relocalizing(tmp_path / "d", START_RELOC="on")
+    assert p.returncode == 2 and "START_RELOC=on needs" in p.stdout + p.stderr
+
+
+def test_a_map_folder_given_by_hand_keeps_the_known_start(tmp_path):
+    # Codex B-P2e design review P2: its MAP_START_POSE is the SLAM's start estimate, not where the truck stands
+    p = _relocalizing(tmp_path)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--start-relocalize" not in _preflight(tmp_path)
+    assert "start: known (a map folder given by hand: START_POSE relocalizes on it)" in p.stdout
