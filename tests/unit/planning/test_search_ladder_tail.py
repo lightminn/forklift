@@ -76,24 +76,44 @@ def test_the_tail_is_left_out_without_the_extended_ladder_or_another_status(monk
     assert len(received) == 1  # an invalid start is not a search that ran out
 
 
-def test_the_tail_keeps_inside_the_ladders_budget(monkeypatch):
+def test_a_budgeted_ladder_has_no_tail(monkeypatch):
+    """Codex review P2 2-3: a caller that gives a deadline (a SearchBudget, or one shared by several candidates, as the
+    observe ladder does) keeps the ladder it had -- a tail there would spend the time its next candidate needs and make
+    a deterministic run's result depend on the clock. The tail is for the searches without one (the release replans)."""
     received = []
     monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", stub(received, lambda c, n: result(False)))
-    budget = pallet_mission.SearchBudget(1000.0)
-    pallet_mission._search(None, None, [], None, None, config(), deadline=budget)
-    tail_deadline = received[-1][1]
-    assert tail_deadline <= time.monotonic() + pallet_mission.FALLBACK_TAIL_WALL_S
-    # almost no budget left: no tail at all, and the ladder's failure stands (not turned into a timeout)
+    out = pallet_mission._search(None, None, [], None, None, config(), deadline=pallet_mission.SearchBudget(1000.0))
+    assert len(received) == 7 and out.status == "expansion_limit"
     received.clear()
+    out = pallet_mission._search(None, None, [], None, None, config(), deadline=time.monotonic() + 1000.0)
+    assert len(received) == 7 and out.status == "expansion_limit"
+
+
+def test_a_tail_success_returned_after_its_cap_is_not_taken(monkeypatch):
+    """Codex review P2 1: the search checks the clock every 256 expansions, so a goal connection can come back past the
+    tail's cap -- off, that result is a failed tail (the ladder's failure stands); deterministic, the run ends (D6)."""
     clock = {"t": 0.0}
     monkeypatch.setattr(pallet_mission.time, "monotonic", lambda: clock["t"])
 
-    def spend(c, n):
-        clock["t"] += 1.0
+    def late(c, n):
+        if n == 8:
+            clock["t"] += pallet_mission.FALLBACK_TAIL_WALL_S + 1.0  # the tail comes back a second past its cap
+            return result(True)
         return result(False)
-    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", stub(received, spend))
-    out = pallet_mission._search(None, None, [], None, None, config(), deadline=pallet_mission.SearchBudget(7.5))
-    assert len(received) == 7 and out.status == "expansion_limit"
+
+    received = []
+    monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", stub(received, late))
+    out = pallet_mission._search(None, None, [], None, None, config())
+    assert len(received) == 8 and not out.success and out.status == "expansion_limit"
+    clock["t"], received[:] = 0.0, []
+    determinism.configure(True)
+    try:
+        monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", stub(received, lambda c, n: (
+            clock.__setitem__("t", clock["t"] + determinism.WALL_CAP_S + 1.0) or result(True)) if n == 8 else result(False)))
+        with pytest.raises(determinism.DeterministicBroken):
+            pallet_mission._search(None, None, [], None, None, config())
+    finally:
+        determinism.configure(False)
 
 
 def test_a_deterministic_run_caps_the_tail_with_the_deterministic_budget(monkeypatch):
