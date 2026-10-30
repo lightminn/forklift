@@ -177,25 +177,25 @@ def test_a_failed_search_from_the_prefix_end_is_recorded_beside_the_plain_fallba
     assert plan.status == "invalid_start" and plan.exit_prefix["status"] == "unmet:search_no_path"
     assert plan.exit_prefix["end_search"] == {"status": "no_path",
                                               "attempts": [[8, "no_path", 353], [8, "expansion_limit", 30000]]}
-    assert pm.plan_failure_reason(plan) == "invalid_start (exit_prefix unmet:search_no_path)"
+    assert pm.failed_plan_reason(plan) == "invalid_start (exit_prefix unmet:search_no_path)"
 
 
 def test_the_failure_reason_is_the_status_alone_without_an_unmet_record():
     plain = plan_transport_leg(scenario(), EXTRACTED, CONFIG, geometry=GEOMETRY)
     failed = replace(plain, success=False, status="invalid_start")
-    assert pm.plan_failure_reason(failed) == "invalid_start"
+    assert pm.failed_plan_reason(failed) == "invalid_start"
     capped = replace(failed, exit_prefix={"status": "unmet:clearance", "length_m": 0.0})
-    assert pm.plan_failure_reason(capped) == "invalid_start (exit_prefix unmet:clearance)"
+    assert pm.failed_plan_reason(capped) == "invalid_start (exit_prefix unmet:clearance)"
     backed = replace(failed, start_backoff={"status": "unmet:search_invalid_goal", "length_m": 0.0})
-    assert pm.plan_failure_reason(backed) == "invalid_start (start_backoff unmet:search_invalid_goal)"
-    assert pm.plan_failure_reason(replace(failed, exit_prefix={"status": "prefix"})) == "invalid_start"
+    assert pm.failed_plan_reason(backed) == "invalid_start (start_backoff unmet:search_invalid_goal)"
+    assert pm.failed_plan_reason(replace(failed, exit_prefix={"status": "prefix"})) == "invalid_start"
 
 
 def test_the_release_replan_failures_name_the_hidden_attempt():
     """Both release paths (the tick's and the real-time worker's) say what the final status may hide; a plan with no unmet
-    record keeps the message every earlier record has (plan_failure_reason is the status alone)."""
+    record keeps the message every earlier record has (failed_plan_reason is the status alone)."""
     from pathlib import Path
 
     source = (Path(pm.__file__).resolve().parents[1] / "mission/core.py").read_text()
-    assert source.count('f"slam_release_replan_failed: {plan_failure_reason(replanned)}"') == 2
+    assert source.count('f"slam_release_replan_failed: {failed_plan_reason(replanned)}"') == 2
     assert 'slam_release_replan_failed: {replanned.status}' not in source

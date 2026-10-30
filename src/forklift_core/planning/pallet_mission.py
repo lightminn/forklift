@@ -730,7 +730,7 @@ def exit_prefix_length_m(start: Pose2D, footprint: Footprint, exit_prefix: ExitP
     return None
 
 
-def plan_failure_reason(result: PlanResult) -> str:
+def failed_plan_reason(result: PlanResult) -> str:
     """A failed plan's status, with the unmet exit prefix or return-start backoff that came before it -- the attempt the
     final status may hide (``invalid_start (exit_prefix unmet:search_no_path)``); the status alone otherwise."""
     notes = [f"{name} {record['status']}" for name in ("exit_prefix", "start_backoff")
