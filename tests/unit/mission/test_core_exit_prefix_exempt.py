@@ -284,3 +284,47 @@ def test_off_leaves_every_tick_as_it_was():
     out = tick(core, 10.0)
     assert out.allowed == pytest.approx(0.3)
     assert not any(c[0].startswith("exit_exempt") for c in calls)
+
+
+def _close_by_ring(core, layer):
+    tick(core, 10.0)
+    layer.status = {"verified_s": 10.05, "verified_version": 2, "transformed": True, "skipped": None,
+                    "rang": {"stamp_s": 10.15, "hits": 3, "first": []}}
+    tick(core, 10.2)
+    assert closed(core)[-1]["reason"] == "watch"
+
+
+def test_a_closed_latch_decides_every_later_tick_as_a_core_without_one():
+    """Rule 6 of the next riib batch (lead 2026-10-31, option (가)): instead of a continuation replay, the closed latch is
+    shown inert here -- after the close, with the same layer answers, the decisions and the layer calls are those of a
+    core that never had a latch."""
+    on, on_layer, _, on_calls = make()
+    _close_by_ring(on, on_layer)
+    off, off_layer, _, off_calls = make(option="off")
+    off._exit_latch = None
+    answers = [(0.3, "ok"), (0.0, "occupied"), (0.12, "limit"), (0.3, "ok")]
+    for k, answer in enumerate(answers):
+        t = 10.3 + 0.1 * k
+        on_layer.answer = off_layer.answer = answer
+        n_on, n_off = len(on_calls), len(off_calls)
+        a, b = tick(on, t, speed=-0.05 * k), tick(off, t, speed=-0.05 * k)
+        assert (a.allowed, a.why, a.requested_speed, a.obstacle_hold) == (b.allowed, b.why, b.requested_speed,
+                                                                         b.obstacle_hold)
+        assert names(on_calls[n_on:]) == names(off_calls[n_off:])
+        assert on.obstacle.get("permission_cap") == off.obstacle.get("permission_cap")
+    assert len(closed(on)) == 1  # it never opened again
+
+
+def test_the_closing_tick_and_the_settling_after_it_belong_to_the_exemption():
+    """The hole a continuation replay would have had (Codex design review P2-3: a close and a failure in the same
+    tick): the closing tick decides as the exemption (the ring's stop), and every tick until the truck first stands
+    is booked to it -- "after the close" begins only there."""
+    core, layer, _, _ = make()
+    tick(core, 10.0)
+    layer.status = {"verified_s": 10.05, "verified_version": 2, "transformed": True, "skipped": None,
+                    "rang": {"stamp_s": 10.15, "hits": 3, "first": []}}
+    out = tick(core, 10.2)
+    assert (out.allowed, out.why) == (0.0, "exit_watch") and closed(core)[-1]["closed_s"] == pytest.approx(10.2)
+    assert core.exit_exempt_counts(-0.06) and core.exit_exempt_counts(-0.02)  # still moving: the exemption's
+    assert not core.exit_exempt_counts(-0.005)  # first standing: settled
+    assert not core.exit_exempt_counts(-0.08)  # moving again later is no longer the exemption's
