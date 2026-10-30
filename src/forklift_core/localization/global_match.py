@@ -210,11 +210,14 @@ class _Budget:
 
 class _Search:
     def __init__(self, grid: Grid, pts: np.ndarray, cfg: MatchConfig, index: MapIndex | None = None,
-                 budget: _Budget | None = None):
+                 budget: _Budget | None = None, *, cells: np.ndarray | None = None, yaw_index=None):
+        """``cells`` (a mask of the grid's shape) and ``yaw_index`` restrict where the laser may stand and which
+        lattice headings are searched (F1's local re-match); without them, every candidate cell and heading."""
         self.grid, self.cfg, self.res = grid, cfg, grid.resolution_m
         self.budget = budget or _Budget(replace(cfg, max_work=None))
         self.n_yaw = max(1, int(round(2 * math.pi / cfg.yaw_step_rad)))
         self.yaws = np.arange(self.n_yaw) * (2 * math.pi / self.n_yaw)
+        self.yaw_index = np.arange(self.n_yaw) if yaw_index is None else np.asarray(yaw_index, np.int64)
         # an endpoint's distance, not its largest coordinate: a heading can turn it onto one axis (Codex B-P1b review)
         reach = _reach_cells(float(np.hypot(pts[:, 0], pts[:, 1]).max()), self.res) if len(pts) else 2
         if index is not None:
@@ -230,6 +233,9 @@ class _Search:
             self.L = _pyramid(np.pad(field, self.pad), cfg.levels, np.maximum)
             self.C = _pyramid(cand, cfg.levels, np.logical_or)
             self.cand = cand
+        if cells is not None:
+            self.cand = self.cand & cells
+            self.C = _pyramid(self.cand, cfg.levels, np.logical_or)
         c, s = np.cos(self.yaws)[:, None], np.sin(self.yaws)[:, None]
         qx = c * pts[:, 0] - s * pts[:, 1]
         qy = s * pts[:, 0] + c * pts[:, 1]
@@ -265,8 +271,8 @@ class _Search:
         rs, cs = rs.ravel(), cs.ravel()
         keep = self.C[self.cfg.levels][rs, cs]
         rs, cs = rs[keep], cs[keep]
-        h = np.repeat(np.arange(self.n_yaw), len(rs))
-        return h, np.tile(rs, self.n_yaw), np.tile(cs, self.n_yaw)
+        h = np.repeat(self.yaw_index, len(rs))
+        return h, np.tile(rs, len(self.yaw_index)), np.tile(cs, len(self.yaw_index))
 
     def pose(self, h, r, c) -> tuple:
         ox, oy, _ = self.grid.origin
@@ -286,6 +292,28 @@ def _beam_floor(s: _Search, h, r, c, bounds, width: int) -> float:
     return float(b.max())
 
 
+def _lattice_leaves(s: _Search, cfg: MatchConfig):
+    """Every lattice leaf scoring >= ``keep_ratio`` of the best one -- complete down to that share, since the descent
+    prunes below ``keep_ratio`` of a real leaf's score (the beam floor) with upper bounds. Raises _Stop on the work
+    cap, the deadline, a cancel, or a frontier over ``max_nodes`` (``overflow``)."""
+    h, r, c = s.top()
+    bounds = s.scores(cfg.levels, h, r, c)
+    if not len(bounds):
+        return h, r, c, bounds
+    floor = _beam_floor(s, h, r, c, bounds, max(1, cfg.beam_width))
+    thr = cfg.keep_ratio * floor
+    for level in range(cfg.levels, 0, -1):
+        keep = bounds >= thr
+        h, r, c = h[keep], r[keep], c[keep]
+        if len(h) * 4 > cfg.max_nodes:
+            raise _Stop("overflow")
+        h, r, c = s.children(level, h, r, c)
+        bounds = s.scores(level - 1, h, r, c)
+    best = float(bounds.max()) if len(bounds) else floor
+    keep = bounds >= cfg.keep_ratio * best
+    return h[keep], r[keep], c[keep], bounds[keep]
+
+
 def global_match(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None, *, index: MapIndex | None = None,
                  clock=None, deadline: float | None = None, cancel=None) -> GlobalMatch:
     """The kept candidates (lattice poses, before refinement) or why there are none. With ``clock`` and ``deadline``
@@ -299,22 +327,9 @@ def global_match(grid: Grid, points: np.ndarray, cfg: MatchConfig | None = None,
     budget = _Budget(cfg, clock, deadline, cancel)
     try:
         s = _Search(grid, pts, cfg, index, budget)
-        h, r, c = s.top()
-        bounds = s.scores(cfg.levels, h, r, c)
-        floor = _beam_floor(s, h, r, c, bounds, max(1, cfg.beam_width))
-        thr = cfg.keep_ratio * floor
-        for level in range(cfg.levels, 0, -1):
-            keep = bounds >= thr
-            h, r, c = h[keep], r[keep], c[keep]
-            if len(h) * 4 > cfg.max_nodes:
-                return GlobalMatch("overflow", work=budget.work)
-            h, r, c = s.children(level, h, r, c)
-            bounds = s.scores(level - 1, h, r, c)
+        h, r, c, sc = _lattice_leaves(s, cfg)
     except _Stop as stop:
         return GlobalMatch(str(stop), work=budget.work)
-    best = float(bounds.max()) if len(bounds) else floor
-    keep = bounds >= cfg.keep_ratio * best
-    h, r, c, sc = h[keep], r[keep], c[keep], bounds[keep]
     order = np.argsort(-sc, kind="stable")
     leaves = [Candidate(s.pose(h[k], r[k], c[k]), float(sc[k]), math.nan) for k in order]
     kept = suppress(leaves, sep_m=cfg.sep_m, sep_rad=cfg.sep_rad)[:cfg.max_candidates]
