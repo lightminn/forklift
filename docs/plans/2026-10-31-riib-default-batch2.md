@@ -173,7 +173,12 @@ F2′ 계획 C5 를 riib 장면에 맞춘다.
 
 ## 6. 제출 기록
 
-(결과 전에 채운다: 스냅숏, 목록 경로, 실행 수, 잡, 디스크 여유, 롤링 준비.)
+결과 전에 적는다(2026-10-31).
+- 코드: main `abe5e07b`(PR #232 머지). 그 코드와 같은 트리 `c7ad3faa` 에서 재생 게이트 runs29 29/29(ws1 `test_runs/replay_gate/rp_c7ad3faa`), ws1 전체 시험 8 070 통과·알려진 ws1 전용 실패 10. 그 뒤 커밋은 문서뿐이다. Codex 등록 검토는 4 차에서 "새 P1/P2 없음"으로 수렴했다.
+- 스냅숏: ws1 `snapshots/r2_abe5e07b`.
+- 목록: ws1 `test_runs/riibotics/r2_abe5e07b/RUNS.jsonl` 123 실행(경계 기록 87). 생성기 `tss_diag/make_runs_r2.py`. 팔별 인자 수: A 13(대상)·20(회귀, 기록), B 33(기록)·C4 24, BF 33(기록). `isaac_bundle.py check` 0 문제.
+- 잡: 묶음 2 개 13363·13364(각 shard 4·CPU 8·20 GB·12 시간, claim 공유, `--run-est-min 45`).
+- 디스크: 제출 직전 `/home` 여유 48 GB. 15 GB 아래면 `claim_hold.py` 로 남은 실행을 보류하는 감시를 걸었다. 롤링 보관·삭제는 디스크 정리 세션에 알렸다.
 
 ## 7. 남는 것
 
