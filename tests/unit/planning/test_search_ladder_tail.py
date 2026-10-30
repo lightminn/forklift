@@ -105,6 +105,7 @@ def test_a_tail_success_returned_after_its_cap_is_not_taken(monkeypatch):
     monkeypatch.setattr(pallet_mission, "plan_hybrid_astar", stub(received, late))
     out = pallet_mission._search(None, None, [], None, None, config())
     assert len(received) == 8 and not out.success and out.status == "expansion_limit"
+    assert out.search_attempts[-1][1] == "success:late"  # Codex re-review P3: a batch tally does not count it
     clock["t"], received[:] = 0.0, []
     determinism.configure(True)
     try:

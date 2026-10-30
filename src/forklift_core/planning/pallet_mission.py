@@ -202,6 +202,7 @@ def _search(
                 # back past its cap (the search checks the clock every 256 expansions): deterministic, the run ends
                 # (D6); off, a failed tail (Codex review P2 1)
                 determinism.timed_out("search_ladder_tail")
+                attempts[-1] = (attempts[-1][0], f"{attempts[-1][1]}:late", *attempts[-1][2:])  # not counted a success
                 tail_result = ladder_result
             if tail_result.success:
                 result, interval = tail_result, tail.analytic_expansion_interval
