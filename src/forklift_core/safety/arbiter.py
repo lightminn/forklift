@@ -26,7 +26,8 @@ from .validate import problem
 
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
-          "mission_cancel", "recovery", "session_end", "sim_reset", "relocalize_pick", "relocalize_retry")
+          "mission_cancel", "recovery", "session_end", "sim_reset", "relocalize_pick", "relocalize_retry",
+          "relocalize_place", "relocalize_place_confirm")  # F1: the operator's placed pose and its confirmation
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request", "pick_request")
 # B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
 # session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
@@ -429,6 +430,29 @@ class Arbiter:
             return self._reply("relocalize_retry", request_id, why)
         self.events.append({"t": now_mono, "event": "relocalize_retry", "generation": msg["generation"]})
         return self._reply("relocalize_retry", request_id, generation=self.reloc.generation)
+
+    def _on_relocalize_place(self, client_id, request_id, msg, now_mono):
+        """F1 (plan 2026-10-31-operator-placed-start 1.2): the operator's placed base pose; the phase runs its local
+        re-match while the state is ``placing``. Applied here, so the answer is the applied result."""
+        if self.reloc is None:
+            return self._reply("relocalize_place", request_id, "not_relocalizing")
+        ok, why = self.reloc.place(msg["generation"], tuple(msg["pose"]))
+        if not ok:
+            return self._reply("relocalize_place", request_id, why)
+        self.events.append({"t": now_mono, "event": "relocalize_place", "generation": msg["generation"],
+                            "pose": list(msg["pose"]), "places": self.reloc.places})
+        return self._reply("relocalize_place", request_id, places=self.reloc.places)
+
+    def _on_relocalize_place_confirm(self, client_id, request_id, msg, now_mono):
+        """F1: the operator confirms the preview shown (its generation and preview id): the estimate."""
+        if self.reloc is None:
+            return self._reply("relocalize_place_confirm", request_id, "not_relocalizing")
+        ok, why = self.reloc.confirm_place(msg["generation"], msg["preview_id"])
+        if not ok:
+            return self._reply("relocalize_place_confirm", request_id, why)
+        self.events.append({"t": now_mono, "event": "relocalize_place_confirm", "generation": msg["generation"],
+                            "preview_id": msg["preview_id"]})
+        return self._reply("relocalize_place_confirm", request_id)
 
     # --- stops ---------------------------------------------------------------------------------------------------
     def stop(self, now_mono: float, reason: str) -> None:

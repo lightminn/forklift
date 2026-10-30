@@ -277,3 +277,94 @@ def test_a_retry_takes_a_plain_integer_generation():
     r = _reloc(attempts=1)
     r.record(_match(_cand((3.0, 1.0, 0.5))), G.Decision(False, "low_fit", 0.9))
     assert r.retry(True) == (False, "reloc_stale_pick") and r.state != "relocalizing"
+
+
+# --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2) ---------------------------------
+def _asking(**kw):
+    r = _reloc(**kw)
+    a, b = _cand((3.0, 1.0, 0.5), score=0.9), _cand((9.0, 4.0, 2.0), score=0.88)
+    for _ in range(3):
+        r.record(_match(a, b), G.Decision(False, "competitor", 0.98))
+    assert r.state == "awaiting_pick"
+    return r
+
+
+PLACED = (5.0, 2.0, 0.3)
+
+
+def test_a_placement_previews_and_the_preview_is_confirmed_as_the_operators_placed_estimate():
+    r = _asking()
+    gen = r.generation
+    assert r.place(gen, PLACED) == (True, "") and r.state == "placing" and r.places == 1
+    assert r.placed_result(True, (5.1, 2.0, 0.31)) == "place_preview"
+    assert r.preview_id == 1 and r.preview == (5.1, 2.0, 0.31)
+    assert r.confirm_place(gen, 1) == (True, "") and r.state == "chosen"
+    assert r.estimate.source == "operator_placed" and r.estimate.base == (5.1, 2.0, 0.31)
+    assert r.confirm_place(gen, 1) == (True, "duplicate")  # the same request twice: once
+
+
+def test_a_refused_placement_returns_to_the_candidate_stage_and_its_picks_stay_valid():
+    r = _asking()
+    gen = r.generation
+    r.place(gen, PLACED)
+    assert r.placed_result(False, None, "ambiguous") == "awaiting_pick" and r.place_reason == "ambiguous"
+    assert r.pick(gen, 0) == (True, "")
+
+
+def test_a_new_placement_from_the_preview_invalidates_it_and_a_refusal_never_returns_to_it():
+    r = _asking()
+    gen = r.generation
+    r.place(gen, PLACED)
+    r.placed_result(True, (5.1, 2.0, 0.31))
+    assert r.place(gen, (5.5, 2.0, 0.3)) == (True, "") and r.preview is None
+    assert r.confirm_place(gen, 1) == (False, "reloc_not_awaiting")  # placing: no preview to confirm
+    assert r.placed_result(False, None, "edge") == "awaiting_pick"  # Codex F1 plan review P3: not the old preview
+    assert r.confirm_place(gen, 1) == (False, "reloc_not_awaiting")
+
+
+def test_the_placement_cap_blocks_new_placements_but_not_the_last_preview():
+    r = _asking()
+    gen = r.generation
+    for _ in range(2):
+        r.place(gen, PLACED)
+        r.placed_result(False, None, "low_fit")
+    assert r.place(gen, PLACED) == (True, "") and r.places == 3
+    r.placed_result(True, (5.0, 2.0, 0.3))
+    assert r.place(gen, PLACED) == (False, "reloc_place_limit")
+    assert r.state == "place_preview" and r.confirm_place(gen, 3) == (True, "")
+
+
+def test_a_global_retry_drops_the_preview_and_keeps_the_count():
+    r = _asking()
+    gen = r.generation
+    r.place(gen, PLACED)
+    r.placed_result(True, (5.1, 2.0, 0.31))
+    assert r.retry(gen) == (True, "") and r.state == "relocalizing" and r.preview is None and r.places == 1
+
+
+def test_a_stop_while_placing_or_previewing_drops_it_and_a_late_result_is_ignored():
+    r = _asking()
+    gen = r.generation
+    r.place(gen, PLACED)
+    assert r.interrupt() and r.state == "stopped"
+    assert r.placed_result(True, (5.1, 2.0, 0.31)) == "stopped" and r.preview is None
+    r2 = _asking()
+    r2.place(r2.generation, PLACED)
+    r2.placed_result(True, (5.1, 2.0, 0.31))
+    assert r2.interrupt() and r2.state == "stopped" and r2.preview is None
+
+
+@pytest.mark.parametrize("pose", [(1.0, 2.0), (1.0, float("nan"), 0.0), ("1", 2.0, 0.0), (1.0, 2.0, True)])
+def test_a_placed_pose_is_three_finite_numbers(pose):
+    r = _asking()
+    assert r.place(r.generation, pose) == (False, "reloc_place_invalid") and r.state == "awaiting_pick"
+
+
+def test_placements_need_the_current_generation_the_candidate_stage_and_the_operators_time():
+    clock = Clock()
+    r = _asking(clock=clock)
+    assert r.place(r.generation - 1, PLACED) == (False, "reloc_stale_pick")
+    r.expires_at = clock.t - 1
+    assert r.place(r.generation, PLACED) == (False, "reloc_operator_timeout")
+    r2 = _reloc()
+    assert r2.place(r2.generation, PLACED) == (False, "reloc_not_awaiting")  # still relocalizing

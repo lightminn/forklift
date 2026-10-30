@@ -40,6 +40,16 @@ def problem(msg) -> str | None:
         return "invalid"
     if t == "relocalize_pick" and not is_int(msg.get("candidate")):
         return "invalid"
+    # F1 (plan 2026-10-31-operator-placed-start 1.2): a placed base pose of three finite numbers, and the preview id
+    if t in ("relocalize_place", "relocalize_place_confirm") and not is_int(msg.get("generation")):
+        return "invalid"
+    if t == "relocalize_place":
+        pose = msg.get("pose")
+        if not (isinstance(pose, list) and len(pose) == 3 and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pose)):
+            return "invalid"
+    if t == "relocalize_place_confirm" and not is_int(msg.get("preview_id")):
+        return "invalid"
     if t == "teleop":
         if not all(is_int(msg.get(k)) for k in INT_FIELDS) or not isinstance(msg.get("lease_id"), str):
             return "invalid"

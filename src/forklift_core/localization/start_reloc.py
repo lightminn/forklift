@@ -62,6 +62,7 @@ class RelocConfig:
     max_shown: int = 4
     sep_m: float = 0.3  # a candidate refinement moved this far is not pickable (decide's refine_moved)
     sep_rad: float = 0.1
+    max_places: int = 3  # F1 (plan 2026-10-31-operator-placed-start 1.2): local re-matches the operator may start
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,12 @@ def _moved(c: Candidate, cfg: RelocConfig) -> bool:
 
 class StartRelocalizer:
     """relocalizing -> chosen | awaiting_pick | reloc_failed; awaiting_pick -> chosen (pick); awaiting_pick or
-    reloc_failed -> relocalizing (retry); any -> cancelled."""
+    reloc_failed -> relocalizing (retry); any -> cancelled.
+
+    F1 (plan 2026-10-31-operator-placed-start 1.2): awaiting_pick, reloc_failed or place_preview -> placing (place, at
+    most ``max_places`` per session); placing -> place_preview (the local re-match confirmed) or back to the candidate
+    stage it came from (refused); place_preview -> chosen (confirm, source ``operator_placed``) or relocalizing
+    (retry). A placement keeps the candidate generation: a refused one leaves the shown candidates pickable."""
 
     def __init__(self, cfg: RelocConfig, clock):
         self.cfg, self.clock = cfg, clock
@@ -95,6 +101,13 @@ class StartRelocalizer:
         self.shown: tuple = ()
         self._pool: list = []  # the pickable candidates every attempt of this generation produced, one per place
         self._picked: tuple | None = None
+        self.places = 0  # F1: local re-matches started this session (a retry does not reset it)
+        self.placed: tuple | None = None  # the pose the operator placed (the one being matched or previewed)
+        self.preview: tuple | None = None  # the local re-match's base pose, shown for confirmation
+        self.preview_id: int | None = None
+        self.place_reason: str | None = None  # the last refusal's reason
+        self._stage = "awaiting_pick"  # the candidate stage a placement returns to when it is refused
+        self._confirmed: tuple | None = None
 
     def start(self) -> None:
         """The first scan of this generation is being collected: the session deadline starts now (once)."""
@@ -155,14 +168,59 @@ class StartRelocalizer:
         self._choose(base_from_laser(self.shown[index].pose), "operator")
         return True, ""
 
+    def place(self, generation: int, pose) -> tuple[bool, str]:
+        """F1: the operator's placed base pose (map); its local re-match runs next (``placing``)."""
+        if self.state not in ("awaiting_pick", "reloc_failed", "place_preview"):
+            return False, "reloc_not_awaiting"
+        if self._expired():
+            return False, "reloc_operator_timeout"
+        if not _plain_int(generation) or generation != self.generation:
+            return False, "reloc_stale_pick"
+        if not (isinstance(pose, (list, tuple)) and len(pose) == 3 and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pose)):
+            return False, "reloc_place_invalid"
+        if self.places >= self.cfg.max_places:
+            return False, "reloc_place_limit"
+        if self.state != "place_preview":
+            self._stage = self.state
+        self.places += 1
+        self.state, self.placed, self.preview, self.preview_id = "placing", tuple(float(v) for v in pose), None, None
+        return True, ""
+
+    def placed_result(self, confirmed: bool, base, reason: str | None = None) -> str:
+        """The local re-match's result. A result after a STOP, a retry or the end (no longer ``placing``) is ignored."""
+        if self.state != "placing":
+            return self.state
+        if confirmed:
+            self.state, self.preview, self.preview_id = "place_preview", tuple(float(v) for v in base), self.places
+        else:  # back to the candidate stage, never to a preview the new placement invalidated (Codex F1 plan P3)
+            self.state, self.place_reason = self._stage, reason
+        return self.state
+
+    def confirm_place(self, generation: int, preview_id: int) -> tuple[bool, str]:
+        if not (_plain_int(generation) and _plain_int(preview_id)):
+            return False, "reloc_pick_refused"
+        if self.state == "chosen" and self._confirmed == (generation, preview_id):
+            return True, "duplicate"
+        if self._expired():
+            return False, "reloc_operator_timeout"
+        if self.state != "place_preview":
+            return False, "reloc_not_awaiting"
+        if generation != self.generation or preview_id != self.preview_id:
+            return False, "reloc_stale_pick"
+        self._confirmed = (generation, preview_id)
+        self._choose(self.preview, "operator_placed")
+        return True, ""
+
     def retry(self, generation: int) -> tuple[bool, str]:
-        if self.state not in ("awaiting_pick", "reloc_failed", "stopped"):
+        if self.state not in ("awaiting_pick", "reloc_failed", "stopped", "place_preview"):
             return False, "reloc_not_awaiting"
         if self._expired():
             return False, "reloc_operator_timeout"
         if not _plain_int(generation) or generation != self.generation:
             return False, "reloc_stale_pick"
         self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []
+        self.preview = self.preview_id = None  # the count of placements stays (plan 1.2)
         self.generation += 1
         self.deadline_at = None
         return True, ""
@@ -170,16 +228,17 @@ class StartRelocalizer:
     def interrupt(self) -> bool:
         """A STOP before the estimate (B-P2c, Codex design P1): the attempt running or the candidates shown are
         dropped and the generation moves on; a retry may follow. After the choice or the end it changes nothing."""
-        if self.state not in ("relocalizing", "awaiting_pick", "reloc_failed"):
+        if self.state not in ("relocalizing", "awaiting_pick", "reloc_failed", "placing", "place_preview"):
             return False
         self.state, self.shown, self._pool = "stopped", (), []
+        self.preview = self.preview_id = None
         self.generation += 1
         return True
 
     def cancel(self) -> None:
         self.state, self.shown = "cancelled", ()
 
-    def _choose(self, base: tuple, source: str) -> None:
+    def _choose(self, base: tuple, source: str) -> None:  # source: matcher | operator | operator_placed
         """The estimate keeps the generation it was chosen in; the generation then moves on, so any later pick of the
         old set is stale (plan 1.2 step 7)."""
         self.estimate = Estimate(tuple(float(v) for v in base), source, self.generation, self.attempts)
