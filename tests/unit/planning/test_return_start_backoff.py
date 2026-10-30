@@ -262,3 +262,23 @@ def test_a_cusp_right_after_the_backoff_is_followed():
     assert run.status == "arrived" and run.position_error_m <= 0.03
     reached = min(p[0] for p in run.trajectory)
     assert -0.20 - 0.03 <= reached <= -0.20 + 0.03  # it stopped at the cusp before going forward
+
+
+def test_the_runner_path_record_keeps_a_start_backoff_only_when_there_is_one():
+    """docs/plans/2026-10-31-riib-default-batch2.md 5 (2): the riib batch tells "the return the truck drove began with the
+    backoff straight" from the final return path's own record -- so the runner's path_record keeps start_backoff, and
+    only when set (a plan without one records as before, as exit_prefix does)."""
+    import importlib.util
+    from pathlib import Path
+
+    from forklift_core.planning.hybrid_astar import PlanResult
+
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location("run_transport_path_record", root / "sim/isaac/run_transport.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    plain = PlanResult(True, "success", np.zeros((2, 3)), np.ones(2, dtype=np.int8), np.zeros(2), 0.1, 3)
+    backed = PlanResult(True, "success", np.zeros((2, 3)), np.ones(2, dtype=np.int8), np.zeros(2), 0.1, 3,
+                        start_backoff={"status": "prefix", "length_m": 0.08})
+    assert "start_backoff" not in module.path_record(plain)
+    assert module.path_record(backed)["start_backoff"] == {"status": "prefix", "length_m": 0.08}

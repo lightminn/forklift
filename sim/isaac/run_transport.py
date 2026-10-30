@@ -2340,6 +2340,9 @@ def path_record(path) -> dict:
         "turnaround": getattr(path, "turnaround", None),
         # the transport exit prefix's record (docs/plans/2026-10-22-riibotics-trailer-exit.md), only when asked for
         **({"exit_prefix": path.exit_prefix} if getattr(path, "exit_prefix", None) is not None else {}),
+        # the return-start backoff's record (docs/plans/2026-10-27-return-start-withdraw-extension.md), only when tried:
+        # the riib batch 2 tells a return driven from its backoff straight by the final return path's own record
+        **({"start_backoff": path.start_backoff} if getattr(path, "start_backoff", None) is not None else {}),
     }
 
 
