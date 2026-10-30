@@ -157,6 +157,7 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 - **Promotion condition (4.4b):** met, with 68 started, 0 wrong, and a bound of 4.31 % against 5 %. The stricter variant the lead may choose (CP lower bound ≥ 70 %) is met too, at 72.5 %.
 - **Pose at the running tick, 68 starts:** median error 2.0 cm, p95 4.3 cm, maximum 4.9 cm; heading at most 0.0042 rad. Every start held its 10 s stand.
 - **Success by attempt:** 66 on the first attempt, 2 more after rescans (Δ = 2).
+- **Extra wait from rescans** (the last attempt's stage minus the first's): 2.28 s on average over the 84 valid sessions, 10.62 s over the 18 that rescanned.
 - **By layer:**
 
   | Layer | Valid | Success | Invalid |
@@ -167,7 +168,7 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 
 - **Matcher time:**
   - per session stage: median 3.6 s, p95 20.6 s;
-  - per attempt (wall): p95 7.8 s, maximum 15.6 s.
+  - per attempt (wall, all 118 attempts): p95 8.45 s taking the next sample up (8.24 s interpolated), maximum 15.6 s.
   - The record-only check "p95 and maximum per attempt ≤ 10 s" holds for p95 but not for the maximum. On a Jetson about 3 × slower, such an attempt would not fit the 30 s deadline.
 - **Operator requests (16), record F1:**
   - In 12 the truth (success range) was among the shown candidates.
@@ -180,6 +181,8 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 - **Start coverage (4.4):**
   - Of 14,889 drawable positions (a 0.25 m lattice, any of 8 headings, the sampler's footprint and keep-out), 56.6 % have a start's LiDAR within 1.5 m and 100 % within 3.0 m (the farthest 2.997 m). That is what a 3 m draw run until no start fits gives.
   - Computed by a scratch script (`coverage.py`, kept with the ws1 records).
+- **Failures by area:** all 16 failed valid sessions (the operator requests) started in the hall's southern half (y < 0), among the repeated shelf bays: 42 of 58 valid starts succeeded there (72 %), all 26 in the northern half. Linked at 6 m (twice the start spacing), 15 of them chain into one group, x −16.7 to 4.7 m, y −22.2 to −0.6 m; val4_084 (−25.5, −3.3) stands apart. F1's cases (the truth outside the shown candidates) are this repeated structure.
+- **Input overlap against development (4.4, record):** not measured. The sessions keep the matcher's candidates and timings but not their scan points, so the overlap of their matching input with the development captures cannot be computed from these records. A stationary capture at the same starts (B4a's tool) would give it if it is wanted.
 - **Scope:** this is the same hall with the seed-5 layout, a conditional check. The CP bounds are nominal bounds within one map, and spatial correlation can make the effective sample smaller.
 
 **Code after the collection:** `f593f2b3` (after `0fa66b4a`, which the collection ran) restores the spawn check's literal reason at its `require` (`tests/unit/mission/test_failures.py`: every reason has a class). The condition and message are the same as `0fa66b4a`. It changes `sim/isaac/run_transport.py`, so the branch head's fingerprint is not freeze 1's. A further world pooled with this judgement (4.4a) would have to run from the frozen snapshot, or start a new count.
