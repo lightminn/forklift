@@ -133,3 +133,53 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 - **Map:** `3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7`.
 - **Starts:** 93 (layer A 47, B 22, C 24), drawn with seed 1030, 3 m apart, until all three layers were exhausted (118,807 attempts); keep-out from the survey's own `result.json`.
 - **Second freeze** (`docs/validation/assets/b-p2d/freeze2.json`): the map id, the keep-out record (sha256 `7ca5b9f3…`) and the start list `val_s5.json` (sha256 `b86a94bf…`), committed before any session ran.
+
+## 4. Judgement (plan 4.0–4.4b)
+
+93 unattended sessions, one per start (record `docs/validation/assets/b-p2d/judgement.json`; ws1 bundle 13214, 3 slots, snapshot `bp2d_0fa66b4a`, bridge image by digest; the image id was the same after the collection). Judged on ws1 with `tools/reloc_judge.py --frozen freeze1.json --code-root <that snapshot>`. The judgement pools (exit 0):
+- no fingerprint mismatch;
+- no session off the freeze (image, arguments, external inputs, run root);
+- one argument set;
+- every session at its listed start.
+
+| | Result | Registered floor |
+|---|---|---|
+| Valid sessions (4.0) | **84** (invalid 9, all `reloc_invalid_input: not_at_target`; not run 0) | ≥ 60 |
+| Wrong / imprecise starts (4.1) | **0 / 0** of 68 started | 0 / 0 |
+| One-sided 95 % upper bound, valid denominator | 3.50 % | (≤ 5 %, the lead's condition) |
+| Same, started denominator (4.4b) | 4.31 % with 68 started | promotion: ≥ 59 started, 0 wrong (bound ≤ 5 %) |
+| Success (4.2) | **68 / 84 = 81.0 %**, Clopper-Pearson lower bound 72.5 % | observed ≥ 70 % |
+| Deadline hits (4.3) | 2 / 84 | ≤ 10 % |
+| Matcher stage over 32 s | 0 (maximum 30.5 s) | 0 |
+| Bridge stage | maximum 19.17 s, median 7.7 s | ≤ 40 s |
+
+- **All four floors pass:** safety, success, matcher time and bridge time.
+- **Promotion condition (4.4b):** met, with 68 started, 0 wrong, and a bound of 4.31 % against 5 %. The stricter variant the lead may choose (CP lower bound ≥ 70 %) is met too, at 72.5 %.
+- **Pose at the running tick, 68 starts:** median error 2.0 cm, p95 4.3 cm, maximum 4.9 cm; heading at most 0.0042 rad. Every start held its 10 s stand.
+- **Success by attempt:** 66 on the first attempt, 2 more after rescans (Δ = 2).
+- **By layer:**
+
+  | Layer | Valid | Success | Invalid |
+  |---|---|---|---|
+  | A | 46 | 34 | 1 |
+  | B | 20 | 18 | 2 |
+  | C | 18 | 16 | 6 |
+
+- **Matcher time:**
+  - per session stage: median 3.6 s, p95 20.6 s;
+  - per attempt (wall): p95 7.8 s, maximum 15.6 s.
+  - The record-only check "p95 and maximum per attempt ≤ 10 s" holds for p95 but not for the maximum. On a Jetson about 3 × slower, such an attempt would not fit the 30 s deadline.
+- **Operator requests (16), record F1:**
+  - In 12 the truth (success range) was among the shown candidates.
+  - In 2 it was among the matcher's candidates but not shown (val4_043, val4_075).
+  - In 2 it was not among any candidate (val4_021; val4_052, which was also a deadline hit).
+  - So an operator could have picked correctly in 12 of 16.
+- **Console gaps, record F2:**
+  - The non-stepping `prewarm` gap was 0.67 s at the median.
+  - It was 11.85 s once, on the bundle's first session (a cold start).
+- **Start coverage (4.4):**
+  - Of 14,889 drawable positions (a 0.25 m lattice, any of 8 headings, the sampler's footprint and keep-out), 56.6 % have a start's LiDAR within 1.5 m and 100 % within 3.0 m (the farthest 2.997 m). That is what a 3 m draw run until no start fits gives.
+  - Computed by a scratch script (`coverage.py`, kept with the ws1 records).
+- **Scope:** this is the same hall with the seed-5 layout, a conditional check. The CP bounds are nominal bounds within one map, and spatial correlation can make the effective sample smaller.
+
+**Code after the collection:** `f593f2b3` (after `0fa66b4a`, which the collection ran) restores the spawn check's literal reason at its `require` (`tests/unit/mission/test_failures.py`: every reason has a class). The condition and message are the same as `0fa66b4a`. It changes `sim/isaac/run_transport.py`, so the branch head's fingerprint is not freeze 1's. A further world pooled with this judgement (4.4a) would have to run from the frozen snapshot, or start a new count.
