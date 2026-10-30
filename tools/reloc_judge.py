@@ -263,7 +263,8 @@ def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict 
            "started": False, "outcome": None, "pose_class": None, "error_m": None, "error_rad": None,
            "hold_ok": None, "bridge_stage_s": None, "matcher_wall_max_s": None, "matcher_stage_max_s": None,
            "deadline_hit": False, "attempts": None, "truth_in_shown": None, "truth_in_candidates": None, "gaps": [],
-           "exit": None, "source_mismatches": [], "args_signature": None, "world": None, "start_mismatch": None}
+           "exit": None, "source_mismatches": [], "args_signature": None, "world": None, "start_mismatch": None,
+           "hard": None, "places": None, "place_reasons": []}
     if not d.is_dir():
         # never run: no evidence either way -- out of every denominator, and the judgement waits (B-P2d development)
         row["class"] = row["outcome"] = "not_run"
@@ -298,6 +299,11 @@ def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict 
     row["gaps"] = (result.get("reloc_console") or {}).get("gaps") or []
     attempts = rec.get("attempts") or []
     row["attempts"] = len(attempts)
+    # F1 (plan 2026-10-31-operator-placed-start 4.0-4.1): the operator's placements; a start the matcher alone did not
+    # confirm is the hard population F1 must rescue
+    places = rec.get("places") or []
+    row["places"], row["place_reasons"] = len(places), [p.get("reason") for p in places]
+    row["hard"] = not (rec.get("status") == "chosen" and rec.get("source") == "matcher")
     wall = [a["wall_s"] for a in attempts if a.get("wall_s") is not None]
     stage = [a["stage_s"] for a in attempts if a.get("stage_s") is not None]
     row["matcher_wall_max_s"] = max(wall) if wall else None
@@ -333,6 +339,8 @@ def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict 
     row["hold_ok"] = _hold_ok(_records(d / "epoch_1" / "run"), verdict, _load(d / "probe.json"))
     if row["pose_class"] != "success":
         row["outcome"] = row["pose_class"]
+    elif rec.get("source") == "operator_placed":  # F1: the operator placed it and the local re-match confirmed it
+        row["outcome"] = "rescued" if row["hold_ok"] else "hold_failed"
     elif rec.get("source") != "matcher":
         row["outcome"] = "operator"  # no operator in an unattended batch: never a success
     elif not row["hold_ok"]:
@@ -376,6 +384,14 @@ def cp_lower(k: int, n: int) -> float | None:
     from scipy.stats import beta
 
     return float(beta.ppf(0.05, k, n - k + 1))
+
+
+def _f1_place(valid: list) -> dict:
+    hard = [r for r in valid if r.get("hard") is not False]  # unknown (no record) counts against the floor
+    rescued = sum(r["outcome"] == "rescued" for r in hard)
+    return {"hard": len(hard), "rescued": rescued, "rescue_rate": rescued / len(hard) if hard else None,
+            "rescue_cp_lower": cp_lower(rescued, len(hard)),
+            "placements": sum(r.get("places") or 0 for r in valid)}
 
 
 def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
@@ -429,6 +445,8 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
             "bridge_time": (None if bridge_bound_s is None or not judged or missing
                             else all(b <= bridge_bound_s for b in bridge)),
         },
+        # F1: the hard population (the matcher alone did not confirm) and how many the operator's placement rescued
+        "f1_place": _f1_place(valid),
         "f1": {"requests": len(requests), "truth_in_shown": sum(bool(r.get("truth_in_shown")) for r in requests),
                "truth_in_candidates": sum(bool(r.get("truth_in_candidates")) for r in requests)},
         "f2": {"sessions_with_gaps": sum(bool(r.get("gaps")) for r in rows),

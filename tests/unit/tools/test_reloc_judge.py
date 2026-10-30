@@ -28,7 +28,7 @@ ARGS = {"seed": 5, "slam_map_bundle": "/bundle", "start_pose": [2.0, 1.0, 0.5], 
 
 
 def _session(root: Path, name: str, *, status="chosen", verdict_off=(0.02, 0.0, 0.0), hold=True, records=None,
-             exit_code=0, reason=None, shown=None, attempts=None, gaps=None, estimate_source="matcher",
+             exit_code=0, reason=None, shown=None, attempts=None, gaps=None, estimate_source="matcher", places=None,
              probe_end=True, reloc_wall=(100.0, 103.0, 120.0), sources=None, arguments=None, result=True,
              manifest=True, image_id=IMAGE_ID, inputs=None):
     d = root / name
@@ -38,7 +38,8 @@ def _session(root: Path, name: str, *, status="chosen", verdict_off=(0.02, 0.0, 
            "attempts": attempts if attempts is not None else [
                {"reason": "confirmed", "status": "ok", "wall_s": 2.5, "stage_s": 3.0,
                 "candidates": [{"base": TRUTH, "score": 0.9, "endpoint_fraction": 0.97}]}],
-           "estimate": TRUTH if status == "chosen" else None, "source": estimate_source if status == "chosen" else None}
+           "estimate": TRUTH if status == "chosen" else None, "source": estimate_source if status == "chosen" else None,
+           "places": list(places or [])}
     started = status == "chosen" and verdict_off is not None
     if started:
         rec["verdict"] = {"sim_s": 1.0, "truth_base": TRUTH,
@@ -425,3 +426,38 @@ def test_the_freeze_binds_the_arguments_and_the_external_inputs_the_sessions_ran
     assert rows[4]["source_mismatches"] == [f"run root {ref_root} (not the judged code root)"]
     fp = J.fingerprint(ROOT, IMAGE)
     assert "config/isaac_slam_lidar.yaml" in fp["files"] and "config/obstacle_layer_single.yaml" in fp["files"]
+
+
+# --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 4.0-4.3) --------------------------------
+REFUSED = [{"reason": "competitor", "status": "ok", "wall_s": 2.0, "stage_s": 3.0, "candidates": []}]
+
+
+def test_a_placed_start_that_holds_is_rescued_and_a_matcher_start_is_not_hard(tmp_path):
+    _session(tmp_path, "s1", estimate_source="operator_placed", attempts=REFUSED * 3,
+             places=[{"reason": "ambiguous"}, {"reason": "confirmed"}])
+    _session(tmp_path, "s2")  # the matcher confirmed: not the population F1 must rescue
+    _session(tmp_path, "s3", status="operator_timeout", verdict_off=None, exit_code=1,
+             reason="reloc_operator_timeout", attempts=REFUSED * 3, places=[{"reason": "edge"}] * 3)
+    rows = J.judge_sessions(tmp_path, _starts("s1", "s2", "s3"))
+    assert rows[0]["outcome"] == "rescued" and rows[0]["hard"] and rows[0]["places"] == 2
+    assert rows[0]["place_reasons"] == ["ambiguous", "confirmed"]
+    assert rows[1]["outcome"] == "success" and not rows[1]["hard"]
+    assert rows[2]["outcome"] == "operator_timeout" and rows[2]["hard"]
+    f1 = J.summarize(rows)["f1_place"]
+    assert f1["hard"] == 2 and f1["rescued"] == 1 and f1["rescue_rate"] == pytest.approx(0.5)
+
+
+def test_a_wrong_placed_start_is_a_wrong_start(tmp_path):
+    _session(tmp_path, "s1", estimate_source="operator_placed", verdict_off=(0.5, 0.0, 0.0), attempts=REFUSED * 3,
+             places=[{"reason": "confirmed"}])
+    [row] = J.judge_sessions(tmp_path, _starts("s1"))
+    assert row["outcome"] == "wrong" and row["hard"]
+    assert J.summarize([row])["wrong"] == 1
+
+
+def test_a_session_without_a_record_counts_as_hard_and_not_rescued(tmp_path):
+    (tmp_path / "s1" / "epoch_1").mkdir(parents=True)  # ran, but left no record
+    [row] = J.judge_sessions(tmp_path, _starts("s1"))
+    assert row["outcome"] == "no_record" and row["hard"] is None
+    f1 = J.summarize([row])["f1_place"]
+    assert f1["hard"] == 1 and f1["rescued"] == 0  # unknown counts against the rescue floor
