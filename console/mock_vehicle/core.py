@@ -58,6 +58,8 @@ LEASE_REQUIRED = {
     "sim_reset",
     "relocalize_pick",  # B-P2c: the start relocalization, as the live arbiter
     "relocalize_retry",
+    "relocalize_place",  # F1: the operator's placed pose and its confirmation
+    "relocalize_place_confirm",
 }
 RELIABLE = LEASE_REQUIRED | {"stop", "lease_request", "targets_request", "pick_request"}
 LATEST_ONLY = {"echo", "teleop", "input_state"}
@@ -75,6 +77,8 @@ STOPPED_ALLOWED = {
     "sim_reset",
     "relocalize_pick",  # B-P2c: a computation; the truck stands
     "relocalize_retry",
+    "relocalize_place",
+    "relocalize_place_confirm",
 }
 # B-P2c: while the start is unknown nothing may move the truck or replace the scene (the live arbiter's RELOC_REFUSED)
 RELOC_REFUSED = {"arm", "mission_submit", "mission_resume", "recovery", "sim_reset"}
@@ -155,6 +159,15 @@ def _valid(msg) -> str | None:
     if t in ("relocalize_pick", "relocalize_retry") and not _is_int(msg.get("generation")):
         return "invalid"  # B-P2c: required plain integers, as the live validator
     if t == "relocalize_pick" and not _is_int(msg.get("candidate")):
+        return "invalid"
+    if t in ("relocalize_place", "relocalize_place_confirm") and not _is_int(msg.get("generation")):
+        return "invalid"  # F1, as the live validator
+    if t == "relocalize_place":
+        pose = msg.get("pose")
+        if not (isinstance(pose, list) and len(pose) == 3 and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pose)):
+            return "invalid"
+    if t == "relocalize_place_confirm" and not _is_int(msg.get("preview_id")):
         return "invalid"
     if t in ("teleop", "echo"):
         echo = msg.get("echo")
@@ -274,9 +287,11 @@ class MockVehicle:
             m["status"], m["reason"] = status, reason
 
     def _stop(self, source: str) -> None:
-        if self.reloc is not None and self.reloc["state"] in ("relocalizing", "awaiting_pick", "reloc_failed"):
-            # B-P2c: a STOP interrupts the relocalization (its candidates go, a retry may follow)
-            self.reloc.update(state="stopped", candidates=[], generation=self.reloc["generation"] + 1)
+        if self.reloc is not None and self.reloc["state"] in ("relocalizing", "awaiting_pick", "reloc_failed",
+                                                              "placing", "place_preview"):
+            # B-P2c: a STOP interrupts the relocalization (its candidates go, a retry may follow); F1 its placement too
+            self.reloc.update(state="stopped", candidates=[], generation=self.reloc["generation"] + 1, preview=None,
+                              preview_id=None, preview_points=None)
             self._reloc_due = None
         if self.mode == "STOPPED":
             self._boundary()  # a new stop is a boundary even in the same mode
@@ -1003,15 +1018,47 @@ class MockVehicle:
         self._reloc_due = (self._now() + 2.0, ("localized", x, y, yaw))
         return self._reply(msg)
 
+    def _req_relocalize_place(self, msg: dict) -> dict:
+        """F1: the operator's placed pose; a fake local re-match previews the true place when the pose is within the
+        window (2 m, 0.6 rad), else refuses it (low_fit) -- for the screen only."""
+        r = self.reloc
+        if r is None:
+            return self._reply(msg, reason="not_relocalizing")
+        if r["state"] not in ("awaiting_pick", "reloc_failed", "place_preview"):
+            return self._reply(msg, reason="reloc_not_awaiting")
+        if msg["generation"] != r["generation"]:
+            return self._reply(msg, reason="reloc_stale_pick")
+        if r["places"] >= r["max_places"]:
+            return self._reply(msg, reason="reloc_place_limit")
+        stage = r["state"] if r["state"] != "place_preview" else r.get("stage", "awaiting_pick")
+        r.update(state="placing", places=r["places"] + 1, placed=list(msg["pose"]), preview=None, preview_id=None,
+                 preview_points=None, stage=stage)
+        self._reloc_due = (self._now() + 1.5, ("placed",))
+        return self._reply(msg, places=r["places"])
+
+    def _req_relocalize_place_confirm(self, msg: dict) -> dict:
+        r = self.reloc
+        if r is None:
+            return self._reply(msg, reason="not_relocalizing")
+        if r["state"] != "place_preview":
+            return self._reply(msg, reason="reloc_not_awaiting")
+        if msg["generation"] != r["generation"] or msg["preview_id"] != r["preview_id"]:
+            return self._reply(msg, reason="reloc_stale_pick")
+        x, y, yaw = r["preview"]
+        r.update(state="localizing", candidates=[], generation=r["generation"] + 1)
+        self._reloc_due = (self._now() + 2.0, ("localized", x, y, yaw))
+        return self._reply(msg)
+
     def _req_relocalize_retry(self, msg: dict) -> dict:
         r = self.reloc
         if r is None:
             return self._reply(msg, reason="not_relocalizing")
-        if r["state"] not in ("awaiting_pick", "reloc_failed", "stopped"):
+        if r["state"] not in ("awaiting_pick", "reloc_failed", "stopped", "place_preview"):
             return self._reply(msg, reason="reloc_not_awaiting")
         if msg["generation"] != r["generation"]:
             return self._reply(msg, reason="reloc_stale_pick")
-        r.update(state="relocalizing", candidates=[], generation=r["generation"] + 1, attempts=0)
+        r.update(state="relocalizing", candidates=[], generation=r["generation"] + 1, attempts=0, preview=None,
+                 preview_id=None, preview_points=None)
         self._reloc_due = (self._now() + 2.0, ("candidates",))
         return self._reply(msg, generation=r["generation"])
 
@@ -1023,6 +1070,20 @@ class MockVehicle:
         if what[0] == "candidates":
             self.reloc.update(state="awaiting_pick", attempts=3, last_reason="competitor",
                               candidates=self._reloc_candidates())
+        elif what[0] == "placed":  # F1: the fake local re-match
+            r = self.reloc
+            if r["state"] != "placing":
+                return
+            px, py, pyaw = r["placed"]
+            x, y, yaw = self.pose.x_m, self.pose.y_m, self.pose.yaw_rad
+            dyaw = abs(math.atan2(math.sin(pyaw - yaw), math.cos(pyaw - yaw)))
+            if math.hypot(px - x, py - y) <= 1.7 and dyaw <= 0.5:
+                pts = [[round(x + 3.0 * math.cos(a), 3), round(y + 3.0 * math.sin(a), 3)]
+                       for a in (k * math.pi / 18 for k in range(36))]
+                r.update(state="place_preview", preview=[x, y, yaw], preview_id=r["places"], preview_points=pts,
+                         place_reason=None)
+            else:
+                r.update(state=r.get("stage", "awaiting_pick"), place_reason="low_fit")
         else:  # localized: the place is known, the session goes on as usual
             self.pose = replace(self.pose, x_m=what[1], y_m=what[2], yaw_rad=what[3])
             self.reloc = None
@@ -1034,7 +1095,10 @@ class MockVehicle:
             # B-P2c: a start the matcher could not confirm, waiting for the operator's pick (10 min to answer)
             self.reloc = {"state": "awaiting_pick", "generation": 1, "attempts": 3, "last_reason": "competitor",
                           "deadline_left_s": 0.0, "operator_until": now + 540.0,
-                          "candidates": self._reloc_candidates()}
+                          "candidates": self._reloc_candidates(),
+                          # F1: the operator's placements (plan 2026-10-31-operator-placed-start 1.2)
+                          "places": 0, "max_places": 3, "placed": None, "preview": None, "preview_id": None,
+                          "preview_points": None, "place_reason": None}
             return
         if kind in self.PICK_INJECTIONS:
             self._pick_override = kind  # the next pick only (CT-2 console plan C7)

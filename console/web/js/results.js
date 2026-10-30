@@ -262,8 +262,12 @@ export class ConfirmGate {
 
 function sameKey(a, b) {
   // B-P2c: a start candidate's pick is the same only for the same candidate of the same set (absent elsewhere)
+  // F1: a placement only for the same placed pose, a confirmation only for the same preview
+  const samePose = (p, q) => (p === undefined && q === undefined)
+    || (Array.isArray(p) && Array.isArray(q) && p.length === q.length && p.every((v, k) => v === q[k]));
   return a.kind === b.kind && a.epoch === b.epoch && a.leaseId === b.leaseId && a.controlGen === b.controlGen
-    && a.generation === b.generation && a.candidate === b.candidate;
+    && a.generation === b.generation && a.candidate === b.candidate && samePose(a.pose, b.pose)
+    && a.preview_id === b.preview_id;
 }
 
 // The back-off advice (contract 5.2): a guide from the pose at the failure, not a permit.

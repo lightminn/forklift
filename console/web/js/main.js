@@ -15,7 +15,7 @@ import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
 import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
-import { candidateAt, pickKey, relocActions, relocOf } from "./reloc.js";
+import { candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -528,6 +528,44 @@ $("reloc-cands").onclick = (e) => {
   const reloc = relocOf(m.session.state);
   if (b && reloc && relocActions(reloc, m.session.hasLease).pick) pickCandidate(reloc, Number(b.dataset.candidate));
 };
+// F1 (docs/plans/2026-10-31-operator-placed-start.md 1.2): the operator places the start on the map (press where the
+// truck stands, drag along its heading), sends it with two clicks, then confirms the preview with two clicks
+m.placeMode = false;
+m.placeGhost = null;
+$("reloc-place").onclick = () => {
+  const reloc = relocOf(m.session.state);
+  if (!reloc || !placeActions(reloc, m.session.hasLease).place.enabled) return;
+  m.placeMode = !m.placeMode;
+  if (!m.placeMode) m.placeGhost = null;
+  else log("지도에서 차가 선 자리를 누르고 앞쪽으로 끌어 놓으세요");
+};
+$("reloc-place-send").onclick = () => {
+  const reloc = relocOf(m.session.state);
+  const pose = m.placeGhost;
+  if (!reloc || !pose || !placeActions(reloc, m.session.hasLease).place.enabled) return;
+  const key = placeKey(reloc, pose, m.confirmKey("relocalize_place"));
+  const step = m.confirm.click(key, performance.now());
+  if (step === "armed") log("놓은 자세 · 한 번 더 누르면 그 근처를 맞춥니다");
+  if (step !== "send") return;
+  req("relocalize_place", { generation: key.generation, pose: key.pose }).then((r) => {
+    if (r && r.t === "ack") {
+      m.placeMode = false;
+      m.placeGhost = null;
+      log("놓은 자리 근처를 맞추는 중");
+    }
+  });
+};
+$("reloc-confirm").onclick = () => {
+  const reloc = relocOf(m.session.state);
+  if (!reloc || !placeActions(reloc, m.session.hasLease).confirm) return;
+  const key = previewKey(reloc, m.confirmKey("relocalize_place_confirm"));
+  const step = m.confirm.click(key, performance.now());
+  if (step === "armed") log("미리보기 · 한 번 더 누르면 이 위치로 정합니다");
+  if (step !== "send") return;
+  req("relocalize_place_confirm", { generation: key.generation, preview_id: key.preview_id }).then((r) => {
+    if (r && r.t === "ack") log("놓은 위치로 정했습니다 · SLAM 을 그 위치에서 시작합니다");
+  });
+};
 $("reloc-retry").onclick = () => {
   const reloc = relocOf(m.session.state);
   if (reloc && relocActions(reloc, m.session.hasLease).retry.enabled) req("relocalize_retry", { generation: reloc.generation });
@@ -696,7 +734,14 @@ mapCv.addEventListener("pointermove", (e) => {
   if (!prev || !m.view.fitted) return;
   const cur = { x: e.clientX, y: e.clientY };
   pointers.set(e.pointerId, cur);
-  if (pointers.size === 1) {
+  if (pointers.size === 1 && m.placeMode && press) {
+    // F1: in place mode a drag sets the placed pose's heading instead of panning (drawn as it goes)
+    const { rc, w, h } = mapSize();
+    const pose = placeFromDrag(m.view, w, h, { x: press.x - rc.left, y: press.y - rc.top },
+                               { x: cur.x - rc.left, y: cur.y - rc.top });
+    if (pose) m.placeGhost = pose;
+    press.moved = true;
+  } else if (pointers.size === 1) {
     panBy(m.view, cur.x - prev.x, cur.y - prev.y);
     if (press && Math.hypot(cur.x - press.x, cur.y - press.y) > 4) press.moved = true;
   } else if (pointers.size === 2 && pinch) {
@@ -918,6 +963,7 @@ function frame(now) {
       vehicleId: m.session.welcome?.vehicle_id,
       stale: m.stale,
       armedCandidate: m.armedCandidate,
+      placeGhost: m.placeMode ? m.placeGhost : null,
     },
     tok,
     m.view,

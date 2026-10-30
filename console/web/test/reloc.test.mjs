@@ -95,3 +95,67 @@ test("the map fits the candidates while the truck's place is unknown", () => {
   const b = contentBounds(null, null, state(RELOC));
   assert.ok(b.x0 <= 3.0 - 1 && b.x0 + b.w >= 9.0 + 1 && b.y0 <= 0.0 && b.y0 + b.h >= 5.0);
 });
+
+// --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2) --------------------------------
+import { placeActions, placeFromDrag, placeKey, previewKey } from "../js/reloc.js";
+
+const VIEW = { cx: 0, cy: 0, scale: 20, fitted: true }; // 20 px per metre, the map's centre at the screen's
+const PLACING = { ...RELOC, places: 1, max_places: 3, placed: [5.0, 2.0, 0.3], preview: null, preview_id: null };
+
+test("a press and a drag on the map place a pose: where pressed, heading along the drag", () => {
+  const p = placeFromDrag(VIEW, 400, 300, { x: 200, y: 150 }, { x: 240, y: 110 });
+  assert.deepEqual(p.slice(0, 2), [0, 0]);
+  assert.ok(Math.abs(p[2] - Math.PI / 4) < 1e-9); // up and right on the screen is +x +y in the map
+  assert.equal(placeFromDrag(VIEW, 400, 300, { x: 200, y: 150 }, { x: 205, y: 150 }), null); // no heading yet
+});
+
+test("placing needs the lease, a candidate stage or a preview, and placements left", () => {
+  assert.equal(placeActions({ ...PLACING, state: "awaiting_pick" }, true).place.enabled, true);
+  assert.equal(placeActions({ ...PLACING, state: "reloc_failed" }, true).place.enabled, true);
+  assert.equal(placeActions({ ...PLACING, state: "place_preview", preview_id: 1 }, true).place.enabled, true);
+  assert.equal(placeActions({ ...PLACING, state: "placing" }, true).place.enabled, false);
+  assert.equal(placeActions({ ...PLACING, state: "relocalizing" }, true).place.enabled, false);
+  const used = placeActions({ ...PLACING, state: "awaiting_pick", places: 3 }, true).place;
+  assert.equal(used.enabled, false);
+  assert.match(used.why, /세 번/);
+  assert.match(placeActions({ ...PLACING, state: "awaiting_pick" }, false).place.why, /조종 권한/);
+});
+
+test("only a preview may be confirmed, with the lease", () => {
+  assert.equal(placeActions({ ...PLACING, state: "place_preview", preview_id: 1 }, true).confirm, true);
+  assert.equal(placeActions({ ...PLACING, state: "place_preview", preview_id: 1 }, false).confirm, false);
+  assert.equal(placeActions({ ...PLACING, state: "awaiting_pick" }, true).confirm, false);
+});
+
+test("the two-step keys bind the pose or the preview to the set and the session they were made in", () => {
+  const base = { epoch: 5, leaseId: "L", controlGen: 3 };
+  const k = placeKey(PLACING, [5.0, 2.0, 0.3], base);
+  assert.equal(k.kind, "relocalize_place");
+  assert.notDeepEqual(k, placeKey(PLACING, [5.5, 2.0, 0.3], base)); // another pose arms again
+  const pk = previewKey({ ...PLACING, state: "place_preview", preview_id: 2 }, base);
+  assert.deepEqual([pk.kind, pk.generation, pk.preview_id], ["relocalize_place_confirm", 2, 2]);
+});
+
+test("the placement states and a refusal say what happened", () => {
+  assert.match(relocSummary({ ...PLACING, state: "placing" }).text, /맞추는 중/);
+  assert.match(relocSummary({ ...PLACING, state: "place_preview", preview_id: 1 }).text, /미리보기/);
+  assert.match(relocSummary({ ...PLACING, state: "awaiting_pick", place_reason: "ambiguous" }).text, /스캔만으로/);
+  assert.match(relocSummary({ ...PLACING, state: "awaiting_pick" }).text, /놓기 1\/3/);
+});
+
+test("a second click sends only the same placed pose or the same preview it armed", () => {
+  const base = { epoch: 5, leaseId: "L", controlGen: 3 };
+  const gate = new ConfirmGate();
+  assert.equal(gate.click(placeKey(PLACING, [5.0, 2.0, 0.3], base), 0), "armed");
+  assert.equal(gate.click(placeKey(PLACING, [5.5, 2.0, 0.3], base), 800), "armed"); // re-dragged: arms again
+  assert.equal(gate.click(placeKey(PLACING, [5.5, 2.0, 0.3], base), 1600), "send");
+  const prev = { ...PLACING, state: "place_preview" };
+  assert.equal(gate.click(previewKey({ ...prev, preview_id: 1 }, base), 0), "armed");
+  assert.equal(gate.click(previewKey({ ...prev, preview_id: 2 }, base), 800), "armed"); // a newer preview
+});
+
+test("a preview may also be dropped for a new global attempt, and says how to confirm it", () => {
+  const prev = { ...PLACING, state: "place_preview", preview_id: 1 };
+  assert.equal(relocActions(prev, true).retry.enabled, true);
+  assert.equal(relocActions(prev, true).pick, false);
+});

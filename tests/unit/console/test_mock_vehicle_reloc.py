@@ -98,3 +98,46 @@ def test_without_a_relocalization_the_commands_are_refused(v):
     lease = _lease(v)
     assert _req(v, lease, "relocalize_pick", "p", generation=1, candidate=0)["reason"] == "not_relocalizing"
     assert _req(v, lease, "relocalize_retry", "r", generation=1)["reason"] == "not_relocalizing"
+
+
+# --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2) ---------------------------------
+def test_a_placement_near_the_truck_previews_and_its_confirmation_places_the_truck(v):
+    v.inject("relocalize")
+    lease = _lease(v)
+    true = (v.pose.x_m, v.pose.y_m, v.pose.yaw_rad)
+    assert _req(v, lease, "relocalize_place", "pl", generation=1, pose=[true[0] + 0.4, true[1], true[2] + 0.1])["t"] == "ack"
+    r = v.make_state()["slam"]["reloc"]
+    assert r["state"] == "placing" and r["places"] == 1 and r["max_places"] == 3
+    v.clock.t += 2.0
+    v.step(0.1)
+    r = v.make_state()["slam"]["reloc"]
+    assert r["state"] == "place_preview" and r["preview_id"] == 1 and r["preview_points"]
+    assert r["preview"] == pytest.approx(list(true))
+    # the test's clock jumped past the lease without the page's echoes: a new one (its own request id; "L" replays)
+    lease = v.handle("a", {"t": "lease_request", "request_id": "L2", "session_epoch": v.session_epoch},
+                     conn_id="c1")["lease_id"]
+    assert _req(v, lease, "relocalize_place_confirm", "c", generation=1, preview_id=1)["t"] == "ack"
+    v.clock.t += 3.0
+    v.step(0.1)
+    assert v.make_state()["pose"]["x_m"] == pytest.approx(true[0])
+
+
+def test_a_placement_far_from_the_truck_is_refused_back_to_the_candidates(v):
+    v.inject("relocalize")
+    lease = _lease(v)
+    _req(v, lease, "relocalize_place", "pl", generation=1, pose=[v.pose.x_m + 5.0, v.pose.y_m, v.pose.yaw_rad])
+    v.clock.t += 2.0
+    v.step(0.1)
+    r = v.make_state()["slam"]["reloc"]
+    assert r["state"] == "awaiting_pick" and r["place_reason"] == "low_fit" and r["places"] == 1
+
+
+@pytest.mark.parametrize("t, fields", [
+    ("relocalize_place", {"generation": 1, "pose": [1.0, 2.0]}),
+    ("relocalize_place", {"generation": 1, "pose": [1.0, 2.0, True]}),
+    ("relocalize_place_confirm", {"generation": 1}),
+])
+def test_a_malformed_placement_or_confirmation_is_invalid(v, t, fields):
+    v.inject("relocalize")
+    lease = _lease(v)
+    assert _req(v, lease, t, "x", **fields)["reason"] == "invalid"
