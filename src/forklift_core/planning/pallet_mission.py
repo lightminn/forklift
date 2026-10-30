@@ -730,6 +730,15 @@ def exit_prefix_length_m(start: Pose2D, footprint: Footprint, exit_prefix: ExitP
     return None
 
 
+def failed_plan_reason(result: PlanResult) -> str:
+    """A failed plan's status, with the unmet exit prefix or return-start backoff that came before it -- the attempt the
+    final status may hide (``invalid_start (exit_prefix unmet:search_no_path)``); the status alone otherwise."""
+    notes = [f"{name} {record['status']}" for name in ("exit_prefix", "start_backoff")
+             for record in [getattr(result, name, None)]
+             if isinstance(record, dict) and str(record.get("status", "")).startswith("unmet")]
+    return result.status if not notes else f"{result.status} ({', '.join(notes)})"
+
+
 def _join_prefix(prefix: PlanResult, search: PlanResult, record: dict, field_: str = "exit_prefix") -> PlanResult:
     """The straight reverse then the search from its end, the search's own records kept; ``record`` goes in
     ``field_`` (exit_prefix, or start_backoff for the return-start backoff)."""
@@ -767,7 +776,11 @@ def _transport_search(start, goal, props, footprint, bounds, config, *, occupanc
         return replace(plain(), exit_prefix={**record, "status": "unmet:straight_collision"})
     search = _search(end, goal, props, footprint, bounds, config, occupancy=occupancy, deadline=deadline)
     if not search.success:
-        return replace(plain(), exit_prefix={**record, "status": f"unmet:search_{search.status}"})
+        # the plain search's status is the result's (an in-slot start says invalid_start); the prefix end's own search
+        # -- the failure that sent it there -- is kept beside it (docs/validation/2026-10-31-invalid-start-diagnosis.md)
+        end_search = {"status": search.status, "attempts": [list(a) for a in search.search_attempts]}
+        return replace(plain(), exit_prefix={**record, "status": f"unmet:search_{search.status}",
+                                             "end_search": end_search})
     return _join_prefix(straight, search, {**record, "status": "prefix", "length_m": distance,
                                             "min_clearance_m": footprint_clearance_m(end, footprint, exit_prefix.obstacles)})
 

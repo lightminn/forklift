@@ -83,7 +83,7 @@ from forklift_core.perception.pocket_detector import DetectorParams, ExpectedSit
 from forklift_core.localization.scan_docking import laser_points
 from forklift_core.localization.slam_pose import compose, invert
 from forklift_core.planning import PlanResult, Rectangle, collision_free_pose
-from forklift_core.planning.pallet_mission import SearchBudget
+from forklift_core.planning.pallet_mission import SearchBudget, failed_plan_reason
 from forklift_core.planning import Pose2D as PlanningPose
 
 __all__ = ["MissionCore"]
@@ -7089,7 +7089,7 @@ class MissionCore:
             replan_status=replanned.status,
             planning_wall_s=time.monotonic() - replan_start,
         )
-        require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
+        require(replanned.success, f"slam_release_replan_failed: {failed_plan_reason(replanned)}")
         paths[leg] = replanned
         state.setdefault("paths", {})[leg] = path_record(replanned)
         self.hooks.write_paths()
@@ -7292,7 +7292,7 @@ class MissionCore:
             note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
                      planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
-        hooks.require(replanned.success, f"slam_release_replan_failed: {replanned.status}")
+        hooks.require(replanned.success, f"slam_release_replan_failed: {failed_plan_reason(replanned)}")
         paths[leg] = replanned
         state.setdefault("paths", {})[leg] = hooks.path_record(replanned)
         hooks.write_paths()
