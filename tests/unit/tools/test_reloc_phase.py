@@ -503,3 +503,15 @@ def test_a_stop_while_placing_drops_the_match(tmp_path):
     box["inputs"] = _symmetric(tmp_path, FakeConsole(script), operator_deadline_at=time.monotonic() + 600.0)
     out = P.run(box["inputs"])
     assert out["status"] == "operator_timeout" and out["places"][0]["reason"] == "interrupted"
+
+
+def test_the_placement_settings_come_from_their_frozen_file_or_are_marked_provisional(tmp_path):
+    from forklift_core.localization import local_match as LM
+
+    cfg, record = P.place_settings(tmp_path)
+    assert cfg == LM.PlaceConfig() and record == {"file": None, "provisional": True}
+    f = tmp_path / P.PLACE_CONFIG
+    f.parent.mkdir(parents=True)
+    f.write_text('{"r_amb": 0.86, "radius_m": 2.0, "yaw_rad": 0.6, "edge_m": 0.3, "edge_rad": 0.1, "deadline_s": 10.0}')
+    cfg, record = P.place_settings(tmp_path)
+    assert cfg.r_amb == 0.86 and record["file"] == P.PLACE_CONFIG and len(record["sha256"]) == 64

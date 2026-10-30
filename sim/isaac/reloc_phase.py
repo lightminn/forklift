@@ -317,6 +317,7 @@ def failure_reason(out: dict) -> str | None:
 
 MATCH_CONFIG = "docs/validation/assets/b-p1b/match_config.json"
 DEV_CHOICE = "docs/validation/assets/b-p1b/dev_choice.json"
+PLACE_CONFIG = "docs/validation/assets/f1/place_config.json"  # F1's first freeze (window, R_AMB, deadline)
 
 
 def frozen_settings(root: Path) -> tuple:
@@ -332,4 +333,15 @@ def frozen_settings(root: Path) -> tuple:
     return cfg, reloc, record
 
 
-__all__ = ["DEV_CHOICE", "MATCH_CONFIG", "RelocInputs", "failure_reason", "frozen_settings", "run"]
+def place_settings(root: Path) -> tuple:
+    """F1's placement settings (plan 2026-10-31-operator-placed-start 2, 4.6): the frozen file with its hash, or the
+    plan's provisional values (R_AMB not yet chosen) marked as such."""
+    path = Path(root) / PLACE_CONFIG
+    if not path.exists():
+        return LM.PlaceConfig(), {"file": None, "provisional": True}
+    data = path.read_bytes()
+    return LM.PlaceConfig(**json.loads(data)), {"file": PLACE_CONFIG, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+__all__ = ["DEV_CHOICE", "MATCH_CONFIG", "PLACE_CONFIG", "RelocInputs", "failure_reason", "frozen_settings",
+           "place_settings", "run"]

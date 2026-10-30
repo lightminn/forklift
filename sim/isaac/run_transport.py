@@ -3164,6 +3164,8 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
     if abs(lx - R.LASER_X_M) > 1e-9 or abs(ly) > 1e-9:  # the matcher's laser poses become base poses by R's frames
         raise SessionFailure(f"reloc_config_error: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
     cfg, reloc_cfg, settings_record = frozen or reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
+    # F1: the operator's placements (frozen file, or the plan's provisional values) -- recorded with the settings
+    place_cfg, place_record = reloc_phase.place_settings(Path(__file__).resolve().parents[2])
     t0 = time.monotonic()
     index = G.MapIndex(bundle.grid, cfg)
     index_s = time.monotonic() - t0
@@ -3174,8 +3176,9 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
-        operator_deadline_at=None if console is None else operator_deadline(args)))
-    record = {**out, "map_id": bundle.map_id, "settings": settings_record, "index_build_s": round(index_s, 3),
+        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg))
+    record = {**out, "map_id": bundle.map_id, "settings": settings_record, "place_settings": place_record,
+              "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
                                 if out["estimate"] is not None else None)}
     state["start_reloc"] = record
