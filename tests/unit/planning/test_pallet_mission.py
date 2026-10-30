@@ -910,7 +910,7 @@ def test_the_trace_keeps_an_earlier_fallback_when_a_later_search_fails(monkeypat
     real_plan = pallet_mission.plan_hybrid_astar
     goals = []
 
-    def transport_fails(start, goal, *rest):
+    def transport_fails(start, goal, *rest, **kwargs):
         if goal not in goals:
             goals.append(goal)
         if len(goals) == 1:
@@ -957,6 +957,8 @@ def test_the_trace_keeps_an_earlier_fallback_when_a_later_search_fails(monkeypat
         (2, "no_path", 0.2, round(np.radians(10), 6), 0.25),
         (1, "no_path", 0.2, round(np.radians(10), 6), 0.25),
         (8, "no_path", 0.1, round(np.radians(5), 6), 0.10),
+        # the tail: the caller's 0.2 m lattice at 5 deg (docs/validation/2026-10-31-invalid-start-diagnosis.md 2(b))
+        (8, "no_path", 0.2, round(np.radians(5), 6), 0.25),
     ]
     assert all(entry[2] > 0 for entry in approach)
 
@@ -1015,7 +1017,7 @@ def test_a_failure_other_than_search_exhaustion_is_not_retried(monkeypatch):
 
 
 def _exhausted(received):
-    def plan(*args):
+    def plan(*args, **kwargs):
         received.append(args[-1])
         return pallet_mission.PlanResult(
             False,
@@ -1039,17 +1041,18 @@ def test_the_fine_lattice_is_tried_first_at_the_same_interval(monkeypatch):
     intervals = [c.analytic_expansion_interval for c in received]
     base = (config.xy_resolution_m, config.yaw_resolution_rad)
     fine = (0.1, np.radians(5))
-    assert lattices == [base, fine, base, base, base, fine, fine]
-    assert intervals == [8, 8, 4, 2, 1, 8, 8]
+    tail = (config.xy_resolution_m, np.radians(5))
+    assert lattices == [base, fine, base, base, base, fine, fine, tail]
+    assert intervals == [8, 8, 4, 2, 1, 8, 8, 8]
     # The earlier ladder keeps the caller's budget and primitive; the extended
     # one runs after it: the fine lattice at four times the budget, then with
     # a 0.10 m primitive (docs/plans/2026-10-03-transport-stage-fixes.md, T2).
     assert [c.max_expansions for c in received] == [config.max_expansions] * 5 + [
         4 * config.max_expansions
-    ] * 2
+    ] * 3
     assert [c.primitive_length_m for c in received] == [
         config.primitive_length_m
-    ] * 6 + [0.10]
+    ] * 6 + [0.10, config.primitive_length_m]
     for retry in received[1:5]:
         assert (
             replace(
@@ -1175,7 +1178,7 @@ def test_a_boxed_start_repeats_the_whole_ladder_at_the_finer_collision_step(
 ):
     received = []
 
-    def boxed(*args):
+    def boxed(*args, **kwargs):
         received.append(args[-1])
         return pallet_mission.PlanResult(
             False,
@@ -1193,13 +1196,13 @@ def test_a_boxed_start_repeats_the_whole_ladder_at_the_finer_collision_step(
     # ladder moves straight to the finer step.
     steps = [c.collision_step_m for c in received]
     base = g2_config().collision_step_m
-    assert steps == [base] + [0.01] * 6
+    assert steps == [base] + [0.01] * 7  # the tail at the boxed step too
     # The fine lattice closed, so its larger-budget search is skipped.
-    assert [c.analytic_expansion_interval for c in received] == [8, 8, 8, 4, 2, 1, 8]
+    assert [c.analytic_expansion_interval for c in received] == [8, 8, 8, 4, 2, 1, 8, 8]
 
 
 def _no_path_after(expanded, received):
-    def plan(*args):
+    def plan(*args, **kwargs):
         received.append(args[-1])
         return pallet_mission.PlanResult(
             False,

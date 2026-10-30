@@ -66,6 +66,17 @@ FALLBACK_FINE_PRIMITIVE_M = 0.10
 # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P6).
 FALLBACK_BOXED_COLLISION_STEP_M = 0.01
 _RETRIED_STATUSES = ("expansion_limit", "no_path")
+# The ladder's tail (docs/validation/2026-10-31-invalid-start-diagnosis.md 2(b), lead 2026-10-31): after every attempt
+# above ran out, once more on the caller's position lattice with a 5 deg heading lattice and this multiple of the
+# budget -- the same footprint, clearance, collision step and primitive. rxi_box15_aisle_rack_s1's prefix end closed
+# the 0.2 m / 10 deg queue (353 expansions) and ran the 0.1 m / 5 deg one out at 120,000; 0.2 m / 5 deg planned it in
+# 16,080 (10 s on an idle ws1 core, about 27 s at the 2.7x a running Isaac session gave that run's ladder). Its own wall
+# cap, inside any ladder budget, bounds what a search that still fails costs; a failed tail leaves the ladder's failure
+# as the result, so a search the earlier ladder solved or failed ends as before apart from the time.
+FALLBACK_TAIL_YAW_RAD = pi / 36
+FALLBACK_TAIL_BUDGET_FACTOR = 4
+FALLBACK_TAIL_WALL_S = 30.0
+FALLBACK_TAIL_MIN_S = 1.0  # less left of the ladder's budget than this: no tail
 DEFAULT_TRANSPORT_PRIMITIVE_LENGTH_M = 0.25
 
 
@@ -128,11 +139,13 @@ def _search(
 
     attempts_config = []
 
-    def attempt(attempt_config):
+    def attempt(attempt_config, own_deadline=None):
         attempts_config.append(attempt_config)
         # Without a grid the call is exactly the pre-grid one.
         extra = {} if occupancy is None else {"occupancy": occupancy}
-        if deadline is not None:
+        if own_deadline is not None:
+            extra["deadline"] = own_deadline
+        elif deadline is not None:
             extra["deadline"] = deadline
         result = plan_hybrid_astar(
             start, goal, obstacles, footprint, bounds, attempt_config, **extra
@@ -175,10 +188,27 @@ def _search(
             continue
         result = attempt(retry)
         interval = retry.analytic_expansion_interval
+    before_tail = None  # the ladder's own end, when a tail ran and failed
+    if (extended and FALLBACK_TAIL_YAW_RAD is not None and not result.success
+            and result.status in _RETRIED_STATUSES):
+        tail = replace(config, yaw_resolution_rad=min(FALLBACK_TAIL_YAW_RAD, config.yaw_resolution_rad),
+                       max_expansions=config.max_expansions * FALLBACK_TAIL_BUDGET_FACTOR)
+        now = time.monotonic()
+        cap = determinism.budget(FALLBACK_TAIL_WALL_S)
+        if deadline is not None:
+            cap = min(cap, deadline - now)
+        if cap >= FALLBACK_TAIL_MIN_S and tail not in attempts_config:
+            ladder_result = result
+            tail_result = attempt(tail, own_deadline=now + cap)
+            if tail_result.success:
+                result, interval = tail_result, tail.analytic_expansion_interval
+            else:
+                result, before_tail = ladder_result, now
     if budget is not None:
         ended = time.monotonic()
         budget.spent_s.append(ended - started)
-        if ended > deadline and result.status != "timeout":
+        # a failed tail is judged at the ladder's own end: its time never turns the ladder's failure into a timeout
+        if (before_tail if before_tail is not None else ended) > deadline and result.status != "timeout":
             determinism.timed_out("search_ladder")
             result = _timed_out(result)
     return replace(
