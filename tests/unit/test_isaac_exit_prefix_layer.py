@@ -264,3 +264,27 @@ def test_a_beam_that_read_nothing_does_not_hide_a_danger_in_the_same_scan_nor_ke
     lay.add_scans(10.1, raw, odom_rear=P0, loaded=True, correction=(0.0, 0.0, 0.0), version=0)
     st = lay.exit_exempt_status()
     assert st.get("rang") is None and st["invalid_scans"] == 1 and lay.exit_verified is None
+
+
+def test_without_a_region_the_on_arguments_leave_every_layer_answer_as_the_off_call_does():
+    """The off-path replay's premise (docs/plans/2026-10-29-riib-exit-prefix-default-batch.md §2): the replay hands the
+    layer's recorded answers back, so the layer itself must answer the same with the exemption's arguments (correction,
+    version) and no region set -- a regression scene with no exit prefix -- as without them."""
+    def answers(on):
+        lay = layer()
+        out = []
+        for k in range(4):
+            extra = {"correction": (0.0, 0.0, 0.0), "version": 0} if on else {}
+            lay.add_scans(9.7 + 0.1 * k, scan(lay, box=(-0.9, -0.6, -0.15, 0.15)), odom_rear=P0, loaded=True,
+                          **extra)
+        lay.refresh(10.05, (0.0, 0.0, 0.0), 0, current_pose=P0, path_ahead=PATH, loaded=True, direction=-1)
+        out.append(lay.limit(10.05, current_pose=P0, curvature_inv_m=0.0, direction=-1, loaded=True, cap_mps=0.18))
+        out.append(dict(lay.last_scan_s))
+        snap = lay.snapshot
+        out.append(None if snap is None else (snap.state.tobytes(), np.nan_to_num(snap.free_stamp, nan=-1).tobytes()))
+        return out, lay.exit_exempt_status()
+
+    off, _ = answers(False)
+    on, status = answers(True)
+    assert on == off
+    assert not status.get("transformed") and status.get("rang") is None

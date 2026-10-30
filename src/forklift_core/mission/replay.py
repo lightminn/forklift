@@ -321,7 +321,7 @@ class ReplaySession:
             raise self.fail(f"tick {tick['tick']} outputs: {exc}") from None
         if _canonical(got) != _canonical(tick["outputs"]):
             raise self.fail(f"tick {tick['tick']} outputs differ")
-        if list(branches) != tick["branches"]:
+        if self._kept_branches(branches) != self._kept_branches(tick["branches"]):
             raise self.fail(f"tick {tick['tick']} branches {branches} differ from {tick['branches']}")
         self.tick = None
         self.ticks_done += 1
@@ -339,8 +339,9 @@ class ReplaySession:
             node = Encoder(opaque_ok=True, value_types=self.value_types, hash_arrays=True,
                            identity=False).encode(final_state)
             recorded_node = json.loads(recorded.read_text())
-            if self.video_sink_paths:  # a video run: the counts its frames keep are not the replay's (video_sink_paths)
-                for path in VIDEO_STATE_KEYS:
+            dropped = (VIDEO_STATE_KEYS if self.video_sink_paths else ()) + tuple(self.ignored_state_keys)
+            if dropped:  # a video run's frame counts (video_sink_paths); an off-path replay's feature keys
+                for path in dropped:
                     _drop_key(node, path)
                     _drop_key(recorded_node, path)
                 if _canonical(node) != _canonical(recorded_node):
@@ -368,6 +369,16 @@ class ReplaySession:
     # plan history and grid frames -- is not there. Such a Sink entry is matched by its path alone when the replay
     # writes it, and skipped when it does not; every other entry is compared as ever.
     video_sink_paths: frozenset = frozenset()
+    # An off-path replay (tools/boundary_replay.py --off): a record made with a feature on, replayed with it off. The
+    # feature's own bookkeeping -- the record branches it adds (by prefix) and its end-state keys (map-key paths) -- is
+    # left out of the comparison; every call, output, other branch and key is compared as ever, so a run where the
+    # feature acted (a call it made, a decision it changed) still differs where it did.
+    ignored_branch_prefixes: tuple = ()
+    ignored_state_keys: tuple = ()
+
+    def _kept_branches(self, branches) -> list:
+        prefixes = tuple(self.ignored_branch_prefixes)
+        return [b for b in branches if not (prefixes and str(b).startswith(prefixes))]
 
     @staticmethod
     def sink_path(node) -> str | None:

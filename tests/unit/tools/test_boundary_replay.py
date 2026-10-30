@@ -201,3 +201,20 @@ def test_every_added_setup_name_is_one_drive_binds_and_the_setup_always_binds():
     for name, (_flag, _off, value) in H.SETUP_NAMES_ADDED.items():
         assert name in prologue and name in unconditional, name
         assert unconditional[name] == value and type(unconditional[name]) is type(value), name  # Codex P3
+
+
+def test_an_off_path_turns_the_recorded_feature_off_and_names_its_bookkeeping(tmp_path):
+    """2026-10-29 (the next riib batch's regression rule): --off exit_prefix_exempt replays a record made with the
+    exemption on with it off; refused for a record that had it off already, and for an unknown name."""
+    import types
+
+    session = ReplaySession.__new__(ReplaySession)
+    args = types.SimpleNamespace(exit_prefix_exempt="on")
+    H.apply_off_path(args, session, "exit_prefix_exempt")
+    assert args.exit_prefix_exempt == "off"
+    assert session.ignored_branch_prefixes == ("state.exit_prefix_exempt[",)
+    assert session.ignored_state_keys == (("containers", "state", "exit_prefix_exempt"),)
+    with pytest.raises(ValueError, match="already off"):
+        H.apply_off_path(types.SimpleNamespace(exit_prefix_exempt="off"), session, "exit_prefix_exempt")
+    with pytest.raises(ValueError, match="no off path"):
+        H.apply_off_path(args, session, "near_tracking")
