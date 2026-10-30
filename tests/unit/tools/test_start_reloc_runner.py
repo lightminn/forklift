@@ -445,8 +445,8 @@ def test_a_relocalizing_setup_leaves_the_placed_starts_settling_to_the_phases_va
     on = SimpleNamespace(start_relocalize=True)
     assert run_transport.truck_spawn_problem(on, np.array([1.3, 2.0, 0.1]), start) is None
     run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
-    assert "truck_spawn_problem(args, initial_base, base_start)" in run_
-    assert '"Truck spawn displaced",' not in run_  # the one check is the helper's
+    # the one check is the helper's, its reason the classified literal (tests/unit/mission/test_failures.py)
+    assert 'require(truck_spawn_problem(args, initial_base, base_start) is None, "Truck spawn displaced")' in run_
 
 
 class _FloorTruck:

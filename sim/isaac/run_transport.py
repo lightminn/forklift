@@ -4116,8 +4116,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             require(np.linalg.norm(pos_[:2] - [p_.truth.x_m, p_.truth.y_m]) < 0.005 and abs(pos_[2]) < 0.005,
                     f"Invalid pallet spawn after settling: {p_.pallet_id}")
             session_rest.rest(p_.pallet_id, pos_, q_)
-    spawn_problem_ = truck_spawn_problem(args, initial_base, base_start)
-    require(spawn_problem_ is None, spawn_problem_ or "")
+    # the reason stays a literal at the call: every require reason is classified (mission/failures.py)
+    require(truck_spawn_problem(args, initial_base, base_start) is None, "Truck spawn displaced")
     state["initial_pallet_m"] = initial_pallet.tolist()
     state["velocities_before_planning"] = body_velocities()
     try:
