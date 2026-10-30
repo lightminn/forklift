@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -152,29 +153,33 @@ def _hold_ok(records: list | None, verdict: dict, probe: dict | None) -> bool:
     return hold.get("closed_during") is None and ((probe or {}).get("session_end") or {}).get("t") == "ack"
 
 
-def _relative(value, code_root: Path | None):
-    """An absolute path inside the code root as its repository path (the longest suffix that exists under the root),
-    so a session's arguments do not depend on its snapshot's folder; anything else as it is."""
-    if code_root is None or not isinstance(value, str) or not value.startswith("/"):
+def run_root(arguments) -> str | None:
+    """The code root a session ran from: the launcher's console web root is <root>/console/web."""
+    web = (arguments or {}).get("live_web_root") if isinstance(arguments, dict) else None
+    if isinstance(web, str) and web.endswith("/console/web"):
+        return web[: -len("/console/web")]
+    return None
+
+
+def _relative(value, root: str | None):
+    """A path under the session's own run root as its repository path, so a session's arguments do not depend on its
+    snapshot's folder; anything else -- a path outside it, whatever its suffix -- as it is (Codex freeze re-review P2:
+    a changed copy elsewhere must not pass as the frozen repository file)."""
+    if root is None or not isinstance(value, str) or not value.startswith(root.rstrip("/") + "/"):
         return value
-    parts = Path(value).parts[1:]
-    for k in range(len(parts)):
-        rel = Path(*parts[k:])
-        if (Path(code_root) / rel).exists():
-            return rel.as_posix()
-    return value
+    return value[len(root.rstrip("/")) + 1:]
 
 
-def kept_arguments(arguments, code_root: Path | None = None) -> dict | None:
+def kept_arguments(arguments) -> dict | None:
     """The arguments every session of a batch shares: the start, its outputs and the world aside."""
     if not isinstance(arguments, dict):
         return None
-    return {k: _relative(v, code_root) for k, v in arguments.items()
-            if k not in PER_SESSION_ARGUMENTS + WORLD_ARGUMENTS}
+    root = run_root(arguments)
+    return {k: _relative(v, root) for k, v in arguments.items() if k not in PER_SESSION_ARGUMENTS + WORLD_ARGUMENTS}
 
 
-def _args_signature(arguments, code_root: Path | None = None) -> str | None:
-    kept = kept_arguments(arguments, code_root)
+def _args_signature(arguments) -> str | None:
+    kept = kept_arguments(arguments)
     if kept is None:
         return None
     return hashlib.sha256(json.dumps(kept, sort_keys=True, default=str).encode()).hexdigest()
@@ -185,7 +190,10 @@ def _frozen_mismatches(result: dict, frozen: dict | None, code_root: Path | None
     if frozen is None or "arguments" not in frozen:
         return []
     out = []
-    if kept_arguments(result.get("arguments"), code_root) != frozen["arguments"]:
+    root = run_root(result.get("arguments"))
+    if code_root is not None and (root is None or os.path.realpath(root) != os.path.realpath(code_root)):
+        out.append(f"run root {root or '(not recorded)'} (not the judged code root)")
+    if kept_arguments(result.get("arguments")) != frozen["arguments"]:
         out.append("arguments (not the freeze's)")
     for key in INPUT_HASHES:
         if result.get(key) != frozen.get("inputs", {}).get(key):
@@ -271,7 +279,7 @@ def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict 
     if result is not None:
         row["source_mismatches"] = _source_mismatches(result.get("source_sha256"), fp)
         row["source_mismatches"] = row["source_mismatches"] + _frozen_mismatches(result, frozen, code_root)
-        row["args_signature"] = _args_signature(result.get("arguments"), code_root)
+        row["args_signature"] = _args_signature(result.get("arguments"))
         row["start_mismatch"] = _start_mismatch(result, start)
         row["world"] = _world(result.get("arguments"))
     if fp is not None and (walls.get("reloc_pose") is not None or localized):  # the bridge was started
@@ -473,11 +481,11 @@ def main(argv=None) -> int:
         if _image_digest(a.image) is None:
             ap.error("--make-frozen needs the bridge image by digest (...@sha256:<64 hex>)")
         ref = _load(a.reference_result) if a.reference_result else None
-        if ref is None or not isinstance(ref.get("arguments"), dict):
-            ap.error("--make-frozen needs --reference-result: a session's result.json with its arguments")
+        if ref is None or not isinstance(ref.get("arguments"), dict) or run_root(ref["arguments"]) is None:
+            ap.error("--make-frozen needs --reference-result: a session's result.json with its arguments and run root")
         a.make_frozen.write_text(json.dumps({
             "fingerprint": fp, "bridge_bound_s": float(a.bridge_bound_s),
-            "arguments": kept_arguments(ref["arguments"], a.code_root),
+            "arguments": kept_arguments(ref["arguments"]),
             "inputs": {k: ref.get(k) for k in INPUT_HASHES}, "reference_result": str(a.reference_result)},
             indent=1) + "\n")
         return 0

@@ -337,7 +337,7 @@ def test_a_judgement_needs_the_frozen_record_which_has_its_own_mode(tmp_path):
     real = J.fingerprint(ROOT, IMAGE)["files"]  # the runner's own hashes of the code root's trees
     sources = {(k[len("src/"):] if k.startswith("src/") else k): v for k, v in real.items()
                if k.startswith(("src/forklift_core/", "sim/isaac/"))}
-    _session(tmp_path, "s1", sources=sources)
+    _session(tmp_path, "s1", sources=sources, arguments={**ARGS, "live_web_root": str(ROOT / "console/web")})
     starts = tmp_path / "starts.json"
     starts.write_text(json.dumps({"poses": _starts("s1")}))
     base = ["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", IMAGE,
@@ -350,7 +350,7 @@ def test_a_judgement_needs_the_frozen_record_which_has_its_own_mode(tmp_path):
     assert J.main(make + ["--reference-result", str(tmp_path / "s1/epoch_1/run/result.json")]) == 0
     data = json.loads(frozen.read_text())
     assert data["bridge_bound_s"] == 45.0 and data["fingerprint"] == J.fingerprint(ROOT, IMAGE)
-    assert data["arguments"] == J.kept_arguments(ARGS, ROOT)
+    assert data["arguments"] == J.kept_arguments({**ARGS, "live_web_root": str(ROOT / "console/web")})
     # the same sessions judged against it: pooled
     assert J.main(base + ["--frozen", str(frozen)]) == 0
 
@@ -393,26 +393,35 @@ def test_each_session_ran_its_listed_start_and_the_list_has_no_repeated_id(tmp_p
 
 
 def test_the_freeze_binds_the_arguments_and_the_external_inputs_the_sessions_ran(tmp_path):
-    # P2: the fingerprint hashed the listed files but not which ones a session used, nor its URDF and scene
+    # P2: the fingerprint hashed the listed files but not which ones a session used, nor its URDF and scene; a path is
+    # a repository path only under the session's own run root (the launcher's live_web_root, <root>/console/web)
     lidar = "config/isaac_slam_lidar.yaml"
-    args = {**ARGS, "lidar": str(ROOT / lidar), "obstacle_layer": "config/obstacle_layer_single.yaml"}
-    ref = _session(tmp_path / "ref", "r", arguments=args)
+    ref_root = tmp_path / "snap" / "bp2d_ref"  # the reference ran from another snapshot of the same code
+
+    def args_at(root, **over):
+        return {**ARGS, "lidar": str(root / lidar), "obstacle_layer": "config/obstacle_layer_single.yaml",
+                "live_web_root": str(root / "console/web"), **over}
+
+    ref = _session(tmp_path / "ref", "r", arguments=args_at(ref_root))
     frozen = tmp_path / "frozen.json"
     assert J.main(["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", IMAGE,
                    "--bridge-bound-s", "40", "--reference-result", str(ref / "epoch_1/run/result.json")]) == 0
     data = json.loads(frozen.read_text())
-    assert data["arguments"]["lidar"] == lidar  # repository paths are kept relative to the code root
+    assert data["arguments"]["lidar"] == lidar and data["arguments"]["live_web_root"] == "console/web"
     assert data["inputs"] == INPUTS
-    other_root = tmp_path / "snap" / "bp2d_x"  # the same file under another snapshot
-    (other_root / "config").mkdir(parents=True)
     root = tmp_path / "sessions"
-    _session(root, "s1", arguments={**args, "lidar": str(other_root / lidar), "seed": 9})  # world aside
-    _session(root, "s2", arguments={**args, "obstacle_layer": "config/obstacle_layer_single_team_spec.yaml"})
-    _session(root, "s3", arguments=args, inputs={**INPUTS, "forklift_urdf_sha256": "9" * 64})
-    rows = J.judge_sessions(root, _starts("s1", "s2", "s3"), {"files": {}, "image": IMAGE}, frozen=data,
-                            code_root=ROOT)
+    _session(root, "s1", arguments=args_at(ROOT, seed=9))  # the world aside
+    _session(root, "s2", arguments=args_at(ROOT, obstacle_layer="config/obstacle_layer_single_team_spec.yaml"))
+    _session(root, "s3", arguments=args_at(ROOT), inputs={**INPUTS, "forklift_urdf_sha256": "9" * 64})
+    # Codex re-review P2: a changed copy outside the run root, with the same repository suffix
+    _session(root, "s4", arguments=args_at(ROOT, lidar=str(tmp_path / "changed" / lidar)))
+    _session(root, "s5", arguments=args_at(ref_root))  # run from a root that is not the judged code
+    rows = J.judge_sessions(root, _starts("s1", "s2", "s3", "s4", "s5"), {"files": {}, "image": IMAGE},
+                            frozen=data, code_root=ROOT)
     assert rows[0]["source_mismatches"] == []
     assert rows[1]["source_mismatches"] == ["arguments (not the freeze's)"]
     assert rows[2]["source_mismatches"] == ["forklift_urdf_sha256"]
+    assert rows[3]["source_mismatches"] == ["arguments (not the freeze's)"]
+    assert rows[4]["source_mismatches"] == [f"run root {ref_root} (not the judged code root)"]
     fp = J.fingerprint(ROOT, IMAGE)
     assert "config/isaac_slam_lidar.yaml" in fp["files"] and "config/obstacle_layer_single.yaml" in fp["files"]
