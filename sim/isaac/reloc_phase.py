@@ -20,6 +20,7 @@ from pathlib import Path
 import scan_capture
 
 from forklift_core.localization import global_match as G
+from forklift_core.localization import local_match as LM
 from forklift_core.localization import start_reloc as R
 
 
@@ -44,6 +45,8 @@ class RelocInputs:
     # B-P2c: the early console (reloc_console.RelocConsole), serviced at every step and wait; None: no operator
     console: object = None
     operator_deadline_at: float | None = None  # the operator's whole budget (clock time); None: none
+    # F1 (plan 2026-10-31-operator-placed-start 1.3): the local re-match's window, R_AMB and deadline
+    place_cfg: LM.PlaceConfig = field(default_factory=LM.PlaceConfig)
 
 
 def _points(inputs: RelocInputs, sent) -> object:
@@ -95,7 +98,50 @@ def _wait_bridge_go(inputs: RelocInputs, step):
     return None
 
 
-WAITING = ("awaiting_pick", "reloc_failed", "stopped")
+WAITING = ("awaiting_pick", "reloc_failed", "stopped", "place_preview")
+PREVIEW_POINTS = 360  # at most this many scan endpoints drawn over the map for the operator's preview
+
+
+def _place(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points, step) -> tuple:
+    """One local re-match on a worker (as ``_attempt``): cancelled at a session cancel or once the relocalizer left
+    this placement (a STOP). Returns (LocalResult, wall_s)."""
+    box = {}
+    places = relocalizer.places
+    pc = inputs.place_cfg
+    t0 = inputs.clock()
+
+    def cancelled() -> bool:
+        return inputs.cancel.is_set() or relocalizer.state != "placing" or relocalizer.places != places
+
+    def work():
+        w0 = time.monotonic()
+        window = LM.Window(base=relocalizer.placed, radius_m=pc.radius_m, yaw_rad=pc.yaw_rad, edge_m=pc.edge_m,
+                           edge_rad=pc.edge_rad)
+        box["result"] = LM.local_match(inputs.grid, points, window, inputs.match_cfg, e_min=inputs.reloc_cfg.e_min,
+                                       r_amb=pc.r_amb, index=inputs.index, clock=inputs.clock,
+                                       deadline=t0 + pc.deadline_s, cancel=cancelled)
+        box["wall_s"] = time.monotonic() - w0
+
+    worker = threading.Thread(target=work, name="start-place", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        step("placing")
+        worker.join(timeout=inputs.pace_s)
+    if "result" not in box:
+        raise RuntimeError("the placement worker ended without a result")
+    return box["result"], box["wall_s"]
+
+
+def _preview_points(points, base) -> list:
+    """The scan's endpoints at the previewed base pose (map), at most PREVIEW_POINTS, for the operator's overlay."""
+    import numpy as np  # noqa: PLC0415
+
+    pts = np.asarray(points, float).reshape(-1, 2)
+    if len(pts) > PREVIEW_POINTS:
+        pts = pts[np.linspace(0, len(pts) - 1, PREVIEW_POINTS).astype(int)]
+    lx, ly, yaw = R.laser_from_base(base)
+    c, s_ = np.cos(yaw), np.sin(yaw)
+    return [[round(float(lx + c * x - s_ * y), 3), round(float(ly + s_ * x + c * y), 3)] for x, y in pts]
 
 
 def run(inputs: RelocInputs) -> dict:
@@ -112,7 +158,7 @@ def run(inputs: RelocInputs) -> dict:
 
 def _run(inputs: RelocInputs) -> dict:
     out = {"status": None, "reason": "", "estimate": None, "attempts": [], "truth": None, "bridge_go": None,
-           "generation": None, "shown": []}
+           "generation": None, "shown": [], "places": []}
     if inputs.cancel.is_set():
         out["status"] = "cancelled"
         return out
@@ -186,6 +232,38 @@ def _run(inputs: RelocInputs) -> dict:
             out["attempts"].append(record)
             if console is not None:
                 console.note(last_reason=decision.reason)
+            continue
+        if state == "placing":
+            # F1: fresh scans where the truck stands (it may have been pushed while the operator looked), the stillness
+            # check again, then the local re-match around the placed pose (plan 1.3)
+            places = relocalizer.places
+            t0 = inputs.clock()
+            got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
+                                        settle_steps=0)
+            scan_key += 1
+            record = {"click": list(relocalizer.placed), "places": places}
+            if not got["valid"]:
+                out["places"].append({**record, "reason": "unsteady", "matcher_reason": got["reason"]})
+                out["status"], out["reason"] = "unsteady", got["reason"]
+                return out
+            if relocalizer.state != "placing" or relocalizer.places != places:
+                out["places"].append({**record, "reason": "interrupted"})
+                continue
+            points = _points(inputs, got["sent"])
+            res, wall_s = _place(inputs, relocalizer, points, step)
+            if console is not None:
+                console.service("placed")
+            record.update(reason=res.reason, status=res.status, base=None if res.base is None else list(res.base),
+                          amb_ratio=res.amb_ratio, endpoint_fraction=res.endpoint_fraction, leaves=res.leaves,
+                          work=int(res.work), wall_s=round(wall_s, 3), stage_s=round(inputs.clock() - t0, 3))
+            if relocalizer.state != "placing" or relocalizer.places != places:
+                out["places"].append({**record, "reason": "interrupted", "matcher_reason": res.reason})
+                continue
+            relocalizer.placed_result(res.confirmed, res.base, res.reason)
+            out["places"].append(record)
+            if console is not None:
+                console.note(place_reason=None if res.confirmed else res.reason,
+                             preview_points=_preview_points(points, res.base) if res.confirmed else None)
             continue
         if state in WAITING:
             if unattended:

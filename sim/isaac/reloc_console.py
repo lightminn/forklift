@@ -155,7 +155,16 @@ class RelocConsole:
                 "operator_left_s": None if operator is None else max(0.0, operator - now),
                 "candidates": [] if r is None else [
                     {"index": k, "base": list(base_from_laser(c.pose)), "score": float(c.search_score),
-                     "endpoint_fraction": float(c.endpoint_fraction)} for k, c in enumerate(r.shown)]}
+                     "endpoint_fraction": float(c.endpoint_fraction)} for k, c in enumerate(r.shown)],
+                # F1 (plan 2026-10-31-operator-placed-start 1.2): the operator's placements and the preview to confirm
+                "places": None if r is None else r.places,
+                "max_places": None if r is None else r.cfg.max_places,
+                "placed": None if r is None or r.placed is None else list(r.placed),
+                "preview": None if r is None or r.preview is None else list(r.preview),
+                "preview_id": None if r is None else r.preview_id,
+                "preview_points": (self.notes.get("preview_points")
+                                   if r is not None and r.state == "place_preview" else None),
+                "place_reason": self.notes.get("place_reason")}
 
     def _write_port(self, state: str, force: bool = False) -> None:
         if self.port_file is None or self.parts.started_wall is None or (state == self._port_state and not force):

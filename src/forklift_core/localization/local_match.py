@@ -43,6 +43,18 @@ class Window:
 
 
 @dataclass(frozen=True)
+class PlaceConfig:
+    """The plan's values (2): the window, its edge bands, R_AMB and the deadline of one placement (T_LOC). R_AMB is
+    the development's choice by the registered rule; until then a provisional value within 0.80-1."""
+    radius_m: float = 2.0
+    yaw_rad: float = 0.6
+    edge_m: float = 0.3
+    edge_rad: float = 0.1
+    r_amb: float = 0.90
+    deadline_s: float = 10.0
+
+
+@dataclass(frozen=True)
 class LocalResult:
     status: str  # ok | uninformative | empty | overflow | timeout | cancelled
     confirmed: bool
@@ -156,4 +168,4 @@ def local_match(grid: Grid, points: np.ndarray, window: Window, cfg: G.MatchConf
     return LocalResult("ok", True, "confirmed", **common)
 
 
-__all__ = ["LocalResult", "Window", "ambiguity_ratio", "local_match", "wrap"]
+__all__ = ["LocalResult", "PlaceConfig", "Window", "ambiguity_ratio", "local_match", "wrap"]

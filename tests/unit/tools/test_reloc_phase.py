@@ -447,3 +447,59 @@ def test_the_frozen_settings_are_b_p1bs():
     assert (reloc.e_min, reloc.r_max, reloc.r_struct) == (0.8, 0.95, 0.8)
     assert reloc.attempts == 3 and reloc.deadline_s == 30.0
     assert set(record) == {"match_config", "dev_choice"} and all(len(v["sha256"]) == 64 for v in record.values())
+
+
+# --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2-1.3) ------------------------------
+def _place_then(action):
+    """A script: place once near the truth when the candidates are shown, then ``action`` on the preview."""
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            assert r.place(r.generation, (2.2, 1.5, 0.15)) == (True, "")
+        elif r.state == "place_preview" and stage == "place_preview":
+            action(r)
+    return script
+
+
+def test_a_placed_pose_previews_and_its_confirmation_is_the_estimate(tmp_path):
+    _go_later(tmp_path)
+    console = FakeConsole(_place_then(lambda r: r.confirm_place(r.generation, r.preview_id)))
+    out = P.run(_symmetric(tmp_path, console))
+    assert out["status"] == "chosen" and R.read_reloc_pose(tmp_path)["source"] == "operator_placed"
+    [place] = out["places"]
+    assert place["reason"] == "confirmed" and place["click"] == [2.2, 1.5, 0.15] and "stage_s" in place
+    est = out["estimate"]
+    assert math.hypot(est[0] - 2.0, est[1] - 1.4) <= 0.10 and abs(est[2]) <= 0.05
+    assert console.notes["preview_points"]  # the overlay drawn for the operator
+
+
+def test_a_refused_placement_goes_back_to_the_candidates(tmp_path):
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick":
+            if r.places == 0:
+                assert r.place(r.generation, (5.6, 3.6, 0.0)) == (True, "")  # the window holds no fit
+            else:
+                assert r.pick(r.generation, 0) == (True, "")
+
+    _go_later(tmp_path)
+    out = P.run(_symmetric(tmp_path, FakeConsole(script)))
+    assert out["status"] == "chosen" and out["places"][0]["reason"] != "confirmed"
+    assert R.read_reloc_pose(tmp_path)["source"] == "operator"
+
+
+def test_a_stop_while_placing_drops_the_match(tmp_path):
+    box = {}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            r.place(r.generation, (2.2, 1.5, 0.15))
+        elif r.state == "placing" and stage == "placing":
+            assert r.interrupt()
+        elif r.state == "stopped" and stage == "stopped":
+            box["inputs"].operator_deadline_at = time.monotonic()  # nobody retries: the operator's time ends
+
+    box["inputs"] = _symmetric(tmp_path, FakeConsole(script), operator_deadline_at=time.monotonic() + 600.0)
+    out = P.run(box["inputs"])
+    assert out["status"] == "operator_timeout" and out["places"][0]["reason"] == "interrupted"

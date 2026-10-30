@@ -233,3 +233,21 @@ def test_the_survey_map_is_the_pages_grid():
 def test_the_console_publishes_the_survey_map(tmp_path):
     rig = Rig(tmp_path, _awaiting())
     assert rig.parts.store.get("grid") is not None
+
+
+def test_the_state_carries_the_placement_and_its_preview(tmp_path):
+    # F1 (plan 2026-10-31-operator-placed-start 1.2): the count, the placed pose, the preview and its overlay
+    reloc = _awaiting()
+    rig = Rig(tmp_path, reloc)
+    rig.lease()
+    rig.send("relocalize_place", generation=reloc.generation, pose=[5.0, 2.0, 0.3])
+    rig.service()
+    reloc.placed_result(True, (5.1, 2.0, 0.31))
+    rig.console.note(preview_points=[[5.0, 2.5], [5.2, 1.6]], place_reason=None)
+    rig.out()
+    rig.service(30)
+    state = [m for m in rig.out() if m.get("t") == "state"][-1]  # the state is sent at its own rate
+    p = state["slam"]["reloc"]
+    assert p["state"] == "place_preview" and p["places"] == 1 and p["max_places"] == 3
+    assert p["placed"] == [5.0, 2.0, 0.3] and p["preview"] == [5.1, 2.0, 0.31] and p["preview_id"] == 1
+    assert p["preview_points"] == [[5.0, 2.5], [5.2, 1.6]] and p["place_reason"] is None
