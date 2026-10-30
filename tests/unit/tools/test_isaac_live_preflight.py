@@ -229,8 +229,9 @@ def test_a_bundles_run_keeps_the_known_start_unless_its_start_pose_says_otherwis
 
 
 def test_the_start_choice_refuses_what_it_cannot_do(tmp_path):
-    p, _ = _registry_launch(tmp_path, START_RELOC="maybe")
-    assert p.returncode == 2 and "START_RELOC must be on or off" in p.stdout + p.stderr
+    for bad in ("maybe", ""):  # set but empty is no "unset" (Codex B-P2e review P3)
+        p, _ = _registry_launch(tmp_path / f"bad{len(bad)}", START_RELOC=bad)
+        assert p.returncode == 2 and "START_RELOC must be on or off" in p.stdout + p.stderr
     p, _ = _registry_launch(tmp_path / "b", START_RELOC="off", START_POSE="-4.0,3.0,-2.0")
     assert p.returncode == 2 and "contradicts START_POSE" in p.stdout + p.stderr
     p, _ = _registry_launch(tmp_path / "c", START_RELOC="off")

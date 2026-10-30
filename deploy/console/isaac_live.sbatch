@@ -86,8 +86,12 @@ fi
 # bundle's run (BUNDLE_TOKEN: unattended) keeps the known start, as riib and the replay gate do. START_POSE
 # relocalizes as before; a map folder given by hand keeps the known start (its MAP_START_POSE is the SLAM's start
 # estimate, not where the truck stands: Codex design review P2).
-START_RELOC_GIVEN=${START_RELOC:-}
-START_RELOC=${START_RELOC:-$([ -n "${BUNDLE_TOKEN:-}" ] && echo off || echo on)}
+if [ -n "${START_RELOC+set}" ]; then  # given, even empty: checked below (Codex B-P2e review P3)
+  START_RELOC_GIVEN=${START_RELOC:-empty}
+else
+  START_RELOC_GIVEN=
+  START_RELOC=$([ -n "${BUNDLE_TOKEN:-}" ] && echo off || echo on)
+fi
 case "$START_RELOC" in on|off) ;; *) echo "START_RELOC must be on or off"; exit 2;; esac
 if [ -n "${START_POSE:-}" ]; then
   [ "$START_RELOC_GIVEN" = off ] && { echo "START_RELOC=off contradicts START_POSE (which relocalizes)" >&2; exit 2; }

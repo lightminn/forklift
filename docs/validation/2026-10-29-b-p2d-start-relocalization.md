@@ -197,3 +197,10 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 ```
 
 The condition is the same call. Its only result besides None is "Truck spawn displaced", which is now the literal message, so the failure and its reason are the same. With the start relocalization the helper returns None and nothing is raised in either version. No other verdict-path file changed (Codex results review: "the failure condition and the actual message are the same"). Other worlds pooled with this judgement still run from the frozen snapshot (plan 4.4b), unless a new count starts.
+
+The exception covers `f593f2b3`, not the main it was merged into. Main at the merge (`ea4afef5`) also carries other pull requests (#228–#233) that changed seven fingerprinted files after `f593f2b3`:
+- `sim/isaac/run_transport.py`, `sim/isaac/new_obstacles.py`, `sim/isaac/replay_setup.py`;
+- `src/forklift_core/mission/core.py`, `src/forklift_core/mission/boundary_record.py`, `src/forklift_core/mission/replay.py`;
+- `src/forklift_core/planning/pallet_mission.py`.
+
+B-P2d did not judge them. The launcher default the lead promoted (plan 7.1) runs on that main, and its relocalization is the B-P2d path with those changes around it (Codex B-P2e review P3).
