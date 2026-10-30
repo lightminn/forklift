@@ -22,13 +22,15 @@ TRUTH = [2.0, 1.0, 0.5]
 SOURCES = {"forklift_core/localization/global_match.py": "a" * 64, "sim/isaac/run_transport.py": "b" * 64}
 IMAGE_ID = "sha256:" + "e" * 64
 IMAGE = "forklift/ros2-dev@" + IMAGE_ID  # what a freeze names: the bridge image by digest
+INPUTS = {"forklift_urdf_sha256": "1" * 64, "pallet_urdf_sha256": "2" * 64, "pallet_geometry_sha256": "3" * 64,
+          "scene_sha256": {"configuration/forklift_base.usd": "4" * 64}}
 ARGS = {"seed": 5, "slam_map_bundle": "/bundle", "start_pose": [2.0, 1.0, 0.5], "output": "x", "reloc_dir": "y"}
 
 
 def _session(root: Path, name: str, *, status="chosen", verdict_off=(0.02, 0.0, 0.0), hold=True, records=None,
              exit_code=0, reason=None, shown=None, attempts=None, gaps=None, estimate_source="matcher",
              probe_end=True, reloc_wall=(100.0, 103.0, 120.0), sources=None, arguments=None, result=True,
-             manifest=True, image_id=IMAGE_ID):
+             manifest=True, image_id=IMAGE_ID, inputs=None):
     d = root / name
     run = d / "epoch_1" / "run"
     run.mkdir(parents=True)
@@ -44,7 +46,7 @@ def _session(root: Path, name: str, *, status="chosen", verdict_off=(0.02, 0.0, 
                           "estimate_base": TRUTH}
     record = {"success": exit_code == 0, "start_reloc": rec, "reloc_console": {"gaps": gaps or []},
               "failure_reason": reason, "source_sha256": dict(sources or SOURCES),
-              "arguments": dict(arguments or ARGS)}
+              "arguments": dict(arguments or ARGS), **(INPUTS if inputs is None else inputs)}
     if result:
         (run / "result.json").write_text(json.dumps(record))
     spool = RecordSpool(run / "spool")
@@ -332,18 +334,25 @@ def test_an_unjudged_start_leaves_the_safety_bounds_unjudged_and_gives_a_conserv
 
 def test_a_judgement_needs_the_frozen_record_which_has_its_own_mode(tmp_path):
     # Codex round 3 P2: no frozen record, no pooled judgement; the freeze record is written by an explicit mode
-    _session(tmp_path, "s1")
+    real = J.fingerprint(ROOT, IMAGE)["files"]  # the runner's own hashes of the code root's trees
+    sources = {(k[len("src/"):] if k.startswith("src/") else k): v for k, v in real.items()
+               if k.startswith(("src/forklift_core/", "sim/isaac/"))}
+    _session(tmp_path, "s1", sources=sources)
     starts = tmp_path / "starts.json"
     starts.write_text(json.dumps({"poses": _starts("s1")}))
     base = ["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", IMAGE,
             "--out", str(tmp_path / "out.json")]
     assert J.main(base) == 2  # no --frozen: judged, never pooled
     frozen = tmp_path / "frozen.json"
-    assert J.main(["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", IMAGE,
-                   "--bridge-bound-s", "45"]) == 0
+    make = ["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", IMAGE, "--bridge-bound-s", "45"]
+    with pytest.raises(SystemExit):
+        J.main(make)  # the freeze binds a reference session's arguments too
+    assert J.main(make + ["--reference-result", str(tmp_path / "s1/epoch_1/run/result.json")]) == 0
     data = json.loads(frozen.read_text())
     assert data["bridge_bound_s"] == 45.0 and data["fingerprint"] == J.fingerprint(ROOT, IMAGE)
-    assert not (tmp_path / "out.json").exists() or json.loads((tmp_path / "out.json").read_text())
+    assert data["arguments"] == J.kept_arguments(ARGS, ROOT)
+    # the same sessions judged against it: pooled
+    assert J.main(base + ["--frozen", str(frozen)]) == 0
 
 
 def test_the_fingerprint_covers_the_scan_odometry_and_runner_inputs():
@@ -369,3 +378,41 @@ def test_each_session_ran_the_frozen_bridge_image(tmp_path):
     with pytest.raises(SystemExit):
         J.main(["--make-frozen", str(tmp_path / "f.json"), "--code-root", str(ROOT), "--image",
                 "forklift/ros2-dev:jazzy", "--bridge-bound-s", "40"])
+
+
+# --- Codex B-P2d freeze review (new thread) ----------------------------------------------------------------------------
+def test_each_session_ran_its_listed_start_and_the_list_has_no_repeated_id(tmp_path):
+    # P2: the list's pose was only copied to the output; 60 starts all run at one pose passed every floor
+    _session(tmp_path, "s1")
+    _session(tmp_path, "s2", arguments={**ARGS, "start_pose": [9.0, 9.0, 0.0]})
+    rows = J.judge_sessions(tmp_path, _starts("s1", "s2"))
+    assert rows[0]["start_mismatch"] is False and rows[1]["start_mismatch"] is True
+    assert J.summarize(rows)["starts_mismatched"] == 1
+    with pytest.raises(ValueError, match="repeated start ids"):
+        J.judge_sessions(tmp_path, _starts("s1", "s1"))
+
+
+def test_the_freeze_binds_the_arguments_and_the_external_inputs_the_sessions_ran(tmp_path):
+    # P2: the fingerprint hashed the listed files but not which ones a session used, nor its URDF and scene
+    lidar = "config/isaac_slam_lidar.yaml"
+    args = {**ARGS, "lidar": str(ROOT / lidar), "obstacle_layer": "config/obstacle_layer_single.yaml"}
+    ref = _session(tmp_path / "ref", "r", arguments=args)
+    frozen = tmp_path / "frozen.json"
+    assert J.main(["--make-frozen", str(frozen), "--code-root", str(ROOT), "--image", IMAGE,
+                   "--bridge-bound-s", "40", "--reference-result", str(ref / "epoch_1/run/result.json")]) == 0
+    data = json.loads(frozen.read_text())
+    assert data["arguments"]["lidar"] == lidar  # repository paths are kept relative to the code root
+    assert data["inputs"] == INPUTS
+    other_root = tmp_path / "snap" / "bp2d_x"  # the same file under another snapshot
+    (other_root / "config").mkdir(parents=True)
+    root = tmp_path / "sessions"
+    _session(root, "s1", arguments={**args, "lidar": str(other_root / lidar), "seed": 9})  # world aside
+    _session(root, "s2", arguments={**args, "obstacle_layer": "config/obstacle_layer_single_team_spec.yaml"})
+    _session(root, "s3", arguments=args, inputs={**INPUTS, "forklift_urdf_sha256": "9" * 64})
+    rows = J.judge_sessions(root, _starts("s1", "s2", "s3"), {"files": {}, "image": IMAGE}, frozen=data,
+                            code_root=ROOT)
+    assert rows[0]["source_mismatches"] == []
+    assert rows[1]["source_mismatches"] == ["arguments (not the freeze's)"]
+    assert rows[2]["source_mismatches"] == ["forklift_urdf_sha256"]
+    fp = J.fingerprint(ROOT, IMAGE)
+    assert "config/isaac_slam_lidar.yaml" in fp["files"] and "config/obstacle_layer_single.yaml" in fp["files"]

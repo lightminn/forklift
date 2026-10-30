@@ -90,6 +90,32 @@ def test_a_truck_that_did_not_settle_at_its_target_is_invalid_before_any_matchin
     assert R.read_reloc_pose(tmp_path) is None
 
 
+class _MovingTruck(FakeTruck):
+    """At its target for the first scan set, then 3 cm off: it moved after the session's input check."""
+
+    def __init__(self, grid, base, moved_after_scans: int):
+        super().__init__(grid, base)
+        self.poses, self.moved_after = 0, moved_after_scans
+
+    def pose(self):
+        self.poses += 1
+        if self.poses > self.moved_after:
+            self.drift = (0.03, 0.0)
+        return super().pose()
+
+
+def test_a_truck_that_moves_after_the_first_check_is_a_valid_failure_not_invalid(tmp_path):
+    # Codex B-P2d freeze review P2: plan 4.0 fixes the invalid class before any matching; a later rescan that finds
+    # the truck moved is a failure of a valid session (in the denominator), never a late "invalid"
+    grid = TG._grid(6.0, 4.0, [])  # symmetric: the first attempt does not confirm, so the phase rescans
+    base = (2.0, 1.4, 0.0)
+    truck = _MovingTruck(grid, base, moved_after_scans=C.SCANS + 1)  # the whole first scan set at the target
+    out = P.run(_inputs(tmp_path, grid, truck, base,
+                        match_cfg=G.MatchConfig(yaw_step_rad=math.radians(2.0), max_nodes=5_000_000)))
+    assert len(out["attempts"]) == 1 and out["status"] == "unsteady" and out["reason"] == "not_at_target"
+    assert P.failure_reason(out) == "reloc_unsteady: not_at_target after 1 attempt(s)"
+
+
 def test_an_ambiguous_unattended_start_needs_the_operator_after_its_rescans(tmp_path):
     grid = TG._grid(6.0, 4.0, [])  # a symmetric room: the turned twin always competes
     base = (2.0, 1.4, 0.0)

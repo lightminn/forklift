@@ -57,7 +57,12 @@ OK_REPLIES = ("processed", "skipped")
 # the world (plan 4.4a pools worlds under one measurement condition): kept per row, out of the argument set
 WORLD_ARGUMENTS = ("seed", "layout", "scene_file", "slam_map_bundle", "expected_map_id", "slam_choice")
 # the whole core and runner trees besides the files listed: a transitive dependency changes the verdict path too
-FINGERPRINT_TREES = ("src/forklift_core/**/*.py", "sim/isaac/*.py")
+FINGERPRINT_TREES = ("src/forklift_core/**/*.py", "sim/isaac/*.py",
+                     # every configuration an argument can name, by content (Codex B-P2d freeze review P2)
+                     "config/**/*.yaml", "config/**/*.json")
+# the external inputs' content hashes the runner records (outside the repository: the chassis URDF, the base scene),
+# bound to the freeze from a reference session (Codex B-P2d freeze review P2)
+INPUT_HASHES = ("forklift_urdf_sha256", "pallet_urdf_sha256", "pallet_geometry_sha256", "scene_sha256")
 PER_SESSION_ARGUMENTS = ("start_pose", "output", "reloc_dir", "live_port", "live_port_file", "slam_feedback",
                          "slam_map_dir", "live_epoch")
 FINGERPRINT_FILES = (
@@ -147,11 +152,53 @@ def _hold_ok(records: list | None, verdict: dict, probe: dict | None) -> bool:
     return hold.get("closed_during") is None and ((probe or {}).get("session_end") or {}).get("t") == "ack"
 
 
-def _args_signature(arguments) -> str | None:
+def _relative(value, code_root: Path | None):
+    """An absolute path inside the code root as its repository path (the longest suffix that exists under the root),
+    so a session's arguments do not depend on its snapshot's folder; anything else as it is."""
+    if code_root is None or not isinstance(value, str) or not value.startswith("/"):
+        return value
+    parts = Path(value).parts[1:]
+    for k in range(len(parts)):
+        rel = Path(*parts[k:])
+        if (Path(code_root) / rel).exists():
+            return rel.as_posix()
+    return value
+
+
+def kept_arguments(arguments, code_root: Path | None = None) -> dict | None:
+    """The arguments every session of a batch shares: the start, its outputs and the world aside."""
     if not isinstance(arguments, dict):
         return None
-    kept = {k: v for k, v in arguments.items() if k not in PER_SESSION_ARGUMENTS + WORLD_ARGUMENTS}
+    return {k: _relative(v, code_root) for k, v in arguments.items()
+            if k not in PER_SESSION_ARGUMENTS + WORLD_ARGUMENTS}
+
+
+def _args_signature(arguments, code_root: Path | None = None) -> str | None:
+    kept = kept_arguments(arguments, code_root)
+    if kept is None:
+        return None
     return hashlib.sha256(json.dumps(kept, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _frozen_mismatches(result: dict, frozen: dict | None, code_root: Path | None) -> list:
+    """The session's shared arguments and external inputs against the freeze's (from its reference session)."""
+    if frozen is None or "arguments" not in frozen:
+        return []
+    out = []
+    if kept_arguments(result.get("arguments"), code_root) != frozen["arguments"]:
+        out.append("arguments (not the freeze's)")
+    for key in INPUT_HASHES:
+        if result.get(key) != frozen.get("inputs", {}).get(key):
+            out.append(key)
+    return out
+
+
+def _start_mismatch(result: dict, start: dict) -> bool:
+    """The pose the session was placed at is not its row's: the list's pose is otherwise only copied."""
+    got, want = result.get("arguments", {}).get("start_pose"), start.get("base_world")
+    if got is None or want is None or len(got) != len(want):
+        return True
+    return any(abs(float(g) - float(w)) > 1e-9 for g, w in zip(got, want, strict=True))
 
 
 def _source_mismatches(sources, fp: dict | None) -> list:
@@ -202,12 +249,13 @@ def _reason(row: dict, result) -> str:
     return str((row["exit"] or {}).get("reason") or (result or {}).get("failure_reason") or "")
 
 
-def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
+def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict | None = None,
+                  code_root: Path | None = None) -> dict:
     row = {"id": start["id"], "stratum": start.get("stratum"), "start": start.get("base_world"), "class": "valid",
            "started": False, "outcome": None, "pose_class": None, "error_m": None, "error_rad": None,
            "hold_ok": None, "bridge_stage_s": None, "matcher_wall_max_s": None, "matcher_stage_max_s": None,
            "deadline_hit": False, "attempts": None, "truth_in_shown": None, "truth_in_candidates": None, "gaps": [],
-           "exit": None, "source_mismatches": [], "args_signature": None, "world": None}
+           "exit": None, "source_mismatches": [], "args_signature": None, "world": None, "start_mismatch": None}
     if not d.is_dir():
         # never run: no evidence either way -- out of every denominator, and the judgement waits (B-P2d development)
         row["class"] = row["outcome"] = "not_run"
@@ -222,7 +270,9 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
     rec = (result or {}).get("start_reloc")
     if result is not None:
         row["source_mismatches"] = _source_mismatches(result.get("source_sha256"), fp)
-        row["args_signature"] = _args_signature(result.get("arguments"))
+        row["source_mismatches"] = row["source_mismatches"] + _frozen_mismatches(result, frozen, code_root)
+        row["args_signature"] = _args_signature(result.get("arguments"), code_root)
+        row["start_mismatch"] = _start_mismatch(result, start)
         row["world"] = _world(result.get("arguments"))
     if fp is not None and (walls.get("reloc_pose") is not None or localized):  # the bridge was started
         row["source_mismatches"] = row["source_mismatches"] + _image_mismatches(d, fp)
@@ -284,8 +334,12 @@ def judge_session(d: Path, start: dict, fp: dict | None = None) -> dict:
     return row
 
 
-def judge_sessions(root: Path, starts: list, fp: dict | None = None) -> list:
-    return [judge_session(Path(root) / s["id"], s, fp) for s in starts]
+def judge_sessions(root: Path, starts: list, fp: dict | None = None, *, frozen: dict | None = None,
+                   code_root: Path | None = None) -> list:
+    ids = [s["id"] for s in starts]
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"repeated start ids: {sorted({i for i in ids if ids.count(i) > 1})}")
+    return [judge_session(Path(root) / s["id"], s, fp, frozen=frozen, code_root=code_root) for s in starts]
 
 
 def cp_upper(k: int, n: int) -> float | None:
@@ -354,6 +408,7 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
         "bridge_stage_max_s": max((b for b in bridge if b is not None), default=None),
         "bridge_stage_missing": missing, "bridge_bound_s": bridge_bound_s,
         "sessions_off_fingerprint": off, "argument_sets": len(signatures),
+        "starts_mismatched": sum(bool(r.get("start_mismatch")) for r in rows),
         "arguments_missing": sum(r.get("args_signature") is None for r in rows
                                  if r["outcome"] not in ("no_record", "not_run")),
         "judged": judged,
@@ -407,6 +462,9 @@ def main(argv=None) -> int:
                     help="the first freeze (plan 4.5): write the fingerprint of --code-root/--image and "
                     "--bridge-bound-s to this record, and judge nothing")
     ap.add_argument("--bridge-bound-s", type=float, default=None, help="with --make-frozen: the bridge stage bound")
+    ap.add_argument("--reference-result", type=Path, default=None,
+                    help="with --make-frozen: a development session's result.json on the frozen code and the "
+                    "collection's launch settings; its shared arguments and external input hashes are frozen")
     a = ap.parse_args(argv)
     fp = fingerprint(a.code_root, a.image)
     if a.make_frozen is not None:
@@ -414,25 +472,37 @@ def main(argv=None) -> int:
             ap.error("--make-frozen needs a positive --bridge-bound-s")
         if _image_digest(a.image) is None:
             ap.error("--make-frozen needs the bridge image by digest (...@sha256:<64 hex>)")
-        a.make_frozen.write_text(json.dumps({"fingerprint": fp, "bridge_bound_s": float(a.bridge_bound_s)},
-                                            indent=1) + "\n")
+        ref = _load(a.reference_result) if a.reference_result else None
+        if ref is None or not isinstance(ref.get("arguments"), dict):
+            ap.error("--make-frozen needs --reference-result: a session's result.json with its arguments")
+        a.make_frozen.write_text(json.dumps({
+            "fingerprint": fp, "bridge_bound_s": float(a.bridge_bound_s),
+            "arguments": kept_arguments(ref["arguments"], a.code_root),
+            "inputs": {k: ref.get(k) for k in INPUT_HASHES}, "reference_result": str(a.reference_result)},
+            indent=1) + "\n")
         return 0
     if a.sessions is None or a.starts is None or a.out is None:
         ap.error("a judgement needs --sessions, --starts and --out")
     frozen = _load(a.frozen) if a.frozen else None
-    if a.frozen and (frozen is None or "fingerprint" not in frozen):
-        print(f"reloc_judge: the frozen record {a.frozen} is not there or has no fingerprint", file=sys.stderr)
+    if a.frozen and (frozen is None or "fingerprint" not in frozen or "arguments" not in frozen):
+        print(f"reloc_judge: the frozen record {a.frozen} is not there or has no fingerprint and arguments",
+              file=sys.stderr)
         return 2
     mismatches = fingerprint_mismatches(frozen["fingerprint"], fp) if frozen else None
     starts = json.loads(a.starts.read_text())["poses"]
-    rows = judge_sessions(a.sessions, starts, fp)
+    try:
+        rows = judge_sessions(a.sessions, starts, fp, frozen=frozen, code_root=a.code_root)
+    except ValueError as exc:
+        print(f"reloc_judge: {exc}", file=sys.stderr)
+        return 2
     summary = summarize(rows, (frozen or {}).get("bridge_bound_s"))
     out = {"fingerprint": fp, "fingerprint_mismatches": mismatches, "summary": summary, "rows": rows}
     a.out.write_text(json.dumps(out, indent=1, default=str) + "\n")
     print(json.dumps({"summary": summary, "fingerprint_mismatches": mismatches}, indent=1, default=str))
     # pooled only against an existing frozen record whose fingerprint matches (Codex round 3 P2: no --frozen, no pool)
     poolable = (frozen is not None and not mismatches and summary["sessions_off_fingerprint"] == 0
-                and summary["argument_sets"] == 1 and summary["arguments_missing"] == 0)
+                and summary["argument_sets"] == 1 and summary["arguments_missing"] == 0
+                and summary["starts_mismatched"] == 0)
     return 0 if poolable else 2
 
 
