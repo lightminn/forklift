@@ -124,3 +124,12 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 - It was surveyed once before the freeze and discarded.
 - What was seen: its V2′ figures (world 0.052 m / 0.0048 rad, coverage 99.98 %) and the map itself. No relocalization or matching ran on it, and no setting changed because of it.
 - The lead chose to survey seed 5 again after this freeze, by the same procedure with SLAM noise seed 0. If that survey fails V2′, the registered order follows: noise seed 1, then the next world, seed 3.
+
+## 3. Validation world and second freeze (plan 4.4, 4.5)
+
+- **Survey:** factory layout seed 5, gyro heading, SLAM noise seed 0, the refined seed-5 tour (ws1 13006, snapshot `bp2d_987bb0bc`, after the first freeze).
+  - V2′ passed on the first survey: world position maximum 0.062 m and yaw maximum 0.0068 rad (limits 0.10 m / 0.03 rad); coverage 99.98 % of the judged region known.
+  - The moving check did not run (no rigid-body list), as on seed 4; the survey tool's overall `ok` is therefore false, and the map is accepted on V2′ as B4a registered.
+- **Map:** `3edf24b0e9814911ae02ab0bd7811df50e1334eae72e4086bb46dd91759003e7`.
+- **Starts:** 93 (layer A 47, B 22, C 24), drawn with seed 1030, 3 m apart, until all three layers were exhausted (118,807 attempts); keep-out from the survey's own `result.json`.
+- **Second freeze** (`docs/validation/assets/b-p2d/freeze2.json`): the map id, the keep-out record (sha256 `7ca5b9f3…`) and the start list `val_s5.json` (sha256 `b86a94bf…`), committed before any session ran.
