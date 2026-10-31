@@ -130,3 +130,50 @@ def test_a_click_off_the_map_is_refused_before_its_scans_are_looked_at(tmp_path)
     for p in row["placements"]:
         if not (0.0 <= p["click"][0] < 6.0 and 0.0 <= p["click"][1] < 4.0):
             assert p["reason"] == "invalid"
+
+
+# --- the plan's record-only placements (4.5): a neighbouring bay, clicks outside the model ---
+def test_the_record_clicks_are_the_plans_and_reproducible():
+    truth = (1.0, 2.0, 0.3)
+    assert F.stress_click(4, 7, "bay+x", truth) == (7.0, 2.0, 0.3)
+    assert F.stress_click(4, 7, "bay-y", truth) == (1.0, -4.0, 0.3)
+    x, y, yaw = F.stress_click(4, 7, "pos1.5", truth)
+    assert math.isclose(math.hypot(x - 1.0, y - 2.0), 1.5) and yaw == 0.3
+    x, y, yaw = F.stress_click(4, 7, "yaw0.5", truth)
+    assert (x, y) == (1.0, 2.0) and math.isclose(abs(F.L.wrap(yaw - 0.3)), 0.5)
+    x, y, yaw = F.stress_click(4, 7, "yaw180", truth)
+    assert (x, y) == (1.0, 2.0) and math.isclose(abs(F.L.wrap(yaw - 0.3)), math.pi)
+    assert F.stress_click(4, 7, "pos1.5", truth) == F.stress_click(4, 7, "pos1.5", truth)
+    assert F.stress_click(4, 7, "pos1.5", truth) != F.stress_click(4, 8, "pos1.5", truth)
+    assert set(F.STRESS_KINDS) == {"bay+x", "bay-x", "bay+y", "bay-y", "pos1.5", "yaw0.5", "yaw180"}
+
+
+def test_the_record_summary_counts_confirmations_at_the_chosen_r_amb():
+    rows = [{"id": "a", "kind": "bay+x", "truth_base": list(TRUTH), **_rec("confirmed", 0.99, base=(6.0, 0.0, 0.0))},
+            {"id": "b", "kind": "bay+x", "truth_base": list(TRUTH), **_rec("confirmed", 0.50, base=(6.0, 0.0, 0.0))},
+            {"id": "c", "kind": "yaw180", "truth_base": list(TRUTH), **_rec("low_fit")},
+            {"id": "d", "kind": "yaw180", "truth_base": list(TRUTH), **_rec("invalid")}]
+    rows[1]["endpoint_fraction"] = 0.91
+    s = F.stress_summary(rows, 0.98)
+    assert s["bay+x"] == {"n": 2, "confirmed": 1, "success": 0, "imprecise": 0, "wrong": 1, "endpoint_fractions": [0.91],
+                          "reasons": {"ambiguous": 1, "confirmed": 1}}
+    assert s["yaw180"]["confirmed"] == 0 and s["yaw180"]["reasons"] == {"low_fit": 1, "invalid": 1}
+
+
+def test_a_record_run_places_every_kind_once_per_valid_start(tmp_path):
+    grid = TG._grid(*TG.ROOM)
+    cap = _capture(tmp_path / "c0.npz", [(2.42, 1.7, 0.6), (4.8, 1.2, 0.0)], 1, grid)
+    with np.load(cap) as z:
+        d = dict(z)
+    d["valid"] = np.array([True, False])
+    np.savez(cap, **d)
+    rows, summary = tmp_path / "stress.jsonl", tmp_path / "stress.json"
+    assert F.main(["stress", "--bundle", str(_bundle(tmp_path, grid)), "--capture", str(cap), "--seed", "3",
+                   "--r-amb", "0.98", "--out", str(rows), "--summary", str(summary),
+                   "--config", json.dumps({"yaw_step_rad": math.radians(2.0)})]) == 0
+    out = [json.loads(line) for line in rows.read_text().splitlines()]
+    assert sorted(r["kind"] for r in out) == sorted(F.STRESS_KINDS) and {r["id"] for r in out} == {"p0"}
+    # the room is 6 m x 4 m: a click a bay (6 m) away is off the map, refused as live refuses it
+    assert all(r["reason"] == "invalid" for r in out if r["kind"].startswith("bay"))
+    s = json.loads(summary.read_text())
+    assert s["r_amb"] == 0.98 and set(s["kinds"]) == set(F.STRESS_KINDS)
