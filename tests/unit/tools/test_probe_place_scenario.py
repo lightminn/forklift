@@ -125,3 +125,18 @@ def test_the_place_scenario_connects_while_the_start_is_still_unknown(tmp_path):
     assert info is None  # the default waits for a running session
     info, why = lcp.wait_port(port, 0.05, sleep=lambda s: None, states=lcp.RELOC_PORT_STATES)
     assert info["state"] == "awaiting_pick" and why is None
+
+
+def test_a_click_off_the_map_uses_one_of_the_operators_tries_as_offline():
+    class OffMap(Vehicle):
+        def handle(self, kind, fields):
+            if kind == "relocalize_place" and not self.__dict__.get("refused"):
+                self.refused = True
+                return {"t": "reject", "reason": "reloc_place_invalid"}  # the vehicle does not count it
+            return super().handle(kind, fields)
+
+    p = StubProbe(OffMap(["preview"]))
+    _run(p)
+    sent = [f for k, f in p.calls if k == "relocalize_place"]
+    assert [x["pose"] for x in sent] == [list(F.click(5, 7, 0, TRUTH)), list(F.click(5, 7, 1, TRUTH))]
+    assert [x["reason"] for x in p.report["places"]] == ["reloc_place_invalid", None]

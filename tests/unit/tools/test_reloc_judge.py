@@ -461,3 +461,47 @@ def test_a_session_without_a_record_counts_as_hard_and_not_rescued(tmp_path):
     assert row["outcome"] == "no_record" and row["hard"] is None
     f1 = J.summarize([row])["f1_place"]
     assert f1["hard"] == 1 and f1["rescued"] == 0  # unknown counts against the rescue floor
+
+
+# --- Codex F1 implementation review ------------------------------------------------------------------------------------------
+def test_the_fingerprint_takes_the_placement_settings_and_the_click_model():
+    assert "docs/validation/assets/f1/place_config.json" in J.FINGERPRINT_FILES
+    assert "tools/f1_place_eval.py" in J.FINGERPRINT_FILES
+
+
+def test_each_session_ran_the_frozen_placement_settings(tmp_path):
+    fp = {"files": {J.PLACE_CONFIG: "c" * 64}, "image": IMAGE}
+    for name, ps in (("s1", {"file": J.PLACE_CONFIG, "sha256": "c" * 64}),
+                     ("s2", {"file": J.PLACE_CONFIG, "sha256": "d" * 64}),
+                     ("s3", {"file": None, "provisional": True}), ("s4", None)):
+        d = _session(tmp_path, name)
+        res = json.loads((d / "epoch_1/run/result.json").read_text())
+        if ps is not None:
+            res["start_reloc"]["place_settings"] = ps
+        (d / "epoch_1/run/result.json").write_text(json.dumps(res))
+    rows = J.judge_sessions(tmp_path, _starts("s1", "s2", "s3", "s4"), fp)
+    assert [("place_settings" in " ".join(r["source_mismatches"])) for r in rows] == [False, True, True, True]
+
+
+def test_the_hard_population_is_the_frozen_list_whatever_the_rerun(tmp_path):
+    # P2 2: ten frozen hard starts, nine confirmed by the matcher alone this time, one rescued: 1/10, not 1/1
+    names = [f"s{k}" for k in range(10)]
+    for n in names[:9]:
+        _session(tmp_path, n)
+    _session(tmp_path, names[9], estimate_source="operator_placed", attempts=REFUSED * 3, places=[{"reason": "confirmed"}])
+    rows = J.judge_sessions(tmp_path, _starts(*names))
+    f1 = J.summarize(rows, hard_ids=names)["f1_place"]
+    assert f1["hard"] == 10 and f1["rescued"] == 1 and f1["hard_source"] == "frozen"
+    assert J.summarize(rows)["f1_place"]["hard_source"] == "inferred"
+
+
+def test_f1_has_its_own_floors():
+    # P3: safety among the hard starts and the 70 % rescue, apart from B-P2's fields
+    rows = [{"class": "valid", "outcome": "rescued", "hard": True, "started": True, "pose_class": "success",
+             "places": 1, "id": f"h{k}"} for k in range(7)]
+    rows += [{"class": "valid", "outcome": "operator_timeout", "hard": True, "started": False, "pose_class": None,
+              "places": 3, "id": f"f{k}"} for k in range(3)]
+    f1 = J._f1_place(rows)
+    assert f1["floors"] == {"safety": True, "rescue": True}
+    rows[0] = {**rows[0], "outcome": "wrong", "pose_class": "wrong"}
+    assert J._f1_place(rows)["floors"] == {"safety": False, "rescue": False}

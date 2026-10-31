@@ -53,6 +53,17 @@ class PlaceConfig:
     r_amb: float = 0.90
     deadline_s: float = 10.0
 
+    def __post_init__(self):
+        # the registered range (plan 2: the leaf floor keep_ratio 0.80 to 1), finite; the window positive (Codex F1
+        # implementation review P2: an operating R_AMB of 2 or NaN confirmed an ambiguous pose)
+        if not (math.isfinite(self.r_amb) and 0.80 <= self.r_amb <= 1.0):
+            raise ValueError(f"r_amb {self.r_amb} is outside 0.80-1")
+        for name in ("radius_m", "yaw_rad", "deadline_s"):
+            if not (math.isfinite(getattr(self, name)) and getattr(self, name) > 0):
+                raise ValueError(f"{name} must be positive")
+        if not (0 <= self.edge_m < self.radius_m and 0 <= self.edge_rad < self.yaw_rad):
+            raise ValueError("the edge bands must lie inside the window")
+
 
 @dataclass(frozen=True)
 class LocalResult:

@@ -88,3 +88,11 @@ def test_the_global_match_is_unchanged():
     pts = TG._points(grid, truth)
     match = G.global_match(grid, pts, CFG)
     assert match.status == "ok" and _close(match.candidates[0].pose, truth)
+
+
+@pytest.mark.parametrize("r_amb", [2.0, float("nan"), 0.79, 1.01])
+def test_an_operating_placement_config_holds_r_amb_to_its_registered_range(r_amb):
+    # Codex F1 implementation review P2 7: 0.80 <= R_AMB <= 1 (the leaf floor to 1), finite
+    with pytest.raises(ValueError):
+        L.PlaceConfig(r_amb=r_amb)
+    assert L.PlaceConfig(r_amb=0.8).r_amb == 0.8 and L.PlaceConfig(r_amb=1.0).r_amb == 1.0

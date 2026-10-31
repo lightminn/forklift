@@ -66,7 +66,11 @@ FINGERPRINT_TREES = ("src/forklift_core/**/*.py", "sim/isaac/*.py",
 INPUT_HASHES = ("forklift_urdf_sha256", "pallet_urdf_sha256", "pallet_geometry_sha256", "scene_sha256")
 PER_SESSION_ARGUMENTS = ("start_pose", "output", "reloc_dir", "live_port", "live_port_file", "slam_feedback",
                          "slam_map_dir", "live_epoch")
+PLACE_CONFIG = "docs/validation/assets/f1/place_config.json"  # F1's frozen placement settings
+RESCUE_FLOOR = 0.70  # F1 plan 4.3: rescued share of the hard population (observed)
 FINGERPRINT_FILES = (
+    # F1 (plan 2026-10-31-operator-placed-start 4.6): the placement settings and the click model
+    PLACE_CONFIG, "tools/f1_place_eval.py",
     # matching and refinement, the map, the tracker and the link (plan 4.4b)
     "src/forklift_core/localization/global_match.py", "src/forklift_core/localization/scan_match.py",
     "src/forklift_core/localization/slam_map.py", "src/forklift_core/localization/slam_pose.py",
@@ -283,6 +287,12 @@ def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict 
         row["args_signature"] = _args_signature(result.get("arguments"))
         row["start_mismatch"] = _start_mismatch(result, start)
         row["world"] = _world(result.get("arguments"))
+    if fp is not None and fp["files"].get(PLACE_CONFIG) is not None and result is not None:
+        # F1: the session ran the frozen placement settings (Codex F1 implementation review P2)
+        ps = (rec or {}).get("place_settings") or {}
+        if ps.get("sha256") != fp["files"][PLACE_CONFIG]:
+            row["source_mismatches"] = row["source_mismatches"] + [
+                f"place_settings {ps.get('sha256') or ('provisional' if ps.get('provisional') else '(not recorded)')}"]
     if fp is not None and (walls.get("reloc_pose") is not None or localized):  # the bridge was started
         row["source_mismatches"] = row["source_mismatches"] + _image_mismatches(d, fp)
     if (rec or {}).get("status") == "invalid" or _reason(row, result).startswith("reloc_invalid_input"):
@@ -386,15 +396,29 @@ def cp_lower(k: int, n: int) -> float | None:
     return float(beta.ppf(0.05, k, n - k + 1))
 
 
-def _f1_place(valid: list) -> dict:
-    hard = [r for r in valid if r.get("hard") is not False]  # unknown (no record) counts against the floor
+def _f1_place(valid: list, hard_ids=None) -> dict:
+    """F1's own judgement (plan 4.2 b, 4.3): the hard population -- the frozen list of starts the unattended path did
+    not confirm (Codex F1 implementation review P2: a rerun's own inference shrinks it), else inferred and said so --
+    its wrong and imprecise starts (none allowed) and the rescued share against the 70 % floor."""
+    if hard_ids is not None:
+        ids = set(hard_ids)
+        hard = [r for r in valid if r.get("id") in ids]
+    else:
+        hard = [r for r in valid if r.get("hard") is not False]  # unknown (no record) counts against the floor
     rescued = sum(r["outcome"] == "rescued" for r in hard)
-    return {"hard": len(hard), "rescued": rescued, "rescue_rate": rescued / len(hard) if hard else None,
-            "rescue_cp_lower": cp_lower(rescued, len(hard)),
-            "placements": sum(r.get("places") or 0 for r in valid)}
+    started = [r for r in hard if r.get("started")]
+    events = sum(r.get("pose_class") in ("wrong", "imprecise") for r in started)
+    unjudged = sum(r.get("pose_class") is None for r in started)
+    rate = rescued / len(hard) if hard else None
+    return {"hard": len(hard), "hard_source": "frozen" if hard_ids is not None else "inferred", "rescued": rescued,
+            "rescue_rate": rate, "rescue_cp_lower": cp_lower(rescued, len(hard)), "started": len(started),
+            "wrong_or_imprecise": events, "safety_upper_started": None if unjudged else cp_upper(events, len(started)),
+            "placements": sum(r.get("places") or 0 for r in valid),
+            "floors": {"safety": None if not started or (unjudged and not events) else events == 0,
+                       "rescue": None if rate is None else rate >= RESCUE_FLOOR}}
 
 
-def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
+def summarize(rows: list, bridge_bound_s: float | None = None, hard_ids=None) -> dict:
     valid = [r for r in rows if r["class"] == "valid"]
     started = [r for r in valid if r["started"]]
     n_valid, n_started = len(valid), len(started)
@@ -446,7 +470,7 @@ def summarize(rows: list, bridge_bound_s: float | None = None) -> dict:
                             else all(b <= bridge_bound_s for b in bridge)),
         },
         # F1: the hard population (the matcher alone did not confirm) and how many the operator's placement rescued
-        "f1_place": _f1_place(valid),
+        "f1_place": _f1_place(valid, hard_ids),
         "f1": {"requests": len(requests), "truth_in_shown": sum(bool(r.get("truth_in_shown")) for r in requests),
                "truth_in_candidates": sum(bool(r.get("truth_in_candidates")) for r in requests)},
         "f2": {"sessions_with_gaps": sum(bool(r.get("gaps")) for r in rows),
@@ -488,6 +512,8 @@ def main(argv=None) -> int:
                     help="the first freeze (plan 4.5): write the fingerprint of --code-root/--image and "
                     "--bridge-bound-s to this record, and judge nothing")
     ap.add_argument("--bridge-bound-s", type=float, default=None, help="with --make-frozen: the bridge stage bound")
+    ap.add_argument("--hard", type=Path, default=None,
+                    help="F1: the frozen list (JSON ids) of the hard starts -- the F1 judgement's population")
     ap.add_argument("--reference-result", type=Path, default=None,
                     help="with --make-frozen: a development session's result.json on the frozen code and the "
                     "collection's launch settings; its shared arguments and external input hashes are frozen")
@@ -521,7 +547,8 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"reloc_judge: {exc}", file=sys.stderr)
         return 2
-    summary = summarize(rows, (frozen or {}).get("bridge_bound_s"))
+    hard_ids = json.loads(a.hard.read_text()) if a.hard else None
+    summary = summarize(rows, (frozen or {}).get("bridge_bound_s"), hard_ids)
     out = {"fingerprint": fp, "fingerprint_mismatches": mismatches, "summary": summary, "rows": rows}
     a.out.write_text(json.dumps(out, indent=1, default=str) + "\n")
     print(json.dumps({"summary": summary, "fingerprint_mismatches": mismatches}, indent=1, default=str))

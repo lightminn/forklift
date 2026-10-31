@@ -72,6 +72,8 @@ def session(placements: list, r_amb: float, truth) -> dict:
             return {"outcome": GE.outcome(True, tuple(rec["base"]), tuple(truth)), "placements": k + 1,
                     "reasons": reasons + ["confirmed"]}
         reasons.append(reason)
+        if reason == "unsteady":  # the live phase ends the session there (Codex F1 implementation review P2)
+            return {"outcome": "failed", "placements": k + 1, "reasons": reasons}
     return {"outcome": "failed", "placements": len(placements), "reasons": reasons}
 
 
@@ -102,6 +104,9 @@ def cmd_run(a) -> int:
     grid = Grid.from_npz(a.bundle / "grid.npz")
     cfg = G.MatchConfig(**json.loads(a.config)) if a.config else G.MatchConfig()
     index = G.MapIndex(grid, cfg)
+    h, w = grid.data.shape
+    x0, y0 = grid.origin[0], grid.origin[1]
+    x1, y1 = x0 + w * grid.resolution_m, y0 + h * grid.resolution_m
     with open(a.out, "w") as f:
         for i, sid in enumerate(ids[0]):
             truth = tuple(compose(mfw, tuple(caps[0]["base_truth"][i])))
@@ -114,8 +119,12 @@ def cmd_run(a) -> int:
                         row["placements"].append({"click": list(c), "reason": "unsteady", "status": "unsteady",
                                                   "amb_ratio": None, "base": None})
                         continue
+                    if not (x0 <= c[0] < x1 and y0 <= c[1] < y1):  # off the map: one failed placement
+                        row["placements"].append({"click": list(c), "reason": "invalid", "status": "invalid",
+                                                  "amb_ratio": None, "base": None})
+                        continue
+                    t0 = time.monotonic()  # T_LOC from the scans (here: their conversion) to the result
                     pts = GE.capture_points(caps[k], i)
-                    t0 = time.monotonic()
                     res = L.local_match(grid, pts, L.Window(base=c), cfg, e_min=E_MIN, r_amb=NO_AMB, index=index,
                                         clock=time.monotonic, deadline=t0 + T_LOC_S)
                     row["placements"].append(_record(res, time.monotonic() - t0, c))

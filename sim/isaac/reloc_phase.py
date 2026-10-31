@@ -102,13 +102,13 @@ WAITING = ("awaiting_pick", "reloc_failed", "stopped", "place_preview")
 PREVIEW_POINTS = 360  # at most this many scan endpoints drawn over the map for the operator's preview
 
 
-def _place(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points, step) -> tuple:
+def _place(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points, step, deadline_at: float) -> tuple:
     """One local re-match on a worker (as ``_attempt``): cancelled at a session cancel or once the relocalizer left
-    this placement (a STOP). Returns (LocalResult, wall_s)."""
+    this placement (a STOP); ``deadline_at`` is T_LOC from the placement's scan start (clock time). Returns
+    (LocalResult, wall_s)."""
     box = {}
     places = relocalizer.places
     pc = inputs.place_cfg
-    t0 = inputs.clock()
 
     def cancelled() -> bool:
         return inputs.cancel.is_set() or relocalizer.state != "placing" or relocalizer.places != places
@@ -119,7 +119,7 @@ def _place(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points, step) -
                            edge_rad=pc.edge_rad)
         box["result"] = LM.local_match(inputs.grid, points, window, inputs.match_cfg, e_min=inputs.reloc_cfg.e_min,
                                        r_amb=pc.r_amb, index=inputs.index, clock=inputs.clock,
-                                       deadline=t0 + pc.deadline_s, cancel=cancelled)
+                                       deadline=deadline_at, cancel=cancelled)
         box["wall_s"] = time.monotonic() - w0
 
     worker = threading.Thread(target=work, name="start-place", daemon=True)
@@ -179,6 +179,10 @@ def _run(inputs: RelocInputs) -> dict:
         console.attach(relocalizer)
         console.note(operator_deadline_at=inputs.operator_deadline_at)
     relocalizer.expires_at = inputs.operator_deadline_at  # no pick or retry after it, in the handler too
+    g = inputs.grid  # F1: a placement off the survey map is refused (Codex F1 implementation review P2)
+    h_, w_ = g.data.shape
+    relocalizer.place_bounds = (g.origin[0], g.origin[1], g.origin[0] + w_ * g.resolution_m,
+                                g.origin[1] + h_ * g.resolution_m)
     for _ in range(inputs.settle_steps):  # settle where it was placed (plan 1.2 step 3)
         step("settle")
     scan_key = 0  # every scan set of the session its own noise (a retry never reuses one, Codex B-P2c design P3)
@@ -238,6 +242,7 @@ def _run(inputs: RelocInputs) -> dict:
             # check again, then the local re-match around the placed pose (plan 1.3)
             places = relocalizer.places
             t0 = inputs.clock()
+            deadline_at = t0 + inputs.place_cfg.deadline_s  # T_LOC from the scan start (Codex F1 impl review P2)
             got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
                                         settle_steps=0)
             scan_key += 1
@@ -250,7 +255,9 @@ def _run(inputs: RelocInputs) -> dict:
                 out["places"].append({**record, "reason": "interrupted"})
                 continue
             points = _points(inputs, got["sent"])
-            res, wall_s = _place(inputs, relocalizer, points, step)
+            res, wall_s = _place(inputs, relocalizer, points, step, deadline_at)
+            if res.confirmed and inputs.clock() > deadline_at:  # nothing confirmed past T_LOC
+                res = replace(res, confirmed=False, reason="timeout", status="timeout")
             if console is not None:
                 console.service("placed")
             record.update(reason=res.reason, status=res.status, base=None if res.base is None else list(res.base),

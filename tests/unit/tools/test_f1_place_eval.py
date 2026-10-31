@@ -50,7 +50,7 @@ def test_a_session_ends_at_its_first_confirmation_and_classifies_it():
     s = F.session([_rec("confirmed", 0.5, (TRUTH[0] + 0.02, TRUTH[1], TRUTH[2] + 0.08))], 0.9, TRUTH)
     assert s["outcome"] == "imprecise"  # neither success nor wrong (Codex F1 v1 review P2 4)
     s = F.session([_rec("ambiguous", 1.0), _rec("unsteady"), _rec("edge", 0.2)], 0.9, TRUTH)
-    assert s["outcome"] == "failed" and s["reasons"] == ["ambiguous", "unsteady", "edge"]
+    assert s["outcome"] == "failed" and s["reasons"] == ["ambiguous", "unsteady"]  # unsteady ends it
 
 
 def test_the_choice_is_the_clean_value_with_the_most_rescues_and_the_stricter_on_a_tie():
@@ -93,3 +93,21 @@ def test_a_run_simulates_one_session_per_valid_start(tmp_path):
     assert F.main(["sweep", "--rows", str(rows), "--out", str(summary)]) == 0
     s = json.loads(summary.read_text())
     assert s["valid"] == 1 and len(s["table"]) == len(F.R_AMB_GRID) and "time" in s
+
+
+def test_an_unsteady_placement_ends_the_session_as_live_does():
+    # Codex F1 implementation review P2 3: the live phase ends the session on unsteady
+    s = F.session([_rec("edge", 0.2), _rec("unsteady"), _rec("confirmed", 0.5)], 0.9, TRUTH)
+    assert s["outcome"] == "failed" and s["placements"] == 2 and s["reasons"] == ["edge", "unsteady"]
+
+
+def test_a_click_outside_the_map_is_one_failed_placement_offline(tmp_path):
+    grid = TG._grid(*TG.ROOM)
+    caps = [_capture(tmp_path / f"c{k}.npz", [(0.3, 2.0, math.pi / 2)], 1, grid) for k in range(3)]
+    rows = tmp_path / "rows.jsonl"
+    F.main(["run", "--bundle", str(_bundle(tmp_path, grid)), "--capture", str(caps[0]), "--capture", str(caps[1]),
+            "--capture", str(caps[2]), "--seed", "3", "--out", str(rows),
+            "--config", json.dumps({"yaw_step_rad": math.radians(2.0)})])
+    [row] = [json.loads(line) for line in rows.read_text().splitlines()]
+    outside = [p for p in row["placements"] if not (0.0 <= p["click"][0] < 6.0 and 0.0 <= p["click"][1] < 4.0)]
+    assert all(p["reason"] == "invalid" for p in outside)

@@ -368,3 +368,11 @@ def test_placements_need_the_current_generation_the_candidate_stage_and_the_oper
     assert r.place(r.generation, PLACED) == (False, "reloc_operator_timeout")
     r2 = _reloc()
     assert r2.place(r2.generation, PLACED) == (False, "reloc_not_awaiting")  # still relocalizing
+
+
+def test_a_placement_outside_the_map_is_refused_without_using_a_placement():
+    # Codex F1 implementation review P2 6: the map's extent, set by the phase from the survey grid
+    r = _asking()
+    r.place_bounds = (0.0, 0.0, 6.0, 4.0)
+    assert r.place(r.generation, (-0.1, 2.0, 1.57)) == (False, "reloc_place_invalid") and r.places == 0
+    assert r.place(r.generation, (0.6, 2.0, 1.57)) == (True, "")

@@ -22,7 +22,7 @@ LAUNCHER=${RELOC_LAUNCHER:-$ROOT/deploy/console/isaac_live.sbatch}
 PROBE_MODE=${RELOC_PROBE:-hold}
 case "$PROBE_MODE" in
   hold) UNATTENDED=1; PROBE_ARGS=(--scenario hold) ;;
-  place) UNATTENDED=; PROBE_ARGS=(--scenario place --truth "$START_POSE" --click-seed "${CLICK_SEED:-0}"
+  place) UNATTENDED=; PROBE_ARGS=(--scenario place "--truth=$START_POSE" --click-seed "${CLICK_SEED:-0}"
                                   --click-index "${CLICK_INDEX:-0}" --place-wait-s "${PLACE_WAIT_S:-600}") ;;
   *) echo "RELOC_PROBE must be hold or place" >&2; exit 2 ;;
 esac

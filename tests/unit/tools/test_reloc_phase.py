@@ -515,3 +515,34 @@ def test_the_placement_settings_come_from_their_frozen_file_or_are_marked_provis
     f.write_text('{"r_amb": 0.86, "radius_m": 2.0, "yaw_rad": 0.6, "edge_m": 0.3, "edge_rad": 0.1, "deadline_s": 10.0}')
     cfg, record = P.place_settings(tmp_path)
     assert cfg.r_amb == 0.86 and record["file"] == P.PLACE_CONFIG and len(record["sha256"]) == 64
+
+
+def test_the_placements_deadline_runs_from_the_scans_start(tmp_path):
+    # Codex F1 implementation review P2 5: scans that take the whole T_LOC leave no time for the match
+    clock = {"t": time.monotonic()}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            r.place(r.generation, (2.2, 1.5, 0.15))
+        elif r.state == "placing" and stage == "scan":
+            clock["t"] += 1.0  # every scan step a second: the scans alone pass the 10 s
+        elif r.state in ("awaiting_pick", "reloc_failed") and r.places == 1 and stage in ("awaiting_pick",
+                                                                                           "reloc_failed"):
+            box["inputs"].operator_deadline_at = clock["t"] - 1.0  # done: end the wait (the clock stands now)
+
+    box = {}
+    box["inputs"] = _symmetric(tmp_path, FakeConsole(script), clock=lambda: clock["t"],
+                               operator_deadline_at=clock["t"] + 1e6)
+    out = P.run(box["inputs"])
+    assert out["places"][0]["reason"] == "timeout" and out["status"] != "chosen"
+
+
+def test_the_phase_gives_the_relocalizer_the_maps_extent(tmp_path):
+    seen = {}
+
+    def script(console, stage):
+        seen.setdefault("bounds", console.reloc.place_bounds)
+
+    P.run(_symmetric(tmp_path, FakeConsole(script), unattended=True))  # ends at the operator request
+    assert seen["bounds"] == pytest.approx((0.0, 0.0, 6.0, 4.0))

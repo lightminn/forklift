@@ -107,6 +107,7 @@ class StartRelocalizer:
         self.preview_id: int | None = None
         self.place_reason: str | None = None  # the last refusal's reason
         self._stage = "awaiting_pick"  # the candidate stage a placement returns to when it is refused
+        self.place_bounds: tuple | None = None  # the map's extent (x0, y0, x1, y1); a placement outside is refused
         self._confirmed: tuple | None = None
 
     def start(self) -> None:
@@ -179,6 +180,10 @@ class StartRelocalizer:
         if not (isinstance(pose, (list, tuple)) and len(pose) == 3 and all(
                 isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pose)):
             return False, "reloc_place_invalid"
+        if self.place_bounds is not None:  # off the map (Codex F1 implementation review P2): never matched
+            x0, y0, x1, y1 = self.place_bounds
+            if not (x0 <= pose[0] < x1 and y0 <= pose[1] < y1):
+                return False, "reloc_place_invalid"
         if self.places >= self.cfg.max_places:
             return False, "reloc_place_limit"
         if self.state != "place_preview":

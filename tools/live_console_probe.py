@@ -1531,6 +1531,7 @@ async def place_scenario(p, args):
     places = p.report["places"] = []
     sent = 0
     acked = 0  # placements the vehicle took: the next one waits until its state shows them
+    invalid = 0  # clicks off the map: refused by the vehicle uncounted, each one try of the operator's three (plan 3)
     end = time.monotonic() + args.place_wait_s
     while time.monotonic() < end and p.closed_code is None and sent < 10:
         st = p.state or {}
@@ -1538,14 +1539,17 @@ async def place_scenario(p, args):
             break
         r = (st.get("slam") or {}).get("reloc") or {}
         state, done = r.get("state"), r.get("places") or 0
-        if state in ("awaiting_pick", "reloc_failed") and done >= acked and done < (r.get("max_places") or 0):
-            c = place_click(args.click_seed, args.click_index, done, args.truth)
+        k = done + invalid
+        if state in ("awaiting_pick", "reloc_failed") and done >= acked and k < (r.get("max_places") or 0):
+            c = place_click(args.click_seed, args.click_index, k, args.truth)
             reply = await p.request("relocalize_place", generation=r["generation"], pose=[float(v) for v in c]) or {}
             sent += 1
-            places.append({"k": done, "click": list(c), "reply": reply.get("t"), "reason": reply.get("reason"),
+            places.append({"k": k, "click": list(c), "reply": reply.get("t"), "reason": reply.get("reason"),
                            "mono": time.monotonic()})
             if reply.get("t") == "ack":
                 acked = done + 1
+            elif reply.get("reason") == "reloc_place_invalid":
+                invalid += 1
         elif state == "place_preview" and "confirm" not in p.report:
             reply = await p.request("relocalize_place_confirm", generation=r["generation"],
                                     preview_id=r["preview_id"]) or {}
