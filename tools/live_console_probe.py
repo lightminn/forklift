@@ -1514,6 +1514,21 @@ async def _hold_and_end(p, args):
     p.report["close_code"] = p.closed_code
 
 
+HANDOVER_CODE = 1012  # the early console's close when the live runtime adopts it ("session ready")
+
+
+async def _reopen(p, deadline: float) -> None:
+    """Connect again until ``deadline`` (the listening server may refuse for a moment while it changes hands)."""
+    while True:
+        try:
+            await p.open()
+            return
+        except (OSError, websockets.exceptions.InvalidHandshake):
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(0.5)
+
+
 async def place_scenario(p, args):
     """F1 (docs/plans/2026-10-31-operator-placed-start.md 4.2 b): the probe is the operator. While the candidates are
     shown and placements are left, it places the click model's draw around the truth (--truth, the placed start; the
@@ -1557,6 +1572,13 @@ async def place_scenario(p, args):
             p.report["confirm"] = {"preview_id": r["preview_id"], "reply": reply.get("t"),
                                    "reason": reply.get("reason"), "mono": time.monotonic()}
         await asyncio.sleep(0.2)
+    if p.closed_code == HANDOVER_CODE:
+        # the live runtime adopted the early console (console/live/server.py reconnect_clients): hello again and read
+        # the session's state there, as the page does after any close but a session end (F1 Isaac development 13450:
+        # the probe stopped here, sent no session end, and the launcher had to be ended)
+        p.report["handover"] = {"code": p.closed_code, "mono": time.monotonic()}
+        await _reopen(p, time.monotonic() + 30.0)
+        await p.until(lambda s: s is not None and s.get("pose") is not None, 30, label="localized_state")
     p.report["localized"] = bool((p.state or {}).get("pose") is not None)
     if p.report["localized"]:
         await _hold_and_end(p, args)

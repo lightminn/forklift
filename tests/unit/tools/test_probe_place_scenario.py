@@ -140,3 +140,37 @@ def test_a_click_off_the_map_uses_one_of_the_operators_tries_as_offline():
     sent = [f for k, f in p.calls if k == "relocalize_place"]
     assert [x["pose"] for x in sent] == [list(F.click(5, 7, 0, TRUTH)), list(F.click(5, 7, 1, TRUTH))]
     assert [x["reason"] for x in p.report["places"]] == ["reloc_place_invalid", None]
+
+
+class HandoverProbe(StubProbe):
+    """The real hand-over: the confirmation's estimate goes to the bridge, the early console closes every connection
+    with 1012 "session ready" once the live runtime adopts it, and the pose shows only on the new connection."""
+
+    async def request(self, kind, timeout=5.0, **fields):
+        reply = await super().request(kind, timeout, **fields)
+        if kind == "relocalize_place_confirm" and reply.get("t") == "ack":
+            self.v.pose, self.ready = None, True
+            self.closed_code = 1012
+        return reply
+
+    async def open(self):
+        self.calls.append(("open", {}))
+        if getattr(self, "ready", False):
+            self.v.pose, self.closed_code = {"x_m": 0.0}, None
+
+
+def test_the_operator_reconnects_when_the_live_runtime_adopts_the_console_and_then_holds():
+    # F1 Isaac development (ws1 13450): the probe stopped at the 1012 hand-over, so no session end was sent and the
+    # launcher had to be ended -- the page reconnects after any close but a session end, and so does the probe
+    p = HandoverProbe(Vehicle(["preview"]))
+    _run(p)
+    assert [k for k, _ in p.calls].count("open") == 2
+    assert p.report["handover"]["code"] == 1012 and p.report["localized"] is True
+    assert p.report["hold"]["closed_during"] is None and p.report["session_end"] == {"t": "ack"}
+
+
+def test_a_close_that_is_no_hand_over_is_not_reconnected():
+    p = HandoverProbe(Vehicle(["edge", "low_fit", "ambiguous"]))
+    p.closed_code = 1001  # the session went away: the probe does not open again
+    _run(p, place_wait_s=0.3)
+    assert [k for k, _ in p.calls].count("open") == 1 and "handover" not in p.report
