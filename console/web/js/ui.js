@@ -5,7 +5,7 @@ import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfter
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
-import { candidateButtons, placeActions, relocActions, relocOf, relocSummary } from "./reloc.js";
+import { bayCheckKey, candidateButtons, placeActions, relocActions, relocOf, relocSummary } from "./reloc.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -235,7 +235,9 @@ export function render(m) {
     $("reloc-banner").title = sum.title;
     $("reloc-retry").hidden = !["awaiting_pick", "reloc_failed", "stopped", "place_preview"].includes(reloc.state);
     $("reloc-retry").disabled = !act.retry.enabled;
+    const placing = placeActions(reloc, lease, m.bayChecked);
     $("reloc-why").textContent = !act.retry.enabled ? act.retry.why
+      : reloc.state === "place_preview" && placing.confirmWhy ? `화살표가 차의 앞입니다 · ${placing.confirmWhy}`
       : reloc.state === "place_preview" ? "화살표가 차의 앞입니다 · 미리보기 확정을 두 번 눌러 정합니다"
       : act.pick ? "후보를 두 번 눌러 확정" : "";
     // one button per candidate (two at one place with other headings both reachable); rebuilt when the set changes
@@ -257,7 +259,7 @@ export function render(m) {
       }));
     }
     // F1 (plan 2026-10-31-operator-placed-start 1.2): place on the map, send the placed pose, confirm the preview
-    const place = placeActions(reloc, lease);
+    const place = placeActions(reloc, lease, m.bayChecked);
     if (!place.place.enabled) {
       m.placeMode = false;
       m.placeGhost = null;
@@ -270,6 +272,9 @@ export function render(m) {
     $("reloc-place-send").hidden = !(m.placeMode && m.placeGhost);
     $("reloc-confirm").hidden = reloc.state !== "place_preview";
     $("reloc-confirm").disabled = !place.confirm;
+    // the bay check (lead 2026-10-31): shown while a preview needs it, cleared for a new preview
+    $("reloc-bay").hidden = !place.bayCheck;
+    $("reloc-bay-check").checked = place.bayCheck && m.bayChecked === bayCheckKey(reloc);
   } else {
     m.placeMode = false;
     m.placeGhost = null;

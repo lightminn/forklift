@@ -50,6 +50,8 @@ export function relocSummary(reloc) {
   // the lead's screen aid (2026-10-31): look-alike places the global search showed, before the operator confirms
   if (reloc.state === "place_preview" && reloc.preview_twins > 0) {
     parts.push(`같은 모양 칸 ${reloc.preview_twins}곳 — 칸 번호를 확인하세요`);
+  } else if (reloc.state === "place_preview" && reloc.preview_twins == null) {
+    parts.push("같은 모양 칸 여부를 알 수 없음 — 칸 번호를 확인하세요");
   }
   if (reloc.places && reloc.max_places) parts.push(`놓기 ${reloc.places}/${reloc.max_places}`);
   const left = clock(reloc.operator_left_s);
@@ -109,15 +111,29 @@ export function placeFromDrag(view, w, h, down, up) {
   return [x, y, Math.atan2(-(up.y - down.y), up.x - down.x)]; // the screen's y grows down, the map's up
 }
 
-export function placeActions(reloc, hasLease) {
+// The lead's decision (2026-10-31): the bridge's start check let every neighbouring-bay confirmation through, so a
+// preview with look-alike places -- or none known (no global candidates shown) -- is confirmed only after the
+// operator says the bay is checked. A check belongs to its preview (set and number). An operating aid, page-side.
+export function needsBayCheck(reloc) {
+  return reloc?.state === "place_preview" && !(reloc.preview_twins === 0);
+}
+
+export function bayCheckKey(reloc) {
+  return `${reloc?.generation}:${reloc?.preview_id}`;
+}
+
+export function placeActions(reloc, hasLease, bayChecked = null) {
   const stage = ["awaiting_pick", "reloc_failed", "place_preview"].includes(reloc?.state);
   const left = (reloc?.places ?? 0) < (reloc?.max_places ?? 0);
   let why = "";
   if (!hasLease) why = "조종 권한이 있어야 합니다";
   else if (!stage) why = "후보를 기다리거나 미리보기를 볼 때만 놓을 수 있습니다";
   else if (!left) why = "놓기를 세 번 다 썼습니다 · 다시 시도하거나 세션을 끝내세요";
-  const confirm = Boolean(hasLease) && reloc?.state === "place_preview" && reloc.preview_id != null;
-  return { place: { enabled: Boolean(hasLease) && stage && left, why }, confirm };
+  const bayCheck = needsBayCheck(reloc);
+  const checked = !bayCheck || bayChecked === bayCheckKey(reloc);
+  const confirm = Boolean(hasLease) && reloc?.state === "place_preview" && reloc.preview_id != null && checked;
+  const confirmWhy = bayCheck && !checked ? "칸 번호를 확인했다고 표시해야 확정할 수 있습니다" : "";
+  return { place: { enabled: Boolean(hasLease) && stage && left, why }, confirm, bayCheck, confirmWhy };
 }
 
 // The two-step confirm's keys: the pose (rounded as sent) or the preview and the set and session they belong to.

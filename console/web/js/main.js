@@ -15,7 +15,7 @@ import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.
 import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
 import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
-import { candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
+import { bayCheckKey, candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 const $ = (id) => document.getElementById(id);
@@ -532,6 +532,11 @@ $("reloc-cands").onclick = (e) => {
 // truck stands, drag along its heading), sends it with two clicks, then confirms the preview with two clicks
 m.placeMode = false;
 m.placeGhost = null;
+m.bayChecked = null; // the preview (bayCheckKey) whose bay the operator said is checked
+$("reloc-bay-check").onchange = (e) => {
+  const reloc = relocOf(m.session.state);
+  m.bayChecked = e.target.checked && reloc ? bayCheckKey(reloc) : null;
+};
 $("reloc-place").onclick = () => {
   const reloc = relocOf(m.session.state);
   if (!reloc || !placeActions(reloc, m.session.hasLease).place.enabled) return;
@@ -557,7 +562,7 @@ $("reloc-place-send").onclick = () => {
 };
 $("reloc-confirm").onclick = () => {
   const reloc = relocOf(m.session.state);
-  if (!reloc || !placeActions(reloc, m.session.hasLease).confirm) return;
+  if (!reloc || !placeActions(reloc, m.session.hasLease, m.bayChecked).confirm) return;
   const key = previewKey(reloc, m.confirmKey("relocalize_place_confirm"));
   const step = m.confirm.click(key, performance.now());
   if (step === "armed") log("미리보기 · 한 번 더 누르면 이 위치로 정합니다");

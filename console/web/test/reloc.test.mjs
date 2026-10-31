@@ -97,7 +97,7 @@ test("the map fits the candidates while the truck's place is unknown", () => {
 });
 
 // --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2) --------------------------------
-import { placeActions, placeFromDrag, placeKey, previewKey } from "../js/reloc.js";
+import { bayCheckKey, needsBayCheck, placeActions, placeFromDrag, placeKey, previewKey } from "../js/reloc.js";
 
 const VIEW = { cx: 0, cy: 0, scale: 20, fitted: true }; // 20 px per metre, the map's centre at the screen's
 const PLACING = { ...RELOC, places: 1, max_places: 3, placed: [5.0, 2.0, 0.3], preview: null, preview_id: null };
@@ -122,8 +122,9 @@ test("placing needs the lease, a candidate stage or a preview, and placements le
 });
 
 test("only a preview may be confirmed, with the lease", () => {
-  assert.equal(placeActions({ ...PLACING, state: "place_preview", preview_id: 1 }, true).confirm, true);
-  assert.equal(placeActions({ ...PLACING, state: "place_preview", preview_id: 1 }, false).confirm, false);
+  const clear = { ...PLACING, state: "place_preview", preview_id: 1, preview_twins: 0 }; // no look-alike place
+  assert.equal(placeActions(clear, true).confirm, true);
+  assert.equal(placeActions(clear, false).confirm, false);
   assert.equal(placeActions({ ...PLACING, state: "awaiting_pick" }, true).confirm, false);
 });
 
@@ -164,6 +165,29 @@ test("a preview with look-alike places asks the operator to check the bay (lead 
   const base = { state: "place_preview", generation: 2, places: 1, max_places: 3, preview: [1, 2, 0], preview_id: 1 };
   assert.match(relocSummary({ ...base, preview_twins: 2 }).text, /같은 모양 칸 2곳 — 칸 번호를 확인하세요/);
   assert.doesNotMatch(relocSummary({ ...base, preview_twins: 0 }).text, /같은 모양/);
-  assert.doesNotMatch(relocSummary({ ...base, preview_twins: null }).text, /같은 모양/);
+  assert.match(relocSummary({ ...base, preview_twins: null }).text, /알 수 없음/); // none known: said, not hidden
   assert.doesNotMatch(relocSummary({ ...base, state: "awaiting_pick", preview_twins: 2 }).text, /같은 모양/);
+});
+
+test("a preview with look-alike places, or none known, is confirmed only after the operator checks the bay", () => {
+  // the lead's decision (2026-10-31): the bridge's start check let all four neighbouring-bay confirmations through
+  const prev = { ...PLACING, state: "place_preview", preview_id: 2, generation: 3 };
+  assert.equal(needsBayCheck({ ...prev, preview_twins: 0 }), false);
+  for (const twins of [1, 3, null, undefined]) assert.equal(needsBayCheck({ ...prev, preview_twins: twins }), true);
+  assert.equal(needsBayCheck({ ...prev, state: "awaiting_pick", preview_twins: 2 }), false);
+  const twins = { ...prev, preview_twins: 2 };
+  const unchecked = placeActions(twins, true);
+  assert.equal(unchecked.confirm, false);
+  assert.equal(unchecked.bayCheck, true);
+  assert.match(unchecked.confirmWhy, /칸 번호를 확인/);
+  assert.equal(placeActions(twins, true, bayCheckKey(twins)).confirm, true);
+  // a check belongs to its preview: a new preview (or set) asks again
+  assert.equal(placeActions({ ...twins, preview_id: 3 }, true, bayCheckKey(twins)).confirm, false);
+  assert.equal(placeActions({ ...twins, generation: 4 }, true, bayCheckKey(twins)).confirm, false);
+  assert.equal(placeActions(twins, false, bayCheckKey(twins)).confirm, false); // still the lease
+});
+
+test("a preview whose look-alike places are not known says so", () => {
+  const prev = { ...PLACING, state: "place_preview", preview_id: 1, preview_twins: null };
+  assert.match(relocSummary(prev).text, /같은 모양 칸 여부를 알 수 없음 — 칸 번호를 확인하세요/);
 });
