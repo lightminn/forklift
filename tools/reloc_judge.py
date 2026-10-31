@@ -273,6 +273,10 @@ def judge_session(d: Path, start: dict, fp: dict | None = None, *, frozen: dict 
         # never run: no evidence either way -- out of every denominator, and the judgement waits (B-P2d development)
         row["class"] = row["outcome"] = "not_run"
         return row
+    if ((_load(d / "probe.json") or {}).get("click_kind")) is not None:
+        # a development session placing a record click (outside the click model, same sources and arguments): never
+        # pooled into a judgement (Codex F1 development review P2)
+        raise ValueError(f"{start['id']}: a development session with a record click is not judged")
     result = _load(d / "epoch_1" / "run" / "result.json")
     events = _supervisor(d)
     exits = [e for e in events if e.get("event") == "exit"]

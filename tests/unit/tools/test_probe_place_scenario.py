@@ -54,6 +54,7 @@ class Vehicle:
 class StubProbe:
     def __init__(self, vehicle):
         self.v, self.report, self.calls, self.closed_code, self.lease_id = vehicle, {}, [], None, None
+        self.epoch = 1
 
     @property
     def state(self):
@@ -182,3 +183,19 @@ def test_a_named_record_click_is_placed_instead_of_the_click_model():
     poses = [f["pose"] for k, f in p.calls if k == "relocalize_place"]
     assert poses == [list(F.stress_click(5, 7, "bay+y", TRUTH))] * 2
     assert p.report["click_kind"] == "bay+y"
+
+
+class EpochProbe(HandoverProbe):
+    """The reconnect lands on another session (a new epoch on the same port): not this session's to hold or end."""
+
+    async def open(self):
+        await super().open()
+        self.epoch = 2 if getattr(self, "ready", False) else 1
+
+
+def test_a_reconnect_to_another_session_neither_holds_nor_ends_it():
+    # Codex F1 development review P3: the hand-over keeps the session; a new epoch is another session
+    p = EpochProbe(Vehicle(["preview"]))
+    _run(p)
+    assert p.report["handover"]["epoch_changed"] == [1, 2]
+    assert "hold" not in p.report and "session_end" not in p.report and p.report["localized"] is False

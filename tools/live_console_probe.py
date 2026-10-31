@@ -1581,7 +1581,13 @@ async def place_scenario(p, args):
         # the session's state there, as the page does after any close but a session end (F1 Isaac development 13450:
         # the probe stopped here, sent no session end, and the launcher had to be ended)
         p.report["handover"] = {"code": p.closed_code, "mono": time.monotonic()}
+        epoch = p.epoch
         await _reopen(p, time.monotonic() + 30.0)
+        if p.epoch != epoch:  # another session on the port: not this one's to hold or end (Codex F1 dev review P3)
+            p.report["handover"]["epoch_changed"] = [epoch, p.epoch]
+            p.report["localized"] = False
+            p.report["close_code"] = p.closed_code
+            return
         await p.until(lambda s: s is not None and s.get("pose") is not None, 30, label="localized_state")
     p.report["localized"] = bool((p.state or {}).get("pose") is not None)
     if p.report["localized"]:

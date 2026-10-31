@@ -338,7 +338,11 @@ def test_a_judgement_needs_the_frozen_record_which_has_its_own_mode(tmp_path):
     real = J.fingerprint(ROOT, IMAGE)["files"]  # the runner's own hashes of the code root's trees
     sources = {(k[len("src/"):] if k.startswith("src/") else k): v for k, v in real.items()
                if k.startswith(("src/forklift_core/", "sim/isaac/"))}
-    _session(tmp_path, "s1", sources=sources, arguments={**ARGS, "live_web_root": str(ROOT / "console/web")})
+    d = _session(tmp_path, "s1", sources=sources, arguments={**ARGS, "live_web_root": str(ROOT / "console/web")})
+    if real.get(J.PLACE_CONFIG) is not None:  # F1's frozen placement settings, as the runner records them
+        res = json.loads((d / "epoch_1/run/result.json").read_text())
+        res["start_reloc"]["place_settings"] = {"file": J.PLACE_CONFIG, "sha256": real[J.PLACE_CONFIG]}
+        (d / "epoch_1/run/result.json").write_text(json.dumps(res))
     starts = tmp_path / "starts.json"
     starts.write_text(json.dumps({"poses": _starts("s1")}))
     base = ["--sessions", str(tmp_path), "--starts", str(starts), "--code-root", str(ROOT), "--image", IMAGE,
@@ -517,3 +521,13 @@ def test_a_frozen_hard_start_not_run_or_missing_holds_the_f1_judgement(tmp_path)
     rows = J.judge_sessions(tmp_path, _starts("s0", "s1"))
     f1 = J.summarize(rows, hard_ids=["s0", "s1"])["f1_place"]
     assert f1["missing"] == [] and f1["hard"] == 1 and f1["floors"]["rescue"] is True  # s1 invalid: out
+
+
+def test_a_development_session_with_a_record_click_is_never_judged(tmp_path):
+    # Codex F1 development review P2: a CLICK_KIND session (outside the click model) ran the same sources and
+    # arguments and counted as rescued -- it is refused outright, never pooled
+    d = _session(tmp_path, "s1", estimate_source="operator_placed", attempts=REFUSED * 3, places=[{"reason": "confirmed"}])
+    probe = json.loads((d / "probe.json").read_text())
+    (d / "probe.json").write_text(json.dumps({**probe, "click_kind": "pos1.5"}))
+    with pytest.raises(ValueError, match="record click"):
+        J.judge_sessions(tmp_path, _starts("s1"))
