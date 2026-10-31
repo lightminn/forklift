@@ -1535,8 +1535,9 @@ async def place_scenario(p, args):
     seed and the start's index fix the draws, as tools/f1_place_eval.py's sessions), and confirms the first preview it
     sees (the plan's fixed policy). Once localized it stands the hold and ends the session, as the hold scenario; a
     session that never localizes is left to the operator's time."""
-    from f1_place_eval import (
-        click as place_click,  # noqa: PLC0415 -- the same click model as the offline sessions
+    from f1_place_eval import (  # noqa: PLC0415 -- the same clicks as the offline sessions and records
+        click as place_click,
+        stress_click,
     )
 
 
@@ -1544,6 +1545,8 @@ async def place_scenario(p, args):
     lease = await p.request("lease_request")
     p.lease_id = (lease or {}).get("lease_id")
     places = p.report["places"] = []
+    if args.click_kind:  # a record click (f1_place_eval STRESS_KINDS) at every placement instead of the click model
+        p.report["click_kind"] = args.click_kind
     sent = 0
     acked = 0  # placements the vehicle took: the next one waits until its state shows them
     invalid = 0  # clicks off the map: refused by the vehicle uncounted, each one try of the operator's three (plan 3)
@@ -1556,7 +1559,8 @@ async def place_scenario(p, args):
         state, done = r.get("state"), r.get("places") or 0
         k = done + invalid
         if state in ("awaiting_pick", "reloc_failed") and done >= acked and k < (r.get("max_places") or 0):
-            c = place_click(args.click_seed, args.click_index, k, args.truth)
+            c = (stress_click(args.click_seed, args.click_index, args.click_kind, args.truth) if args.click_kind
+                 else place_click(args.click_seed, args.click_index, k, args.truth))
             reply = await p.request("relocalize_place", generation=r["generation"], pose=[float(v) for v in c]) or {}
             sent += 1
             places.append({"k": k, "click": list(c), "reply": reply.get("t"), "reason": reply.get("reason"),
@@ -1703,6 +1707,11 @@ def main():
                     help="place scenario (F1): the placed start x,y,yaw (world = map), the click model's centre")
     ap.add_argument("--click-seed", type=int, default=0, help="place scenario: the click model's seed")
     ap.add_argument("--click-index", type=int, default=0, help="place scenario: the start's index in its list")
+    ap.add_argument("--click-kind", default=None, choices=("bay+x", "bay-x", "bay+y", "bay-y", "pos1.5", "yaw0.5",
+                                                           "yaw180"),
+                    help="place scenario, development only: place this record click (tools/f1_place_eval.py "
+                         "STRESS_KINDS) every time instead of the click model's draws -- what a wrong confirmation "
+                         "meets after the console")
     ap.add_argument("--place-wait-s", type=float, default=600.0,
                     help="place scenario: how long to act as the operator (wall s; the operator budget ends it too)")
     ap.add_argument("--tour-path", type=Path, default=None, help="tour scenario: tools/survey_tour.py's path (.npz)")

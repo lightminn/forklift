@@ -78,7 +78,7 @@ class StubProbe:
 
 def _run(p, **kw):
     args = SimpleNamespace(**{"hold_sim_s": 0.1, "live_factor": 1.0, "truth": TRUTH, "click_seed": 5,
-                              "click_index": 7, "place_wait_s": 5.0, **kw})
+                              "click_index": 7, "place_wait_s": 5.0, "click_kind": None, **kw})
     orig = asyncio.sleep
 
     async def sleep(s):
@@ -174,3 +174,11 @@ def test_a_close_that_is_no_hand_over_is_not_reconnected():
     p.closed_code = 1001  # the session went away: the probe does not open again
     _run(p, place_wait_s=0.3)
     assert [k for k, _ in p.calls].count("open") == 1 and "handover" not in p.report
+
+
+def test_a_named_record_click_is_placed_instead_of_the_click_model():
+    p = StubProbe(Vehicle(["edge", "preview"]))
+    _run(p, click_kind="bay+y")
+    poses = [f["pose"] for k, f in p.calls if k == "relocalize_place"]
+    assert poses == [list(F.stress_click(5, 7, "bay+y", TRUTH))] * 2
+    assert p.report["click_kind"] == "bay+y"

@@ -83,6 +83,19 @@ def test_a_place_session_is_attended_and_its_probe_places_around_the_truth(tmp_p
     args = (tmp_path / "probe_args").read_text().split()
     assert args[args.index("--scenario") + 1] == "place" and "--truth=-1,2,3" in args
     assert args[args.index("--click-seed") + 1] == "11" and args[args.index("--click-index") + 1] == "4"
+    assert "--click-kind" not in args  # the click model, unless a record click is named
+
+
+def test_a_place_session_can_name_a_record_click(tmp_path):
+    # the lead's safety-net check (2026-10-31): does the bridge's start check stop a wrong placement an operator confirms
+    launcher, python = _fakes(tmp_path, probe_rc=0, launcher_s=1)
+    env = {**os.environ, "START_POSE": "1,2,3", "VENV_PY": str(python), "RELOC_LAUNCHER": str(launcher),
+           "RELOC_END_GRACE_S": "10", "FACTOR": "0.3", "RELOC_PROBE": "place", "CLICK_KIND": "bay+y"}
+    p = subprocess.run(["bash", str(WRAPPER), str(tmp_path / "out")], cwd=ROOT, env=env, capture_output=True,
+                       text=True, timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--click-kind") + 1] == "bay+y"
 
 
 def test_an_unknown_probe_mode_is_refused(tmp_path):

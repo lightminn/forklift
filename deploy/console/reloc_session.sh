@@ -11,7 +11,8 @@
 #   optional: HOLD_SIM_S (10), WAIT_PORT_S (1500), RELOC_END_GRACE_S (300); RELOC_LAUNCHER (tests only)
 #   RELOC_PROBE (hold): place -- F1 (docs/plans/2026-10-31-operator-placed-start.md 4.2 b): the session is attended
 #   (no RELOC_UNATTENDED: the console waits for the operator) and the probe is the operator, placing the click model's
-#   draws around START_POSE (CLICK_SEED, CLICK_INDEX: the start's index in its list) and confirming the first preview
+#   draws around START_POSE (CLICK_SEED, CLICK_INDEX: the start's index in its list) and confirming the first preview;
+#   CLICK_KIND (development only) places that record click (tools/f1_place_eval.py STRESS_KINDS) instead
 #
 # Run from the repository root.
 set -u
@@ -23,7 +24,8 @@ PROBE_MODE=${RELOC_PROBE:-hold}
 case "$PROBE_MODE" in
   hold) UNATTENDED=1; PROBE_ARGS=(--scenario hold) ;;
   place) UNATTENDED=; PROBE_ARGS=(--scenario place "--truth=$START_POSE" --click-seed "${CLICK_SEED:-0}"
-                                  --click-index "${CLICK_INDEX:-0}" --place-wait-s "${PLACE_WAIT_S:-600}") ;;
+                                  --click-index "${CLICK_INDEX:-0}" --place-wait-s "${PLACE_WAIT_S:-600}"
+                                  ${CLICK_KIND:+--click-kind "$CLICK_KIND"}) ;;
   *) echo "RELOC_PROBE must be hold or place" >&2; exit 2 ;;
 esac
 GRACE=${RELOC_END_GRACE_S:-300}
