@@ -81,8 +81,9 @@ def _fake_python(tmp_path):
     fake = tmp_path / "fakepy"
     fake.write_text("#!/bin/bash\n"
                     "if [ \"$1\" = -c ]; then case \"$2\" in *load_bundle*) echo " + "f" * 64 + "; exit 0;; esac;"
-                    " exec python3 \"$@\"; fi\n"
-                    'case "$1" in */slam_bundle_registry.py) exec python3 "$@";; esac\n'  # the registry's lookup runs
+                    f" exec {sys.executable} \"$@\"; fi\n"
+                    # the registry's lookup runs, under this test's interpreter (ws1's python3 has no numpy)
+                    f'case "$1" in */slam_bundle_registry.py) exec {sys.executable} "$@";; esac\n'
                     'for a in "$@"; do [ "$a" = --check-args ] && { echo ARGS_OK; exit 0; }; done\n'
                     f"printf '%s\\n' \"$*\" >> {tmp_path / 'started'}\nexit 0\n")
     fake.chmod(0o755)
