@@ -36,4 +36,5 @@ bundles:
   start_reloc_evidence: 'Isaac smoke 2026-10-31, ws1 Slurm job 13426 (commit 9ba9e845,
     live console default start): at the registry start the first search gave competitor
     (ratio 0.990) with the truth first among the candidates (0.03 m from it) and its
-    twins 6 m to either side -- found, an operator''s pick confirms it'
+    twins 6 m to either side -- the start is found and shown; no operator answered
+    in the smoke (it ended at the operator''s time), so the pick itself was not exercised'
