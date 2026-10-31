@@ -32,7 +32,7 @@ def _choose_err(tmp_path, **env):
     return out.returncode, out.stdout, out.stderr
 
 
-def _registry(tmp_path):
+def _registry(tmp_path, relocalizable=False):
     scene = tmp_path / "line_m_session.json"
     scene.write_text(json.dumps({"name": "line_m"}))
     manifest = {"map_id": "a" * 64, "inputs": {"scene_file": {"path": scene.name, "sha256": reg.sha256(scene)}},
@@ -40,7 +40,10 @@ def _registry(tmp_path):
     row = reg.entry(manifest, {"ok": True, "map_id": "a" * 64, "world": {"ok": True, "position_max_m": 0.09, "yaw_max_rad": 0.006}},
                     folder="line_m_tsq_aaaaaaaaaaaa", start=[1.5, -2.0, 0.25], name="line_m")
     book = tmp_path / "bundles.yaml"
-    reg.write(book, reg.put({"bundles": []}, row))
+    marked = reg.put({"bundles": []}, row)
+    if relocalizable:
+        marked = reg.mark(marked, "line_m", True, "a test's smoke")
+    reg.write(book, marked)
     return scene, book
 
 
@@ -103,3 +106,18 @@ def test_an_explicit_folder_is_used_as_given_and_a_broken_registry_stops(tmp_pat
         rc, err = _choose(tmp_path, SCENE_FILE=str(scene), SLAM_BUNDLE_ROOT=str(tmp_path), SLAM_BUNDLE_REGISTRY=str(book),
                           **env)
         assert rc != 0 and "registry" in err
+
+
+def test_the_registry_row_says_whether_its_start_relocalizes(tmp_path):
+    # lead 2026-10-31 (a): MAP_START_RELOC is the row's mark, yes or no; empty wherever no registry row was taken
+    shown = 'printf %s "$MAP_START_RELOC"'
+    for relocalizable, want in ((False, "no"), (True, "yes")):
+        d = tmp_path / want
+        d.mkdir()
+        scene, book = _registry(d, relocalizable=relocalizable)
+        out = _run(shown, {"SCENE_FILE": str(scene), "SLAM_BUNDLE_ROOT": str(d), "SLAM_BUNDLE_REGISTRY": str(book)})
+        assert out.returncode == 0 and out.stdout == want, out.stderr
+    for env in ({"MAP_BUNDLE": "none", "SCENE_FILE": str(scene)}, {"MAP_BUNDLE": str(tmp_path), "MAP_START_POSE": "0,0,0"},
+                {"SCENE_FILE": str(scene), "ENCODER_MODEL": "reported", "SLAM_BUNDLE_REGISTRY": str(book)}):
+        out = _run(shown, {"MAP_START_RELOC": "yes", **env})  # never inherited from the caller
+        assert out.returncode == 0 and out.stdout == "", (env, out.stderr)

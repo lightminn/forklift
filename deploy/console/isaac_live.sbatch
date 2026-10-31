@@ -37,6 +37,12 @@
 #   session instead (unattended batches, B-P2d); RELOC_WAIT_S (600): the supervisor's whole wait, the operator's
 #   time 60 s less), MAX_EPOCHS (unset: epochs until the session ends; 1 for a validation session that must not be
 #   retried, B-P2d),
+#   START_RELOC (on|off; start relocalization plan 7.1, lead 2026-10-31): unset, on for an operator's session and off
+#   in a bundle's run (BUNDLE_TOKEN). On without START_POSE, on the registry's survey map: the truck placed at the
+#   registry's scene start and relocalized (START_MODE in env.sh says what the start is and why) -- by default only
+#   where the registry row is marked relocalizable at its start, otherwise the known start with the reason added to
+#   SLAM_CHOICE (the console shows it); without that map, the known start (on asked for by name: no launch). START_POSE
+#   relocalizes whatever the default; off with it: no launch.
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -76,7 +82,51 @@ if [ -n "${START_POSE:-}" ] && [ -z "${MAP_BUNDLE:-}" ]; then
   echo "START_POSE relocalizes on a survey map: it needs one (slam: $SLAM_CHOICE)" >&2
   exit 2
 fi
+# The start (lead 2026-10-31, start relocalization plan 7.1): the operator's console relocalizes by default -- placed at
+# the registry's scene start (the survey's own settled start, ~80 um from the scene's nominal one; the localization
+# never reads it, plan 1.1) and found on its survey map, the operator picking or retrying when it is ambiguous. A
+# bundle's run (BUNDLE_TOKEN: unattended) keeps the known start, as riib and the replay gate do. START_POSE
+# relocalizes as before; a map folder given by hand keeps the known start (its MAP_START_POSE is the SLAM's start
+# estimate, not where the truck stands: Codex design review P2).
+if [ -n "${START_RELOC+set}" ]; then  # given, even empty: checked below (Codex B-P2e review P3)
+  START_RELOC_GIVEN=${START_RELOC:-empty}
+else
+  START_RELOC_GIVEN=
+  START_RELOC=$([ -n "${BUNDLE_TOKEN:-}" ] && echo off || echo on)
+fi
+case "$START_RELOC" in on|off) ;; *) echo "START_RELOC must be on or off"; exit 2;; esac
+if [ -n "${START_POSE:-}" ]; then
+  [ "$START_RELOC_GIVEN" = off ] && { echo "START_RELOC=off contradicts START_POSE (which relocalizes)" >&2; exit 2; }
+  START_MODE="relocalization (START_POSE)"
+elif [ "$START_RELOC" = off ]; then
+  if [ -n "$START_RELOC_GIVEN" ]; then START_MODE="known (START_RELOC=off)"; else START_MODE="known (a bundle's run: unattended)"; fi
+elif [[ "$SLAM_CHOICE" == "localization (registry: "* ]]; then
+  # lead 2026-10-31 (a): by default only on a row the Isaac smoke marked relocalizable at its start (the registry's
+  # start_relocalizable); elsewhere the known start, its reason in the log, the supervisor's and the console's
+  # slam.choice. START_RELOC=on asks for the relocalization all the same
+  if [ "$MAP_START_RELOC" = yes ]; then
+    START_POSE=$MAP_START_POSE
+    START_MODE="relocalization (default: placed at the registry's scene start)"
+  elif [ -n "$START_RELOC_GIVEN" ]; then
+    START_POSE=$MAP_START_POSE
+    START_MODE="relocalization (START_RELOC=on: the registry row is not marked relocalizable at its start)"
+  else
+    START_MODE="known (the registry row is not marked relocalizable at its start)"
+    SLAM_CHOICE="$SLAM_CHOICE; start known: the row is not marked relocalizable"
+  fi
+else
+  if [ -n "$START_RELOC_GIVEN" ]; then
+    echo "START_RELOC=on needs the registry's survey map to relocalize on (slam: $SLAM_CHOICE)" >&2
+    exit 2
+  fi
+  if [ -n "${MAP_BUNDLE:-}" ]; then
+    START_MODE="known (a map folder given by hand: START_POSE relocalizes on it)"
+  else
+    START_MODE="known (no survey map to relocalize on)"
+  fi
+fi
 echo "slam: $SLAM_CHOICE"
+echo "start: $START_MODE"
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -92,6 +142,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
+  printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
   printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
   # the SLAM bridge's image: the tag by default; a judged batch names it by digest (B-P2d, Codex freeze review P2)

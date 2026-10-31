@@ -1,8 +1,9 @@
 # The live session's SLAM mode (docs/plans/2026-10-26-slam-localization-default.md D2; the default switched to the
 # registry by user decision 2026-10-27, plan 5d), sourced by isaac_live.sbatch after ENCODER_MODEL is set. Reads ROOT,
 # VENV_PY, ENCODER_MODEL and optionally MAP_BUNDLE, MAP_START_POSE, EXPECTED_MAP_ID, SCENE_FILE, SLAM_BUNDLE_ROOT,
-# SLAM_BUNDLE_REGISTRY; sets MAP_BUNDLE (empty: online mapping), MAP_START_POSE, EXPECTED_MAP_ID and SLAM_CHOICE (what was
-# chosen and why, for the session's log).
+# SLAM_BUNDLE_REGISTRY; sets MAP_BUNDLE (empty: online mapping), MAP_START_POSE, EXPECTED_MAP_ID, SLAM_CHOICE (what was
+# chosen and why, for the session's log) and MAP_START_RELOC (the registry row's mark, yes or no: can the truck be
+# relocalized at that start; empty when no registry row was taken).
 #   MAP_BUNDLE unset    the default: the accepted survey bundle of SCENE_FILE (by content) and ENCODER_MODEL from
 #                       config/slam_map_bundles.yaml -- its folder under SLAM_BUNDLE_ROOT, its map id (held against the
 #                       folder by the supervisor) and its start pose. No row for them, or no SCENE_FILE (the factory
@@ -14,6 +15,7 @@
 # A registry that does not read stops the launch either way.
 EXPECTED_MAP_ID=${EXPECTED_MAP_ID:-}
 MAP_START_POSE=${MAP_START_POSE:-}
+MAP_START_RELOC=  # only a registry row says it
 slam_fallback() {  # $1: why; online mapping, recorded
   MAP_BUNDLE=; EXPECTED_MAP_ID=; MAP_START_POSE=
   SLAM_CHOICE="mapping (fallback: $1)"
@@ -33,7 +35,8 @@ case "${MAP_BUNDLE:-}" in
       SLAM_RC=$?
       if [ "$SLAM_RC" -eq 0 ]; then
         : "${SLAM_BUNDLE_ROOT:?the registry has a bundle for this scene: SLAM_BUNDLE_ROOT (or MAP_BUNDLE=none to map)}"
-        read -r SLAM_FOLDER EXPECTED_MAP_ID MAP_START_POSE <<< "$SLAM_ROW"
+        read -r SLAM_FOLDER EXPECTED_MAP_ID MAP_START_POSE MAP_START_RELOC <<< "$SLAM_ROW"
+        case "$MAP_START_RELOC" in yes|no) ;; *) echo "the registry's lookup gave no start mark" >&2; exit 2;; esac
         MAP_BUNDLE=$SLAM_BUNDLE_ROOT/$SLAM_FOLDER
         SLAM_CHOICE="localization (registry: $SLAM_FOLDER)"
       elif [ "$SLAM_RC" -eq 3 ]; then
