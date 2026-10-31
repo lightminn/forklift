@@ -14,6 +14,11 @@ bundles:
   v2:
     position_max_m: 0.09193202074943474
     yaw_max_rad: 0.005993157672012028
+  start_relocalizable: false
+  start_reloc_evidence: 'Isaac smoke 2026-10-31, ws1 Slurm job 13426 (commit 9ba9e845,
+    live console default start): at the registry start all three searches were uninformative
+    (too few scan points within reach to search; no candidate) -- the operator console
+    keeps the known start'
 - name: random_m
   scene_sha256: 8b8fe55499148528e3daec138937b406efaeec46459e520c6429014309858cfa
   scene: random_m_session.json
@@ -27,3 +32,9 @@ bundles:
   v2:
     position_max_m: 0.08415433298331662
     yaw_max_rad: 0.004793488635950194
+  start_relocalizable: true
+  start_reloc_evidence: 'Isaac smoke 2026-10-31, ws1 Slurm job 13426 (commit 9ba9e845,
+    live console default start): at the registry start the first search gave competitor
+    (ratio 0.990) with the truth first among the candidates (0.03 m from it) and its
+    twins 6 m to either side -- the start is found and shown; no operator answered
+    in the smoke (it ended at the operator''s time), so the pick itself was not exercised'

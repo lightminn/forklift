@@ -321,8 +321,11 @@ export function slamLabel(st) {
     return { text: choice.startsWith("mapping (fallback:") ? "지도 작성 · 조사 지도 없음" : "지도 작성", title: choice };
   }
   const id = String(slam.map_id ?? "");
-  return { text: `지도 ${slam.mode === "localization" ? "위치추정" : slam.mode} · ${id.slice(0, 8)}`,
-           title: `지도 ${id}${slam.map_loaded ? " · 세션 시작 검사 통과" : ""}` };
+  // lead 2026-10-31 (a): the launcher's reason for keeping the known start on a survey map rides in its choice
+  const choice = String(slam.choice ?? "");
+  return { text: `지도 ${slam.mode === "localization" ? "위치추정" : slam.mode} · ${id.slice(0, 8)}` +
+                 (choice.includes("; start known:") ? " · 알려진 시작" : ""),
+           title: `지도 ${id}${slam.map_loaded ? " · 세션 시작 검사 통과" : ""}${choice ? ` · ${choice}` : ""}` };
 }
 
 // The session note on screen: the standby's answer (where the session is now) over this page's own waiting note

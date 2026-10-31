@@ -186,3 +186,21 @@ A later change to any fingerprinted file means a new freeze, and the counts star
 - **Scope:** this is the same hall with the seed-5 layout, a conditional check. The CP bounds are nominal bounds within one map, and spatial correlation can make the effective sample smaller.
 
 **Code after the collection:** `f593f2b3` (after `0fa66b4a`, which the collection ran) restores the spawn check's literal reason at its `require` (`tests/unit/mission/test_failures.py`: every reason has a class). The condition and message are the same as `0fa66b4a`. It changes `sim/isaac/run_transport.py`, so the branch head's fingerprint is not freeze 1's. A further world pooled with this judgement (4.4a) would have to run from the frozen snapshot, or start a new count.
+
+**The lead's exception (2026-10-31):** the promotion evidence is accepted for the merged head `f593f2b3` too. The whole diff of `sim/isaac/run_transport.py` between `0fa66b4a` and `f593f2b3` is:
+
+```diff
+-    spawn_problem_ = truck_spawn_problem(args, initial_base, base_start)
+-    require(spawn_problem_ is None, spawn_problem_ or "")
++    # the reason stays a literal at the call: every require reason is classified (mission/failures.py)
++    require(truck_spawn_problem(args, initial_base, base_start) is None, "Truck spawn displaced")
+```
+
+The condition is the same call. Its only result besides None is "Truck spawn displaced", which is now the literal message, so the failure and its reason are the same. With the start relocalization the helper returns None and nothing is raised in either version. No other verdict-path file changed (Codex results review: "the failure condition and the actual message are the same"). Other worlds pooled with this judgement still run from the frozen snapshot (plan 4.4b), unless a new count starts.
+
+The exception covers `f593f2b3`, not the main it was merged into. Main at the merge (`ea4afef5`) also carries other pull requests (#228–#233) that changed seven fingerprinted files after `f593f2b3`:
+- `sim/isaac/run_transport.py`, `sim/isaac/new_obstacles.py`, `sim/isaac/replay_setup.py`;
+- `src/forklift_core/mission/core.py`, `src/forklift_core/mission/boundary_record.py`, `src/forklift_core/mission/replay.py`;
+- `src/forklift_core/planning/pallet_mission.py`.
+
+B-P2d did not judge them. The launcher default the lead promoted (plan 7.1) runs on that main, and its relocalization is the B-P2d path with those changes around it (Codex B-P2e review P3).

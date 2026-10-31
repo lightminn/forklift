@@ -195,6 +195,14 @@ test("the SLAM label says localization on a named map, or that it is not known (
   assert.deepEqual(slamLabel({ slam: { mode: "mapping", choice: "mapping (MAP_BUNDLE=none)" } }),
                    { text: "지도 작성", title: "mapping (MAP_BUNDLE=none)" });
   assert.deepEqual(slamLabel(null), { text: "—", title: "" });
+  // lead 2026-10-31 (a): a survey map whose row is not marked relocalizable at its start keeps the known start, and
+  // the screen says so (the launcher's reason in the title)
+  const known = "localization (registry: line_m_x); start known: the row is not marked relocalizable";
+  assert.deepEqual(slamLabel({ slam: { mode: "localization", map_id: id, map_loaded: true, choice: known } }),
+                   { text: "지도 위치추정 · abababab · 알려진 시작", title: `지도 ${id} · 세션 시작 검사 통과 · ${known}` });
+  const relocalized = "localization (registry: random_m_x)";
+  assert.deepEqual(slamLabel({ slam: { mode: "localization", map_id: id, choice: relocalized } }),
+                   { text: "지도 위치추정 · abababab", title: `지도 ${id} · ${relocalized}` });
 });
 
 test("the standby's note is shown over a waiting note of this page's own (Codex standby review P2-1)", async () => {
