@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 
 from console.mock_vehicle import paths
+from forklift_core.localization.twins import twin_count
 from forklift_core.mission.results import ResultsBook
 from forklift_core.safety.generations import RequestLedger
 from console.mock_vehicle.world import (
@@ -41,6 +42,7 @@ PHASES = (
     "withdraw",
     "return",
 )
+MOCK_R_AMB = 0.95  # the fake's look-alike threshold: its turned-around candidate (0.88 of 0.91) shows the warning
 TELEOP_FORBIDDEN = {"insert", "lift", "lower", "withdraw", "recover"}
 NO_MANUAL_LIFT = {"insert", "withdraw", "recover"}
 LEASE_REQUIRED = {
@@ -291,7 +293,7 @@ class MockVehicle:
                                                               "placing", "place_preview"):
             # B-P2c: a STOP interrupts the relocalization (its candidates go, a retry may follow); F1 its placement too
             self.reloc.update(state="stopped", candidates=[], generation=self.reloc["generation"] + 1, preview=None,
-                              preview_id=None, preview_points=None)
+                              preview_id=None, preview_points=None, preview_twins=None)
             self._reloc_due = None
         if self.mode == "STOPPED":
             self._boundary()  # a new stop is a boundary even in the same mode
@@ -1032,7 +1034,7 @@ class MockVehicle:
             return self._reply(msg, reason="reloc_place_limit")
         stage = r["state"] if r["state"] != "place_preview" else r.get("stage", "awaiting_pick")
         r.update(state="placing", places=r["places"] + 1, placed=list(msg["pose"]), preview=None, preview_id=None,
-                 preview_points=None, stage=stage)
+                 preview_points=None, preview_twins=None, stage=stage)
         self._reloc_due = (self._now() + 1.5, ("placed",))
         return self._reply(msg, places=r["places"])
 
@@ -1058,7 +1060,7 @@ class MockVehicle:
         if msg["generation"] != r["generation"]:
             return self._reply(msg, reason="reloc_stale_pick")
         r.update(state="relocalizing", candidates=[], generation=r["generation"] + 1, attempts=0, preview=None,
-                 preview_id=None, preview_points=None)
+                 preview_id=None, preview_points=None, preview_twins=None)
         self._reloc_due = (self._now() + 2.0, ("candidates",))
         return self._reply(msg, generation=r["generation"])
 
@@ -1080,8 +1082,10 @@ class MockVehicle:
             if math.hypot(px - x, py - y) <= 1.7 and dyaw <= 0.5:
                 pts = [[round(x + 3.0 * math.cos(a), 3), round(y + 3.0 * math.sin(a), 3)]
                        for a in (k * math.pi / 18 for k in range(36))]
+                twins = twin_count([(c["base"], c["score"]) for c in r.get("candidates") or []], (x, y, yaw),
+                                   MOCK_R_AMB)
                 r.update(state="place_preview", preview=[x, y, yaw], preview_id=r["places"], preview_points=pts,
-                         place_reason=None)
+                         preview_twins=twins, place_reason=None)
             else:
                 r.update(state=r.get("stage", "awaiting_pick"), place_reason="low_fit")
         else:  # localized: the place is known, the session goes on as usual
@@ -1098,7 +1102,7 @@ class MockVehicle:
                           "candidates": self._reloc_candidates(),
                           # F1: the operator's placements (plan 2026-10-31-operator-placed-start 1.2)
                           "places": 0, "max_places": 3, "placed": None, "preview": None, "preview_id": None,
-                          "preview_points": None, "place_reason": None}
+                          "preview_points": None, "preview_twins": None, "place_reason": None}
             return
         if kind in self.PICK_INJECTIONS:
             self._pick_override = kind  # the next pick only (CT-2 console plan C7)

@@ -159,3 +159,11 @@ test("a preview may also be dropped for a new global attempt, and says how to co
   assert.equal(relocActions(prev, true).retry.enabled, true);
   assert.equal(relocActions(prev, true).pick, false);
 });
+
+test("a preview with look-alike places asks the operator to check the bay (lead 2026-10-31)", () => {
+  const base = { state: "place_preview", generation: 2, places: 1, max_places: 3, preview: [1, 2, 0], preview_id: 1 };
+  assert.match(relocSummary({ ...base, preview_twins: 2 }).text, /같은 모양 칸 2곳 — 칸 번호를 확인하세요/);
+  assert.doesNotMatch(relocSummary({ ...base, preview_twins: 0 }).text, /같은 모양/);
+  assert.doesNotMatch(relocSummary({ ...base, preview_twins: null }).text, /같은 모양/);
+  assert.doesNotMatch(relocSummary({ ...base, state: "awaiting_pick", preview_twins: 2 }).text, /같은 모양/);
+});

@@ -386,6 +386,29 @@ export function drawMap(cv, model, tok, view, layers) {
       c.fillRect(x - 1.5, y - 1.5, 3, 3);
     }
     outline(reloc.preview, { color: tok.accent, dash: [] });
+    // the forward direction, large (the lead's screen aid against a placement turned around, 2026-10-31)
+    const [x, y] = P(reloc.preview[0], reloc.preview[1]);
+    const len = Math.max(48, 1.6 * sc);
+    c.save();
+    c.translate(x, y);
+    c.rotate(-reloc.preview[2]);
+    c.strokeStyle = tok.accent;
+    c.fillStyle = tok.accent;
+    c.lineWidth = 4;
+    c.setLineDash([]);
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.lineTo(len - 14, 0);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(len, 0);
+    c.lineTo(len - 18, -10);
+    c.lineTo(len - 18, 10);
+    c.closePath();
+    c.fill();
+    c.restore();
+    c.font = "bold 14px system-ui, sans-serif";
+    c.fillText("전진", x + (len + 8) * Math.cos(reloc.preview[2]) - 14, y - (len + 8) * Math.sin(reloc.preview[2]) + 5);
   }
   if (model.placeGhost) outline(model.placeGhost, { color: tok.fg, dash: [6, 4] });
 

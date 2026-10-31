@@ -236,7 +236,7 @@ export function render(m) {
     $("reloc-retry").hidden = !["awaiting_pick", "reloc_failed", "stopped", "place_preview"].includes(reloc.state);
     $("reloc-retry").disabled = !act.retry.enabled;
     $("reloc-why").textContent = !act.retry.enabled ? act.retry.why
-      : reloc.state === "place_preview" ? "미리보기 확정을 두 번 눌러 정합니다"
+      : reloc.state === "place_preview" ? "화살표가 차의 앞입니다 · 미리보기 확정을 두 번 눌러 정합니다"
       : act.pick ? "후보를 두 번 눌러 확정" : "";
     // one button per candidate (two at one place with other headings both reachable); rebuilt when the set changes
     const buttons = candidateButtons(reloc, act);

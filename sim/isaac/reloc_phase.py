@@ -22,6 +22,7 @@ import scan_capture
 from forklift_core.localization import global_match as G
 from forklift_core.localization import local_match as LM
 from forklift_core.localization import start_reloc as R
+from forklift_core.localization.twins import twin_count
 
 
 @dataclass
@@ -272,8 +273,12 @@ def _run(inputs: RelocInputs) -> dict:
             relocalizer.placed_result(res.confirmed, res.base, res.reason)
             out["places"].append(record)
             if console is not None:
+                # the look-alike places the global search showed, for the operator's check (lead 2026-10-31)
+                twins = (twin_count([(R.base_from_laser(c.pose), c.search_score) for c in relocalizer.shown],
+                                      res.base, inputs.place_cfg.r_amb) if res.confirmed else None)
                 console.note(place_reason=None if res.confirmed else res.reason,
-                             preview_points=_preview_points(points, res.base) if res.confirmed else None)
+                             preview_points=_preview_points(points, res.base) if res.confirmed else None,
+                             preview_twins=twins)
             continue
         if state in WAITING:
             if unattended:

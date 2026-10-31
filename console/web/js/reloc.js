@@ -47,6 +47,10 @@ export function relocSummary(reloc) {
   if (reloc.place_reason && ["awaiting_pick", "reloc_failed"].includes(reloc.state)) {
     parts.push(PLACE_REASON_KO[reloc.place_reason] ?? `놓기 거부 ${reloc.place_reason}`);
   }
+  // the lead's screen aid (2026-10-31): look-alike places the global search showed, before the operator confirms
+  if (reloc.state === "place_preview" && reloc.preview_twins > 0) {
+    parts.push(`같은 모양 칸 ${reloc.preview_twins}곳 — 칸 번호를 확인하세요`);
+  }
   if (reloc.places && reloc.max_places) parts.push(`놓기 ${reloc.places}/${reloc.max_places}`);
   const left = clock(reloc.operator_left_s);
   if (left !== null && reloc.state !== "localizing") parts.push(`남은 시간 ${left}`);

@@ -471,6 +471,9 @@ def test_a_placed_pose_previews_and_its_confirmation_is_the_estimate(tmp_path):
     est = out["estimate"]
     assert math.hypot(est[0] - 2.0, est[1] - 1.4) <= 0.10 and abs(est[2]) <= 0.05
     assert console.notes["preview_points"]  # the overlay drawn for the operator
+    # the look-alike places the global search showed (the lead's screen aid): a count, or None without candidates
+    assert console.notes["preview_twins"] is None or console.notes["preview_twins"] >= 0
+    assert "preview_twins" in console.notes
 
 
 def test_a_refused_placement_goes_back_to_the_candidates(tmp_path):

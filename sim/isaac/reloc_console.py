@@ -164,6 +164,9 @@ class RelocConsole:
                 "preview_id": None if r is None else r.preview_id,
                 "preview_points": (self.notes.get("preview_points")
                                    if r is not None and r.state == "place_preview" else None),
+                # the look-alike places among the shown candidates (lead 2026-10-31: a screen aid, not a decision)
+                "preview_twins": (self.notes.get("preview_twins")
+                                  if r is not None and r.state == "place_preview" else None),
                 "place_reason": self.notes.get("place_reason")}
 
     def _write_port(self, state: str, force: bool = False) -> None:

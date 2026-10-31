@@ -112,6 +112,7 @@ def test_a_placement_near_the_truck_previews_and_its_confirmation_places_the_tru
     v.step(0.1)
     r = v.make_state()["slam"]["reloc"]
     assert r["state"] == "place_preview" and r["preview_id"] == 1 and r["preview_points"]
+    assert r["preview_twins"] == 1  # the fake's turned-around look-alike (its scores against the fake's R_AMB 0.95)
     assert r["preview"] == pytest.approx(list(true))
     # the test's clock jumped past the lease without the page's echoes: a new one (its own request id; "L" replays)
     lease = v.handle("a", {"t": "lease_request", "request_id": "L2", "session_epoch": v.session_epoch},

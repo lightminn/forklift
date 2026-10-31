@@ -251,3 +251,17 @@ def test_the_state_carries_the_placement_and_its_preview(tmp_path):
     assert p["state"] == "place_preview" and p["places"] == 1 and p["max_places"] == 3
     assert p["placed"] == [5.0, 2.0, 0.3] and p["preview"] == [5.1, 2.0, 0.31] and p["preview_id"] == 1
     assert p["preview_points"] == [[5.0, 2.5], [5.2, 1.6]] and p["place_reason"] is None
+
+
+def test_the_preview_says_how_many_look_alike_places_the_global_search_saw(tmp_path):
+    # the lead's screen aid (2026-10-31): only while the preview waits for its confirmation
+    reloc = _awaiting()
+    rig = Rig(tmp_path, reloc)
+    rig.lease()
+    rig.send("relocalize_place", generation=reloc.generation, pose=[5.0, 2.0, 0.3])
+    rig.service()
+    reloc.placed_result(True, (5.1, 2.0, 0.31))
+    rig.console.note(preview_points=[[5.0, 2.5]], place_reason=None, preview_twins=2)
+    rig.out()
+    rig.service(30)
+    assert [m for m in rig.out() if m.get("t") == "state"][-1]["slam"]["reloc"]["preview_twins"] == 2
