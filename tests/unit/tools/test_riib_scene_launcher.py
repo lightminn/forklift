@@ -131,10 +131,12 @@ def test_the_exit_prefix_exemption_is_on_in_the_slam_mode_unless_turned_off(tmp_
 
 
 @pytest.mark.parametrize("env", [{"EXIT_EXEMPT": "maybe"}, {"EXTRA_ARGS": "--exit-prefix-exempt off"},
-                                 {"EXTRA_ARGS": "--exit-prefix-exempt=on"}, {"EXTRA_ARGS": "--near-tracking"},
+                                 {"EXTRA_ARGS": "--exit-prefix-exempt=on"}, {"EXTRA_ARGS": "--exit-prefix-exe off"},
+                                 {"EXTRA_ARGS": "--exit-p=off"}, {"EXTRA_ARGS": "--near-tracking"},
                                  {"EXTRA_ARGS": "--near-tracking", "EXIT_EXEMPT": "on"}])
 def test_the_exemption_has_one_switch_and_refuses_near_tracking(tmp_path, env):
-    # EXIT_EXEMPT is the one switch (riib_defaults.txt records it); the runner refuses the exemption with
+    # EXIT_EXEMPT is the one switch (riib_defaults.txt records it), abbreviations included -- the runner's parser takes
+    # a unique prefix (Codex results review P3); the runner refuses the exemption with
     # --near-tracking (exit-prefix-extract-rules D1), so the launcher says so before Isaac starts
     assert dry_run(tmp_path, **env).returncode != 0
 

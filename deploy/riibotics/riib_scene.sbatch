@@ -161,8 +161,11 @@ set -f
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
   case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
-  case "$w" in --exit-prefix-exempt|--exit-prefix-exempt=*)
-    echo "EXIT_EXEMPT=on|off sets the exit-prefix exemption, not EXTRA_ARGS (riib_defaults.txt records the switch)"; exit 2;; esac
+  # the runner's parser takes a unique prefix too: --exit-p... can only be --exit-prefix-exempt
+  k=${w%%=*}
+  if [[ "$k" == --exit-p* && "--exit-prefix-exempt" == "$k"* ]]; then
+    echo "EXIT_EXEMPT=on|off sets the exit-prefix exemption, not EXTRA_ARGS (riib_defaults.txt records the switch)"; exit 2
+  fi
   case "$w" in --near-tracking)
     [ "$EXIT_EXEMPT" = off ] || { echo "--near-tracking needs EXIT_EXEMPT=off (the runner refuses the exemption with it)"; exit 2; };; esac
 done
