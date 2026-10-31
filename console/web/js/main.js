@@ -535,7 +535,7 @@ m.placeGhost = null;
 m.bayChecked = null; // the preview (bayCheckKey) whose bay the operator said is checked
 $("reloc-bay-check").onchange = (e) => {
   const reloc = relocOf(m.session.state);
-  m.bayChecked = e.target.checked && reloc ? bayCheckKey(reloc) : null;
+  m.bayChecked = e.target.checked && reloc ? bayCheckKey(reloc, m.session.generations.session_epoch) : null;
 };
 $("reloc-place").onclick = () => {
   const reloc = relocOf(m.session.state);
@@ -562,7 +562,7 @@ $("reloc-place-send").onclick = () => {
 };
 $("reloc-confirm").onclick = () => {
   const reloc = relocOf(m.session.state);
-  if (!reloc || !placeActions(reloc, m.session.hasLease, m.bayChecked).confirm) return;
+  if (!reloc || !placeActions(reloc, m.session.hasLease, m.bayChecked, m.session.generations.session_epoch).confirm) return;
   const key = previewKey(reloc, m.confirmKey("relocalize_place_confirm"));
   const step = m.confirm.click(key, performance.now());
   if (step === "armed") log("미리보기 · 한 번 더 누르면 이 위치로 정합니다");

@@ -235,7 +235,8 @@ export function render(m) {
     $("reloc-banner").title = sum.title;
     $("reloc-retry").hidden = !["awaiting_pick", "reloc_failed", "stopped", "place_preview"].includes(reloc.state);
     $("reloc-retry").disabled = !act.retry.enabled;
-    const placing = placeActions(reloc, lease, m.bayChecked);
+    const epoch = m.session.generations?.session_epoch;
+    const placing = placeActions(reloc, lease, m.bayChecked, epoch);
     $("reloc-why").textContent = !act.retry.enabled ? act.retry.why
       : reloc.state === "place_preview" && placing.confirmWhy ? `화살표가 차의 앞입니다 · ${placing.confirmWhy}`
       : reloc.state === "place_preview" ? "화살표가 차의 앞입니다 · 미리보기 확정을 두 번 눌러 정합니다"
@@ -259,7 +260,7 @@ export function render(m) {
       }));
     }
     // F1 (plan 2026-10-31-operator-placed-start 1.2): place on the map, send the placed pose, confirm the preview
-    const place = placeActions(reloc, lease, m.bayChecked);
+    const place = placeActions(reloc, lease, m.bayChecked, epoch);
     if (!place.place.enabled) {
       m.placeMode = false;
       m.placeGhost = null;
@@ -274,7 +275,7 @@ export function render(m) {
     $("reloc-confirm").disabled = !place.confirm;
     // the bay check (lead 2026-10-31): shown while a preview needs it, cleared for a new preview
     $("reloc-bay").hidden = !place.bayCheck;
-    $("reloc-bay-check").checked = place.bayCheck && m.bayChecked === bayCheckKey(reloc);
+    $("reloc-bay-check").checked = place.bayCheck && m.bayChecked === bayCheckKey(reloc, epoch);
   } else {
     m.placeMode = false;
     m.placeGhost = null;

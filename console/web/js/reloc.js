@@ -113,16 +113,16 @@ export function placeFromDrag(view, w, h, down, up) {
 
 // The lead's decision (2026-10-31): the bridge's start check let every neighbouring-bay confirmation through, so a
 // preview with look-alike places -- or none known (no global candidates shown) -- is confirmed only after the
-// operator says the bay is checked. A check belongs to its preview (set and number). An operating aid, page-side.
+// operator says the bay is checked. A check belongs to its preview: session, set and number. An operating aid, page-side.
 export function needsBayCheck(reloc) {
   return reloc?.state === "place_preview" && !(reloc.preview_twins === 0);
 }
 
-export function bayCheckKey(reloc) {
-  return `${reloc?.generation}:${reloc?.preview_id}`;
+export function bayCheckKey(reloc, epoch) {
+  return `${epoch}:${reloc?.generation}:${reloc?.preview_id}`;
 }
 
-export function placeActions(reloc, hasLease, bayChecked = null) {
+export function placeActions(reloc, hasLease, bayChecked = null, epoch = null) {
   const stage = ["awaiting_pick", "reloc_failed", "place_preview"].includes(reloc?.state);
   const left = (reloc?.places ?? 0) < (reloc?.max_places ?? 0);
   let why = "";
@@ -130,7 +130,7 @@ export function placeActions(reloc, hasLease, bayChecked = null) {
   else if (!stage) why = "후보를 기다리거나 미리보기를 볼 때만 놓을 수 있습니다";
   else if (!left) why = "놓기를 세 번 다 썼습니다 · 다시 시도하거나 세션을 끝내세요";
   const bayCheck = needsBayCheck(reloc);
-  const checked = !bayCheck || bayChecked === bayCheckKey(reloc);
+  const checked = !bayCheck || (epoch != null && bayChecked === bayCheckKey(reloc, epoch));
   const confirm = Boolean(hasLease) && reloc?.state === "place_preview" && reloc.preview_id != null && checked;
   const confirmWhy = bayCheck && !checked ? "칸 번호를 확인했다고 표시해야 확정할 수 있습니다" : "";
   return { place: { enabled: Boolean(hasLease) && stage && left, why }, confirm, bayCheck, confirmWhy };

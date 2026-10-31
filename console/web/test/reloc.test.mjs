@@ -180,11 +180,13 @@ test("a preview with look-alike places, or none known, is confirmed only after t
   assert.equal(unchecked.confirm, false);
   assert.equal(unchecked.bayCheck, true);
   assert.match(unchecked.confirmWhy, /칸 번호를 확인/);
-  assert.equal(placeActions(twins, true, bayCheckKey(twins)).confirm, true);
+  assert.equal(placeActions(twins, true, bayCheckKey(twins, 7), 7).confirm, true);
   // a check belongs to its preview: a new preview (or set) asks again
-  assert.equal(placeActions({ ...twins, preview_id: 3 }, true, bayCheckKey(twins)).confirm, false);
-  assert.equal(placeActions({ ...twins, generation: 4 }, true, bayCheckKey(twins)).confirm, false);
-  assert.equal(placeActions(twins, false, bayCheckKey(twins)).confirm, false); // still the lease
+  assert.equal(placeActions({ ...twins, preview_id: 3 }, true, bayCheckKey(twins, 7), 7).confirm, false);
+  assert.equal(placeActions({ ...twins, generation: 4 }, true, bayCheckKey(twins, 7), 7).confirm, false);
+  // and to its session: a new epoch with the same set and preview numbers asks again (Codex F1 dev re-review P2)
+  assert.equal(placeActions(twins, true, bayCheckKey(twins, 7), 8).confirm, false);
+  assert.equal(placeActions(twins, false, bayCheckKey(twins, 7), 7).confirm, false); // still the lease
 });
 
 test("a preview whose look-alike places are not known says so", () => {
