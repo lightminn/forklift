@@ -254,9 +254,9 @@ def test_a_row_not_marked_relocalizable_keeps_the_known_start_and_says_why(tmp_p
     assert f"slam: {choice}" in p.stdout and "--relocalize" not in _supervisor(tmp_path).split()
     assert choice in _supervisor(tmp_path) and choice in "\n".join(_preflight(tmp_path))
     # asked for by name, the operator's session relocalizes on it all the same
-    p, _ = _registry_launch(tmp_path / "on", relocalizable=False, START_RELOC="on")
+    p, _ = _registry_launch(tmp_path / "b", relocalizable=False, START_RELOC="on")
     assert p.returncode == 0, p.stdout + p.stderr
-    assert "--start-pose=1.5,-2.0,0.25" in _preflight(tmp_path / "on")
+    assert "--start-pose=1.5,-2.0,0.25" in _preflight(tmp_path / "b")
     assert "start: relocalization (START_RELOC=on: the registry row is not marked relocalizable at its start)" in p.stdout
 
 
