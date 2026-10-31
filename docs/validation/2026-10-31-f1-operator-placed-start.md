@@ -99,3 +99,19 @@ Recorded in `docs/validation/assets/f1/freeze1.json` by `tools/reloc_judge.py --
   - The second freeze adds the hard-population id lists (`--hard`).
 
 Next (plan 4.1, 4.6): the seed-3 survey after this commit, then the starts, the second freeze (map id, keep-out, start list hash, both worlds' hard populations) and the collection.
+
+## 3. Seed-3 world (plan 4.1)
+
+Surveyed after the freeze commit `cb1490d3` (the lead's order), by B-P2d's procedure with layout seed 3:
+
+- a one-second seed-3 record for planning;
+- the tour planned from `config/slam_survey_tour.yaml` and refined (refine 8, margin 0.10 m);
+- the gyro-heading survey (`deploy/console/slam_survey.sbatch`, SLAM noise seed 0, then 1 and 2 if V2′ fails, limits not relaxed);
+- then starts drawn at 3 m (seed 1031).
+
+Registered before the survey (the lead's request):
+
+- **Expected output:** about 0.6 GB. Seed 5's `hall_s5b_G0` was 611 MB.
+- **Run:** about 1 h 45 min and 7.3 GB peak RSS (ws1 13006).
+- **Disk:** at submission ws1 `/home` had 35 GB free (96 % used).
+- **Queue:** two of the lead's riib jobs and one teammate job.
