@@ -120,6 +120,31 @@ def test_the_d7_reapproach_hold_is_on_unless_turned_off(tmp_path):
     assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--d7-reapproach-hold", "on"])
 
 
+def test_the_exit_prefix_exemption_is_on_in_the_slam_mode_unless_turned_off(tmp_path):
+    # docs/validation/2026-10-31-riib-default-batch2.md: rule ① passed for MODE=slam (the batch's mode); MODE=truth
+    # was not in it, so it keeps the exemption off unless asked
+    assert contains(args_of(dry_run(tmp_path)), ["--exit-prefix-exempt", "on"])
+    assert " EXIT_EXEMPT=on " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, EXIT_EXEMPT="off")), ["--exit-prefix-exempt", "off"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--exit-prefix-exempt", "off"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth", EXIT_EXEMPT="on")), ["--exit-prefix-exempt", "on"])
+
+
+@pytest.mark.parametrize("env", [{"EXIT_EXEMPT": "maybe"}, {"EXTRA_ARGS": "--exit-prefix-exempt off"},
+                                 {"EXTRA_ARGS": "--exit-prefix-exempt=on"}, {"EXTRA_ARGS": "--near-tracking"},
+                                 {"EXTRA_ARGS": "--near-tracking", "EXIT_EXEMPT": "on"}])
+def test_the_exemption_has_one_switch_and_refuses_near_tracking(tmp_path, env):
+    # EXIT_EXEMPT is the one switch (riib_defaults.txt records it); the runner refuses the exemption with
+    # --near-tracking (exit-prefix-extract-rules D1), so the launcher says so before Isaac starts
+    assert dry_run(tmp_path, **env).returncode != 0
+
+
+def test_near_tracking_goes_with_the_exemption_turned_off(tmp_path):
+    out = dry_run(tmp_path, EXIT_EXEMPT="off", EXTRA_ARGS="--near-tracking")
+    assert out.returncode == 0, out.stderr
+    assert contains(args_of(out), ["--exit-prefix-exempt", "off"])
+
+
 def test_the_slam_mode_is_said_and_recorded(tmp_path):
     # live-default plan 5d: the live console localizes by default; this launcher maps online and says so, never silently
     out = dry_run(tmp_path)
@@ -199,7 +224,7 @@ def test_the_gyro_heading_is_refused_where_it_is_not_defined(tmp_path, env):
                                  {"SCENE": "line_9"}, {"RACK": "maybe"}, {"SCENE": "aisle_rack", "RACK": "off"},
                                  {"SCENE": "aisle_out"}, {"NOISE": "loud"}, {"START_BAND": "maybe"},
                                  {"START_BAND_M": "0"}, {"START_BAND_M": "x"}, {"ESCAPE_PRESTEER": "maybe"},
-                                 {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"},
+                                 {"ESCAPE_START": "maybe"}, {"D7_HOLD": "maybe"}, {"EXIT_EXEMPT": "maybe"},
                                  {"ENCODER_MODEL": "team_spec_typical_inl"}, {"ENCODER_MODEL": "x"},
                                  {"NEAR_RECAPTURE_GAP": "-1"}, {"NEAR_RECAPTURE_GAP": "x"},
                                  {"NEAR_RECAPTURE_GAP": "1.0", "NEAR": "off"}, {"NEAR_RECAPTURE_GAP": "1.0", "MODE": "truth"},
@@ -212,7 +237,8 @@ def test_bad_choices_are_refused(tmp_path, env):
 
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
                                  {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"},
-                                 {"NEAR_REDRAW_LATERAL": "0.05"}, {"VIDEO": "off"}])
+                                 {"NEAR_REDRAW_LATERAL": "0.05"}, {"VIDEO": "off"}, {"EXIT_EXEMPT": "off"},
+                                 {"MODE": "truth", "EXIT_EXEMPT": "on"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))

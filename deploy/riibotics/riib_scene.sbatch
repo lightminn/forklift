@@ -55,6 +55,11 @@
 #   D7_HOLD=on    --d7-reapproach-hold: the SLAM corrections held over a D7 re-approach until its retry match
 #                  (docs/plans/2026-10-25-reapproach-slam-hold.md); on: its registered V5 batch passed
 #                  (docs/validation/2026-10-25-reapproach-slam-hold.md); D7_HOLD=off as before
+#   EXIT_EXEMPT=on (MODE=slam; off for MODE=truth) --exit-prefix-exempt: the transport's exit prefix driven under the
+#                  extract rules (docs/plans/2026-10-28-exit-prefix-extract-rules.md); on: its registered batch passed
+#                  rule ① in the slam mode (docs/validation/2026-10-31-riib-default-batch2.md); MODE=truth was not in
+#                  that batch and keeps it off unless asked; EXIT_EXEMPT=off as before. The runner refuses it with
+#                  --near-tracking, so EXTRA_ARGS=--near-tracking needs EXIT_EXEMPT=off.
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -67,7 +72,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -108,6 +113,8 @@ case "$ESCAPE_PRESTEER" in on|off) ;; *) echo "ESCAPE_PRESTEER must be on or off
 case "$ESCAPE_START" in on|off) ;; *) echo "ESCAPE_START must be on or off"; exit 2;; esac
 case "$LOW_CLEARANCE" in on|off) ;; *) echo "LOW_CLEARANCE must be on or off"; exit 2;; esac
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
+if [ "$MODE" = slam ]; then EXIT_EXEMPT=${EXIT_EXEMPT:-on}; else EXIT_EXEMPT=${EXIT_EXEMPT:-off}; fi
+case "$EXIT_EXEMPT" in on|off) ;; *) echo "EXIT_EXEMPT must be on or off"; exit 2;; esac
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
 # near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): empty = 0.10, the default before it.
 NEAR_REDRAW_LATERAL=${NEAR_REDRAW_LATERAL:-}
@@ -154,6 +161,10 @@ set -f
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
   case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
+  case "$w" in --exit-prefix-exempt|--exit-prefix-exempt=*)
+    echo "EXIT_EXEMPT=on|off sets the exit-prefix exemption, not EXTRA_ARGS (riib_defaults.txt records the switch)"; exit 2;; esac
+  case "$w" in --near-tracking)
+    [ "$EXIT_EXEMPT" = off ] || { echo "--near-tracking needs EXIT_EXEMPT=off (the runner refuses the exemption with it)"; exit 2; };; esac
 done
 set +f
 if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
@@ -173,8 +184,8 @@ mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
 echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s START_BAND_M=%s ESCAPE_PRESTEER=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$START_BAND_M" "$ESCAPE_PRESTEER" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$ENCODER_MODEL" "$GYRO" \
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s START_BAND_M=%s ESCAPE_PRESTEER=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s EXIT_EXEMPT=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$START_BAND_M" "$ESCAPE_PRESTEER" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$EXIT_EXEMPT" "$ENCODER_MODEL" "$GYRO" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
@@ -201,7 +212,8 @@ COMMON=(--base-scene "$BASE_SCENE"
   --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
   --escape-presteer "$ESCAPE_PRESTEER"
-  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD")
+  --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
+  --exit-prefix-exempt "$EXIT_EXEMPT")
 [ "$VIDEO" = on ] && COMMON+=(--video)
 case "$VIEWS" in
   none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress

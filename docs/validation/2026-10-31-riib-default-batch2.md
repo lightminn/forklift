@@ -1,0 +1,126 @@
+# riib 기본 켬 배치 2 — 출구 접두 면제·F2′ 결과 (2026-10-31)
+
+등록: `docs/plans/2026-10-31-riib-default-batch2.md`(3.1 판, 제출 기록 PR #233, 결과 전에 커밋).
+배치: ws1 `test_runs/riibotics/r2_abe5e07b`, 123 실행(경계 기록 87), 잡 13363·13364, 스냅숏 `r2_abe5e07b`.
+후속: ws1 `test_runs/riibotics/r2rep_abe5e07b`(반복 12, C4 재실행 1), 잡 13490·13491.
+집계: `tss_diag/r2_sum.py` → `tss_diag/r2_sum.json`. 재생: `test_runs/replay_gate/r2_judge/j_{1..4}.json`(잡 13484).
+
+## 결론
+
+- **① 면제(B 대 A)는 등록 규칙을 모두 넘었다.** 규칙 1–5·8 과 새 규칙 6(가)·6(나)·7 이 통과다.
+- **② F2′(BF 대 B)는 노출 부족이라 판정하지 않는다.** 등록식 완료(완주 + 최종 복귀 경로 기록의 후진)가 0 건이다. 채택 1 건은 후진을 달리고 복귀를 끝냈지만, 그 뒤 장면 재계획이 경로를 바꿔 등록 하한 식에 잡히지 않았다(아래 참고).
+- 등록 §1 의 처리는 "① 통과, ② 노출 부족 → 면제만 켠다"다. riib 런처 기본에 `--exit-prefix-exempt on` 을 넣는 PR 을 낸다. F2′ 는 끈 채로 둔다.
+- ③b 사다리 끝 시도는 세 팔 모두 한 번도 돌지 않았다.
+
+## 유효성 (§4)
+
+- 본실행 123 건 모두 결과가 온전했다. 허용 목록의 인프라 무효는 세 팔 모두 0 이다.
+- 유효 짝: ①·② 모두 대상 13/13, 회귀 line_2 10/10, random_1 10/10. 하한(대상 10, 회귀 장면마다 8)을 넘는다. 짝 재실행은 하지 않았다.
+- C4 는 `r2i_box25_aisle_rack_s2` 하나가 운반 허가 틱 0(관측 단계 `near_capture_failed`)이라 무효다. 같은 주입으로 다시 돌았다(아래 규칙 7).
+- 순서 변경 하나: 등록 §3 은 반복·재실행을 "본실행 끔 재생이 끝나고 실패 기록을 gdrive 로 보관·삭제한 뒤" 내게 했다. 디스크 때문에 둔 순서다. 끔 재생이 끝난 뒤 바로 냈다. 실패 기록 보관은 기다리지 않았다. 이때 여유는 35 GB 였고, 후속은 경계 기록 없는 13 실행(약 3 GB)이었다. 판정 입력에는 영향이 없다.
+
+## ① 면제 (B 대 A)
+
+| 규칙 | 결과 | 판정 |
+|---|---|---|
+| 1 출발 통과 장면별 B ≥ A, 합 +3 | 등록 집계식으로 aisle B 7 ≥ A 5, trailer 5 ≥ 0, 합 +7. 집계식이 A aisle s0·s1·s3 을 과대 집계했다(운반 중 실제 이동이 문턱보다 짧음, 지난 배치와 같은 현상). 이를 빼면 aisle 7 ≥ 2, 합 +10 | 통과 |
+| 2 완주 합 B ≥ A, 장면별 B ≥ A − 1 | 합 9 ≥ 1, aisle 4 ≥ 1, trailer 5 ≥ 0 | 통과 |
+| 3 안전 | 면제 키 4 개 모두 0(B·BF 66 실행), seed 별 `unpermitted_dir_entries` 세 팔 모두 0, 금지 접촉·overlap 실패 0, 같은 스냅숏(같은 평가기) | 통과 |
+| 4 회귀 | line_2 A·B 10/10, random_1 A·B 8/10. B 실패 2 건 모두 끔 경로 재생 `REPLAY_EXIT 0` | 통과 |
+| 5 감시 오경보 | B 대상 실행에서 latch 닫힘은 모두 `length`·`driven`, 울림 0(s7 은 관측 실패로 latch 없음) | 통과 |
+| 6(가) 짝 부호 검정 | 33 짝, b = 3(aisle s7, random_1 s2·s3), c = 11, P(X ≥ 3 \| 14) = 0.994 | 통과 |
+| 6(나) 반복 대조 | 대상 aisle s7 | 통과 |
+| 7 C4 | 유효 23 건 통과. 무효 1 건(`r2i_box25_aisle_rack_s2`, 운반 허가 틱 0)은 재실행 1 회로 통과 | 통과 |
+| 8 C3 | `r2_B_aisle_rack_s0`(latch active 에 이른 가장 낮은 seed) 22 633 틱, `r2i_box15_aisle_rack_s0` 37 971 틱, 둘 다 on 경로 `REPLAY_EXIT 0` | 통과 |
+
+### 규칙 4 — 끔 경로 재생
+
+| B 실패 | 단계·사유 | 끔 재생 |
+|---|---|---|
+| random_1 s2 | 관측, 추종 시간 초과 | 6 975 틱, 같은 예외, exit 0 |
+| random_1 s3 | 관측, `near_capture_misaligned`(측면 −0.108 m) | 6 032 틱, 같은 예외, exit 0 |
+
+A 의 실패는 상계하지 않고 보고만 한다. random_1 s0·s4 가 관측 추종 시간 초과다.
+
+### 규칙 6(나) — 반복 대조
+
+- 대상은 본실행에서 "A 완주·B 실패"였던 aisle s7 하나다(B 는 관측 단계 `near_capture_failed`, latch 열리기 전).
+- A·B 각 6 회, 모두 유효(인프라 무효 0, 경계 기록 없음).
+
+| 회차 | A | B |
+|---|---|---|
+| r1 | 완주 | 관측 `near_capture_failed:perception_invalid:opening_width_mismatch` |
+| r2 | 운반 추종 시간 초과 | 운반 `docking_retry_match_refused:start_rejected:degenerate` |
+| r3 | 운반 추종 시간 초과 | 완주 |
+| r4 | 복귀 추종 실패 | 복귀 추종 실패 |
+| r5 | 해제 재계획 `no_path` | 관측 `near_capture_failed:perception_no_pallet` |
+| r6 | 완주 | 운반 추종 실패 |
+
+- B 실패 5/6, A 완주 2/6 이다. 등록 기준은 "B 실패 ≥ 5/6 이고 A 완주 ≥ 5/6"이므로 면제 탓이 아니다. 이 seed 는 두 팔 모두 자주 실패한다.
+- A 4 회차에서 이미 완주 1/4 라 결론이 정해졌다(남은 두 회가 모두 완주여도 3/6).
+
+### 규칙 7 — C4
+
+- 상자 17 건(유효)은 모두 통과했다.
+  - 생성 기록 면 거리 0.15000–0.15007 m.
+  - 모두 울림(`watch`)으로 닫혔다.
+  - 울림 뒤 첫 정지까지 0.0042–0.0071 m(한계 0.108 m).
+  - 면제 키 위반 0.
+- 무응답 6 건 모두 `sensor_silent:high` 로 섰다. 첫 정지까지 0.027–0.036 m.
+- `r2i_box25_aisle_rack_s2` 는 운반 허가 틱 0 이라 무효다(관측 단계 `near_capture_failed:perception_no_pallet`).
+- 재실행 `rr1i_box25_aisle_rack_s2`(같은 장면·seed·주입, B 설정): 운반 허가 틱 25 172, 면 거리 0.15002 m, `watch` 닫힘, 첫 정지까지 0.0070 m, 면제 키 위반 0. 통과다. 원래 무효 실행은 위와 같이 따로 적는다.
+- 그래서 C4 24 주입 모두 판정 가능했고 모두 통과다.
+
+### 면제가 작용한 실행의 뒤 단계 실패 (판정과 별개, 후속 결함 목록)
+
+| 실행 | latch 닫힘 | 실패 시각·단계 | 사유 |
+|---|---|---|---|
+| B aisle s0 | `length` 81.75 s | 188.76 s 운반 | `Tracking failed in transport` |
+| B aisle s1 | `length` 84.42 s | 230.79 s 복귀 | `Tracking failed in return_home` |
+| B aisle s2 | `length` 82.54 s | 216.21 s 꺼낸 뒤 해제 재계획 | `slam_release_replan_failed: invalid_start` |
+| BF aisle s0 | `driven` 81.90 s | 304.46 s 복귀 | `Tracking timeout in return_home` |
+| BF aisle s6 | `length` 84.11 s | 251.91 s 복귀 | `Tracking failed in return_home` |
+
+- 다섯 건 모두 latch 가 닫히고 100 s 이상 지난 뒤 났다.
+- 유형은 모두 면제 없는 배치에도 있었다(지난 결과 문서 규칙 6).
+- A 는 대상 장면에서 운반 출발에 10 번 멈춰(`Tracking timeout in transport`) 이 단계에 이른 실행이 적다.
+
+## ② F2′ (BF 대 B) — 노출 부족, 판정하지 않음
+
+- 등록식 노출(완주 + 최종 `paths.return_home` 에 `start_backoff` `prefix`): 0 건. 시도·채택은 BF 1 건, B 0 건이다.
+- 그래서 등록 §5 ② 대로 판정하지 않는다. F2′ 는 끈 채로 둔다.
+- 참고(판정에 쓰지 않음): 채택 1 건은 `r2_BF_aisle_rack_s2` 다.
+  - 225.26 s 해제 재계획에서 후진 0.07 m(advice 0.04 m)가 채택돼 설치됐다(추종기 버전 29).
+  - 그 경로는 맨 앞 후진에 같은 기어 후진이 이어져, 다리 0 이 index 22 까지다. 이 다리 끝에 230.36 s 에 도착했고(위치 오차 2.3 mm), 다리 1·2 도 끝냈다.
+  - 247.99 s 장면 재계획이 경로를 바꿨고(버전 30), 그 경로로 복귀를 끝냈다(273.67 s 완료).
+  - 즉 후진을 달리고 복귀를 끝냈다. 다만 최종 경로 기록에는 후진이 없다. 등록이 정한 하한 식(Codex 3 차 P3 의 거짓 음성 유형)이 세지 못한 경우다.
+  - 같은 seed 의 B 는 꺼낸 뒤 해제 재계획이 `invalid_start` 로 실패했다(216.21 s). F2′ 가 고치려던 유형이다.
+- 그 밖의 집계(보고만): BF 에 `invalid_start` 0 건. 유효 짝 완주 B 27 · BF 27. 짝 불일치 b′ = 2(aisle s6, random_1 s4), c′ = 2(aisle s1·s2), P = 0.69. `unpermitted_dir_entries` B·BF 모두 0. BF 의 random_1 실패 3 건은 모두 관측 추종 시간 초과다. 물러남이 작용하기 전 단계다.
+
+## ③b 사다리 끝 시도
+
+- 세 팔 모두 0 회다. 본실행 123 건 어디에서도 끝 시도가 돌지 않았다. 그래서 끝 시도의 성공 수·확장 수·계획 시간은 없다.
+
+## 실패 유형 (팔별, 본실행)
+
+| 팔 | 단계: 사유 | seed |
+|---|---|---|
+| A | 운반: 추종 시간 초과 | aisle 0·1·3·4·6, trailer 0–4 |
+| A | 관측: 근접 캡처 실패 | aisle 2 |
+| A | 해제 재계획 `invalid_start` | aisle 5 |
+| A | 관측: 추종 시간 초과 | random_1 0·4 |
+| B | 운반: 추종 실패 | aisle 0 |
+| B | 복귀: 추종 실패 | aisle 1 |
+| B | 해제 재계획 `invalid_start` | aisle 2 |
+| B | 관측: 근접 캡처 실패 | aisle 7 |
+| B | 관측: 추종 시간 초과 / `near_capture_misaligned` | random_1 2 / 3 |
+| BF | 복귀: 추종 시간 초과 / 추종 실패 | aisle 0 / 6 |
+| BF | 관측: 근접 캡처 실패 | aisle 7 |
+| BF | 관측: 추종 시간 초과 | random_1 2·3·4 |
+
+## 다음
+
+- riib 런처 기본 켬 PR(`deploy/riibotics/riib_scene.sbatch` 에 `--exit-prefix-exempt on`, 런처 시험·문서). 재생 게이트·전체 시험·Codex 리뷰 뒤 머지한다.
+- F2′ 는 끈 채로 둔다. 노출을 다시 보려면 따로 등록한다. 이번 채택 사례처럼 후진 뒤 경로가 바뀌는 경우를 세려면 완료 판정을 추종기 버전 기록(`tracker_versions`·`leg_switches`)에 묶는 방법이 있다. 다음 등록에서 결과 전에 정한다.
+- 후속 결함 목록: 위 "면제가 작용한 실행의 뒤 단계 실패" 5 건과 return_home cusp 방위.
+- 남길 것·지울 것은 디스크 정리 세션에 따로 보낸다.
