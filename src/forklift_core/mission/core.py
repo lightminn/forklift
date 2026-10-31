@@ -135,6 +135,18 @@ def note_return_backoff(state: dict, where: str, record: dict | None, adopted: b
          "status": record.get("status"), "adopted": bool(adopted)})
 
 
+def failed_plan_record(result) -> dict:
+    """A failed release replan's own record (docs/validation/2026-10-31-riib-default-batch2.md ③b): its status, the
+    search ladder it tried (``search_attempts``) and the exit-prefix / start-backoff records it carries -- the run ends
+    on it before any path record could keep them."""
+    record = {"status": result.status,
+              "search_attempts": [list(a) for a in (getattr(result, "search_attempts", None) or ())]}
+    for field_ in ("exit_prefix", "start_backoff"):
+        if getattr(result, field_, None) is not None:
+            record[field_] = getattr(result, field_)
+    return record
+
+
 def note_trace_backoffs(state: dict, where: str, trace, success: bool) -> None:
     """R6: the mission plan's backoff attempts from its trace (its return_home entries; a tight replan adds a second);
     the last one is adopted when the plan was."""
@@ -7089,6 +7101,10 @@ class MissionCore:
             replan_status=replanned.status,
             planning_wall_s=time.monotonic() - replan_start,
         )
+        if not replanned.success:  # ③b: the ladder of a replan that ends the run (and of the tight retry's first try)
+            event.update(failed_plan=failed_plan_record(replanned))
+            if first_ is not replanned:
+                event["first_failed_plan"] = failed_plan_record(first_)
         require(replanned.success, f"slam_release_replan_failed: {failed_plan_reason(replanned)}")
         paths[leg] = replanned
         state.setdefault("paths", {})[leg] = path_record(replanned)
@@ -7292,6 +7308,8 @@ class MissionCore:
             note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
                      planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
+        if not replanned.success:  # ③b: as the batch path (the worker sends the final try only)
+            event.update(failed_plan=failed_plan_record(replanned))
         hooks.require(replanned.success, f"slam_release_replan_failed: {failed_plan_reason(replanned)}")
         paths[leg] = replanned
         state.setdefault("paths", {})[leg] = hooks.path_record(replanned)
