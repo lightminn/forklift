@@ -188,13 +188,14 @@ def test_a_start_pose_needs_a_survey_map(tmp_path):
 
 
 # --- the start relocalization as the operator console's default (lead 2026-10-31, start relocalization plan 7.1) ---
-def _registry_launch(tmp_path, **env):
-    """A launch on the registry's survey map of a scene file (deploy/console/slam_choice.sh's default path)."""
+def _registry_launch(tmp_path, relocalizable=True, **env):
+    """A launch on the registry's survey map of a scene file (deploy/console/slam_choice.sh's default path), its row
+    marked relocalizable at its start unless ``relocalizable`` is false."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from test_slam_choice import _registry
 
     tmp_path.mkdir(parents=True, exist_ok=True)
-    scene, book = _registry(tmp_path)  # its row's start: [1.5, -2.0, 0.25]
+    scene, book = _registry(tmp_path, relocalizable=relocalizable)  # its row's start: [1.5, -2.0, 0.25]
     (tmp_path / "root" / "line_m_tsq_aaaaaaaaaaaa").mkdir(parents=True, exist_ok=True)
     base = {"SCENE_FILE": str(scene), "SLAM_BUNDLE_ROOT": str(tmp_path / "root"), "SLAM_BUNDLE_REGISTRY": str(book)}
     base.update(env)
@@ -239,6 +240,23 @@ def test_the_start_choice_refuses_what_it_cannot_do(tmp_path):
     # asked for by name where no registry map is there to relocalize on: no launch
     p = _relocalizing(tmp_path / "d", START_RELOC="on")
     assert p.returncode == 2 and "START_RELOC=on needs" in p.stdout + p.stderr
+
+
+def test_a_row_not_marked_relocalizable_keeps_the_known_start_and_says_why(tmp_path):
+    # lead 2026-10-31 (a): the default relocalizes only where the Isaac smoke showed the start can be found; elsewhere
+    # the known start, its reason in the launch log, the supervisor's log and the console's state (slam.choice)
+    p, env_sh = _registry_launch(tmp_path, relocalizable=False)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--start-relocalize" not in _preflight(tmp_path)
+    assert "start: known (the registry row is not marked relocalizable at its start)" in p.stdout
+    choice = "localization (registry: line_m_tsq_aaaaaaaaaaaa); start known: the row is not marked relocalizable"
+    assert f"slam: {choice}" in p.stdout and "--relocalize" not in _supervisor(tmp_path).split()
+    assert choice in _supervisor(tmp_path) and choice in "\n".join(_preflight(tmp_path))
+    # asked for by name, the operator's session relocalizes on it all the same
+    p, _ = _registry_launch(tmp_path / "on", relocalizable=False, START_RELOC="on")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--start-pose=1.5,-2.0,0.25" in _preflight(tmp_path / "on")
+    assert "start: relocalization (START_RELOC=on: the registry row is not marked relocalizable at its start)" in p.stdout
 
 
 def test_a_map_folder_given_by_hand_keeps_the_known_start(tmp_path):

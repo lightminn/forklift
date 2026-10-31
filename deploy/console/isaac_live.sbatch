@@ -39,8 +39,10 @@
 #   retried, B-P2d),
 #   START_RELOC (on|off; start relocalization plan 7.1, lead 2026-10-31): unset, on for an operator's session and off
 #   in a bundle's run (BUNDLE_TOKEN). On without START_POSE, on the registry's survey map: the truck placed at the
-#   registry's scene start and relocalized (START_MODE in env.sh says what the start is and why); without that map, the
-#   known start (on asked for by name: no launch). START_POSE relocalizes whatever the default; off with it: no launch.
+#   registry's scene start and relocalized (START_MODE in env.sh says what the start is and why) -- by default only
+#   where the registry row is marked relocalizable at its start, otherwise the known start with the reason added to
+#   SLAM_CHOICE (the console shows it); without that map, the known start (on asked for by name: no launch). START_POSE
+#   relocalizes whatever the default; off with it: no launch.
 #   SCENE_FILE (a tools/riibotics_isaac_scenes.py scene: --layout scene on its layout as the prior map -- no
 #   --grid-planning, --min-obstacle-height-m or --prism-colliders -- instead of the factory hall)
 #   The far recognition (docs/plans/2026-10-22-live-far-recognition.md) goes in EXTRA_ARGS: --recognition far and,
@@ -99,8 +101,19 @@ if [ -n "${START_POSE:-}" ]; then
 elif [ "$START_RELOC" = off ]; then
   if [ -n "$START_RELOC_GIVEN" ]; then START_MODE="known (START_RELOC=off)"; else START_MODE="known (a bundle's run: unattended)"; fi
 elif [[ "$SLAM_CHOICE" == "localization (registry: "* ]]; then
-  START_POSE=$MAP_START_POSE
-  START_MODE="relocalization (default: placed at the registry's scene start)"
+  # lead 2026-10-31 (a): by default only on a row the Isaac smoke marked relocalizable at its start (the registry's
+  # start_relocalizable); elsewhere the known start, its reason in the log, the supervisor's and the console's
+  # slam.choice. START_RELOC=on asks for the relocalization all the same
+  if [ "$MAP_START_RELOC" = yes ]; then
+    START_POSE=$MAP_START_POSE
+    START_MODE="relocalization (default: placed at the registry's scene start)"
+  elif [ -n "$START_RELOC_GIVEN" ]; then
+    START_POSE=$MAP_START_POSE
+    START_MODE="relocalization (START_RELOC=on: the registry row is not marked relocalizable at its start)"
+  else
+    START_MODE="known (the registry row is not marked relocalizable at its start)"
+    SLAM_CHOICE="$SLAM_CHOICE; start known: the row is not marked relocalizable"
+  fi
 else
   if [ -n "$START_RELOC_GIVEN" ]; then
     echo "START_RELOC=on needs the registry's survey map to relocalize on (slam: $SLAM_CHOICE)" >&2

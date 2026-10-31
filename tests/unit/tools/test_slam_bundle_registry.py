@@ -60,7 +60,7 @@ def test_the_lookup_command_prints_what_the_launcher_reads(tmp_path, capsys):
     book = tmp_path / "bundles.yaml"
     reg.write(book, reg.put({"bundles": []}, row))
     assert reg.main(["lookup", str(book), "--scene-file", str(scene), "--encoder-model", "team_spec_quantized"]) == 0
-    assert capsys.readouterr().out.split() == ["fa", "a" * 64, "1.0,-2.0,2.5"]
+    assert capsys.readouterr().out.split() == ["fa", "a" * 64, "1.0,-2.0,2.5", "no"]
     assert reg.main(["lookup", str(book), "--scene-file", str(scene), "--encoder-model", "reported"]) == reg.NONE
 
 
@@ -91,3 +91,68 @@ def test_the_survey_run_and_nodes_must_be_the_reports_own(tmp_path):
         reg.check_sources(report, t / "epoch_1" / "run", s / "readback" / "dump" / "nodes.csv")
     with pytest.raises(ValueError, match="nodes"):
         reg.check_sources(report, s / "epoch_1" / "run", t / "readback" / "dump" / "nodes.csv")
+
+
+# --- "relocalizable at its start" (lead 2026-10-31, start relocalization plan 7.1 (a)) ---
+def test_a_new_row_is_not_marked_relocalizable_at_its_start():
+    e = reg.entry(_manifest(), _report(), folder="f", start=[0, 0, 0], name="line_m")
+    assert e["start_relocalizable"] is False and e["start_reloc_evidence"] is None
+    assert reg.start_relocalizable(e) is False
+    # a new survey of the same scene and model replaces the row, its mark with it (the evidence was the old map's)
+    book = reg.mark(reg.put({"bundles": []}, e), "line_m", True, "ws1 job 1, 2026-10-31: competitor, truth first")
+    book = reg.put(book, reg.entry(_manifest(map_id="c" * 64), _report(map_id="c" * 64), folder="g", start=[0, 0, 0],
+                                   name="line_m"))
+    assert reg.start_relocalizable(reg.lookup(book, "s" * 64, "team_spec_quantized")) is False
+
+
+def test_marking_a_row_needs_its_evidence_and_its_name():
+    book = reg.put({"bundles": []}, reg.entry(_manifest(), _report(), folder="f", start=[0, 0, 0], name="line_m"))
+    marked = reg.mark(book, "line_m", True, "ws1 job 13426, 2026-10-31")
+    row = reg.lookup(marked, "s" * 64, "team_spec_quantized")
+    assert reg.start_relocalizable(row) is True and row["start_reloc_evidence"] == "ws1 job 13426, 2026-10-31"
+    assert reg.start_relocalizable(reg.lookup(book, "s" * 64, "team_spec_quantized")) is False  # a copy, not in place
+    for evidence in (None, "", "  "):
+        with pytest.raises(ValueError, match="evidence"):
+            reg.mark(book, "line_m", True, evidence)
+    unmarked = reg.mark(marked, "line_m", False, "ws1 job 13426: uninformative x3")
+    assert reg.start_relocalizable(reg.lookup(unmarked, "s" * 64, "team_spec_quantized")) is False
+    with pytest.raises(ValueError, match="no registry row"):
+        reg.mark(book, "random_m", True, "x")
+
+
+def test_a_mark_that_is_not_a_yes_or_no_does_not_read():
+    row = reg.entry(_manifest(), _report(), folder="f", start=[0, 0, 0], name="line_m")
+    for bad in ("yes", 1, None):
+        with pytest.raises(ValueError, match="start_relocalizable"):
+            reg.start_relocalizable({**row, "start_relocalizable": bad})
+    with pytest.raises(ValueError, match="evidence"):  # a yes without its evidence (edited by hand)
+        reg.start_relocalizable({**row, "start_relocalizable": True})
+    legacy = {k: v for k, v in row.items() if k not in ("start_relocalizable", "start_reloc_evidence")}
+    assert reg.start_relocalizable(legacy) is False  # a row written before the mark: no
+
+
+def test_the_lookup_command_says_whether_the_start_relocalizes(tmp_path, capsys):
+    scene = tmp_path / "line_m_session.json"
+    scene.write_text("{}")
+    row = reg.entry(_manifest(scene_hash=reg.sha256(scene)), _report(), folder="fa", start=[1.0, -2.0, 2.5],
+                    name="line_m")
+    book = tmp_path / "bundles.yaml"
+    reg.write(book, reg.put({"bundles": []}, row))
+    look = ["lookup", str(book), "--scene-file", str(scene), "--encoder-model", "team_spec_quantized"]
+    assert reg.main(look) == 0 and capsys.readouterr().out.split()[3] == "no"
+    assert reg.main(["mark", str(book), "--name", "line_m", "--relocalizable", "yes", "--evidence", "job 1"]) == 0
+    capsys.readouterr()
+    assert reg.main(look) == 0 and capsys.readouterr().out.split() == ["fa", "a" * 64, "1.0,-2.0,2.5", "yes"]
+
+
+def test_every_registered_row_says_whether_it_relocalizes_at_its_start_and_why():
+    from pathlib import Path
+
+    book = reg.read(Path(reg.__file__).resolve().parents[1] / "config" / "slam_map_bundles.yaml")
+    marks = {}
+    for row in book["bundles"]:
+        assert isinstance(row.get("start_relocalizable"), bool) and str(row.get("start_reloc_evidence") or "").strip()
+        marks[row["name"]] = reg.start_relocalizable(row)
+    # the Isaac smoke of 2026-10-31 (ws1 13426): random_m's start found with its twins (an operator's pick), line_m's
+    # start too bare to search (uninformative x3)
+    assert marks == {"line_m": False, "random_m": True}

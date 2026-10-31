@@ -7,10 +7,16 @@ the bundle's folder name under the launcher's ``SLAM_BUNDLE_ROOT`` (no host path
 node: map <- world is the identity the survey's start check confirmed) and the survey's V2' figures. Only a survey
 whose checks all passed (``survey_report.json`` ok, the world check included) enters it (D5).
 
+Each row also says whether the truck can be relocalized at that start (``start_relocalizable``, with the Isaac smoke
+that showed it in ``start_reloc_evidence``: run and date; lead 2026-10-31, start relocalization plan 7.1 (a)): the
+operator console relocalizes by default only on a row marked yes. A new row, and a new survey that replaces one, is
+"no" until ``mark`` says otherwise; a yes needs its evidence.
+
     python tools/slam_bundle_registry.py add REGISTRY --name NAME --bundle DIR --report SURVEY_REPORT
         --survey-run RUN --nodes NODES_CSV
+    python tools/slam_bundle_registry.py mark REGISTRY --name NAME --relocalizable yes|no --evidence TEXT
     python tools/slam_bundle_registry.py lookup REGISTRY --scene-file FILE --encoder-model MODEL
-        (prints "folder map_id x,y,yaw"; exit 3 when the registry has none, any other failure 1)
+        (prints "folder map_id x,y,yaw yes|no"; exit 3 when the registry has none, any other failure 1)
 """
 
 from __future__ import annotations
@@ -54,7 +60,31 @@ def entry(manifest: dict, report: dict, *, folder: str, start, name: str) -> dic
     return {"name": name, "scene_sha256": scene["sha256"], "scene": Path(scene.get("path", "")).name,
             "encoder_model": model, "folder": folder, "map_id": manifest["map_id"],
             "start_pose": [float(v) for v in start],
-            "v2": {"position_max_m": float(world["position_max_m"]), "yaw_max_rad": float(world["yaw_max_rad"])}}
+            "v2": {"position_max_m": float(world["position_max_m"]), "yaw_max_rad": float(world["yaw_max_rad"])},
+            "start_relocalizable": False, "start_reloc_evidence": None}
+
+
+def start_relocalizable(row: dict) -> bool:
+    """The row's mark: a row written before the mark is no; a mark that is not a bool, or a yes without its evidence,
+    does not read (ValueError)."""
+    mark = row.get("start_relocalizable", False)
+    if not isinstance(mark, bool):
+        raise ValueError(f"{row.get('name')}: start_relocalizable is {mark!r}, not true or false")
+    if mark and not str(row.get("start_reloc_evidence") or "").strip():
+        raise ValueError(f"{row.get('name')}: start_relocalizable is true without its evidence")
+    return mark
+
+
+def mark(book: dict, name: str, relocalizable: bool, evidence: str | None) -> dict:
+    """The registry with row ``name`` marked (a copy); a yes needs its evidence (the smoke's run and date)."""
+    if relocalizable and not str(evidence or "").strip():
+        raise ValueError(f"{name}: marking a start relocalizable needs its evidence (the Isaac smoke's run and date)")
+    rows = book.get("bundles") or []
+    if sum(r["name"] == name for r in rows) != 1:
+        raise ValueError(f"no registry row named {name} (or more than one)")
+    return {**book, "bundles": [{**r, "start_relocalizable": bool(relocalizable),
+                                 "start_reloc_evidence": str(evidence).strip() if evidence else None}
+                                if r["name"] == name else r for r in rows]}
 
 
 def check_sources(report: dict, survey_run: Path, nodes_csv: Path) -> None:
@@ -121,6 +151,11 @@ def main(argv=None) -> int:
     add.add_argument("--report", type=Path, required=True)
     add.add_argument("--survey-run", type=Path, required=True)
     add.add_argument("--nodes", type=Path, required=True, help="the survey's read-back nodes.csv")
+    mk = sub.add_parser("mark")
+    mk.add_argument("registry", type=Path)
+    mk.add_argument("--name", required=True)
+    mk.add_argument("--relocalizable", choices=("yes", "no"), required=True)
+    mk.add_argument("--evidence", default=None, help="the Isaac smoke that showed it: run and date")
     look = sub.add_parser("lookup")
     look.add_argument("registry", type=Path)
     look.add_argument("--scene-file", type=Path, required=True)
@@ -134,10 +169,14 @@ def main(argv=None) -> int:
         write(a.registry, put(read(a.registry, missing_ok=True), row))
         print(json.dumps(row))
         return 0
+    if a.cmd == "mark":
+        write(a.registry, mark(read(a.registry), a.name, a.relocalizable == "yes", a.evidence))
+        return 0
     row = lookup(read(a.registry), sha256(a.scene_file), a.encoder_model)
     if row is None:
         return NONE
-    print(row["folder"], row["map_id"], ",".join(repr(float(v)) for v in row["start_pose"]))
+    print(row["folder"], row["map_id"], ",".join(repr(float(v)) for v in row["start_pose"]),
+          "yes" if start_relocalizable(row) else "no")
     return 0
 
 

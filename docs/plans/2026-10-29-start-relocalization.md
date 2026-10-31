@@ -354,3 +354,8 @@ B-P2c 의 첫 Isaac 세션(`docs/validation/2026-10-29-b-p2c-console-isaac.md`)�
   - F2: B-P2d 의 `prewarm` 무갱신 구간은 중앙 0.67 s 이고, 차가운 첫 세션에서 11.85 s 였다.
   - Jetson 정합 시간: B-P2d 의 시도당 정합 시간은 최대 15.6 s 였다. Jetson 이 3 배 느리면 30 s 마감을 넘을 수 있다.
   - Jetson 실측이 나오면 다시 본다.
+- **장면별 표시 (총괄 2026-10-31, (a))**: 기본 켬은 등록부(`config/slam_map_bundles.yaml`) 행이 "시작 자리에서 재위치 가능"(`start_relocalizable`)으로 표시된 장면에서만 한다. 표시에는 그것을 보인 Isaac 스모크의 실행과 날짜(`start_reloc_evidence`)를 같이 적는다.
+  - 새로 등록하는 행과, 같은 장면·모형의 새 조사로 바뀐 행은 "아니오"로 시작한다. "예"는 근거 없이 적을 수 없다(`slam_bundle_registry.py mark`).
+  - 표시가 없는 행에서는 알려진 시작으로 띄운다. 사유를 런처 로그(`start: known (...)`)와 `SLAM_CHOICE` 에 남긴다. `SLAM_CHOICE` 는 감독기 로그와 콘솔 상태 `slam.choice` 로 가고, 화면은 "알려진 시작"을 붙인다. `START_RELOC=on` 으로 이름을 대면 그래도 재위치한다.
+  - 근거(ws1 Slurm 13426, 2026-10-31, 커밋 `9ba9e845`): random_m 은 첫 탐색이 competitor(비 0.990)였고 참값이 후보 1 위(0.03 m)였다. 쌍둥이는 양옆 6 m 에 있었다. 찾았고 운전자가 고르면 끝난다. → 예. line_m 은 세 번 모두 uninformative 였다(닿는 스캔 점이 적어 탐색하지 않음, 후보 없음). → 아니오.
+- **후속(지금 구현하지 않음)**: line_m 처럼 시작 자리에서 보이는 것이 적으면, 실차에서는 운전자가 조금 움직여 다시 시도하는 것이 자연스럽다. `uninformative` 일 때 재위치 중 텔레옵(저속·짧은 거리)을 허용할지는 안전 판단이 필요해 따로 정한다.
