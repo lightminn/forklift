@@ -396,12 +396,18 @@ def cp_lower(k: int, n: int) -> float | None:
     return float(beta.ppf(0.05, k, n - k + 1))
 
 
-def _f1_place(valid: list, hard_ids=None) -> dict:
+def _f1_place(rows: list, hard_ids=None) -> dict:
     """F1's own judgement (plan 4.2 b, 4.3): the hard population -- the frozen list of starts the unattended path did
     not confirm (Codex F1 implementation review P2: a rerun's own inference shrinks it), else inferred and said so --
     its wrong and imprecise starts (none allowed) and the rescued share against the 70 % floor."""
+    valid = [r for r in rows if r["class"] == "valid"]
+    missing = []
     if hard_ids is not None:
         ids = set(hard_ids)
+        # every frozen hard start must have run: not run or not listed holds the judgement; only an explicit physical
+        # input failure (invalid) leaves the population (Codex F1 re-review P2)
+        by_id = {r.get("id"): r for r in rows}
+        missing = sorted(i for i in ids if i not in by_id or by_id[i]["class"] == "not_run")
         hard = [r for r in valid if r.get("id") in ids]
     else:
         hard = [r for r in valid if r.get("hard") is not False]  # unknown (no record) counts against the floor
@@ -413,9 +419,9 @@ def _f1_place(valid: list, hard_ids=None) -> dict:
     return {"hard": len(hard), "hard_source": "frozen" if hard_ids is not None else "inferred", "rescued": rescued,
             "rescue_rate": rate, "rescue_cp_lower": cp_lower(rescued, len(hard)), "started": len(started),
             "wrong_or_imprecise": events, "safety_upper_started": None if unjudged else cp_upper(events, len(started)),
-            "placements": sum(r.get("places") or 0 for r in valid),
-            "floors": {"safety": None if not started or (unjudged and not events) else events == 0,
-                       "rescue": None if rate is None else rate >= RESCUE_FLOOR}}
+            "placements": sum(r.get("places") or 0 for r in valid), "missing": missing,
+            "floors": {"safety": None if missing or not started or (unjudged and not events) else events == 0,
+                       "rescue": None if missing or rate is None else rate >= RESCUE_FLOOR}}
 
 
 def summarize(rows: list, bridge_bound_s: float | None = None, hard_ids=None) -> dict:
@@ -470,7 +476,7 @@ def summarize(rows: list, bridge_bound_s: float | None = None, hard_ids=None) ->
                             else all(b <= bridge_bound_s for b in bridge)),
         },
         # F1: the hard population (the matcher alone did not confirm) and how many the operator's placement rescued
-        "f1_place": _f1_place(valid, hard_ids),
+        "f1_place": _f1_place(rows, hard_ids),
         "f1": {"requests": len(requests), "truth_in_shown": sum(bool(r.get("truth_in_shown")) for r in requests),
                "truth_in_candidates": sum(bool(r.get("truth_in_candidates")) for r in requests)},
         "f2": {"sessions_with_gaps": sum(bool(r.get("gaps")) for r in rows),

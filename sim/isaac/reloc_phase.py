@@ -266,6 +266,9 @@ def _run(inputs: RelocInputs) -> dict:
             if relocalizer.state != "placing" or relocalizer.places != places:
                 out["places"].append({**record, "reason": "interrupted", "matcher_reason": res.reason})
                 continue
+            if res.confirmed and inputs.clock() > deadline_at:  # right before it applies (Codex F1 re-review P2)
+                res = replace(res, confirmed=False, reason="timeout", status="timeout")
+                record.update(reason="timeout", status="timeout", stage_s=round(inputs.clock() - t0, 3))
             relocalizer.placed_result(res.confirmed, res.base, res.reason)
             out["places"].append(record)
             if console is not None:

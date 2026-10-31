@@ -505,3 +505,15 @@ def test_f1_has_its_own_floors():
     assert f1["floors"] == {"safety": True, "rescue": True}
     rows[0] = {**rows[0], "outcome": "wrong", "pose_class": "wrong"}
     assert J._f1_place(rows)["floors"] == {"safety": False, "rescue": False}
+
+
+def test_a_frozen_hard_start_not_run_or_missing_holds_the_f1_judgement(tmp_path):
+    # Codex F1 re-review P2 1: only an explicit physical input failure leaves the frozen population
+    _session(tmp_path, "s0", estimate_source="operator_placed", attempts=REFUSED * 3, places=[{"reason": "confirmed"}])
+    rows = J.judge_sessions(tmp_path, _starts("s0", "s1"))  # s1 listed, never run
+    f1 = J.summarize(rows, hard_ids=["s0", "s1", "s2"])["f1_place"]  # s2 not even in the start list
+    assert f1["missing"] == ["s1", "s2"] and f1["floors"] == {"safety": None, "rescue": None}
+    _session(tmp_path, "s1", status="invalid", verdict_off=None, exit_code=1, reason="reloc_invalid_input: tilt")
+    rows = J.judge_sessions(tmp_path, _starts("s0", "s1"))
+    f1 = J.summarize(rows, hard_ids=["s0", "s1"])["f1_place"]
+    assert f1["missing"] == [] and f1["hard"] == 1 and f1["floors"]["rescue"] is True  # s1 invalid: out

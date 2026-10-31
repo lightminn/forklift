@@ -111,3 +111,22 @@ def test_a_click_outside_the_map_is_one_failed_placement_offline(tmp_path):
     [row] = [json.loads(line) for line in rows.read_text().splitlines()]
     outside = [p for p in row["placements"] if not (0.0 <= p["click"][0] < 6.0 and 0.0 <= p["click"][1] < 4.0)]
     assert all(p["reason"] == "invalid" for p in outside)
+
+
+def test_a_click_off_the_map_is_refused_before_its_scans_are_looked_at(tmp_path):
+    # Codex F1 re-review P2 2: live refuses an off-map command before scanning; its capture's validity never counts
+    grid = TG._grid(*TG.ROOM)
+    caps = [_capture(tmp_path / f"c{k}.npz", [(0.3, 2.0, math.pi / 2)], 1, grid) for k in range(3)]
+    for k in range(3):  # every capture invalid: only an off-map click may avoid "unsteady"
+        with np.load(caps[k]) as z:
+            d = dict(z)
+        d["valid"] = np.array([k == 0])
+        np.savez(caps[k], **d)
+    rows = tmp_path / "rows.jsonl"
+    F.main(["run", "--bundle", str(_bundle(tmp_path, grid)), "--capture", str(caps[0]), "--capture", str(caps[1]),
+            "--capture", str(caps[2]), "--seed", "3", "--out", str(rows),
+            "--config", json.dumps({"yaw_step_rad": math.radians(2.0)})])
+    [row] = [json.loads(line) for line in rows.read_text().splitlines()]
+    for p in row["placements"]:
+        if not (0.0 <= p["click"][0] < 6.0 and 0.0 <= p["click"][1] < 4.0):
+            assert p["reason"] == "invalid"

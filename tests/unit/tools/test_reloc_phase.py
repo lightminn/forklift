@@ -546,3 +546,24 @@ def test_the_phase_gives_the_relocalizer_the_maps_extent(tmp_path):
 
     P.run(_symmetric(tmp_path, FakeConsole(script), unattended=True))  # ends at the operator request
     assert seen["bounds"] == pytest.approx((0.0, 0.0, 6.0, 4.0))
+
+
+def test_a_preview_is_never_made_after_t_loc_even_when_the_console_takes_the_time(tmp_path):
+    # Codex F1 re-review P2 3: the deadline checked right before the result applies, after the console's service
+    clock = {"t": time.monotonic()}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            r.place(r.generation, (2.2, 1.5, 0.15))
+        elif r.state == "placing" and stage == "placed":
+            clock["t"] += 11.0  # the console's service after the match takes past T_LOC
+        elif r.state in ("awaiting_pick", "reloc_failed") and r.places == 1 and stage in ("awaiting_pick",
+                                                                                           "reloc_failed"):
+            box["inputs"].operator_deadline_at = clock["t"] - 1.0
+
+    box = {}
+    box["inputs"] = _symmetric(tmp_path, FakeConsole(script), clock=lambda: clock["t"],
+                               operator_deadline_at=clock["t"] + 1e6)
+    out = P.run(box["inputs"])
+    assert out["places"][0]["reason"] == "timeout" and out["status"] != "chosen"

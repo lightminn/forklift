@@ -115,12 +115,13 @@ def cmd_run(a) -> int:
             if row["valid"]:
                 for k in range(min(N_PLACE, len(caps))):
                     c = click(a.seed, i, k, truth)
-                    if not bool(caps[k]["valid"][i]):
-                        row["placements"].append({"click": list(c), "reason": "unsteady", "status": "unsteady",
+                    # off the map first: live refuses the command before any scan (Codex F1 re-review P2)
+                    if not (x0 <= c[0] < x1 and y0 <= c[1] < y1):  # one failed placement
+                        row["placements"].append({"click": list(c), "reason": "invalid", "status": "invalid",
                                                   "amb_ratio": None, "base": None})
                         continue
-                    if not (x0 <= c[0] < x1 and y0 <= c[1] < y1):  # off the map: one failed placement
-                        row["placements"].append({"click": list(c), "reason": "invalid", "status": "invalid",
+                    if not bool(caps[k]["valid"][i]):
+                        row["placements"].append({"click": list(c), "reason": "unsteady", "status": "unsteady",
                                                   "amb_ratio": None, "base": None})
                         continue
                     t0 = time.monotonic()  # T_LOC from the scans (here: their conversion) to the result
