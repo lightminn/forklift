@@ -68,7 +68,9 @@ class WheelHold:
     def step(self, t: float, *, dwell_standing: bool, wheel_cmd, phase: str, wheel_rates, q_now,
              read_gains) -> HoldOutput:
         stand = self._stand_ok(t, wheel_cmd, phase, wheel_rates)
-        want = "dwell" if dwell_standing else ("stand" if stand else "none")
+        commanded = not bool(np.all(np.asarray(wheel_cmd, dtype=float) == 0.0))
+        # a non-zero wheel command is never applied locked, whatever the dwell flag says (Codex impl review P2-3)
+        want = "none" if commanded else ("dwell" if dwell_standing else ("stand" if stand else "none"))
         if want == self.mode:
             return HoldOutput(None, None if self.q is None else self.q.copy())
         q_now = np.asarray(q_now, dtype=float)

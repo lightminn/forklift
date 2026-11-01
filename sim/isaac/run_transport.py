@@ -4398,13 +4398,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "retry_stand": False,
         }
     wheel_lock = {"q": None, "gains": None, "events": []}
-    # docs/plans/2026-11-01-standstill-wheel-hold.md S1: off (every earlier run) keeps the dwell lock path below as is
-    stand_hold = None
-    if getattr(args, "stand_wheel_hold", "off") != "off":
-        from forklift_core.control.stand_hold import WheelHold
-
-        stand_hold = WheelHold(args.stand_wheel_hold)
-    stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
     # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
     # tips, less the camera's distance behind them (0.431 m on the measured chassis).
     dwell_d_end_m = (
@@ -4823,6 +4816,16 @@ def drive(S, isaac) -> None:
         y0 = _bound["y0"]
     if "y1" in _bound:
         y1 = _bound["y1"]
+    # docs/plans/2026-11-01-standstill-wheel-hold.md S1/S0: made here from the arguments (not setup values), so a
+    # setup recorded before them and an off run bind nothing new; off keeps the dwell lock path below as is
+    stand_hold = None
+    if getattr(args, "stand_wheel_hold", "off") != "off":
+        from forklift_core.control.stand_hold import WheelHold
+
+        stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)
+        state["stand_wheel_locks"] = stand_hold.events  # the result's record, filled as it goes
+    stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
+    stand_watch = {"lock_base": None, "max_m": 0.0, "max_effort": None, "release": None}
 
     def record_video_overlay(t_now: float) -> None:
         from forklift_core.perception.obstacle_grid import OCCUPIED as GRID_OCCUPIED
@@ -9703,21 +9706,28 @@ def drive(S, isaac) -> None:
                         read_gains=controller_.get_gains)
                     if hold_.gains is not None:
                         controller_.set_gains(kps=hold_.gains[0], kds=hold_.gains[1])
+                    base_now_ = [float(base[0]), float(base[1]), float(yaw)]
                     if len(stand_hold.events) > events_before_:
-                        stand_hold.events[-1].update(
-                            base=[float(base[0]), float(base[1]), float(yaw)],
-                            pallet=[float(ppos[0]), float(ppos[1]), float(pallet_yaw)])
-                    wheel_lock["q"] = hold_.q
-                    if stand_probe is not None and np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0):
+                        ev_ = stand_hold.events[-1]
+                        ev_.update(base=base_now_, pallet=[float(ppos[0]), float(ppos[1]), float(pallet_yaw)])
+                        if ev_["from"] == "none":
+                            stand_watch.update(lock_base=base_now_, max_m=0.0, max_effort=None, release=None)
+                        if ev_["to"] == "none":
+                            # what the lock held: the largest true move from where it locked, the largest wheel effort
+                            ev_.update(locked_max_move_m=stand_watch["max_m"], locked_max_effort=stand_watch["max_effort"])
+                            stand_watch.update(lock_base=None, release={"event": ev_, "base": base_now_, "t": float(t)})
+                    if stand_watch["lock_base"] is not None:
+                        lb_ = stand_watch["lock_base"]
+                        stand_watch["max_m"] = max(stand_watch["max_m"], math.hypot(base_now_[0] - lb_[0], base_now_[1] - lb_[1]))
                         efforts_ = getattr(robot, "get_measured_joint_efforts", None)
-                        stand_probe.write(json.dumps({
-                            "t": float(t), "phase": ms.phase, "lock": stand_hold.mode,
-                            "steer_cmd": [float(v) for v in steering_command],
-                            "q": [float(v) for v in robot.get_joint_positions()[wheels]],
-                            "qd": [float(v) for v in robot.get_joint_velocities()[wheels]],
-                            "effort": None if efforts_ is None else [float(v) for v in efforts_()[wheels]],
-                            "base": [float(base[0]), float(base[1]), float(yaw)],
-                            "pallet": [float(ppos[0]), float(ppos[1]), float(pallet_yaw)]}) + "\n")
+                        if efforts_ is not None:
+                            e_ = float(np.max(np.abs(np.asarray(efforts_(), dtype=float)[wheels])))
+                            stand_watch["max_effort"] = e_ if stand_watch["max_effort"] is None else max(stand_watch["max_effort"], e_)
+                    rel_ = stand_watch["release"]
+                    if rel_ is not None and math.hypot(base_now_[0] - rel_["base"][0], base_now_[1] - rel_["base"][1]) > 0.005:
+                        rel_["event"]["moved_after_s"] = float(t) - rel_["t"]  # the restart: 5 mm of true travel
+                        stand_watch["release"] = None
+                    wheel_lock["q"] = hold_.q
                 elif dwell_standing and wheel_lock["q"] is None:
                     # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                     controller_ = robot.get_articulation_controller()
@@ -9731,6 +9741,19 @@ def drive(S, isaac) -> None:
                     robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
                     wheel_lock["events"][-1]["release_s"] = float(t)
                     wheel_lock["q"] = None
+                if stand_probe is not None and np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0):
+                    # Plan S0: every zero-command tick, whatever the lock (off too, for the comparison)
+                    efforts_ = getattr(robot, "get_measured_joint_efforts", None)
+                    stand_probe.write(json.dumps({
+                        "t": float(t), "phase": ms.phase,
+                        "lock": "dwell" if (stand_hold is None and wheel_lock["q"] is not None)
+                        else (stand_hold.mode if stand_hold is not None else "none"),
+                        "steer_cmd": [float(v) for v in steering_command],
+                        "q": [float(v) for v in robot.get_joint_positions()[wheels]],
+                        "qd": [float(v) for v in robot.get_joint_velocities()[wheels]],
+                        "effort": None if efforts_ is None else [float(v) for v in np.asarray(efforts_())[wheels]],
+                        "base": [float(base[0]), float(base[1]), float(yaw)],
+                        "pallet": [float(ppos[0]), float(ppos[1]), float(pallet_yaw)]}) + "\n")
                 robot.apply_action(
                     isaac.action(
                         joint_velocities=np.asarray(drive.wheel_rates_rad_s),
@@ -9884,6 +9907,8 @@ def drive(S, isaac) -> None:
         require(verdict_.ok, verdict_.reason or "")
         delivery_error = verdict_.delivery_error_m
         snapshot("delivered")
+        if stand_probe is not None:
+            stand_probe.close()  # line-buffered, so a run ended by a failure keeps every line written too
         state.update(
             {
                 "success": True,
@@ -9917,7 +9942,8 @@ def drive(S, isaac) -> None:
                             "dwell_hold_s": None if dwells is None else dwells.hold_s,
                         "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
                         "dwell_wheel_locks": wheel_lock["events"],
-                        # plan 2026-11-01-standstill-wheel-hold S1: with the stand lock on, the dwell's locks are here
+                        # plan 2026-11-01-standstill-wheel-hold S1: with the stand lock on, the dwell's locks are in
+                        # state["stand_wheel_locks"] (the result) and here
                         **({} if stand_hold is None else {"stand_wheel_locks": stand_hold.events}),
                             "dwell_d_end_m": dwell_d_end_m,
                             "safety_stop_gaps_m": (None if args.measure_safety_stops_m is None

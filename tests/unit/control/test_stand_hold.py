@@ -175,3 +175,38 @@ def test_the_runner_option_is_off_by_default_batch_only_and_in_the_near_field_co
     # off keeps the dwell lock's own path: the new branch is taken only with the stand lock on
     assert "if stand_hold is not None:" in source and "elif dwell_standing and wheel_lock[\"q\"] is None:" in source
     assert 'if getattr(args, "stand_wheel_hold", "off") != "off":' in source
+    # made inside drive() from the arguments with the runner's own wheel indices, its record in the result
+    drive_src = source[source.index("def drive(S, isaac)"):]
+    assert "stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)" in drive_src
+    assert 'state["stand_wheel_locks"] = stand_hold.events' in drive_src
+    assert "stand_hold = None" in drive_src and "stand_hold = None" not in source[:source.index("def drive(S, isaac)")]
+    # the probe writes on every zero-command tick, outside the lock branch (off too)
+    probe = source.index("if stand_probe is not None and np.all(")
+    assert probe > source.index("elif not dwell_standing and wheel_lock[\"q\"] is not None:")
+
+
+def test_a_dwell_flag_with_a_wheel_command_does_not_lock():
+    hold, robot = WheelHold("rear"), Robot()
+    out = tick(hold, robot, 0.0, dwell=True, cmd=np.array([1.0, 1.0, 1.0, 1.0]))
+    assert hold.mode == "none" and out.q is None and robot.sets == []
+    tick(hold, robot, 0.01, dwell=True)
+    assert hold.mode == "dwell"
+    out = tick(hold, robot, 0.02, dwell=True, cmd=np.array([0.0, 0.0, 0.5, 0.5]))
+    assert hold.mode == "none" and out.q is None and np.array_equal(robot.kps, KPS)
+
+
+def test_the_runners_wheel_indices_are_the_ones_locked():
+    """The runner's wheels are dof indices in its own order (frozen record: front left 5, front right 6, rear 2, 3)."""
+    kps = np.array([4000.0, 57295.8, 0.0, 0.0, 57295.8, 0.0, 0.0])  # lift, left steer, RL, RR, right steer, FL, FR
+    kds = np.zeros(7)
+    hold = WheelHold("rear", wheel_indices=[5, 6, 2, 3])
+    t, out = 0.0, None
+    while hold.mode == "none":
+        out = hold.step(t, dwell_standing=False, wheel_cmd=ZERO, phase="transport", wheel_rates=ZERO,
+                        q_now=np.zeros(4), read_gains=lambda: (kps, kds))
+        t += 1 / 120
+    assert list(out.gains[0]) == [4000.0, 57295.8, WHEEL_KP, WHEEL_KP, 57295.8, 0.0, 0.0]
+    hold = WheelHold("all", wheel_indices=[5, 6, 2, 3])
+    out = hold.step(0.0, dwell_standing=True, wheel_cmd=ZERO, phase="transport", wheel_rates=ZERO, q_now=np.zeros(4),
+                    read_gains=lambda: (kps, kds))
+    assert list(out.gains[0]) == [4000.0, 57295.8, WHEEL_KP, WHEEL_KP, 57295.8, WHEEL_KP, WHEEL_KP]
