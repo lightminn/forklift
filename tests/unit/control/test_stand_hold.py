@@ -187,6 +187,9 @@ def test_the_runner_option_is_off_by_default_batch_only_and_in_the_near_field_co
     assert 'ev_lock_["observed_to_s"] = float(t)' in drive_src and "atexit.register(stand_probe.close)" in drive_src
     # the probe writes on every zero-command tick, outside the lock branch (off too)
     probe = source.index("if stand_probe is not None and probe_tail.keep(")
+    # ... with this tick's pose before the action is applied -- the release tick's pose, as moved_after_s (Codex P3)
+    assert probe < source.index("robot.apply_action(", probe)
+    assert "probe_tail.keep(float(t), probe_zero_, (float(base[0]), float(base[1])))" in drive_src
     assert probe > source.index("elif not dwell_standing and wheel_lock[\"q\"] is not None:")
 
 
