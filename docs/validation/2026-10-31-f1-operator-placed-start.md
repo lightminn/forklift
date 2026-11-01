@@ -151,3 +151,17 @@ These runs used `tools/f1_place_eval.py` on the frozen code (snapshot `f1_678f10
 | 1.5 m off | 86 (0) | 78 (0) |
 | 0.5 rad off | 55 (0) | 37 (0) |
 | heading turned around | 1 (1) | 0 |
+
+## 5. Hard populations and the second freeze (plan 4.1, 4.6)
+
+- **Seed 3's hard population:** all 98 seed-3 starts ran through the frozen B-P2 unattended path (ws1 13622, snapshot `bp2d_0fa66b4a`, B-P2d's list generator and bridge digest).
+  - Judged against B-P2d's first freeze, the batch pools: no fingerprint mismatch, one argument set (`s3_unattended_judgement.json`).
+  - 91 valid: 73 started on the matcher's confirmation (0 wrong, 0 imprecise), 16 asked for a person, 2 had no candidate (`reloc_failed`). 7 invalid.
+  - The hard population is those 18 (`hard_s3.json`): val5_011, val5_012, val5_017, val5_024, val5_028, val5_033, val5_035, val5_042, val5_045, val5_047, val5_052, val5_068, val5_074, val5_081, val5_083, val5_088, val5_089, val5_096.
+- **Seed 5's hard population:** B-P2d's 16 operator requests (`hard_s5.json`): val4_001, val4_002, val4_012, val4_021, val4_032, val4_033, val4_034, val4_040, val4_043, val4_045, val4_052, val4_069, val4_075, val4_077, val4_081, val4_084.
+- **Offline (a record):** 16 of seed 3's 18 and 14 of seed 5's 16 are rescued, 30 of 34.
+- **Second freeze** (`docs/validation/assets/f1/freeze2.json`), committed before any F1 collection session ran:
+  - seed 3: map id `fb0ad8ca…`, keep-out (the survey's `result.json`, sha256 `be975094…`), start list `val_s3.json` (sha256 `81fdf6e5…`), the survey's V2′ figures, the hard list and the judgement it came from;
+  - seed 5: B-P2d's second freeze and the hard list with its judgement;
+  - the first freeze's sha256, and the collection's probe, snapshot (`f1_678f10fb`) and list generator.
+- **Collection (plan 4.2 b, 4.3):** one attended session per hard start (34), the probe as the operator (`RELOC_PROBE=place`), on snapshot `f1_678f10fb`. Judged with `tools/reloc_judge.py --frozen freeze1.json --hard` per world.

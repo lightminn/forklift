@@ -1,0 +1,74 @@
+{
+ "seed3": {
+  "map_id": "fb0ad8ca280ad3515fce69a2566c21af7fce0e618400e4f962de576ecac36e4a",
+  "bundle": "/home/projects/forklift/test_runs/live/f1_survey/hall_s3_G0/bundle",
+  "keep_out": {
+   "path": "/home/projects/forklift/test_runs/live/f1_survey/hall_s3_G0/epoch_1/run/result.json",
+   "sha256": "be9750945337144927e152ce2b79a98b933ed39d9b6cdff25379996399e37099"
+  },
+  "starts": {
+   "file": "docs/validation/assets/f1/val_s3.json",
+   "sha256": "81fdf6e5889cc7c0aa31dce7ea2b5eb383a61c9ed19095fba4248181f1453878",
+   "count": 98,
+   "draw": {
+    "stop_reason": "exhausted",
+    "attempts": 95460,
+    "exhausted": [
+     "A",
+     "B",
+     "C"
+    ],
+    "strata": {
+     "A": 49,
+     "B": 24,
+     "C": 25
+    }
+   },
+   "seed": 1031,
+   "sep_m": 3.0
+  },
+  "survey": {
+   "job": 13497,
+   "snapshot": "f1_678f10fb",
+   "noise_seed": 0,
+   "v2": {
+    "position_max_m": 0.06412597201938636,
+    "yaw_max_rad": 0.00430690141792911,
+    "judged_known_fraction": 1.0
+   },
+   "accepted_on": "V2' (B4a); the moving check did not run, as on seeds 4 and 5"
+  },
+  "hard": {
+   "file": "docs/validation/assets/f1/hard_s3.json",
+   "sha256": "d1e56c38c2354b29ed956251f07a5f7a3662965d01db039731a48a3f252f06dc",
+   "count": 18,
+   "from": {
+    "run": "ws1 13622, snapshot bp2d_0fa66b4a (the frozen B-P2 unattended path)",
+    "judgement": "docs/validation/assets/f1/s3_unattended_judgement.json",
+    "judgement_sha256": "f41a0b2ac8b3890834d2d986a56decfe79db36a2b842924a4fbcef263b26c0cd",
+    "outcomes": "valid sessions ending needs_operator, or failed with reloc_failed (no candidate an operator could pick)"
+   }
+  }
+ },
+ "seed5": {
+  "second_freeze": "docs/validation/assets/b-p2d/freeze2.json",
+  "hard": {
+   "file": "docs/validation/assets/f1/hard_s5.json",
+   "sha256": "366fe96bcce2399a3e7c0fda8f58e57679a0c6c337f17f1093722d512eb11037",
+   "count": 16,
+   "from": {
+    "run": "B-P2d collection ws1 13214, snapshot bp2d_0fa66b4a",
+    "judgement": "docs/validation/assets/b-p2d/judgement.json",
+    "judgement_sha256": "32dc8d1c23cf3247165e96b17ad6789cfcfd3e64c68cea6c390eed265ecfa065",
+    "outcomes": "valid sessions ending needs_operator, or failed with reloc_failed (no candidate an operator could pick)"
+   }
+  }
+ },
+ "first_freeze": "docs/validation/assets/f1/freeze1.json",
+ "first_freeze_sha256": "e8f1019b698b0af77d6f31ea36628299bcf86627e4e8e0b80525be09cf22c190",
+ "collection": {
+  "probe": "RELOC_PROBE=place, CLICK_SEED = the world's seed, CLICK_INDEX = the start's index in its full list",
+  "snapshot": "f1_678f10fb",
+  "list_generator": "test_runs/live/f1_ref/f1_list.py (ws1)"
+ }
+}
