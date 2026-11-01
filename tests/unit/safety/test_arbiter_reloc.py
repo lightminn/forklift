@@ -113,3 +113,35 @@ def test_after_the_relocalization_the_mission_goes_as_before():
     msg = rig.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
     rig.cycle(msg)
     assert rig.reply(msg["request_id"])["t"] == "ack" and rig.a.mode == "AUTO"
+
+
+# --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2) ---------------------------------
+def test_the_placement_commands_are_leased_and_reliable():
+    assert {"relocalize_place", "relocalize_place_confirm"} <= set(LEASED) <= set(RELIABLE)
+
+
+def test_a_placement_and_its_confirmation_go_through_the_relocalizations_state():
+    reloc = _awaiting()
+    rig = _rig(reloc)
+    [reply] = rig.cycle(rig.msg("relocalize_place", generation=1, pose=[5.0, 2.0, 0.3]))
+    assert reply["t"] == "ack" and reloc.state == "placing" and reloc.placed == (5.0, 2.0, 0.3)
+    reloc.placed_result(True, (5.1, 2.0, 0.31))
+    [reply] = rig.cycle(rig.msg("relocalize_place_confirm", generation=1, preview_id=1))
+    assert reply["t"] == "ack" and reloc.state == "chosen" and reloc.estimate.source == "operator_placed"
+
+
+@pytest.mark.parametrize("kind, fields, reason", [
+    ("relocalize_place", {"generation": 1, "pose": [5.0, 2.0]}, "invalid"),
+    ("relocalize_place", {"generation": 1, "pose": [5.0, "2", 0.3]}, "invalid"),
+    ("relocalize_place", {"generation": 1, "pose": [5.0, 2.0, True]}, "invalid"),
+    ("relocalize_place", {"pose": [5.0, 2.0, 0.3]}, "invalid"),
+    ("relocalize_place", {"generation": 0, "pose": [5.0, 2.0, 0.3]}, "reloc_stale_pick"),
+    ("relocalize_place_confirm", {"generation": 1}, "invalid"),
+    ("relocalize_place_confirm", {"generation": 1, "preview_id": True}, "invalid"),
+    ("relocalize_place_confirm", {"generation": 1, "preview_id": 1}, "reloc_not_awaiting"),
+])
+def test_a_wrong_placement_or_confirmation_is_refused_and_changes_nothing(kind, fields, reason):
+    reloc = _awaiting()
+    rig = _rig(reloc)
+    [reply] = rig.cycle(rig.msg(kind, **fields))
+    assert reply["t"] == "reject" and reply["reason"] == reason and reloc.state == "awaiting_pick"

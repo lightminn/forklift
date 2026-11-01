@@ -250,6 +250,9 @@ export const REJECT = {
   reloc_pick_refused: "그 후보는 고를 수 없습니다",
   reloc_not_awaiting: "지금은 후보를 고르거나 다시 시도할 수 없습니다",
   reloc_operator_timeout: "고르기·다시 시도 시간이 지났습니다",
+  // F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2)
+  reloc_place_invalid: "놓은 자세를 읽을 수 없습니다",
+  reloc_place_limit: "놓기를 세 번 다 썼습니다 · 다시 시도하거나 세션을 끝내세요",
   // the fake vehicle's own (console/mock_vehicle)
   fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
   load_present: "포크에 짐이 실려 있습니다",

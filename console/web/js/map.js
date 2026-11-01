@@ -43,6 +43,7 @@ export function worldBounds(grid) {
   return { x0, y0, w: grid.head.width * grid.head.resolution_m, h: grid.head.height * grid.head.resolution_m };
 }
 
+const REAR_AXLE_FROM_BASE_M = 0.34; // base_link is this far ahead of the rear axle (start_reloc.REAR_AXLE_OFFSET_M)
 const MODE_TOK = { AUTO: "accent", TELEOP: "teleop", STOPPED: "crit" };
 
 function roundRect(c, x, y, w, h, r) {
@@ -357,6 +358,59 @@ export function drawMap(cv, model, tok, view, layers) {
       tag(c, `후보 ${cand.index + 1} · ${Number(cand.score).toFixed(2)}`, x, y + r + 8, tok.accent, tok);
     }
   }
+
+  // F1 (plan 2026-10-31-operator-placed-start 1.2): the pose the operator is placing (dashed) and the preview of its
+  // local re-match (solid, with the scan's endpoints at that pose) -- base_link poses, the truck drawn from its rear axle
+  const outline = (base, style) => {
+    if (!model.chassis) return;
+    const ch = model.chassis;
+    const [x, y] = P(base[0], base[1]);
+    c.save();
+    c.translate(x, y);
+    c.rotate(-base[2]);
+    c.setLineDash(style.dash);
+    c.strokeStyle = style.color;
+    c.lineWidth = 2;
+    const rear = -REAR_AXLE_FROM_BASE_M - ch.rear_overhang_m;
+    c.strokeRect(rear * sc, -ch.half_width_m * sc, (ch.rear_overhang_m + ch.nose_from_rear_m) * sc, 2 * ch.half_width_m * sc);
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.lineTo(0.6 * sc, 0);
+    c.stroke();
+    c.restore();
+  };
+  if (reloc && !st?.pose && reloc.state === "place_preview" && reloc.preview) {
+    c.fillStyle = tok.accent;
+    for (const [px, py] of reloc.preview_points ?? []) {
+      const [x, y] = P(px, py);
+      c.fillRect(x - 1.5, y - 1.5, 3, 3);
+    }
+    outline(reloc.preview, { color: tok.accent, dash: [] });
+    // the forward direction, large (the lead's screen aid against a placement turned around, 2026-10-31)
+    const [x, y] = P(reloc.preview[0], reloc.preview[1]);
+    const len = Math.max(48, 1.6 * sc);
+    c.save();
+    c.translate(x, y);
+    c.rotate(-reloc.preview[2]);
+    c.strokeStyle = tok.accent;
+    c.fillStyle = tok.accent;
+    c.lineWidth = 4;
+    c.setLineDash([]);
+    c.beginPath();
+    c.moveTo(0, 0);
+    c.lineTo(len - 14, 0);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(len, 0);
+    c.lineTo(len - 18, -10);
+    c.lineTo(len - 18, 10);
+    c.closePath();
+    c.fill();
+    c.restore();
+    c.font = "bold 14px system-ui, sans-serif";
+    c.fillText("전진", x + (len + 8) * Math.cos(reloc.preview[2]) - 14, y - (len + 8) * Math.sin(reloc.preview[2]) + 5);
+  }
+  if (model.placeGhost) outline(model.placeGhost, { color: tok.fg, dash: [6, 4] });
 
   // scale bar, top-left
   const meters = sc > 120 ? 0.5 : sc > 40 ? 1 : sc > 12 ? 5 : 10;
