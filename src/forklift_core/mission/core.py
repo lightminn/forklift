@@ -2650,6 +2650,7 @@ class MissionCore:
                         t, ms.phase, id(hold_tracker), hold_tracker.leg_index, cusp_heading_end(tracking),
                         tracking.cusp_pending, tracking.speed_mps,
                         cusp_heading_offset(hold_tracker, tracking.progress_m, rear))
+        tracking, rear = self._return_cusp_replan(t, rear, tracking, signed_speed, dt, step)
         # Under SLAM, an observe leg judged out of heading at a cusp or
         # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
         # versions running): brake, then plan the leg again from the
@@ -6067,6 +6068,77 @@ class MissionCore:
             "passes": passes_.blocked, "first_unknown_m": passes_.first_unknown_m,
             "evidence_age_s": age_ if math.isfinite(age_) else None, "silent": silent_,
         }
+
+    def _return_cusp_replan(self, t: float, rear, tracking, signed_speed: float, dt: float, step: int):
+        """docs/plans/2026-10-31-return-cusp-replan.md D1: a heading failure at a return_home cusp, after the cusp
+        heading hold (it may have latched it this tick), is braked at zero until the truck stands, then the return is
+        planned again from there as the goal-stall recovery plans it -- a held SLAM released first, no turnaround, no
+        start backoff, no tight retry -- at most ``return_cusp_replans`` times per return (0: off, as before).
+        Returns ``tracking`` and ``rear``."""
+        ms, state, obstacle, slam, hooks, options = self.ms, self.state, self.obstacle, self.slam, self.hooks, self.options
+        budget = int(getattr(options, "return_cusp_replans", 0) or 0)
+        if not (budget > 0 and ms.phase == "return_home" and tracking.status == "failed"
+                and tracking.failure == "endpoint_heading" and tracking.at_cusp and not tracking.off_path
+                and len(state.get("return_cusp_replans", ())) < budget):
+            return tracking, rear
+        trackers = self.trackers
+        if slam is not None:
+            stopped = bool(slam["stop_now"])
+        else:  # the commanded speed is forced to zero below; the stand is the true one
+            stopped = (float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps
+                       and abs(float(hooks.truth_yaw_rate())) <= options.cusp_stop_yaw_rate_radps)
+        ms.cusp_stop_ticks = ms.cusp_stop_ticks + 1 if stopped else 0
+        if ms.cusp_stop_ticks < options.cusp_stop_needed:
+            # Zero, not the failed tracker's last command (BF s6 left 0.0095 m/s, Codex plan review 2).
+            return replace(tracking, status="braking", speed_mps=0.0), rear
+        ms.cusp_stop_ticks = 0
+        record = {"time_s": t, "loop_step": step, "rear_pose": np.asarray(rear, dtype=float).tolist(),
+                  "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad,
+                  "released": None}
+        if slam is not None and slam["tracker"].mode == "holding":
+            # As before the goal-stall replan: a long new return must not be driven held (Codex plan review 2 P2-2).
+            jump_m, jump_rad = self.release_slam(hooks.slam_odom_base())
+            slam["holds"].append({"phase": ms.phase, "time_s": t, "event": "release_before_return_cusp_replan",
+                                  "jump_m": jump_m, "jump_rad": jump_rad})
+            record["released"] = {"jump_m": jump_m, "jump_rad": jump_rad}
+            rear_now = hooks.slam_rear(hooks.now_s())
+            if obstacle is not None and slam["tracker"].applied is not None:
+                obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+                obstacle["version"] += 1
+                obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                obstacle["layer"].refresh(
+                    t, obstacle["applied"], obstacle["version"],
+                    current_pose=tuple(float(v) for v in rear_now), path_ahead=np.array([rear_now]), loaded=False,
+                )
+            rear = np.asarray(rear_now, dtype=float)
+            hooks.set_rear(rear)  # the runner's closures (grid_kwargs) read its rear
+        start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+        scenario_ = options.scenario if slam is None else slam.get("return_scenario", options.scenario)
+        replan_start = hooks.wall()
+        replanned = hooks.plan_return_leg(
+            hooks.grid_world(scenario_), start, options.return_to_pose, options.planner_config,
+            geometry=self.geometry, travel_config=options.travel_config, **hooks.grid_kwargs(None),
+        )
+        wall_s = hooks.wall() - replan_start
+        state["planning_wall_s"] = (state.get("planning_wall_s") or 0.0) + wall_s
+        record.update(status=replanned.status, planning_wall_s=wall_s,
+                      search_attempts=[list(a) for a in (getattr(replanned, "search_attempts", None) or ())],
+                      path=hooks.path_record(replanned) if replanned.success else None,
+                      replaced_path=hooks.path_record(self.paths[ms.phase]))
+        state.setdefault("return_cusp_replans", []).append(record)  # made at the first one: off adds no key
+        hooks.require(replanned.success, f"return_cusp_replan_failed: {failed_plan_reason(replanned)}")
+        self.paths[ms.phase] = replanned
+        state.setdefault("paths", {})[ms.phase] = hooks.path_record(replanned)
+        hooks.write_paths()
+        hooks.show_path(replanned, "Return", (0.55, 0.2, 0.85))
+        trackers[ms.phase] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
+                                                 trackers[ms.phase].config)
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()  # as the transport's cusp replan
+        ms.phase_started = t
+        tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+        ms.last_tracking = tracking
+        return tracking, rear
 
     def cusp_end_recovered(self, goal: bool) -> bool:
         """A short next leg's end missed (in heading, or a stall at the final goal -- cusp design

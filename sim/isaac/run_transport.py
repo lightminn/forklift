@@ -599,6 +599,21 @@ def arguments() -> argparse.Namespace:
         "travel max(2L, L + 2 m), 40 s) releasing, re-planning and holding again once. Off: every earlier run.",
     )
     parser.add_argument(
+        "--return-cusp-replans",
+        type=int,
+        default=0,
+        help="docs/plans/2026-10-31-return-cusp-replan.md D1: a heading failure at a return_home cusp is braked to a "
+        "stand and the return planned again from there (as the goal-stall recovery: a held SLAM released first, no "
+        "turnaround, no start backoff), at most this many times per return. 0: off, every earlier run.",
+    )
+    parser.add_argument(
+        "--transport-cusp-replans",
+        type=int,
+        default=2,
+        help="docs/plans/2026-10-31-return-cusp-replan.md D2: the transport's cusp replans per run (2: every earlier "
+        "run).",
+    )
+    parser.add_argument(
         "--lidar-keepout-m",
         type=float,
         default=0.0,
@@ -1328,6 +1343,8 @@ def arguments() -> argparse.Namespace:
         # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1: checked for the Riibotics scene runs (scene replan,
         # no grid planning); the near-tracking combination waits for its own check
         parser.error("--exit-prefix-exempt on needs --layout scene and --obstacle-layer, and not --near-tracking")
+    if args.return_cusp_replans < 0 or args.transport_cusp_replans < 0:
+        parser.error("--return-cusp-replans and --transport-cusp-replans are counts (0 or more)")
     if args.layout == "scene":
         if args.min_obstacle_height_m is not None or args.prism_colliders:
             # The scene's low pallets are part of the scenario and its boxes are their own colliders.
@@ -3443,7 +3460,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     ms.observe_stall_ticks = 0
     ms.slam_stall_ticks = 0
     ms.dock_stop_ticks = 0
-    max_cusp_replans = 2
+    # docs/plans/2026-10-31-return-cusp-replan.md D2: 2 in a record from before the option
+    max_cusp_replans = int(getattr(args, "transport_cusp_replans", 2))
     # Stopped = zero command, planar speed and yaw rate under these for this
     # many consecutive ticks (0.1 s), not the forward speed alone (Codex review).
     ms.cusp_stop_ticks, cusp_stop_needed = 0, 12
@@ -6423,6 +6441,8 @@ def drive(S, isaac) -> None:
                                 backoff_speed_mps=BACKOFF_SPEED_MPS, backoff_per_leg=BACKOFF_PER_LEG,
                                 escape_per_leg=ESCAPE_PER_LEG, cusp_heading_hold_phases=CUSP_HEADING_HOLD_PHASES,
                                 max_cusp_replans=max_cusp_replans, cusp_stop_needed=cusp_stop_needed,
+                                # docs/plans/2026-10-31-return-cusp-replan.md D1: 0 (off) in a record from before it
+                                return_cusp_replans=int(getattr(args, "return_cusp_replans", 0)),
                                 cusp_stop_yaw_rate_radps=cusp_stop_yaw_rate_radps,
                                 cusp_heading_hold_position_m=CUSP_HEADING_HOLD_POSITION_M,
                                 cusp_heading_hold_rad=CUSP_HEADING_HOLD_RAD,

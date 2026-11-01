@@ -1168,6 +1168,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "return_start_backoff": "off",
                               # 2026-10-25 re-approach hold plan H1: off in every earlier run.
                               "d7_reapproach_hold": "off",
+                              # 2026-10-31 return cusp replan plan D1/D2: off / the earlier 2 in every earlier record
+                              "return_cusp_replans": 0, "transport_cusp_replans": 2,
                               # 2026-10-25: the low-clearance guard; off in every earlier run.
                               "low_clearance_guard": "off", "low_clearance_margin_m": 0.05,
                               "low_clearance_deviation_m": 0.02,
