@@ -108,7 +108,7 @@
 
 - 팔: A = riib 기본(면제 켬), G = A + `--return-cusp-replans 2`, GN = G + `--transport-cusp-replans 3`.
 - 장면: 대상 aisle_rack 0–15·trailer 0–4, 회귀 line_2·random_1 0–9 → 41 seed × 3 팔 = 123 실행.
-  - aisle 을 0–15 로 늘린 것은 cusp 방위 실패 6 건이 모두 aisle 이기 때문이다(agy 지적 5). 배치 2 에서 aisle 8 seed 의 복귀 cusp 방위 실패는 B·BF 합 3 건이었다. 16 seed 면 팔당 기대 3 건 안팎이다.
+  - aisle 을 0–15 로 늘린 것은 cusp 방위 실패 6 건이 모두 aisle 이기 때문이다(agy 지적 5). 배치 2 본실행 aisle 8 seed 의 복귀 cusp 방위 실패는 B s1·BF s6 의 2 건(팔당 1 건)이었다. A 는 운반 출발에서 자주 멈춰 복귀에 덜 이른다. 16 seed 면 면제 켬 팔당 기대 2 건 안팎이다.
   - 이 크기로 완주 수의 작은 차이를 가를 수는 없다. 그래서 판정의 중심은 "복귀 cusp 방위 실패 유형이 G 에서 사라지는가"와 "G 에서 새로 생긴 끝이 없는가"이고, 완주는 비열등(아래)으로 본다.
 - 판정 초안:
   - G 대 A:
