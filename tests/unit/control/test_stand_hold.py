@@ -186,7 +186,7 @@ def test_the_runner_option_is_off_by_default_batch_only_and_in_the_near_field_co
     assert count_ < drive_src.index('if len(stand_hold.events) > events_before_:')
     assert 'ev_lock_["observed_to_s"] = float(t)' in drive_src and "atexit.register(stand_probe.close)" in drive_src
     # the probe writes on every zero-command tick, outside the lock branch (off too)
-    probe = source.index("if stand_probe is not None and np.all(")
+    probe = source.index("if stand_probe is not None and probe_tail.keep(")
     assert probe > source.index("elif not dwell_standing and wheel_lock[\"q\"] is not None:")
 
 
@@ -215,3 +215,25 @@ def test_the_runners_wheel_indices_are_the_ones_locked():
     out = hold.step(0.0, dwell_standing=True, wheel_cmd=ZERO, phase="transport", wheel_rates=ZERO, q_now=np.zeros(4),
                     read_gains=lambda: (kps, kds))
     assert list(out.gains[0]) == [4000.0, 57295.8, WHEEL_KP, WHEEL_KP, 57295.8, WHEEL_KP, WHEEL_KP]
+
+
+def test_the_probe_keeps_zero_ticks_and_the_restart_after_one():
+    from forklift_core.control.stand_hold import RestartTail
+
+    tail = RestartTail()
+    assert not tail.keep(0.0, False, (0.0, 0.0))  # nothing before the first zero tick
+    assert tail.keep(0.1, True, (0.0, 0.0))
+    # the restart: from the first non-zero tick (its pose the start) to the tick past 5 mm, that one kept
+    assert tail.keep(0.2, False, (0.001, 0.0))
+    assert tail.keep(0.3, False, (0.0055, 0.0))
+    assert tail.keep(0.4, False, (0.0065, 0.0))  # 5.5 mm from the start at 0.2 s: the last line
+    assert not tail.keep(0.5, False, (0.02, 0.0))
+    # a zero tick re-arms; a restart that never moves ends 5 s after its first tick
+    assert tail.keep(1.0, True, (0.02, 0.0))
+    assert tail.keep(1.1, False, (0.02, 0.0))
+    assert tail.keep(6.1, False, (0.02, 0.0))
+    assert tail.keep(6.2, False, (0.02, 0.0))  # 5.1 s past it: the last line
+    assert not tail.keep(6.3, False, (0.02, 0.0))
+    # a zero tick inside a tail restarts it
+    assert tail.keep(7.0, True, (0.0, 0.0)) and tail.keep(7.1, False, (0.0, 0.0)) and tail.keep(7.2, True, (0.0, 0.0))
+    assert tail.keep(7.3, False, (1.0, 0.0)) and tail.keep(7.4, False, (1.0, 0.0))  # start 7.3, not 7.1

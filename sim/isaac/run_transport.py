@@ -612,7 +612,9 @@ def arguments() -> argparse.Namespace:
         type=Path,
         default=None,
         help="docs/plans/2026-11-01-standstill-wheel-hold.md S0: one JSON line per control tick with a zero wheel "
-        "command -- the wheels' angles, rates and measured efforts, the truck's and pallet's true poses, the lock.",
+        "command -- the wheels' angles, rates and measured efforts, the steering angles, the truck's and pallet's true "
+        "poses, the lock -- and the restart after one (the ticks from the first non-zero command until the truck has "
+        "moved 5 mm or 5 s have passed, in either lock setting: the S1 batch's restart comparison).",
     )
     parser.add_argument(
         "--return-cusp-replans",
@@ -5565,6 +5567,9 @@ def drive(S, isaac) -> None:
     # whose restart is being timed
     stand_watch = {"event": None, "release": None}
     if stand_probe is not None:
+        from forklift_core.control.stand_hold import RestartTail
+
+        probe_tail = RestartTail()  # the zero-command ticks and the restart after each (the S1 batch's off arm too)
         import atexit
 
         atexit.register(stand_probe.close)  # every end, a failure or a cancel too
@@ -9751,14 +9756,18 @@ def drive(S, isaac) -> None:
                     robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
                     wheel_lock["events"][-1]["release_s"] = float(t)
                     wheel_lock["q"] = None
-                if stand_probe is not None and np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0):
-                    # Plan S0: every zero-command tick, whatever the lock (off too, for the comparison)
+                probe_zero_ = bool(np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0))
+                if stand_probe is not None and probe_tail.keep(float(t), probe_zero_, (float(base[0]), float(base[1]))):
+                    # Plan S0: every zero-command tick, whatever the lock (off too, for the comparison), and the
+                    # restart tail after one
                     efforts_ = getattr(robot, "get_measured_joint_efforts", None)
                     stand_probe.write(json.dumps({
-                        "t": float(t), "phase": ms.phase,
+                        "t": float(t), "phase": ms.phase, "cmd_zero": probe_zero_,
+                        "wheel_cmd": [float(v) for v in np.asarray(drive.wheel_rates_rad_s, dtype=float)],
                         "lock": "dwell" if (stand_hold is None and wheel_lock["q"] is not None)
                         else (stand_hold.mode if stand_hold is not None else "none"),
                         "steer_cmd": [float(v) for v in steering_command],
+                        "steer_q": [float(v) for v in robot.get_joint_positions()[steers]],
                         "q": [float(v) for v in robot.get_joint_positions()[wheels]],
                         "qd": [float(v) for v in robot.get_joint_velocities()[wheels]],
                         "effort": None if efforts_ is None else [float(v) for v in np.asarray(efforts_())[wheels]],

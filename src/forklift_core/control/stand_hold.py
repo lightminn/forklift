@@ -89,3 +89,28 @@ class WheelHold:
             return HoldOutput(gains, None)
         self.mode = want
         return HoldOutput(self._gains(want), self.q.copy())
+
+
+RESTART_MOVE_M = 0.005  # the restart: 5 mm of true travel (the runner's moved_after_s)
+RESTART_TAIL_S = 5.0
+
+
+class RestartTail:
+    """Which ticks the S0/S1 probe log keeps: every zero-command tick, and after one the non-zero ticks from the first
+    (whose pose is the start) up to the tick that has moved ``RESTART_MOVE_M`` or is ``RESTART_TAIL_S`` past it -- the
+    command-start-to-motion time in either lock setting (the S1 batch compares the off arm's with the lock's)."""
+
+    def __init__(self):
+        self.armed, self.t0, self.xy = False, None, None
+
+    def keep(self, t: float, zero: bool, xy) -> bool:
+        if zero:
+            self.armed, self.t0, self.xy = True, None, None
+            return True
+        if not self.armed:
+            return False
+        if self.t0 is None:
+            self.t0, self.xy = float(t), (float(xy[0]), float(xy[1]))
+        if math.hypot(float(xy[0]) - self.xy[0], float(xy[1]) - self.xy[1]) > RESTART_MOVE_M or float(t) - self.t0 > RESTART_TAIL_S:
+            self.armed = False  # this tick is the tail's last line
+        return True
