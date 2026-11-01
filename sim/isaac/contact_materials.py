@@ -101,15 +101,35 @@ def material_record(prim) -> dict:
                if attr.GetName().startswith(("physics:", "physxMaterial:"))}}
 
 
-def unbound_colliders(stage, roots=("/World",)) -> dict:
-    """Colliders with no physics material bound, counted by their first two path components under each root (PhysX
-    gives them its default material). For the record and the T0 inventory."""
+def colliders(stage, root: str = "/World"):
+    """Every collider under ``root``, instance proxies included (a plain traversal skips what sits inside an
+    instanceable reference -- Codex A review P2-1)."""
     from pxr import Usd, UsdPhysics
 
-    out: dict[str, int] = {}
-    for root_path in roots:
-        for prim in Usd.PrimRange(stage.GetPrimAtPath(root_path)):
-            if prim.HasAPI(UsdPhysics.CollisionAPI) and _bound_path(prim) is None:
-                key = "/".join(str(prim.GetPath()).split("/")[:3])
-                out[key] = out.get(key, 0) + 1
-    return out
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(root), Usd.TraverseInstanceProxies()):
+        if prim.HasAPI(UsdPhysics.CollisionAPI):
+            yield prim
+
+
+def material_inventory(stage, root: str = "/World") -> dict:
+    """The colliders under ``root`` by the physics material bound to them (``None``: none bound, PhysX's default
+    material applies), each counted by its first two path components, and every bound material's values -- the T0
+    inventory (plan section 5)."""
+    from pxr import UsdShade
+
+    by_material: dict[str, dict[str, int]] = {}
+    values = {}
+    for prim in colliders(stage, root):
+        material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+        key = str(material.GetPath()) if material else "None"
+        group = "/".join(str(prim.GetPath()).split("/")[:3])
+        by_material.setdefault(key, {})
+        by_material[key][group] = by_material[key].get(group, 0) + 1
+        if material and key not in values:
+            values[key] = material_record(material.GetPrim())
+    return {"colliders": by_material, "materials": values}
+
+
+def unbound_colliders(stage, root: str = "/World") -> dict:
+    """The colliders with no physics material bound, counted by their first two path components."""
+    return material_inventory(stage, root)["colliders"].get("None", {})

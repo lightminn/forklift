@@ -3676,7 +3676,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # Contact materials plan step A: one material per part with the same values; off (absent) as before
         state["contact_materials"] = contact_materials.split_contact_materials(
             stage, ("/World/Pallet",) if session is None else tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets))
-        state["contact_materials"]["unbound_colliders"] = contact_materials.unbound_colliders(stage)
+        # the whole stage by bound material (T0's inventory of this scene, plan section 5)
+        state["contact_materials"]["inventory"] = contact_materials.material_inventory(stage)
     # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
     from scene import plant_readback, tyre_contact_readback
 

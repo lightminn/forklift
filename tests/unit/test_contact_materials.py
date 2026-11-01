@@ -58,12 +58,15 @@ def test_every_part_gets_a_copy_with_the_same_values_and_the_floor_stays_unbound
     record = cm.split_contact_materials(stage)
     assert record["colliders"] == {"tyre": 1, "chassis": 2, "fork": 1, "pallet": 2}
     assert record["kept_on_other_material"] == {}
-    for role, m in record["materials"].items():
+    for m in record["materials"].values():
         assert m["physics:staticFriction"] == pytest.approx(0.8) and m["physics:dynamicFriction"] == pytest.approx(0.7)
         assert m["physics:restitution"] == 0.0 and "physxMaterial:frictionCombineMode" not in m  # average, as before
     assert cm._bound_path(stage.GetPrimAtPath(
         "/World/Forklift/fork_carriage/collisions/left_fork_collision")) == f"{cm.ROOT}/Fork"
     assert cm.unbound_colliders(stage) == {"/World/Environment": 1}
+    inventory = cm.material_inventory(stage)
+    assert inventory["colliders"][f"{cm.ROOT}/Fork"] == {"/World/Forklift": 1}
+    assert inventory["colliders"][f"{cm.ROOT}/Pallet"] == {"/World/Pallet": 2}
 
 
 def test_a_diagnostic_tyre_material_is_left_where_it_is():

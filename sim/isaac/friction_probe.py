@@ -41,8 +41,11 @@ ap.add_argument("--tilt-start-deg", type=float, default=15.0)
 ap.add_argument("--tilt-end-deg", type=float, default=50.0)
 ap.add_argument("--tilt-rate-deg-s", type=float, default=0.5)
 ap.add_argument("--slip-m", type=float, default=0.002)
-ap.add_argument("--slide-speed", type=float, default=1.0)
+ap.add_argument("--slide-speed", type=float, default=1.0,
+                help="at most 1.5 m/s: the plate pairs must stop on their plate (Codex A review P2-4)")
 args = ap.parse_args()
+if not 0.2 <= args.slide_speed <= 1.5:
+    ap.error("--slide-speed must be in [0.2, 1.5] m/s")
 args.output.mkdir(parents=True, exist_ok=False)
 
 from isaacsim import SimulationApp  # noqa: E402 -- before any other Isaac import
@@ -51,19 +54,38 @@ app = SimulationApp({"headless": True, "multi_gpu": False})
 G = 9.81
 DT = 1 / 120
 BOX = (0.20, 0.20, 0.04)
-record = {"settings": str(args.settings), "base_scene": args.base_scene, "boxes": [], "errors": []}
+PLATE_HALF_X = 0.3
+# a box on a plate counts while it is still on the plate (its centre at most this far from where it started)
+ON_PLATE_M = PLATE_HALF_X - BOX[0] / 2
+record = {"settings": str(args.settings), "base_scene": args.base_scene, "boxes": [], "errors": [],
+          "conditions": {k: v for k, v in vars(args).items() if k != "output"} | {"box_m": BOX, "box_kg": 2.0,
+                                                                                 "dt_s": DT, "g": G}}
 
 
 def main():
+    import hashlib
+
     import omni.usd
     import yaml
     from isaacsim.core.api import World
-    from pxr import Gf, PhysxSchema, Sdf, UsdGeom, UsdPhysics, UsdShade
+    from pxr import Gf, PhysxSchema, UsdGeom, UsdPhysics, UsdShade
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import contact_materials
 
     settings = yaml.safe_load(args.settings.read_text())
+    # the probe builds the contact material from the two friction values alone: a settings file whose operating
+    # materials differ (a diagnostic friction or compliance) would be measured as something it is not (Codex A P2-2)
+    diagnostic = [k for k in ("pallet_contact_friction", "contact_stiffness_n_per_m", "tyre_contact_stiffness_n_per_m")
+                  if k in settings]
+    if diagnostic:
+        raise ValueError(f"{', '.join(diagnostic)}: the probe measures the plain contact material only")
+    here = Path(__file__).resolve().parent
+    record["sources_sha256"] = {name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+                                for name in ("friction_probe.py", "contact_materials.py")}
+    record["settings_sha256"] = hashlib.sha256(args.settings.read_bytes()).hexdigest()
+    record["base_scene_sha256"] = hashlib.sha256(Path(args.base_scene).read_bytes()).hexdigest()
+    record["python"] = sys.executable
     if not omni.usd.get_context().open_stage(args.base_scene):
         raise RuntimeError("Cannot open base scene")
     for _ in range(20):
@@ -124,7 +146,7 @@ def main():
         cube.CreateSizeAttr(1.0)
         xf = UsdGeom.Xformable(cube)
         xf.AddTranslateOp().Set(Gf.Vec3d(*xyz))
-        xf.AddScaleOp().Set(Gf.Vec3f(0.6, 0.4, 0.02))
+        xf.AddScaleOp().Set(Gf.Vec3f(2 * PLATE_HALF_X, 0.4, 0.02))
         prim = cube.GetPrim()
         body = UsdPhysics.RigidBodyAPI.Apply(prim)
         body.CreateKinematicEnabledAttr(True)
@@ -152,16 +174,21 @@ def main():
         boxes.append({"label": label, "box_material": box_mat, "support_material": plate_mat or "floor",
                       "prim": box(f"/World/Probe/Box_{i}", (0.0, y, z), mats[box_mat]), "start": (0.0, y, z),
                       "support": support})
-    record["unbound_colliders_outside_probe"] = {
-        k: v for k, v in contact_materials.unbound_colliders(stage).items() if not k.startswith("/World/Probe")}
+    inventory = contact_materials.material_inventory(stage)
+    record["inventory_outside_probe"] = {
+        "colliders": {m: {g: n for g, n in groups.items() if not g.startswith("/World/Probe")}
+                      for m, groups in inventory["colliders"].items()},
+        "materials": inventory["materials"]}
     # the probe's region must be free: any other collider whose bounds reach into it is recorded (and the run is then
     # not to be read)
     lo, hi = Gf.Vec3d(-0.4, -1.8, -0.05), Gf.Vec3d(0.6, -1.5 + 0.35 * len(cases) + 0.2, 1.8)
-    cache = UsdGeom.BBoxCache(0, [UsdGeom.Tokens.default_], useExtentsHint=True)
+    # collision geometry is often authored with the guide or proxy purpose (Codex A P2-1): every purpose counts
+    cache = UsdGeom.BBoxCache(0, [UsdGeom.Tokens.default_, UsdGeom.Tokens.proxy, UsdGeom.Tokens.guide,
+                                  UsdGeom.Tokens.render], useExtentsHint=True)
     intruders = []
-    for prim in stage.Traverse():
+    for prim in contact_materials.colliders(stage):
         path = str(prim.GetPath())
-        if path.startswith("/World/Probe") or not prim.HasAPI(UsdPhysics.CollisionAPI):
+        if path.startswith("/World/Probe"):
             continue
         r = cache.ComputeWorldBound(prim).ComputeAlignedRange()
         if r.IsEmpty() or "GroundPlane" in path:
@@ -187,7 +214,7 @@ def main():
 
     # each box settled where it was put (on its own support, not on something else)
     record["settled_offsets_m"] = {b["label"]: [round(float(v), 4) for v in p - np.array(b["start"])]
-                                   for b, p in zip(boxes, positions())}
+                                   for b, p in zip(boxes, positions(), strict=True)}
 
     # static: tilt gravity about y (pull along +x)
     start = positions()
@@ -198,13 +225,13 @@ def main():
         scene_api.CreateGravityDirectionAttr().Set(Gf.Vec3f(math.sin(a), 0.0, -math.cos(a)))
         world.step(render=False)
         now = positions()
-        for i, b in enumerate(boxes):
+        for i in range(len(boxes)):
             if slipped[i] is None and (now[i][0] - start[i][0]) > args.slip_m:
                 slipped[i] = angle
         angle += args.tilt_rate_deg_s * DT
     # dynamic: vertical gravity, every box back at rest at its start, then a push along +x
     scene_api.CreateGravityDirectionAttr().Set(Gf.Vec3f(0.0, 0.0, -1.0))
-    for h, b in zip(handles, boxes):
+    for h, b in zip(handles, boxes, strict=True):
         h.set_world_pose(np.array(b["start"]), np.array([1.0, 0.0, 0.0, 0.0]))
         h.set_linear_velocity(np.zeros(3))
         h.set_angular_velocity(np.zeros(3))
@@ -213,12 +240,17 @@ def main():
     for h in handles:
         h.set_linear_velocity(np.array([args.slide_speed, 0.0, 0.0]))
     speeds = [[] for _ in boxes]
+    starts = positions()
     for k in range(240):
         world.step(render=False)
+        now = positions()
         for i, h in enumerate(handles):
-            speeds[i].append((k * DT, float(h.get_linear_velocity()[0])))
+            speeds[i].append((k * DT, float(h.get_linear_velocity()[0]), float(now[i][0] - starts[i][0])))
     for i, b in enumerate(boxes):
-        pts = np.array([(t, v) for t, v in speeds[i] if v > args.slide_speed / 5])
+        on_floor = b["support_material"] == "floor"
+        # the fit keeps a plate box's samples while it is still on its plate, and every box's while it slides
+        pts = np.array([(t, v) for t, v, dx in speeds[i]
+                        if v > args.slide_speed / 5 and (on_floor or dx < ON_PLATE_M)])
         mu_dyn = None
         if len(pts) >= 6:
             slope = np.polyfit(pts[1:, 0], pts[1:, 1], 1)[0]
@@ -226,7 +258,8 @@ def main():
         mu_st = None if slipped[i] is None else math.tan(math.radians(slipped[i]))
         record["boxes"].append({"label": b["label"], "box_material": b["box_material"],
                                 "support": b["support_material"], "slip_angle_deg": slipped[i],
-                                "mu_static": mu_st, "mu_dynamic": mu_dyn, "fit_points": int(len(pts))})
+                                "mu_static": mu_st, "mu_dynamic": mu_dyn, "fit_points": int(len(pts)),
+                                "slide_series": [[round(t, 4), round(v, 5), round(dx, 5)] for t, v, dx in speeds[i]]})
     record["materials"] = {k: (None if m is None else contact_materials.material_record(m.GetPrim()))
                            for k, m in mats.items()}
 
