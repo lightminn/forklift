@@ -6094,6 +6094,13 @@ class MissionCore:
         # resume) starts the count again, and the transport's ms.cusp_stop_ticks is left alone.
         key = (ms.phase, id(trackers[ms.phase]))
         wait = getattr(self, "_return_cusp_wait", None)
+        if wait is None or wait["key"] != key:
+            # Where the rule first acted on this failure (the batch tells a run it touched from one it did not:
+            # docs/plans/2026-11-01-return-cusp-replan-batch.md 5)
+            state.setdefault("return_cusp_waits", []).append(
+                {"time_s": t, "loop_step": step, "rear_pose": np.asarray(rear, dtype=float).tolist(),
+                 "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad,
+                 "replans_before": len(state.get("return_cusp_replans", ()))})
         ticks = (wait["ticks"] if wait is not None and wait["key"] == key else 0) + 1 if stopped else 0
         self._return_cusp_wait = {"key": key, "ticks": ticks}
         if ticks < options.cusp_stop_needed:

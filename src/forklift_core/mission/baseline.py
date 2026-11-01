@@ -27,6 +27,7 @@ MISSION_KEYS = {
         "observe_start_backoffs",  # plan 2026-10-26-observe-start-backoff B6
         "return_start_backoffs",  # plan 2026-10-27-return-start-withdraw-extension R6
         "return_cusp_replans",  # plan 2026-10-31-return-cusp-replan D1: the return's own budget, per mission
+        "return_cusp_waits",  # each qualifying return cusp failure the rule acted on (the batch's "touched" runs)
         "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
         "adoption_zone",  # plan 2026-10-28-adoption-zone-check: each adoption's check, the refusal

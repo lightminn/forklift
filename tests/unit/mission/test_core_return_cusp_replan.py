@@ -53,6 +53,8 @@ def test_a_return_cusp_miss_brakes_at_zero_until_it_stands_then_replans_the_retu
         out = w.tick(MISS)
         assert out.tracking.status == "braking" and out.tracking.speed_mps == 0.0  # zero, not the failed 0.0095
     assert "plan_return_leg" not in w.names() and "return_cusp_replans" not in w.state
+    wait, = w.state["return_cusp_waits"]  # one failure acted on: recorded once, at its first tick
+    assert wait["replans_before"] == 0 and wait["rear_pose"] == [1.0, 2.0, 0.0]
     out = w.tick(MISS)
     (_, args, kwargs), = [c for c in w.calls if c[0] == "plan_return_leg"]
     assert args[0] == ("world", "SC_R") and (args[1].x_m, args[1].y_m) == (1.0, 2.0) and args[2] == "HOME"
@@ -95,7 +97,7 @@ def test_the_budget_is_the_returns_own_and_spent_it_ends_as_before():
 
 def test_off_it_is_as_before_no_call_no_key():
     w = world(budget=0)
-    assert w.tick(MISS).tracking == MISS and "return_cusp_replans" not in w.state
+    assert w.tick(MISS).tracking == MISS and "return_cusp_replans" not in w.state and "return_cusp_waits" not in w.state
     assert not hasattr(w.core, "_return_cusp_wait") and w.ms.cusp_stop_ticks == 0  # off: nothing written
     w = co.World("return_home")  # options without the attribute (a record from before the option)
     assert w.tick(MISS).tracking == MISS and "return_cusp_replans" not in w.state
@@ -109,6 +111,7 @@ def test_only_a_heading_failure_at_a_cusp_on_the_path_is_replanned(miss):
     w = world(plans=[co.plan()])
     stand(w, 13, miss)
     assert "plan_return_leg" not in w.names() and "return_cusp_replans" not in w.state
+    assert "return_cusp_waits" not in w.state
 
 
 def test_a_held_slam_is_released_and_the_grid_reprojected_before_the_plan_reads_the_pose():
@@ -187,7 +190,7 @@ def test_only_the_return_cusp_replan_writes_its_budget():
     from forklift_core.mission import core
 
     source = inspect.getsource(core)
-    assert source.count('"return_cusp_replans"') == 3  # the budget read, the append, and the option read
+    assert source.count('"return_cusp_replans"') == 4  # the option read, the budget read, the wait's count, the append
     assert source.count('state.setdefault("return_cusp_replans", []).append(record)') == 1
 
 
@@ -200,6 +203,7 @@ def test_a_path_replaced_or_a_move_while_waiting_starts_the_stand_count_again():
     w.core.trackers["return_home"] = co.HoldTracker(w.calls)  # an obstacle replan / resume installed another path
     w.tick(MISS)
     assert w.core._return_cusp_wait["ticks"] == 1 and "plan_return_leg" not in w.names()
+    assert len(w.state["return_cusp_waits"]) == 2  # a new tracker's failure is another wait
     stand(w, 5)
     w.tick(co.Tracking(status="tracking", speed_mps=0.2))  # following again: no failure to wait on
     assert w.core._return_cusp_wait is None
@@ -213,7 +217,7 @@ def test_the_budget_and_its_records_are_the_missions():
     mission key, absent at capture, absent after each restore."""
     from forklift_core.mission.baseline import MISSION_KEYS
 
-    assert "return_cusp_replans" in MISSION_KEYS["state"]
+    assert "return_cusp_replans" in MISSION_KEYS["state"] and "return_cusp_waits" in MISSION_KEYS["state"]
 
 
 def test_a_restored_baseline_gives_the_next_mission_its_whole_budget():
