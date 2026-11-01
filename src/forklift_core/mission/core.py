@@ -6123,10 +6123,11 @@ class MissionCore:
         start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
         record["plan_start_pose"] = [start.x_m, start.y_m, start.yaw_rad]  # after a release, not the failure's pose
         scenario_ = options.scenario if slam is None else slam.get("return_scenario", options.scenario)
+        grid_world, grid_kwargs, plan_return_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_return_leg
         replan_start = hooks.wall()
-        replanned = hooks.plan_return_leg(
-            hooks.grid_world(scenario_), start, options.return_to_pose, options.planner_config,
-            geometry=self.geometry, travel_config=options.travel_config, **hooks.grid_kwargs(None),
+        replanned = plan_return_leg(
+            grid_world(scenario_), start, options.return_to_pose, options.planner_config,
+            geometry=self.geometry, travel_config=options.travel_config, **grid_kwargs(None),
         )
         wall_s = hooks.wall() - replan_start
         state["planning_wall_s"] = (state.get("planning_wall_s") or 0.0) + wall_s

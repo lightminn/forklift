@@ -572,7 +572,7 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     # Same tracker configuration as the leg it replaces.
     assert "trackers[ms.phase].config" in branch.split("RearAxlePathTracker(")[1]
     source = SCRIPT.read_text()
-    assert "max_cusp_replans = 2" in source
+    assert 'max_cusp_replans = int(getattr(args, "transport_cusp_replans", 2))' in source  # D2: 2 unless given
     assert "cusp_stop_ticks, cusp_stop_needed = 0, 12" in source
     # A failure the branch does not clear still aborts as before.
     after = source.index("recover_ = core.cusp_and_observe_recovery(")
@@ -925,8 +925,11 @@ def test_every_path_replacement_restarts_the_no_progress_baseline():
     # ... and the C3 second near capture's installed approach (plan 2026-10-27 insertion lateral drift T2).
     second = replan.index("    def second_near_capture(self, ")
     assert 'obstacle.setdefault("progress", {}).clear()' in replan[second : replan.index("\n    def ", second + 10)]
+    # ... and the return cusp replan's installed return (plan 2026-10-31-return-cusp-replan D1).
+    cusp = replan.index("    def _return_cusp_replan(self, ")
+    assert 'obstacle.setdefault("progress", {}).clear()' in replan[cusp : replan.index("\n    def ", cusp + 10)]
     assert source.count('obstacle.setdefault("progress", {}).clear()') + replan.count(
-        'obstacle.setdefault("progress", {}).clear()') == 9  # + the re-observation's, before the near leg
+        'obstacle.setdefault("progress", {}).clear()') == 10  # + the re-observation's, before the near leg
 
 
 def test_d7c_reapproach_is_under_the_permission_and_kept_by_obstacle_replans():
