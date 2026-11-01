@@ -145,6 +145,10 @@ def run(app, args, state):
     state["tracking_settings_synthetic"] = tracking_settings
     pallet_geometry_path = root / "config/pallet_geometry_epal6.yaml"
     pallet_geometry = load_pallet_geometry(pallet_geometry_path)
+    from pallet_mass import resolve_pallet_mass
+
+    # plan 2026-11-01-pallet-mass: a table by shape is read for this runner's EPAL 6 before the scene uses the number
+    settings, state["pallet_mass"] = resolve_pallet_mass(settings, pallet_geometry.geometry_version)
     # Plan D8a: the drive geometry, fork tip and target front x come from the chassis
     # model and the insertion rule, not constants (same values on the provisional model).
     from insertion_geometry import read_fork_blades_m, tracking_frame

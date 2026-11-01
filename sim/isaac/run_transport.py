@@ -10223,6 +10223,14 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
+    from pallet_mass import resolve_pallet_mass
+
+    # plan 2026-11-01-pallet-mass: a table by shape is read for this run's pallet (its geometry's version), and every
+    # reader after this sees the number
+    try:
+        settings, args.pallet_mass_record = resolve_pallet_mass(settings, args.pallet_geometry_loaded.geometry_version)
+    except ValueError as exc:
+        require(False, f"--settings: {exc}")
     require(
         settings["physics_hz"] == 120 or (args.steering_probe and settings["physics_hz"] in (120, 240)),
         "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
@@ -10340,6 +10348,7 @@ def main() -> None:
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
         "settings_synthetic": settings,
+        "pallet_mass": args.pallet_mass_record,
         "scene_requirements": args.scene_requirements_report,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),

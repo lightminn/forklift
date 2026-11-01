@@ -73,3 +73,14 @@ def test_the_check_flag_is_never_recorded():
     assert args.check_args is False and "check_args" not in run_transport.recorded_arguments(args)
     args.check_args = True
     assert "check_args" not in run_transport.recorded_arguments(args)
+
+
+def test_a_settings_table_without_the_runs_pallet_shape_is_refused(tmp_path):
+    # plan 2026-11-01-pallet-mass: the table is read by the geometry's version; a shape it lacks never reaches Isaac
+    settings = tmp_path / "settings.yaml"
+    text = (ROOT / "config/isaac_transport_measured.yaml").read_text()
+    settings.write_text(text.replace("pallet_mass_kg: {epal6: 4.93, ", "pallet_mass_kg: {"))
+    argv = [a if a != str(ROOT / "config/isaac_transport_measured.yaml") else str(settings)
+            for a in _base(tmp_path / "run")]
+    p = _check(*argv)
+    assert p.returncode == 2 and "no entry for the pallet shape 'epal6'" in p.stderr
