@@ -125,14 +125,22 @@ def moved_slot_props(prepared_destination, world) -> list:
     return props
 
 
+def boxed_backoff_kwargs(options) -> dict:
+    """F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D1): the boxed-start backoff for the same calls as the
+    return-start backoff; none unless on, so the calls are as before (a record from before the option: off)."""
+    return {"return_start_backoff_boxed": True} if getattr(options, "return_start_backoff_boxed", False) else {}
+
+
 def note_return_backoff(state: dict, where: str, record: dict | None, adopted: bool) -> None:
     """docs/plans/2026-10-27-return-start-withdraw-extension.md R6: a return-start backoff attempt a plan came back
     with -- taken or refused (no advice, clipped, no return from its end), installed or not."""
     if record is None:
         return
-    state.setdefault("return_start_backoffs", []).append(
-        {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
-         "status": record.get("status"), "adopted": bool(adopted)})
+    entry = {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
+             "status": record.get("status"), "adopted": bool(adopted)}
+    # F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D5): its trigger and check, only when it made them
+    entry.update({k: record[k] for k in ("trigger", "check") if k in record})
+    state.setdefault("return_start_backoffs", []).append(entry)
 
 
 def failed_plan_record(result) -> dict:
@@ -7334,7 +7342,7 @@ class MissionCore:
         for the core's plan_transport calls (sync and worker), as _exit_prefix_kwargs gives the exit prefix; none when
         off, so the calls are as before."""
         limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
-        return {"return_start_backoff_m": limit} if limit > 0.0 else {}
+        return {"return_start_backoff_m": limit, **boxed_backoff_kwargs(self.options)} if limit > 0.0 else {}
 
     def _return_backoff_kwargs(self, world) -> dict:
         """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 2-3 / R5: the return-start backoff for a return
@@ -7348,7 +7356,8 @@ class MissionCore:
             return {}
         return {"return_start_backoff_m": limit,
                 "backoff_slot_props": [p_.rectangle for p_ in moved_slot_props(self.options.scenario.destination,
-                                                                                world)]}
+                                                                                world)],
+                **boxed_backoff_kwargs(self.options)}
 
     def _exit_prefix_kwargs(self) -> dict:
         """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;

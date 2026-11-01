@@ -643,13 +643,15 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--return-start-backoff",
-        choices=("on", "off"),
+        choices=("on", "boxed", "off"),
         default="off",
         help="docs/plans/2026-10-27-return-start-withdraw-extension.md: a return planned from the withdrawal end whose "
         "start is invalid (the mission plan's return_home, the docking release's replan, the first live return) backs "
         "straight off first -- the first distance the return's start check accepts while the straight keeps the "
-        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. Off: as every "
-        "earlier run.",
+        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. boxed "
+        "(docs/plans/2026-11-02-return-start-backoff-boxed.md, F2''): also a start every search attempt leaves after its "
+        "root, the distances checked for a first step of the search itself, and a failed return from the end keeps the "
+        "original result. Off: as every earlier run.",
     )
     parser.add_argument(
         "--start-band-m",
@@ -6452,6 +6454,8 @@ def drive(S, isaac) -> None:
                                 # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
                                 # before the option
                                 return_start_backoff_m=return_start_backoff_m_of(args),
+                                # docs/plans/2026-11-02-return-start-backoff-boxed.md D1: off before the option
+                                return_start_backoff_boxed=getattr(args, "return_start_backoff", "off") == "boxed",
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -10208,13 +10212,17 @@ def return_start_backoff_m_of(args) -> float:
     record from before the option)."""
     from forklift_core.planning.pallet_mission import RETURN_START_BACKOFF_CAP_M
 
-    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") == "on" else 0.0
+    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") in ("on", "boxed") else 0.0
 
 
 def return_start_backoff_kw(args) -> dict:
     """The mission planners' keyword for the return-start backoff: none when off, so their calls are as before."""
     m = return_start_backoff_m_of(args)
-    return {"return_start_backoff_m": m} if m > 0.0 else {}
+    if m <= 0.0:
+        return {}
+    # F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D1): the key only when boxed, so on is as before
+    boxed = getattr(args, "return_start_backoff", "off") == "boxed"
+    return {"return_start_backoff_m": m, **({"return_start_backoff_boxed": True} if boxed else {})}
 
 
 def validate_before_isaac(args: argparse.Namespace) -> dict:

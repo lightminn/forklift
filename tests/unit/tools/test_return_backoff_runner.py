@@ -39,3 +39,15 @@ def test_the_first_mission_plan_records_its_attempts():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
     first = source[source.index('        state.setdefault("planning_traces", []).append(planning_trace)\n'):][:600]
     assert 'note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)' in first
+
+
+def test_boxed_is_on_plus_the_boxed_key():
+    # docs/plans/2026-11-02-return-start-backoff-boxed.md D1: the same cap, the key only when boxed
+    import run_transport
+
+    boxed = _runner_args(["--return-start-backoff", "boxed"])
+    assert run_transport.return_start_backoff_m_of(boxed) == RETURN_START_BACKOFF_CAP_M
+    assert run_transport.return_start_backoff_kw(boxed) == {"return_start_backoff_m": RETURN_START_BACKOFF_CAP_M,
+                                                            "return_start_backoff_boxed": True}
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert 'return_start_backoff_boxed=getattr(args, "return_start_backoff", "off") == "boxed",' in source

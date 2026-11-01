@@ -157,3 +157,44 @@ def test_the_records_and_the_runner_argument_are_registered():
     from near_tracking import POST_MEASUREMENT_ARGUMENTS
 
     assert POST_MEASUREMENT_ARGUMENTS["return_start_backoff"] == "off"
+
+
+# F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D1, D5): the boxed-start key only when on, for the same
+# calls; its record fields kept in the state
+
+def test_the_boxed_key_goes_only_where_the_backoff_goes_and_only_when_on():
+    sc = recorded()
+    cap = pm.RETURN_START_BACKOFF_CAP_M
+    on = SimpleNamespace(options=SimpleNamespace(return_start_backoff_m=cap, scenario=sc))
+    boxed = SimpleNamespace(options=SimpleNamespace(return_start_backoff_m=cap, return_start_backoff_boxed=True,
+                                                    scenario=sc))
+    assert "return_start_backoff_boxed" not in MissionCore._return_backoff_kwargs(on, sc)
+    assert "return_start_backoff_boxed" not in MissionCore._mission_backoff_kwargs(on)
+    assert MissionCore._return_backoff_kwargs(boxed, sc)["return_start_backoff_boxed"] is True
+    assert MissionCore._mission_backoff_kwargs(boxed) == {"return_start_backoff_m": cap,
+                                                          "return_start_backoff_boxed": True}
+    off = SimpleNamespace(options=SimpleNamespace(return_start_backoff_m=0.0, return_start_backoff_boxed=True,
+                                                  scenario=sc))
+    assert MissionCore._mission_backoff_kwargs(off) == {} and MissionCore._return_backoff_kwargs(off, sc) == {}
+
+
+def test_the_state_keeps_the_boxed_records_trigger_and_check():
+    state = {}
+    note_return_backoff(state, "release_replan", {"status": "prefix", "advice_m": 0.05, "length_m": 0.08,
+                                                   "trigger": "boxed", "check": "first_step"}, True)
+    note_return_backoff(state, "release_replan", {"status": "prefix", "advice_m": 0.17, "length_m": 0.2}, True)
+    assert state["return_start_backoffs"][0]["trigger"] == "boxed"
+    assert state["return_start_backoffs"][0]["check"] == "first_step"
+    assert set(state["return_start_backoffs"][1]) == {"where", "advice_m", "length_m", "status", "adopted"}
+
+
+def test_the_worker_carries_the_boxed_key():
+    payload = _leg_payload(pm.RETURN_START_BACKOFF_CAP_M)
+    for k in ("kwargs", "tight_kwargs"):
+        payload[k]["return_start_backoff_boxed"] = True
+    answer = _run("leg", payload)
+    assert answer["result"].success and answer["result"].start_backoff["check"] == "first_step"
+    loaded = _loaded_payload(pm.RETURN_START_BACKOFF_CAP_M)
+    loaded["kwargs"]["return_start_backoff_boxed"] = True
+    taken = _run("loaded_delivery", loaded)
+    assert taken["result"].success and taken["return_backoffs"][0]["check"] == "first_step"
