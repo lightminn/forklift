@@ -1,0 +1,1335 @@
+{
+ "source": "ws1 test_runs/riibotics/rc_95e61a74 boundary records, snapshot rc_95e61a74",
+ "cases": {
+  "rc_G_aisle_rack_s1": {
+   "recorded": "no_path",
+   "scenario": {
+    "seed": 0,
+    "start_rear": {
+     "x_m": 2.809285714285714,
+     "y_m": 0.0,
+     "yaw_rad": -1.5707963267948966
+    },
+    "pickup": {
+     "x_m": 4.13,
+     "y_m": -3.974285714285714,
+     "yaw_rad": 0.03490658503988659
+    },
+    "destination": {
+     "x_m": 4.115050975125719,
+     "y_m": -10.879553764744578,
+     "yaw_rad": -0.007119372183413591
+    },
+    "props": [
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_0",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -2.5442857142857145,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_2",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -5.304285714285714,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_3",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -6.684285714285714,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_4",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -8.064285714285713,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_5",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -9.444285714285714,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 0.6921428571428567,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": 0.8539285714285714,
+       "length_m": 0.6921428571428567,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -2.1514285714285712,
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -5.6971428571428575,
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571422,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -9.242857142857144,
+       "length_m": 1.7728571428571422,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -12.78857142857143,
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -16.334285714285716,
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 0.11071428571428754,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -19.048928571428572,
+       "length_m": 0.11071428571428754,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -1.8542857142857145,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -1.8542857142857145,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -3.2342857142857144,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -3.2342857142857144,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -4.614285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -4.614285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -5.994285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -5.994285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -7.374285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -7.374285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -8.754285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -8.754285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -10.134285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -10.134285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -11.514285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -11.514285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -12.894285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -12.894285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -14.274285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -14.274285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -15.654285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -15.654285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -17.034285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -17.034285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -18.414285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -18.414285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     }
+    ],
+    "bounds": {
+     "x_min_m": -0.7885714285714287,
+     "x_max_m": 4.6,
+     "y_min_m": -19.104285714285716,
+     "y_max_m": 1.1999999999999997
+    }
+   },
+   "start": {
+    "x_m": 2.3127705125457214,
+    "y_m": -10.866440265762245,
+    "yaw_rad": -0.007588746980523549
+   },
+   "return_to": {
+    "x_m": 2.809285714285714,
+    "y_m": 0.0,
+    "yaw_rad": -1.5707963267948966
+   },
+   "config": {
+    "curvature_limit_inv_m": 0.29,
+    "xy_resolution_m": 0.2,
+    "yaw_resolution_rad": 0.17453292519943295,
+    "primitive_length_m": 0.25,
+    "collision_step_m": 0.06,
+    "max_expansions": 30000,
+    "analytic_expansion_interval": 8,
+    "heuristic_weight": 1.8,
+    "reverse_penalty": 1.3,
+    "gear_change_penalty_m": 1.0,
+    "steering_penalty": 0.15,
+    "steering_change_penalty_m": 0.15,
+    "clearance_m": 0.1,
+    "obstacle_heuristic_resolution_m": null,
+    "goal_connection": "reeds_shepp",
+    "rs_min_segment_m": 0.1,
+    "shot_cap_m": 4.0,
+    "shot_cap_patience": 2000,
+    "turn_cycles": false,
+    "turn_cycle_m": 0.5
+   },
+   "travel_config": null,
+   "geometry": {
+    "unloaded_footprint": {
+     "front_m": 1.29,
+     "rear_m": 0.17,
+     "half_width_m": 0.36
+    },
+    "pallet_depth_m": 0.6,
+    "pallet_width_m": 0.8,
+    "axle_to_fork_tip_m": 1.29,
+    "approach_gap_m": 0.1,
+    "alignment_straight_m": 2.1,
+    "delivery_straight_m": 1.5,
+    "extraction_m": 0.65,
+    "withdrawal_m": 0.55,
+    "spawn_clearance_m": 0.12,
+    "carriage_limit_m": 0.346,
+    "insertion_reserve_m": 0.016,
+    "lidar_keepout_m": 0.15,
+    "lidar_plane_m": 1.05,
+    "inserted_offset_m": 1.2600000000000002,
+    "approach_offset_m": 1.6900000000000002,
+    "prealign_offset_m": 3.79,
+    "predelivery_offset_m": 2.7600000000000002,
+    "loaded_footprint": {
+     "front_m": 1.5600000000000003,
+     "rear_m": 0.17,
+     "half_width_m": 0.4
+    }
+   },
+   "kwargs": [
+    "geometry",
+    "travel_config"
+   ]
+  },
+  "rc_GN_aisle_rack_s10": {
+   "recorded": "invalid_start",
+   "scenario": {
+    "seed": 0,
+    "start_rear": {
+     "x_m": 2.809285714285714,
+     "y_m": 0.0,
+     "yaw_rad": -1.5707963267948966
+    },
+    "pickup": {
+     "x_m": 4.13,
+     "y_m": -3.974285714285714,
+     "yaw_rad": 0.03490658503988659
+    },
+    "destination": {
+     "x_m": 4.113772795804513,
+     "y_m": -10.901495231830658,
+     "yaw_rad": -0.0043147878145306726
+    },
+    "props": [
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_0",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -2.5442857142857145,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_2",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -5.304285714285714,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_3",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -6.684285714285714,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_4",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -8.064285714285713,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_pallet_5",
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 4.1,
+       "y_m": -9.444285714285714,
+       "length_m": 0.6,
+       "width_m": 0.8,
+       "yaw_rad": 0.0
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 0.6921428571428567,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": 0.8539285714285714,
+       "length_m": 0.6921428571428567,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -2.1514285714285712,
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -5.6971428571428575,
+       "length_m": 1.7728571428571431,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571422,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -9.242857142857144,
+       "length_m": 1.7728571428571422,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -12.78857142857143,
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -16.334285714285716,
+       "length_m": 1.7728571428571414,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:block",
+       "length_m": 0.11071428571428754,
+       "width_m": 2.607142857142857,
+       "height_m": 0.144
+      },
+      "rectangle": {
+       "x_m": 0.5149999999999997,
+       "y_m": -19.048928571428572,
+       "length_m": 0.11071428571428754,
+       "width_m": 2.607142857142857,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -1.8542857142857145,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -1.8542857142857145,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -3.2342857142857144,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -3.2342857142857144,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -4.614285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -4.614285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -5.994285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -5.994285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -7.374285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -7.374285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -8.754285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -8.754285714285714,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -10.134285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -10.134285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -11.514285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -11.514285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -12.894285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -12.894285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -14.274285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -14.274285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -15.654285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -15.654285714285713,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -17.034285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -17.034285714285712,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 3.8259999999999996,
+       "y_m": -18.414285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     },
+     {
+      "asset": {
+       "uri": "riibotics:rack_upright",
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "height_m": 1.5
+      },
+      "rectangle": {
+       "x_m": 4.574,
+       "y_m": -18.414285714285715,
+       "length_m": 0.052,
+       "width_m": 0.052,
+       "yaw_rad": -1.5707963267948966
+      }
+     }
+    ],
+    "bounds": {
+     "x_min_m": -0.7885714285714287,
+     "x_max_m": 4.6,
+     "y_min_m": -19.104285714285716,
+     "y_max_m": 1.1999999999999997
+    }
+   },
+   "start": {
+    "x_m": 2.31156118855593,
+    "y_m": -10.893439080632307,
+    "yaw_rad": -0.00471473062436388
+   },
+   "return_to": {
+    "x_m": 2.809285714285714,
+    "y_m": 0.0,
+    "yaw_rad": -1.5707963267948966
+   },
+   "config": {
+    "curvature_limit_inv_m": 0.29,
+    "xy_resolution_m": 0.2,
+    "yaw_resolution_rad": 0.17453292519943295,
+    "primitive_length_m": 0.25,
+    "collision_step_m": 0.06,
+    "max_expansions": 30000,
+    "analytic_expansion_interval": 8,
+    "heuristic_weight": 1.8,
+    "reverse_penalty": 1.3,
+    "gear_change_penalty_m": 1.0,
+    "steering_penalty": 0.15,
+    "steering_change_penalty_m": 0.15,
+    "clearance_m": 0.1,
+    "obstacle_heuristic_resolution_m": null,
+    "goal_connection": "reeds_shepp",
+    "rs_min_segment_m": 0.1,
+    "shot_cap_m": 4.0,
+    "shot_cap_patience": 2000,
+    "turn_cycles": false,
+    "turn_cycle_m": 0.5
+   },
+   "travel_config": null,
+   "geometry": {
+    "unloaded_footprint": {
+     "front_m": 1.29,
+     "rear_m": 0.17,
+     "half_width_m": 0.36
+    },
+    "pallet_depth_m": 0.6,
+    "pallet_width_m": 0.8,
+    "axle_to_fork_tip_m": 1.29,
+    "approach_gap_m": 0.1,
+    "alignment_straight_m": 2.1,
+    "delivery_straight_m": 1.5,
+    "extraction_m": 0.65,
+    "withdrawal_m": 0.55,
+    "spawn_clearance_m": 0.12,
+    "carriage_limit_m": 0.346,
+    "insertion_reserve_m": 0.016,
+    "lidar_keepout_m": 0.15,
+    "lidar_plane_m": 1.05,
+    "inserted_offset_m": 1.2600000000000002,
+    "approach_offset_m": 1.6900000000000002,
+    "prealign_offset_m": 3.79,
+    "predelivery_offset_m": 2.7600000000000002,
+    "loaded_footprint": {
+     "front_m": 1.5600000000000003,
+     "rear_m": 0.17,
+     "half_width_m": 0.4
+    }
+   },
+   "kwargs": [
+    "geometry",
+    "travel_config"
+   ]
+  }
+ }
+}
