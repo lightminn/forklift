@@ -6077,21 +6077,29 @@ class MissionCore:
         Returns ``tracking`` and ``rear``."""
         ms, state, obstacle, slam, hooks, options = self.ms, self.state, self.obstacle, self.slam, self.hooks, self.options
         budget = int(getattr(options, "return_cusp_replans", 0) or 0)
-        if not (budget > 0 and ms.phase == "return_home" and tracking.status == "failed"
+        if budget <= 0:
+            return tracking, rear  # off: nothing read or written, every earlier run
+        trackers = self.trackers
+        if not (ms.phase == "return_home" and tracking.status == "failed"
                 and tracking.failure == "endpoint_heading" and tracking.at_cusp and not tracking.off_path
                 and len(state.get("return_cusp_replans", ())) < budget):
+            self._return_cusp_wait = None  # a wait belongs to one failure on one tracker (Codex impl review P2-2)
             return tracking, rear
-        trackers = self.trackers
         if slam is not None:
             stopped = bool(slam["stop_now"])
         else:  # the commanded speed is forced to zero below; the stand is the true one
             stopped = (float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps
                        and abs(float(hooks.truth_yaw_rate())) <= options.cusp_stop_yaw_rate_radps)
-        ms.cusp_stop_ticks = ms.cusp_stop_ticks + 1 if stopped else 0
-        if ms.cusp_stop_ticks < options.cusp_stop_needed:
+        # Its own stand count, keyed to this phase's tracker: a path replaced while it waited (an obstacle replan, a
+        # resume) starts the count again, and the transport's ms.cusp_stop_ticks is left alone.
+        key = (ms.phase, id(trackers[ms.phase]))
+        wait = getattr(self, "_return_cusp_wait", None)
+        ticks = (wait["ticks"] if wait is not None and wait["key"] == key else 0) + 1 if stopped else 0
+        self._return_cusp_wait = {"key": key, "ticks": ticks}
+        if ticks < options.cusp_stop_needed:
             # Zero, not the failed tracker's last command (BF s6 left 0.0095 m/s, Codex plan review 2).
             return replace(tracking, status="braking", speed_mps=0.0), rear
-        ms.cusp_stop_ticks = 0
+        self._return_cusp_wait = None
         record = {"time_s": t, "loop_step": step, "rear_pose": np.asarray(rear, dtype=float).tolist(),
                   "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad,
                   "released": None}
@@ -6113,6 +6121,7 @@ class MissionCore:
             rear = np.asarray(rear_now, dtype=float)
             hooks.set_rear(rear)  # the runner's closures (grid_kwargs) read its rear
         start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+        record["plan_start_pose"] = [start.x_m, start.y_m, start.yaw_rad]  # after a release, not the failure's pose
         scenario_ = options.scenario if slam is None else slam.get("return_scenario", options.scenario)
         replan_start = hooks.wall()
         replanned = hooks.plan_return_leg(

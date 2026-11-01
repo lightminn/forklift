@@ -26,6 +26,7 @@ MISSION_KEYS = {
         "observe_replans", "observe_replan_leg", "observe_loose_arrival", "observe_loose_arrivals",
         "observe_start_backoffs",  # plan 2026-10-26-observe-start-backoff B6
         "return_start_backoffs",  # plan 2026-10-27-return-start-withdraw-extension R6
+        "return_cusp_replans",  # plan 2026-10-31-return-cusp-replan D1: the return's own budget, per mission
         "cusp_heading_holds",
         "perception", "near_capture", "near_capture_history", "near_capture_refused",
         "adoption_zone",  # plan 2026-10-28-adoption-zone-check: each adoption's check, the refusal
