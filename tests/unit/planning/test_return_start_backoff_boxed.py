@@ -186,6 +186,16 @@ def test_a_blocked_rear_is_no_advice():
     assert (plan.status, plan.search_attempts) == (direct.status, direct.search_attempts)
 
 
+def test_a_first_step_run_cut_at_its_first_distance_is_clipped():
+    # a slot prop behind, its face at x -0.326: the straight keeps the clearance to 0.05 m back (the advice) only
+    behind = Rectangle(-0.326 - 0.15, 0.0, 0.3, 1.2, 0.0)
+    direct = search(START, CORNER)
+    plan = backed_off(CORNER, boxed=True, slot_props=[behind], direct=direct)
+    rec = plan.start_backoff
+    assert (rec["status"], rec["advice_m"], rec["last_m"]) == ("unmet:clipped", 0.05, 0.05)
+    assert (plan.status, plan.search_attempts) == (direct.status, direct.search_attempts)
+
+
 # -- a failed return from the end keeps direct (D6)
 
 @pytest.mark.parametrize("end_status", ["no_path", "timeout"])
@@ -272,14 +282,15 @@ def test_boxed_with_the_forward_turnaround_backs_off_first():
     assert plan.turnaround is not None  # the turnaround was weighed from the backoff's end
 
 
-def test_the_recorded_backed_off_return_is_followed_no_closer_to_the_leg():
+@pytest.mark.parametrize("name", ["rc_G_aisle_rack_s1", "rc_GN_aisle_rack_s10"])
+def test_the_recorded_backed_off_return_is_followed_no_closer_to_the_leg(name):
     # D7: the backoff and the return go on in the same gear; the ideal follower (the runner's return lookahead)
     # steers before L, and still comes no closer to the props than the start was
     from forklift_core.control.low_clearance import shape_clearance
     from forklift_core.control.path_tracking import TrackerConfig
     from forklift_core.control.rollout import bicycle_rollout
 
-    _, scenario, start, home, config, geometry = case("rc_G_aisle_rack_s1")
+    _, scenario, start, home, config, geometry = case(name)
     plan = plan_return_leg(scenario, start, home, config, geometry=geometry, return_start_backoff_m=CAP,
                            return_start_backoff_boxed=True)
     length = plan.start_backoff["length_m"]

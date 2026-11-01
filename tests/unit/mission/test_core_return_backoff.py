@@ -188,11 +188,41 @@ def test_the_state_keeps_the_boxed_records_trigger_and_check():
     assert set(state["return_start_backoffs"][1]) == {"where", "advice_m", "length_m", "status", "adopted"}
 
 
+def test_the_state_keeps_the_end_searchs_attempts_after_a_kept_invalid_start():
+    # D6 then the tight retry (Codex F2'' implementation review P3-1): the end search's ladder survives in the state
+    state = {}
+    rec = {"status": "unmet:search_timeout", "advice_m": 0.05, "length_m": 0.0, "trigger": "invalid_start",
+           "check": "first_step", "end_search_attempts": [[8, "timeout", 0, 0.2, 0.17, 0.06, 0.25, 30000, 0, 0]]}
+    note_return_backoff(state, "release_replan", rec, False)
+    assert state["return_start_backoffs"][0]["end_search_attempts"] == rec["end_search_attempts"]
+
+
+def test_the_worker_retries_tight_after_boxed_keeps_the_invalid_start():
+    # D6 through the worker: the return from the backoff's end cannot end (home inside the P-5 estimate), boxed hands
+    # back the invalid start, the worker's own tight retry still runs; every answer survives pickling
+    import pickle
+
+    payload = _leg_payload(pm.RETURN_START_BACKOFF_CAP_M)
+    home = Pose2D(3.4, -8.469, 0.0)
+    payload["args"] = (*payload["args"][:2], home, *payload["args"][3:])
+    payload["tight_args"] = (*payload["tight_args"][:2], home, *payload["tight_args"][3:])
+    on = _run("leg", payload)
+    assert not on["tight"] and on["result"].status == "invalid_goal"  # F2': the end's failure, no tight retry
+    for k in ("kwargs", "tight_kwargs"):
+        payload[k]["return_start_backoff_boxed"] = True
+    boxed = pickle.loads(pickle.dumps(_run("leg", payload)))
+    assert boxed["tight"]
+    assert boxed["first_backoff"]["status"] == "unmet:search_invalid_goal"
+    assert boxed["first_backoff"]["end_search_attempts"]
+
+
 def test_the_worker_carries_the_boxed_key():
     payload = _leg_payload(pm.RETURN_START_BACKOFF_CAP_M)
     for k in ("kwargs", "tight_kwargs"):
         payload[k]["return_start_backoff_boxed"] = True
-    answer = _run("leg", payload)
+    import pickle
+
+    answer = pickle.loads(pickle.dumps(_run("leg", payload)))
     assert answer["result"].success and answer["result"].start_backoff["check"] == "first_step"
     loaded = _loaded_payload(pm.RETURN_START_BACKOFF_CAP_M)
     loaded["kwargs"]["return_start_backoff_boxed"] = True

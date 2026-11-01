@@ -139,7 +139,7 @@ def note_return_backoff(state: dict, where: str, record: dict | None, adopted: b
     entry = {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
              "status": record.get("status"), "adopted": bool(adopted)}
     # F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D5): its trigger and check, only when it made them
-    entry.update({k: record[k] for k in ("trigger", "check") if k in record})
+    entry.update({k: record[k] for k in ("trigger", "check", "end_search_attempts") if k in record})
     state.setdefault("return_start_backoffs", []).append(entry)
 
 
