@@ -10190,6 +10190,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # scene requirements plan: the verdict goes into its own block; the three options only when given (an override
         # run's arguments rebuild it), the near-field contract treats them as run-specific
         and k != "scene_requirements_report"
+        # pallet-mass plan (2026-11-01): the resolved mass goes into its own block (pallet_mass), not the arguments
+        # (Codex pallet-mass review 2 P2-1: as an argument it broke the near-field contract of every earlier record)
+        and k != "pallet_mass_record"
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)

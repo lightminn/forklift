@@ -57,3 +57,14 @@ def test_a_table_needs_the_shape_and_an_entry_and_values_must_be_positive():
             resolve_pallet_mass({"pallet_mass_kg": {"epal6": bad}}, "epal6")
         with pytest.raises(ValueError, match="positive finite"):
             resolve_pallet_mass({"pallet_mass_kg": bad}, "epal6")
+
+
+def test_the_resolved_mass_is_never_a_recorded_argument():
+    # Codex pallet-mass review 2 P2-1: as an argument it reads "arguments pallet_mass_record differs from the
+    # measurement runs" in the near-field contract, with the scalar settings too
+    import argparse
+
+    import run_transport
+
+    args = argparse.Namespace(seed=0, pallet_mass_record={"kg": 10.0, "shape": "epal6"})
+    assert run_transport.recorded_arguments(args) == {"seed": 0}
