@@ -4825,7 +4825,13 @@ def drive(S, isaac) -> None:
         stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)
         state["stand_wheel_locks"] = stand_hold.events  # the result's record, filled as it goes
     stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
-    stand_watch = {"lock_base": None, "max_m": 0.0, "max_effort": None, "release": None}
+    # the lock in progress (its first event, which carries the locked move / effort as they grow) and the release
+    # whose restart is being timed
+    stand_watch = {"event": None, "release": None}
+    if stand_probe is not None:
+        import atexit
+
+        atexit.register(stand_probe.close)  # every end, a failure or a cancel too
 
     def record_video_overlay(t_now: float) -> None:
         from forklift_core.perception.obstacle_grid import OCCUPIED as GRID_OCCUPIED
@@ -9707,22 +9713,26 @@ def drive(S, isaac) -> None:
                     if hold_.gains is not None:
                         controller_.set_gains(kps=hold_.gains[0], kds=hold_.gains[1])
                     base_now_ = [float(base[0]), float(base[1]), float(yaw)]
+                    if stand_watch["event"] is not None:
+                        # this tick's pose moved under the lock held through the last physics step: counted first,
+                        # also on the tick that releases it (Codex impl review 2 P2-1); kept in the lock's own event
+                        # every tick, so a run ending locked keeps them too (P2-2)
+                        ev_lock_, lb_ = stand_watch["event"], stand_watch["event"]["base"]
+                        ev_lock_["locked_max_move_m"] = max(ev_lock_.get("locked_max_move_m", 0.0),
+                                                            math.hypot(base_now_[0] - lb_[0], base_now_[1] - lb_[1]))
+                        efforts_ = getattr(robot, "get_measured_joint_efforts", None)
+                        if efforts_ is not None:
+                            e_ = float(np.max(np.abs(np.asarray(efforts_(), dtype=float)[wheels])))
+                            ev_lock_["locked_max_effort"] = max(ev_lock_.get("locked_max_effort") or 0.0, e_)
+                        ev_lock_["observed_to_s"] = float(t)
                     if len(stand_hold.events) > events_before_:
                         ev_ = stand_hold.events[-1]
                         ev_.update(base=base_now_, pallet=[float(ppos[0]), float(ppos[1]), float(pallet_yaw)])
                         if ev_["from"] == "none":
-                            stand_watch.update(lock_base=base_now_, max_m=0.0, max_effort=None, release=None)
-                        if ev_["to"] == "none":
-                            # what the lock held: the largest true move from where it locked, the largest wheel effort
-                            ev_.update(locked_max_move_m=stand_watch["max_m"], locked_max_effort=stand_watch["max_effort"])
-                            stand_watch.update(lock_base=None, release={"event": ev_, "base": base_now_, "t": float(t)})
-                    if stand_watch["lock_base"] is not None:
-                        lb_ = stand_watch["lock_base"]
-                        stand_watch["max_m"] = max(stand_watch["max_m"], math.hypot(base_now_[0] - lb_[0], base_now_[1] - lb_[1]))
-                        efforts_ = getattr(robot, "get_measured_joint_efforts", None)
-                        if efforts_ is not None:
-                            e_ = float(np.max(np.abs(np.asarray(efforts_(), dtype=float)[wheels])))
-                            stand_watch["max_effort"] = e_ if stand_watch["max_effort"] is None else max(stand_watch["max_effort"], e_)
+                            ev_.update(locked_max_move_m=0.0, locked_max_effort=None, observed_to_s=float(t))
+                            stand_watch.update(event=ev_, release=None)
+                        elif ev_["to"] == "none":
+                            stand_watch.update(event=None, release={"event": ev_, "base": base_now_, "t": float(t)})
                     rel_ = stand_watch["release"]
                     if rel_ is not None and math.hypot(base_now_[0] - rel_["base"][0], base_now_[1] - rel_["base"][1]) > 0.005:
                         rel_["event"]["moved_after_s"] = float(t) - rel_["t"]  # the restart: 5 mm of true travel
@@ -9907,8 +9917,6 @@ def drive(S, isaac) -> None:
         require(verdict_.ok, verdict_.reason or "")
         delivery_error = verdict_.delivery_error_m
         snapshot("delivered")
-        if stand_probe is not None:
-            stand_probe.close()  # line-buffered, so a run ended by a failure keeps every line written too
         state.update(
             {
                 "success": True,

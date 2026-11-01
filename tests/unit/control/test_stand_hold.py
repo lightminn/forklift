@@ -180,6 +180,11 @@ def test_the_runner_option_is_off_by_default_batch_only_and_in_the_near_field_co
     assert "stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)" in drive_src
     assert 'state["stand_wheel_locks"] = stand_hold.events' in drive_src
     assert "stand_hold = None" in drive_src and "stand_hold = None" not in source[:source.index("def drive(S, isaac)")]
+    # the locked move / effort: counted before this tick's events (the release tick's pose too) and kept in the lock's
+    # own event every tick (a run ending locked keeps them), Codex impl review 2
+    count_ = drive_src.index('ev_lock_["locked_max_move_m"] = max(')
+    assert count_ < drive_src.index('if len(stand_hold.events) > events_before_:')
+    assert 'ev_lock_["observed_to_s"] = float(t)' in drive_src and "atexit.register(stand_probe.close)" in drive_src
     # the probe writes on every zero-command tick, outside the lock branch (off too)
     probe = source.index("if stand_probe is not None and np.all(")
     assert probe > source.index("elif not dwell_standing and wheel_lock[\"q\"] is not None:")
