@@ -165,3 +165,22 @@ These runs used `tools/f1_place_eval.py` on the frozen code (snapshot `f1_678f10
   - seed 5: B-P2d's second freeze and the hard list with its judgement;
   - the first freeze's sha256, and the collection's probe, snapshot (`f1_678f10fb`) and list generator.
 - **Collection (plan 4.2 b, 4.3):** one attended session per hard start (34), the probe as the operator (`RELOC_PROBE=place`), on snapshot `f1_678f10fb`. Judged with `tools/reloc_judge.py --frozen freeze1.json --hard` per world.
+
+## 6. Isaac judgement (plan 4.2 b, 4.3)
+
+Collection: ws1 13725 on snapshot `f1_678f10fb`, one attended place session per frozen hard start (34). Judged per world by `tools/reloc_judge.py --frozen freeze1.json --hard hard_sN.json` (`judgement_s3.json`, `judgement_s5.json`). Both pool: no fingerprint mismatch, one argument set, every listed start run.
+
+| World | Hard | Started | Wrong / imprecise | Rescued | Held short (`hold_failed`) | Operator's time (3 refusals) |
+|---|---|---|---|---|---|---|
+| seed 3 | 18 | 16 | 0 / 0 | 7 | 9 | 2 (val5_011 ambiguous, val5_083 low fit) |
+| seed 5 | 16 | 14 | 0 / 0 | 13 | 1 | 2 (val4_021, val4_052 ambiguous) |
+| **both** | **34** | **30** | **0 / 0** | **20** | **10** | 4 |
+
+- **Safety (4.2 b) passes:** 0 wrong and 0 imprecise of 30 started. The SLAM pose at the running tick was 0.001–0.041 m from the truth. The one-sided 95 % upper bound is 9.5 % (reported, not required, as registered).
+- **Rescue (4.3) does not pass as registered:** 20 of 34 = 59 % (one-sided 95 % CP lower bound 43 %) against the 70 % floor. Seed 5 alone: 13 of 16 (81 %); seed 3: 7 of 18.
+- **Why the ten were held short** (`hold_check.txt`, per session):
+  - The probe holds by wall time: 10 s ÷ the live factor 0.3, plus 1 s, from when it sees the pose after reconnecting.
+  - The simulation ran slightly below 0.3×, so every one of the ten ended at t0 + 7.75–9.48 s of simulated time, before the 10 s window closed.
+  - Their SLAM replies were tracking without a bad status, at most 0.10 s apart, up to 0.00–0.08 s before the simulation's end. The localization did not stop: the probe ended the session early.
+  - The rescued sessions ended at t0 + 9.58–10.05 s and passed only within the window's final 0.5 s gap allowance. The whole collection stood at the edge of the probe's wall-time margin.
+- The registered result stands as written. Any rerun is a separate decision (Codex review, below).
