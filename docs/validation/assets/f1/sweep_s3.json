@@ -1,0 +1,167 @@
+{
+ "valid": 91,
+ "invalid": 7,
+ "table": [
+  {
+   "r_amb": 0.8,
+   "success": 32,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 59,
+   "reasons": {
+    "ambiguous": 179,
+    "confirmed": 32,
+    "low_fit": 3
+   },
+   "rescued": 32
+  },
+  {
+   "r_amb": 0.82,
+   "success": 40,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 51,
+   "reasons": {
+    "confirmed": 40,
+    "ambiguous": 157,
+    "low_fit": 3
+   },
+   "rescued": 40
+  },
+  {
+   "r_amb": 0.84,
+   "success": 46,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 45,
+   "reasons": {
+    "confirmed": 46,
+    "ambiguous": 136,
+    "low_fit": 3
+   },
+   "rescued": 46
+  },
+  {
+   "r_amb": 0.86,
+   "success": 54,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 37,
+   "reasons": {
+    "confirmed": 54,
+    "ambiguous": 113,
+    "low_fit": 3
+   },
+   "rescued": 54
+  },
+  {
+   "r_amb": 0.88,
+   "success": 59,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 32,
+   "reasons": {
+    "confirmed": 59,
+    "ambiguous": 98,
+    "low_fit": 3
+   },
+   "rescued": 59
+  },
+  {
+   "r_amb": 0.9,
+   "success": 68,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 23,
+   "reasons": {
+    "confirmed": 68,
+    "ambiguous": 72,
+    "low_fit": 3
+   },
+   "rescued": 68
+  },
+  {
+   "r_amb": 0.92,
+   "success": 73,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 18,
+   "reasons": {
+    "confirmed": 73,
+    "ambiguous": 53,
+    "low_fit": 3
+   },
+   "rescued": 73
+  },
+  {
+   "r_amb": 0.94,
+   "success": 74,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 17,
+   "reasons": {
+    "confirmed": 74,
+    "ambiguous": 49,
+    "low_fit": 3
+   },
+   "rescued": 74
+  },
+  {
+   "r_amb": 0.96,
+   "success": 82,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 9,
+   "reasons": {
+    "confirmed": 82,
+    "ambiguous": 26,
+    "low_fit": 3
+   },
+   "rescued": 82
+  },
+  {
+   "r_amb": 0.98,
+   "success": 88,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 3,
+   "reasons": {
+    "confirmed": 88,
+    "ambiguous": 6,
+    "low_fit": 3
+   },
+   "rescued": 88
+  },
+  {
+   "r_amb": 1.0,
+   "success": 89,
+   "imprecise": 0,
+   "wrong": 0,
+   "failed": 2,
+   "reasons": {
+    "confirmed": 89,
+    "ambiguous": 3,
+    "low_fit": 3
+   },
+   "rescued": 89
+  }
+ ],
+ "choice": {
+  "r_amb": 1.0,
+  "success": 89,
+  "imprecise": 0,
+  "wrong": 0,
+  "failed": 2,
+  "reasons": {
+   "confirmed": 89,
+   "ambiguous": 3,
+   "low_fit": 3
+  },
+  "rescued": 89
+ },
+ "time": {
+  "placements": 273,
+  "p95_s": 1.3518,
+  "max_s": 2.9376
+ }
+}

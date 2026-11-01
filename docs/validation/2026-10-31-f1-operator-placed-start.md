@@ -119,16 +119,18 @@ Registered before the survey (the lead's request):
 ### 3.1 Survey and starts
 
 - **Survey** `hall_s3_G0` (ws1 13495 → 13496 → 13497, snapshot `f1_678f10fb`, SLAM noise seed 0). Map `fb0ad8ca…`.
-  - The tour arrived (562 m, 1,245 graph nodes, 2 h 03 min).
+  - The tour arrived: 562 m, 1,245 graph nodes (`s3_survey_report.json`), and the job ran 2 h 03 min (Slurm).
   - **V2′ passed:** world position maximum 0.064 m (RMSE 0.027 m), yaw maximum 0.0043 rad. Coverage, start, nodes, received, cost and finalize checks also passed.
   - The moving check did not run (no rigid-body list), as on seed 4 and seed 5. The survey tool's overall `ok` is therefore false and Slurm reports the job FAILED.
   - The map is accepted on V2′ as B4a registered, the rule B-P2d applied to seed 5 (the lead confirmed, 2026-11-01).
-  - **Output:** 734 MB, against the about 0.6 GB registered.
+  - **Output:** 734 MB (`du` on ws1), against the about 0.6 GB registered.
 - **Starts** `val_s3.json` (ws1 13618): 98 starts (layer A 49, B 24, C 25).
   - Drawn with seed 1031, 3 m apart, until all three layers were exhausted (95,460 attempts).
   - Validation split, map index 5. Keep-out from the survey's own `result.json`.
 
 ## 4. Offline judgement (plan 4.2 a, 4.4, 4.5; frozen code)
+
+Records, per world: `rows_sN.jsonl` (each session's placements), `sweep_sN.json` (the table; R_AMB 0.98 is the judged row, `time` the placement times) and `stress_sN.jsonl` / `stress_sN.json` (4.5). The hard populations' offline rescue is `tools/f1_place_eval.py sweep --rows rows_sN.jsonl --hard hard_sN.json`, read at R_AMB 0.98.
 
 These runs used `tools/f1_place_eval.py` on the frozen code (snapshot `f1_678f10fb`) with R_AMB from `place_config.json`. Each start had three scan sets from capture jobs on that code (map indices 1xx, 2xx and 3xx), and the clicks came from the click model with the world's seed and the start's index.
 
@@ -141,7 +143,7 @@ These runs used `tools/f1_place_eval.py` on the frozen code (snapshot `f1_678f10
 - **Safety (4.2 a) passes:** 169 confirmed sessions with no wrong and no imprecise one. The one-sided 95 % Clopper-Pearson upper bound is 1.8 %. There are 175 valid starts, against at least 120 required.
   - The scope is the click model, the N_PLACE = 3 policy and an operator who confirms the first preview.
 - **Time (4.4) passes:** p95 ≤ 2 s and maximum ≤ 10 s in both worlds.
-- **Hard population, offline (4.3, a record):** seed 5's 16 starts that B-P2d left to a person. 14 are rescued offline.
+- **Hard populations, offline (4.3, a record):** 16 of seed 3's 18 and 14 of seed 5's 16 are rescued offline (section 5).
 - **Record-only placements (4.5)**, first scan set:
 
 | Click | seed 3 confirmed (wrong) | seed 5 confirmed (wrong) |
@@ -151,6 +153,11 @@ These runs used `tools/f1_place_eval.py` on the frozen code (snapshot `f1_678f10
 | 1.5 m off | 86 (0) | 78 (0) |
 | 0.5 rad off | 55 (0) | 37 (0) |
 | heading turned around | 1 (1) | 0 |
+
+- **Endpoint fractions of the wrong neighbouring-bay confirmations:**
+  - seed 3: 0.80–1.00 (10 confirmations: 0.800, 0.849, 0.867, 0.877, 0.877, 0.908, 0.989, 1.0, 1.0, 1.0);
+  - seed 5: 0.81–1.00 (10 confirmations: 0.808, 0.831, 0.843, 0.888, 0.938, 0.951, 0.964, 0.984, 1.0, 1.0).
+  - The overlap reads as good as the truth's. Overlap is no defence (plan 5).
 
 ## 5. Hard populations and the second freeze (plan 4.1, 4.6)
 
@@ -214,11 +221,51 @@ ws1 13936: the first run's list with only `HOLD_SIM_S=14`, the same snapshot and
 
 - **Safety:** 0 wrong and 0 imprecise of 30 started (bound 9.5 %). The SLAM pose was 0.001–0.043 m from the truth.
 - **Rescue:** 30 of 34 = 88 %, one-sided 95 % CP lower bound 75 %. This clears the 70 % floor in this run, which is reported beside section 6 and not pooled with it.
-- **The holds:** every started session ran to t0 + 13.5–14.2 s of simulated time, past the judged 10 s.
+- **The holds:** every started session ran to t0 + 13.5–14.2 s of simulated time, past the judged 10 s. Each session's clicks, t0, last simulated tick and last SLAM reply, for both runs, are in `sessions_trace.json`.
 - **The lead's two questions:**
   1. **The four operator-time endings repeated** with the same refusals: val5_011, val4_021 and val4_052 ambiguous three times, val5_083 low fit three times. They are the hard starts F1's window cannot settle.
-  2. **Seed 3 had no other cause.** Its ten sessions held short the first time are all rescued now, each on the same first placement it confirmed before. Every seed-3 outcome other than the hold matches the first run.
+  2. **On seed 3, the only difference between the runs is the hold.**
+     - Its nine sessions held short the first time are rescued now. They confirmed on the same first click both times: the click model's draw is fixed, and the clicks match in `sessions_trace.json`.
+     - Every other seed-3 outcome, placement count and refusal reason is the same in both runs.
+     - Its two failures remain: val5_011 was refused three times as ambiguous, val5_083 three times on low fit.
 - **Each start's outcome against the first run:**
   - the 20 rescued then are rescued again;
-  - the 10 held short are rescued;
+  - the 10 held short (seed 3 nine, seed 5 one) are rescued;
   - the 4 operator-time endings are the same.
+
+- **Seed 5 by the plan's request types** (section 0's typing of B-P2d's 16):
+
+| Type | Registered run | Rerun |
+|---|---|---|
+| repeated bay (11) | 10 (val4_001 held short) | 11 |
+| truth outside the four shown (2: 043, 075) | 2 | 2 |
+| deadline (2: 032, 052) | 1 (052 at the operator's time) | 1 |
+| aisle slip (1: 021) | 0 (operator's time) | 0 |
+
+## 9. Conclusion, constraints and the follow-up
+
+- **As registered (section 6):**
+  - Safety passes: 0 wrong or imprecise of 30 started.
+  - The rescue floor does not pass: 20 of 34.
+- **In the rerun the lead registered (section 7, reported beside it):**
+  - Safety 0 of 30.
+  - Rescue 30 of 34 (88 %, CP lower bound 75 %).
+- **Offline:** 0 wrong among 169 confirmations, and the time limits pass.
+- **What stays until the next freeze:**
+  - The probe holds by wall time (plan 5). The sim-clock hold goes into the next, third freeze.
+  - A neighbouring-bay or turned-around confirmation passes the bridge's start check. The defence is the operator premise plus the page's look-alike count and bay check:
+    - the count is taken only among the shown candidates, at most four;
+    - the check is a page step, not enforced by the vehicle.
+  - The four hard starts F1 does not rescue need another means: seed 5's val4_021 (aisle slip) and val4_052 (deadline), both refused as ambiguous at every placement, and seed 3's val5_011 (ambiguous) and val5_083 (low fit).
+- **Follow-up "확인 전 위치"** (the lead, after F1 closes; plan 5.1):
+  - **What:** a placed start with look-alikes (or none known) is held as an unconfirmed position.
+    - While unconfirmed, the arbiter refuses pick, lift and lower, unload and mission legs.
+    - The lead's provisional defaults allow slow operator teleop and short automatic disambiguating moves with distance and speed caps, in free cells only, the obstacle-layer stop on.
+    - The look-alike hypotheses' map-match scores are accumulated from the scans along the way. A hypothesis is promoted when it wins by a margin and the repetition's end is seen.
+    - The deferred teleop-while-uninformative case comes under the same rule.
+  - **Pieces:**
+    - ① a hypothesis tracker (pure core, reusing the global matcher's scores);
+    - ② the arbiter's permission and the state field with the console's band. The runner changes, so the replay gate applies;
+    - ③ validation: offline on short captured drives from neighbouring-bay confirmations, then Isaac sessions.
+    - A plan with three independent reviews comes first. The caps are set there, with reasons. The probe's sim-clock hold joins this third freeze.
+  - **Cost:** two to three days including the plan, and about two Isaac batches.
