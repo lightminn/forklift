@@ -96,7 +96,12 @@ riib 배치 2 등록(`docs/plans/2026-10-31-riib-default-batch2.md` §4)의 규�
 
 ## 6. 제출 기록
 
-(결과 전에 채운다: 스냅숏, 목록 경로, 실행 수, 잡, 디스크 여유, 롤링 준비.)
+결과 전에 적는다(2026-11-01).
+- 코드: main `95e61a74`(PR #239). 러너를 마지막으로 바꾼 커밋 `4f3d027a` 에서 재생 게이트 runs29 29/29(ws1 `test_runs/replay_gate/rc_4f3d027a`), ws1 전체 시험 8 161 통과·알려진 ws1 전용 실패 10. 그 뒤 커밋은 문서뿐이다. Codex 는 계획 4 차·구현 2 차·등록 3 차에서 "새 P1/P2 없음"으로 수렴했다.
+- 스냅숏: ws1 `snapshots/rc_95e61a74`.
+- 목록: ws1 `test_runs/riibotics/rc_95e61a74/RUNS.jsonl` 123 실행(경계 기록 G·GN 82). 생성기 `tss_diag/make_runs_rc.py`. `isaac_bundle.py check` 0 문제.
+- 잡: 묶음 2 개 13723·13724(각 shard 4·CPU 8·20 GB·12 시간, claim 공유, `--run-est-min 45`).
+- 디스크: 제출 직전 `/home` 여유 37 GB. 디스크 정리 세션의 롤링(`~/ws1-cleanup-tools/rc_roll.sh`)이 제출 전에 시작됐다. 15 GB 아래면 남은 실행의 claim 을 보류하는 감시를 걸었다.
 
 ## 7. 자체 검토
 
