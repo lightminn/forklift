@@ -81,4 +81,5 @@ S1 등록(`docs/plans/2026-11-02-standstill-wheel-hold-batch.md` §4)과 같은 
 
 - ① 원자료 재계산: 노출 산식(10/48, n = 24 에서 기댓값 5.0·P(≥ 2) 0.973, n = 16 에서 0.876), 실행 수 98·최대 108, 최소 유효 짝 합 40(20 + 4 + 8 + 8).
 - ② Codex 등록 1 차(a32c1f9e, `tmp/rx/codex_f2reg1.out`): 새 P1/P2 없음. P3 3 을 고쳤다. 노출 확률은 발동 확률이고 완료 확률이 아님, `invalid_start` 만의 완료와 `boxed` 의 Isaac 미확인, 후진 완료 미계측, 기록 없음은 무관·미발동의 충분조건이 아님. 확인한 것: 조건 1·2 의 입력(`failure_reason`, `slam_summary.holds[*].failed_plan.search_attempts`)이 결과에 남고, 완료 하한식이 경로 교체 반례를 막으며, VIDEO=off 가 판정 필드를 끄지 않는다.
+- Codex 등록 2 차(372f1887, `tmp/rx/codex_f2reg2.out`): 새 P1/P2 없음(수렴).
 - ③ 독립 검토: 계획 단계에서 agy 1 회(계획 §7 ③). 등록은 계획 §6 과 F2′ C5 를 고정한 것이라 따로 받지 않는다.
