@@ -53,10 +53,18 @@ def _copy_material(stage, source, path: str):
     return material
 
 
-def _bound_path(prim) -> str | None:
-    from pxr import UsdShade
+def _bound_material(prim):
+    """The physics material bound to ``prim``, or None. ``ComputeBoundMaterial("physics")`` falls back to an
+    all-purpose (render) binding, so a bound material counts only when it carries the physics material API -- the
+    warehouse floor tiles are bound to render materials with no friction (T0, 2026-11-02)."""
+    from pxr import UsdPhysics, UsdShade
 
     material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+    return material if material and material.GetPrim().HasAPI(UsdPhysics.MaterialAPI) else None
+
+
+def _bound_path(prim) -> str | None:
+    material = _bound_material(prim)
     return str(material.GetPath()) if material else None
 
 
@@ -112,15 +120,13 @@ def colliders(stage, root: str = "/World"):
 
 
 def material_inventory(stage, root: str = "/World") -> dict:
-    """The colliders under ``root`` by the physics material bound to them (``None``: none bound, PhysX's default
-    material applies), each counted by its first two path components, and every bound material's values -- the T0
+    """The colliders under ``root`` by the physics material bound to them (``None``: none bound, or only a render
+    material -- PhysX's default material applies), each counted by its first two path components, and every bound material's values -- the T0
     inventory (plan section 5)."""
-    from pxr import UsdShade
-
     by_material: dict[str, dict[str, int]] = {}
     values = {}
     for prim in colliders(stage, root):
-        material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+        material = _bound_material(prim)
         key = str(material.GetPath()) if material else "None"
         group = "/".join(str(prim.GetPath()).split("/")[:3])
         by_material.setdefault(key, {})

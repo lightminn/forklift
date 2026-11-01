@@ -43,10 +43,14 @@ def _stage(tyre_material=False):
              "/World/Forklift/fork_carriage/collisions/carriage_cross_0_collision",
              "/World/Forklift/base_link/collisions/rear_hood_collision",
              "/World/Pallet/collisions/block_0", "/World/Pallet/collisions/block_1",
-             "/World/Environment/Root/GroundPlane/CollisionPlane"]
+             "/World/Environment/Root/GroundPlane/CollisionPlane", "/World/Environment/SM_floor28/SM_floor02"]
+    # a render material with no physics API, bound for all purposes, as the warehouse's floor tiles are
+    render = UsdShade.Material.Define(stage, "/World/Environment/Looks/MI_Floor_02b")
     for path in paths:
         prim = UsdGeom.Cube.Define(stage, path).GetPrim()
         UsdPhysics.CollisionAPI.Apply(prim)
+        if "SM_floor" in path:
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(render)
         if path.startswith(("/World/Forklift", "/World/Pallet")):
             material = tyre if (tyre is not None and "_tire_" in path) else contact
             UsdShade.MaterialBindingAPI.Apply(prim).Bind(material, UsdShade.Tokens.strongerThanDescendants, "physics")
@@ -63,7 +67,8 @@ def test_every_part_gets_a_copy_with_the_same_values_and_the_floor_stays_unbound
         assert m["physics:restitution"] == 0.0 and "physxMaterial:frictionCombineMode" not in m  # average, as before
     assert cm._bound_path(stage.GetPrimAtPath(
         "/World/Forklift/fork_carriage/collisions/left_fork_collision")) == f"{cm.ROOT}/Fork"
-    assert cm.unbound_colliders(stage) == {"/World/Environment": 1}
+    # the render-bound floor tile counts as unbound: it carries no physics material
+    assert cm.unbound_colliders(stage) == {"/World/Environment": 2}
     inventory = cm.material_inventory(stage)
     assert inventory["colliders"][f"{cm.ROOT}/Fork"] == {"/World/Forklift": 1}
     assert inventory["colliders"][f"{cm.ROOT}/Pallet"] == {"/World/Pallet": 2}
