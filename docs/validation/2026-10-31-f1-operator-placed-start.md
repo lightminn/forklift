@@ -115,3 +115,15 @@ Registered before the survey (the lead's request):
 - **Run:** about 1 h 45 min and 7.3 GB peak RSS (ws1 13006).
 - **Disk:** at submission ws1 `/home` had 35 GB free (96 % used).
 - **Queue:** two of the lead's riib jobs and one teammate job.
+
+### 3.1 Survey and starts
+
+- **Survey** `hall_s3_G0` (ws1 13495 → 13496 → 13497, snapshot `f1_678f10fb`, SLAM noise seed 0). Map `fb0ad8ca…`.
+  - The tour arrived (562 m, 1,245 graph nodes, 2 h 03 min).
+  - **V2′ passed:** world position maximum 0.064 m (RMSE 0.027 m), yaw maximum 0.0043 rad. Coverage, start, nodes, received, cost and finalize checks also passed.
+  - The moving check did not run (no rigid-body list), as on seed 4 and seed 5. The survey tool's overall `ok` is therefore false and Slurm reports the job FAILED.
+  - The map is accepted on V2′ as B4a registered, the rule B-P2d applied to seed 5 (the lead confirmed, 2026-11-01).
+  - **Output:** 734 MB, against the about 0.6 GB registered.
+- **Starts** `val_s3.json` (ws1 13618): 98 starts (layer A 49, B 24, C 25).
+  - Drawn with seed 1031, 3 m apart, until all three layers were exhausted (95,460 attempts).
+  - Validation split, map index 5. Keep-out from the survey's own `result.json`.
