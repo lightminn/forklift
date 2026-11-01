@@ -599,6 +599,22 @@ def arguments() -> argparse.Namespace:
         "travel max(2L, L + 2 m), 40 s) releasing, re-planning and holding again once. Off: every earlier run.",
     )
     parser.add_argument(
+        "--stand-wheel-hold",
+        choices=("off", "rear", "all"),
+        default="off",
+        help="docs/plans/2026-11-01-standstill-wheel-hold.md S1: a zero command held 0.5 s in a driving phase with the "
+        "rear wheels below 0.05 rad/s locks the rear (driven) wheels where they stand (the dwell lock's stiffness), "
+        "released on the first non-zero command before it is applied; 'all' locks all four (the S0 cause probe). Off: "
+        "every earlier run (the dwell lock alone). Batch runs only.",
+    )
+    parser.add_argument(
+        "--stand-probe-log",
+        type=Path,
+        default=None,
+        help="docs/plans/2026-11-01-standstill-wheel-hold.md S0: one JSON line per control tick with a zero wheel "
+        "command -- the wheels' angles, rates and measured efforts, the truck's and pallet's true poses, the lock.",
+    )
+    parser.add_argument(
         "--return-cusp-replans",
         type=int,
         default=0,
@@ -1343,6 +1359,10 @@ def arguments() -> argparse.Namespace:
         # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1: checked for the Riibotics scene runs (scene replan,
         # no grid planning); the near-tracking combination waits for its own check
         parser.error("--exit-prefix-exempt on needs --layout scene and --obstacle-layer, and not --near-tracking")
+    if getattr(args, "live", False) and args.stand_wheel_hold != "off":
+        # the live mission end zeroes the wheels and then releases the shared lock (live_runtime unlock_wheels);
+        # the stand lock's ownership there is not settled (plan S1)
+        parser.error("--stand-wheel-hold is for batch runs; not with --live")
     if args.return_cusp_replans < 0 or args.transport_cusp_replans < 0:
         parser.error("--return-cusp-replans and --transport-cusp-replans are counts (0 or more)")
     if args.layout == "scene":
@@ -4378,6 +4398,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "retry_stand": False,
         }
     wheel_lock = {"q": None, "gains": None, "events": []}
+    # docs/plans/2026-11-01-standstill-wheel-hold.md S1: off (every earlier run) keeps the dwell lock path below as is
+    stand_hold = None
+    if getattr(args, "stand_wheel_hold", "off") != "off":
+        from forklift_core.control.stand_hold import WheelHold
+
+        stand_hold = WheelHold(args.stand_wheel_hold)
+    stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
     # Camera-face distance at the approach goal: the stand-off gap ahead of the fork
     # tips, less the camera's distance behind them (0.431 m on the measured chassis).
     dwell_d_end_m = (
@@ -9664,7 +9691,34 @@ def drive(S, isaac) -> None:
                 slip_watch.end_tick(ms.phase if live is None or core.commands.adopted_id is not None else "idle",
                                     (float(base[0]), float(base[1]), float(yaw)),
                                     (float(ppos[0]), float(ppos[1]), float(pallet_yaw)), t=t)
-                if dwell_standing and wheel_lock["q"] is None:
+                if stand_hold is not None:
+                    # Plan 2026-11-01-standstill-wheel-hold S1: one lock state (none / stand / dwell) for both locks
+                    controller_ = robot.get_articulation_controller()
+                    events_before_ = len(stand_hold.events)
+                    hold_ = stand_hold.step(
+                        float(t), dwell_standing=bool(dwell_standing),
+                        wheel_cmd=np.asarray(drive.wheel_rates_rad_s, dtype=float), phase=ms.phase,
+                        wheel_rates=np.asarray(robot.get_joint_velocities()[wheels], dtype=float),
+                        q_now=np.asarray(robot.get_joint_positions()[wheels], dtype=float),
+                        read_gains=controller_.get_gains)
+                    if hold_.gains is not None:
+                        controller_.set_gains(kps=hold_.gains[0], kds=hold_.gains[1])
+                    if len(stand_hold.events) > events_before_:
+                        stand_hold.events[-1].update(
+                            base=[float(base[0]), float(base[1]), float(yaw)],
+                            pallet=[float(ppos[0]), float(ppos[1]), float(pallet_yaw)])
+                    wheel_lock["q"] = hold_.q
+                    if stand_probe is not None and np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0):
+                        efforts_ = getattr(robot, "get_measured_joint_efforts", None)
+                        stand_probe.write(json.dumps({
+                            "t": float(t), "phase": ms.phase, "lock": stand_hold.mode,
+                            "steer_cmd": [float(v) for v in steering_command],
+                            "q": [float(v) for v in robot.get_joint_positions()[wheels]],
+                            "qd": [float(v) for v in robot.get_joint_velocities()[wheels]],
+                            "effort": None if efforts_ is None else [float(v) for v in efforts_()[wheels]],
+                            "base": [float(base[0]), float(base[1]), float(yaw)],
+                            "pallet": [float(ppos[0]), float(ppos[1]), float(pallet_yaw)]}) + "\n")
+                elif dwell_standing and wheel_lock["q"] is None:
                     # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                     controller_ = robot.get_articulation_controller()
                     kps_, kds_ = (np.asarray(g, dtype=float).copy() for g in controller_.get_gains())
@@ -9863,6 +9917,8 @@ def drive(S, isaac) -> None:
                             "dwell_hold_s": None if dwells is None else dwells.hold_s,
                         "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
                         "dwell_wheel_locks": wheel_lock["events"],
+                        # plan 2026-11-01-standstill-wheel-hold S1: with the stand lock on, the dwell's locks are here
+                        **({} if stand_hold is None else {"stand_wheel_locks": stand_hold.events}),
                             "dwell_d_end_m": dwell_d_end_m,
                             "safety_stop_gaps_m": (None if args.measure_safety_stops_m is None
                                                    else list(args.measure_safety_stops_m)),
