@@ -53,7 +53,7 @@ ADR 0002 는 2.49 kg 의 계산식을 남기지 않았다. ADR 의 5 %·10 % 두
 | 근접 추적 재측정을 이어 갈 세션(`docs/plans/2026-10-27-insertion-lateral-drift.md` (B)) | 설정 파일 사본만으로는 riib 조건을 못 지킨다 — 실행기가 현장 표를 자기 체크아웃의 고정 경로에서 읽는다(Codex P2-3). 두 파일이 다 10 kg 인 **옛 스냅숏에서** 돌리거나, 새 질량 조건으로 다시 잰다. |
 | `tools/reloc_judge.py` 지문 | 동결할 때만 쓴다. 새 동결은 새 지문을 받는다. 러너가 바뀔 때마다 생기는 일과 같다. |
 | SLAM 지도 묶음(`slam_map.SHARED_INPUTS`) | 설정을 대조하지 않는다. 영향 없음. |
-| 재생 게이트 runs29 | 재생 도구가 기록 당시 설정 파일과 바이트가 같은지 먼저 본다(`boundary_replay.build_inputs`). 바뀐 `isaac_transport_measured.yaml` 그대로는 29 건 모두 `setup input files differ` 로 거부된다(`pm_275031ea`, 잡 13847) — 물성이 바뀐 실행은 정의상 재생할 수 없다. 그래서 게이트는 **세 설정 파일만 main 바이트로 되돌린 스냅숏(비교 배치 A 팔과 같은 것)** 에서 돌려 코드 변경만 본다. 해석 함수와 새 물성은 단위 시험·사전 검사 시험과 §4 배치로 본다. |
+| 재생 게이트 runs29 | 재생 도구가 기록 당시 설정 파일과 바이트가 같은지 먼저 본다(`boundary_replay.build_inputs`). 바뀐 `isaac_transport_measured.yaml` 그대로는 29 건 모두 `setup input files differ` 로 거부된다(`pm_275031ea`, 잡 13847) — 물성이 바뀐 실행은 정의상 재생할 수 없다. 그래서 게이트는 **세 설정 파일만 main 바이트로 되돌린 스냅숏(비교 배치 A 팔과 같은 것)** 에서 돌려 옛 10 kg 입력에서의 코드 호환성만 본다. 해석 함수와 새 물성은 단위 시험·사전 검사 시험과 §4 배치로 본다. |
 
 `config/isaac_slam_lidar.yaml` 주석처럼 위 파일을 주석 때문에 고치지 않는 것과 같은 이유로, 이 변경은 질량이 실제로 바뀌는 곳에서만 해시를 바꾼다.
 
@@ -84,7 +84,7 @@ T11 사이클과 live 적재 정지는 Codex P3 를 반영했다. 운영 런처�
 |---|---|
 | 완주 | `success` 참 그리고 `phase == "complete"` |
 | 끝 사유 | `failure_reason` |
-| 안전 실패 | `failure_reason` 이 다음 중 하나로 시작: `Actual truck/load footprint overlap`, `Measured pallet footprint overlap`, `Forbidden fork/pallet contact`, `Excessive body tilt`, `Pallet slipped off forks`, `Pallet dropped during transport`. 그리고 `forbidden_pocket_contacts` 가 비어 있지 않은 실행 |
+| 안전 실패 | `failure_reason` 을 `forklift_core.mission.failures.classify` 가 장면 손상(`scene`)으로 분류하는 실행(지금 목록: `Excessive body tilt`, `Actual truck/load footprint overlap`, `Measured pallet footprint overlap`, `Measured pallet solid overlap`, `Pallet dropped during transport`, `Pallet slipped off forks`, `Pallet displaced before pickup`, `Forbidden fork/pallet contact`, `Session pallet displaced`) **또는** `forbidden_pocket_contacts` 가 비어 있지 않은 실행 |
 | 미끄럼 실패 | `slip_watch.failure` 가 있는 실행 |
 | 들기 도달 | `lift_tilt_peak` 가 있는 실행 |
 | 포크 도달 깊이 | `insertion_measured.left/right.insertion_m`, `beyond_centre_m` |
@@ -101,7 +101,7 @@ T11 사이클과 live 적재 정지는 Codex P3 를 반영했다. 운영 런처�
 - 깨진 짝(같은 묶음·장면·seed 의 두 팔 중 하나 이상 무효)은 두 팔을 함께 한 번 다시 돈다. 그래도 깨지면 결측이다.
 - 안전 실패는 무효로 분류된 실행도 관측된 그대로 센다.
 - **최소 유효 짝:** riib 12 짝 중 10, 사이클은 형상마다 3 짝 모두, live 2 짝 모두. 모자라면 판정 불가.
-- **단계 도달(기준선이 시험할 거리를 만들었는가):** A 팔이 riib 에서 8 실행 이상, 사이클 형상마다 2 실행 이상 들기에 도달해야 한다. 모자라면 판정 불가. 미끄럼·삽입 측정은 두 팔 모두 들기에 도달한 짝만 비교한다.
+- **단계 도달(시험할 거리가 생겼는가):** 두 팔 모두 들기에 도달한 짝이 riib 에서 8 짝 이상, 사이클 형상마다 2 짝 이상이어야 한다. A 팔만 들기에 도달하는 것으로는 채우지 못한다(Codex 3 차 P2-2: A 가 들고 B 가 들기 전에 시간 초과로 끝나면 완주·미끄럼 부등식이 0 대 0 으로 통과한다). 모자라면 판정 불가. 미끄럼·삽입 측정은 두 팔 모두 들기에 도달한 짝만 비교한다.
 - **판정 불가면 운영 기본을 바꾸지 않는다.** 원인과 함께 총괄에 올린다.
 
 ### 판정
@@ -137,3 +137,4 @@ T11 사이클과 live 적재 정지는 Codex P3 를 반영했다. 운영 런처�
 - 원자료 재계산: 형상 파일에서 실체적·부재 표면적을 다시 뽑아 위 표를 냈다. ADR 의 5 %·10 % 두 값에서 거꾸로 푼 껍질·내부 체적이 부재별 껍질 모형과 맞는 것을 확인했다.
 - Codex 설계 검토 1 차: P1 없음, P2 3 건 — ① 파일 이름 대신 `geometry_version` ② `run_pocket_insertion` 이 설정을 따로 읽어 표를 넘기면 `scene.py` 질량 분배에서 `TypeError` ③ 근접 추적 10 kg 유지에는 설정 사본만으로 부족(현장 표 고정 경로). 셋 다 소스로 확인해 반영했다(§2, §3). P3 2 건(EPAL 값의 보정 계수 없음, 배치에 T11·live 적재 정지 포함)도 반영했다.
 - Codex 2 차(구현·등록): P1 없음, P2 4 건 — ① 해석 결과(`args.pallet_mass_record`)가 기록 인자로 새어 숫자 설정에서도 근접 추적 인자 계약이 깨짐: 기록 인자에서 뺐다(시험 추가) ② `collision_counts` 는 충돌체 수: 안전 실패를 `failure_reason` 문자열로 정의 ③ 최소 유효 짝·단계 도달 없이 0 ≥ 0 − 1 로 통과 가능: 최소 짝·A 팔 들기 도달·판정 불가 규칙 추가 ④ `final_pallet_m` 은 배달 뒤 값, `insertion_error` 는 경로 끝 오차, live 세션 `success` 는 임무 실패를 숨김: 측정 원천 표와 live `probe.json` 조건으로 고정. P3(재제출 출발 판정 미검증, 삽입 비교는 서술)도 반영했다.
+- Codex 3 차: 코드 P1·P2 없음. 등록 P2 2 건 — ① 안전 실패 목록이 장면 손상 사유 일부(`Pallet displaced before pickup`, `Measured pallet solid overlap`, `Session pallet displaced`)를 빠뜨림: `failures.classify` 의 장면 손상 분류로 바꿨다 ② A 팔 들기 도달만으로는 비교 가능한 짝이 0 일 수 있음: 두 팔 공통 들기 도달 짝 최소 수로 바꿨다. 10 kg 스냅숏 재생 게이트는 "옛 10 kg 입력에서의 코드 호환성" 게이트로 유효하다고 했다.
