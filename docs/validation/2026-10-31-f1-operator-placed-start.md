@@ -201,3 +201,24 @@ The registered result in section 6 (`0da6d571`) stands and is not replaced. This
 - **Also judged on the rerun (the lead's questions):**
   1. Do the four sessions that ended at the operator's time after three refusals (val5_011, val5_083, val4_021, val4_052) end the same way again?
   2. On seed 3 (7 of 18 the first time), is anything other than the probe's hold behind the low count? Every seed-3 session's outcome, placements and refusal reasons will be compared with the first run's.
+
+## 8. Rerun (section 7's registration)
+
+ws1 13936: the first run's list with only `HOLD_SIM_S=14`, the same snapshot and bundle shape. Judged per world by the unchanged judge against freeze 1 with the frozen hard lists (`rerun_judgement_s3.json`, `rerun_judgement_s5.json`). Both pool: no fingerprint mismatch, one argument set, every listed start run.
+
+| World | Hard | Started | Wrong / imprecise | Rescued | Held short | Operator's time |
+|---|---|---|---|---|---|---|
+| seed 3 | 18 | 16 | 0 / 0 | 16 | 0 | 2 |
+| seed 5 | 16 | 14 | 0 / 0 | 14 | 0 | 2 |
+| **both** | **34** | **30** | **0 / 0** | **30** | **0** | 4 |
+
+- **Safety:** 0 wrong and 0 imprecise of 30 started (bound 9.5 %). The SLAM pose was 0.001–0.043 m from the truth.
+- **Rescue:** 30 of 34 = 88 %, one-sided 95 % CP lower bound 75 %. This clears the 70 % floor in this run, which is reported beside section 6 and not pooled with it.
+- **The holds:** every started session ran to t0 + 13.5–14.2 s of simulated time, past the judged 10 s.
+- **The lead's two questions:**
+  1. **The four operator-time endings repeated** with the same refusals: val5_011, val4_021 and val4_052 ambiguous three times, val5_083 low fit three times. They are the hard starts F1's window cannot settle.
+  2. **Seed 3 had no other cause.** Its ten sessions held short the first time are all rescued now, each on the same first placement it confirmed before. Every seed-3 outcome other than the hold matches the first run.
+- **Each start's outcome against the first run:**
+  - the 20 rescued then are rescued again;
+  - the 10 held short are rescued;
+  - the 4 operator-time endings are the same.
