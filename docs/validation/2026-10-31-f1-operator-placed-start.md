@@ -127,3 +127,27 @@ Registered before the survey (the lead's request):
 - **Starts** `val_s3.json` (ws1 13618): 98 starts (layer A 49, B 24, C 25).
   - Drawn with seed 1031, 3 m apart, until all three layers were exhausted (95,460 attempts).
   - Validation split, map index 5. Keep-out from the survey's own `result.json`.
+
+## 4. Offline judgement (plan 4.2 a, 4.4, 4.5; frozen code)
+
+These runs used `tools/f1_place_eval.py` on the frozen code (snapshot `f1_678f10fb`) with R_AMB from `place_config.json`. Each start had three scan sets from capture jobs on that code (map indices 1xx, 2xx and 3xx), and the clicks came from the click model with the world's seed and the start's index.
+
+| World | Valid starts | Success | Imprecise | Wrong | Failed | Placement p95 / max |
+|---|---|---|---|---|---|---|
+| seed 3 (map `fb0ad8ca`, ws1 13619–13621, 13623) | 91 of 98 | 88 | 0 | 0 | 3 (ambiguous 6, low fit 3 placements) | 1.35 s / 2.94 s |
+| seed 5 (map `3edf24b0`, ws1 13498–13500, 13501) | 84 of 93 | 81 | 0 | 0 | 3 (ambiguous 9, off-map 1 placement) | 1.31 s / 2.10 s |
+| **both** | **175** | **169** | **0** | **0** | 6 | |
+
+- **Safety (4.2 a) passes:** 169 confirmed sessions with no wrong and no imprecise one. The one-sided 95 % Clopper-Pearson upper bound is 1.8 %. There are 175 valid starts, against at least 120 required.
+  - The scope is the click model, the N_PLACE = 3 policy and an operator who confirms the first preview.
+- **Time (4.4) passes:** p95 ≤ 2 s and maximum ≤ 10 s in both worlds.
+- **Hard population, offline (4.3, a record):** seed 5's 16 starts that B-P2d left to a person. 14 are rescued offline.
+- **Record-only placements (4.5)**, first scan set:
+
+| Click | seed 3 confirmed (wrong) | seed 5 confirmed (wrong) |
+|---|---|---|
+| one bay ±x | 1 (1) | 0 |
+| one bay ±y | 9 (9) | 10 (10) |
+| 1.5 m off | 86 (0) | 78 (0) |
+| 0.5 rad off | 55 (0) | 37 (0) |
+| heading turned around | 1 (1) | 0 |
