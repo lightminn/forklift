@@ -111,14 +111,21 @@ T11 사이클과 live 적재 정지는 Codex P3 를 반영했다. 운영 런처�
 - **미끄럼:** 미끄럼 실패 B ≤ A.
 - **새 끝:** B 에만 나온 `failure_reason` 은 원인을 댄다. 질량과 무관함을 보이지 못하면 불합격이다.
 - **삽입·들기:** 포크 도달 깊이, 최소 가로 틈, 들기 기울기, 밀린 거리, 포크 위 상대 이동을 팔별로 적는다. 문턱이 없는 서술 비교이고 수치 비열등 판정이 아니다(Codex 2 차 P3).
-- **live 적재 정지:** `probe.json` 의 첫 임무 `stop_wait` 에서 두 팔 모두
-  - `phase_reached` 참(운반 단계 도달), `stop_reply.t == "ack"`, `end_reason == "sim_time"`, `end_sim_s − start_sim_s ≥ 30`, `mode_at_end == "STOPPED"`,
-  - `rearm` 성공 뒤 PAUSED 관측(`paused_after_rearm` 대기가 시간 초과 없이 끝남),
-  - `after_cancel_statuses` 가 `cancelled` 또는 `recovery_required` 로 끝남,
-  - 그 세션 live 기록에 장면 손상(`scene_damaged`)이 없음.
+- **live 적재 정지 (개정 1, 2026-11-02 — 아래 "등록 개정" 참고):** `probe.json` 의 첫 임무(`missions_run[0]`)에서 두 팔 모두
+  - `stop_wait.phase_reached` 참(운반 단계 도달), `stop_wait.stop_reply.t == "ack"`, `stop_wait.end_reason == "sim_time"`, `stop_wait.end_sim_s − stop_wait.start_sim_s ≥ 30`, `stop_wait.mode_at_end == "STOPPED"`,
+  - `stop_wait.rearm.t == "ack"` 이고, `events` 에 `{"event": "reached", "label": "paused_after_rearm"}` 가 있음(같은 라벨의 `timeout` 이 아님),
+  - **임무 결과 `missions_run[0].result` 의 `mission_id` 가 `stop_wait.mission_id` 와 같고 `outcome` 이 `cancelled` 또는 `recovery_required`,**
+  - 그 세션 live 기록(`live/epoch_1/run/result.json`)에 장면 손상(`scene_damaged`)이 없음.
   - A·B 의 끝 상태가 다르면 원인을 댄다. 세션 `success` 는 실패한 임무가 있어도 참일 수 있어 쓰지 않는다(Codex 2 차 P2-4).
 - 위를 모두 넘으면 운영 기본을 바꾸는 이 PR 을 머지한다. 하나라도 깨지면 머지하지 않고, 원인과 함께 총괄에 올린다. 더 가벼운 팔레트가 더 사실에 가까운 물성일 수 있으므로, 깨진 것을 "새 값이 틀렸다"로 읽지 않고 무엇이 그 질량에 기대고 있었는지를 먼저 찾는다.
 - 결과를 본 뒤 판정식을 고치거나 실행을 무효로 돌리지 않는다.
+
+### 등록 개정 1 (2026-11-02, 총괄 결정)
+
+- 첫 제출(ws1 `test_runs/simphys/pm_bc0ea139`, live 2 짝 `pm_{A,B}_live_s{0,1}`)의 live 끝 상태 원천은 탐침의 `after_cancel_statuses` 마지막 값이었다. 탐침은 임무 결과가 오면 그 목록에 담기 전에 빠져나오므로, 네 실행 모두 목록이 `["paused"]` 로 끝났다. 원천을 잘못 고른 것이고 두 팔에 똑같이 걸린다.
+- **그 2 짝은 "원천 오류로 판정 불가"로 남긴다.** 서술 관찰로만 적으면, 네 실행 모두 운반 단계 STOP·시뮬 30 s 서 있기·재무장·취소가 됐고 임무 결과 `outcome` 은 `cancelled`(사유 `operator`), 장면 손상은 없었다.
+- 결과를 본 뒤 판정 원천을 바꿔 그 2 짝을 다시 읽지 않는다(총괄: 두 팔에 같아도 등록 원칙에 어긋난다). 위처럼 원천을 임무 결과 `outcome` 으로 고친 판정으로 **live 2 짝(4 실행)을 새로 돌리고, 첫 2 짝과 합쳐 세지 않는다.** 최소 유효 짝(live 2/2)은 새 2 짝에 적용한다.
+- 이 개정은 새 결과를 보기 전에 커밋한다.
 
 ## 5. 이 변경이 보이지 않는 것
 
