@@ -4816,22 +4816,6 @@ def drive(S, isaac) -> None:
         y0 = _bound["y0"]
     if "y1" in _bound:
         y1 = _bound["y1"]
-    # docs/plans/2026-11-01-standstill-wheel-hold.md S1/S0: made here from the arguments (not setup values), so a
-    # setup recorded before them and an off run bind nothing new; off keeps the dwell lock path below as is
-    stand_hold = None
-    if getattr(args, "stand_wheel_hold", "off") != "off":
-        from forklift_core.control.stand_hold import WheelHold
-
-        stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)
-        state["stand_wheel_locks"] = stand_hold.events  # the result's record, filled as it goes
-    stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
-    # the lock in progress (its first event, which carries the locked move / effort as they grow) and the release
-    # whose restart is being timed
-    stand_watch = {"event": None, "release": None}
-    if stand_probe is not None:
-        import atexit
-
-        atexit.register(stand_probe.close)  # every end, a failure or a cancel too
 
     def record_video_overlay(t_now: float) -> None:
         from forklift_core.perception.obstacle_grid import OCCUPIED as GRID_OCCUPIED
@@ -5568,6 +5552,22 @@ def drive(S, isaac) -> None:
                                          hash_only_requests={"drive_frame", "stop"},
                                          watches={"drive_frame": far_watch_, "stop": far_watch_} if far_watch_ else None)
     state["phase"] = "planning"
+    # docs/plans/2026-11-01-standstill-wheel-hold.md S1/S0: made here, after the binding prologue, from the arguments (not setup values), so a
+    # setup recorded before them and an off run bind nothing new; off keeps the dwell lock path below as is
+    stand_hold = None
+    if getattr(args, "stand_wheel_hold", "off") != "off":
+        from forklift_core.control.stand_hold import WheelHold
+
+        stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)
+        state["stand_wheel_locks"] = stand_hold.events  # the result's record, filled as it goes
+    stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
+    # the lock in progress (its first event, which carries the locked move / effort as they grow) and the release
+    # whose restart is being timed
+    stand_watch = {"event": None, "release": None}
+    if stand_probe is not None:
+        import atexit
+
+        atexit.register(stand_probe.close)  # every end, a failure or a cancel too
     # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
     # once -- never from the layer, whose every call and attribute is a recorded boundary
     eval_shape_mode_ = (str((obstacle_module.load_layer_config(args.obstacle_layer).get("permission") or {})
