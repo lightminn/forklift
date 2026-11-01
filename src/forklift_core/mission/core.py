@@ -125,14 +125,34 @@ def moved_slot_props(prepared_destination, world) -> list:
     return props
 
 
+def boxed_backoff_kwargs(options) -> dict:
+    """F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D1): the boxed-start backoff for the same calls as the
+    return-start backoff; none unless on, so the calls are as before (a record from before the option: off)."""
+    return {"return_start_backoff_boxed": True} if getattr(options, "return_start_backoff_boxed", False) else {}
+
+
 def note_return_backoff(state: dict, where: str, record: dict | None, adopted: bool) -> None:
     """docs/plans/2026-10-27-return-start-withdraw-extension.md R6: a return-start backoff attempt a plan came back
     with -- taken or refused (no advice, clipped, no return from its end), installed or not."""
     if record is None:
         return
-    state.setdefault("return_start_backoffs", []).append(
-        {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
-         "status": record.get("status"), "adopted": bool(adopted)})
+    entry = {"where": where, "advice_m": record.get("advice_m"), "length_m": record.get("length_m"),
+             "status": record.get("status"), "adopted": bool(adopted)}
+    # F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D5): its trigger and check, only when it made them
+    entry.update({k: record[k] for k in ("trigger", "check", "end_search_attempts") if k in record})
+    state.setdefault("return_start_backoffs", []).append(entry)
+
+
+def failed_plan_record(result) -> dict:
+    """A failed release replan's own record (docs/validation/2026-10-31-riib-default-batch2.md ③b): its status, the
+    search ladder it tried (``search_attempts``) and the exit-prefix / start-backoff records it carries -- the run ends
+    on it before any path record could keep them."""
+    record = {"status": result.status,
+              "search_attempts": [list(a) for a in (getattr(result, "search_attempts", None) or ())]}
+    for field_ in ("exit_prefix", "start_backoff"):
+        if getattr(result, field_, None) is not None:
+            record[field_] = getattr(result, field_)
+    return record
 
 
 def note_trace_backoffs(state: dict, where: str, trace, success: bool) -> None:
@@ -2638,6 +2658,7 @@ class MissionCore:
                         t, ms.phase, id(hold_tracker), hold_tracker.leg_index, cusp_heading_end(tracking),
                         tracking.cusp_pending, tracking.speed_mps,
                         cusp_heading_offset(hold_tracker, tracking.progress_m, rear))
+        tracking, rear = self._return_cusp_replan(t, rear, tracking, signed_speed, dt, step)
         # Under SLAM, an observe leg judged out of heading at a cusp or
         # its end (S2 seed 1: -0.078 rad at a cusp of the near leg, three
         # versions running): brake, then plan the leg again from the
@@ -6056,6 +6077,94 @@ class MissionCore:
             "evidence_age_s": age_ if math.isfinite(age_) else None, "silent": silent_,
         }
 
+    def _return_cusp_replan(self, t: float, rear, tracking, signed_speed: float, dt: float, step: int):
+        """docs/plans/2026-10-31-return-cusp-replan.md D1: a heading failure at a return_home cusp, after the cusp
+        heading hold (it may have latched it this tick), is braked at zero until the truck stands, then the return is
+        planned again from there as the goal-stall recovery plans it -- a held SLAM released first, no turnaround, no
+        start backoff, no tight retry -- at most ``return_cusp_replans`` times per return (0: off, as before).
+        Returns ``tracking`` and ``rear``."""
+        ms, state, obstacle, slam, hooks, options = self.ms, self.state, self.obstacle, self.slam, self.hooks, self.options
+        budget = int(getattr(options, "return_cusp_replans", 0) or 0)
+        if budget <= 0:
+            return tracking, rear  # off: nothing read or written, every earlier run
+        trackers = self.trackers
+        if not (ms.phase == "return_home" and tracking.status == "failed"
+                and tracking.failure == "endpoint_heading" and tracking.at_cusp and not tracking.off_path
+                and len(state.get("return_cusp_replans", ())) < budget):
+            self._return_cusp_wait = None  # a wait belongs to one failure on one tracker (Codex impl review P2-2)
+            return tracking, rear
+        if slam is not None:
+            stopped = bool(slam["stop_now"])
+        else:  # the commanded speed is forced to zero below; the stand is the true one
+            stopped = (float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps
+                       and abs(float(hooks.truth_yaw_rate())) <= options.cusp_stop_yaw_rate_radps)
+        # Its own stand count, keyed to this phase's tracker: a path replaced while it waited (an obstacle replan, a
+        # resume) starts the count again, and the transport's ms.cusp_stop_ticks is left alone.
+        key = (ms.phase, id(trackers[ms.phase]))
+        wait = getattr(self, "_return_cusp_wait", None)
+        if wait is None or wait["key"] != key:
+            # Where the rule first acted on this failure (the batch tells a run it touched from one it did not:
+            # docs/plans/2026-11-01-return-cusp-replan-batch.md 5)
+            state.setdefault("return_cusp_waits", []).append(
+                {"time_s": t, "loop_step": step, "rear_pose": np.asarray(rear, dtype=float).tolist(),
+                 "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad,
+                 "replans_before": len(state.get("return_cusp_replans", ()))})
+        ticks = (wait["ticks"] if wait is not None and wait["key"] == key else 0) + 1 if stopped else 0
+        self._return_cusp_wait = {"key": key, "ticks": ticks}
+        if ticks < options.cusp_stop_needed:
+            # Zero, not the failed tracker's last command (BF s6 left 0.0095 m/s, Codex plan review 2).
+            return replace(tracking, status="braking", speed_mps=0.0), rear
+        self._return_cusp_wait = None
+        record = {"time_s": t, "loop_step": step, "rear_pose": np.asarray(rear, dtype=float).tolist(),
+                  "position_error_m": tracking.position_error_m, "yaw_error_rad": tracking.yaw_error_rad,
+                  "released": None}
+        if slam is not None and slam["tracker"].mode == "holding":
+            # As before the goal-stall replan: a long new return must not be driven held (Codex plan review 2 P2-2).
+            jump_m, jump_rad = self.release_slam(hooks.slam_odom_base())
+            slam["holds"].append({"phase": ms.phase, "time_s": t, "event": "release_before_return_cusp_replan",
+                                  "jump_m": jump_m, "jump_rad": jump_rad})
+            record["released"] = {"jump_m": jump_m, "jump_rad": jump_rad}
+            rear_now = hooks.slam_rear(hooks.now_s())
+            if obstacle is not None and slam["tracker"].applied is not None:
+                obstacle["applied"] = tuple(float(v) for v in slam["tracker"].applied[0])
+                obstacle["version"] += 1
+                obstacle["reprojections"] = obstacle.get("reprojections", 0) + 1
+                obstacle["layer"].refresh(
+                    t, obstacle["applied"], obstacle["version"],
+                    current_pose=tuple(float(v) for v in rear_now), path_ahead=np.array([rear_now]), loaded=False,
+                )
+            rear = np.asarray(rear_now, dtype=float)
+            hooks.set_rear(rear)  # the runner's closures (grid_kwargs) read its rear
+        start = PlanningPose(float(rear[0]), float(rear[1]), float(rear[2]))
+        record["plan_start_pose"] = [start.x_m, start.y_m, start.yaw_rad]  # after a release, not the failure's pose
+        scenario_ = options.scenario if slam is None else slam.get("return_scenario", options.scenario)
+        grid_world, grid_kwargs, plan_return_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_return_leg
+        replan_start = hooks.wall()
+        replanned = plan_return_leg(
+            grid_world(scenario_), start, options.return_to_pose, options.planner_config,
+            geometry=self.geometry, travel_config=options.travel_config, **grid_kwargs(None),
+        )
+        wall_s = hooks.wall() - replan_start
+        state["planning_wall_s"] = (state.get("planning_wall_s") or 0.0) + wall_s
+        record.update(status=replanned.status, planning_wall_s=wall_s,
+                      search_attempts=[list(a) for a in (getattr(replanned, "search_attempts", None) or ())],
+                      path=hooks.path_record(replanned) if replanned.success else None,
+                      replaced_path=hooks.path_record(self.paths[ms.phase]))
+        state.setdefault("return_cusp_replans", []).append(record)  # made at the first one: off adds no key
+        hooks.require(replanned.success, f"return_cusp_replan_failed: {failed_plan_reason(replanned)}")
+        self.paths[ms.phase] = replanned
+        state.setdefault("paths", {})[ms.phase] = hooks.path_record(replanned)
+        hooks.write_paths()
+        hooks.show_path(replanned, "Return", (0.55, 0.2, 0.85))
+        trackers[ms.phase] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
+                                                 trackers[ms.phase].config)
+        if obstacle is not None:
+            obstacle.setdefault("progress", {}).clear()  # as the transport's cusp replan
+        ms.phase_started = t
+        tracking = trackers[ms.phase].update(rear, signed_speed, dt)
+        ms.last_tracking = tracking
+        return tracking, rear
+
     def cusp_end_recovered(self, goal: bool) -> bool:
         """A short next leg's end missed (in heading, or a stall at the final goal -- cusp design
         amendment) that an existing rule recovers within its budget: a transport cusp by the cusp
@@ -7089,6 +7198,10 @@ class MissionCore:
             replan_status=replanned.status,
             planning_wall_s=time.monotonic() - replan_start,
         )
+        if not replanned.success:  # ③b: the ladder of a replan that ends the run (and of the tight retry's first try)
+            event.update(failed_plan=failed_plan_record(replanned))
+            if first_ is not replanned:
+                event["first_failed_plan"] = failed_plan_record(first_)
         require(replanned.success, f"slam_release_replan_failed: {failed_plan_reason(replanned)}")
         paths[leg] = replanned
         state.setdefault("paths", {})[leg] = path_record(replanned)
@@ -7229,7 +7342,7 @@ class MissionCore:
         for the core's plan_transport calls (sync and worker), as _exit_prefix_kwargs gives the exit prefix; none when
         off, so the calls are as before."""
         limit = float(getattr(self.options, "return_start_backoff_m", 0.0) or 0.0)
-        return {"return_start_backoff_m": limit} if limit > 0.0 else {}
+        return {"return_start_backoff_m": limit, **boxed_backoff_kwargs(self.options)} if limit > 0.0 else {}
 
     def _return_backoff_kwargs(self, world) -> dict:
         """docs/plans/2026-10-27-return-start-withdraw-extension.md R2 2-3 / R5: the return-start backoff for a return
@@ -7243,7 +7356,8 @@ class MissionCore:
             return {}
         return {"return_start_backoff_m": limit,
                 "backoff_slot_props": [p_.rectangle for p_ in moved_slot_props(self.options.scenario.destination,
-                                                                                world)]}
+                                                                                world)],
+                **boxed_backoff_kwargs(self.options)}
 
     def _exit_prefix_kwargs(self) -> dict:
         """The worker's transport planners get the run's exit prefix as the hooks' do (the runner binds it there;
@@ -7292,6 +7406,8 @@ class MissionCore:
             note_return_backoff(state, "release_replan", getattr(replanned, "start_backoff", None), replanned.success)
         event.update(replaced_path=hooks.path_record(paths[leg]), replanned=True, replan_status=replanned.status,
                      planning_wall_s=hooks.wall() - p.wall, async_taken_s=float(t))
+        if not replanned.success:  # ③b: as the batch path (the worker sends the final try only)
+            event.update(failed_plan=failed_plan_record(replanned))
         hooks.require(replanned.success, f"slam_release_replan_failed: {failed_plan_reason(replanned)}")
         paths[leg] = replanned
         state.setdefault("paths", {})[leg] = hooks.path_record(replanned)

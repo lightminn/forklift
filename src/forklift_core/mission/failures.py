@@ -64,6 +64,7 @@ PREFIXES = {
     "transport_recovery_after_docking": MISSION, "stall_replan_failed": MISSION, "Mission planning failed": MISSION,
     "approach:": MISSION, "insert:": MISSION, "extract:": MISSION, "transport:": MISSION, "withdraw:": MISSION,
     "return_home:": MISSION, "cusp_position_stall": MISSION,
+    "return_cusp_replan_failed:": MISSION,  # docs/plans/2026-10-31-return-cusp-replan.md D1: the return's cusp replan
     "not_pickable:": MISSION,  # the far reading does not fit the forks at this spacing (2026-10-21)
     # the live far recognition (plan 2026-10-22-live-far-recognition): its work failed, or its stop decision did not
     # come within 30 s -- that mission ends, the session goes on

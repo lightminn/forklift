@@ -340,6 +340,12 @@ python sim/isaac/run_slam_drive.py \
   --output /path/to/new-run --seed 0 --video
 ```
 
+The example keeps the provisional chassis (`dls08_provisional`) of the original
+recording; give the measured URDF (`sim/models/dls08_measured/forklift.urdf`) and a
+base scene built from it for runs on the measured chassis. Unlike `run_transport.py`
+this runner has no chassis-contract or manifest check, so a scene built from the
+other model is not refused.
+
 Drives the closed survey loop of the factory layout (about 115 m) and records
 `slam_log.npz`: PhysX ray-cast planar scans (`planar_lidar.py`; 1,600 beams,
 10 Hz, 0.2-12 m from `config/isaac_slam_lidar.yaml`, the A2M12 catalogue row,

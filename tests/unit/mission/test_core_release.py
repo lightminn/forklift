@@ -317,3 +317,51 @@ def test_a_release_whose_reprojection_fails_has_not_carried_the_estimates_yet():
     with pytest.raises(RuntimeError, match="refresh failed"):
         w.core.release_and_stand(12.0, "release_pickup_retry")
     assert w.obstacle["pickup_estimate"].x_m == 5.0 and w.core.pocket["planning_pickup"].x_m == pytest.approx(5.1)
+
+
+def test_a_failed_release_replan_keeps_its_search_attempts_in_the_release_record():
+    """docs/validation/2026-10-31-riib-default-batch2.md ③b (lead 2026-10-31): a failed release replan ends the run
+    before any path record keeps its ladder, so the release event keeps the failed plan's attempts (and the tight
+    retry's first try); nothing is added when the replan succeeds."""
+    from dataclasses import replace
+
+    tried = ((8, "no_path", 120, 0.2, 0.17, 0.06, 0.25, 30000, 0, 0), (8, "expansion_limit", 30000, 0.2, 0.087, 0.06, 0.25, 120000, 0, 0))
+    failed = replace(leg(success=False, status="no_path"), search_attempts=tried)
+    w = World(phase="transport", plans=[failed])
+    with pytest.raises(RuntimeError, match="slam_release_replan_failed: no_path"):
+        w.core.slam_release(30.0)
+    record = w.slam["holds"][-1]["failed_plan"]
+    assert record["status"] == "no_path" and record["search_attempts"] == [list(a) for a in tried]
+    assert "first_failed_plan" not in w.slam["holds"][-1]
+    first = replace(leg(success=False, status="invalid_start"), search_attempts=tried[:1])
+    w = World(phase="transport", plans=[first, failed])
+    with pytest.raises(RuntimeError, match="slam_release_replan_failed"):
+        w.core.slam_release(30.0)
+    event = w.slam["holds"][-1]
+    assert event["first_failed_plan"]["status"] == "invalid_start"
+    assert event["first_failed_plan"]["search_attempts"] == [list(tried[0])]
+    w = World(phase="transport", plans=[leg(2.1, 3.0)])
+    w.core.slam_release(30.0)
+    assert "failed_plan" not in w.slam["holds"][-1] and "first_failed_plan" not in w.slam["holds"][-1]
+
+
+def test_the_failed_plan_record_takes_the_prefix_and_backoff_records_along():
+    from dataclasses import replace
+
+    from forklift_core.mission.core import failed_plan_record
+
+    plain = leg(success=False, status="no_path")
+    assert failed_plan_record(plain) == {"status": "no_path", "search_attempts": []}
+    rich = replace(plain, exit_prefix={"status": "unmet:search_no_path"}, start_backoff={"status": "unmet:no_advice"})
+    assert failed_plan_record(rich)["exit_prefix"] == {"status": "unmet:search_no_path"}
+    assert failed_plan_record(rich)["start_backoff"] == {"status": "unmet:no_advice"}
+
+
+def test_both_release_paths_record_the_failed_plan():
+    # the batch path (slam_release) and the worker path (_release_finish) end the run the same way
+    import inspect
+
+    from forklift_core.mission import core
+
+    source = inspect.getsource(core)
+    assert source.count("failed_plan=failed_plan_record(replanned)") == 2

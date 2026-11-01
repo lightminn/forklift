@@ -30,7 +30,15 @@ from .geometry import (
     collision_free_pose,
 )
 from .grid_collision import make_checker
-from .hybrid_astar import PlannerConfig, PlanResult, _sample_arc, _wrap, obstacle_heuristic_field, plan_hybrid_astar
+from .hybrid_astar import (
+    PlannerConfig,
+    PlanResult,
+    _sample_arc,
+    _wrap,
+    first_step_free,
+    obstacle_heuristic_field,
+    plan_hybrid_astar,
+)
 
 DEFAULT_TRANSPORT_CLEARANCE_M = 0.10
 # Denser analytic-connection intervals tried, in order, when a mission search
@@ -65,6 +73,23 @@ FALLBACK_FINE_PRIMITIVE_M = 0.10
 # at this step instead, whose smaller margin still encloses the swept footprint
 # (docs/plans/2026-10-02-second-eval-failure-fixes.md, P6).
 FALLBACK_BOXED_COLLISION_STEP_M = 0.01
+
+
+def boxed_fallback_config(config: PlannerConfig) -> PlannerConfig:
+    """The config the ladder retries a boxed start at (P6): the collision step FALLBACK_BOXED_COLLISION_STEP_M when that
+    is finer than the config's own, else the config as it is."""
+    if FALLBACK_BOXED_COLLISION_STEP_M is not None and FALLBACK_BOXED_COLLISION_STEP_M < config.collision_step_m:
+        return replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
+    return config
+
+
+def boxed_start(result: PlanResult) -> bool:
+    """A start every search attempt left after its root (docs/plans/2026-11-02-return-start-backoff-boxed.md D2): the
+    result no_path, and each attempt exactly no_path with one node -- a tail timeout or late attempt, or any attempt that
+    expanded more, is not."""
+    attempts = tuple(result.search_attempts or ())
+    return (result.status == "no_path" and bool(attempts)
+            and all(a[1] == "no_path" and int(a[2]) == 1 for a in attempts))
 _RETRIED_STATUSES = ("expansion_limit", "no_path")
 # The ladder's tail (docs/validation/2026-10-31-invalid-start-diagnosis.md 2(b), lead 2026-10-31): after every attempt
 # above ran out, once more on the caller's position lattice with a 5 deg heading lattice and this multiple of the
@@ -173,7 +198,7 @@ def _search(
         and FALLBACK_BOXED_COLLISION_STEP_M is not None
         and FALLBACK_BOXED_COLLISION_STEP_M < config.collision_step_m
     ):
-        config = replace(config, collision_step_m=FALLBACK_BOXED_COLLISION_STEP_M)
+        config = boxed_fallback_config(config)
         result = attempt(config)
     for retry in _retries(config, extended):
         if result.status == "timeout":
@@ -827,22 +852,31 @@ RETURN_START_BACKOFF_CAP_M = 0.30
 
 def return_start_backoff(start: Pose2D, obstacles, footprint: Footprint, bounds: Bounds, clearance_m: float,
                          slot_props, straight_clearance_m: float, limit_m: float, *, occupancy=None,
-                         step_m: float = RETURN_START_BACKOFF_STEP_M, pad_m: float = RETURN_START_BACKOFF_PAD_M) -> dict:
+                         step_m: float = RETURN_START_BACKOFF_STEP_M, pad_m: float = RETURN_START_BACKOFF_PAD_M,
+                         first_step_config: PlannerConfig | None = None) -> dict:
     """R3: straight back from ``start`` along its heading, ``step_m`` at a time up to ``limit_m``. A distance d is clear
     when (a) the pose d back passes the return's own start check (``obstacles``, bounds and grid at ``clearance_m``) and
     (b) the straight from ``start`` to it keeps ``straight_clearance_m`` from ``slot_props``, the bounds and the grid --
     the props in the start's own frame, so a start already inside a grown estimate can still back away (agy review 5).
     The advice is the first clear d, ``last_m`` the end of the run of clear distances from it; the backoff is
     min(advice + pad, last, limit), taken only when it reaches advice + one step ("prefix"), else "unmet:clipped";
-    no clear d within the limit is "unmet:no_advice"."""
+    no clear d within the limit is "unmet:no_advice".
+
+    ``first_step_config`` (F2'', docs/plans/2026-11-02-return-start-backoff-boxed.md D3): (a) is also that the search
+    can take a first step from the pose -- first_step_free on the ladder's boxed-start config of the search's own
+    travel config -- and the record says so ("check")."""
     checker = make_checker(obstacles, footprint, bounds, occupancy)
     record = {"start": [float(start.x_m), float(start.y_m), float(start.yaw_rad)], "limit_m": float(limit_m),
               "step_m": float(step_m), "pad_m": float(pad_m), "advice_m": None, "last_m": None, "length_m": 0.0}
+    step_config = None if first_step_config is None else boxed_fallback_config(first_step_config)
+    if step_config is not None:
+        record["check"] = "first_step"
     advice = last = None
     for k in range(1, int(floor(limit_m / step_m + 1e-9)) + 1):
         d = round(k * step_m, 6)
         end = _reversed_by(start, d)
-        clear = checker.free((end.x_m, end.y_m, end.yaw_rad), clearance_m) and _straight_plan(
+        clear = checker.free((end.x_m, end.y_m, end.yaw_rad), clearance_m) and (
+            step_config is None or first_step_free((end.x_m, end.y_m, end.yaw_rad), checker, step_config)) and _straight_plan(
             start, end, -1, slot_props, footprint, bounds, straight_clearance_m, occupancy).success
         if clear:
             advice = d if advice is None else advice
@@ -859,32 +893,45 @@ def return_start_backoff(start: Pose2D, obstacles, footprint: Footprint, bounds:
 
 
 def _return_search(start, goal, props, footprint, bounds, config, *, occupancy=None, deadline=None, slot_props=(),
-                   straight_clearance_m: float = 0.0, backoff_m: float = 0.0) -> PlanResult:
+                   straight_clearance_m: float = 0.0, backoff_m: float = 0.0, backoff_boxed: bool = False) -> PlanResult:
     """The mission plan's return_home search from the withdrawal end; with ``backoff_m`` > 0 an invalid start backs
-    straight off first (_backed_off, R2 1). With 0 it is the plain search."""
+    straight off first (_backed_off, R2 1), and with ``backoff_boxed`` a boxed one too (F2''). With 0 it is the plain
+    search."""
     def plan_from(start_: Pose2D) -> PlanResult:
         return _search(start_, goal, props, footprint, bounds, config, occupancy=occupancy, deadline=deadline)
 
     return _backed_off(start, plan_from(start), plan_from, props, footprint, bounds, config.clearance_m,
-                       list(slot_props), straight_clearance_m, backoff_m, occupancy)
+                       list(slot_props), straight_clearance_m, backoff_m, occupancy,
+                       boxed_config=config if backoff_boxed else None)
 
 
 def _backed_off(start: Pose2D, direct: PlanResult, plan_from, obstacles, footprint, bounds, clearance_m, slot_props,
-                straight_clearance_m, limit_m, occupancy) -> PlanResult:
+                straight_clearance_m, limit_m, occupancy, *, boxed_config: PlannerConfig | None = None) -> PlanResult:
     """R4: ``direct`` (the return planned from ``start``) when it is not an invalid start or no backoff is asked for;
     else the straight reverse R3 gives, then ``plan_from(end)`` joined after it. A backoff not found keeps ``direct``,
-    and a failed return from its end gives that failure; both carry the record in ``start_backoff``."""
-    if limit_m <= 0.0 or direct.status != "invalid_start":
+    and a failed return from its end gives that failure; both carry the record in ``start_backoff``.
+
+    ``boxed_config`` (F2'', docs/plans/2026-11-02-return-start-backoff-boxed.md, the search's own travel config): a
+    boxed start (boxed_start) backs off too (D2); either trigger's distances must let the search take a first step
+    (D3); the record says which trigger; and a failed return from the end keeps ``direct``, with the end search's
+    attempts in the record, so a caller's own fallback on an invalid start still runs (D6)."""
+    boxed = boxed_config is not None and boxed_start(direct)
+    if limit_m <= 0.0 or (direct.status != "invalid_start" and not boxed):
         return direct
     record = return_start_backoff(start, obstacles, footprint, bounds, clearance_m, slot_props, straight_clearance_m,
-                                  limit_m, occupancy=occupancy)
+                                  limit_m, occupancy=occupancy, first_step_config=boxed_config)
+    if boxed_config is not None:
+        record["trigger"] = "boxed" if boxed else "invalid_start"
     if record["status"] != "prefix":
         return replace(direct, start_backoff=record)
     end = _reversed_by(start, record["length_m"])
     straight = _straight_plan(start, end, -1, slot_props, footprint, bounds, straight_clearance_m, occupancy)
     rest = plan_from(end)
     if not rest.success:
-        return replace(rest, start_backoff={**record, "status": f"unmet:search_{rest.status}", "length_m": 0.0})
+        failed = {**record, "status": f"unmet:search_{rest.status}", "length_m": 0.0}
+        if boxed_config is not None:
+            return replace(direct, start_backoff={**failed, "end_search_attempts": [list(a) for a in rest.search_attempts]})
+        return replace(rest, start_backoff=failed)
     return _join_prefix(straight, rest, record, "start_backoff")
 
 
@@ -1479,6 +1526,7 @@ def plan_return_leg(
     turnaround_check=None,
     return_start_backoff_m: float = 0.0,
     backoff_slot_props=None,
+    return_start_backoff_boxed: bool = False,
 ) -> PlanResult:
     """The unloaded return leg alone, as plan_transport's return_home stage.
 
@@ -1496,7 +1544,9 @@ def plan_return_leg(
     return_start_backoff_m > 0 (docs/plans/2026-10-27-return-start-withdraw-extension.md R2-R4, only for a return
     from the withdrawal end): an invalid start backs straight off first, up to that far -- return_start_backoff,
     the straight checked against ``backoff_slot_props`` (the scenario's slot-stage props when None) -- and the
-    return, turnaround included, is planned from the backoff's end.
+    return, turnaround included, is planned from the backoff's end. ``return_start_backoff_boxed`` (F2'',
+    docs/plans/2026-11-02-return-start-backoff-boxed.md): a boxed start backs off as well, the distances checked for a
+    first step on ``travel_config``.
     """
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
@@ -1524,7 +1574,8 @@ def plan_return_leg(
 
     slot_props = scenario_props(scenario, "slot") if backoff_slot_props is None else list(backoff_slot_props)
     return _backed_off(start_rear, plan_from(start_rear), plan_from, obstacles, footprint, bounds,
-                       travel_config.clearance_m, slot_props, config.clearance_m, return_start_backoff_m, occupancy)
+                       travel_config.clearance_m, slot_props, config.clearance_m, return_start_backoff_m, occupancy,
+                       boxed_config=travel_config if return_start_backoff_boxed else None)
 
 
 # Return-leg forward preference (2026-10-12, user: prefer driving forward; plan
@@ -1755,6 +1806,7 @@ def plan_loaded_delivery(
     deadline=None,
     exit_prefix: ExitPrefix | None = None,
     return_start_backoff_m: float = 0.0,
+    return_start_backoff_boxed: bool = False,
 ) -> MissionPlan:
     """The delivery of a pallet already on the forks (persistent console plan D5 6c): from ``start_rear`` the same
     steps plan_transport takes from its extracted pose on -- the transport search with the loaded footprint (on a
@@ -1813,7 +1865,8 @@ def plan_loaded_delivery(
                                                      geometry.unloaded_footprint, scenario.bounds, travel_config,
                                                      occupancy=grid, deadline=deadline, slot_props=slot_props,
                                                      straight_clearance_m=config.clearance_m,
-                                                     backoff_m=return_start_backoff_m))
+                                                     backoff_m=return_start_backoff_m,
+                                                     backoff_boxed=return_start_backoff_boxed))
     if not return_home.success:
         return MissionPlan(False, f"return_home:{return_home.status}")
     return MissionPlan(True, "success", None, None, None, transport, withdraw, return_home)
@@ -1836,6 +1889,7 @@ def plan_transport(
     deadline=None,
     exit_prefix: ExitPrefix | None = None,
     return_start_backoff_m: float = 0.0,
+    return_start_backoff_boxed: bool = False,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -2078,6 +2132,7 @@ def plan_transport(
             slot_props=slot_props,
             straight_clearance_m=config.clearance_m,
             backoff_m=return_start_backoff_m,
+            backoff_boxed=return_start_backoff_boxed,
         ),
     )
     if not return_home.success:

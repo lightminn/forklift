@@ -39,7 +39,7 @@ python tools/build_forklift_model.py \
 |---|---|---|
 | 뒤차축 중심 최소 회전 반경 | 2.728 m (κ 0.3665 1/m) | 두 바퀴 15°. 15° 가 바깥 바퀴였다면 2.198 m, 자전거 모델로는 2.463 m — 회전 원 실측 전까지 미확정 |
 | 캐리지 삽입 한계 | 0.346 m | 포크 끝 − 가로대 앞면(두께 0.028 은 추정) |
-| 삽입 목표 `min(깊이 × 0.6, 한계 − 0.046)` | EPAL 6 · T11 × 0.6 모두 0.300 m | 잠정 모델은 0.360 m |
+| 삽입 목표 `min(깊이 × 0.6, 한계 − 0.016)` | EPAL 6 · T11 × 0.6 · 얕은 T11 모두 0.330 m | 예비 0.016 은 2026-10-08 사용자 결정(`INSERTION_RESERVE_M`, ADR 0004 D3 개정). 잠정 모델(한계 0.406)은 EPAL 6 0.360 m · T11 × 0.6 0.390 m |
 | 차축–포크 끝 | 1.29 m | 잠정과 같음. "포크 끝 = 전장 끝"·뒤차축 −0.34 두 추정 위의 값 |
 
 ## 쓰는 곳
@@ -49,7 +49,13 @@ python tools/build_forklift_model.py \
   (`sim/isaac/build_base_scene.py`)을 함께 준다. 실행기가 장면 관절과 URDF, 설정 곡률과 조향
   한계를 대조해 어긋나면 시작하지 않는다.
 - CPU 도구(`preview_docking`, `build_t11_drawing`, `factory_planning_sweep` 등), G1 관문,
-  `run_perception_approach`·`run_pocket_insertion` 은 아직 잠정 모델 기준선이다.
+  `run_perception_approach`·`run_pocket_insertion` 은 아직 잠정 모델 기준선이다. 옛 기준선을 재현하려고
+  그대로 둔다. `run_perception_approach` 는 기본 URDF 가 잠정 모델이고 구동 기하(축거 0.64·윤거 0.51·
+  바퀴 반지름 0.135·조향 0.45)가 코드에 박혀 있어, 실측 URDF 를 줘도 실측 차체 실행이 아니다.
+  `run_slam_drive.py` 는 `--forklift-urdf` 를 받지만 장면 일치·manifest 검사가 없다(`sim/isaac/README.md`).
+- **엔코더 축 환산은 실차와 미확정이다.** 시뮬은 뒤 바퀴 관절각에 MT6701 4,096 계수/회전을 바로
+  적용한다(`encoders.py`, 감속비 1 가정). 실차 자석은 바퀴 모터 뒤쪽 Ø3 축에 붙으므로 바퀴 한 바퀴에
+  4,096 × G 계수다. 감속비 G 는 실측 물리값이라 확인 전에는 바꾸지 않는다.
 
 ## 다음 실측 요청
 
