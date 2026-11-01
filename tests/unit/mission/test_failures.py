@@ -93,6 +93,7 @@ KNOWN = {
         "obstacle_no_progress in ", "near_capture_realign_held_recovery", "Tracking timeout in ", "Tracking failed in ",
         "perception_capture_failed:", "observation_discarded:", "docking_retry_no_plan:", "docking_unaligned:",
         "slam_release_replan_failed: ", "async_plan_failed:", "near_field_frame_released",
+        "return_cusp_replan_failed: ",  # docs/plans/2026-10-31-return-cusp-replan.md D1
         "near_capture_realign_too_long:", "near_field_without_capture", "near_field_without_hold",
         "Pallet was not lifted", "Pallet did not settle onto destination floor", "Fork did not lower",
         "sensor_silence_stopped", "near_capture_failed:", "observe:all_candidates_exhausted:",
