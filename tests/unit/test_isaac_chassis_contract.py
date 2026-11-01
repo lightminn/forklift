@@ -57,11 +57,12 @@ def test_provisional_settings_are_refused_on_the_measured_model():
         )
 
 
-def test_measured_settings_differ_from_the_default_only_in_curvature():
+def test_measured_settings_differ_from_the_default_only_in_curvature_and_the_pallet_mass():
     default = settings("isaac_transport.yaml")
     measured = settings("isaac_transport_measured.yaml")
     changed = {k for k in default if default[k] != measured.get(k)}
-    assert changed == {"planner_curvature_inv_m", "tracker_curvature_inv_m"}
+    # pallet-mass plan (2026-11-01): the measured settings carry a mass by pallet shape, the provisional ones 10 kg
+    assert changed == {"planner_curvature_inv_m", "tracker_curvature_inv_m", "pallet_mass_kg"}
     assert set(measured) == set(default)
 
 
