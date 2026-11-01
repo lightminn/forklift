@@ -184,3 +184,20 @@ Collection: ws1 13725 on snapshot `f1_678f10fb`, one attended place session per 
   - Their SLAM replies were tracking without a bad status, at most 0.10 s apart, up to 0.00–0.08 s before the simulation's end. The localization did not stop: the probe ended the session early.
   - The rescued sessions ended at t0 + 9.58–10.05 s and passed only within the window's final 0.5 s gap allowance. The whole collection stood at the edge of the probe's wall-time margin.
 - The registered result stands as written. Any rerun is a separate decision (Codex review, below).
+
+## 7. Rerun registration (the lead's decision (B), 2026-11-02), committed before any rerun session
+
+The registered result in section 6 (`0da6d571`) stands and is not replaced. This rerun is a second, separate measurement.
+
+- **What changes:** only the probe's hold. `HOLD_SIM_S=14` is written into each run's environment in the run list. At live factor 0.3 the wall hold becomes 14 ÷ 0.3 + 1 ≈ 47.7 s, which covers 10 s of simulated time down to about 0.21×.
+- **What stays:**
+  - the frozen code (snapshot `f1_678f10fb`, freeze 1) and the judge and its criterion: 10 s of simulated time from the running tick, gaps ≤ 0.5 s;
+  - the start lists `val_s3.json` and `val_s5.json`, the hard lists, the click seeds and the click indices (the start's index in its full list);
+  - the bridge image digest, the bundle shape (live, 3 slots, `shard:4`) and the list generator, the output only to a new folder (`f1_val2`).
+- **Which starts:** all 34 frozen hard starts, each once.
+- **How it is reported:**
+  - by itself, against the same floors: safety 0 wrong / imprecise, rescue ≥ 70 %;
+  - next to section 6, never pooled with it (not 68 samples), and a worse result is reported as it comes.
+- **Also judged on the rerun (the lead's questions):**
+  1. Do the four sessions that ended at the operator's time after three refusals (val5_011, val5_083, val4_021, val4_052) end the same way again?
+  2. On seed 3 (7 of 18 the first time), is anything other than the probe's hold behind the low count? Every seed-3 session's outcome, placements and refusal reasons will be compared with the first run's.
