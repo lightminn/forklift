@@ -1,4 +1,4 @@
-# 복귀 cusp 재계획 계획 (2026-11-01, 3 판)
+# 복귀 cusp 재계획 계획 (2026-11-01, 3.1 판)
 
 지시: 총괄(2026-10-31) 후보 1 — 진단 → 계획(검토 3 회) → 수정 → 게이트·비교 배치. 총괄 보탬: 곡률 여유(다)를 대조 후보로 넣고 오프라인 재호출로 잰다.
 진단: `docs/validation/2026-10-31-return-cusp-diagnosis.md`.
@@ -52,7 +52,10 @@
 - 단계 시간 한도는 `follow` 첫머리에서 대기보다 먼저 본다. 대기 중에 한도가 다 되면 지금처럼 `Tracking timeout in return_home` 으로 끝난다. 성공 뒤 시각 재설정이 대기 중 시간 초과를 구제하지는 않는다.
 - 계획: 복귀 다리 회복의 기존 선례인 목표 정체 재계획(`docking_and_stall`)과 같은 형태다.
   - SLAM 이 hold 중이면(복귀 끝 0.5 m + 제동 거리 안에서 hold 가 걸린다) 먼저 해제한다: `release_slam`, `slam["holds"]` 에 `release_before_return_cusp_replan` 기록, 장애물 격자를 새 보정으로 다시 투영, 지금 자세를 해제 뒤 자세로 바꾼다. 해제 없이 긴 새 경로를 설치하면 보정 없이 달린다(Codex 2 차 P2-2: 운반 복구는 hold 를 둔 채 12 m 경로를 설치했다).
-  - 호출: `plan_return_leg(grid_world(slam.get("return_scenario", scenario)), 지금 자세, return_to_pose, planner_config, geometry=geometry, travel_config=travel_config, **grid_kwargs(None))`.
+  - 호출: `plan_return_leg(grid_world(sc_), 지금 자세, return_to_pose, planner_config, geometry=geometry, travel_config=travel_config, **grid_kwargs(None))`, `sc_ = scenario if slam is None else slam.get("return_scenario", scenario)`.
+  - 발동 조건에 SLAM 을 요구하지 않는다(운반 cusp 재계획도 SLAM 없이 돈다). 그래서 장면 선택과 hold 해제를 SLAM 유무로 나눈다(Codex 3 차 P2-2).
+  - hold 해제 순서는 정체 재계획을 그대로 따른다: 해제 → 기록 → 격자 재투영 → 로컬 `rear` 와 `hooks.set_rear(rear)` 갱신 → 그다음 `grid_kwargs(None)`. 해제 예외는 잡지 않는다(계획·설치 0 회로 실행이 끝난다).
+  - 해제 때 `return_scenario` 의 목적지는 다시 옮기지 않는다. 복귀 말기의 hold 에서 그 목적지는 이미 지도 기준 추정이다. 하역 직후 해제처럼 다시 옮기면 두 번 옮긴다(Codex 3 차 CPU 탐침).
   - turnaround·F2′ backoff 인자는 넘기지 않는다. 둘은 withdrawal 끝에서 시작하는 첫 복귀에만 쓰는 계약이다(`docs/plans/2026-10-27-return-start-withdraw-extension.md` 가 cusp 재계획을 명시적으로 제외한다, Codex 2 차 P2-1). F2′ 가 켜진 실행에서도 그렇다(시험).
   - 여유 0 재시도는 하지 않는다. 목표 정체 재계획도 하지 않는다. 오프라인 탐침에서 4 자세 모두 보통 여유로 성공했다. 여유 0 경로 뒤 `occupied` 정지 위험(agy 지적 1)도 이것으로 없앤다.
   - `slam.get("return_scenario", scenario)` 는 도킹으로 옮겨진 목적지를 쓴다(정체 재계획과 같은 선택).
@@ -113,16 +116,16 @@
 ## 4. 시험 (구현 전 고정)
 
 - 단위:
-  - 복귀 cusp 실패 → 정지 대기 → `plan_return_leg` 호출(인자: 지금 자세, `return_scenario`, 목적지 grid, turnaround·backoff 인자) → 성공 설치·기록.
-  - 여유 0 재시도(`invalid_start`·`no_path`).
-  - 계획 실패 → `return_cusp_replan_failed:` 로 끝남, 기록 남음.
+  - 복귀 cusp 실패 → 정지 대기 → `plan_return_leg` 호출(인자: 지금 자세, 고른 장면, `return_to_pose`, `planner_config`, `geometry`, `travel_config`, `grid_kwargs(None)`; turnaround·backoff 인자 없음) → 성공 설치·기록.
+  - `invalid_start`·`no_path` 등 계획 실패 → 두 번째 계획 호출 없이 기록을 남기고 `return_cusp_replan_failed:` 로 끝남.
+  - SLAM 없는 실행: 장면은 `scenario`, 정지 확인은 truth 속도·요 각속도(운반 cusp 재계획과 같음), hold 해제 없음.
   - 예산 2 회 소진 → 지금처럼 `Tracking failed in return_home`.
   - 옵션 off → 지금과 같음(재계획 호출 없음).
   - 운반 cusp 재계획과 예산을 나눠 씀(운반 2 회를 써도 복귀 2 회가 남음).
   - 보류가 실패를 확정한 틱에 `Tracking failed` 로 끝나지 않고 `braking` 이 되며, 다음 틱부터 보류 블록이 다시 들어오지 않음.
   - 성공 뒤 `ms.phase_started` 가 바뀜(단계 시간 한도 재시작). 대기 중 시간 한도는 그대로 적용됨.
   - 대기 중 명령 0(`speed_mps=0.0`).
-  - SLAM hold 중이면 해제 → 격자 재투영 → 해제 뒤 자세에서 계획, 기록 남음.
+  - SLAM hold 중이면 해제 → 기록 → 격자 재투영 → `rear`·`hooks.set_rear` 갱신 → 해제 뒤 자세에서 계획(이 순서). 해제 예외면 계획·설치 0 회.
   - F2′(`--return-start-backoff on`)이 켜져 있어도 cusp 재계획 호출에 turnaround·backoff 인자가 없음.
   - 옵션 0 이면 `return_cusp_replans` 키가 생기지 않고 새 hook 호출이 없음.
   - 같은 틱 장애물 재계획이 덮어쓰는 경우의 기록·예산.
@@ -141,6 +144,9 @@
 - 판정 초안:
   - G 대 A:
     - 노출(먼저 본다): G 팔 전체에서 복귀 cusp 재계획이 설치까지 간 것이 3 회 이상이고, 그 뒤 복귀를 끝낸 실행이 2 건 이상이어야 한다. 모자라면 판정 불가로 적고 끈 채 둔다(F2′ 노출 규칙과 같은 취지, Codex 2 차 P2-4).
+      - 판정에 쓰는 유효 실행(재실행이 있으면 채택한 회차)만 센다. 원래 회차와 재실행을 겹쳐 세지 않는다.
+      - 같은 틱에 장애물 재계획이 새 cusp 경로를 덮어쓴 설치는 따로 보고하고, "새 경로를 실제로 따라간 노출"에는 넣지 않는다.
+      - 예상 발동이 팔당 2 건 안팎이라 문턱에 못 미칠 수 있다. 그때는 판정 불가로 남긴다.
     - 복귀 cusp 방위 실패(`Tracking failed in return_home` 중 발동 자격 — 단계 `return_home`, `endpoint_heading`, `at_cusp`, `off_path` 아님, escape 아님 — 을 갖춘 것): G 는 예산을 다 쓴 경우만 남아야 한다. 예산이 남았는데 자격을 갖춘 실패로 끝난 G 실행이 있으면 구현 결함이다.
     - 완주: 유효 짝 합 G ≥ A − 1. (2 판의 부호 검정은 뺐다. 이 조건을 넘으면 단측 악화 검정이 유의해질 수 없어 중복이다, Codex.)
     - 안전: 접촉·overlap 실패 0, 허가 없는 진입 합 G ≤ A, 면제 키 0.
@@ -179,6 +185,12 @@
   - P2-3 GN 독립 승격이 시험하지 않은 조합을 만듦 → GN 은 G 통과일 때만, 운반 3 은 복귀 2 와 함께만.
   - P2-4 노출 0 이어도 통과 → 최소 노출, 모자라면 판정 불가.
   - 보정: 70 %·30 % 의 모집단·필드 명시(진단 문서), "분포 밖" 표현 정정, 함수 이름(`cusp_and_observe_recovery`), 계획 시간 범위, 첫 다리 길이 오프바이원(탐침 재실행), 명시적 명령 0, 대기 중 시간 한도, 같은 틱 장애물 재계획·escape 시험, 옵션 0 에서 새 키 없음, 근접 계약 인자, 부호 검정 중복 제거, 결함 조항의 발동 자격.
+- 3 차(3 판 44dd407b, `tmp/rx/codex_rc3.out`): 앞선 P2 넷의 방향은 반영됐다고 확인. 새 P2 2.
+  - P2 §4 시험 목록이 옛 설계(turnaround·backoff·여유 0 재시도)를 요구 → 3.1 판에서 새 D1 에 맞춤.
+  - P2 SLAM 없는 실행에서 `slam.get` 이 깨짐 → 장면 선택·hold 해제를 SLAM 유무로 나누고 비SLAM 시험 추가.
+  - hold 해제: 보정 (2 m, −1 m, 0.4 rad) 뒤 출발점·rear·격자 보정이 맞고, 해제 예외 때 계획·설치 0 회임을 CPU 로 확인. 목적지를 다시 옮기지 않는 것이 맞다고 했다. `hooks.set_rear` 순서를 시험에 넣으라고 했다.
+  - 노출 문턱은 타당, 재실행 중복 집계 금지·같은 틱 덮어쓰기 분리 보고를 등록에 적으라고 했다(반영).
+  - 산출물 대조: 포화율 36.058·26.703·29.723·13.080 %, 탐침 첫 다리 0.75·12.71·0.75·0.25 m, 곡률 탐침 20 행(조건마다 성공 8·`invalid_start` 2)과 D3 악화 사례가 일치.
   - 원자료 재계산으로 맞다고 확인: 136 건, 6 건 분류, 33/33·21/23, 예산 소진 10 건, 280 건 분포(0.0122·0.0383·0.0439·0.0536·0.0743 rad), 0.05 초과 4 건. 보류 뒤 틱 흐름의 중심 가설도 맞다고 했다. "2 회면 네 사례가 회복된다"는 아직 가설이라고 했다(배치로 본다).
 
 ### ③ 독립 검토(agy, Gemini 4 Argon)
