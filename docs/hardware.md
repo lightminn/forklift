@@ -10,7 +10,7 @@
 |---|---|---|
 | RGB-D 카메라 | **확정** | Intel RealSense D435i를 사용한다. 실물 장착 위치·외부 보정·Jetson 드라이버 동작은 미검증 |
 | RGB-D **장착 위치** | ⚠️ **미확정 — 결정 대기** | 합성 측정은 전부 잠정값 (0.75, 0, 0.5)에서 냈다. **장착이 검출 근접한계를 직접 정한다**(검출기 게이트가 아니라 수직 화각이다). EPAL 6 실측: 0.50 m 에서 최근접 2.3 m, 0.27 m 에서 2.1 m, **브리프가 말하는 마스트 높이 0.90 m 에서 2.8 m**. 삽입은 그보다 가까이서 끝나므로 **마스트 장착이면 마지막 접근을 못 본다.** 후보 장착은 `sim/gazebo/build_scene_world.py` 의 `APPROVED_CAMERAS` 에 등록돼 있고, 측정은 `tools/measure_pocket_evidence.py --camera-z/--camera-tilt`, 캡처용 카탈로그는 `tools/retarget_scene_catalogue.py --camera` 로 낸다. 근거: `docs/validation/2026-09-14-epal6-capture-and-evaluation.md` §6 |
-| 2D LiDAR | **확정 / 세부형 유력안** | Slamtec RPLIDAR를 사용한다. 과제 자료의 A2 계열 중 **A2M12가 유력하다**(2026-09-15 사용자 의견, 구매·수령 전이므로 확정이 아니다). 인터페이스와 스캔 설정은 장비 확인 후 고정. 카탈로그 값은 아래 표 참고 |
+| 2D LiDAR | **확정 / A2M12 보유** | Slamtec RPLIDAR A2M12 를 사용한다. 팀이 이미 보유한 장비라 고른 것이다(2026-10-12 사용자 확인). 인터페이스와 스캔 설정은 실기 확인 후 고정. 카탈로그 값은 아래 표 참고 |
 | 2D LiDAR **장착 위치** | ⚠️ **미확정** | 커밋된 산출물마다 가정이 다르다 — `sim/gazebo/scene_config.yaml` (0.75, 0, 0.50), `tools/deck/lidar_plane.py` (0.60, 0, 0.50), `config/isaac_slam_lidar.yaml` (−0.12, 0, 1.05; 가드 윗면 위, 2026-09-26 Isaac SLAM 기록용). 목적이 다른 합성 실험이라 서로 같을 이유는 없으나 **셋 다 실측이 아니다.** 잠정 모델 URDF 상자로는 0.55 m 이하 장착이 빔의 34–100 %, 0.75 m 도 약 9.5 % 를 차체에 가린다([계획](plans/2026-09-26-factory-hall-and-isaac-slam.md)). 실제 장착과 후방·측면 관측 가능 범위는 H0 에서 측정한 뒤 고정한다 |
 | 상위 제어기 | **구매 권장 / 미구매** | NVIDIA 공식 Jetson Orin Nano Super Developer Kit 8GB 권장 |
 | 하위 제어 MCU | **유력안 / 미구매·핀맵 초안** | STM32H743VIT6(WeAct Studio MiniSTM32H7xx)가 유력하다(2026-10-22 사용자; 7주차 자료의 Nucleo STM32H533RE 구성을 대체하는 중). 실기기 없음. 팀 핀맵 초안 대조 결과는 [핀맵 초안 검토](design/2026-10-22-h743-pinmap-draft-review.md), 보드와 무관한 펌웨어 코어는 [펌웨어 코어 설계](design/2026-10-22-mcu-firmware-core.md)·[링크 계약](interfaces/2026-10-22-mcu-link-contract.md) |
@@ -38,16 +38,16 @@ JetPack 7.2.1과 ROS 2 Jazzy는 공통 Ubuntu 24.04 기준으로 맞추는 제�
 1. ARM64에서 librealsense 빌드 또는 지원 패키지 설치
 2. D435i RGB·depth·IMU 열거와 지속 스트리밍
 3. `realsense-ros`의 정합 영상, CameraInfo, 시각과 TF 확인
-4. RPLIDAR 세부형(A2M12 유력) 확정 후 `sllidar_ros2` 스캔과 통신 안정성 확인
+4. RPLIDAR A2M12 에서 `sllidar_ros2` 스캔과 통신 안정성 확인
 5. 두 센서 동시 동작, 저장장치 처리량, 온도·전력과 재부팅 후 재현 확인
 
 librealsense의 Jetson 설치 문서는 참고 절차를 제공하지만 Orin Nano Super의 JetPack 7.2.1과 D435i 조합을 정확히 인증하는 문서로 간주하지 않는다. 실제 장치 시험 결과를 검증 기록에 남긴 뒤 버전을 동결한다.
 
-## 2D LiDAR 세부형 — A2M12 유력안 (2026-09-15)
+## 2D LiDAR 세부형 — A2M12 보유 (2026-10-12 확인)
 
-사용자가 A2M12로 갈 것 같다고 밝혔다. **구매·수령 전이므로 확정이 아니다.** 아래는 제조사 비교표의 값이며 실측값으로 쓰지 않는다. 같은 페이지에 세 변종이 함께 있고 **세부형이 바뀌면 절반이 달라지므로** 셋을 모두 적는다.
+팀이 A2M12 를 이미 보유하고 있다(2026-10-12 사용자 확인). 아래는 제조사 비교표의 값이며 실측값으로 쓰지 않는다. 같은 페이지에 세 변종이 함께 있어 비교용으로 셋을 모두 적는다.
 
-| | A2M7 | A2M8 | **A2M12 (유력)** |
+| | A2M7 | A2M8 | **A2M12 (보유)** |
 |---|---|---|---|
 | 측정 거리 | 0.2 ~ 16 m | 0.2 ~ 12 m | **0.2 ~ 12 m** |
 | 표본율 | 16 K sample/s | 8 K sample/s | **16 K sample/s** |
@@ -57,6 +57,8 @@ librealsense의 Jetson 설치 문서는 참고 절차를 제공하지만 Orin Na
 출처: [Slamtec RPLIDAR A2 제품 페이지](https://www.slamtec.com/en/lidar/a2) (2026-09-15 확인). 같은 페이지가 두께를 "cut the thickness to only 4cm"로 적는다. 통신 인터페이스, 공급 전압, 무게는 이 페이지에 없어 미확인이며 제품 Spec 하위 페이지를 아직 확인하지 않았다. 데이터시트 PDF는 직접 내려받기가 막혀 있다(HTTP 403).
 
 ⚠️ **각 분해능은 회전 속도에 따라 달라진다.** 표의 0.225°는 표본율 16 K 를 기본 10 Hz 로 나눈 값(회전당 1,600점)이다. 같은 센서라도 5 Hz 에서는 0.1125°, 15 Hz 에서는 0.3375° 가 된다. 두 값을 독립된 사양처럼 읽지 않는다.
+
+`config/isaac_slam_lidar.yaml` 주석에는 아직 "A2M12 is the likely subvariant, not a purchase" 가 남아 있다. 그 파일은 근접 추적 실측 주행항(`near_field_drive_terms*.json` 의 `argument lidar`)과 재위치 판정 지문(`tools/reloc_judge.py`)에 내용 해시로 묶여 있어, 주석만 고쳐도 기존 계약이 어긋난다. 그 파일을 다른 이유로 고칠 때 함께 고친다. 보유 사실은 이 문서가 정본이다.
 
 **시뮬레이션 설정과 비교하지 않는다.** `sim/gazebo/scene_config.yaml` 의 LiDAR(회전당 360점·5 Hz)는 2026-09-10 에 승인·동결된 **단발 기준 실험**의 값이다. 설계 문서가 "범용 2D scan 을 쓰며 RPLIDAR SKU 충실도를 주장하지 않는다"고 명시했고, `build_sensor_world.py` 는 이 값이 조금이라도 다르면 거부하며 생성물 SHA-256 이 시험에 고정돼 있다. 즉 실기 사양에 맞출 대상이 아니다. 현재 장면 촬영 경로인 `build_scene_world.py` 에는 LiDAR 자체가 없다(RGB-D 만). 실제 스캔 설정은 장비 입고 후 `sllidar_ros2` 로 정하고 별도 검증 기록에 남긴다.
 
