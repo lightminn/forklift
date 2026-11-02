@@ -9073,9 +9073,9 @@ def drive(S, isaac) -> None:
                         if captured_ is not None:
                             attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
                             frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                            # the capture's own truth pose, apart: this tick's base / q / yaw stay the tick's truth for
-                            # everything after (slip baseline, trace evidence, stand lock, probe, samples), as each says
-                            # (docs/validation/2026-11-02-observe-capture-base.md)
+                            # the capture's own pose (the SLAM estimate it was taken at), apart: this tick's base / q /
+                            # yaw stay the tick's truth for everything after (slip baseline, trace evidence, stand lock,
+                            # probe, samples), as each says (docs/validation/2026-11-02-observe-capture-base.md)
                             capture_diagnostics, cap_base, cap_yaw = captured_.capture_diagnostics, captured_.base, captured_.yaw
                             forward, rear = captured_.forward, captured_.rear
                             if captured_.rear_stamp is not None:
