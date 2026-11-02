@@ -81,6 +81,24 @@
   - 그래서 게이트 판정 자체는 21/29 이다. 이 PR 은 위 근거로 총괄의 명시적 예외 승인을 받아야 하고, 8 기록의 재기록은 기존 기록을 보존한 별도 기준선으로 다룬다(Codex).
 - 재생 호환 범위(Codex P2): 기존 경계 기록 가운데 캡처 틱이 12 의 배수 스텝과 겹친 것은 `state.samples` 의 한 점이 달라진다. 240 의 배수 스텝이면 `SAMPLE` 출력 sink 도 달라진다. 그래서 그런 기록은 재생 비교가 어긋날 수 있다(Codex 가 비교기에서 `final state differs`·`Sink.echo request differs` 를 재현). 이 수정은 truth 기록을 바로잡는 것이라 그 차이는 의도한 것이다. runs29 게이트가 29/29 이면 그 집합에서 비교 차이가 검출되지 않았다는 뜻일 뿐이고(겹쳐도 두 위치가 같으면 통과한다), 일반적 호환을 보장하지는 않는다.
 
+## 게이트 예외와 새 기준선 (총괄 승인 2026-11-02)
+
+- 사유: 이 수정은 관측이 끝나는 틱의 truth 위치 기록을 바로잡는다. 그래서 그 틱이 표본 틱(12 의 배수 스텝)과 겹친 옛 기록 8 건은 재생에서 표본 위치가 달라지는 것이 의도한 결과다. 기존 기준선(runs29)으로는 21/29(잡 14212, `ocb_05667414`)를 넘을 수 없다.
+- 근거: 진단 재생 잡 14274(`tss_diag/replay_samples.py`, 원 표본 대조 `tmp/rx/rt2/s_1..8.json`). 8 건 모두 끝까지 재생됐고, 다른 것은 표본 9 개의 `base_position_m` 한 필드(17.8–37.6 mm)와 그 틱의 `SAMPLE` echo 뿐이다. Codex 게이트 해석 검토 2 차(`tmp/rx/codex_ocb4.out`)에서 새 P1/P2 없음.
+- 그 진단 비교기는 이 8 건에만 쓴 일회성 근거다. 영구 허용 목록이 아니다. 이후 게이트는 다시 정확 일치(29/29)만 통과다.
+- 새 기준선: 8 기록을 수정 트리(스냅숏 `ocr_b34b47b1`)로 같은 인자로 다시 기록했다. 출력은 `artifacts/20261013_fork_spacing/<그룹>_ocb/<seed>/run`(잡 14306–14313, r5d_ml_le 는 14382). 옛 기록은 그대로 둔다.
+  - r5d_ml_le 의 첫 두 시도(14313, 14361)는 기반 실패다. 원 기록의 소켓 인자가 이전 재기록 경로(`rebase/sk8648`)여서 재기록 스크립트가 바꾸지 못했다. 스크립트를 고쳐 셋째 시도에서 완주했다. 실패 시도는 `r5d_ml_le_ocb_try1/`·`_try2/` 에 남겼다.
+  - g_ry3_le·g_ry1 은 옛 기록처럼 `near_capture_misaligned` 로 끝났다. 기록으로서는 문제없다.
+- 새 목록 `test_runs/runs29_ocb.txt`(기존 21 + `*_ocb` 8)를 `replay_gate_ocb.sh` 로 돌렸다.
+  - main(#254) 병합 트리 `e3dec8a9` 는 #254 의 질량 설정 때문에 29 건 모두 `setup input files differ` 로 거부됐다(잡 14404). 정의상 재생할 수 없는 경우다.
+  - 그래서 #254 와 같은 방식으로, 세 설정 파일(`isaac_transport_measured.yaml`, `_tyre.yaml`, `site_load_defaults.yaml`)만 #254 이전 바이트로 되돌린 스냅숏에서 돌렸다. 되돌린 파일은 재기록 스냅숏의 것과 md5 가 같다. 이것은 옛 10 kg 입력에서의 코드 호환성만 본다.
+  - `ocm10_e3dec8a9`(잡 14447): 29/29.
+  - 그 뒤 main 에 #256(접촉 재질, `run_transport.py` 포함)이 들어와 다시 병합했다. 최종 트리 `ef9b68b7` 의 `ocm10_ef9b68b7`(잡 14477): 29/29.
+- 머지 뒤 `runs29.txt` 를 새 목록으로 바꾼다. 옛 목록은 `runs29_2026-11-02_pre_ocb.txt` 로 남긴다.
+- 전체 시험(ws1). 실패는 ws1 에서만 나는 알려진 10 건(preview_docking 6, evaluate_cli 1, remote_model_jobs 1, diagnose_detection 2)이다.
+  - 병합 트리 e3dec8a9(잡 14385): 8,345 통과, 70 건너뜀, 10 실패.
+  - 최종 트리 ef9b68b7(잡 14478): 8,346 통과, 73 건너뜀, 11 실패. 하나 더 실패한 `test_reloc_session.py::test_a_failing_probe_ends_the_launcher_at_once` 는 실행기가 0.017 s 만에 끝나며 종료 표식을 남기지 않았다. 같은 트리에서 그 파일만 세 번 돌리면 모두 통과했고, 이 브랜치는 main 에 비해 `tools/` 와 그 시험을 건드리지 않는다. 병렬 부하에서 생긴 일시 실패로 본다.
+
 ## 근거
 
 - S1 원자료 로컬 사본 `tmp/rx/s1res/`(탐침 random_1 s1·s3·s6 두 팔, result.json). 집계 출력 `tss_diag/st_sum_out.txt`.
