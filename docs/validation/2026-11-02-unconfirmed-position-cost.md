@@ -36,10 +36,10 @@ Plan `docs/plans/2026-11-02-unconfirmed-position.md` 1.3 and the lead's decision
 - **Completeness:** every correct start's truth lies in its own region (b is the truth there). One F1 wrong confirmation's truth is outside the set (val3_019 bay−y); it is caught anyway.
 - **What catches the wrong confirmations:**
   - All 21 are unconfirmed.
-  - In at least 19 a competitor comes from another hypothesis's region: the pool or a synthetic twin, 6 m or about 30 m away. The stored list is cut at 20 competitors, and all 21 have more, so this is a lower bound.
+  - In at least 19 a competitor comes from another hypothesis's region: the pool or a synthetic twin, mostly 6 m or about 30 m away (val3_038's turnaround: 1.46 m). The stored list is cut at 20 competitors, and all 21 have more, so this is a lower bound.
   - The other two (val3_019 and val3_057) show only leaves inside b's own region in their stored 20; val3_019's global search also overflowed. A wrong start fits worse (s(b) 0.74–0.99, median 0.84 / 0.94), and its conservatively scored neighbours reach 0.98·s(b).
 - **The correct starts held unconfirmed (10):**
-  - All are held by competitors 0.06–0.35 m from b, none by a far twin.
+  - Every stored competitor lies 0.06–0.35 m from b. Five of the ten have more than the 20 stored, so a far twin among the rest is not ruled out.
   - The competitors come from b's own regions or from pool and leaf regions centred next to b.
   - 1 also has F1's in-window ambiguity.
   - s(b) is 0.904–0.992 over all correct starts.
