@@ -1,4 +1,4 @@
-# 접촉 재질 T0 — 실효 쌍 마찰 측정 (2026-11-02)
+# 접촉 재질 T0·A — 실효 쌍 마찰 측정과 재질 분리 동일성 (2026-11-02)
 
 계획: `docs/plans/2026-11-01-contact-materials.md` §5 T0. 코드: `sim/isaac/friction_probe.py`, `sim/isaac/contact_materials.py`(브랜치 `feat/contact-materials-split`).
 
@@ -37,3 +37,15 @@
 - C(문헌 값) 단계의 "타이어–바닥 0.65 → 0.8" 은 "0.60 → 0.8" 이다. 구동 plant 변경 폭이 추정보다 크다.
 - 2 단계 B 의 팔레트–포크 팔 값은 실효 문턱이 μd 를 따른다는 점을 반영해 정한다(위 4 의 추가 측정 뒤).
 - 사용자·총괄이 알던 "지게차·팔레트·바닥이 모두 0.8 · 0.7" 은 바닥 쪽이 사실이 아니다.
+
+## A — 재질만 나누고 값은 그대로: 실행 동일성 (2026-11-02)
+
+- 스냅숏 `cm_d7c1c694`(끔: 설정 그대로)와 `cmA_d7c1c694`(켬: `isaac_transport_measured.yaml` 에 `contact_material_split: 1` 한 줄만 더함). 코드는 같다.
+- **일반 모드 짝(riib line_2·aisle_rack·trailer seed 0, 묶음 13932)은 결론을 못 낸다.** 끔 3/3 완주, 켬 2/3(켬 aisle_rack 이 이미 알려진 `slam_release_replan_failed: invalid_start`), line_2 는 끔·켬의 시뮬 시간이 167.4 · 192.8 s 로 갈렸다. Isaac 일반 모드는 같은 설정끼리도 실행마다 갈린다(팔레트 질량 배치의 같은 seed 반복에서도 봤다).
+- **그래서 결정 모드(`--deterministic`, 계획 `2026-10-25-deterministic-sim-mode.md`)로 끔·켬을 돌렸다**(riib line_2·trailer seed 0, 묶음 14173). 엄격 비교기 `tools/deterministic_compare.py` 로:
+  - line_2: 비교 항목 45 개 중 다른 것은 `result.json` 하나. trailer: 34 개 중 `result.json` 하나. 배열·스트림(SLAM 기록, 주행 기록, 경로, 장애물 스캔, 프레임 등)은 모두 비트 단위로 같다. broken 사유 없음.
+  - 두 장면 모두 끔·켬이 같은 시뮬 시간(158.55 s · 105.34 s)에 완주했다.
+  - `result.json` 의 차이는 켬 쪽의 `contact_materials` 블록, `settings_synthetic.contact_material_split`, 그리고 재질 이름이 들어간 기록 두 곳(`plant.materials` 의 재질별 충돌체 수, `plant_tyre_contact[].material`)뿐이다. 이 넷을 빼면 차이가 없다.
+- 켬 쪽 재질 분리 기록: 타이어 4 · 차체 47 · 포크 4 · 팔레트 22 충돌체, 다른 재질에 남은 것 없음.
+- 결론: **A 는 재질 수준(T0 의 사본 측정)과 실행 수준(결정 모드 비트 일치) 모두에서 동작을 바꾸지 않는다.** 기본은 끔(키 없음)이므로 운영 기본도 바뀌지 않는다.
+- 재생 게이트 runs29 29/29(`cm_d7c1c694`, 옛 입력 호환).
