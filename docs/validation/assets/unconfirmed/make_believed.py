@@ -12,20 +12,24 @@ def write(name, rows):
     (OUT / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
     print(name, len(rows))
 
-# seed 4: B-P1b's validation rows confirmed by the matcher (first scan set), b = the top candidate's base pose
+# seed 4: B-P1b's validation rows confirmed by the matcher (first scan set), b = the top candidate's base pose, the
+# generation's pool = its kept candidates (laser poses there, base poses here)
 s4 = []
 for line in open(SNAP / "docs/validation/assets/b-p1b/val3_rows.jsonl"):
     r = json.loads(line)
     if r["valid"] and r["decision"] == "confirmed":
-        s4.append({"id": r["id"], "base": list(base_from_laser(r["candidates"][0]["pose"]))})
+        s4.append({"id": r["id"], "base": list(base_from_laser(r["candidates"][0]["pose"])),
+                   "pool": [list(base_from_laser(c["pose"])) for c in r["candidates"]]})
 write("s4_starts.jsonl", s4)
-# seed 5: B-P2d's sessions started on the matcher's confirmation, b = the session's estimate
+# seed 5: B-P2d's sessions started on the matcher's confirmation, b = the session's estimate, the generation's pool =
+# the confirming attempt's kept candidates (base poses)
 j = json.load(open(SNAP / "docs/validation/assets/b-p2d/judgement.json"))
 s5 = []
 for r in j["rows"]:
     if r["class"] == "valid" and r["outcome"] == "success":
-        est = json.load(open(P / "bp2d_val/s" / r["id"] / "epoch_1/run/result.json"))["start_reloc"]["estimate"]
-        s5.append({"id": r["id"], "base": est})
+        sr = json.load(open(P / "bp2d_val/s" / r["id"] / "epoch_1/run/result.json"))["start_reloc"]
+        att = [a for a in sr["attempts"] if a["reason"] == "confirmed"][-1]
+        s5.append({"id": r["id"], "base": sr["estimate"], "pool": [c["base"] for c in att["candidates"]]})
 write("s5_starts.jsonl", s5)
 
 def wrong(stress):

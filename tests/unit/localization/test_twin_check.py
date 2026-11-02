@@ -5,6 +5,7 @@ unknown map cells counted as hits, a region dropped only when no pose in it is p
 
 import math
 
+import numpy as np
 import test_global_match as TG
 
 from forklift_core.localization import global_match as G
@@ -151,3 +152,45 @@ def test_the_rematch_waits_for_d_min_and_the_agreement_allows_for_both_estimates
     # g 0.18 m from the moved start: inside 0.20 m + 0.05 d (d = 0.6) with a zero odometry bound
     out = _rematch(grid, (2.4, 1.6, 0.0), b, [], "confirmed", (2.4, 1.78, 0.0))
     assert out.agree_m is not None and out.agree_m < 0.23 and out.outcome in ("confirm", "unconfirmed")
+    assert out.outcome != "out_of_set"
+
+
+# --- Codex piece 1 review ---
+def test_region_leaves_are_every_lattice_leaf_above_the_absolute_threshold():
+    # P1: pruning relative to the search's own best (keep_ratio) lost an in-region competitor when the best stood
+    # outside the region; the threshold is absolute (R_RESID * s(b)), checked here against an exhaustive search
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    pts = G._thin(_points_at(grid, truth), grid.resolution_m)
+    cons = T.ConservativeIndex(grid, CFG)
+    region = (2.6, 1.7, 0.6)
+    thr = 0.3
+    bases, scores = T._region_leaves(grid, pts, CFG, cons, region, G._Budget(CFG), thr)
+    s = G._Search(grid, pts, CFG, cons, G._Budget(CFG))
+    rows, cols = np.nonzero(s.cand)
+    want = set()
+    for h in range(s.n_yaw):
+        sc = s.scores(0, np.full(len(rows), h), rows, cols)
+        for k in np.flatnonzero(sc >= thr):
+            base = T.L._bases(np.array([s.pose(h, rows[k], cols[k])]))[0]
+            if math.hypot(base[0] - region[0], base[1] - region[1]) <= T.REGION_M and \
+                    abs(T.wrap(base[2] - region[2])) <= T.REGION_RAD + 1e-9:
+                want.add((round(base[0], 6), round(base[1], 6), round(base[2], 6)))
+    got = {(round(b[0], 6), round(b[1], 6), round(b[2], 6)) for b in bases}
+    assert got == want and len(got) > 0
+    assert all(sc >= thr for sc in scores)
+
+
+def test_a_failed_hypothesis_search_leaves_the_start_unconfirmed():
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    res = T.residual_ambiguity(grid, _points_at(grid, truth), truth, [], CFG, e_min=0.8, hyp_status="overflow")
+    assert not res.confirmed and "hypotheses:overflow" in res.reasons
+
+
+def test_the_rematch_keeps_the_moved_starts_own_region():
+    # P2: the moved start b' is a hypothesis at the new place too (g agrees with it only within E_AGREE)
+    grid = TG._grid(*TG.ROOM)
+    b = (3.0, 1.6, 0.0)
+    out = _rematch(grid, (2.4, 1.6, 0.0), b, [], "confirmed", (2.4, 1.78, 0.0))
+    assert out.residual is not None and out.residual.regions == 2  # g's own region and the moved start's

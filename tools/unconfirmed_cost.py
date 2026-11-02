@@ -1,11 +1,14 @@
 """The unconfirmed position plan's cost measurement (docs/plans/2026-11-02-unconfirmed-position.md 1.3), offline, before
 any implementation.
 
-For each believed start (one JSON line ``{"id", "base": [x, y, yaw]}``, map frame) on one world's survey bundle and
-one stationary capture of those starts (B4a's capture, the start's index by id), the start check of plan 1.2
-(``forklift_core.localization.twin_check``): the global search on the capture's scans gives the pool (its kept
-candidates) and the pre-suppression leaves scoring >= R_RESID of its best; with the synthetic twins they form the
-hypothesis set; the residual ambiguity is judged conservatively. Recorded per start: confirmed or not and why, the
+For each believed start (one JSON line ``{"id", "base": [x, y, yaw], ["pool": [[x, y, yaw], ...]]}``, map frame, base
+poses) on one world's survey bundle and one stationary capture of those starts (B4a's capture, the start's index by
+id), the start check of plan 1.2 (``forklift_core.localization.twin_check``): the pool is the generation's own kept
+candidates when the row carries them (``pool_source`` generation), else the kept candidates of one global search on the
+capture's scans (proxy); that search also gives the pre-suppression leaves scoring >= R_RESID of its best (the
+generation's leaves are not recorded, so the leaves are always this proxy's); with the synthetic twins they form the
+hypothesis set; a search that did not finish leaves the start unconfirmed; the residual ambiguity is judged
+conservatively. Recorded per start: confirmed or not and why, the
 hypothesis set's size and sources, impossible regions, whether the truth (the capture's settled base) lies within a
 hypothesis region (completeness), whether the straight reverse corridor behind the start is clear of occupied survey
 cells for ``--rear-m`` (self-lock, obstacles only: the pallet zones are not in the survey map, so this is a lower
@@ -118,13 +121,16 @@ def cmd_run(a) -> int:
             b = tuple(float(v) for v in row["base"])
             t0 = time.monotonic()
             pts = GE.capture_points(cap, i)
-            status, pool, leaves = pool_and_leaves(grid, pts, cfg, index, T.R_RESID)
+            status, proxy_pool, leaves = pool_and_leaves(grid, pts, cfg, index, T.R_RESID)
             t_search = time.monotonic() - t0
+            own = row.get("pool")
+            pool = [tuple(float(v) for v in p) for p in own] if own is not None else proxy_pool
             hyps = T.hypotheses(b, pool=pool, leaves=leaves, synthetic=T.synthetic_twins(b))
-            res = T.residual_ambiguity(grid, pts, b, hyps, cfg, e_min=E_MIN, index=index, cons=cons)
+            res = T.residual_ambiguity(grid, pts, b, hyps, cfg, e_min=E_MIN, index=index, cons=cons, hyp_status=status)
             regions = [b] + [p for p, _ in hyps]
             out.update(status="ok", search=status, confirmed=res.confirmed, reasons=list(res.reasons),
-                       s_b=res.s_b, a_b=res.a_b, n_pool=len(pool), n_leaves=len(leaves), n_hyps=len(hyps),
+                       s_b=res.s_b, a_b=res.a_b, pool_source="generation" if own is not None else "proxy",
+                       n_pool=len(pool), n_proxy_pool=len(proxy_pool), n_leaves=len(leaves), n_hyps=len(hyps),
                        sources=sorted({src.split(" ")[0] for _, src in hyps}),
                        competitors=[{"pose": list(p), "score": s, "source": src} for p, s, src in res.competitors[:20]],
                        n_competitors=len(res.competitors), impossible=len(res.impossible),
@@ -144,14 +150,19 @@ def summarize(rows: list) -> dict:
     ok = [r for r in rows if r.get("status") == "ok"]
     unconf = [r for r in ok if not r["confirmed"]]
     reasons: dict = {}
+    kinds: dict = {}
     for r in unconf:
         for why in r["reasons"]:
-            reasons[why.split(":")[0] if why.startswith("search") else why] = reasons.get(why, 0) + 1
+            reasons[why] = reasons.get(why, 0) + 1
+        for kind in {why.split(":")[0] for why in r["reasons"]}:
+            kinds[kind] = kinds.get(kind, 0) + 1
     times = [r["search_s"] + r["check_s"] for r in ok]
     return {"rows": len(rows), "checked": len(ok), "skipped": {s: sum(r.get("status") == s for r in rows)
                                                               for s in ("not_captured", "invalid_capture")},
             "unconfirmed": len(unconf), "unconfirmed_share": len(unconf) / len(ok) if ok else None,
-            "reasons": reasons, "truth_in_set": sum(r["truth_in_set"] for r in ok),
+            "reasons": reasons, "reason_kinds": kinds,
+            "pool_source": {k: sum(r.get("pool_source") == k for r in ok) for k in ("generation", "proxy")},
+            "truth_in_set": sum(r["truth_in_set"] for r in ok),
             "believed_is_truth": sum(r["believed_is_truth"] for r in ok),
             "rear_blocked": sum(not r["rear_clear"] for r in ok),
             "hyps": {"median": _q([r["n_hyps"] for r in ok], 0.5), "max": max((r["n_hyps"] for r in ok), default=None)},

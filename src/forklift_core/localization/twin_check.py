@@ -110,9 +110,26 @@ class Residual:
     wall_s: float = 0.0
 
 
-def _region_leaves(grid: Grid, pts, cfg, cons: ConservativeIndex, region, budget):
-    """Every conservative lattice leaf whose base lies in ``region`` (+-REGION_M, +-REGION_RAD): (bases, scores), or
-    None when no laser cell in the region is possible."""
+def _leaves_above(s: G._Search, cfg: G.MatchConfig, thr: float):
+    """Every lattice leaf scoring >= ``thr`` (an absolute score): the descent prunes only nodes whose upper bound is
+    below ``thr``, so none is lost to a better leaf elsewhere (Codex piece 1 review: G._lattice_leaves prunes relative
+    to its own best, which may stand outside the region). Raises G._Stop on the budget or a frontier over max_nodes."""
+    h, r, c = s.top()
+    bounds = s.scores(cfg.levels, h, r, c)
+    for level in range(cfg.levels, 0, -1):
+        keep = bounds >= thr
+        h, r, c = h[keep], r[keep], c[keep]
+        if len(h) * 4 > cfg.max_nodes:
+            raise G._Stop("overflow")
+        h, r, c = s.children(level, h, r, c)
+        bounds = s.scores(level - 1, h, r, c)
+    keep = bounds >= thr
+    return h[keep], r[keep], c[keep], bounds[keep]
+
+
+def _region_leaves(grid: Grid, pts, cfg, cons: ConservativeIndex, region, budget, thr: float):
+    """Every conservative lattice leaf scoring >= ``thr`` whose base lies in ``region`` (+-REGION_M, +-REGION_RAD):
+    (bases, scores), or None when no laser cell in the region is possible."""
     x0, y0, yaw0 = region
     cells = L._laser_disc(grid, (x0, y0), REGION_M + abs(LASER_X_M))
     n_yaw = max(1, int(round(2 * math.pi / cfg.yaw_step_rad)))
@@ -121,18 +138,21 @@ def _region_leaves(grid: Grid, pts, cfg, cons: ConservativeIndex, region, budget
     s = G._Search(grid, pts, cfg, cons, budget, cells=cells, yaw_index=yaw_index)
     if not s.cand.any() or not len(yaw_index):
         return None
-    h, r, c, sc = G._lattice_leaves(s, cfg)
+    h, r, c, sc = _leaves_above(s, cfg, thr)
     if not len(sc):
         return np.zeros((0, 3)), np.zeros(0)
     bases = L._bases(np.array([s.pose(h[k], r[k], c[k]) for k in range(len(h))]))
-    inside = (np.hypot(bases[:, 0] - x0, bases[:, 1] - y0) <= REGION_M) & (L._yaw_gaps(bases[:, 2], yaw0) <= REGION_RAD)
+    inside = (np.hypot(bases[:, 0] - x0, bases[:, 1] - y0) <= REGION_M) & \
+             (L._yaw_gaps(bases[:, 2], yaw0) <= REGION_RAD + 1e-9)
     return bases[inside], sc[inside]
 
 
 def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = None, *, e_min: float,
                        r_resid: float = R_RESID, index: G.MapIndex | None = None,
-                       cons: ConservativeIndex | None = None, clock=None, deadline: float | None = None) -> Residual:
-    """The plan's 1.2 check of b against ``hyps`` ((pose, source), b excluded)."""
+                       cons: ConservativeIndex | None = None, clock=None, deadline: float | None = None,
+                       hyp_status: str = "ok") -> Residual:
+    """The plan's 1.2 check of b against ``hyps`` ((pose, source), b excluded). ``hyp_status`` is how the hypothesis
+    set's own search ended: anything but ``ok`` leaves b unconfirmed (plan 1.2, a set that could not be generated)."""
     cfg = cfg or G.MatchConfig()
     t0 = time.monotonic()
     pts = G._thin(np.asarray(points, float).reshape(-1, 2), grid.resolution_m)
@@ -145,7 +165,7 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
         return out
     s_b = G._field_score(grid, index.field, pts, R.laser_from_base(own.base))
     out.s_b = s_b
-    reasons = []
+    reasons = [] if hyp_status == "ok" else [f"hypotheses:{hyp_status}"]
     if own.amb_ratio is not None and own.amb_ratio >= r_resid:
         reasons.append("believed:ambiguous")
     cons = cons or ConservativeIndex(grid, cfg)
@@ -153,7 +173,7 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
     regions = [(own.base, "believed")] + list(hyps)
     try:
         for pose, src in regions:
-            got = _region_leaves(grid, pts, cfg, cons, pose, budget)
+            got = _region_leaves(grid, pts, cfg, cons, pose, budget, r_resid * s_b)
             out.regions += 1
             if got is None:
                 out.impossible.append((pose, src))
@@ -170,10 +190,6 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
     out.work += budget.work
     out.reasons, out.confirmed, out.wall_s = tuple(reasons), not reasons, time.monotonic() - t0
     return out
-
-
-
-
 
 
 # --- the re-match after a straight reverse (plan 1.5) ---------------------------------------------------------------
@@ -220,7 +236,8 @@ def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, c
     out = Rematch("unconfirmed", d, agree_m=dm, agree_rad=da)
     if dm <= tol_m and da <= tol_rad:
         # the conservative check at this place too: an unattended confirmation alone misses a twin unknown hides
-        here = hypotheses(g, synthetic=[(moved(h, o0, ot), src) for h, src in hyps])
+        # b' keeps its own region: g agrees with it only within E_AGREE (Codex piece 1 review)
+        here = hypotheses(g, synthetic=[(b_now, "believed-start")] + [(moved(h, o0, ot), src) for h, src in hyps])
         out.residual = residual_ambiguity(grid, points, g, here, cfg, e_min=e_min, index=index, cons=cons,
                                           clock=clock, deadline=deadline)
         out.outcome = "confirm" if out.residual.confirmed else "unconfirmed"
@@ -232,6 +249,7 @@ def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, c
             return out
     out.outcome = "out_of_set"
     return out
+
 
 __all__ = ["BAY_M", "ConservativeIndex", "D_MIN", "R_RESID", "REGION_M", "REGION_RAD", "Rematch", "Residual",
            "SUCCESS_M", "SUCCESS_RAD", "e_agree", "hypotheses", "moved", "rematch_decision", "residual_ambiguity",
