@@ -49,7 +49,7 @@ ap.add_argument("--ramp-start-deg", type=float, default=5.0)
 ap.add_argument("--ramp-end-deg", type=float, default=45.0)
 ap.add_argument("--ramp-rate-deg-s", type=float, default=0.5)
 ap.add_argument("--slip-m", type=float, default=0.002)
-ap.add_argument("--slide-speed", type=float, default=0.4)
+ap.add_argument("--slide-speed", type=float, default=0.5)  # 0.4 left a 0.7 pair 5 fit points (Codex B0 r2 P3)
 args = ap.parse_args()
 if not 0.3 <= args.slide_speed <= 0.6:
     ap.error("--slide-speed must be in [0.3, 0.6] m/s: enough samples, and the fit stays on the blades")
@@ -121,6 +121,15 @@ def main():
     layout = face_layout(spec, "x")
     pair = choose_pocket_pair(layout, args.fork_spacing_m, BLADE_W)
     margin, _ = pair_margin(layout, pair, args.fork_spacing_m, BLADE_W)
+    # the pallet's centre of mass must lie inside the blade tips by more than the travel a reading allows, or the
+    # pallet leaves level support within it (Codex B0 r2 P2: the 660 mm T11's centre sits on the tips)
+    boxes = spec_boxes(spec)
+    vol = np.array([np.prod(b.size_m) for b in boxes])
+    com_x = float(np.dot(vol, [b.centre_m[0] for b in boxes]) / vol.sum())
+    tip_x = -geometry.overall_depth_m / 2 + BLADE_L
+    if not tip_x - com_x > SUPPORTED_TRAVEL_M + 0.005:
+        raise ValueError(f"the pallet's centre of mass ({com_x:.3f} m) is {tip_x - com_x:.3f} m inside the blade "
+                         f"tips: at most {SUPPORTED_TRAVEL_M + 0.005} m needed")
     if not margin > 0:
         raise ValueError(f"fork spacing {args.fork_spacing_m} m puts a blade into a block (margin {margin:.4f} m)")
     centres = [sum(layout.opening_intervals_m[i]) / 2 for i in pair]
@@ -128,7 +137,7 @@ def main():
     ceiling = layout.lane_ceiling_m  # the stringers' underside: what the blades lift
     front_x = -geometry.overall_depth_m / 2
     record["geometry"] = {"pair": list(pair), "pocket_centres_y_m": centres, "blade_y_m": blade_y,
-                          "lateral_margin_m": margin,
+                          "lateral_margin_m": margin, "com_inside_tips_m": tip_x - com_x,
                           "lift_face_z_m": ceiling, "blade_x_m": [front_x, front_x + BLADE_L]}
 
     if not omni.usd.get_context().open_stage(args.base_scene):
@@ -286,10 +295,13 @@ def main():
     for k in range(180):
         world.step(render=False)
         now = xs()
+        tilt = tilts()
         for i, (_, pallet, _) in enumerate(handles):
-            series[i].append((k * DT, float(pallet.get_linear_velocity()[0]), float(now[i] - start[i])))
+            series[i].append((k * DT, float(pallet.get_linear_velocity()[0]), float(now[i] - start[i]), float(tilt[i])))
     for o, s in zip(out, series, strict=True):
-        pts = np.array([(t, v) for t, v, dx in s if v > args.slide_speed / 5 and dx < SUPPORTED_TRAVEL_M])
+        # samples while sliding level on the blades only: before the first tilted one (Codex B0 r2 P2)
+        level = next((j for j, (_, _, _, a) in enumerate(s) if a > TILTED_RAD), len(s))
+        pts = np.array([(t, v) for t, v, dx, _ in s[:level] if v > args.slide_speed / 5 and dx < SUPPORTED_TRAVEL_M])
         o["fit_points"] = int(len(pts))
         o["mu_dynamic"] = None if len(pts) < MIN_FIT_POINTS else float(-np.polyfit(pts[1:, 0], pts[1:, 1], 1)[0] / G)
         o["mu_onset"] = None if o["ramp_onset_deg"] is None else math.tan(math.radians(o["ramp_onset_deg"]))
@@ -297,7 +309,7 @@ def main():
         o["problems"] = ([] if o["mu_dynamic"] is not None else [f"slide fit has {len(pts)} points"]) + (
             [] if o["mu_onset"] is not None else ["no ramp onset"]) + (
             ["ramp onset with the pallet tilted"] if (o.get("ramp_onset_tilt_rad") or 0) > TILTED_RAD else [])
-        o["slide_series"] = [[round(t, 4), round(v, 5), round(dx, 5)] for t, v, dx in s]
+        o["slide_series"] = [[round(t, 4), round(v, 5), round(dx, 5), round(a, 5)] for t, v, dx, a in s]
     record["arms"] = out
     record["contact_material"] = contact_materials.material_record(contact.GetPrim())
 
