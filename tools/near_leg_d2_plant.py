@@ -149,13 +149,15 @@ def main():
             tj, pose = r["tj"], r["pose"]
             dL, dR = steer_sim(r, 0, tau, dead), steer_sim(r, 1, tau, dead)
             kap = (np.tan(dL) + np.tan(dR)) / (2 * L)
-            vcmd = np.interp(tj, r["ts"], r["v"]) * s_g
+            vraw = np.interp(tj, r["ts"], r["v"])
+            vcmd = vraw * s_g
             dt = float(np.median(np.diff(tj)))
             res = []
             t0 = tj[0]
             while t0 + 3.0 <= tj[-1]:
                 i0 = int(np.searchsorted(tj, t0)); i1 = int(np.searchsorted(tj, t0 + 3.0))
-                if np.max(np.abs(vcmd[i0:i1])) > 0.05:
+                # the registered window selection: the applied speed before the gain (Codex D2' review)
+                if np.max(np.abs(vraw[i0:i1])) > 0.05:
                     yaw = yaw_of(pose[i0]); x = pose[i0, 0] - OFFSET * math.cos(yaw); y = pose[i0, 1] - OFFSET * math.sin(yaw)
                     for i in range(i0, i1):
                         v = vcmd[i]
