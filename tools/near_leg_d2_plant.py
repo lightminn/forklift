@@ -8,14 +8,36 @@ window end against the truth.
 g_r) and a speed gain s, the curvature-response plan's prior (forward ~0.90, reverse ~1.05); tau_v = 0. Picked on
 the identification windows' heading p95 (the heading change is linear in them per window), then the validation
 windows are integrated in full."""
-import glob, json, math, os, sys
+
+import glob
+import json
+import math
+import os
+import sys
+
 import numpy as np
 from scipy.signal import lfilter
 
-EXCLUDED = {"st_off_random_1_s2", "st_on_random_1_s2", "st_on_random_1_s5", "st_on_random_1_s9"}  # diagnostic only
-IDENT = {f"st_{a}_{s}" for a in ("on", "off") for s in
-         ("random_1_s0", "random_1_s1", "random_1_s3", "aisle_rack_s0", "aisle_rack_s1", "line_2_s0", "line_2_s1",
-          "trailer_s0")}
+EXCLUDED = {
+    "st_off_random_1_s2",
+    "st_on_random_1_s2",
+    "st_on_random_1_s5",
+    "st_on_random_1_s9",
+}  # diagnostic only
+IDENT = {
+    f"st_{a}_{s}"
+    for a in ("on", "off")
+    for s in (
+        "random_1_s0",
+        "random_1_s1",
+        "random_1_s3",
+        "aisle_rack_s0",
+        "aisle_rack_s1",
+        "line_2_s0",
+        "line_2_s1",
+        "trailer_s0",
+    )
+}
 OFFSET = 0.34  # rear axle behind the base origin (the runs' --rear-axle-offset-m)
 TAU_GRID = [round(0.05 + 0.01 * i, 2) for i in range(26)]
 DEAD_GRID = [0.0, 0.025, 0.05]
@@ -28,9 +50,14 @@ def load(d):
     S = s["samples"]
     ts = np.array([x["time_s"] for x in S])
     return dict(
-        ts=ts, cmd=np.array([x["steering_command_rad"] for x in S]), v=np.array([x["speed_command_mps"] for x in S]),
-        k=np.array([x["curvature_inv_m"] for x in S]), tj=z["joint_stamps_s"], act=z["steering_rad"],
-        pose=z["base_pose_world"])
+        ts=ts,
+        cmd=np.array([x["steering_command_rad"] for x in S]),
+        v=np.array([x["speed_command_mps"] for x in S]),
+        k=np.array([x["curvature_inv_m"] for x in S]),
+        tj=z["joint_stamps_s"],
+        act=z["steering_rad"],
+        pose=z["base_pose_world"],
+    )
 
 
 def lag(u, tj, y0, tau):
@@ -47,13 +74,19 @@ def steer_sim(r, k, tau, dead):
     return lag(u, r["tj"], r["act"][0, k], tau)
 
 
-def yaw_of(q):  # base_pose_world: x y z qw qx qy qz (checked against the rear yaw below)
+def yaw_of(
+    q,
+):  # base_pose_world: x y z qw qx qy qz (checked against the rear yaw below)
     w, x, y, z = q[3], q[4], q[5], q[6]
     return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
 def main():
-    runs = {os.path.basename(d): d for d in sorted(glob.glob(sys.argv[1] + "/st_*")) if os.path.isdir(d + "/run")}
+    runs = {
+        os.path.basename(d): d
+        for d in sorted(glob.glob(sys.argv[1] + "/st_*"))
+        if os.path.isdir(d + "/run")
+    }
     data = {n: load(d) for n, d in runs.items() if n not in EXCLUDED}
     ident = [n for n in data if n in IDENT]
     valid = [n for n in data if n not in IDENT]
@@ -62,8 +95,14 @@ def main():
     best = None
     for tau in TAU_GRID:
         for dead in DEAD_GRID:
-            e = np.concatenate([steer_sim(data[n], k, tau, dead) - data[n]["act"][:, k] for n in ident for k in (0, 1)])
-            rmse = float(np.sqrt(np.mean(e ** 2)))
+            e = np.concatenate(
+                [
+                    steer_sim(data[n], k, tau, dead) - data[n]["act"][:, k]
+                    for n in ident
+                    for k in (0, 1)
+                ]
+            )
+            rmse = float(np.sqrt(np.mean(e**2)))
             if best is None or rmse < best[0]:
                 best = (rmse, tau, dead)
     _, tau, dead = best
@@ -71,15 +110,29 @@ def main():
     per = {}
     allv = []
     for n in valid:
-        e = np.concatenate([steer_sim(data[n], k, tau, dead) - data[n]["act"][:, k] for k in (0, 1)])
+        e = np.concatenate(
+            [steer_sim(data[n], k, tau, dead) - data[n]["act"][:, k] for k in (0, 1)]
+        )
         allv.append(e)
-        per[n] = {"rmse": float(np.sqrt(np.mean(e ** 2))), "p99": float(np.percentile(np.abs(e), 99))}
+        per[n] = {
+            "rmse": float(np.sqrt(np.mean(e**2))),
+            "p99": float(np.percentile(np.abs(e), 99)),
+        }
     allv = np.concatenate(allv)
-    out["steer"].update(valid_rmse=float(np.sqrt(np.mean(allv ** 2))),
-                        runs_p99_ok=sum(v["p99"] <= 0.06 for v in per.values()), runs=len(per), per_run=per)
+    out["steer"].update(
+        valid_rmse=float(np.sqrt(np.mean(allv**2))),
+        runs_p99_ok=sum(v["p99"] <= 0.06 for v in per.values()),
+        runs=len(per),
+        per_run=per,
+    )
     # (b) motion: the curvature from the wheel angles -- k = (tan dL + tan dR) / (2 L), L fitted on the identification
     # runs' applied (command curvature, command angles); the speed through a lag tau_v
-    num = np.concatenate([(np.tan(data[n]["cmd"][:, 0]) + np.tan(data[n]["cmd"][:, 1])) / 2 for n in ident])
+    num = np.concatenate(
+        [
+            (np.tan(data[n]["cmd"][:, 0]) + np.tan(data[n]["cmd"][:, 1])) / 2
+            for n in ident
+        ]
+    )
     kk = np.concatenate([data[n]["k"] for n in ident])
     m = np.abs(kk) > 0.05
     L = float(np.median(num[m] / kk[m]))
@@ -94,9 +147,12 @@ def main():
         res = []
         t0 = tj[0]
         while t0 + 3.0 <= tj[-1]:
-            i0 = int(np.searchsorted(tj, t0)); i1 = int(np.searchsorted(tj, t0 + 3.0))
+            i0 = int(np.searchsorted(tj, t0))
+            i1 = int(np.searchsorted(tj, t0 + 3.0))
             if np.max(np.abs(vcmd[i0:i1])) > 0.05:
-                yaw = yaw_of(pose[i0]); x = pose[i0, 0] - OFFSET * math.cos(yaw); y = pose[i0, 1] - OFFSET * math.sin(yaw)
+                yaw = yaw_of(pose[i0])
+                x = pose[i0, 0] - OFFSET * math.cos(yaw)
+                y = pose[i0, 1] - OFFSET * math.sin(yaw)
                 # the truth speed at the start, from the truth rear positions one tick apart
                 yb = yaw_of(pose[i0 - 1]) if i0 > 0 else yaw
                 xb = pose[i0 - 1, 0] - OFFSET * math.cos(yb) if i0 > 0 else x
@@ -107,8 +163,12 @@ def main():
                     v = a * v + (1 - a) * vcmd[i]
                     ch = v * kap[i] * dt
                     h = yaw + ch / 2
-                    x += v * dt * math.cos(h); y += v * dt * math.sin(h); yaw += ch
-                ty = yaw_of(pose[i1]); tx = pose[i1, 0] - OFFSET * math.cos(ty); tyy = pose[i1, 1] - OFFSET * math.sin(ty)
+                    x += v * dt * math.cos(h)
+                    y += v * dt * math.sin(h)
+                    yaw += ch
+                ty = yaw_of(pose[i1])
+                tx = pose[i1, 0] - OFFSET * math.cos(ty)
+                tyy = pose[i1, 1] - OFFSET * math.sin(ty)
                 he = math.atan2(math.sin(yaw - ty), math.cos(yaw - ty))
                 lat = -math.sin(ty) * (x - tx) + math.cos(ty) * (y - tyy)
                 res.append((abs(he), abs(lat)))
@@ -128,11 +188,18 @@ def main():
             rows = []
             t0 = tj[0]
             while t0 + 3.0 <= tj[-1]:
-                i0 = int(np.searchsorted(tj, t0)); i1 = int(np.searchsorted(tj, t0 + 3.0))
+                i0 = int(np.searchsorted(tj, t0))
+                i1 = int(np.searchsorted(tj, t0 + 3.0))
                 if np.max(np.abs(vcmd[i0:i1])) > 0.05:
                     w = vcmd[i0:i1] * kap[i0:i1] * dt
-                    af, ar = float(w[vcmd[i0:i1] >= 0].sum()), float(w[vcmd[i0:i1] < 0].sum())
-                    dy = math.atan2(math.sin(yaw_of(pose[i1]) - yaw_of(pose[i0])), math.cos(yaw_of(pose[i1]) - yaw_of(pose[i0])))
+                    af, ar = (
+                        float(w[vcmd[i0:i1] >= 0].sum()),
+                        float(w[vcmd[i0:i1] < 0].sum()),
+                    )
+                    dy = math.atan2(
+                        math.sin(yaw_of(pose[i1]) - yaw_of(pose[i0])),
+                        math.cos(yaw_of(pose[i1]) - yaw_of(pose[i0])),
+                    )
                     rows.append((af, ar, dy))
                 t0 += 1.0
             return rows
@@ -155,16 +222,23 @@ def main():
             res = []
             t0 = tj[0]
             while t0 + 3.0 <= tj[-1]:
-                i0 = int(np.searchsorted(tj, t0)); i1 = int(np.searchsorted(tj, t0 + 3.0))
+                i0 = int(np.searchsorted(tj, t0))
+                i1 = int(np.searchsorted(tj, t0 + 3.0))
                 # the registered window selection: the applied speed before the gain (Codex D2' review)
                 if np.max(np.abs(vraw[i0:i1])) > 0.05:
-                    yaw = yaw_of(pose[i0]); x = pose[i0, 0] - OFFSET * math.cos(yaw); y = pose[i0, 1] - OFFSET * math.sin(yaw)
+                    yaw = yaw_of(pose[i0])
+                    x = pose[i0, 0] - OFFSET * math.cos(yaw)
+                    y = pose[i0, 1] - OFFSET * math.sin(yaw)
                     for i in range(i0, i1):
                         v = vcmd[i]
                         ch = v * kap[i] * (g_f if v >= 0 else g_r) * dt
                         h = yaw + ch / 2
-                        x += v * dt * math.cos(h); y += v * dt * math.sin(h); yaw += ch
-                    ty = yaw_of(pose[i1]); tx = pose[i1, 0] - OFFSET * math.cos(ty); tyy = pose[i1, 1] - OFFSET * math.sin(ty)
+                        x += v * dt * math.cos(h)
+                        y += v * dt * math.sin(h)
+                        yaw += ch
+                    ty = yaw_of(pose[i1])
+                    tx = pose[i1, 0] - OFFSET * math.cos(ty)
+                    tyy = pose[i1, 1] - OFFSET * math.sin(ty)
                     he = math.atan2(math.sin(yaw - ty), math.cos(yaw - ty))
                     lat = -math.sin(ty) * (x - tx) + math.cos(ty) * (y - tyy)
                     res.append((abs(he), abs(lat)))
@@ -173,11 +247,16 @@ def main():
 
         wi = [x for n in ident for x in windows2(data[n])]
         wv = [x for n in valid for x in windows2(data[n])]
-        out["round2"] = {"g_forward": g_f, "g_reverse": g_r, "speed_gain": s_g,
-                         "ident_heading_p95": float(np.percentile([h for h, _ in wi], 95)),
-                         "ident_lateral_p95_m": float(np.percentile([l for _, l in wi], 95)), "windows": len(wv),
-                         "valid_heading_p95": float(np.percentile([h for h, _ in wv], 95)),
-                         "valid_lateral_p95_m": float(np.percentile([l for _, l in wv], 95))}
+        out["round2"] = {
+            "g_forward": g_f,
+            "g_reverse": g_r,
+            "speed_gain": s_g,
+            "ident_heading_p95": float(np.percentile([h for h, _ in wi], 95)),
+            "ident_lateral_p95_m": float(np.percentile([lat_ for _, lat_ in wi], 95)),
+            "windows": len(wv),
+            "valid_heading_p95": float(np.percentile([h for h, _ in wv], 95)),
+            "valid_lateral_p95_m": float(np.percentile([lat_ for _, lat_ in wv], 95)),
+        }
     bestv = None
     for tv in TAUV_GRID:
         w = [x for n in ident for x in windows(data[n], tv)]
@@ -186,12 +265,28 @@ def main():
             bestv = (sc, tv)
     tau_v = bestv[1]
     wv = [x for n in valid for x in windows(data[n], tau_v)]
-    out["motion"].update(tau_v_s=tau_v, ident_heading_p95=bestv[0], windows=len(wv),
-                         valid_heading_p95=float(np.percentile([h for h, _ in wv], 95)),
-                         valid_lateral_p95_m=float(np.percentile([l for _, l in wv], 95)))
+    out["motion"].update(
+        tau_v_s=tau_v,
+        ident_heading_p95=bestv[0],
+        windows=len(wv),
+        valid_heading_p95=float(np.percentile([h for h, _ in wv], 95)),
+        valid_lateral_p95_m=float(np.percentile([lat_ for _, lat_ in wv], 95)),
+    )
     json.dump(out, open(sys.argv[2], "w"), indent=1)
-    print(json.dumps({k: (v if k != "steer" else {kk: vv for kk, vv in v.items() if kk != "per_run"}) for k, v in out.items()
-                      if k not in ("ident", "valid")}, indent=1))
+    print(
+        json.dumps(
+            {
+                k: (
+                    v
+                    if k != "steer"
+                    else {kk: vv for kk, vv in v.items() if kk != "per_run"}
+                )
+                for k, v in out.items()
+                if k not in ("ident", "valid")
+            },
+            indent=1,
+        )
+    )
 
 
 if __name__ == "__main__":
