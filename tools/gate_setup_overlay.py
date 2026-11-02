@@ -9,9 +9,12 @@ the recorded bytes in the record's recording snapshot (the one directory its abs
 their sha256 and writes them into the copy. The gate then checks the code against the inputs the run was recorded on.
 
 It writes only into a directory holding the copy marker (the gate script makes a private copy per record), only data
-files (``DATA_SUFFIXES``), and only relative paths inside the copy; anything else that differs is refused before a
+files (``DATA_SUFFIXES``), only relative paths inside the copy, and only through real directories onto a regular file
+or a new one -- a symbolic link anywhere on the way (the target or a parent) is refused, so nothing outside the copy
+and no code file behind a data name is written (Codex review 1 P2). Anything else that differs is refused before a
 byte is written, and the replay's own check reports it as before. Absolute inputs (artifacts outside the snapshot)
-are left to the replay.
+are left to the replay. Other input kinds (a relative ``--recognition-onnx`` model, say) are refused, not guessed:
+adding one to ``DATA_SUFFIXES`` is a reviewed change.
 
     python tools/gate_setup_overlay.py RUN_DIR COPY_DIR [--json OUT]   # exit 0 written/nothing to do, 2 refused
 """
@@ -54,11 +57,29 @@ def recording_snapshot(entries: list[dict]) -> Path:
     return Path(roots.pop())
 
 
+def _plain_target(copy_dir: Path, rel: str) -> Path:
+    """COPY_DIR/rel when every directory on the way is a real directory inside the copy and the target is a regular
+    file or absent; a symbolic link anywhere on the way is refused."""
+    base = copy_dir.resolve()
+    here = base
+    parts = PurePosixPath(rel).parts
+    for i, part in enumerate(parts):
+        here = here / part
+        if here.is_symlink():
+            raise OverlayRefused(f"{rel} goes through the symbolic link {here.relative_to(base)}")
+        last = i == len(parts) - 1
+        if here.exists() and not (here.is_file() if last else here.is_dir()):
+            raise OverlayRefused(f"{rel}: {here.relative_to(base)} is not a {'regular file' if last else 'directory'}")
+    if base not in here.resolve().parents:
+        raise OverlayRefused(f"{rel} leaves the copy")
+    return here
+
+
 def overlay(run_dir: Path, copy_dir: Path) -> dict:
     if not (copy_dir / MARKER).is_file():
         raise OverlayRefused(f"{copy_dir} has no {MARKER}: only a gate copy is written")
     entries = json.loads((run_dir / "boundary/setup_snapshot.json").read_text()).get("files", [])
-    root = recording_snapshot(entries)
+    root = None  # looked up only when a file differs (a record with nothing to write needs no recording snapshot)
     plan, unchanged, seen = [], 0, set()
     for item in entries:
         rel = item["path"]
@@ -77,15 +98,18 @@ def overlay(run_dir: Path, copy_dir: Path) -> dict:
             continue
         if PurePosixPath(rel).suffix not in DATA_SUFFIXES:
             raise OverlayRefused(f"{rel} differs and is not a setup data file (only {sorted(DATA_SUFFIXES)})")
+        _plain_target(copy_dir, rel)
+        root = root or recording_snapshot(entries)
         source = root / rel
         if _sha(source) != item["sha256"]:
             raise OverlayRefused(f"the recording snapshot {root} no longer holds the recorded {rel}")
         plan.append({"path": rel, "recorded_sha256": item["sha256"], "gate_sha256": now, "source": str(source)})
     for w in plan:  # every check passed: only now is anything written
-        target = copy_dir / w["path"]
+        target = _plain_target(copy_dir, w["path"])
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(Path(w["source"]).read_bytes())
-    return {"run": str(run_dir), "copy": str(copy_dir), "recording_snapshot": str(root), "written": plan,
+    return {"run": str(run_dir), "copy": str(copy_dir), "recording_snapshot": None if root is None else str(root),
+            "written": plan,
             "unchanged": unchanged}
 
 

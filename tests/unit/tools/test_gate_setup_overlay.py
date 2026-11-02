@@ -122,3 +122,39 @@ def test_the_cli_writes_its_report_and_exits_2_on_refusal(tmp_path):
     run2, _, gate2 = make(tmp_path / "b", {"x.py": b"a"}, {"x.py": b"b"})
     assert G.main([str(run2), str(gate2), "--json", str(tmp_path / "o2.json")]) == 2
     assert "refused" in json.loads((tmp_path / "o2.json").read_text())
+
+
+@pytest.mark.parametrize("how", ["target_outside", "target_code", "parent_outside"])
+def test_a_symbolic_link_on_the_way_is_refused_and_nothing_is_written(tmp_path, how):
+    run, rec, gate = make(tmp_path, {"config/a.yaml": b"old\n"}, {"src/m.py": b"code\n"})
+    shared = tmp_path / "shared"
+    (shared / "config").mkdir(parents=True)
+    (shared / "config/a.yaml").write_bytes(b"shared\n")
+    if how == "target_outside":
+        (gate / "config").mkdir()
+        (gate / "config/a.yaml").symlink_to(shared / "config/a.yaml")
+    elif how == "target_code":
+        (gate / "config").mkdir()
+        (gate / "config/a.yaml").symlink_to(gate / "src/m.py")
+    else:
+        (gate / "config").symlink_to(shared / "config")
+    with pytest.raises(G.OverlayRefused, match="symbolic link"):
+        G.overlay(run, gate)
+    assert (shared / "config/a.yaml").read_bytes() == b"shared\n"
+    assert (gate / "src/m.py").read_bytes() == b"code\n"
+
+
+def test_a_record_with_nothing_to_write_needs_no_recording_snapshot(tmp_path):
+    run = tmp_path / "run"
+    (run / "boundary").mkdir(parents=True)
+    gate = tmp_path / "gate"
+    (gate / "config").mkdir(parents=True)
+    (gate / "config/a.yaml").write_bytes(b"same\n")
+    (gate / G.MARKER).write_text("copy\n")
+    entries = [{"path": "config/a.yaml", "sha256": sha(b"same\n"), "bytes": 5}]  # no repo_relative anywhere
+    (run / "boundary/setup_snapshot.json").write_text(json.dumps({"files": entries}))
+    out = G.overlay(run, gate)
+    assert out["written"] == [] and out["recording_snapshot"] is None and out["unchanged"] == 1
+    (gate / "config/a.yaml").write_bytes(b"changed\n")
+    with pytest.raises(G.OverlayRefused, match="recording snapshot"):
+        G.overlay(run, gate)
