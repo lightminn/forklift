@@ -98,3 +98,56 @@ def test_a_search_that_cannot_finish_leaves_the_start_unconfirmed():
     res = T.residual_ambiguity(grid, _points_at(grid, truth, **SHORT), truth, T.synthetic_twins(truth),
                                G.MatchConfig(yaw_step_rad=math.radians(2.0), max_work=1), e_min=0.8)
     assert not res.confirmed and res.reasons
+
+
+# --- the re-match after a straight reverse (plan 1.5) ---
+def test_hypotheses_move_by_the_odometry_step_in_their_own_frame():
+    o0, ot = (10.0, 5.0, 0.0), (9.0, 5.0, 0.0)  # one metre straight back
+    assert T.moved((2.0, 2.0, 0.0), o0, ot) == (1.0, 2.0, 0.0)
+    x, y, yaw = T.moved((2.0, 2.0, math.pi), o0, ot)  # a turned-around twin moves the other way on the map
+    assert abs(x - 3.0) < 1e-9 and abs(y - 2.0) < 1e-9
+
+
+def _rematch(grid, truth_now, b, hyps, decision, g, **kw):
+    o0 = (0.0, 0.0, 0.0)
+    ot = kw.pop("ot", (-0.6, 0.0, 0.0))
+    return T.rematch_decision(grid, _points_at(grid, truth_now, **kw.pop("scan", {})), b, hyps, o0, ot,
+                              decision=decision, g=g, cfg=CFG, e_min=0.8, **kw)
+
+
+def test_a_rematch_agreeing_with_the_moved_start_confirms_where_nothing_competes():
+    grid = TG._grid(*TG.ROOM)
+    b = (3.0, 1.6, 0.0)
+    now = (2.4, 1.6, 0.0)  # backed up 0.6 m
+    out = _rematch(grid, now, b, [], "confirmed", now)
+    assert out.outcome == "confirm" and out.residual.confirmed
+
+
+def test_a_rematch_on_a_moved_twin_prefers_the_twin_and_one_elsewhere_ends_the_session():
+    grid = TG._grid(*TG.ROOM)
+    b = (3.0, 1.6, 0.0)
+    twin = (3.0, 2.6, 0.0)
+    out = _rematch(grid, (2.4, 2.6, 0.0), b, [(twin, "pool")], "confirmed", (2.4, 2.6, 0.0))
+    assert out.outcome == "twin_preferred" and out.matched == "pool"
+    out = _rematch(grid, (4.4, 1.0, 0.0), b, [(twin, "pool")], "confirmed", (4.4, 1.0, 0.0))
+    assert out.outcome == "out_of_set"
+
+
+def test_a_rematch_that_did_not_confirm_or_is_still_ambiguous_stays_unconfirmed():
+    grid = TG._grid(*TG.ROOM)
+    b = (3.0, 1.6, 0.0)
+    for decision in ("competitor", "periodic", "no_candidate", "timeout", "uninformative"):
+        assert _rematch(grid, (2.4, 1.6, 0.0), b, [], decision, None).outcome == "unconfirmed"
+    bays = _bays(3)
+    b2 = (9.1, 2.0, 0.0)
+    out = _rematch(bays, (8.5, 2.0, 0.0), b2, T.synthetic_twins(b2), "confirmed", (8.5, 2.0, 0.0), scan=SHORT)
+    assert out.outcome == "unconfirmed" and not out.residual.confirmed
+
+
+def test_the_rematch_waits_for_d_min_and_the_agreement_allows_for_both_estimates_and_the_odometry():
+    grid = TG._grid(*TG.ROOM)
+    b = (3.0, 1.6, 0.0)
+    assert _rematch(grid, (2.8, 1.6, 0.0), b, [], "confirmed", (2.8, 1.6, 0.0), ot=(-0.2, 0.0, 0.0)).outcome == "too_short"
+    # g 0.18 m from the moved start: inside 0.20 m + 0.05 d (d = 0.6) with a zero odometry bound
+    out = _rematch(grid, (2.4, 1.6, 0.0), b, [], "confirmed", (2.4, 1.78, 0.0))
+    assert out.agree_m is not None and out.agree_m < 0.23 and out.outcome in ("confirm", "unconfirmed")

@@ -28,11 +28,13 @@ from forklift_core.localization import local_match as L
 from forklift_core.localization import start_reloc as R
 from forklift_core.localization.relocalization_samples import LASER_X_M
 from forklift_core.localization.slam_map import Grid
+from forklift_core.localization.slam_pose import compose, invert
 
 R_RESID = 0.98  # fixed before results (the lead's decision 2)
 SUCCESS_M, SUCCESS_RAD = 0.10, 0.05  # B-P2 4.0's success tolerance
 REGION_M, REGION_RAD = 0.30, 0.10  # a hypothesis's region (F1's refine_moved)
 BAY_M = 6.0  # this hall's repeated bay pitch (plan 1.2; set per hall)
+D_MIN = 0.5  # plan 3: the straight reverse (odometry) before the re-match
 MULTIPLES = (1, 2, 3)
 
 
@@ -173,5 +175,64 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
 
 
 
-__all__ = ["BAY_M", "ConservativeIndex", "R_RESID", "REGION_M", "REGION_RAD", "Residual", "SUCCESS_M", "SUCCESS_RAD",
-           "hypotheses", "residual_ambiguity", "synthetic_twins", "wrap"]
+
+# --- the re-match after a straight reverse (plan 1.5) ---------------------------------------------------------------
+def moved(pose, o0, ot) -> tuple:
+    """``pose`` carried by the odometry step O(0) -> O(t), expressed in its own frame: pose o O(0)^-1 o O(t) (a
+    turned-around hypothesis moves the other way on the map)."""
+    x, y, yaw = compose(pose, compose(invert(o0), ot))
+    return (x, y, wrap(yaw))
+
+
+def e_agree(d: float, dp: float = 0.0, dth: float = 0.0) -> tuple:
+    """Plan 1.5: two estimates each within the success tolerance, the odometry bound and b's heading error turning the
+    move: 0.20 m + dp + 0.05 d, 0.10 rad + dth."""
+    return 0.20 + dp + 0.05 * d, 0.10 + dth
+
+
+@dataclass
+class Rematch:
+    outcome: str  # too_short | unconfirmed | confirm | twin_preferred | out_of_set
+    d: float
+    matched: str | None = None  # the hypothesis source a twin_preferred re-match landed on
+    agree_m: float | None = None  # g's distance from the moved start
+    agree_rad: float | None = None
+    residual: Residual | None = None
+
+
+def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, cfg: G.MatchConfig | None = None,
+                     e_min: float, d: float | None = None, dp=lambda d: 0.0, dth=lambda d: 0.0, d_min: float = D_MIN,
+                     index: G.MapIndex | None = None, cons: ConservativeIndex | None = None, clock=None,
+                     deadline: float | None = None) -> Rematch:
+    """Plan 1.5 after the truck stood: ``decision`` and ``g`` are the frozen relocalizer's on this place's scans
+    (``points``); ``hyps`` the start's hypothesis set. ``confirm`` still needs the SLAM agreement (piece 2);
+    ``twin_preferred`` and ``out_of_set`` end the session; ``unconfirmed`` waits for another stroke."""
+    if d is None:
+        d = math.hypot(ot[0] - o0[0], ot[1] - o0[1])
+    if d < d_min:
+        return Rematch("too_short", d)
+    if decision != "confirmed" or g is None:
+        return Rematch("unconfirmed", d)
+    g = tuple(float(v) for v in g)
+    tol_m, tol_rad = e_agree(d, dp(d), dth(d))
+    b_now = moved(b, o0, ot)
+    dm, da = _gap(g, b_now)
+    out = Rematch("unconfirmed", d, agree_m=dm, agree_rad=da)
+    if dm <= tol_m and da <= tol_rad:
+        # the conservative check at this place too: an unattended confirmation alone misses a twin unknown hides
+        here = hypotheses(g, synthetic=[(moved(h, o0, ot), src) for h, src in hyps])
+        out.residual = residual_ambiguity(grid, points, g, here, cfg, e_min=e_min, index=index, cons=cons,
+                                          clock=clock, deadline=deadline)
+        out.outcome = "confirm" if out.residual.confirmed else "unconfirmed"
+        return out
+    for h, src in hyps:
+        hm, ha = _gap(g, moved(h, o0, ot))
+        if hm <= tol_m and ha <= tol_rad:
+            out.outcome, out.matched = "twin_preferred", src
+            return out
+    out.outcome = "out_of_set"
+    return out
+
+__all__ = ["BAY_M", "ConservativeIndex", "D_MIN", "R_RESID", "REGION_M", "REGION_RAD", "Rematch", "Residual",
+           "SUCCESS_M", "SUCCESS_RAD", "e_agree", "hypotheses", "moved", "rematch_decision", "residual_ambiguity",
+           "synthetic_twins", "wrap"]
