@@ -1047,6 +1047,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     "pocket_check",
     "near_tracking",
     "near_tracking_stop_at",
+    # docs/plans/2026-11-02-near-leg-end-stand-c2.md 2: the near re-observation leg's end stand, before the near capture
+    "near_end_stand",
     "near_bounds",
     "near_drive_terms",
     # Plan D8 S4c-1: the injections are checked on their own, not against the measurement.

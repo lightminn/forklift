@@ -660,6 +660,14 @@ def arguments() -> argparse.Namespace:
         "earlier run.",
     )
     parser.add_argument(
+        "--near-end-stand",
+        choices=("off", "shadow", "on"),
+        default="off",
+        help="docs/plans/2026-11-02-near-leg-end-stand-c2.md: the near re-observation leg's final-goal stand outside the "
+        "loose arrival bounds for 3 s is planned again to the same target under the final-goal SLAM hold (once per "
+        "leg, within its replan budget; a failure waits). shadow records the judgement only. Off: as every earlier run.",
+    )
+    parser.add_argument(
         "--return-start-backoff",
         choices=("on", "boxed", "off"),
         default="off",
@@ -6505,6 +6513,8 @@ def drive(S, isaac) -> None:
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
                                 observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
+                                # docs/plans/2026-11-02-near-leg-end-stand-c2.md: off in a record from before the option
+                                near_end_stand=getattr(args, "near_end_stand", "off"),
                                 # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
                                 # before the option
                                 return_start_backoff_m=return_start_backoff_m_of(args),

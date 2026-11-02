@@ -194,8 +194,10 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     # and its zero-clearance retry; the mission is planned after the re-observation, as always. The scene replan
     # plan 2.3 adds a scene's first far observation stall taking the next candidate. The leg-end plan's O1
     # (docs/plans/2026-10-24-leg-end-budget-stands.md) adds the first far observation's final-goal stand, planned again
-    # to the same target as the observe replan.
+    # to the same target as the observe replan. C2 (docs/plans/2026-11-02-near-leg-end-stand-c2.md) adds the near
+    # re-observation leg's final-goal stand, planned again the same way.
     assert sorted(node.func.id for node in calls) == [
+        "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",
         "plan_observation_leg",

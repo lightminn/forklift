@@ -54,6 +54,7 @@ The bodies are the runner's, statement for statement: moving them changes no dec
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
@@ -2795,6 +2796,8 @@ class MissionCore:
                 tracking = self._install_observe_replan(t, rear, replanned, trackers["observe"].config, signed_speed, dt)
         if slam is not None and ms.phase == "observe":
             tracking = self.observe_end_stand(t, rear, tracking, signed_speed, dt)
+            if getattr(options, "near_end_stand", "off") != "off":  # plan 2026-11-02-near-leg-end-stand-c2
+                tracking = self.near_end_stand(t, rear, tracking, signed_speed, dt)
         return SimpleNamespace(tracking=tracking, rear=rear)
 
     def _install_observe_replan(self, t: float, rear, replanned, config, signed_speed: float, dt: float):
@@ -3063,6 +3066,157 @@ class MissionCore:
         ms.last_tracking = tracking
         return tracking
 
+    def _near_end_shadow_close(self, end: str, t: float | None = None) -> None:
+        """C2 5.1: end the open shadow episode -- its record gets ``end`` (and the time)."""
+        state = self.state
+        open_ = state.pop("near_end_shadow_open", None)
+        if open_ is not None:
+            state["observe_end_stands"][open_["index"]]["end"] = {"kind": end, "time_s": t}
+
+    def near_end_shadow_tick(self, tracking, t: float) -> None:
+        """C2 5.1: on every later observe tick, the open shadow episode ends the moment the stand is no longer the
+        judged one -- another tracker (a replan, another leg) or a resumed command, before any arrival. A loose
+        arrival of the same tracker ends it in ``command()`` (``near_end_shadow_arrival``); left open, the run's own
+        end tells (a timeout, or undecidable)."""
+        state, ms = self.state, self.ms
+        open_ = state.get("near_end_shadow_open")
+        if open_ is None:
+            return
+        same_ = (open_["leg_serial"] == state["observe_replan_leg"]["serial"]
+                 and open_["phase_started_s"] == float(ms.phase_started)
+                 and open_["observe_replans_n"] == len(state["observe_replans"]))
+        if not same_:
+            self._near_end_shadow_close("tracker_changed", float(ms.phase_started))
+        elif abs(tracking.speed_mps) >= 1e-12:
+            self._near_end_shadow_close("command_resumed", float(t))
+        elif tracking.status != "tracking":
+            self._near_end_shadow_close(f"status:{tracking.status}", float(t))
+
+    def near_end_shadow_arrival(self, t: float) -> None:
+        """C2 5.1: a loose arrival on the observe leg; it ends the open shadow episode as ``loose_arrival`` only when
+        it is the same tracker the judgement was on (else the episode had already ended)."""
+        open_ = self.state.get("near_end_shadow_open")
+        if open_ is None:
+            return
+        same_ = (open_["leg_serial"] == self.state["observe_replan_leg"]["serial"]
+                 and open_["phase_started_s"] == float(self.ms.phase_started)
+                 and open_["observe_replans_n"] == len(self.state["observe_replans"]))
+        self._near_end_shadow_close("loose_arrival" if same_ else "tracker_changed", float(t))
+
+    def near_reobserve_leg(self) -> bool:
+        """Plan 2026-11-02-near-leg-end-stand-c2 1: the near re-observation leg -- installed after the far capture
+        (``near_leg_or_recapture``: the near capture pending with its waypoint) and still driven, neither a held
+        realignment, the bottom-deck legs, a start backoff nor an obstacle backoff, and never the first far
+        observation O1 owns (``near_active()`` holds only in approach / insert, so it cannot tell this leg)."""
+        ms, state, obstacle = self.ms, self.state, self.obstacle
+        if self.slam is None or ms.phase != "observe":
+            return False
+        near_capture_ = state.get("near_capture") or {}
+        if near_capture_.get("status") != "pending" or "waypoint" not in near_capture_:
+            return False
+        if self.realign_active() or self.bottom_deck_leg_active() or self.observe_backoff is not None:
+            return False
+        if obstacle is not None and obstacle.get("backoff", {}).get("phase") == "observe":
+            return False
+        return not self.scene_far_observe()
+
+    def near_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
+        """Plan 2026-11-02-near-leg-end-stand-c2 (C2): O1's rule on the near re-observation leg. A stop at its final
+        goal without an arrival (remaining 0, tracking, not at a cusp, a zero command) whose zero command lasts
+        OBSERVE_END_STAND_S, and on the tick it is judged stands (stop_now) outside the loose arrival bounds, is
+        planned again to the same target under the final-goal SLAM hold -- once per near leg serial, within the
+        leg's replan budget; an installed replan restarts the obstacle layer's no-progress watch. A failed attempt
+        or a spent budget is recorded and the truck keeps standing (the loose arrival or the timeout follow as
+        before). ``--near-end-stand shadow`` records the judgement only (``shadow`` / ``shadow_no_budget``). Its own
+        clock key: O1 clears ``observe_end_stand`` on every tick it does not apply. Returns the tracking."""
+        ms, state, slam, hooks, options, paths, trackers = (self.ms, self.state, self.slam, self.hooks, self.options,
+                                                            self.paths, self.trackers)
+        mode_ = getattr(options, "near_end_stand", "off")
+        leg_ = state["observe_replan_leg"]
+        self.near_end_shadow_tick(tracking, t)
+        tried_ = any(r.get("kind") == "near" and r.get("leg_serial") == leg_["serial"]
+                     for r in state.get("observe_end_stands", ()))
+        standing_ = (
+            not tried_
+            and self.near_reobserve_leg()  # a held realignment is not this leg (near_capture_realign_held_recovery's)
+            and tracking.status == "tracking"
+            and not tracking.at_cusp
+            and abs(tracking.speed_mps) < 1e-12
+            and trackers["observe"].remaining_to_goal_m() <= 1e-9
+            and not hooks.cusp_monitor().holds_observe()
+        )
+        if not standing_:
+            state.pop("near_end_stand", None)
+            return tracking
+        pending_ = state.setdefault("near_end_stand", {"since_s": float(t)})
+        stood_ = self.commands.work_elapsed(pending_["since_s"], t)
+        outside_ = (tracking.position_error_m > options.observe_arrival_m
+                    or abs(tracking.yaw_error_rad) > options.observe_arrival_yaw_rad)
+        if stood_ < OBSERVE_END_STAND_S or not outside_ or not slam["stop_now"]:
+            return tracking
+        state.pop("near_end_stand", None)
+        record = {"time_s": float(t), "kind": "near", "leg_serial": leg_["serial"], "zero_command_s": float(stood_),
+                  "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
+                  "rear_pose": [float(v) for v in rear], "slam_mode": slam["tracker"].mode}
+        records_ = state.setdefault("observe_end_stands", [])
+        budget_ = len(state["observe_replans"]) - leg_["start"] < options.observe_replans_per_leg
+        if mode_ == "shadow":
+            # C2 5.1: what ties the judgement to this very stand -- the mission, the leg, the tracker installed at
+            # phase_started, its path and goal, the stand's start and the loose arrivals so far; the episode stays open
+            # until the loose arrival, a resumed command, another tracker or the end of the run says how it ended
+            poses_ = np.asarray(paths["observe"].poses, dtype=float)
+            records_.append({**record, "outcome": "shadow" if budget_ else "shadow_no_budget",
+                             "mission_id": self.commands.mission_id, "phase_started_s": float(ms.phase_started),
+                             "stand_since_s": float(pending_["since_s"]),
+                             "path_sha256": hashlib.sha256(  # the whole path: poses, gears and curvatures
+                                 poses_.tobytes()
+                                 + np.asarray(paths["observe"].directions, dtype=np.int8).tobytes()
+                                 + np.asarray(paths["observe"].curvatures_inv_m, dtype=float).tobytes()).hexdigest(),
+                             "goal": [float(v) for v in poses_[-1]],
+                             "observe_replans_n": len(state["observe_replans"]),
+                             "loose_arrivals_n": len(state.get("observe_loose_arrivals", ()))})
+            state["near_end_shadow_open"] = {"index": len(records_) - 1, "leg_serial": leg_["serial"],
+                                             "phase_started_s": float(ms.phase_started),
+                                             "observe_replans_n": len(state["observe_replans"])}
+            return tracking
+        if not budget_:
+            records_.append({**record, "outcome": "no_budget"})
+            return tracking
+        grid_world, grid_kwargs, plan_observation_leg = hooks.grid_world, hooks.grid_kwargs, hooks.plan_observation_leg
+        planner_config, scenario, geometry = options.planner_config, options.scenario, self.geometry
+        target = PlanningPose(*(float(v) for v in paths["observe"].poses[-1]))
+        replan_start = hooks.wall()
+        replanned = plan_observation_leg(  # the observe_miss replan's call and names, as O1's
+            grid_world(scenario), target, planner_config, geometry=geometry,
+            start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+            pickup_bounds=self.observe_bounds(), extended=False, **grid_kwargs("observe"),
+        )
+        record["planning_wall_s"] = hooks.wall() - replan_start
+        if not replanned.success:
+            records_.append({**record, "outcome": f"failed:{replanned.status}"})
+            return tracking
+        records_.append({**record, "outcome": "installed"})
+        state["observe_replans"].append(
+            {"time_s": t, "rear_pose": [float(v) for v in rear], "yaw_error_rad": ms.last_tracking.yaw_error_rad,
+             "status": replanned.status, "planning_wall_s": record["planning_wall_s"], "leg_serial": leg_["serial"],
+             "budget_left": options.observe_replans_per_leg - (len(state["observe_replans"]) + 1 - leg_["start"]),
+             "trigger": "near_end_stand"})
+        paths["observe"] = replanned
+        state.setdefault("paths", {})["observe"] = hooks.path_record(replanned)
+        hooks.write_paths()
+        hooks.show_path(replanned, "Observe", (0.2, 0.8, 0.8))
+        trackers["observe"] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
+                                                  trackers["observe"].config)
+        ms.phase_started = t
+        if self.obstacle is not None:
+            # C2 1: the no-progress watch starts over on the new leg (its best remaining length stood at 0, so the new
+            # leg's progress would never refresh it -- Codex C2 review 1 P2-1)
+            self.obstacle.pop("progress", None)
+        self.realign_install("observe_replan")
+        tracking = trackers["observe"].update(rear, signed_speed, dt)
+        ms.last_tracking = tracking
+        return tracking
+
     def command(self, t: float, rear, rear_stamp: float, tracking, signed_speed: float, dwell_hold: bool,
                 dwell_standing: bool, safety_hold: bool) -> SimpleNamespace:
         """The follower's command and what stops it before the arrival: a failed tracker ends the run, SLAM
@@ -3178,6 +3332,7 @@ class MissionCore:
                     {"time_s": t, "position_error_m": tracking.position_error_m,
                      "yaw_error_rad": tracking.yaw_error_rad}
                 )
+                self.near_end_shadow_arrival(t)  # C2 5.1: a shadow episode on this stand ends as a loose arrival
                 state.pop("observe_loose_arrival", None)
                 tracking = replace(tracking, status="arrived")
         else:
