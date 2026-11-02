@@ -16,6 +16,10 @@ value must be) = split. The pure helpers below need no Isaac; the stage function
 from __future__ import annotations
 
 SPLIT_KEY = "contact_material_split"
+# Step B (fork-material sensitivity): the fork copy's own friction, combined by "min" against what it touches, so the
+# pallet-fork pair takes the fork's values (docs/plans/2026-11-01-contact-materials.md section 5 B). All three keys
+# together, and only with the split; absent = the fork copy keeps the source's values.
+FORK_KEYS = ("fork_static_friction", "fork_dynamic_friction", "fork_friction_combine_min")
 SOURCE_PATH = "/World/ContactMaterial"
 ROOT = "/World/ContactMaterials"
 ROLES = ("tyre", "chassis", "fork", "pallet")
@@ -23,6 +27,19 @@ ROLES = ("tyre", "chassis", "fork", "pallet")
 
 def split_enabled(settings: dict) -> bool:
     return settings.get(SPLIT_KEY) is not None
+
+
+def fork_override(settings: dict) -> dict | None:
+    """The fork material's step-B values from the settings, or None; refuses a partial or inconsistent set."""
+    given = [k for k in FORK_KEYS if k in settings]
+    if not given:
+        return None
+    if len(given) != len(FORK_KEYS) or not split_enabled(settings):
+        raise ValueError(f"{', '.join(FORK_KEYS)} go together and need {SPLIT_KEY} (given: {', '.join(given)})")
+    mu_s, mu_d = float(settings["fork_static_friction"]), float(settings["fork_dynamic_friction"])
+    if not 0 < mu_d <= mu_s:
+        raise ValueError(f"fork friction: dynamic {mu_d} must be positive and at most the static {mu_s}")
+    return {"static_friction": mu_s, "dynamic_friction": mu_d, "combine": "min"}
 
 
 def truck_role(collider_path: str) -> str:
@@ -53,6 +70,20 @@ def _copy_material(stage, source, path: str):
     return material
 
 
+def _set_combine(prim, mode: str) -> None:
+    """The PhysX friction combine rule on a material prim -- through PhysxSchema in Isaac; the same applied schema and
+    attribute by name where only plain USD is installed (the unit tests)."""
+    try:
+        from pxr import PhysxSchema
+    except ImportError:
+        from pxr import Sdf
+
+        prim.AddAppliedSchema("PhysxMaterialAPI")
+        prim.CreateAttribute("physxMaterial:frictionCombineMode", Sdf.ValueTypeNames.Token).Set(mode)
+        return
+    PhysxSchema.PhysxMaterialAPI.Apply(prim).CreateFrictionCombineModeAttr(mode)
+
+
 def _bound_material(prim):
     """The physics material bound to ``prim``, or None. ``ComputeBoundMaterial("physics")`` falls back to an
     all-purpose (render) binding, so a bound material counts only when it carries the physics material API -- the
@@ -68,16 +99,22 @@ def _bound_path(prim) -> str | None:
     return str(material.GetPath()) if material else None
 
 
-def split_contact_materials(stage, pallet_roots=("/World/Pallet",)) -> dict:
-    """Step A: rebind the truck and pallet colliders bound to ``/World/ContactMaterial`` to one copy per part. Returns
-    the record: each part's material, its values and how many colliders it took, and the colliders left on another
-    material (by that material)."""
+def split_contact_materials(stage, pallet_roots=("/World/Pallet",), fork: dict | None = None) -> dict:
+    """Step A: rebind the truck and pallet colliders bound to ``/World/ContactMaterial`` to one copy per part; ``fork``
+    (``fork_override``) then gives the fork copy its own friction and the "min" rule (step B). Returns the record:
+    each part's material, its values and how many colliders it took, and the colliders left on another material (by
+    that material)."""
     from pxr import Usd, UsdPhysics, UsdShade
 
     source = UsdShade.Material(stage.GetPrimAtPath(SOURCE_PATH))
     if not source:
         raise ValueError(f"{SPLIT_KEY}: no {SOURCE_PATH} to split (configure_drives has not run)")
     materials = {role: _copy_material(stage, source, f"{ROOT}/{role.capitalize()}") for role in ROLES}
+    if fork is not None:
+        api = UsdPhysics.MaterialAPI(materials["fork"].GetPrim())
+        api.GetStaticFrictionAttr().Set(fork["static_friction"])
+        api.GetDynamicFrictionAttr().Set(fork["dynamic_friction"])
+        _set_combine(materials["fork"].GetPrim(), fork["combine"])
     counts = {role: 0 for role in ROLES}
     kept: dict[str, int] = {}
     for root_path, is_pallet in [("/World/Forklift", False), *((r, True) for r in pallet_roots)]:

@@ -3701,8 +3701,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     if contact_materials.split_enabled(settings):
         # Contact materials plan step A: one material per part with the same values; off (absent) as before
+        # step B: the fork copy's own friction when the settings give it (validate_before_isaac checked the set)
         state["contact_materials"] = contact_materials.split_contact_materials(
-            stage, ("/World/Pallet",) if session is None else tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets))
+            stage, ("/World/Pallet",) if session is None else tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets),
+            fork=contact_materials.fork_override(settings))
         # the whole stage by bound material (T0's inventory of this scene, plan section 5)
         state["contact_materials"]["inventory"] = contact_materials.material_inventory(stage)
     # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
@@ -10354,6 +10356,13 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     # reader after this sees the number
     try:
         settings, args.pallet_mass_record = resolve_pallet_mass(settings, args.pallet_geometry_loaded.geometry_version)
+    except ValueError as exc:
+        require(False, f"--settings: {exc}")
+    import contact_materials
+
+    # contact materials step B: a partial or inconsistent fork friction set never reaches Isaac
+    try:
+        contact_materials.fork_override(settings)
     except ValueError as exc:
         require(False, f"--settings: {exc}")
     require(
