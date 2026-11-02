@@ -86,3 +86,27 @@ def test_a_stage_without_the_contact_material_is_refused():
 
     with pytest.raises(ValueError, match="no /World/ContactMaterial"):
         cm.split_contact_materials(Usd.Stage.CreateInMemory())
+
+
+def test_the_fork_override_goes_together_with_the_split_and_keeps_dynamic_at_most_static():
+    assert cm.fork_override({cm.SPLIT_KEY: 1}) is None
+    ok = {cm.SPLIT_KEY: 1, "fork_static_friction": 0.5714, "fork_dynamic_friction": 0.5, "fork_friction_combine_min": 1}
+    assert cm.fork_override(ok) == {"static_friction": 0.5714, "dynamic_friction": 0.5, "combine": "min"}
+    for bad in ({k: v for k, v in ok.items() if k != cm.SPLIT_KEY},
+                {k: v for k, v in ok.items() if k != "fork_friction_combine_min"},
+                {**ok, "fork_dynamic_friction": 0.6}):
+        with pytest.raises(ValueError):
+            cm.fork_override(bad)
+
+
+def test_the_fork_override_gives_only_the_fork_copy_its_values_and_the_min_rule():
+    stage = _stage()
+    fork = {"static_friction": 0.3429, "dynamic_friction": 0.3, "combine": "min"}
+    record = cm.split_contact_materials(stage, fork=fork)
+    m = record["materials"]
+    assert m["fork"]["physics:staticFriction"] == pytest.approx(0.3429)
+    assert m["fork"]["physics:dynamicFriction"] == pytest.approx(0.3)
+    assert m["fork"]["physxMaterial:frictionCombineMode"] == "min"
+    for role in ("tyre", "chassis", "pallet"):
+        assert m[role]["physics:staticFriction"] == pytest.approx(0.8)
+        assert "physxMaterial:frictionCombineMode" not in m[role]

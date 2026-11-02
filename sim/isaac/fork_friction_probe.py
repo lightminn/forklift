@@ -49,7 +49,7 @@ ap.add_argument("--ramp-start-deg", type=float, default=5.0)
 ap.add_argument("--ramp-end-deg", type=float, default=45.0)
 ap.add_argument("--ramp-rate-deg-s", type=float, default=0.5)
 ap.add_argument("--slip-m", type=float, default=0.002)
-ap.add_argument("--slide-speed", type=float, default=0.5)  # 0.4 left a 0.7 pair 5 fit points (Codex B0 r2 P3)
+ap.add_argument("--slide-speed", type=float, default=0.45)  # 6+ fit points for every arm 0.26-0.7 (Codex B0 r2-r3 P3)
 args = ap.parse_args()
 if not 0.3 <= args.slide_speed <= 0.6:
     ap.error("--slide-speed must be in [0.3, 0.6] m/s: enough samples, and the fit stays on the blades")
