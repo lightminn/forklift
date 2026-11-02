@@ -59,18 +59,21 @@ def synthetic_twins(b, bay_m: float = BAY_M, multiples=MULTIPLES) -> list:
     return out
 
 
+def _same(a, b) -> bool:
+    d, a_ = _gap(a, b)
+    return d <= 1e-9 and a_ <= 1e-9
+
+
 def hypotheses(b, *, pool=(), leaves=(), synthetic=()) -> list:
-    """(pose, source) of every hypothesis other than b; poses within b's success tolerance are b, and two within each
-    other's success tolerance are one (only those: a pose further away is another hypothesis)."""
+    """(pose, source) of every hypothesis other than b. Only exact repeats go: two centres within each other's success
+    tolerance still search different +-REGION_M regions, and the check must cover their union (Codex piece 1
+    re-review)."""
     out = []
     items = [(tuple(float(v) for v in p), "pool") for p in pool] + \
             [(tuple(float(v) for v in p), "leaf") for p in leaves] + \
             [(tuple(float(v) for v in p), src) for p, src in synthetic]
     for pose, src in items:
-        d, a = _gap(pose, b)
-        if d <= SUCCESS_M and a <= SUCCESS_RAD:
-            continue
-        if any(_gap(pose, q)[0] <= SUCCESS_M and _gap(pose, q)[1] <= SUCCESS_RAD for q, _ in out):
+        if _same(pose, b) or any(_same(pose, q) for q, _ in out):
             continue
         out.append((pose, src))
     return out
@@ -106,6 +109,7 @@ class Residual:
     competitors: list = field(default_factory=list)  # (pose, conservative score, source)
     impossible: list = field(default_factory=list)  # (pose, source)
     regions: int = 0
+    searched: list = field(default_factory=list)  # (centre, source) of every region searched, in order
     work: int = 0
     wall_s: float = 0.0
 
@@ -160,21 +164,26 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
     window = L.Window(base=tuple(float(v) for v in b), radius_m=REGION_M, yaw_rad=REGION_RAD, edge_m=0.0, edge_rad=0.0)
     own = L.local_match(grid, points, window, cfg, e_min=e_min, r_amb=2.0, index=index, clock=clock, deadline=deadline)
     out = Residual(False, (), base=own.base, a_b=own.amb_ratio, work=own.work)
+    early = () if hyp_status == "ok" else (f"hypotheses:{hyp_status}",)
     if not own.confirmed:
-        out.reasons, out.wall_s = (f"believed:{own.reason}",), time.monotonic() - t0
+        out.reasons, out.wall_s = early + (f"believed:{own.reason}",), time.monotonic() - t0
         return out
     s_b = G._field_score(grid, index.field, pts, R.laser_from_base(own.base))
     out.s_b = s_b
-    reasons = [] if hyp_status == "ok" else [f"hypotheses:{hyp_status}"]
+    reasons = list(early)
     if own.amb_ratio is not None and own.amb_ratio >= r_resid:
         reasons.append("believed:ambiguous")
     cons = cons or ConservativeIndex(grid, cfg)
     budget = G._Budget(cfg, clock, deadline)
-    regions = [(own.base, "believed")] + list(hyps)
+    b = tuple(float(v) for v in b)
+    # b refined and b as believed: different centres, so both regions (Codex piece 1 re-review)
+    regions = [(own.base, "believed")] + ([] if _same(b, own.base) else [(b, "believed-start")])
+    regions += [(p, src) for p, src in hyps if not any(_same(p, q) for q, _ in regions)]
     try:
         for pose, src in regions:
             got = _region_leaves(grid, pts, cfg, cons, pose, budget, r_resid * s_b)
             out.regions += 1
+            out.searched.append((pose, src))
             if got is None:
                 out.impossible.append((pose, src))
                 continue
@@ -237,7 +246,7 @@ def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, c
     if dm <= tol_m and da <= tol_rad:
         # the conservative check at this place too: an unattended confirmation alone misses a twin unknown hides
         # b' keeps its own region: g agrees with it only within E_AGREE (Codex piece 1 review)
-        here = hypotheses(g, synthetic=[(b_now, "believed-start")] + [(moved(h, o0, ot), src) for h, src in hyps])
+        here = hypotheses(g, synthetic=[(b_now, "moved-start")] + [(moved(h, o0, ot), src) for h, src in hyps])
         out.residual = residual_ambiguity(grid, points, g, here, cfg, e_min=e_min, index=index, cons=cons,
                                           clock=clock, deadline=deadline)
         out.outcome = "confirm" if out.residual.confirmed else "unconfirmed"

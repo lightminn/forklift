@@ -48,13 +48,15 @@ def test_the_synthetic_set_is_the_bay_shifts_and_the_turnarounds():
     assert all(abs(T.wrap(p[2] - (0.3 + math.pi))) < 1e-9 for p in flips) and len(flips) == 13
 
 
-def test_hypotheses_merge_only_within_the_success_tolerance():
+def test_hypotheses_drop_only_exact_repeats_so_the_union_of_regions_is_kept():
+    # Codex piece 1 re-review: two centres 0.08 m apart do not search the same +-0.30 m region, so a pose within the
+    # success tolerance of b or of another hypothesis is still its own region; only exact repeats go
     b = (1.0, 2.0, 0.0)
-    hyps = T.hypotheses(b, pool=[(1.05, 2.0, 0.0), (1.2, 2.0, 0.0)], leaves=[(1.2, 2.0, 0.01)], synthetic=[])
+    hyps = T.hypotheses(b, pool=[(1.0, 2.0, 0.0), (1.05, 2.0, 0.0), (1.2, 2.0, 0.0)], leaves=[(1.2, 2.0, 0.0),
+                        (1.2, 2.0, 0.01)], synthetic=[])
     poses = [p for p, _ in hyps]
-    assert (1.05, 2.0, 0.0) not in poses  # within b's success tolerance: b itself
-    assert len([p for p in poses if abs(p[0] - 1.2) < 0.02]) == 1  # the two 1.2 m poses are one hypothesis
-    assert len(hyps) == 1
+    assert (1.0, 2.0, 0.0) not in poses  # b itself
+    assert poses == [(1.05, 2.0, 0.0), (1.2, 2.0, 0.0), (1.2, 2.0, 0.01)]
 
 
 def test_an_asymmetric_room_has_no_residual_ambiguity():
@@ -186,11 +188,25 @@ def test_a_failed_hypothesis_search_leaves_the_start_unconfirmed():
     truth = (2.4, 1.6, 0.6)
     res = T.residual_ambiguity(grid, _points_at(grid, truth), truth, [], CFG, e_min=0.8, hyp_status="overflow")
     assert not res.confirmed and "hypotheses:overflow" in res.reasons
+    wrong = (3.4, 2.2, 0.6)  # the believed start fails too: both reasons are kept (Codex re-review P3)
+    res = T.residual_ambiguity(grid, _points_at(grid, truth), wrong, [], CFG, e_min=0.8, hyp_status="overflow")
+    assert res.reasons[0] == "hypotheses:overflow" and res.reasons[1].startswith("believed:")
 
 
 def test_the_rematch_keeps_the_moved_starts_own_region():
-    # P2: the moved start b' is a hypothesis at the new place too (g agrees with it only within E_AGREE)
+    # P2: the moved start b' is a hypothesis at the new place too (g agrees with it only within E_AGREE), even when g
+    # and b' are within each other's success tolerance (Codex re-review: 0.08 m apart merged it away)
     grid = TG._grid(*TG.ROOM)
     b = (3.0, 1.6, 0.0)
-    out = _rematch(grid, (2.4, 1.6, 0.0), b, [], "confirmed", (2.4, 1.78, 0.0))
-    assert out.residual is not None and out.residual.regions == 2  # g's own region and the moved start's
+    for g in ((2.4, 1.78, 0.0), (2.48, 1.6, 0.0)):
+        out = _rematch(grid, (2.4, 1.6, 0.0), b, [], "confirmed", g)
+        assert out.residual is not None
+        assert any(src == "moved-start" and T._same(p, (2.4, 1.6, 0.0)) for p, src in out.residual.searched)
+
+
+def test_the_residual_searches_the_believed_start_as_well_as_its_refined_pose():
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    b = (2.47, 1.6, 0.6)  # refined towards the truth: two different regions
+    res = T.residual_ambiguity(grid, _points_at(grid, truth), b, [], CFG, e_min=0.8)
+    assert res.searched[0][1] == "believed" and (b, "believed-start") in res.searched

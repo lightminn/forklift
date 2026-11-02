@@ -22,14 +22,16 @@ for line in open(SNAP / "docs/validation/assets/b-p1b/val3_rows.jsonl"):
                    "pool": [list(base_from_laser(c["pose"])) for c in r["candidates"]]})
 write("s4_starts.jsonl", s4)
 # seed 5: B-P2d's sessions started on the matcher's confirmation, b = the session's estimate, the generation's pool =
-# the confirming attempt's kept candidates (base poses)
+# the kept candidates of every attempt of the session's one generation (start_reloc pools them all; Codex re-review),
+# unfiltered by E_MIN and refinement movement, so a superset of the pool the session held (base poses)
 j = json.load(open(SNAP / "docs/validation/assets/b-p2d/judgement.json"))
 s5 = []
 for r in j["rows"]:
     if r["class"] == "valid" and r["outcome"] == "success":
         sr = json.load(open(P / "bp2d_val/s" / r["id"] / "epoch_1/run/result.json"))["start_reloc"]
-        att = [a for a in sr["attempts"] if a["reason"] == "confirmed"][-1]
-        s5.append({"id": r["id"], "base": sr["estimate"], "pool": [c["base"] for c in att["candidates"]]})
+        assert sr["generation"] == 1
+        s5.append({"id": r["id"], "base": sr["estimate"],
+                   "pool": [c["base"] for att in sr["attempts"] for c in att["candidates"]]})
 write("s5_starts.jsonl", s5)
 
 def wrong(stress):
