@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 MARKER = ".gate_setup_copy"
@@ -107,7 +109,13 @@ def overlay(run_dir: Path, copy_dir: Path) -> dict:
     for w in plan:  # every check passed: only now is anything written
         target = _plain_target(copy_dir, w["path"])
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(Path(w["source"]).read_bytes())
+        # a new file renamed over the target: a hard link the copy kept (cp -a) to the same inode -- a code file,
+        # say -- keeps its own bytes (Codex review 2 P2)
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(Path(w["source"]).read_bytes())
+        os.chmod(tmp, (target.stat().st_mode if target.exists() else 0o644) & 0o777)  # mkstemp makes it 0600
+        os.replace(tmp, target)
     return {"run": str(run_dir), "copy": str(copy_dir), "recording_snapshot": None if root is None else str(root),
             "written": plan,
             "unchanged": unchanged}

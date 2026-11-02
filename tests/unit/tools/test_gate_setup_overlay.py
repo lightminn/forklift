@@ -3,6 +3,7 @@ back from its recording snapshot onto a marked copy of the gate snapshot, code i
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -158,3 +159,13 @@ def test_a_record_with_nothing_to_write_needs_no_recording_snapshot(tmp_path):
     (gate / "config/a.yaml").write_bytes(b"changed\n")
     with pytest.raises(G.OverlayRefused, match="recording snapshot"):
         G.overlay(run, gate)
+
+
+def test_a_hard_link_to_a_code_file_keeps_the_code_file(tmp_path):
+    run, rec, gate = make(tmp_path, {"config/a.yaml": b"mass: 10\n"}, {"src/m.py": b"mass: 4.93\n"})
+    (gate / "config").mkdir()
+    os.link(gate / "src/m.py", gate / "config/a.yaml")
+    G.overlay(run, gate)
+    assert (gate / "config/a.yaml").read_bytes() == b"mass: 10\n"
+    assert (gate / "src/m.py").read_bytes() == b"mass: 4.93\n"
+    assert not list((gate / "config").glob(".a.yaml.*"))

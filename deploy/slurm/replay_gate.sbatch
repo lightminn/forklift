@@ -39,10 +39,11 @@ REL=$(sed -n "${ID}p" "$LIST")
 case "$REL" in /*) RUN=$REL;; *) RUN=$RUNS_ROOT/$REL;; esac
 [ -f "$RUN/boundary/setup_snapshot.json" ] || fail 2 "$RUN holds no boundary record"
 mkdir -p "$OUT" || fail 2 "cannot make $OUT"
-[ -e "$OUT/r_$ID.json" ] || [ -e "$OUT/o_$ID.json" ] && fail 2 "$OUT already holds task $ID's result"
 W=$OUT/work_$ID
 mkdir "$W" 2>/dev/null || fail 2 "$W is taken"
 trap 'rm -rf "$W"' EXIT
+# checked after the claim: a task that finished and released work_ID in between has left its result (Codex review 2 P3)
+[ -e "$OUT/r_$ID.json" ] || [ -e "$OUT/o_$ID.json" ] && fail 2 "$OUT already holds task $ID's result"
 cp -a "$SNAP/." "$W/" || fail 2 "copy of $SNAP failed"
 echo "gate $SNAP setup=$SETUP_INPUTS record $RUN $(date -Is)"
 if [ "$SETUP_INPUTS" = recorded ]; then
