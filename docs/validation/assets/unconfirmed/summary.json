@@ -22,19 +22,19 @@
   "believed_is_truth": 69,
   "rear_blocked": 14,
   "hyps": {
-   "median": 25,
-   "max": 32
+   "median": 27,
+   "max": 37
   },
   "leaves": {
    "median": 2,
    "max": 5
   },
   "time_s": {
-   "p50": 5.78,
+   "p50": 5.742,
    "p95": 10.792,
-   "max": 15.869
+   "max": 15.965
   },
-  "work_max": 2673186
+  "work_max": 4064640
  },
  "s5_starts_rows.jsonl": {
   "rows": 68,
@@ -61,19 +61,19 @@
   "believed_is_truth": 68,
   "rear_blocked": 13,
   "hyps": {
-   "median": 25,
-   "max": 32
+   "median": 27,
+   "max": 38
   },
   "leaves": {
    "median": 2,
    "max": 7
   },
   "time_s": {
-   "p50": 5.52,
-   "p95": 10.883000000000001,
-   "max": 18.172
+   "p50": 5.563,
+   "p95": 11.146,
+   "max": 18.663
   },
-  "work_max": 2686688
+  "work_max": 3518368
  },
  "s4_wrong_rows.jsonl": {
   "rows": 11,
@@ -100,19 +100,19 @@
   "believed_is_truth": 0,
   "rear_blocked": 4,
   "hyps": {
-   "median": 30,
-   "max": 32
+   "median": 36,
+   "max": 56
   },
   "leaves": {
    "median": 4,
    "max": 30
   },
   "time_s": {
-   "p50": 8.427999999999999,
-   "p95": 12.479,
-   "max": 12.479
+   "p50": 8.634,
+   "p95": 12.385,
+   "max": 12.385
   },
-  "work_max": 4439987
+  "work_max": 11357754
  },
  "s5_wrong_rows.jsonl": {
   "rows": 10,
@@ -137,18 +137,18 @@
   "believed_is_truth": 0,
   "rear_blocked": 4,
   "hyps": {
-   "median": 30,
-   "max": 33
+   "median": 35,
+   "max": 51
   },
   "leaves": {
    "median": 4,
    "max": 27
   },
   "time_s": {
-   "p50": 9.967,
-   "p95": 16.028,
-   "max": 16.028
+   "p50": 10.04,
+   "p95": 16.133,
+   "max": 16.133
   },
-  "work_max": 5880000
+  "work_max": 6548850
  }
 }
