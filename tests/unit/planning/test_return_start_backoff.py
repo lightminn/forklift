@@ -282,3 +282,63 @@ def test_the_runner_path_record_keeps_a_start_backoff_only_when_there_is_one():
                         start_backoff={"status": "prefix", "length_m": 0.08})
     assert "start_backoff" not in module.path_record(plain)
     assert module.path_record(backed)["start_backoff"] == {"status": "prefix", "length_m": 0.08}
+
+
+# F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md §4): boxed keeps what on recovers, the advice never earlier,
+# the length possibly shorter
+
+def test_boxed_recovers_the_recorded_return_on_recovers():
+    sc = recorded()
+    for scenario in (sc, moved(sc, "session:pallet:P-5@search", x_m=3.3, y_m=-8.469 - 0.31, yaw_rad=0.015)):
+        start = withdrawn(scenario)
+        on = plan_return_leg(scenario, start, scenario.start_rear, CONFIG, geometry=GEOMETRY, return_start_backoff_m=CAP)
+        boxed = plan_return_leg(scenario, start, scenario.start_rear, CONFIG, geometry=GEOMETRY,
+                                return_start_backoff_m=CAP, return_start_backoff_boxed=True)
+        assert on.success and boxed.success
+        assert boxed.start_backoff["advice_m"] >= on.start_backoff["advice_m"]
+        assert boxed.start_backoff["trigger"] == "invalid_start"
+    # the loaded delivery's return_home too
+    predelivery = site_poses(sc.destination, GEOMETRY)["predelivery"]
+    start = Pose2D(predelivery.x_m - 1.0, predelivery.y_m, 0.0)
+    boxed = plan_loaded_delivery(sc, start, CONFIG, geometry=GEOMETRY, return_to=sc.start_rear,
+                                 return_start_backoff_m=CAP, return_start_backoff_boxed=True)
+    assert boxed.success and boxed.return_home.start_backoff["check"] == "first_step"
+
+
+def _rh(name):
+    s = json.loads((FIXTURE.parent / f"return_start_backoff_rh_{name}.json").read_text())["mission_scenario"]
+    return TransportScenario(
+        seed=int(s["seed"]), start_rear=Pose2D(**s["start_rear"]), pickup=PalletSite(**s["pickup"]),
+        destination=PalletSite(**s["destination"]),
+        props=tuple(PlacedProp(AssetSpec(**p["asset"]), Rectangle(**p["rectangle"])) for p in s["props"]),
+        bounds=Bounds(**s["bounds"]))
+
+
+@pytest.mark.parametrize("name, advice, length", [("s8_m3", 0.17, 0.20), ("random_m_s4_m3", 0.21, 0.24),
+                                                  ("random_m_s6_m3", 0.19, 0.22), ("tq_random_m_s2_m2", 0.08, 0.11)])
+def test_boxed_recovers_the_four_recorded_f2_cases(name, advice, length):
+    # F2' plan C2's four recorded rh_5d280e80 starts (docs/validation/2026-10-27-return-start-backoff.md): on as recorded
+    # there, boxed recovers each too (F2'' plan §4)
+    sc = _rh(name)
+    start = withdrawn(sc)
+    assert plan_return_leg(sc, start, sc.start_rear, CONFIG, geometry=GEOMETRY).status == "invalid_start"
+    on = plan_return_leg(sc, start, sc.start_rear, CONFIG, geometry=GEOMETRY, return_start_backoff_m=CAP)
+    assert on.success
+    assert (on.start_backoff["advice_m"], on.start_backoff["length_m"]) == (pytest.approx(advice), pytest.approx(length))
+    boxed = plan_return_leg(sc, start, sc.start_rear, CONFIG, geometry=GEOMETRY, return_start_backoff_m=CAP,
+                            return_start_backoff_boxed=True)
+    assert boxed.success and boxed.start_backoff["trigger"] == "invalid_start"
+    assert boxed.start_backoff["advice_m"] >= on.start_backoff["advice_m"] - 1e-9
+
+
+def test_boxed_can_back_off_less_than_on():
+    # Codex F2'' review 1 P2-3: a bar behind cuts the run of first-step distances at 0.18 m, not the start check's
+    sc = with_prop(recorded(), "test:bar_behind", Rectangle(0.835, -9.756, 0.1, 2.0, 0.0))
+    start = withdrawn(sc)
+    obstacles, footprint, bounds = pm.leg_obstacles("return", sc, GEOMETRY)
+    slot = pm.scenario_props(sc, "slot")
+    on = return_start_backoff(start, obstacles, footprint, bounds, 0.1, slot, 0.1, CAP)
+    boxed = return_start_backoff(start, obstacles, footprint, bounds, 0.1, slot, 0.1, CAP, first_step_config=CONFIG)
+    assert (on["advice_m"], on["last_m"], on["length_m"]) == (pytest.approx(0.17), pytest.approx(0.30), pytest.approx(0.20))
+    assert (boxed["advice_m"], boxed["last_m"], boxed["length_m"]) == (
+        pytest.approx(0.17), pytest.approx(0.18), pytest.approx(0.18))

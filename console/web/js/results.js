@@ -58,6 +58,7 @@ export const REASONS = {
   "Perception display clipping range": "인식 카메라 표시 범위가 잘못됐습니다",
   "Perception camera local pose differs": "인식 카메라 장착 자세가 다릅니다",
   "--odometry-wheel-radius-m": "주행기록 바퀴 반지름 설정이 잘못됐습니다",
+  "--settings:": "시뮬 설정이 이 팔레트 형상의 질량을 정하지 않았습니다",
   "scene requirements:": "이 장면에 필요한 실행 설정이 빠졌습니다",
   "recognition label target": "장면에 인식 라벨 대상이 없습니다",
   // the delivery verdict (simulation truth): the mission fails, the session goes on
@@ -263,8 +264,12 @@ export class ConfirmGate {
 
 function sameKey(a, b) {
   // B-P2c: a start candidate's pick is the same only for the same candidate of the same set (absent elsewhere)
+  // F1: a placement only for the same placed pose, a confirmation only for the same preview
+  const samePose = (p, q) => (p === undefined && q === undefined)
+    || (Array.isArray(p) && Array.isArray(q) && p.length === q.length && p.every((v, k) => v === q[k]));
   return a.kind === b.kind && a.epoch === b.epoch && a.leaseId === b.leaseId && a.controlGen === b.controlGen
-    && a.generation === b.generation && a.candidate === b.candidate;
+    && a.generation === b.generation && a.candidate === b.candidate && samePose(a.pose, b.pose)
+    && a.preview_id === b.preview_id;
 }
 
 // The back-off advice (contract 5.2): a guide from the pose at the failure, not a permit.

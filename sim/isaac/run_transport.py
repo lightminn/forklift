@@ -599,6 +599,24 @@ def arguments() -> argparse.Namespace:
         "travel max(2L, L + 2 m), 40 s) releasing, re-planning and holding again once. Off: every earlier run.",
     )
     parser.add_argument(
+        "--stand-wheel-hold",
+        choices=("off", "rear", "all"),
+        default="off",
+        help="docs/plans/2026-11-01-standstill-wheel-hold.md S1: a zero command held 0.5 s in a driving phase with the "
+        "rear wheels below 0.05 rad/s locks the rear (driven) wheels where they stand (the dwell lock's stiffness), "
+        "released on the first non-zero command before it is applied; 'all' locks all four (the S0 cause probe). Off: "
+        "every earlier run (the dwell lock alone). Batch runs only.",
+    )
+    parser.add_argument(
+        "--stand-probe-log",
+        type=Path,
+        default=None,
+        help="docs/plans/2026-11-01-standstill-wheel-hold.md S0: one JSON line per control tick with a zero wheel "
+        "command -- the wheels' angles, rates and measured efforts, the steering angles, the truck's and pallet's true "
+        "poses, the lock -- and the restart after one (the ticks from the first non-zero command until the truck has "
+        "moved 5 mm or 5 s have passed, in either lock setting: the S1 batch's restart comparison).",
+    )
+    parser.add_argument(
         "--return-cusp-replans",
         type=int,
         default=0,
@@ -643,13 +661,15 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--return-start-backoff",
-        choices=("on", "off"),
+        choices=("on", "boxed", "off"),
         default="off",
         help="docs/plans/2026-10-27-return-start-withdraw-extension.md: a return planned from the withdrawal end whose "
         "start is invalid (the mission plan's return_home, the docking release's replan, the first live return) backs "
         "straight off first -- the first distance the return's start check accepts while the straight keeps the "
-        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. Off: as every "
-        "earlier run.",
+        "planner clearance from the slot-stage props, + 0.03, at most 0.30 m -- and returns from there. boxed "
+        "(docs/plans/2026-11-02-return-start-backoff-boxed.md, F2''): also a start every search attempt leaves after its "
+        "root, the distances checked for a first step of the search itself, and a failed return from the end keeps the "
+        "original result. Off: as every earlier run.",
     )
     parser.add_argument(
         "--start-band-m",
@@ -1343,6 +1363,10 @@ def arguments() -> argparse.Namespace:
         # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1: checked for the Riibotics scene runs (scene replan,
         # no grid planning); the near-tracking combination waits for its own check
         parser.error("--exit-prefix-exempt on needs --layout scene and --obstacle-layer, and not --near-tracking")
+    if getattr(args, "live", False) and args.stand_wheel_hold != "off":
+        # the live mission end zeroes the wheels and then releases the shared lock (live_runtime unlock_wheels);
+        # the stand lock's ownership there is not settled (plan S1)
+        parser.error("--stand-wheel-hold is for batch runs; not with --live")
     if args.return_cusp_replans < 0 or args.transport_cusp_replans < 0:
         parser.error("--return-cusp-replans and --transport-cusp-replans are counts (0 or more)")
     if args.layout == "scene":
@@ -3181,6 +3205,8 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
     if abs(lx - R.LASER_X_M) > 1e-9 or abs(ly) > 1e-9:  # the matcher's laser poses become base poses by R's frames
         raise SessionFailure(f"reloc_config_error: the LiDAR mount {engine.laser_xyz_m} is not start_reloc's")
     cfg, reloc_cfg, settings_record = frozen or reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
+    # F1: the operator's placements (frozen file, or the plan's provisional values) -- recorded with the settings
+    place_cfg, place_record = reloc_phase.place_settings(Path(__file__).resolve().parents[2])
     t0 = time.monotonic()
     index = G.MapIndex(bundle.grid, cfg)
     index_s = time.monotonic() - t0
@@ -3191,8 +3217,9 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
-        operator_deadline_at=None if console is None else operator_deadline(args)))
-    record = {**out, "map_id": bundle.map_id, "settings": settings_record, "index_build_s": round(index_s, 3),
+        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg))
+    record = {**out, "map_id": bundle.map_id, "settings": settings_record, "place_settings": place_record,
+              "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
                                 if out["estimate"] is not None else None)}
     state["start_reloc"] = record
@@ -5540,6 +5567,25 @@ def drive(S, isaac) -> None:
                                          hash_only_requests={"drive_frame", "stop"},
                                          watches={"drive_frame": far_watch_, "stop": far_watch_} if far_watch_ else None)
     state["phase"] = "planning"
+    # docs/plans/2026-11-01-standstill-wheel-hold.md S1/S0: made here, after the binding prologue, from the arguments (not setup values), so a
+    # setup recorded before them and an off run bind nothing new; off keeps the dwell lock path below as is
+    stand_hold = None
+    if getattr(args, "stand_wheel_hold", "off") != "off":
+        from forklift_core.control.stand_hold import WheelHold
+
+        stand_hold = WheelHold(args.stand_wheel_hold, wheel_indices=wheels)
+        state["stand_wheel_locks"] = stand_hold.events  # the result's record, filled as it goes
+    stand_probe = None if getattr(args, "stand_probe_log", None) is None else open(args.stand_probe_log, "w", buffering=1)
+    # the lock in progress (its first event, which carries the locked move / effort as they grow) and the release
+    # whose restart is being timed
+    stand_watch = {"event": None, "release": None}
+    if stand_probe is not None:
+        from forklift_core.control.stand_hold import RestartTail
+
+        probe_tail = RestartTail()  # the zero-command ticks and the restart after each (the S1 batch's off arm too)
+        import atexit
+
+        atexit.register(stand_probe.close)  # every end, a failure or a cancel too
     # the truth evaluator's moving shape (obstacle_module.moving_shape): the layer config's permission.shape, read here
     # once -- never from the layer, whose every call and attribute is a recorded boundary
     eval_shape_mode_ = (str((obstacle_module.load_layer_config(args.obstacle_layer).get("permission") or {})
@@ -6460,6 +6506,8 @@ def drive(S, isaac) -> None:
                                 # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
                                 # before the option
                                 return_start_backoff_m=return_start_backoff_m_of(args),
+                                # docs/plans/2026-11-02-return-start-backoff-boxed.md D1: off before the option
+                                return_start_backoff_boxed=getattr(args, "return_start_backoff", "off") == "boxed",
                                 observe_arrival_m=OBSERVE_ARRIVAL_M, observe_arrival_yaw_rad=OBSERVE_ARRIVAL_YAW_RAD,
                                 # a recorded run's arguments may predate the diagnostic (the replay gate)
                                 **({} if getattr(args, "diag_return_stall_budget", None) is None
@@ -9672,7 +9720,45 @@ def drive(S, isaac) -> None:
                 slip_watch.end_tick(ms.phase if live is None or core.commands.adopted_id is not None else "idle",
                                     (float(base[0]), float(base[1]), float(yaw)),
                                     (float(ppos[0]), float(ppos[1]), float(pallet_yaw)), t=t)
-                if dwell_standing and wheel_lock["q"] is None:
+                if stand_hold is not None:
+                    # Plan 2026-11-01-standstill-wheel-hold S1: one lock state (none / stand / dwell) for both locks
+                    controller_ = robot.get_articulation_controller()
+                    events_before_ = len(stand_hold.events)
+                    hold_ = stand_hold.step(
+                        float(t), dwell_standing=bool(dwell_standing),
+                        wheel_cmd=np.asarray(drive.wheel_rates_rad_s, dtype=float), phase=ms.phase,
+                        wheel_rates=np.asarray(robot.get_joint_velocities()[wheels], dtype=float),
+                        q_now=np.asarray(robot.get_joint_positions()[wheels], dtype=float),
+                        read_gains=controller_.get_gains)
+                    if hold_.gains is not None:
+                        controller_.set_gains(kps=hold_.gains[0], kds=hold_.gains[1])
+                    base_now_ = [float(base[0]), float(base[1]), float(yaw)]
+                    if stand_watch["event"] is not None:
+                        # this tick's pose moved under the lock held through the last physics step: counted first,
+                        # also on the tick that releases it (Codex impl review 2 P2-1); kept in the lock's own event
+                        # every tick, so a run ending locked keeps them too (P2-2)
+                        ev_lock_, lb_ = stand_watch["event"], stand_watch["event"]["base"]
+                        ev_lock_["locked_max_move_m"] = max(ev_lock_.get("locked_max_move_m", 0.0),
+                                                            math.hypot(base_now_[0] - lb_[0], base_now_[1] - lb_[1]))
+                        efforts_ = getattr(robot, "get_measured_joint_efforts", None)
+                        if efforts_ is not None:
+                            e_ = float(np.max(np.abs(np.asarray(efforts_(), dtype=float)[wheels])))
+                            ev_lock_["locked_max_effort"] = max(ev_lock_.get("locked_max_effort") or 0.0, e_)
+                        ev_lock_["observed_to_s"] = float(t)
+                    if len(stand_hold.events) > events_before_:
+                        ev_ = stand_hold.events[-1]
+                        ev_.update(base=base_now_, pallet=[float(ppos[0]), float(ppos[1]), float(pallet_yaw)])
+                        if ev_["from"] == "none":
+                            ev_.update(locked_max_move_m=0.0, locked_max_effort=None, observed_to_s=float(t))
+                            stand_watch.update(event=ev_, release=None)
+                        elif ev_["to"] == "none":
+                            stand_watch.update(event=None, release={"event": ev_, "base": base_now_, "t": float(t)})
+                    rel_ = stand_watch["release"]
+                    if rel_ is not None and math.hypot(base_now_[0] - rel_["base"][0], base_now_[1] - rel_["base"][1]) > 0.005:
+                        rel_["event"]["moved_after_s"] = float(t) - rel_["t"]  # the restart: 5 mm of true travel
+                        stand_watch["release"] = None
+                    wheel_lock["q"] = hold_.q
+                elif dwell_standing and wheel_lock["q"] is None:
                     # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
                     controller_ = robot.get_articulation_controller()
                     kps_, kds_ = (np.asarray(g, dtype=float).copy() for g in controller_.get_gains())
@@ -9685,6 +9771,23 @@ def drive(S, isaac) -> None:
                     robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
                     wheel_lock["events"][-1]["release_s"] = float(t)
                     wheel_lock["q"] = None
+                probe_zero_ = bool(np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0))
+                if stand_probe is not None and probe_tail.keep(float(t), probe_zero_, (float(base[0]), float(base[1]))):
+                    # Plan S0: every zero-command tick, whatever the lock (off too, for the comparison), and the
+                    # restart tail after one
+                    efforts_ = getattr(robot, "get_measured_joint_efforts", None)
+                    stand_probe.write(json.dumps({
+                        "t": float(t), "phase": ms.phase, "cmd_zero": probe_zero_,
+                        "wheel_cmd": [float(v) for v in np.asarray(drive.wheel_rates_rad_s, dtype=float)],
+                        "lock": "dwell" if (stand_hold is None and wheel_lock["q"] is not None)
+                        else (stand_hold.mode if stand_hold is not None else "none"),
+                        "steer_cmd": [float(v) for v in steering_command],
+                        "steer_q": [float(v) for v in robot.get_joint_positions()[steers]],
+                        "q": [float(v) for v in robot.get_joint_positions()[wheels]],
+                        "qd": [float(v) for v in robot.get_joint_velocities()[wheels]],
+                        "effort": None if efforts_ is None else [float(v) for v in np.asarray(efforts_())[wheels]],
+                        "base": [float(base[0]), float(base[1]), float(yaw)],
+                        "pallet": [float(ppos[0]), float(ppos[1]), float(pallet_yaw)]}) + "\n")
                 robot.apply_action(
                     isaac.action(
                         joint_velocities=np.asarray(drive.wheel_rates_rad_s),
@@ -9871,6 +9974,9 @@ def drive(S, isaac) -> None:
                             "dwell_hold_s": None if dwells is None else dwells.hold_s,
                         "dwell_wheel_kp": DWELL_WHEEL_KP if dwells is not None else None,
                         "dwell_wheel_locks": wheel_lock["events"],
+                        # plan 2026-11-01-standstill-wheel-hold S1: with the stand lock on, the dwell's locks are in
+                        # state["stand_wheel_locks"] (the result) and here
+                        **({} if stand_hold is None else {"stand_wheel_locks": stand_hold.events}),
                             "dwell_d_end_m": dwell_d_end_m,
                             "safety_stop_gaps_m": (None if args.measure_safety_stops_m is None
                                                    else list(args.measure_safety_stops_m)),
@@ -10198,6 +10304,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # scene requirements plan: the verdict goes into its own block; the three options only when given (an override
         # run's arguments rebuild it), the near-field contract treats them as run-specific
         and k != "scene_requirements_report"
+        # pallet-mass plan (2026-11-01): the resolved mass goes into its own block (pallet_mass), not the arguments
+        # (Codex pallet-mass review 2 P2-1: as an argument it broke the near-field contract of every earlier record)
+        and k != "pallet_mass_record"
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
@@ -10216,13 +10325,17 @@ def return_start_backoff_m_of(args) -> float:
     record from before the option)."""
     from forklift_core.planning.pallet_mission import RETURN_START_BACKOFF_CAP_M
 
-    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") == "on" else 0.0
+    return RETURN_START_BACKOFF_CAP_M if getattr(args, "return_start_backoff", "off") in ("on", "boxed") else 0.0
 
 
 def return_start_backoff_kw(args) -> dict:
     """The mission planners' keyword for the return-start backoff: none when off, so their calls are as before."""
     m = return_start_backoff_m_of(args)
-    return {"return_start_backoff_m": m} if m > 0.0 else {}
+    if m <= 0.0:
+        return {}
+    # F2'' (docs/plans/2026-11-02-return-start-backoff-boxed.md D1): the key only when boxed, so on is as before
+    boxed = getattr(args, "return_start_backoff", "off") == "boxed"
+    return {"return_start_backoff_m": m, **({"return_start_backoff_boxed": True} if boxed else {})}
 
 
 def validate_before_isaac(args: argparse.Namespace) -> dict:
@@ -10231,6 +10344,14 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
+    from pallet_mass import resolve_pallet_mass
+
+    # plan 2026-11-01-pallet-mass: a table by shape is read for this run's pallet (its geometry's version), and every
+    # reader after this sees the number
+    try:
+        settings, args.pallet_mass_record = resolve_pallet_mass(settings, args.pallet_geometry_loaded.geometry_version)
+    except ValueError as exc:
+        require(False, f"--settings: {exc}")
     require(
         settings["physics_hz"] == 120 or (args.steering_probe and settings["physics_hz"] in (120, 240)),
         "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
@@ -10348,6 +10469,7 @@ def main() -> None:
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
         "settings_synthetic": settings,
+        "pallet_mass": args.pallet_mass_record,
         "scene_requirements": args.scene_requirements_report,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),

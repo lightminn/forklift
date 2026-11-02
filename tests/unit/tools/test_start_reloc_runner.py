@@ -531,3 +531,9 @@ def test_each_attempt_has_its_own_seeded_noise():
     assert np.array_equal(a, run_transport.reloc_noise(7)(0, 1).standard_normal(3))  # reproducible per run seed
     assert not np.array_equal(a, run_transport.reloc_noise(7)(1, 1).standard_normal(3))
     assert not np.array_equal(a, run_transport.reloc_noise(8)(0, 1).standard_normal(3))
+
+
+def test_the_runner_hands_the_phase_the_placement_settings_and_records_them():
+    helper = _source("\ndef start_relocalization(", "\ndef run(app,")
+    assert "reloc_phase.place_settings(" in helper and "place_cfg=place_cfg" in helper
+    assert '"place_settings": place_record' in helper

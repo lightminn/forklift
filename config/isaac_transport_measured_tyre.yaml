@@ -8,7 +8,11 @@
 # model's 0.3665 1/m (15 deg per wheel, 0.66 m wheelbase, 0.53 m track) give
 # 0.36 and 0.29. Whether these suit the scenarios is left to re-validation.
 physics_hz: 120
-pallet_mass_kg: 10.0
+# Pallet mass by shape (geometry_version), the expected weight of a printed test article (PLA, 5 % infill, 0.8 mm
+# walls): estimates, not measurements (docs/plans/2026-11-01-pallet-mass.md). T11 x0.6 and the shallow T11 take ADR
+# 0002 section 4's 2.49 kg; EPAL 6 is the same construction on its own volume. Was 10.0 for every shape (the toy
+# catalogue's payload limit) until 2026-11-01; the provisional settings keep that.
+pallet_mass_kg: {epal6: 4.93, t11_06: 2.49, t11_06_d600: 2.49}
 static_friction: 0.8
 dynamic_friction: 0.7
 wheel_torque_nm: 3.0

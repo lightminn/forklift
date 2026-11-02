@@ -39,3 +39,28 @@ def test_the_first_mission_plan_records_its_attempts():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
     first = source[source.index('        state.setdefault("planning_traces", []).append(planning_trace)\n'):][:600]
     assert 'note_trace_backoffs(state, "mission_plan", planning_trace, plans.success)' in first
+
+
+def test_boxed_is_on_plus_the_boxed_key():
+    # docs/plans/2026-11-02-return-start-backoff-boxed.md D1: the same cap, the key only when boxed
+    import run_transport
+
+    boxed = _runner_args(["--return-start-backoff", "boxed"])
+    assert run_transport.return_start_backoff_m_of(boxed) == RETURN_START_BACKOFF_CAP_M
+    assert run_transport.return_start_backoff_kw(boxed) == {"return_start_backoff_m": RETURN_START_BACKOFF_CAP_M,
+                                                            "return_start_backoff_boxed": True}
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert 'return_start_backoff_boxed=getattr(args, "return_start_backoff", "off") == "boxed",' in source
+
+
+def test_the_returns_from_the_withdrawal_end_get_the_backoff_and_nothing_else_does():
+    # F2'' plan D1 (Codex implementation review 2 P3): the release replan (sync and worker) and the first live return
+    # (sync and worker) take the core's return backoff kwargs -- the boxed key rides in them -- and no other call does
+    core = (ROOT / "src/forklift_core/mission/core.py").read_text()
+    calls = [line.strip() for line in core.splitlines() if "self._return_backoff_kwargs(" in line and "def " not in line]
+    assert len(calls) == 4
+    assert sum("extra_kw=self._return_backoff_kwargs(" in c for c in calls) == 2  # the two worker requests
+    release = core[core.index('backoff_kw_ = self._return_backoff_kwargs(grid_world(return_scenario))'):]
+    release = release[:release.index("def ")]
+    assert release.count("**backoff_kw_") == 2  # the release replan and its tight retry
+    assert core.count("**backoff_kw_") == 4  # and the first live return's sync plan and its tight retry
