@@ -61,7 +61,7 @@
 
 ## 7. 도구 (결과 전 고정)
 
-- 생성기 `tss_diag/make_runs_c2.py`, 집계기 `tss_diag/c2_sum.py`(배치 스냅숏에서 `PYTHONPATH=src` 로 실행, `failures.classify` 사용). md5 는 Codex 수렴 뒤 이 절에 적는다. 합성 자료(로컬 `tmp/rx/c2b/syn`)로 분류·판정을 확인했다.
+- 생성기 `tss_diag/make_runs_c2.py`, 집계기 `tss_diag/c2_sum.py`(배치 스냅숏에서 `PYTHONPATH=src` 로 실행, `failures.classify` 사용). 결과 전 고정본: ws1 `test_runs/riibotics/tss_diag/c2_sum.py` md5 f5be53be160ff20ac07eebaa83c1cd62, `make_runs_c2.py` md5 14726e040043e498dd5c637d165e15fa(로컬 `tmp/rx/c2b/` 와 같음). 합성 자료(로컬 `tmp/rx/c2b/syn`)로 분류·판정을 확인했다.
 
 ## 8. 자체 검토
 
@@ -72,5 +72,6 @@
   - 무회귀 범위는 근접 다리 밖으로 되돌렸다.
   - 최소 짝 미달은 먼저 판정 불가로 했다.
   - 그 밖: 다중 설치 검사, `RETURN_START` 명시, 두 팔 기록, 앞 시도 면제 키 보고.
+- Codex 등록 3 차(`tmp/rx/codex_c2b3.out`, 83be0794): 수렴(새 P1/P2 없음). 앞선 반례가 모두 기대대로 FAIL·판정 불가로 처리됨을 재확인했다.
 - Codex 등록 2 차(`tmp/rx/codex_c2b2.out`): 새 P2 한 건. 근접 인식 실패의 종료 상태 `failed` 를 근접 다리로 연결하게 고쳤고, 합성 자료에 실제 형태를 넣었다.
 - ③ 독립 검토: 계획(#262)은 상위 계획(#260)에서 agy 독립 검토를 거쳤다. 이 등록은 계획 §5 를 고정한 것이라 따로 받지 않는다.
