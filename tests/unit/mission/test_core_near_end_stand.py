@@ -166,3 +166,123 @@ def test_the_pending_stand_is_a_missions_own_state():
 
     assert "near_end_stand" in baseline.MISSION_KEYS["state"]
     assert "observe_end_stands" in baseline.MISSION_KEYS["state"]  # C2's records join O1's
+
+
+# --- C2 5.1: the shadow episode, tied to its very stand ------------------------------------------------------------
+
+
+def shadowed():
+    w = n_world("shadow")
+    stand_for(w, 3.0 + DT)
+    (rec,) = near_records(w)
+    return w, rec
+
+
+def test_a_shadow_record_carries_what_ties_it_to_its_stand():
+    w, rec = shadowed()
+    assert rec["outcome"] == "shadow" and rec["phase_started_s"] == 0.0 and rec["stand_since_s"] == 40.0
+    assert rec["goal"] == [1.0, 0.0, 0.0] and len(rec["path_sha256"]) == 64 and rec["loose_arrivals_n"] == 0
+    assert w.state["near_end_shadow_open"] == {"index": 0, "leg_serial": 7, "phase_started_s": 0.0,
+                                               "observe_replans_n": 0}
+    assert "end" not in rec
+
+
+def test_a_loose_arrival_of_the_same_stand_ends_the_episode_as_such():
+    w, rec = shadowed()
+    stand_for(w, 1.0, t0=43.1)  # still the same stand: open
+    assert "end" not in rec
+    w.core.near_end_shadow_arrival(44.2)
+    assert rec["end"] == {"kind": "loose_arrival", "time_s": 44.2} and "near_end_shadow_open" not in w.state
+
+
+def test_a_resumed_command_ends_the_episode_before_any_arrival():
+    w, rec = shadowed()
+    w.tick(replace(STAND, speed_mps=0.01), t=43.05)  # one tick commanded: no longer the judged stand
+    assert rec["end"]["kind"] == "command_resumed"
+    w.core.near_end_shadow_arrival(44.2)  # a later arrival is not this stand's
+    assert rec["end"]["kind"] == "command_resumed"
+
+
+def test_another_tracker_ends_the_episode():
+    w, rec = shadowed()
+    w.ms.phase_started = 43.5  # a replan installed another tracker
+    w.tick(STAND, t=43.6)
+    assert rec["end"] == {"kind": "tracker_changed", "time_s": 43.5}
+
+
+def test_the_loose_arrival_rule_reports_to_the_shadow_episode():
+    import inspect
+
+    from forklift_core.mission.core import MissionCore
+
+    src = inspect.getsource(MissionCore.command)
+    at = src.index('state.setdefault("observe_loose_arrivals", []).append(')
+    assert "self.near_end_shadow_arrival(t)" in src[at:at + 400]
+
+
+# --- the installed replan's consumers ---------------------------------------------------------------------------------
+
+
+def test_the_installed_replan_restarts_the_no_progress_watch_in_the_permission():
+    import test_core_permission as cp
+
+    core, obstacle, _, _ = cp.make("observe", remaining=1.0, act=True)
+    obstacle["progress"] = {"phase": "observe", "best_m": 0.0, "since_s": 0.0}  # the stand's watch: best 0
+    obstacle.pop("progress")  # what C2's install does
+    core.permission(53.0, cp.REAR, 0.2, 0.4, True, None)
+    assert obstacle["progress"] == {"phase": "observe", "best_m": 1.0, "since_s": 53.0}
+    core.permission(60.1, cp.REAR, 0.2, 0.4, True, None)  # 7.1 s on the new leg: no obstacle_no_progress
+    core2, obstacle2, _, _ = cp.make("observe", remaining=1.0, act=True)
+    obstacle2["progress"] = {"phase": "observe", "best_m": 0.0, "since_s": 0.0}  # kept (a failed attempt)
+    with pytest.raises(RuntimeError, match="obstacle_no_progress in observe"):
+        core2.permission(60.1, cp.REAR, 0.2, 0.4, True, None)
+
+
+def test_the_replan_starts_from_the_held_control_pose_and_the_grid_of_that_tick():
+    w = n_world(plans=[co.plan()])
+    w.runner_rear = co.REAR  # the runner's control pose under the final-goal hold
+    stand_for(w, 3.0 + DT)
+    (_, args, kwargs), = [c for c in w.calls if c[0] == "plan_observation_leg"]
+    start = kwargs["start_rear"]
+    assert (start.x_m, start.y_m, start.yaw_rad) == tuple(float(v) for v in co.REAR)
+    (grid,) = [c for c in w.calls if c[0] == "grid_kwargs"]
+    assert grid[1] == ("observe",) and grid[2]["own"] == tuple(co.REAR)  # the same pose's frame, the same tick
+    assert w.slam["tracker"].mode == "holding"
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_after_an_install_the_near_capture_flow_accepts_or_refuses_as_before(accepted):
+    import test_core_near_capture as nc
+
+    # refused: without near tracking a refused straight ends the run (with it, the S4c-3 realignment takes it)
+    w = nc.World(near={"tracker": None}) if accepted else nc.World(dry=nc.Dry(status="failed"))
+    # the state C2 leaves: the near leg's waypoint, an installed replan in the leg's budget, another observe path
+    w.state["near_capture"]["waypoint"] = [2.5, 2.0, 0.0]
+    w.state["observe_replans"].append({"trigger": "near_end_stand", "leg_serial": 2})
+    w.core.paths["observe"] = nc.leg(1.2, 1.3)
+    if accepted:
+        w.run()
+        assert w.state["near_capture"]["status"] == "done" and w.ms.phase == "approach"
+        assert w.calls[-1][0] == "build_near_tracker"
+    else:
+        with pytest.raises(RuntimeError, match="near_capture_misaligned:dry_run:"):
+            w.run()
+        assert w.state["near_capture"]["status"] == "pending" and w.ms.phase == "observe"
+        assert "build_near_tracker" not in w.names()
+
+
+def test_two_missions_each_judge_their_own_near_leg():
+    from forklift_core.mission.baseline import MissionBaseline
+
+    w = n_world("shadow")
+    w.ms.last_tracking = None  # as at a mission's start (the baseline takes plain data only)
+    base = MissionBaseline.capture(w.core)
+    stand_for(w, 3.0 + DT)
+    assert len(near_records(w)) == 1 and "near_end_shadow_open" in w.state
+    records = base.restore(w.core)
+    assert records["state"]["observe_end_stands"][0]["kind"] == "near"
+    assert "near_end_shadow_open" not in w.state and "observe_end_stands" not in w.state
+    w.state["near_capture"] = {"status": "pending", "waypoint": WAYPOINT}  # the next mission's near leg
+    w.state["observe_replan_leg"] = {"serial": 7, "start": 0}  # even the same serial: a new mission's records
+    stand_for(w, 3.0 + DT, t0=100.0)
+    assert [r["outcome"] for r in near_records(w)] == ["shadow"]
