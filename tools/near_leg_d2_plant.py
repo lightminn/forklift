@@ -3,7 +3,11 @@
 identification runs, scored on the validation runs. (b) motion: the applied speed through a first-order lag, the
 curvature from the two simulated wheel angles, integrated from the truth rear pose over 3 s windows; scored at the
 window end against the truth.
-    python d2_plant.py RUNS_DIR OUT.json   (RUNS_DIR holds st_*/run/{result.json,slam_log.npz})"""
+    python d2_plant.py RUNS_DIR OUT.json [--round2]   (RUNS_DIR holds st_*/run/{result.json,slam_log.npz})
+--round2 (registered after round 1 missed (b)): the realised curvature over the wheel-angle curvature by gear (g_f,
+g_r) and a speed gain s, the curvature-response plan's prior (forward ~0.90, reverse ~1.05); tau_v = 0. Picked on
+the identification windows' heading p95 (the heading change is linear in them per window), then the validation
+windows are integrated in full."""
 import glob, json, math, os, sys
 import numpy as np
 from scipy.signal import lfilter
@@ -111,6 +115,67 @@ def main():
             t0 += 1.0
         return res
 
+    if "--round2" in sys.argv:
+        G = np.round(np.arange(0.80, 1.1501, 0.01), 2)
+        SG = np.round(np.arange(0.90, 1.1001, 0.02), 2)
+
+        def parts(r):
+            tj, pose = r["tj"], r["pose"]
+            dL, dR = steer_sim(r, 0, tau, dead), steer_sim(r, 1, tau, dead)
+            kap = (np.tan(dL) + np.tan(dR)) / (2 * L)
+            vcmd = np.interp(tj, r["ts"], r["v"])
+            dt = float(np.median(np.diff(tj)))
+            rows = []
+            t0 = tj[0]
+            while t0 + 3.0 <= tj[-1]:
+                i0 = int(np.searchsorted(tj, t0)); i1 = int(np.searchsorted(tj, t0 + 3.0))
+                if np.max(np.abs(vcmd[i0:i1])) > 0.05:
+                    w = vcmd[i0:i1] * kap[i0:i1] * dt
+                    af, ar = float(w[vcmd[i0:i1] >= 0].sum()), float(w[vcmd[i0:i1] < 0].sum())
+                    dy = math.atan2(math.sin(yaw_of(pose[i1]) - yaw_of(pose[i0])), math.cos(yaw_of(pose[i1]) - yaw_of(pose[i0])))
+                    rows.append((af, ar, dy))
+                t0 += 1.0
+            return rows
+
+        P_ = np.array([x for n in ident for x in parts(data[n])])
+        gf, gr, sg = np.meshgrid(G, G, SG, indexing="ij")
+        pred = sg[..., None] * (gf[..., None] * P_[:, 0] + gr[..., None] * P_[:, 1])
+        err = np.abs(np.arctan2(np.sin(pred - P_[:, 2]), np.cos(pred - P_[:, 2])))
+        p95 = np.percentile(err, 95, axis=-1)
+        i, j, k_ = np.unravel_index(int(np.argmin(p95)), p95.shape)
+        g_f, g_r, s_g = float(G[i]), float(G[j]), float(SG[k_])
+
+        def windows2(r):
+            tj, pose = r["tj"], r["pose"]
+            dL, dR = steer_sim(r, 0, tau, dead), steer_sim(r, 1, tau, dead)
+            kap = (np.tan(dL) + np.tan(dR)) / (2 * L)
+            vcmd = np.interp(tj, r["ts"], r["v"]) * s_g
+            dt = float(np.median(np.diff(tj)))
+            res = []
+            t0 = tj[0]
+            while t0 + 3.0 <= tj[-1]:
+                i0 = int(np.searchsorted(tj, t0)); i1 = int(np.searchsorted(tj, t0 + 3.0))
+                if np.max(np.abs(vcmd[i0:i1])) > 0.05:
+                    yaw = yaw_of(pose[i0]); x = pose[i0, 0] - OFFSET * math.cos(yaw); y = pose[i0, 1] - OFFSET * math.sin(yaw)
+                    for i in range(i0, i1):
+                        v = vcmd[i]
+                        ch = v * kap[i] * (g_f if v >= 0 else g_r) * dt
+                        h = yaw + ch / 2
+                        x += v * dt * math.cos(h); y += v * dt * math.sin(h); yaw += ch
+                    ty = yaw_of(pose[i1]); tx = pose[i1, 0] - OFFSET * math.cos(ty); tyy = pose[i1, 1] - OFFSET * math.sin(ty)
+                    he = math.atan2(math.sin(yaw - ty), math.cos(yaw - ty))
+                    lat = -math.sin(ty) * (x - tx) + math.cos(ty) * (y - tyy)
+                    res.append((abs(he), abs(lat)))
+                t0 += 1.0
+            return res
+
+        wi = [x for n in ident for x in windows2(data[n])]
+        wv = [x for n in valid for x in windows2(data[n])]
+        out["round2"] = {"g_forward": g_f, "g_reverse": g_r, "speed_gain": s_g,
+                         "ident_heading_p95": float(np.percentile([h for h, _ in wi], 95)),
+                         "ident_lateral_p95_m": float(np.percentile([l for _, l in wi], 95)), "windows": len(wv),
+                         "valid_heading_p95": float(np.percentile([h for h, _ in wv], 95)),
+                         "valid_lateral_p95_m": float(np.percentile([l for _, l in wv], 95))}
     bestv = None
     for tv in TAUV_GRID:
         w = [x for n in ident for x in windows(data[n], tv)]
