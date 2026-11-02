@@ -118,3 +118,14 @@ def test_the_mission_lifecycle_refuses_a_submit_and_a_resume_while_the_pose_is_n
     m.status = "paused"
     m.queue(Resume())
     assert m.apply(0.0, Context(pose_ok=False))[-1]["reason"] == "pose_unconfirmed" and m.status == "paused"
+
+
+def test_the_end_is_a_latch_the_next_view_cannot_lift():
+    # Codex piece 2a P3
+    rig = _rig(READY)
+    rig.a.end_pose(rig.t, "pose_revoked:int")
+    rig.a.pose = {"status": "confirmed", "drive_ready": False, "reason": None}
+    rig.stand()
+    [reply] = rig.cycle(rig.msg("rearm"))
+    assert reply["t"] == "reject" and reply["reason"] == "pose_ended"
+    assert not teleop_policy(SAFE, feedback_ok=True, standing=True, pose=rig.a._pose_view()).teleop_allowed

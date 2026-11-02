@@ -285,3 +285,21 @@ def test_the_growth_is_the_designs():
     (g2,) = T.grown_zones([(z, 1.0)], 0.5, b)
     want = 0.30 + 0.02 + 2 * 0.5 * math.sin(0.05) + 2 * 1.5 * math.sin((0.10 + 0.002) / 2)
     assert (g2.length_m - 1.0) / 2 == pytest.approx(want) and (g2.width_m - 1.0) / 2 == pytest.approx(want)
+
+
+def test_a_start_check_without_the_generations_scans_is_unconfirmed():
+    # Codex piece 2a P2: a missing generation set is no evidence
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    out = T.start_check(grid, _points_at(grid, truth), truth, pool=[], gen_points=None, cfg=CFG, e_min=0.8)
+    assert not out.residual.confirmed and out.statuses["generation"] == "missing"
+
+
+def test_the_start_check_drops_the_hypotheses_it_proved_impossible():
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    pts = _points_at(grid, truth)
+    out = T.start_check(grid, pts, truth, pool=[], gen_points=pts, cfg=CFG, e_min=0.8)
+    assert out.residual.impossible
+    gone = {tuple(p) for p, _ in out.residual.impossible}
+    assert out.hyps and not any(tuple(p) in gone for p, _ in out.hyps)

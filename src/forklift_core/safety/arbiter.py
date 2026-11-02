@@ -148,6 +148,7 @@ class Arbiter:
         self.reloc = None
         # the unconfirmed position check's view this tick ({status, drive_ready, reason}); None: no check
         self.pose: dict | None = None
+        self._pose_end: str | None = None  # end_pose's reason: a latch the next view cannot lift
         self.stops = 0  # every STOP taken (B-P2c: the relocalization drops the attempt a new one interrupts)
         self.provisional_auto = False
         self._context_gen = 0
@@ -351,7 +352,7 @@ class Arbiter:
         if self.reloc is not None and (kind in RELOC_REFUSED
                                        or (kind == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
             return self._reply(kind, request_id, "relocalizing")
-        pose = (self.pose or {}).get("status")
+        pose = (self._pose_view() or {}).get("status")
         if pose is not None and pose.startswith("ended:") and kind in POSE_ENDED_REFUSED:
             return self._reply(kind, request_id, "pose_ended")
         if pose is not None and pose != "confirmed" and (kind in POSE_REFUSED
@@ -478,9 +479,16 @@ class Arbiter:
         else:
             self._set_mode("STOPPED", now_mono, reason)
 
+    def _pose_view(self) -> dict | None:
+        if self._pose_end is not None:
+            return {"status": f"ended:{self._pose_end}", "drive_ready": False, "reason": "pose_ended"}
+        return self.pose
+
     def end_pose(self, now_mono: float, reason: str) -> None:
         """The unconfirmed position check ended (plan 2.3): a stop and a control boundary, and the controls locked."""
-        self.pose = {"status": f"ended:{reason}", "drive_ready": False, "reason": "pose_ended"}
+        if self._pose_end is None:
+            self._pose_end = reason
+        self.pose = self._pose_view()
         self.events.append({"t": now_mono, "event": "pose_ended", "reason": reason})
         self.stop(now_mono, reason)
 
@@ -795,7 +803,7 @@ class Arbiter:
     def _policy(self, safety) -> Policy:
         policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
                                lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough(),
-                               pose=self.pose)
+                               pose=self._pose_view())
         if self._stand_unconfirmed and policy.drive_allowed and not self.stop_confirmed:
             # Entered unconfirmed: the drive opens only on a tick the detector confirms the stand (main 2026-10-19);
             # the waiver ends at the first wheel speed (step), not at a confirmed tick that gave none (Codex).

@@ -253,3 +253,39 @@ def test_the_odometry_bound_grows_with_d():
     assert BOUNDS.dth(2.0) == pytest.approx(0.025)
     with pytest.raises(ValueError):
         P.Bounds(odom=(0.02, -0.1, 0.0, 0.0), e_still=(0.03, 0.01), e_slam=(0.05, 0.025))
+
+
+# --- Codex piece 2a review ---
+def test_a_confirmed_rematch_locks_the_controls_while_the_monitor_goes_on():
+    pc = _confirmed()
+    C = (0.12, 0.0, 0.0)
+    _tick(pc, I, C, standing=True)
+    pc.begin_rematch(0.0, epoch=1, control_gen=4)
+    view = _tick(pc, I, C, standing=True)
+    assert view.status == "checking" and view.reason == "pose_checking" and not view.drive_ready
+    _tick(pc, I, (0.25, 0.0, 0.0), standing=True)  # the monitor still runs: past 0.20 m it ends
+    assert pc.status == "ended:pose_revoked:int"
+
+
+def test_a_stroke_never_passes_d_stroke_with_its_stopping_distance():
+    # Codex piece 2a P2: closing after the threshold left the last sample's move; the brake counts one tick's travel
+    pc = P.PoseCheck(BOUNDS, rear_offset_m=0.34, stop_m=0.0683333333, tick_m=0.01)
+    pc.start(0.0, confirmed=False, r_scan=I, o_scan=I, C=I, o_now=I)
+    o = I
+    for _ in range(3):
+        o = _drive(pc, o, 2.0)
+        o = _back(o, 0.0683333333)  # the stop after the close
+        _stand(pc, o)
+    assert pc.used_m <= P.D_TOTAL + 1e-9
+    assert all(e["s_m"] + 0.0683333333 <= P.D_STROKE + 1e-9 for e in pc.events if e["kind"] == "stroke_close")
+
+
+def test_a_rematch_result_is_discarded_when_the_rear_axle_moved():
+    # Codex piece 2a P2: base 0.0019 m, rear axle 0.0025 m
+    pc = _unconfirmed()
+    o = _drive(pc, I, 0.6)
+    _stand(pc, o)
+    pc.begin_rematch(0.0, epoch=1, control_gen=4)
+    pc.rematch_result(0.0, "twin_preferred", None, o, o_now=compose(o, (0.0, -0.0019, 0.0019)), C=I, epoch=1,
+                      control_gen=4)
+    assert pc.status == "unconfirmed" and pc.events[-1]["kind"] == "rematch_discarded"

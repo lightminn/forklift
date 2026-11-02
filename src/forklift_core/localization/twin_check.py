@@ -241,13 +241,16 @@ def start_check(grid: Grid, points, b, *, pool=(), gen_points=None, carry=None, 
     carry = carry or (lambda p: tuple(float(v) for v in p))
     kw = {"clock": clock, "deadline": deadline, "cancel": cancel}
     st_live, live = last_leaves(grid, points, cfg, index, r_resid, **kw)
-    st_gen, gen = ("ok", []) if gen_points is None else last_leaves(grid, gen_points, cfg, index, r_resid, **kw)
+    # Codex piece 2a P2: without the generation's scans its leaves are not in the set -- no confirmation
+    st_gen, gen = ("missing", []) if gen_points is None else last_leaves(grid, gen_points, cfg, index, r_resid, **kw)
     extra = [(carry(p), "gen-leaf") for p in gen] + [(p, "leaf") for p in live]
     hyps = hypotheses(b, pool=[carry(p) for p in pool], synthetic=extra + synthetic_twins(b))
     status = next((st for st in (st_gen, st_live) if st != "ok"), "ok")
     res = residual_ambiguity(grid, points, b, hyps, cfg, e_min=e_min, r_resid=r_resid, index=index, cons=cons,
                              hyp_status=status, **kw)
-    return StartCheck(res, hyps, {"generation": st_gen, "live": st_live})
+    gone = res.impossible  # proved impossible (no laser cell possible in the region): no pallet zone (plan 2.1)
+    kept = [(p, src) for p, src in hyps if not any(_same(p, q) for q, _ in gone)]
+    return StartCheck(res, kept, {"generation": st_gen, "live": st_live})
 
 
 def odom_zones(zones, hyps, o_s) -> list:

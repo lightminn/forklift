@@ -87,6 +87,7 @@ class PoseCheck:
     bounds: Bounds
     rear_offset_m: float
     stop_m: float  # the stopping distance at V_REV_U (the obstacle layer's model)
+    tick_m: float = 0.0  # the most one control tick can move at V_REV_U: the brake is judged once a tick
     status: str = "checking"
     events: list = field(default_factory=list)
 
@@ -153,7 +154,8 @@ class PoseCheck:
         self._rm = None
         if phase == "unconfirmed":
             self.status = "unconfirmed"
-        moved = _net(o_now, o_scan) > STILL_M or abs(_wrap(o_now[2] - o_scan[2])) > STILL_RAD
+        moved_m, moved_rad = gap(tuple(o_now), tuple(o_scan), self.rear_offset_m)  # base and rear axle (plan 0)
+        moved = moved_m > STILL_M or moved_rad > STILL_RAD
         if moved or epoch != epoch0 or (phase == "confirmed" and control_gen != gen0):
             self._event(t, "rematch_discarded", phase=phase, outcome=outcome, moved=moved, epoch=epoch,
                         control_gen=control_gen)
@@ -187,7 +189,12 @@ class PoseCheck:
         if status == "checking":
             return View(status, reason="pose_checking")
         if status == "confirmed":
-            return self._monitor(t, o, C, standing, new_stand, mission_active, near)
+            view = self._monitor(t, o, C, standing, new_stand, mission_active, near)
+            if self._rm is not None and view.status == "confirmed":
+                # a confirmed re-match in progress: the controls locked as while checking, the monitor going on
+                # (Codex piece 2a P2: it left driving, the forks and a submit open)
+                return View("checking", reason="pose_checking", delta_int=view.delta_int)
+            return view
         return self._strokes(t, o, standing, deadman)
 
     def _monitor(self, t, o, C, standing, new_stand, mission_active, near) -> View:
@@ -219,7 +226,8 @@ class PoseCheck:
         s = _net(o, self.o_s) if self.o_s is not None else 0.0
         if self.stroke == "active":
             left = min(D_STROKE - s, total_left - s)
-            if left <= self.stop_m or not deadman:
+            # Codex piece 2a P2: judged once a tick, so the brake allows for one tick's travel before the stop
+            if left <= self.stop_m + self.tick_m or not deadman:
                 self.stroke = "closed"
                 self._event(t, "stroke_close", s_m=s, released=not deadman)
         if self.stroke == "closed" and standing and not deadman:
