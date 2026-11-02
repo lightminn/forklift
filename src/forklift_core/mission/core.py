@@ -3073,7 +3073,7 @@ class MissionCore:
         if open_ is not None:
             state["observe_end_stands"][open_["index"]]["end"] = {"kind": end, "time_s": t}
 
-    def near_end_shadow_tick(self, tracking) -> None:
+    def near_end_shadow_tick(self, tracking, t: float) -> None:
         """C2 5.1: on every later observe tick, the open shadow episode ends the moment the stand is no longer the
         judged one -- another tracker (a replan, another leg) or a resumed command, before any arrival. A loose
         arrival of the same tracker ends it in ``command()`` (``near_end_shadow_arrival``); left open, the run's own
@@ -3088,9 +3088,9 @@ class MissionCore:
         if not same_:
             self._near_end_shadow_close("tracker_changed", float(ms.phase_started))
         elif abs(tracking.speed_mps) >= 1e-12:
-            self._near_end_shadow_close("command_resumed")
+            self._near_end_shadow_close("command_resumed", float(t))
         elif tracking.status != "tracking":
-            self._near_end_shadow_close(f"status:{tracking.status}")
+            self._near_end_shadow_close(f"status:{tracking.status}", float(t))
 
     def near_end_shadow_arrival(self, t: float) -> None:
         """C2 5.1: a loose arrival on the observe leg; it ends the open shadow episode as ``loose_arrival`` only when
@@ -3133,7 +3133,7 @@ class MissionCore:
                                                             self.paths, self.trackers)
         mode_ = getattr(options, "near_end_stand", "off")
         leg_ = state["observe_replan_leg"]
-        self.near_end_shadow_tick(tracking)
+        self.near_end_shadow_tick(tracking, t)
         tried_ = any(r.get("kind") == "near" and r.get("leg_serial") == leg_["serial"]
                      for r in state.get("observe_end_stands", ()))
         standing_ = (
@@ -3168,7 +3168,10 @@ class MissionCore:
             records_.append({**record, "outcome": "shadow" if budget_ else "shadow_no_budget",
                              "mission_id": self.commands.mission_id, "phase_started_s": float(ms.phase_started),
                              "stand_since_s": float(pending_["since_s"]),
-                             "path_sha256": hashlib.sha256(poses_.tobytes()).hexdigest(),
+                             "path_sha256": hashlib.sha256(  # the whole path: poses, gears and curvatures
+                                 poses_.tobytes()
+                                 + np.asarray(paths["observe"].directions, dtype=np.int8).tobytes()
+                                 + np.asarray(paths["observe"].curvatures_inv_m, dtype=float).tobytes()).hexdigest(),
                              "goal": [float(v) for v in poses_[-1]],
                              "observe_replans_n": len(state["observe_replans"]),
                              "loose_arrivals_n": len(state.get("observe_loose_arrivals", ()))})

@@ -198,7 +198,7 @@ def test_a_loose_arrival_of_the_same_stand_ends_the_episode_as_such():
 def test_a_resumed_command_ends_the_episode_before_any_arrival():
     w, rec = shadowed()
     w.tick(replace(STAND, speed_mps=0.01), t=43.05)  # one tick commanded: no longer the judged stand
-    assert rec["end"]["kind"] == "command_resumed"
+    assert rec["end"] == {"kind": "command_resumed", "time_s": 43.05}
     w.core.near_end_shadow_arrival(44.2)  # a later arrival is not this stand's
     assert rec["end"]["kind"] == "command_resumed"
 
