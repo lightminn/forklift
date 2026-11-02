@@ -3697,6 +3697,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         expected_pallet_box_count=len(insertion_geometry.pallet_boxes),
         **({} if session is None else {"pallet_roots": tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets)}),
     )
+    import contact_materials
+
+    if contact_materials.split_enabled(settings):
+        # Contact materials plan step A: one material per part with the same values; off (absent) as before
+        state["contact_materials"] = contact_materials.split_contact_materials(
+            stage, ("/World/Pallet",) if session is None else tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets))
+        # the whole stage by bound material (T0's inventory of this scene, plan section 5)
+        state["contact_materials"]["inventory"] = contact_materials.material_inventory(stage)
     # The plant record (EPAL 6 fork spacing plan, new plant candidate): each tyre's material as bound.
     from scene import plant_readback, tyre_contact_readback
 
@@ -9073,7 +9081,10 @@ def drive(S, isaac) -> None:
                         if captured_ is not None:
                             attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
                             frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                            capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                            # the capture's own pose (the SLAM estimate it was taken at), apart: this tick's base / q /
+                            # yaw stay the tick's truth for everything after (slip baseline, trace evidence, stand lock,
+                            # probe, samples), as each says (docs/validation/2026-11-02-observe-capture-base.md)
+                            capture_diagnostics, cap_base, cap_yaw = captured_.capture_diagnostics, captured_.base, captured_.yaw
                             forward, rear = captured_.forward, captured_.rear
                             if captured_.rear_stamp is not None:
                                 rear_stamp = captured_.rear_stamp
@@ -9082,13 +9093,13 @@ def drive(S, isaac) -> None:
                                 if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                     break
                             else:
-                                succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation,
+                                succeeded_ = core.observe_succeeded(t, rear, cap_base, cap_yaw, attempt, attempt_number, observation,
                                                                     scene_input, capture_diagnostics, step)
                                 if succeeded_.stop:
                                     break
                                 observation, near_leg = succeeded_.observation, succeeded_.near_leg
                                 if not getattr(succeeded_, "pending", False) and not getattr(succeeded_, "handled", False):
-                                    core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                                    core.near_leg_or_recapture(t, rear, cap_base, cap_yaw, observation, attempt_number, near_leg)
                             core.capture_acquired_s = None
                 # Persistent console plan D5 6c item 5: a loaded mission stands in its start wait (the lift to the carry
                 # height, the first live leg taken, the docking armed): no follower, arrival, cusp or stall counts, no
@@ -9209,7 +9220,8 @@ def drive(S, isaac) -> None:
                                     if not live_abort_:
                                         attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
                                         frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                                        capture_diagnostics, cap_base, cap_yaw = (captured_.capture_diagnostics, captured_.base,
+                                                                                  captured_.yaw)  # apart, as above
                                         forward, rear = captured_.forward, captured_.rear
                                         if captured_.rear_stamp is not None:
                                             rear_stamp = captured_.rear_stamp
@@ -9341,7 +9353,7 @@ def drive(S, isaac) -> None:
                                             break
                                     else:
                                         # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
-                                        succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
+                                        succeeded_ = core.observe_succeeded(t, rear, cap_base, cap_yaw, attempt, attempt_number, observation, scene_input,
                                                                             capture_diagnostics, step)
                                         if succeeded_.stop:
                                             break
@@ -9352,7 +9364,7 @@ def drive(S, isaac) -> None:
                                             pass  # plan 2026-10-19 task 4: the first side leg is installed instead
                                         else:
                                             # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
-                                            core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                                            core.near_leg_or_recapture(t, rear, cap_base, cap_yaw, observation, attempt_number, near_leg)
                             elif core.second_near_due():
                                 # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): the approach stood at the
                                 # second near capture's gap -- captured and re-drawn there; the approach goes on.
@@ -10296,6 +10308,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # scene requirements plan: the verdict goes into its own block; the three options only when given (an override
         # run's arguments rebuild it), the near-field contract treats them as run-specific
         and k != "scene_requirements_report"
+        # pallet-mass plan (2026-11-01): the resolved mass goes into its own block (pallet_mass), not the arguments
+        # (Codex pallet-mass review 2 P2-1: as an argument it broke the near-field contract of every earlier record)
+        and k != "pallet_mass_record"
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
@@ -10333,6 +10348,14 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
+    from pallet_mass import resolve_pallet_mass
+
+    # plan 2026-11-01-pallet-mass: a table by shape is read for this run's pallet (its geometry's version), and every
+    # reader after this sees the number
+    try:
+        settings, args.pallet_mass_record = resolve_pallet_mass(settings, args.pallet_geometry_loaded.geometry_version)
+    except ValueError as exc:
+        require(False, f"--settings: {exc}")
     require(
         settings["physics_hz"] == 120 or (args.steering_probe and settings["physics_hz"] in (120, 240)),
         "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
@@ -10450,6 +10473,7 @@ def main() -> None:
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
         "settings_synthetic": settings,
+        "pallet_mass": args.pallet_mass_record,
         "scene_requirements": args.scene_requirements_report,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),

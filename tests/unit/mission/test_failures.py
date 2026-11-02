@@ -74,6 +74,7 @@ KNOWN = {
         "Perception camera intrinsics mismatch (G1a)", "base scene built from another forklift URDF",
         "pocket_check_without_capture", "pocket_check_refused:", "Mission planning failed: ",
         "Mission exceeded simulation time budget", "--odometry-wheel-radius-m ", "scene requirements: ",
+        "--settings: ",  # pallet-mass plan: the mass table refused before Isaac
         "Perception camera intrinsics check failed: ", "pocket camera intrinsics differ from the perception camera's",
         "live video camera intrinsics differ from the scaled perception camera's (the page's camera_model)",
         "Perception display clipping range did not preserve the far plane",
