@@ -11,6 +11,13 @@
   "reasons": {
    "competitor": 5
   },
+  "reason_kinds": {
+   "competitor": 5
+  },
+  "pool_source": {
+   "generation": 69,
+   "proxy": 0
+  },
   "truth_in_set": 69,
   "believed_is_truth": 69,
   "rear_blocked": 14,
@@ -23,11 +30,11 @@
    "max": 5
   },
   "time_s": {
-   "p50": 5.891,
-   "p95": 10.808,
-   "max": 15.817
+   "p50": 5.78,
+   "p95": 10.792,
+   "max": 15.869
   },
-  "work_max": 75617246
+  "work_max": 2673186
  },
  "s5_starts_rows.jsonl": {
   "rows": 68,
@@ -42,23 +49,31 @@
    "competitor": 5,
    "believed:ambiguous": 1
   },
+  "reason_kinds": {
+   "competitor": 5,
+   "believed": 1
+  },
+  "pool_source": {
+   "generation": 68,
+   "proxy": 0
+  },
   "truth_in_set": 68,
   "believed_is_truth": 68,
   "rear_blocked": 13,
   "hyps": {
    "median": 25,
-   "max": 33
+   "max": 32
   },
   "leaves": {
    "median": 2,
    "max": 7
   },
   "time_s": {
-   "p50": 5.611000000000001,
-   "p95": 11.482,
-   "max": 18.51
+   "p50": 5.52,
+   "p95": 10.883000000000001,
+   "max": 18.172
   },
-  "work_max": 79650423
+  "work_max": 2686688
  },
  "s4_wrong_rows.jsonl": {
   "rows": 11,
@@ -70,7 +85,16 @@
   "unconfirmed": 11,
   "unconfirmed_share": 1.0,
   "reasons": {
-   "competitor": 11
+   "competitor": 11,
+   "hypotheses:overflow": 1
+  },
+  "reason_kinds": {
+   "competitor": 11,
+   "hypotheses": 1
+  },
+  "pool_source": {
+   "generation": 0,
+   "proxy": 11
   },
   "truth_in_set": 10,
   "believed_is_truth": 0,
@@ -84,11 +108,11 @@
    "max": 30
   },
   "time_s": {
-   "p50": 8.262,
-   "p95": 12.56,
-   "max": 12.56
+   "p50": 8.427999999999999,
+   "p95": 12.479,
+   "max": 12.479
   },
-  "work_max": 46385295
+  "work_max": 4439987
  },
  "s5_wrong_rows.jsonl": {
   "rows": 10,
@@ -102,6 +126,13 @@
   "reasons": {
    "competitor": 10
   },
+  "reason_kinds": {
+   "competitor": 10
+  },
+  "pool_source": {
+   "generation": 0,
+   "proxy": 10
+  },
   "truth_in_set": 10,
   "believed_is_truth": 0,
   "rear_blocked": 4,
@@ -114,10 +145,10 @@
    "max": 27
   },
   "time_s": {
-   "p50": 10.34,
-   "p95": 16.535999999999998,
-   "max": 16.535999999999998
+   "p50": 9.967,
+   "p95": 16.028,
+   "max": 16.028
   },
-  "work_max": 37359059
+  "work_max": 5880000
  }
 }
