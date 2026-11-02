@@ -289,3 +289,38 @@ def test_a_rematch_result_is_discarded_when_the_rear_axle_moved():
     pc.rematch_result(0.0, "twin_preferred", None, o, o_now=compose(o, (0.0, -0.0019, 0.0019)), C=I, epoch=1,
                       control_gen=4)
     assert pc.status == "unconfirmed" and pc.events[-1]["kind"] == "rematch_discarded"
+
+
+def test_the_stroke_brake_holds_on_the_quantized_encoder_odometry():
+    # Codex piece 2a re-review P2: team_spec_quantized moves up to 5 counts (0.96 mm) in a tick at 0.10 m/s, more than
+    # 0.10 / 120; the brake allows for the larger of the given tick bound and the largest step seen
+    import numpy as np
+
+    from forklift_core.localization.encoders import (
+        MT6701_COUNTS_PER_REV, TeamEncoderModel, encoder_model_spec, sensor_phases)
+    from forklift_core.localization.slam_pose import IncrementalWheelOdometry
+    from forklift_core.localization.wheel_odometry import AckermannOdometryGeometry
+
+    stop_m, r, dt, v = 0.0683333333, 0.125, 1 / 120, 0.10
+    quantum = 2 * math.pi / MT6701_COUNTS_PER_REV
+
+    def closed_plus_stop(a0, tick_m):
+        model = TeamEncoderModel(encoder_model_spec("team_spec_quantized"), sensor_phases(3))
+        odo = IncrementalWheelOdometry(AckermannOdometryGeometry(0.66, 0.53, 0.125))
+        pc = P.PoseCheck(BOUNDS, rear_offset_m=0.34, stop_m=stop_m, tick_m=tick_m)
+        pc.start(0.0, confirmed=False, r_scan=I, o_scan=I, C=I, o_now=I)
+        angle, o = a0, I
+        model.read(np.array([angle, angle]), np.array([0.0, 0.0]))
+        for k in range(1, 3000):
+            if not pc.update(k * dt, o, I, standing=False, deadman=True).drive_ready:
+                break
+            angle -= v * dt / r
+            inc, steer, _ = model.read(np.array([angle, angle]), np.array([0.0, 0.0]))
+            o = odo.update_increments(k * dt, inc, steer)
+        return next(e["s_m"] for e in pc.events if e["kind"] == "stroke_close") + stop_m
+
+    starts = [quantum * j / 10 for j in range(40)]  # where in a count the wheel starts
+    # V_REV_U x dt alone: the plan's first figure; Codex's 1.0000349 m at a start 3.6 counts in
+    assert max(closed_plus_stop(a, v * dt) for a in starts) > P.D_STROKE
+    # one count more (P.tick_bound): never past D_STROKE
+    assert max(closed_plus_stop(a, P.tick_bound(v, dt, r, MT6701_COUNTS_PER_REV)) for a in starts) <= P.D_STROKE

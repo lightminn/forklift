@@ -71,6 +71,14 @@ class View:
     d: float | None = None  # net displacement from the start check's scan
 
 
+def tick_bound(speed_mps: float, tick_s: float, wheel_radius_m: float, counts_per_rev: int | None) -> float:
+    """The most the odometry can move in one control tick at ``speed_mps``: the travel and, on a counted encoder
+    model, one count of quantization (Codex piece 2a re-review P2: team_spec_quantized moved 5 counts, 0.96 mm, in a
+    tick at 0.10 m/s -- 0.83 mm of travel). None: the engine's own rates, no counts."""
+    count = 0.0 if counts_per_rev is None else 2 * math.pi * wheel_radius_m / counts_per_rev
+    return abs(speed_mps) * tick_s + count
+
+
 def gap(a, b, rear_offset_m: float) -> tuple:
     """(metres, radians) between two base poses, the metres the larger of the base and the rear axle."""
     ra, rb = rear_from_base(a, rear_offset_m), rear_from_base(b, rear_offset_m)
@@ -246,5 +254,5 @@ class PoseCheck:
                     want_rematch=want, reason=reason, d=d)
 
 
-__all__ = ["Bounds", "D_MIN", "D_STROKE", "D_TOTAL", "INT_M", "INT_RAD", "PoseCheck", "REMATCH_M", "STILL_M",
+__all__ = ["Bounds", "tick_bound", "D_MIN", "D_STROKE", "D_TOTAL", "INT_M", "INT_RAD", "PoseCheck", "REMATCH_M", "STILL_M",
            "STILL_RAD", "View", "gap"]
