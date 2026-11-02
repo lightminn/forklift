@@ -130,6 +130,23 @@ def test_the_exit_prefix_exemption_is_on_in_the_slam_mode_unless_turned_off(tmp_
     assert contains(args_of(dry_run(tmp_path, MODE="truth", EXIT_EXEMPT="on")), ["--exit-prefix-exempt", "on"])
 
 
+def test_the_return_start_backoff_is_boxed_in_the_slam_mode_unless_turned_off(tmp_path):
+    # docs/validation/2026-11-02-return-start-backoff-boxed-batch.md: the F2'' batch passed in MODE=slam (the batch's
+    # mode); MODE=truth was not in it, so it keeps the backoff off unless asked
+    assert contains(args_of(dry_run(tmp_path)), ["--return-start-backoff", "boxed"])
+    assert " RETURN_START=boxed " in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, RETURN_START="off")), ["--return-start-backoff", "off"])
+    assert contains(args_of(dry_run(tmp_path, RETURN_START="on")), ["--return-start-backoff", "on"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--return-start-backoff", "off"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth", RETURN_START="boxed")), ["--return-start-backoff", "boxed"])
+
+
+@pytest.mark.parametrize("env", [{"RETURN_START": "maybe"}, {"EXTRA_ARGS": "--return-start-backoff off"},
+                                 {"EXTRA_ARGS": "--return-start-backoff=boxed"}, {"EXTRA_ARGS": "--return-s off"}])
+def test_the_return_start_backoff_has_one_switch(tmp_path, env):
+    assert dry_run(tmp_path, **env).returncode != 0
+
+
 @pytest.mark.parametrize("env", [{"EXIT_EXEMPT": "maybe"}, {"EXTRA_ARGS": "--exit-prefix-exempt off"},
                                  {"EXTRA_ARGS": "--exit-prefix-exempt=on"}, {"EXTRA_ARGS": "--exit-prefix-exe off"},
                                  {"EXTRA_ARGS": "--exit-p=off"}, {"EXTRA_ARGS": "--near-tracking"},
@@ -240,7 +257,8 @@ def test_bad_choices_are_refused(tmp_path, env):
 @pytest.mark.parametrize("env", [{}, {"MODE": "truth"}, {"NEAR": "off", "MARKERS": "off"}, {"NOISE": "a2"},
                                  {"ENCODER_MODEL": "reported"}, {"NEAR_RECAPTURE_GAP": "1.0"}, {"GYRO": "measured"},
                                  {"NEAR_REDRAW_LATERAL": "0.05"}, {"VIDEO": "off"}, {"EXIT_EXEMPT": "off"},
-                                 {"MODE": "truth", "EXIT_EXEMPT": "on"}])
+                                 {"MODE": "truth", "EXIT_EXEMPT": "on"}, {"RETURN_START": "on"},
+                                 {"MODE": "truth", "RETURN_START": "boxed"}])
 def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
     args = args_of(dry_run(tmp_path, **env))
     sys.path.insert(0, str(ROOT / "sim/isaac"))

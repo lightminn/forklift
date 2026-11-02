@@ -75,7 +75,9 @@ S1 등록(`docs/plans/2026-11-02-standstill-wheel-hold-batch.md` §4)과 같은 
 
 ## 6. 제출 기록
 
-(제출 때 적는다.)
+- 2026-11-02: 스냅숏 `snapshots/f2b_22eac21d`(main 22eac21d). `test_runs/riibotics/f2b_22eac21d/RUNS.jsonl` 98 실행, `isaac_bundle.py check` 0 문제. 묶음 잡 14210(f2b_b1)·14211(f2b_b2)은 claim-dir 를 공유한다. 디스크 세션이 롤링했다.
+- 14211 은 GPU 대기 중 claim 92/98 시점에 총괄 지시로 취소했다. 남은 실행은 14210 이 끝냈다. 98 실행 모두 결과가 있다.
+- 결과: `docs/validation/2026-11-02-return-start-backoff-boxed-batch.md`(통과).
 
 ## 7. 자체 검토
 
