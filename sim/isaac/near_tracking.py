@@ -1170,6 +1170,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "d7_reapproach_hold": "off",
                               # 2026-10-31 return cusp replan plan D1/D2: off / the earlier 2 in every earlier record
                               "return_cusp_replans": 0, "transport_cusp_replans": 2,
+                              # 2026-11-01 standstill wheel hold plan S0/S1: off / no probe log in every earlier record
+                              "stand_wheel_hold": "off", "stand_probe_log": None,
                               # 2026-10-25: the low-clearance guard; off in every earlier run.
                               "low_clearance_guard": "off", "low_clearance_margin_m": 0.05,
                               "low_clearance_deviation_m": 0.02,

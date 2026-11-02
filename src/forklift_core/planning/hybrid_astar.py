@@ -330,12 +330,20 @@ def _advance(pose, distance_m, curvature):
     )
 
 
+# The six motions every expansion tries, in the order it tries them: (direction, steering), steering x the curvature limit.
+PRIMITIVES = tuple((direction, steering) for direction in (1, -1) for steering in (0, -1, 1))
+
+
+def sweep_margin_m(clearance_m: float, ds: float, radius_m: float, curvature: float) -> float:
+    """The margin a motion's midpoint is checked at: a body point travels at most ds * (1 + radius * |curvature|), so the
+    clearance plus half of that encloses the swept footprint for each half interval."""
+    return clearance_m + ds / 2 * (1 + radius_m * abs(curvature))
+
+
 def _sample_arc(pose, length, direction, curvature, checker, config):
     count_samples = max(1, ceil(length / config.collision_step_m))
     ds = length / count_samples
-    # A body point travels at most ds * (1 + radius * |curvature|).
-    # Midpoint inflation encloses the swept footprint for each half interval.
-    margin = config.clearance_m + ds / 2 * (1 + checker.radius_m * abs(curvature))
+    margin = sweep_margin_m(config.clearance_m, ds, checker.radius_m, curvature)
     samples = []
     for index in range(count_samples):
         midpoint = _advance(pose, direction * ds * (index + 0.5), curvature)
@@ -345,6 +353,22 @@ def _sample_arc(pose, length, direction, curvature, checker, config):
     if not checker.free(samples[-1], config.clearance_m):
         return None
     return samples
+
+
+def first_step_free(pose, checker, config) -> bool:
+    """Whether a search started at ``pose`` with ``config`` can make a child (docs/plans/2026-11-02-return-start-backoff-
+    boxed.md D3): the start check plan_hybrid_astar makes, then the six PRIMITIVES through the same _sample_arc. Equal to
+    "the single attempt expands more than one node" only for a valid goal its root shot does not reach, a budget that
+    lets it expand and ``turn_cycles`` off; with turn cycles on it is conservative (no primitive child, a turn cycle
+    child: False)."""
+    pose = (float(pose[0]), float(pose[1]), _wrap(float(pose[2])))
+    if not checker.free(pose, config.clearance_m):
+        return False
+    return any(
+        _sample_arc(pose, config.primitive_length_m, direction, steering * config.curvature_limit_inv_m, checker, config)
+        is not None
+        for direction, steering in PRIMITIVES
+    )
 
 
 def _dubins_words(start, goal, curvature):
@@ -642,41 +666,40 @@ def plan_hybrid_astar(
                 total = node.cost + over_cost
                 if passed_over is None or total < passed_over[0]:
                     passed_over = (total, node, over, expanded if passed_over is None else passed_over[3])
-        for direction in (1, -1):
-            for steering in (0, -1, 1):
-                curvature = steering * config.curvature_limit_inv_m
-                samples = _sample_arc(
-                    node.pose,
-                    config.primitive_length_m,
-                    direction,
-                    curvature,
-                    checker,
-                    config,
-                )
-                if samples is None:
-                    continue
-                cost = node.cost + config.primitive_length_m * (
-                    (config.reverse_penalty if direction < 0 else 1)
-                    + config.steering_penalty * abs(steering)
-                )
-                cost += config.steering_change_penalty_m * abs(steering - node.steering)
-                if node.direction and node.direction != direction:
-                    cost += config.gear_change_penalty_m
-                state_key = key(samples[-1], direction, steering)
-                if cost >= best.get(state_key, float("inf")) - 1e-10:
-                    counts[0] += 1
-                    continue
-                best[state_key] = cost
-                child = _Node(samples[-1], cost, direction, steering, node, samples)
-                child.length_m = config.primitive_length_m
-                heapq.heappush(
-                    queue,
-                    (
-                        cost + config.heuristic_weight * heuristic(child.pose),
-                        next(serial),
-                        child,
-                    ),
-                )
+        for direction, steering in PRIMITIVES:
+            curvature = steering * config.curvature_limit_inv_m
+            samples = _sample_arc(
+                node.pose,
+                config.primitive_length_m,
+                direction,
+                curvature,
+                checker,
+                config,
+            )
+            if samples is None:
+                continue
+            cost = node.cost + config.primitive_length_m * (
+                (config.reverse_penalty if direction < 0 else 1)
+                + config.steering_penalty * abs(steering)
+            )
+            cost += config.steering_change_penalty_m * abs(steering - node.steering)
+            if node.direction and node.direction != direction:
+                cost += config.gear_change_penalty_m
+            state_key = key(samples[-1], direction, steering)
+            if cost >= best.get(state_key, float("inf")) - 1e-10:
+                counts[0] += 1
+                continue
+            best[state_key] = cost
+            child = _Node(samples[-1], cost, direction, steering, node, samples)
+            child.length_m = config.primitive_length_m
+            heapq.heappush(
+                queue,
+                (
+                    cost + config.heuristic_weight * heuristic(child.pose),
+                    next(serial),
+                    child,
+                ),
+            )
         if config.turn_cycles:
             # D7b: (gear, steering) of the two halves; the second half reverses both.
             length = config.turn_cycle_m

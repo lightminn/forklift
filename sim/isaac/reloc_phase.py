@@ -20,7 +20,9 @@ from pathlib import Path
 import scan_capture
 
 from forklift_core.localization import global_match as G
+from forklift_core.localization import local_match as LM
 from forklift_core.localization import start_reloc as R
+from forklift_core.localization.twins import twin_count
 
 
 @dataclass
@@ -44,6 +46,8 @@ class RelocInputs:
     # B-P2c: the early console (reloc_console.RelocConsole), serviced at every step and wait; None: no operator
     console: object = None
     operator_deadline_at: float | None = None  # the operator's whole budget (clock time); None: none
+    # F1 (plan 2026-10-31-operator-placed-start 1.3): the local re-match's window, R_AMB and deadline
+    place_cfg: LM.PlaceConfig = field(default_factory=LM.PlaceConfig)
 
 
 def _points(inputs: RelocInputs, sent) -> object:
@@ -95,7 +99,50 @@ def _wait_bridge_go(inputs: RelocInputs, step):
     return None
 
 
-WAITING = ("awaiting_pick", "reloc_failed", "stopped")
+WAITING = ("awaiting_pick", "reloc_failed", "stopped", "place_preview")
+PREVIEW_POINTS = 360  # at most this many scan endpoints drawn over the map for the operator's preview
+
+
+def _place(inputs: RelocInputs, relocalizer: R.StartRelocalizer, points, step, deadline_at: float) -> tuple:
+    """One local re-match on a worker (as ``_attempt``): cancelled at a session cancel or once the relocalizer left
+    this placement (a STOP); ``deadline_at`` is T_LOC from the placement's scan start (clock time). Returns
+    (LocalResult, wall_s)."""
+    box = {}
+    places = relocalizer.places
+    pc = inputs.place_cfg
+
+    def cancelled() -> bool:
+        return inputs.cancel.is_set() or relocalizer.state != "placing" or relocalizer.places != places
+
+    def work():
+        w0 = time.monotonic()
+        window = LM.Window(base=relocalizer.placed, radius_m=pc.radius_m, yaw_rad=pc.yaw_rad, edge_m=pc.edge_m,
+                           edge_rad=pc.edge_rad)
+        box["result"] = LM.local_match(inputs.grid, points, window, inputs.match_cfg, e_min=inputs.reloc_cfg.e_min,
+                                       r_amb=pc.r_amb, index=inputs.index, clock=inputs.clock,
+                                       deadline=deadline_at, cancel=cancelled)
+        box["wall_s"] = time.monotonic() - w0
+
+    worker = threading.Thread(target=work, name="start-place", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        step("placing")
+        worker.join(timeout=inputs.pace_s)
+    if "result" not in box:
+        raise RuntimeError("the placement worker ended without a result")
+    return box["result"], box["wall_s"]
+
+
+def _preview_points(points, base) -> list:
+    """The scan's endpoints at the previewed base pose (map), at most PREVIEW_POINTS, for the operator's overlay."""
+    import numpy as np  # noqa: PLC0415
+
+    pts = np.asarray(points, float).reshape(-1, 2)
+    if len(pts) > PREVIEW_POINTS:
+        pts = pts[np.linspace(0, len(pts) - 1, PREVIEW_POINTS).astype(int)]
+    lx, ly, yaw = R.laser_from_base(base)
+    c, s_ = np.cos(yaw), np.sin(yaw)
+    return [[round(float(lx + c * x - s_ * y), 3), round(float(ly + s_ * x + c * y), 3)] for x, y in pts]
 
 
 def run(inputs: RelocInputs) -> dict:
@@ -112,7 +159,7 @@ def run(inputs: RelocInputs) -> dict:
 
 def _run(inputs: RelocInputs) -> dict:
     out = {"status": None, "reason": "", "estimate": None, "attempts": [], "truth": None, "bridge_go": None,
-           "generation": None, "shown": []}
+           "generation": None, "shown": [], "places": []}
     if inputs.cancel.is_set():
         out["status"] = "cancelled"
         return out
@@ -133,6 +180,10 @@ def _run(inputs: RelocInputs) -> dict:
         console.attach(relocalizer)
         console.note(operator_deadline_at=inputs.operator_deadline_at)
     relocalizer.expires_at = inputs.operator_deadline_at  # no pick or retry after it, in the handler too
+    g = inputs.grid  # F1: a placement off the survey map is refused (Codex F1 implementation review P2)
+    h_, w_ = g.data.shape
+    relocalizer.place_bounds = (g.origin[0], g.origin[1], g.origin[0] + w_ * g.resolution_m,
+                                g.origin[1] + h_ * g.resolution_m)
     for _ in range(inputs.settle_steps):  # settle where it was placed (plan 1.2 step 3)
         step("settle")
     scan_key = 0  # every scan set of the session its own noise (a retry never reuses one, Codex B-P2c design P3)
@@ -187,6 +238,48 @@ def _run(inputs: RelocInputs) -> dict:
             if console is not None:
                 console.note(last_reason=decision.reason)
             continue
+        if state == "placing":
+            # F1: fresh scans where the truck stands (it may have been pushed while the operator looked), the stillness
+            # check again, then the local re-match around the placed pose (plan 1.3)
+            places = relocalizer.places
+            t0 = inputs.clock()
+            deadline_at = t0 + inputs.place_cfg.deadline_s  # T_LOC from the scan start (Codex F1 impl review P2)
+            got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
+                                        settle_steps=0)
+            scan_key += 1
+            record = {"click": list(relocalizer.placed), "places": places}
+            if not got["valid"]:
+                out["places"].append({**record, "reason": "unsteady", "matcher_reason": got["reason"]})
+                out["status"], out["reason"] = "unsteady", got["reason"]
+                return out
+            if relocalizer.state != "placing" or relocalizer.places != places:
+                out["places"].append({**record, "reason": "interrupted"})
+                continue
+            points = _points(inputs, got["sent"])
+            res, wall_s = _place(inputs, relocalizer, points, step, deadline_at)
+            if res.confirmed and inputs.clock() > deadline_at:  # nothing confirmed past T_LOC
+                res = replace(res, confirmed=False, reason="timeout", status="timeout")
+            if console is not None:
+                console.service("placed")
+            record.update(reason=res.reason, status=res.status, base=None if res.base is None else list(res.base),
+                          amb_ratio=res.amb_ratio, endpoint_fraction=res.endpoint_fraction, leaves=res.leaves,
+                          work=int(res.work), wall_s=round(wall_s, 3), stage_s=round(inputs.clock() - t0, 3))
+            if relocalizer.state != "placing" or relocalizer.places != places:
+                out["places"].append({**record, "reason": "interrupted", "matcher_reason": res.reason})
+                continue
+            if res.confirmed and inputs.clock() > deadline_at:  # right before it applies (Codex F1 re-review P2)
+                res = replace(res, confirmed=False, reason="timeout", status="timeout")
+                record.update(reason="timeout", status="timeout", stage_s=round(inputs.clock() - t0, 3))
+            relocalizer.placed_result(res.confirmed, res.base, res.reason)
+            out["places"].append(record)
+            if console is not None:
+                # the look-alike places the global search showed, for the operator's check (lead 2026-10-31)
+                twins = (twin_count([(R.base_from_laser(c.pose), c.search_score) for c in relocalizer.shown],
+                                      res.base, inputs.place_cfg.r_amb) if res.confirmed else None)
+                console.note(place_reason=None if res.confirmed else res.reason,
+                             preview_points=_preview_points(points, res.base) if res.confirmed else None,
+                             preview_twins=twins)
+            continue
         if state in WAITING:
             if unattended:
                 break
@@ -239,6 +332,7 @@ def failure_reason(out: dict) -> str | None:
 
 MATCH_CONFIG = "docs/validation/assets/b-p1b/match_config.json"
 DEV_CHOICE = "docs/validation/assets/b-p1b/dev_choice.json"
+PLACE_CONFIG = "docs/validation/assets/f1/place_config.json"  # F1's first freeze (window, R_AMB, deadline)
 
 
 def frozen_settings(root: Path) -> tuple:
@@ -254,4 +348,15 @@ def frozen_settings(root: Path) -> tuple:
     return cfg, reloc, record
 
 
-__all__ = ["DEV_CHOICE", "MATCH_CONFIG", "RelocInputs", "failure_reason", "frozen_settings", "run"]
+def place_settings(root: Path) -> tuple:
+    """F1's placement settings (plan 2026-10-31-operator-placed-start 2, 4.6): the frozen file with its hash, or the
+    plan's provisional values (R_AMB not yet chosen) marked as such."""
+    path = Path(root) / PLACE_CONFIG
+    if not path.exists():
+        return LM.PlaceConfig(), {"file": None, "provisional": True}
+    data = path.read_bytes()
+    return LM.PlaceConfig(**json.loads(data)), {"file": PLACE_CONFIG, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+__all__ = ["DEV_CHOICE", "MATCH_CONFIG", "PLACE_CONFIG", "RelocInputs", "failure_reason", "frozen_settings",
+           "place_settings", "run"]

@@ -447,3 +447,126 @@ def test_the_frozen_settings_are_b_p1bs():
     assert (reloc.e_min, reloc.r_max, reloc.r_struct) == (0.8, 0.95, 0.8)
     assert reloc.attempts == 3 and reloc.deadline_s == 30.0
     assert set(record) == {"match_config", "dev_choice"} and all(len(v["sha256"]) == 64 for v in record.values())
+
+
+# --- F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2-1.3) ------------------------------
+def _place_then(action):
+    """A script: place once near the truth when the candidates are shown, then ``action`` on the preview."""
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            assert r.place(r.generation, (2.2, 1.5, 0.15)) == (True, "")
+        elif r.state == "place_preview" and stage == "place_preview":
+            action(r)
+    return script
+
+
+def test_a_placed_pose_previews_and_its_confirmation_is_the_estimate(tmp_path):
+    _go_later(tmp_path)
+    console = FakeConsole(_place_then(lambda r: r.confirm_place(r.generation, r.preview_id)))
+    out = P.run(_symmetric(tmp_path, console))
+    assert out["status"] == "chosen" and R.read_reloc_pose(tmp_path)["source"] == "operator_placed"
+    [place] = out["places"]
+    assert place["reason"] == "confirmed" and place["click"] == [2.2, 1.5, 0.15] and "stage_s" in place
+    est = out["estimate"]
+    assert math.hypot(est[0] - 2.0, est[1] - 1.4) <= 0.10 and abs(est[2]) <= 0.05
+    assert console.notes["preview_points"]  # the overlay drawn for the operator
+    # the look-alike places the global search showed (the lead's screen aid): a count, or None without candidates
+    assert console.notes["preview_twins"] is None or console.notes["preview_twins"] >= 0
+    assert "preview_twins" in console.notes
+
+
+def test_a_refused_placement_goes_back_to_the_candidates(tmp_path):
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick":
+            if r.places == 0:
+                assert r.place(r.generation, (5.6, 3.6, 0.0)) == (True, "")  # the window holds no fit
+            else:
+                assert r.pick(r.generation, 0) == (True, "")
+
+    _go_later(tmp_path)
+    out = P.run(_symmetric(tmp_path, FakeConsole(script)))
+    assert out["status"] == "chosen" and out["places"][0]["reason"] != "confirmed"
+    assert R.read_reloc_pose(tmp_path)["source"] == "operator"
+
+
+def test_a_stop_while_placing_drops_the_match(tmp_path):
+    box = {}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            r.place(r.generation, (2.2, 1.5, 0.15))
+        elif r.state == "placing" and stage == "placing":
+            assert r.interrupt()
+        elif r.state == "stopped" and stage == "stopped":
+            box["inputs"].operator_deadline_at = time.monotonic()  # nobody retries: the operator's time ends
+
+    box["inputs"] = _symmetric(tmp_path, FakeConsole(script), operator_deadline_at=time.monotonic() + 600.0)
+    out = P.run(box["inputs"])
+    assert out["status"] == "operator_timeout" and out["places"][0]["reason"] == "interrupted"
+
+
+def test_the_placement_settings_come_from_their_frozen_file_or_are_marked_provisional(tmp_path):
+    from forklift_core.localization import local_match as LM
+
+    cfg, record = P.place_settings(tmp_path)
+    assert cfg == LM.PlaceConfig() and record == {"file": None, "provisional": True}
+    f = tmp_path / P.PLACE_CONFIG
+    f.parent.mkdir(parents=True)
+    f.write_text('{"r_amb": 0.86, "radius_m": 2.0, "yaw_rad": 0.6, "edge_m": 0.3, "edge_rad": 0.1, "deadline_s": 10.0}')
+    cfg, record = P.place_settings(tmp_path)
+    assert cfg.r_amb == 0.86 and record["file"] == P.PLACE_CONFIG and len(record["sha256"]) == 64
+
+
+def test_the_placements_deadline_runs_from_the_scans_start(tmp_path):
+    # Codex F1 implementation review P2 5: scans that take the whole T_LOC leave no time for the match
+    clock = {"t": time.monotonic()}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            r.place(r.generation, (2.2, 1.5, 0.15))
+        elif r.state == "placing" and stage == "scan":
+            clock["t"] += 1.0  # every scan step a second: the scans alone pass the 10 s
+        elif r.state in ("awaiting_pick", "reloc_failed") and r.places == 1 and stage in ("awaiting_pick",
+                                                                                           "reloc_failed"):
+            box["inputs"].operator_deadline_at = clock["t"] - 1.0  # done: end the wait (the clock stands now)
+
+    box = {}
+    box["inputs"] = _symmetric(tmp_path, FakeConsole(script), clock=lambda: clock["t"],
+                               operator_deadline_at=clock["t"] + 1e6)
+    out = P.run(box["inputs"])
+    assert out["places"][0]["reason"] == "timeout" and out["status"] != "chosen"
+
+
+def test_the_phase_gives_the_relocalizer_the_maps_extent(tmp_path):
+    seen = {}
+
+    def script(console, stage):
+        seen.setdefault("bounds", console.reloc.place_bounds)
+
+    P.run(_symmetric(tmp_path, FakeConsole(script), unattended=True))  # ends at the operator request
+    assert seen["bounds"] == pytest.approx((0.0, 0.0, 6.0, 4.0))
+
+
+def test_a_preview_is_never_made_after_t_loc_even_when_the_console_takes_the_time(tmp_path):
+    # Codex F1 re-review P2 3: the deadline checked right before the result applies, after the console's service
+    clock = {"t": time.monotonic()}
+
+    def script(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick" and r.places == 0:
+            r.place(r.generation, (2.2, 1.5, 0.15))
+        elif r.state == "placing" and stage == "placed":
+            clock["t"] += 11.0  # the console's service after the match takes past T_LOC
+        elif r.state in ("awaiting_pick", "reloc_failed") and r.places == 1 and stage in ("awaiting_pick",
+                                                                                           "reloc_failed"):
+            box["inputs"].operator_deadline_at = clock["t"] - 1.0
+
+    box = {}
+    box["inputs"] = _symmetric(tmp_path, FakeConsole(script), clock=lambda: clock["t"],
+                               operator_deadline_at=clock["t"] + 1e6)
+    out = P.run(box["inputs"])
+    assert out["places"][0]["reason"] == "timeout" and out["status"] != "chosen"

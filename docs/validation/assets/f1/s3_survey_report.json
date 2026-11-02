@@ -1,0 +1,200 @@
+{
+ "epoch": "/home/projects/forklift/test_runs/live/f1_survey/hall_s3_G0/epoch_1",
+ "readback": "/home/projects/forklift/test_runs/live/f1_survey/hall_s3_G0/readback",
+ "finalize": {
+  "runner_exit": {
+   "code": 0,
+   "reason": null
+  },
+  "bridge_container_exit": "0",
+  "bridge_status": {
+   "ok": true,
+   "stray_pose_stamps_ns": [],
+   "failed": 0,
+   "records_dropped": 0,
+   "records_unsettled": 0
+  },
+  "serialized": true,
+  "graph_files": {
+   "map.posegraph": 80064444,
+   "map.data": 67820006
+  },
+  "map_grab": {
+   "settled": true,
+   "repeats": 3,
+   "maps_received": 3,
+   "wall_s": 3.1859149590018205,
+   "shape": [
+    844,
+    639
+   ]
+  },
+  "graph": {
+   "scans": 1245,
+   "vertices": 1245,
+   "edges": 2848,
+   "width": 639,
+   "height": 844,
+   "origin": [
+    -26.400984662609748,
+    -23.518907727715423
+   ],
+   "resolution_m": 0.05
+  },
+  "readback_grid_is_the_graphs": true,
+  "ok": true
+ },
+ "cost": {
+  "ok": true,
+  "processed": 1245,
+  "mean_s": 0.11578836373962138,
+  "p99_s": 0.4922826542792609,
+  "max_s": 0.5973078340030042,
+  "last10_mean_s": 0.19139787980666076,
+  "over_0_3_s": 103
+ },
+ "received": {
+  "ok": true,
+  "bridge_processed": 1245,
+  "runner_processed": 1245,
+  "not_received": [],
+  "not_received_count": 0
+ },
+ "nodes": {
+  "ok": true,
+  "graph_scans": 1245,
+  "processed": 1245,
+  "graph_scans_not_processed": 0,
+  "last_processed": {
+   "scan_id": 21750,
+   "stamp_s": 2175.0084467688575
+  },
+  "first_stamp_s": 0.008333333767950535,
+  "last_stamp_s": 2175.0084467688575
+ },
+ "world": {
+  "nodes": 1245,
+  "paired": 1245,
+  "position_max_m": 0.06412597201938636,
+  "position_rmse_m": 0.027328367941999505,
+  "yaw_max_rad": 0.00430690141792911,
+  "worst_node_stamp_s": 532.108361085,
+  "limits": {
+   "position_max_m": 0.1,
+   "yaw_max_rad": 0.03
+  },
+  "ok": true
+ },
+ "start": {
+  "ok": true,
+  "stamp_s": 0.008333334,
+  "odom_position_error_m": 8.034706124458129e-05,
+  "odom_yaw_error_rad": 6.329487017056907e-08,
+  "limits": {
+   "position_m": 0.01,
+   "yaw_rad": 0.005
+  }
+ },
+ "coverage": {
+  "judged": {
+   "ok": true,
+   "cells": 9614,
+   "cell_m": 0.25,
+   "radius_m": 2.823223304703363,
+   "uncovered": 0,
+   "uncovered_area_m2": 0.0,
+   "farthest_m": 2.742229893699898,
+   "farthest_cell": [
+    4.274999999999999,
+    0.7250000000000014
+   ]
+  },
+  "judged_known_fraction": 1.0,
+  "unsurveyed_estimate": {
+   "ok": false,
+   "cells": 13243,
+   "cell_m": 0.25,
+   "radius_m": 2.823223304703363,
+   "uncovered": 130,
+   "uncovered_area_m2": 8.125,
+   "farthest_m": 3.582360458270971,
+   "farthest_cell": [
+    -25.225,
+    7.725000000000001
+   ]
+  },
+  "observation_poses": 0,
+  "tour_judged_source": {
+   "tour_config_sha256": "08d346c2609d187756764987c4a601b80b2faa84e71aaa4b7a877900c1cfa6c7",
+   "reference_runs": [],
+   "observation_poses": 0,
+   "nodes": null,
+   "margin_m": 0.1,
+   "radius_m": 2.723223304703363,
+   "cells": 9614
+  },
+  "tour_scene_matches": true,
+  "tour_sha256": "246393bc9d09ee93fd2a7c97368bcc255a7f03795b070af78f21f21102e8c1e5",
+  "judged_matches_tour": true,
+  "ok": true
+ },
+ "tour": {
+  "ok": true,
+  "end": "arrived",
+  "progress_m": 562.0857320157864,
+  "events": [
+   {
+    "wall": 75527.963348384,
+    "event": "disarmed",
+    "progress_m": 468.1928748911943,
+    "stop_kind": "preempt",
+    "reject": "stale_control",
+    "latch": "expired",
+    "speed": 0.299126238037051,
+    "applied": {
+     "speed_mps": 0.0,
+     "curvature_inv_m": -0.29578360821264915,
+     "steering_rad": [
+      -0.18952955112549305,
+      -0.22299318002735863
+     ],
+     "stop_kind": "preempt"
+    }
+   },
+   {
+    "wall": 75528.899616038,
+    "event": "rearm_sent",
+    "progress_m": 468.1928748911943,
+    "rearms": 1,
+    "reply": "ack",
+    "reason": null,
+    "arm_gen": 2
+   },
+   {
+    "wall": 75529.001293996,
+    "event": "rearmed",
+    "progress_m": 468.1928748911943,
+    "disarmed_s": 1.037945611999021,
+    "rearms": 1,
+    "arm_gen": 2
+   },
+   {
+    "wall": 76765.147539984,
+    "event": "arrived",
+    "progress_m": 562.0857320157864,
+    "position_error_m": 0.06413100618887899
+   }
+  ]
+ },
+ "moving": {
+  "ok": false,
+  "reason": "no rigid body list (tools/list_rigid_bodies.py did not run or failed)",
+  "provenance": {
+   "ok": false,
+   "reason": "no list"
+  }
+ },
+ "map_id": "fb0ad8ca280ad3515fce69a2566c21af7fce0e618400e4f962de576ecac36e4a",
+ "bundle_written": true,
+ "ok": false
+}
