@@ -378,6 +378,10 @@ def run(app, args, state):
     from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
 
     settings = yaml.safe_load(args.settings.read_text())
+    from pallet_mass import resolve_pallet_mass
+
+    # plan 2026-11-01-pallet-mass: no pallet geometry here, so a table by shape is refused with its reason
+    settings, state["pallet_mass"] = resolve_pallet_mass(settings, None)
     require(settings["physics_hz"] == 120, "Expected 120Hz physics")
     require(
         all(

@@ -10300,6 +10300,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # scene requirements plan: the verdict goes into its own block; the three options only when given (an override
         # run's arguments rebuild it), the near-field contract treats them as run-specific
         and k != "scene_requirements_report"
+        # pallet-mass plan (2026-11-01): the resolved mass goes into its own block (pallet_mass), not the arguments
+        # (Codex pallet-mass review 2 P2-1: as an argument it broke the near-field contract of every earlier record)
+        and k != "pallet_mass_record"
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
@@ -10337,6 +10340,14 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
+    from pallet_mass import resolve_pallet_mass
+
+    # plan 2026-11-01-pallet-mass: a table by shape is read for this run's pallet (its geometry's version), and every
+    # reader after this sees the number
+    try:
+        settings, args.pallet_mass_record = resolve_pallet_mass(settings, args.pallet_geometry_loaded.geometry_version)
+    except ValueError as exc:
+        require(False, f"--settings: {exc}")
     require(
         settings["physics_hz"] == 120 or (args.steering_probe and settings["physics_hz"] in (120, 240)),
         "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
@@ -10454,6 +10465,7 @@ def main() -> None:
         "pallet_fixed_attachment": False,
         "pose_teleportation_after_reset": False,
         "settings_synthetic": settings,
+        "pallet_mass": args.pallet_mass_record,
         "scene_requirements": args.scene_requirements_report,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "pallet_urdf_sha256": hashlib.sha256(args.pallet_urdf.read_bytes()).hexdigest(),
