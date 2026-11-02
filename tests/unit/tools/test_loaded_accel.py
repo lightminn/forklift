@@ -32,3 +32,14 @@ def test_a_straight_brake_is_the_deceleration_alone():
     tt, a = la.pallet_acceleration(_control(t, x, np.zeros_like(t), np.zeros_like(t)), 1.26, 3)
     s = la.window_stats(tt, a, 10.1, 10.5, 3)
     assert s["max"] == pytest.approx(a0, rel=0.05)
+
+
+def test_a_sideways_slip_of_the_truck_is_seen():
+    # Codex B registration round 2 P2: fixed yaw, forward 0.3 m/s, braking sideways at 1.5 m/s^2
+    dt, a0 = 1 / 120, 1.5
+    t = np.arange(0, 20, dt)
+    vy = np.clip(1.0 - a0 * np.clip(t - 10.0, 0, None), 0, None)
+    x, y = 0.3 * t, np.cumsum(vy) * dt
+    tt, a = la.pallet_acceleration(_control(t, x, y, np.zeros_like(t)), 1.26, 3)
+    s = la.window_stats(tt, a, 10.1, 10.5, 3)
+    assert s["max"] == pytest.approx(a0, rel=0.05)

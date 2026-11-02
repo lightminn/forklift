@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """The horizontal acceleration a carried pallet sees in recorded Isaac runs (docs/plans/2026-11-01-contact-materials.md
 B0 margin table): from the truth rear-axle pose at the control rate (``slam_control.npy`` of a batch run, the
-``slam.control`` spool of a live run; columns 4-6 are the truth x, y, yaw), carried to the pallet's centre by rigid-body
-kinematics -- the centre stands ``--pallet-offset-m`` ahead of the rear axle on the truck's axis, so its acceleration in
-the truck frame is (a_long - omega^2 d, a_lat + alpha d) with a_lat = v omega.
+``slam.control`` spool of a live run; columns 4-6 are the truth x, y, yaw), carried to the pallet's centre -- the centre stands
+``--pallet-offset-m`` ahead of the rear axle on the truck's axis -- and that point's world track differentiated twice.
 
 The loaded window is from the lift transition to the lower transition in a batch run, and every sample labelled lift,
 extract or transport in a live run. Speeds and accelerations are differentiated on the whole run and the window taken
@@ -30,17 +29,14 @@ def smooth(x: np.ndarray, n: int) -> np.ndarray:
 
 
 def pallet_acceleration(control: np.ndarray, d: float, n: int) -> tuple[np.ndarray, np.ndarray]:
-    """(time, |a| at the pallet centre) over a whole run; rows of ``control`` are (t, ..., x, y, yaw) at columns 0, 4-6."""
-    t, x, y = control[:, 0], smooth(control[:, 4], n), smooth(control[:, 5], n)
-    th = np.unwrap(control[:, 6])
+    """(time, |a| at the pallet centre) over a whole run; rows of ``control`` are (t, ..., x, y, yaw) at columns 0, 4-6.
+    The centre's own world track (x + d cos yaw, y + d sin yaw) is differentiated twice, so a lateral slip of the truck
+    counts too (Codex B registration round 2 P2: a heading-projected speed drops it)."""
+    t, th = control[:, 0], np.unwrap(control[:, 6])
+    px, py = smooth(control[:, 4] + d * np.cos(th), n), smooth(control[:, 5] + d * np.sin(th), n)
     dt = np.gradient(t)
-    vx, vy = np.gradient(x) / dt, np.gradient(y) / dt
-    v = smooth(vx * np.cos(th) + vy * np.sin(th), n)
-    a_long = smooth(np.gradient(v) / dt, n)
-    omega = smooth(np.gradient(smooth(th, n)) / dt, n)
-    alpha = smooth(np.gradient(omega) / dt, n)
-    ax = a_long - omega ** 2 * d
-    ay = v * omega + alpha * d
+    vx, vy = smooth(np.gradient(px) / dt, n), smooth(np.gradient(py) / dt, n)
+    ax, ay = smooth(np.gradient(vx) / dt, n), smooth(np.gradient(vy) / dt, n)
     return t, np.hypot(ax, ay)
 
 
