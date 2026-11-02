@@ -9073,7 +9073,10 @@ def drive(S, isaac) -> None:
                         if captured_ is not None:
                             attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
                             frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                            capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                            # the capture's own truth pose, apart: this tick's base / q / yaw stay the tick's truth for
+                            # everything after (slip baseline, trace evidence, stand lock, probe, samples), as each says
+                            # (docs/validation/2026-11-02-observe-capture-base.md)
+                            capture_diagnostics, cap_base, cap_yaw = captured_.capture_diagnostics, captured_.base, captured_.yaw
                             forward, rear = captured_.forward, captured_.rear
                             if captured_.rear_stamp is not None:
                                 rear_stamp = captured_.rear_stamp
@@ -9082,13 +9085,13 @@ def drive(S, isaac) -> None:
                                 if core.observe_failed(t, rear, attempt, attempt_number, observation):
                                     break
                             else:
-                                succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation,
+                                succeeded_ = core.observe_succeeded(t, rear, cap_base, cap_yaw, attempt, attempt_number, observation,
                                                                     scene_input, capture_diagnostics, step)
                                 if succeeded_.stop:
                                     break
                                 observation, near_leg = succeeded_.observation, succeeded_.near_leg
                                 if not getattr(succeeded_, "pending", False) and not getattr(succeeded_, "handled", False):
-                                    core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                                    core.near_leg_or_recapture(t, rear, cap_base, cap_yaw, observation, attempt_number, near_leg)
                             core.capture_acquired_s = None
                 # Persistent console plan D5 6c item 5: a loaded mission stands in its start wait (the lift to the carry
                 # height, the first live leg taken, the docking armed): no follower, arrival, cusp or stall counts, no
@@ -9209,7 +9212,8 @@ def drive(S, isaac) -> None:
                                     if not live_abort_:
                                         attempt, attempt_number, scene_input = captured_.attempt, captured_.attempt_number, captured_.scene_input
                                         frame_diagnostics, capture_attempts = captured_.frame_diagnostics, captured_.capture_attempts
-                                        capture_diagnostics, base, q, yaw = captured_.capture_diagnostics, captured_.base, captured_.q, captured_.yaw
+                                        capture_diagnostics, cap_base, cap_yaw = (captured_.capture_diagnostics, captured_.base,
+                                                                                  captured_.yaw)  # apart, as above
                                         forward, rear = captured_.forward, captured_.rear
                                         if captured_.rear_stamp is not None:
                                             rear_stamp = captured_.rear_stamp
@@ -9341,7 +9345,7 @@ def drive(S, isaac) -> None:
                                             break
                                     else:
                                         # M-a1 slice 4b-iv: a valid observation's estimate, records, plan and followers are the core's.
-                                        succeeded_ = core.observe_succeeded(t, rear, base, yaw, attempt, attempt_number, observation, scene_input,
+                                        succeeded_ = core.observe_succeeded(t, rear, cap_base, cap_yaw, attempt, attempt_number, observation, scene_input,
                                                                             capture_diagnostics, step)
                                         if succeeded_.stop:
                                             break
@@ -9352,7 +9356,7 @@ def drive(S, isaac) -> None:
                                             pass  # plan 2026-10-19 task 4: the first side leg is installed instead
                                         else:
                                             # M-a1 slice 4b-v: the near leg, or the near capture's re-drawn straight, is the core's.
-                                            core.near_leg_or_recapture(t, rear, base, yaw, observation, attempt_number, near_leg)
+                                            core.near_leg_or_recapture(t, rear, cap_base, cap_yaw, observation, attempt_number, near_leg)
                             elif core.second_near_due():
                                 # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): the approach stood at the
                                 # second near capture's gap -- captured and re-drawn there; the approach goes on.
