@@ -154,7 +154,7 @@ def _region_leaves(grid: Grid, pts, cfg, cons: ConservativeIndex, region, budget
 def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = None, *, e_min: float,
                        r_resid: float = R_RESID, index: G.MapIndex | None = None,
                        cons: ConservativeIndex | None = None, clock=None, deadline: float | None = None,
-                       hyp_status: str = "ok") -> Residual:
+                       hyp_status: str = "ok", cancel=None) -> Residual:
     """The plan's 1.2 check of b against ``hyps`` ((pose, source), b excluded). ``hyp_status`` is how the hypothesis
     set's own search ended: anything but ``ok`` leaves b unconfirmed (plan 1.2, a set that could not be generated)."""
     cfg = cfg or G.MatchConfig()
@@ -162,7 +162,8 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
     pts = G._thin(np.asarray(points, float).reshape(-1, 2), grid.resolution_m)
     index = index or G.MapIndex(grid, cfg)
     window = L.Window(base=tuple(float(v) for v in b), radius_m=REGION_M, yaw_rad=REGION_RAD, edge_m=0.0, edge_rad=0.0)
-    own = L.local_match(grid, points, window, cfg, e_min=e_min, r_amb=2.0, index=index, clock=clock, deadline=deadline)
+    own = L.local_match(grid, points, window, cfg, e_min=e_min, r_amb=2.0, index=index, clock=clock, deadline=deadline,
+                        cancel=cancel)
     out = Residual(False, (), base=own.base, a_b=own.amb_ratio, work=own.work)
     early = () if hyp_status == "ok" else (f"hypotheses:{hyp_status}",)
     if not own.confirmed:
@@ -174,7 +175,7 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
     if own.amb_ratio is not None and own.amb_ratio >= r_resid:
         reasons.append("believed:ambiguous")
     cons = cons or ConservativeIndex(grid, cfg)
-    budget = G._Budget(cfg, clock, deadline)
+    budget = G._Budget(cfg, clock, deadline, cancel)
     b = tuple(float(v) for v in b)
     # b refined and b as believed: different centres, so both regions (Codex piece 1 re-review)
     regions = [(own.base, "believed")] + ([] if _same(b, own.base) else [(b, "believed-start")])
@@ -198,6 +199,83 @@ def residual_ambiguity(grid: Grid, points, b, hyps, cfg: G.MatchConfig | None = 
         reasons.append("competitor")
     out.work += budget.work
     out.reasons, out.confirmed, out.wall_s = tuple(reasons), not reasons, time.monotonic() - t0
+    return out
+
+
+# --- piece 2: the start check's entry and the pallet zones in odometry coordinates -------------------------------------
+def last_leaves(grid: Grid, points, cfg: G.MatchConfig, index: G.MapIndex, r_resid: float = R_RESID, *, clock=None,
+                deadline: float | None = None, cancel=None) -> tuple:
+    """(status, leaves): one global lattice search on ``points`` (the frozen matcher's own search, not changed) and its
+    pre-suppression leaves scoring >= ``r_resid`` of the best, as base poses. Deterministic for the same grid, points
+    and settings once it finishes; the deadline and cancel reach the whole search (Codex piece 2 draft 1 P2-7)."""
+    pts = G._thin(np.asarray(points, float).reshape(-1, 2), grid.resolution_m)
+    if len(pts) < cfg.min_points or not index.cand.any() or not grid.occupied().any():
+        return "uninformative", []
+    try:
+        s = G._Search(grid, pts, cfg, index, G._Budget(cfg, clock, deadline, cancel))
+        h, r, c, sc = G._lattice_leaves(s, cfg)
+    except G._Stop as stop:
+        return str(stop), []
+    if not len(sc):
+        return "ok", []
+    keep = np.flatnonzero(sc >= r_resid * float(sc.max()))
+    return "ok", [tuple(float(v) for v in p) for p in L._bases(np.array([s.pose(h[k], r[k], c[k]) for k in keep]))]
+
+
+@dataclass
+class StartCheck:
+    residual: Residual
+    hyps: list  # (pose, source) at the live scan's time, the believed start excluded
+    statuses: dict  # the leaf searches' ends
+
+
+def start_check(grid: Grid, points, b, *, pool=(), gen_points=None, carry=None, cfg: G.MatchConfig | None = None,
+                e_min: float, r_resid: float = R_RESID, index: G.MapIndex | None = None,
+                cons: ConservativeIndex | None = None, clock=None, deadline: float | None = None,
+                cancel=None) -> StartCheck:
+    """The start check after the live start (plan 2.2): the believed start ``b`` and the live scan set ``points`` at
+    O_scan; the generation's pool and the leaves of its last global search (``gen_points``) carried to O_scan's time by
+    ``carry``; the live set's own leaves added; the synthetic twins of ``b``. One deadline for all of it."""
+    cfg = cfg or G.MatchConfig()
+    index = index or G.MapIndex(grid, cfg)
+    carry = carry or (lambda p: tuple(float(v) for v in p))
+    kw = {"clock": clock, "deadline": deadline, "cancel": cancel}
+    st_live, live = last_leaves(grid, points, cfg, index, r_resid, **kw)
+    st_gen, gen = ("ok", []) if gen_points is None else last_leaves(grid, gen_points, cfg, index, r_resid, **kw)
+    extra = [(carry(p), "gen-leaf") for p in gen] + [(p, "leaf") for p in live]
+    hyps = hypotheses(b, pool=[carry(p) for p in pool], synthetic=extra + synthetic_twins(b))
+    status = next((st for st in (st_gen, st_live) if st != "ok"), "ok")
+    res = residual_ambiguity(grid, points, b, hyps, cfg, e_min=e_min, r_resid=r_resid, index=index, cons=cons,
+                             hyp_status=status, **kw)
+    return StartCheck(res, hyps, {"generation": st_gen, "live": st_live})
+
+
+def odom_zones(zones, hyps, o_s) -> list:
+    """(zone, rho0) per hypothesis and pallet zone: Z_h = O_s o h_s^-1 o z in odometry coordinates (plan 3.3) --
+    where the pallet is if h_s (a base pose at O_s's time) is true; it does not move with the odometry. rho0: the
+    farthest corner's distance from the truck's base link at O_s."""
+    out = []
+    for k, h in enumerate(hyps):
+        rel = compose(tuple(o_s), invert(tuple(h)))
+        for z in zones:
+            x, y, yaw = compose(rel, (z.x_m, z.y_m, z.yaw_rad))
+            c, s_ = math.cos(yaw), math.sin(yaw)
+            rho0 = max(math.hypot(x + c * a - s_ * w - o_s[0], y + s_ * a + c * w - o_s[1])
+                       for a in (-z.length_m / 2, z.length_m / 2) for w in (-z.width_m / 2, z.width_m / 2))
+            out.append((type(z)(f"{z.zone_id}@h{k}", x, y, z.length_m, z.width_m, wrap(yaw)), rho0))
+    return out
+
+
+def grown_zones(zones_rho, d_upper: float, bounds) -> list:
+    """Each zone grown by design 1.4's (0.30 + dp(d) + 2 d sin 0.05) + 2 rho sin((0.10 + dth(d)) / 2), at the upper
+    end ``d_upper`` of the net displacement's 0.05 m bin and rho <= rho0 + d_upper (the triangle inequality: d is the
+    net displacement from O_s, Codex piece 2 draft 3 P2)."""
+    d = float(d_upper)
+    out = []
+    for z, rho0 in zones_rho:
+        g = (REGION_M + bounds.dp(d) + 2 * d * math.sin(REGION_RAD / 2)
+             + 2 * (rho0 + d) * math.sin((REGION_RAD + bounds.dth(d)) / 2))
+        out.append(type(z)(z.zone_id, z.x_m, z.y_m, z.length_m + 2 * g, z.width_m + 2 * g, z.yaw_rad))
     return out
 
 
@@ -261,5 +339,5 @@ def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, c
 
 
 __all__ = ["BAY_M", "ConservativeIndex", "D_MIN", "R_RESID", "REGION_M", "REGION_RAD", "Rematch", "Residual",
-           "SUCCESS_M", "SUCCESS_RAD", "e_agree", "hypotheses", "moved", "rematch_decision", "residual_ambiguity",
-           "synthetic_twins", "wrap"]
+           "SUCCESS_M", "SUCCESS_RAD", "StartCheck", "e_agree", "grown_zones", "hypotheses", "last_leaves", "moved",
+           "odom_zones", "rematch_decision", "residual_ambiguity", "start_check", "synthetic_twins", "wrap"]
