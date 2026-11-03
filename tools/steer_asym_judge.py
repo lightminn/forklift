@@ -395,12 +395,15 @@ def h1(b: Batch, solver_qualifier: bool) -> dict:
         a3a, a3b = b.runs["A3a"], b.runs["A3b"]
         cont = a3b.tyre[:, :, 6]
         a3b_valid = bool(np.all(np.isfinite(cont))) and float(np.max(cont)) == 0.0
-        weight = sum(a3a.result["plant_backend"]["masses_kg"]) * G
+        try:
+            weight = sum(a3a.result["plant_backend"]["masses_kg"]) * G
+        except (KeyError, TypeError):
+            weight = math.nan  # A3a's mass readback missing: its preload limit cannot hold
         per_seg, preload_ok = [], True
         for i in b.segs("still"):
             vb, va = a3b.values(i), a3a.values(i)
             if vb is None or va is None:
-                per_seg.append("indistinguishable")
+                per_seg.append("invalid")  # out of the set read
                 continue
             met = [("yes" if abs(vb[k]) + 3 * b.delta[i][k] <= 2e-3 else
                     "no" if abs(vb[k]) - 3 * b.delta[i][k] > 2e-3 else "indistinguishable") for k in ("e_L", "e_R")]
@@ -409,7 +412,7 @@ def h1(b: Batch, solver_qualifier: bool) -> dict:
             per_seg.append(tri(met + [{"above": "yes", "below": "no"}.get(remains, "indistinguishable")]))
             floor = sum(va[f"N_{w}"] for w in WHEELS)
             wheel_ok = all(abs(va[f"N_{w}"] - b.base[i][f"N_{w}"]) <= 0.2 * abs(b.base[i][f"N_{w}"]) for w in WHEELS)
-            preload_ok &= wheel_ok and abs(weight - floor) <= 0.2 * weight
+            preload_ok &= bool(wheel_ok and abs(weight - floor) <= 0.2 * weight)
         verdict = every(per_seg) if a3b_valid else "undecided (A3b invalid: floor contact or no contact record)"
         out["ii"] = {"verdict": verdict, "A3b_valid": a3b_valid, "A3a_within_load_and_preload_limits": preload_ok,
                      "scope": "as measured" if preload_ok else "limited to A3a's fixed and preloaded condition"}
@@ -423,14 +426,14 @@ def h1(b: Batch, solver_qualifier: bool) -> dict:
         for i in b.segs("still"):
             v = b.runs["A7R"].values(i)
             if v is None:
-                res.append("indistinguishable")
+                res.append("invalid")
                 continue
             rows = b.runs["A7R"].window(i)
             full = b.runs["A7R"].arms["full"]
             shim = np.abs(full[rows, :, 5]).sum(axis=0)
             edge = full[rows, :, 8].sum() if full.shape[2] > 8 else math.nan
             if not (shim[1] > 0 and shim[0] == shim[2] == shim[3] == 0) or not edge == 0:
-                res.append("indistinguishable")  # the shim is not under the front right alone in this window
+                res.append("invalid")  # the shim is not under the front right alone in this window: not read
                 continue
             load = side(v["N_FR"] - v["N_FL"], 0.0, b.t("N", i, "dN_front"))
             err = side(-v["abs_LR"], 0.0, b.t("e", i, "abs_LR"))
