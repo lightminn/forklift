@@ -7174,10 +7174,13 @@ def drive(S, isaac) -> None:
             if near_end_detour_ is not None:
                 # C2 injection plan 4 0 and 4: every physics step's pallet shift, a capture's steps included (Codex
                 # implementation review 1 P2-1), kept as the largest since the last control tick; the tick gives it
-                # to the windows open after its own update (review 2 P2-1, P2-3). A step's state key, so watched.
-                state["near_end_step_shift_max_m"] = max(
-                    state.get("near_end_step_shift_max_m", 0.0),
-                    float(np.linalg.norm(np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
+                # to the windows open after its own update (review 2 P2-1, P2-3), by the phase the step ran in (a
+                # capture's steps before the same call's approach transition are observe's, review 3). A step's state
+                # key, so watched.
+                steps_shift_ = state.setdefault("near_end_step_shift_max_m", {})
+                phase_key_ = "observe" if ms.phase == "observe" else "other"
+                steps_shift_[phase_key_] = max(steps_shift_.get(phase_key_, 0.0), float(np.linalg.norm(
+                    np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.

@@ -67,9 +67,13 @@ class NearEndDetour:
 
     The order inside a tick matters (Codex implementation review 1 P2-2, 2 P2-1): what the follower did in the last
     tick (a judgement, a tracker change, an arrival, the phase) is read first and closes or opens the windows; only
-    then do the pallet's shifts since that follower call -- every physics step's largest, a capture's included, kept
-    by the runner in ``state["near_end_step_shift_max_m"]``, and this tick's own -- go to the windows still open. The
-    steps never write the record itself, so one taken after a mission's end cannot touch what it handed over (2 P2-3).
+    then do the pallet's shifts since that follower call go to the windows. The steps' largest shifts are kept by the
+    runner in ``state["near_end_step_shift_max_m"]`` by the phase each step ran in ({"observe": .., "other": ..}).
+    - A window open after the update takes them all and this tick's own sample: nothing it watches ended in the call.
+    - The injection window closed in it takes none: its end (a judgement, a change, an arrival) came before the steps.
+    - The install window closed in it (the call left observe) takes the observe steps only: a capture's, run inside
+      that call before its approach transition (Codex implementation review 3).
+    The steps never write the record itself, so one taken after a mission's end cannot touch what it handed over (2 P2-3).
     """
 
     def __init__(self) -> None:
@@ -108,15 +112,11 @@ class NearEndDetour:
         self._trackers.append(tracker)
         return len(self._trackers) - 1
 
-    def _sample(self, pallet_shift_m: float) -> None:
-        """A pallet shift (its distance from where it started) for the windows open now."""
-        if self._record_obj is None:
+    def _give(self, window: str, value) -> None:
+        if value is None or self._record_obj is None:
             return
-        for window, open_ in (("injection", self.watch_open), ("install", self.install_open)):
-            if open_:
-                old = self._record_obj["pallet_shift_max_m"][window]
-                self._record_obj["pallet_shift_max_m"][window] = (
-                    float(pallet_shift_m) if old is None else max(old, float(pallet_shift_m)))
+        old = self._record_obj["pallet_shift_max_m"][window]
+        self._record_obj["pallet_shift_max_m"][window] = float(value) if old is None else max(old, float(value))
 
     def tick(self, t: float, phase: str, tracker, near_leg: bool, state: dict, pallet_shift_m: float, rear,
              can_arm: bool = True) -> None:
@@ -124,7 +124,8 @@ class NearEndDetour:
         ``pallet_shift_m`` the pallet's distance from where it started (the runner's pick-up check, run in observe
         too); ``rear`` the control rear-axle pose; ``can_arm`` false on a paused or warming tick."""
         self._sync_mission(state)
-        steps_max = state.pop("near_end_step_shift_max_m", None)
+        steps = state.pop("near_end_step_shift_max_m", None) or {}
+        install_was_open = self.install_open
         if (not self.decided and can_arm and phase == "observe" and near_leg and tracker is not None
                 and not tracker._arrived and not tracker._failed and not tracker._pending
                 and tracker.leg_index == len(tracker._leg_ends) - 1
@@ -144,7 +145,13 @@ class NearEndDetour:
         if self.watch_open:
             self._watch(t, phase, tracker, state, rear)
         self._install_window(t, phase, state)
-        self._sample(pallet_shift_m if steps_max is None else max(float(pallet_shift_m), float(steps_max)))
+        everything = max([float(pallet_shift_m), *(float(v) for v in steps.values())])
+        if self.watch_open:
+            self._give("injection", everything)
+        if self.install_open:
+            self._give("install", everything)
+        elif install_was_open:  # closed in the last call: its observe steps (a capture before the transition)
+            self._give("install", steps.get("observe"))
 
     def _watch(self, t: float, phase: str, tracker, state: dict, rear) -> None:
         record = self._record_obj

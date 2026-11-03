@@ -153,7 +153,7 @@ def test_a_sample_after_the_judgement_goes_to_the_install_window_not_the_injecti
     tracker.input_offset_events.append({"event": "cleared"})
     tracker._input_offset = None
     state["observe_end_stands"].append(stand(43.0, "installed"))
-    state["near_end_step_shift_max_m"] = 0.025  # the physics step right after the judging follower call
+    state["near_end_step_shift_max_m"] = {"observe": 0.025}  # the physics step right after the judging call
     detour.tick(43.0083, "observe", tracker_of([(1.0, -1, 0.0)]), True, state, 0.0, tracker._poses[-1])
     record = state["near_end_injections"]
     assert record["windows"]["injection"] == [35.0, 43.0]
@@ -165,10 +165,10 @@ def test_a_capture_s_physics_steps_reach_the_open_window():
     detour, state = nd.NearEndDetour(), {"observe_end_stands": [stand(3.0, "installed")]}
     detour.decided = True
     detour.tick(3.1, "observe", None, False, state, 0.0, np.zeros(3))
-    state["near_end_step_shift_max_m"] = 0.025  # the steps between the ticks: 0 -> 25 -> 0 mm, its largest kept
+    state["near_end_step_shift_max_m"] = {"observe": 0.025}  # the steps between the ticks: 0 -> 25 -> 0 mm
     detour.tick(3.3, "observe", None, False, state, 0.0, np.zeros(3))
     assert "near_end_step_shift_max_m" not in state  # taken by the tick
-    state["near_end_step_shift_max_m"] = 0.4  # steps after the approach transition (the follower call of 3.3)
+    state["near_end_step_shift_max_m"] = {"other": 0.4}  # steps after the approach transition (the call of 3.3)
     detour.tick(3.5, "approach", None, False, state, 0.0, np.zeros(3))
     record = state["near_end_injections"]
     assert record["pallet_shift_max_m"]["install"] == 0.025 and record["windows"]["install"] == [3.0, 3.5]
@@ -230,7 +230,7 @@ def test_steps_after_a_mission_end_never_touch_the_handed_over_record():
     handed = core.state["near_end_injections"]
     before = repr(handed)
     baseline.restore(core)
-    core.state["near_end_step_shift_max_m"] = 0.025  # the runner's step write after the end
+    core.state["near_end_step_shift_max_m"] = {"other": 0.025}  # the runner's step write after the end
     detour.tick(2.0, "observe", None, False, core.state, 0.03, np.zeros(3))
     assert repr(handed) == before
 
@@ -250,5 +250,18 @@ def test_the_runner_keeps_the_step_shift_behind_the_option_and_watched():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
     head = source.index('            world.step(render=render or frame_due or far_due)')
     block = source[head:head + 900]
-    assert "if near_end_detour_ is not None:" in block and 'state["near_end_step_shift_max_m"] = max(' in block
+    assert "if near_end_detour_ is not None:" in block
+    assert 'steps_shift_ = state.setdefault("near_end_step_shift_max_m", {})' in block
     assert '*(("near_end_step_shift_max_m",) if near_end_detour_ is not None else ())' in source
+
+
+def test_a_capture_and_its_approach_transition_in_one_call_keep_the_capture_s_shift():
+    # Codex implementation review 3: the install window open, a capture inside the call 0 -> 25 -> 0 mm, adopted and
+    # moved on to approach in the same call -- the next tick still gives the capture's observe steps to the window
+    detour, state = nd.NearEndDetour(), {"observe_end_stands": [stand(3.0, "installed")]}
+    detour.decided = True
+    detour.tick(3.1, "observe", None, False, state, 0.0, np.zeros(3))
+    state["near_end_step_shift_max_m"] = {"observe": 0.025, "other": 0.3}  # the capture, then steps after approach
+    detour.tick(3.2, "approach", None, False, state, 0.1, np.zeros(3))
+    record = state["near_end_injections"]
+    assert record["pallet_shift_max_m"]["install"] == 0.025 and record["windows"]["install"] == [3.0, 3.2]
