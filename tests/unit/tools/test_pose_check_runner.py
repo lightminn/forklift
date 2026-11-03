@@ -101,3 +101,29 @@ def test_a_setup_recorded_before_the_check_replays_with_it_off():
     assert boundary_replay.SETUP_NAMES_ADDED["pose_box"] == ("pose_check", "off", {"rt": None, "sink": None,
                                                                                   "end": None})
     assert 'if "pose_box" not in _bound:' in _source()
+
+
+def test_the_end_tick_refuses_this_ticks_submit_and_resume_on_copies():
+    # Codex 2b P2-2: the boundary alone left an applied submit answered ack
+    src = _source()
+    at = src.index('if reason_.startswith("pose_ending:"):')
+    assert 'dict(r_, accepted=False, reason="pose_ended")' in src[at:at + 600]
+    assert src.index("live.end_mission(t_,", at) > at
+
+
+def test_the_rear_check_walks_the_straight_reverses_own_bundle():
+    # Codex 2b P2-3: kappa 0 alone passed where the permit's +-0.05 arcs stopped
+    from forklift_core.safety.teleop_drive import TeleopLimits, bundle
+
+    assert bundle(0.0, 0.0, TeleopLimits().curvature_margin_inv_m) == [-0.05, 0.0, 0.05]
+    src = _source()
+    at = src.index("def pose_rear_blocked(rt_)")
+    assert "for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):" in src[at:at + 2500]
+
+
+def test_the_base_link_from_the_rear_axle():
+    import math
+
+    import run_transport
+
+    assert run_transport.base_from_rear_axle((1.0, 2.0, math.pi / 2), 0.34) == pytest.approx((1.0, 2.34, math.pi / 2))

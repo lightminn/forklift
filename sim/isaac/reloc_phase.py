@@ -232,7 +232,9 @@ def _run(inputs: RelocInputs) -> dict:
                       "stage_s": None if stage_s is None else round(stage_s, 3),
                       "top": _candidate(match.candidates[0]) if match.candidates else None,
                       # plan 7 F1: every candidate of the matcher (not only those shown), for B-P2d's record
-                      "candidates": [_candidate(c) for c in match.candidates], "search": search}
+                      "candidates": [_candidate(c) for c in match.candidates],
+                      # the unconfirmed position check's search group, only with the check (Codex 2b P2-5)
+                      **({} if inputs.sink is None else {"search": search})}
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 # a STOP (and maybe a retry since) came while it matched: the result is its old generation's
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
@@ -305,7 +307,8 @@ def _run(inputs: RelocInputs) -> dict:
     est = relocalizer.estimate
     out["estimate"] = list(est.base)
     out["source"] = est.source
-    _hand_on(inputs, out, relocalizer.searches, scan_sets)
+    if inputs.sink is not None:  # only with the check: a run without it records what it did (Codex 2b P2-5)
+        _hand_on(inputs, out, relocalizer.searches, scan_sets)
     R.write_reloc_pose(inputs.epoch_dir, est, {"attempts": out["attempts"]})
     if console is not None:
         console.localizing()

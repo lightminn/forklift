@@ -3286,6 +3286,12 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
     return record
 
 
+def base_from_rear_axle(rear, offset_m: float) -> tuple:
+    """The base link from a rear-axle pose (the base is ``offset_m`` ahead of the rear axle)."""
+    x, y, yaw = (float(v) for v in rear)
+    return (x + offset_m * math.cos(yaw), y + offset_m * math.sin(yaw), yaw)
+
+
 def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dict, scan_pattern):
     """The unconfirmed position check's runtime (docs/plans/2026-11-02-unconfirmed-runner.md 3.3): its worker process on
     the survey grid with B-P1b's frozen settings, the start relocalization's estimate and chosen search group, the
@@ -8799,27 +8805,39 @@ def drive(S, isaac) -> None:
             from forklift_core.localization import pose_check as P
             from forklift_core.safety.pallet_permit import first_contact
 
+            from forklift_core.safety.teleop_drive import bundle
+
             layer_ = obstacle["layer"]
             length_ = P.D_MIN + rt_.pc.stop_m
             step_ = layer_.permission.config.step_m
             fp_, own_ = layer_.footprints(None, -1)
             odom_rear_ = tuple(float(v) for v in slam["odom_rear"])
             zones_ = rt_.rear_zones(live_pallet_zones())
-            if zones_ and first_contact(odom_rear_, 0.0, -1, length_ + step_, step_, fp_, zones_)[0] < length_:
-                return True
             map_rear_ = tuple(float(v) for v in slam_rear(world.current_time - initial_time))
             snap_ = layer_.snapshot
             if snap_ is None:
                 return True
-            path_ = arc_poses(map_rear_, 0.0, -1, length_ + step_, step_)[0]
-            check_ = layer_.permission.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
-                                                  lookahead_m=length_ + step_)
-            return check_.verified_m < length_
+            # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
+            for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
+                if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_, zones_)[0] < length_:
+                    return True
+                path_ = arc_poses(map_rear_, kappa_, -1, length_ + step_, step_)[0]
+                check_ = layer_.permission.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
+                                                      lookahead_m=length_ + step_)
+                if check_.verified_m < length_:
+                    return True
+            return False
 
         def live_failed(t_, reason_, ticked_, stepped__, applied_):
             """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
             (the wheels zeroed, the lift held), then what the tick had not done yet -- its output and publish with a
             zero candidate, its physics step -- exactly once."""
+            if reason_.startswith("pose_ending:"):
+                # plan 3.3 (Codex 2b P2-2): a submit or resume this tick applied is answered refused -- on copies, the
+                # mission log keeps what happened
+                applied_ = [dict(r_, accepted=False, reason="pose_ended")
+                            if r_.get("accepted") and r_.get("command") in ("submit", "resume") else r_
+                            for r_ in applied_]
             failure_ = {"time_s": float(t_), "phase": ms.phase, "reason": reason_, "class": classify_failure(reason_),
                         "where": traceback.format_exc().strip().splitlines()[-3:]}
             state.setdefault("live_failures", []).append(failure_)
@@ -9875,6 +9893,13 @@ def drive(S, isaac) -> None:
                             live_state["rear"] = tuple(float(v) for v in rear)
                     if pose_box["rt"] is not None:
                         pose_checkpoint(t)  # plan 3.3 (3): the correction this tick ends with, before the output
+                        a_ = live.arbiter
+                        off_ = abs(args.rear_axle_offset_m)
+                        pose_box["rt"].note_tick(  # plan 3.4: the judgement's record (simulation truth, decides nothing)
+                            t, applied=tuple(float(v) for v in base_from_rear_axle(rear, off_)),
+                            truth=tuple(float(v) for v in base_from_rear_axle(truth_rear, off_)),
+                            open_=(a_.pose or {}).get("status") == "confirmed"
+                            and (a_.mode == "AUTO" or (a_.mode == "TELEOP" and a_.armed)))
                     live_safety_ = core.safety_state(t)
                     out_ = live.tick_end(
                         t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),

@@ -163,7 +163,8 @@ def test_no_live_decision_rests_on_pocket_phase_names_any_more():
 def test_an_unconfirmed_position_end_ends_the_session():
     # docs/plans/2026-11-02-unconfirmed-runner.md 2.4
     for reason in ("pose_rear_blocked", "pose_twin_preferred", "pose_out_of_set", "pose_slam_disagree",
-                   "pose_revoked:int", "pose_revoked:still", "pose_revoked:rematch", "pose_worker_dead: exit 1"):
+                   "pose_revoked:int", "pose_revoked:still", "pose_revoked:rematch", "pose_worker_dead: exit 1",
+                   "pose_start_failed"):
         assert classify(reason, strict=True) == SESSION, reason
     # the tick it ended in: a mission's failure there (live_failed stops and publishes), the session's at the next top
     assert classify("pose_ending:pose_revoked:int", strict=True) == "mission"

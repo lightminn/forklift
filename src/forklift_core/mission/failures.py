@@ -34,6 +34,7 @@ PREFIXES = {
     # the unconfirmed position check ended (docs/plans/2026-11-02-unconfirmed-runner.md 2.4): the session ends
     "pose_rear_blocked": SESSION, "pose_twin_preferred": SESSION, "pose_out_of_set": SESSION,
     "pose_slam_disagree": SESSION, "pose_revoked": SESSION, "pose_worker_dead": SESSION,
+    "pose_start_failed": SESSION,  # the start check could not build every hypothesis in time: no reverse
     # the tick the check ended in: that tick's mission ends (live_failed), the session ends once the truck stands
     "pose_ending:": MISSION,
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,

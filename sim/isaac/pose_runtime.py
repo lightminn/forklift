@@ -157,6 +157,19 @@ class ProcessWorker:
 
 
 # --- the runtime ------------------------------------------------------------------------------------------------------
+def _tally() -> dict:
+    return {"success": 0, "imprecise": 0, "wrong": 0, "max_m": 0.0, "max_rad": 0.0}
+
+
+def _classify(pose, truth) -> tuple:
+    """B-P2 4.0 on the base link: success <= 0.10 m and <= 0.05 rad, wrong > 0.30 m or > 0.10 rad, else imprecise."""
+    m = math.hypot(pose[0] - truth[0], pose[1] - truth[1])
+    rad = abs(math.atan2(math.sin(pose[2] - truth[2]), math.cos(pose[2] - truth[2])))
+    if m <= 0.10 and rad <= 0.05:
+        return "success", m, rad
+    if m > 0.30 or rad > 0.10:
+        return "wrong", m, rad
+    return "imprecise", m, rad
 @dataclass
 class _Scan:
     stamp: float
@@ -177,6 +190,7 @@ class _Rematch:
     points: object = None
     o_scan: tuple | None = None
     attempts: list = field(default_factory=list)
+    stamps: list = field(default_factory=list)  # each attempt's scan stamps
 
 
 class PoseRuntime:
@@ -200,6 +214,11 @@ class PoseRuntime:
         self.rematches: list = []
         self._zones_cache = None
         self.rear = None  # None: not asked; "pending"; {"t", "blocked"}: design 3's start check, once
+        self.start_deadline = None  # the start check's absolute deadline, from the first tracking tick (plan 3.2)
+        self.ticks = {"all": _tally(), "open": _tally()}  # plan 3.4: every control tick's class (simulation truth)
+        self.samples: list = []  # 10 Hz: (t, status, open, applied, truth)
+        self.evidence: list = []  # every C_int's evidence against the truth (design 4)
+        self._seen_events = 0
 
     # --- inputs --------------------------------------------------------------------------------------------------------
     def on_scan(self, stamp: float, ranges, o_base, standing: bool) -> None:
@@ -232,6 +251,12 @@ class PoseRuntime:
         if C is None:  # no SLAM correction yet: a scan before it is not the start's (plan 2.2)
             self.buf.clear()
             return self.pc.update(t, o, (0.0, 0.0, 0.0), standing=standing, deadman=deadman)
+        if self.stage == "await_start" and self.start_deadline is None:
+            self.start_deadline = self.clock() + self.deadline_s
+        if self.stage == "await_start" and self.clock() > self.start_deadline:
+            # Codex 2b P2-4: the scans' wait counts; past it no start check can be had (design 1.4: no reverse)
+            self.stage = "started"
+            self.pc.end(t, "pose_start_failed")
         if self.stage == "await_start":
             got = self._still_set()
             if got is not None:
@@ -240,7 +265,7 @@ class PoseRuntime:
                 self.start = {"o_scan": list(o_scan), "b_scan": list(b_scan)}
                 self.start_job = self.worker.submit("start_check", {
                     "points": pts, "b_scan": b_scan, "pool": self.pool, "gen_points": self.gen_points,
-                    "o0": self.o0, "o_scan": o_scan, "deadline_at": self.clock() + self.deadline_s})
+                    "o0": self.o0, "o_scan": o_scan, "deadline_at": self.start_deadline})
                 self.stage = "start_running"
                 self.start["submitted_t"] = t
         view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active, near=near)
@@ -262,6 +287,7 @@ class PoseRuntime:
                 got = self._still_set()
                 if got is not None:
                     self.rm.points, self.rm.o_scan = got
+                    self.rm.stamps.append([s.stamp for s in self.buf])
                     if self.rm.relocalizer.deadline_at is None:
                         self.rm.relocalizer.start()
                     self.rm.job = self.worker.submit("relocalize", {
@@ -276,10 +302,12 @@ class PoseRuntime:
             self.start["result_t"] = t
             o_scan = tuple(self.start["o_scan"])
             self.o_s = o_scan
-            if "error" in result:
+            statuses = result.get("statuses") or {}
+            if "error" in result or any(v != "ok" for v in statuses.values()):
+                # Codex 2b P1: without every hypothesis the union zones miss pallets -- no reverse can be opened
+                # (design 1.4), so the session ends
                 self.hyps_s = []
-                self.pc.start(t, confirmed=False, r_scan=tuple(self.start["b_scan"]), o_scan=o_scan, C=C, o_now=o,
-                              reasons=("worker_error",))
+                self.pc.end(t, "pose_start_failed")
                 return
             self.hyps_s = [(tuple(q), src) for q, src in result["hyps"]]
             r_scan = tuple(result["base"]) if result["base"] is not None else tuple(self.start["b_scan"])
@@ -320,7 +348,8 @@ class PoseRuntime:
     def _finish_rematch(self, t, outcome, g, o_scan, o, C, epoch, control_gen, *, why=None) -> None:
         rm, self.rm = self.rm, None
         self.rematches.append({"t": t, "phase": rm.phase, "outcome": outcome, "g": None if g is None else list(g),
-                               "attempts": rm.attempts, "why": why})
+                               "attempts": rm.attempts, "why": why, "o_begin": list(rm.o_begin),
+                               "o_scan": None if o_scan is None else list(o_scan), "scan_stamps": rm.stamps})
         self.buf.clear()
         self.pc.rematch_result(t, outcome, g, tuple(o_scan), o_now=o, C=C if C is not None else (0.0, 0.0, 0.0),
                                epoch=epoch, control_gen=control_gen)
@@ -328,9 +357,18 @@ class PoseRuntime:
     def _check_worker(self, t) -> None:
         if self.worker.alive():
             return
+        try:
+            self.worker.close()  # Codex 2b P3: the dead one's queues go too
+        except Exception:  # noqa: BLE001, S110 -- a dead worker's close may fail; it is replaced either way
+            pass
         if self.worker_factory is not None and self.restarts < 1:
             self.restarts += 1
-            self.worker = self.worker_factory()
+            try:
+                self.worker = self.worker_factory()
+            except Exception as exc:  # noqa: BLE001 -- Codex 2b P2-6: a failed restart ends the check too
+                self.pc.events.append({"t": t, "kind": "worker_restart_failed", "error": repr(exc)})
+                self.pc.end(t, "pose_worker_dead")
+                return
             if self.stage == "start_running":  # its job went with the worker: the start check runs again
                 self.stage, self.start_job = "await_start", None
             if self.rm is not None:
@@ -376,9 +414,28 @@ class PoseRuntime:
         hyps = [T.moved(self.b, self.o0, self.o_s)] + [q for q, _ in self.hyps_s]
         return T.grown_zones(T.odom_zones(list(map_zones), hyps, self.o_s), upper, self.bounds)
 
+    def note_tick(self, t: float, *, applied, truth, open_: bool) -> None:
+        """Plan 3.4: this control tick's applied pose against the simulation's truth (base link, B-P2 4.0 classes),
+        counted for every tick and for the ticks with forward or mission permission open; 10 Hz samples; and each
+        new C_int's evidence against the truth (design 4). The judgement only -- nothing decides on it."""
+        cls, m, rad = _classify(applied, truth)
+        for key in ("all", "open") if open_ else ("all",):
+            tally = self.ticks[key]
+            tally[cls] += 1
+            tally["max_m"], tally["max_rad"] = max(tally["max_m"], m), max(tally["max_rad"], rad)
+        if not self.samples or t - self.samples[-1][0] >= 0.1:
+            self.samples.append([t, self.pc.status, bool(open_), list(applied), list(truth)])
+        for e in self.pc.events[self._seen_events:]:
+            if e["kind"] in ("slam_agreement", "rematch_agreement") and e.get("ok"):
+                ecls, em, erad = _classify(e["evidence"], truth)
+                self.evidence.append({"t": t, "kind": e["kind"], "class": ecls, "m": em, "rad": erad})
+        self._seen_events = len(self.pc.events)
+
     def record(self) -> dict:
         return {"start": self.start, "events": self.pc.events, "rematches": self.rematches, "rear": self.rear,
-                "hypotheses": len(self.hyps_s), "status": self.pc.status, "worker_restarts": self.restarts}
+                "hyps": [[list(q), src] for q, src in self.hyps_s], "status": self.pc.status,
+                "worker_restarts": self.restarts, "ticks": self.ticks, "samples": self.samples,
+                "evidence": self.evidence}
 
     def close(self) -> None:
         self.worker.close()

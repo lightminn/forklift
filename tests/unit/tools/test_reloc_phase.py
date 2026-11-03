@@ -628,3 +628,13 @@ def test_a_placed_start_hands_on_its_search_groups_attempts(tmp_path):
     console = FakeConsole(_place_then(lambda r: r.confirm_place(r.generation, r.preview_id)))
     out = P.run(_symmetric(tmp_path, console, sink={}))
     assert out["status"] == "chosen" and out["pose_pool"] and out["pose_gen_points"]["attempt"] == 2
+
+
+def test_without_the_check_the_record_is_as_before(tmp_path):
+    # Codex 2b P2-5: --start-relocalize with --pose-check off records exactly what it did
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base))
+    assert not {"pose_search", "pose_pool", "pose_gen_points"} & set(out)
+    assert all("search" not in a for a in out["attempts"])

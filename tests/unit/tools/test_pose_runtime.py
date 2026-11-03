@@ -307,3 +307,76 @@ def test_a_confirmed_start_needs_no_rear_check():
     grid, w, rt = _started(True, b)
     _tick(rt, b, compose(b, invert(b)))
     assert not rt.rear_pending()
+
+
+# --- Codex piece 2b review ---
+def _answer_start(w, b, **fields):
+    w.answer({"confirmed": False, "base": list(b), "reasons": ["competitor"], "hyps": [], "statuses":
+              {"generation": "ok", "live": "ok"}, "wall_s": 1.0, **fields})
+
+
+@pytest.mark.parametrize("fields", [{"error": "RuntimeError: x"}, {"statuses": {"generation": "timeout", "live": "ok"}},
+                                    {"statuses": {"generation": "ok", "live": "overflow"}}])
+def test_a_start_check_without_a_whole_hypothesis_set_ends_instead_of_opening_the_reverse(fields):
+    # Codex 2b P1: with the hypotheses not all built, the union zones miss pallets -- no reverse (design 1.4)
+    grid = TG._grid(*TG.ROOM)
+    b = (2.42, 1.7, 0.6)
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)))
+    _tick(rt, b)
+    _feed(rt, grid, b, b)
+    _tick(rt, b)
+    _answer_start(w, b, **fields)
+    view = _tick(rt, b)
+    assert view.status == "ended:pose_start_failed" and not view.drive_ready
+
+
+def test_the_start_checks_deadline_runs_from_the_first_tracking_tick_and_survives_a_restart():
+    # Codex 2b P2-4: the scans' wait counts, and a new worker keeps the first deadline
+    grid = TG._grid(*TG.ROOM)
+    b = (2.42, 1.7, 0.6)
+    now = {"t": 100.0}
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)), clock=lambda: now["t"])
+    _tick(rt, b)  # tracking from here: the deadline is 130
+    now["t"] = 120.0
+    _feed(rt, grid, b, b)
+    _tick(rt, b)
+    assert w.jobs[-1][2]["deadline_at"] == 130.0
+    now["t"] = 131.0
+    rt.stage, rt.start_job = "await_start", None  # as after a worker restart: the job is gone
+    assert _tick(rt, b).status == "ended:pose_start_failed"
+
+
+def test_a_worker_that_cannot_be_started_again_ends_the_check_and_the_old_one_is_closed():
+    b = (2.42, 1.7, 0.6)
+
+    class Dead(Scripted):
+        closed = False
+
+        def alive(self):
+            return False
+
+        def close(self):
+            self.closed = True
+
+    old = Dead()
+
+    def refuse():
+        raise OSError("spawn refused")
+
+    rt = _rt(old, b=b, gen_points=np.zeros((40, 2)), worker_factory=refuse)
+    assert _tick(rt, b).status == "ended:pose_worker_dead" and old.closed
+
+
+def test_the_record_holds_what_the_judgement_needs():
+    # Codex 2b P3-8 (plan 3.4): the hypotheses, the re-matches' scans and odometry, every tick's class
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b, hyps=[((8.42, 1.7, 0.6), "shift x+1")])
+    _tick(rt, b)
+    rt.note_tick(0.0, applied=b, truth=(2.42 + 0.35, 1.7, 0.6), open_=True)
+    rt.note_tick(0.01, applied=b, truth=(2.42 + 0.05, 1.7, 0.6), open_=False)
+    rec = rt.record()
+    assert rec["hyps"] == [[[8.42, 1.7, 0.6], "shift x+1"]]
+    assert rec["ticks"]["open"]["wrong"] == 1 and rec["ticks"]["all"]["success"] == 1
+    assert rec["ticks"]["open"]["max_m"] == pytest.approx(0.35)
