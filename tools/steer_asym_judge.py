@@ -175,7 +175,7 @@ def scalar(v: dict) -> dict:
 class Batch:
     def __init__(self, batch: Path):
         self.runs, self.broken = {}, {}
-        for folder in sorted((batch / "runs").iterdir()):
+        for folder in sorted(p for p in (batch / "runs").iterdir() if p.is_dir()):  # not the stall-stack files
             try:
                 self.runs[folder.name] = Run(folder)
             except Exception as exc:  # noqa: BLE001 -- a run that did not finish is reported, not fatal
