@@ -30,13 +30,14 @@ def final_leg(tracker) -> tuple[int, float, int]:
     return start, float(tracker._distance[-1] - tracker._distance[start]), int(tracker._directions[-1])
 
 
-def curvature_sign(tracker, start: int) -> float:
-    """s: the sign of the mean curvature over the final leg's samples within R1_M of the goal (+1 at zero)."""
+def curvature_sign(tracker, start: int) -> tuple[float, float]:
+    """s, the sign of the mean curvature over the final leg's samples within R1_M of the goal (+1 at zero), and that
+    mean."""
     distance = np.asarray(tracker._distance, dtype=float)
     index = np.arange(len(distance))
     mask = (distance >= distance[-1] - R1_M) & (index >= start)
     mean = float(np.mean(np.asarray(tracker._curvatures, dtype=float)[mask]))
-    return 1.0 if mean >= 0.0 else -1.0
+    return (1.0 if mean >= 0.0 else -1.0), mean
 
 
 def decide(tracker) -> dict:
@@ -47,8 +48,9 @@ def decide(tracker) -> dict:
         return {**decision, "event": "not_armed", "reason": "forward_final_leg"}
     if length < R1_M:
         return {**decision, "event": "not_armed", "reason": "final_leg_short"}
-    s = curvature_sign(tracker, start)
-    return {**decision, "event": "armed", "s": s, "dx_left_m": -D_M * s, "dpsi_rad": PSI_RAD * s}
+    s, mean = curvature_sign(tracker, start)
+    return {**decision, "event": "armed", "kappa_mean_inv_m": mean, "s": s, "dx_left_m": -D_M * s,
+            "dpsi_rad": PSI_RAD * s}
 
 
 def path_distance_m(tracker, xy) -> float:
@@ -60,102 +62,143 @@ def path_distance_m(tracker, xy) -> float:
 
 
 class NearEndDetour:
-    """One run's injection: the decision (once), the watch on the armed tracker and the pallet-shift windows."""
+    """One run's injection: the decision (once a run), and per mission the watch on the armed tracker and the
+    pallet-shift windows. A window's end None means still open where the record ends (the run or mission ended).
+
+    The order inside a tick matters (Codex implementation review 1 P2-2): the watch closes on the judgement first,
+    then the install window opens or closes, and only then is the tick's pallet sample given to the windows still
+    open. ``sample`` also takes every physics step a capture runs between ticks (P2-1)."""
 
     def __init__(self) -> None:
-        self.decided = False
-        self.tracker = None  # the armed tracker (by identity); None before and when not armed
-        self.watch_open = False  # until the stand's first C2 judgement, an arrival or the observe phase's end
+        self.decided = False  # once a run, whatever the missions
+        self._reset_mission()
+
+    def _reset_mission(self) -> None:
+        self.tracker = None  # the armed tracker (by identity); None before, when not armed and after the mission
+        self.watch_open = False  # until the stand's first C2 judgement, a tracker change, a failure, an arrival or
+        # the observe phase's end
         self.restored = False
-        self.judged_at = None
         self.install_open = False
         self._install_seen = False
         self._seen_events = 0
+        self._record_obj = None
+        self._trackers = []  # the observe trackers seen while watching, by identity (their ordinal is recorded)
 
     def _record(self, state: dict) -> dict:
-        return state.setdefault("near_end_injections", {
-            "events": [], "pallet_shift_max_m": {"injection": None, "install": None},
-            "windows": {"injection": None, "install": None}, "max_path_distance_m": None,
-        })
+        if self._record_obj is None:
+            self._record_obj = state.setdefault("near_end_injections", {
+                "events": [], "pallet_shift_max_m": {"injection": None, "install": None},
+                "windows": {"injection": None, "install": None}, "max_path_distance_m": None,
+            })
+        return self._record_obj
 
-    @staticmethod
-    def _raise(record: dict, window: str, value: float) -> None:
-        old = record["pallet_shift_max_m"][window]
-        record["pallet_shift_max_m"][window] = value if old is None else max(old, value)
+    def _sync_mission(self, state: dict) -> None:
+        """A mission's end puts its keys back (MissionBaseline.restore drops near_end_injections): the watch and the
+        windows were that mission's (P2-3). The run's one decision stays spent."""
+        if self._record_obj is not None and state.get("near_end_injections") is not self._record_obj:
+            self._reset_mission()
 
-    def tick(self, t: float, phase: str, tracker, near_leg: bool, state: dict, pallet_shift_m: float, rear) -> None:
+    def _ordinal(self, tracker) -> int:
+        for i, seen in enumerate(self._trackers):
+            if seen is tracker:
+                return i
+        self._trackers.append(tracker)
+        return len(self._trackers) - 1
+
+    def sample(self, pallet_shift_m: float) -> None:
+        """A pallet sample (its distance from where it started) for the windows open now."""
+        if self._record_obj is None:
+            return
+        for window, open_ in (("injection", self.watch_open), ("install", self.install_open)):
+            if open_:
+                old = self._record_obj["pallet_shift_max_m"][window]
+                self._record_obj["pallet_shift_max_m"][window] = (
+                    float(pallet_shift_m) if old is None else max(old, float(pallet_shift_m)))
+
+    def tick(self, t: float, phase: str, tracker, near_leg: bool, state: dict, pallet_shift_m: float, rear,
+             can_arm: bool = True) -> None:
         """Ahead of the follower: decide once, then watch. ``near_leg`` is ``core.near_reobserve_leg()``;
         ``pallet_shift_m`` the pallet's distance from where it started (the runner's pick-up check, run in observe
-        too); ``rear`` the control rear-axle pose."""
-        if not self.decided:
-            if (phase == "observe" and near_leg and tracker is not None and not tracker._arrived
-                    and not tracker._failed and not tracker._pending
-                    and tracker.leg_index == len(tracker._leg_ends) - 1
-                    and tracker.remaining_to_goal_m() <= R1_M):
-                self.decided = True
-                decision = decide(tracker)
-                record = self._record(state)
-                record["events"].append({**decision, "time_s": float(t),
-                                         "remaining_m": float(tracker.remaining_to_goal_m()),
-                                         "progress_m": float(tracker.progress_m()), "segment": int(tracker._segment),
-                                         "leg_index": int(tracker.leg_index),
-                                         "tracker_sha256": _digest(tracker)})
-                if decision["event"] == "armed":
-                    tracker.set_input_offset(decision["dx_left_m"], decision["dpsi_rad"], R2_M)
-                    self.tracker, self.watch_open, self._seen_events = tracker, True, len(tracker.input_offset_events)
-                    record["windows"]["injection"] = [float(t), None]
-                    self._raise(record, "injection", float(pallet_shift_m))
-        self._install_window(t, phase, state, pallet_shift_m)
-        if self.tracker is None or (not self.watch_open and not self.tracker.input_offset_active()):
-            return  # not armed, or the watch closed with the offset gone
-        record = self._record(state)
+        too); ``rear`` the control rear-axle pose; ``can_arm`` false on a paused or warming tick."""
+        self._sync_mission(state)
+        if (not self.decided and can_arm and phase == "observe" and near_leg and tracker is not None
+                and not tracker._arrived and not tracker._failed and not tracker._pending
+                and tracker.leg_index == len(tracker._leg_ends) - 1
+                and tracker.remaining_to_goal_m() <= R1_M):
+            self.decided = True
+            decision = decide(tracker)
+            record = self._record(state)
+            record["events"].append({**decision, "time_s": float(t),
+                                     "remaining_m": float(tracker.remaining_to_goal_m()),
+                                     "progress_m": float(tracker.progress_m()), "segment": int(tracker._segment),
+                                     "leg_index": int(tracker.leg_index), "tracker_ordinal": self._ordinal(tracker),
+                                     "tracker_sha256": _digest(tracker)})
+            if decision["event"] == "armed":
+                tracker.set_input_offset(decision["dx_left_m"], decision["dpsi_rad"], R2_M)
+                self.tracker, self.watch_open, self._seen_events = tracker, True, len(tracker.input_offset_events)
+                record["windows"]["injection"] = [float(t), None]
+        if self.watch_open:
+            self._watch(t, phase, tracker, state, rear)
+        self._install_window(t, phase, state)
+        self.sample(pallet_shift_m)
+
+    def _watch(self, t: float, phase: str, tracker, state: dict, rear) -> None:
+        record = self._record_obj
         # the armed tracker's own events: its clear, and an arrival under the offset (never expected)
         for event in self.tracker.input_offset_events[self._seen_events:]:
             record["events"].append({**event, "event": "restored" if event["event"] == "cleared" else event["event"],
                                      "time_s": float(t)})
             self.restored = self.restored or event["event"] == "cleared"
         self._seen_events = len(self.tracker.input_offset_events)
-        if self.tracker.input_offset_active():
+        stands = [r for r in state.get("observe_end_stands", ()) if r.get("kind") == "near"
+                  and r.get("time_s", -math.inf) >= record["windows"]["injection"][0]]
+        closed = None
+        if stands:
+            # the stand's first C2 judgement closes the watch (C2's own install replaces the tracker after it, so it
+            # is never counted as a supersede -- plan 2 call order)
+            closed = float(stands[0]["time_s"])
+            record["events"].append({"event": "judged", "time_s": closed, "outcome": stands[0].get("outcome"),
+                                     "restored_before": self.restored})
+        elif tracker is not self.tracker:
+            closed = float(t)
+            record["events"].append({"event": "superseded_after_restore" if self.restored else "superseded",
+                                     "time_s": closed, "phase": phase,
+                                     "tracker_ordinal": None if tracker is None else self._ordinal(tracker)})
+        elif self.tracker._failed:
+            closed = float(t)
+            record["events"].append({"event": "failed", "failure": self.tracker._failure, "time_s": closed,
+                                     "under_offset": self.tracker.input_offset_active()})
+        elif phase != "observe" or self.tracker._arrived:
+            closed = float(t)
+            record["events"].append({"event": "arrived" if self.tracker._arrived else "left_observe",
+                                     "time_s": closed, "phase": phase})
+        if closed is not None:
+            self.watch_open = False
+            record["windows"]["injection"][1] = closed
+        elif self.tracker.input_offset_active():
             distance = path_distance_m(self.tracker, rear[:2])
             old = record["max_path_distance_m"]
             record["max_path_distance_m"] = distance if old is None else max(old, distance)
-        stands = [r for r in state.get("observe_end_stands", ()) if r.get("kind") == "near"
-                  and r.get("time_s", -math.inf) >= record["events"][0]["time_s"]]
-        if self.watch_open:
-            self._raise(record, "injection", float(pallet_shift_m))
-            if stands:
-                # the stand's first C2 judgement closes the watch (C2's own install replaces the tracker after it,
-                # so it is never counted as a supersede -- plan 2 call order)
-                self.watch_open, self.judged_at = False, float(stands[0]["time_s"])
-                record["windows"]["injection"][1] = self.judged_at
-                record["events"].append({"event": "judged", "time_s": self.judged_at,
-                                         "outcome": stands[0].get("outcome"), "restored_before": self.restored})
-            elif tracker is not self.tracker:
-                self.watch_open = False
-                record["windows"]["injection"][1] = float(t)
-                record["events"].append({"event": "superseded_after_restore" if self.restored else "superseded",
-                                         "time_s": float(t), "phase": phase})
-            elif phase != "observe" or self.tracker._arrived:
-                self.watch_open = False
-                record["windows"]["injection"][1] = float(t)
-                record["events"].append({"event": "arrived" if self.tracker._arrived else "left_observe",
-                                         "time_s": float(t), "phase": phase})
 
-    def _install_window(self, t: float, phase: str, state: dict, pallet_shift_m: float) -> None:
-        """Condition 4's pallet window, armed or not: from the run's first C2 install to the observe phase's end (the
-        runner's own pick-up check runs in approach and insert only)."""
-        if not self.install_open and (self._install_seen or not any(
-                r.get("kind") == "near" and r.get("outcome") == "installed" for r in state.get("observe_end_stands", ()))):
+    def _install_window(self, t: float, phase: str, state: dict) -> None:
+        """Condition 4's pallet window, armed or not: from the mission's first C2 install to the observe phase's end
+        (the runner's own pick-up check runs in approach and insert only)."""
+        if self.install_open:
+            if phase != "observe":
+                self.install_open = False
+                self._record_obj["windows"]["install"][1] = float(t)
             return
-        record = self._record(state)
-        if not self.install_open:
-            first = next(r for r in state["observe_end_stands"] if r.get("kind") == "near" and r.get("outcome") == "installed")
-            record["windows"]["install"] = [float(first["time_s"]), None]
-            self.install_open = self._install_seen = True
-        self._raise(record, "install", float(pallet_shift_m))
-        if phase != "observe":
+        if self._install_seen:
+            return
+        first = next((r for r in state.get("observe_end_stands", ())
+                      if r.get("kind") == "near" and r.get("outcome") == "installed"), None)
+        if first is None:
+            return
+        self._record(state)["windows"]["install"] = [float(first["time_s"]), None]
+        self.install_open = self._install_seen = True
+        if phase != "observe":  # the mission left observe within this tick: nothing of the window is left to sample
             self.install_open = False
-            record["windows"]["install"][1] = float(t)
+            self._record_obj["windows"]["install"][1] = float(t)
 
 
 def _digest(tracker) -> str:

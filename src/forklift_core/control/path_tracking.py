@@ -536,6 +536,7 @@ class RearAxlePathTracker:
                 # cleared before this update runs: its projection, end judgement and _last_eval use the pose as given
                 self._input_offset = None
                 self.input_offset_events.append({"event": "cleared", "progress_m": float(self._progress),
+                                                 "segment": int(self._segment),
                                                  "remaining_m": float(self._distance[-1] - self._progress),
                                                  "projected_remaining_m": remaining})
             else:

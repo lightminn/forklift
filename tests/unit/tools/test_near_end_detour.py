@@ -143,3 +143,71 @@ def test_an_unarmed_run_still_keeps_the_install_window():
     detour.decided = True  # decided not to arm (or never reached)
     detour.tick(3.1, "observe", None, False, state, 0.03, np.zeros(3))
     assert state["near_end_injections"]["pallet_shift_max_m"]["install"] == 0.03
+
+
+def test_a_sample_after_the_judgement_goes_to_the_install_window_not_the_injection_one():
+    # Codex implementation review 1 P2-2: installed at 43.0, the pallet moved at the next tick
+    tracker = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    detour, state = nd.NearEndDetour(), {"observe_end_stands": []}
+    detour.tick(35.0, "observe", tracker, True, state, 0.0, tracker._poses[20])
+    tracker.input_offset_events.append({"event": "cleared"})
+    tracker._input_offset = None
+    state["observe_end_stands"].append(stand(43.0, "installed"))
+    detour.tick(43.0083, "observe", tracker_of([(1.0, -1, 0.0)]), True, state, 0.025, tracker._poses[-1])
+    record = state["near_end_injections"]
+    assert record["windows"]["injection"] == [35.0, 43.0]
+    assert record["pallet_shift_max_m"] == {"injection": 0.0, "install": 0.025}
+
+
+def test_a_capture_s_physics_steps_reach_the_open_window():
+    # P2-1: a shift inside a capture (between control ticks), 0 -> 25 -> 0 mm
+    detour, state = nd.NearEndDetour(), {"observe_end_stands": [stand(3.0, "installed")]}
+    detour.decided = True
+    detour.tick(3.1, "observe", None, False, state, 0.0, np.zeros(3))
+    for shift in (0.0, 0.025, 0.0):
+        detour.sample(shift)
+    detour.tick(3.5, "approach", None, False, state, 0.0, np.zeros(3))
+    detour.sample(0.4)  # after the window closed
+    record = state["near_end_injections"]
+    assert record["pallet_shift_max_m"]["install"] == 0.025 and record["windows"]["install"] == [3.0, 3.5]
+
+
+def test_a_mission_restore_ends_the_watch_and_keeps_the_run_s_decision_spent():
+    # P2-3: armed, the mission ends before the judgement, its keys put back (near_end_injections dropped)
+    sys.path.insert(0, str(ROOT / "tests/unit/mission"))
+    from test_baseline import fake_core
+
+    from forklift_core.mission.baseline import MissionBaseline
+
+    tracker = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    core = fake_core()
+    baseline = MissionBaseline.capture(core)
+    detour = nd.NearEndDetour()
+    detour.tick(1.0, "observe", tracker, True, core.state, 0.0, tracker._poses[20])
+    assert "near_end_injections" in core.state
+    baseline.restore(core)
+    assert "near_end_injections" not in core.state
+    other = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    detour.tick(9.0, "observe", other, True, core.state, 0.01, other._poses[20])  # a new tracker: no TypeError
+    assert detour.decided and detour.tracker is None and not other.input_offset_active()
+    assert "near_end_injections" not in core.state
+
+
+def test_a_failure_under_the_offset_closes_the_watch_and_the_distance_stops():
+    tracker = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    detour, state = nd.NearEndDetour(), {}
+    detour.tick(1.0, "observe", tracker, True, state, 0.0, tracker._poses[20])
+    tracker._failed, tracker._failure = True, "cross_track"
+    detour.tick(1.1, "observe", tracker, True, state, 0.0, tracker._poses[20])
+    record = state["near_end_injections"]
+    assert record["events"][-1] == {"event": "failed", "failure": "cross_track", "time_s": 1.1, "under_offset": True}
+    distance = record["max_path_distance_m"]
+    detour.tick(1.2, "transport", tracker, True, state, 0.0, np.array([100.0, 100.0, 0.0]))
+    assert record["max_path_distance_m"] == distance
+
+
+def test_a_paused_tick_does_not_arm():
+    tracker = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    detour, state = nd.NearEndDetour(), {}
+    detour.tick(1.0, "observe", tracker, True, state, 0.0, tracker._poses[20], can_arm=False)
+    assert not detour.decided and not tracker.input_offset_active() and "near_end_injections" not in state

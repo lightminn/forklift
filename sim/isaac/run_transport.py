@@ -7171,6 +7171,11 @@ def drive(S, isaac) -> None:
                 tick, observing=far_observing(ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
                 and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
+            if near_end_detour_ is not None:
+                # C2 injection plan 4 0 and 4: every physics step's pallet sample, a capture's steps included (Codex
+                # implementation review 1 P2-1: the control tick alone misses a shift inside a capture)
+                near_end_detour_.sample(float(np.linalg.norm(np.asarray(pallet.get_world_pose()[0])[:2]
+                                                             - initial_pallet[:2])))
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
@@ -9177,7 +9182,8 @@ def drive(S, isaac) -> None:
                     # Diagnostic (C2 injection plan 1.2): decided once and watched here, ahead of the follower; the
                     # pallet's shift is the pick-up check's, read in observe too (plan 4 0 and 4)
                     near_end_detour_.tick(t, ms.phase, trackers.get("observe"), core.near_reobserve_leg(), state,
-                                          float(np.linalg.norm(ppos[:2] - initial_pallet[:2])), rear)
+                                          float(np.linalg.norm(ppos[:2] - initial_pallet[:2])), rear,
+                                          can_arm=not paused_ and not warming)
                 scene_owned_, scene_presteer_ = False, None
                 if not paused_ and not releasing and not warming and core.scene_replan.active():
                     scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)
