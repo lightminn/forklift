@@ -121,3 +121,24 @@
   - 반박하지 않은 것: 최종 판정 순서, `restored_before`, 18 mm 경계, timeout 연결, 구제 기록, timeout 짝 요건, 도구 md5.
 - Codex 등록 2 차: P2 하나(설치 직후 종료로 설치 창 기록이 없을 때 남은 누적값이 주입 창으로만 감) → 판정 기록으로 창 경계 복원.
 - ③ 독립 검토: 계획(#268)이 agy 독립 검토를 두 번 거쳤다. 이 등록은 계획 §4 를 고정한 것이라 따로 받지 않는다.
+
+## 8. 구현 검증 (이 PR, d9122892)
+
+- 재생 게이트: runs29 `SETUP_INPUTS=recorded` 29/29 다.
+  - 결과는 `test_runs/replay_gate/cin_rec_d9122892` 에 있다.
+  - 25·26 번은 재부팅으로 끊겨, `cin_rec_d9122892_b` 에 다시 돌렸다.
+- ws1 전체 pytest: 8,446 통과, 74 건너뜀, 10 실패다. 실패는 알려진 목록뿐이다(preview_docking 6, evaluate_cli 1, remote_model_jobs 1, diagnose_detection 2).
+- 주입 smoke 짝: random_1 seed 1, 경계 기록이다. 위치는 `test_runs/riibotics/cin_smoke_d9122892` 다.
+  - 켬은 `armed`(마지막 다리 2.03 m, s = +1) → `restored`(남은 0.101 m) → `judged` `installed` 로 이어졌다.
+    - 정지는 0.0578 m · −0.143 rad 였다.
+    - 캡처가 채택됐고(`done`) 완주했다.
+  - 그림자는 `armed`(단일 다리 2.01 m) → `restored` → `judged` `shadow` 로 이어졌다.
+    - 정지는 0.0577 m · −0.147 rad 였다.
+    - 그 다리의 `Tracking timeout in observe` 로 끝났다.
+  - 두 팔 모두 비킴 중 차–원래 경로 거리 최대는 0.043–0.044 m, 팔레트 변위는 0 이었다.
+  - 굴림 예측(옆 57.5 mm, 방위 0.143–0.144 rad)과 같다.
+- smoke 두 기록의 format-2 재생: 2/2 통과했다(`replay_gate/cin_smoke_rep_d9122892`, strict).
+- Codex 구현 검토 4 차(스레드 01a19f1c)에서 수렴했다.
+  - 1 차 P2: 캡처 스텝 변위, 판정 뒤 표본, baseline 복원 뒤 감시
+  - 2 차 P2: 판정 뒤 물리 스텝, format-2 재생의 스텝 값, 미션 종료 뒤 표본
+  - 3 차 P2: 캡처와 approach 전이가 같은 호출에 있을 때
