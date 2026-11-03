@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from forklift_core.mission.failures import DYNAMIC_SITES, classify
+from forklift_core.mission.failures import DYNAMIC_SITES, SESSION, classify
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -158,3 +158,10 @@ def test_no_live_decision_rests_on_pocket_phase_names_any_more():
 
     assert not hasattr(core_module, "POCKET_PHASES")
     assert "LIVE_POCKET_PHASES" not in (ROOT / "sim/isaac/run_transport.py").read_text()
+
+
+def test_an_unconfirmed_position_end_ends_the_session():
+    # docs/plans/2026-11-02-unconfirmed-runner.md 2.4
+    for reason in ("pose_rear_blocked", "pose_twin_preferred", "pose_out_of_set", "pose_slam_disagree",
+                   "pose_revoked:int", "pose_revoked:still", "pose_revoked:rematch", "pose_worker_dead: exit 1"):
+        assert classify(reason, strict=True) == SESSION, reason

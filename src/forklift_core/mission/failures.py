@@ -31,6 +31,9 @@ PREFIXES = {
     "reloc_bridge_timeout": SESSION, "reloc_operator_timeout": SESSION, "reloc_cancelled": SESSION,
     "reloc_unsteady": SESSION,  # the truck moved after the start's input check (a valid session's failure)
     "reloc_config_error": SESSION,  # the relocalization cannot run as set up (map frame, LiDAR mount, shared layer)
+    # the unconfirmed position check ended (docs/plans/2026-11-02-unconfirmed-runner.md 2.4): the session ends
+    "pose_rear_blocked": SESSION, "pose_twin_preferred": SESSION, "pose_out_of_set": SESSION,
+    "pose_slam_disagree": SESSION, "pose_revoked": SESSION, "pose_worker_dead": SESSION,
     "sensor_silence_stopped": SESSION, "Camera did not produce RGB": SESSION,
     "Perception camera did not produce depth": SESSION, "Nonfinite body state": SESSION,
     "Mission exceeded simulation time budget": SESSION, "mission_cancelled": SESSION,

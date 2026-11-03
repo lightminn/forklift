@@ -32,6 +32,10 @@ RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request"
 # B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
 # session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
 RELOC_REFUSED = ("arm", "mission_submit", "mission_resume", "recovery", "sim_reset")
+# docs/plans/2026-11-02-unconfirmed-runner.md 2.3: while the position is not confirmed nothing that moves the truck by
+# the map opens (and no AUTO); once ended the controls stay locked too -- STOP and the session end stay open
+POSE_REFUSED = ("mission_submit", "mission_resume", "pick_request", "recovery", "sim_reset")
+POSE_ENDED_REFUSED = POSE_REFUSED + ("rearm", "arm", "mode_request")
 # the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
 AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
@@ -142,6 +146,9 @@ class Arbiter:
         self.next_pick_allowed = False  # CT-2: the runner answers pick_request (welcome capabilities.next_pick)
         # B-P2c: the start relocalization (a StartRelocalizer) while the start is unknown; None: localized or none
         self.reloc = None
+        # the unconfirmed position check's view this tick ({status, drive_ready, reason}); None: no check
+        self.pose: dict | None = None
+        self._pose_end: str | None = None  # end_pose's reason: a latch the next view cannot lift
         self.stops = 0  # every STOP taken (B-P2c: the relocalization drops the attempt a new one interrupts)
         self.provisional_auto = False
         self._context_gen = 0
@@ -345,6 +352,12 @@ class Arbiter:
         if self.reloc is not None and (kind in RELOC_REFUSED
                                        or (kind == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
             return self._reply(kind, request_id, "relocalizing")
+        pose = (self._pose_view() or {}).get("status")
+        if pose is not None and pose.startswith("ended:") and kind in POSE_ENDED_REFUSED:
+            return self._reply(kind, request_id, "pose_ended")
+        if pose is not None and pose != "confirmed" and (kind in POSE_REFUSED
+                                                         or (kind == "mode_request" and msg.get("to") == "AUTO")):
+            return self._reply(kind, request_id, "pose_unconfirmed")
         handler = getattr(self, f"_on_{kind}")
         return handler(client_id, request_id, msg, now_mono)
 
@@ -465,6 +478,19 @@ class Arbiter:
             self._boundary(now_mono, reason)
         else:
             self._set_mode("STOPPED", now_mono, reason)
+
+    def _pose_view(self) -> dict | None:
+        if self._pose_end is not None:
+            return {"status": f"ended:{self._pose_end}", "drive_ready": False, "reason": "pose_ended"}
+        return self.pose
+
+    def end_pose(self, now_mono: float, reason: str) -> None:
+        """The unconfirmed position check ended (plan 2.3): a stop and a control boundary, and the controls locked."""
+        if self._pose_end is None:
+            self._pose_end = reason
+        self.pose = self._pose_view()
+        self.events.append({"t": now_mono, "event": "pose_ended", "reason": reason})
+        self.stop(now_mono, reason)
 
     # --- latest-value messages -------------------------------------------------------------------------------------
     def _latest_value(self, client_id: str, kind: str, msg: dict, now_mono: float) -> None:
@@ -776,7 +802,8 @@ class Arbiter:
 
     def _policy(self, safety) -> Policy:
         policy = teleop_policy(safety, feedback_ok=self.feedback_ok, standing=self.stop_confirmed,
-                               lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough())
+                               lift_m=self.lift_m, steering_rad=self.steering_rad, still=self._still_enough(),
+                               pose=self._pose_view())
         if self._stand_unconfirmed and policy.drive_allowed and not self.stop_confirmed:
             # Entered unconfirmed: the drive opens only on a tick the detector confirms the stand (main 2026-10-19);
             # the waiver ends at the first wheel speed (step), not at a confirmed tick that gave none (Codex).

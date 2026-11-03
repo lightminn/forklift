@@ -75,15 +75,7 @@ def pool_and_leaves(grid: Grid, pts, cfg: G.MatchConfig, index: G.MapIndex, r_re
     """The global search's kept candidates (base poses) and its pre-suppression leaves >= r_resid of its best."""
     match = G.global_match(grid, pts, cfg, index=index)
     pool = [L._bases(np.array([c.pose]))[0] for c in match.candidates] if match.status == "ok" else []
-    leaves = []
-    if match.status == "ok":
-        s = G._Search(grid, G._thin(np.asarray(pts, float).reshape(-1, 2), grid.resolution_m), cfg, index,
-                      G._Budget(cfg))
-        h, r, c, sc = G._lattice_leaves(s, cfg)
-        if len(sc):
-            keep = sc >= r_resid * float(sc.max())
-            lasers = np.array([s.pose(h[k], r[k], c[k]) for k in np.flatnonzero(keep)])
-            leaves = list(L._bases(lasers)) if len(lasers) else []
+    leaves = T.last_leaves(grid, pts, cfg, index, r_resid)[1] if match.status == "ok" else []
     return match.status, pool, leaves
 
 

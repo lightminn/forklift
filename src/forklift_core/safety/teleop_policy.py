@@ -32,9 +32,25 @@ def _lift(dirs) -> dict:
 
 
 def teleop_policy(safety: dict | None, *, feedback_ok: bool, standing: bool, lift_m: float | None = 0.0,
-                  steering_rad: float | None = 0.0, still: bool = False) -> Policy:
+                  steering_rad: float | None = 0.0, still: bool = False, pose: dict | None = None) -> Policy:
     """``lift_m`` / ``steering_rad``: the measured lift and the larger measured steering angle (None: not measured).
-    ``still``: not rolling though not confirmed standing (main 2026-10-19) -- enough for a recovery's lowering."""
+    ``still``: not rolling though not confirmed standing (main 2026-10-19) -- enough for a recovery's lowering.
+    ``pose``: the unconfirmed position check's view ({status, drive_ready, reason}; None: no check)."""
+    policy = _policy(safety, feedback_ok=feedback_ok, standing=standing, lift_m=lift_m, steering_rad=steering_rad,
+                     still=still)
+    if pose is None or pose.get("status") == "confirmed":
+        return policy
+    # docs/plans/2026-11-02-unconfirmed-runner.md 2.3: the policy's own refusals first, then the straight reverse
+    # only, no forks, and only while a stroke may drive (design 1.4)
+    if not policy.drive_allowed:
+        return Policy(False, False, policy.reason, loaded=policy.loaded)
+    if pose.get("status") != "unconfirmed" or not pose.get("drive_ready"):
+        return Policy(False, False, pose.get("reason") or "pose_unconfirmed", loaded=policy.loaded)
+    return Policy(True, False, None, loaded=policy.loaded, drive_mode="reverse_straight")
+
+
+def _policy(safety: dict | None, *, feedback_ok: bool, standing: bool, lift_m: float | None,
+            steering_rad: float | None, still: bool) -> Policy:
     def refuse(reason, dirs=NONE):
         return Policy(False, reason=reason, **_lift(dirs))
 

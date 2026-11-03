@@ -39,6 +39,13 @@ export const REASONS = {
   "reloc_cancelled": "출발 위치 찾기가 취소됐습니다",
   "reloc_unsteady": "위치를 찾는 사이에 차가 움직였습니다",
   "reloc_config_error": "출발 위치 찾기 설정이 맞지 않습니다(지도 좌표·LiDAR 장착·장애물 층)",
+  // the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-position.md 1.4-1.5)
+  "pose_rear_blocked": "뒤에 공간이 없어 출발 위치를 확인할 수 없습니다 · 차를 옮긴 뒤 세션을 다시 시작하세요",
+  "pose_twin_preferred": "출발 위치가 닮은 다른 자리로 보입니다 · 세션을 다시 시작하세요",
+  "pose_out_of_set": "출발 위치가 다른 곳으로 보입니다 · 세션을 다시 시작하세요",
+  "pose_slam_disagree": "확인한 위치와 SLAM 위치가 맞지 않습니다 · 세션을 다시 시작하세요",
+  "pose_revoked": "확인한 위치에서 SLAM 보정이 크게 벗어나 권한을 거뒀습니다",
+  "pose_worker_dead": "위치 확인 계산을 다시 띄우지 못했습니다",
   "sensor_silence_stopped": "센서가 멈춰 정지했습니다",
   "Camera did not produce RGB": "카메라 영상이 오지 않았습니다",
   "Perception camera did not produce depth": "깊이 영상이 오지 않았습니다",

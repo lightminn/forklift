@@ -664,3 +664,14 @@ def test_an_early_consoles_state_is_not_localization_ready(tmp_path):
     port.write_text(json.dumps({"pid": 42, "state": "ended", "started": 1000.0, "localized_wall": 1010.0}))
     reloc.observe()
     assert reloc.localized
+
+
+@pytest.mark.parametrize("reason", ["pose_rear_blocked", "pose_revoked:int", "pose_slam_disagree",
+                                    "pose_twin_preferred", "pose_out_of_set"])
+def test_an_unconfirmed_position_end_is_not_restarted(tmp_path, reason):
+    # docs/plans/2026-11-02-unconfirmed-runner.md 2.4: the same start gives the same end; the operator moves the truck
+    # and starts again (Codex draft 2 P2-5: the check was an exact match, a prefix is needed)
+    folder, _ = _bundle(tmp_path)
+    result = run(tmp_path / "out", writes_exit([1, 0], [reason, None]), exit_file="{epoch_dir}/run/exit_code",
+                 map_bundle=folder)
+    assert result["epochs"] == 1 and result["end"] == "pose_ended" and result["reason"] == reason
