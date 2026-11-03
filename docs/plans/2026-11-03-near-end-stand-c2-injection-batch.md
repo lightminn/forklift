@@ -142,3 +142,4 @@
   - 1 차 P2: 캡처 스텝 변위, 판정 뒤 표본, baseline 복원 뒤 감시
   - 2 차 P2: 판정 뒤 물리 스텝, format-2 재생의 스텝 값, 미션 종료 뒤 표본
   - 3 차 P2: 캡처와 approach 전이가 같은 호출에 있을 때
+- main(#269) 병합 뒤 193edd3e 에서 다시 확인했다. runs29 recorded 29/29(`cin_rec_193edd3e`), smoke 두 기록 재생 2/2, ws1 pytest 는 알려진 10 실패뿐이다.
