@@ -93,3 +93,33 @@ def test_on_s2_vetoes_when_unconfirmed_or_of_another_reason():
     assert m.choose(pop, row("near", "bounds"))["decision"] == "cause_diagnosis"
     assert m.choose(pop, row("unconfirmed", "bounds"))["veto"] == "on_s2_unconfirmed"
     assert m.choose(pop, row("near", "converge"))["veto"] == "on_s2_reason_converge"
+
+
+def test_the_registered_population_keeps_the_released_stalls():
+    # Codex implementation review 1 P2-1: released stalls are in the plan's population; dropping them is post-hoc
+    pop = [row("near", "bounds")] * 65 + [row("near", "converge")] * 16 + [row("unconfirmed", "released")] * 44
+    assert m.choose(pop, row("near", "bounds"))["decision"] == "report_only"
+    assert m.choose(pop, row("near", "bounds"), refusals_only=True)["decision"] == "cause_diagnosis"
+
+
+def test_an_unconfirmed_join_after_the_first_near_event_stays_unconfirmed():
+    # review 1 P2-2: the cusp accepted, the next goal's replan a tick later, after an earlier near event
+    s = run([stall(5.0, closed=6.016667)], [{"time_s": 1.0, "leg_serial": 1}, {"time_s": 6.025, "leg_serial": 1}],
+            switches=[{"phase": "observe", "via": "arrival", "time_s": 6.016667}])
+    r = m.analyse(s, "r")["stalls"][0]
+    assert r["role"] == "unconfirmed" and r["basis"] == "link_leg_switch"
+
+
+def test_an_event_beyond_the_k3_cycle_puts_the_reason_outside_the_scan():
+    st = stall(1.0, scans=[scan(converged=True, sweep=False)])
+    st["events"].append({"time_s": 1.1, "event": "handed_to_obstacle", "reason": "silent"})
+    assert m.last_scan_reason(st) == "outside_scan"
+    pop = [row("near", "outside_scan")] * 3 + [row("near", "sweep")] * 1
+    assert m.choose(pop, row("near", "sweep"))["decision"] == "report_only"
+
+
+def test_q3_uses_every_near_miss_replan_joined_or_not():
+    # review 1 P2-4: the second miss unjoined at 20 s, a stall at 25 s after it
+    s = run([stall(10.0, closed=12.0), stall(25.0)], [{"time_s": 12.0, "leg_serial": 1}, {"time_s": 20.0, "leg_serial": 1}])
+    a = m.analyse(s, "r")
+    assert a["near_miss_times_s"] == [12.0, 20.0] and a["near_misses"] == 2

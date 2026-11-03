@@ -20,8 +20,15 @@ EPS_S = 1e-6  # the raw times are compared, not rounded ones (Codex plan review 
 RECUR_M = 0.30  # Q1: a stall after a replan within this of the previous stall's last-scan rear
 
 
+KNOWN_EVENTS = {"stop_confirmed", "observe_rule", "closed", "released", "release_refused"}
+
+
 def last_scan_reason(stall: dict) -> str:
-    """Plan 2: why the existing K3 did not release, from the last scan (the top-level errors are the latch's)."""
+    """Plan 2: why the existing K3 did not release, from the last scan (the top-level errors are the latch's). An event
+    beyond the K3 cycle (a hand-off to the obstacle layer, an ownership change) puts the reason outside the scans
+    (Codex implementation review 1 P2-3)."""
+    if any(e.get("event") not in KNOWN_EVENTS for e in stall.get("events") or []):
+        return "outside_scan"
     scans = stall.get("scans") or []
     if not scans:
         return "k3_absent"
@@ -94,6 +101,8 @@ def analyse(s: dict, name: str) -> dict:
         replan, how = join_replan(st, replans, switches)
         if why_out is not None:
             role, basis = "unconfirmed", why_out
+        elif how in ("leg_switch", "ambiguous", "unlinked"):
+            role, basis = "unconfirmed", f"link_{how}"  # plan 2: a join not confirmed is unconfirmed (review 1 P2-2)
         elif replan is not None and replan.get("leg_serial") in near_serials:
             role, basis = "near", "joined_near_replan"
         elif replan is not None and replan.get("leg_serial") == 0:
@@ -118,10 +127,13 @@ def analyse(s: dict, name: str) -> dict:
     unlinked_miss = [float(r["time_s"]) for r in replans if r.get("leg_serial") in near_serials
                      and not r.get("trigger") and float(r["time_s"]) not in linked_times
                      and (armed_s is None or float(r["time_s"]) < armed_s)]
-    near_miss = [r for r in replans if r.get("leg_serial") in near_serials and not r.get("trigger")]
+    # the near leg's observe_miss replans before any injection arming (Q3's common basis, review 1 P2-4)
+    near_miss = sorted(float(r["time_s"]) for r in replans if r.get("leg_serial") in near_serials
+                       and not r.get("trigger") and (armed_s is None or float(r["time_s"]) < armed_s))
     return {"run": name, "success": bool(s.get("success")), "failure": (s.get("failure_reason") or "")[:80],
             "excluded": why_out, "near_serials": sorted(x for x in near_serials if x is not None),
-            "near_misses": len(near_miss), "unlinked_near_miss_replans": unlinked_miss, "stalls": rows}
+            "near_misses": len(near_miss), "near_miss_times_s": near_miss,
+            "unlinked_near_miss_replans": unlinked_miss, "stalls": rows}
 
 
 def recurrences(run: dict) -> list:
@@ -139,26 +151,32 @@ def recurrences(run: dict) -> list:
     return out
 
 
-def choose(population: list, on_s2: dict | None) -> dict:
-    """Plan 4: each choice must hold with every unconfirmed stall against it; on s2 vetoes."""
-    judged = [r for r in population if r["reason"] != "released" and r["role"] != "far"]  # near + unconfirmed
-    confirmed = [r for r in judged if r["role"] == "near" and r["reason"] != "k3_absent"]
+UNDETERMINED = {"k3_absent", "outside_scan", "sensor_or_other"}  # not one reason the plan can choose on
+
+
+def choose(population: list, on_s2: dict | None, refusals_only: bool = False) -> dict:
+    """Plan 4: the population is the near-confirmed stalls plus the unconfirmed ones (released included); each choice
+    must hold with every unconfirmed stall against it; on s2 vetoes. refusals_only drops the released stalls -- a
+    post-hoc reading, not the registered rule (Codex implementation review 1 P2-1)."""
+    judged = [r for r in population if r["role"] != "far" and not (refusals_only and r["reason"] == "released")]
+    confirmed = [r for r in judged if r["role"] == "near" and r["reason"] not in UNDETERMINED]
     unconfirmed = [r for r in judged if r not in confirmed]
     n = len(confirmed) + len(unconfirmed)
     counts = {}
     for r in confirmed:
         counts[r["reason"]] = counts.get(r["reason"], 0) + 1
-    out = {"n": n, "confirmed": len(confirmed), "unconfirmed": len(unconfirmed), "reasons": counts}
+    out = {"n": n, "confirmed": len(confirmed), "unconfirmed": len(unconfirmed), "reasons": counts,
+           "refusals_only": refusals_only}
     choice = None
     if n and 3 * counts.get("bounds", 0) >= 2 * n:
         choice = ("cause_diagnosis", "bounds")
     else:
-        for reason in ("converge", "sweep", "sensor_or_other"):
+        for reason in ("converge", "sweep"):
             if n and 3 * counts.get(reason, 0) >= 2 * n:
                 choice = ("C1", reason)
     veto = None
     if choice is not None:
-        if on_s2 is None or on_s2["role"] != "near" or on_s2["reason"] in ("k3_absent", "released"):
+        if on_s2 is None or on_s2["role"] != "near" or on_s2["reason"] in UNDETERMINED | {"released"}:
             veto = "on_s2_unconfirmed"
         elif on_s2["reason"] != choice[1]:
             veto = f"on_s2_reason_{on_s2['reason']}"
@@ -183,11 +201,13 @@ def main(argv: list) -> None:
     spent_ok = [r for r in runs if r["near_misses"] >= 2 and r["success"]]
     q3 = []
     for r in spent_ok + ([on_s2_run] if on_s2_run else []):
-        miss_t = sorted(x["replan_time_s"] for x in r["stalls"] if x["replan_trigger"] == "observe_miss"
-                        and x["role"] == "near")
-        after = [x for x in r["stalls"] if miss_t and len(miss_t) >= 2 and x["time_s"] > miss_t[1]]
-        q3.append({"run": r["run"], "success": r["success"], "stalls_after_second_miss":
-                   [(x["role"], x["reason"], x["disposition"]) for x in after]})
+        miss_t = r["near_miss_times_s"]  # every pre-arming near observe_miss replan, joined to a stall or not
+        if len(miss_t) < 2:
+            q3.append({"run": r["run"], "success": r["success"], "stalls_after_second_miss": None})
+            continue
+        after = [x for x in r["stalls"] if x["time_s"] > miss_t[1]]
+        q3.append({"run": r["run"], "success": r["success"], "second_miss_s": miss_t[1],
+                   "stalls_after_second_miss": [(x["role"], x["reason"], x["disposition"]) for x in after]})
     summary = {
         "runs": len(runs), "excluded": {k: sum(r["excluded"] == k for r in runs)
                                         for k in ("realign_or_retry", "bottom_deck", "scene_candidate")},
@@ -202,7 +222,8 @@ def main(argv: list) -> None:
         summary["joins"][r["join"]] = summary["joins"].get(r["join"], 0) + 1
         if r["role"] == "near":
             summary["near_reasons"][r["reason"]] = summary["near_reasons"].get(r["reason"], 0) + 1
-    summary["choice"] = choose(stalls, on_s2)
+    summary["choice"] = choose(stalls, on_s2)  # the registered rule
+    summary["choice_refusals_only_post_hoc"] = choose(stalls, on_s2, refusals_only=True)
     json.dump({"summary": summary, "runs": runs}, open(out_path, "w"), indent=1)
     print(json.dumps({k: v for k, v in summary.items() if k not in ("q1", "q3")}, indent=1))
     print("q1 recurrences", len(summary["q1"]), "within", sum(x["within"] for x in summary["q1"]))
