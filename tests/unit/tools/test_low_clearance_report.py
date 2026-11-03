@@ -86,11 +86,12 @@ def test_physical_near_reopens_a(tmp_path):
     assert r["reopen"]["a_physical_near"]
 
 
-def test_the_stop_arc_follows_the_truth_motion_not_the_command(tmp_path):
-    # driving forward at 0.5 m/s toward an object ahead; the commanded curvature (sharp) is ignored
+def test_the_stop_arc_is_centred_on_the_truth_motion(tmp_path):
+    # driving straight ahead at 0.5 m/s toward an object; the band is centred on the truth path curvature (0), the
+    # commanded curvature (sharp, 0.36) is only one more member of it
     r = report(write_run(tmp_path, speed=0.5, physical=(1.56 + 0.2 + 0.3 + 1.0, 0.0), cmd_kappa=0.36))
     assert r["physical_arc_violations"] and r["reopen"]["a_physical_near"]
-    assert all(abs(h["curvature_inv_m"]) < 1e-6 for h in r["physical_arc_violations"])
+    assert all(abs(h["path_curvature_inv_m"]) < 1e-6 and h["review"] for h in r["physical_arc_violations"])
 
 
 def test_the_phase_comes_from_the_transitions(tmp_path):
@@ -112,3 +113,35 @@ def test_unevaluated_ranges_are_listed(tmp_path):
     assert any(isinstance(u, dict) and "control_gap_s" in u for u in r["unevaluated"])
     assert any(isinstance(u, dict) and u.get("sample_gap_s") == [0.1, 1.0] for u in r["unevaluated"])
     assert any(isinstance(u, dict) and "after_last_sample_s" in u for u in r["unevaluated"])
+
+
+def test_the_arc_covers_a_steering_curvature_off_the_path_curvature(tmp_path):
+    # the truck follows a 0.30 1/m arc; a pallet sits where a 0.36 1/m stop arc (held steering) would reach
+    run = write_run(tmp_path, speed=0.6, kappa=0.30, physical=(5.0, 5.0))
+    data = json.loads((run / "result.json").read_text())
+    C = np.load(run / "slam_control.npy")
+    k = len(C) // 2
+    x, y, yaw = C[k, 4:7]
+    from forklift_core.control.drive_permission import arc_poses
+    end = arc_poses((x, y, yaw), 0.36, 1, StoppingModel(0.15, 1.5, 0.05).distance_m(0.61), 0.025)[0][-1]
+    # put the object just past the loaded front at the 0.36 arc's end, sideways off the 0.30 one
+    fx, fy = end[0] + 1.56 * np.cos(end[2]), end[1] + 1.56 * np.sin(end[2])
+    data["scene_layout"]["obstacles"][0].update(x_m=float(fx + 0.30 * np.cos(end[2])), y_m=float(fy + 0.30 * np.sin(end[2])))
+    (run / "result.json").write_text(json.dumps(data))
+    r = report(run)
+    assert r["physical_arc_violations"] and all(h["review"] for h in r["physical_arc_violations"])
+
+
+def test_a_short_speed_peak_is_not_averaged_below_the_threshold(tmp_path):
+    # a 0.06 m/s peak (accelerating and braking at 1.5 m/s^2): a +-2 tick mean reads below 0.05, the window bound not
+    run = write_run(tmp_path, physical=(5.0, 5.0))
+    t = np.arange(240) / 120.0
+    v = np.clip(0.06 - 1.5 * np.abs(t - 1.0), 0.0, None)
+    x = np.concatenate([[0.0], np.cumsum(v[1:] * np.diff(t))])
+    C = np.column_stack([t, x, 0 * t, 0 * t, x, 0 * t, 0 * t])
+    np.save(run / "slam_control.npy", C)
+    data = json.loads((run / "result.json").read_text())
+    data["scene_layout"]["obstacles"][0].update(x_m=float(x[120] + 1.56 + 0.3 + 0.06), y_m=0.0)
+    (run / "result.json").write_text(json.dumps(data))
+    r = report(run)
+    assert r["physical_arc_violations"]
