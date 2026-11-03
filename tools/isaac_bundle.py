@@ -94,8 +94,11 @@ riib/simphys runs, p99 108 s). A run whose kind names no first-record file is no
 
 Node start gap: two bundle jobs of the node (this user's, through --node-ledger-dir) start no two runs less than
 --node-stagger-s apart (default 60; 0: off), under a file lock: the F1 sessions that stopped had started 4-6 s after a
-session of another job, while one job's staggered starts (one session alone, two at 180 s) ran. Launchers outside the
-bundle do not take part.
+session of another job and stopped inside Kit's viewport wait, while one job's staggered starts (one session alone,
+two at 180 s) ran. The gap covers a start up to its viewport (ws1, 2026-11-04): launch to Kit's start 1.4-3.8 s (513
+bundle runs, p99 3.6), Kit's start to "app ready" 3.9-17.5 s (876 run logs, p99 7.2), "app ready" to the end of
+_wait_for_viewport 2.2-7.3 s, Kit's start to it 6.6-20.0 s (the 21 healthy Kit logs ws1 still keeps) -- at most
+about 30 s. Launchers outside the bundle do not take part.
 
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
