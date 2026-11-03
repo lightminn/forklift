@@ -278,3 +278,69 @@ def test_age_comparison():
     out = J.age_comparison(table, {"ages_s": [0.1, 1.0], "position_max_m": [0.019, 0.031], "yaw_max_rad": [0.0, 0.0]})
     assert out["ages_over"] == [1.0]
     assert "error" in J.age_comparison(table, {"ages_s": [0.1], "position_max_m": [0], "yaw_max_rad": [0]})
+
+
+def _overscan(tmp_path: Path, name: str, arm: str, key: str, *, samples=(), moved=0.0, trace=True):
+    """A run ended on the omni.replicator overscan TypeError (registration amendment 2)."""
+    import numpy as np
+
+    r = _result(arm, key, complete=False, reason=J.OVERSCAN_REASON, lifted=False, samples=list(samples))
+    r.update(transitions=[], applied_command=[0.0, [0.0, 0.0]])
+    _write(tmp_path, name, r)
+    run = tmp_path / name / "run"
+    (run / "failure.txt").write_text("File camera.py, in get_rgba\n  in _resize_data_for_overscan\nTypeError"
+                                     if trace else "TypeError")
+    np.save(run / "slam_control.npy", np.array([[0, -2.34, 0, 0, -2.34, 0, 0], [0.1, -2.34, 0, 0, -2.34 + moved, 0, 0]]))
+
+
+def test_amendment_2_overscan_end_is_infrastructure_and_its_pair_reruns(tmp_path):
+    _batch(tmp_path, skip={"f1_O_cy_epal6_s0"})
+    _overscan(tmp_path, "f1_O_cy_epal6_s0", "O", "cy_epal6_s0")
+    for arm in J.ARMS:
+        _write(tmp_path, f"f1_{arm}_cy_epal6_s0_r2", _result(arm, "cy_epal6_s0"))
+    out = J.judge(tmp_path)
+    g = out["groups"]["cycle_epal6"]
+    assert g["valid_pairs"] == 3 and g["infra"] == {"O": 1, "F1": 0} and g["verdict"] == "pass"
+    assert out["overscan"]["O"]["overscan"] == ["f1_O_cy_epal6_s0"]
+
+
+@pytest.mark.parametrize("kw", [{"samples": _samples(0.0, n=2)}, {"moved": 0.05}, {"trace": False}])
+def test_amendment_2_does_not_cover_a_run_that_started_or_moved(tmp_path, kw):
+    _batch(tmp_path, skip={"f1_O_cy_epal6_s0"})
+    _overscan(tmp_path, "f1_O_cy_epal6_s0", "O", "cy_epal6_s0", **kw)
+    run = [r for r in J.judge(tmp_path)["runs"] if r["name"] == "f1_O_cy_epal6_s0"][0]
+    assert not run["infra"] and not run["overscan_end"] and run["overscan_reason"]
+
+
+def test_amendment_2_rerun_broken_again_leaves_the_pair_out(tmp_path):
+    _batch(tmp_path, skip={"f1_O_cy_epal6_s0"})
+    _overscan(tmp_path, "f1_O_cy_epal6_s0", "O", "cy_epal6_s0")
+    _overscan(tmp_path, "f1_O_cy_epal6_s0_r2", "O", "cy_epal6_s0")
+    _write(tmp_path, "f1_F1_cy_epal6_s0_r2", _result("F1", "cy_epal6_s0"))
+    out = J.judge(tmp_path)
+    assert out["groups"]["cycle_epal6"]["valid_pairs"] == 2
+    assert out["groups"]["cycle_epal6"]["verdict"] == "inconclusive"  # 3 valid pairs needed
+    assert out["overscan"]["O"]["overscan"] == ["f1_O_cy_epal6_s0", "f1_O_cy_epal6_s0_r2"]
+    assert out["overscan"]["O"]["over_hold_share"] is False  # 2 of 21
+
+
+def test_amendment_2_hold_share():
+    runs = [{"name": f"r{i}", "arm": "O", "identity": {"x": 1}, "overscan_reason": i < 2} for i in range(5)]
+    assert J.overscan_share(runs)["O"]["over_hold_share"] is True  # 2 / 5 > 25 %
+    assert J.overscan_share(runs[1:])["O"]["over_hold_share"] is False  # 1 / 4
+    # a hung session without a result counts in the denominator
+    hung = [{"name": "e", "arm": "O", "identity": {}, "overscan_reason": True}] + [
+        {"name": f"h{i}", "arm": "O", "identity": {}} for i in range(3)]
+    assert J.overscan_share(hung)["O"]["over_hold_share"] is False  # 1 / 4
+
+
+@pytest.mark.parametrize("drop", ["applied_command", "samples", "transitions", "forbidden_pocket_contacts"])
+def test_amendment_2_missing_record_is_not_infrastructure(tmp_path, drop):
+    _batch(tmp_path, skip={"f1_O_cy_epal6_s0"})
+    _overscan(tmp_path, "f1_O_cy_epal6_s0", "O", "cy_epal6_s0")
+    p = tmp_path / "f1_O_cy_epal6_s0" / "run" / "result.json"
+    d = json.loads(p.read_text())
+    d.pop(drop)
+    p.write_text(json.dumps(d))
+    run = [r for r in J.judge(tmp_path)["runs"] if r["name"] == "f1_O_cy_epal6_s0"][0]
+    assert not run["overscan_end"] and not run["infra"]

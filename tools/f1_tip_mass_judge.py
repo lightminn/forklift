@@ -38,6 +38,13 @@ ARMS = ("O", "F1")
 INFRA_PREFIXES = ("slam_link_failed", "slam_prewarm_timeout", "plan_worker_dead", "Camera did not produce RGB",
                   "Perception camera did not produce depth", "Cannot open base scene",
                   "Invalid pallet spawn after settling", "Truck spawn displaced")  # riib batch 2 section 4 list
+# Registration amendment 2 (2026-11-04, the lead's decision before the verdict; the F1 plan's section 3): a run that
+# ended before its first perception frame on the omni.replicator overscan TypeError of the perception camera's
+# get_rgba, with no contact and no movement, is the 'no sensor output' infrastructure end, in both arms alike.
+OVERSCAN_REASON = "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"
+OVERSCAN_TRACE = "_resize_data_for_overscan"
+STILL_M = 0.01  # the truth rear axle's largest move from its first control sample
+OVERSCAN_HOLD_SHARE = 0.25  # amendment 2's stop rule: above this share of an arm's runs the batch is held
 MIN_PAIRS = {"riib": 10, "cycle": 3, "live": 2}
 MIN_LIFT_PAIRS = {"riib": 8, "cycle": 2}
 CMD_MIN, STEADY, V_STILL, LOADED = 0.20, 1e-3, 0.02, 0.02
@@ -160,16 +167,42 @@ def median_of(samples: list, phase: str, field: str):
     return float(np.median(vals)) if vals else None
 
 
+def overscan_end(run_dir: Path, d: dict | None) -> bool:
+    """Amendment 2: the overscan TypeError before the first perception frame, no contact, no movement. Every
+    condition needs its own record; a missing record does not meet it."""
+    if d is None or d.get("failure_reason") != OVERSCAN_REASON:
+        return False
+    for field in ("samples", "transitions", "forbidden_pocket_contacts"):  # recorded and empty, not absent
+        if not isinstance(d.get(field), list) or d[field]:
+            return False
+    command = d.get("applied_command")
+    if not isinstance(command, list) or not command or not isinstance(command[0], (int, float)) or command[0] != 0:
+        return False
+    try:
+        trace = (run_dir / "failure.txt").read_text()
+        control = np.load(run_dir / "slam_control.npy").reshape(-1, 7)
+    except (OSError, ValueError):
+        return False
+    if OVERSCAN_TRACE not in trace or "get_rgba" not in trace or len(control) == 0:
+        return False
+    moved = float(np.max(np.hypot(control[:, 4] - control[0, 4], control[:, 5] - control[0, 5])))
+    return not d.get("scene_damaged") and moved <= STILL_M
+
+
 def batch_run(root: Path, name: str, bundle: dict, live: bool = False) -> dict:
     b = bundle.get(name) or {}
     arm, key, _ = split_name(name)
     probe = load(root / "probe.json") if live else None
-    d = load(root / "live" / "epoch_1" / "run" / "result.json") if live else load(root / "run" / "result.json")
+    run_dir = root / "live" / "epoch_1" / "run" if live else root / "run"
+    d = load(run_dir / "result.json")
     reason_ = None if d is None else d.get("failure_reason")
+    overscan = overscan_end(run_dir, d)
+    # a session that stopped after 'app ready' (no log, GPU idle) leaves no result.json: the existing list's case
     infra = (d is None or (live and probe is None) or b.get("status") in ("infra_failed", "stalled")
-             or (reason_ is not None and str(reason_).startswith(INFRA_PREFIXES)))
+             or (reason_ is not None and str(reason_).startswith(INFRA_PREFIXES)) or overscan)
     ident = arm_identity(d)
-    out = {"name": name, "arm": arm, "key": key, "infra": infra, "bundle_status": b.get("status"),
+    out = {"name": name, "arm": arm, "key": key, "infra": infra, "overscan_end": overscan,
+           "overscan_reason": reason_ == OVERSCAN_REASON, "bundle_status": b.get("status"),
            "identity": ident, "identity_problems": identity_problems(arm, shape_of(key), ident)}
     if d is None:  # with a result and no probe the result's safety evidence is still read, not the live rule
         return out
@@ -400,6 +433,18 @@ def age_comparison(table: dict, measured: dict) -> dict:
     return {"rows": rows, "ages_over": [r["age_s"] for r in rows if r["over"]]}
 
 
+def overscan_share(runs: list) -> dict:
+    """Amendment 2's stop rule, per arm over every run folder of the batch (first runs and reruns, a hung session
+    without a result included): the share that ended on the overscan TypeError (amendment-2 ends and later ones)."""
+    out = {}
+    for a in ARMS:
+        mine = [r for r in runs if r["arm"] == a]
+        hit = [r["name"] for r in mine if r.get("overscan_reason")]
+        out[a] = {"runs": len(mine), "overscan": hit,
+                  "over_hold_share": bool(mine) and len(hit) / len(mine) > OVERSCAN_HOLD_SHARE}
+    return out
+
+
 def registered(name: str) -> bool:
     try:
         arm, key, _ = split_name(name)
@@ -439,7 +484,8 @@ def judge(batch: Path, age_table: dict | None = None, ages: dict | None = None) 
         r.pop("_samples", None)
     return {"overall": overall, "groups": verdict, "residual": residual, "identity_mismatch": identity_bad,
             "scene_problems": scene_problems, "scenes": {f"{a}/{sh}": sorted(v) for (a, sh), v in scenes.items()},
-            "unregistered_folders": unregistered, "reported": reported(pairs), "odometry_age": age, "runs": runs}
+            "unregistered_folders": unregistered, "reported": reported(pairs), "odometry_age": age,
+            "overscan": overscan_share(runs), "runs": runs}
 
 
 def main() -> None:
