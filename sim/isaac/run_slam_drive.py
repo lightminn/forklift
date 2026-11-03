@@ -290,6 +290,12 @@ def run(app, args: argparse.Namespace, state: dict) -> None:
     state["scene_chassis"] = chassis_record(scene_chassis)
     require_scene_matches_model(scene_chassis, args.forklift_urdf)
     state["scene_chassis_matches_urdf"] = True
+    # as run_transport: a scene's manifest names the URDF it was built from (model audit, lead 2026-11-01)
+    from chassis_contract import scene_manifest_urdf
+
+    built_from, running = scene_manifest_urdf(args.base_scene, args.forklift_urdf)
+    require(built_from in (None, running), "base scene built from another forklift URDF")
+    state["scene_built_from_urdf_sha256"] = built_from
     state["chassis_model"] = {
         "forklift_urdf": str(args.forklift_urdf),
         "drive_geometry": asdict(args.drive_geometry),

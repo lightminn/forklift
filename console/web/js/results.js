@@ -66,6 +66,7 @@ export const REASONS = {
   "Perception camera local pose differs": "인식 카메라 장착 자세가 다릅니다",
   "--odometry-wheel-radius-m": "주행기록 바퀴 반지름 설정이 잘못됐습니다",
   "--settings:": "시뮬 설정이 이 팔레트 형상의 질량을 정하지 않았습니다",
+  "Pallet body mass": "시뮬 팔레트의 질량이 설정값과 다릅니다",
   "scene requirements:": "이 장면에 필요한 실행 설정이 빠졌습니다",
   "recognition label target": "장면에 인식 라벨 대상이 없습니다",
   // the delivery verdict (simulation truth): the mission fails, the session goes on
