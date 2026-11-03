@@ -44,7 +44,8 @@ PREFIXES = {
     "base scene built from another forklift URDF": SESSION, "pocket camera intrinsics differ": SESSION,
     "live video camera intrinsics differ": SESSION, "Perception display clipping range": SESSION,
     "Perception camera local pose differs": SESSION, "--odometry-wheel-radius-m": SESSION,
-    "--settings:": SESSION,  # pallet-mass plan (2026-11-01): a mass table without the run's shape, refused before Isaac
+    "--settings:": SESSION,
+    "Pallet body mass": SESSION,  # model audit (2026-11-01): the engine's pallet body is not the settings' mass  # pallet-mass plan (2026-11-01): a mass table without the run's shape, refused before Isaac
     "scene requirements:": SESSION,  # docs/plans/2026-10-27-scene-requirements.md: refused before Isaac
     # the anchored neighbours block the unaligned delivery straight (plan 2026-10-22-slot-anchored-neighbours 2.3)
     "session_anchor_unaligned:": MISSION,

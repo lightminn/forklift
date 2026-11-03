@@ -2475,6 +2475,18 @@ def loaded_lift_mass_kg(site_path, shape: str, *, setting_kg: float, engine_kg: 
                               "site_pallet_kg": site_pallet, "engine_pallet_kg": engine_kg}
 
 
+def pallet_body_masses_kg(stage, roots) -> dict:
+    """Each liftable pallet's rigid-body mass as the stage holds it (the importer writes the run's mass)."""
+    from pxr import Usd, UsdPhysics
+
+    out = {}
+    for root in roots:
+        bodies = [p for p in Usd.PrimRange(stage.GetPrimAtPath(root)) if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+        for body in bodies:
+            out[str(body.GetPath())] = float(UsdPhysics.MassAPI(body).GetMassAttr().Get() or 0.0)
+    return out
+
+
 def plant_lift_sag_m(plant_backend: dict, extra_mass_kg: float = 0.0) -> float | None:
     """Plan D14 (Codex impl round 4 P2-3): the lift drive's gravity sag in the engine as built -- the bodies the lift
     carries (the carriage and the blades: their names hold "fork") plus ``extra_mass_kg`` over the fork_lift drive's
@@ -3684,6 +3696,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                                       name=f"pallet_{session_prim_name(p_.pallet_id)}")
                            for p_ in session.pallets}
         pallet = PalletSwitch(session_handles, session.sequence[0][0])
+    # model audit (lead 2026-11-01): the pallet body the engine got carries the run's mass (pallet-mass plan)
+    state["pallet_mass"]["engine_usd_kg"] = pallet_body_masses_kg(
+        stage, ("/World/Pallet",) if session is None else tuple(pallet_prim(p_.pallet_id) for p_ in session.pallets))
+    require(all(abs(m - settings["pallet_mass_kg"]) <= 1e-4 * settings["pallet_mass_kg"]
+                for m in state["pallet_mass"]["engine_usd_kg"].values()),
+            f"Pallet body mass {state['pallet_mass']['engine_usd_kg']} is not the settings' {settings['pallet_mass_kg']} kg")
     if scene_layout is not None:
         state["scene_pallets"] = add_scene_pallets(stage, app, args.output / "pallet.usd", scene_layout.visuals)
     # The scene's start, or B-P2's --start-pose (plan 1.1: the placement and its validity only)
