@@ -283,3 +283,27 @@ def test_the_confirmed_rematch_job_judges_the_place_with_every_hypothesis_carrie
     out = PR.run_job("rematch", {"phase": "confirmed", "points": pts, "b": b, "hyps": [], "o0": I, "ot": I,
                                  "decision": "confirmed", "g": b, "deadline_at": None}, ctx)
     assert out["outcome"] == "confirm"
+
+
+def test_the_rear_check_is_asked_once_for_an_unconfirmed_start_and_a_block_ends_it():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b)
+    _tick(rt, b)
+    assert rt.rear_pending()
+    z = Zone("p", 1.0, 1.7, 1.2, 1.0, 0.0)
+    near = rt.rear_zones([z])
+    far = rt.zones([z])[0]
+    assert near[0].length_m > far[0].length_m  # grown for D_MIN and the stop, not the first bin
+    rt.rear_checked(0.0, blocked=False)
+    assert not rt.rear_pending() and rt.pc.status == "unconfirmed"
+    grid, w, rt = _started(False, b)
+    _tick(rt, b)
+    rt.rear_checked(0.0, blocked=True)
+    assert rt.pc.status == "ended:pose_rear_blocked" and not rt.rear_pending()
+
+
+def test_a_confirmed_start_needs_no_rear_check():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    _tick(rt, b, compose(b, invert(b)))
+    assert not rt.rear_pending()

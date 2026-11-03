@@ -56,3 +56,48 @@ def test_the_arguments_are_in_the_near_field_contract():
 
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_check"] == "off"
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_check_bounds"] is None
+
+
+def _source():
+    return (ROOT / "sim/isaac/run_transport.py").read_text()
+
+
+def test_the_check_sits_where_the_plan_puts_it_in_the_tick():
+    # plan 3.3 (Codex draft 1 P1-1): after the SLAM replies are applied and the control pose read, before any mission
+    # work; again right before the output; the check's end before a session end request can make it a normal end
+    src = _source()
+    replies = src.index("core.slam_replies(t, replies_")
+    first = src.index("pose_checkpoint(t)  # plan 3.3 (2)")
+    work = src.index("if obstacle is not None:\n                    obstacle[\"control_rear\"]")
+    assert replies < first < work
+    second = src.index("pose_checkpoint(t)  # plan 3.3 (3)")
+    assert second < src.index("live_safety_ = core.safety_state(t)\n                    out_ = live.tick_end(")
+    top_end = src.index('if pose_box["end"] is not None:\n                # plan 3.3: the check ended')
+    assert top_end < src.index("if live is not None and live.arbiter.session_request is not None:")
+
+
+def test_every_new_path_is_behind_the_check():
+    # the off path makes exactly the recorded calls (the replay gate): each new call is under pose_box
+    src = _source()
+    for needle in ("pose_box[\"rt\"].on_scan(", "pose_checkpoint(t)  # plan 3.3 (2)", "pose_checkpoint(t)  # plan 3.3 (3)",
+                   "pose_box[\"rt\"] = make_pose_runtime(args"):
+        at = src.index(needle)
+        assert 'pose_box["rt"] is not None' in src[at - 260:at] or 'pose_box["sink"] is not None' in src[at - 260:at], \
+            needle
+    assert '**({} if pose_box["rt"] is None' in src  # tick_start's pose_ok only when on
+
+
+def test_the_end_of_the_check_is_a_mission_failure_in_its_tick_and_a_session_failure_after():
+    from forklift_core.mission.failures import classify
+
+    assert classify("pose_ending:pose_revoked:int", strict=True) == "mission"
+    assert classify("pose_revoked:int", strict=True) == "session"
+    assert 'raise RuntimeError(f"pose_ending:{reason_}")' in _source()
+
+
+def test_a_setup_recorded_before_the_check_replays_with_it_off():
+    from tools import boundary_replay
+
+    assert boundary_replay.SETUP_NAMES_ADDED["pose_box"] == ("pose_check", "off", {"rt": None, "sink": None,
+                                                                                  "end": None})
+    assert 'if "pose_box" not in _bound:' in _source()

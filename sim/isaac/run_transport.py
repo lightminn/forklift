@@ -3244,7 +3244,7 @@ def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple
 
 
 def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, frozen=None, pace_s: float = 1 / 120,
-                         clock=None, console=None) -> dict:
+                         clock=None, console=None, sink=None) -> dict:
     """B-P2b (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 3-10, unattended): the stopped truck's start
     relocalization on the survey bundle's grid with B-P1b's frozen settings (sim/isaac/reloc_phase.py). Returns the
     record (``state["start_reloc"]``) with the estimate (map base) and its rear axle, once the supervisor answered
@@ -3274,7 +3274,7 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
-        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg))
+        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg, sink=sink))
     record = {**out, "map_id": bundle.map_id, "settings": settings_record, "place_settings": place_record,
               "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
@@ -3284,6 +3284,36 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
     if reason is not None:
         raise SessionFailure(reason)
     return record
+
+
+def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dict, scan_pattern):
+    """The unconfirmed position check's runtime (docs/plans/2026-11-02-unconfirmed-runner.md 3.3): its worker process on
+    the survey grid with B-P1b's frozen settings, the start relocalization's estimate and chosen search group, the
+    shared LiDAR's pattern, the stopping distance and one tick's travel at the straight reverse's speed."""
+    import pose_runtime
+    import reloc_phase
+
+    from forklift_core.localization import pose_check as P
+    from forklift_core.localization.encoders import MT6701_COUNTS_PER_REV, encoder_model_spec
+
+    cfg, reloc_cfg, _ = reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
+    bounds = args.pose_check_bounds
+    grid_path = Path(bundle.folder) / "grid.npz"
+    speed = 0.10  # V_REV_U: the straight reverse's limit (TeleopLimits.recovery_reverse_mps, design 3)
+    counts = MT6701_COUNTS_PER_REV if encoder_model_spec(args.encoder_model) is not None else None
+    stopping = obstacle["layer"].permission.config.stopping
+
+    def worker():
+        return pose_runtime.ProcessWorker(grid_path, cfg, reloc_cfg, bounds)
+
+    estimate = tuple(float(v) for v in start_reloc["estimate"])
+    return pose_runtime.PoseRuntime(
+        bounds=bounds, worker=worker(), worker_factory=worker, estimate=estimate, o0=estimate,
+        pool=start_reloc.get("pose_pool") or [], gen_points=(sink or {}).get("gen_points"), reloc_cfg=reloc_cfg,
+        angles=(scan_pattern.angle_min_rad, scan_pattern.angle_increment_rad), range_min_m=scan_pattern.range_min_m,
+        range_max_m=scan_pattern.range_max_m, match_range_m=cfg.match_range_m,
+        rear_offset_m=abs(args.rear_axle_offset_m), stop_m=stopping.distance_m(speed),
+        tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts))
 
 
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
@@ -3299,6 +3329,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     ms = MissionState()  # M-a1 step 0: the phase and its start, shared with the mission core
     tracker_book = {"book": None}  # set once the trackers exist; drained in the finally block
+    # the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md): its runtime, the relocalization's
+    # hand-on and the end it reached -- all None unless --pose-check on
+    pose_box = {"rt": None, "sink": {} if getattr(args, "pose_check", "off") == "on" else None, "end": None}
     import omni.usd
     from insertion_geometry import InsertionGeometry, read_fork_blades_m
     from isaacsim.core.api import World
@@ -4525,7 +4558,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         reloc_console = open_reloc_console(args, settings, robot, slam_bundle_, lift_index=lift_index, steers=steers,
                                            state=state)
         start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,
-                                           console=reloc_console)
+                                           console=reloc_console, sink=pose_box["sink"])
         reloc_console.service("setup")
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
@@ -4874,6 +4907,10 @@ def drive(S, isaac) -> None:
         _bound["reloc_console"] = None
     if "reloc_console" in _bound:
         reloc_console = _bound["reloc_console"]
+    if "pose_box" not in _bound:  # a setup recorded before the unconfirmed position check (2026-11-04): off
+        _bound["pose_box"] = {"rt": None, "sink": None, "end": None}
+    if "pose_box" in _bound:
+        pose_box = _bound["pose_box"]
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     if "truth_destination" in _bound:
@@ -7397,6 +7434,8 @@ def drive(S, isaac) -> None:
                     range_max_m=scan_pattern.range_max_m,
                 )
             slam["last_sent_ranges"] = sent  # the noisy scan, as docking sees it
+            if pose_box["rt"] is not None:  # plan 3.3: the scans the SLAM link was sent, for the check's scan sets
+                pose_box["rt"].on_scan(float(stamp_now), sent, slam_odom_base(), bool(slam.get("stop_now")))
             if slam["tracker"].applied is not None:
                 bx, by, byaw = compose(slam["tracker"].applied[0], slam_odom_base())
                 off = abs(args.rear_axle_offset_m)
@@ -7827,6 +7866,11 @@ def drive(S, isaac) -> None:
                               "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
                               "step_start_mono": live.step_start[-1][1]})  # sim -> wall for the lag (round 16 P1)
 
+            def live_pallet_zones():
+                """Plan D10: the target pallets' keep-out zones (map), as the permit and the pose check read them."""
+                return live_zones_from(core.targets, pickup_zone if session is None
+                                       else {id_: e_["zone"] for id_, e_ in live_session_["pallets"].items()})
+
             def live_permit(curvatures, direction, check):
                 # The arbiter's own permission on the layer's latest grid, in the sim's time (plan C2: the world and
                 # its sensors move in sim time); the snapshot is taken again only when a new scan came in.
@@ -7869,11 +7913,18 @@ def drive(S, isaac) -> None:
                     # Plan D10: the target pallets (grown by their margins) on the same arcs and outline; installed
                     # again on a new grid snapshot, a targets change or a correction (the pose moves without driving).
                     applied_ = obstacle.get("applied")
-                    zones_ = live_zones_from(core.targets, pickup_zone if session is None
-                                             else {id_: e_["zone"] for id_, e_ in live_session_["pallets"].items()})
+                    zones_ = live_pallet_zones()
                     ctx_ = core.cargo.recovery_context
                     pkey_ = (key_, None if applied_ is None else tuple(float(v) for v in applied_))
-                    if ctx_ is not None:
+                    pose_zones_, pose_key_ = ((None, None) if pose_box["rt"] is None
+                                              else pose_box["rt"].zones(zones_))
+                    if pose_zones_ is not None:
+                        # plan 3.3: the start not confirmed -- the union over every hypothesis, in odometry
+                        # coordinates against the odometry's rear axle (a SLAM correction cannot move them)
+                        odom_pose_ = tuple(float(v) for v in slam["odom_rear"])
+                        pallet_ = live_pallet_perm.limit(pose_zones_, pose_key_, odom_pose_, curvatures, direction,
+                                                         check, fp_, key=(key_, "pose_union"))
+                    elif ctx_ is not None:
                         # Plan D14: the recovered pallet's own zone is exempted (inside it every arc is 0); the
                         # others stay, and so does the LiDAR permission above.
                         kept_ = [z for z in zones_ if z.zone_id != ctx_["pallet_id"]]
@@ -8684,6 +8735,11 @@ def drive(S, isaac) -> None:
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
                        "overlay": overlay}
                 if encoder is not None else None)
+            if pose_box["sink"] is not None:
+                # plan 3.3: checking from the first live tick -- nothing opens until the start check's result
+                pose_box["rt"] = make_pose_runtime(args, start_reloc, slam_bundle_, obstacle, pose_box["sink"],
+                                                   scan_pattern)
+                live.arbiter.pose = pose_box["rt"].view_dict()
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         def scene_require(t_, ok_, reason_, cargo=False):
@@ -8706,6 +8762,59 @@ def drive(S, isaac) -> None:
             state["scene_after_damage"] = state.get("scene_after_damage", 0) + 1
 
         from forklift_core.mission.failures import classify as classify_failure
+
+        def pose_checkpoint(t_):
+            """The unconfirmed position check at one of its points in the tick (plan 3.3): this tick's odometry and
+            correction in, the view to the arbiter; the start's rear check once; an end raises pose_ending (a
+            mission-class failure: live_failed ends the mission, zeroes the output, publishes) and is kept for the
+            session's end at the next tick's top."""
+            from forklift_core.mission.commands import ACTIVE
+
+            rt_, a_ = pose_box["rt"], live.arbiter
+            tel_ = a_.teleop or {}
+            applied_ = slam["tracker"].applied
+            view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
+                             standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
+                             epoch=live.session_epoch, control_gen=a_.control_gen,
+                             mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
+            if rt_.rear_pending():
+                blocked_ = pose_rear_blocked(rt_)
+                rt_.rear_checked(t_, blocked_)
+                view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
+                                 standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
+                                 epoch=live.session_epoch, control_gen=a_.control_gen,
+                                 mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
+            a_.pose = rt_.view_dict(view_)
+            if view_.status.startswith("ended:") and pose_box["end"] is None:
+                reason_ = view_.status.split(":", 1)[1]
+                pose_box["end"] = {"reason": reason_, "t": float(t_)}
+                state["pose_check_end"] = dict(pose_box["end"])
+                a_.end_pose(live.clock(), reason_)
+                raise RuntimeError(f"pose_ending:{reason_}")
+
+        def pose_rear_blocked(rt_) -> bool:
+            """Design 3: the straight reverse to D_MIN and its stop is clear of the union zones (grown for that move)
+            and of the obstacle layer, on the permits' own outline and walk."""
+            from forklift_core.control.drive_permission import arc_poses
+            from forklift_core.localization import pose_check as P
+            from forklift_core.safety.pallet_permit import first_contact
+
+            layer_ = obstacle["layer"]
+            length_ = P.D_MIN + rt_.pc.stop_m
+            step_ = layer_.permission.config.step_m
+            fp_, own_ = layer_.footprints(None, -1)
+            odom_rear_ = tuple(float(v) for v in slam["odom_rear"])
+            zones_ = rt_.rear_zones(live_pallet_zones())
+            if zones_ and first_contact(odom_rear_, 0.0, -1, length_ + step_, step_, fp_, zones_)[0] < length_:
+                return True
+            map_rear_ = tuple(float(v) for v in slam_rear(world.current_time - initial_time))
+            snap_ = layer_.snapshot
+            if snap_ is None:
+                return True
+            path_ = arc_poses(map_rear_, 0.0, -1, length_ + step_, step_)[0]
+            check_ = layer_.permission.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
+                                                  lookahead_m=length_ + step_)
+            return check_.verified_m < length_
 
         def live_failed(t_, reason_, ticked_, stepped__, applied_):
             """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
@@ -8731,6 +8840,12 @@ def drive(S, isaac) -> None:
             # tick ends that mission and the session goes on; the tick's output, publish and physics step run
             # once (the flags say which already did). Any other failure goes on up, as in a batch run.
             live_tick_out_ = live_stepped_ = False
+            if pose_box["end"] is not None:
+                # plan 3.3: the check ended -- the controls locked, the wheels zeroed; once standing (or after 2 s)
+                # the session ends with its reason, before a session end request could make it a normal end
+                end_ = pose_box["end"]
+                if live.arbiter.stop_confirmed or world.current_time - initial_time - end_["t"] >= 2.0:
+                    raise SessionFailure(end_["reason"])
             if live is not None and live.arbiter.session_request is not None:
                 # The lease holder ended the session or asked for a new scene; the tick that took it is complete.
                 state["live_session_request"] = live.arbiter.session_request
@@ -8765,7 +8880,10 @@ def drive(S, isaac) -> None:
                         # plan D3: a submit before the tracker tracks is localization_lost
                         localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"),
                         loaded_pallet=live_loaded_pallet(),  # plan D5 6c: the carried pallet a submit may deliver
-                        repick_blockers=live_repick_blockers_)  # a re-pick's blockers (2026-10-28)
+                        repick_blockers=live_repick_blockers_,  # a re-pick's blockers (2026-10-28)
+                        **({} if pose_box["rt"] is None
+                           else {"pose_ok": live.arbiter.pose is not None
+                                 and live.arbiter.pose.get("status") == "confirmed"}))
                 elif mission_schedule is not None:
                     # M-a3 (plan E2, E7): the schedule's due commands and the stop kind in force, applied at this
                     # control tick's start.
@@ -8849,6 +8967,8 @@ def drive(S, isaac) -> None:
                         state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
                 if slam is not None:
                     rear = slam_rear(t)
+                    if live is not None and pose_box["rt"] is not None:
+                        pose_checkpoint(t)  # plan 3.3 (2): the new correction, before any mission work this tick
                     signed_speed = slam["tracker_speed"]
                     slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
                 if obstacle is not None:
@@ -9753,6 +9873,8 @@ def drive(S, isaac) -> None:
                             # D14 impl round 1 P2-3).
                             rear = np.asarray(slam_rear(t), dtype=float)
                             live_state["rear"] = tuple(float(v) for v in rear)
+                    if pose_box["rt"] is not None:
+                        pose_checkpoint(t)  # plan 3.3 (3): the correction this tick ends with, before the output
                     live_safety_ = core.safety_state(t)
                     out_ = live.tick_end(
                         t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
@@ -10100,6 +10222,16 @@ def drive(S, isaac) -> None:
                     tracker_book["book"].close()  # the leg switches not yet drained (V5 cusp arrivals)
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
                     state.setdefault("record_errors", []).append(f"leg switches: {exc_!r}")
+            if pose_box["rt"] is not None:
+                # plan 3.4: the unconfirmed position check's record, then its worker process goes
+                try:
+                    state["pose_check"] = pose_box["rt"].record()
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                    state.setdefault("record_errors", []).append(f"pose check: {exc_!r}")
+                try:
+                    pose_box["rt"].close()
+                except Exception as exc_:  # noqa: BLE001
+                    state.setdefault("record_errors", []).append(f"pose check worker: {exc_!r}")
             if near is not None:
                 # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
                 # summary in result.json. Guarded: a failed write never replaces the run's own

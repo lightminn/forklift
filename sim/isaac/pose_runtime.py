@@ -199,6 +199,7 @@ class PoseRuntime:
         self.rm: _Rematch | None = None
         self.rematches: list = []
         self._zones_cache = None
+        self.rear = None  # None: not asked; "pending"; {"t", "blocked"}: design 3's start check, once
 
     # --- inputs --------------------------------------------------------------------------------------------------------
     def on_scan(self, stamp: float, ranges, o_base, standing: bool) -> None:
@@ -284,6 +285,8 @@ class PoseRuntime:
             r_scan = tuple(result["base"]) if result["base"] is not None else tuple(self.start["b_scan"])
             self.pc.start(t, confirmed=bool(result["confirmed"]), r_scan=r_scan, o_scan=o_scan, C=C, o_now=o,
                           reasons=tuple(result["reasons"]), hyps=self.hyps_s)
+            if self.pc.status == "unconfirmed":
+                self.rear = "pending"  # design 3: can it back up D_MIN at all? (the runner judges, rear_checked)
             return
         rm = self.rm
         if rm is None or job != rm.job:
@@ -358,8 +361,23 @@ class PoseRuntime:
             self._zones_cache = (key, T.grown_zones(rho, upper, self.bounds))
         return self._zones_cache[1], ("pose_union", key[1], hash(key[0]))
 
+    def rear_pending(self) -> bool:
+        return self.rear == "pending" and self.pc.status == "unconfirmed"
+
+    def rear_checked(self, t: float, blocked: bool) -> None:
+        """The runner's verdict on the straight reverse to D_MIN and its stop (design 3): blocked ends the session."""
+        self.rear = {"t": t, "blocked": bool(blocked)}
+        if blocked:
+            self.pc.end(t, "pose_rear_blocked")
+
+    def rear_zones(self, map_zones) -> list:
+        """The union zones in odometry coordinates grown for the whole move to D_MIN and the stop (design 3)."""
+        upper = P.D_MIN + self.pc.stop_m + ZONE_BIN_M
+        hyps = [T.moved(self.b, self.o0, self.o_s)] + [q for q, _ in self.hyps_s]
+        return T.grown_zones(T.odom_zones(list(map_zones), hyps, self.o_s), upper, self.bounds)
+
     def record(self) -> dict:
-        return {"start": self.start, "events": self.pc.events, "rematches": self.rematches,
+        return {"start": self.start, "events": self.pc.events, "rematches": self.rematches, "rear": self.rear,
                 "hypotheses": len(self.hyps_s), "status": self.pc.status, "worker_restarts": self.restarts}
 
     def close(self) -> None:

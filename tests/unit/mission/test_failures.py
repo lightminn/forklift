@@ -165,3 +165,5 @@ def test_an_unconfirmed_position_end_ends_the_session():
     for reason in ("pose_rear_blocked", "pose_twin_preferred", "pose_out_of_set", "pose_slam_disagree",
                    "pose_revoked:int", "pose_revoked:still", "pose_revoked:rematch", "pose_worker_dead: exit 1"):
         assert classify(reason, strict=True) == SESSION, reason
+    # the tick it ended in: a mission's failure there (live_failed stops and publishes), the session's at the next top
+    assert classify("pose_ending:pose_revoked:int", strict=True) == "mission"

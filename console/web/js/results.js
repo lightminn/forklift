@@ -46,6 +46,7 @@ export const REASONS = {
   "pose_slam_disagree": "확인한 위치와 SLAM 위치가 맞지 않습니다 · 세션을 다시 시작하세요",
   "pose_revoked": "확인한 위치에서 SLAM 보정이 크게 벗어나 권한을 거뒀습니다",
   "pose_worker_dead": "위치 확인 계산을 다시 띄우지 못했습니다",
+  "pose_ending:": "출발 위치 확인이 끝나 미션을 멈췄습니다 · 차가 서면 세션이 끝납니다",
   "sensor_silence_stopped": "센서가 멈춰 정지했습니다",
   "Camera did not produce RGB": "카메라 영상이 오지 않았습니다",
   "Perception camera did not produce depth": "깊이 영상이 오지 않았습니다",
