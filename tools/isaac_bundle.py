@@ -931,25 +931,46 @@ def node_available_mib():
 
 class NodeStartGap:
     """The node's latest run start, shared by every bundle job on the node through a file under a file lock: a start
-    is let through when the latest one, of any job, is at least gap_s old (a clock that went back lets it through)."""
+    is let through when the latest one, of any job, is at least gap_s old (a clock that went back lets it through).
+    It is taken right before the start, after every wait (the RAM ledger's included), and given back when nothing
+    started, so a job that cannot start holds no turn from the others (Codex)."""
 
     def __init__(self, directory, gap_s):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.gap_s = gap_s
 
-    def take(self, now=time.time) -> bool:
+    def _last(self):
+        try:
+            return (self.dir / "last_start").read_text().strip()
+        except OSError:
+            return None
+
+    def take(self, now=time.time):
+        """The turn (to give back if nothing starts), or None while the latest start is younger than gap_s."""
         with open(self.dir / ".start_lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            t = now()
+            t, last = now(), self._last()
             try:
-                last = float((self.dir / "last_start").read_text())
-            except (OSError, ValueError):
-                last = None
-            if last is not None and 0.0 <= t - last < self.gap_s:
-                return False
-            (self.dir / "last_start").write_text(f"{t}\n")
-            return True
+                if last is not None and 0.0 <= t - float(last) < self.gap_s:
+                    return None
+            except ValueError:
+                pass
+            mark = repr(t)
+            (self.dir / "last_start").write_text(mark + "\n")
+            return mark, last
+
+    def give_back(self, turn):
+        """Put back the start before ours, unless another job has started since."""
+        mark, last = turn
+        with open(self.dir / ".start_lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self._last() != mark:
+                return
+            if last is None:
+                (self.dir / "last_start").unlink(missing_ok=True)
+            else:
+                (self.dir / "last_start").write_text(last + "\n")
 
 
 class NodeLedger:
@@ -1797,18 +1818,22 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 v = verdict(now)
                 index, run, attempt = queue[0]
                 key = f"{job_id}-{index}-{attempt}-{nonce}"
-                if v in ("ok", "unreadable_go") and start_gap is not None:
-                    if claimed_elsewhere(run, attempt):  # not ours: it takes no turn of the node's start gap
-                        queue.popleft()
-                        st["claimed_elsewhere"] += 1
-                        continue
-                    if not start_gap.take():
-                        v = "node_start"
+                if v in ("ok", "unreadable_go") and start_gap is not None and claimed_elsewhere(run, attempt):
+                    queue.popleft()  # not ours: it takes no turn of the node's start gap
+                    st["claimed_elsewhere"] += 1
+                    continue
                 if v in ("ok", "unreadable_go") and ledger is not None:
                     # the node's own memory: Slurm reserves the cgroups, not the bridge containers or what others
                     # run outside Slurm; the ledger keeps two jobs from both spending the same free memory
                     if not ledger.admit(key, node_ram_min_mib, node_ram):
                         v = "node_ram"
+                turn = None
+                if v in ("ok", "unreadable_go") and start_gap is not None:
+                    turn = start_gap.take()  # last, right before the start: no wait comes between
+                    if turn is None:
+                        v = "node_start"
+                        if ledger is not None:
+                            ledger.release(key)
                 if v in ("ok", "unreadable_go"):
                     st["waiting"] = None
                     if v == "unreadable_go":
@@ -1838,6 +1863,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 ledger.release(key)
                             except Exception as exc:  # noqa: BLE001
                                 note_error(f"release {run.name}", exc)
+                        if not started and turn is not None:
+                            try:  # nor the node's start turn
+                                start_gap.give_back(turn)
+                            except Exception as exc:  # noqa: BLE001
+                                note_error(f"give back {run.name}", exc)
                     continue
                 if v in ("over", "gpu_full", "node_ram", "node_start") and st["waiting"] != v:
                     st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits",

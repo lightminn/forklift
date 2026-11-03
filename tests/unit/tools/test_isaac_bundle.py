@@ -1702,11 +1702,42 @@ def test_the_node_start_gap_lets_one_start_through_per_gap(tmp_path):
     a, b = ib.NodeStartGap(tmp_path / "led", 60.0), ib.NodeStartGap(tmp_path / "led", 60.0)  # two jobs
     assert a.take(lambda: clock[0])
     clock[0] += 5.0
-    assert not b.take(lambda: clock[0]) and not a.take(lambda: clock[0])
+    assert b.take(lambda: clock[0]) is None and a.take(lambda: clock[0]) is None
     clock[0] += 55.0
     assert b.take(lambda: clock[0])
     clock[0] -= 30.0  # the clock went back: let through rather than hold every job
     assert a.take(lambda: clock[0])
+
+
+def test_a_turn_given_back_frees_the_gap_unless_another_start_came_since(tmp_path):
+    clock = [1000.0]
+    a, b = ib.NodeStartGap(tmp_path / "led", 60.0), ib.NodeStartGap(tmp_path / "led", 60.0)
+    first = a.take(lambda: clock[0])
+    clock[0] += 70.0
+    turn = a.take(lambda: clock[0])  # then nothing started (claim lost, start failed)
+    a.give_back(turn)
+    assert b.take(lambda: clock[0])  # the gap counts from the first start again: 70 s old
+    clock[0] += 70.0
+    turn = a.take(lambda: clock[0])
+    clock[0] += 70.0
+    assert b.take(lambda: clock[0])
+    a.give_back(turn)  # b started since: its start stays
+    assert a.take(lambda: clock[0]) is None and first
+
+
+def test_a_job_refused_by_the_ram_ledger_takes_no_turn_of_the_node_gap(tmp_path):
+    # Codex: a turn taken before the ledger refused would hold the gap (here: 60 s) from this and every other job
+    avail = iter([3000, 3000, 3000] + [20000] * 1000)
+    summary = bundle(tmp_path, [stamp_run("a", tmp_path, 0.05)], slots=1, node_ram_min_mib=6344,
+                     node_ram=lambda: next(avail), node_stagger_s=60.0, node_ledger_dir=str(tmp_path / "led"))
+    assert summary["node_ram_waits"] == 1 and summary["node_start_waits"] == 0 and summary["failed"] == 0
+
+
+def test_a_failed_start_gives_its_node_turn_back(tmp_path):
+    led = tmp_path / "led"
+    bundle(tmp_path, [ib.Run(name="a", argv=[str(tmp_path / "no_such_program")])], node_stagger_s=60.0,
+           node_ledger_dir=str(led))
+    assert results(tmp_path)["a"]["status"] == "start_failed" and not (led / "last_start").exists()
 
 
 def test_a_bundle_spaces_its_starts_by_the_node_gap_and_counts_the_waits(tmp_path):
