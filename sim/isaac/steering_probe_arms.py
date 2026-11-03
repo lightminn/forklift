@@ -144,10 +144,10 @@ def steer_axis_moment_z(points, impulses, axis_point) -> float:
 
 # ---- Isaac-side helpers (pxr / omni imported inside) ----
 
-def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float,
+def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float, steer_positions: dict,
                  floor_material_path: str = "/World/ContactMaterial") -> dict:
-    """The stage-side arms, authored after configure_drives and before the world reset (A3, A6, A7). Returns what
-    was authored, for the record."""
+    """The stage-side arms, authored after configure_drives and before the world reset (A3, A6, A7). ``steer_positions``:
+    each steering joint's position in the base frame by name (the scene record). Returns what was authored."""
     from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 
     record = {}
@@ -180,16 +180,14 @@ def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float,
     if "probe_shim_wheel" in settings:
         wheel = ("front_left", "front_right")[int(settings["probe_shim_wheel"]) - 1]
         cylinder = UsdGeom.Cylinder(stage.GetPrimAtPath(f"/World/Forklift/{wheel}_wheel/collisions/{wheel}_tire_collision/cylinder"))
-        # the tyre in the base frame of the imported model (both transforms from the import, neutral joints), carried to
-        # the spawn pose -- the stage's own wheel transforms do not follow the articulation's placement before the reset
-        # (Codex review)
-        base = UsdGeom.Xformable(stage.GetPrimAtPath("/World/Forklift/base_link"))
-        relative = (cylinder.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-                    * base.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).GetInverse()).ExtractTranslation()
-        c_, s_ = math.cos(base_yaw), math.sin(base_yaw)
-        cx = float(base_xyz[0]) + c_ * float(relative[0]) - s_ * float(relative[1])
-        cy = float(base_xyz[1]) + s_ * float(relative[0]) + c_ * float(relative[1])
         tyre_radius_m, tyre_width_m = float(cylinder.GetRadiusAttr().Get()), float(cylinder.GetHeightAttr().Get())
+        # the wheel centre is its steering joint's origin in the base frame (the measured model: spin joint and tyre
+        # collider at the carrier's origin), carried to the spawn pose -- the stage's wheel transforms do not follow the
+        # articulation's placement before the reset (Codex review)
+        relative = [float(v) for v in steer_positions[("left_steer", "right_steer")[int(settings["probe_shim_wheel"]) - 1]]]
+        c_, s_ = math.cos(base_yaw), math.sin(base_yaw)
+        cx = float(base_xyz[0]) + c_ * relative[0] - s_ * relative[1]
+        cy = float(base_xyz[1]) + s_ * relative[0] + c_ * relative[1]
         h = float(settings["probe_shim_height_m"])
         size_xy = (SHIM_SIZE_FACTOR * 2 * math.sqrt(2 * tyre_radius_m * 0.002), SHIM_SIZE_FACTOR * tyre_width_m)
         # at least the tyre's diameter long, so the wheel's steering sweep stays on the plate
@@ -205,7 +203,7 @@ def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float,
         UsdShade.MaterialBindingAPI.Apply(cube.GetPrim()).Bind(floor_material, UsdShade.Tokens.strongerThanDescendants,
                                                               "physics")
         record["shim"] = {"path": SHIM_PATH, "wheel": wheel, "centre_xy": [cx, cy], "height_m": h,
-                          "wheel_in_base_m": [float(relative[0]), float(relative[1]), float(relative[2])],
+                          "wheel_in_base_m": relative,
                           "size_xy_m": list(size_xy), "material": floor_material_path}
     return record
 

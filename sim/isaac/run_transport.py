@@ -3789,7 +3789,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         import steering_probe_arms
 
         state["steering_probe_arms_stage"] = steering_probe_arms.author_stage(
-            stage, settings, base_xyz=base_start, base_yaw=start_yaw)
+            stage, settings, base_xyz=base_start, base_yaw=start_yaw,
+            steer_positions={n: v["position_m"] for n, v in state["scene_chassis"]["joints"].items()})
         # read again after the arms (A6's material on the front tyres -- the records above predate it)
         state["steering_probe_arms_stage"]["tyre_contact_after"] = tyre_contact_readback(stage)
     if args.steering_probe:
