@@ -1258,6 +1258,14 @@ def arguments() -> argparse.Namespace:
         "tyre_contacts.npy (fork spacing plan, new plant candidate V1/V5).",
     )
     parser.add_argument(
+        "--probe-geometry-urdf",
+        type=Path,
+        default=None,
+        help="Steering left-asymmetry plan A10 (--steering-probe only): read the drive geometry (wheelbase, track, wheel "
+        "radius, steering limit) from this URDF instead of --forklift-urdf -- a name-swapped model's own reads by name "
+        "give a negative track.",
+    )
+    parser.add_argument(
         "--steering-probe",
         action="store_true",
         help="Diagnostic: after the spawn checks, drive scripted steering segments (standstill, "
@@ -1757,6 +1765,11 @@ class SessionFailure(RuntimeError):
 # --steering-probe only (numbers, as every settings value must be: 1 switches a flag on).
 DIAGNOSTIC_PROBE_SETTINGS = ("physx_friction_correlation_distance_m", "physx_solver_pgs", "physx_enable_stabilization",
                              "tyre_damping_combine_max", "wheel_drive_damping", "physx_external_forces_every_iteration")
+# The steering left-asymmetry plan's probe arms (steering_probe_arms.PROBE_ARM_SETTINGS, the same names -- a unit test
+# holds the two equal; listed here so a run without them does not import that module).
+PROBE_ARM_SETTINGS = ("probe_fix_base_z_m", "probe_load_kg", "probe_load_dx_m", "probe_load_dz_m", "probe_lift_m",
+                      "probe_front_tyre_frictionless", "probe_shim_wheel", "probe_shim_height_m",
+                      "probe_spawn_yaw_offset_rad", "probe_assign_by_y", "probe_front_spin_free")
 TYRE_LINKS = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
@@ -1907,20 +1920,25 @@ def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
     return out
 
 
-def run_steering_probe(world, robot, wheels, steers, settings, args, action_type, ackermann, out_dir) -> dict:
+def run_steering_probe(world, robot, wheels, steers, settings, args, action_type, ackermann, out_dir,
+                       arms=None, lift_index=None) -> dict:
     """Drive probe_segments() (or probe_segments_long()) and return a per-segment summary; the per-tick
     record goes to steering_probe.npz. Segment summaries use the last second of each segment, plus the
-    steady window when one exists."""
+    steady window when one exists. ``arms``: the steering left-asymmetry plan's run-time arms and extra
+    records (steering_probe_arms.ProbeRuntime -- its per-tick record goes to steering_probe_arms.npz)."""
     segments = {"long": probe_segments_long, "long_reverse_first": probe_segments_long_reverse_first,
                 "standard": probe_segments}[args.steering_probe_set]()
     dt = 1.0 / float(settings["physics_hz"])
     geometry = args.drive_geometry
     offset = abs(float(args.rear_axle_offset_m))
+    stage_wheels = TYRE_LINKS
+    names = list(robot.dof_names)
+    if arms is not None:
+        steers, wheels, stage_wheels = arms.assign(names, steers, wheels, stage_wheels)
+        arms.setup(world, names, action_type, lift_index, dt)
     steering = np.asarray(robot.get_joint_positions()[steers], dtype=float).copy()
     speed = 0.0
     rows, efforts_applied, efforts_measured, joint_forces, tyre_contacts = [], [], [], [], []
-    stage_wheels = TYRE_LINKS
-    names = list(robot.dof_names)
     # The 6-D incoming joint force of each wheel's support joint (front: the steering joint, rear: the
     # spin joint) -- its vertical part is the wheel's share of the truck's weight.
     try:
@@ -1955,6 +1973,8 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
                          *q[steers], *qd[steers], *drive.wheel_rates_rad_s, *qd[wheels], *rear,
                          float(position[2]), roll, pitch, *q[wheels]])
             tyre_contacts.append(tyre_floor_forces(stage_wheels))
+            if arms is not None:
+                arms.tick()
             try:
                 joint_forces.append(np.asarray(robot.get_measured_joint_forces(), dtype=float).reshape(-1, 6))
             except Exception:  # noqa: BLE001
@@ -2042,8 +2062,11 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
             "wheel_rate_FL": [float(np.mean(seg[:, c["w_cmd_FL"]])), float(np.mean(seg[:, c["w_FL"]]))],
             "wheel_rate_FR": [float(np.mean(seg[:, c["w_cmd_FR"]])), float(np.mean(seg[:, c["w_FR"]]))],
         })
-    return {"segments": summary, "dt_s": dt, "speeds_mps": [PROBE_SPEED_MPS, PROBE_FAST_MPS],
-            "curvatures": list(PROBE_CURVATURES)}
+    out = {"segments": summary, "dt_s": dt, "speeds_mps": [PROBE_SPEED_MPS, PROBE_FAST_MPS],
+           "curvatures": list(PROBE_CURVATURES)}
+    if arms is not None:
+        out["arms"] = arms.save(out_dir)
+    return out
 
 
 # Colour range of the robot-camera depth video; display only, not a sensor limit.
@@ -3719,6 +3742,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # The scene's start, or B-P2's --start-pose (plan 1.1: the placement and its validity only)
     base_start = np.array([*spawn_base_pose(args, scenario)[:2], 0.015])
     start_yaw = spawn_base_pose(args, scenario)[2]
+    if args.steering_probe and "probe_spawn_yaw_offset_rad" in settings:
+        start_yaw += float(settings["probe_spawn_yaw_offset_rad"])  # steering asymmetry plan A9: same place, turned
     robot = world.scene.add(
         Robot(
             prim_path="/World/Forklift",
@@ -3758,6 +3783,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for wheel_ in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"):
             report_ = PS.PhysxContactReportAPI.Apply(stage.GetPrimAtPath(f"/World/Forklift/{wheel_}"))
             report_.CreateThresholdAttr(0.0)
+    if args.steering_probe and any(k in settings for k in PROBE_ARM_SETTINGS):
+        # The steering left-asymmetry plan's stage-side arms (A3 base fixed, A6 front tyres frictionless, A7 shim),
+        # after configure_drives bound the materials and before the world reset.
+        import steering_probe_arms
+
+        state["steering_probe_arms_stage"] = steering_probe_arms.author_stage(
+            stage, settings, base_xyz=base_start, base_yaw=start_yaw)
+    if args.steering_probe:
+        import steering_probe_arms
+
+        state["steering_probe_joint_readback"] = steering_probe_arms.joint_readback(stage)
     # Physics-step scheduling sets the recording rate. Acquire every rendered
     # frame so the SDK elapsed-time threshold cannot skip frame metadata.
     camera = Camera(
@@ -4252,8 +4288,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     except Exception as exc_:  # noqa: BLE001 -- the API differs between releases; record why
         state["plant_backend"] = {"error": repr(exc_)}
     if args.steering_probe:
+        import steering_probe_arms
+
+        # the steering left-asymmetry plan's run-time arms and extra records (every probe, arms or not)
+        probe_arms_ = steering_probe_arms.ProbeRuntime(
+            robot, settings, state["scene_chassis"]["joints"], stage,
+            lambda extra_kg: plant_lift_sag_m(state["plant_backend"], extra_kg))
         state["steering_probe"] = run_steering_probe(
-            world, robot, wheels, steers, settings, args, ArticulationAction, ackermann_command, args.output
+            world, robot, wheels, steers, settings, args, ArticulationAction, ackermann_command, args.output,
+            arms=probe_arms_, lift_index=lift_index,
         )
         state["phase"] = "steering_probe_done"
         state["success"] = True
@@ -10443,11 +10486,19 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
         args.steering_probe or not any(k in settings for k in DIAGNOSTIC_PROBE_SETTINGS),
         f"{', '.join(k for k in DIAGNOSTIC_PROBE_SETTINGS if k in settings)}: diagnostic settings, --steering-probe only",
     )
+    if any(k in settings for k in PROBE_ARM_SETTINGS) or args.probe_geometry_urdf is not None:
+        # The steering left-asymmetry plan's probe arms (section 4.2): --steering-probe only, each well formed.
+        require(args.steering_probe, "probe arm settings and --probe-geometry-urdf: --steering-probe only")
+        from steering_probe_arms import arm_problems
+
+        problems_ = arm_problems(settings)
+        require(not problems_, f"probe arm settings: {'; '.join(problems_)}")
     from chassis_contract import require_curvature_within_model
     from insertion_geometry import read_carriage_limit_m, read_drive_geometry_m
 
     args.drive_geometry = read_drive_geometry_m(
-        args.forklift_urdf, settings["max_wheel_rate_rad_s"]
+        args.forklift_urdf if args.probe_geometry_urdf is None else args.probe_geometry_urdf,
+        settings["max_wheel_rate_rad_s"]
     )
     args.carriage_limit_m = read_carriage_limit_m(args.forklift_urdf)
     require_curvature_within_model(settings, args.drive_geometry)

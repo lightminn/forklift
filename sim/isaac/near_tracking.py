@@ -1088,6 +1088,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "odometry_heading": "steering", "gyro_model": None, "gyro_fault_at": None,
                               "return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
                               "tyre_contact_log": False, "steering_probe_set": "standard",
+                              # 2026-11-04 steering left-asymmetry plan A10 (--steering-probe only): the drive
+                              # geometry's URDF; unset = --forklift-urdf, as every earlier record
+                              "probe_geometry_urdf": None,
                               # 2026-10-15: the odometry's encoders; a record without the argument read
                               # the engine-reported rates, so a team-spec run differs from those tables.
                               "encoder_model": "reported",
