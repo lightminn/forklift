@@ -65,6 +65,14 @@
 #                  (docs/plans/2026-11-02-return-start-backoff-boxed.md); boxed: its registered F2'' batch passed in the
 #                  slam mode (docs/validation/2026-11-02-return-start-backoff-boxed-batch.md); MODE=truth was not in that
 #                  batch and keeps it off unless asked; RETURN_START=on (invalid_start only) or off as before.
+#   NEAR_END_STAND=on (MODE=slam; off for MODE=truth) --near-end-stand: the near re-observation leg's end stand outside
+#                  the loose bounds is planned again to the same target (C2, docs/plans/2026-11-02-near-leg-end-stand-c2.md);
+#                  on: its natural batch passed conditions 2-4 (#267) and its injection batch conditions 1-2
+#                  (docs/validation/2026-11-03-near-end-stand-c2-injection-results.md); the runner's default stays off.
+#                  NEAR_END_STAND=shadow|off as before; an explicit --near-end-stand in EXTRA_ARGS wins (the runner takes
+#                  the last one) and riib_defaults.txt records the value applied. Earlier riib batches ran it off: keep their
+#                  snapshots and settings, name both arms' C2 value in every comparison from now on, and never pool
+#                  earlier off results with new on results in one denominator (lead decision 2026-11-03).
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -77,7 +85,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -122,6 +130,9 @@ if [ "$MODE" = slam ]; then EXIT_EXEMPT=${EXIT_EXEMPT:-on}; else EXIT_EXEMPT=${E
 case "$EXIT_EXEMPT" in on|off) ;; *) echo "EXIT_EXEMPT must be on or off"; exit 2;; esac
 if [ "$MODE" = slam ]; then RETURN_START=${RETURN_START:-boxed}; else RETURN_START=${RETURN_START:-off}; fi
 case "$RETURN_START" in on|boxed|off) ;; *) echo "RETURN_START must be on, boxed or off"; exit 2;; esac
+if [ "$MODE" = slam ]; then NEAR_END_STAND=${NEAR_END_STAND:-on}; else NEAR_END_STAND=${NEAR_END_STAND:-off}; fi
+case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "NEAR_END_STAND must be on, shadow or off"; exit 2;; esac
+NEAR_END_STAND_FROM=launcher  # or EXTRA_ARGS, when it names its own (the runner takes the last --near-end-stand)
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
 # near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): empty = 0.10, the default before it.
 NEAR_REDRAW_LATERAL=${NEAR_REDRAW_LATERAL:-}
@@ -165,8 +176,17 @@ case "$VIEWS" in none|quarter|chase|quarter,chase|chase,quarter) ;; *) echo "VIE
 EXIT_CLEARANCE=${EXIT_CLEARANCE:-}
 EXTRA_SETS_EXIT=0  # EXTRA_ARGS's words, split as the runner gets them (spaces, tabs, newlines), not globbed here
 set -f
+NES_NEXT=0
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
+  # C2: an explicit --near-end-stand in EXTRA_ARGS is the value applied (the runner's parser takes a unique prefix and
+  # the last occurrence); recorded below as what the run got
+  if [ "$NES_NEXT" = 1 ]; then NEAR_END_STAND=$w; NEAR_END_STAND_FROM=EXTRA_ARGS; NES_NEXT=0; continue; fi
+  k=${w%%=*}
+  if [[ "$k" == --near-e* && "--near-end-stand" == "$k"* ]]; then
+    if [[ "$w" == *=* ]]; then NEAR_END_STAND=${w#*=}; NEAR_END_STAND_FROM=EXTRA_ARGS; else NES_NEXT=1; fi
+    continue
+  fi
   case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
   # the runner's parser takes a unique prefix too: --exit-p... can only be --exit-prefix-exempt
   k=${w%%=*}
@@ -180,6 +200,7 @@ for w in ${EXTRA_ARGS:-}; do
     [ "$EXIT_EXEMPT" = off ] || { echo "--near-tracking needs EXIT_EXEMPT=off (the runner refuses the exemption with it)"; exit 2; };; esac
 done
 set +f
+case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "--near-end-stand in EXTRA_ARGS must be on, shadow or off"; exit 2;; esac
 if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
     && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
   EXIT_CLEARANCE=0.30
@@ -202,6 +223,8 @@ printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s STA
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
+# C2: the value applied and where it came from (the launcher's default or switch, or EXTRA_ARGS)
+printf 'NEAR_END_STAND=%s NEAR_END_STAND_FROM=%s\n' "$NEAR_END_STAND" "$NEAR_END_STAND_FROM" >> "$OUT/riib_defaults.txt"
 [ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
@@ -227,6 +250,8 @@ COMMON=(--base-scene "$BASE_SCENE"
   --escape-presteer "$ESCAPE_PRESTEER"
   --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"
   --exit-prefix-exempt "$EXIT_EXEMPT" --return-start-backoff "$RETURN_START")
+# C2: the launcher's value only when EXTRA_ARGS names none, so the runner's arguments read one --near-end-stand
+[ "$NEAR_END_STAND_FROM" = launcher ] && COMMON+=(--near-end-stand "$NEAR_END_STAND")
 [ "$VIDEO" = on ] && COMMON+=(--video)
 case "$VIEWS" in
   none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress
