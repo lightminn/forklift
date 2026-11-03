@@ -13,13 +13,18 @@ Records only: ``run/result.json`` (scenario, scene_layout, geometry, samples) an
 pose every control tick). The runner and the evaluator are not touched.
 
 Shapes and sampling (said in the output too):
+- the phase of a control tick comes from the recorded ``transitions`` (not from the 0.1 s samples);
 - the truck: the nominal outline the guard uses -- ``geometry.loaded_footprint`` in the loaded phases, otherwise
-  ``geometry.unloaded_footprint`` (the hull beside the blades; the runner's reversing body-and-blades parts shape is not
-  rebuilt) -- at the truth rear pose of every control tick;
-- the carried pallet (loaded phases): its recorded outline at the 0.1 s samples only, as its own row;
-- the stop arc: at the 0.1 s samples with |speed| > 0.05 m/s, the sample's curvature command (the evaluator uses the
-  held steering curvature), the stopping distance of the permission model given on the command line;
-- unevaluated ranges: control-tick gaps over 3 ticks, and the time after the last sample for the sample-based rows.
+  ``geometry.unloaded_footprint`` (the hull beside the blades) -- at the truth rear pose of every control tick;
+- the carried pallet (loaded phases): its recorded outline at the 0.1 s samples only, as its own row, in the keep-out
+  overlap test too;
+- the stop arc: at every control tick, from the truth motion -- signed speed and path curvature from the truth rear
+  poses of the neighbouring ticks (the evaluator uses the held steering curvature; the truth path curvature stands for it)
+  -- the stopping distance of the permission model given on the command line, the evaluator's envelope, checked only
+  where the truck is within reach of a physical object. Reversing unloaded, the evaluator drives the body-and-blades
+  parts shape, which this tool does not rebuild: those ticks are listed as unevaluated for the arc;
+- unevaluated ranges: control-tick gaps over 3 ticks, sample gaps over 0.15 s, the time after the last sample for the
+  sample-based rows, and the unloaded reversing arc ticks.
 
     python tools/low_clearance_report.py OUT.json RUN_DIR [RUN_DIR ...]
         [--latency-s 0.15 --decel-mps2 1.5 --margin-m 0.05 --envelope-m 0.01]   (RUN_DIR holds run/result.json)"""
@@ -68,14 +73,39 @@ def _nearest(pose, shape, objs, beat: float = math.inf) -> tuple[float, int | No
     return d, min(objs, key=lambda o: shape_clearance(pose, shape, [o[1]]))[0]
 
 
-def _phase_at(samples: list, t: float) -> str | None:
-    """the phase of the last sample at or before t (samples are 0.1 s apart)"""
+def phase_timeline(s: dict) -> list:
+    """[(from time, phase)] from the recorded transitions; the first phase is the first transition's 'from'."""
+    tr = [t for t in s.get("transitions") or [] if isinstance(t, dict) and t.get("to")]
+    if not tr:
+        return []
+    out = [(-math.inf, tr[0].get("from"))]
+    out += [(float(t["time_s"]), t["to"]) for t in tr]
+    return out
+
+
+def phase_at(timeline: list, t: float) -> str | None:
     ph = None
-    for x in samples:
-        if float(x["time_s"]) > t + 1e-9:
+    for t0, p in timeline:
+        if t0 > t + 1e-12:
             break
-        ph = x.get("phase")
+        ph = p
     return ph
+
+
+def truth_motion(C: np.ndarray, k: int, half: int = 2) -> tuple[float, float]:
+    """(signed speed m/s, path curvature 1/m) at control row k from the truth rear poses of the neighbouring rows"""
+    a, b = max(0, k - half), min(len(C) - 1, k + half)
+    if b <= a:
+        return 0.0, 0.0
+    dx, dy = C[b, 4] - C[a, 4], C[b, 5] - C[a, 5]
+    dt = C[b, 0] - C[a, 0]
+    ds = math.hypot(dx, dy)
+    yaw = C[k, 6]
+    sign = 1.0 if dx * math.cos(yaw) + dy * math.sin(yaw) >= 0 else -1.0
+    dyaw = math.atan2(math.sin(C[b, 6] - C[a, 6]), math.cos(C[b, 6] - C[a, 6]))
+    v = sign * ds / dt if dt > 0 else 0.0
+    kappa = dyaw / (sign * ds) if ds > 1e-4 else 0.0
+    return float(v), float(kappa)
 
 
 def _gaps(times: np.ndarray, dt: float) -> list:
@@ -91,6 +121,7 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
     g = s.get("geometry") or {}
     loaded_fp, unloaded_fp = Footprint(**g["loaded_footprint"]), Footprint(**g["unloaded_footprint"])
     samples = [x for x in s.get("samples") or [] if x.get("phase")]
+    timeline = phase_timeline(s)
     out = {"run": rundir, "keepout_objects": len(keepout), "physical_objects": len(physical),
            "shapes": {"loaded": "geometry.loaded_footprint", "unloaded": "geometry.unloaded_footprint (hull)",
                       "pallet": "recorded outline at samples"},
@@ -105,7 +136,13 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
                                   "estimate, so they are not truth and are left out")
     rows = {k: {"min_m": math.inf, "t": None, "object": None, "phase": None}
             for k in ("truck_keepout", "truck_physical", "pallet_keepout", "pallet_physical")}
-    overlaps, arc_hits = [], []
+    overlaps, arc_hits, arc_unevaluated = [], [], []
+
+    def overlap(i, t, ph, part, step):
+        if not overlaps or overlaps[-1]["object"] != i or overlaps[-1]["part"] != part or t - overlaps[-1]["to_s"] > 2 * step:
+            overlaps.append({"object": i, "part": part, "from_s": t, "to_s": t, "phase": ph})
+        else:
+            overlaps[-1]["to_s"] = t
 
     def note(key, d, t, obj, ph):
         if d < rows[key]["min_m"]:
@@ -116,12 +153,13 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
         out["control_tick_s"] = dt
         out["unevaluated"] += [{"control_gap_s": gp} for gp in _gaps(C[:, 0], dt)]
         t0 = float(samples[0]["time_s"])
-        for row in C:
+        for k, row in enumerate(C):
             t = float(row[0])
             if t < t0:
                 continue
-            ph = _phase_at(samples, t)
-            shape = loaded_fp if ph in LOADED_PHASES else unloaded_fp
+            ph = phase_at(timeline, t) if timeline else None
+            loaded = ph in LOADED_PHASES
+            shape = loaded_fp if loaded else unloaded_fp
             pose = tuple(float(v) for v in row[4:7])
             dk, ok = _nearest(pose, shape, keepout, rows["truck_keepout"]["min_m"])
             dp, op = _nearest(pose, shape, physical, rows["truck_physical"]["min_m"])
@@ -129,10 +167,23 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
             note("truck_physical", dp, t, op, ph)
             for i, r in (keepout if dk <= 0.0 else ()):  # the distance is 0 when they meet; the overlap test decides
                 if shape_meets(r, shape, pose, 0.0):
-                    if not overlaps or overlaps[-1]["object"] != i or t - overlaps[-1]["to_s"] > 2 * dt:
-                        overlaps.append({"object": i, "from_s": t, "to_s": t, "phase": ph})
-                    else:
-                        overlaps[-1]["to_s"] = t
+                    overlap(i, t, ph, "truck", dt)
+            v, kappa = truth_motion(C, k)
+            if abs(v) <= 0.05:
+                continue
+            stop_len = stopping.distance_m(v)
+            if dp > stop_len + envelope_m + 0.05:
+                continue  # out of reach of every physical object on this tick's arc
+            if not loaded and v < 0:
+                if not arc_unevaluated or t - arc_unevaluated[-1][1] > 2 * dt:
+                    arc_unevaluated.append([t, t])
+                else:
+                    arc_unevaluated[-1][1] = t
+                continue
+            poses = arc_poses(pose, kappa, 1 if v > 0 else -1, stop_len, 0.025)[0]
+            hit = [j for j, r in physical if any(shape_meets(r, shape, tuple(p), envelope_m) for p in poses[1:])]
+            if hit:
+                arc_hits.append({"t": t, "phase": ph, "objects": hit, "speed_mps": v, "curvature_inv_m": kappa})
     pd, pw = float(g.get("pallet_depth_m", 0.6)), float(g.get("pallet_width_m", 0.8))
     for x in samples:
         t, ph = float(x["time_s"]), x["phase"]
@@ -145,19 +196,14 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
             dp, op = _nearest(pose, pal_shape, physical, rows["pallet_physical"]["min_m"])
             note("pallet_keepout", dk, t, ok, ph)
             note("pallet_physical", dp, t, op, ph)
-        if C is None or not len(C):
-            continue
-        v = float(x.get("signed_speed_mps") or 0.0)
-        if abs(v) <= 0.05:
-            continue
-        i = int(np.clip(np.searchsorted(C[:, 0], t), 0, len(C) - 1))
-        pose = tuple(float(c) for c in C[i, 4:7])
-        shape = loaded_fp if ph in LOADED_PHASES else unloaded_fp
-        poses = arc_poses(pose, float(x.get("curvature_inv_m") or 0.0), 1 if v > 0 else -1,
-                          stopping.distance_m(v), 0.025)[0]
-        hit = [j for j, r in physical if any(shape_meets(r, shape, tuple(p), envelope_m) for p in poses[1:])]
-        if hit:
-            arc_hits.append({"t": t, "phase": ph, "objects": hit, "speed_mps": v})
+            for i, r in (keepout if dk <= 0.0 else ()):
+                if shape_meets(r, pal_shape, pose, 0.0):
+                    overlap(i, t, ph, "pallet", 0.1)
+    st = np.array([float(x["time_s"]) for x in samples])
+    out["sample_interval_s"] = float(np.median(np.diff(st))) if len(st) > 1 else None
+    out["unevaluated"] += [{"sample_gap_s": [float(st[k]), float(st[k + 1])]}
+                           for k in np.nonzero(np.diff(st) > 0.15)[0]] if len(st) > 1 else []
+    out["unevaluated"] += [{"arc_unloaded_reversing_s": seg} for seg in arc_unevaluated]
     out["unevaluated"].append({"after_last_sample_s": float(samples[-1]["time_s"])})
     out["rows"] = {k: ({**r, "min_m": None} if math.isinf(r["min_m"]) else r) for k, r in rows.items()}
     out["keepout_overlaps"] = overlaps
