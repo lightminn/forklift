@@ -159,7 +159,8 @@ def test_the_exemption_has_one_switch_and_refuses_near_tracking(tmp_path, env):
 
 
 def test_near_tracking_goes_with_the_exemption_turned_off(tmp_path):
-    out = dry_run(tmp_path, EXIT_EXEMPT="off", EXTRA_ARGS="--near-tracking")
+    # and with the return cusp replan budget at the 0 its contract was measured at (the slam default is 2)
+    out = dry_run(tmp_path, EXIT_EXEMPT="off", EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0")
     assert out.returncode == 0, out.stderr
     assert contains(args_of(out), ["--exit-prefix-exempt", "off"])
 
@@ -573,3 +574,27 @@ def test_return_cusp_replans_named_twice_records_the_last_one(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "RETURN_CUSP_REPLANS=0 RETURN_CUSP_REPLANS_FROM=EXTRA_ARGS" in (tmp_path / "out/riib_defaults.txt").read_text()
     assert not contains(args_of(out), ["--return-cusp-replans", "2"])
+
+
+def test_near_tracking_needs_return_cusp_replans_0(tmp_path):
+    # Codex promotion review P3: the near-tracking contract was measured at 0; the launcher says so before the runner does
+    out = dry_run(tmp_path, EXTRA_ARGS="--near-tracking", EXIT_EXEMPT="off")
+    assert out.returncode == 2 and "--near-tracking needs RETURN_CUSP_REPLANS=0" in out.stdout
+    out = dry_run(tmp_path, EXTRA_ARGS="--near-tracking", EXIT_EXEMPT="off", RETURN_CUSP_REPLANS="0")
+    assert "needs RETURN_CUSP_REPLANS" not in out.stdout
+
+
+def test_the_runner_s_check_takes_the_default_budget_and_refuses_a_missing_value(tmp_path):
+    # Codex promotion review P3: the real parser (DRY_RUN_CHECK=1), not the launcher's own argument list
+    from tools import riibotics_isaac_scenes as tool
+
+    scenes = tmp_path / "real"
+    scenes.mkdir()
+    (scenes / "aisle_rack.json").write_text(json.dumps(tool.scene_record("aisle_rack", tool.rack_scene())))
+    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "o_ok", SCENE_DIR=str(scenes), DRY_RUN_CHECK="1",
+                  PYTHONPATH=str(ROOT / "src"))
+    assert out.returncode == 0 and out.stdout.splitlines()[-1] == "ARGS_OK", out.stdout[-800:] + out.stderr
+    assert contains(args_of(out), ["--return-cusp-replans", "2"])
+    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "o_bad", SCENE_DIR=str(scenes), DRY_RUN_CHECK="1",
+                  PYTHONPATH=str(ROOT / "src"), EXTRA_ARGS="--return-cusp-replans")
+    assert out.returncode == 2 and "--return-cusp-replans: expected one argument" in out.stderr

@@ -78,8 +78,10 @@
 #                  (docs/plans/2026-10-31-return-cusp-replan.md D1); 2: its re-registered batch passed in the slam mode
 #                  (docs/validation/2026-11-04-return-cusp-replan-reregistration-results.md); the runner's default stays 0.
 #                  RETURN_CUSP_REPLANS=0 is the earlier behaviour; an explicit --return-cusp-replans in EXTRA_ARGS wins (the
-#                  runner takes the last one) and riib_defaults.txt records the value applied. Earlier riib batches ran 0:
-#                  name both arms' value in every comparison and never pool 0 results with 2 results in one denominator.
+#                  runner takes the last one; the launcher then adds none of its own) and riib_defaults.txt records the value
+#                  applied. Earlier riib batches ran 0: name both arms' value in every comparison and never pool 0 results
+#                  with 2 results in one denominator. The near-tracking contract was measured at 0, so EXTRA_ARGS=--near-tracking
+#                  needs RETURN_CUSP_REPLANS=0 (the runner refuses another value); bundle lists name the full flag.
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -219,6 +221,8 @@ done
 set +f
 case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "--near-end-stand in EXTRA_ARGS must be on, shadow or off"; exit 2;; esac
 [[ "$RETURN_CUSP_REPLANS" =~ ^[0-9]+$ ]] || { echo "--return-cusp-replans in EXTRA_ARGS must be a count (0 = off)"; exit 2; }
+case " ${EXTRA_ARGS:-} " in *" --near-tracking "*)
+  [ "$RETURN_CUSP_REPLANS" = 0 ] || { echo "--near-tracking needs RETURN_CUSP_REPLANS=0 (its contract was measured at 0)"; exit 2; };; esac
 if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
     && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
   EXIT_CLEARANCE=0.30
