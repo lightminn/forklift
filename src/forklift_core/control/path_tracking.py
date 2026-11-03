@@ -205,6 +205,57 @@ class RearAxlePathTracker:
         self.leg_switches: list[dict] = []
         self._last_eval = None
         self._braking_against_motion = False
+        # Diagnostic (docs/plans/2026-11-03-near-end-stand-c2-injection.md 1.2): a rigid offset of the input pose about
+        # the final goal, None when off (every earlier run); its clear and any arrival under it, for the caller.
+        self._input_offset = None
+        self.input_offset_events: list[dict] = []
+
+    def set_input_offset(self, dx_left_m: float, dpsi_rad: float, clear_within_m: float) -> None:
+        """Diagnostic (docs/plans/2026-11-03-near-end-stand-c2-injection.md 1.2): from the next update() on, follow the
+        path as if it were moved rigidly about its final goal -- dx_left_m to the goal heading's left and turned by
+        dpsi_rad -- by reading each input pose through the inverse move. The path arrays are not changed (every other
+        reader sees the original path). Cleared inside update(), before that update runs, when its projection would
+        leave clear_within_m or less to the goal, so no end judgement is made under it."""
+        for name, value in (("dx_left_m", dx_left_m), ("dpsi_rad", dpsi_rad), ("clear_within_m", clear_within_m)):
+            _finite_scalar(value, name)
+        goal = self._poses[-1]
+        self._input_offset = (float(goal[0]), float(goal[1]), float(goal[2]), float(dx_left_m), float(dpsi_rad),
+                              float(clear_within_m))
+
+    def input_offset_active(self) -> bool:
+        """Whether set_input_offset() still applies."""
+        return self._input_offset is not None
+
+    def _offset_input(self, pose: np.ndarray) -> np.ndarray:
+        """The input pose read through the inverse of the rigid move about the goal."""
+        gx, gy, gyaw, dx, dpsi, _ = self._input_offset
+        x = pose[0] + dx * sin(gyaw) - gx
+        y = pose[1] - dx * cos(gyaw) - gy
+        c, s = cos(dpsi), sin(dpsi)
+        return np.array([gx + c * x + s * y, gy - s * x + c * y, _angle(float(pose[2] - dpsi))])
+
+    def _project(self, pose: np.ndarray, signed_speed_mps: float, dt_s: float) -> tuple[int, float, float]:
+        """The segment, the fraction along it and the advance limit update() projects pose onto (no state changed)."""
+        endpoint = self._leg_ends[self._leg]
+        # Only walk adjacent segments; repeated spatial locations cannot select
+        # a later leg. Bound projection advance to a local motion-sized window.
+        advance_limit = (
+            self._progress + abs(signed_speed_mps) * dt_s + self.config.lookahead_m / 2
+        )
+        i = self._segment
+        while True:
+            fraction = float(
+                np.dot(pose[:2] - self._poses[i, :2], self._vectors[i])
+                / self._lengths[i] ** 2
+            )
+            if (
+                fraction < 1
+                or i + 1 >= endpoint
+                or self._distance[i + 1] > advance_limit
+            ):
+                break
+            i += 1
+        return i, fraction, advance_limit
 
     def _speed_profile(self) -> np.ndarray:
         """Largest speed on the segment arriving at each sample, braked ahead."""
@@ -476,6 +527,19 @@ class RearAxlePathTracker:
             raise ValueError("signed_speed_mps must be finite")
         _positive("dt_s", dt_s)
         cfg = self.config
+        if self._input_offset is not None:
+            moved = self._offset_input(pose)
+            i, fraction, advance_limit = self._project(moved, signed_speed_mps, dt_s)
+            projected = self._distance[i] + float(np.clip(fraction, 0, 1)) * self._lengths[i]
+            remaining = float(self._distance[-1] - max(self._progress, min(projected, advance_limit)))
+            if remaining <= self._input_offset[5]:
+                # cleared before this update runs: its projection, end judgement and _last_eval use the pose as given
+                self._input_offset = None
+                self.input_offset_events.append({"event": "cleared", "progress_m": float(self._progress),
+                                                 "remaining_m": float(self._distance[-1] - self._progress),
+                                                 "projected_remaining_m": remaining})
+            else:
+                pose = moved
         self._braking_against_motion = False
         endpoint = self._leg_ends[self._leg]
         goal = self._poses[endpoint]
@@ -483,24 +547,8 @@ class RearAxlePathTracker:
         yaw_error = _angle(float(goal[2] - pose[2]))
         self._last_eval = ([float(v) for v in pose], position_error, float(yaw_error))
 
-        # Only walk adjacent segments; repeated spatial locations cannot select
-        # a later leg. Bound projection advance to a local motion-sized window.
-        advance_limit = (
-            self._progress + abs(signed_speed_mps) * dt_s + cfg.lookahead_m / 2
-        )
-        while True:
-            i = self._segment
-            fraction = float(
-                np.dot(pose[:2] - self._poses[i, :2], self._vectors[i])
-                / self._lengths[i] ** 2
-            )
-            if (
-                fraction < 1
-                or i + 1 >= endpoint
-                or self._distance[i + 1] > advance_limit
-            ):
-                break
-            self._segment += 1
+        i, fraction, advance_limit = self._project(pose, signed_speed_mps, dt_s)
+        self._segment = i
         projected = (
             self._distance[i] + float(np.clip(fraction, 0, 1)) * self._lengths[i]
         )
@@ -635,6 +683,9 @@ class RearAxlePathTracker:
             if endpoint == len(self._poses) - 1:
                 self._arrived = True
                 status = "arrived"
+                if self._input_offset is not None:  # never expected: the clear above runs first (plan 1.2)
+                    self.input_offset_events.append({"event": "arrived_under_offset",
+                                                     "progress_m": float(self._progress)})
             else:
                 self._advance_leg()
         if self._arrived:
