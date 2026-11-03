@@ -73,6 +73,13 @@
 #                  the last one) and riib_defaults.txt records the value applied. Earlier riib batches ran it off: keep their
 #                  snapshots and settings, name both arms' C2 value in every comparison from now on, and never pool
 #                  earlier off results with new on results in one denominator (lead decision 2026-11-03).
+#   RETURN_CUSP_REPLANS=2 (MODE=slam; 0 for MODE=truth) --return-cusp-replans: a return_home cusp heading failure is
+#                  braked and the return planned again from the stand, at most N times per return
+#                  (docs/plans/2026-10-31-return-cusp-replan.md D1); 2: its re-registered batch passed in the slam mode
+#                  (docs/validation/2026-11-04-return-cusp-replan-reregistration-results.md); the runner's default stays 0.
+#                  RETURN_CUSP_REPLANS=0 is the earlier behaviour; an explicit --return-cusp-replans in EXTRA_ARGS wins (the
+#                  runner takes the last one) and riib_defaults.txt records the value applied. Earlier riib batches ran 0:
+#                  name both arms' value in every comparison and never pool 0 results with 2 results in one denominator.
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -85,7 +92,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [RETURN_CUSP_REPLANS=2] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -133,6 +140,9 @@ case "$RETURN_START" in on|boxed|off) ;; *) echo "RETURN_START must be on, boxed
 if [ "$MODE" = slam ]; then NEAR_END_STAND=${NEAR_END_STAND:-on}; else NEAR_END_STAND=${NEAR_END_STAND:-off}; fi
 case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "NEAR_END_STAND must be on, shadow or off"; exit 2;; esac
 NEAR_END_STAND_FROM=launcher  # or EXTRA_ARGS, when it names its own (the runner takes the last --near-end-stand)
+if [ "$MODE" = slam ]; then RETURN_CUSP_REPLANS=${RETURN_CUSP_REPLANS:-2}; else RETURN_CUSP_REPLANS=${RETURN_CUSP_REPLANS:-0}; fi
+[[ "$RETURN_CUSP_REPLANS" =~ ^[0-9]+$ ]] || { echo "RETURN_CUSP_REPLANS must be a count (0 = off)"; exit 2; }
+RETURN_CUSP_REPLANS_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --return-cusp-replans)
 [[ "$RESTART_CONFIRM" =~ ^[0-9]+$ ]] || { echo "RESTART_CONFIRM must be 0 (off) or a number of scans"; exit 2; }
 # near tracking re-measure (docs/plans/2026-10-27-insertion-lateral-drift.md 5.3): empty = 0.10, the default before it.
 NEAR_REDRAW_LATERAL=${NEAR_REDRAW_LATERAL:-}
@@ -177,6 +187,7 @@ EXIT_CLEARANCE=${EXIT_CLEARANCE:-}
 EXTRA_SETS_EXIT=0  # EXTRA_ARGS's words, split as the runner gets them (spaces, tabs, newlines), not globbed here
 set -f
 NES_NEXT=0
+RCR_NEXT=0
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
   # C2: an explicit --near-end-stand in EXTRA_ARGS is the value applied (the runner's parser takes a unique prefix and
@@ -185,6 +196,12 @@ for w in ${EXTRA_ARGS:-}; do
   k=${w%%=*}
   if [[ "$k" == --near-e* && "--near-end-stand" == "$k"* ]]; then
     if [[ "$w" == *=* ]]; then NEAR_END_STAND=${w#*=}; NEAR_END_STAND_FROM=EXTRA_ARGS; else NES_NEXT=1; fi
+    continue
+  fi
+  # the same for the return cusp replan budget (--return-c... can only be --return-cusp-replans)
+  if [ "$RCR_NEXT" = 1 ]; then RETURN_CUSP_REPLANS=$w; RETURN_CUSP_REPLANS_FROM=EXTRA_ARGS; RCR_NEXT=0; continue; fi
+  if [[ "$k" == --return-c* && "--return-cusp-replans" == "$k"* ]]; then
+    if [[ "$w" == *=* ]]; then RETURN_CUSP_REPLANS=${w#*=}; RETURN_CUSP_REPLANS_FROM=EXTRA_ARGS; else RCR_NEXT=1; fi
     continue
   fi
   case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
@@ -201,6 +218,7 @@ for w in ${EXTRA_ARGS:-}; do
 done
 set +f
 case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "--near-end-stand in EXTRA_ARGS must be on, shadow or off"; exit 2;; esac
+[[ "$RETURN_CUSP_REPLANS" =~ ^[0-9]+$ ]] || { echo "--return-cusp-replans in EXTRA_ARGS must be a count (0 = off)"; exit 2; }
 if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
     && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
   EXIT_CLEARANCE=0.30
@@ -225,6 +243,8 @@ printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s STA
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
 # C2: the value applied and where it came from (the launcher's default or switch, or EXTRA_ARGS)
 printf 'NEAR_END_STAND=%s NEAR_END_STAND_FROM=%s\n' "$NEAR_END_STAND" "$NEAR_END_STAND_FROM" >> "$OUT/riib_defaults.txt"
+# return cusp replan budget: the value applied and where it came from
+printf 'RETURN_CUSP_REPLANS=%s RETURN_CUSP_REPLANS_FROM=%s\n' "$RETURN_CUSP_REPLANS" "$RETURN_CUSP_REPLANS_FROM" >> "$OUT/riib_defaults.txt"
 [ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
@@ -252,6 +272,8 @@ COMMON=(--base-scene "$BASE_SCENE"
   --exit-prefix-exempt "$EXIT_EXEMPT" --return-start-backoff "$RETURN_START")
 # C2: the launcher's value only when EXTRA_ARGS names none, so the runner's arguments read one --near-end-stand
 [ "$NEAR_END_STAND_FROM" = launcher ] && COMMON+=(--near-end-stand "$NEAR_END_STAND")
+# the launcher's budget only when EXTRA_ARGS names none, so the runner's arguments read one --return-cusp-replans
+[ "$RETURN_CUSP_REPLANS_FROM" = launcher ] && COMMON+=(--return-cusp-replans "$RETURN_CUSP_REPLANS")
 [ "$VIDEO" = on ] && COMMON+=(--video)
 case "$VIEWS" in
   none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress

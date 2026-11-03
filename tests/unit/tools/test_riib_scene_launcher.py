@@ -539,3 +539,37 @@ def test_c2_named_twice_in_extra_args_records_the_last_one(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "NEAR_END_STAND=off NEAR_END_STAND_FROM=EXTRA_ARGS" in (tmp_path / "out/riib_defaults.txt").read_text()
     assert not contains(args_of(out), ["--near-end-stand", "on"])
+
+
+def test_return_cusp_replans_is_2_in_the_slam_mode_and_0_in_truth_unless_switched(tmp_path):
+    # lead decision 2026-11-04: the re-registered batch passed (docs/validation/2026-11-04-return-cusp-replan-reregistration-results.md)
+    args = args_of(dry_run(tmp_path))
+    assert contains(args, ["--return-cusp-replans", "2"]) and args.count("--return-cusp-replans") == 1
+    assert "RETURN_CUSP_REPLANS=2 RETURN_CUSP_REPLANS_FROM=launcher" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, RETURN_CUSP_REPLANS="0")), ["--return-cusp-replans", "0"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--return-cusp-replans", "0"])
+
+
+@pytest.mark.parametrize("extra, value", [("--return-cusp-replans 0", "0"), ("--return-cusp-replans=1", "1"),
+                                          ("--return-c 3 --record-boundary", "3")])
+def test_return_cusp_replans_named_in_extra_args_wins_and_is_recorded(tmp_path, extra, value):
+    out = dry_run(tmp_path, EXTRA_ARGS=extra, RETURN_CUSP_REPLANS="2")
+    assert out.returncode == 0, out.stderr
+    named = [a for a in args_of(out) if a.startswith("--return-c")]
+    assert len(named) == 1  # the launcher adds none of its own: the runner reads one
+    text = (tmp_path / "out/riib_defaults.txt").read_text()
+    assert f"RETURN_CUSP_REPLANS={value} RETURN_CUSP_REPLANS_FROM=EXTRA_ARGS" in text
+
+
+@pytest.mark.parametrize("env", [{"RETURN_CUSP_REPLANS": "two"}, {"RETURN_CUSP_REPLANS": "-1"},
+                                 {"EXTRA_ARGS": "--return-cusp-replans x"}])
+def test_return_cusp_replans_takes_only_a_count(tmp_path, env):
+    out = dry_run(tmp_path, **env)
+    assert out.returncode == 2 and "must be a count" in out.stdout
+
+
+def test_return_cusp_replans_named_twice_records_the_last_one(tmp_path):
+    out = dry_run(tmp_path, EXTRA_ARGS="--return-cusp-replans 1 --return-cusp-replans=0")
+    assert out.returncode == 0, out.stderr
+    assert "RETURN_CUSP_REPLANS=0 RETURN_CUSP_REPLANS_FROM=EXTRA_ARGS" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert not contains(args_of(out), ["--return-cusp-replans", "2"])
