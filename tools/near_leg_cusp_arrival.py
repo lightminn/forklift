@@ -37,10 +37,12 @@ def in_frame(pose, ref) -> tuple[float, float, float]:
     return dx * c + dy * s, -dx * s + dy * c, wrap(pose[2] - ref[2])
 
 
-def near_trackers(s: dict, near_serials: set) -> dict:
-    """book serial -> tracker version, for the near-leg trackers this rule can prove."""
+def near_trackers(s: dict, near_serials: set, armed_s: float | None = None) -> dict:
+    """book serial -> tracker version, for the near-leg trackers this rule can prove from the replans before any
+    injection arming (no later record decides it -- Codex arrival review P3)."""
     versions = [v for v in s.get("tracker_versions") or [] if v.get("phase") == "observe"]
-    times = sorted(float(r["time_s"]) for r in s.get("observe_replans") or [] if r.get("leg_serial") in near_serials)
+    times = sorted(float(r["time_s"]) for r in s.get("observe_replans") or [] if r.get("leg_serial") in near_serials
+                   and (armed_s is None or float(r["time_s"]) < armed_s))
     out = {}
     for v in versions:
         inst, repl = v.get("installed_s"), v.get("replaced_s")
@@ -56,24 +58,36 @@ def at(C: np.ndarray, t: float) -> tuple[list, list]:
     return C[i, 1:4].tolist(), C[i, 4:7].tolist()
 
 
+def apply(T, p) -> np.ndarray:
+    """A map-from-odom transform (x, y, yaw) applied to an odom pose (x, y, yaw)."""
+    c, s_ = math.cos(T[2]), math.sin(T[2])
+    return np.array([T[0] + c * p[0] - s_ * p[1], T[1] + s_ * p[0] + c * p[1], wrap(T[2] + p[2])])
+
+
 def corrections(records: list, t: float, cusp_pose=None) -> dict:
-    """The applied map-from-odom over WINDOW_S before t: its largest single step and its net change, the net
-    translation also in the cusp's frame (its lateral sign against the stand's lateral error)."""
-    win = [r for r in records if t - WINDOW_S <= float(r["stamp_s"]) <= t and r.get("applied_map_from_odom")]
+    """The applied map-from-odom over WINDOW_S before t, as what it did to the vehicle's estimate: each step is the
+    same odom pose under the new and the old transform (dp = dt + (R2 - R1) p_odom -- Codex arrival review P2-2); the
+    net change likewise at the window's last odom pose, in the cusp's frame. A window whose transform never changed
+    gets no step time (review P2-3)."""
+    win = [r for r in records if t - WINDOW_S <= float(r["stamp_s"]) <= t and r.get("applied_map_from_odom")
+           and r.get("odom_base")]
     if len(win) < 2:
         return {"n": len(win)}
-    a = np.array([r["applied_map_from_odom"] for r in win], dtype=float)
-    d = np.diff(a, axis=0)
-    step = np.hypot(d[:, 0], d[:, 1])
-    k = int(np.argmax(step))
-    out = {"n": len(win), "max_step_m": float(step[k]), "max_step_yaw_rad": float(abs(d[k, 2])),
-           "max_step_before_s": float(t - float(win[k + 1]["stamp_s"])),
-           "net_m": float(math.hypot(*(a[-1, :2] - a[0, :2]))), "net_yaw_rad": float(abs(wrap(a[-1, 2] - a[0, 2])))}
+    steps = []
+    for prev, cur in zip(win, win[1:]):
+        d = apply(cur["applied_map_from_odom"], cur["odom_base"]) - apply(prev["applied_map_from_odom"], cur["odom_base"])
+        steps.append((math.hypot(d[0], d[1]), float(cur["stamp_s"]), d))
+    k = max(range(len(steps)), key=lambda i: steps[i][0])
+    net = apply(win[-1]["applied_map_from_odom"], win[-1]["odom_base"]) - apply(win[0]["applied_map_from_odom"],
+                                                                              win[-1]["odom_base"])
+    out = {"n": len(win), "changed": steps[k][0] > 1e-9, "max_step_m": float(steps[k][0]),
+           "net_m": float(math.hypot(net[0], net[1])), "net_yaw_rad": float(abs(wrap(net[2])))}
+    if out["changed"]:
+        out["max_step_before_s"] = float(t - steps[k][1])
     if cusp_pose is not None:
         c, s_ = math.cos(cusp_pose[2]), math.sin(cusp_pose[2])
-        n = a[-1, :2] - a[0, :2]
-        out["net_along_m"], out["net_lateral_m"] = float(n[0] * c + n[1] * s_), float(-n[0] * s_ + n[1] * c)
-        out["net_yaw_signed_rad"] = float(wrap(a[-1, 2] - a[0, 2]))
+        out["net_along_m"], out["net_lateral_m"] = float(net[0] * c + net[1] * s_), float(-net[0] * s_ + net[1] * c)
+        out["net_yaw_signed_rad"] = float(wrap(net[2]))
     return out
 
 
@@ -95,18 +109,19 @@ def run_events(rundir: str, name: str) -> dict:
     have = {k: os.path.exists(os.path.join(rundir, k)) for k in ("slam_control.npy", "slam_records.json", "paths.json")}
     a = miss.analyse(s, name)
     near_serials = set(a["near_serials"])
-    trackers = near_trackers(s, near_serials)
+    armed = ((s.get("near_end_injections") or {}).get("windows") or {}).get("injection")
+    armed_s = None if not armed else float(armed[0])
+    trackers = near_trackers(s, near_serials, armed_s)
     out = {"run": name, "inputs": have, "near_trackers": sorted(trackers), "events": []}
     if not have["slam_control.npy"] or not trackers:
         return out
     C = np.load(os.path.join(rundir, "slam_control.npy"))
     records = json.load(open(os.path.join(rundir, "slam_records.json"))) if have["slam_records.json"] else []
     samples = s.get("samples") or []
-    armed = ((s.get("near_end_injections") or {}).get("windows") or {}).get("injection")
-    armed_s = None if not armed else float(armed[0])
 
     def around_step(t, corr, cusp_pose):
-        """truth - estimate in the cusp's frame 0.1 s before and after the window's largest correction step."""
+        """truth - estimate in the cusp's frame 0.1 s before and after the window's largest correction step (motion
+        and odometry in those 0.2 s are in it too)."""
         if "max_step_before_s" not in corr:
             return None
         ts = t - corr["max_step_before_s"]
@@ -135,7 +150,8 @@ def run_events(rundir: str, name: str) -> dict:
                                    and (armed_s is None or float(x["time_s"]) < armed_s)]):
         if r["role"] != "near" or r["reason"] in ("released",):
             continue
-        t = float(st["time_s"])
+        stop = next((e for e in st.get("events") or [] if e.get("event") == "stop_confirmed"), None)
+        t = float(stop["time_s"]) if stop is not None else float(st["time_s"])  # the stand, not the latch (P2-1)
         owner = [v for v in trackers.values() if v.get("installed_s") is not None and float(v["installed_s"]) <= t
                  and (v.get("replaced_s") is None or t < float(v["replaced_s"]) + TICK_S)
                  or v.get("installed_s") is None and v.get("replaced_s") is not None and t < float(v["replaced_s"])]
@@ -146,6 +162,8 @@ def run_events(rundir: str, name: str) -> dict:
         if k is None or k >= len(cusps):
             continue
         event("refused_" + r["reason"], t, cusps[k]["pose"], {"tracker": owner[0]["serial"],
+                                                               "latch_s": float(st["time_s"]),
+                                                               "stand_from": "stop_confirmed" if stop else "latch",
                                                                "last_scan_error": [r["last_position_error_m"],
                                                                                    r["last_yaw_error_rad"]]})
     return out
