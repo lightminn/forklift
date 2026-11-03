@@ -75,6 +75,7 @@ def tri(conditions: list[str]) -> str:
 def majority(results: list[str]) -> str:
     """Plan 4.3 'in a majority of valid segments': yes when more than half are yes, no when at least half are no
     (so yes is out of reach), else undecided. Every valid segment counts, an indistinguishable one included."""
+    results = [r for r in results if r != "invalid"]
     n = len(results)
     if n == 0:
         return "undecided (no valid segment)"
@@ -87,6 +88,7 @@ def majority(results: list[str]) -> str:
 
 def every(results: list[str]) -> str:
     """Plan 4.3 conditions without a majority clause hold in every segment read: no if any no, else yes or undecided."""
+    results = [r for r in results if r != "invalid"]
     if not results:
         return "undecided (no valid segment)"
     if "no" in results:
@@ -124,8 +126,8 @@ class Run:
         if len(w) < MIN_ROWS or np.ptp(self.col("cmd_FL")[w]) > 1e-12 or np.ptp(self.col("cmd_FR")[w]) > 1e-12:
             return None
         # a clean window only: no robot body touching the scene (a tyre the floor or the shim excepted)
-        if "env_contacts" not in self.arms or np.any(self.arms["env_contacts"][w] > 0):
-            return None
+        if "env_contacts" not in self.arms or not np.all(self.arms["env_contacts"][w] == 0):
+            return None  # NaN (the report failed) is not clean either
         return w
 
     def first_rows(self):
@@ -212,9 +214,11 @@ class Batch:
         """|key(arm)| against factor x |key(A0)| in segment i: yes / no / indistinguishable (an invalid arm window or
         a reference under 2 mrad is indistinguishable -- undecided)."""
         v = self.runs[arm].values(i)
+        if v is None:
+            return "invalid"  # the arm's window is not valid: out of the denominator (plan 4.1)
         ref = abs(self.base[i][key])
-        if v is None or ref < REF_MIN:
-            return "indistinguishable"
+        if ref < REF_MIN:
+            return "indistinguishable"  # stays in the denominator, undecided
         s = side(abs(v[key]), factor * ref, self.t("e", i, key))
         if s == "indistinguishable":
             return s
@@ -232,6 +236,13 @@ def drive_value(run: Run, field: str, name: str) -> float:
 
 
 def validity(b: Batch, arm: str) -> tuple[bool, list[str]]:
+    try:
+        return _validity(b, arm)
+    except (KeyError, ValueError, TypeError, IndexError) as exc:  # a readback missing: that arm only is invalid
+        return False, [f"readback missing: {exc!r}"]
+
+
+def _validity(b: Batch, arm: str) -> tuple[bool, list[str]]:
     run = b.runs[arm]
     why = []
     steers = ("left_steer", "right_steer")
@@ -269,8 +280,17 @@ def validity(b: Batch, arm: str) -> tuple[bool, list[str]]:
         if len(front) != 2 or not all(t["static_friction"] == 0 and t["dynamic_friction"] == 0
                                       and t["friction_combine_mode"] == "min" for t in front):
             why.append("front tyre readback is not mu 0 / min on both")
-        if run.arm_record.get("anchor_index_problem") is not None:
-            why.append("tangential impulse not verifiable: friction anchors not reported")
+        rows = [w for w in (run.window(i) for i in b.segs("still")) if w is not None]
+        full = run.arms["full"]
+        if run.arm_record.get("anchor_index_problem") is not None or not rows:
+            why.append("tangential impulse not verifiable: friction anchors not reported (or no clean window)")
+        else:
+            r_ = np.concatenate(rows)
+            front = full[r_, :2, :]
+            if not np.all(np.isfinite(front)) or np.any(front[:, :, 7] > 0):
+                why.append("contact report missing or anchors missing in a read window")
+            elif np.any(front[:, :, 1] > 0.01 * np.abs(front[:, :, 0])):
+                why.append("front tangential impulse above 1 % of the normal")
     if arm == "A10":
         place = run.arm_record.get("assignment") or {}
         if place.get("steer") != ["right_steer", "left_steer"]:
@@ -308,21 +328,24 @@ def h4(b: Batch) -> dict:
         if abs(b.base[i]["e_L"]) < REF_MIN:
             cancel[i] = "indistinguishable"
             continue
-        per_run = []
+        fracs, gaps = [], []
         for a in b.a0:
             r = a.values(i)["_rows"]
             t_tau = b.t("tau", i, "abs_tau_rep_mean")
-            sat = (np.abs(r["spring"]) - r["cap"] >= t_tau) & (r["cap"] - np.abs(r["tau_rep"]) >= t_tau)
-            unsure = ~sat & ((np.abs(np.abs(r["spring"]) - r["cap"]) < t_tau) | (np.abs(np.abs(r["tau_rep"]) - r["cap"]) < t_tau))
-            frac_yes, frac_maybe = float(np.mean(sat)), float(np.mean(sat | unsure))
-            if frac_yes >= 0.9:
-                gap = side(float(np.median(r["qd_gap"][sat])), 0.05, threshold("w", 0.0))
-                per_run.append({"above": "yes", "below": "no"}.get(gap, "indistinguishable"))
-            elif frac_maybe < 0.9:
-                per_run.append("no")
-            else:
-                per_run.append("indistinguishable")
-        cancel[i] = tri(per_run)
+            over = np.abs(r["spring"]) - r["cap"]
+            under = r["cap"] - np.abs(r["tau_rep"])
+            sat = (over >= t_tau) & (under >= t_tau)
+            unsure = ~sat & ((np.abs(over) < t_tau) | (np.abs(under) < t_tau))
+            fracs.append((float(np.mean(sat)), float(np.mean(sat | unsure))))
+            gaps.append(float(np.median(r["qd_gap"][sat])) if sat.any() else math.nan)
+        if all(f >= 0.9 for f, _ in fracs) and all(math.isfinite(g) for g in gaps):
+            # the velocity gap's threshold from the two repeats' medians (plan 4.1 T_w)
+            gap = side(float(np.mean(gaps)), 0.05, threshold("w", abs(gaps[0] - gaps[1])))
+            cancel[i] = {"above": "yes", "below": "no"}.get(gap, "indistinguishable")
+        elif any(m < 0.9 for _, m in fracs):
+            cancel[i] = "no"
+        else:
+            cancel[i] = "indistinguishable"
     out["cancel_segments"] = cancel
     holding = [i for i, c in cancel.items() if c == "yes"]
     if majority(list(cancel.values())) == "yes" and "A2b" in b.runs:
@@ -336,7 +359,7 @@ def h4(b: Batch) -> dict:
         res = []
         for i in b.base:
             lo, hi = b.ratio("A2a", i, 5, relation="above"), b.ratio("A2a", i, 20, relation="below")
-            res.append(tri([lo, hi]))
+            res.append("invalid" if "invalid" in (lo, hi) else tri([lo, hi]))
         out["stiffness_dominated"] = majority(res) if ok else f"undecided (A2a invalid: {why})"
     for arm in ("A2c", "A2d"):
         if arm not in b.runs:
@@ -345,7 +368,8 @@ def h4(b: Batch) -> dict:
         res = []
         for i in b.base:
             down, up = b.ratio(arm, i, 0.5), b.ratio(arm, i, 2.0, relation="above")
-            res.append("yes" if "yes" in (down, up) else ("no" if down == "no" and up == "no" else "indistinguishable"))
+            res.append("invalid" if "invalid" in (down, up) else "yes" if "yes" in (down, up) else
+                       ("no" if down == "no" and up == "no" else "indistinguishable"))
         out[f"dt_iteration_{arm}"] = majority(res) if ok else f"undecided ({arm} invalid: {why})"
     named = [k for k in ("limit_sensitive", "reported_cancel_and_damping_sensitive", "stiffness_dominated")
              if out.get(k) == "yes"]
@@ -402,16 +426,17 @@ def h1(b: Batch, solver_qualifier: bool) -> dict:
                 res.append("indistinguishable")
                 continue
             rows = b.runs["A7R"].window(i)
-            shim = np.abs(b.runs["A7R"].arms["full"][rows, :, 5]).sum(axis=0)
-            if not (shim[1] > 0 and shim[0] == shim[2] == shim[3] == 0):
+            full = b.runs["A7R"].arms["full"]
+            shim = np.abs(full[rows, :, 5]).sum(axis=0)
+            edge = full[rows, :, 8].sum() if full.shape[2] > 8 else math.nan
+            if not (shim[1] > 0 and shim[0] == shim[2] == shim[3] == 0) or not edge == 0:
                 res.append("indistinguishable")  # the shim is not under the front right alone in this window
                 continue
             load = side(v["N_FR"] - v["N_FL"], 0.0, b.t("N", i, "dN_front"))
             err = side(-v["abs_LR"], 0.0, b.t("e", i, "abs_LR"))
             res.append("yes" if load == err == "above" else ("no" if "below" in (load, err) else "indistinguishable"))
         out["A7R"] = {"error_follows_load": every(res), "segments": res,
-                      "shim_check": "per window: shim impulse on the front right tyre only",
-                      "edge_contact": "not verifiable from the records (normals not kept)"}
+                      "shim_check": "per window: shim impulse on the front right tyre only and no side (edge) contact"}
     if "A7L" in b.runs:
         out["A7L_e_L_change_mrad"] = {i: 1e3 * (b.runs["A7L"].values(i)["e_L"] - b.base[i]["e_L"])
                                       for i in b.segs("still") if b.runs["A7L"].values(i) is not None}
@@ -438,13 +463,15 @@ def a8(b: Batch) -> dict:
         sag = z0 - r.arms["wheel_z"][w].mean(axis=0)
         with np.errstate(divide="ignore", invalid="ignore"):
             k_eff = n / sag
-            # the effective stiffness's uncertainty from A0's repeat differences (3 delta of height and load)
-            u = np.abs(k_eff) * (3 * dn / np.abs(n) + 3 * dz / np.abs(sag))
+            # the bounds with A0's repeat differences put into the quotient itself (3 delta of load and height)
+            k_lo = (n - 3 * dn) / (sag + 3 * dz)
+            k_hi = np.where(sag - 3 * dz > 0, (n + 3 * dn) / (sag - 3 * dz), np.inf)
         ok_r, why = validity(b, arm)
-        inside = np.abs(k_eff - kw) + u <= 0.3 * kw
-        outside = np.abs(k_eff - kw) - u > 0.3 * kw
+        inside = (k_lo >= 0.7 * kw) & (k_hi <= 1.3 * kw)
+        outside = (k_hi < 0.7 * kw) | (k_lo > 1.3 * kw)
         stiff = "valid" if bool(np.all(inside)) else ("invalid" if bool(np.any(outside)) else "indistinguishable")
-        out[arm] = {"k_eff_per_wheel": k_eff, "uncertainty": u, "sag_m": sag, "normal_N": n, "stiffness": stiff,
+        u = np.stack([k_lo, k_hi], axis=1)
+        out[arm] = {"k_eff_per_wheel": k_eff, "k_bounds": u, "sag_m": sag, "normal_N": n, "stiffness": stiff,
                     "readback_ok": ok_r, "readback_why": why}
     rows = {}
     for arm, ref_name in (("A8r", None), ("A8s", None), ("A8h", None), ("A8o", None), ("A8r240", "A2c")):
@@ -463,9 +490,10 @@ def a8(b: Batch) -> dict:
                               {"below": "yes", "above": "no"}.get(side(x, 0.5 * ref, t), "indistinguishable"))}
     out["metric"] = rows
     r120, r240 = rows.get("A8r", {}).get("half"), rows.get("A8r240", {}).get("half")
-    valid = all(out.get(a, {}).get("stiffness") == "valid" and out[a]["readback_ok"] for a in ("A8r", "A8r240"))
+    valid = (all(out.get(a, {}).get("stiffness") == "valid" and out[a]["readback_ok"] for a in ("A8r", "A8r240"))
+             and "A2c" in b.runs and validity(b, "A2c")[0])
     if not valid:
-        out["verdict"] = "undecided (A8r or A8r240 invalid: per-wheel stiffness or readback)"
+        out["verdict"] = "undecided (A8r, A8r240 or A2c invalid: per-wheel stiffness or readback)"
     elif r120 in (None, "indistinguishable") or r240 in (None, "indistinguishable"):
         out["verdict"] = "undecided (indistinguishable or missing)"
     elif r120 != r240:
@@ -496,17 +524,21 @@ def h5(b: Batch) -> dict:
             continue
         ok, why = validity(b, arm)
         keep, flip, n = 0, 0, 0
+        missing = 0
         for i, (d0, e0) in ref.items():
-            v = b.runs[arm].values(i)
-            if "?" in (d0, e0) or v is None:
+            if "?" in (d0, e0):
                 continue
+            v = b.runs[arm].values(i)
             n += 1
+            if v is None:
+                missing += 1  # a decided A0 segment the arm cannot show: not 'every segment'
+                continue
             d, e = pattern(v, i, b)
             keep += (d, e) == (d0, e0)
             flip += (d, e) == (mirror[d0], mirror[e0])
-        out[arm] = {"segments": n, "keep": keep, "flip": flip, "valid": ok, "why": why,
-                    "result": ("undecided (invalid)" if not ok else "keeps" if n and keep == n else
-                               "flips" if n and flip == n else "undecided")}
+        out[arm] = {"segments": n, "keep": keep, "flip": flip, "missing": missing, "valid": ok, "why": why,
+                    "result": ("undecided (invalid)" if not ok else "undecided (missing windows)" if missing else
+                               "keeps" if n and keep == n else "flips" if n and flip == n else "undecided")}
     if all(a in out for a in ("A9a", "A9b")):
         out["yaw"] = ("insensitive to the tested spawn yaws" if out["A9a"]["result"] == out["A9b"]["result"] == "keeps"
                       else "undecided")

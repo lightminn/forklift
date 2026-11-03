@@ -147,10 +147,10 @@ def _header(a0, a1, offset, n, aoff=0, an=0):
                                  friction_anchors_offset=aoff, num_friction_anchors_data=an)
 
 
-def _contact(j, p=(0.0, 0.0, 0.0)):
+def _contact(j, p=(0.0, 0.0, 0.0), n=(0.0, 0.0, 1.0)):
     import types
 
-    return types.SimpleNamespace(impulse=j, position=p)
+    return types.SimpleNamespace(impulse=j, position=p, normal=n)
 
 
 def test_full_contacts_count_robot_scene_contacts_but_not_tyres_on_the_floor_or_shim(monkeypatch):
@@ -180,3 +180,26 @@ def test_full_contacts_count_anchor_indices_outside_the_vector(monkeypatch):
     arms.ANCHOR_INDEX_PROBLEM.clear()
     rows = arms.tyre_full_contacts(tyre, [None], {}, {})
     assert rows[0][7] == 2 and arms.ANCHOR_INDEX_PROBLEM["first"]["vector"] == 0
+
+
+def test_a_failed_report_leaves_the_clean_window_count_unknown(monkeypatch):
+    import types
+
+    physx = types.ModuleType("omni.physx")
+
+    def broken():
+        raise RuntimeError("no report")
+
+    physx.get_physx_simulation_interface = broken
+    monkeypatch.setitem(sys.modules, "omni.physx", physx)
+    env = {}
+    rows = arms.tyre_full_contacts(("/World/Forklift/front_left_wheel",), [None], {}, env)
+    assert math.isnan(env["count"]) and all(math.isnan(v) for v in rows[0])
+
+
+def test_a_shim_side_contact_is_counted(monkeypatch):
+    tyre = ("/World/Forklift/front_right_wheel",)
+    _fake_report(monkeypatch, [_header(arms.SHIM_PATH, tyre[0], 0, 2)],
+                 [_contact((0, 0, 1.0)), _contact((0.5, 0, 0), n=(1.0, 0.0, 0.0))], [])
+    rows = arms.tyre_full_contacts(tyre, [None], {}, {})
+    assert rows[0][8] == 1

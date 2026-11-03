@@ -248,7 +248,7 @@ def joint_readback(stage) -> dict:
 
 
 FULL_FIELDS = ("Jz", "tangent_impulse", "steer_moment_z", "contacts", "anchors", "shim_Jz", "partners",
-               "anchors_missing")
+               "anchors_missing", "shim_side_contacts")
 
 
 ANCHOR_INDEX_PROBLEM = {}
@@ -274,7 +274,9 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None, env=None) ->
         from pxr import PhysicsSchemaTools
 
         headers, data, anchors = get_physx_simulation_interface().get_full_contact_report()
-    except Exception:  # noqa: BLE001 -- recorded as missing
+    except Exception:  # noqa: BLE001 -- recorded as missing; the clean-window count is unknown too
+        if env is not None:
+            env["count"] = math.nan
         return [nan_row for _ in tyre_links]
     out = [[0.0] * len(FULL_FIELDS) for _ in tyre_links]
     points = [[] for _ in tyre_links]
@@ -304,6 +306,8 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None, env=None) ->
                 c = data[header.contact_data_offset + i]
                 j = [sign * float(c.impulse[k]) for k in range(3)]
                 out[w][5 if shim else 0] += j[2]
+                if shim and abs(float(c.normal[2])) < 0.9:
+                    out[w][8] += 1  # a contact on the plate's side (its edge), not its top (plan 4.2 A7 validity)
                 out[w][1] += math.hypot(j[0], j[1])
                 out[w][3] += 1
                 points[w].append([float(c.position[k]) for k in range(3)])
