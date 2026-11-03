@@ -46,11 +46,35 @@ class SceneJoint(NamedTuple):
 
 
 class LinkInertia(NamedTuple):
-    """A link's mass, centre of mass in the link frame and principal moments (ascending)."""
+    """A link's mass, centre of mass and inertia tensor about it, both in the link frame (the URDF's inertial rpy
+    and the USD principal axes applied -- Codex chassis review P2-1: eigenvalues alone pass a rotated tensor)."""
 
     mass_kg: float
     com_m: Vector
-    principal_kg_m2: Vector
+    tensor_kg_m2: tuple[Vector, Vector, Vector]
+
+
+def _rpy_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """URDF rpy: R = Rz(yaw) Ry(pitch) Rx(roll)."""
+    cr, sr, cp, sp, cy, sy = (math.cos(roll), math.sin(roll), math.cos(pitch), math.sin(pitch), math.cos(yaw),
+                              math.sin(yaw))
+    return np.array([[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+                     [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+                     [-sp, cp * sr, cp * cr]])
+
+
+def _quat_matrix(w: float, x: float, y: float, z: float) -> np.ndarray:
+    n = math.sqrt(w * w + x * x + y * y + z * z)
+    if n == 0.0:  # an unauthored principalAxes reads (0, 0, 0, 0): the identity
+        return np.eye(3)
+    w, x, y, z = w / n, x / n, y / n, z / n
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                     [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                     [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def _tensor_tuple(m: np.ndarray) -> tuple[Vector, Vector, Vector]:
+    return tuple(tuple(float(v) for v in row) for row in m)
 
 
 class ChassisDescription(NamedTuple):
@@ -110,12 +134,14 @@ def urdf_chassis(forklift_urdf: Path) -> ChassisDescription:
             continue
         origin = inertial.find("origin")
         com = tuple(float(v) for v in (origin.get("xyz") if origin is not None else "0 0 0").split())
+        rpy = [float(v) for v in ((origin.get("rpy") if origin is not None else None) or "0 0 0").split()]
         i = inertial.find("inertia")
         g = {k: float(i.get(k, 0.0)) for k in ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")}
         tensor = np.array([[g["ixx"], g["ixy"], g["ixz"]], [g["ixy"], g["iyy"], g["iyz"]],
                            [g["ixz"], g["iyz"], g["izz"]]])
+        r = _rpy_matrix(*rpy)
         inertials[each.get("name")] = LinkInertia(float(inertial.find("mass").get("value")), com,
-                                                  tuple(float(v) for v in np.sort(np.linalg.eigvalsh(tensor))))
+                                                  _tensor_tuple(r @ tensor @ r.T))
     lift_joint = truck.find("joint[@name='fork_lift']")
     limit = None if lift_joint is None else lift_joint.find("limit")
     lift_limit = None if limit is None else (float(limit.get("lower")), float(limit.get("upper")))
@@ -245,21 +271,43 @@ def stage_chassis(stage, root: str) -> ChassisDescription:
                 _finite(matrix.ExtractTranslation(), f"{name} centre"),
                 _finite((size * s / 2 for s in scale_of(matrix)), f"{name} size"),
             )
-    # every link's mass as the importer wrote it: a link prim directly under the root with the mass API (a zero
-    # or unauthored mass is "none of its own"; its centre of mass is then not read -- the importer leaves it -inf)
+    # every link's mass as the importer writes it: an explicit mass, centre of mass and principal inertia on the
+    # link prim directly under the root. Any other mass source is refused as unsupported, since it would act
+    # without being compared (Codex chassis review P2-2): a rigid body below a link, a mass or density authored
+    # below a link, a density on a link, and a link without a mass of its own that has colliders (PhysX would
+    # give it their volume's mass). A zero or unauthored mass is "none of its own"; its centre of mass is not read
+    # (the importer leaves it -inf).
+    root_prim = stage.GetPrimAtPath(root)
+    links = {p.GetName(): p for p in root_prim.GetChildren()
+             if p.HasAPI(UsdPhysics.RigidBodyAPI) or p.HasAPI(UsdPhysics.MassAPI)}
+    for prim in Usd.PrimRange(root_prim, Usd.TraverseInstanceProxies()):
+        if prim == root_prim or (prim.GetParent() == root_prim and prim.GetName() in links):
+            continue
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            raise ValueError(f"Scene rigid body {prim.GetPath()} is not a link directly under {root}")
+        if prim.HasAPI(UsdPhysics.MassAPI):
+            api = UsdPhysics.MassAPI(prim)
+            if (api.GetMassAttr().Get() or 0.0) > 0 or (api.GetDensityAttr().Get() or 0.0) > 0:
+                raise ValueError(f"Scene mass authored below a link: {prim.GetPath()}")
     inertials = {}
-    for link in stage.GetPrimAtPath(root).GetChildren():
-        if not link.HasAPI(UsdPhysics.MassAPI):
-            continue
+    for name, link in links.items():
         api = UsdPhysics.MassAPI(link)
-        mass = api.GetMassAttr().Get()
+        if link.HasAPI(UsdPhysics.MassAPI) and (api.GetDensityAttr().Get() or 0.0) > 0:
+            raise ValueError(f"Scene link {name} takes its mass from a density")
+        mass = api.GetMassAttr().Get() if link.HasAPI(UsdPhysics.MassAPI) else None
         if not mass:
-            inertials[link.GetName()] = None
+            if any(p.HasAPI(UsdPhysics.CollisionAPI)
+                   for p in Usd.PrimRange(link, Usd.TraverseInstanceProxies())):
+                raise ValueError(f"Scene link {name} has no mass of its own but has colliders")
+            inertials[name] = None
             continue
-        inertials[link.GetName()] = LinkInertia(
-            _finite((mass,), f"{link.GetName()} mass")[0],
-            _finite(api.GetCenterOfMassAttr().Get(), f"{link.GetName()} centre of mass"),
-            tuple(sorted(_finite(api.GetDiagonalInertiaAttr().Get(), f"{link.GetName()} inertia"))))
+        axes = api.GetPrincipalAxesAttr().Get()
+        r = _quat_matrix(*((axes.GetReal(), *axes.GetImaginary()) if axes is not None else (1.0, 0.0, 0.0, 0.0)))
+        diag = np.diag(_finite(api.GetDiagonalInertiaAttr().Get(), f"{name} inertia"))
+        inertials[name] = LinkInertia(
+            _finite((mass,), f"{name} mass")[0],
+            _finite(api.GetCenterOfMassAttr().Get(), f"{name} centre of mass"),
+            _tensor_tuple(r @ diag @ r.T))
     lift = stage.GetPrimAtPath(f"{root}/joints/fork_lift")
     lift_limit = None
     if lift.IsValid() and lift.IsA(UsdPhysics.PrismaticJoint):
@@ -267,6 +315,17 @@ def stage_chassis(stage, root: str) -> ChassisDescription:
         lift_limit = _finite((prismatic.GetLowerLimitAttr().Get(), prismatic.GetUpperLimitAttr().Get()),
                              "fork_lift limit")
     return ChassisDescription(joints, tyres, boxes, sources, inertials, lift_limit)
+
+
+def scene_manifest_urdf(base_scene: Path, forklift_urdf: Path) -> tuple[str | None, str]:
+    """(the URDF sha256 the base scene's manifest says it was built from, or None without a manifest or entry; the
+    given URDF's sha256). The runners refuse a scene whose manifest names another URDF."""
+    import hashlib
+    import json
+
+    manifest = Path(base_scene).resolve().parent / "base_scene_manifest.json"
+    built_from = json.loads(manifest.read_text()).get("forklift_urdf_sha256") if manifest.exists() else None
+    return built_from, hashlib.sha256(Path(forklift_urdf).read_bytes()).hexdigest()
 
 
 def carriage_limit_from_boxes_m(chassis: ChassisDescription) -> float | None:
@@ -375,10 +434,11 @@ def require_scene_matches_model(scene: ChassisDescription, forklift_urdf: Path) 
                 raise ValueError(f"Scene link {name} mass {got.mass_kg} kg differs from {want.mass_kg} kg")
             if _exceeds(math.dist(got.com_m, want.com_m), POSITION_TOLERANCE_M):
                 raise ValueError(f"Scene link {name} centre of mass {got.com_m} differs from {want.com_m}")
-            if any(_exceeds(abs(a - b), INERTIA_TOLERANCE_ABS + INERTIA_TOLERANCE_REL * abs(b))
-                   for a, b in zip(got.principal_kg_m2, want.principal_kg_m2, strict=True)):
-                raise ValueError(f"Scene link {name} inertia {got.principal_kg_m2} differs from "
-                                 f"{want.principal_kg_m2}")
+            got_i, want_i = np.array(got.tensor_kg_m2), np.array(want.tensor_kg_m2)
+            if _exceeds(float(np.abs(got_i - want_i).max()),
+                        INERTIA_TOLERANCE_ABS + INERTIA_TOLERANCE_REL * float(np.abs(want_i).max())):
+                raise ValueError(f"Scene link {name} inertia tensor differs from {forklift_urdf}: "
+                                 f"{got_i.tolist()} vs {want_i.tolist()}")
     if scene.lift_limit_m is not None or (scene.inertials is not None and expected.lift_limit_m is not None):
         if scene.lift_limit_m is None or expected.lift_limit_m is None or _exceeds(
                 max(abs(a - b) for a, b in zip(scene.lift_limit_m, expected.lift_limit_m, strict=True)),
