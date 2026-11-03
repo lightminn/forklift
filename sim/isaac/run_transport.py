@@ -3790,6 +3790,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         state["steering_probe_arms_stage"] = steering_probe_arms.author_stage(
             stage, settings, base_xyz=base_start, base_yaw=start_yaw)
+        # read again after the arms (A6's material on the front tyres -- the records above predate it)
+        state["steering_probe_arms_stage"]["tyre_contact_after"] = tyre_contact_readback(stage)
     if args.steering_probe:
         import steering_probe_arms
 
@@ -10419,6 +10421,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # pallet-mass plan (2026-11-01): the resolved mass goes into its own block (pallet_mass), not the arguments
         # (Codex pallet-mass review 2 P2-1: as an argument it broke the near-field contract of every earlier record)
         and k != "pallet_mass_record"
+        # steering left-asymmetry plan A10: only when given, so every other run records what it always did
+        and (k != "probe_geometry_urdf" or v is not None)
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)

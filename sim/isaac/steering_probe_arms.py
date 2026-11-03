@@ -180,9 +180,15 @@ def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float,
     if "probe_shim_wheel" in settings:
         wheel = ("front_left", "front_right")[int(settings["probe_shim_wheel"]) - 1]
         cylinder = UsdGeom.Cylinder(stage.GetPrimAtPath(f"/World/Forklift/{wheel}_wheel/collisions/{wheel}_tire_collision/cylinder"))
-        # the tyre where the truck was placed (the stage transform before the world reset)
-        centre = cylinder.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
-        cx, cy = float(centre[0]), float(centre[1])
+        # the tyre in the base frame of the imported model (both transforms from the import, neutral joints), carried to
+        # the spawn pose -- the stage's own wheel transforms do not follow the articulation's placement before the reset
+        # (Codex review)
+        base = UsdGeom.Xformable(stage.GetPrimAtPath("/World/Forklift/base_link"))
+        relative = (cylinder.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                    * base.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).GetInverse()).ExtractTranslation()
+        c_, s_ = math.cos(base_yaw), math.sin(base_yaw)
+        cx = float(base_xyz[0]) + c_ * float(relative[0]) - s_ * float(relative[1])
+        cy = float(base_xyz[1]) + s_ * float(relative[0]) + c_ * float(relative[1])
         tyre_radius_m, tyre_width_m = float(cylinder.GetRadiusAttr().Get()), float(cylinder.GetHeightAttr().Get())
         h = float(settings["probe_shim_height_m"])
         size_xy = (SHIM_SIZE_FACTOR * 2 * math.sqrt(2 * tyre_radius_m * 0.002), SHIM_SIZE_FACTOR * tyre_width_m)
@@ -199,6 +205,7 @@ def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float,
         UsdShade.MaterialBindingAPI.Apply(cube.GetPrim()).Bind(floor_material, UsdShade.Tokens.strongerThanDescendants,
                                                               "physics")
         record["shim"] = {"path": SHIM_PATH, "wheel": wheel, "centre_xy": [cx, cy], "height_m": h,
+                          "wheel_in_base_m": [float(relative[0]), float(relative[1]), float(relative[2])],
                           "size_xy_m": list(size_xy), "material": floor_material_path}
     return record
 
@@ -242,8 +249,9 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list
     tangential impulse magnitude (contact points and friction anchors), the z moment of every point and anchor
     impulse about the vertical axis through its ``axis_points`` entry (None: about the mean contact point), the
     contact-point and anchor counts, the shim's vertical impulse, and the number of distinct partner actors this step.
-    Impulses are as the report gives them -- the convention of tyre_floor_forces: standing, the floor impulses sum to
-    about -weight x dt, so the floor's push on the truck is the negative (Jz, moment alike). Divide by the step for
+    Impulses carry tyre_floor_forces' sign (the report's impulse acts on actor1: + when the tyre is actor1, - when it
+    is actor0): standing, the floor impulses sum to about -weight x dt, so the floor's push on the truck is the
+    negative (Jz, moment alike). Divide by the step for
     force. ``partners_seen``: a dict of sets to collect each tyre's partner paths over the run (actor-path
     classification, plan 4.1). NaN rows when the report is unavailable."""
     nan_row = [math.nan] * len(FULL_FIELDS)
@@ -268,9 +276,10 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list
                 continue
             partners[w].add(other)
             shim = other.startswith(SHIM_PATH)
+            sign = 1.0 if paths[1] == link else -1.0  # as tyre_floor_forces (Codex review: actor order)
             for i in range(header.num_contact_data):
                 c = data[header.contact_data_offset + i]
-                j = [float(c.impulse[k]) for k in range(3)]
+                j = [sign * float(c.impulse[k]) for k in range(3)]
                 out[w][5 if shim else 0] += j[2]
                 out[w][1] += math.hypot(j[0], j[1])
                 out[w][3] += 1
@@ -278,7 +287,7 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list
                 impulses[w].append(j)
             for i in range(header.num_friction_anchors_data):
                 a = anchors[header.friction_anchors_offset + i]
-                j = [float(a.impulse[k]) for k in range(3)]
+                j = [sign * float(a.impulse[k]) for k in range(3)]
                 out[w][1] += math.hypot(j[0], j[1])
                 out[w][4] += 1
                 points[w].append([float(a.position[k]) for k in range(3)])
@@ -387,8 +396,8 @@ class ProbeRuntime:
         coms_p = np.asarray(coms_p, float).reshape(-1, 3)
         coms_q = np.asarray(coms_q, float).reshape(-1, 4)
         inertias = np.asarray(view.get_body_inertias(), float).reshape(-1, 9)
-        r_com = quat_matrix(coms_q[k])  # the carriage inertia is about its own COM frame
-        inertia_carr = r_com @ inertias[k].reshape(3, 3) @ r_com.T
+        # about the COM, already expressed in the link frame (Isaac 5.1 get_body_inertias; Codex review)
+        inertia_carr = inertias[k].reshape(3, 3)
         rotation_load = r_bc.T  # the load's axes (aligned with the base) in the carriage frame
         m, c, inertia = composite_body(masses[k], coms_p[k], inertia_carr, mass_kg, com_c,
                                        rotation_load @ inertia_load @ rotation_load.T)

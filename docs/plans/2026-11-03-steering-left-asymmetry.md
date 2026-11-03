@@ -152,6 +152,8 @@
 합계 26 실행(standard 24, long 2; 그중 판독을 정지 구간으로 한정하는 실행 5 — 그 팔도 standard 전체를 돌린다). 자원은 ws1 Slurm, `tools/isaac_bundle.py
 sizes` 크기의 한 묶음.
 
+- A3 의 고정 자세는 출발 x·y·yaw 와 정한 높이뿐이다(A0 정착 뒤의 roll·pitch·미세 이동은 옮기지 않는다) — A3a·A3b 결론은 그 고정·예압 조건에서의
+  결과로 한정한다(Codex 코드 리뷰 P3).
 - A4 는 팔레트–날 마찰 동역학을 뺀 근사다(고정 부착이 articulation 의 관성 구조도 바꾼다). 결론은 '이 근사 모델 안에서의 질량 효과' 까지다.
 - A10: Isaac 5.1 URDF importer 는 관절을 이름 키의 `std::map` 으로 두고 그 순서로 자식을 만든다(Codex 2차, `KinematicChain.cpp` 84행) — XML 기술 순서를
   바꿔서는 트리 순서가 바뀌지 않는다. 그래서 이름을 맞바꿔 물리적 좌우의 순회 순서를 뒤집고, 명령 배정은 이름이 아니라 y 부호로 한다. 실행기의 기하

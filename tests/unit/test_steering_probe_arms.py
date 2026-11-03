@@ -115,3 +115,10 @@ def test_steer_axis_moment_is_the_z_of_r_cross_j():
 
 def test_quat_matrix_turns_x_into_y_at_a_quarter_turn():
     np.testing.assert_allclose(arms.quat_matrix(arms.yaw_quat_wxyz(math.pi / 2)) @ [1, 0, 0], [0, 1, 0], atol=1e-12)
+
+
+def test_an_unset_geometry_urdf_is_not_recorded():
+    # every other run records the arguments it always did (Codex review P3)
+    source = SCRIPT.read_text()
+    block = source[source.index("def recorded_arguments("): source.index("def return_start_backoff_m_of(")]
+    assert 'and (k != "probe_geometry_urdf" or v is not None)' in block
