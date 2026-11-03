@@ -1695,6 +1695,53 @@ def test_the_kinds_name_their_first_record():
     assert ib.KINDS["riib"]["watch_rel"] == "run/frames.jsonl" and "first_rel" not in ib.KINDS["live"]
 
 
+VIEWPORT_TRACE = ("Traceback (most recent call last):\n  File \"camera.py\", line 1026, in get_rgba\n"
+                  "  File \"annotator_utils.py\", line 522, in _resize_data_for_overscan\n"
+                  "TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'\n")
+
+
+def viewport_run(tmp_path, name, *, samples=(), transitions=(), trace=VIEWPORT_TRACE, result=True):
+    out = tmp_path / name / "run"
+    out.mkdir(parents=True)
+    (tmp_path / f"{name}_failure.txt").write_text(trace)
+    if result:
+        (tmp_path / f"{name}_result.json").write_text(json.dumps({"samples": list(samples),
+                                                                   "transitions": list(transitions)}))
+    files = "failure.txt" + (" result.json" if result else "")
+    # each attempt writes its records afresh into the folder the retry moved aside
+    cmd = " && ".join(f"cp {tmp_path}/{name}_{f} {out}/{f}" for f in files.split()) if files else "true"
+    cmd = f"mkdir -p {out} && {cmd} && echo '{{}}' > {out}/scenario.json && exit 1"
+    return ib.Run(name=name, argv=["bash", "-c", cmd], retry_move=[str(tmp_path / name)])
+
+
+def test_a_run_that_ended_itself_on_an_unready_viewport_is_infra_and_retried(tmp_path):
+    run = viewport_run(tmp_path, "vp_s0")
+    bundle(tmp_path, [run], retries=1, first_rel="run/scenario.json")
+    first, second = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert first["status"] == "infra_failed" and first["retried"] is True and first["startup_viewport"] is True
+    assert first["infra"][0].startswith("startup_viewport:") and first["startup_silent"] is False
+    assert second["status"] == "infra_failed" and second["retried"] is False
+    assert (tmp_path / "vp_s0.attempt1" / "run" / "failure.txt").exists()
+
+
+def test_a_viewport_failure_needs_all_three_records(tmp_path):
+    cases = {"ticked": dict(samples=[{"time_s": 0.0}]), "moved_on": dict(transitions=[{"from": "a", "to": "b"}]),
+             "other_error": dict(trace="Traceback\nTypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'\n"),
+             "no_result": dict(result=False)}
+    for name, kw in cases.items():
+        d = tmp_path / name
+        d.mkdir()
+        bundle(d, [viewport_run(d, name, **kw)], retries=1, first_rel="run/scenario.json")
+        r = results(d)[name]
+        assert r["status"] == "ended" and r["startup_viewport"] is False and r["retried"] is False, name
+    assert ib.startup_viewport(tmp_path / "nowhere") is None
+
+
+def test_without_a_first_record_file_the_viewport_failure_is_not_looked_for(tmp_path):
+    bundle(tmp_path, [viewport_run(tmp_path, "vp_s1")], retries=1)
+    assert results(tmp_path)["vp_s1"]["status"] == "ended"
+
+
 # --- node start gap (the F1 sessions that stopped had started 4-6 s after another job's) ----------------------------
 
 def test_the_node_start_gap_lets_one_start_through_per_gap(tmp_path):

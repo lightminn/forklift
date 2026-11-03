@@ -92,6 +92,13 @@ stop right after "app ready" for 11-30 min (no log write, GPU idle, 585 MiB each
 off; healthy sessions took 17-113 s from "app ready" to their first frame, which comes after scenario.json (344
 riib/simphys runs, p99 108 s). A run whose kind names no first-record file is not judged.
 
+Start-up viewport failure: the other end of the same start-up fault -- Kit's viewport wait runs out (63 frames) and
+the runner ends itself at its first camera read -- is recorded as infra_failed with the sign "startup_viewport: ..."
+and retried the same way, but only when the run's output (the first-record file's folder) holds all three records:
+failure.txt with the TypeError "unsupported operand type(s) for -: 'NoneType' and 'NoneType'" raised under get_rgba
+and _resize_data_for_overscan, and a result.json whose "samples" and "transitions" are both recorded and empty (the
+simulation never ticked). A missing or different record leaves the run as it ended (F1 registration, revision 2).
+
 Node start gap: two bundle jobs of the node (this user's, through --node-ledger-dir) start no two runs less than
 --node-stagger-s apart (default 60; 0: off), under a file lock: the F1 sessions that stopped had started 4-6 s after a
 session of another job and stopped inside Kit's viewport wait, while one job's staggered starts (one session alone,
@@ -770,6 +777,26 @@ def first_record(run, first_rel=None):
     return None
 
 
+VIEWPORT_FAILURE = ("unsupported operand type(s) for -: 'NoneType' and 'NoneType'", "get_rgba",
+                    "_resize_data_for_overscan")
+
+
+def startup_viewport(run_dir):
+    """The start-up viewport failure's sign when run_dir holds all three of its records (see the module text), else
+    None."""
+    try:
+        text = Path(run_dir, "failure.txt").read_text(errors="replace")
+        result = json.loads(Path(run_dir, "result.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not all(k in text for k in VIEWPORT_FAILURE) or not isinstance(result, dict):
+        return None
+    if any(not isinstance(result.get(k), list) or result[k] for k in ("samples", "transitions")):
+        return None
+    return ("startup_viewport: the first camera read failed on a viewport Kit never readied "
+            "(failure.txt: get_rgba / _resize_data_for_overscan TypeError; result.json: no samples, no transitions)")
+
+
 def written(path) -> bool:
     """The file exists and holds something (a file opened empty is not a record yet)."""
     try:
@@ -1436,6 +1463,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             signs.insert(0, f"oom_kill +{x['ooms']} in the job cgroup and the run was killed")
         if r.startup_silent:
             signs.insert(0, r.startup_silent)
+        viewport = None
+        if not r.startup_silent and not r.stalled and first_record(r.run, first_rel) is not None:
+            viewport = startup_viewport(os.path.dirname(first_record(r.run, first_rel)))
+            if viewport:
+                signs.insert(0, viewport)
         infra = bool(signs)
         removed, cleanup_error = [], None
         try:
@@ -1471,7 +1503,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": status, "missions": missions, "infra": signs,
             "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
-            "startup_silent": bool(r.startup_silent),
+            "startup_silent": bool(r.startup_silent), "startup_viewport": bool(viewport),
             "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
