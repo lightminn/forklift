@@ -531,3 +531,11 @@ def test_c2_named_in_extra_args_wins_and_is_recorded(tmp_path, extra, value):
 def test_c2_takes_only_its_three_values(tmp_path, env):
     out = dry_run(tmp_path, **env)
     assert out.returncode == 2 and "must be on, shadow or off" in out.stdout
+
+
+def test_c2_named_twice_in_extra_args_records_the_last_one(tmp_path):
+    # Codex promotion review P3: the runner's parser takes the last occurrence; the record says the same
+    out = dry_run(tmp_path, EXTRA_ARGS="--near-end-stand shadow --near-end-stand=off")
+    assert out.returncode == 0, out.stderr
+    assert "NEAR_END_STAND=off NEAR_END_STAND_FROM=EXTRA_ARGS" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert not contains(args_of(out), ["--near-end-stand", "on"])
