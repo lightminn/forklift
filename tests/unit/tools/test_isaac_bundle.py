@@ -1777,6 +1777,41 @@ def test_the_npy_reader_matches_numpy_and_refuses_other_files(tmp_path):
     assert ib.npy_rows(tmp_path / "d.npy", 7) is None
 
 
+def test_a_non_finite_position_is_not_still(tmp_path):
+    import numpy as np
+    for name, (row, col, value) in {"nan_first": (0, 4, np.nan), "nan_later": (3, 5, np.nan),
+                                    "inf": (slice(None), 4, np.inf)}.items():
+        d = tmp_path / name
+        viewport_records(d)
+        c = np.load(d / "slam_control.npy")
+        c[row, col] = value
+        np.save(d / "slam_control.npy", c)
+        assert ib.startup_viewport(d) is None, name
+
+
+def test_a_damaged_npy_is_no_record_and_does_not_stop_the_bundle(tmp_path):
+    import struct
+    good = tmp_path / "good.npy"
+    viewport_records(tmp_path / "g")
+    raw = (tmp_path / "g" / "slam_control.npy").read_bytes()
+    header = "{'descr': '<f8', 'shape': (5, 7)}".ljust(118) + "\n"
+    bad = {"magic_only": b"\x93NUMPY", "short_length": b"\x93NUMPY\x01\x00\x10",
+           "list_header": b"\x93NUMPY\x01\x00" + struct.pack("<H", 3) + b"[]\n",
+           "version_2_99": b"\x93NUMPY\x02\x63" + raw[8:],
+           "no_fortran_order": b"\x93NUMPY\x01\x00" + struct.pack("<H", len(header)) + header.encode() + raw[128:],
+           "truncated": raw[:-8]}
+    for name, data in bad.items():
+        good.write_bytes(data)
+        assert ib.npy_rows(good, 7) is None, name
+    run = viewport_run(tmp_path, "dmg_s0")
+    other = ib.Run(name="other_s0", argv=["bash", "-c", "sleep 0.5"])
+    (tmp_path / "dmg_s0_records" / "slam_control.npy").write_bytes(bad["magic_only"])
+    summary = bundle(tmp_path, [run, other], retries=1, first_rel="run/scenario.json")
+    r = results(tmp_path)
+    assert r["dmg_s0"]["status"] == "ended" and r["dmg_s0"]["startup_viewport"] is False
+    assert r["other_s0"]["status"] == "ended" and r["other_s0"]["rc"] == 0 and summary["errors"] == []
+
+
 def test_without_a_first_record_file_the_viewport_failure_is_not_looked_for(tmp_path):
     bundle(tmp_path, [viewport_run(tmp_path, "vp_s1")], retries=1)
     assert results(tmp_path)["vp_s1"]["status"] == "ended"

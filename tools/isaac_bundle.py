@@ -785,27 +785,31 @@ VIEWPORT_STILL_M = 0.01  # the truth rear axle's largest move from its first con
 
 
 def npy_rows(path, columns):
-    """The rows of a little-endian float64 C-order .npy file of shape (n, columns), read without numpy; None for any
-    other file."""
+    """The rows of a little-endian float64 C-order .npy file (format 1.0-3.0) of shape (n, columns), read without numpy;
+    None for any other, truncated or damaged file."""
     import ast
     import struct
-    with open(path, "rb") as f:
-        if f.read(6) != b"\x93NUMPY":
+    try:
+        with open(path, "rb") as f:
+            if f.read(6) != b"\x93NUMPY":
+                return None
+            version = tuple(f.read(2))
+            if version not in ((1, 0), (2, 0), (3, 0)):
+                return None
+            (size,) = struct.unpack("<H" if version == (1, 0) else "<I", f.read(2 if version == (1, 0) else 4))
+            header = ast.literal_eval(f.read(size).decode("utf8" if version == (3, 0) else "latin1"))
+            data = f.read()
+        if not isinstance(header, dict) or set(header) != {"descr", "fortran_order", "shape"}:
             return None
-        major = f.read(2)[0]
-        (size,) = struct.unpack("<H" if major == 1 else "<I", f.read(2 if major == 1 else 4))
-        try:
-            header = ast.literal_eval(f.read(size).decode("latin1"))
-        except (ValueError, SyntaxError):
+        shape = header["shape"]
+        if (header["descr"] != "<f8" or header["fortran_order"] is not False or not isinstance(shape, tuple)
+                or len(shape) != 2 or shape[1] != columns or not all(type(n) is int and n >= 0 for n in shape)):
             return None
-        shape = header.get("shape") if isinstance(header, dict) else None
-        if (header.get("descr") != "<f8" or header.get("fortran_order") or not isinstance(shape, tuple)
-                or len(shape) != 2 or shape[1] != columns):
+        if len(data) != 8 * shape[0] * columns:
             return None
-        data = f.read()
-    if len(data) != 8 * shape[0] * columns:
+        flat = struct.unpack(f"<{shape[0] * columns}d", data)
+    except (OSError, ValueError, SyntaxError, TypeError, struct.error, MemoryError, RecursionError):
         return None
-    flat = struct.unpack(f"<{shape[0] * columns}d", data)
     return [flat[i:i + columns] for i in range(0, len(flat), columns)]
 
 
@@ -829,8 +833,10 @@ def startup_viewport(run_dir):
         return None
     if not all(k in trace for k in VIEWPORT_TRACE) or not control:
         return None
+    import math
     x0, y0 = control[0][4], control[0][5]
-    if max(((x - x0) ** 2 + (y - y0) ** 2) ** 0.5 for *_, x, y, _yaw in control) > VIEWPORT_STILL_M:
+    moved = [math.hypot(row[4] - x0, row[5] - y0) for row in control]
+    if not all(math.isfinite(m) for m in moved) or not max(moved) <= VIEWPORT_STILL_M:  # NaN or Inf: not still
         return None
     return ("startup_viewport: the first camera read failed before a perception frame, with no contact and no motion "
             "(F1 revision 2: failure_reason, failure.txt get_rgba / _resize_data_for_overscan, empty samples, "
@@ -1505,7 +1511,10 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             signs.insert(0, r.startup_silent)
         viewport = None
         if not r.startup_silent and not r.stalled and first_record(r.run, first_rel) is not None:
-            viewport = startup_viewport(os.path.dirname(first_record(r.run, first_rel)))
+            try:  # a record it cannot read leaves the run as it ended
+                viewport = startup_viewport(os.path.dirname(first_record(r.run, first_rel)))
+            except Exception as exc:  # noqa: BLE001 -- the run is still recorded, the others go on
+                note_error(f"startup_viewport {r.run.name}", exc)
             if viewport:
                 signs.insert(0, viewport)
         infra = bool(signs)
