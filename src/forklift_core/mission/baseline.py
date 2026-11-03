@@ -49,6 +49,8 @@ MISSION_KEYS = {
         "observe_end_stand", "observe_end_stands", "return_loose_checks", "return_loose_arrivals",
         "near_end_stand",  # plan 2026-11-02-near-leg-end-stand-c2: C2's pending stand (its records join observe_end_stands)
         "near_end_shadow_open",  # its open shadow episode (C2 5.1)
+        "near_end_injections",  # its diagnostic --inject-near-end-detour (plan 2026-11-03-near-end-stand-c2-injection)
+        "near_end_step_shift_max_m",  # its pallet shift since the last tick, written by the physics steps
         "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
         "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
         "exit_prefix_exempt",  # the exit-prefix latches' records (plan 2026-10-28-exit-prefix-extract-rules D5)

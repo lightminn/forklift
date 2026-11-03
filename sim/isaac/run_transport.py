@@ -567,6 +567,16 @@ def arguments() -> argparse.Namespace:
         "every earlier run.",
     )
     parser.add_argument(
+        "--inject-near-end-detour",
+        action="store_true",
+        help="Diagnostic only, never a result (docs/plans/2026-11-03-near-end-stand-c2-injection.md 1.2): with "
+        "--near-end-stand shadow or on, once per run, on the near re-observation leg's final reverse leg (at least "
+        "0.80 m), the observe tracker reads its input pose through a rigid offset about the original final goal from "
+        "0.80 m before it (0.06 m and 0.15 rad, signed by the leg's end curvature) and clears it before an update "
+        "that would leave 0.10 m, so the leg stands at its end outside the loose bounds and C2 takes it to the "
+        "original target. The goal, the paths, the path arrays, SLAM and the grid are untouched. Off: every earlier run.",
+    )
+    parser.add_argument(
         "--diag-return-stall-budget",
         type=int,
         default=None,
@@ -1673,6 +1683,8 @@ def arguments() -> argparse.Namespace:
             parser.error("--near-capture-redraw-lateral-m must be in [0.05, 0.10] m")
     if args.near_inject_roof_off and not args.near_tracking:
         parser.error("--near-inject-roof-off needs --near-tracking")
+    if args.inject_near_end_detour and args.near_end_stand == "off":
+        parser.error("--inject-near-end-detour needs --near-end-stand shadow or on")
     if args.near_drop_frames_from_m is not None:
         if not args.near_tracking:
             parser.error("--near-drop-frames-from-m needs --near-tracking")
@@ -7084,6 +7096,11 @@ def drive(S, isaac) -> None:
         session_truth_ids_ = []  # their ids, in the same order
         cusp_injection_ = {"done": False}  # --inject-cusp-offset-m: once per run
         observe_end_injection_ = {"done": False}  # --inject-observe-end-offset-m: once per run
+        near_end_detour_ = None  # --inject-near-end-detour: once per run (plan 2026-11-03-near-end-stand-c2-injection)
+        if getattr(args, "inject_near_end_detour", False):
+            from near_end_detour import NearEndDetour
+
+            near_end_detour_ = NearEndDetour()
         if session is not None:
             from session_pallets import NeighbourGap
 
@@ -7172,6 +7189,16 @@ def drive(S, isaac) -> None:
                 tick, observing=far_observing(ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
                 and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
+            if near_end_detour_ is not None:
+                # C2 injection plan 4 0 and 4: every physics step's pallet shift, a capture's steps included (Codex
+                # implementation review 1 P2-1), kept as the largest since the last control tick; the tick gives it
+                # to the windows open after its own update (review 2 P2-1, P2-3), by the phase the step ran in (a
+                # capture's steps before the same call's approach transition are observe's, review 3). A step's state
+                # key, so watched.
+                steps_shift_ = state.setdefault("near_end_step_shift_max_m", {})
+                phase_key_ = "observe" if ms.phase == "observe" else "other"
+                steps_shift_[phase_key_] = max(steps_shift_.get(phase_key_, 0.0), float(np.linalg.norm(
+                    np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
@@ -7994,7 +8021,9 @@ def drive(S, isaac) -> None:
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
                       **({"slam_log": list(slam_log)} if watched_log_ else {}),
                       # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
-                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s"]}
+                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s",
+                                    # the C2 injection's step pallet shift (review 2 P2-2: a replay runs no step)
+                                    *(("near_end_step_shift_max_m",) if near_end_detour_ is not None else ())]}
                          if early_ports else {}),
                       **({"recognition": list(FAR_SUMMARY_LISTS)} if far_lists_ is not None else {})},
                 append_only={"records", "scans", *(slam_log if watched_log_ else ()),
@@ -9174,6 +9203,12 @@ def drive(S, isaac) -> None:
                          "map_step_m": list(slam["cusp_injection_m"]), "rear": [float(v) for v in rear],
                          "pallet": getattr(pallet, "current", None),
                          "remaining_m": float(trackers["observe"].remaining_to_goal_m())})
+                if near_end_detour_ is not None:
+                    # Diagnostic (C2 injection plan 1.2): decided once and watched here, ahead of the follower; the
+                    # pallet's shift is the pick-up check's, read in observe too (plan 4 0 and 4)
+                    near_end_detour_.tick(t, ms.phase, trackers.get("observe"), core.near_reobserve_leg(), state,
+                                          float(np.linalg.norm(ppos[:2] - initial_pallet[:2])), rear,
+                                          can_arm=not paused_ and not warming)
                 scene_owned_, scene_presteer_ = False, None
                 if not paused_ and not releasing and not warming and core.scene_replan.active():
                     scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)
