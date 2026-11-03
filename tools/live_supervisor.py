@@ -50,6 +50,9 @@ from pathlib import Path
 
 ENDED, NEW_SCENE = 0, 3
 STOP_AT_ONCE = ("slam_map_mismatch",)  # causes no retry can change (plan L4)
+# docs/plans/2026-11-02-unconfirmed-runner.md 2.4: the unconfirmed position check ended -- the same start ends the same
+# way; the operator moves the truck and starts again
+STOP_AT_ONCE_PREFIXES = ("pose_",)
 
 
 def _fill(command: list[str], **values) -> list[str]:
@@ -497,6 +500,8 @@ def supervise(*, out: Path, runner: list[str], port_file: Path, backoff_s: float
             cause = _cause(code, reason)
             if cause[1] in STOP_AT_ONCE:
                 return stopped({"epochs": epoch, "end": "map_mismatch", "codes": codes, "reason": reason}, True)
+            if cause[1] is not None and cause[1].startswith(STOP_AT_ONCE_PREFIXES):
+                return stopped({"epochs": epoch, "end": "pose_ended", "codes": codes, "reason": reason}, True)
             repeats = repeats + 1 if cause == last_cause else 1
             last_cause = cause
             if repeats >= max_failures:  # the same cause, max_failures times in a row (plan D9)

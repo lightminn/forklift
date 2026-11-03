@@ -6,12 +6,14 @@ unknown map cells counted as hits, a region dropped only when no pose in it is p
 import math
 
 import numpy as np
+import pytest
 import test_global_match as TG
 
 from forklift_core.localization import global_match as G
 from forklift_core.localization import start_reloc as R
 from forklift_core.localization import twin_check as T
 from forklift_core.localization.slam_map import Grid
+from forklift_core.localization.slam_pose import compose, invert
 
 CFG = G.MatchConfig(yaw_step_rad=math.radians(2.0))
 
@@ -210,3 +212,94 @@ def test_the_residual_searches_the_believed_start_as_well_as_its_refined_pose():
     b = (2.47, 1.6, 0.6)  # refined towards the truth: two different regions
     res = T.residual_ambiguity(grid, _points_at(grid, truth), b, [], CFG, e_min=0.8)
     assert res.searched[0][1] == "believed" and (b, "believed-start") in res.searched
+
+
+# --- piece 2 (docs/plans/2026-11-02-unconfirmed-runner.md 2.1) ---
+from forklift_core.localization import pose_check as PC  # noqa: E402
+from forklift_core.safety.pallet_permit import Zone  # noqa: E402
+
+BOUNDS0 = PC.Bounds(odom=(0.0, 0.0, 0.0, 0.0), e_still=(0.03, 0.01), e_slam=(0.05, 0.025))
+
+
+def test_last_leaves_honours_its_deadline():
+    # Codex draft 1 P2-7: the config's deadline_s alone does not stop the search; the clock and deadline do
+    grid = TG._grid(*TG.ROOM)
+    pts = _points_at(grid, (2.4, 1.6, 0.6))
+    status, leaves = T.last_leaves(grid, pts, CFG, G.MapIndex(grid, CFG), 0.98)
+    assert status == "ok" and leaves
+    ticks = iter(range(10**6))
+    status, leaves = T.last_leaves(grid, pts, CFG, G.MapIndex(grid, CFG), 0.98, clock=lambda: next(ticks),
+                                   deadline=3)
+    assert status == "timeout" and leaves == []
+
+
+def test_the_start_check_takes_the_generations_leaves_and_the_live_ones():
+    grid = _bays(3)
+    truth = (8.5, 2.0, 0.0)
+    live = _points_at(grid, truth, **SHORT)
+    gen = _points_at(grid, (2.5, 2.0, 0.0), **SHORT)  # another place: its leaves are other poses
+    out = T.start_check(grid, live, truth, pool=[], gen_points=gen, cfg=CFG, e_min=0.8)
+    assert not out.residual.confirmed
+    index = G.MapIndex(grid, CFG)
+    for pts in (live, gen):  # every leaf of both searches is a hypothesis (or b itself); exact repeats are one
+        _, leaves = T.last_leaves(grid, pts, CFG, index, 0.98)
+        assert leaves and all(T._same(p, truth) or any(T._same(p, q) for q, _ in out.hyps) for p in leaves)
+    carried = T.start_check(grid, live, truth, pool=[(14.5, 2.0, 0.0)], gen_points=gen, cfg=CFG, e_min=0.8,
+                            carry=lambda p: (p[0] + 0.2, p[1], p[2]))
+    assert any(abs(p[0] - 14.7) < 1e-9 and src == "pool" for p, src in carried.hyps)  # moved once to O_scan's time
+
+
+def test_a_failed_generation_search_leaves_the_start_unconfirmed():
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    pts = _points_at(grid, truth)
+    out = T.start_check(grid, pts, truth, pool=[], gen_points=pts, cfg=G.MatchConfig(yaw_step_rad=math.radians(2.0),
+                        max_work=1), e_min=0.8)
+    assert not out.residual.confirmed
+
+
+def test_odometry_zones_are_c_h_inverse_z_and_do_not_move_with_the_odometry():
+    z = Zone("p", 5.0, 0.0, 1.0, 0.8, 0.0)
+    o_s = (10.0, 3.0, math.pi / 2)
+    (zone, rho0), = T.odom_zones([z], [(2.0, 0.0, 0.0)], o_s)
+    # the pallet 3 m ahead of the hypothesis, so 3 m ahead of the truck at o_s (facing +y in odom)
+    assert (zone.x_m, zone.y_m) == pytest.approx((10.0, 6.0)) and zone.yaw_rad == pytest.approx(math.pi / 2)
+    assert rho0 == pytest.approx(math.hypot(3.5, 0.4))
+    (turned, _), = T.odom_zones([z], [(2.0, 0.0, math.pi)], o_s)  # a turned-around hypothesis: behind the truck
+    assert (turned.x_m, turned.y_m) == pytest.approx((10.0, 0.0))
+    # the map pose c = C o O_t: in map coordinates the zone is C o Z, the same as c o h_t^-1 o z with h_t carried
+    C = (1.0, -2.0, 0.3)
+    o_t = compose(o_s, (-0.7, 0.0, 0.0))
+    h_t = T.moved((2.0, 0.0, 0.0), o_s, o_t)
+    via_map = compose(compose(compose(C, o_t), invert(h_t)), (5.0, 0.0, 0.0))
+    via_odom = compose(C, (zone.x_m, zone.y_m, zone.yaw_rad))
+    assert via_map == pytest.approx(via_odom)
+
+
+def test_the_growth_is_the_designs():
+    z = Zone("p", 0.0, 0.0, 1.0, 1.0, 0.0)
+    (grown,) = T.grown_zones([(z, 1.0 - 2.5)], 2.5, BOUNDS0)  # rho bound rho0 + d+ = 1.0
+    g = (grown.length_m - 1.0) / 2
+    assert g == pytest.approx(0.649854, abs=1e-6)  # design 1.4's 0.65 m, Codex's 0.649854
+    b = PC.Bounds(odom=(0.01, 0.02, 0.001, 0.002), e_still=(0.03, 0.01), e_slam=(0.05, 0.025))
+    (g2,) = T.grown_zones([(z, 1.0)], 0.5, b)
+    want = 0.30 + 0.02 + 2 * 0.5 * math.sin(0.05) + 2 * 1.5 * math.sin((0.10 + 0.002) / 2)
+    assert (g2.length_m - 1.0) / 2 == pytest.approx(want) and (g2.width_m - 1.0) / 2 == pytest.approx(want)
+
+
+def test_a_start_check_without_the_generations_scans_is_unconfirmed():
+    # Codex piece 2a P2: a missing generation set is no evidence
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    out = T.start_check(grid, _points_at(grid, truth), truth, pool=[], gen_points=None, cfg=CFG, e_min=0.8)
+    assert not out.residual.confirmed and out.statuses["generation"] == "missing"
+
+
+def test_the_start_check_drops_the_hypotheses_it_proved_impossible():
+    grid = TG._grid(*TG.ROOM)
+    truth = (2.4, 1.6, 0.6)
+    pts = _points_at(grid, truth)
+    out = T.start_check(grid, pts, truth, pool=[], gen_points=pts, cfg=CFG, e_min=0.8)
+    assert out.residual.impossible
+    gone = {tuple(p) for p, _ in out.residual.impossible}
+    assert out.hyps and not any(tuple(p) in gone for p, _ in out.hyps)

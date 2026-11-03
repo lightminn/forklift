@@ -81,6 +81,9 @@ class Context:
     scene_damaged: bool = False  # live: the scene's damage is latched (persistent console plan D6; else scene_damaged)
     # live: the SLAM tracker tracks or holds (plan D3; warming_up -- before its scan 4 processed -- localization_lost)
     localization_ok: bool = True
+    # live: the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 3.3): False while the start is
+    # not confirmed -- a submit and a resume are refused pose_unconfirmed; True without the check
+    pose_ok: bool = True
     # live: the pallet on the forks a submit may deliver as it is carried (plan D5 6c; the runner's conditions
     # met), else None -- a cargo_held refusal lets that one submit through as a loaded submit
     loaded_pallet: str | None = None
@@ -178,6 +181,8 @@ class MissionCommands:
             return "recovery_required"
         if not context.localization_ok:
             return "localization_lost"
+        if not context.pose_ok:
+            return "pose_unconfirmed"
         if self.targets is not None:
             refused = self.targets.check_submit(command.pallet_id, command.destination_id, command.targets_revision,
                                                 loaded=loaded)
@@ -216,6 +221,8 @@ class MissionCommands:
             return "not_paused"
         if context.stop_kind != "none":
             return "stopping"
+        if not context.pose_ok:
+            return "pose_unconfirmed"
         self.status = "resuming"
         return None
 

@@ -148,6 +148,12 @@ const FORBID = {
   "recovery:no_steering": "조향각을 잴 수 없어 손으로 빼기를 열지 않습니다",
   "recovery:steering": "조향이 아직 0 으로 돌아오지 않아 멈춰 있습니다",
   "recovery:stage_unknown": "복구 단계를 알 수 없어 수동 조종을 받지 않습니다",
+  // the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 2.3)
+  pose_unconfirmed: "출발 위치가 확인되지 않았습니다 · 곧은 후진만 됩니다",
+  "pose_unconfirmed:stroke": "한 번 누름의 후진 거리를 다 썼습니다 · 차가 선 뒤 손을 뗐다가 다시 누르세요",
+  "pose_unconfirmed:total": "확인 전 후진 거리를 다 썼습니다",
+  pose_checking: "출발 위치를 확인하는 중입니다",
+  pose_ended: "출발 위치 확인이 끝나 세션을 끝냅니다",
 };
 
 // Plan D14: which lift buttons work (the policy's directions) and the travel shown beside the height.
@@ -253,6 +259,9 @@ export const REJECT = {
   // F1: the operator's placed pose (docs/plans/2026-10-31-operator-placed-start.md 1.2)
   reloc_place_invalid: "놓은 자세를 읽을 수 없습니다",
   reloc_place_limit: "놓기를 세 번 다 썼습니다 · 다시 시도하거나 세션을 끝내세요",
+  // the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 2.3)
+  pose_unconfirmed: "출발 위치가 확인되기 전입니다 · 곧은 후진으로 확인한 뒤에 보내세요",
+  pose_ended: "출발 위치 확인이 끝났습니다 · 세션을 다시 시작하세요",
   // the fake vehicle's own (console/mock_vehicle)
   fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
   load_present: "포크에 짐이 실려 있습니다",
