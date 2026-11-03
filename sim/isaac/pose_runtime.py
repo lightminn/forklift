@@ -27,6 +27,7 @@ from forklift_core.localization import twin_check as T
 SCANS = 5  # scan_capture.SCANS: one set, as the start relocalization takes it
 DEADLINE_S = 30.0  # the start check's and a re-match generation's deadline (the matcher's, plan 3.2)
 ZONE_BIN_M = 0.05  # the net displacement's bin: zones grown at its upper end, fixed within it (plan 3.3)
+RESULT_GRACE_S = 5.0  # past a job's own deadline, the time its result may take to come back before it counts as lost
 
 
 # --- the worker's jobs ------------------------------------------------------------------------------------------------
@@ -219,6 +220,8 @@ class PoseRuntime:
         self.samples: list = []  # 10 Hz: (t, status, open, applied, truth)
         self.evidence: list = []  # every C_int's evidence against the truth (design 4)
         self._seen_events = 0
+        self._truths: deque = deque(maxlen=1200)  # (t, truth): the evidence's scan time looked up (10 s at 120 Hz)
+        self._evidence_t = None  # the last scan time of the evidence the next agreement uses
 
     # --- inputs --------------------------------------------------------------------------------------------------------
     def on_scan(self, stamp: float, ranges, o_base, standing: bool) -> None:
@@ -245,7 +248,10 @@ class PoseRuntime:
              near: bool = False) -> P.View:
         o = tuple(float(v) for v in o)
         self.o_last = o
-        self._check_worker(t)
+        if not self.pc.status.startswith("ended:"):
+            self._check_worker(t)
+        if self.pc.status.startswith("ended:"):  # Codex 2b re-review P2: nothing more to ask a closed worker
+            return self.pc.update(t, o, C if C is not None else (0.0, 0.0, 0.0), standing=standing, deadman=deadman)
         for job, result in self.worker.poll():
             self._result(t, job, result, o, C, epoch, control_gen)
         if C is None:  # no SLAM correction yet: a scan before it is not the start's (plan 2.2)
@@ -253,6 +259,9 @@ class PoseRuntime:
             return self.pc.update(t, o, (0.0, 0.0, 0.0), standing=standing, deadman=deadman)
         if self.stage == "await_start" and self.start_deadline is None:
             self.start_deadline = self.clock() + self.deadline_s
+        if self.stage == "start_running" and self.clock() > self.start_deadline + RESULT_GRACE_S:
+            self.stage = "started"  # a result that never came (Codex 2b re-review P2)
+            self.pc.end(t, "pose_start_failed")
         if self.stage == "await_start" and self.clock() > self.start_deadline:
             # Codex 2b P2-4: the scans' wait counts; past it no start check can be had (design 1.4: no reverse)
             self.stage = "started"
@@ -262,7 +271,7 @@ class PoseRuntime:
             if got is not None:
                 pts, o_scan = got
                 b_scan = T.moved(self.b, self.o0, o_scan)
-                self.start = {"o_scan": list(o_scan), "b_scan": list(b_scan)}
+                self.start = {"o_scan": list(o_scan), "b_scan": list(b_scan), "scan_t": self.buf[-1].stamp}
                 self.start_job = self.worker.submit("start_check", {
                     "points": pts, "b_scan": b_scan, "pool": self.pool, "gen_points": self.gen_points,
                     "o0": self.o0, "o_scan": o_scan, "deadline_at": self.start_deadline})
@@ -273,7 +282,14 @@ class PoseRuntime:
             phase = self.pc.status
             self.pc.begin_rematch(t, epoch=epoch, control_gen=control_gen)
             self.rm = _Rematch(phase, o, epoch, control_gen, R.StartRelocalizer(self.reloc_cfg, self.clock))
+            self.rm.relocalizer.start()  # its 30 s from now: the scans' wait counts (Codex 2b re-review P2)
             self.buf.clear()
+            view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active,
+                                  near=near)
+        if self.rm is not None and self.clock() > self.rm.relocalizer.deadline_at + (
+                0.0 if self.rm.stage == "scans" else RESULT_GRACE_S):
+            self._finish_rematch(t, "none" if self.rm.phase == "confirmed" else "unconfirmed", None,
+                                 self.rm.o_scan or self.rm.o_begin, o, C, epoch, control_gen, why="deadline")
             view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active,
                                   near=near)
         if self.rm is not None and self.rm.stage == "scans":
@@ -311,6 +327,7 @@ class PoseRuntime:
                 return
             self.hyps_s = [(tuple(q), src) for q, src in result["hyps"]]
             r_scan = tuple(result["base"]) if result["base"] is not None else tuple(self.start["b_scan"])
+            self._evidence_t = self.start["scan_t"]
             self.pc.start(t, confirmed=bool(result["confirmed"]), r_scan=r_scan, o_scan=o_scan, C=C, o_now=o,
                           reasons=tuple(result["reasons"]), hyps=self.hyps_s)
             if self.pc.status == "unconfirmed":
@@ -342,6 +359,7 @@ class PoseRuntime:
             return
         if rm.stage == "decide":
             g = result.get("g")
+            self._evidence_t = rm.stamps[-1][-1] if rm.stamps else t
             self._finish_rematch(t, result["outcome"], None if g is None else tuple(g), rm.o_scan, o, C, epoch,
                                  control_gen, why=result.get("residual"))
 
@@ -418,6 +436,7 @@ class PoseRuntime:
         """Plan 3.4: this control tick's applied pose against the simulation's truth (base link, B-P2 4.0 classes),
         counted for every tick and for the ticks with forward or mission permission open; 10 Hz samples; and each
         new C_int's evidence against the truth (design 4). The judgement only -- nothing decides on it."""
+        self._truths.append((t, tuple(truth)))
         cls, m, rad = _classify(applied, truth)
         for key in ("all", "open") if open_ else ("all",):
             tally = self.ticks[key]
@@ -427,8 +446,12 @@ class PoseRuntime:
             self.samples.append([t, self.pc.status, bool(open_), list(applied), list(truth)])
         for e in self.pc.events[self._seen_events:]:
             if e["kind"] in ("slam_agreement", "rematch_agreement") and e.get("ok"):
-                ecls, em, erad = _classify(e["evidence"], truth)
-                self.evidence.append({"t": t, "kind": e["kind"], "class": ecls, "m": em, "rad": erad})
+                # the evidence is the scan's: judged against the truth at that scan (Codex 2b re-review P3)
+                at = self._evidence_t if self._evidence_t is not None else t
+                truth_t, truth_at = min(self._truths, key=lambda r: abs(r[0] - at))
+                ecls, em, erad = _classify(e["evidence"], truth_at)
+                self.evidence.append({"t": t, "kind": e["kind"], "class": ecls, "m": em, "rad": erad,
+                                      "truth_t": truth_t})
         self._seen_events = len(self.pc.events)
 
     def record(self) -> dict:

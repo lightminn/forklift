@@ -380,3 +380,74 @@ def test_the_record_holds_what_the_judgement_needs():
     assert rec["hyps"] == [[[8.42, 1.7, 0.6], "shift x+1"]]
     assert rec["ticks"]["open"]["wrong"] == 1 and rec["ticks"]["all"]["success"] == 1
     assert rec["ticks"]["open"]["max_m"] == pytest.approx(0.35)
+
+
+# --- Codex piece 2b re-review ---
+def test_an_ended_check_no_longer_polls_its_worker():
+    b = (2.42, 1.7, 0.6)
+
+    class Closed(Scripted):
+        def alive(self):
+            return False
+
+        def poll(self):
+            raise ValueError("Queue is closed")
+
+    rt = _rt(Closed(), b=b, gen_points=np.zeros((40, 2)))  # no factory: dead at once
+    assert _tick(rt, b).status == "ended:pose_worker_dead"
+    assert _tick(rt, b).status == "ended:pose_worker_dead"  # no poll on the closed queue
+
+
+def test_a_start_result_that_never_comes_ends_at_the_deadline():
+    grid = TG._grid(*TG.ROOM)
+    b = (2.42, 1.7, 0.6)
+    now = {"t": 100.0}
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)), clock=lambda: now["t"])
+    _tick(rt, b)
+    _feed(rt, grid, b, b)
+    _tick(rt, b)
+    assert rt.stage == "start_running"
+    now["t"] = 130.0 + PR.RESULT_GRACE_S + 0.1
+    assert _tick(rt, b).status == "ended:pose_start_failed"
+
+
+def test_a_rematch_generations_deadline_counts_its_scans():
+    b = (2.42, 1.7, 0.6)
+    grid = TG._grid(*TG.ROOM)
+    now = {"t": 100.0}
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)), clock=lambda: now["t"])
+    _tick(rt, b)
+    _feed(rt, grid, b, b)
+    _tick(rt, b)
+    _answer_start(w, b)
+    o = b
+    _tick(rt, o)
+    while _tick(rt, o, standing=False, deadman=True).drive_ready:
+        o = compose(o, (-0.01, 0.0, 0.0))
+    _tick(rt, o, standing=False)
+    now["t"] = 200.0
+    assert _tick(rt, o).status == "checking" and rt.rm.relocalizer.deadline_at == 230.0  # from the begin
+    now["t"] = 231.0
+    view = _tick(rt, o)  # no scans in its 30 s: no evidence
+    assert view.status == "unconfirmed" and rt.rematches[-1]["why"] == "deadline"
+
+
+def test_the_evidence_is_judged_against_the_truth_at_its_scans():
+    # Codex 2b re-review P3: the truck may have moved between the scan and the result's tick
+    b = (2.42, 1.7, 0.6)
+    grid = TG._grid(*TG.ROOM)
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)))
+    _tick(rt, b)
+    for k in range(5):  # the scans at 1.0-1.4 s, the truth there the estimate
+        rt.on_scan(1.0 + 0.1 * k, _ranges(grid, b), b, True)
+        rt.note_tick(1.0 + 0.1 * k, applied=b, truth=b, open_=False)
+    _tick(rt, b)
+    w.answer({"confirmed": True, "base": list(b), "reasons": [], "hyps": [], "statuses": {}, "wall_s": 1.0})
+    _tick(rt, b, compose(b, invert(b)))
+    moved = (b[0] + 0.35, b[1], b[2])
+    rt.note_tick(2.0, applied=moved, truth=moved, open_=True)
+    [ev] = rt.evidence
+    assert ev["class"] == "success" and ev["truth_t"] == pytest.approx(1.4)
