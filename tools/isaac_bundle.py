@@ -81,6 +81,15 @@ the run's start, and is judged only while a Python process runs --stack-match (r
 from the later of the run's and that runner's start -- between a live session's epochs the supervisor runs alone for
 up to its backoff plus 300 s of standby; a run with no progress file named is not watched.
 
+Start-up silence: a run whose runner (--stack-match) has started but which has written no first record -- its progress
+files as above, else the kind's first-record file under its first retry_move (bd: run/scenario.json) -- while its
+logs (its attempt log and its "scan" files) have not changed for --startup-silence-min (default 5; 0: off) is asked
+for its stack (SIGUSR1), then, --stack-wait-s later, ended like a timeout and recorded as infra_failed with the sign
+"startup_silent: ...", so it goes again under --retries like any infrastructure failure. The F1 batch of 2026-11-04
+had five sessions stop right after "app ready" for 11-30 min (no log write, GPU idle, 585 MiB each) under kinds whose
+progress stall is off; healthy sessions took 17-113 s from "app ready" to their first record (344 riib/simphys runs,
+p99 108 s). A run with neither a progress file nor a first-record file named is not judged.
+
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
 with the code of what it ran. Exit 0 when every run's last attempt exited 0, 1 otherwise, 2 for a refused
@@ -144,8 +153,11 @@ KINDS = {
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
     "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
              "watch_rel": "run/frames.jsonl"},
+    # first_rel: the start-up silence watch's first record when no progress file is named (run_transport writes its
+    # scenario.json about 17 s after the log's first line; the F1 sessions that stopped after "app ready" never did)
     # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
-    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500, "run_min": 13},
+    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500, "run_min": 13,
+           "first_rel": "run/scenario.json"},
 }
 BRIDGE_CORE_CPUS = 2  # one physical core (its two hyperthreads) for the SLAM bridges, apart from the Isaac sessions
 SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
@@ -740,6 +752,28 @@ def watch_globs(run, watch_rel=None):
     return []
 
 
+def first_globs(run, watch_rel=None, first_rel=None):
+    """A run's first record for the start-up silence watch: its progress files, else first_rel under its output."""
+    globs = watch_globs(run, watch_rel)
+    if globs:
+        return globs
+    if first_rel and run.retry_move:
+        return [os.path.join(run.retry_move[0], first_rel)]
+    return []
+
+
+def startup_silence(run, log_path, runner_start, now=time.time):
+    """Seconds since the run's logs (its attempt log and its scan files) last changed, from its runner's start at the
+    earliest."""
+    latest = runner_start
+    for path in [str(log_path), *(p for g in run.scan for p in glob.glob(g))]:
+        try:
+            latest = max(latest, os.stat(path).st_mtime)
+        except OSError:
+            continue
+    return now() - latest
+
+
 def _runner_start(pids, match):
     """The latest start (wall clock) of the Python processes among pids running `match`, or None when none runs."""
     try:
@@ -1204,6 +1238,9 @@ class _Live:
     no_runner_since: float | None = None
     runner_seen: bool = False  # its runner (run_transport) has run at some point
     stall_reason: str | None = None
+    first_seen: bool = False  # its first record (progress or first-record file) exists
+    startup_silent: str | None = None  # the start-up silence sign, once it is ended for it
+    startup_term_at: float | None = None
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -1231,7 +1268,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
-               diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0,
+               diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0, startup_silence_s=None, first_rel=None,
                leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings, gpu_full_give_up_s=None, preflight=None):
@@ -1336,6 +1373,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         killed = x["signal"] == signal.SIGKILL or x["rc"] in (137, -9)
         if x["ooms"] and killed:
             signs.insert(0, f"oom_kill +{x['ooms']} in the job cgroup and the run was killed")
+        if r.startup_silent:
+            signs.insert(0, r.startup_silent)
         infra = bool(signs)
         removed, cleanup_error = [], None
         try:
@@ -1371,6 +1410,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": status, "missions": missions, "infra": signs,
             "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
+            "startup_silent": bool(r.startup_silent),
             "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
@@ -1648,6 +1688,28 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 r, "diagnostics", stall_diagnostics(r.stack_pids, r, out)), daemon=True)
                             r.diag_thread.start()
                             r.diag_deadline = now + diag_wait_s
+                if (startup_silence_s and not r.first_seen and not r.stalled and r.startup_silent is None
+                        and r.term_at is None and now >= st["stall_next"]):
+                    fglobs = first_globs(r.run, watch_rel, first_rel)
+                    if not fglobs:
+                        r.first_seen = True  # nothing to wait for: not judged
+                    elif any(glob.glob(g) for g in fglobs):
+                        r.first_seen = True
+                    else:
+                        began = (_runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match
+                                 else r.start_wall)
+                        if began is not None:
+                            quiet = startup_silence(r.run, r.log_path, max(began, r.start_wall))
+                            if quiet >= startup_silence_s:
+                                r.startup_silent = (f"startup_silent: no first record and the logs unchanged for "
+                                                    f"{quiet:.0f} s after the runner started")
+                                pids_ = [p for p in token_pids(r.env["BUNDLE_TOKEN"])
+                                         if stack_match and stack_match in _cmdline(p)]
+                                _kill(stall_targets(pids_, stack_match), signal.SIGUSR1)
+                                r.startup_term_at = now + stack_wait_s
+                if r.startup_silent and r.term_at is None and now >= (r.startup_term_at or 0.0):
+                    r.term_at = now  # ended like a timeout; recorded as infra_failed and retried under --retries
+                    _kill([r.proc.pid], signal.SIGTERM)
                 if (r.stalled and r.stack_term_at is None and r.term_at is None
                         and (not r.diag_thread.is_alive() or now >= r.diag_deadline)):
                     # then the stack: SIGUSR1 only to processes that catch it (run_transport's faulthandler)
@@ -1966,6 +2028,9 @@ def main(argv=None) -> int:
                     help="end a run whose progress files (its watch globs, else its pace_log, else the kind's file "
                          "under its output) have not changed for this long, status stalled, not retried (default: "
                          "--kind's; 0: off)")
+    ap.add_argument("--startup-silence-min", type=float, default=5.0,
+                    help="end a run whose runner started but which wrote no first record while its logs stayed "
+                         "unchanged this long, as infra_failed (retried under --retries); 0: off")
     ap.add_argument("--list-registry-dir", default=f"/tmp/isaac_bundle_lists_{os.getuid()}",
                     help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
@@ -2074,6 +2139,8 @@ def _run_main(a, runs, slots, shards, probe, stop):
         time_left=(lambda: job_time_left(os.environ)) if os.environ.get("SLURM_JOB_ID") else None,
         stall_s=60 * (a.stall_min if a.stall_min is not None else (KINDS[a.kind].get("stall_min", 0) if a.kind else 0)),
         watch_rel=KINDS[a.kind].get("watch_rel") if a.kind else None,
+        startup_silence_s=60 * a.startup_silence_min or None,
+        first_rel=KINDS[a.kind].get("first_rel") if a.kind else None,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
         node_ledger_dir=a.node_ledger_dir,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),

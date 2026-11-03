@@ -1609,3 +1609,72 @@ def test_an_override_is_not_taken_for_another_requirements_file(tmp_path):
     run = ib.Run(name="a", argv=["bash", str(tmp_path / "launch.sh"), str(tmp_path / "out_a")],
                  env={"SEED": "1", "EXTRA": "--scene-requirements-override why"}, retry_move=[str(tmp_path / "out_a")])
     assert ib.check_runs([run], tmp_path / "runner.py") == []
+
+
+# --- start-up silence (F1 batch 2026-11-04: five sessions stopped right after "app ready" for 11-30 min) ------------
+
+SILENT_TRANSPORT = (
+    "import faulthandler,pathlib,signal,sys,time\n"
+    "out=pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)\n"
+    "faulthandler.register(signal.SIGUSR1, file=open(str(out)+'.stall_stack.txt','w'), all_threads=True)\n"
+    "print('app ready', flush=True)\n"
+    "def stuck_after_app_ready():\n"
+    "    time.sleep(60)\n"
+    "stuck_after_app_ready()\n"
+)
+
+
+def silent_run(tmp_path, name, **extra):
+    script = tmp_path / "run_transport.py"
+    script.write_text(SILENT_TRANSPORT)
+    out = tmp_path / name
+    return ib.Run(name=name, argv=["bash", "-c", f"{sys.executable} {script} {out}/run"], retry_move=[str(out)],
+                  **extra), out
+
+
+def test_a_run_silent_after_its_start_with_no_first_record_is_infra_and_retried(tmp_path):
+    run, out = silent_run(tmp_path, "f1_s0", watch=[str(tmp_path / "f1_s0" / "run" / "frames.jsonl")])
+    summary = bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, stack_wait_s=0.3, grace_s=1.0,
+                     retries=1)
+    lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    first, second = [x for x in lines if x["name"] == "f1_s0"]
+    assert first["status"] == "infra_failed" and first["retried"] is True and first["startup_silent"] is True
+    assert first["infra"][0].startswith("startup_silent:") and first["stalled"] is False
+    assert second["status"] == "infra_failed" and second["retried"] is False  # retries spent
+    assert (tmp_path / "f1_s0.attempt1").exists()  # moved aside for the retry, as any infrastructure failure
+    assert "stuck_after_app_ready" in (tmp_path / "f1_s0.attempt1" / "run.stall_stack.txt").read_text()
+    assert summary["exit_code"] == 1
+
+
+def test_a_run_that_writes_its_first_record_is_not_judged_by_the_start_up_silence(tmp_path):
+    script = tmp_path / "run_transport.py"
+    out = tmp_path / "ok_s0"
+    script.write_text("import pathlib,sys,time; d=pathlib.Path(sys.argv[1]); d.mkdir(parents=True); "
+                      "time.sleep(0.3); (d/'frames.jsonl').write_text('{}\\n'); time.sleep(1.5)\n")
+    run = ib.Run(name="ok_s0", argv=["bash", "-c", f"{sys.executable} {script} {out}/run"], retry_move=[str(out)],
+                 watch=[str(out / "run" / "frames.jsonl")])
+    bundle(tmp_path, [run], startup_silence_s=0.8, stall_check_s=0.1, grace_s=1.0)
+    r = results(tmp_path)["ok_s0"]
+    assert r["status"] == "ended" and r["startup_silent"] is False
+
+
+def test_the_kind_s_first_record_file_is_used_without_a_progress_file(tmp_path):
+    run, out = silent_run(tmp_path, "bd_s0")
+    assert ib.first_globs(run, None, "run/scenario.json") == [str(out / "run" / "scenario.json")]
+    bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, stack_wait_s=0.2, grace_s=1.0, retries=0,
+           first_rel="run/scenario.json")
+    assert results(tmp_path)["bd_s0"]["status"] == "infra_failed"
+
+
+def test_a_run_with_nothing_to_wait_for_or_the_watch_off_is_not_judged(tmp_path):
+    run, _ = silent_run(tmp_path, "none_s0")  # no progress file, no first-record file
+    bundle(tmp_path, [run], startup_silence_s=0.4, stall_check_s=0.1, grace_s=1.0, run_timeout_s=2.0)
+    assert results(tmp_path)["none_s0"]["startup_silent"] is False
+    (tmp_path / "b").mkdir(exist_ok=True)
+    run2, _ = silent_run(tmp_path / "b", "off_s0", watch=[str(tmp_path / "b" / "off_s0" / "run" / "frames.jsonl")])
+    bundle(tmp_path / "b", [run2], startup_silence_s=None, stall_check_s=0.1, grace_s=1.0, run_timeout_s=2.0)
+    assert results(tmp_path / "b")["off_s0"]["startup_silent"] is False
+
+
+def test_the_kinds_name_their_first_record():
+    assert ib.KINDS["bd"]["first_rel"] == "run/scenario.json" and ib.KINDS["riib"]["watch_rel"] == "run/frames.jsonl"
