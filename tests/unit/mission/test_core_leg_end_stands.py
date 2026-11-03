@@ -52,6 +52,32 @@ def test_o1_a_stand_outside_the_loose_bounds_for_3_s_is_planned_again_to_the_sam
     assert w.ms.phase_started == 13.0
 
 
+def test_o1_an_installed_replan_restarts_the_no_progress_watch_and_a_failed_one_keeps_it():
+    # The stand's watch was taken at remaining 0: the new leg's remaining never falls a metre below it, so without a
+    # restart its normal progress would end in obstacle_no_progress 60 s on (as C2's install restarts it)
+    w = o_world(plans=[co.plan()])
+    stand_for(w, 3.0 + DT)
+    assert w.state["observe_end_stands"][0]["outcome"] == "installed" and "progress" not in w.obstacle
+    w = o_world(plans=[co.plan(False)])
+    stand_for(w, 3.0 + DT)
+    assert w.state["observe_end_stands"][0]["outcome"].startswith("failed:") and w.obstacle["progress"] == {"x": 1}
+
+
+def test_o1_the_restarted_watch_lets_the_new_leg_run_past_60_s():
+    import pytest
+    import test_core_permission as cp
+
+    core, obstacle, _, _ = cp.make("observe", remaining=1.0, act=True)
+    obstacle["progress"] = {"phase": "observe", "best_m": 0.0, "since_s": 0.0}  # taken at the stand: best 0
+    with pytest.raises(RuntimeError, match="obstacle_no_progress in observe"):
+        core.permission(60.1, cp.REAR, 0.2, 0.4, True, None)  # kept: the new leg is judged on the old baseline
+    core, obstacle, _, _ = cp.make("observe", remaining=1.0, act=True)
+    obstacle["progress"] = {"phase": "observe", "best_m": 0.0, "since_s": 0.0}
+    obstacle.pop("progress")  # what O1's install does now
+    core.permission(53.0, cp.REAR, 0.2, 0.4, True, None)
+    core.permission(60.1, cp.REAR, 0.2, 0.4, True, None)  # 7.1 s on the new leg's own baseline
+
+
 def test_o1_inside_the_loose_bounds_is_left_to_the_loose_arrival():
     w = o_world()
     stand_for(w, 5.0, replace(STAND, position_error_m=0.09, yaw_error_rad=0.09))
