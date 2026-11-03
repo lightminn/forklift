@@ -1635,7 +1635,7 @@ def silent_run(tmp_path, name, **extra):
 def test_a_run_silent_after_its_start_with_no_first_record_is_infra_and_retried(tmp_path):
     run, out = silent_run(tmp_path, "f1_s0", watch=[str(tmp_path / "f1_s0" / "run" / "frames.jsonl")])
     summary = bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, stack_wait_s=0.3, grace_s=1.0,
-                     retries=1)
+                     retries=1, first_rel="run/scenario.json")
     lines = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
     first, second = [x for x in lines if x["name"] == "f1_s0"]
     assert first["status"] == "infra_failed" and first["retried"] is True and first["startup_silent"] is True
@@ -1646,35 +1646,85 @@ def test_a_run_silent_after_its_start_with_no_first_record_is_infra_and_retried(
     assert summary["exit_code"] == 1
 
 
-def test_a_run_that_writes_its_first_record_is_not_judged_by_the_start_up_silence(tmp_path):
+def test_a_quiet_wait_after_the_first_record_is_not_judged(tmp_path):
+    # scenario.json written, then planning or a relocalization's operator wait with no log and no frames yet (Codex)
     script = tmp_path / "run_transport.py"
     out = tmp_path / "ok_s0"
     script.write_text("import pathlib,sys,time; d=pathlib.Path(sys.argv[1]); d.mkdir(parents=True); "
-                      "time.sleep(0.3); (d/'frames.jsonl').write_text('{}\\n'); time.sleep(1.5)\n")
+                      "time.sleep(0.3); (d/'scenario.json').write_text('{}\\n'); time.sleep(1.5)\n")
     run = ib.Run(name="ok_s0", argv=["bash", "-c", f"{sys.executable} {script} {out}/run"], retry_move=[str(out)],
                  watch=[str(out / "run" / "frames.jsonl")])
-    bundle(tmp_path, [run], startup_silence_s=0.8, stall_check_s=0.1, grace_s=1.0)
+    bundle(tmp_path, [run], startup_silence_s=0.8, stall_check_s=0.1, grace_s=1.0, first_rel="run/scenario.json")
     r = results(tmp_path)["ok_s0"]
     assert r["status"] == "ended" and r["startup_silent"] is False
 
 
-def test_the_kind_s_first_record_file_is_used_without_a_progress_file(tmp_path):
-    run, out = silent_run(tmp_path, "bd_s0")
-    assert ib.first_globs(run, None, "run/scenario.json") == [str(out / "run" / "scenario.json")]
+def test_an_empty_first_record_file_is_not_a_record(tmp_path):
+    # a file opened and not yet written: the run stuck after opening it is still judged (Codex)
+    script = tmp_path / "run_transport.py"
+    out = tmp_path / "empty_s0"
+    script.write_text("import pathlib,sys,time; d=pathlib.Path(sys.argv[1]); d.mkdir(parents=True); "
+                      "(d/'scenario.json').touch(); time.sleep(60)\n")
+    run = ib.Run(name="empty_s0", argv=["bash", "-c", f"{sys.executable} {script} {out}/run"], retry_move=[str(out)])
     bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, stack_wait_s=0.2, grace_s=1.0, retries=0,
            first_rel="run/scenario.json")
-    assert results(tmp_path)["bd_s0"]["status"] == "infra_failed"
+    r = results(tmp_path)["empty_s0"]
+    assert r["status"] == "infra_failed" and r["startup_silent"] is True
+
+
+def test_the_kind_s_first_record_file_is_under_the_run_s_output(tmp_path):
+    run, out = silent_run(tmp_path, "bd_s0")
+    assert ib.first_record(run, "run/scenario.json") == str(out / "run" / "scenario.json")
+    assert ib.first_record(run, None) is None
 
 
 def test_a_run_with_nothing_to_wait_for_or_the_watch_off_is_not_judged(tmp_path):
-    run, _ = silent_run(tmp_path, "none_s0")  # no progress file, no first-record file
+    # a progress file alone is not a first record: it comes after planning
+    run, _ = silent_run(tmp_path, "none_s0", watch=[str(tmp_path / "none_s0" / "run" / "frames.jsonl")])
     bundle(tmp_path, [run], startup_silence_s=0.4, stall_check_s=0.1, grace_s=1.0, run_timeout_s=2.0)
     assert results(tmp_path)["none_s0"]["startup_silent"] is False
     (tmp_path / "b").mkdir(exist_ok=True)
-    run2, _ = silent_run(tmp_path / "b", "off_s0", watch=[str(tmp_path / "b" / "off_s0" / "run" / "frames.jsonl")])
-    bundle(tmp_path / "b", [run2], startup_silence_s=None, stall_check_s=0.1, grace_s=1.0, run_timeout_s=2.0)
+    run2, _ = silent_run(tmp_path / "b", "off_s0")
+    bundle(tmp_path / "b", [run2], startup_silence_s=None, stall_check_s=0.1, grace_s=1.0, run_timeout_s=2.0,
+           first_rel="run/scenario.json")
     assert results(tmp_path / "b")["off_s0"]["startup_silent"] is False
 
 
 def test_the_kinds_name_their_first_record():
-    assert ib.KINDS["bd"]["first_rel"] == "run/scenario.json" and ib.KINDS["riib"]["watch_rel"] == "run/frames.jsonl"
+    assert ib.KINDS["bd"]["first_rel"] == ib.KINDS["riib"]["first_rel"] == "run/scenario.json"
+    assert ib.KINDS["riib"]["watch_rel"] == "run/frames.jsonl" and "first_rel" not in ib.KINDS["live"]
+
+
+# --- node start gap (the F1 sessions that stopped had started 4-6 s after another job's) ----------------------------
+
+def test_the_node_start_gap_lets_one_start_through_per_gap(tmp_path):
+    clock = [1000.0]
+    a, b = ib.NodeStartGap(tmp_path / "led", 60.0), ib.NodeStartGap(tmp_path / "led", 60.0)  # two jobs
+    assert a.take(lambda: clock[0])
+    clock[0] += 5.0
+    assert not b.take(lambda: clock[0]) and not a.take(lambda: clock[0])
+    clock[0] += 55.0
+    assert b.take(lambda: clock[0])
+    clock[0] -= 30.0  # the clock went back: let through rather than hold every job
+    assert a.take(lambda: clock[0])
+
+
+def test_a_bundle_spaces_its_starts_by_the_node_gap_and_counts_the_waits(tmp_path):
+    led = tmp_path / "led"
+    ib.NodeStartGap(led, 0.7).take()  # another job of the node has just started a run
+    runs = [ib.Run(name=f"g{i}", argv=["bash", "-c", "sleep 0.2"]) for i in range(2)]
+    summary = bundle(tmp_path, runs, node_stagger_s=0.7, node_ledger_dir=str(led))
+    r = results(tmp_path)
+    assert r["g1"]["start"] - r["g0"]["start"] >= 0.7 - 0.05
+    assert summary["node_start_waits"] >= 1
+
+
+def test_a_run_claimed_by_another_job_takes_no_turn_of_the_node_gap(tmp_path):
+    claims = tmp_path / "claims"
+    (claims / "c0").mkdir(parents=True)
+    (claims / "c0" / "by").write_text("other\n")
+    runs = [ib.Run(name="c0", argv=["bash", "-c", "true"]), ib.Run(name="c1", argv=["bash", "-c", "true"])]
+    summary = bundle(tmp_path, runs, node_stagger_s=5.0, node_ledger_dir=str(tmp_path / "led"),
+                     claim_dir=str(claims))
+    assert summary["claimed_elsewhere"] == 1 and results(tmp_path)["c1"]["status"] == "ended"
+    assert summary["node_start_waits"] == 0
