@@ -94,10 +94,12 @@ riib/simphys runs, p99 108 s). A run whose kind names no first-record file is no
 
 Start-up viewport failure: the other end of the same start-up fault -- Kit's viewport wait runs out (63 frames) and
 the runner ends itself at its first camera read -- is recorded as infra_failed with the sign "startup_viewport: ..."
-and retried the same way, but only when the run's output (the first-record file's folder) holds all three records:
-failure.txt with the TypeError "unsupported operand type(s) for -: 'NoneType' and 'NoneType'" raised under get_rgba
-and _resize_data_for_overscan, and a result.json whose "samples" and "transitions" are both recorded and empty (the
-simulation never ticked). A missing or different record leaves the run as it ended (F1 registration, revision 2).
+and retried the same way, but only on the F1 registration's own conditions (revision 2, its judge's overscan_end),
+each read from its own record in the run's output (the first-record file's folder): result.json's failure_reason is
+the TypeError "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"; its "samples", "transitions" and
+"forbidden_pocket_contacts" are recorded and empty; its applied_command starts with a recorded 0; scene_damaged is
+not set; failure.txt names get_rgba and _resize_data_for_overscan; slam_control.npy's truth rear axle moved at most
+0.01 m from its first sample. A missing or different record leaves the run as it ended.
 
 Node start gap: two bundle jobs of the node (this user's, through --node-ledger-dir) start no two runs less than
 --node-stagger-s apart (default 60; 0: off), under a file lock: the F1 sessions that stopped had started 4-6 s after a
@@ -777,24 +779,62 @@ def first_record(run, first_rel=None):
     return None
 
 
-VIEWPORT_FAILURE = ("unsupported operand type(s) for -: 'NoneType' and 'NoneType'", "get_rgba",
-                    "_resize_data_for_overscan")
+VIEWPORT_REASON = "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"
+VIEWPORT_TRACE = ("get_rgba", "_resize_data_for_overscan")
+VIEWPORT_STILL_M = 0.01  # the truth rear axle's largest move from its first control sample
+
+
+def npy_rows(path, columns):
+    """The rows of a little-endian float64 C-order .npy file of shape (n, columns), read without numpy; None for any
+    other file."""
+    import ast
+    import struct
+    with open(path, "rb") as f:
+        if f.read(6) != b"\x93NUMPY":
+            return None
+        major = f.read(2)[0]
+        (size,) = struct.unpack("<H" if major == 1 else "<I", f.read(2 if major == 1 else 4))
+        try:
+            header = ast.literal_eval(f.read(size).decode("latin1"))
+        except (ValueError, SyntaxError):
+            return None
+        shape = header.get("shape") if isinstance(header, dict) else None
+        if (header.get("descr") != "<f8" or header.get("fortran_order") or not isinstance(shape, tuple)
+                or len(shape) != 2 or shape[1] != columns):
+            return None
+        data = f.read()
+    if len(data) != 8 * shape[0] * columns:
+        return None
+    flat = struct.unpack(f"<{shape[0] * columns}d", data)
+    return [flat[i:i + columns] for i in range(0, len(flat), columns)]
 
 
 def startup_viewport(run_dir):
-    """The start-up viewport failure's sign when run_dir holds all three of its records (see the module text), else
-    None."""
+    """The start-up viewport failure's sign when run_dir's records meet every condition of the F1 registration's
+    revision 2 (its judge's overscan_end; see the module text), else None."""
     try:
-        text = Path(run_dir, "failure.txt").read_text(errors="replace")
         result = json.loads(Path(run_dir, "result.json").read_text())
+        trace = Path(run_dir, "failure.txt").read_text(errors="replace")
+        control = npy_rows(Path(run_dir, "slam_control.npy"), 7)
     except (OSError, ValueError):
         return None
-    if not all(k in text for k in VIEWPORT_FAILURE) or not isinstance(result, dict):
+    if not isinstance(result, dict) or result.get("failure_reason") != VIEWPORT_REASON:
         return None
-    if any(not isinstance(result.get(k), list) or result[k] for k in ("samples", "transitions")):
+    if any(not isinstance(result.get(k), list) or result[k]
+           for k in ("samples", "transitions", "forbidden_pocket_contacts")):  # recorded and empty, not absent
         return None
-    return ("startup_viewport: the first camera read failed on a viewport Kit never readied "
-            "(failure.txt: get_rgba / _resize_data_for_overscan TypeError; result.json: no samples, no transitions)")
+    command = result.get("applied_command")
+    if (not isinstance(command, list) or not command or isinstance(command[0], bool)
+            or not isinstance(command[0], (int, float)) or command[0] != 0 or result.get("scene_damaged")):
+        return None
+    if not all(k in trace for k in VIEWPORT_TRACE) or not control:
+        return None
+    x0, y0 = control[0][4], control[0][5]
+    if max(((x - x0) ** 2 + (y - y0) ** 2) ** 0.5 for *_, x, y, _yaw in control) > VIEWPORT_STILL_M:
+        return None
+    return ("startup_viewport: the first camera read failed before a perception frame, with no contact and no motion "
+            "(F1 revision 2: failure_reason, failure.txt get_rgba / _resize_data_for_overscan, empty samples, "
+            "transitions and contacts, command 0, still)")
 
 
 def written(path) -> bool:

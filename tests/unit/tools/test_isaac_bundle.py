@@ -1698,19 +1698,30 @@ def test_the_kinds_name_their_first_record():
 VIEWPORT_TRACE = ("Traceback (most recent call last):\n  File \"camera.py\", line 1026, in get_rgba\n"
                   "  File \"annotator_utils.py\", line 522, in _resize_data_for_overscan\n"
                   "TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'\n")
+VIEWPORT_RESULT = {"failure_reason": ib.VIEWPORT_REASON, "samples": [], "transitions": [],
+                   "forbidden_pocket_contacts": [], "applied_command": [0.0, 0.0], "scene_damaged": False}
 
 
-def viewport_run(tmp_path, name, *, samples=(), transitions=(), trace=VIEWPORT_TRACE, result=True):
+def viewport_records(d, *, result=VIEWPORT_RESULT, trace=VIEWPORT_TRACE, moved=0.0, control=True):
+    import numpy as np
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "failure.txt").write_text(trace)
+    if result is not None:
+        (d / "result.json").write_text(json.dumps(result))
+    if control:
+        c = np.zeros((5, 7))
+        c[:, 0] = np.arange(5) / 120
+        c[-1, 4] = moved
+        np.save(d / "slam_control.npy", c)
+    (d / "scenario.json").write_text("{}\n")
+
+
+def viewport_run(tmp_path, name, **kw):
+    src = tmp_path / f"{name}_records"
+    viewport_records(src, **kw)
     out = tmp_path / name / "run"
-    out.mkdir(parents=True)
-    (tmp_path / f"{name}_failure.txt").write_text(trace)
-    if result:
-        (tmp_path / f"{name}_result.json").write_text(json.dumps({"samples": list(samples),
-                                                                   "transitions": list(transitions)}))
-    files = "failure.txt" + (" result.json" if result else "")
     # each attempt writes its records afresh into the folder the retry moved aside
-    cmd = " && ".join(f"cp {tmp_path}/{name}_{f} {out}/{f}" for f in files.split()) if files else "true"
-    cmd = f"mkdir -p {out} && {cmd} && echo '{{}}' > {out}/scenario.json && exit 1"
+    cmd = f"mkdir -p {out} && cp {src}/* {out}/ && exit 1"
     return ib.Run(name=name, argv=["bash", "-c", cmd], retry_move=[str(tmp_path / name)])
 
 
@@ -1724,17 +1735,46 @@ def test_a_run_that_ended_itself_on_an_unready_viewport_is_infra_and_retried(tmp
     assert (tmp_path / "vp_s0.attempt1" / "run" / "failure.txt").exists()
 
 
-def test_a_viewport_failure_needs_all_three_records(tmp_path):
-    cases = {"ticked": dict(samples=[{"time_s": 0.0}]), "moved_on": dict(transitions=[{"from": "a", "to": "b"}]),
-             "other_error": dict(trace="Traceback\nTypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'\n"),
-             "no_result": dict(result=False)}
+def test_a_viewport_failure_needs_every_condition_of_the_registration(tmp_path):
+    # Codex: each of the registration's conditions alone keeps the run as it ended
+    cases = {
+        "ticked": dict(result={**VIEWPORT_RESULT, "samples": [{"time_s": 0.0}]}),
+        "moved_on": dict(result={**VIEWPORT_RESULT, "transitions": [{"from": "a", "to": "b"}]}),
+        "contact": dict(result={**VIEWPORT_RESULT, "forbidden_pocket_contacts": [{"t": 0.1}]}),
+        "damaged": dict(result={**VIEWPORT_RESULT, "scene_damaged": True}),
+        "commanded": dict(result={**VIEWPORT_RESULT, "applied_command": [0.2, 0.0]}),
+        "no_command": dict(result={k: v for k, v in VIEWPORT_RESULT.items() if k != "applied_command"}),
+        "no_contacts": dict(result={k: v for k, v in VIEWPORT_RESULT.items() if k != "forbidden_pocket_contacts"}),
+        "other_reason": dict(result={**VIEWPORT_RESULT, "failure_reason": "Camera did not produce RGB"}),
+        "moved": dict(moved=0.02),
+        "no_control": dict(control=False),
+        "other_trace": dict(trace="TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'\n"),
+        "no_result": dict(result=None),
+    }
     for name, kw in cases.items():
         d = tmp_path / name
-        d.mkdir()
-        bundle(d, [viewport_run(d, name, **kw)], retries=1, first_rel="run/scenario.json")
-        r = results(d)[name]
-        assert r["status"] == "ended" and r["startup_viewport"] is False and r["retried"] is False, name
-    assert ib.startup_viewport(tmp_path / "nowhere") is None
+        viewport_records(d, **kw)
+        assert ib.startup_viewport(d) is None, name
+    viewport_records(tmp_path / "ok", moved=0.009)
+    assert ib.startup_viewport(tmp_path / "ok") and ib.startup_viewport(tmp_path / "nowhere") is None
+    d = tmp_path / "ticked_run"
+    d.mkdir()
+    bundle(d, [viewport_run(d, "t_s0", result={**VIEWPORT_RESULT, "samples": [{"time_s": 0.0}]})], retries=1,
+           first_rel="run/scenario.json")
+    r = results(d)["t_s0"]
+    assert r["status"] == "ended" and r["startup_viewport"] is False and r["retried"] is False
+
+
+def test_the_npy_reader_matches_numpy_and_refuses_other_files(tmp_path):
+    import numpy as np
+    a = np.arange(21, dtype="<f8").reshape(3, 7)
+    np.save(tmp_path / "a.npy", a)
+    assert ib.npy_rows(tmp_path / "a.npy", 7) == [tuple(r) for r in a.tolist()]
+    np.save(tmp_path / "b.npy", a.astype("<f4"))
+    np.save(tmp_path / "c.npy", a.reshape(7, 3))
+    (tmp_path / "d.npy").write_bytes(b"not an array")
+    assert ib.npy_rows(tmp_path / "b.npy", 7) is None and ib.npy_rows(tmp_path / "c.npy", 7) is None
+    assert ib.npy_rows(tmp_path / "d.npy", 7) is None
 
 
 def test_without_a_first_record_file_the_viewport_failure_is_not_looked_for(tmp_path):
