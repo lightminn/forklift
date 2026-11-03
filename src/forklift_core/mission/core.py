@@ -3004,7 +3004,8 @@ class MissionCore:
         rad, outside throughout, never fired -- the same stand's earlier cusp latch logged stop_lost / stop_confirmed
         seven times in 5 s); inside the bounds on the tick, the loose arrival's own count is left to finish. A failed
         attempt is recorded only here (no budget spent) and the truck keeps standing, so the loose arrival or the
-        timeout follow as before; an installed one counts in observe_replans. Returns the tracking for this tick."""
+        timeout follow as before; an installed one counts in observe_replans and restarts the obstacle layer's
+        no-progress watch. Returns the tracking for this tick."""
         ms, state, slam, hooks, options, paths, trackers = (self.ms, self.state, self.slam, self.hooks, self.options,
                                                             self.paths, self.trackers)
         leg_ = state["observe_replan_leg"]
@@ -3061,6 +3062,10 @@ class MissionCore:
         trackers["observe"] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
                                                   trackers["observe"].config)
         ms.phase_started = t
+        if self.obstacle is not None:
+            # the no-progress watch starts over on the new leg: its best remaining stood at 0 at the stand, so the new
+            # leg's progress would never refresh it (as C2's install, plan 2026-11-02-near-leg-end-stand-c2 1)
+            self.obstacle.pop("progress", None)
         self.realign_install("observe_replan")
         tracking = trackers["observe"].update(rear, signed_speed, dt)
         ms.last_tracking = tracking
