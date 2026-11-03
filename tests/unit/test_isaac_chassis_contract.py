@@ -342,8 +342,13 @@ def test_mass_from_anywhere_but_a_links_own_explicit_mass_is_refused():
     def link_density(stage, root):
         UsdPhysics.MassAPI(stage.GetPrimAtPath(f"{root}/base_link")).CreateDensityAttr().Set(1000.0)
 
+    def root_body(stage, root):  # a 26 kg body on the root itself (Codex chassis review round 2 P2)
+        prim = stage.GetPrimAtPath(root)
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr().Set(26.0)
+
     for extra, message in ((nested_body, "rigid body"), (child_mass, "mass authored below a link"),
-                           (link_density, "density")):
+                           (link_density, "density"), (root_body, "root /World/Forklift carries")):
         with pytest.raises(ValueError, match=message):
             _stage_with(extra)
 

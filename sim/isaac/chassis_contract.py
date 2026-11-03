@@ -278,6 +278,13 @@ def stage_chassis(stage, root: str) -> ChassisDescription:
     # give it their volume's mass). A zero or unauthored mass is "none of its own"; its centre of mass is not read
     # (the importer leaves it -inf).
     root_prim = stage.GetPrimAtPath(root)
+    # the root is a plain container in the importer's layout: a body or a mass on it would act uncompared
+    # (Codex chassis review round 2 P2: a 26 kg root body fixed to base_link passed)
+    if root_prim.HasAPI(UsdPhysics.RigidBodyAPI) or (
+            root_prim.HasAPI(UsdPhysics.MassAPI)
+            and ((UsdPhysics.MassAPI(root_prim).GetMassAttr().Get() or 0.0) > 0
+                 or (UsdPhysics.MassAPI(root_prim).GetDensityAttr().Get() or 0.0) > 0)):
+        raise ValueError(f"Scene root {root} carries a rigid body or a mass")
     links = {p.GetName(): p for p in root_prim.GetChildren()
              if p.HasAPI(UsdPhysics.RigidBodyAPI) or p.HasAPI(UsdPhysics.MassAPI)}
     for prim in Usd.PrimRange(root_prim, Usd.TraverseInstanceProxies()):
