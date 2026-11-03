@@ -18,7 +18,8 @@ GEOM = {"loaded_footprint": {"front_m": 1.56, "rear_m": 0.17, "half_width_m": 0.
 
 
 def write_run(tmp_path, *, keepout_y=3.0, physical=(1.0, 3.0), speed=0.0, kappa=0.0, ticks=240, gap=False,
-              transitions=(("insert", "transport", 0.0),), pallet_lat=0.0, sample_times=None, cmd_kappa=0.0):
+              transitions=(("insert", "transport", 0.0),), pallet_lat=0.0, sample_times=None, cmd_kappa=0.0,
+              held=None):
     run = tmp_path / "run"
     run.mkdir(parents=True)
     keep = {"asset": {"uri": "riibotics:block", "length_m": 2.0, "width_m": 1.0, "height_m": 0.144},
@@ -38,6 +39,9 @@ def write_run(tmp_path, *, keepout_y=3.0, physical=(1.0, 3.0), speed=0.0, kappa=
     C = np.column_stack([t, x, y, yaw, x, y, yaw])
     np.save(run / "slam_control.npy", C)
     st = np.arange(0, ticks / 120.0, 0.1) if sample_times is None else np.asarray(sample_times)
+    held = kappa if held is None else held
+    L, h = 0.66, 0.53 / 2
+    steer = [float(np.arctan(held * L / (1 - held * h))), float(np.arctan(held * L / (1 + held * h)))]
     samples = []
     for tt in st:
         i = int(np.argmin(np.abs(t - tt)))
@@ -46,9 +50,10 @@ def write_run(tmp_path, *, keepout_y=3.0, physical=(1.0, 3.0), speed=0.0, kappa=
                         "signed_speed_mps": 0.0, "curvature_inv_m": cmd_kappa,
                         "pallet_position_m": [float(x[i] + 1.26 * c - pallet_lat * s_),
                                               float(y[i] + 1.26 * s_ + pallet_lat * c), 0.2],
-                        "pallet_yaw_rad": float(yaw[i])})
+                        "pallet_yaw_rad": float(yaw[i]), "steering_actual_rad": steer})
     (run / "result.json").write_text(json.dumps({
         "scenario": {"props": [keep, tall]}, "scene_layout": {"obstacles": [phys]}, "geometry": GEOM,
+        "chassis_model": {"drive_geometry": {"wheelbase_m": L, "track_m": 2 * h}},
         "samples": samples, "transitions": [{"from": a, "to": b, "time_s": tt} for a, b, tt in transitions]}))
     return run
 
@@ -86,12 +91,12 @@ def test_physical_near_reopens_a(tmp_path):
     assert r["reopen"]["a_physical_near"]
 
 
-def test_the_stop_arc_is_centred_on_the_truth_motion(tmp_path):
-    # driving straight ahead at 0.5 m/s toward an object; the band is centred on the truth path curvature (0), the
-    # commanded curvature (sharp, 0.36) is only one more member of it
-    r = report(write_run(tmp_path, speed=0.5, physical=(1.56 + 0.2 + 0.3 + 1.0, 0.0), cmd_kappa=0.36))
+def test_the_stop_arc_uses_the_held_steering_not_the_command(tmp_path):
+    # driving straight ahead at 0.5 m/s toward an object, steering held straight; the commanded curvature is ignored
+    r = report(write_run(tmp_path, speed=0.5, physical=(1.56 + 0.2 + 0.3 + 0.8, 0.0), cmd_kappa=0.36))
     assert r["physical_arc_violations"] and r["reopen"]["a_physical_near"]
-    assert all(abs(h["path_curvature_inv_m"]) < 1e-6 and h["review"] for h in r["physical_arc_violations"])
+    assert all(abs(h["held_curvature_inv_m"]) < 1e-6 for h in r["physical_arc_violations"])
+    assert r["arc_checked_samples"] > 0 and r["arc_in_reach_control_ticks"] >= r["arc_checked_samples"]
 
 
 def test_the_phase_comes_from_the_transitions(tmp_path):
@@ -117,7 +122,7 @@ def test_unevaluated_ranges_are_listed(tmp_path):
 
 def test_the_arc_covers_a_steering_curvature_off_the_path_curvature(tmp_path):
     # the truck follows a 0.30 1/m arc; a pallet sits where a 0.36 1/m stop arc (held steering) would reach
-    run = write_run(tmp_path, speed=0.6, kappa=0.30, physical=(5.0, 5.0))
+    run = write_run(tmp_path, speed=0.6, kappa=0.30, held=0.36, physical=(5.0, 5.0))
     data = json.loads((run / "result.json").read_text())
     C = np.load(run / "slam_control.npy")
     k = len(C) // 2
@@ -129,7 +134,8 @@ def test_the_arc_covers_a_steering_curvature_off_the_path_curvature(tmp_path):
     data["scene_layout"]["obstacles"][0].update(x_m=float(fx + 0.30 * np.cos(end[2])), y_m=float(fy + 0.30 * np.sin(end[2])))
     (run / "result.json").write_text(json.dumps(data))
     r = report(run)
-    assert r["physical_arc_violations"] and all(h["review"] for h in r["physical_arc_violations"])
+    assert r["physical_arc_violations"]
+    assert all(abs(h["held_curvature_inv_m"] - 0.36) < 1e-6 for h in r["physical_arc_violations"])
 
 
 def test_a_short_speed_peak_is_not_averaged_below_the_threshold(tmp_path):

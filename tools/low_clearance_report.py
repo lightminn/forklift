@@ -18,12 +18,12 @@ Shapes and sampling (said in the output too):
   ``geometry.unloaded_footprint`` (the hull beside the blades) -- at the truth rear pose of every control tick;
 - the carried pallet (loaded phases): its recorded outline at the 0.1 s samples only, as its own row, in the keep-out
   overlap test too;
-- the stop arc: the evaluator's held steering curvature and instantaneous truth speed are not in the records, so the
-  check is conservative (a superset; a hit is flagged for review, a miss is a pass): at every control tick within reach
-  of a physical object, the speed is the largest truth speed in a +-0.25 s window plus 0.01 m/s (ticks below 0.05 m/s
-  on that bound are skipped), and the curvature takes every value of a band -- the truth path curvature +-0.10 1/m in
-  0.025 steps and the nearest sample's commanded curvature -- clipped to the steering limit 0.36 1/m; the stopping
-  distance is the permission model's given on the command line, at the evaluator's envelope. Reversing unloaded, the evaluator drives the body-and-blades
+- the stop arc: at the 0.1 s samples only, where the held steering is recorded (``steering_actual_rad``, turned into
+  the curvature by the evaluator's formula with ``chassis_model.drive_geometry``); the speed is the largest truth speed
+  in a +-0.25 s window plus 0.01 m/s (a sample below 0.05 m/s on that bound is skipped); the stopping distance is the
+  permission model's given on the command line, at the evaluator's envelope; checked only where the truck is within
+  reach of a physical object. The control ticks between samples are not arc-checked: their count is listed, so an arc
+  miss is a pass at the samples only. Reversing unloaded, the evaluator drives the body-and-blades
   parts shape, which this tool does not rebuild: those ticks are listed as unevaluated for the arc;
 - unevaluated ranges: control-tick gaps over 3 ticks, sample gaps over 0.15 s, the time after the last sample for the
   sample-based rows, and the unloaded reversing arc ticks.
@@ -95,7 +95,6 @@ def phase_at(timeline: list, t: float) -> str | None:
 
 
 SPEED_WINDOW_S, SPEED_PAD_MPS = 0.25, 0.01
-KAPPA_BAND, KAPPA_STEP, KAPPA_LIMIT = 0.10, 0.025, 0.36
 
 
 def speed_bound(C: np.ndarray, k: int, dt: float) -> tuple[float, int]:
@@ -110,11 +109,11 @@ def speed_bound(C: np.ndarray, k: int, dt: float) -> tuple[float, int]:
     return float(v.max()) + SPEED_PAD_MPS, (1 if sv >= 0 else -1)
 
 
-def kappa_band(kappa: float, command) -> list:
-    vals = list(np.arange(kappa - KAPPA_BAND, kappa + KAPPA_BAND + 1e-9, KAPPA_STEP))
-    if command is not None:
-        vals.append(float(command))
-    return sorted({round(float(np.clip(v, -KAPPA_LIMIT, KAPPA_LIMIT)), 6) for v in vals})
+def held_kappa(steer, wheelbase_m: float, track_m: float) -> float:
+    """The evaluator's held curvature from the two steering joints (sim/isaac/run_transport.py held_kappa)."""
+    h = track_m / 2
+    return float(np.mean([math.tan(steer[0]) / (wheelbase_m + math.tan(steer[0]) * h),
+                          math.tan(steer[1]) / (wheelbase_m - math.tan(steer[1]) * h)]))
 
 
 def truth_motion(C: np.ndarray, k: int, half: int = 2) -> tuple[float, float]:
@@ -178,7 +177,7 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
         out["control_tick_s"] = dt
         out["unevaluated"] += [{"control_gap_s": gp} for gp in _gaps(C[:, 0], dt)]
         t0 = float(samples[0]["time_s"])
-        st_all = np.array([float(x["time_s"]) for x in samples])
+        in_reach_ticks = 0
         for k, row in enumerate(C):
             t = float(row[0])
             if t < t0:
@@ -194,31 +193,9 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
             for i, r in (keepout if dk <= 0.0 else ()):  # the distance is 0 when they meet; the overlap test decides
                 if shape_meets(r, shape, pose, 0.0):
                     overlap(i, t, ph, "truck", dt)
-            _, kappa = truth_motion(C, k)
-            vmax, direction = speed_bound(C, k, dt)
-            if vmax <= 0.05:
-                continue
-            stop_len = stopping.distance_m(vmax)
-            if dp > stop_len + envelope_m + 0.05:
-                continue  # out of reach of every physical object on this tick's arc
-            if not loaded and direction < 0:
-                if not arc_unevaluated or t - arc_unevaluated[-1][1] > 2 * dt:
-                    arc_unevaluated.append([t, t])
-                else:
-                    arc_unevaluated[-1][1] = t
-                continue
-            si = int(np.clip(np.searchsorted(st_all, t), 0, len(st_all) - 1)) if len(st_all) else None
-            command = None if si is None else samples[si].get("curvature_inv_m")
-            hit, hit_k = [], None
-            for kk in kappa_band(kappa, command):
-                poses = arc_poses(pose, kk, direction, stop_len, 0.025)[0]
-                hit = [j for j, r in physical if any(shape_meets(r, shape, tuple(p), envelope_m) for p in poses[1:])]
-                if hit:
-                    hit_k = kk
-                    break
-            if hit_k is not None:
-                arc_hits.append({"t": t, "phase": ph, "objects": hit, "speed_bound_mps": vmax, "direction": direction,
-                                 "curvature_inv_m": hit_k, "path_curvature_inv_m": kappa, "review": True})
+            vmax, _ = speed_bound(C, k, dt)
+            if vmax > 0.05 and dp <= stopping.distance_m(vmax) + envelope_m + 0.05:
+                in_reach_ticks += 1  # a tick the arc could matter on; checked below only if it is a sample tick
     pd, pw = float(g.get("pallet_depth_m", 0.6)), float(g.get("pallet_width_m", 0.8))
     for x in samples:
         t, ph = float(x["time_s"]), x["phase"]
@@ -234,6 +211,41 @@ def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
             for i, r in (keepout if dk <= 0.0 else ()):
                 if shape_meets(r, pal_shape, pose, 0.0):
                     overlap(i, t, ph, "pallet", 0.1)
+    # the stop arc at the samples, with the recorded held steering
+    dg = (s.get("chassis_model") or {}).get("drive_geometry") or (s.get("arguments") or {}).get("drive_geometry") or {}
+    arc_samples = 0
+    if C is not None and len(C) and dg.get("wheelbase_m") and dg.get("track_m"):
+        dt_c = out.get("control_tick_s", 1 / 120)
+        for x in samples:
+            steer = x.get("steering_actual_rad")
+            if not steer or len(steer) < 2:
+                continue
+            t = float(x["time_s"])
+            k = int(np.clip(np.searchsorted(C[:, 0], t), 0, len(C) - 1))
+            pose = tuple(float(c) for c in C[k, 4:7])
+            ph = phase_at(timeline, t) if timeline else x.get("phase")
+            loaded = ph in LOADED_PHASES
+            shape = loaded_fp if loaded else unloaded_fp
+            vmax, direction = speed_bound(C, k, dt_c)
+            if vmax <= 0.05:
+                continue
+            stop_len = stopping.distance_m(vmax)
+            if shape_clearance(pose, shape, [r for _, r in physical]) > stop_len + envelope_m + 0.05:
+                continue
+            if not loaded and direction < 0:
+                arc_unevaluated.append([t, t])
+                continue
+            arc_samples += 1
+            kk = held_kappa(steer, float(dg["wheelbase_m"]), float(dg["track_m"]))
+            poses = arc_poses(pose, kk, direction, stop_len, 0.025)[0]
+            hit = [j for j, r in physical if any(shape_meets(r, shape, tuple(p), envelope_m) for p in poses[1:])]
+            if hit:
+                arc_hits.append({"t": t, "phase": ph, "objects": hit, "speed_bound_mps": vmax, "direction": direction,
+                                 "held_curvature_inv_m": kk})
+    elif C is not None and len(C):
+        out["unevaluated"].append("no drive_geometry: the stop arc is not checked")
+    out["arc_checked_samples"] = arc_samples
+    out["arc_in_reach_control_ticks"] = in_reach_ticks if C is not None and len(C) else 0
     st = np.array([float(x["time_s"]) for x in samples])
     out["sample_interval_s"] = float(np.median(np.diff(st))) if len(st) > 1 else None
     out["unevaluated"] += [{"sample_gap_s": [float(st[k]), float(st[k + 1])]}
