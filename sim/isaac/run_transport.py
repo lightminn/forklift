@@ -1769,7 +1769,7 @@ DIAGNOSTIC_PROBE_SETTINGS = ("physx_friction_correlation_distance_m", "physx_sol
 # holds the two equal; listed here so a run without them does not import that module).
 PROBE_ARM_SETTINGS = ("probe_fix_base_z_m", "probe_load_kg", "probe_load_dx_m", "probe_load_dz_m", "probe_lift_m",
                       "probe_front_tyre_frictionless", "probe_shim_wheel", "probe_shim_height_m",
-                      "probe_spawn_yaw_offset_rad", "probe_assign_by_y", "probe_front_spin_free")
+                      "probe_spawn_yaw_offset_rad", "probe_assign_by_y", "probe_front_spin_free", "probe_clear_area")
 TYRE_LINKS = tuple(f"/World/Forklift/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"))
 PROBE_CURVATURES = (0.29, -0.29, 0.36, -0.36)
 PROBE_SPEED_MPS = 0.25
@@ -1921,7 +1921,7 @@ def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
 
 
 def run_steering_probe(world, robot, wheels, steers, settings, args, action_type, ackermann, out_dir,
-                       arms=None, lift_index=None) -> dict:
+                       arms=None, lift_index=None, scene_pallet=None) -> dict:
     """Drive probe_segments() (or probe_segments_long()) and return a per-segment summary; the per-tick
     record goes to steering_probe.npz. Segment summaries use the last second of each segment, plus the
     steady window when one exists. ``arms``: the steering left-asymmetry plan's run-time arms and extra
@@ -1935,7 +1935,7 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
     names = list(robot.dof_names)
     if arms is not None:
         steers, wheels, stage_wheels = arms.assign(names, steers, wheels, stage_wheels)
-        arms.setup(world, names, action_type, lift_index, dt)
+        arms.setup(world, names, action_type, lift_index, dt, scene_pallet=scene_pallet)
     steering = np.asarray(robot.get_joint_positions()[steers], dtype=float).copy()
     speed = 0.0
     rows, efforts_applied, efforts_measured, joint_forces, tyre_contacts = [], [], [], [], []
@@ -3808,8 +3808,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["steering_probe_arms_stage"]["tyre_contact_after"] = tyre_contact_readback(stage)
     if args.steering_probe:
         import steering_probe_arms
+        from pxr import PhysxSchema as PS, Usd as U_, UsdPhysics as UP_
 
         state["steering_probe_joint_readback"] = steering_probe_arms.joint_readback(stage)
+        # every robot body reports its contacts, so a window where anything but a tyre touches the scene (or a tyre
+        # anything but the floor) is known (steering left-asymmetry plan: the clean-window check)
+        for body_ in U_.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
+            if body_.HasAPI(UP_.RigidBodyAPI) and not body_.HasAPI(PS.PhysxContactReportAPI):
+                PS.PhysxContactReportAPI.Apply(body_).CreateThresholdAttr(0.0)
     # Physics-step scheduling sets the recording rate. Acquire every rendered
     # frame so the SDK elapsed-time threshold cannot skip frame metadata.
     camera = Camera(
@@ -4312,7 +4318,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             lambda extra_kg: plant_lift_sag_m(state["plant_backend"], extra_kg))
         state["steering_probe"] = run_steering_probe(
             world, robot, wheels, steers, settings, args, ArticulationAction, ackermann_command, args.output,
-            arms=probe_arms_, lift_index=lift_index,
+            arms=probe_arms_, lift_index=lift_index, scene_pallet=pallet,
         )
         state["phase"] = "steering_probe_done"
         state["success"] = True

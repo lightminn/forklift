@@ -16,6 +16,9 @@ them otherwise, as DIAGNOSTIC_PROBE_SETTINGS); with none of them set the probe r
                                       base frame) instead of their names (a name-swapped URDF; the drive geometry then
                                       comes from --probe-geometry-urdf)
   A11 probe_front_spin_free           the two front spin drives without gains or effort (rear-wheel drive)
+  all probe_clear_area                the random props deactivated before the reset and the scene pallet made
+                                      kinematic and lifted out of the way after the spawn checks, so the probe's
+                                      arcs touch nothing but the floor (the smoke runs' fast arcs reached a prop)
 
 Values are positive numbers, as every settings value must be: a flag is 1 (set) or absent; the base height and the
 yaw offset are positive (A3's 'touching' height is the smallest positive value next to the settled height).
@@ -33,10 +36,11 @@ PROBE_ARM_SETTINGS = (
     "probe_spawn_yaw_offset_rad",
     "probe_assign_by_y",
     "probe_front_spin_free",
+    "probe_clear_area",
 )
 LOAD_KEYS = ("probe_load_kg", "probe_load_dx_m", "probe_load_dz_m", "probe_lift_m")
 SHIM_KEYS = ("probe_shim_wheel", "probe_shim_height_m")
-FLAG_KEYS = ("probe_front_tyre_frictionless", "probe_assign_by_y", "probe_front_spin_free")
+FLAG_KEYS = ("probe_front_tyre_frictionless", "probe_assign_by_y", "probe_front_spin_free", "probe_clear_area")
 LIFT_SETTLE_S = 1.5  # plan 4.2 A4: the load and the lift settle before the segments
 FRONT_TYRES = ("front_left_tire_collision", "front_right_tire_collision")
 SHIM_PATH = "/World/ProbeShim"
@@ -151,6 +155,11 @@ def author_stage(stage, settings: dict, *, base_xyz, base_yaw: float, steer_posi
     from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 
     record = {}
+    if settings.get("probe_clear_area"):
+        props = stage.GetPrimAtPath("/World/RandomProps")
+        if props and props.IsValid():
+            props.SetActive(False)
+        record["cleared_props"] = bool(props and props.IsValid())
     if "probe_fix_base_z_m" in settings:
         joint = UsdPhysics.FixedJoint.Define(stage, BASE_FIX_PATH)
         joint.CreateBody1Rel().SetTargets(["/World/Forklift/base_link"])
@@ -245,7 +254,10 @@ FULL_FIELDS = ("Jz", "tangent_impulse", "steer_moment_z", "contacts", "anchors",
 ANCHOR_INDEX_PROBLEM = {}
 
 
-def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list[float]]:
+FLOOR_TOKEN = "/GroundPlane/"  # the warehouse scene's floor collider (/World/Environment/GroundPlane/CollisionPlane)
+
+
+def tyre_full_contacts(tyre_links, axis_points, partners_seen=None, env=None) -> list[list[float]]:
     """Per tyre link, from this step's full contact report (friction anchors included -- plan 4.1 record 4), against
     everything outside the robot: the summed vertical impulse of its contact points except the shim's, the summed
     tangential impulse magnitude (contact points and friction anchors), the z moment of every point and anchor
@@ -270,6 +282,15 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list
     partners = [set() for _ in tyre_links]
     for header in headers:
         paths = (str(PhysicsSchemaTools.intToSdfPath(header.actor0)), str(PhysicsSchemaTools.intToSdfPath(header.actor1)))
+        if env is not None:
+            # any robot body against anything but the floor or the shim under a tyre: the window is not clean
+            robot = [p for p in paths if p.startswith("/World/Forklift")]
+            if len(robot) == 1:
+                other = paths[1] if paths[0] == robot[0] else paths[0]
+                tyre_on_floor = robot[0] in tyre_links and (FLOOR_TOKEN in other or other.startswith(SHIM_PATH))
+                if not tyre_on_floor:
+                    env["count"] = env.get("count", 0) + max(1, header.num_contact_data)
+                    env.setdefault("pairs", set()).add((robot[0], other))
         for w, link in enumerate(tyre_links):
             if link not in paths:
                 continue
@@ -338,7 +359,8 @@ class ProbeRuntime:
         self.scene_joints, self.lift_sag = scene_joints, lift_sag
         self.record = {"arms": {k: settings[k] for k in PROBE_ARM_SETTINGS if k in settings}}
         self.rows = {"gains": [], "damping": [], "max_effort": [], "lift_q": [], "base_pose": [], "wheel_z": [],
-                     "full": []}
+                     "full": [], "env_contacts": []}
+        self.env_pairs = set()
         self.partners = {}
 
     def assign(self, names: list, steers, wheels, tyre_links):
@@ -357,9 +379,23 @@ class ProbeRuntime:
         self.steers, self.wheels, self.tyre_links = steers, wheels, tyre_links
         return steers, wheels, tyre_links
 
-    def setup(self, world, names: list, action_type, lift_index, dt: float) -> None:
-        """A11 then A4 (the load merged into the carriage, the lift raised and settled), before the segments."""
+    def setup(self, world, names: list, action_type, lift_index, dt: float, scene_pallet=None) -> None:
+        """The clear area, A11, then A4 (the load merged into the carriage, the lift raised and settled), before the
+        segments. ``scene_pallet``: the scene's pallet handle (a rigid prim with set_world_pose)."""
         view = self.robot._articulation_view
+        if self.settings.get("probe_clear_area") and scene_pallet is not None:
+            from pxr import Usd, UsdPhysics
+
+            bodies = [p for p in Usd.PrimRange(self.stage.GetPrimAtPath("/World/Pallet"))
+                      if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+            for body in bodies:
+                UsdPhysics.RigidBodyAPI(body).CreateKinematicEnabledAttr(True)
+            position, orientation = scene_pallet.get_world_pose()
+            lifted = np.asarray(position, float) + np.array([0.0, 0.0, 10.0])
+            scene_pallet.set_world_pose(position=lifted, orientation=orientation)
+            world.step(render=False)
+            self.record["cleared_pallet"] = {"bodies": [str(p.GetPath()) for p in bodies],
+                                             "lifted_to_m": np.asarray(scene_pallet.get_world_pose()[0], float).tolist()}
         if self.settings.get("probe_front_spin_free"):
             front = np.array([names.index(n) for n in self.record["assignment"]["spin"][:2]])
             view.set_gains(kps=np.zeros((1, 2)), kds=np.zeros((1, 2)), joint_indices=front)
@@ -442,7 +478,10 @@ class ProbeRuntime:
         rotation = quat_matrix(orientation)
         axes = [np.asarray(position, float) + rotation @ np.asarray(self.scene_joints[n]["position_m"], float)
                 for n in self.steer_names] + [None, None]
-        self.rows["full"].append(tyre_full_contacts(self.tyre_links, axes, self.partners))
+        env = {}
+        self.rows["full"].append(tyre_full_contacts(self.tyre_links, axes, self.partners, env))
+        self.rows["env_contacts"].append(float(env.get("count", 0)))
+        self.env_pairs |= env.get("pairs", set())
 
     def save(self, out_dir) -> dict:
         np.savez(out_dir / "steering_probe_arms.npz", steer_names=np.array(self.steer_names),
@@ -450,4 +489,5 @@ class ProbeRuntime:
                  **{k: np.asarray(v, dtype=float) for k, v in self.rows.items()})
         self.record["partners"] = {k: sorted(v) for k, v in self.partners.items()}
         self.record["anchor_index_problem"] = ANCHOR_INDEX_PROBLEM.get("first")
+        self.record["env_contact_pairs"] = sorted(list(p) for p in self.env_pairs)
         return self.record
