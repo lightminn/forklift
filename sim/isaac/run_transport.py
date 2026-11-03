@@ -216,6 +216,20 @@ def _finite_triple(value: str) -> tuple[float, float, float]:
     return parts
 
 
+def _pose_bounds(value: str):
+    """Parse the unconfirmed position check's development values (docs/plans/2026-11-02-unconfirmed-runner.md 0):
+    JSON {"odom": [a, b, c, e], "e_still": [m, rad], "e_slam": [m, rad]} inline or in a file."""
+    from forklift_core.localization.pose_check import Bounds
+
+    try:
+        text = Path(value).read_text() if not value.lstrip().startswith("{") and Path(value).is_file() else value
+        data = json.loads(text)
+        return Bounds(odom=tuple(float(v) for v in data["odom"]), e_still=tuple(float(v) for v in data["e_still"]),
+                      e_slam=tuple(float(v) for v in data["e_slam"]))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise argparse.ArgumentTypeError(f"--pose-check-bounds: {exc}") from exc
+
+
 def quarter_focal(value: str) -> float:
     """Parse a positive finite focal length for Camera.set_focal_length."""
     try:
@@ -1024,6 +1038,13 @@ def arguments() -> argparse.Namespace:
                         help="B-P2c: with --start-relocalize, the operator's whole time from the runner's start "
                         f"(unset: {RELOC_OPERATOR_TIMEOUT_S:.0f} s, inside the supervisor's 600 s --reloc-wait-s); a "
                         "retry does not extend it. Past it the session ends reloc_operator_timeout.")
+    parser.add_argument("--pose-check", choices=("off", "on"), default="off",
+                        help="The unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md): after the "
+                        "start relocalization, a start with residual ambiguity opens only a straight reverse until a "
+                        "re-match confirms it; then a monitor. Needs --start-relocalize and --pose-check-bounds.")
+    parser.add_argument("--pose-check-bounds", type=_pose_bounds, default=None,
+                        help="The check's development values (plan 0), JSON inline or a file: {\"odom\": [a, b, c, e] "
+                        "(dp = a + b d, dth = c + e d), \"e_still\": [m, rad], \"e_slam\": [m, rad]}.")
     parser.add_argument(
         "--new-obstacles",
         type=Path,
@@ -1455,6 +1476,10 @@ def arguments() -> argparse.Namespace:
           or args.reloc_operator_timeout_s is not None):
         parser.error("--start-pose, --reloc-dir, --reloc-unattended and --reloc-operator-timeout-s go with "
                      "--start-relocalize")
+    if args.pose_check == "on" and (not args.start_relocalize or args.pose_check_bounds is None):
+        parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
+    if args.pose_check == "off" and args.pose_check_bounds is not None:
+        parser.error("--pose-check-bounds goes with --pose-check on")
     if args.slam_choice is not None and args.slam_feedback is None:
         parser.error("--slam-choice requires --slam-feedback")
     if args.odometry_heading == "gyro" and (args.gyro_model is None or args.encoder_model != "team_spec_quantized"
@@ -10350,6 +10375,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         k: (
             asdict(v)
             if k in {"pallet_geometry_loaded", "drive_geometry"}
+            else {f: list(getattr(v, f)) for f in ("odom", "e_still", "e_slam")}
+            if k == "pose_check_bounds" and v is not None
             else str(v)
             if isinstance(v, Path)
             else v
@@ -10382,6 +10409,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
         and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s")
              or v not in (None, False))
+        # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 3.1): only when on
+        and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
