@@ -3337,7 +3337,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     tracker_book = {"book": None}  # set once the trackers exist; drained in the finally block
     # the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md): its runtime, the relocalization's
     # hand-on and the end it reached -- all None unless --pose-check on
-    pose_box = {"rt": None, "sink": {} if getattr(args, "pose_check", "off") == "on" else None, "end": None}
+    pose_box = {"rt": None, "sink": None, "end": None}
+    if getattr(args, "pose_check", "off") == "on":
+        pose_box["sink"] = {}
     import omni.usd
     from insertion_geometry import InsertionGeometry, read_fork_blades_m
     from isaacsim.core.api import World
@@ -8741,12 +8743,12 @@ def drive(S, isaac) -> None:
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
                        "overlay": overlay}
                 if encoder is not None else None)
+            live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
             if pose_box["sink"] is not None:
                 # plan 3.3: checking from the first live tick -- nothing opens until the start check's result
                 pose_box["rt"] = make_pose_runtime(args, start_reloc, slam_bundle_, obstacle, pose_box["sink"],
                                                    scan_pattern)
                 live.arbiter.pose = pose_box["rt"].view_dict()
-            live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
 
         def scene_require(t_, ok_, reason_, cargo=False):
             """A truth check on the scene (simulation only). A batch run aborts as require does; a live one latches
