@@ -65,9 +65,12 @@ class NearEndDetour:
     """One run's injection: the decision (once a run), and per mission the watch on the armed tracker and the
     pallet-shift windows. A window's end None means still open where the record ends (the run or mission ended).
 
-    The order inside a tick matters (Codex implementation review 1 P2-2): the watch closes on the judgement first,
-    then the install window opens or closes, and only then is the tick's pallet sample given to the windows still
-    open. ``sample`` also takes every physics step a capture runs between ticks (P2-1)."""
+    The order inside a tick matters (Codex implementation review 1 P2-2, 2 P2-1): what the follower did in the last
+    tick (a judgement, a tracker change, an arrival, the phase) is read first and closes or opens the windows; only
+    then do the pallet's shifts since that follower call -- every physics step's largest, a capture's included, kept
+    by the runner in ``state["near_end_step_shift_max_m"]``, and this tick's own -- go to the windows still open. The
+    steps never write the record itself, so one taken after a mission's end cannot touch what it handed over (2 P2-3).
+    """
 
     def __init__(self) -> None:
         self.decided = False  # once a run, whatever the missions
@@ -105,8 +108,8 @@ class NearEndDetour:
         self._trackers.append(tracker)
         return len(self._trackers) - 1
 
-    def sample(self, pallet_shift_m: float) -> None:
-        """A pallet sample (its distance from where it started) for the windows open now."""
+    def _sample(self, pallet_shift_m: float) -> None:
+        """A pallet shift (its distance from where it started) for the windows open now."""
         if self._record_obj is None:
             return
         for window, open_ in (("injection", self.watch_open), ("install", self.install_open)):
@@ -121,6 +124,7 @@ class NearEndDetour:
         ``pallet_shift_m`` the pallet's distance from where it started (the runner's pick-up check, run in observe
         too); ``rear`` the control rear-axle pose; ``can_arm`` false on a paused or warming tick."""
         self._sync_mission(state)
+        steps_max = state.pop("near_end_step_shift_max_m", None)
         if (not self.decided and can_arm and phase == "observe" and near_leg and tracker is not None
                 and not tracker._arrived and not tracker._failed and not tracker._pending
                 and tracker.leg_index == len(tracker._leg_ends) - 1
@@ -140,7 +144,7 @@ class NearEndDetour:
         if self.watch_open:
             self._watch(t, phase, tracker, state, rear)
         self._install_window(t, phase, state)
-        self.sample(pallet_shift_m)
+        self._sample(pallet_shift_m if steps_max is None else max(float(pallet_shift_m), float(steps_max)))
 
     def _watch(self, t: float, phase: str, tracker, state: dict, rear) -> None:
         record = self._record_obj
@@ -175,7 +179,13 @@ class NearEndDetour:
         if closed is not None:
             self.watch_open = False
             record["windows"]["injection"][1] = closed
-        elif self.tracker.input_offset_active():
+            record.pop("watch_last", None)
+            return
+        # where the watch stood at its last tick: a run that ends inside the follower call (a failure raising at once)
+        # leaves no closing event, and this says what the tracker was doing then (review 2 P3)
+        record["watch_last"] = {"time_s": float(t), "offset_active": self.tracker.input_offset_active(),
+                                "remaining_m": float(self.tracker.remaining_to_goal_m()), "phase": phase}
+        if self.tracker.input_offset_active():
             distance = path_distance_m(self.tracker, rear[:2])
             old = record["max_path_distance_m"]
             record["max_path_distance_m"] = distance if old is None else max(old, distance)

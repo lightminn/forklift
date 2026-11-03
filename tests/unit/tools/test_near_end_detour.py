@@ -153,7 +153,8 @@ def test_a_sample_after_the_judgement_goes_to_the_install_window_not_the_injecti
     tracker.input_offset_events.append({"event": "cleared"})
     tracker._input_offset = None
     state["observe_end_stands"].append(stand(43.0, "installed"))
-    detour.tick(43.0083, "observe", tracker_of([(1.0, -1, 0.0)]), True, state, 0.025, tracker._poses[-1])
+    state["near_end_step_shift_max_m"] = 0.025  # the physics step right after the judging follower call
+    detour.tick(43.0083, "observe", tracker_of([(1.0, -1, 0.0)]), True, state, 0.0, tracker._poses[-1])
     record = state["near_end_injections"]
     assert record["windows"]["injection"] == [35.0, 43.0]
     assert record["pallet_shift_max_m"] == {"injection": 0.0, "install": 0.025}
@@ -164,10 +165,11 @@ def test_a_capture_s_physics_steps_reach_the_open_window():
     detour, state = nd.NearEndDetour(), {"observe_end_stands": [stand(3.0, "installed")]}
     detour.decided = True
     detour.tick(3.1, "observe", None, False, state, 0.0, np.zeros(3))
-    for shift in (0.0, 0.025, 0.0):
-        detour.sample(shift)
+    state["near_end_step_shift_max_m"] = 0.025  # the steps between the ticks: 0 -> 25 -> 0 mm, its largest kept
+    detour.tick(3.3, "observe", None, False, state, 0.0, np.zeros(3))
+    assert "near_end_step_shift_max_m" not in state  # taken by the tick
+    state["near_end_step_shift_max_m"] = 0.4  # steps after the approach transition (the follower call of 3.3)
     detour.tick(3.5, "approach", None, False, state, 0.0, np.zeros(3))
-    detour.sample(0.4)  # after the window closed
     record = state["near_end_injections"]
     assert record["pallet_shift_max_m"]["install"] == 0.025 and record["windows"]["install"] == [3.0, 3.5]
 
@@ -211,3 +213,42 @@ def test_a_paused_tick_does_not_arm():
     detour, state = nd.NearEndDetour(), {}
     detour.tick(1.0, "observe", tracker, True, state, 0.0, tracker._poses[20], can_arm=False)
     assert not detour.decided and not tracker.input_offset_active() and "near_end_injections" not in state
+
+
+def test_steps_after_a_mission_end_never_touch_the_handed_over_record():
+    # review 2 P2-3: a live failure's mission end, the baseline restore, then physics steps
+    sys.path.insert(0, str(ROOT / "tests/unit/mission"))
+    from test_baseline import fake_core
+
+    from forklift_core.mission.baseline import MissionBaseline
+
+    tracker = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    core = fake_core()
+    baseline = MissionBaseline.capture(core)
+    detour = nd.NearEndDetour()
+    detour.tick(1.0, "observe", tracker, True, core.state, 0.0, tracker._poses[20])
+    handed = core.state["near_end_injections"]
+    before = repr(handed)
+    baseline.restore(core)
+    core.state["near_end_step_shift_max_m"] = 0.025  # the runner's step write after the end
+    detour.tick(2.0, "observe", None, False, core.state, 0.03, np.zeros(3))
+    assert repr(handed) == before
+
+
+def test_the_watch_s_last_tick_is_kept_while_open():
+    # review 2 P3: a failure raising inside the follower call leaves no closing event
+    tracker = at_remaining(tracker_of([(1.5, -1, 0.29)]), 0.79)
+    detour, state = nd.NearEndDetour(), {}
+    detour.tick(1.0, "observe", tracker, True, state, 0.0, tracker._poses[20])
+    assert state["near_end_injections"]["watch_last"]["offset_active"] is True
+    state["observe_end_stands"] = [stand(1.5, "shadow")]
+    detour.tick(1.6, "observe", tracker, True, state, 0.0, tracker._poses[20])
+    assert "watch_last" not in state["near_end_injections"]
+
+
+def test_the_runner_keeps_the_step_shift_behind_the_option_and_watched():
+    source = (ROOT / "sim/isaac/run_transport.py").read_text()
+    head = source.index('            world.step(render=render or frame_due or far_due)')
+    block = source[head:head + 900]
+    assert "if near_end_detour_ is not None:" in block and 'state["near_end_step_shift_max_m"] = max(' in block
+    assert '*(("near_end_step_shift_max_m",) if near_end_detour_ is not None else ())' in source

@@ -7172,10 +7172,12 @@ def drive(S, isaac) -> None:
                 and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
             if near_end_detour_ is not None:
-                # C2 injection plan 4 0 and 4: every physics step's pallet sample, a capture's steps included (Codex
-                # implementation review 1 P2-1: the control tick alone misses a shift inside a capture)
-                near_end_detour_.sample(float(np.linalg.norm(np.asarray(pallet.get_world_pose()[0])[:2]
-                                                             - initial_pallet[:2])))
+                # C2 injection plan 4 0 and 4: every physics step's pallet shift, a capture's steps included (Codex
+                # implementation review 1 P2-1), kept as the largest since the last control tick; the tick gives it
+                # to the windows open after its own update (review 2 P2-1, P2-3). A step's state key, so watched.
+                state["near_end_step_shift_max_m"] = max(
+                    state.get("near_end_step_shift_max_m", 0.0),
+                    float(np.linalg.norm(np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
@@ -7998,7 +8000,9 @@ def drive(S, isaac) -> None:
                       "obstacle": ["version", "last_stamp", "applied", "last_raw", "scans"],
                       **({"slam_log": list(slam_log)} if watched_log_ else {}),
                       # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
-                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s"]}
+                      **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s",
+                                    # the C2 injection's step pallet shift (review 2 P2-2: a replay runs no step)
+                                    *(("near_end_step_shift_max_m",) if near_end_detour_ is not None else ())]}
                          if early_ports else {}),
                       **({"recognition": list(FAR_SUMMARY_LISTS)} if far_lists_ is not None else {})},
                 append_only={"records", "scans", *(slam_log if watched_log_ else ()),
