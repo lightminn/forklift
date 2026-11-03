@@ -504,3 +504,38 @@ def test_the_real_trailer_and_rack_scenes_pass_the_runner_s_check_with_the_defau
                   DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"),
                   EXTRA_ARGS="--exit-clearance-m=0.30 --lidar-keepout-m=0.15")
     assert out.returncode == 2 and "scene trailer needs one of" in out.stderr
+
+
+def test_c2_is_on_in_the_slam_mode_and_off_in_truth_unless_switched(tmp_path):
+    # lead decision 2026-11-03: the riib default turns C2 on (docs/validation/2026-11-03-near-end-stand-c2-injection-results.md)
+    args = args_of(dry_run(tmp_path))
+    assert contains(args, ["--near-end-stand", "on"]) and args.count("--near-end-stand") == 1
+    assert "NEAR_END_STAND=on NEAR_END_STAND_FROM=launcher" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert contains(args_of(dry_run(tmp_path, NEAR_END_STAND="off")), ["--near-end-stand", "off"])
+    assert contains(args_of(dry_run(tmp_path, NEAR_END_STAND="shadow")), ["--near-end-stand", "shadow"])
+    assert contains(args_of(dry_run(tmp_path, MODE="truth")), ["--near-end-stand", "off"])
+
+
+@pytest.mark.parametrize("extra, value", [("--near-end-stand shadow", "shadow"), ("--near-end-stand=off", "off"),
+                                          ("--near-end-s on --record-boundary", "on")])
+def test_c2_named_in_extra_args_wins_and_is_recorded(tmp_path, extra, value):
+    out = dry_run(tmp_path, EXTRA_ARGS=extra, NEAR_END_STAND="on")
+    assert out.returncode == 0, out.stderr
+    args = args_of(out)
+    named = [a for a in args if a.startswith("--near-end")]
+    assert len(named) == 1  # the launcher adds none of its own: the runner reads one
+    assert f"NEAR_END_STAND={value} NEAR_END_STAND_FROM=EXTRA_ARGS" in (tmp_path / "out/riib_defaults.txt").read_text()
+
+
+@pytest.mark.parametrize("env", [{"NEAR_END_STAND": "maybe"}, {"EXTRA_ARGS": "--near-end-stand maybe"}])
+def test_c2_takes_only_its_three_values(tmp_path, env):
+    out = dry_run(tmp_path, **env)
+    assert out.returncode == 2 and "must be on, shadow or off" in out.stdout
+
+
+def test_c2_named_twice_in_extra_args_records_the_last_one(tmp_path):
+    # Codex promotion review P3: the runner's parser takes the last occurrence; the record says the same
+    out = dry_run(tmp_path, EXTRA_ARGS="--near-end-stand shadow --near-end-stand=off")
+    assert out.returncode == 0, out.stderr
+    assert "NEAR_END_STAND=off NEAR_END_STAND_FROM=EXTRA_ARGS" in (tmp_path / "out/riib_defaults.txt").read_text()
+    assert not contains(args_of(out), ["--near-end-stand", "on"])
