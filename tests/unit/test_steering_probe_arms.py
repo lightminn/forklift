@@ -122,3 +122,61 @@ def test_an_unset_geometry_urdf_is_not_recorded():
     source = SCRIPT.read_text()
     block = source[source.index("def recorded_arguments("): source.index("def return_start_backoff_m_of(")]
     assert 'and (k != "probe_geometry_urdf" or v is not None)' in block
+
+
+def _fake_report(monkeypatch, headers, data, anchors):
+    import types
+
+    physx = types.ModuleType("omni.physx")
+    physx.get_physx_simulation_interface = lambda: types.SimpleNamespace(
+        get_full_contact_report=lambda: (headers, data, anchors))
+    omni = types.ModuleType("omni")
+    omni.physx = physx
+    schema = types.SimpleNamespace(intToSdfPath=lambda p: p)
+    pxr = types.ModuleType("pxr")
+    pxr.PhysicsSchemaTools = schema
+    monkeypatch.setitem(sys.modules, "omni", omni)
+    monkeypatch.setitem(sys.modules, "omni.physx", physx)
+    monkeypatch.setitem(sys.modules, "pxr", pxr)
+
+
+def _header(a0, a1, offset, n, aoff=0, an=0):
+    import types
+
+    return types.SimpleNamespace(actor0=a0, actor1=a1, contact_data_offset=offset, num_contact_data=n,
+                                 friction_anchors_offset=aoff, num_friction_anchors_data=an)
+
+
+def _contact(j, p=(0.0, 0.0, 0.0)):
+    import types
+
+    return types.SimpleNamespace(impulse=j, position=p)
+
+
+def test_full_contacts_count_robot_scene_contacts_but_not_tyres_on_the_floor_or_shim(monkeypatch):
+    tyres = ("/World/Forklift/front_left_wheel", "/World/Forklift/front_right_wheel")
+    floor = "/World/Environment/GroundPlane/CollisionPlane"
+    headers = [_header(tyres[0], floor, 0, 2),                                   # tyre on the floor: clean
+               _header(arms.SHIM_PATH, tyres[1], 2, 1),                          # tyre on the shim: clean
+               _header("/World/Forklift/front_left_wheel", "/World/RandomProps/Prop_1/m", 3, 1),  # tyre on a prop
+               _header("/World/Forklift/base_link", floor, 4, 1),               # the body on the floor
+               _header("/World/Forklift/base_link", "/World/Forklift/fork_carriage", 5, 1)]  # self contact: skipped
+    data = [_contact((0, 0, -1.0)), _contact((0, 0, -1.0)), _contact((0, 0, 2.0)), _contact((1, 0, 0)),
+            _contact((0, 0, -1)), _contact((0, 0, 1))]
+    _fake_report(monkeypatch, headers, data, [])
+    env, seen = {}, {}
+    rows = arms.tyre_full_contacts(tyres, [None, None], seen, env)
+    assert env["count"] == 2
+    assert sorted(env["pairs"]) == [("/World/Forklift/base_link", floor),
+                                    ("/World/Forklift/front_left_wheel", "/World/RandomProps/Prop_1/m")]
+    # signed as tyre_floor_forces: + when the tyre is actor1, - when it is actor0
+    assert rows[1][5] == pytest.approx(2.0) and rows[0][0] == pytest.approx(2.0)
+
+
+def test_full_contacts_count_anchor_indices_outside_the_vector(monkeypatch):
+    tyre = ("/World/Forklift/front_left_wheel",)
+    floor = "/World/Environment/GroundPlane/CollisionPlane"
+    _fake_report(monkeypatch, [_header(tyre[0], floor, 0, 1, aoff=0, an=2)], [_contact((0, 0, -1.0))], [])
+    arms.ANCHOR_INDEX_PROBLEM.clear()
+    rows = arms.tyre_full_contacts(tyre, [None], {}, {})
+    assert rows[0][7] == 2 and arms.ANCHOR_INDEX_PROBLEM["first"]["vector"] == 0
