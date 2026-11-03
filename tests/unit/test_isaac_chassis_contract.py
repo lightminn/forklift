@@ -3,6 +3,7 @@
 import importlib.util
 import math
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,9 @@ def importer_like_stage(
     steer_axis="Z",
     tyre_upright=False,
     steer_limit_deg=None,
+    base_mass_scale=1.0,
+    lift_upper=None,
+    drop_masses=False,
 ):
     """USD laid out like Isaac 5.1's URDF importer output (checked 2026-10-01).
 
@@ -164,6 +168,23 @@ def importer_like_stage(
         cube = UsdGeom.Cube.Define(stage, f"{root}/fork_carriage/collisions/{name}/box")
         cube.CreateSizeAttr().Set(1.0)
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+    # every link's mass as the importer writes it (mass, centre of mass, principal moments), and the lift joint
+    for link, inertia in ({} if drop_masses else expected.inertials).items():
+        prim = stage.GetPrimAtPath(f"{root}/{link}")
+        if not prim.IsValid():
+            prim = UsdGeom.Xform.Define(stage, f"{root}/{link}").GetPrim()
+        api = UsdPhysics.MassAPI.Apply(prim)
+        if inertia is None:
+            api.CreateMassAttr().Set(0.0)
+            continue
+        scale = base_mass_scale if link == "base_link" else 1.0
+        api.CreateMassAttr().Set(inertia.mass_kg * scale)
+        api.CreateCenterOfMassAttr().Set(Gf.Vec3f(*inertia.com_m))
+        api.CreateDiagonalInertiaAttr().Set(Gf.Vec3f(*(v * scale for v in inertia.principal_kg_m2)))
+    lift = UsdPhysics.PrismaticJoint.Define(stage, f"{root}/joints/fork_lift")
+    lower, upper = expected.lift_limit_m
+    lift.CreateLowerLimitAttr().Set(lower)
+    lift.CreateUpperLimitAttr().Set(upper if lift_upper is None else lift_upper)
     return stage
 
 
@@ -186,6 +207,10 @@ def test_an_importer_like_scene_of_the_model_passes_through_a_mount_link():
         ({"tyre_upright": True}, "tyre"),
         ({"tyre_radius": math.nan}, "finite"),
         ({"steer_limit_deg": math.nan}, "finite"),
+        # model audit (lead 2026-11-01): Codex's counterexamples -- a 26 kg truck, a 0.028 m lift
+        ({"base_mass_scale": 26.0 / 24.0}, "base_link mass"),
+        ({"lift_upper": 0.028}, "fork_lift travel"),
+        ({"drop_masses": True}, "links with mass"),
     ],
 )
 def test_same_joints_but_other_collision_geometry_is_refused(change, message):
@@ -240,3 +265,20 @@ def test_the_record_carries_what_the_scene_check_read():
     import json
 
     json.dumps(record, allow_nan=False)
+
+
+def test_a_frame_link_without_a_mass_of_its_own_matches_a_urdf_link_without_an_inertial(tmp_path):
+    # the operating base scene (2026-10-13) was built from a URDF whose fork-tip frames carried no inertial: the
+    # importer leaves them at mass 0, which the check reads as "none of its own" on both sides
+    truck = ET.parse(MEASURED)
+    for link in truck.getroot().findall("link"):
+        if link.get("name").endswith("_fork_tip") and link.find("inertial") is not None:
+            link.remove(link.find("inertial"))
+    old = tmp_path / "forklift.urdf"
+    truck.write(old)
+    stage = importer_like_stage(old)
+    chassis = MODULE.stage_chassis(stage, "/World/Forklift")
+    MODULE.require_scene_matches_model(chassis, old)
+    assert MODULE.chassis_record(chassis)["links_without_mass"] == ["left_fork_tip", "right_fork_tip"]
+    with pytest.raises(ValueError, match="left_fork_tip mass"):
+        MODULE.require_scene_matches_model(chassis, MEASURED)  # the repo URDF gives them 0.0001 kg

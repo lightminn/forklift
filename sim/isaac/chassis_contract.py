@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import NamedTuple
 
+import numpy as np
 from insertion_geometry import _base_position_m, _boxes, _cylinder_radius_m
 
 from forklift_core.control.path_tracking import AckermannGeometry
@@ -24,6 +25,10 @@ WHEELS = ("front_left", "front_right", "rear_left", "rear_right")
 # A difference strictly greater than these is refused.
 POSITION_TOLERANCE_M = 0.001
 LIMIT_TOLERANCE_RAD = 0.001
+# Masses and principal moments as the importer writes them (float32): equal within these.
+MASS_TOLERANCE_REL = 1e-5
+INERTIA_TOLERANCE_REL = 1e-4
+INERTIA_TOLERANCE_ABS = 1e-8  # kg m^2, for the tiny frame links
 
 Vector = tuple[float, float, float]
 
@@ -40,17 +45,30 @@ class SceneJoint(NamedTuple):
     axis: Vector
 
 
-class ChassisDescription(NamedTuple):
-    """What a scene must reproduce: axle frames, tyres and carriage/fork boxes.
+class LinkInertia(NamedTuple):
+    """A link's mass, centre of mass in the link frame and principal moments (ascending)."""
 
-    Boxes map collision name to (centre, half extents) in base_link. `sources`
-    is diagnostic only (what the stage reader saw) and is never compared.
+    mass_kg: float
+    com_m: Vector
+    principal_kg_m2: Vector
+
+
+class ChassisDescription(NamedTuple):
+    """What a scene must reproduce: axle frames, tyres, carriage/fork boxes, the links' inertia and the lift's travel.
+
+    Boxes map collision name to (centre, half extents) in base_link. `inertials` maps link name to its
+    `LinkInertia`, or None for a link with no mass of its own (no URDF inertial; an unauthored or zero USD mass,
+    which PhysX fills with its default). `lift_limit_m` is the fork_lift joint's (lower, upper) travel. Both are
+    None in a description that did not read them (then they are not compared). `sources` is diagnostic only (what
+    the stage reader saw) and is never compared.
     """
 
     joints: dict[str, SceneJoint]
     tyre_radii_m: dict[str, float]
     carriage_boxes: dict[str, tuple[Vector, Vector]]
     sources: dict = {}
+    inertials: dict[str, LinkInertia | None] | None = None
+    lift_limit_m: tuple[float, float] | None = None
 
 
 def _finite(values, what: str) -> tuple[float, ...]:
@@ -84,7 +102,24 @@ def urdf_chassis(forklift_urdf: Path) -> ChassisDescription:
         name: (tuple(float(v) for v in lift + center), tuple(float(v) for v in half))
         for name, center, half in _boxes(link)
     }
-    return ChassisDescription(joints, tyres, boxes)
+    inertials = {}
+    for each in truck.findall("link"):
+        inertial = each.find("inertial")
+        if inertial is None:
+            inertials[each.get("name")] = None
+            continue
+        origin = inertial.find("origin")
+        com = tuple(float(v) for v in (origin.get("xyz") if origin is not None else "0 0 0").split())
+        i = inertial.find("inertia")
+        g = {k: float(i.get(k, 0.0)) for k in ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")}
+        tensor = np.array([[g["ixx"], g["ixy"], g["ixz"]], [g["ixy"], g["iyy"], g["iyz"]],
+                           [g["ixz"], g["iyz"], g["izz"]]])
+        inertials[each.get("name")] = LinkInertia(float(inertial.find("mass").get("value")), com,
+                                                  tuple(float(v) for v in np.sort(np.linalg.eigvalsh(tensor))))
+    lift_joint = truck.find("joint[@name='fork_lift']")
+    limit = None if lift_joint is None else lift_joint.find("limit")
+    lift_limit = None if limit is None else (float(limit.get("lower")), float(limit.get("upper")))
+    return ChassisDescription(joints, tyres, boxes, inertials=inertials, lift_limit_m=lift_limit)
 
 
 def stage_chassis(stage, root: str) -> ChassisDescription:
@@ -210,7 +245,28 @@ def stage_chassis(stage, root: str) -> ChassisDescription:
                 _finite(matrix.ExtractTranslation(), f"{name} centre"),
                 _finite((size * s / 2 for s in scale_of(matrix)), f"{name} size"),
             )
-    return ChassisDescription(joints, tyres, boxes, sources)
+    # every link's mass as the importer wrote it: a link prim directly under the root with the mass API (a zero
+    # or unauthored mass is "none of its own"; its centre of mass is then not read -- the importer leaves it -inf)
+    inertials = {}
+    for link in stage.GetPrimAtPath(root).GetChildren():
+        if not link.HasAPI(UsdPhysics.MassAPI):
+            continue
+        api = UsdPhysics.MassAPI(link)
+        mass = api.GetMassAttr().Get()
+        if not mass:
+            inertials[link.GetName()] = None
+            continue
+        inertials[link.GetName()] = LinkInertia(
+            _finite((mass,), f"{link.GetName()} mass")[0],
+            _finite(api.GetCenterOfMassAttr().Get(), f"{link.GetName()} centre of mass"),
+            tuple(sorted(_finite(api.GetDiagonalInertiaAttr().Get(), f"{link.GetName()} inertia"))))
+    lift = stage.GetPrimAtPath(f"{root}/joints/fork_lift")
+    lift_limit = None
+    if lift.IsValid() and lift.IsA(UsdPhysics.PrismaticJoint):
+        prismatic = UsdPhysics.PrismaticJoint(lift)
+        lift_limit = _finite((prismatic.GetLowerLimitAttr().Get(), prismatic.GetUpperLimitAttr().Get()),
+                             "fork_lift limit")
+    return ChassisDescription(joints, tyres, boxes, sources, inertials, lift_limit)
 
 
 def carriage_limit_from_boxes_m(chassis: ChassisDescription) -> float | None:
@@ -241,13 +297,20 @@ def chassis_record(chassis: ChassisDescription) -> dict:
         }
         for name, joint in chassis.joints.items()
     }
-    return {
+    record = {
         "meters_per_unit": chassis.sources.get("meters_per_unit"),
         "joints": joints,
         "tyre_radii_m": dict(chassis.tyre_radii_m),
         "carriage_box_count": len(chassis.carriage_boxes),
         "carriage_limit_m": carriage_limit_from_boxes_m(chassis),
     }
+    if chassis.inertials is not None:
+        record["total_mass_kg"] = sum(i.mass_kg for i in chassis.inertials.values() if i is not None)
+        # PhysX gives a body without a mass of its own its default mass
+        record["links_without_mass"] = sorted(n for n, i in chassis.inertials.items() if i is None)
+    if chassis.lift_limit_m is not None:
+        record["lift_limit_m"] = list(chassis.lift_limit_m)
+    return record
 
 
 def _exceeds(value: float, tolerance: float) -> bool:
@@ -295,6 +358,32 @@ def require_scene_matches_model(scene: ChassisDescription, forklift_urdf: Path) 
             POSITION_TOLERANCE_M,
         ):
             raise ValueError(f"Scene collision box {name} differs from {forklift_urdf}")
+    # model audit (lead 2026-11-01, Codex: a 26 kg model and a 0.028 m lift both passed): the links' inertia and
+    # the lift's travel, when the scene description carries them (the stage reader always does)
+    if scene.inertials is not None:
+        if set(scene.inertials) != set(expected.inertials):
+            raise ValueError(f"Scene links with mass {sorted(scene.inertials)} differ from {forklift_urdf}'s "
+                             f"{sorted(expected.inertials)}")
+        for name, want in expected.inertials.items():
+            got = scene.inertials[name]
+            if (want is None) != (got is None):
+                raise ValueError(f"Scene link {name} mass {None if got is None else got.mass_kg} differs from "
+                                 f"{None if want is None else want.mass_kg} in {forklift_urdf}")
+            if want is None:
+                continue
+            if _exceeds(abs(got.mass_kg - want.mass_kg), MASS_TOLERANCE_REL * max(want.mass_kg, 1e-3)):
+                raise ValueError(f"Scene link {name} mass {got.mass_kg} kg differs from {want.mass_kg} kg")
+            if _exceeds(math.dist(got.com_m, want.com_m), POSITION_TOLERANCE_M):
+                raise ValueError(f"Scene link {name} centre of mass {got.com_m} differs from {want.com_m}")
+            if any(_exceeds(abs(a - b), INERTIA_TOLERANCE_ABS + INERTIA_TOLERANCE_REL * abs(b))
+                   for a, b in zip(got.principal_kg_m2, want.principal_kg_m2, strict=True)):
+                raise ValueError(f"Scene link {name} inertia {got.principal_kg_m2} differs from "
+                                 f"{want.principal_kg_m2}")
+    if scene.lift_limit_m is not None or (scene.inertials is not None and expected.lift_limit_m is not None):
+        if scene.lift_limit_m is None or expected.lift_limit_m is None or _exceeds(
+                max(abs(a - b) for a, b in zip(scene.lift_limit_m, expected.lift_limit_m, strict=True)),
+                POSITION_TOLERANCE_M):
+            raise ValueError(f"Scene fork_lift travel {scene.lift_limit_m} differs from {expected.lift_limit_m}")
 
 
 def kinematic_curvature_limit_inv_m(geometry: AckermannGeometry) -> float:
