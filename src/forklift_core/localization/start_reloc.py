@@ -100,6 +100,10 @@ class StartRelocalizer:
         self.estimate: Estimate | None = None
         self.shown: tuple = ()
         self._pool: list = []  # the pickable candidates every attempt of this generation produced, one per place
+        # the search group: attempts since the pool was last emptied (a retry, a STOP); the unconfirmed position check
+        # takes the chosen start's group (docs/plans/2026-11-02-unconfirmed-runner.md 3.2) -- not the generation,
+        # which also moves on showing candidates and choosing
+        self.searches = 0
         self._picked: tuple | None = None
         self.places = 0  # F1: local re-matches started this session (a retry does not reset it)
         self.placed: tuple | None = None  # the pose the operator placed (the one being matched or previewed)
@@ -225,6 +229,7 @@ class StartRelocalizer:
         if not _plain_int(generation) or generation != self.generation:
             return False, "reloc_stale_pick"
         self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []
+        self.searches += 1
         self.preview = self.preview_id = None  # the count of placements stays (plan 1.2)
         self.generation += 1
         self.deadline_at = None
@@ -236,6 +241,7 @@ class StartRelocalizer:
         if self.state not in ("relocalizing", "awaiting_pick", "reloc_failed", "placing", "place_preview"):
             return False
         self.state, self.shown, self._pool = "stopped", (), []
+        self.searches += 1
         self.preview = self.preview_id = None
         self.generation += 1
         return True
