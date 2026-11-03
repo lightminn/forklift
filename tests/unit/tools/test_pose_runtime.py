@@ -451,3 +451,21 @@ def test_the_evidence_is_judged_against_the_truth_at_its_scans():
     rt.note_tick(2.0, applied=moved, truth=moved, open_=True)
     [ev] = rt.evidence
     assert ev["class"] == "success" and ev["truth_t"] == pytest.approx(1.4)
+
+
+def test_evidence_without_a_truth_near_its_scan_is_unknown_not_misjudged():
+    # Codex 2b re-review 3 P3: the nearest truth seconds away judged a right evidence wrong
+    b = (2.42, 1.7, 0.6)
+    grid = TG._grid(*TG.ROOM)
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)))
+    _tick(rt, b)
+    for k in range(5):
+        rt.on_scan(1.0 + 0.1 * k, _ranges(grid, b), b, True)  # no truth noted at the scans
+    _tick(rt, b)
+    w.answer({"confirmed": True, "base": list(b), "reasons": [], "hyps": [], "statuses": {}, "wall_s": 1.0})
+    _tick(rt, b, compose(b, invert(b)))
+    moved = (b[0] + 0.35, b[1], b[2])
+    rt.note_tick(20.0, applied=moved, truth=moved, open_=True)
+    [ev] = rt.evidence
+    assert ev["class"] == "unknown"

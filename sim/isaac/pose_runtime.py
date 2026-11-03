@@ -220,7 +220,7 @@ class PoseRuntime:
         self.samples: list = []  # 10 Hz: (t, status, open, applied, truth)
         self.evidence: list = []  # every C_int's evidence against the truth (design 4)
         self._seen_events = 0
-        self._truths: deque = deque(maxlen=1200)  # (t, truth): the evidence's scan time looked up (10 s at 120 Hz)
+        self._truths: deque = deque(maxlen=1800)  # (t, truth) at 20 Hz: the evidence's scan time looked up (90 s)
         self._evidence_t = None  # the last scan time of the evidence the next agreement uses
 
     # --- inputs --------------------------------------------------------------------------------------------------------
@@ -436,7 +436,8 @@ class PoseRuntime:
         """Plan 3.4: this control tick's applied pose against the simulation's truth (base link, B-P2 4.0 classes),
         counted for every tick and for the ticks with forward or mission permission open; 10 Hz samples; and each
         new C_int's evidence against the truth (design 4). The judgement only -- nothing decides on it."""
-        self._truths.append((t, tuple(truth)))
+        if not self._truths or t - self._truths[-1][0] >= 0.05:
+            self._truths.append((t, tuple(truth)))
         cls, m, rad = _classify(applied, truth)
         for key in ("all", "open") if open_ else ("all",):
             tally = self.ticks[key]
@@ -449,9 +450,13 @@ class PoseRuntime:
                 # the evidence is the scan's: judged against the truth at that scan (Codex 2b re-review P3)
                 at = self._evidence_t if self._evidence_t is not None else t
                 truth_t, truth_at = min(self._truths, key=lambda r: abs(r[0] - at))
+                if abs(truth_t - at) > 0.1:  # no truth near the scan: not judged (Codex 2b re-review 3 P3)
+                    self.evidence.append({"t": t, "kind": e["kind"], "class": "unknown", "scan_t": at,
+                                          "truth_t": truth_t})
+                    continue
                 ecls, em, erad = _classify(e["evidence"], truth_at)
                 self.evidence.append({"t": t, "kind": e["kind"], "class": ecls, "m": em, "rad": erad,
-                                      "truth_t": truth_t})
+                                      "truth_t": truth_t, "scan_t": at})
         self._seen_events = len(self.pc.events)
 
     def record(self) -> dict:
