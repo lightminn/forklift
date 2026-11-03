@@ -2066,7 +2066,20 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
            "curvatures": list(PROBE_CURVATURES)}
     if arms is not None:
         out["arms"] = arms.save(out_dir)
+        # a window without contact (A3b, the base lifted) averages to NaN; the record keeps it as null (JSON)
+        out = finite_or_none(out)
     return out
+
+
+def finite_or_none(value):
+    """``value`` with every non-finite float replaced by None (lists, tuples and dicts walked)."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: finite_or_none(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [finite_or_none(v) for v in value]
+    return value
 
 
 # Colour range of the robot-camera depth video; display only, not a sensor limit.

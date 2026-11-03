@@ -238,7 +238,11 @@ def joint_readback(stage) -> dict:
     return out
 
 
-FULL_FIELDS = ("Jz", "tangent_impulse", "steer_moment_z", "contacts", "anchors", "shim_Jz", "partners")
+FULL_FIELDS = ("Jz", "tangent_impulse", "steer_moment_z", "contacts", "anchors", "shim_Jz", "partners",
+               "anchors_missing")
+
+
+ANCHOR_INDEX_PROBLEM = {}
 
 
 def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list[float]]:
@@ -284,7 +288,17 @@ def tyre_full_contacts(tyre_links, axis_points, partners_seen=None) -> list[list
                 points[w].append([float(c.position[k]) for k in range(3)])
                 impulses[w].append(j)
             for i in range(header.num_friction_anchors_data):
-                a = anchors[header.friction_anchors_offset + i]
+                k_ = header.friction_anchors_offset + i
+                if not 0 <= k_ < len(anchors):
+                    # an anchor index outside the vector the report returned (seen in the first smoke runs): counted,
+                    # and the first case kept for the record; the steer-axis moment then lacks those anchors
+                    out[w][7] += 1
+                    if ANCHOR_INDEX_PROBLEM.get("first") is None:
+                        ANCHOR_INDEX_PROBLEM["first"] = {"tyre": link, "partner": other, "offset": header.friction_anchors_offset,
+                                                         "count": header.num_friction_anchors_data, "vector": len(anchors),
+                                                         "contacts": header.num_contact_data}
+                    continue
+                a = anchors[k_]
                 j = [sign * float(a.impulse[k]) for k in range(3)]
                 out[w][1] += math.hypot(j[0], j[1])
                 out[w][4] += 1
@@ -435,4 +449,5 @@ class ProbeRuntime:
                  tyre_links=np.array(self.tyre_links), full_fields=np.array(FULL_FIELDS),
                  **{k: np.asarray(v, dtype=float) for k, v in self.rows.items()})
         self.record["partners"] = {k: sorted(v) for k, v in self.partners.items()}
+        self.record["anchor_index_problem"] = ANCHOR_INDEX_PROBLEM.get("first")
         return self.record
