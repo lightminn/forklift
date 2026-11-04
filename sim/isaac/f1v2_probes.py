@@ -62,7 +62,10 @@ def _state(robot, lift_index) -> dict:
             "yaw_rad": yaw, "lift_m": float(robot.get_joint_positions()[lift_index[0]])}
 
 
-SETTLE_WINDOW_S, SETTLE_MAX_S = 0.25, 6.0  # F2 plan 2: the time constants in seconds (30 and 720 steps at 120 Hz)
+SETTLE_WINDOW_S, SETTLE_MAX_S = 0.25, 15.0  # F2 plan 2 + amendment 1: seconds; 15 s (a compliant truck rocks longer)
+# F2 amendment 1: pitch/roll within 2e-6 rad per window for the F2 probes (a compliant truck's lateral rocking did
+# not reach 5e-7 in 6 s; 2e-6 rad moves a wheel centre by 0.5 um over the half track, a laser by 2 um at 1.05 m)
+SETTLE_TOL_F2 = {"base_z_m": 5e-5, "pitch_rad": 2e-6, "roll_rad": 2e-6, "lift_m": 5e-5}
 SETTLE_EXTRA_TOL = {"steer_rad": 5e-5, "pallet_rel_m": 5e-5, "pallet_rel_yaw_rad": 5e-5}  # F2 plan 4.1
 
 
@@ -98,7 +101,8 @@ def _settle(world, robot, action_type, wheels, steers, lift_index, lift_command,
         deltas = {"base_z_m": abs(now["base"][2] - prev["base"][2]),
                   "pitch_rad": abs(now["pitch_rad"] - prev["pitch_rad"]),
                   "roll_rad": abs(now["roll_rad"] - prev["roll_rad"]), "lift_m": abs(now["lift_m"] - prev["lift_m"])}
-        ok = all(deltas[k] < SETTLE_TOL[k] for k in SETTLE_TOL)
+        tol = SETTLE_TOL if hz is None else SETTLE_TOL_F2  # F1 v2 (hz None) keeps its own
+        ok = all(deltas[k] < tol[k] for k in tol)
         if check_steer:
             deltas["steer_rad"] = float(np.max(np.abs(now_x["steer"] - prev_x["steer"])))
             ok = ok and deltas["steer_rad"] < SETTLE_EXTRA_TOL["steer_rad"]
@@ -167,26 +171,36 @@ def _match_planar(world, robot, pallet, action_type, wheels, steers, lift_index,
     each shift; at most PLANAR_TRIES shifts."""
     import planar_lidar
 
-    tries, settles = 0, []
-    while True:
+    def laser_now():
         base, q = robot.get_world_pose()
-        laser = planar_lidar.laser_pose_2d(np.asarray(base), np.asarray(q), mount)
+        return planar_lidar.laser_pose_2d(np.asarray(base), np.asarray(q), mount)
+
+    tries, settles, history = 0, [], []
+    drift = (0.0, 0.0, 0.0)  # the last settle's own planar drift, taken off the next shift in advance (smoke: the
+    # truck rolled about 0.5 mm forward on every re-settle, so a plain shift never got within 0.05 mm)
+    while True:
+        laser = laser_now()
         corr = core_.planar_correction(laser, target)
+        history.append([float(v) for v in corr])
         ok = math.hypot(corr[0], corr[1]) <= PLANAR_TOL_M and abs(corr[2]) <= PLANAR_TOL_RAD
         if ok or tries >= PLANAR_TRIES:
             # a point is matched when the pose is within the tolerance and every settle after a shift converged
             return {"matched": bool(ok and all(settles)), "within_tolerance": bool(ok), "shifts": tries,
-                    "residual": [float(v) for v in corr], "settles": settles}
+                    "residual": [float(v) for v in corr], "history": history, "settles": settles}
         pivot = (float(laser[0]), float(laser[1]))
+        move = (corr[0] + drift[0], corr[1] + drift[1], corr[2] + drift[2])
         for body in (robot, pallet):
             pos, qb = body.get_world_pose()
-            new_pos, new_q = core_.shift_planar(pos, qb, pivot, corr)
+            new_pos, new_q = core_.shift_planar(pos, qb, pivot, move)
             body.set_world_pose(position=new_pos, orientation=new_q)
             body.set_linear_velocity(np.zeros(3))
             body.set_angular_velocity(np.zeros(3))
         robot.set_joint_velocities(np.zeros(robot.num_dof))
+        placed = laser_now()
         settles.append(_settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd, hz=hz, pallet=pallet,
                                check_steer=True)["converged"])
+        after = laser_now()
+        drift = core_.planar_correction(after, placed)  # after - placed
         tries += 1
 
 
