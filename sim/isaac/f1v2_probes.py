@@ -128,10 +128,14 @@ def _common_start(world, robot, pallet, action_type, wheels, steers, lift_index,
     robot.set_joint_positions(q)
     robot.set_joint_velocities(np.zeros(robot.num_dof))
     held = pallet if load == "loaded" else None
-    out = {"seat": _settle(world, robot, action_type, wheels, steers, lift_index, 0.0, on_step=on_step, hz=hz,
+    # ``on_step(include_pallet)``: the pallet rests on the floor while it is seated (allowed); once lifted, anything
+    # it touches but the truck is a foreign contact (Codex review of P2)
+    seat_step = None if on_step is None else (lambda: on_step(False))
+    lift_step = None if on_step is None else (lambda: on_step(True))
+    out = {"seat": _settle(world, robot, action_type, wheels, steers, lift_index, 0.0, on_step=seat_step, hz=hz,
                            pallet=held, check_steer=True)}
     if load == "loaded":
-        out["lift"] = _settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd, on_step=on_step, hz=hz,
+        out["lift"] = _settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd, on_step=lift_step, hz=hz,
                               pallet=held, check_steer=True)
     out["converged"] = all(v["converged"] for k, v in out.items() if isinstance(v, dict))
     st = _state(robot, lift_index)
@@ -339,7 +343,7 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
            "delivery_rear": list(delivery), "base_z_reference_m": base_z,
            "rear_from_laser": list(rear_from_laser), "lift_command_m": lift_command,
            "pallet_on_forks_nominal": list(PALLET_ON_FORKS), "seat": seat, "lift_settle": lift,
-           "pallet_rel_after_lift": [float(v) for v in pallet_rel],
+           "pallet_rel_after_lift": None if pallet_rel is None else [float(v) for v in pallet_rel],
            "reference_beams": int(np.isfinite(reference_ranges).sum()), "reference_self_hits": int(own),
            "points": rows}
     (out_dir / "f1v2_delivery_probe.json").write_text(json.dumps(out) + "\n")
@@ -350,13 +354,14 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
 ROBOT_PREFIX = "/World/Forklift"
 PALLET_PREFIX = "/World/Pallet"
 LOAD_STEPS = 12  # the wheel load check: the floor impulses averaged over this many held steps after the settle
+LOAD_S = 0.1  # F2 plan 2: the same window in seconds (LOAD_STEPS at 120 Hz)
 LOAD_TOL = 0.01  # plan section 3: the wheel loads sum to the truck's (+ the pallet's) weight within 1 %
 
 
 FLOOR_TOKEN = "/GroundPlane/"  # the warehouse floor collider (steering_probe_arms.FLOOR_TOKEN)
 
 
-def _contacts(stage_wheels) -> dict:
+def _contacts(stage_wheels, include_pallet: bool = True) -> dict:
     """This step's contact report: the tyres' summed impulse z against the floor collider (by the other actor, as
     steering_probe_arms classifies the clean window) and the count of contacts between the truck or the pallet and
     anything else, a tyre on the floor aside."""
@@ -372,6 +377,8 @@ def _contacts(stage_wheels) -> dict:
         if all(ours) or not any(ours):
             continue
         mine, other = (a0, a1) if ours[0] else (a1, a0)
+        if not include_pallet and mine.startswith(PALLET_PREFIX):
+            continue  # a pallet not on the forks (seating on the floor, or left at the pickup)
         sign = 1.0 if mine == a1 else -1.0
         for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
             c = data[k]
@@ -381,6 +388,19 @@ def _contacts(stage_wheels) -> dict:
                 foreign += 1
                 pairs.add((mine, other))
     return {"jz": jz, "foreign": foreign, "pairs": sorted(pairs)}
+
+
+def _pallet_away(stage, pallet, world) -> list:
+    """The pallet out of the way for empty trials: its bodies kinematic and lifted 10 m (one physics step)."""
+    from pxr import Usd, UsdPhysics
+
+    bodies = [p for p in Usd.PrimRange(stage.GetPrimAtPath(PALLET_PREFIX)) if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+    for body in bodies:
+        UsdPhysics.RigidBodyAPI(body).CreateKinematicEnabledAttr(True)
+    position, orientation = pallet.get_world_pose()
+    pallet.set_world_pose(position=np.asarray(position, float) + np.array([0.0, 0.0, 10.0]), orientation=orientation)
+    world.step(render=False)
+    return [str(p.GetPath()) for p in bodies]
 
 
 def _gravity(stage) -> float:
@@ -401,7 +421,6 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
     legs whose running number -- registry order, versions then legs -- is a multiple of 8). Every trial starts from the
     common state (F2 plan 4.1, ``_common_start``): loaded, the pallet is seated and lifted again each time."""
     from forklift_core.control.path_tracking import TrackerConfig
-    from pxr import Usd, UsdPhysics
 
     stage_wheels = tuple(f"{ROBOT_PREFIX}/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel",
                                                           "rear_right_wheel"))
@@ -449,16 +468,9 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
             if load == "loaded":
                 setup["loaded"] = {"init": "common start per trial (F2 plan 4.1)"}
             else:
-                bodies = [p for p in Usd.PrimRange(stage.GetPrimAtPath(PALLET_PREFIX))
-                          if p.HasAPI(UsdPhysics.RigidBodyAPI)]
-                for body in bodies:
-                    UsdPhysics.RigidBodyAPI(body).CreateKinematicEnabledAttr(True)
-                position, orientation = pallet.get_world_pose()
-                pallet.set_world_pose(position=np.asarray(position, float) + np.array([0.0, 0.0, 10.0]),
-                                      orientation=orientation)
-                world.step(render=False)
+                bodies = _pallet_away(stage, pallet, world)
                 base_z = float(initial_base[2])
-                setup["empty"] = {"pallet_bodies_kinematic": [str(p.GetPath()) for p in bodies],
+                setup["empty"] = {"pallet_bodies_kinematic": bodies,
                                   "pallet_lifted_to_m": np.asarray(pallet.get_world_pose()[0], float).tolist(),
                                   "base_z_m": base_z}
         lift_cmd = lift_command if load == "loaded" else 0.0
@@ -479,14 +491,15 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
 
         settle = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=sb, yaw=sr[2],
                                base_z=base_z, load=load, lift_cmd=lift_cmd, hz=hz,
-                               on_step=lambda: count("settle", _contacts(stage_wheels)))
+                               on_step=lambda inc: count("settle", _contacts(stage_wheels, inc and load == "loaded")))
         jz = 0.0
-        for _ in range(LOAD_STEPS):
+        load_steps = int(round(LOAD_S * hz))  # F2 plan 2: seconds (12 steps at 120 Hz)
+        for _ in range(load_steps):
             _hold(robot, action_type, wheels, steers, lift_index, lift_cmd)
             world.step(render=False)
-            jz += count("load", _contacts(stage_wheels))["jz"]
+            jz += count("load", _contacts(stage_wheels, load == "loaded"))["jz"]
         weight = (robot_mass_kg + (pallet_kg if load == "loaded" else 0.0)) * g
-        load_ratio = -jz / (LOAD_STEPS * dt) / weight
+        load_ratio = -jz / (load_steps * dt) / weight
         st = _state(robot, lift_index)
         start_actual = (st["base"][0] - offset * math.cos(st["yaw_rad"]), st["base"][1] - offset * math.sin(st["yaw_rad"]),
                         st["yaw_rad"])
@@ -510,7 +523,7 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
             robot.apply_action(action_type(joint_positions=steer_cmd, joint_indices=steers))
             robot.apply_action(action_type(joint_positions=np.array([lift_cmd]), joint_indices=lift_index))
             world.step(render=False)
-            count("drive", _contacts(stage_wheels))
+            count("drive", _contacts(stage_wheels, load == "loaded"))
             k += 1
         tid = f"{version['id']}/leg{leg}/{cname}/{load}"
         ticks[f"t{index:04d}"] = np.asarray(trial.rows, dtype=np.float64)
@@ -552,7 +565,7 @@ WHEEL_LINKS = ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear
 STATIC_WINDOW_S = 0.5  # F2 plan 3: the window after the settle
 
 
-def _wheel_floor(stage_wheels) -> dict:
+def _wheel_floor(stage_wheels, include_pallet: bool = True) -> dict:
     """This step's contact report per tyre against the floor collider: the summed impulse z on the tyre (sign: on the
     truck), the contact point count and the smallest separation; and the foreign contact count (the truck or the pallet
     against anything but each other, a tyre on the floor aside)."""
@@ -569,6 +582,8 @@ def _wheel_floor(stage_wheels) -> dict:
         if all(ours) or not any(ours):
             continue
         mine, other = (a0, a1) if ours[0] else (a1, a0)
+        if not include_pallet and mine.startswith(PALLET_PREFIX):
+            continue
         sign = 1.0 if mine == a1 else -1.0
         for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
             c = data[k]
@@ -590,7 +605,7 @@ def _axle_tilt(q_wxyz) -> float:
 
 
 def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_base, lift_index, wheels, steers,
-                     action_type, out_dir: Path, robot_mass_kg: float) -> dict:
+                     action_type, out_dir: Path, robot_mass_kg: float, order: str = "forward") -> dict:
     """At the scene's start pose, empty then loaded: the common start (4.1), then a STATIC_WINDOW_S window recording
     each wheel's floor force (impulse z / dt), contact point count, smallest separation, link-centre height and axle
     tilt, and the body height, roll, pitch and lift. The calibration judge compares an arm with the rigid arm of the
@@ -606,14 +621,20 @@ def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_bas
     base0, q0 = robot.get_world_pose()
     yaw0 = _rpy(q0)[2]
     base_z = float(initial_base[2])
-    out = {"probe": "static", "physics_hz": hz, "gravity_mps2": g, "robot_mass_kg": robot_mass_kg,
+    from scene import tyre_contact_readback
+
+    readback = tyre_contact_readback(stage)
+    out = {"probe": "static", "physics_hz": hz, "tyre_readback": readback, "order": order, "gravity_mps2": g, "robot_mass_kg": robot_mass_kg,
            "pallet_mass_kg": pallet_kg, "lift_command_m": lift_command,
            "start_base": [float(base0[0]), float(base0[1]), yaw0], "loads": {}}
-    for load in ("empty", "loaded"):
+    for load in (("empty", "loaded") if order == "forward" else ("loaded", "empty")):
+        if load == "empty" and order != "forward":
+            _pallet_away(stage, pallet, world)  # the reversed run: the seated pallet leaves before the empty truck
         foreign = {"n": 0}
+        loaded = load == "loaded"
 
-        def count():
-            foreign["n"] += _wheel_floor(stage_wheels)["foreign"]
+        def count(include_pallet):
+            foreign["n"] += _wheel_floor(stage_wheels, include_pallet and loaded)["foreign"]
 
         start = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=base0[:2],
                               yaw=yaw0, base_z=base_z, load=load, lift_cmd=lift_command if load == "loaded" else 0.0,
@@ -625,7 +646,7 @@ def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_bas
         for _ in range(steps):
             _hold(robot, action_type, wheels, steers, lift_index, lift_cmd)
             world.step(render=False)
-            c = _wheel_floor(stage_wheels)
+            c = _wheel_floor(stage_wheels, loaded)
             foreign["n"] += c["foreign"]
             poses = _link_poses(robot)
             for w, path in zip(WHEEL_LINKS, stage_wheels):
@@ -651,7 +672,7 @@ def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_bas
         weight = (robot_mass_kg + (pallet_kg if load == "loaded" else 0.0)) * g
         total = sum(summary(series[w]["fz"])["mean"] or 0.0 for w in WHEEL_LINKS)
         out["loads"][load] = {
-            "start": start, "window_steps": steps, "foreign_contacts": foreign["n"],
+            "start": start, "window_steps": steps, "foreign_contacts": foreign["n"], "tyre_readback": readback,
             "wheel_load_ratio": total / weight,
             "wheels": {w: {k: summary(v) for k, v in series[w].items()} for w in WHEEL_LINKS},
             "body": {k: summary(v) for k, v in body.items()}}

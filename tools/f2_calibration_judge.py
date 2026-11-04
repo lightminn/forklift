@@ -23,6 +23,8 @@ DAMPING_PER_STIFFNESS_S = 310.0 / 400_000.0  # c_mat = k_mat x this (plan 3)
 WHEELS = ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel")
 LOADS = ("empty", "loaded")
 MASSES = ("O", "F1")
+GRID = (100_000.0, 120_000.0, 140_000.0, 160_000.0, 180_000.0)  # plan 3, fixed before the results
+ENGINE_KG = {"O": 26.0, "F1": 24.0002}  # the arms' engine masses (F1 v2 records)
 
 
 def support_height(alpha: float) -> float:
@@ -37,8 +39,10 @@ def wheel_stiffness(rigid: dict, f2: dict) -> dict:
     comp = (rigid["z"]["mean"] - f2["z"]["mean"]) + (support_height(f2["tilt"]["mean"])
                                                      - support_height(rigid["tilt"]["mean"]))
     sep = rigid["min_sep"]["min"]
-    u = (abs(min(sep, 0.0)) if sep is not None else 0.0) + (rigid["z"]["max"] - rigid["z"]["min"]) \
-        + (f2["z"]["max"] - f2["z"]["min"])
+    if sep is None or not math.isfinite(sep):
+        return {"force_n": n, "compression_m": comp, "u_m": None, "valid": False, "k": None, "k_lo": None,
+                "k_hi": None, "why": "no rigid contact separation"}
+    u = abs(min(sep, 0.0)) + (rigid["z"]["max"] - rigid["z"]["min"]) + (f2["z"]["max"] - f2["z"]["min"])
     out = {"force_n": n, "compression_m": comp, "u_m": u}
     if n is None or n <= 0 or comp <= 0:
         out.update(valid=False, k=None, k_lo=None, k_hi=None)
@@ -75,9 +79,41 @@ def repeat_spread(a: dict, b: dict) -> dict:
     return {"three_delta_z_m": 3 * dz, "three_delta_force_n": 3 * df}
 
 
+def record_problems(rec: dict, mass: str, hz: float, k_mat, start) -> list:
+    """Why a static record is not the registered condition: dt, the arm's engine mass, the start pose, the order, and
+    the tyre material read back (rigid: no compliance; F2: k_mat and c_mat on all four tyres)."""
+    out = []
+    if rec.get("physics_hz") != hz:
+        out.append(f"physics_hz {rec.get('physics_hz')}")
+    if not math.isclose(rec.get("robot_mass_kg", -1), ENGINE_KG[mass], abs_tol=1e-3):
+        out.append(f"engine mass {rec.get('robot_mass_kg')}")
+    if rec.get("order", "forward") != "forward":
+        out.append(f"order {rec.get('order')}")
+    if start is not None and any(abs(a - b) > 1e-6 for a, b in zip(rec.get("start_base", []), start)):
+        out.append(f"start pose {rec.get('start_base')}")
+    tyres = rec.get("tyre_readback") or []
+    if len(tyres) != 4:
+        out.append(f"{len(tyres)} tyres read back")
+    for t in tyres:
+        k, c = t.get("compliant_stiffness"), t.get("compliant_damping")
+        if k_mat is None:
+            if k is not None:
+                out.append(f"rigid arm with compliance on {t.get('collider')}")
+        elif k is None or not math.isclose(k, k_mat, rel_tol=1e-6) or c is None \
+                or not math.isclose(c, k_mat * DAMPING_PER_STIFFNESS_S, rel_tol=1e-6):
+            out.append(f"{t.get('collider')}: k {k} c {c}, expected {k_mat}")
+    return out
+
+
 def judge(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dict:
     rigid_runs = {m: [load(p) for p in manifest["rigid"][m]] for m in MASSES}
     unusable = []
+    start = rigid_runs["O"][0].get("start_base") if rigid_runs["O"] else None
+    if sorted(float(k) for k in manifest["grid"]) != list(GRID):
+        unusable.append(f"grid {sorted(manifest['grid'])} is not the registered {GRID}")
+    for m in MASSES:
+        for i, run in enumerate(rigid_runs[m]):
+            unusable += [f"rigid {m} #{i + 1}: {w}" for w in record_problems(run, m, 120.0, None, start)]
     for m in MASSES:
         if len(rigid_runs[m]) != 2:
             unusable.append(f"rigid {m}: two repeats needed")
@@ -91,6 +127,8 @@ def judge(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dic
     grid = {}
     for k_mat, runs in sorted(manifest["grid"].items(), key=lambda kv: float(kv[0])):
         f2 = {m: load(runs[m]) for m in MASSES}
+        for m in MASSES:
+            unusable += [f"grid {k_mat} {m}: {w}" for w in record_problems(f2[m], m, 120.0, float(k_mat), start)]
         point = grid_point(rigid, f2)
         bad = [f"{m} {ld}" for m in MASSES for ld in LOADS
                if not f2[m]["loads"][ld]["start"]["converged"] or f2[m]["loads"][ld]["foreign_contacts"]
@@ -108,8 +146,10 @@ def judge(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dic
            "verdict": "chosen" if chosen is not None else "none (F2 registration stops, plan 3)"}
     if "dt240" in manifest and chosen is not None:
         d = manifest["dt240"]
-        out["dt240_reported"] = grid_point({m: load(d["rigid"][m]) for m in MASSES},
-                                           {m: load(d["chosen"][m]) for m in MASSES})
+        r240, c240 = {m: load(d["rigid"][m]) for m in MASSES}, {m: load(d["chosen"][m]) for m in MASSES}
+        problems = [f"{m}: {w}" for m in MASSES for w in record_problems(r240[m], m, 240.0, None, start)
+                    + record_problems(c240[m], m, 240.0, chosen, start)]
+        out["dt240_reported"] = {"problems": problems, **grid_point(r240, c240)}
     return out
 
 

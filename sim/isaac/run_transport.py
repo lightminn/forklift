@@ -4446,7 +4446,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["f1v2_probe"] = f1v2_probes.run_static_probe(
             world, robot, pallet, args=args, settings=settings, stage=stage, initial_base=initial_base,
             lift_index=lift_index, wheels=wheels, steers=steers, action_type=ArticulationAction, out_dir=args.output,
-            robot_mass_kg=float(sum(state["plant_backend"]["masses_kg"])))
+            robot_mass_kg=float(sum(state["plant_backend"]["masses_kg"])), order=args.f1v2_probe_order)
         state["phase"] = "f1v2_probe_done"
         state["success"] = True
         return
