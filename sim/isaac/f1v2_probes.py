@@ -109,7 +109,8 @@ def _place(robot, pallet, base_xy, yaw, base_z, pallet_rel):
 
 
 def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destination, initial_base, lift_index, wheels,
-                       steers, action_type, out_dir: Path, order: str = "forward", extra=None, reference=None) -> dict:
+                       steers, action_type, out_dir: Path, order: str = "forward", extra=None, reference=None,
+                       reference_sha256=None) -> dict:
     import planar_lidar
     import yaml
 
@@ -206,6 +207,7 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
     np.savez_compressed(out_dir / "f1v2_delivery_ranges.npz", order=np.array(sorted(casts)),
                         **{k.replace(".", "p"): v for k, v in raw.items()})
     out = {"probe": "delivery", "order": order, "d_reference": "own" if reference is None else "O",
+           "d_reference_sha256": reference_sha256,
            "delivery_rear": list(delivery), "base_z_reference_m": base_z,
            "rear_from_laser": list(rear_from_laser), "lift_command_m": lift_command,
            "pallet_on_forks_nominal": list(PALLET_ON_FORKS), "seat": seat, "lift_settle": lift,
@@ -370,7 +372,7 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
             aux = [float(base[2]), roll_, pitch_, float(robot.get_joint_positions()[lift_index[0]])]
             if load == "loaded":
                 pp_, pq_ = pallet.get_world_pose()
-                aux += [float(v) for v in pp_] + [_rpy(pq_)[2]] + [float(v) for v in pallet.get_linear_velocity()]
+                aux += [float(v) for v in pp_] + [float(v) for v in pq_] + [float(v) for v in pallet.get_linear_velocity()]
             out = trial.step(k * dt, rear, signed, float(np.linalg.norm(v[:2])),
                              float(robot.get_angular_velocity()[2]), robot.get_joint_positions()[steers], aux=aux)
             if out is None:

@@ -4383,6 +4383,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             world, robot, pallet, args=args, settings=settings, geometry=geometry, destination=truth_destination,
             initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
             action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_,
+            reference_sha256=None if args.f1v2_probe_reference is None
+            else hashlib.sha256(Path(args.f1v2_probe_reference).read_bytes()).hexdigest(),
             reference=None if args.f1v2_probe_reference is None else {
                 r_["label"]: r_["laser_origin_world"][2]
                 for r_ in json.loads(Path(args.f1v2_probe_reference).read_text())["points"]})

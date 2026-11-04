@@ -403,5 +403,5 @@ class CuspTrial:
 TICK_COLUMNS = ("t", "rear_x", "rear_y", "rear_yaw", "signed_speed", "planar_speed", "yaw_rate", "steer_l", "steer_r",
                 "trk_speed", "trk_curvature", "trk_status", "trk_failure", "trk_pending", "advanced", "trk_progress",
                 "trk_segment", "wheel_speed_cmd", "steer_cmd_l", "steer_cmd_r")
-AUX_COLUMNS = ("base_z", "roll", "pitch", "lift", "pallet_x", "pallet_y", "pallet_z", "pallet_yaw", "pallet_vx",
-               "pallet_vy", "pallet_vz")  # the pallet's only when loaded
+AUX_COLUMNS = ("base_z", "roll", "pitch", "lift", "pallet_x", "pallet_y", "pallet_z", "pallet_qw", "pallet_qx",
+               "pallet_qy", "pallet_qz", "pallet_vx", "pallet_vy", "pallet_vz")  # the pallet's only when loaded
