@@ -132,12 +132,15 @@ def _common_start(world, robot, pallet, action_type, wheels, steers, lift_index,
     # it touches but the truck is a foreign contact (Codex review of P2)
     seat_step = None if on_step is None else (lambda: on_step(False))
     lift_step = None if on_step is None else (lambda: on_step(True))
+    # the seat settle does not hold the pallet's pose relative to the truck: resting on the floor it stays while the
+    # truck settles (smoke: 6e-5 m drift); its pose on the forks is held once lifted
     out = {"seat": _settle(world, robot, action_type, wheels, steers, lift_index, 0.0, on_step=seat_step, hz=hz,
-                           pallet=held, check_steer=True)}
+                           pallet=None, check_steer=True)}
     if load == "loaded":
         out["lift"] = _settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd, on_step=lift_step, hz=hz,
                               pallet=held, check_steer=True)
-    out["converged"] = all(v["converged"] for k, v in out.items() if isinstance(v, dict))
+    # the trial starts from the last settle (loaded: after the lift); the seat's own convergence is recorded
+    out["converged"] = out["lift" if load == "loaded" else "seat"]["converged"]
     st = _state(robot, lift_index)
     out["start_steer_rad"] = [float(v) for v in robot.get_joint_positions()[steers]]
     out["lift_m"] = st["lift_m"]
