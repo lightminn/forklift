@@ -293,14 +293,16 @@ def _overscan(tmp_path: Path, name: str, arm: str, key: str, *, samples=(), move
     np.save(run / "slam_control.npy", np.array([[0, -2.34, 0, 0, -2.34, 0, 0], [0.1, -2.34, 0, 0, -2.34 + moved, 0, 0]]))
 
 
-def test_amendment_2_overscan_end_is_infrastructure_and_its_pair_reruns(tmp_path):
+def test_amendment_2_overscan_end_is_infrastructure_and_no_longer_uses_the_r2(tmp_path):
     _batch(tmp_path, skip={"f1_O_cy_epal6_s0"})
     _overscan(tmp_path, "f1_O_cy_epal6_s0", "O", "cy_epal6_s0")
     for arm in J.ARMS:
         _write(tmp_path, f"f1_{arm}_cy_epal6_s0_r2", _result(arm, "cy_epal6_s0"))
     out = J.judge(tmp_path)
     g = out["groups"]["cycle_epal6"]
-    assert g["valid_pairs"] == 3 and g["infra"] == {"O": 1, "F1": 0} and g["verdict"] == "pass"
+    # amendment 3 supersedes amendment 2's _r2 for this end: a start failure is retried under its own name, so the
+    # _r2 pair is not used and, with no later attempt, the pair is out
+    assert g["valid_pairs"] == 2 and g["infra"] == {"O": 1, "F1": 0} and g["verdict"] == "inconclusive"
     assert out["overscan"]["O"]["overscan"] == ["f1_O_cy_epal6_s0"]
 
 
@@ -344,3 +346,98 @@ def test_amendment_2_missing_record_is_not_infrastructure(tmp_path, drop):
     p.write_text(json.dumps(d))
     run = [r for r in J.judge(tmp_path)["runs"] if r["name"] == "f1_O_cy_epal6_s0"][0]
     assert not run["overscan_end"] and not run["infra"]
+
+
+def test_amendment_3_start_retries_are_not_runs(tmp_path):
+    import shutil
+
+    _batch(tmp_path, skip={"f1_O_line_2_s0", "f1_F1_cy_epal6_s0"})
+    # O line_2 s0: a hung first start (run/ empty) moved aside by the retry, then a valid run under the same name
+    (tmp_path / "f1_O_line_2_s0.attempt1" / "run").mkdir(parents=True)
+    _write(tmp_path, "f1_O_line_2_s0", _result("O", "line_2_s0"))
+    # F1 cycle EPAL6 s0: an overscan start moved aside, then a valid run
+    _overscan(tmp_path, "f1_F1_cy_epal6_s0", "F1", "cy_epal6_s0")
+    shutil.move(str(tmp_path / "f1_F1_cy_epal6_s0"), str(tmp_path / "f1_F1_cy_epal6_s0.attempt1"))
+    _write(tmp_path, "f1_F1_cy_epal6_s0", _result("F1", "cy_epal6_s0"))
+    out = J.judge(tmp_path)
+    assert out["overall"] == "pass" and not out["unregistered_folders"]
+    assert out["start_retries"]["O"]["start_retries"] == ["f1_O_line_2_s0.attempt1"]
+    assert out["start_retries"]["F1"]["start_retries"] == ["f1_F1_cy_epal6_s0.attempt1"]
+    assert out["start_retries"]["O"]["start_failure_rate"] == pytest.approx(1 / 21)
+
+
+def test_amendment_3_a_last_attempt_that_never_started_leaves_the_pair_out(tmp_path):
+    _batch(tmp_path, skip={"f1_O_line_2_s0"})
+    (tmp_path / "f1_O_line_2_s0" / "run").mkdir(parents=True)  # retries used up, still not started
+    out = J.judge(tmp_path)
+    assert out["groups"]["riib"]["valid_pairs"] == 11
+    assert out["start_retries"]["O"]["never_started"] == ["f1_O_line_2_s0"]
+    assert out["start_retries"]["O"]["hold_never_started"] is False  # amendment 3 (a): 2 or more hold
+
+
+def test_amendment_3_stop_rule_and_rate_gap(tmp_path):
+    _batch(tmp_path, skip={"f1_O_line_2_s0", "f1_O_line_2_s1"})
+    for k in ("line_2_s0", "line_2_s1"):
+        (tmp_path / f"f1_O_{k}" / "run").mkdir(parents=True)  # two O runs never started after their retries
+    for i in range(1, 5):  # four F1 start retries, none for O beyond the two
+        (tmp_path / f"f1_F1_line_2_s2.attempt{i}" / "run").mkdir(parents=True)
+    out = J.judge(tmp_path)["start_retries"]
+    assert out["O"]["hold_never_started"] is True and out["F1"]["hold_never_started"] is False
+    assert out["F1"]["start_failure_rate"] == pytest.approx(4 / 24)  # 20 runs + 4 earlier attempts
+    assert out["O"]["start_failure_rate"] == pytest.approx(2 / 20)
+    assert out["rate_gap_note"] is False  # 0.067 < 0.15
+
+
+def test_amendment_3_an_earlier_attempt_that_ran_stops_the_reading(tmp_path):
+    import shutil
+
+    def result(arm, key):
+        if (arm, key) != ("F1", "cy_epal6_s0"):
+            return None
+        r = _result(arm, key, complete=False, reason="Forbidden fork/pallet contact in insert: x")
+        r["forbidden_pocket_contacts"] = ["x"]
+        return r
+
+    _batch(tmp_path, result=result)
+    shutil.move(str(tmp_path / "f1_F1_cy_epal6_s0"), str(tmp_path / "f1_F1_cy_epal6_s0.attempt1"))
+    _write(tmp_path, "f1_F1_cy_epal6_s0", _result("F1", "cy_epal6_s0"))
+    out = J.judge(tmp_path)
+    assert out["earlier_attempts_that_ran"] == ["f1_F1_cy_epal6_s0.attempt1"] and out["overall"] == "inconclusive"
+
+
+def test_amendment_3_a_never_started_first_run_does_not_use_the_r2(tmp_path):
+    _batch(tmp_path, skip={"f1_O_cy_epal6_s0"})
+    (tmp_path / "f1_O_cy_epal6_s0" / "run").mkdir(parents=True)  # retries used up
+    for arm in J.ARMS:
+        _write(tmp_path, f"f1_{arm}_cy_epal6_s0_r2", _result(arm, "cy_epal6_s0"))
+    g = J.judge(tmp_path)["groups"]["cycle_epal6"]
+    assert g["valid_pairs"] == 2 and g["verdict"] == "inconclusive"
+
+
+def test_amendment_3_absent_run_dir_is_not_a_start_failure(tmp_path):
+    assert J.start_failure(tmp_path / "missing" / "run", None) is False
+    (tmp_path / "empty" / "run").mkdir(parents=True)
+    assert J.start_failure(tmp_path / "empty" / "run", None) is True
+
+
+def test_amendment_3_hold_void_is_listed_not_read(tmp_path):
+    _batch(tmp_path)
+    (tmp_path / "hold_void" / "f1_O_line_2_s0_r2" / "run").mkdir(parents=True)
+    out = J.judge(tmp_path)
+    assert out["hold_void"] == ["f1_O_line_2_s0_r2"] and out["overall"] == "pass"
+
+
+def test_amendment_3_an_earlier_attempt_that_ran_counts_without_a_current_folder(tmp_path):
+    import shutil
+
+    def result(arm, key):
+        if (arm, key) != ("F1", "line_2_s0"):
+            return None
+        r = _result(arm, key, complete=False, reason="Forbidden fork/pallet contact in insert: x")
+        r["forbidden_pocket_contacts"] = ["x"]
+        return r
+
+    _batch(tmp_path, result=result)
+    shutil.move(str(tmp_path / "f1_F1_line_2_s0"), str(tmp_path / "f1_F1_line_2_s0.attempt1"))  # no current folder
+    out = J.judge(tmp_path)
+    assert out["earlier_attempts_that_ran"] == ["f1_F1_line_2_s0.attempt1"] and out["overall"] == "inconclusive"

@@ -44,7 +44,13 @@ INFRA_PREFIXES = ("slam_link_failed", "slam_prewarm_timeout", "plan_worker_dead"
 OVERSCAN_REASON = "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"
 OVERSCAN_TRACE = "_resize_data_for_overscan"
 STILL_M = 0.01  # the truth rear axle's largest move from its first control sample
-OVERSCAN_HOLD_SHARE = 0.25  # amendment 2's stop rule: above this share of an arm's runs the batch is held
+OVERSCAN_HOLD_SHARE = 0.25  # amendment 2's stop rule, replaced by amendment 3's (a)-(c); still reported
+NEVER_STARTED_HOLD = 2  # amendment 3 (a): this many runs of one arm that never started after their retries hold the batch
+RATE_GAP_NOTE = 0.15  # amendment 3 (b): a larger gap between the arms' start failure rates is noted in the results
+# Registration amendment 3 (2026-11-04, the lead's decision before the verdict): a start that never ran a tick
+# -- run/ empty with no result.json, or amendment 2's overscan end (samples 0) -- is a start retry, not a run: it does
+# not use the one _r2 and goes again under the same name (the bundle's --retries; earlier attempts kept as
+# <name>.attempt<n>). A run whose last attempt is still a start failure is not valid. Start retries are reported per arm.
 MIN_PAIRS = {"riib": 10, "cycle": 3, "live": 2}
 MIN_LIFT_PAIRS = {"riib": 8, "cycle": 2}
 CMD_MIN, STEADY, V_STILL, LOADED = 0.20, 1e-3, 0.02, 0.02
@@ -189,6 +195,24 @@ def overscan_end(run_dir: Path, d: dict | None) -> bool:
     return not d.get("scene_damaged") and moved <= STILL_M
 
 
+def start_failure(run_dir: Path, d: dict | None) -> bool:
+    """Amendment 3: the start never ran a tick -- no result.json and run/ empty (or absent), or the overscan end."""
+    if d is None:
+        return run_dir.is_dir() and not any(run_dir.iterdir())  # run/ recorded and empty; an absent run/ is not
+    return overscan_end(run_dir, d)
+
+
+def attempt_folders(batch: Path) -> dict:
+    """run name -> its earlier attempts' run dirs (<name>.attempt<n>, the bundle's retry_move)."""
+    out = {}
+    for p in sorted(batch.glob("f1_*.attempt*")):
+        if p.is_dir():
+            name = p.name.rsplit(".attempt", 1)[0]
+            live = "_live_" in name
+            out.setdefault(name, []).append(p / "live" / "epoch_1" / "run" if live else p / "run")
+    return out
+
+
 def batch_run(root: Path, name: str, bundle: dict, live: bool = False) -> dict:
     b = bundle.get(name) or {}
     arm, key, _ = split_name(name)
@@ -197,12 +221,14 @@ def batch_run(root: Path, name: str, bundle: dict, live: bool = False) -> dict:
     d = load(run_dir / "result.json")
     reason_ = None if d is None else d.get("failure_reason")
     overscan = overscan_end(run_dir, d)
+    started_not = start_failure(run_dir, d)
     # a session that stopped after 'app ready' (no log, GPU idle) leaves no result.json: the existing list's case
     infra = (d is None or (live and probe is None) or b.get("status") in ("infra_failed", "stalled")
              or (reason_ is not None and str(reason_).startswith(INFRA_PREFIXES)) or overscan)
     ident = arm_identity(d)
     out = {"name": name, "arm": arm, "key": key, "infra": infra, "overscan_end": overscan,
-           "overscan_reason": reason_ == OVERSCAN_REASON, "bundle_status": b.get("status"),
+           "overscan_reason": reason_ == OVERSCAN_REASON, "start_failure": started_not,
+           "bundle_status": b.get("status"),
            "identity": ident, "identity_problems": identity_problems(arm, shape_of(key), ident)}
     if d is None:  # with a result and no probe the result's safety evidence is still read, not the live rule
         return out
@@ -266,7 +292,9 @@ def pair_table(runs: list) -> dict:
     out = {}
     for key in EXPECTED_KEYS:
         pair = first.get(key, {})
-        out[key] = pair if valid(pair) or key not in rerun else rerun[key]
+        # amendment 3: a first run that never started after its retries does not use the _r2; the pair is out
+        never = any(r.get("start_failure") for r in pair.values())
+        out[key] = pair if valid(pair) or never or key not in rerun else rerun[key]
     return out
 
 
@@ -434,14 +462,39 @@ def age_comparison(table: dict, measured: dict) -> dict:
 
 
 def overscan_share(runs: list) -> dict:
-    """Amendment 2's stop rule, per arm over every run folder of the batch (first runs and reruns, a hung session
-    without a result included): the share that ended on the overscan TypeError (amendment-2 ends and later ones)."""
+    """Amendment 2's share, per arm over every run folder of the batch (first runs and reruns, a hung session without
+    a result included) that ended on the overscan TypeError. Its 25 % hold was replaced by amendment 3; reported."""
     out = {}
     for a in ARMS:
         mine = [r for r in runs if r["arm"] == a]
         hit = [r["name"] for r in mine if r.get("overscan_reason")]
         out[a] = {"runs": len(mine), "overscan": hit,
                   "over_hold_share": bool(mine) and len(hit) / len(mine) > OVERSCAN_HOLD_SHARE}
+    return out
+
+
+def start_retries(batch: Path, runs: list) -> dict:
+    """Amendment 3's report per arm: earlier attempts that were start failures, earlier attempts that were not (a
+    retry the amendment does not cover -- named, not read), and runs whose last attempt still did not start."""
+    attempts = attempt_folders(batch)
+    out = {}
+    for a in ARMS:
+        mine = [r for r in runs if r["arm"] == a]
+        retried, other = [], []
+        # every kept attempt of a registered run of this arm, whether or not the run's current folder exists
+        for name, dirs in sorted(attempts.items()):
+            if not registered(name) or split_name(name)[0] != a:
+                continue
+            for run_dir in dirs:
+                (retried if start_failure(run_dir, load(run_dir / "result.json")) else other).append(str(run_dir.parent.name))
+        unstarted = [r["name"] for r in mine if r.get("start_failure")]
+        starts = len(mine) + len(retried) + len(other)
+        out[a] = {"runs": len(mine), "start_retries": retried, "other_earlier_attempts": other,
+                  "never_started": unstarted, "hold_never_started": len(unstarted) >= NEVER_STARTED_HOLD,
+                  "start_failure_rate": (len(retried) + len(unstarted)) / starts if starts else None}
+    rates = [out[a]["start_failure_rate"] for a in ARMS]
+    out["rate_gap"] = None if None in rates else abs(rates[0] - rates[1])
+    out["rate_gap_note"] = out["rate_gap"] is not None and out["rate_gap"] > RATE_GAP_NOTE
     return out
 
 
@@ -455,7 +508,7 @@ def registered(name: str) -> bool:
 
 def judge(batch: Path, age_table: dict | None = None, ages: dict | None = None) -> dict:
     bundle = bundle_rows(batch)
-    folders = [p for p in sorted(batch.iterdir()) if p.is_dir() and p.name.startswith("f1_")]
+    folders = [p for p in sorted(batch.iterdir()) if p.is_dir() and p.name.startswith("f1_") and ".attempt" not in p.name]
     runs = [batch_run(p, p.name, bundle, live="_live_" in p.name) for p in folders if registered(p.name)]
     unregistered = [p.name for p in folders if not registered(p.name)]
     pairs = pair_table(runs)
@@ -477,7 +530,11 @@ def judge(batch: Path, age_table: dict | None = None, ages: dict | None = None) 
         if scenes.get(("O", sh)) and scenes.get(("O", sh)) == scenes.get(("F1", sh)):
             scene_problems.append(f"{sh}: the two arms ran the same scene")
     parts = [v["verdict"] for v in verdict.values()] + [residual["verdict"]]
-    overall = ("inconclusive" if identity_bad or scene_problems else "fail" if "fail" in parts
+    retries = start_retries(batch, runs)
+    # amendment 3: an earlier attempt that ran (a sample, or a result that is not a start failure) is that arm's
+    # result, not a start retry -- a batch holding one is not read until it is accounted for
+    ran_before = [n for a in ARMS for n in retries[a]["other_earlier_attempts"]]
+    overall = ("inconclusive" if identity_bad or scene_problems or ran_before else "fail" if "fail" in parts
                else "inconclusive" if "inconclusive" in parts else "needs_cause" if "needs_cause" in parts else "pass")
     age = ({a: age_comparison(age_table, m) for a, m in (ages or {}).items()} if age_table is not None else None)
     for r in runs:
@@ -485,7 +542,10 @@ def judge(batch: Path, age_table: dict | None = None, ages: dict | None = None) 
     return {"overall": overall, "groups": verdict, "residual": residual, "identity_mismatch": identity_bad,
             "scene_problems": scene_problems, "scenes": {f"{a}/{sh}": sorted(v) for (a, sh), v in scenes.items()},
             "unregistered_folders": unregistered, "reported": reported(pairs), "odometry_age": age,
-            "overscan": overscan_share(runs), "runs": runs}
+            "overscan": overscan_share(runs), "start_retries": retries, "earlier_attempts_that_ran": ran_before,
+            # amendment 3: the two _r2 runs of the held 07:31 chain, moved to hold_void/ and not read
+            "hold_void": sorted(p.name for p in (batch / "hold_void").iterdir()) if (batch / "hold_void").is_dir() else [],
+            "runs": runs}
 
 
 def main() -> None:
