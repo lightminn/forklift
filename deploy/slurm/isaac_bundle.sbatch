@@ -19,6 +19,11 @@
 #   to the sessions; riib holds 3 per GPU -- 4.15-4.37 GB each with its video)
 #   optional: BUNDLE_PY (python3; the runner needs only the standard library), BUNDLE_ARGS (more tools/isaac_bundle.py
 #   options, split on spaces: --stagger-s, --run-timeout-s, --slots, --session-vram-mib ...)
+#   A batch whose result a registered judgement reads gives every arm BUNDLE_ARGS="--retries 2" (the default stays 1):
+#   about 20 % of Isaac starts on ws1 stop or lose their viewport even alone on the node (2 of 10, 2026-11-04). If the
+#   starts fail independently and every retry runs (an infra_failed, retryable run with its cleanup done and time
+#   left; one short of time is left time_left_retry), a run stays infra-invalid about 4 % of the time with 1, 0.8 %
+#   with 2 -- an estimate, not a measured rate.
 #
 # The list (before submitting, required: the runner refuses a list without the proof check writes beside it --
 # docs/plans/2026-10-27-ws1-preflight.md; BUNDLE_ARGS="--no-preflight --preflight-note WHY" for an exception):
