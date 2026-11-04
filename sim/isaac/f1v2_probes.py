@@ -128,10 +128,11 @@ def _common_start(world, robot, pallet, action_type, wheels, steers, lift_index,
     robot.set_joint_positions(q)
     robot.set_joint_velocities(np.zeros(robot.num_dof))
     held = pallet if load == "loaded" else None
-    # ``on_step(include_pallet)``: the pallet rests on the floor while it is seated (allowed); once lifted, anything
-    # it touches but the truck is a foreign contact (Codex review of P2)
-    seat_step = None if on_step is None else (lambda: on_step(False))
-    lift_step = None if on_step is None else (lambda: on_step(True))
+    # ``on_step(include_pallet)``: while the pallet is seated and lifted its floor contact is allowed ("prep") -- the
+    # forks take it off the floor during the lift -- and anything else it touches counts; after the settles, every
+    # pallet contact but the truck's counts (the caller's own counting; Codex reviews of P2)
+    seat_step = None if on_step is None else (lambda: on_step("prep"))
+    lift_step = None if on_step is None else (lambda: on_step("prep"))
     # the seat settle does not hold the pallet's pose relative to the truck: resting on the floor it stays while the
     # truck settles (smoke: 6e-5 m drift); its pose on the forks is held once lifted
     out = {"seat": _settle(world, robot, action_type, wheels, steers, lift_index, 0.0, on_step=seat_step, hz=hz,
@@ -364,7 +365,18 @@ LOAD_TOL = 0.01  # plan section 3: the wheel loads sum to the truck's (+ the pal
 FLOOR_TOKEN = "/GroundPlane/"  # the warehouse floor collider (steering_probe_arms.FLOOR_TOKEN)
 
 
-def _contacts(stage_wheels, include_pallet: bool = True) -> dict:
+def _pallet_skip(mine: str, other: str, include_pallet) -> bool:
+    """Whether a pallet contact is left out: ``include_pallet`` False (a pallet not involved) leaves every pallet
+    contact out; "prep" (being seated or lifted) leaves only the pallet's floor contact out -- anything else it touches
+    still counts; True counts all."""
+    if not mine.startswith(PALLET_PREFIX):
+        return False
+    if include_pallet is False:
+        return True
+    return include_pallet == "prep" and FLOOR_TOKEN in other
+
+
+def _contacts(stage_wheels, include_pallet=True) -> dict:
     """This step's contact report: the tyres' summed impulse z against the floor collider (by the other actor, as
     steering_probe_arms classifies the clean window) and the count of contacts between the truck or the pallet and
     anything else, a tyre on the floor aside."""
@@ -380,8 +392,8 @@ def _contacts(stage_wheels, include_pallet: bool = True) -> dict:
         if all(ours) or not any(ours):
             continue
         mine, other = (a0, a1) if ours[0] else (a1, a0)
-        if not include_pallet and mine.startswith(PALLET_PREFIX):
-            continue  # a pallet not on the forks (seating on the floor, or left at the pickup)
+        if _pallet_skip(mine, other, include_pallet):
+            continue  # a pallet not on the forks (left at the pickup), or its floor contact while seated or lifted
         sign = 1.0 if mine == a1 else -1.0
         for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
             c = data[k]
@@ -494,7 +506,8 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
 
         settle = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=sb, yaw=sr[2],
                                base_z=base_z, load=load, lift_cmd=lift_cmd, hz=hz,
-                               on_step=lambda inc: count("settle", _contacts(stage_wheels, inc and load == "loaded")))
+                               on_step=lambda inc: count("settle", _contacts(stage_wheels,
+                                                                             inc if load == "loaded" else False)))
         jz = 0.0
         load_steps = int(round(LOAD_S * hz))  # F2 plan 2: seconds (12 steps at 120 Hz)
         for _ in range(load_steps):
@@ -568,7 +581,7 @@ WHEEL_LINKS = ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear
 STATIC_WINDOW_S = 0.5  # F2 plan 3: the window after the settle
 
 
-def _wheel_floor(stage_wheels, include_pallet: bool = True) -> dict:
+def _wheel_floor(stage_wheels, include_pallet=True) -> dict:
     """This step's contact report per tyre against the floor collider: the summed impulse z on the tyre (sign: on the
     truck), the contact point count and the smallest separation; and the foreign contact count (the truck or the pallet
     against anything but each other, a tyre on the floor aside)."""
@@ -585,7 +598,7 @@ def _wheel_floor(stage_wheels, include_pallet: bool = True) -> dict:
         if all(ours) or not any(ours):
             continue
         mine, other = (a0, a1) if ours[0] else (a1, a0)
-        if not include_pallet and mine.startswith(PALLET_PREFIX):
+        if _pallet_skip(mine, other, include_pallet):
             continue
         sign = 1.0 if mine == a1 else -1.0
         for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
@@ -637,7 +650,7 @@ def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_bas
         loaded = load == "loaded"
 
         def count(include_pallet):
-            foreign["n"] += _wheel_floor(stage_wheels, include_pallet and loaded)["foreign"]
+            foreign["n"] += _wheel_floor(stage_wheels, include_pallet if loaded else False)["foreign"]
 
         start = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=base0[:2],
                               yaw=yaw0, base_z=base_z, load=load, lift_cmd=lift_command if load == "loaded" else 0.0,

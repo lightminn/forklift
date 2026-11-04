@@ -25,6 +25,7 @@ LOADS = ("empty", "loaded")
 MASSES = ("O", "F1")
 GRID = (100_000.0, 120_000.0, 140_000.0, 160_000.0, 180_000.0)  # plan 3, fixed before the results
 ENGINE_KG = {"O": 26.0, "F1": 24.0002}  # the arms' engine masses (F1 v2 records)
+TYRE_FRICTION = (0.8, 0.7)  # the operating settings' tyre material (isaac_transport_measured.yaml); F2 keeps it (#304)
 
 
 def support_height(alpha: float) -> float:
@@ -79,7 +80,12 @@ def repeat_spread(a: dict, b: dict) -> dict:
     return {"three_delta_z_m": 3 * dz, "three_delta_force_n": 3 * df}
 
 
-def record_problems(rec: dict, mass: str, hz: float, k_mat, start) -> list:
+def _pose_ok(pose) -> bool:
+    return isinstance(pose, (list, tuple)) and len(pose) == 3 and all(
+        isinstance(v, (int, float)) and math.isfinite(v) for v in pose)
+
+
+def record_problems(rec: dict, mass: str, hz: float, k_mat, start, combine=None) -> list:
     """Why a static record is not the registered condition: dt, the arm's engine mass, the start pose, the order, and
     the tyre material read back (rigid: no compliance; F2: k_mat and c_mat on all four tyres)."""
     out = []
@@ -89,12 +95,20 @@ def record_problems(rec: dict, mass: str, hz: float, k_mat, start) -> list:
         out.append(f"engine mass {rec.get('robot_mass_kg')}")
     if rec.get("order", "forward") != "forward":
         out.append(f"order {rec.get('order')}")
-    if start is not None and any(abs(a - b) > 1e-6 for a, b in zip(rec.get("start_base", []), start)):
-        out.append(f"start pose {rec.get('start_base')}")
+    pose = rec.get("start_base")
+    if not _pose_ok(pose) or not _pose_ok(start) or any(abs(a - b) > 1e-6 for a, b in zip(pose, start)):
+        out.append(f"start pose {pose} (reference {start})")
     tyres = rec.get("tyre_readback") or []
     if len(tyres) != 4:
         out.append(f"{len(tyres)} tyres read back")
     for t in tyres:
+        modes = (t.get("friction_combine_mode"), t.get("damping_combine_mode"))
+        if combine is not None and modes != combine:
+            out.append(f"{t.get('collider')}: combine modes {modes} (reference {combine})")
+    for t in tyres:
+        fr = (t.get("static_friction"), t.get("dynamic_friction"))  # read back as float32
+        if None in fr or not all(math.isclose(a, b, rel_tol=1e-6) for a, b in zip(fr, TYRE_FRICTION)):
+            out.append(f"{t.get('collider')}: friction {t.get('static_friction')}/{t.get('dynamic_friction')}")
         k, c = t.get("compliant_stiffness"), t.get("compliant_damping")
         if k_mat is None:
             if k is not None:
@@ -108,12 +122,15 @@ def record_problems(rec: dict, mass: str, hz: float, k_mat, start) -> list:
 def judge(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dict:
     rigid_runs = {m: [load(p) for p in manifest["rigid"][m]] for m in MASSES}
     unusable = []
-    start = rigid_runs["O"][0].get("start_base") if rigid_runs["O"] else None
+    ref = rigid_runs["O"][0] if rigid_runs["O"] else {}
+    start = ref.get("start_base")
+    ref_tyres = ref.get("tyre_readback") or [{}]
+    combine = (ref_tyres[0].get("friction_combine_mode"), ref_tyres[0].get("damping_combine_mode"))
     if sorted(float(k) for k in manifest["grid"]) != list(GRID):
         unusable.append(f"grid {sorted(manifest['grid'])} is not the registered {GRID}")
     for m in MASSES:
         for i, run in enumerate(rigid_runs[m]):
-            unusable += [f"rigid {m} #{i + 1}: {w}" for w in record_problems(run, m, 120.0, None, start)]
+            unusable += [f"rigid {m} #{i + 1}: {w}" for w in record_problems(run, m, 120.0, None, start, combine)]
     for m in MASSES:
         if len(rigid_runs[m]) != 2:
             unusable.append(f"rigid {m}: two repeats needed")
@@ -128,7 +145,8 @@ def judge(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dic
     for k_mat, runs in sorted(manifest["grid"].items(), key=lambda kv: float(kv[0])):
         f2 = {m: load(runs[m]) for m in MASSES}
         for m in MASSES:
-            unusable += [f"grid {k_mat} {m}: {w}" for w in record_problems(f2[m], m, 120.0, float(k_mat), start)]
+            unusable += [f"grid {k_mat} {m}: {w}"
+                         for w in record_problems(f2[m], m, 120.0, float(k_mat), start, combine)]
         point = grid_point(rigid, f2)
         bad = [f"{m} {ld}" for m in MASSES for ld in LOADS
                if not f2[m]["loads"][ld]["start"]["converged"] or f2[m]["loads"][ld]["foreign_contacts"]
@@ -147,8 +165,8 @@ def judge(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dic
     if "dt240" in manifest and chosen is not None:
         d = manifest["dt240"]
         r240, c240 = {m: load(d["rigid"][m]) for m in MASSES}, {m: load(d["chosen"][m]) for m in MASSES}
-        problems = [f"{m}: {w}" for m in MASSES for w in record_problems(r240[m], m, 240.0, None, start)
-                    + record_problems(c240[m], m, 240.0, chosen, start)]
+        problems = [f"{m}: {w}" for m in MASSES for w in record_problems(r240[m], m, 240.0, None, start, combine)
+                    + record_problems(c240[m], m, 240.0, chosen, start, combine)]
         out["dt240_reported"] = {"problems": problems, **grid_point(r240, c240)}
     return out
 

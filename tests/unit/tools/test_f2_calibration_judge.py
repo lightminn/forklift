@@ -24,7 +24,8 @@ def _wheel(z, fz, tilt=0.0, sep=-1e-6, zr=0.0):
 def _static(zs, fz=(74.0, 74.0, 53.0, 53.0), tilt=0.0, ratio=1.0, mass="O", k_mat=None, hz=120.0):
     wheels = {w: _wheel(z, f, tilt) for w, z, f in zip(J.WHEELS, zs, fz)}
     rec = {"start": {"converged": True}, "foreign_contacts": 0, "wheel_load_ratio": ratio, "wheels": wheels}
-    tyres = [{"collider": f"/t{i}", "compliant_stiffness": k_mat,
+    tyres = [{"collider": f"/t{i}", "static_friction": 0.800000011920929, "dynamic_friction": 0.699999988079071,
+              "friction_combine_mode": None, "damping_combine_mode": None, "compliant_stiffness": k_mat,
               "compliant_damping": None if k_mat is None else k_mat * J.DAMPING_PER_STIFFNESS_S} for i in range(4)]
     return {"loads": {ld: rec for ld in J.LOADS}, "physics_hz": hz, "robot_mass_kg": J.ENGINE_KG[mass],
             "start_base": [1.0, 2.0, 0.5], "order": "forward", "tyre_readback": tyres}
@@ -117,3 +118,26 @@ def test_registered_condition_is_checked():
     # a missing rigid separation is not taken as zero penetration
     r = J.wheel_stiffness(_wheel(0.125, 74.0, sep=None), _wheel(0.125 - 74.0 / 400_000, 74.0))
     assert r["valid"] is False
+
+
+def test_friction_and_start_pose_are_bound():
+    man, files = _files([400_000] * 5)
+    bad = _f2(400_000, "O", 140000.0)
+    for t in bad["tyre_readback"]:
+        t["static_friction"], t["dynamic_friction"] = 0.99, 0.01
+    files["g140000O"] = bad
+    out = J.judge(man, load=files.__getitem__)
+    assert out["chosen_k_mat"] is None and any("friction" in u for u in out["unusable"])
+    man, files = _files([400_000] * 5)
+    files["g140000O"] = dict(files["g140000O"], start_base=[])
+    assert J.judge(man, load=files.__getitem__)["chosen_k_mat"] is None
+    man, files = _files([400_000] * 5)
+    files["rO1"] = {k: v for k, v in files["rO1"].items() if k != "start_base"}  # the reference itself missing
+    files["g140000F1"] = dict(files["g140000F1"], start_base=[99.0, 99.0, 2.5])
+    assert J.judge(man, load=files.__getitem__)["chosen_k_mat"] is None
+    man, files = _files([400_000] * 5)
+    bad = _f2(400_000, "F1", 160000.0)
+    for t in bad["tyre_readback"]:
+        t["damping_combine_mode"] = "max"
+    files["g160000F1"] = bad
+    assert J.judge(man, load=files.__getitem__)["chosen_k_mat"] is None
