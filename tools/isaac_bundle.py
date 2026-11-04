@@ -7,8 +7,9 @@
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
-"pace_log": glob, "missions": path} (all but name and argv optional; "missions" is the run's console probe report,
-by default probe.json in a retry_move folder -- see mission_verdict). Runs start in list order whenever
+"pace_log": glob, "missions": path, "first_record": path} (all but name and argv optional; "missions" is the run's
+console probe report, by default probe.json in a retry_move folder -- see mission_verdict; "first_record" is the
+start-up silence watch's first record, see below). Runs start in list order whenever
 
 - a slot is free: at most --slots runs at once, and never more slots than the job's shards (the rule: as many shards
   as Isaac sessions running in the job). A run holds its slot until every process it started has ended, not only its
@@ -81,6 +82,42 @@ the run's start, and is judged only while a Python process runs --stack-match (r
 from the later of the run's and that runner's start -- between a live session's epochs the supervisor runs alone for
 up to its backoff plus 300 s of standby; a run with no progress file named is not watched.
 
+Start-up silence: a run whose runner (--stack-match) has started but which has not written its first record -- the
+kind's first-record file under its first retry_move (riib, bd: run/scenario.json), non-empty -- while its logs (its
+attempt log and its "scan" files) have not changed for --startup-silence-min (default 5; 0: off) is asked for its
+stack (SIGUSR1), then, --stack-wait-s later, ended like a timeout and recorded as infra_failed with the sign
+"startup_silent: ...", so it goes again under --retries like any infrastructure failure. The first record is written
+before the mission's planning and before a relocalization's operator wait (up to 540 s), so neither of those is
+judged; the progress file is not used, as it comes after both (Codex). A run's own "first_record" (a path inside one
+of its retry_move outputs, so a retry starts without it) takes the place of the kind's file: a live session names
+its first epoch's scenario.json (e.g. OUT/live/epoch_1/run/scenario.json, written as the runner's --output path
+spells it), as the live kind names none. Such a record binds the watch to the runner with that record's folder as an
+argument (the epoch's --output): only while that runner runs, and once it has ended without the record (the
+supervisor goes on to another epoch) the run is no longer judged -- a later epoch's start is not watched. A live
+runner writes its own log (epoch_<n>/run.log): name it in the run's "scan" so its output counts as activity. The F1 batch of 2026-11-04 had five sessions
+stop right after "app ready" for 11-30 min (no log write, GPU idle, 585 MiB each) under kinds whose progress stall is
+off; healthy sessions took 17-113 s from "app ready" to their first frame, which comes after scenario.json (344
+riib/simphys runs, p99 108 s). A run with neither its own first_record nor a kind's first-record file is not judged.
+
+Start-up viewport failure: the other end of the same start-up fault -- Kit's viewport wait runs out (63 frames) and
+the runner ends itself at its first camera read -- is recorded as infra_failed with the sign "startup_viewport: ..."
+and retried the same way -- for the kinds that name a first-record file (riib, bd), not a run's own first_record: a
+live session's supervisor starts another epoch after a runner that ended itself -- but only on the F1 registration's
+own conditions (revision 2, its judge's overscan_end),
+each read from its own record in the run's output (the first-record file's folder): result.json's failure_reason is
+the TypeError "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"; its "samples", "transitions" and
+"forbidden_pocket_contacts" are recorded and empty; its applied_command starts with a recorded 0; scene_damaged is
+not set; failure.txt names get_rgba and _resize_data_for_overscan; slam_control.npy's truth rear axle moved at most
+0.01 m from its first sample. A missing or different record leaves the run as it ended.
+
+Node start gap: two bundle jobs of the node (this user's, through --node-ledger-dir) start no two runs less than
+--node-stagger-s apart (default 60; 0: off), under a file lock: the F1 sessions that stopped had started 4-6 s after a
+session of another job and stopped inside Kit's viewport wait, while one job's staggered starts (one session alone,
+two at 180 s) ran. The gap covers a start up to its viewport (ws1, 2026-11-04): launch to Kit's start 1.4-3.8 s (513
+bundle runs, p99 3.6), Kit's start to "app ready" 3.9-17.5 s (876 run logs, p99 7.2), "app ready" to the end of
+_wait_for_viewport 2.2-7.3 s, Kit's start to it 6.6-20.0 s (the 21 healthy Kit logs ws1 still keeps) -- at most
+about 30 s. Launchers outside the bundle do not take part.
+
 Records: OUT/results.jsonl (a line per attempt), OUT/vram.jsonl (the job's GPU memory, per run, every
 --vram-period-s), OUT/pace.jsonl, OUT/summary.json. A run's exit code is its top process's: the launcher has to end
 with the code of what it ran. Exit 0 when every run's last attempt exited 0, 1 otherwise, 2 for a refused
@@ -142,10 +179,14 @@ KINDS = {
     # (docs/plans/2026-10-26-ws1-isaac-array.md 5.4).
     "live": {"session_gib": 5.5, "cores": 2, "max_slots": 3, "vram_mib": 4100, "run_min": 30, "stall_min": 10},
     # batch riib_scene with video: anon 17.8 GiB for 3 sessions (5.93 each), 4,145-4,366 MiB each -> 3 per GPU
+    # first_rel: the start-up silence watch's first record -- run_transport writes scenario.json about 17 s after the
+    # log's first line, before the mission's planning and a relocalization's operator wait (frames.jsonl comes after
+    # both); the F1 sessions that stopped after "app ready" never wrote it
     "riib": {"session_gib": 6.0, "cores": 2, "max_slots": 3, "vram_mib": 4500, "run_min": 63, "stall_min": 0,
-             "watch_rel": "run/frames.jsonl"},
+             "watch_rel": "run/frames.jsonl", "first_rel": "run/scenario.json"},
     # batch bd/jao without the learned worker: cgroup peak <= 5.82 GiB single, 1.8-2.2 cores
-    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500, "run_min": 13},
+    "bd": {"session_gib": 5.0, "cores": 2, "max_slots": 4, "vram_mib": 3500, "run_min": 13,
+           "first_rel": "run/scenario.json"},
 }
 BRIDGE_CORE_CPUS = 2  # one physical core (its two hyperthreads) for the SLAM bridges, apart from the Isaac sessions
 SHARED_FILE_GIB = 1.5  # file pages the bundle's sessions share (10793/10794: 1.36-1.49 GiB)
@@ -166,6 +207,7 @@ class Run:
     pace_log: str | None = None
     watch: list = field(default_factory=list)
     missions: str | None = None
+    first_record: str | None = None
 
     def at(self, attempt) -> Run:
         """This run with "{attempt}" filled in."""
@@ -173,13 +215,19 @@ class Run:
         return Run(self.name, [f(a) for a in self.argv], {k: f(v) for k, v in self.env.items()}, self.cwd,
                    [f(g) for g in self.scan], [f(m) for m in self.retry_move],
                    f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch],
-                   f(self.missions) if self.missions else None)
+                   f(self.missions) if self.missions else None, f(self.first_record) if self.first_record else None)
 
     @property
     def retryable(self) -> bool:
         """A run can go again when its outputs move aside or depend on the attempt (judged on the list's entry)."""
         texts = [*self.argv, *self.env.values(), *self.scan, self.pace_log or ""]
         return bool(self.retry_move) or any("{attempt}" in t for t in texts)
+
+
+def _inside(path, folder) -> bool:
+    """path lies inside folder (both as written, normalized)."""
+    path, folder = os.path.normpath(path), os.path.normpath(folder)
+    return path != folder and path.startswith(folder.rstrip(os.sep) + os.sep)
 
 
 def load_runs(path, text=None) -> list[Run]:
@@ -192,7 +240,8 @@ def load_runs(path, text=None) -> list[Run]:
         obj = json.loads(line)
         if not isinstance(obj, dict):
             raise ValueError(f"line {n}: not an object")
-        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch", "missions"}
+        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch", "missions",
+                              "first_record"}
         if unknown:
             raise ValueError(f"line {n}: unknown keys {sorted(unknown)}")
         name = obj.get("name")
@@ -228,7 +277,13 @@ def load_runs(path, text=None) -> list[Run]:
             raise ValueError(f"line {n}: pace_log must be a string")
         if missions is not None and not isinstance(missions, str):
             raise ValueError(f"line {n}: missions must be a path (string)")
-        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, missions=missions, **lists))
+        first = obj.get("first_record")
+        if first is not None and not (isinstance(first, str) and os.path.isabs(first)
+                                      and any(_inside(first, m) for m in lists["retry_move"])):
+            # a retry moves its outputs aside: a first record outside them would still be there for the next attempt
+            raise ValueError(f"line {n}: first_record must be an absolute path inside one of its retry_move outputs")
+        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, missions=missions,
+                        first_record=first, **lists))
     return runs
 
 
@@ -740,8 +795,108 @@ def watch_globs(run, watch_rel=None):
     return []
 
 
-def _runner_start(pids, match):
-    """The latest start (wall clock) of the Python processes among pids running `match`, or None when none runs."""
+def first_record(run, first_rel=None):
+    """A run's first record for the start-up silence watch: first_rel under its output, or None."""
+    if first_rel and run.retry_move:
+        return os.path.join(run.retry_move[0], first_rel)
+    return None
+
+
+VIEWPORT_REASON = "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"
+VIEWPORT_TRACE = ("get_rgba", "_resize_data_for_overscan")
+VIEWPORT_STILL_M = 0.01  # the truth rear axle's largest move from its first control sample
+
+
+def npy_rows(path, columns):
+    """The rows of a little-endian float64 C-order .npy file (format 1.0-3.0) of shape (n, columns), read without numpy;
+    None for any other, truncated or damaged file."""
+    import ast
+    import struct
+    try:
+        with open(path, "rb") as f:
+            if f.read(6) != b"\x93NUMPY":
+                return None
+            version = tuple(f.read(2))
+            if version not in ((1, 0), (2, 0), (3, 0)):
+                return None
+            (size,) = struct.unpack("<H" if version == (1, 0) else "<I", f.read(2 if version == (1, 0) else 4))
+            header = ast.literal_eval(f.read(size).decode("utf8" if version == (3, 0) else "latin1"))
+            data = f.read()
+        if not isinstance(header, dict) or set(header) != {"descr", "fortran_order", "shape"}:
+            return None
+        shape = header["shape"]
+        if (header["descr"] != "<f8" or header["fortran_order"] is not False or not isinstance(shape, tuple)
+                or len(shape) != 2 or shape[1] != columns or not all(type(n) is int and n >= 0 for n in shape)):
+            return None
+        if len(data) != 8 * shape[0] * columns:
+            return None
+        flat = struct.unpack(f"<{shape[0] * columns}d", data)
+    except (OSError, ValueError, SyntaxError, TypeError, struct.error, MemoryError, RecursionError):
+        return None
+    return [flat[i:i + columns] for i in range(0, len(flat), columns)]
+
+
+def startup_viewport(run_dir):
+    """The start-up viewport failure's sign when run_dir's records meet every condition of the F1 registration's
+    revision 2 (its judge's overscan_end; see the module text), else None."""
+    try:
+        result = json.loads(Path(run_dir, "result.json").read_text())
+        trace = Path(run_dir, "failure.txt").read_text(errors="replace")
+        control = npy_rows(Path(run_dir, "slam_control.npy"), 7)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(result, dict) or result.get("failure_reason") != VIEWPORT_REASON:
+        return None
+    if any(not isinstance(result.get(k), list) or result[k]
+           for k in ("samples", "transitions", "forbidden_pocket_contacts")):  # recorded and empty, not absent
+        return None
+    command = result.get("applied_command")
+    if (not isinstance(command, list) or not command or isinstance(command[0], bool)
+            or not isinstance(command[0], (int, float)) or command[0] != 0 or result.get("scene_damaged")):
+        return None
+    if not all(k in trace for k in VIEWPORT_TRACE) or not control:
+        return None
+    import math
+    x0, y0 = control[0][4], control[0][5]
+    moved = [math.hypot(row[4] - x0, row[5] - y0) for row in control]
+    if not all(math.isfinite(m) for m in moved) or not max(moved) <= VIEWPORT_STILL_M:  # NaN or Inf: not still
+        return None
+    return ("startup_viewport: the first camera read failed before a perception frame, with no contact and no motion "
+            "(F1 revision 2: failure_reason, failure.txt get_rgba / _resize_data_for_overscan, empty samples, "
+            "transitions and contacts, command 0, still)")
+
+
+def written(path) -> bool:
+    """The file exists and holds something (a file opened empty is not a record yet)."""
+    try:
+        return os.stat(path).st_size > 0
+    except OSError:
+        return False
+
+
+def startup_silence(run, log_path, runner_start, now=time.time):
+    """Seconds since the run's logs (its attempt log and its scan files) last changed, from its runner's start at the
+    earliest."""
+    latest = runner_start
+    for path in [str(log_path), *(p for g in run.scan for p in glob.glob(g))]:
+        try:
+            latest = max(latest, os.stat(path).st_mtime)
+        except OSError:
+            continue
+    return now() - latest
+
+
+def _args(pid) -> list:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0")]
+    except OSError:
+        return []
+
+
+def _runner_start(pids, match, arg=None):
+    """The latest start (wall clock) of the Python processes among pids running `match` (and, given arg, with arg as
+    one of their arguments, normalized), or None when none runs."""
     try:
         with open("/proc/stat") as f:
             btime = next(int(x.split()[1]) for x in f if x.startswith("btime "))
@@ -750,6 +905,8 @@ def _runner_start(pids, match):
     starts = []
     for p in pids:
         if not match or match not in _cmdline(p):
+            continue
+        if arg is not None and os.path.normpath(arg) not in {os.path.normpath(a) for a in _args(p) if a}:
             continue
         try:
             if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
@@ -877,6 +1034,50 @@ def node_available_mib():
     except (OSError, ValueError):
         return None
     return None
+
+
+class NodeStartGap:
+    """The node's latest run start, shared by every bundle job on the node through a file under a file lock: a start
+    is let through when the latest one, of any job, is at least gap_s old (a clock that went back lets it through).
+    It is taken right before the start, after every wait (the RAM ledger's included), and given back when nothing
+    started, so a job that cannot start holds no turn from the others (Codex)."""
+
+    def __init__(self, directory, gap_s):
+        self.dir = Path(directory)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.gap_s = gap_s
+
+    def _last(self):
+        try:
+            return (self.dir / "last_start").read_text().strip()
+        except OSError:
+            return None
+
+    def take(self, now=time.time):
+        """The turn (to give back if nothing starts), or None while the latest start is younger than gap_s."""
+        with open(self.dir / ".start_lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            t, last = now(), self._last()
+            try:
+                if last is not None and 0.0 <= t - float(last) < self.gap_s:
+                    return None
+            except ValueError:
+                pass
+            mark = repr(t)
+            (self.dir / "last_start").write_text(mark + "\n")
+            return mark, last
+
+    def give_back(self, turn):
+        """Put back the start before ours, unless another job has started since."""
+        mark, last = turn
+        with open(self.dir / ".start_lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self._last() != mark:
+                return
+            if last is None:
+                (self.dir / "last_start").unlink(missing_ok=True)
+            else:
+                (self.dir / "last_start").write_text(last + "\n")
 
 
 class NodeLedger:
@@ -1204,6 +1405,10 @@ class _Live:
     no_runner_since: float | None = None
     runner_seen: bool = False  # its runner (run_transport) has run at some point
     stall_reason: str | None = None
+    first_seen: bool = False  # its first record exists and is not empty
+    startup_silent: str | None = None  # the start-up silence sign, once it is ended for it
+    startup_term_at: float | None = None
+    first_runner_seen: bool = False  # the runner writing the run's own first_record has been seen
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -1231,8 +1436,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                pace_window_s=300.0, pace_warmup_s=540.0, pace_period_s=60.0, pace_stall_s=120.0, pace_confirm=2,
                pace_recover=10, pace_stall_warmup_s=240.0, run_est_s=None, time_left=None, time_check_s=300.0,
                stall_s=None, stall_check_s=30.0, watch_rel=None, stack_match="run_transport.py", stack_wait_s=3.0,
-               diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0,
-               leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
+               diag_wait_s=60.0, no_runner_s=900.0, first_runner_s=600.0, startup_silence_s=None, first_rel=None,
+               node_stagger_s=None, leftover_grace_s=10.0, settle_quiet_s=1.0, gpu_index=None, node_ram_min_mib=None,
                node_ram=node_available_mib, claim_dir=None, node_ledger_dir=None, bridge_cpus=0,
                siblings=_siblings, gpu_full_give_up_s=None, preflight=None):
     """Run the list; return the summary (also written to out/summary.json)."""
@@ -1240,6 +1445,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
     if claim_dir is not None:
         Path(claim_dir).mkdir(parents=True, exist_ok=True)
     ledger = NodeLedger(node_ledger_dir or Path(out) / "node_ledger") if node_ram_min_mib is not None else None
+    start_gap = NodeStartGap(node_ledger_dir or Path(out) / "node_ledger", node_stagger_s) if node_stagger_s else None
     if (out / "results.jsonl").exists() or (out / "summary.json").exists():
         raise FileExistsError(f"{out} holds an earlier bundle")
     if slots < 1:
@@ -1270,7 +1476,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
           "cap": slots, "backoffs": [], "backoff_at": None, "pace_next": 0.0, "infra": 0, "errors": [],
           "pace_below": 0, "pace_clean": 0, "stepups": [], "stepup_at": None, "deadline": None, "time_next": 0.0,
           "time_left": 0, "time_left_retry": [], "stall_next": 0.0, "stalled": 0,
-          "node_ram_waits": 0, "claimed_elsewhere": 0, "early_mission_failures": 0, "tours_incomplete": 0,
+          "node_ram_waits": 0, "node_start_waits": 0, "claimed_elsewhere": 0, "early_mission_failures": 0, "tours_incomplete": 0,
           "no_mission_reports": 0, "missions_submitted": 0, "missions_done": 0}
     t_begin, wall_begin = time.monotonic(), time.time()
     stopping = False
@@ -1336,6 +1542,16 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         killed = x["signal"] == signal.SIGKILL or x["rc"] in (137, -9)
         if x["ooms"] and killed:
             signs.insert(0, f"oom_kill +{x['ooms']} in the job cgroup and the run was killed")
+        if r.startup_silent:
+            signs.insert(0, r.startup_silent)
+        viewport = None
+        if not r.startup_silent and not r.stalled and first_record(r.run, first_rel) is not None:
+            try:  # a record it cannot read leaves the run as it ended
+                viewport = startup_viewport(os.path.dirname(first_record(r.run, first_rel)))
+            except Exception as exc:  # noqa: BLE001 -- the run is still recorded, the others go on
+                note_error(f"startup_viewport {r.run.name}", exc)
+            if viewport:
+                signs.insert(0, viewport)
         infra = bool(signs)
         removed, cleanup_error = [], None
         try:
@@ -1371,6 +1587,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             "name": r.run.name, "index": r.index, "slot": r.slot, "attempt": r.attempt,
             "status": status, "missions": missions, "infra": signs,
             "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
+            "startup_silent": bool(r.startup_silent), "startup_viewport": bool(viewport),
             "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
@@ -1648,6 +1865,34 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 r, "diagnostics", stall_diagnostics(r.stack_pids, r, out)), daemon=True)
                             r.diag_thread.start()
                             r.diag_deadline = now + diag_wait_s
+                if (startup_silence_s and not r.first_seen and not r.stalled and r.startup_silent is None
+                        and r.term_at is None and now >= st["stall_next"]):
+                    first = r.run.first_record or first_record(r.run, first_rel)
+                    if first is None or written(first):
+                        r.first_seen = True  # written, or nothing to wait for (not judged)
+                    else:
+                        # a run's own first_record belongs to one runner -- the one whose output folder holds it (a
+                        # live session's first epoch): that runner's life bounds the watch, so a later epoch's runner
+                        # is never timed against the first epoch's missing record (Codex)
+                        own = os.path.dirname(r.run.first_record) if r.run.first_record else None
+                        began = (_runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match, own) if stack_match
+                                 else r.start_wall)
+                        if own is not None and began is None and r.first_runner_seen:
+                            r.first_seen = True  # its runner ended without the record: another epoch, not judged
+                        elif own is not None and began is not None:
+                            r.first_runner_seen = True
+                        if began is not None:
+                            quiet = startup_silence(r.run, r.log_path, max(began, r.start_wall))
+                            if quiet >= startup_silence_s:
+                                r.startup_silent = (f"startup_silent: no first record and the logs unchanged for "
+                                                    f"{quiet:.0f} s after the runner started")
+                                pids_ = [p for p in token_pids(r.env["BUNDLE_TOKEN"])
+                                         if stack_match and stack_match in _cmdline(p)]
+                                _kill(stall_targets(pids_, stack_match), signal.SIGUSR1)
+                                r.startup_term_at = now + stack_wait_s
+                if r.startup_silent and r.term_at is None and now >= (r.startup_term_at or 0.0):
+                    r.term_at = now  # ended like a timeout; recorded as infra_failed and retried under --retries
+                    _kill([r.proc.pid], signal.SIGTERM)
                 if (r.stalled and r.stack_term_at is None and r.term_at is None
                         and (not r.diag_thread.is_alive() or now >= r.diag_deadline)):
                     # then the stack: SIGUSR1 only to processes that catch it (run_transport's faulthandler)
@@ -1697,11 +1942,22 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 v = verdict(now)
                 index, run, attempt = queue[0]
                 key = f"{job_id}-{index}-{attempt}-{nonce}"
+                if v in ("ok", "unreadable_go") and start_gap is not None and claimed_elsewhere(run, attempt):
+                    queue.popleft()  # not ours: it takes no turn of the node's start gap
+                    st["claimed_elsewhere"] += 1
+                    continue
                 if v in ("ok", "unreadable_go") and ledger is not None:
                     # the node's own memory: Slurm reserves the cgroups, not the bridge containers or what others
                     # run outside Slurm; the ledger keeps two jobs from both spending the same free memory
                     if not ledger.admit(key, node_ram_min_mib, node_ram):
                         v = "node_ram"
+                turn = None
+                if v in ("ok", "unreadable_go") and start_gap is not None:
+                    turn = start_gap.take()  # last, right before the start: no wait comes between
+                    if turn is None:
+                        v = "node_start"
+                        if ledger is not None:
+                            ledger.release(key)
                 if v in ("ok", "unreadable_go"):
                     st["waiting"] = None
                     if v == "unreadable_go":
@@ -1731,12 +1987,18 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                                 ledger.release(key)
                             except Exception as exc:  # noqa: BLE001
                                 note_error(f"release {run.name}", exc)
+                        if not started and turn is not None:
+                            try:  # nor the node's start turn
+                                start_gap.give_back(turn)
+                            except Exception as exc:  # noqa: BLE001
+                                note_error(f"give back {run.name}", exc)
                     continue
-                if v in ("over", "gpu_full", "node_ram") and st["waiting"] != v:
-                    st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits"}[v]] += 1
+                if v in ("over", "gpu_full", "node_ram", "node_start") and st["waiting"] != v:
+                    st[{"over": "vram_waits", "gpu_full": "gpu_full_waits", "node_ram": "node_ram_waits",
+                        "node_start": "node_start_waits"}[v]] += 1
                     st["waiting"] = v
                     st["waiting_since"] = now
-                elif v not in ("over", "gpu_full", "node_ram"):  # an unreadable or stale sample breaks the wait
+                elif v not in ("over", "gpu_full", "node_ram", "node_start"):  # an unreadable or stale sample breaks the wait
                     st["waiting"], st["waiting_since"] = None, None
                 if (v == "gpu_full" and gpu_full_give_up_s and not live
                         and now - max(st["waiting_since"], st["busy_at"] or 0.0) >= gpu_full_give_up_s):
@@ -1803,7 +2065,8 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         "runs": len(runs) - st["claimed_elsewhere"], "failed": failed, "not_started": not_started, "slots": slots, "stagger_s": stagger_s,
         "shards": shards, "vram_gate": gate_on, "vram_waits": st["vram_waits"],
         "gpu_full_waits": st["gpu_full_waits"], "gpu_full_gave_up": st["gpu_full_gave_up"], "unreadable_starts": st["unreadable_starts"],
-        "node_ram_waits": st["node_ram_waits"], "claimed_elsewhere": st["claimed_elsewhere"],
+        "node_ram_waits": st["node_ram_waits"], "node_start_waits": st["node_start_waits"],
+        "claimed_elsewhere": st["claimed_elsewhere"],
         "statuses": statuses, "status_line": status_line(statuses),
         "early_mission_failures": st["early_mission_failures"], "tours_incomplete": st["tours_incomplete"],
         "no_mission_reports": st["no_mission_reports"], "missions_submitted": st["missions_submitted"],
@@ -1966,6 +2229,11 @@ def main(argv=None) -> int:
                     help="end a run whose progress files (its watch globs, else its pace_log, else the kind's file "
                          "under its output) have not changed for this long, status stalled, not retried (default: "
                          "--kind's; 0: off)")
+    ap.add_argument("--startup-silence-min", type=float, default=5.0,
+                    help="end a run whose runner started but which wrote no first record while its logs stayed "
+                         "unchanged this long, as infra_failed (retried under --retries); 0: off")
+    ap.add_argument("--node-stagger-s", type=float, default=60.0,
+                    help="no two runs of this user's bundle jobs on the node start less than this apart (0: off)")
     ap.add_argument("--list-registry-dir", default=f"/tmp/isaac_bundle_lists_{os.getuid()}",
                     help="where this node's bundle runners record their run list and claim dir")
     ap.add_argument("--node-ledger-dir", default=f"/tmp/isaac_bundle_node_ledger_{os.getuid()}",
@@ -2074,8 +2342,10 @@ def _run_main(a, runs, slots, shards, probe, stop):
         time_left=(lambda: job_time_left(os.environ)) if os.environ.get("SLURM_JOB_ID") else None,
         stall_s=60 * (a.stall_min if a.stall_min is not None else (KINDS[a.kind].get("stall_min", 0) if a.kind else 0)),
         watch_rel=KINDS[a.kind].get("watch_rel") if a.kind else None,
+        startup_silence_s=60 * a.startup_silence_min or None,
+        first_rel=KINDS[a.kind].get("first_rel") if a.kind else None,
         gpu_index=job_gpu_index(os.environ), node_ram_min_mib=a.node_ram_min_mib or None, claim_dir=a.claim_dir,
-        node_ledger_dir=a.node_ledger_dir,
+        node_ledger_dir=a.node_ledger_dir, node_stagger_s=a.node_stagger_s or None,
         bridge_cpus=a.bridge_cpus if a.bridge_cpus == "auto" else int(a.bridge_cpus),
         gpu_full_give_up_s=60 * a.gpu_full_give_up_min or None,
         preflight=getattr(a, "preflight", None),
