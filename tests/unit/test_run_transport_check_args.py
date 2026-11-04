@@ -84,3 +84,34 @@ def test_a_settings_table_without_the_runs_pallet_shape_is_refused(tmp_path):
             for a in _base(tmp_path / "run")]
     p = _check(*argv)
     assert p.returncode == 2 and "no entry for the pallet shape 'epal6'" in p.stderr
+
+
+def test_the_line2_robustness_options_are_recorded_only_when_set():
+    # docs/plans/2026-11-04-line2-delivery-robustness.md D6: off runs record what they always did
+    import run_transport
+
+    argv = sys.argv
+    sys.argv = ["run_transport.py", *_base("out")]
+    try:
+        args = run_transport.arguments()
+    finally:
+        sys.argv = argv
+    assert (args.docking_degenerate_continue, args.inject_round1_degenerate, args.destination_prior_error_along_m) == (
+        "off", False, 0.0)
+    recorded = run_transport.recorded_arguments(args)
+    assert not {"docking_degenerate_continue", "inject_round1_degenerate",
+                "destination_prior_error_along_m"} & set(recorded)
+    args.docking_degenerate_continue, args.inject_round1_degenerate, args.destination_prior_error_along_m = (
+        "on", True, 0.08)
+    recorded = run_transport.recorded_arguments(args)
+    assert (recorded["docking_degenerate_continue"], recorded["inject_round1_degenerate"],
+            recorded["destination_prior_error_along_m"]) == ("on", True, 0.08)
+
+
+def test_the_line2_stress_tools_are_batch_only(tmp_path):
+    p = _check(*_base(tmp_path / "run"), "--inject-round1-degenerate", "--live")
+    assert p.returncode == 2 and "batch-run tools" in p.stderr
+    p = _check(*_base(tmp_path / "run"), "--destination-prior-error-along-m", "0.08")
+    assert p.returncode == 0, p.stderr
+    p = _check(*_base(tmp_path / "run"), "--docking-degenerate-continue", "on")
+    assert p.returncode == 2 and "needs --d7-docking" in p.stderr

@@ -57,3 +57,12 @@ def test_the_prior_error_moves_the_site_along_its_own_lateral_axis():
     site = PalletSite(3.0, -2.0, math.pi / 2)
     moved = MODULE.destination_with_prior_error(site, 0.2)
     assert (moved.x_m, moved.y_m, moved.yaw_rad) == pytest.approx((2.8, -2.0, math.pi / 2))
+
+
+def test_the_along_prior_error_moves_the_site_along_its_heading():
+    # docs/plans/2026-11-04-line2-delivery-robustness.md V3a: positive is deeper into the slot
+    site = PalletSite(3.0, -2.0, math.pi / 2)
+    moved = MODULE.destination_with_prior_error(site, 0.0, along_m=0.08)
+    assert (moved.x_m, moved.y_m, moved.yaw_rad) == pytest.approx((3.0, -1.92, math.pi / 2))
+    both = MODULE.destination_with_prior_error(site, 0.2, along_m=0.08)
+    assert (both.x_m, both.y_m) == pytest.approx((2.8, -1.92))
