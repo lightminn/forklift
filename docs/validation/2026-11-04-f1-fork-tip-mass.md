@@ -35,12 +35,12 @@
 ## riib 새 끝 (F1 에만 나옴)
 
 - **`Pallet missed the green destination center` — F1 line_2 s0·s1.** 같은 짝의 O 는 둘 다 완주했다.
-  - 두 실행 모두 하역 도킹의 LiDAR 맞춤이 거부됐다(`delivery_docking.reason = start_rejected:degenerate`, 상태 `fallback`). 살아 있는 빔은 535 개로, 같은 장면 O 의 571 개와 F1 s2 의 570 개보다 적었다.
+  - 두 실행 모두 하역 도킹의 1 라운드 LiDAR 맞춤이 거부됐다(`delivery_docking.reason = start_rejected:degenerate`, 상태 `fallback`). 정보량이 49.6 으로 문턱 50 아래였다(O 51.5·52.9, F1 s2 52.1). 기록의 '살아 있는 빔 535 대 571' 은 O 쪽 값이 2 라운드 스캔이라 생긴 차이이고, 같은 1 라운드 스캔은 모든 실행이 533–535 개다.
   - F1 s2 는 완주했지만 하역 오차가 3.7 cm 로, O 의 1.6·2.6 cm 보다 크다.
-  - 후보 메커니즘은 F1 에서 달라진 것들이다. 운반 중 승강이 약 5 mm 높고(아래), 차체 자세가 다르다(`reference_base_z_m` O −6.4e-6 · F1 −1.8e-6 m). 그만큼 실린 팔레트가 LiDAR 빔을 다르게 가릴 수 있다. **확인하지 않았다.**
+  - 기록 진단([2026-11-04-f1-only-ends-diagnosis.md](2026-11-04-f1-only-ends-diagnosis.md)) 결과, 이것은 문턱 근처의 경계 현상이다. 운영 URDF 를 쓴 과거 실험 팔에도 같은 기전으로 같은 끝이 난 기록이 있다. 실린 팔레트·캐리지가 LiDAR 빔을 직접 가리는 경로는 높이로 배제됐다. F1 이 정보량 분포를 옮겼는지는 F1 3 건으로 판단할 수 없다.
   - 같은 운영 설정(URDF 517e8260, 4.93 kg)의 이전 riib 기록에 이 끝은 없다. 다만 line_2 기록은 3 건뿐이다.
 - **`Tracking failed in transport: pos=0.0164,yaw=-0.0512` — F1 aisle_rack s0.** O 는 완주했다.
-  - 같은 운영 설정의 이전 riib 배치(s1c·c2, random_1)에서 같은 종류의 끝이 126 실행 중 6 번 있었다. 끝의 종류는 운영 설정에도 있다.
+  - 운반 중 커스프 도착 요 오차가 세 번 허용치(0.05 rad)를 넘었고, 세 번째에 재계획 예산(2 회)이 소진돼 끝났다. 같은 기전의 끝은 운영 URDF 의 과거 aisle_rack 기록에도 있다(10 kg 5/162, 4.93 kg 1/27). 상세: [기록 진단](2026-11-04-f1-only-ends-diagnosis.md). (처음 이 자리에 쓴 random_1 의 같은 사유 6/126 은 위치 오차 1.3–3.1 m 의 경로 이탈이라 기전이 달라 뺐다.)
   - F1 은 전진 조향 응답을 바꾼다(위 잔차). 그래서 이 실행의 끝이 그 변화와 무관하다고 보이지 못한다.
 - 판단: 두 끝 모두 포크 끝 질량과 무관함을 보이지 못했다 → 등록 규칙상 riib 는 불합격이다. 원인 진단(같은 seed 반복, 하역 스캔 비교)은 하지 않았다. 팔레트 질량 배치의 반복 진단 같은 다음 단계는 총괄이 정한다.
 - O 에만 나온 끝: `Tracking timeout in return_home`(line_2 s2), `near_capture_failed:perception_no_pallet:no_expected_candidate`(aisle_rack s2).
