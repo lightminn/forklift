@@ -160,7 +160,9 @@ def test_the_exemption_has_one_switch_and_refuses_near_tracking(tmp_path, env):
 
 def test_near_tracking_goes_with_the_exemption_turned_off(tmp_path):
     # and with the return cusp replan budget at the 0 its contract was measured at (the slam default is 2)
-    out = dry_run(tmp_path, EXIT_EXEMPT="off", EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0")
+    # and, on line_2_m, with the degenerate-continue switch off as its contract was measured
+    out = dry_run(tmp_path, EXIT_EXEMPT="off", EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0",
+                  DOCKING_DEGENERATE_CONTINUE="off")
     assert out.returncode == 0, out.stderr
     assert contains(args_of(out), ["--exit-prefix-exempt", "off"])
 
@@ -309,6 +311,9 @@ def test_the_runner_parser_takes_the_built_arguments(tmp_path, env):
         assert parsed.near_capture_redraw == "always" and parsed.near_capture_redraw_lateral_m == pytest.approx(lateral)
     else:
         assert parsed.near_capture_expected == "off" and parsed.near_capture_lower == "gate"
+    # the degenerate-continue allow list: line_2_m in the slam mode only (the parametrised MARKERS=off is plain line_2)
+    ddc = "on" if env.get("MODE") != "truth" and env.get("MARKERS", "on") == "on" else "off"
+    assert parsed.docking_degenerate_continue == ddc
     # C3: the second near capture only when asked
     assert parsed.near_recapture_gap_m == (float(env["NEAR_RECAPTURE_GAP"]) if "NEAR_RECAPTURE_GAP" in env else None)
 
@@ -598,3 +603,67 @@ def test_the_runner_s_check_takes_the_default_budget_and_refuses_a_missing_value
     out = dry_run(tmp_path, scene="aisle", out=tmp_path / "o_bad", SCENE_DIR=str(scenes), DRY_RUN_CHECK="1",
                   PYTHONPATH=str(ROOT / "src"), EXTRA_ARGS="--return-cusp-replans")
     assert out.returncode == 2 and "--return-cusp-replans: expected one argument" in out.stderr
+
+
+def ddc_record(tmp_path, out="out"):
+    return [l for l in (tmp_path / out / "riib_defaults.txt").read_text().splitlines()
+            if l.startswith("DOCKING_DEGENERATE_CONTINUE=")]
+
+
+@pytest.mark.parametrize("scene, env, value", [
+    ("line_2", {}, "on"), ("line_2_m", {}, "on"),
+    ("line_2", {"MARKERS": "off"}, "off"), ("line_2", {"MODE": "truth"}, "off"),
+    ("aisle", {}, "off"), ("aisle", {"RACK": "off"}, "off"), ("trailer", {}, "off")])
+def test_degenerate_continue_is_on_only_for_line_2_m_in_the_slam_mode(tmp_path, scene, env, value):
+    # lead decision 2026-11-05 (docs/validation/2026-11-05-line2-robustness-v3.md): an allow list on the final NAME
+    out = dry_run(tmp_path, scene=scene, **env)
+    assert out.returncode == 0, out.stdout + out.stderr
+    args = args_of(out)
+    assert contains(args, ["--docking-degenerate-continue", value]) and args.count("--docking-degenerate-continue") == 1
+    assert ddc_record(tmp_path) == [f"DOCKING_DEGENERATE_CONTINUE={value} DOCKING_DEGENERATE_CONTINUE_FROM=launcher"]
+
+
+def test_degenerate_continue_can_be_switched_either_way_where_it_is_defined(tmp_path):
+    out = dry_run(tmp_path, out=tmp_path / "a", DOCKING_DEGENERATE_CONTINUE="off")
+    assert contains(args_of(out), ["--docking-degenerate-continue", "off"])
+    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "b", DOCKING_DEGENERATE_CONTINUE="on")
+    assert out.returncode == 0, out.stdout
+    assert contains(args_of(out), ["--docking-degenerate-continue", "on"])
+    assert ddc_record(tmp_path, "b") == ["DOCKING_DEGENERATE_CONTINUE=on DOCKING_DEGENERATE_CONTINUE_FROM=launcher"]
+
+
+@pytest.mark.parametrize("extra, value", [("--docking-degenerate-continue off", "off"),
+                                          ("--docking-degenerate-continue=off", "off"),
+                                          ("--docking-d off --record-boundary", "off"),
+                                          ("--docking-degenerate-continue on --docking-degenerate-continue=off", "off")])
+def test_degenerate_continue_named_in_extra_args_wins_and_is_recorded(tmp_path, extra, value):
+    out = dry_run(tmp_path, EXTRA_ARGS=extra)
+    assert out.returncode == 0, out.stdout + out.stderr
+    args = args_of(out)
+    assert sum(a.startswith("--docking-d") for a in args) == extra.count("--docking-d")  # none of the launcher's own
+    assert ddc_record(tmp_path) == [f"DOCKING_DEGENERATE_CONTINUE={value} DOCKING_DEGENERATE_CONTINUE_FROM=EXTRA_ARGS"]
+
+
+@pytest.mark.parametrize("env, said", [
+    ({"DOCKING_DEGENERATE_CONTINUE": "yes"}, "must be on or off"),
+    ({"EXTRA_ARGS": "--docking-degenerate-continue maybe"}, "must be on or off"),
+    ({"MODE": "truth", "DOCKING_DEGENERATE_CONTINUE": "on"}, "needs MODE=slam"),
+    ({"MODE": "truth", "EXTRA_ARGS": "--docking-degenerate-continue on"}, "needs MODE=slam"),
+    ({"EXTRA_ARGS": "--near-tracking", "EXIT_EXEMPT": "off", "RETURN_CUSP_REPLANS": "0"},
+     "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off")])
+def test_degenerate_continue_is_refused_where_it_is_not_defined(tmp_path, env, said):
+    out = dry_run(tmp_path, **env)
+    assert out.returncode == 2 and said in out.stdout, out.stdout
+
+
+def test_the_runner_s_check_takes_the_line_2_m_default(tmp_path):
+    # the real parser (DRY_RUN_CHECK=1) with the real line_2_m scene: on passes the runner's --d7-docking check
+    from tools import riibotics_isaac_scenes as tool
+
+    scenes = tmp_path / "real"
+    scenes.mkdir()
+    (scenes / "line_2_m.json").write_text(
+        json.dumps(tool.scene_record("line_2_m", tool.with_slot_markers("line", tool.scenes()["line_2"]))))
+    out = dry_run(tmp_path, out=tmp_path / "o", SCENE_DIR=str(scenes), DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"))
+    assert out.returncode == 0 and out.stdout.splitlines()[-1] == "ARGS_OK", out.stdout[-800:] + out.stderr
+    assert contains(args_of(out), ["--docking-degenerate-continue", "on"])
