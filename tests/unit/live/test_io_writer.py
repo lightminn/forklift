@@ -257,3 +257,15 @@ def test_a_close_in_time_leaves_the_end_to_its_caller_and_a_failing_end_is_noted
     gate.set()
     w._thread.join(5.0)
     assert w.on_end_error == "OSError: disk"
+
+
+def test_a_timed_out_close_after_the_writer_ended_runs_the_end_at_once():
+    # white box: the writer left its loop (the disposer is what is late) -- the end runs on the closing thread
+    w = OrderedWriter()
+    gate, ended = threading.Event(), []
+    w.put_line(lambda: gate.wait(5.0), 1)
+    with w._cond:
+        w._writer_ended = True
+    assert w.close(0.1, on_end=lambda: ended.append(threading.current_thread().name)) is False
+    assert ended == [threading.current_thread().name] and w._on_end is None
+    gate.set()
