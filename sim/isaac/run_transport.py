@@ -169,8 +169,31 @@ ESTOP = load_perception_module(
 )
 
 
+def _finite_record(value: object, path: str, found: list[str]) -> object:
+    """A copy of a record with each non-finite float as None (its path in ``found``); anything else as it was."""
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    elif isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        found.append(path or "$")
+        return None
+    if isinstance(value, dict):
+        return {k: _finite_record(v, f"{path}.{k}", found) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_record(v, f"{path}[{i}]", found) for i, v in enumerate(value)]
+    return value
+
+
 def record_json(value: object, *, indent: int | None = None) -> str:
-    """Encode simulator numerical records without coercing numbers to strings."""
+    """Encode simulator numerical records without coercing numbers to strings.
+
+    A record with a non-finite float (a timed-out rollout's NaN error, for one) is written with that value as null
+    instead of failing the write -- V3 ddc_on_v3a_line_2_s8 lost its result.json that way (#309; lead 2026-11-05).
+    The strict encoding is tried first, so a finite record's text is byte for byte what it always was; the paths
+    made null go to stderr as one RECORD_NON_FINITE line."""
 
     def native(value: object) -> object:
         if isinstance(value, np.ndarray):
@@ -179,7 +202,16 @@ def record_json(value: object, *, indent: int | None = None) -> str:
             return value.item()
         raise TypeError(f"Unsupported record type: {type(value).__name__}")
 
-    return json.dumps(value, default=native, indent=indent, allow_nan=False)
+    try:
+        return json.dumps(value, default=native, indent=indent, allow_nan=False)
+    except ValueError as exc:
+        if "Out of range float values" not in str(exc):
+            raise
+    found: list[str] = []
+    text = json.dumps(_finite_record(value, "", found), default=native, indent=indent, allow_nan=False)
+    print(f"RECORD_NON_FINITE {len(found)} {' '.join(found[:8])}{' ...' if len(found) > 8 else ''}",
+          file=sys.stderr, flush=True)
+    return text
 
 
 def camera_hz(value: str) -> int:
