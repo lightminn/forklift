@@ -1881,3 +1881,77 @@ def test_a_run_claimed_by_another_job_takes_no_turn_of_the_node_gap(tmp_path):
                      claim_dir=str(claims))
     assert summary["claimed_elsewhere"] == 1 and results(tmp_path)["c1"]["status"] == "ended"
     assert summary["node_start_waits"] == 0
+
+
+# --- a run's own first record (a live session: the live kind names no first-record file) ---------------------------
+
+def test_a_run_names_its_own_first_record_inside_its_outputs(tmp_path):
+    out = str(tmp_path / "lv_s0")
+    line = {"name": "lv_s0", "argv": ["true"], "retry_move": [out],
+            "first_record": f"{out}/live/epoch_1/run/scenario.json"}
+    (tmp_path / "ok.jsonl").write_text(json.dumps(line) + "\n")
+    (run,) = ib.load_runs(tmp_path / "ok.jsonl")
+    assert run.first_record == f"{out}/live/epoch_1/run/scenario.json"
+    for bad in (str(tmp_path / "elsewhere" / "scenario.json"), "live/epoch_1/run/scenario.json", out, 3):
+        (tmp_path / "bad.jsonl").write_text(json.dumps({**line, "first_record": bad}) + "\n")
+        with pytest.raises(ValueError, match="first_record"):
+            ib.load_runs(tmp_path / "bad.jsonl")
+    templ = ib.Run(name="t", argv=["true"], retry_move=[out + "_{attempt}"],
+                   first_record=out + "_{attempt}/run/scenario.json")
+    assert templ.at(2).first_record == out + "_2/run/scenario.json"
+
+
+def test_a_live_session_silent_in_its_first_epoch_is_infra_and_retried(tmp_path):
+    script = tmp_path / "run_transport.py"
+    script.write_text(SILENT_TRANSPORT)
+    out = tmp_path / "lv_s0"
+    run = ib.Run(name="lv_s0", argv=["bash", "-c", f"{sys.executable} {script} {out}/live/epoch_1/run"],
+                 retry_move=[str(out)], first_record=str(out / "live" / "epoch_1" / "run" / "scenario.json"))
+    bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, stack_wait_s=0.2, grace_s=1.0, retries=1)
+    first, second = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert first["status"] == "infra_failed" and first["retried"] is True and first["startup_silent"] is True
+    assert second["retried"] is False and (tmp_path / "lv_s0.attempt1").exists()
+
+
+def test_a_live_session_past_its_first_record_is_not_judged_and_never_gets_the_viewport_sign(tmp_path):
+    # the first epoch wrote its scenario.json, then its runner ended itself on the viewport: the supervisor starts
+    # another epoch, so the viewport sign is not given to a run's own first_record
+    out = tmp_path / "lv_s1"
+    rec = out / "live" / "epoch_1" / "run"
+    src = tmp_path / "lv_s1_records"
+    viewport_records(src)
+    cmd = f"mkdir -p {rec} && cp {src}/* {rec}/ && sleep 1.2 && exit 1"
+    run = ib.Run(name="lv_s1", argv=["bash", "-c", cmd], retry_move=[str(out)],
+                 first_record=str(rec / "scenario.json"))
+    bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, grace_s=1.0, retries=1)
+    r = results(tmp_path)["lv_s1"]
+    assert r["status"] == "ended" and r["startup_silent"] is False and r["startup_viewport"] is False
+
+
+def test_the_first_epoch_s_end_without_its_record_ends_the_watch(tmp_path):
+    # Codex: epoch 1's runner ends before its scenario.json, the supervisor starts epoch 2, which runs quietly past
+    # the silence bound -- epoch 2 is not timed against epoch 1's missing record
+    script = tmp_path / "run_transport.py"
+    out = tmp_path / "lv_s2"
+    e1, e2 = out / "live" / "epoch_1" / "run", out / "live" / "epoch_2" / "run"
+    cmd = (f"mkdir -p {e1} {e2} && {sys.executable} {script} --output {e1} 0.3; "
+           f"{sys.executable} {script} --output {e2} 1.6")
+    # the runner takes its output as "--output DIR": the record's folder is one of its arguments
+    script.write_text("import sys,time; time.sleep(float(sys.argv[3]))\n")
+    run = ib.Run(name="lv_s2", argv=["bash", "-c", cmd], retry_move=[str(out)],
+                 first_record=str(e1 / "scenario.json"))
+    bundle(tmp_path, [run], startup_silence_s=0.8, stall_check_s=0.1, grace_s=1.0, retries=1)
+    r = results(tmp_path)["lv_s2"]
+    assert r["status"] == "ended" and r["rc"] == 0 and r["startup_silent"] is False
+
+
+def test_only_the_runner_with_the_record_s_folder_is_timed(tmp_path):
+    script = tmp_path / "run_transport.py"
+    script.write_text("import sys,time; time.sleep(float(sys.argv[3]))\n")
+    out = tmp_path / "lv_s3"
+    e1, other = out / "live" / "epoch_1" / "run", out / "live" / "epoch_10" / "run"
+    cmd = f"mkdir -p {e1} {other} && {sys.executable} {script} --output {other} 1.6"
+    run = ib.Run(name="lv_s3", argv=["bash", "-c", cmd], retry_move=[str(out)],
+                 first_record=str(e1 / "scenario.json"))
+    bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, grace_s=1.0, retries=1)
+    assert results(tmp_path)["lv_s3"]["startup_silent"] is False  # epoch_10 is not epoch_1's runner

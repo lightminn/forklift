@@ -7,8 +7,9 @@
         [--pace-gap-p99-s S] [--no-vram] [--no-cleanup] [--allow-multi-gpu]
 
 A run is one JSON line: {"name": .., "argv": [..], "env": {..}, "cwd": .., "scan": [globs], "retry_move": [paths],
-"pace_log": glob, "missions": path} (all but name and argv optional; "missions" is the run's console probe report,
-by default probe.json in a retry_move folder -- see mission_verdict). Runs start in list order whenever
+"pace_log": glob, "missions": path, "first_record": path} (all but name and argv optional; "missions" is the run's
+console probe report, by default probe.json in a retry_move folder -- see mission_verdict; "first_record" is the
+start-up silence watch's first record, see below). Runs start in list order whenever
 
 - a slot is free: at most --slots runs at once, and never more slots than the job's shards (the rule: as many shards
   as Isaac sessions running in the job). A run holds its slot until every process it started has ended, not only its
@@ -87,14 +88,22 @@ attempt log and its "scan" files) have not changed for --startup-silence-min (de
 stack (SIGUSR1), then, --stack-wait-s later, ended like a timeout and recorded as infra_failed with the sign
 "startup_silent: ...", so it goes again under --retries like any infrastructure failure. The first record is written
 before the mission's planning and before a relocalization's operator wait (up to 540 s), so neither of those is
-judged; the progress file is not used, as it comes after both (Codex). The F1 batch of 2026-11-04 had five sessions
+judged; the progress file is not used, as it comes after both (Codex). A run's own "first_record" (a path inside one
+of its retry_move outputs, so a retry starts without it) takes the place of the kind's file: a live session names
+its first epoch's scenario.json (e.g. OUT/live/epoch_1/run/scenario.json, written as the runner's --output path
+spells it), as the live kind names none. Such a record binds the watch to the runner with that record's folder as an
+argument (the epoch's --output): only while that runner runs, and once it has ended without the record (the
+supervisor goes on to another epoch) the run is no longer judged -- a later epoch's start is not watched. A live
+runner writes its own log (epoch_<n>/run.log): name it in the run's "scan" so its output counts as activity. The F1 batch of 2026-11-04 had five sessions
 stop right after "app ready" for 11-30 min (no log write, GPU idle, 585 MiB each) under kinds whose progress stall is
 off; healthy sessions took 17-113 s from "app ready" to their first frame, which comes after scenario.json (344
-riib/simphys runs, p99 108 s). A run whose kind names no first-record file is not judged.
+riib/simphys runs, p99 108 s). A run with neither its own first_record nor a kind's first-record file is not judged.
 
 Start-up viewport failure: the other end of the same start-up fault -- Kit's viewport wait runs out (63 frames) and
 the runner ends itself at its first camera read -- is recorded as infra_failed with the sign "startup_viewport: ..."
-and retried the same way, but only on the F1 registration's own conditions (revision 2, its judge's overscan_end),
+and retried the same way -- for the kinds that name a first-record file (riib, bd), not a run's own first_record: a
+live session's supervisor starts another epoch after a runner that ended itself -- but only on the F1 registration's
+own conditions (revision 2, its judge's overscan_end),
 each read from its own record in the run's output (the first-record file's folder): result.json's failure_reason is
 the TypeError "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"; its "samples", "transitions" and
 "forbidden_pocket_contacts" are recorded and empty; its applied_command starts with a recorded 0; scene_damaged is
@@ -198,6 +207,7 @@ class Run:
     pace_log: str | None = None
     watch: list = field(default_factory=list)
     missions: str | None = None
+    first_record: str | None = None
 
     def at(self, attempt) -> Run:
         """This run with "{attempt}" filled in."""
@@ -205,13 +215,19 @@ class Run:
         return Run(self.name, [f(a) for a in self.argv], {k: f(v) for k, v in self.env.items()}, self.cwd,
                    [f(g) for g in self.scan], [f(m) for m in self.retry_move],
                    f(self.pace_log) if self.pace_log else None, [f(w) for w in self.watch],
-                   f(self.missions) if self.missions else None)
+                   f(self.missions) if self.missions else None, f(self.first_record) if self.first_record else None)
 
     @property
     def retryable(self) -> bool:
         """A run can go again when its outputs move aside or depend on the attempt (judged on the list's entry)."""
         texts = [*self.argv, *self.env.values(), *self.scan, self.pace_log or ""]
         return bool(self.retry_move) or any("{attempt}" in t for t in texts)
+
+
+def _inside(path, folder) -> bool:
+    """path lies inside folder (both as written, normalized)."""
+    path, folder = os.path.normpath(path), os.path.normpath(folder)
+    return path != folder and path.startswith(folder.rstrip(os.sep) + os.sep)
 
 
 def load_runs(path, text=None) -> list[Run]:
@@ -224,7 +240,8 @@ def load_runs(path, text=None) -> list[Run]:
         obj = json.loads(line)
         if not isinstance(obj, dict):
             raise ValueError(f"line {n}: not an object")
-        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch", "missions"}
+        unknown = set(obj) - {"name", "argv", "env", "cwd", "scan", "retry_move", "pace_log", "watch", "missions",
+                              "first_record"}
         if unknown:
             raise ValueError(f"line {n}: unknown keys {sorted(unknown)}")
         name = obj.get("name")
@@ -260,7 +277,13 @@ def load_runs(path, text=None) -> list[Run]:
             raise ValueError(f"line {n}: pace_log must be a string")
         if missions is not None and not isinstance(missions, str):
             raise ValueError(f"line {n}: missions must be a path (string)")
-        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, missions=missions, **lists))
+        first = obj.get("first_record")
+        if first is not None and not (isinstance(first, str) and os.path.isabs(first)
+                                      and any(_inside(first, m) for m in lists["retry_move"])):
+            # a retry moves its outputs aside: a first record outside them would still be there for the next attempt
+            raise ValueError(f"line {n}: first_record must be an absolute path inside one of its retry_move outputs")
+        runs.append(Run(name=name, argv=argv, env=env, cwd=cwd, pace_log=pace_log, missions=missions,
+                        first_record=first, **lists))
     return runs
 
 
@@ -863,8 +886,17 @@ def startup_silence(run, log_path, runner_start, now=time.time):
     return now() - latest
 
 
-def _runner_start(pids, match):
-    """The latest start (wall clock) of the Python processes among pids running `match`, or None when none runs."""
+def _args(pid) -> list:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0")]
+    except OSError:
+        return []
+
+
+def _runner_start(pids, match, arg=None):
+    """The latest start (wall clock) of the Python processes among pids running `match` (and, given arg, with arg as
+    one of their arguments, normalized), or None when none runs."""
     try:
         with open("/proc/stat") as f:
             btime = next(int(x.split()[1]) for x in f if x.startswith("btime "))
@@ -873,6 +905,8 @@ def _runner_start(pids, match):
     starts = []
     for p in pids:
         if not match or match not in _cmdline(p):
+            continue
+        if arg is not None and os.path.normpath(arg) not in {os.path.normpath(a) for a in _args(p) if a}:
             continue
         try:
             if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
@@ -1374,6 +1408,7 @@ class _Live:
     first_seen: bool = False  # its first record exists and is not empty
     startup_silent: str | None = None  # the start-up silence sign, once it is ended for it
     startup_term_at: float | None = None
+    first_runner_seen: bool = False  # the runner writing the run's own first_record has been seen
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -1832,12 +1867,20 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                             r.diag_deadline = now + diag_wait_s
                 if (startup_silence_s and not r.first_seen and not r.stalled and r.startup_silent is None
                         and r.term_at is None and now >= st["stall_next"]):
-                    first = first_record(r.run, first_rel)
+                    first = r.run.first_record or first_record(r.run, first_rel)
                     if first is None or written(first):
                         r.first_seen = True  # written, or nothing to wait for (not judged)
                     else:
-                        began = (_runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match
+                        # a run's own first_record belongs to one runner -- the one whose output folder holds it (a
+                        # live session's first epoch): that runner's life bounds the watch, so a later epoch's runner
+                        # is never timed against the first epoch's missing record (Codex)
+                        own = os.path.dirname(r.run.first_record) if r.run.first_record else None
+                        began = (_runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match, own) if stack_match
                                  else r.start_wall)
+                        if own is not None and began is None and r.first_runner_seen:
+                            r.first_seen = True  # its runner ended without the record: another epoch, not judged
+                        elif own is not None and began is not None:
+                            r.first_runner_seen = True
                         if began is not None:
                             quiet = startup_silence(r.run, r.log_path, max(began, r.start_wall))
                             if quiet >= startup_silence_s:
