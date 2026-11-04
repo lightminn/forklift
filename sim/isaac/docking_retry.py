@@ -48,10 +48,11 @@ def carry_on_release(docking: dict, before, after, *, withdraw_poses=None, desti
     return out
 
 
-def destination_with_prior_error(site, error_m: float):
-    """The site moved error_m along its own lateral axis (plan D7c δ runs: the planning prior
-    is wrong by δ while the reference scan and the evaluation keep the true site)."""
-    x, y, yaw = compose((site.x_m, site.y_m, site.yaw_rad), (0.0, float(error_m), 0.0))
+def destination_with_prior_error(site, error_m: float, along_m: float = 0.0):
+    """The site moved error_m along its own lateral axis and along_m along its heading (plan D7c δ runs, and the
+    line2 robustness V3a stress: the planning prior is wrong while the reference scan and the evaluation keep the true
+    site)."""
+    x, y, yaw = compose((site.x_m, site.y_m, site.yaw_rad), (float(along_m), float(error_m), 0.0))
     return replace(site, x_m=x, y_m=y, yaw_rad=yaw)
 
 
