@@ -469,3 +469,29 @@ def test_evidence_without_a_truth_near_its_scan_is_unknown_not_misjudged():
     rt.note_tick(20.0, applied=moved, truth=moved, open_=True)
     [ev] = rt.evidence
     assert ev["class"] == "unknown"
+
+
+# --- piece 2c: what the console is sent (plan 4) ---
+def test_the_console_gets_the_status_the_stroke_and_the_zones_in_the_map():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b, hyps=[((8.42, 1.7, 0.6), "shift x+1")])
+    view = _tick(rt, b)
+    C = (1.0, 0.0, 0.0)  # the applied correction: the map one metre along x from the odometry
+    z = Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)
+    shown = rt.display(view, C, [z])
+    assert shown["status"] == "unconfirmed" and shown["stroke"]["state"] == "ready"
+    assert shown["stroke"]["left_m"] == pytest.approx(P.D_STROKE) and len(shown["zones"]) == 2
+    odom, _ = rt.zones([z])
+    corners = shown["zones"][0]
+    cx = sum(p[0] for p in corners) / 4
+    assert cx == pytest.approx(odom[0].x_m + 1.0)  # C o Z: the odometry zone moved into the map
+    import json
+    json.dumps(shown)
+
+
+def test_a_confirmed_check_sends_its_status_without_zones():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    view = _tick(rt, b, compose(b, invert(b)))
+    shown = rt.display(view, compose(b, invert(b)), [Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)])
+    assert shown == {"status": "confirmed", "reason": None, "stroke": None, "zones": []}

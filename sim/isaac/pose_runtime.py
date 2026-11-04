@@ -23,6 +23,7 @@ from forklift_core.localization import global_match as G
 from forklift_core.localization import pose_check as P
 from forklift_core.localization import start_reloc as R
 from forklift_core.localization import twin_check as T
+from forklift_core.localization.slam_pose import compose
 
 SCANS = 5  # scan_capture.SCANS: one set, as the start relocalization takes it
 DEADLINE_S = 30.0  # the start check's and a re-match generation's deadline (the matcher's, plan 3.2)
@@ -416,6 +417,24 @@ class PoseRuntime:
             rho = T.odom_zones(list(map_zones), hyps, self.o_s)
             self._zones_cache = (key, T.grown_zones(rho, upper, self.bounds))
         return self._zones_cache[1], ("pose_union", key[1], hash(key[0]))
+
+    def display(self, view: P.View, C, map_zones) -> dict:
+        """What the console is sent (plan 4): the status, why nothing opens, the stroke left, and the union zones as
+        map polygons (C o Z_h: where each hypothesis's pallet is relative to the truck, around the estimate)."""
+        stroke = None if view.stroke is None else {
+            "state": view.stroke, "left_m": view.stroke_left_m, "total_left_m": view.total_left_m}
+        zones = []
+        odom, _ = self.zones(map_zones) if C is not None else (None, None)
+        for z in odom or ():
+            c, s_ = math.cos(z.yaw_rad), math.sin(z.yaw_rad)
+            corners = []
+            for a, w in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                cx = z.x_m + c * a * z.length_m / 2 - s_ * w * z.width_m / 2
+                cy = z.y_m + s_ * a * z.length_m / 2 + c * w * z.width_m / 2
+                mx, my, _ = compose(tuple(C), (cx, cy, 0.0))
+                corners.append([round(mx, 3), round(my, 3)])
+            zones.append(corners)
+        return {"status": view.status, "reason": view.reason, "stroke": stroke, "zones": zones}
 
     def rear_pending(self) -> bool:
         return self.rear == "pending" and self.pc.status == "unconfirmed"

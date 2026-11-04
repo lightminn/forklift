@@ -4,6 +4,7 @@
 
 import { contentBounds, syncView, worldToScreen } from "./mapview.js";
 import { palletKindLabel } from "./profile.js";
+import { poseCheckOf, poseZones } from "./posecheck.js";
 
 export function fitCanvas(cv) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -328,6 +329,29 @@ export function drawMap(cv, model, tok, view, layers) {
     const reach = (ch.nose_from_rear_m + 0.1) * sc;
     tag(c, `${model.vehicleId ?? "차량"} · ${model.stale ? "위치 지연" : st.mode ?? "관찰"}`, x, y + Math.max(reach * 0.55, hw) + 8, color, tok);
     c.globalAlpha = 1;
+  }
+
+  // the unconfirmed position check: the hypothesis zones -- where a pallet would be relative to the truck if a
+  // look-alike place were the true one, drawn around the estimate (plan 2026-11-02-unconfirmed-runner 4); dashed,
+  // with one legend tag, so they are not read as the map's pallets
+  const zones = poseZones(poseCheckOf(st));
+  if (zones.length) {
+    c.save();
+    c.strokeStyle = tok.warn ?? tok.accent;
+    c.setLineDash([5, 4]);
+    c.lineWidth = 1.4;
+    for (const poly of zones) {
+      c.beginPath();
+      poly.forEach(([wx, wy], k) => {
+        const [px, py] = P(wx, wy);
+        if (k === 0) c.moveTo(px, py); else c.lineTo(px, py);
+      });
+      c.closePath();
+      c.stroke();
+    }
+    c.restore();
+    const [lx, ly] = P(zones[0][0][0], zones[0][0][1]);
+    tag(c, "가설 구역 (차 기준)", lx, ly - 10, tok.warn ?? tok.accent, tok);
   }
 
   // B-P2c: the start's candidates while the truck's place is unknown -- numbered rings with a heading tick and the

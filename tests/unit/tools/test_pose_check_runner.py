@@ -127,3 +127,12 @@ def test_the_base_link_from_the_rear_axle():
     import run_transport
 
     assert run_transport.base_from_rear_axle((1.0, 2.0, math.pi / 2), 0.34) == pytest.approx((1.0, 2.34, math.pi / 2))
+
+
+def test_the_state_carries_the_checks_view_for_the_console():
+    # plan 4: LiveRuntime.publish adds pose_check when the runner set it (absent with the check off)
+    live = (ROOT / "sim/isaac/live_runtime.py").read_text()
+    assert 'if self.pose_info is not None:  # the unconfirmed position check' in live
+    assert 'msg["pose_check"] = dict(self.pose_info)' in live
+    src = _source()
+    assert "live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones())" in src

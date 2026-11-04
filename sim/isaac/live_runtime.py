@@ -132,6 +132,7 @@ class LiveRuntime:
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.started_wall: float | None = None  # when start() opened the server (None: it never did)
         self.slam_info: dict | None = None  # SLAM localization plan L6: set by the runner for a localization session
+        self.pose_info: dict | None = None  # the unconfirmed position check's view; None: no check (no field)
         self.dt = dt
         self.parts = parts
         self.port_extra: dict = {}  # what the runner adds to every port-file write (B-P2c: localized_wall)
@@ -550,6 +551,8 @@ class LiveRuntime:
             msg["scene"] = self.scene  # a latched damage: automatic work refused until the scene is reset (D6)
             if self.slam_info is not None:  # SLAM localization plan L6: absent = online mapping (or not known)
                 msg["slam"] = dict(self.slam_info)
+            if self.pose_info is not None:  # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 4)
+                msg["pose_check"] = dict(self.pose_info)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
