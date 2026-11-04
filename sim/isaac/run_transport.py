@@ -1273,6 +1273,27 @@ def arguments() -> argparse.Namespace:
         "pose (fork spacing plan, cause survey after the S4 rerun).",
     )
     parser.add_argument(
+        "--f1v2-probe",
+        choices=("delivery", "cusp"),
+        default=None,
+        help="Diagnostic (F1 v2 plan, docs/plans/2026-11-04-f1-v2-registration.md): after the spawn checks, run a "
+        "controlled probe instead of the mission -- delivery: the delivery match at the registered pose grid with the "
+        "pallet on the forks; cusp: cusp arrivals on recorded path legs. Off by default.",
+    )
+    parser.add_argument(
+        "--f1v2-probe-order",
+        choices=("forward", "reverse"),
+        default="forward",
+        help="--f1v2-probe: the order of the grid points or legs (the determinism check's reversed run).",
+    )
+    parser.add_argument(
+        "--f1v2-probe-extra",
+        type=Path,
+        default=None,
+        help="--f1v2-probe delivery: a JSON list of extra laser poses (v1 operating stops, label/laser/recorded state) "
+        "for the operating comparison.",
+    )
+    parser.add_argument(
         "--repeat-at-near-capture",
         action="store_true",
         help="Diagnostic: take the --repeat-captures batch at the first near capture "
@@ -4309,6 +4330,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
     except Exception as exc_:  # noqa: BLE001 -- the API differs between releases; record why
         state["plant_backend"] = {"error": repr(exc_)}
+    if getattr(args, "f1v2_probe", None) == "delivery":
+        # F1 v2 plan section 2 (diagnostic, off by default): the delivery match at the registered poses, then stop
+        import f1v2_probes
+
+        extra_ = (json.loads(Path(args.f1v2_probe_extra).read_text()) if args.f1v2_probe_extra is not None else None)
+        state["f1v2_probe"] = f1v2_probes.run_delivery_probe(
+            world, robot, pallet, args=args, settings=settings, geometry=geometry, destination=truth_destination,
+            initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
+            action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_)
+        state["phase"] = "f1v2_probe_done"
+        state["success"] = True
+        return
     if args.steering_probe:
         import steering_probe_arms
 

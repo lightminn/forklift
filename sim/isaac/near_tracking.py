@@ -1091,6 +1091,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-11-04 steering left-asymmetry plan A10 (--steering-probe only): the drive
                               # geometry's URDF; unset = --forklift-urdf, as every earlier record
                               "probe_geometry_urdf": None,
+                              # 2026-11-04 F1 v2 plan: the controlled probes (diagnostic, off unless given)
+                              "f1v2_probe": None, "f1v2_probe_order": "forward", "f1v2_probe_extra": None,
                               # 2026-10-15: the odometry's encoders; a record without the argument read
                               # the engine-reported rates, so a team-spec run differs from those tables.
                               "encoder_model": "reported",
