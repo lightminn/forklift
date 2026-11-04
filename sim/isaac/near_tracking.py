@@ -1158,6 +1158,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "lidar_keepout_m": 0.0,
                               # 2026-10-22 open-zone docking D2: the sim-only weak-direction docking acceptance; off before.
                               "docking_acceptance": "information",
+                              # 2026-11-04 line2 robustness: the degenerate-continue branch and its stress tools; off
+                              # (absent) in every earlier run -- on is a different condition
+                              "docking_degenerate_continue": "off", "inject_round1_degenerate": False,
+                              "destination_prior_error_along_m": 0.0,
                               # 2026-10-23 scene replan plan 4: the diagnostic control-pose shift at a cusp; off before.
                               "inject_cusp_offset_m": None,
                               # 2026-10-24 leg-end plan 3: the diagnostic observe-end shift and return stall budget.

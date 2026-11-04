@@ -536,6 +536,21 @@ def arguments() -> argparse.Namespace:
         "moved together after teaching and a repeated pattern beyond its range wrongly, so never on the real vehicle.",
     )
     parser.add_argument(
+        "--docking-degenerate-continue",
+        choices=("off", "on"),
+        default="off",
+        help="docs/plans/2026-11-04-line2-delivery-robustness.md D1-D4 (with --d7-docking): a first, non-retry round-1 "
+        "delivery match refused as degenerate at every start drives the SLAM-goal straight only to the round-2 stop "
+        "(0.6 m) and matches there, when the whole straight and its cut at the stop pass their checks. off: the "
+        "whole straight is driven uncorrected, as every earlier run.",
+    )
+    parser.add_argument(
+        "--inject-round1-degenerate",
+        action="store_true",
+        help="SIM ONLY, a stress tool (line2 robustness V3b): the mission's first non-retry round-1 delivery match is "
+        "taken as refused by degenerate at every start; what the matcher said is recorded. Batch runs only.",
+    )
+    parser.add_argument(
         "--exit-clearance-m",
         type=float,
         default=None,
@@ -919,6 +934,14 @@ def arguments() -> argparse.Namespace:
         help="Plan D7c δ runs: plan to (and seed docking from) a destination moved this "
         "far along its own lateral axis; the scene, the docking reference scan and the "
         "evaluation keep the true destination.",
+    )
+    parser.add_argument(
+        "--destination-prior-error-along-m",
+        type=float,
+        default=0.0,
+        help="SIM ONLY, a stress tool (line2 robustness V3a): as --destination-prior-error-m along the destination's "
+        "own heading (positive: deeper into the slot). Only the planning prior moves; the scene, the reference scan, "
+        "the evaluation, SLAM, its map and the obstacle layer keep the truth. Batch runs only.",
     )
     parser.add_argument(
         "--return-home",
@@ -1447,6 +1470,14 @@ def arguments() -> argparse.Namespace:
         first_ = session_as_scene(load_session(args.scene_file)) if args.session else load_scene(args.scene_file)
         if args.observation_waypoints is None:
             args.observation_waypoints = [list(w) for w in first_.observation_waypoints]
+    # docs/plans/2026-11-04-line2-delivery-robustness.md V3: the along prior error and the round-1 injection are
+    # batch-run stress tools -- a session's anchored neighbours and a live console would follow the moved prior
+    if ((args.destination_prior_error_along_m or args.inject_round1_degenerate)
+            and (getattr(args, "session", False) or args.live)):
+        parser.error("--destination-prior-error-along-m and --inject-round1-degenerate are batch-run tools "
+                     "(no session scene, no --live)")
+    if args.docking_degenerate_continue == "on" and not args.d7_docking:
+        parser.error("--docking-degenerate-continue on needs --d7-docking (the round-2 stop and its retry are D7's)")
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -3743,15 +3774,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # match's prior, sees the moved one. The reference scan and the evaluation use
     # truth_destination.
     truth_destination = scenario.destination
-    if args.destination_prior_error_m:
+    along_prior_ = getattr(args, "destination_prior_error_along_m", 0.0)
+    if args.destination_prior_error_m or along_prior_:
         scenario = replace(
             scenario,
             destination=DOCKING_RETRY.destination_with_prior_error(
-                scenario.destination, args.destination_prior_error_m
+                scenario.destination, args.destination_prior_error_m, along_m=along_prior_
             ),
         )
         state["destination_prior"] = {
             "error_m": args.destination_prior_error_m,
+            **({"along_m": along_prior_} if along_prior_ else {}),  # line2 robustness V3a; absent before
             "planning_destination": asdict(scenario.destination),
             "truth_destination": asdict(truth_destination),
         }
@@ -6725,6 +6758,9 @@ def drive(S, isaac) -> None:
                                 # docs/plans/2026-10-28-far-target-binding.md F1: off in a record from before the option
                                 far_capture_expected=getattr(args, "far_capture_expected", "off"),
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
+                                # docs/plans/2026-11-04-line2-delivery-robustness.md: off in a record from before them
+                                docking_degenerate_continue=getattr(args, "docking_degenerate_continue", "off"),
+                                inject_round1_degenerate=getattr(args, "inject_round1_degenerate", False),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
                                 start_band_release=getattr(args, "start_band_release", "off"),
@@ -8127,6 +8163,7 @@ def drive(S, isaac) -> None:
                        # Live (persistent console plan D2, Codex P2-8): the cast pose always goes with its scan -- a
                        # later mission's prior drifts from the truth the scan was cast at.
                        "reference": list(delivery_d) if (args.d7_docking or args.destination_prior_error_m
+                                                         or getattr(args, "destination_prior_error_along_m", 0.0)
                                                          or always_reference) else None,
                        "fields": dict(delivery_rear_prior=list(prior_d),
                                       reference_beams=int(np.isfinite(reference_ranges).sum()),
@@ -10511,6 +10548,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
         # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
         and (k != "lidar_keepout_m" or v != 0.0)
+        # line2 robustness plan (2026-11-04): not recorded at their defaults, so a run without them records what it did
+        and (k != "docking_degenerate_continue" or v != "off") and (k != "inject_round1_degenerate" or v)
+        and (k != "destination_prior_error_along_m" or v != 0.0)
         # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
         and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
         # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
