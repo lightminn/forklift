@@ -281,3 +281,16 @@ def test_cusp_reversed_run_tenth_of_the_margin():
     missing = _crev(base)
     missing["trials"] = missing["trials"][1:]
     assert _cusp(base, copy.deepcopy(base), o_rev=missing)["verdict"] == "unjudgeable"
+
+
+def test_cusp_reversed_run_validity():
+    base = _base()
+    a = IDS[0]
+    for field, value in (("foreign_contacts", 1), ("wheel_load_ok", False)):
+        rev = copy.deepcopy(base)
+        rev[a][field] = value
+        assert _cusp(base, copy.deepcopy(base), o_rev=_crev(rev))["verdict"] == "unjudgeable", field
+    o_rev, f1_rev = copy.deepcopy(base), copy.deepcopy(base)
+    o_rev[a]["settle"] = {"converged": False}
+    f1_rev[a]["settle"] = {"converged": False}
+    assert _cusp(base, copy.deepcopy(base), o_rev=_crev(o_rev), f1_rev=_crev(f1_rev))["verdict"] == "unjudgeable"

@@ -362,10 +362,21 @@ def cusp_pair_why(a: dict, b: dict) -> tuple:
     return why, de, flags
 
 
+def _verdict(pair: tuple) -> tuple:
+    """A pair's reasons and both-arm flags (Codex review 4: the flags are part of the verdict)."""
+    return tuple(pair[0]), tuple(sorted(pair[2]))
+
+
 def _cusp_reverse(fwd: dict, rev: dict) -> list:
     """Why a reversed run's trial does not agree with the forward run's (the lead's condition, 2026-11-05: the same
     state may differ by at most a tenth of the margin, |e_stop| 0.0005 rad; outcome, reach and exceed the same)."""
     why = []
+    if not rev["wheel_load_ok"]:
+        why.append("wheel_load")
+    if rev["settle"]["converged"] != fwd["settle"]["converged"]:
+        why.append("settle")
+    if (rev["foreign_contacts"] > 0) != (fwd["foreign_contacts"] > 0):
+        why.append("foreign_contact")
     if fwd["outcome"] != rev["outcome"]:
         why.append("outcome")
     if ((fwd["events"] or {}).get("first_at_endpoint") is None) != ((rev["events"] or {}).get("first_at_endpoint")
@@ -409,7 +420,7 @@ def cusp(o_runs: list, o_off: dict, f1_runs: list, f1_off: dict, registry: dict 
         o_r = {t["id"]: t for t in o_reverse["trials"]}
         f_r = {t["id"]: t for t in f1_reverse["trials"]}
         flips = [i for i in o_f if all(i in d for d in (f_f, o_r, f_r))
-                 and cusp_pair_why(o_f[i], f_f[i])[0] != cusp_pair_why(o_r[i], f_r[i])[0]]
+                 and _verdict(cusp_pair_why(o_f[i], f_f[i])) != _verdict(cusp_pair_why(o_r[i], f_r[i]))]
         notes["reverse_pair_verdicts_differ"] = flips[:20]
         if flips:
             unjudgeable.append(f"determinism: the reversed runs' pair verdicts differ at {len(flips)} trials")
