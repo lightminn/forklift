@@ -214,3 +214,21 @@ def test_a_round_record_keeps_no_nan_from_a_timed_out_rollout(tmp_path, monkeypa
     r = w.slam["docking"]["rounds"][0]
     assert r["chosen"] == "retry_b" and r["dry_run"]["position_error_m"] is None and r["dry_run"]["status"] == "timeout"
     json.dumps(r, allow_nan=False)
+
+
+def test_the_whole_docking_record_serializes_after_a_timed_out_round_and_a_later_one(tmp_path, monkeypatch):
+    # the accident's sequence (Codex P3): a round whose dry run timed out, then a later round that overwrites the top
+    import json
+
+    from test_core_docking_helpers import Dry
+
+    w = world(tmp_path, monkeypatch)
+    w.hooks.bicycle_rollout = lambda *a: w.log("rollout") or Dry(
+        "timeout", position_error_m=float("nan"), yaw_error_rad=float("nan"), trajectory=((8.0, 0.0, 0.0),))
+    degenerate_dock(w)
+    w.core.dock_at_delivery_straight(12.0)  # refused straight: a retry (stubbed)
+    w.slam["docking"].update(await_retry_match=True, retry_seed_goal=[9.0, 0.0, 0.0])
+    w.hooks.bicycle_rollout = lambda *a: w.log("rollout") or Dry("arrived", trajectory=((8.0, 0.0, 0.0),))
+    degenerate_dock(w, accepted=True)
+    w.core.dock_at_delivery_straight(30.0)  # the retry's first match, accepted: the top-level dry run is finite again
+    json.dumps(w.slam["docking"], allow_nan=False, default=str)
