@@ -88,7 +88,44 @@ def read_steer(folder) -> dict:
         values[f"{seg['label']}/{seg['kappa_cmd']:+.2f}/{seg['segment']}"] = None if v is None else abs(v["e_LR"])
     h = hashlib.sha256(np.ascontiguousarray(run.x).tobytes())
     h.update(np.ascontiguousarray(run.tyre).tobytes())
-    return {"values": values, "digest": h.hexdigest()}
+    return {"values": values, "digest": h.hexdigest(), "physics_hz": 1.0 / run.dt,
+            "arm": arm_identity(run.result)}
+
+
+ENGINE_KG = {"O": 26.0, "F1": 24.0002}
+TYRE_FRICTION = (0.8, 0.7)
+
+
+def arm_identity(result: dict) -> dict:
+    """What a run's result.json shows of its arm: the engine mass and the tyres' compliance and friction."""
+    pb = result.get("plant_backend") or {}
+    tyres = result.get("plant_tyre_contact") or []
+    return {"engine_kg": float(sum(pb.get("masses_kg") or [])) if pb.get("masses_kg") else None,
+            "tyres": [(t.get("compliant_stiffness"), t.get("compliant_damping"), t.get("static_friction"),
+                       t.get("dynamic_friction")) for t in tyres]}
+
+
+def arm_problems(arm: str, ident: dict, k_mat) -> list:
+    """Why a record is not the registered arm (amendment 1 / Codex review: the dt, order and arm are bound to the
+    record, not to the manifest's slot)."""
+    out = []
+    base = "F1" if arm.startswith("F1") else "O"
+    if ident.get("engine_kg") is None or not math.isclose(ident["engine_kg"], ENGINE_KG[base], abs_tol=1e-3):
+        out.append(f"engine mass {ident.get('engine_kg')}")
+    tyres = ident.get("tyres") or []
+    if len(tyres) != 4:
+        out.append(f"{len(tyres)} tyres")
+    for k, c, fs, fd in tyres:
+        if fs is None or fd is None or not (math.isclose(fs, TYRE_FRICTION[0], rel_tol=1e-6)
+                                            and math.isclose(fd, TYRE_FRICTION[1], rel_tol=1e-6)):
+            out.append(f"friction {fs}/{fd}")
+        if arm.endswith("+F2"):
+            if k_mat is None or k is None or not math.isclose(k, k_mat, rel_tol=1e-6) or c is None \
+                    or not math.isclose(c, k_mat * 310.0 / 400_000.0, rel_tol=1e-6):
+                out.append(f"tyre k {k} c {c}, calibrated {k_mat}")
+        elif k is not None:
+            out.append(f"rigid arm with compliance {k}")
+    return sorted(set(out))
 
 
 def effects(values: dict) -> dict:
@@ -203,30 +240,61 @@ def _point_valid(p: dict) -> bool:
     return p["pose_ok"] and p["settle"]["converged"]
 
 
+def _result_of(path) -> str:
+    """The run's result.json next to a probe record (run/f1v2_*.json)."""
+    return str(Path(str(path)).parent / "result.json")
+
+
 def validity(manifest: dict, load, steer_load) -> dict:
     """Per measure, dt and arm: determinism, physical validity of every record, population, and the reversed run
     (required where amendment 1 registers one: M1, M3 and M4 at 120 Hz) -- a missing reversed run is not a pass."""
     out = {}
     registry = load(manifest["registry"]) if manifest.get("registry") else None
+    k_mat = (load(manifest["calibration"]) if manifest.get("calibration") else {}).get("chosen_k_mat")
+    hz = {"120": 120.0, "240": 240.0}
     for dt, arms in manifest.get("static", {}).items():
         for arm in ARMS:
             recs = {k: arms.get(f"{arm}{k}") for k in ("", "#b", "#r")}
             a, b = (None if recs[k] is None else load(recs[k]) for k in ("", "#b"))
             r = None if recs["#r"] is None else load(recs["#r"])
+            bound = []
+            for k, x in (("", a), ("#b", b), ("#r", r)):
+                if x is None:
+                    continue
+                if x.get("physics_hz") != hz[dt]:
+                    bound.append(f"{k or 'a'}: physics_hz {x.get('physics_hz')}")
+                if x.get("order", "forward") != ("reverse" if k == "#r" else "forward"):
+                    bound.append(f"{k or 'a'}: order {x.get('order')}")
+                ident = {"engine_kg": x.get("robot_mass_kg"),
+                         "tyres": [(t.get("compliant_stiffness"), t.get("compliant_damping"), t.get("static_friction"),
+                                    t.get("dynamic_friction")) for t in x.get("tyre_readback") or []]}
+                bound += [f"{k or 'a'}: {w}" for w in arm_problems(arm, ident, k_mat)]
             row = {"deterministic": a is not None and b is not None and a == b,
                    "physically_valid": all(x is not None and m1_valid(x) for x in (a, b))
                    and (r is None or m1_valid(r)),
-                   "reverse_required": dt == "120"}
+                   "population": bound[:10], "reverse_required": dt == "120"}
             tag = None if (a is None or r is None) else static_order_sensitive(a, r)
             row["order_sensitive"] = None if tag is None else bool(tag)
             out.setdefault("M1", {}).setdefault(dt, {})[arm] = row
     for dt, arms in manifest.get("steer", {}).items():
         for arm in ARMS:
             a, b = (None if arms.get(k) is None else steer_load(arms[k]) for k in (arm, f"{arm}#b"))
-            full = a is not None and len(a["values"]) == M2_SEGMENTS and all(v is not None for v in a["values"].values())
+
+            def full(x):
+                return (x is not None and len(x["values"]) == M2_SEGMENTS
+                        and all(v is not None and math.isfinite(v) for v in x["values"].values()))
+
+            bound = []
+            for k, x in (("a", a), ("b", b)):
+                if x is None:
+                    continue
+                if not math.isclose(x.get("physics_hz") or 0.0, hz[dt], rel_tol=1e-6):
+                    bound.append(f"{k}: physics_hz {x.get('physics_hz')}")
+                bound += [f"{k}: {w}" for w in arm_problems(arm, x.get("arm") or {}, k_mat)]
             out.setdefault("M2", {}).setdefault(dt, {})[arm] = {
                 "deterministic": a is not None and b is not None and a["digest"] == b["digest"],
-                "physically_valid": full, "reverse_required": False, "order_sensitive": None}
+                "physically_valid": full(a) and full(b), "population": bound[:10],
+                "reverse_required": False, "order_sensitive": None}
     for m, key, rec, sens, valid_one in (("M3", "cusp", "trials", cusp_order_sensitive, _trial_valid),
                                          ("M4", "delivery", "points", delivery_order_sensitive, _point_valid)):
         for dt, arms in manifest.get(key, {}).items():
@@ -235,6 +303,19 @@ def validity(manifest: dict, load, steer_load) -> dict:
                 loaded = {k: load(runs[k]) for k in ("a", "b", "r") if runs.get(k) is not None}
                 a, b = loaded.get("a"), loaded.get("b")
                 pop = []
+                for k, x in loaded.items():
+                    want_order = "reverse" if k == "r" else "forward"
+                    if x.get("order") != want_order:
+                        pop.append(f"{k}: order {x.get('order')}")
+                    rec_hz = (1.0 / x["dt_s"]) if m == "M3" and x.get("dt_s") else None
+                    if m == "M3" and (rec_hz is None or not math.isclose(rec_hz, hz[dt], rel_tol=1e-6)):
+                        pop.append(f"{k}: dt {x.get('dt_s')}")
+                    if m == "M4" and x.get("grid") != "f2":
+                        pop.append(f"{k}: grid {x.get('grid')}")
+                    if m == "M4" and x.get("physics_hz") != hz[dt]:
+                        pop.append(f"{k}: physics_hz {x.get('physics_hz')}")
+                    res = load(_result_of(runs[k]))
+                    pop += [f"{k}: {w}" for w in arm_problems(arm, arm_identity(res), k_mat)]
                 for k, x in loaded.items():
                     pop += [f"{k}: {w}" for w in (cusp_population(x, expected_cusp(registry, dt)) if m == "M3" and
                                                   registry else ([] if m == "M3" else delivery_population(x)))]
@@ -395,8 +476,9 @@ def candidate(manifest: dict, load, calib: dict, valid: dict, dt: dict, m2: dict
         out["preconditions"].append(f"dt condition not passed for {pick}")
     v4 = (manifest.get("plant_gates") or {}).get(pick)
     v4rec = None if v4 is None else load(v4)
-    if v4rec is None or "v4_v2_preserved" not in v4rec:
-        out["preconditions"].append(f"October V2/V4 not reported for {pick} (plan 4.4)")
+    if v4rec is None or not isinstance(v4rec.get("v4_v2_preserved"), bool):
+        out["preconditions"].append(f"October V2/V4 not reported for {pick} (plan 4.4; a missing or unverified "
+                                    "value is not a report)")
     out["escalate_v4"] = bool(v4rec is not None and v4rec.get("v4_v2_preserved") is False)
     out["escalate_self_degradation"] = out["self_degradation"]["worse_any"]
     out["candidate"] = None if out["preconditions"] else pick

@@ -356,7 +356,8 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
             "v1": p.get("v1"), "evals": evals})
     np.savez_compressed(out_dir / "f1v2_delivery_ranges.npz", order=np.array(sorted(casts)),
                         **{k.replace(".", "p"): v for k, v in raw.items()})
-    out = {"probe": "delivery", "grid": grid_name, "order": order, "d_reference": "own" if reference is None else "O",
+    out = {"probe": "delivery", "grid": grid_name, "physics_hz": hz, "order": order,
+           "d_reference": "own" if reference is None else "O",
            "d_reference_sha256": reference_sha256,
            "delivery_rear": list(delivery), "base_z_reference_m": base_z,
            "rear_from_laser": list(rear_from_laser), "lift_command_m": lift_command,
