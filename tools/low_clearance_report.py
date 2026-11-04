@@ -140,7 +140,8 @@ def _gaps(times: np.ndarray, dt: float) -> list:
 
 
 def run_report(rundir: str, stopping: StoppingModel, envelope_m: float) -> dict:
-    s = json.load(open(os.path.join(rundir, "result.json")))
+    with open(os.path.join(rundir, "result.json")) as f:
+        s = json.load(f)
     keepout, physical = low_objects(s)
     g = s.get("geometry") or {}
     loaded_fp, unloaded_fp = Footprint(**g["loaded_footprint"]), Footprint(**g["unloaded_footprint"])
@@ -287,7 +288,8 @@ def main(argv: list | None = None) -> int:
                "reopen_b": [r["run"] for r in reports if (r.get("reopen") or {}).get("b_keepout_overlap")],
                # advisory only (not a gate): runs whose truck came within the guard's 0.05 m of a keep-out rectangle
                "advisory_c_keepout_within_0p05_runs": len(near_keepout)}
-    json.dump({"summary": summary, "runs": reports}, open(a.out, "w"), indent=1, default=str)
+    with open(a.out, "w") as f:
+        json.dump({"summary": summary, "runs": reports}, f, indent=1, default=str)
     print(json.dumps(summary, indent=1))
     return 0
 
