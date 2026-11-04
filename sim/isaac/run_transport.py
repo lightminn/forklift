@@ -1294,6 +1294,13 @@ def arguments() -> argparse.Namespace:
         "for the operating comparison; cusp: the path registry (tools/f1v2_cusp_paths.py).",
     )
     parser.add_argument(
+        "--f1v2-probe-reference",
+        type=Path,
+        default=None,
+        help="--f1v2-probe delivery: the O arm's f1v2_delivery_probe.json, whose settled base height per grid point "
+        "is cast (d)'s (plan section 2); unset = the run's own height (the O run).",
+    )
+    parser.add_argument(
         "--f1v2-probe-record",
         choices=("on", "off"),
         default="on",
@@ -4375,7 +4382,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["f1v2_probe"] = f1v2_probes.run_delivery_probe(
             world, robot, pallet, args=args, settings=settings, geometry=geometry, destination=truth_destination,
             initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
-            action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_)
+            action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_,
+            reference=None if args.f1v2_probe_reference is None else {
+                r_["label"]: r_["state"]["base"][2]
+                for r_ in json.loads(Path(args.f1v2_probe_reference).read_text())["points"]})
         state["phase"] = "f1v2_probe_done"
         state["success"] = True
         return

@@ -6,7 +6,9 @@ delivery: the delivery match at fixed poses on the line_2 scene. The reference s
 pallet still at the pickup. The pallet is then seated on the forks at a nominal pose and lifted with the operating lift
 command; at every grid point the truck and the pallet are moved together, held (wheels at zero velocity, steering at
 zero, the lift at its command) until settled, and scanned: (a) actual pose, (b) (a) plus K fixed noise draws, (c) the
-actual origin with a yaw-only orientation, (d) the actual orientation with the origin at the nominal base height 0.
+actual origin with a yaw-only orientation, (d) the actual orientation with the base at the O arm's settled height at
+the same grid point (``reference``: the O run's f1v2_delivery_probe.json; the O run itself uses its own height, so its
+(d) is its (a)).
 Each scan is matched as the mission core matches it (f1v2_probe_core.evaluate), with the truth estimate and with v1's
 representative estimate error.
 
@@ -104,7 +106,7 @@ def _place(robot, pallet, base_xy, yaw, base_z, pallet_rel):
 
 
 def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destination, initial_base, lift_index, wheels,
-                       steers, action_type, out_dir: Path, order: str = "forward", extra=None) -> dict:
+                       steers, action_type, out_dir: Path, order: str = "forward", extra=None, reference=None) -> dict:
     import planar_lidar
     import yaml
 
@@ -170,7 +172,8 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
                                                     own_prefixes=(planar_lidar.SELF_PREFIX, "/World/Pallet"))
         casts["c"] = core_.sent_ranges(pattern.ranges_from_hits(d_c, h_c), np.zeros(len(r_a)), pattern.range_min_m,
                                        pattern.range_max_m)
-        o, dv = planar_lidar.laser_rays_world(np.array([base[0], base[1], 0.0]), q, mount, angles)
+        ref_z = float(base[2]) if reference is None else float(reference[p["label"]])
+        o, dv = planar_lidar.laser_rays_world(np.array([base[0], base[1], ref_z]), q, mount, angles)
         d_d, h_d, _ = planar_lidar.cast_scan_flags(o, dv, pattern.range_max_m,
                                                     own_prefixes=(planar_lidar.SELF_PREFIX, "/World/Pallet"))
         casts["d"] = core_.sent_ranges(pattern.ranges_from_hits(d_d, h_d), np.zeros(len(r_a)), pattern.range_min_m,
@@ -188,7 +191,7 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
             "d_m": p["d_m"], "target_laser": [float(v) for v in p["laser"]],
             "laser": [float(v) for v in laser], "pose_ok": (math.hypot(laser[0] - p["laser"][0], laser[1] - p["laser"][1])
                                                            <= POSE_TOL_M and abs(laser[2] - p["laser"][2]) <= POSE_TOL_RAD),
-            "settle": settle, "state": st,
+            "settle": settle, "state": st, "d_base_z_m": ref_z,
             "pallet_rel": [float(v) for v in _relative(st["base"], st["yaw_rad"], pos_p, q_p)],
             "v1": p.get("v1"), "evals": evals})
     np.savez_compressed(out_dir / "f1v2_delivery_ranges.npz", order=np.array(sorted(casts)),
