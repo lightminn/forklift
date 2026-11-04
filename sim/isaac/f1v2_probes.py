@@ -23,9 +23,9 @@ import f1v2_probe_core as core_
 PALLET_ON_FORKS = (0.929, -0.012, -0.003)  # pallet origin in the base frame at transport (v1 line_2 stop samples)
 LIFT_COMMAND_M = None  # the settings' lift_target_m (the operating transport command), read at run time
 SETTLE_WINDOW_STEPS = 30  # 0.25 s at 120 Hz
-SETTLE_MAX_STEPS = 360  # 3 s
-SETTLE_TOL = {"base_z_m": 5e-5, "pitch_rad": 1e-7, "roll_rad": 1e-7, "lift_m": 5e-5}
-POSE_TOL_M, POSE_TOL_RAD = 1e-3, 1e-4  # the laser pose after settling against the grid target
+SETTLE_MAX_STEPS = 720  # 6 s (plan amendment 1: 3 s did not reach the angle tolerance at PhysX jitter)
+SETTLE_TOL = {"base_z_m": 5e-5, "pitch_rad": 5e-7, "roll_rad": 5e-7, "lift_m": 5e-5}  # amendment 1: 1e-7 rad < jitter
+POSE_TOL_M, POSE_TOL_RAD = 3e-3, 1e-3  # amendment 1: the truck shifts ~1 mm while settling after the move
 
 
 def _yaw_quat(yaw: float) -> np.ndarray:
