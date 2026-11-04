@@ -156,10 +156,17 @@ def _cusp_run(trials, record=True):
             "lift_command_m": 0.2, "pallet_mass_kg": 4.93, "scene_start_rear": [0, 0, 0]}
 
 
-def _cusp(o_trials, f1_trials, o_off=None, f1_off=None, registry=REGISTRY):
+def _crev(trials):
+    r = _cusp_run(copy.deepcopy(trials))
+    r["order"] = "reverse"
+    return r
+
+
+def _cusp(o_trials, f1_trials, o_off=None, f1_off=None, registry=REGISTRY, o_rev=None, f1_rev=None):
     o, f1 = _cusp_run(o_trials), _cusp_run(f1_trials)
     return J.cusp([o, copy.deepcopy(o)], o_off or _cusp_run(o_trials, record=False), [f1, copy.deepcopy(f1)],
-                  f1_off or _cusp_run(f1_trials, record=False), registry=registry, registry_sha256="r")
+                  f1_off or _cusp_run(f1_trials, record=False), registry=registry, registry_sha256="r",
+                  o_reverse=o_rev or _crev(o_trials), f1_reverse=f1_rev or _crev(f1_trials))
 
 
 def test_cusp_population_is_the_registry():
@@ -178,7 +185,8 @@ def test_cusp_population_is_the_registry():
             syn[i]["path_sha256"] = "y" * 64
     assert _cusp(_base(), syn)["verdict"] == "unjudgeable"  # the synthetic path is not shared
     assert J.cusp([_cusp_run(_base())] * 2, _cusp_run(_base(), record=False), [_cusp_run(_base())] * 2,
-                  _cusp_run(_base(), record=False))["verdict"] == "unjudgeable"  # no registry
+                  _cusp_run(_base(), record=False), o_reverse=_crev(_base()),
+                  f1_reverse=_crev(_base()))["verdict"] == "unjudgeable"  # no registry
 
 
 def test_cusp_same_and_margins():
@@ -227,7 +235,8 @@ def test_cusp_preconditions():
     o_b = copy.deepcopy(o)
     o_b["trials"][0]["ticks"] += 1
     assert J.cusp([o, o_b], _cusp_run(base, record=False), [f1, copy.deepcopy(f1)], _cusp_run(base, record=False),
-                  registry=REGISTRY, registry_sha256="r")["verdict"] == "unjudgeable"
+                  registry=REGISTRY, registry_sha256="r", o_reverse=_crev(base),
+                  f1_reverse=_crev(base))["verdict"] == "unjudgeable"
 
 
 def test_delivery_reversed_pairs_keep_the_verdict():
@@ -250,3 +259,25 @@ def test_delivery_d_height_bound_to_the_O_run():
     o = _run(stops=STOP_LABELS)
     o["points"][3]["d_origin_z_m"] = 0.25  # the O run's (d) is its (a)
     assert _delivery(o=o)["verdict"] == "unjudgeable"
+
+
+def test_cusp_reversed_run_tenth_of_the_margin():
+    base = _base()
+    a = IDS[0]
+    rev = copy.deepcopy(base)
+    rev[a] = _trial(a, e=0.0204)  # 0.0004 from the forward 0.02: inside, not bitwise
+    out = _cusp(base, copy.deepcopy(base), o_rev=_crev(rev))
+    assert out["verdict"] == "same" and out["determinism"]["reverse_O"]["max_abs_e_stop_diff"] > 0.0003
+    rev[a] = _trial(a, e=0.0206)  # 0.0006: beyond a tenth of the margin
+    assert _cusp(base, copy.deepcopy(base), o_rev=_crev(rev))["verdict"] == "unjudgeable"
+    # each arm moves 0.0004 the other way: inside per arm, but the pair's |e| difference crosses 0.005
+    f1 = copy.deepcopy(base)
+    f1[a] = _trial(a, e=0.0247)
+    o_rev, f1_rev = copy.deepcopy(base), copy.deepcopy(f1)
+    o_rev[a] = _trial(a, e=0.0196)
+    f1_rev[a] = _trial(a, e=0.0251)
+    out = _cusp(base, f1, o_rev=_crev(o_rev), f1_rev=_crev(f1_rev))
+    assert out["verdict"] == "unjudgeable" and out["determinism"]["reverse_pair_verdicts_differ"] == [a]
+    missing = _crev(base)
+    missing["trials"] = missing["trials"][1:]
+    assert _cusp(base, copy.deepcopy(base), o_rev=missing)["verdict"] == "unjudgeable"

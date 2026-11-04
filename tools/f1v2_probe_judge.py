@@ -5,7 +5,7 @@ any full probe result.
   python tools/f1v2_probe_judge.py delivery --stage0 S0.json --v1-stops v1_stops.json \
       --o A.json B.json --o-reverse R.json --f1 A.json B.json --f1-reverse R.json --json OUT.json
   python tools/f1v2_probe_judge.py cusp --o A.json B.json --o-off OFF.json --f1 A.json B.json --f1-off OFF.json \
-      --registry cusp_registry.json --json OUT.json
+      --o-reverse R.json --f1-reverse R.json --registry cusp_registry.json --json OUT.json
 
 The inputs are the probe records (f1v2_delivery_probe.json, f1v2_cusp_probe.json). The verdict is "unjudgeable" when any
 precondition the plan names fails (it then reports what it could compare as well), else "different" when any pair
@@ -49,6 +49,7 @@ REV_GOAL_ERROR_RAD = 1e-4
 REV_LASER_M, REV_LASER_RAD = 3e-3, 1e-3  # amendment 1's settle drift scale
 # (ii') -- plan section 3 and amendment 2
 DELTA_E = 0.005
+REV_DELTA_E = 0.0005  # the lead's condition (2026-11-05): a tenth of the margin
 CONFIGS = ("transport", "observe")
 LOADS = ("loaded", "empty")
 
@@ -142,7 +143,13 @@ def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_run
                 rows[lab] = {"bitwise": False, "why": ["missing"]}
                 continue
             f, r = fwd_points[lab], rev_points[lab]
+            ge = [abs(f["evals"][k]["goal_error_vs_truth"][i] - r["evals"][k]["goal_error_vs_truth"][i])
+                  for k in f["evals"] if k in r["evals"] and f["evals"][k]["accepted"] and r["evals"][k]["accepted"]
+                  for i in range(3)]
             rows[lab] = {"bitwise": f["evals"] == r["evals"] and f["state"] == r["state"],
+                         "max_abs_dI": max(abs(f["evals"][k]["min_information"] - r["evals"][k]["min_information"])
+                                           for k in f["evals"] if k in r["evals"]),
+                         "max_abs_correction_diff": max(ge) if ge else None,
                          "why": _reverse_agrees(f, r)}
         bad = [lab for lab, v in rows.items() if v["why"]]
         notes[f"reverse_{arm}"] = {"points": rows, "differ": bad}
@@ -319,12 +326,97 @@ def _binding(runs: list, registry: dict, registry_sha256: str) -> list:
     return why
 
 
+def cusp_pair_why(a: dict, b: dict) -> tuple:
+    """The plan's section 3 verdict on one O/F1 trial pair: what breaks, the |e| difference, and the both-arm flags
+    that make the probe unjudgeable."""
+    why, flags, de = [], set(), None
+    if a["settle"]["converged"] != b["settle"]["converged"]:
+        why.append("settled_one_arm_only")
+    elif not a["settle"]["converged"]:
+        flags.add("settle_both")
+    ca, cb = a["foreign_contacts"] > 0, b["foreign_contacts"] > 0
+    if ca and cb:
+        flags.add("contact_both")
+    elif ca or cb:
+        why.append("foreign_contact_one_arm_only")
+    ra = (a["events"] or {}).get("first_at_endpoint") is not None
+    rb = (b["events"] or {}).get("first_at_endpoint") is not None
+    if not (ra or rb):
+        flags.add("unreached_both")
+    elif ra != rb:
+        why.append("endpoint_reached_one_arm_only")
+    sa, sb = a["e_stop_rad"] is not None, b["e_stop_rad"] is not None
+    if not (sa or sb):
+        flags.add("no_stop_both")
+    elif sa != sb:
+        why.append("stop_one_arm_only")
+    else:
+        de = abs(b["e_stop_rad"]) - abs(a["e_stop_rad"])
+        if abs(de) > DELTA_E:
+            why.append("delta_e_stop")
+    if a["outcome"] != b["outcome"]:
+        why.append("outcome")
+    xa, xb = _exceeds(a), _exceeds(b)
+    if xa != xb:
+        why.append("exceed_crossing_F1_only" if xb else "exceed_crossing_O_only")
+    return why, de, flags
+
+
+def _cusp_reverse(fwd: dict, rev: dict) -> list:
+    """Why a reversed run's trial does not agree with the forward run's (the lead's condition, 2026-11-05: the same
+    state may differ by at most a tenth of the margin, |e_stop| 0.0005 rad; outcome, reach and exceed the same)."""
+    why = []
+    if fwd["outcome"] != rev["outcome"]:
+        why.append("outcome")
+    if ((fwd["events"] or {}).get("first_at_endpoint") is None) != ((rev["events"] or {}).get("first_at_endpoint")
+                                                                    is None):
+        why.append("reach")
+    if _exceeds(fwd) != _exceeds(rev):
+        why.append("exceed")
+    if (fwd["e_stop_rad"] is None) != (rev["e_stop_rad"] is None):
+        why.append("stop")
+    elif fwd["e_stop_rad"] is not None and abs(fwd["e_stop_rad"] - rev["e_stop_rad"]) > REV_DELTA_E:
+        why.append("e_stop")
+    return why
+
+
 def cusp(o_runs: list, o_off: dict, f1_runs: list, f1_off: dict, registry: dict | None = None,
-         registry_sha256: str | None = None) -> dict:
+         registry_sha256: str | None = None, o_reverse: dict | None = None, f1_reverse: dict | None = None) -> dict:
     unjudgeable = []
+    notes = {}
+    # the lead's condition (2026-11-05): a reversed-order run per arm; every trial agrees with the forward run within
+    # a tenth of the margin, and every pair keeps its verdict
+    if o_reverse is None or f1_reverse is None:
+        unjudgeable.append("no reversed run")
+    else:
+        for arm, runs, rev in (("O", o_runs, o_reverse), ("F1", f1_runs, f1_reverse)):
+            if rev.get("order") != "reverse" or rev.get("record") is not True:
+                unjudgeable.append(f"the {arm} arm's reversed run: order {rev.get('order')}, record {rev.get('record')}")
+            fwd = {t["id"]: t for t in runs[0]["trials"]}
+            rv = {t["id"]: t for t in rev["trials"]}
+            diffs = {i: _cusp_reverse(fwd[i], rv[i]) for i in fwd if i in rv}
+            de = [abs(fwd[i]["e_stop_rad"] - rv[i]["e_stop_rad"]) for i in diffs
+                  if fwd[i]["e_stop_rad"] is not None and rv[i]["e_stop_rad"] is not None]
+            bad = sorted(i for i, w in diffs.items() if w)
+            notes[f"reverse_{arm}"] = {"bitwise": sum(fwd[i]["trajectory_sha256"] == rv[i]["trajectory_sha256"]
+                                                      for i in diffs), "trials": len(diffs),
+                                       "max_abs_e_stop_diff": max(de) if de else None, "differ": bad[:20],
+                                       "differ_count": len(bad)}
+            if bad or set(fwd) != set(rv):
+                unjudgeable.append(f"determinism: the {arm} arm's reversed run differs at {len(bad)} trials")
+        o_f = {t["id"]: t for t in o_runs[0]["trials"]}
+        f_f = {t["id"]: t for t in f1_runs[0]["trials"]}
+        o_r = {t["id"]: t for t in o_reverse["trials"]}
+        f_r = {t["id"]: t for t in f1_reverse["trials"]}
+        flips = [i for i in o_f if all(i in d for d in (f_f, o_r, f_r))
+                 and cusp_pair_why(o_f[i], f_f[i])[0] != cusp_pair_why(o_r[i], f_r[i])[0]]
+        notes["reverse_pair_verdicts_differ"] = flips[:20]
+        if flips:
+            unjudgeable.append(f"determinism: the reversed runs' pair verdicts differ at {len(flips)} trials")
     if registry is not None:
         named = ([(f"O run {i + 1}", r) for i, r in enumerate(o_runs)] + [("O off", o_off)]
-                 + [(f"F1 run {i + 1}", r) for i, r in enumerate(f1_runs)] + [("F1 off", f1_off)])
+                 + [(f"F1 run {i + 1}", r) for i, r in enumerate(f1_runs)] + [("F1 off", f1_off)]
+                 + [(f"{a} reverse", r) for a, r in (("O", o_reverse), ("F1", f1_reverse)) if r is not None])
         unjudgeable += _binding(named, registry, registry_sha256)
         if (any(r.get("record") is not True for n_, r in named if "off" not in n_)
                 or o_off.get("record") is not False or f1_off.get("record") is not False):
@@ -351,37 +443,12 @@ def cusp(o_runs: list, o_off: dict, f1_runs: list, f1_off: dict, registry: dict 
     both_unreached, both_no_stop, settle_both, contact_both = [], [], [], []
     for i in ids:
         a, b = o[i], f1[i]
-        why = []
-        if a["settle"]["converged"] != b["settle"]["converged"]:
-            why.append("settled_one_arm_only")
-        elif not a["settle"]["converged"]:
-            settle_both.append(i)
-        ca, cb = a["foreign_contacts"] > 0, b["foreign_contacts"] > 0
-        if ca and cb:
-            contact_both.append(i)
-        elif ca or cb:
-            why.append("foreign_contact_one_arm_only")
-        ra = (a["events"] or {}).get("first_at_endpoint") is not None
-        rb = (b["events"] or {}).get("first_at_endpoint") is not None
-        if not (ra or rb):
-            both_unreached.append(i)
-        elif ra != rb:
-            why.append("endpoint_reached_one_arm_only")
-        sa, sb = a["e_stop_rad"] is not None, b["e_stop_rad"] is not None
-        de = None
-        if not (sa or sb):
-            both_no_stop.append(i)
-        elif sa != sb:
-            why.append("stop_one_arm_only")
-        else:
-            de = abs(b["e_stop_rad"]) - abs(a["e_stop_rad"])
-            if abs(de) > DELTA_E:
-                why.append("delta_e_stop")
-        if a["outcome"] != b["outcome"]:
-            why.append("outcome")
+        why, de, flags = cusp_pair_why(a, b)
+        for flag, lst in (("settle_both", settle_both), ("contact_both", contact_both),
+                          ("unreached_both", both_unreached), ("no_stop_both", both_no_stop)):
+            if flag in flags:
+                lst.append(i)
         xa, xb = _exceeds(a), _exceeds(b)
-        if xa != xb:
-            why.append("exceed_crossing_F1_only" if xb else "exceed_crossing_O_only")
         row = {"id": i, "version": a["version"], "leg": a["leg"], "config": a["config"], "load": a["load"],
                "e_stop_O": a["e_stop_rad"], "e_stop_F1": b["e_stop_rad"], "delta_abs_e": de,
                "outcome_O": a["outcome"], "outcome_F1": b["outcome"],
@@ -417,6 +484,7 @@ def cusp(o_runs: list, o_off: dict, f1_runs: list, f1_off: dict, registry: dict 
         entry_vs_stop[arm] = _q(diffs)
     verdict = "unjudgeable" if unjudgeable else ("different" if over else "same")
     return {"probe": "cusp", "verdict": verdict, "unjudgeable": unjudgeable, "trials": len(ids), "over": over,
+            "determinism": notes,
             "over_count": len(over), "over_delta_abs_e": _q([abs(r["delta_abs_e"]) for r in over
                                                              if r["delta_abs_e"] is not None]),
             "by_combination": report, "entry_vs_stop_abs": entry_vs_stop,
@@ -439,6 +507,8 @@ def main() -> None:
     c.add_argument("--o-off", type=Path, required=True)
     c.add_argument("--f1", type=Path, nargs=2, required=True)
     c.add_argument("--f1-off", type=Path, required=True)
+    c.add_argument("--o-reverse", type=Path, required=True)
+    c.add_argument("--f1-reverse", type=Path, required=True)
     c.add_argument("--registry", type=Path, required=True)
     c.add_argument("--json", type=Path, required=True)
     args = p.parse_args()
@@ -451,7 +521,8 @@ def main() -> None:
                        [load(x) for x in args.f1], load(args.f1_reverse))
     else:
         out = cusp([load(x) for x in args.o], load(args.o_off), [load(x) for x in args.f1], load(args.f1_off),
-                   registry=load(args.registry), registry_sha256=hashlib.sha256(args.registry.read_bytes()).hexdigest())
+                   registry=load(args.registry), registry_sha256=hashlib.sha256(args.registry.read_bytes()).hexdigest(),
+                   o_reverse=load(args.o_reverse), f1_reverse=load(args.f1_reverse))
     args.json.write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps({k: out[k] for k in ("probe", "verdict", "unjudgeable", "over_count")}, indent=1))
 
