@@ -99,6 +99,22 @@ def _reverse_agrees(f: dict, r: dict) -> list:
     return why
 
 
+def pair_why(eo: dict, ef: dict) -> tuple:
+    """The plan's section 2 verdict on one O/F1 pair: what breaks (empty: inside every margin) and the correction error
+    difference when both accept."""
+    why = []
+    if abs(ef["min_information"] - eo["min_information"]) > DELTA_I:
+        why.append("delta_I")
+    if eo["accepted"] != ef["accepted"]:
+        why.append("accept_crossing_O_only" if eo["accepted"] else "accept_crossing_F1_only")
+    ge = None
+    if eo["accepted"] and ef["accepted"]:
+        ge = [ef["goal_error_vs_truth"][i] - eo["goal_error_vs_truth"][i] for i in range(3)]
+        if abs(ge[0]) > GOAL_ERROR_M or abs(ge[1]) > GOAL_ERROR_M or abs(ge[2]) > GOAL_ERROR_RAD:
+            why.append("correction_error")
+    return why, ge
+
+
 def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_runs: list, f1_reverse: dict) -> dict:
     unjudgeable, notes = [], {}
     rows0 = stage0.get("rows") or []
@@ -133,6 +149,32 @@ def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_run
         if bad:
             unjudgeable.append(f"determinism: the {arm} arm's reversed run differs at {bad}")
     o, f1 = ({p["label"]: p for p in runs[0]["points"]} for runs in (o_runs, f1_runs))
+    # amendment 2 (Codex review 2): at the five points the reversed runs' O/F1 pairs must give the forward pairs' verdict
+    o_rev, f1_rev = ({p["label"]: p for p in r["points"]} for r in (o_reverse, f1_reverse))
+    flips = []
+    for lab in REPRESENTATIVE:
+        if not all(lab in d for d in (o, f1, o_rev, f1_rev)):
+            continue
+        for key in o[lab]["evals"]:
+            if key.split("/")[0] not in JUDGED_CASTS:
+                continue
+            fwd, _ = pair_why(o[lab]["evals"][key], f1[lab]["evals"][key])
+            rev, _ = pair_why(o_rev[lab]["evals"][key], f1_rev[lab]["evals"][key])
+            if fwd != rev:
+                flips.append({"label": lab, "key": key, "forward": fwd, "reverse": rev})
+    notes["reverse_pair_verdicts_differ"] = flips
+    if flips:
+        unjudgeable.append(f"determinism: the reversed runs' pair verdicts differ at {len(flips)} pairs")
+    # (d) was cast at the O run's laser origin height, point by point (Codex review 2)
+    for name, run in (("F1 run 1", f1_runs[0]), ("F1 run 2", f1_runs[-1]), ("F1 reverse", f1_reverse)):
+        bad = [p["label"] for p in run["points"]
+               if p["label"] in o and p.get("d_origin_z_m") != o[p["label"]]["laser_origin_world"][2]]
+        if bad:
+            unjudgeable.append(f"{name}: (d) not cast at the O run's laser origin height at {len(bad)} points")
+    for name, run in (("O run 1", o_runs[0]), ("O run 2", o_runs[-1]), ("O reverse", o_reverse)):
+        bad = [p["label"] for p in run["points"] if p.get("d_origin_z_m") != p["laser_origin_world"][2]]
+        if bad:
+            unjudgeable.append(f"{name}: (d) not cast at its own laser origin height at {len(bad)} points")
     # the operating comparison: each v1 stop against the same arm's probe state at that laser pose
     op_rows = []
     for stop in v1_stops:
@@ -172,16 +214,7 @@ def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_run
                 pairs += 1
                 di = ef["min_information"] - eo["min_information"]
                 di_all.append(abs(di))
-                why = []
-                if abs(di) > DELTA_I:
-                    why.append("delta_I")
-                if eo["accepted"] != ef["accepted"]:
-                    why.append("accept_crossing_O_only" if eo["accepted"] else "accept_crossing_F1_only")
-                ge = None
-                if eo["accepted"] and ef["accepted"]:
-                    ge = [ef["goal_error_vs_truth"][i] - eo["goal_error_vs_truth"][i] for i in range(3)]
-                    if abs(ge[0]) > GOAL_ERROR_M or abs(ge[1]) > GOAL_ERROR_M or abs(ge[2]) > GOAL_ERROR_RAD:
-                        why.append("correction_error")
+                why, ge = pair_why(eo, ef)
                 if why:
                     over.append({"label": lab, "d_m": o[lab]["d_m"], "laser_target": o[lab]["target_laser"],
                                  "cast": cast, "estimate": est, "why": why, "delta_I": di,

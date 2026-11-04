@@ -22,6 +22,7 @@ def _eval(info=52.0, accepted=True, beams=540, ge=(0.0, 0.0, 0.0)):
 def _point(label, info=52.0):
     evals = {f"{c}/{e}": _eval(info) for c in J.JUDGED_CASTS + J.PATH_CASTS for e in J.ESTIMATES}
     return {"label": label, "d_m": 1.5, "target_laser": [0, 0, 0], "laser": [0.0, 0.0, 0.0], "pose_ok": True,
+            "laser_origin_world": [0.0, 0.0, 0.2], "d_origin_z_m": 0.2,
             "settle": {"converged": True}, "evals": evals,
             "state": {"lift_m": 0.178, "base": [0, 0, 1e-6], "q": [1, 0, 0, 0], "pitch_rad": 0.0}}
 
@@ -227,3 +228,25 @@ def test_cusp_preconditions():
     o_b["trials"][0]["ticks"] += 1
     assert J.cusp([o, o_b], _cusp_run(base, record=False), [f1, copy.deepcopy(f1)], _cusp_run(base, record=False),
                   registry=REGISTRY, registry_sha256="r")["verdict"] == "unjudgeable"
+
+
+def test_delivery_reversed_pairs_keep_the_verdict():
+    # forward dI 0.49 (inside); reversed each arm moves 0.04 (inside the reversed-run agreement) but dI 0.57: the
+    # verdict flips at a representative point -> unjudgeable
+    lab = J.REPRESENTATIVE[0]
+    o, f1 = _run(stops=STOP_LABELS), _run(stops=STOP_LABELS, d_reference="O")
+    next(p for p in f1["points"] if p["label"] == lab)["evals"]["a/e0"]["min_information"] = 52.49
+    o_rev, f1_rev = _rev(o), _rev(f1)
+    next(p for p in o_rev["points"] if p["label"] == lab)["evals"]["a/e0"]["min_information"] = 51.96
+    next(p for p in f1_rev["points"] if p["label"] == lab)["evals"]["a/e0"]["min_information"] = 52.53
+    out = J.delivery(STAGE0, STOPS, [o, copy.deepcopy(o)], o_rev, [f1, copy.deepcopy(f1)], f1_rev)
+    assert out["verdict"] == "unjudgeable" and out["determinism"]["reverse_pair_verdicts_differ"][0]["key"] == "a/e0"
+
+
+def test_delivery_d_height_bound_to_the_O_run():
+    f1 = _run(stops=STOP_LABELS, d_reference="O")
+    f1["points"][3]["d_origin_z_m"] = 0.25  # not the O run's laser origin height
+    assert _delivery(f1=f1)["verdict"] == "unjudgeable"
+    o = _run(stops=STOP_LABELS)
+    o["points"][3]["d_origin_z_m"] = 0.25  # the O run's (d) is its (a)
+    assert _delivery(o=o)["verdict"] == "unjudgeable"

@@ -24,7 +24,8 @@ def _result(arm, key, *, complete=True, reason=None, round1=True, cusp_replans=0
     return {"success": complete, "phase": phase or ("complete" if complete else "insert"), "failure_reason": reason,
             "forbidden_pocket_contacts": [], "lift_tilt_peak": {"pallet_tilt_rad": 1e-4, "pallet_position_m": [1, 0, 0]}
             if lifted else None,
-            "tracking_failure": None if failure is None else {"phase": "transport", "tracking": failure},
+            "tracking_failure": None if failure is None else {"phase": "transport", "loop_step": 900,
+                                                              "tracking": failure},
             "initial_pallet_m": [1, 0, 0], "insertion_measured": {}, "slip_watch": {},
             "lateral_clearance_min_m": {"insert": {"left": 0.06}},
             "plant_backend": {"body_names": ["base_link", "left_fork_tip", "right_fork_tip"],
@@ -34,7 +35,8 @@ def _result(arm, key, *, complete=True, reason=None, round1=True, cusp_replans=0
             "delivery_docking": {"rounds": [{"accepted": round1, "reason": "accepted" if round1 else
                                              "start_rejected:degenerate",
                                              "start_details": [{"min_information": 52.0 if round1 else 49.0}]}]},
-            "cusp_replans": [{}] * cusp_replans, "arguments": {"transport_cusp_replans": 2}, "samples": samples}
+            "cusp_replans": [{"status": "success", "loop_step": 100 * (i + 1)} for i in range(cusp_replans)],
+            "arguments": {"transport_cusp_replans": 2}, "samples": samples}
 
 
 def _batch(tmp: Path, override=None, skip=()):
@@ -177,3 +179,17 @@ def test_settle_runs_counted_get_the_identity_check(tmp_path):
         return None
     out = J.judge(_batch(tmp_path, ov))
     assert "f1_F1_line_2_s3" in out["identity_mismatch"] and out["overall"] == "inconclusive"
+
+
+def test_a_last_replan_that_failed_to_plan_is_not_a_budget_end(tmp_path):
+    cusp = {"failure": "endpoint_heading", "at_cusp": True, "off_path": False}
+
+    def ov(arm, key):
+        if key == "aisle_rack_s5" and arm == "F1":
+            r = _result(arm, key, complete=False, phase="transport", cusp_replans=2, failure=cusp,
+                        reason="Tracking failed in transport: pos=0.0164,yaw=-0.0512")
+            r["cusp_replans"][-1] = {"status": "no_path", "loop_step": 900}
+            return r
+        return None
+    out = J.judge(_batch(tmp_path, ov))
+    assert out["scenes"]["aisle_rack"]["exclude"]["mechanism"]["F1"] == 0

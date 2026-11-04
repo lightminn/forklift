@@ -94,7 +94,12 @@ def mechanism_fields(d: dict | None, run_dir: Path) -> dict:
             "cusp_budget_exhausted": (d.get("phase") == "transport" and tf.get("phase") == "transport"
                                       and tracking.get("failure") == "endpoint_heading"
                                       and bool(tracking.get("at_cusp")) and not tracking.get("off_path")
-                                      and len(d.get("cusp_replans") or []) >= budget),
+                                      and len(d.get("cusp_replans") or []) >= budget
+                                      # the budget's last replan found a path and the miss came after it -- not a
+                                      # last replan that failed to plan (Codex review 2)
+                                      and (d.get("cusp_replans") or [{}])[-1].get("status") == "success"
+                                      and int(tf.get("loop_step", -1))
+                                      > int((d.get("cusp_replans") or [{}])[-1].get("loop_step", 1 << 62))),
             "settle_invalid": reason.startswith(SETTLE_REASONS),
             "round1_stop": round1_stop(run_dir)}
 
