@@ -1297,8 +1297,8 @@ def arguments() -> argparse.Namespace:
         "--f1v2-probe-reference",
         type=Path,
         default=None,
-        help="--f1v2-probe delivery: the O arm's f1v2_delivery_probe.json, whose settled base height per grid point "
-        "is cast (d)'s (plan section 2); unset = the run's own height (the O run).",
+        help="--f1v2-probe delivery: the O arm's f1v2_delivery_probe.json, whose laser origin height per grid point "
+        "is cast (d)'s (plan section 2); unset = the run's own (the O run).",
     )
     parser.add_argument(
         "--f1v2-probe-record",
@@ -4384,7 +4384,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
             action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_,
             reference=None if args.f1v2_probe_reference is None else {
-                r_["label"]: r_["state"]["base"][2]
+                r_["label"]: r_["laser_origin_world"][2]
                 for r_ in json.loads(Path(args.f1v2_probe_reference).read_text())["points"]})
         state["phase"] = "f1v2_probe_done"
         state["success"] = True
@@ -4398,6 +4398,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             world, robot, pallet, args=args, settings=settings, stage=stage, initial_base=initial_base,
             lift_index=lift_index, wheels=wheels, steers=steers, action_type=ArticulationAction, out_dir=args.output,
             registry=json.loads(Path(args.f1v2_probe_extra).read_text()),
+            registry_sha256=hashlib.sha256(Path(args.f1v2_probe_extra).read_bytes()).hexdigest(),
+            start_rear=(scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad),
             robot_mass_kg=float(sum(state["plant_backend"]["masses_kg"])), accel_mps2=COMMAND_ACCEL_MPS2,
             record=args.f1v2_probe_record == "on", order=args.f1v2_probe_order)
         state["phase"] = "f1v2_probe_done"

@@ -266,6 +266,7 @@ class CuspTrial:
         self._prev_pending = False
         self._prev_failed = False
         self.rows = []
+        self.aux_rows = []
 
     def start_pose(self) -> list:
         return [float(v) for v in self.poses[self.start_index]]
@@ -283,9 +284,11 @@ class CuspTrial:
                                 "tracker_yaw_error_rad": None if tracking is None else float(tracking.yaw_error_rad),
                                 **more}
 
-    def step(self, t: float, rear, signed_speed: float, planar_speed: float, yaw_rate: float, steering_actual):
+    def step(self, t: float, rear, signed_speed: float, planar_speed: float, yaw_rate: float, steering_actual,
+             aux=()):
         """One tick from the state read after the last physics step. Returns (wheel rates, steering command) to apply,
-        or None when the trial has ended (stop confirmed or time cap reached; nothing is applied then)."""
+        or None when the trial has ended (stop confirmed or time cap reached; nothing is applied then). ``aux``: the
+        rest of the physical state the hash covers (body height and tilt, lift, the pallet's pose and velocity)."""
         from forklift_core.control.path_tracking import ackermann_command
         from forklift_core.control.speed_chain import creep, slew_cap_stop
 
@@ -316,7 +319,10 @@ class CuspTrial:
                           float("nan") if tracking is None else float(tracking.curvature_inv_m),
                           -1 if tracking is None else STATUS_CODE[tracking.status],
                           -1 if tracking is None else FAILURE_CODE[tracking.failure],
-                          -1 if tracking is None else int(tracking.cusp_pending), int(self.advanced)])
+                          -1 if tracking is None else int(tracking.cusp_pending), int(self.advanced),
+                          float("nan") if tracking is None else float(tracking.progress_m),
+                          -1 if tracking is None else int(tracking.segment_index)])
+        self.aux_rows.append([float(v) for v in aux])
         self.ticks += 1
         if self.stop_ticks >= CUSP_STOP_NEEDED:
             self.done = True
@@ -383,7 +389,9 @@ class CuspTrial:
     def trajectory_sha256(self) -> str:
         import hashlib
 
-        return hashlib.sha256(np.asarray(self.rows, dtype=np.float64).tobytes()).hexdigest()
+        h = hashlib.sha256(np.asarray(self.rows, dtype=np.float64).tobytes())
+        h.update(np.asarray(self.aux_rows, dtype=np.float64).tobytes())
+        return h.hexdigest()
 
     def summary(self) -> dict:
         return {"leg": self.leg, "start_index": self.start_index, "end_index": self.end_index,
@@ -393,5 +401,7 @@ class CuspTrial:
 
 
 TICK_COLUMNS = ("t", "rear_x", "rear_y", "rear_yaw", "signed_speed", "planar_speed", "yaw_rate", "steer_l", "steer_r",
-                "trk_speed", "trk_curvature", "trk_status", "trk_failure", "trk_pending", "advanced", "wheel_speed_cmd",
-                "steer_cmd_l", "steer_cmd_r")
+                "trk_speed", "trk_curvature", "trk_status", "trk_failure", "trk_pending", "advanced", "trk_progress",
+                "trk_segment", "wheel_speed_cmd", "steer_cmd_l", "steer_cmd_r")
+AUX_COLUMNS = ("base_z", "roll", "pitch", "lift", "pallet_x", "pallet_y", "pallet_z", "pallet_yaw", "pallet_vx",
+               "pallet_vy", "pallet_vz")  # the pallet's only when loaded
