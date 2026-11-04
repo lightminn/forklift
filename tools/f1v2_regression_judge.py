@@ -2,7 +2,8 @@
 """The F1 v2 operating regression batch read by the rules fixed before the results (docs/plans/
 2026-11-04-f1-v2-registration.md section 4): per scene (line_2, aisle_rack; seeds 3-17), v1's rules (complete F1 >= O - 1,
 safety F1 <= O, slip F1 <= O, at least 12 valid pairs of 15), the two mechanism failures counted apart (line_2 round-1
-delivery match rejections, aisle_rack transport cusp replan budget exhausted; each F1 <= O + 1), the new F1 ends, and
+delivery match rejections, aisle_rack transport cusp replan budget exhausted -- an endpoint_heading miss at a cusp
+on the path with the budget spent; each F1 <= O + 1), at least 10 pairs lifted in both arms, the new F1 ends, and
 the physical settle runs read both ways (left out as invalid, and counted as that arm's failure: verdicts that differ,
 or two or more of them in one arm of a scene, make the scene unjudgeable).
 
@@ -27,11 +28,11 @@ SCENES = ("line_2", "aisle_rack")
 SEEDS = tuple(range(3, 18))
 EXPECTED_KEYS = [f"{sc}_s{s}" for sc in SCENES for s in SEEDS]
 MIN_VALID = 12
+MIN_LIFTED = 10  # amendment 2: v1's both-lifted minimum (8 of 12) carried to 15 pairs
 MECHANISM_SLACK = 1
 MECHANISM = {"line_2": "round1_rejected", "aisle_rack": "cusp_budget_exhausted"}
 SETTLE_REASONS = ("Truck spawn displaced", "Invalid pallet spawn after settling")
 SETTLE_ONE_ARM_HOLD = 2
-CUSP_REASON = "Tracking failed in transport"
 
 
 def registered(name: str) -> bool:
@@ -76,8 +77,10 @@ def mechanism_fields(d: dict | None, run_dir: Path) -> dict:
     rounds = (d.get("delivery_docking") or {}).get("rounds") or []
     first = rounds[0] if rounds else None
     phases = {s.get("phase") for s in d.get("samples") or []} | {d.get("phase")}
-    reason = str(d.get("failure_reason") or "")
     budget = int((d.get("arguments") or {}).get("transport_cusp_replans", 2))
+    tf = d.get("tracking_failure") or {}
+    tracking = tf.get("tracking") or {}
+    reason = str(d.get("failure_reason") or "")
     return {"round1_reached": first is not None,
             "round1_rejected": first is not None and not first.get("accepted"),
             "round1_reason": None if first is None else first.get("reason"),
@@ -86,7 +89,11 @@ def mechanism_fields(d: dict | None, run_dir: Path) -> dict:
                  is not None), default=None),
             "transport_entered": "transport" in phases,
             "cusp_replans": len(d.get("cusp_replans") or []),
-            "cusp_budget_exhausted": (d.get("phase") == "transport" and reason.startswith(CUSP_REASON)
+            # the transport's cusp heading miss the core would have replanned had the budget remained (core.py
+            # cusp_and_observe_recovery: endpoint_heading at a cusp, on the path), with the budget spent
+            "cusp_budget_exhausted": (d.get("phase") == "transport" and tf.get("phase") == "transport"
+                                      and tracking.get("failure") == "endpoint_heading"
+                                      and bool(tracking.get("at_cusp")) and not tracking.get("off_path")
                                       and len(d.get("cusp_replans") or []) >= budget),
             "settle_invalid": reason.startswith(SETTLE_REASONS),
             "round1_stop": round1_stop(run_dir)}
@@ -141,7 +148,7 @@ def scene_verdict(scene: str, pairs: dict, runs: list, mode: str) -> dict:
     out = {"mode": mode, "valid_pairs": len(good), "both_lifted_pairs": len(lifted), "complete": complete,
            "safety_failures": safety, "slip_failures": slip, "mechanism": {"field": field, **mech},
            "failure_reasons": reasons, "new_reasons_F1": sorted(set(reasons["F1"]) - set(reasons["O"]))}
-    if len(good) < MIN_VALID:
+    if len(good) < MIN_VALID or len(lifted) < MIN_LIFTED:
         out["verdict"] = "inconclusive"
     elif not (complete["F1"] >= complete["O"] - 1 and safety["F1"] <= safety["O"] and slip["F1"] <= slip["O"]
               and mech["F1"] <= mech["O"] + MECHANISM_SLACK):
@@ -194,11 +201,12 @@ def judge(batch: Path) -> dict:
         sp_exclude = {k: {a: _as(r, "exclude") for a, r in v.items()} for k, v in sp.items()}
         scenes[scene] = {"verdict": verdict, "exclude": exclude, "fail": fail, "settle_runs": settle,
                          "settle_hold": held, "reach": reach_table(sp_exclude), "round1_stop": stop_report(sp_exclude)}
-    identity_bad = {r["name"]: r["identity_problems"] for r in used if not r["infra"] and r["identity_problems"]}
+    # every run either reading counts (a settle end is counted in the 'fail' reading) shows its arm and scene
+    counted = [r for r in used if not _as(r, "fail")["infra"]]
+    identity_bad = {r["name"]: r["identity_problems"] for r in counted if r["identity_problems"]}
     hashes = {}
-    for r in used:
-        if not r["infra"]:
-            hashes.setdefault(r["arm"], set()).add(json.dumps(r["identity"].get("scene_sha256"), sort_keys=True))
+    for r in counted:
+        hashes.setdefault(r["arm"], set()).add(json.dumps(r["identity"].get("scene_sha256"), sort_keys=True))
     scene_problems = [f"{a}: {len(v)} scene hashes" for a, v in sorted(hashes.items()) if len(v) != 1]
     if hashes.get("O") and hashes.get("O") == hashes.get("F1"):
         scene_problems.append("the two arms ran the same scene")

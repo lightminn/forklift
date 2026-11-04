@@ -15,13 +15,16 @@ import f1_tip_mass_judge as V1  # noqa: E402
 import f1v2_regression_judge as J  # noqa: E402
 
 
-def _result(arm, key, *, complete=True, reason=None, round1=True, cusp_replans=0, phase=None):
+def _result(arm, key, *, complete=True, reason=None, round1=True, cusp_replans=0, phase=None, failure=None,
+            lifted=True):
     sha = V1.URDF_SHA[(arm, "epal6")] + "0" * 56
     samples = [{"time_s": 0.1 * i, "phase": "transport", "steering_command_rad": [0.0, 0.0],
                 "steering_actual_rad": [0.0, 0.0], "signed_speed_mps": 0.0, "lift_m": 0.0,
                 "base_position_m": [0, 0, 0], "pallet_position_m": [1, 0, 0], "base_tilt_rad": 0.001} for i in range(3)]
     return {"success": complete, "phase": phase or ("complete" if complete else "insert"), "failure_reason": reason,
-            "forbidden_pocket_contacts": [], "lift_tilt_peak": {"pallet_tilt_rad": 1e-4, "pallet_position_m": [1, 0, 0]},
+            "forbidden_pocket_contacts": [], "lift_tilt_peak": {"pallet_tilt_rad": 1e-4, "pallet_position_m": [1, 0, 0]}
+            if lifted else None,
+            "tracking_failure": None if failure is None else {"phase": "transport", "tracking": failure},
             "initial_pallet_m": [1, 0, 0], "insertion_measured": {}, "slip_watch": {},
             "lateral_clearance_min_m": {"insert": {"left": 0.06}},
             "plant_backend": {"body_names": ["base_link", "left_fork_tip", "right_fork_tip"],
@@ -72,17 +75,26 @@ def test_mechanism_failures_counted_apart(tmp_path):
 
 def test_one_more_mechanism_failure_is_allowed_and_cusp_budget(tmp_path):
     def ov(arm, key):
+        cusp = {"failure": "endpoint_heading", "at_cusp": True, "off_path": False}
         if key == "aisle_rack_s5" and arm == "F1":
+            return _result(arm, key, complete=False, phase="transport", cusp_replans=2, failure=cusp,
+                           reason="Tracking failed in transport: pos=0.0164,yaw=-0.0512")
+        if key == "aisle_rack_s7" and arm == "F1":  # after the budget, off the path: not a cusp budget end
             return _result(arm, key, complete=False, phase="transport", cusp_replans=2,
+                           failure={"failure": "cross_track", "at_cusp": True, "off_path": True},
+                           reason="Tracking failed in transport: pos=0.0164,yaw=-0.0512")
+        if key == "aisle_rack_s7" and arm == "O":
+            return _result(arm, key, complete=False, phase="transport", cusp_replans=2,
+                           failure={"failure": "endpoint_heading", "at_cusp": False, "off_path": False},
                            reason="Tracking failed in transport: pos=0.0164,yaw=-0.0512")
         if key == "aisle_rack_s6" and arm == "O":
-            return _result(arm, key, complete=False, phase="transport", cusp_replans=2,
+            return _result(arm, key, complete=False, phase="transport", cusp_replans=2, failure=cusp,
                            reason="Tracking failed in transport: pos=0.0164,yaw=-0.0512")  # v1: whole strings
         return None
     out = J.judge(_batch(tmp_path, ov))
     a = out["scenes"]["aisle_rack"]
     assert a["exclude"]["mechanism"]["F1"] == 1 and a["exclude"]["mechanism"]["O"] == 1
-    assert a["verdict"] == "pass"  # the same end in both arms: no new reason; completion 14 vs 14
+    assert a["verdict"] == "pass"  # the same end in both arms: no new reason; completion 13 vs 13
 
 
 def test_new_reason_needs_cause_and_completion_rule(tmp_path):
@@ -143,3 +155,25 @@ def test_round1_stop_from_the_match_file(tmp_path):
     assert math.isclose(rep["stop_distance_m"]["mean"], 1.46, abs_tol=1e-9)
     assert math.isclose(rep["slam_along_error_m"]["mean"], 0.06, abs_tol=1e-9)
     assert out["scenes"]["line_2"]["round1_stop"]["F1"]["stop_distance_m"] is None
+
+
+def test_too_few_lifted_pairs(tmp_path):
+    def ov(arm, key):
+        if key.startswith("line_2") and int(key.rsplit("_s", 1)[1]) < 9:  # 6 pairs never lift: 9 lifted
+            return _result(arm, key, complete=False, lifted=False, reason="Pallet not found")
+        return None
+    out = J.judge(_batch(tmp_path, ov))
+    s = out["scenes"]["line_2"]["exclude"]
+    assert s["valid_pairs"] == 15 and s["both_lifted_pairs"] == 9 and s["verdict"] == "inconclusive"
+
+
+def test_settle_runs_counted_get_the_identity_check(tmp_path):
+    def ov(arm, key):
+        if key == "line_2_s3":
+            r = _result(arm, key, complete=False, reason="Truck spawn displaced")
+            if arm == "F1":
+                r["plant_backend"]["masses_kg"] = [20.0, 1.0, 1.0]  # the O tips in the F1 run
+            return r
+        return None
+    out = J.judge(_batch(tmp_path, ov))
+    assert "f1_F1_line_2_s3" in out["identity_mismatch"] and out["overall"] == "inconclusive"

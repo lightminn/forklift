@@ -5,7 +5,7 @@ any full probe result.
   python tools/f1v2_probe_judge.py delivery --stage0 S0.json --v1-stops v1_stops.json \
       --o A.json B.json --o-reverse R.json --f1 A.json B.json --f1-reverse R.json --json OUT.json
   python tools/f1v2_probe_judge.py cusp --o A.json B.json --o-off OFF.json --f1 A.json B.json --f1-off OFF.json \
-      --json OUT.json
+      --registry cusp_registry.json --json OUT.json
 
 The inputs are the probe records (f1v2_delivery_probe.json, f1v2_cusp_probe.json). The verdict is "unjudgeable" when any
 precondition the plan names fails (it then reports what it could compare as well), else "different" when any pair
@@ -13,11 +13,22 @@ breaks a margin, else "same". Every pair over a margin is listed with what the l
 """
 
 import argparse
+import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sim" / "isaac"))
+
+import f1v2_probe_core as core  # noqa: E402
+
+# the registered grid's labels (they do not depend on the delivery pose or the mount)
+GRID_LABELS = tuple(p["label"] for p in core.grid((0.0, 0.0, 0.0), 0.4, (0.0, 0.0), 0.0))
+V1_STOP_LABELS = tuple(f"v1_{arm}_line_2_s{s}" for arm in ("O", "F1") for s in range(3))
+STAGE0_RUNS = tuple(f"f1_{arm}_line_2_s{s}" for arm in ("O", "F1") for s in range(3))
 
 # (i') -- plan section 2 and amendment 1
 DELTA_I = 0.5
@@ -31,8 +42,15 @@ OP_LIFT_M, OP_BASE_Z_M, OP_TILT_RAD = 1.0e-3, 0.5e-3, 2e-6
 # of round 1, both corners of round 2)
 REPRESENTATIVE = ("r1_d1.38_y-9.000_w0.00", "r1_d1.50_y-8.955_w0.02", "r1_d1.60_y-8.910_w0.04", "r2_d0.50_l-0.08",
                   "r2_d0.64_l+0.08")
+# amendment 2: the reversed run's five points agree with the forward run within these (bitwise agreement reported)
+REV_DELTA_I = 0.05
+REV_GOAL_ERROR_M = 1e-4
+REV_GOAL_ERROR_RAD = 1e-4
+REV_LASER_M, REV_LASER_RAD = 3e-3, 1e-3  # amendment 1's settle drift scale
 # (ii') -- plan section 3 and amendment 2
 DELTA_E = 0.005
+CONFIGS = ("transport", "observe")
+LOADS = ("loaded", "empty")
 
 
 def _q(values, qs=(0.5, 0.9, 0.99, 1.0)):
@@ -53,19 +71,65 @@ def _min_start(ev: dict) -> dict:
 
 # --- (i') delivery ---
 
+def _reverse_agrees(f: dict, r: dict) -> list:
+    """Why a reversed run's point does not agree with the forward run's (amendment 2; empty: it agrees)."""
+    why = []
+    if abs(f["state"]["lift_m"] - r["state"]["lift_m"]) > OP_LIFT_M:
+        why.append("lift")
+    if abs(f["state"]["base"][2] - r["state"]["base"][2]) > OP_BASE_Z_M:
+        why.append("base_z")
+    if abs(_tilt(f["state"]["q"]) - _tilt(r["state"]["q"])) > OP_TILT_RAD:
+        why.append("tilt")
+    if (math.hypot(f["laser"][0] - r["laser"][0], f["laser"][1] - r["laser"][1]) > REV_LASER_M
+            or abs(f["laser"][2] - r["laser"][2]) > REV_LASER_RAD):
+        why.append("laser_pose")
+    for key, ef in f["evals"].items():
+        er = r["evals"].get(key)
+        if er is None:
+            why.append(f"{key}:missing")
+            continue
+        if abs(ef["min_information"] - er["min_information"]) > REV_DELTA_I:
+            why.append(f"{key}:I")
+        if ef["accepted"] != er["accepted"]:
+            why.append(f"{key}:accepted")
+        elif ef["accepted"]:
+            ge = [ef["goal_error_vs_truth"][i] - er["goal_error_vs_truth"][i] for i in range(3)]
+            if abs(ge[0]) > REV_GOAL_ERROR_M or abs(ge[1]) > REV_GOAL_ERROR_M or abs(ge[2]) > REV_GOAL_ERROR_RAD:
+                why.append(f"{key}:correction")
+    return why
+
+
 def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_runs: list, f1_reverse: dict) -> dict:
     unjudgeable, notes = [], {}
-    if not stage0.get("all_bit_identical"):
-        unjudgeable.append("stage 0: dock() did not reproduce the recorded round 1 bit for bit")
+    rows0 = stage0.get("rows") or []
+    named = [next((n for n in STAGE0_RUNS if f"/{n}/" in str(r.get("match"))), None) for r in rows0]
+    if not stage0.get("all_bit_identical") or sorted(n for n in named if n) != sorted(STAGE0_RUNS) or None in named:
+        unjudgeable.append("stage 0: not the six v1 line_2 matches reproduced bit for bit")
+    if sorted(s["label"] for s in v1_stops) != sorted(V1_STOP_LABELS):
+        unjudgeable.append("operating comparison: not the six v1 line_2 round-1 stops")
     for arm, runs, rev in (("O", o_runs, o_reverse), ("F1", f1_runs, f1_reverse)):
+        want = "own" if arm == "O" else "O"
+        for run, order in ((runs[0], "forward"), (runs[-1], "forward"), (rev, "reverse")):
+            labels = [p["label"] for p in run["points"]]
+            if sorted(labels) != sorted(GRID_LABELS + V1_STOP_LABELS):
+                unjudgeable.append(f"the {arm} arm's {order} run is not the registered grid and the six stops")
+            if run.get("order") != order or run.get("d_reference") != want:
+                unjudgeable.append(f"the {arm} arm's {order} run: order {run.get('order')}, (d) reference "
+                                   f"{run.get('d_reference')} (expected {want})")
         if len(runs) != 2 or runs[0]["points"] != runs[1]["points"]:
             unjudgeable.append(f"determinism: the {arm} arm's two fresh runs differ")
         rev_points = {p["label"]: p for p in rev["points"]}
         fwd_points = {p["label"]: p for p in runs[0]["points"]}
-        bad = [lab for lab in REPRESENTATIVE
-               if lab not in rev_points or rev_points[lab]["evals"] != fwd_points.get(lab, {}).get("evals")
-               or rev_points[lab]["state"] != fwd_points.get(lab, {}).get("state")]
-        notes[f"reverse_{arm}"] = {"representative": list(REPRESENTATIVE), "differ": bad}
+        rows = {}
+        for lab in REPRESENTATIVE:
+            if lab not in rev_points or lab not in fwd_points:
+                rows[lab] = {"bitwise": False, "why": ["missing"]}
+                continue
+            f, r = fwd_points[lab], rev_points[lab]
+            rows[lab] = {"bitwise": f["evals"] == r["evals"] and f["state"] == r["state"],
+                         "why": _reverse_agrees(f, r)}
+        bad = [lab for lab, v in rows.items() if v["why"]]
+        notes[f"reverse_{arm}"] = {"points": rows, "differ": bad}
         if bad:
             unjudgeable.append(f"determinism: the {arm} arm's reversed run differs at {bad}")
     o, f1 = ({p["label"]: p for p in runs[0]["points"]} for runs in (o_runs, f1_runs))
@@ -146,6 +210,20 @@ def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_run
             if lab.startswith("r1_"):
                 by_d.setdefault(pts[lab]["d_m"], []).append(pts[lab]["evals"]["a/e0"]["min_information"])
         curve[arm] = {f"{d:.2f}": float(np.mean(v)) for d, v in sorted(by_d.items())}
+    per_point = []
+    for lab in grid:
+        row = {"label": lab, "d_m": o[lab]["d_m"],
+               "laser_diff": [f1[lab]["laser"][i] - o[lab]["laser"][i] for i in range(3)],
+               "pitch_diff_rad": f1[lab]["state"]["pitch_rad"] - o[lab]["state"]["pitch_rad"],
+               "base_z_diff_m": f1[lab]["state"]["base"][2] - o[lab]["state"]["base"][2]}
+        for cast in ("a",) + PATH_CASTS:
+            row[f"dI_{cast}"] = (f1[lab]["evals"][f"{cast}/e0"]["min_information"]
+                                 - o[lab]["evals"][f"{cast}/e0"]["min_information"])
+        for arm, pts in (("O", o), ("F1", f1)):
+            ia = pts[lab]["evals"]["a/e0"]["min_information"]
+            row[f"a_minus_c_{arm}"] = ia - pts[lab]["evals"]["c/e0"]["min_information"]
+            row[f"a_minus_d_{arm}"] = ia - pts[lab]["evals"]["d/e0"]["min_information"]
+        per_point.append(row)
     different = bool(over) or bool(settle_one)
     verdict = "unjudgeable" if unjudgeable else ("different" if different else "same")
     return {"probe": "delivery", "verdict": verdict, "unjudgeable": unjudgeable, "grid_points": len(grid),
@@ -155,6 +233,7 @@ def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_run
             "over_beams_diff": _q([abs(r["beams_diff"]) for r in over]),
             "operating_comparison": op_rows, "path_abs_delta_I_e0": path,
             "delta_I_correlation": corr, "information_by_distance_a_e0": curve, "determinism": notes,
+            "per_point_e0": per_point,
             "body_state_diff": {"pitch_rad": _q([abs(v) for v in dpitch]), "base_z_m": _q([abs(v) for v in dz])}}
 
 
@@ -164,8 +243,61 @@ def _exceeds(t: dict) -> bool:
     return (t.get("events") or {}).get("first_exceed_after_endpoint") is not None
 
 
-def cusp(o_runs: list, o_off: dict, f1_runs: list, f1_off: dict) -> dict:
+def expected_trials(registry: dict) -> dict:
+    """trial id -> the registered path's hash (None for the synthetic paths, whose hash the runs must share)."""
+    out = {}
+    versions = [(v["id"], v["sha256"], v["cusp_legs"]) for v in registry["versions"]]
+    versions += [(f"synthetic_k{k:.2f}_{side}", None, 1) for k in core.SYNTHETIC_CURVATURES for side in ("left", "right")]
+    for load in LOADS:
+        for config in CONFIGS:
+            for vid, sha, legs in versions:
+                for leg in range(legs):
+                    out[f"{vid}/leg{leg}/{config}/{load}"] = sha
+    return out
+
+
+def _binding(runs: list, registry: dict, registry_sha256: str) -> list:
+    """Why the runs do not all drive the registered paths with the registered settings (empty: they do)."""
+    why = []
+    want = expected_trials(registry)
+    synthetic = {}
+    for name, run in runs:
+        if run.get("registry_sha256") != registry_sha256:
+            why.append(f"{name}: registry {run.get('registry_sha256')}")
+        if run.get("tracker_configs") != registry["tracker_configs"]:
+            why.append(f"{name}: tracker settings differ from the registry's")
+        got = {t["id"]: t for t in run["trials"]}
+        if sorted(got) != sorted(want):
+            why.append(f"{name}: {len(got)} trials, not the {len(want)} registered")
+        for tid, sha in want.items():
+            t = got.get(tid)
+            if t is None:
+                continue
+            if sha is None:
+                synthetic.setdefault(t["version"], set()).add(t["path_sha256"])
+            elif t["path_sha256"] != sha:
+                why.append(f"{name}: {tid} path {t['path_sha256'][:12]} is not the registered {sha[:12]}")
+    for vid, shas in synthetic.items():
+        if len(shas) != 1:
+            why.append(f"synthetic path {vid} differs between runs")
+    for key in ("dt_s", "decel_mps2", "accel_mps2", "lift_command_m", "pallet_mass_kg", "scene_start_rear"):
+        if len({json.dumps(run.get(key)) for _, run in runs}) != 1:
+            why.append(f"{key} differs between runs")
+    return why
+
+
+def cusp(o_runs: list, o_off: dict, f1_runs: list, f1_off: dict, registry: dict | None = None,
+         registry_sha256: str | None = None) -> dict:
     unjudgeable = []
+    if registry is not None:
+        named = ([(f"O run {i + 1}", r) for i, r in enumerate(o_runs)] + [("O off", o_off)]
+                 + [(f"F1 run {i + 1}", r) for i, r in enumerate(f1_runs)] + [("F1 off", f1_off)])
+        unjudgeable += _binding(named, registry, registry_sha256)
+        if (any(r.get("record") is not True for n_, r in named if "off" not in n_)
+                or o_off.get("record") is not False or f1_off.get("record") is not False):
+            unjudgeable.append("record on/off flags are not the registered ones")
+    else:
+        unjudgeable.append("no registry given: the population cannot be checked")
     for arm, runs, off in (("O", o_runs, o_off), ("F1", f1_runs, f1_off)):
         if len(runs) != 2 or runs[0]["trials"] != runs[1]["trials"]:
             unjudgeable.append(f"determinism: the {arm} arm's two fresh runs differ")
@@ -274,6 +406,7 @@ def main() -> None:
     c.add_argument("--o-off", type=Path, required=True)
     c.add_argument("--f1", type=Path, nargs=2, required=True)
     c.add_argument("--f1-off", type=Path, required=True)
+    c.add_argument("--registry", type=Path, required=True)
     c.add_argument("--json", type=Path, required=True)
     args = p.parse_args()
 
@@ -284,7 +417,8 @@ def main() -> None:
         out = delivery(load(args.stage0), load(args.v1_stops), [load(x) for x in args.o], load(args.o_reverse),
                        [load(x) for x in args.f1], load(args.f1_reverse))
     else:
-        out = cusp([load(x) for x in args.o], load(args.o_off), [load(x) for x in args.f1], load(args.f1_off))
+        out = cusp([load(x) for x in args.o], load(args.o_off), [load(x) for x in args.f1], load(args.f1_off),
+                   registry=load(args.registry), registry_sha256=hashlib.sha256(args.registry.read_bytes()).hexdigest())
     args.json.write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps({k: out[k] for k in ("probe", "verdict", "unjudgeable", "over_count")}, indent=1))
 
