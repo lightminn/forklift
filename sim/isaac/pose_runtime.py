@@ -427,8 +427,9 @@ class PoseRuntime:
         DISPLAY_ZONES nearest the truck and the count left out (the permit keeps them all); recomputed at most every
         DISPLAY_PERIOD_S or on a new status (Codex 2c P2)."""
         last = self._display
-        if last is not None and t - last[0] < DISPLAY_PERIOD_S and last[1]["status"] == view.status:
-            return last[1]
+        key = (view.status, None if C is None else tuple(round(float(v), 9) for v in C))
+        if last is not None and t - last[0] < DISPLAY_PERIOD_S and last[2] == key:
+            return last[1]  # the same status and correction (Codex 2c re-review P2: a new C redraws at once)
         stroke = None if view.stroke is None else {
             "state": view.stroke, "left_m": view.stroke_left_m, "total_left_m": view.total_left_m}
         odom, _ = self.zones(map_zones) if C is not None else (None, None)
@@ -447,7 +448,7 @@ class PoseRuntime:
             zones.append(corners)
         out = {"status": view.status, "reason": view.reason, "stroke": stroke, "zones": zones,
                "zones_omitted": max(0, len(odom) - DISPLAY_ZONES)}
-        self._display = (t, out)
+        self._display = (t, out, key)
         return out
 
     def rear_pending(self) -> bool:

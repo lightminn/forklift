@@ -39,6 +39,8 @@ test("the zones the vehicle left out are said, and the legend is the band's", ()
   const band = poseBand({ status: "unconfirmed", zones: [sq], zones_omitted: 40 });
   assert.match(band.text, /점선은 가설 구역\(차 기준\) · 먼 40 개 생략/);
   assert.doesNotMatch(poseBand({ status: "unconfirmed", zones: [] }).text, /점선/);
+  // while a re-match runs the zones stay drawn: their legend too (Codex 2c re-review P3)
+  assert.match(poseBand({ status: "checking", zones: [sq], zones_omitted: 40 }).text, /확인하는 중.*점선은 가설 구역.*40 개 생략/);
 });
 
 test("the hypothesis zones are polygons in the map, at most the cap", () => {

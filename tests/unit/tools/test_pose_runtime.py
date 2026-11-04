@@ -508,5 +508,17 @@ def test_the_console_gets_the_nearest_zones_with_the_rest_counted_at_the_publish
     shown = rt.display(view, I, zones, t=0.0)
     assert len(shown["zones"]) == PR.DISPLAY_ZONES and shown["zones_omitted"] == 80 - PR.DISPLAY_ZONES
     again = rt.display(view, (5.0, 0.0, 0.0), zones, t=0.05)
-    assert again is shown  # within 0.1 s: the last one
-    assert rt.display(view, (5.0, 0.0, 0.0), zones, t=0.12) is not shown
+    assert again is not shown  # a new correction: drawn again at once
+    assert rt.display(view, (5.0, 0.0, 0.0), zones, t=0.08) is again  # the same one within 0.1 s: the last
+    assert rt.display(view, (5.0, 0.0, 0.0), zones, t=0.16) is not again
+
+
+def test_a_new_correction_redraws_the_zones_at_once():
+    # Codex 2c re-review P2: the 0.1 s reuse kept polygons of the old C beside the new pose
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b, hyps=[((8.42, 1.7, 0.6), "shift x+1")])
+    view = _tick(rt, b)
+    z = [Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)]
+    first = rt.display(view, I, z, t=0.0)
+    moved = rt.display(view, (5.0, 0.0, 0.0), z, t=0.05)
+    assert moved is not first and moved["zones"][0][0][0] == pytest.approx(first["zones"][0][0][0] + 5.0)

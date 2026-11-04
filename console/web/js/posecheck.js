@@ -29,7 +29,8 @@ function strokeText(stroke) {
 export function poseBand(pc) {
   if (!pc) return null;
   if (pc.status === "checking") {
-    return { text: "출발 위치를 확인하는 중입니다 · 움직이지 마세요", title: "확인 전 위치", tone: "warn" };
+    const text = ["출발 위치를 확인하는 중입니다 · 움직이지 마세요", legend(pc)].filter(Boolean).join(" · ");
+    return { text, title: "확인 전 위치", tone: "warn" };
   }
   if (pc.status.startsWith("ended:")) {
     const reason = pc.status.slice("ended:".length);
@@ -38,12 +39,15 @@ export function poseBand(pc) {
   const parts = [LOCKED];
   const stroke = strokeText(pc.stroke);
   if (stroke) parts.push(stroke);
-  // the legend of the map's dashed zones lives here, always in view (Codex 2c P3)
-  if (poseZones(pc).length) {
-    const omitted = Number.isFinite(pc.zones_omitted) && pc.zones_omitted > 0 ? ` · 먼 ${pc.zones_omitted} 개 생략` : "";
-    parts.push(`점선은 가설 구역(차 기준)${omitted}`);
-  }
+  if (legend(pc)) parts.push(legend(pc));
   return { text: parts.join(" · "), title: "확인 전 위치", tone: "warn" };
+}
+
+// the legend of the map's dashed zones, in the band so it is always in view (Codex 2c P3), "" without zones
+function legend(pc) {
+  if (!poseZones(pc).length) return "";
+  const omitted = Number.isFinite(pc.zones_omitted) && pc.zones_omitted > 0 ? ` · 먼 ${pc.zones_omitted} 개 생략` : "";
+  return `점선은 가설 구역(차 기준)${omitted}`;
 }
 
 // the zones to draw: polygons of [x, y] map points, finite, at most MAX_ZONES
