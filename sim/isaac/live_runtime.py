@@ -325,8 +325,10 @@ class LiveRuntime:
                   "camera_latency_s": self.camera_latency.report(),
                   "camera_pixel_latency_s": self.camera_pixel_latency.report(),
                   "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved})
-        if not self.io.close(self._io_left()):
-            return  # stuck on the disk: its file stays open in its thread, and the log has no end summary
+        if not self.io.close(self._io_left(), on_end=lambda: self._log.close()):
+            # stuck on the disk: the log has no end summary, and its file is closed once the writer has ended (its
+            # current file -- a roll-over reopens it)
+            return
         # The writer drained and stopped: the summary goes last, from here, with the counts as they ended (Codex U29
         # implementation review P2-2) -- a reader refuses a log whose summary is missing or counts a loss.
         self._append_quietly({"log_end": {"dropped_lines": self.io.dropped_lines, "line_errors": self.io.line_errors,

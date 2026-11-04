@@ -18,9 +18,13 @@ and each mission's files -- in the order they were handed over; the control thre
 - ``dispose(value)``: lets ``value`` go on a second thread (``live-io-free``, no disk), ``dispose_after_s`` after the
   hand-over -- by then the caller's own references are gone, so the last one, and the freeing of a large record,
   is that thread's (records a full writer refused were freed on the control thread: 120,000 rows, 31 ms).
-- ``close(timeout_s)``: refuses new jobs, waits for every job within the deadline and stops the thread, then frees
-  what the disposer still holds and stops it, within the same deadline; ``False`` if either did not finish. A Python thread cannot be stopped from outside, so a job still on after a close keeps running
-  in its daemon thread, and its outcome is not reported.
+- ``close(timeout_s, on_end=None)``: refuses new jobs, waits for every job within the deadline and stops the thread,
+  then frees what the disposer still holds and stops it, within the same deadline; ``False`` if either did not finish. A
+  Python thread cannot be stopped from outside, so a job still on after a close keeps running in its daemon thread, and
+  its outcome is not reported. ``on_end`` is for that case: after a close that returned ``False`` it is called once
+  the writer has ended (on the writer thread, or at once if it already had) -- what the writer's jobs keep open, such
+  as the log file, is let go there rather than left to the garbage collector. A close that returned ``True`` leaves
+  the end to its caller.
 """
 
 from __future__ import annotations
@@ -51,6 +55,9 @@ class OrderedWriter:
         self._freeing = False  # the disposer is on a value
         self._closing = False  # no new jobs from outside; both threads end once nothing is left
         self._abandoned = False  # a close passed its deadline: later outcomes are not reported
+        self._writer_ended = False  # the writer thread has left its loop
+        self._on_end = None  # a timed-out close's callback, for the writer's end
+        self.on_end_error = None
         self.dropped_lines = self.dropped_keyed = self.line_errors = 0
         self._thread = threading.Thread(target=self._loop, name=name, daemon=True)
         self._freer = threading.Thread(target=self._free_loop, name=f"{name}-free", daemon=True)
@@ -105,7 +112,7 @@ class OrderedWriter:
                 self._cond.wait(left)
             return list(self._pending_keys)
 
-    def close(self, timeout_s: float) -> bool:
+    def close(self, timeout_s: float, on_end=None) -> bool:
         """New jobs refused from now on (a disposal's report still goes); the writer and the disposer finish what is
         left -- the disposer without its delay -- and end by themselves, whether or not this call waits for them
         (Codex U29 implementation review round 4: a close that timed out had stopped the closing). Waits up to
@@ -117,10 +124,23 @@ class OrderedWriter:
         for thread in (self._thread, self._freer):
             thread.join(max(0.0, deadline - time.monotonic()))
         if self._thread.is_alive() or self._freer.is_alive():
+            run_now = False
             with self._cond:
                 self._abandoned = True
+                if on_end is not None:
+                    run_now = self._writer_ended  # the writer is done (the disposer is what is late): end it here
+                    if not run_now:
+                        self._on_end = on_end
+            if run_now:
+                self._call_on_end(on_end)
             return False
         return True
+
+    def _call_on_end(self, on_end) -> None:
+        try:
+            on_end()
+        except Exception as exc:  # noqa: BLE001 -- noted; the writer's end goes on
+            self.on_end_error = f"{type(exc).__name__}: {exc}"
 
     def _nothing_left(self) -> bool:  # under the lock
         return not (self._queue or self._busy or self._disposals or self._freeing)
@@ -158,15 +178,23 @@ class OrderedWriter:
     # --- the writer thread ------------------------------------------------------------------------------------------
     def _loop(self) -> None:
         while True:
+            ended, on_end = False, None
             with self._cond:
                 while not self._queue:
                     if self._closing and self._nothing_left():
                         self._cond.notify_all()
-                        return
+                        self._writer_ended, ended = True, True
+                        on_end, self._on_end = self._on_end, None
+                        break
                     self._cond.wait()
-                key, job, nbytes = self._queue.popleft()
-                self._line_bytes -= nbytes
-                self._busy = True
+                if not ended:
+                    key, job, nbytes = self._queue.popleft()
+                    self._line_bytes -= nbytes
+                    self._busy = True
+            if ended:
+                if on_end is not None:  # outside the lock: a close on a slow disk must not hold the control thread
+                    self._call_on_end(on_end)
+                return
             errors = None
             try:
                 result = job()

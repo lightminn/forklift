@@ -227,3 +227,33 @@ def test_a_close_that_timed_out_still_refuses_new_jobs_and_both_threads_end_once
     assert not w.put_keyed(3, lambda: [])
     gate.set()
     assert ended(w)
+
+
+def test_a_timed_out_close_hands_its_end_to_the_writer():
+    """A close past its deadline left what the writer's jobs keep open (the live log) to the garbage collector, which
+    raised in a later test under -W error; the writer now lets it go when it ends."""
+    w = OrderedWriter()
+    gate, ended = threading.Event(), []
+    w.put_line(lambda: gate.wait(5.0), 1)
+    assert w.close(0.1, on_end=lambda: ended.append(threading.current_thread().name)) is False
+    assert ended == []
+    gate.set()
+    w._thread.join(5.0)
+    assert ended == ["live-io"] and w.on_end_error is None
+
+
+def test_a_close_in_time_leaves_the_end_to_its_caller_and_a_failing_end_is_noted():
+    w = OrderedWriter()
+    ended = []
+    assert w.close(5.0, on_end=lambda: ended.append(1)) is True and ended == []
+    w = OrderedWriter()
+    gate = threading.Event()
+    w.put_line(lambda: gate.wait(5.0), 1)
+
+    def bad():
+        raise OSError("disk")
+
+    assert w.close(0.1, on_end=bad) is False
+    gate.set()
+    w._thread.join(5.0)
+    assert w.on_end_error == "OSError: disk"
