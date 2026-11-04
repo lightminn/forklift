@@ -1291,7 +1291,13 @@ def arguments() -> argparse.Namespace:
         type=Path,
         default=None,
         help="--f1v2-probe delivery: a JSON list of extra laser poses (v1 operating stops, label/laser/recorded state) "
-        "for the operating comparison.",
+        "for the operating comparison; cusp: the path registry (tools/f1v2_cusp_paths.py).",
+    )
+    parser.add_argument(
+        "--f1v2-probe-record",
+        choices=("on", "off"),
+        default="on",
+        help="--f1v2-probe cusp: the endpoint event record (off: the instrumentation equivalence run).",
     )
     parser.add_argument(
         "--repeat-at-near-capture",
@@ -3837,6 +3843,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for body_ in U_.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
             if body_.HasAPI(UP_.RigidBodyAPI) and not body_.HasAPI(PS.PhysxContactReportAPI):
                 PS.PhysxContactReportAPI.Apply(body_).CreateThresholdAttr(0.0)
+    if getattr(args, "f1v2_probe", None) == "cusp":
+        # F1 v2 plan section 3 (diagnostic, off by default): the scene's walls and pallets stop colliding (the truck
+        # follows the v1 paths at their own coordinates with nothing but the floor to touch), and every truck and
+        # pallet body reports its contacts (the wheel load check and the foreign-contact count), before the reset
+        from pxr import PhysxSchema as PS, Usd as U_, UsdPhysics as UP_
+
+        cleared_ = []
+        for root_ in ("/World/Scene", "/World/ScenePallets"):
+            for prim_ in U_.PrimRange(stage.GetPrimAtPath(root_)):
+                if prim_.HasAPI(UP_.CollisionAPI):
+                    UP_.CollisionAPI(prim_).CreateCollisionEnabledAttr(False)
+                    cleared_.append(str(prim_.GetPath()))
+        for root_ in ("/World/Forklift", "/World/Pallet"):
+            for body_ in U_.PrimRange(stage.GetPrimAtPath(root_)):
+                if body_.HasAPI(UP_.RigidBodyAPI) and not body_.HasAPI(PS.PhysxContactReportAPI):
+                    PS.PhysxContactReportAPI.Apply(body_).CreateThresholdAttr(0.0)
+        state["f1v2_cusp_stage"] = {"collision_off": cleared_}
     # Physics-step scheduling sets the recording rate. Acquire every rendered
     # frame so the SDK elapsed-time threshold cannot skip frame metadata.
     camera = Camera(
@@ -4330,18 +4353,6 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
     except Exception as exc_:  # noqa: BLE001 -- the API differs between releases; record why
         state["plant_backend"] = {"error": repr(exc_)}
-    if getattr(args, "f1v2_probe", None) == "delivery":
-        # F1 v2 plan section 2 (diagnostic, off by default): the delivery match at the registered poses, then stop
-        import f1v2_probes
-
-        extra_ = (json.loads(Path(args.f1v2_probe_extra).read_text()) if args.f1v2_probe_extra is not None else None)
-        state["f1v2_probe"] = f1v2_probes.run_delivery_probe(
-            world, robot, pallet, args=args, settings=settings, geometry=geometry, destination=truth_destination,
-            initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
-            action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_)
-        state["phase"] = "f1v2_probe_done"
-        state["success"] = True
-        return
     if args.steering_probe:
         import steering_probe_arms
 
@@ -4354,6 +4365,32 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             arms=probe_arms_, lift_index=lift_index, scene_pallet=pallet,
         )
         state["phase"] = "steering_probe_done"
+        state["success"] = True
+        return
+    if getattr(args, "f1v2_probe", None) == "delivery":
+        # F1 v2 plan section 2 (diagnostic, off by default): the delivery match at the registered poses, then stop
+        import f1v2_probes
+
+        extra_ = (json.loads(Path(args.f1v2_probe_extra).read_text()) if args.f1v2_probe_extra is not None else None)
+        state["f1v2_probe"] = f1v2_probes.run_delivery_probe(
+            world, robot, pallet, args=args, settings=settings, geometry=geometry, destination=truth_destination,
+            initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
+            action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_)
+        state["phase"] = "f1v2_probe_done"
+        state["success"] = True
+        return
+    if getattr(args, "f1v2_probe", None) == "cusp":
+        # F1 v2 plan section 3 (diagnostic, off by default): every registered cusp leg on the truth pose, then stop
+        import f1v2_probes
+
+        require(args.f1v2_probe_extra is not None, "--f1v2-probe cusp needs --f1v2-probe-extra (the path registry)")
+        state["f1v2_probe"] = f1v2_probes.run_cusp_probe(
+            world, robot, pallet, args=args, settings=settings, stage=stage, initial_base=initial_base,
+            lift_index=lift_index, wheels=wheels, steers=steers, action_type=ArticulationAction, out_dir=args.output,
+            registry=json.loads(Path(args.f1v2_probe_extra).read_text()),
+            robot_mass_kg=float(sum(state["plant_backend"]["masses_kg"])), accel_mps2=COMMAND_ACCEL_MPS2,
+            record=args.f1v2_probe_record == "on", order=args.f1v2_probe_order)
+        state["phase"] = "f1v2_probe_done"
         state["success"] = True
         return
     # SLAM localization plan L4: the survey bundle this run localizes on -- its files hashed again against the

@@ -114,3 +114,284 @@ def evaluate(reference_points, ranges, beam_angles, *, rear_from_laser, estimate
             "goal_error_vs_truth": goal_error,
             "correction": None if result.correction is None else [float(x) for x in result.correction],
             "starts": starts}
+
+
+# --- (ii') the cusp arrival probe (plan section 3, amendment 2): the registered paths and one cusp leg's trial ---
+
+CUSP_STOP_NEEDED = 12  # the runner's cusp_stop_needed (run_transport.py, ms.cusp_stop_ticks)
+CUSP_STOP_YAW_RATE_RADPS = 0.02  # the runner's cusp_stop_yaw_rate_radps
+CUSP_TIME_SPEED_MPS = 0.05  # the time cap is the leg length over this speed (plan section 3)
+SYNTHETIC_STEP_M = 0.05  # the planner's sample spacing
+SYNTHETIC_CURVATURES = (0.20, 0.36)
+SYNTHETIC_LEGS_M = (1.0, 0.6, 0.8)  # straight, arc, then the reverse straight after the cusp
+STATUS_CODE = {"tracking": 0, "braking": 1, "arrived": 2, "failed": 3}
+FAILURE_CODE = {None: 0, "cross_track": 1, "endpoint_heading": 2}
+
+
+def path_sha256(path: dict) -> str:
+    """The hash of what the tracker reads (poses, directions, curvatures) as float64/int8 bytes."""
+    import hashlib
+
+    h = hashlib.sha256()
+    h.update(np.asarray(path["poses"], dtype=np.float64).tobytes())
+    h.update(np.asarray(path["directions"], dtype=np.int8).tobytes())
+    h.update(np.asarray(path["curvatures_inv_m"], dtype=np.float64).tobytes())
+    return h.hexdigest()
+
+
+def leg_bounds(directions) -> list:
+    """(start sample, end sample) of every leg, as the tracker splits the path at its gear changes."""
+    d = np.asarray(directions)
+    ends = (np.flatnonzero(d[1:-1] != d[2:]) + 1).tolist() + [len(d) - 1]
+    starts = [0] + ends[:-1]
+    return list(zip(starts, ends))
+
+
+def first_transport_plan(result: dict) -> tuple:
+    """The run's first transport plan and where it came from (plan section 3): the first cusp replan's replaced path,
+    else the first delivery-straight replacement's original (docking overwrites paths.transport), else paths.transport."""
+    replans = result.get("cusp_replans") or []
+    if replans:
+        return replans[0]["replaced_path"], "cusp_replans[0].replaced_path"
+    for e in result.get("paths_replaced") or []:
+        if e.get("leg") == "transport" and e.get("by") == "delivery_straight":
+            return e["path"], "paths_replaced[first transport/delivery_straight].path"
+    return (result.get("paths") or {})["transport"], "paths.transport"
+
+
+def registered_paths(results: dict) -> dict:
+    """Every registered path version of the v1 runs ({run name: result.json dict}): the first transport plan and each
+    cusp replan's path, deduplicated by hash, with the versions the rule leaves out listed (the transport plans a
+    scene replan replaced before any of the registered ones)."""
+    versions, omitted = [], []
+    seen = set()
+    for run in sorted(results):
+        r = results[run]
+        first, source = first_transport_plan(r)
+        entries = [(f"{run}/first", source, first)]
+        entries += [(f"{run}/replan{i}", f"cusp_replans[{i}].path", c["path"])
+                    for i, c in enumerate(r.get("cusp_replans") or [])]
+        for vid, src, p in entries:
+            digest = path_sha256(p)
+            if digest in seen:
+                omitted.append({"id": vid, "source": src, "sha256": digest, "why": "duplicate"})
+                continue
+            seen.add(digest)
+            versions.append({"id": vid, "run": run, "source": src, "sha256": digest,
+                             "poses": [[float(v) for v in q] for q in p["poses"]],
+                             "directions": [int(v) for v in p["directions"]],
+                             "curvatures_inv_m": [float(v) for v in p["curvatures_inv_m"]],
+                             "cusp_legs": len(leg_bounds(p["directions"])) - 1})
+        if not (r.get("cusp_replans") or []):
+            # a scene replan before the first delivery straight replaced a transport plan the rule cannot reach
+            for e in r.get("paths_replaced") or []:
+                if e.get("leg") == "transport" and e.get("by") == "delivery_straight":
+                    break
+                if e.get("leg") == "transport":
+                    omitted.append({"id": f"{run}/{e.get('by')}@{float(e.get('time_s', 0.0)):.1f}",
+                                    "source": "paths_replaced", "sha256": path_sha256(e["path"]),
+                                    "why": "replaced before the first registered plan"})
+    return {"versions": versions, "omitted": omitted}
+
+
+def synthetic_path(start_rear, curvature: float) -> dict:
+    """Plan section 3 (P2): 1.0 m straight, 0.6 m arc of ``curvature`` (sign = side), a cusp, a 0.8 m reverse straight,
+    sampled every SYNTHETIC_STEP_M from ``start_rear``."""
+    x, y, yaw = (float(v) for v in start_rear)
+    poses, directions, curvatures = [[x, y, yaw]], [1], [0.0]
+    pieces = ((SYNTHETIC_LEGS_M[0], 1, 0.0), (SYNTHETIC_LEGS_M[1], 1, float(curvature)), (SYNTHETIC_LEGS_M[2], -1, 0.0))
+    for length, direction, kappa in pieces:
+        for _ in range(int(round(length / SYNTHETIC_STEP_M))):
+            s = direction * SYNTHETIC_STEP_M
+            if kappa == 0.0:
+                x, y = x + s * math.cos(yaw), y + s * math.sin(yaw)
+            else:
+                yaw1 = yaw + kappa * s
+                x, y = x + (math.sin(yaw1) - math.sin(yaw)) / kappa, y + (math.cos(yaw) - math.cos(yaw1)) / kappa
+                yaw = yaw1
+            poses.append([x, y, yaw])
+            directions.append(direction)
+            curvatures.append(kappa)
+    directions[0], curvatures[0] = directions[1], curvatures[1]
+    return {"poses": poses, "directions": directions, "curvatures_inv_m": curvatures}
+
+
+class CuspTrial:
+    """One cusp leg driven as the mission core drives it, on the truth rear pose (plan section 3).
+
+    The tracker gets the whole path and starts at ``leg`` (skip_legs); every step is the core's tick: tracker update,
+    the cusp stop count (core.py cusp_and_observe_recovery: the tracker's speed 0, the planar truth speed within the
+    tracker's stop speed, the yaw rate within CUSP_STOP_YAW_RATE_RADPS, CUSP_STOP_NEEDED ticks), then assemble_command
+    with the obstacle layer acting (Ackermann, creep, slew_cap_stop with the stopping deceleration and the command
+    acceleration, the steering rate limit) and no permission, low-clearance or hold input. A leg the tracker itself
+    accepts (its own leg switch) is held from there: zero speed, steering held, until the stop count completes.
+
+    ``record`` adds the endpoint events, read from the update's own results and the tracker's views (status,
+    braking_against_motion, cusp_pending, failure, leg_switches): no call changes the tracker or the commands, and the
+    command/trajectory hash is the same with it off (the instrumentation equivalence).
+    """
+
+    def __init__(self, path: dict, config, leg: int, *, geometry, decel_mps2: float, accel_mps2: float,
+                 steering_rate_rad_s: float, dt: float, steering_now, record: bool = True):
+        from forklift_core.control.path_tracking import RearAxlePathTracker
+
+        self.poses = np.asarray(path["poses"], dtype=float)
+        self.tracker = RearAxlePathTracker(path["poses"], path["directions"], path["curvatures_inv_m"], config)
+        bounds = leg_bounds(path["directions"])
+        if not 0 <= leg < len(bounds) - 1:
+            raise ValueError(f"leg {leg} does not end at a cusp ({len(bounds) - 1} cusp legs)")
+        if leg:
+            self.tracker.skip_legs(leg)
+        self.leg, (self.start_index, self.end_index) = leg, bounds[leg]
+        assert self.tracker.leg_end_index == self.end_index
+        self.goal = self.poses[self.end_index]
+        d = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(self.poses[:, :2], axis=0), axis=1))]
+        self.leg_length_m = float(d[self.end_index] - d[self.start_index])
+        self.time_limit_s = self.leg_length_m / CUSP_TIME_SPEED_MPS
+        self.config, self.geometry, self.dt = config, geometry, float(dt)
+        self.decel, self.accel, self.rate = float(decel_mps2), float(accel_mps2), float(steering_rate_rad_s)
+        self.steering_command = np.asarray(steering_now, dtype=float).copy()
+        self.command_speed = 0.0
+        self.held_curvature = 0.0
+        self.stop_ticks = 0
+        self.ticks = 0
+        self.advanced = False
+        self.done = False
+        self.outcome = None
+        self.e_stop = None
+        self.stop = None
+        self.record = record
+        self.events = {"first_at_endpoint": None, "first_exceed_after_endpoint": None, "first_pending": None,
+                       "first_failed": None, "leg_switch": None} if record else None
+        self._prev_pending = False
+        self._prev_failed = False
+        self.rows = []
+
+    def start_pose(self) -> list:
+        return [float(v) for v in self.poses[self.start_index]]
+
+    def yaw_error(self, rear) -> float:
+        return _wrap(float(self.goal[2]) - float(rear[2]))
+
+    def position_error(self, rear) -> float:
+        return float(math.hypot(float(self.goal[0]) - float(rear[0]), float(self.goal[1]) - float(rear[1])))
+
+    def _note(self, key, t, rear, tracking, **more):
+        if self.events[key] is None:
+            self.events[key] = {"tick": self.ticks, "t_s": float(t), "rear": [float(v) for v in rear],
+                                "position_error_m": self.position_error(rear), "yaw_error_rad": self.yaw_error(rear),
+                                "tracker_yaw_error_rad": None if tracking is None else float(tracking.yaw_error_rad),
+                                **more}
+
+    def step(self, t: float, rear, signed_speed: float, planar_speed: float, yaw_rate: float, steering_actual):
+        """One tick from the state read after the last physics step. Returns (wheel rates, steering command) to apply,
+        or None when the trial has ended (stop confirmed or time cap reached; nothing is applied then)."""
+        from forklift_core.control.path_tracking import ackermann_command
+        from forklift_core.control.speed_chain import creep, slew_cap_stop
+
+        if self.done:
+            return None
+        rear = np.asarray(rear, dtype=float)
+        tracking = None
+        if not self.advanced:
+            leg_before = self.tracker.leg_index
+            tracking = self.tracker.update(rear, float(signed_speed), self.dt)
+            if self.tracker.leg_index != leg_before:
+                self.advanced = True  # the tracker's own leg switch (an accepted cusp)
+            requested, curvature = float(tracking.speed_mps), float(tracking.curvature_inv_m)
+            speed_zero = self.advanced or tracking.speed_mps == 0.0
+            if self.record:
+                self._record_events(t, rear, tracking)
+        else:
+            requested, curvature, speed_zero = 0.0, self.held_curvature, True
+            if self.record and abs(self.yaw_error(rear)) > self._yaw_tolerance():
+                self._note("first_exceed_after_endpoint", t, rear, None)  # held after the switch, still the leg's end
+        # the core's stop (its condition only: a tracker speed of 0 while driving a leg comes only at its end)
+        stopped = (speed_zero and float(planar_speed) <= self.config.stop_speed_mps
+                   and abs(float(yaw_rate)) <= CUSP_STOP_YAW_RATE_RADPS)
+        self.stop_ticks = self.stop_ticks + 1 if stopped else 0
+        self.rows.append([float(t), *[float(v) for v in rear], float(signed_speed), float(planar_speed),
+                          float(yaw_rate), *[float(v) for v in steering_actual],
+                          float("nan") if tracking is None else float(tracking.speed_mps),
+                          float("nan") if tracking is None else float(tracking.curvature_inv_m),
+                          -1 if tracking is None else STATUS_CODE[tracking.status],
+                          -1 if tracking is None else FAILURE_CODE[tracking.failure],
+                          -1 if tracking is None else int(tracking.cusp_pending), int(self.advanced)])
+        self.ticks += 1
+        if self.stop_ticks >= CUSP_STOP_NEEDED:
+            self.done = True
+            self.e_stop = self.yaw_error(rear)
+            self.stop = {"tick": self.ticks - 1, "t_s": float(t), "rear": [float(v) for v in rear],
+                         "yaw_error_rad": self.e_stop, "position_error_m": self.position_error(rear)}
+            if self.advanced:
+                self.outcome = "release"
+            elif tracking is not None and tracking.status == "failed":
+                self.outcome = f"failed_{tracking.failure}"
+            elif tracking is not None and tracking.cusp_pending:
+                self.outcome = "pending"
+            else:
+                self.outcome = "stopped_not_released"
+            self.rows[-1].extend([0.0, *self.steering_command])  # nothing applied after the confirmation
+            return None
+        if self.ticks * self.dt >= self.time_limit_s:
+            self.done, self.outcome = True, "timeout"
+            self.rows[-1].extend([0.0, *self.steering_command])
+            return None
+        hold = self.advanced
+        drive = ackermann_command(requested, curvature, self.geometry)
+        target = self.steering_command.copy() if hold else np.asarray(drive.steering_rad, dtype=float)
+        error = float(np.max(np.abs(target - np.asarray(steering_actual, dtype=float))))
+        wheel = creep(requested, error)
+        wheel = slew_cap_stop(self.command_speed, wheel, decel_mps2=self.decel, accel_mps2=self.accel, dt=self.dt)
+        self.command_speed = wheel
+        drive = ackermann_command(wheel, curvature, self.geometry)
+        self.steering_command = self.steering_command + np.clip(target - self.steering_command, -self.rate * self.dt,
+                                                                self.rate * self.dt)
+        if not self.advanced:
+            self.held_curvature = curvature
+        self.rows[-1].extend([float(drive.speed_mps), *self.steering_command])
+        return np.asarray(drive.wheel_rates_rad_s, dtype=float), self.steering_command.copy()
+
+    def _record_events(self, t, rear, tracking):
+        """The endpoint events of this update, inferred from its results (amendment 2): at_endpoint holds exactly
+        when the update braked for the endpoint -- status braking that is neither a brake against the motion nor a held
+        cusp carried over from an earlier update -- or latched endpoint_heading or a held cusp this update, or switched
+        the leg this update (status braking, set before the switch)."""
+        pending_now, failed_now = bool(tracking.cusp_pending), tracking.status == "failed"
+        at_endpoint = ((tracking.status == "braking" and not self.tracker.braking_against_motion
+                        and not self._prev_pending)
+                       or (failed_now and not self._prev_failed and tracking.failure == "endpoint_heading")
+                       or (pending_now and not self._prev_pending))
+        if at_endpoint:
+            self._note("first_at_endpoint", t, rear, tracking)
+        if (self.events["first_at_endpoint"] is not None
+                and abs(self.yaw_error(rear)) > self._yaw_tolerance()):
+            self._note("first_exceed_after_endpoint", t, rear, tracking)
+        if pending_now and not self._prev_pending:
+            self._note("first_pending", t, rear, tracking)
+        if failed_now and not self._prev_failed:
+            self._note("first_failed", t, rear, tracking, failure=tracking.failure)
+        if self.advanced and self.events["leg_switch"] is None:
+            sw = self.tracker.leg_switches[-1]
+            self._note("leg_switch", t, rear, tracking, via=sw["via"])
+        self._prev_pending, self._prev_failed = pending_now, failed_now
+
+    def _yaw_tolerance(self) -> float:
+        c = self.config
+        return c.yaw_tolerance_rad if c.cusp_yaw_tolerance_rad is None else c.cusp_yaw_tolerance_rad
+
+    def trajectory_sha256(self) -> str:
+        import hashlib
+
+        return hashlib.sha256(np.asarray(self.rows, dtype=np.float64).tobytes()).hexdigest()
+
+    def summary(self) -> dict:
+        return {"leg": self.leg, "start_index": self.start_index, "end_index": self.end_index,
+                "leg_length_m": self.leg_length_m, "time_limit_s": self.time_limit_s, "ticks": self.ticks,
+                "outcome": self.outcome, "e_stop_rad": self.e_stop, "stop": self.stop, "events": self.events,
+                "trajectory_sha256": self.trajectory_sha256()}
+
+
+TICK_COLUMNS = ("t", "rear_x", "rear_y", "rear_yaw", "signed_speed", "planar_speed", "yaw_rate", "steer_l", "steer_r",
+                "trk_speed", "trk_curvature", "trk_status", "trk_failure", "trk_pending", "advanced", "wheel_speed_cmd",
+                "steer_cmd_l", "steer_cmd_r")
