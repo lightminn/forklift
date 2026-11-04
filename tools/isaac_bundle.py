@@ -110,6 +110,17 @@ the TypeError "unsupported operand type(s) for -: 'NoneType' and 'NoneType'"; it
 not set; failure.txt names get_rgba and _resize_data_for_overscan; slam_control.npy's truth rear axle moved at most
 0.01 m from its first sample. A missing or different record leaves the run as it ended.
 
+Start-up crash: a run of a kind that names a first-record file (riib, bd), whose top process ended on a crash signal
+(SIGSEGV, SIGABRT, SIGBUS, SIGILL or SIGFPE, or a shell's 128 + that signal: the launcher passes the runner's status
+on) while its first record's folder exists and holds nothing at all, is recorded as infra_failed with the sign
+"startup_crash: ..." and retried the same way. Any file in that folder, a folder that is not there, another exit or a
+run the bundle itself ended leaves it as it ended (F1, 2026-11-04: f1_O_random_1_s1 segfaulted in Kit 0.35 s after
+its start with run/ empty -- the only crash exit in every bundle record on ws1).
+
+A retry moves the run's outputs aside to <path>.attempt<n>, n the attempt's number or, when a folder of that name is
+already there (moved aside by hand, an earlier batch), the next number free for every output of the run; the record's
+"moved" names where they went.
+
 Node start gap: two bundle jobs of the node (this user's, through --node-ledger-dir) start no two runs less than
 --node-stagger-s apart (default 60; 0: off), under a file lock: the F1 sessions that stopped had started 4-6 s after a
 session of another job and stopped inside Kit's viewport wait, while one job's staggered starts (one session alone,
@@ -866,6 +877,32 @@ def startup_viewport(run_dir):
             "transitions and contacts, command 0, still)")
 
 
+CRASH_SIGNALS = (signal.SIGILL, signal.SIGABRT, signal.SIGBUS, signal.SIGFPE, signal.SIGSEGV)
+
+
+def startup_crash(run_dir, rc, sig):
+    """The start-up crash's sign when the run ended on a crash signal (its own, or the shell's 128 + it) and run_dir
+    exists and is empty, else None."""
+    crash = sig if sig in CRASH_SIGNALS else (rc - 128 if isinstance(rc, int) and rc - 128 in CRASH_SIGNALS else None)
+    if crash is None:
+        return None
+    try:
+        if not os.path.isdir(run_dir) or os.listdir(run_dir):
+            return None
+    except OSError:
+        return None
+    return (f"startup_crash: the run ended on {signal.Signals(crash).name} before its first record "
+            f"({os.path.basename(os.path.normpath(run_dir))}/ empty)")
+
+
+def attempt_slot(paths, attempt):
+    """The first n >= attempt for which no path has a <path>.attempt<n> yet."""
+    n = attempt
+    while any(os.path.lexists(f"{p}.attempt{n}") for p in paths):
+        n += 1
+    return n
+
+
 def written(path) -> bool:
     """The file exists and holds something (a file opened empty is not a record yet)."""
     try:
@@ -1552,6 +1589,15 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                 note_error(f"startup_viewport {r.run.name}", exc)
             if viewport:
                 signs.insert(0, viewport)
+        crash = None
+        if (not viewport and not r.startup_silent and not r.stalled and r.term_at is None
+                and first_record(r.run, first_rel) is not None):
+            try:  # a run the bundle ended itself (its time, a stop) is not a crash of its own
+                crash = startup_crash(os.path.dirname(first_record(r.run, first_rel)), x["rc"], x["signal"])
+            except Exception as exc:  # noqa: BLE001 -- the run is still recorded, the others go on
+                note_error(f"startup_crash {r.run.name}", exc)
+            if crash:
+                signs.insert(0, crash)
         infra = bool(signs)
         removed, cleanup_error = [], None
         try:
@@ -1563,10 +1609,11 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
         moved, move_error = [], None
         if retry:
             try:
+                n = attempt_slot(r.run.retry_move, r.attempt)  # a name taken already (moved by hand) is skipped
                 for path in r.run.retry_move:
                     if os.path.lexists(path):
-                        dest = f"{path}.attempt{r.attempt}"
-                        if os.path.lexists(dest):
+                        dest = f"{path}.attempt{n}"
+                        if os.path.lexists(dest):  # appeared since: not overwritten
                             raise FileExistsError(dest)
                         os.rename(path, dest)
                         moved.append(dest)
@@ -1588,6 +1635,7 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
             "status": status, "missions": missions, "infra": signs,
             "retried": retry, "stalled": r.stalled, "stall_reason": r.stall_reason,
             "startup_silent": bool(r.startup_silent), "startup_viewport": bool(viewport),
+            "startup_crash": bool(crash),
             "silence_max_s": round(r.silence_max, 1),
             "stall_diagnostics": r.diagnostics,
             "oom_kills_during": x["ooms"], "pace_min": r.pace_min, "start": r.start_wall, **x,
