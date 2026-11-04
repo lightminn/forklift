@@ -64,7 +64,9 @@ def test_all_degenerate_goes_on_to_the_round_two_stop_on_the_slam_goal(tmp_path,
     assert not d.get("accepted_any") and d["degenerate_continued"] is True and d["previous_goal"] == [9.0, 0.0, 0.0]
     r = d["rounds"][0]
     assert r["start_verdicts"] == {"degenerate": 7} and r["chosen"] == "round2_stop"
-    assert r["degenerate_continue"] == {"eligible": True, "stop_check": True, "prefix_dry_run": {"status": "arrived"}}
+    assert r["degenerate_continue"] == {"eligible": True, "stop_check": True}
+    assert r["prefix_dry_run"] == {"status": "arrived"} and r["dry_run"]["status"] == "arrived"
+    assert r["straight_refused"] is False and r["offsets_to_new_line"] == {"lateral_m": 0.02}
     assert straight_goal(w) == (9.0, 0.0, 0.0)  # the straight to the SLAM goal
     assert w.core.trackers["transport"].config.position_tolerance_m == 0.03  # the round-2 prefix's stop
 
@@ -174,3 +176,24 @@ def test_off_and_no_injection_leave_the_record_as_before(tmp_path, monkeypatch):
     d = w.slam["docking"]
     assert "round1_injected" not in d and "degenerate_continued" not in d
     assert set(d["rounds"][0]).isdisjoint({"start_verdicts", "degenerate_continue", "chosen", "dry_run"})
+
+
+def test_round_two_accepted_with_a_refused_straight_retries_from_the_committed_goal(tmp_path, monkeypatch):
+    w = round_two(tmp_path, monkeypatch, straight=False)
+    w.slam["docking"]["dry_run"] = {"status": "arrived", "swept_clear": True}  # the first round's, left at the top
+    degenerate_dock(w, accepted=True)
+    w.core.dock_at_delivery_straight(20.0)
+    d = w.slam["docking"]
+    assert w.names()[-1] == "retry" and w.calls[-1][1] == ("b", "docking_unaligned")
+    assert d["previous_goal"] == [9.05, 0.02, 0.01] and d["goal_frame"] == "held" and d["accepted_any"] is True
+    r = d["rounds"][-1]
+    assert r["chosen"] == "retry_b" and r["straight_refused"] is True
+    assert r["dry_run"] is None and r["prefix_dry_run"] is None  # not the first round's carried-over check
+
+
+def test_an_accepted_first_round_keeps_its_own_stop_check_when_on(tmp_path, monkeypatch):
+    w = world(tmp_path, monkeypatch)  # on, an accepted first match
+    w.core.dock_at_delivery_straight(12.0)
+    r = w.slam["docking"]["rounds"][0]
+    assert r["chosen"] == "round2_stop" and r["prefix_dry_run"] == {"status": "arrived"}
+    assert r["degenerate_continue"] == {"eligible": False}

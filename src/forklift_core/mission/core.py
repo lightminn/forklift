@@ -7028,6 +7028,7 @@ class MissionCore:
         )
         docking["offsets_to_new_line"] = offsets
         path = None
+        round_dry_, round_prefix_ = None, None  # this round's own checks (line2 robustness D6; top-level ones carry over)
         if straight is not None:
             config = slam.get("transport_config", trackers["transport"].config)
             dry = bicycle_rollout(
@@ -7070,6 +7071,7 @@ class MissionCore:
                 "trajectory_samples": len(dry.trajectory),
                 "swept_clear": swept_clear,
             }
+            round_dry_ = docking["dry_run"]
             # The tracker stops anywhere inside its own tolerance (Codex v3.8 P2:
             # a clean 0.7 m straight stops at 7.8 mm); require yaw margin only.
             if (
@@ -7087,6 +7089,7 @@ class MissionCore:
                     stop_ok, docking["prefix_dry_run"] = DOCKING_RETRY.round_two_stop_check(
                         straight, rear, docking_stop_config(), ROUND2_KEEP_M, clear=pose_clear
                     )
+                    round_prefix_ = docking["prefix_dry_run"]
                     if not stop_ok:
                         path = None
                 elif continue_:
@@ -7095,8 +7098,8 @@ class MissionCore:
                     stop_ok, docking["prefix_dry_run"] = DOCKING_RETRY.round_two_stop_check(
                         straight, rear, docking_stop_config(), ROUND2_KEEP_M, clear=pose_clear
                     )
-                    docking["rounds"][-1]["degenerate_continue"].update(
-                        stop_check=bool(stop_ok), prefix_dry_run=docking["prefix_dry_run"])
+                    round_prefix_ = docking["prefix_dry_run"]
+                    docking["rounds"][-1]["degenerate_continue"]["stop_check"] = bool(stop_ok)
                     if not stop_ok:
                         continue_ = False
         corrected = replace(
@@ -7117,7 +7120,8 @@ class MissionCore:
         # seed 0). A straight that cannot be accepted ends the run instead.
         if degenerate_continue_:
             # line2 robustness D6: each round's own checks and choice (the top-level ones are the last round's)
-            docking["rounds"][-1].update(dry_run=docking.get("dry_run"), chosen=(
+            docking["rounds"][-1].update(offsets_to_new_line=offsets, straight_refused=straight is None,
+                                         dry_run=round_dry_, prefix_dry_run=round_prefix_, chosen=(
                 "retry_b" if path is None and options.d7_docking
                 else "round2_stop" if continue_ or (round_number == 1 and result.accepted) else "straight"))
         if path is None and options.d7_docking:
