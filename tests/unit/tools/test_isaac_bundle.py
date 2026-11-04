@@ -1926,3 +1926,32 @@ def test_a_live_session_past_its_first_record_is_not_judged_and_never_gets_the_v
     bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, grace_s=1.0, retries=1)
     r = results(tmp_path)["lv_s1"]
     assert r["status"] == "ended" and r["startup_silent"] is False and r["startup_viewport"] is False
+
+
+def test_the_first_epoch_s_end_without_its_record_ends_the_watch(tmp_path):
+    # Codex: epoch 1's runner ends before its scenario.json, the supervisor starts epoch 2, which runs quietly past
+    # the silence bound -- epoch 2 is not timed against epoch 1's missing record
+    script = tmp_path / "run_transport.py"
+    out = tmp_path / "lv_s2"
+    e1, e2 = out / "live" / "epoch_1" / "run", out / "live" / "epoch_2" / "run"
+    cmd = (f"mkdir -p {e1} {e2} && {sys.executable} {script} --output {e1} 0.3; "
+           f"{sys.executable} {script} --output {e2} 1.6")
+    # the runner takes its output as "--output DIR": the record's folder is one of its arguments
+    script.write_text("import sys,time; time.sleep(float(sys.argv[3]))\n")
+    run = ib.Run(name="lv_s2", argv=["bash", "-c", cmd], retry_move=[str(out)],
+                 first_record=str(e1 / "scenario.json"))
+    bundle(tmp_path, [run], startup_silence_s=0.8, stall_check_s=0.1, grace_s=1.0, retries=1)
+    r = results(tmp_path)["lv_s2"]
+    assert r["status"] == "ended" and r["rc"] == 0 and r["startup_silent"] is False
+
+
+def test_only_the_runner_with_the_record_s_folder_is_timed(tmp_path):
+    script = tmp_path / "run_transport.py"
+    script.write_text("import sys,time; time.sleep(float(sys.argv[3]))\n")
+    out = tmp_path / "lv_s3"
+    e1, other = out / "live" / "epoch_1" / "run", out / "live" / "epoch_10" / "run"
+    cmd = f"mkdir -p {e1} {other} && {sys.executable} {script} --output {other} 1.6"
+    run = ib.Run(name="lv_s3", argv=["bash", "-c", cmd], retry_move=[str(out)],
+                 first_record=str(e1 / "scenario.json"))
+    bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, grace_s=1.0, retries=1)
+    assert results(tmp_path)["lv_s3"]["startup_silent"] is False  # epoch_10 is not epoch_1's runner

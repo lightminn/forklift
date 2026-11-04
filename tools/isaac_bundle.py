@@ -90,8 +90,11 @@ stack (SIGUSR1), then, --stack-wait-s later, ended like a timeout and recorded a
 before the mission's planning and before a relocalization's operator wait (up to 540 s), so neither of those is
 judged; the progress file is not used, as it comes after both (Codex). A run's own "first_record" (a path inside one
 of its retry_move outputs, so a retry starts without it) takes the place of the kind's file: a live session names
-its first epoch's scenario.json (e.g. OUT/live/epoch_1/run/scenario.json), as the live kind names none -- only the
-first epoch is watched, a later epoch's start is not. The F1 batch of 2026-11-04 had five sessions
+its first epoch's scenario.json (e.g. OUT/live/epoch_1/run/scenario.json, written as the runner's --output path
+spells it), as the live kind names none. Such a record binds the watch to the runner with that record's folder as an
+argument (the epoch's --output): only while that runner runs, and once it has ended without the record (the
+supervisor goes on to another epoch) the run is no longer judged -- a later epoch's start is not watched. A live
+runner writes its own log (epoch_<n>/run.log): name it in the run's "scan" so its output counts as activity. The F1 batch of 2026-11-04 had five sessions
 stop right after "app ready" for 11-30 min (no log write, GPU idle, 585 MiB each) under kinds whose progress stall is
 off; healthy sessions took 17-113 s from "app ready" to their first frame, which comes after scenario.json (344
 riib/simphys runs, p99 108 s). A run with neither its own first_record nor a kind's first-record file is not judged.
@@ -883,8 +886,17 @@ def startup_silence(run, log_path, runner_start, now=time.time):
     return now() - latest
 
 
-def _runner_start(pids, match):
-    """The latest start (wall clock) of the Python processes among pids running `match`, or None when none runs."""
+def _args(pid) -> list:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0")]
+    except OSError:
+        return []
+
+
+def _runner_start(pids, match, arg=None):
+    """The latest start (wall clock) of the Python processes among pids running `match` (and, given arg, with arg as
+    one of their arguments, normalized), or None when none runs."""
     try:
         with open("/proc/stat") as f:
             btime = next(int(x.split()[1]) for x in f if x.startswith("btime "))
@@ -893,6 +905,8 @@ def _runner_start(pids, match):
     starts = []
     for p in pids:
         if not match or match not in _cmdline(p):
+            continue
+        if arg is not None and os.path.normpath(arg) not in {os.path.normpath(a) for a in _args(p) if a}:
             continue
         try:
             if not os.path.basename(os.readlink(f"/proc/{p}/exe")).startswith("python"):
@@ -1394,6 +1408,7 @@ class _Live:
     first_seen: bool = False  # its first record exists and is not empty
     startup_silent: str | None = None  # the start-up silence sign, once it is ended for it
     startup_term_at: float | None = None
+    first_runner_seen: bool = False  # the runner writing the run's own first_record has been seen
     diagnostics: str | None = None
     diag_thread: object = None  # the stalled run's diagnostics, gathered off the loop
     diag_deadline: float | None = None
@@ -1856,8 +1871,16 @@ def run_bundle(runs, out, *, slots, stagger_s=60.0, grace_s=110.0, run_timeout_s
                     if first is None or written(first):
                         r.first_seen = True  # written, or nothing to wait for (not judged)
                     else:
-                        began = (_runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match) if stack_match
+                        # a run's own first_record belongs to one runner -- the one whose output folder holds it (a
+                        # live session's first epoch): that runner's life bounds the watch, so a later epoch's runner
+                        # is never timed against the first epoch's missing record (Codex)
+                        own = os.path.dirname(r.run.first_record) if r.run.first_record else None
+                        began = (_runner_start(token_pids(r.env["BUNDLE_TOKEN"]), stack_match, own) if stack_match
                                  else r.start_wall)
+                        if own is not None and began is None and r.first_runner_seen:
+                            r.first_seen = True  # its runner ended without the record: another epoch, not judged
+                        elif own is not None and began is not None:
+                            r.first_runner_seen = True
                         if began is not None:
                             quiet = startup_silence(r.run, r.log_path, max(began, r.start_wall))
                             if quiet >= startup_silence_s:
