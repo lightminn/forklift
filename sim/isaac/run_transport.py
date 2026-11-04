@@ -1297,11 +1297,12 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--f1v2-probe",
-        choices=("delivery", "cusp"),
+        choices=("delivery", "cusp", "static"),
         default=None,
         help="Diagnostic (F1 v2 plan, docs/plans/2026-11-04-f1-v2-registration.md): after the spawn checks, run a "
         "controlled probe instead of the mission -- delivery: the delivery match at the registered pose grid with the "
-        "pallet on the forks; cusp: cusp arrivals on recorded path legs. Off by default.",
+        "pallet on the forks; cusp: cusp arrivals on recorded path legs; static: each wheel's floor force, height and "
+        "axle tilt at rest, empty and loaded (F2 plan 3). Off by default.",
     )
     parser.add_argument(
         "--f1v2-probe-order",
@@ -1322,6 +1323,19 @@ def arguments() -> argparse.Namespace:
         default=None,
         help="--f1v2-probe delivery: the O arm's f1v2_delivery_probe.json, whose laser origin height per grid point "
         "is cast (d)'s (plan section 2); unset = the run's own (the O run).",
+    )
+    parser.add_argument(
+        "--f1v2-cusp-subset",
+        choices=("all", "every8"),
+        default="all",
+        help="--f1v2-probe cusp: every registered leg, or the synthetic legs and every 8th registry leg (F2 plan 4.2).",
+    )
+    parser.add_argument(
+        "--f1v2-delivery-grid",
+        choices=("full", "f2"),
+        default="full",
+        help="--f1v2-probe delivery: the F1 v2 132-point grid, or the F2 plan's 22 points with the common start and the "
+        "planar pose matching (4.2).",
     )
     parser.add_argument(
         "--f1v2-probe-record",
@@ -3883,7 +3897,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for body_ in U_.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
             if body_.HasAPI(UP_.RigidBodyAPI) and not body_.HasAPI(PS.PhysxContactReportAPI):
                 PS.PhysxContactReportAPI.Apply(body_).CreateThresholdAttr(0.0)
-    if getattr(args, "f1v2_probe", None) == "cusp":
+    if getattr(args, "f1v2_probe", None) in ("cusp", "static"):
         # F1 v2 plan section 3 (diagnostic, off by default): the scene's walls and pallets stop colliding (the truck
         # follows the v1 paths at their own coordinates with nothing but the floor to touch), and every truck and
         # pallet body reports its contacts (the wheel load check and the foreign-contact count), before the reset
@@ -4416,11 +4430,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             world, robot, pallet, args=args, settings=settings, geometry=geometry, destination=truth_destination,
             initial_base=initial_base, lift_index=lift_index, wheels=wheels, steers=steers,
             action_type=ArticulationAction, out_dir=args.output, order=args.f1v2_probe_order, extra=extra_,
+            grid_name=args.f1v2_delivery_grid,
             reference_sha256=None if args.f1v2_probe_reference is None
             else hashlib.sha256(Path(args.f1v2_probe_reference).read_bytes()).hexdigest(),
             reference=None if args.f1v2_probe_reference is None else {
                 r_["label"]: r_["laser_origin_world"][2]
                 for r_ in json.loads(Path(args.f1v2_probe_reference).read_text())["points"]})
+        state["phase"] = "f1v2_probe_done"
+        state["success"] = True
+        return
+    if getattr(args, "f1v2_probe", None) == "static":
+        # F2 plan section 3 / M1 (diagnostic, off by default): each wheel's floor force, height and tilt at rest
+        import f1v2_probes
+
+        state["f1v2_probe"] = f1v2_probes.run_static_probe(
+            world, robot, pallet, args=args, settings=settings, stage=stage, initial_base=initial_base,
+            lift_index=lift_index, wheels=wheels, steers=steers, action_type=ArticulationAction, out_dir=args.output,
+            robot_mass_kg=float(sum(state["plant_backend"]["masses_kg"])))
         state["phase"] = "f1v2_probe_done"
         state["success"] = True
         return
@@ -4436,7 +4462,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             registry_sha256=hashlib.sha256(Path(args.f1v2_probe_extra).read_bytes()).hexdigest(),
             start_rear=(scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad),
             robot_mass_kg=float(sum(state["plant_backend"]["masses_kg"])), accel_mps2=COMMAND_ACCEL_MPS2,
-            record=args.f1v2_probe_record == "on", order=args.f1v2_probe_order)
+            record=args.f1v2_probe_record == "on", order=args.f1v2_probe_order, subset=args.f1v2_cusp_subset)
         state["phase"] = "f1v2_probe_done"
         state["success"] = True
         return
@@ -10620,8 +10646,10 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     except ValueError as exc:
         require(False, f"--settings: {exc}")
     require(
-        settings["physics_hz"] == 120 or (args.steering_probe and settings["physics_hz"] in (120, 240)),
-        "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
+        settings["physics_hz"] == 120
+        or ((args.steering_probe or getattr(args, "f1v2_probe", None) is not None)
+            and settings["physics_hz"] in (120, 240)),
+        "This adapter requires 120Hz physics (240 Hz only for a --steering-probe or --f1v2-probe convergence check)",
     )
     require(
         all(

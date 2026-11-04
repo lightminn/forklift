@@ -294,3 +294,10 @@ def test_cusp_reversed_run_validity():
     o_rev[a]["settle"] = {"converged": False}
     f1_rev[a]["settle"] = {"converged": False}
     assert _cusp(base, copy.deepcopy(base), o_rev=_crev(o_rev), f1_rev=_crev(f1_rev))["verdict"] == "unjudgeable"
+
+
+def test_stage0_matches_relative_and_absolute_paths():
+    rel = {"all_bit_identical": True,
+           "rows": [{"match": f"{n}/run/delivery_match_1.npz", "bit_identical": True} for n in J.STAGE0_RUNS]}
+    assert _delivery(stage0=rel)["verdict"] == "same"
+    assert _delivery(stage0=STAGE0)["verdict"] == "same"

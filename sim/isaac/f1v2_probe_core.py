@@ -118,7 +118,8 @@ def evaluate(reference_points, ranges, beam_angles, *, rear_from_laser, estimate
 
 # --- (ii') the cusp arrival probe (plan section 3, amendment 2): the registered paths and one cusp leg's trial ---
 
-CUSP_STOP_NEEDED = 12  # the runner's cusp_stop_needed (run_transport.py, ms.cusp_stop_ticks)
+CUSP_STOP_NEEDED = 12  # the runner's cusp_stop_needed (run_transport.py, ms.cusp_stop_ticks) at 120 Hz
+CUSP_STOP_S = 0.1  # F2 plan 2: the same stop in seconds at any dt (24 ticks at 240 Hz)
 CUSP_STOP_YAW_RATE_RADPS = 0.02  # the runner's cusp_stop_yaw_rate_radps
 CUSP_TIME_SPEED_MPS = 0.05  # the time cap is the leg length over this speed (plan section 3)
 SYNTHETIC_STEP_M = 0.05  # the planner's sample spacing
@@ -254,6 +255,7 @@ class CuspTrial:
         self.command_speed = 0.0
         self.held_curvature = 0.0
         self.stop_ticks = 0
+        self.stop_needed = int(round(CUSP_STOP_S / self.dt))
         self.ticks = 0
         self.advanced = False
         self.done = False
@@ -324,7 +326,7 @@ class CuspTrial:
                           -1 if tracking is None else int(tracking.segment_index)])
         self.aux_rows.append([float(v) for v in aux])
         self.ticks += 1
-        if self.stop_ticks >= CUSP_STOP_NEEDED:
+        if self.stop_ticks >= self.stop_needed:
             self.done = True
             self.e_stop = self.yaw_error(rear)
             self.stop = {"tick": self.ticks - 1, "t_s": float(t), "rear": [float(v) for v in rear],
@@ -405,3 +407,40 @@ TICK_COLUMNS = ("t", "rear_x", "rear_y", "rear_yaw", "signed_speed", "planar_spe
                 "trk_segment", "wheel_speed_cmd", "steer_cmd_l", "steer_cmd_r")
 AUX_COLUMNS = ("base_z", "roll", "pitch", "lift", "pallet_x", "pallet_y", "pallet_z", "pallet_qw", "pallet_qx",
                "pallet_qy", "pallet_qz", "pallet_vx", "pallet_vy", "pallet_vz")  # the pallet's only when loaded
+
+
+# --- F2 plan 4.2 (M4): the reduced delivery grid ---
+
+F2_STRESS_LABELS = ("r1_d1.42_y-8.955_w0.04", "r1_d1.60_y-8.910_w0.04")  # F1 v2's acceptance crossing and reversed dI
+
+
+def f2_grid(delivery_rear, rear_offset_m: float, mount_xy, mount_yaw: float) -> list:
+    """The 22-point M4 grid: round 1 at laser y -8.955 and yaw 0.02 (12 distances), round 2 at lateral 0 (8
+    distances), and the two F1 v2 stress points."""
+    out = []
+    for p in grid(delivery_rear, rear_offset_m, mount_xy, mount_yaw):
+        lab = p["label"]
+        if (lab.startswith("r1_") and lab.endswith("_y-8.955_w0.02")) or (lab.startswith("r2_") and lab.endswith("_l+0.00")):
+            out.append(p)
+        elif lab in F2_STRESS_LABELS:
+            out.append(p)
+    return out
+
+
+def planar_correction(laser, target) -> tuple:
+    """(dx, dy, dyaw) to take off a laser planar pose to reach the target."""
+    return (float(laser[0]) - float(target[0]), float(laser[1]) - float(target[1]),
+            _wrap(float(laser[2]) - float(target[2])))
+
+
+def shift_planar(position, q_wxyz, pivot_xy, correction) -> tuple:
+    """A body pose moved rigidly in the plane: rotated by -dyaw about the pivot, translated by -(dx, dy); height, roll
+    and pitch kept (the rotation is about the world vertical)."""
+    dx, dy, dyaw = correction
+    c, s = math.cos(-dyaw), math.sin(-dyaw)
+    rx, ry = float(position[0]) - pivot_xy[0], float(position[1]) - pivot_xy[1]
+    new_pos = np.array([pivot_xy[0] + c * rx - s * ry - dx, pivot_xy[1] + s * rx + c * ry - dy, float(position[2])])
+    hw, hz = math.cos(-dyaw / 2), math.sin(-dyaw / 2)
+    w, x, y, z = (float(v) for v in q_wxyz)
+    new_q = np.array([hw * w - hz * z, hw * x - hz * y, hw * y + hz * x, hw * z + hz * w])  # q_z(-dyaw) * q
+    return new_pos, new_q

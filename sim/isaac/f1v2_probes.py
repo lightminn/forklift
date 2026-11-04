@@ -62,26 +62,124 @@ def _state(robot, lift_index) -> dict:
             "yaw_rad": yaw, "lift_m": float(robot.get_joint_positions()[lift_index[0]])}
 
 
-def _settle(world, robot, action_type, wheels, steers, lift_index, lift_command, on_step=None) -> dict:
+SETTLE_WINDOW_S, SETTLE_MAX_S = 0.25, 6.0  # F2 plan 2: the time constants in seconds (30 and 720 steps at 120 Hz)
+SETTLE_EXTRA_TOL = {"steer_rad": 5e-5, "pallet_rel_m": 5e-5, "pallet_rel_yaw_rad": 5e-5}  # F2 plan 4.1
+
+
+def _settle(world, robot, action_type, wheels, steers, lift_index, lift_command, on_step=None, hz=None,
+            pallet=None, check_steer=False) -> dict:
     """Hold and step until the base height, pitch, roll and lift change less than SETTLE_TOL over a window;
-    ``on_step`` is called after every physics step (the cusp probe's contact count)."""
-    prev = _state(robot, lift_index)
+    ``on_step`` is called after every physics step (the cusp probe's contact count). ``hz`` sets the window and the
+    cap in seconds (None: the 120 Hz step counts, as F1 v2 ran). ``check_steer`` adds the steering joint angles and
+    ``pallet`` the pallet's pose relative to the truck (F2 plan 4.1)."""
+    window = SETTLE_WINDOW_STEPS if hz is None else int(round(SETTLE_WINDOW_S * hz))
+    cap = SETTLE_MAX_STEPS if hz is None else int(round(SETTLE_MAX_S * hz))
+
+    def extra():
+        out = {}
+        if check_steer:
+            out["steer"] = np.asarray(robot.get_joint_positions()[steers], dtype=float)
+        if pallet is not None:
+            st = _state(robot, lift_index)
+            pos_p, q_p = pallet.get_world_pose()
+            out["pallet_rel"] = np.asarray(_relative(st["base"], st["yaw_rad"], pos_p, q_p), dtype=float)
+        return out
+
+    prev, prev_x = _state(robot, lift_index), extra()
     steps, deltas = 0, None
-    while steps < SETTLE_MAX_STEPS:
-        for _ in range(SETTLE_WINDOW_STEPS):
+    while steps < cap:
+        for _ in range(window):
             _hold(robot, action_type, wheels, steers, lift_index, lift_command)
             world.step(render=False)
             if on_step is not None:
                 on_step()
-        steps += SETTLE_WINDOW_STEPS
-        now = _state(robot, lift_index)
+        steps += window
+        now, now_x = _state(robot, lift_index), extra()
         deltas = {"base_z_m": abs(now["base"][2] - prev["base"][2]),
                   "pitch_rad": abs(now["pitch_rad"] - prev["pitch_rad"]),
                   "roll_rad": abs(now["roll_rad"] - prev["roll_rad"]), "lift_m": abs(now["lift_m"] - prev["lift_m"])}
-        prev = now
-        if all(deltas[k] < SETTLE_TOL[k] for k in SETTLE_TOL):
+        ok = all(deltas[k] < SETTLE_TOL[k] for k in SETTLE_TOL)
+        if check_steer:
+            deltas["steer_rad"] = float(np.max(np.abs(now_x["steer"] - prev_x["steer"])))
+            ok = ok and deltas["steer_rad"] < SETTLE_EXTRA_TOL["steer_rad"]
+        if pallet is not None:
+            d = now_x["pallet_rel"] - prev_x["pallet_rel"]
+            deltas["pallet_rel_m"] = float(np.max(np.abs(d[:3])))
+            deltas["pallet_rel_yaw_rad"] = float(abs(d[3]))
+            ok = (ok and deltas["pallet_rel_m"] < SETTLE_EXTRA_TOL["pallet_rel_m"]
+                  and deltas["pallet_rel_yaw_rad"] < SETTLE_EXTRA_TOL["pallet_rel_yaw_rad"])
+        prev, prev_x = now, now_x
+        if ok:
             return {"converged": True, "steps": steps, "last_window": deltas}
     return {"converged": False, "steps": steps, "last_window": deltas}
+
+
+def _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, *, base_xy, yaw, base_z, load: str,
+                  lift_cmd: float, hz: float, on_step=None) -> dict:
+    """F2 plan 4.1: the common initial state of a trial. The truck goes to the pose with every joint's velocity zero,
+    the steering at 0 and the lift at 0 (the spin joints left where they are); loaded, the pallet goes to its nominal
+    seat on the forks (PALLET_ON_FORKS at floor height) with the lift down, settles, and is lifted with the operating
+    command and settles again -- so no joint is set into the pallet. Returns the settle records."""
+    _place(robot, pallet if load == "loaded" else None, base_xy, yaw, base_z,
+           (PALLET_ON_FORKS[0], PALLET_ON_FORKS[1], 0.0, PALLET_ON_FORKS[2]))
+    q = np.asarray(robot.get_joint_positions(), dtype=float).copy()
+    q[np.asarray(steers)] = 0.0
+    q[np.asarray(lift_index)] = 0.0
+    robot.set_joint_positions(q)
+    robot.set_joint_velocities(np.zeros(robot.num_dof))
+    held = pallet if load == "loaded" else None
+    out = {"seat": _settle(world, robot, action_type, wheels, steers, lift_index, 0.0, on_step=on_step, hz=hz,
+                           pallet=held, check_steer=True)}
+    if load == "loaded":
+        out["lift"] = _settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd, on_step=on_step, hz=hz,
+                              pallet=held, check_steer=True)
+    out["converged"] = all(v["converged"] for k, v in out.items() if isinstance(v, dict))
+    st = _state(robot, lift_index)
+    out["start_steer_rad"] = [float(v) for v in robot.get_joint_positions()[steers]]
+    out["lift_m"] = st["lift_m"]
+    if held is not None:
+        pos_p, q_p = pallet.get_world_pose()
+        out["pallet_rel"] = [float(v) for v in _relative(st["base"], st["yaw_rad"], pos_p, q_p)]
+    return out
+
+
+PLANAR_TOL_M, PLANAR_TOL_RAD, PLANAR_TRIES = 5e-5, 1e-5, 5  # F2 plan 4.2: the laser planar pose matching
+
+
+def _quat_rpy(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    cr, sr, cp, sp, cy, sy = (math.cos(roll / 2), math.sin(roll / 2), math.cos(pitch / 2), math.sin(pitch / 2),
+                              math.cos(yaw / 2), math.sin(yaw / 2))
+    return np.array([cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy, cr * sp * cy + sr * cp * sy,
+                     cr * cp * sy - sr * sp * cy])
+
+
+def _match_planar(world, robot, pallet, action_type, wheels, steers, lift_index, lift_cmd, hz, mount, target) -> dict:
+    """F2 plan 4.2: shift truck and pallet together in the plane (about the laser point, height, roll, pitch and the
+    pallet's full relative pose kept) until the laser planar pose is within PLANAR_TOL of the target, settling after
+    each shift; at most PLANAR_TRIES shifts."""
+    import planar_lidar
+
+    tries, settles = 0, []
+    while True:
+        base, q = robot.get_world_pose()
+        laser = planar_lidar.laser_pose_2d(np.asarray(base), np.asarray(q), mount)
+        corr = core_.planar_correction(laser, target)
+        ok = math.hypot(corr[0], corr[1]) <= PLANAR_TOL_M and abs(corr[2]) <= PLANAR_TOL_RAD
+        if ok or tries >= PLANAR_TRIES:
+            # a point is matched when the pose is within the tolerance and every settle after a shift converged
+            return {"matched": bool(ok and all(settles)), "within_tolerance": bool(ok), "shifts": tries,
+                    "residual": [float(v) for v in corr], "settles": settles}
+        pivot = (float(laser[0]), float(laser[1]))
+        for body in (robot, pallet):
+            pos, qb = body.get_world_pose()
+            new_pos, new_q = core_.shift_planar(pos, qb, pivot, corr)
+            body.set_world_pose(position=new_pos, orientation=new_q)
+            body.set_linear_velocity(np.zeros(3))
+            body.set_angular_velocity(np.zeros(3))
+        robot.set_joint_velocities(np.zeros(robot.num_dof))
+        settles.append(_settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd, hz=hz, pallet=pallet,
+                               check_steer=True)["converged"])
+        tries += 1
 
 
 def _relative(base, base_yaw, pos, q):
@@ -110,7 +208,11 @@ def _place(robot, pallet, base_xy, yaw, base_z, pallet_rel):
 
 def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destination, initial_base, lift_index, wheels,
                        steers, action_type, out_dir: Path, order: str = "forward", extra=None, reference=None,
-                       reference_sha256=None) -> dict:
+                       reference_sha256=None, grid_name: str = "full") -> dict:
+    """``grid_name`` "full" (F1 v2: 132 points, one seat and lift, poses re-placed with the pallet's planar pose) or
+    "f2" (F2 plan 4.2: 22 points, each from the common start of 4.1, the laser planar pose matched by rigid planar
+    shifts of truck and pallet to PLANAR_TOL in at most PLANAR_TRIES, a point that does not get there invalid; cast
+    (e) adds the target planar laser pose at the actual height, roll and pitch)."""
     import planar_lidar
     import yaml
 
@@ -133,7 +235,9 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
     reference_ranges = pattern.ranges_from_hits(dist, hits)
     reference_points = core_.laser_points(reference_ranges, angles)
     rear_from_laser = (offset + float(mount.xyz_m[0]), float(mount.xyz_m[1]), float(mount.yaw_rad))
-    points = core_.grid(delivery, offset, mount.xyz_m[:2], mount.yaw_rad)
+    f2 = grid_name == "f2"
+    hz = float(settings["physics_hz"])
+    points = (core_.f2_grid if f2 else core_.grid)(delivery, offset, mount.xyz_m[:2], mount.yaw_rad)
     for e in extra or []:  # v1 operating stop poses (the operating comparison)
         base, rear = core_.poses_from_laser(e["laser"], offset, mount.xyz_m[:2], mount.yaw_rad)
         points.append({"label": e["label"], "d_m": delivery[0] - rear[0], "laser": list(e["laser"]), "base": base,
@@ -145,16 +249,28 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
     if limit:
         points = points[:int(limit)]
     first = points[0]
-    _place(robot, pallet, first["base"][:2], first["base"][2], base_z, (*PALLET_ON_FORKS[:2], 0.0, PALLET_ON_FORKS[2]))
-    seat = _settle(world, robot, action_type, wheels, steers, lift_index, 0.0)
-    lift = _settle(world, robot, action_type, wheels, steers, lift_index, lift_command)
-    s0 = _state(robot, lift_index)
-    pos_p, q_p = pallet.get_world_pose()
-    pallet_rel = _relative(s0["base"], s0["yaw_rad"], pos_p, q_p)
+    seat = lift = None
+    if not f2:
+        _place(robot, pallet, first["base"][:2], first["base"][2], base_z,
+               (*PALLET_ON_FORKS[:2], 0.0, PALLET_ON_FORKS[2]))
+        seat = _settle(world, robot, action_type, wheels, steers, lift_index, 0.0)
+        lift = _settle(world, robot, action_type, wheels, steers, lift_index, lift_command)
+        s0 = _state(robot, lift_index)
+        pos_p, q_p = pallet.get_world_pose()
+        pallet_rel = _relative(s0["base"], s0["yaw_rad"], pos_p, q_p)
+    else:
+        pallet_rel = None
     rows, raw = [], {}
     for index, p in enumerate(points):
-        _place(robot, pallet, p["base"][:2], p["base"][2], s0["base"][2], pallet_rel)
-        settle = _settle(world, robot, action_type, wheels, steers, lift_index, lift_command)
+        planar = None
+        if f2:
+            settle = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=p["base"][:2],
+                                   yaw=p["base"][2], base_z=base_z, load="loaded", lift_cmd=lift_command, hz=hz)
+            planar = _match_planar(world, robot, pallet, action_type, wheels, steers, lift_index, lift_command, hz,
+                                   mount, p["laser"])
+        else:
+            _place(robot, pallet, p["base"][:2], p["base"][2], s0["base"][2], pallet_rel)
+            settle = _settle(world, robot, action_type, wheels, steers, lift_index, lift_command)
         st = _state(robot, lift_index)
         base, q = np.asarray(st["base"]), np.asarray(st["q"])
         laser = planar_lidar.laser_pose_2d(base, q, mount)
@@ -188,6 +304,16 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
                                                     own_prefixes=(planar_lidar.SELF_PREFIX, "/World/Pallet"))
         casts["d"] = core_.sent_ranges(pattern.ranges_from_hits(d_d, h_d), np.zeros(len(r_a)), pattern.range_min_m,
                                        pattern.range_max_m)
+        if f2:
+            # (e): the target planar laser pose at the actual height, roll and pitch (the residual planar error's share)
+            roll_, pitch_, yaw_ = _rpy(q)
+            q_e = _quat_rpy(roll_, pitch_, yaw_ - core_._wrap(laser[2] - p["laser"][2]))
+            o_e, dv = planar_lidar.laser_rays_world(base, q_e, mount, angles)
+            o_e = np.array([p["laser"][0], p["laser"][1], o_e[2]])
+            d_e, h_e, _ = planar_lidar.cast_scan_flags(o_e, dv, pattern.range_max_m,
+                                                        own_prefixes=(planar_lidar.SELF_PREFIX, "/World/Pallet"))
+            casts["e"] = core_.sent_ranges(pattern.ranges_from_hits(d_e, h_e), np.zeros(len(r_a)),
+                                           pattern.range_min_m, pattern.range_max_m)
         evals = {}
         for name, sent in casts.items():
             for ei, off in enumerate(core_.ESTIMATE_OFFSETS):
@@ -199,14 +325,16 @@ def run_delivery_probe(world, robot, pallet, *, args, settings, geometry, destin
         rows.append({
             "label": p["label"], "grid_index": index if order == "forward" else len(points) - 1 - index,
             "d_m": p["d_m"], "target_laser": [float(v) for v in p["laser"]],
-            "laser": [float(v) for v in laser], "pose_ok": (math.hypot(laser[0] - p["laser"][0], laser[1] - p["laser"][1])
-                                                           <= POSE_TOL_M and abs(laser[2] - p["laser"][2]) <= POSE_TOL_RAD),
-            "settle": settle, "state": st, "laser_origin_world": [float(v) for v in o_a], "d_origin_z_m": ref_z,
+            "laser": [float(v) for v in laser],
+            "pose_ok": (planar["matched"] if f2 else
+                        (math.hypot(laser[0] - p["laser"][0], laser[1] - p["laser"][1]) <= POSE_TOL_M
+                         and abs(laser[2] - p["laser"][2]) <= POSE_TOL_RAD)),
+            "settle": settle, "planar": planar, "state": st, "laser_origin_world": [float(v) for v in o_a], "d_origin_z_m": ref_z,
             "pallet_rel": [float(v) for v in _relative(st["base"], st["yaw_rad"], pos_p, q_p)],
             "v1": p.get("v1"), "evals": evals})
     np.savez_compressed(out_dir / "f1v2_delivery_ranges.npz", order=np.array(sorted(casts)),
                         **{k.replace(".", "p"): v for k, v in raw.items()})
-    out = {"probe": "delivery", "order": order, "d_reference": "own" if reference is None else "O",
+    out = {"probe": "delivery", "grid": grid_name, "order": order, "d_reference": "own" if reference is None else "O",
            "d_reference_sha256": reference_sha256,
            "delivery_rear": list(delivery), "base_z_reference_m": base_z,
            "rear_from_laser": list(rear_from_laser), "lift_command_m": lift_command,
@@ -267,13 +395,18 @@ def _gravity(stage) -> float:
 
 def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base, lift_index, wheels, steers,
                    action_type, out_dir: Path, registry: dict, robot_mass_kg: float, accel_mps2: float,
-                   start_rear, registry_sha256: str, record: bool = True, order: str = "forward") -> dict:
+                   start_rear, registry_sha256: str, record: bool = True, order: str = "forward",
+                   subset: str = "all") -> dict:
+    """``subset``: "all" (every registered leg) or "every8" (F2 plan 4.2: the synthetic legs and the registry's cusp
+    legs whose running number -- registry order, versions then legs -- is a multiple of 8). Every trial starts from the
+    common state (F2 plan 4.1, ``_common_start``): loaded, the pallet is seated and lifted again each time."""
     from forklift_core.control.path_tracking import TrackerConfig
     from pxr import Usd, UsdPhysics
 
     stage_wheels = tuple(f"{ROBOT_PREFIX}/{n}" for n in ("front_left_wheel", "front_right_wheel", "rear_left_wheel",
                                                           "rear_right_wheel"))
-    dt = 1.0 / float(settings["physics_hz"])
+    hz = float(settings["physics_hz"])
+    dt = 1.0 / hz
     offset = abs(float(args.rear_axle_offset_m))
     lift_command = float(settings["lift_target_m"])
     pallet_kg = float(settings["pallet_mass_kg"])
@@ -293,33 +426,28 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
     versions = list(registry["versions"]) + synthetic
     limit = os.environ.get("FORKLIFT_F1V2_PROBE_LIMIT")  # smoke runs only: the first N trials per load
     trials, results, ticks = [], [], {}
+    running = {}
+    for v in registry["versions"]:
+        for leg in range(v["cusp_legs"]):
+            running[(v["id"], leg)] = len(running)
+    keep = (lambda v, leg: True) if subset == "all" else (
+        lambda v, leg: v["source"] == "synthetic" or running[(v["id"], leg)] % 8 == 0)
     for load in ("loaded", "empty"):
         plan = [(load, cname, v, leg) for cname in ("transport", "observe") for v in versions
-                for leg in range(v["cusp_legs"])]
+                for leg in range(v["cusp_legs"]) if keep(v, leg)]
         if order == "reverse":
             plan = plan[::-1]
         if limit:
             plan = plan[:int(limit)]
         trials.extend(plan)
     setup = {}
-    pallet_rel, base_z = None, float(initial_base[2])
+    base_z = float(initial_base[2])
     current_load = None
     for index, (load, cname, version, leg) in enumerate(trials):
         if load != current_load:
             current_load = load
-            first = core_.CuspTrial(version, configs[cname], leg, geometry=args.drive_geometry, decel_mps2=decel,
-                                    accel_mps2=accel, steering_rate_rad_s=float(settings["steering_command_rate_rad_s"]),
-                                    dt=dt, steering_now=np.zeros(len(steers)), record=False).start_pose()
-            fb = (first[0] + offset * math.cos(first[2]), first[1] + offset * math.sin(first[2]))
             if load == "loaded":
-                _place(robot, pallet, fb, first[2], base_z, (*PALLET_ON_FORKS[:2], 0.0, PALLET_ON_FORKS[2]))
-                seat = _settle(world, robot, action_type, wheels, steers, lift_index, 0.0)
-                lift = _settle(world, robot, action_type, wheels, steers, lift_index, lift_command)
-                s0 = _state(robot, lift_index)
-                pos_p, q_p = pallet.get_world_pose()
-                pallet_rel, base_z = _relative(s0["base"], s0["yaw_rad"], pos_p, q_p), float(s0["base"][2])
-                setup["loaded"] = {"seat": seat, "lift": lift, "pallet_rel": [float(v) for v in pallet_rel],
-                                   "base_z_m": base_z}
+                setup["loaded"] = {"init": "common start per trial (F2 plan 4.1)"}
             else:
                 bodies = [p for p in Usd.PrimRange(stage.GetPrimAtPath(PALLET_PREFIX))
                           if p.HasAPI(UsdPhysics.RigidBodyAPI)]
@@ -349,9 +477,9 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
             pairs.update(map(tuple, c_["pairs"]))
             return c_
 
-        _place(robot, pallet if load == "loaded" else None, sb, sr[2], base_z, pallet_rel)
-        settle = _settle(world, robot, action_type, wheels, steers, lift_index, lift_cmd,
-                         on_step=lambda: count("settle", _contacts(stage_wheels)))
+        settle = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=sb, yaw=sr[2],
+                               base_z=base_z, load=load, lift_cmd=lift_cmd, hz=hz,
+                               on_step=lambda: count("settle", _contacts(stage_wheels)))
         jz = 0.0
         for _ in range(LOAD_STEPS):
             _hold(robot, action_type, wheels, steers, lift_index, lift_cmd)
@@ -401,7 +529,7 @@ def run_cusp_probe(world, robot, pallet, *, args, settings, stage, initial_base,
     out = {"probe": "cusp", "order": order, "record": record, "dt_s": dt, "gravity_mps2": g,
            "robot_mass_kg": robot_mass_kg, "pallet_mass_kg": pallet_kg, "lift_command_m": lift_command,
            "decel_mps2": decel, "accel_mps2": accel, "tracker_configs": registry["tracker_configs"],
-           "scene_start_rear": list(start_rear), "setup": setup,
+           "scene_start_rear": list(start_rear), "setup": setup, "subset": subset, "init": "common",
            "registry_sha256": registry_sha256,
            "versions": [{k: v[k] for k in ("id", "run", "source", "sha256", "cusp_legs")} for v in versions],
            "omitted": registry.get("omitted", []), "trials": results}
@@ -416,3 +544,117 @@ def yaml_load(path) -> dict:
     import yaml
 
     return yaml.safe_load(Path(path).read_text())
+
+
+# --- F2 plan section 3 / M1: the static probe (per-wheel floor force, height, axle tilt) ---
+
+WHEEL_LINKS = ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel")
+STATIC_WINDOW_S = 0.5  # F2 plan 3: the window after the settle
+
+
+def _wheel_floor(stage_wheels) -> dict:
+    """This step's contact report per tyre against the floor collider: the summed impulse z on the tyre (sign: on the
+    truck), the contact point count and the smallest separation; and the foreign contact count (the truck or the pallet
+    against anything but each other, a tyre on the floor aside)."""
+    from omni.physx import get_physx_simulation_interface
+    from pxr import PhysicsSchemaTools
+
+    headers, data = get_physx_simulation_interface().get_contact_report()
+    rows = {w: {"jz": 0.0, "n": 0, "min_sep": math.inf} for w in stage_wheels}
+    foreign = 0
+    for header in headers:
+        a0 = str(PhysicsSchemaTools.intToSdfPath(header.actor0))
+        a1 = str(PhysicsSchemaTools.intToSdfPath(header.actor1))
+        ours = [p.startswith(ROBOT_PREFIX) or p.startswith(PALLET_PREFIX) for p in (a0, a1)]
+        if all(ours) or not any(ours):
+            continue
+        mine, other = (a0, a1) if ours[0] else (a1, a0)
+        sign = 1.0 if mine == a1 else -1.0
+        for k in range(header.contact_data_offset, header.contact_data_offset + header.num_contact_data):
+            c = data[k]
+            if mine in rows and FLOOR_TOKEN in other:
+                r = rows[mine]
+                r["jz"] += sign * float(c.impulse[2])
+                r["n"] += 1
+                r["min_sep"] = min(r["min_sep"], float(c.separation))
+            else:
+                foreign += 1
+    return {"wheels": rows, "foreign": foreign}
+
+
+def _axle_tilt(q_wxyz) -> float:
+    """The wheel axle's angle from the horizontal: the link's local y (the spin axis, URDF axis 0 1 0) in the world."""
+    w, x, y, z = (float(v) for v in q_wxyz)
+    axle_z = 2 * (y * z + w * x)  # the z component of R @ (0, 1, 0)
+    return math.asin(max(-1.0, min(1.0, abs(axle_z))))
+
+
+def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_base, lift_index, wheels, steers,
+                     action_type, out_dir: Path, robot_mass_kg: float) -> dict:
+    """At the scene's start pose, empty then loaded: the common start (4.1), then a STATIC_WINDOW_S window recording
+    each wheel's floor force (impulse z / dt), contact point count, smallest separation, link-centre height and axle
+    tilt, and the body height, roll, pitch and lift. The calibration judge compares an arm with the rigid arm of the
+    same mass (F2 plan 3)."""
+    from steering_probe_arms import _link_poses
+
+    hz = float(settings["physics_hz"])
+    dt = 1.0 / hz
+    stage_wheels = tuple(f"{ROBOT_PREFIX}/{n}" for n in WHEEL_LINKS)
+    g = _gravity(stage)
+    lift_command = float(settings["lift_target_m"])
+    pallet_kg = float(settings["pallet_mass_kg"])
+    base0, q0 = robot.get_world_pose()
+    yaw0 = _rpy(q0)[2]
+    base_z = float(initial_base[2])
+    out = {"probe": "static", "physics_hz": hz, "gravity_mps2": g, "robot_mass_kg": robot_mass_kg,
+           "pallet_mass_kg": pallet_kg, "lift_command_m": lift_command,
+           "start_base": [float(base0[0]), float(base0[1]), yaw0], "loads": {}}
+    for load in ("empty", "loaded"):
+        foreign = {"n": 0}
+
+        def count():
+            foreign["n"] += _wheel_floor(stage_wheels)["foreign"]
+
+        start = _common_start(world, robot, pallet, action_type, wheels, steers, lift_index, base_xy=base0[:2],
+                              yaw=yaw0, base_z=base_z, load=load, lift_cmd=lift_command if load == "loaded" else 0.0,
+                              hz=hz, on_step=count)
+        lift_cmd = lift_command if load == "loaded" else 0.0
+        steps = int(round(STATIC_WINDOW_S * hz))
+        series = {w: {"fz": [], "n": [], "min_sep": [], "z": [], "tilt": []} for w in WHEEL_LINKS}
+        body = {"z": [], "roll": [], "pitch": [], "lift": []}
+        for _ in range(steps):
+            _hold(robot, action_type, wheels, steers, lift_index, lift_cmd)
+            world.step(render=False)
+            c = _wheel_floor(stage_wheels)
+            foreign["n"] += c["foreign"]
+            poses = _link_poses(robot)
+            for w, path in zip(WHEEL_LINKS, stage_wheels):
+                r = c["wheels"][path]
+                series[w]["fz"].append(-r["jz"] / dt)  # the floor's push on the tyre, upward positive
+                series[w]["n"].append(r["n"])
+                series[w]["min_sep"].append(r["min_sep"])
+                p, q = poses[w]
+                series[w]["z"].append(float(p[2]))
+                series[w]["tilt"].append(_axle_tilt(q))
+            st = _state(robot, lift_index)
+            body["z"].append(st["base"][2])
+            body["roll"].append(st["roll_rad"])
+            body["pitch"].append(st["pitch_rad"])
+            body["lift"].append(st["lift_m"])
+
+        def summary(xs):
+            a = np.asarray(xs, dtype=float)
+            fin = a[np.isfinite(a)]
+            return {"mean": float(fin.mean()) if len(fin) else None, "min": float(fin.min()) if len(fin) else None,
+                    "max": float(fin.max()) if len(fin) else None}
+
+        weight = (robot_mass_kg + (pallet_kg if load == "loaded" else 0.0)) * g
+        total = sum(summary(series[w]["fz"])["mean"] or 0.0 for w in WHEEL_LINKS)
+        out["loads"][load] = {
+            "start": start, "window_steps": steps, "foreign_contacts": foreign["n"],
+            "wheel_load_ratio": total / weight,
+            "wheels": {w: {k: summary(v) for k, v in series[w].items()} for w in WHEEL_LINKS},
+            "body": {k: summary(v) for k, v in body.items()}}
+    (out_dir / "f1v2_static_probe.json").write_text(json.dumps(out) + "\n")
+    return {"loads": {k: {"ratio": v["wheel_load_ratio"], "converged": v["start"]["converged"],
+                          "foreign": v["foreign_contacts"]} for k, v in out["loads"].items()}}

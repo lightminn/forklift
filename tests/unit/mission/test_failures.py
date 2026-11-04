@@ -69,7 +69,8 @@ KNOWN = {
         "Cannot open base scene", "Invalid pallet spawn after settling", "Truck spawn displaced",
         "recognition label target ",  # main's far recognition (merged 2026-10-19): a setup check
         "Tracking failed in ",  # persistent console plan section 4 (U10b): --live-test-fail-at, a mission failure
-        "This adapter requires 120Hz physics (240 Hz only for a --steering-probe convergence check)",
+        "This adapter requires 120Hz physics (240 Hz only for a --steering-probe or --f1v2-probe convergence check)",
+        "--f1v2-probe cusp needs --f1v2-probe-extra (the path registry)",  # F1 v2 plan: the cusp probe's registry
         "Settings must be positive finite values", "Camera render product prim is missing",
         "Perception camera intrinsics mismatch (G1a)", "base scene built from another forklift URDF",
         "pocket_check_without_capture", "pocket_check_refused:", "Mission planning failed: ",

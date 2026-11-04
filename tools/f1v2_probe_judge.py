@@ -119,7 +119,9 @@ def pair_why(eo: dict, ef: dict) -> tuple:
 def delivery(stage0: dict, v1_stops: list, o_runs: list, o_reverse: dict, f1_runs: list, f1_reverse: dict) -> dict:
     unjudgeable, notes = [], {}
     rows0 = stage0.get("rows") or []
-    named = [next((n for n in STAGE0_RUNS if f"/{n}/" in str(r.get("match"))), None) for r in rows0]
+    # the run folder is a part of the recorded match path, relative or absolute (F2 plan 4.2: F1 v2 matched "/<run>/"
+    # only, which a relative path never has)
+    named = [next((n for n in STAGE0_RUNS if n in Path(str(r.get("match"))).parts), None) for r in rows0]
     if not stage0.get("all_bit_identical") or sorted(n for n in named if n) != sorted(STAGE0_RUNS) or None in named:
         unjudgeable.append("stage 0: not the six v1 line_2 matches reproduced bit for bit")
     if sorted(s["label"] for s in v1_stops) != sorted(V1_STOP_LABELS):

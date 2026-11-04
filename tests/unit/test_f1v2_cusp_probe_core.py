@@ -199,3 +199,25 @@ def test_an_overshot_cusp_stall_ends_at_the_cores_stop():
     _drive(trial, trial.start_pose(), yaw_bias=0.1)
     assert trial.outcome == "stopped_not_released" and trial.stop["position_error_m"] > 0.03
     assert trial.events["first_at_endpoint"] is not None and trial.stop["tick"] < 1000
+
+
+def test_stop_count_is_in_seconds():
+    path = P.synthetic_path((0.0, 0.0, 0.0), 0.2)
+    t120 = _trial(path, TRANSPORT)
+    t240 = P.CuspTrial(path, TRANSPORT, 0, geometry=GEOMETRY, decel_mps2=1.5, accel_mps2=0.8, steering_rate_rad_s=1.2,
+                       dt=1 / 240, steering_now=np.zeros(2))
+    assert t120.stop_needed == P.CUSP_STOP_NEEDED == 12 and t240.stop_needed == 24
+
+
+def test_f2_grid_and_planar_shift():
+    g = P.f2_grid((0.678, -8.946, 0.0), 0.34, (-0.12, 0.0), 0.0)
+    labels = [p["label"] for p in g]
+    assert len(g) == 22 and set(P.F2_STRESS_LABELS) <= set(labels)
+    assert sum(lab.startswith("r1_") for lab in labels) == 14 and sum(lab.startswith("r2_") for lab in labels) == 8
+    yaw = 0.3
+    q = np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
+    pos, q2 = P.shift_planar([1.0, 2.0, 0.1], q, (1.0, 1.0), (0.01, -0.02, 0.05))
+    assert pos[2] == 0.1 and 2 * math.atan2(q2[3], q2[0]) == pytest.approx(yaw - 0.05)
+    # the pivot itself moves by the translation only
+    p0, _ = P.shift_planar([1.0, 1.0, 0.0], q, (1.0, 1.0), (0.01, -0.02, 0.05))
+    assert p0[:2] == pytest.approx([0.99, 1.02])

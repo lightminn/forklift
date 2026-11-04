@@ -40,6 +40,7 @@ PREFIXES = {
     # the setup's own (never inside a live mission)
     "Cannot open base scene": SESSION, "Invalid pallet spawn after settling": SESSION, "Truck spawn displaced": SESSION,
     "This adapter requires 120Hz physics": SESSION, "Settings must be positive finite values": SESSION,
+    "--f1v2-probe cusp needs --f1v2-probe-extra": SESSION,  # F1 v2 plan: the cusp probe's registry (a setup check)
     "Camera render product prim is missing": SESSION, "Perception camera intrinsics": SESSION,
     "base scene built from another forklift URDF": SESSION, "pocket camera intrinsics differ": SESSION,
     "live video camera intrinsics differ": SESSION, "Perception display clipping range": SESSION,
