@@ -34,6 +34,13 @@ test("checking and an end have their own lines", () => {
   assert.match(poseBand({ status: "ended:pose_revoked:int" }).text, /권한을 거뒀습니다/);
 });
 
+test("the zones the vehicle left out are said, and the legend is the band's", () => {
+  const sq = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const band = poseBand({ status: "unconfirmed", zones: [sq], zones_omitted: 40 });
+  assert.match(band.text, /점선은 가설 구역\(차 기준\) · 먼 40 개 생략/);
+  assert.doesNotMatch(poseBand({ status: "unconfirmed", zones: [] }).text, /점선/);
+});
+
 test("the hypothesis zones are polygons in the map, at most the cap", () => {
   const sq = [[0, 0], [1, 0], [1, 1], [0, 1]];
   const pc = { status: "unconfirmed", zones: Array.from({ length: 80 }, () => sq) };

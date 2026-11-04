@@ -297,8 +297,8 @@ lease 보유자는 `tick`을 받을 때마다 `{"t": "echo", "session_epoch", "l
 - 2026-11-04(확인 전 위치, `docs/plans/2026-11-02-unconfirmed-runner.md` 4) 추가: `pose_check`(선택, `--pose-check on` 인 세션만) — `{"status", "reason", "stroke": null | {"state", "left_m", "total_left_m"}, "zones": [[[x, y], ...], ...]}`.
   - `status` 는 `checking`(출발 검사·다시 정합 계산 중 — 움직이지 않음), `unconfirmed`(곧은 후진만), `confirmed`, `ended:<사유>`(세션이 곧 끝남 — 사유는 결과 표의 `pose_*`)다.
   - `stroke.state` 는 `ready`·`active`·`closed`(차가 선 뒤 손을 뗐다가 다시 눌러야 함)·`spent`(누적 3.0 m 를 다 씀)다. `left_m` 은 이번 누름(1.0 m)과 누적 상한 가운데 남은 쪽, `total_left_m` 은 누적 상한까지 남은 거리다.
-  - `zones` 는 가설 구역이다. 각 가설이 참일 때 팔레트가 차에 대해 있을 자리를, 지금 추정한 차 자세 둘레의 지도 좌표 다각형으로 보낸 것이다(최대 64 개). 지도의 실제 팔레트 자리가 아니다. 화면은 점선과 '가설 구역 (차 기준)' 표지로 그린다.
-  - 이 동안 `drive_mode` 는 `reverse_straight` 이고 `recovery` 는 `null` 이다. 화면은 이것을 복구 후진이 아니라 확인 전 후진으로 보인다.
+  - `zones` 는 가설 구역이다. 각 가설이 참일 때 팔레트가 차에 대해 있을 자리를, 지금 추정한 차 자세 둘레의 지도 좌표 다각형으로 보낸 것이다. 차에서 가까운 64 개까지 보내고, 남은 수는 `zones_omitted` 에 싣는다(허가는 전부를 쓴다). 지도의 실제 팔레트 자리가 아니다. 화면은 점선으로 그리고 띠에 '점선은 가설 구역(차 기준)' 을 적는다. 10 Hz 로 다시 계산한다.
+  - 확인 전 후진이 허용되는 동안(`unconfirmed` 이고 누름이 `ready`·`active`) `drive_mode` 는 `reverse_straight` 이고 `recovery` 는 `null` 이다. 화면은 이것을 복구 후진이 아니라 확인 전 후진으로 보인다. `checking`·`ended`·누름 `closed`·`spent` 에서는 주행이 거부된다.
   - 세션이 `pose_` 로 시작하는 사유로 끝나면 감독자는 다시 띄우지 않는다(같은 출발에서는 같은 결과).
 - `pacing`은 Isaac에서만 의미가 있다. 실시간 배속을 유지하지 못하면(`ok: false`) 수동 조종을 막는다. 기준은 M-c가 정한다.
 - 잴 수 없는 값은 `null`로 둔다. 0이나 추정값으로 채우지 않는다.

@@ -28,6 +28,8 @@ from forklift_core.localization.slam_pose import compose
 SCANS = 5  # scan_capture.SCANS: one set, as the start relocalization takes it
 DEADLINE_S = 30.0  # the start check's and a re-match generation's deadline (the matcher's, plan 3.2)
 ZONE_BIN_M = 0.05  # the net displacement's bin: zones grown at its upper end, fixed within it (plan 3.3)
+DISPLAY_ZONES = 64  # the console is sent the nearest ones, and the count left out (Codex 2c P2)
+DISPLAY_PERIOD_S = 0.1  # the state's publish period
 RESULT_GRACE_S = 5.0  # past a job's own deadline, the time its result may take to come back before it counts as lost
 
 
@@ -221,6 +223,7 @@ class PoseRuntime:
         self.samples: list = []  # 10 Hz: (t, status, open, applied, truth)
         self.evidence: list = []  # every C_int's evidence against the truth (design 4)
         self._seen_events = 0
+        self._display = None  # (t, the last view sent to the console)
         self._truths: deque = deque(maxlen=1800)  # (t, truth) at 20 Hz: the evidence's scan time looked up (90 s)
         self._evidence_t = None  # the last scan time of the evidence the next agreement uses
 
@@ -418,14 +421,22 @@ class PoseRuntime:
             self._zones_cache = (key, T.grown_zones(rho, upper, self.bounds))
         return self._zones_cache[1], ("pose_union", key[1], hash(key[0]))
 
-    def display(self, view: P.View, C, map_zones) -> dict:
+    def display(self, view: P.View, C, map_zones, *, t: float) -> dict:
         """What the console is sent (plan 4): the status, why nothing opens, the stroke left, and the union zones as
-        map polygons (C o Z_h: where each hypothesis's pallet is relative to the truck, around the estimate)."""
+        map polygons (C o Z_h: where each hypothesis's pallet is relative to the truck, around the estimate) -- the
+        DISPLAY_ZONES nearest the truck and the count left out (the permit keeps them all); recomputed at most every
+        DISPLAY_PERIOD_S or on a new status (Codex 2c P2)."""
+        last = self._display
+        if last is not None and t - last[0] < DISPLAY_PERIOD_S and last[1]["status"] == view.status:
+            return last[1]
         stroke = None if view.stroke is None else {
             "state": view.stroke, "left_m": view.stroke_left_m, "total_left_m": view.total_left_m}
-        zones = []
         odom, _ = self.zones(map_zones) if C is not None else (None, None)
-        for z in odom or ():
+        odom = list(odom or ())
+        here = self.o_last or (0.0, 0.0, 0.0)
+        odom.sort(key=lambda z: math.hypot(z.x_m - here[0], z.y_m - here[1]))
+        zones = []
+        for z in odom[:DISPLAY_ZONES]:
             c, s_ = math.cos(z.yaw_rad), math.sin(z.yaw_rad)
             corners = []
             for a, w in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
@@ -434,7 +445,10 @@ class PoseRuntime:
                 mx, my, _ = compose(tuple(C), (cx, cy, 0.0))
                 corners.append([round(mx, 3), round(my, 3)])
             zones.append(corners)
-        return {"status": view.status, "reason": view.reason, "stroke": stroke, "zones": zones}
+        out = {"status": view.status, "reason": view.reason, "stroke": stroke, "zones": zones,
+               "zones_omitted": max(0, len(odom) - DISPLAY_ZONES)}
+        self._display = (t, out)
+        return out
 
     def rear_pending(self) -> bool:
         return self.rear == "pending" and self.pc.status == "unconfirmed"

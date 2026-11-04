@@ -349,9 +349,7 @@ export function drawMap(cv, model, tok, view, layers) {
       c.closePath();
       c.stroke();
     }
-    c.restore();
-    const [lx, ly] = P(zones[0][0][0], zones[0][0][1]);
-    tag(c, "가설 구역 (차 기준)", lx, ly - 10, tok.warn ?? tok.accent, tok);
+    c.restore(); // their legend is in the pose band, always in view (Codex 2c P3)
   }
 
   // B-P2c: the start's candidates while the truck's place is unknown -- numbered rings with a heading tick and the

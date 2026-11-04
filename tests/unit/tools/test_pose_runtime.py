@@ -478,7 +478,7 @@ def test_the_console_gets_the_status_the_stroke_and_the_zones_in_the_map():
     view = _tick(rt, b)
     C = (1.0, 0.0, 0.0)  # the applied correction: the map one metre along x from the odometry
     z = Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)
-    shown = rt.display(view, C, [z])
+    shown = rt.display(view, C, [z], t=0.0)
     assert shown["status"] == "unconfirmed" and shown["stroke"]["state"] == "ready"
     assert shown["stroke"]["left_m"] == pytest.approx(P.D_STROKE) and len(shown["zones"]) == 2
     odom, _ = rt.zones([z])
@@ -493,5 +493,20 @@ def test_a_confirmed_check_sends_its_status_without_zones():
     b = (2.42, 1.7, 0.6)
     grid, w, rt = _started(True, b)
     view = _tick(rt, b, compose(b, invert(b)))
-    shown = rt.display(view, compose(b, invert(b)), [Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)])
-    assert shown == {"status": "confirmed", "reason": None, "stroke": None, "zones": []}
+    shown = rt.display(view, compose(b, invert(b)), [Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)], t=0.0)
+    assert shown == {"status": "confirmed", "reason": None, "stroke": None, "zones": [], "zones_omitted": 0}
+
+
+def test_the_console_gets_the_nearest_zones_with_the_rest_counted_at_the_publish_rate():
+    # Codex 2c P2: the cap was the page's only; the server sends at most the nearest PR.DISPLAY_ZONES and says how many
+    # it left out, and recomputes at most every 0.1 s
+    b = (2.42, 1.7, 0.6)
+    hyps = [((2.42 + 6.0 * k, 1.7, 0.6), f"shift x+{k}") for k in range(1, 40)]
+    grid, w, rt = _started(False, b, hyps=hyps)
+    view = _tick(rt, b)
+    zones = [Zone(f"p{k}", 4.0, 1.7 + k, 1.2, 1.0, 0.0) for k in range(2)]
+    shown = rt.display(view, I, zones, t=0.0)
+    assert len(shown["zones"]) == PR.DISPLAY_ZONES and shown["zones_omitted"] == 80 - PR.DISPLAY_ZONES
+    again = rt.display(view, (5.0, 0.0, 0.0), zones, t=0.05)
+    assert again is shown  # within 0.1 s: the last one
+    assert rt.display(view, (5.0, 0.0, 0.0), zones, t=0.12) is not shown

@@ -135,4 +135,4 @@ def test_the_state_carries_the_checks_view_for_the_console():
     assert 'if self.pose_info is not None:  # the unconfirmed position check' in live
     assert 'msg["pose_check"] = dict(self.pose_info)' in live
     src = _source()
-    assert "live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones())" in src
+    assert "live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)" in src

@@ -35,8 +35,15 @@ export function poseBand(pc) {
     const reason = pc.status.slice("ended:".length);
     return { text: reasonText(reason).text, title: reason, tone: "bad" };
   }
+  const parts = [LOCKED];
   const stroke = strokeText(pc.stroke);
-  return { text: stroke ? `${LOCKED} · ${stroke}` : LOCKED, title: "확인 전 위치", tone: "warn" };
+  if (stroke) parts.push(stroke);
+  // the legend of the map's dashed zones lives here, always in view (Codex 2c P3)
+  if (poseZones(pc).length) {
+    const omitted = Number.isFinite(pc.zones_omitted) && pc.zones_omitted > 0 ? ` · 먼 ${pc.zones_omitted} 개 생략` : "";
+    parts.push(`점선은 가설 구역(차 기준)${omitted}`);
+  }
+  return { text: parts.join(" · "), title: "확인 전 위치", tone: "warn" };
 }
 
 // the zones to draw: polygons of [x, y] map points, finite, at most MAX_ZONES
