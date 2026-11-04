@@ -31,8 +31,11 @@ def info(name):
     first = r1[0] if r1 else {}
     eligible = bool((first.get("degenerate_continue") or {}).get("eligible"))
     installed = eligible and first.get("chosen") == "round2_stop"
-    installed_fail = [r for r in rounds if r.get("chosen") in ("round2_stop", "straight") and any(
-        (r.get(k) or {}).get("swept_clear") is False for k in ("dry_run", "prefix_dry_run"))]
+    # what was installed: the whole straight's check, and the stop's only when the stop path was installed (a refused
+    # stop drives the checked whole straight -- plan D2 -- and is not an installed path's failure; Codex results P3)
+    installed_fail = [r for r in rounds if r.get("chosen") in ("round2_stop", "straight") and (
+        (r.get("dry_run") or {}).get("swept_clear") is False
+        or (r.get("chosen") == "round2_stop" and (r.get("prefix_dry_run") or {}).get("swept_clear") is False))]
     lr = lcr.get(name) or {}
     phys = [v.get("min_m") for k, v in (lr.get("rows") or {}).items() if "physical" in k and v.get("min_m") is not None]
     return {
