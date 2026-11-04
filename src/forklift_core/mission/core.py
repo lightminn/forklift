@@ -257,6 +257,18 @@ def _finite_or_none(value):
     return value if math.isfinite(value) else None
 
 
+def _finite(value):
+    """value with every non-finite float replaced by None (dicts, lists and tuples gone through), for a record that is
+    written without NaN."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
+
+
 def _refused_degenerate(result):
     """The docking result as refused by degenerate at every start (the sim-only round-1 injection, line2 robustness
     V3b): no goal, no correction; the starts' poses and details kept."""
@@ -7120,8 +7132,10 @@ class MissionCore:
         # seed 0). A straight that cannot be accepted ends the run instead.
         if degenerate_continue_:
             # line2 robustness D6: each round's own checks and choice (the top-level ones are the last round's)
-            docking["rounds"][-1].update(offsets_to_new_line=offsets, straight_refused=straight is None,
-                                         dry_run=round_dry_, prefix_dry_run=round_prefix_, chosen=(
+            # finite only: a rollout that timed out reports NaN errors, which a later round overwrites at the top but
+            # this round's copy kept -- and result.json is written without NaN (ddc_on_v3a_line_2_s8 lost its record)
+            docking["rounds"][-1].update(offsets_to_new_line=_finite(offsets), straight_refused=straight is None,
+                                         dry_run=_finite(round_dry_), prefix_dry_run=_finite(round_prefix_), chosen=(
                 "retry_b" if path is None and options.d7_docking
                 else "round2_stop" if continue_ or (round_number == 1 and result.accepted) else "straight"))
         if path is None and options.d7_docking:

@@ -197,3 +197,20 @@ def test_an_accepted_first_round_keeps_its_own_stop_check_when_on(tmp_path, monk
     r = w.slam["docking"]["rounds"][0]
     assert r["chosen"] == "round2_stop" and r["prefix_dry_run"] == {"status": "arrived"}
     assert r["degenerate_continue"] == {"eligible": False}
+
+
+def test_a_round_record_keeps_no_nan_from_a_timed_out_rollout(tmp_path, monkeypatch):
+    # ddc_on_v3a_line_2_s8: a round's dry run timed out (NaN errors); the top-level copy was overwritten later, the
+    # round's own kept the NaN and result.json (written without NaN) failed
+    import json
+
+    w = world(tmp_path, monkeypatch, dry_status="timeout")
+    from test_core_docking_helpers import Dry
+
+    w.hooks.bicycle_rollout = lambda *a: w.log("rollout") or Dry(
+        "timeout", position_error_m=float("nan"), yaw_error_rad=float("nan"), trajectory=((8.0, 0.0, 0.0),))
+    degenerate_dock(w)
+    w.core.dock_at_delivery_straight(12.0)
+    r = w.slam["docking"]["rounds"][0]
+    assert r["chosen"] == "retry_b" and r["dry_run"]["position_error_m"] is None and r["dry_run"]["status"] == "timeout"
+    json.dumps(r, allow_nan=False)
