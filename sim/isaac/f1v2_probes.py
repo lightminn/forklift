@@ -636,7 +636,8 @@ def _axle_tilt(q_wxyz) -> float:
 
 
 def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_base, lift_index, wheels, steers,
-                     action_type, out_dir: Path, robot_mass_kg: float, order: str = "forward") -> dict:
+                     action_type, out_dir: Path, robot_mass_kg: float, order: str = "forward",
+                     start_rear=None) -> dict:
     """At the scene's start pose, empty then loaded: the common start (4.1), then a STATIC_WINDOW_S window recording
     each wheel's floor force (impulse z / dt), contact point count, smallest separation, link-centre height and axle
     tilt, and the body height, roll, pitch and lift. The calibration judge compares an arm with the rigid arm of the
@@ -649,15 +650,18 @@ def run_static_probe(world, robot, pallet, *, args, settings, stage, initial_bas
     g = _gravity(stage)
     lift_command = float(settings["lift_target_m"])
     pallet_kg = float(settings["pallet_mass_kg"])
-    base0, q0 = robot.get_world_pose()
-    yaw0 = _rpy(q0)[2]
+    # the scene's registered start (the same in every arm), not the run's settled spawn, which moves with the arm's
+    # mass and compliance (stage C's first submission: 0.1-2 mm and up to 0.9 mrad apart, refused by the judge)
+    offset = abs(float(args.rear_axle_offset_m))
+    sx, sy, yaw0 = (float(v) for v in start_rear)
+    base0 = np.array([sx + offset * math.cos(yaw0), sy + offset * math.sin(yaw0)])
     base_z = float(initial_base[2])
     from scene import tyre_contact_readback
 
     readback = tyre_contact_readback(stage)
     out = {"probe": "static", "physics_hz": hz, "tyre_readback": readback, "order": order, "gravity_mps2": g, "robot_mass_kg": robot_mass_kg,
            "pallet_mass_kg": pallet_kg, "lift_command_m": lift_command,
-           "start_base": [float(base0[0]), float(base0[1]), yaw0], "loads": {}}
+           "start_base": [float(base0[0]), float(base0[1]), yaw0], "start_rear": [sx, sy, yaw0], "loads": {}}
     for load in (("empty", "loaded") if order == "forward" else ("loaded", "empty")):
         if load == "empty" and order != "forward":
             _pallet_away(stage, pallet, world)  # the reversed run: the seated pallet leaves before the empty truck
