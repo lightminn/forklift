@@ -1,31 +1,39 @@
 #!/usr/bin/env python3
-"""F2 2x2 probe (docs/plans/2026-11-05-f2-tyre-2x2.md sections 4.3, 4.4 and 6), fixed before any 2x2 result: the
-effects and the interaction per state (descriptive), the validity of each measure (determinism, the same-arm reversed
-run), the dt condition, and the candidate rule.
+"""F2 2x2 probe (docs/plans/2026-11-05-f2-tyre-2x2.md sections 4.3, 4.4 and 6, with amendment 1), fixed before any 2x2
+result: the effects and the interaction per state (descriptive), the validity of each measure, the dt condition, and
+the candidate rule.
 
-  python tools/f2_2x2.py MANIFEST.json --json OUT.json
+  PYTHONPATH=<snapshot>/src python tools/f2_2x2.py MANIFEST.json --json OUT.json
 
-MANIFEST (paths to the probe records; arms O, F1, O+F2, F1+F2):
-  {"static":   {"120": {arm: STATIC_A, ...}, "240": {...}},                                   # M1, plus "<arm>#b"
-   "steer":    {"120": {arm: RESULT_A, ...}, "240": {...}},                                   # M2, plus "<arm>#b"
-   "cusp":     {"120": {arm: {"a": CUSP, "b": CUSP, "r": CUSP}}, "240": {arm: {"a": ..., "b": ...}}},   # M3
-   "delivery": {"120": {arm: {"a": DELIVERY, "b": DELIVERY, "r": DELIVERY}}},                 # M4
-   "calibration": CALIBRATION_VERDICT}
-STATIC is run/f1v2_static_probe.json, RESULT the steering probe's run/result.json (its "steering_probe"), CUSP and
-DELIVERY the F1 v2 probe records. "#b" keys are the second fresh process of M1/M2 (determinism).
+MANIFEST (arms O, F1, O+F2, F1+F2; "#b" = the second fresh process):
+  {"static":   {"120": {arm: STATIC, "<arm>#b": STATIC, "<arm>#r": STATIC_REVERSED}, "240": {arm, "<arm>#b"}},   # M1
+   "steer":    {"120": {arm: RUN_DIR, "<arm>#b": RUN_DIR}, "240": {...}},                                        # M2
+   "cusp":     {"120": {arm: {"a": CUSP, "b": CUSP, "r": CUSP}}, "240": {arm: {"a": CUSP, "b": CUSP}}},          # M3
+   "delivery": {"120": {arm: {"a": DELIVERY, "b": DELIVERY, "r": DELIVERY}}},                                    # M4
+   "registry": CUSP_REGISTRY, "calibration": CALIBRATION_VERDICT,
+   "plant_gates": {"F2": V4_REPORT, "F1+F2": V4_REPORT}}
+STATIC is run/f1v2_static_probe.json, RUN_DIR a steering probe run folder (result.json, steering_probe.npz,
+steering_probe_arms.npz -- read with tools/steer_asym_judge.Run, the same windows), CUSP and DELIVERY the probe
+records, V4_REPORT {"v4_v2_preserved": bool, ...} from the October plant gates recomputed on M2 (plan 4.4).
 """
 
 import argparse
+import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sim" / "isaac"))
 
 ARMS = ("O", "F1", "O+F2", "F1+F2")
 WHEELS = ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel")
 LOADS = ("empty", "loaded")
 T_N, T_E = 2.0, 1e-3  # the distinguishing floors (N, rad), the steering asymmetry plan's
+REV_N = T_N / 10  # amendment 1: M1's reversed run, a tenth of the floor
 DT_MIN = {"M1": 4, "M2": 10}
 DT_SIGN, DT_SIZE, DT_VANISH = 0.8, 0.5, 0.2  # plan 4.4
 CONTRASTS = {"F2|O": ("O+F2", "O"), "F2|F1": ("F1+F2", "F1")}
@@ -33,16 +41,24 @@ CANDIDATE_CONTRAST = {"F2": ("O+F2", "O"), "F1+F2": ("F1+F2", "O")}
 REV_E, REV_I, REV_GE_M, REV_GE_RAD = 0.0005, 0.05, 1e-4, 1e-4  # the lead's tenth of the margin (F1 v2)
 E_MARGIN, GE_M, GE_RAD, LR_MRAD = 0.005, 1e-3, 1e-3, 1.0  # plan 6
 JUDGED_CASTS = ("a",) + tuple(f"b{k}" for k in range(8))
+ALL_CASTS = JUDGED_CASTS + ("c", "d", "e")
+ESTIMATES = ("e0", "e1")
 BAD_OUTCOMES = ("timeout", "stopped_not_released", "pending")
 M3_MIN_SHARE, M4_MIN_POINTS, M2_SEGMENTS = 0.9, 18, 20
+M2_LABELS = ("still", "fwd", "rev", "fwd_fast", "rev_fast")
+TOP = 5
 
 
-def _q(xs):
-    a = np.asarray([x for x in xs if x is not None], dtype=float)
-    if not len(a):
-        return None
-    return {"n": int(len(a)), "median": float(np.median(np.abs(a))), "q90": float(np.quantile(np.abs(a), 0.9)),
-            "max": float(np.max(np.abs(a))), "positive_share": float(np.mean(a > 0))}
+def _summary(effect: dict) -> dict:
+    """Distribution of one effect over states, plus its largest states (plan 4.3)."""
+    vals = {s: v for s, v in effect.items() if v is not None}
+    if not vals:
+        return {"n": 0}
+    a = np.asarray(list(vals.values()), dtype=float)
+    top = sorted(vals, key=lambda s: -abs(vals[s]))[:TOP]
+    return {"n": int(len(a)), "median_abs": float(np.median(np.abs(a))), "q90_abs": float(np.quantile(np.abs(a), 0.9)),
+            "max_abs": float(np.max(np.abs(a))), "positive_share": float(np.mean(a > 0)),
+            "largest": [[s, float(vals[s])] for s in top]}
 
 
 # --- state values per measure ---
@@ -52,19 +68,27 @@ def m1_values(static: dict) -> dict:
     return {f"{ld}/{w}": static["loads"][ld]["wheels"][w]["fz"]["mean"] for ld in LOADS for w in WHEELS}
 
 
-def m2_values(result: dict) -> dict:
-    """M2: |e_L - e_R| (rad) per judged steering segment (curvature not 0), from the segment means; e = (command -
-    actual) x sign(command)."""
-    out = {}
-    for seg in result["steering_probe"]["segments"]:
-        if seg["kappa_cmd"] == 0.0 or seg["label"] in ("settle", "stop"):
+def m1_valid(static: dict) -> bool:
+    return all(static["loads"][ld]["start"]["converged"] and static["loads"][ld]["foreign_contacts"] == 0
+               and abs(static["loads"][ld]["wheel_load_ratio"] - 1.0) <= 0.01 for ld in LOADS)
+
+
+def read_steer(folder) -> dict:
+    """M2 from a steering probe run folder: |e_L - e_R| (rad) per judged segment from steer_asym_judge.Run's windows
+    (the last half of the segment, at most 1 s, the command constant, a clean window), None when the window is not
+    clean; the digest of the tick record and tyre contacts (determinism)."""
+    import steer_asym_judge as S
+
+    run = S.Run(Path(folder))
+    values = {}
+    for seg in run.segments:
+        if seg["kappa_cmd"] == 0.0 or seg["label"] not in M2_LABELS:
             continue
-        e = {}
-        for s_ in ("FL", "FR"):
-            cmd, q = seg[f"target_{s_}"], seg[f"q_{s_}"]
-            e[s_] = (cmd - q) * math.copysign(1.0, cmd)
-        out[f"{seg['label']}/{seg['kappa_cmd']:+.2f}/{seg['segment']}"] = abs(e["FL"] - e["FR"])
-    return out
+        v = run.values(seg["segment"])
+        values[f"{seg['label']}/{seg['kappa_cmd']:+.2f}/{seg['segment']}"] = None if v is None else abs(v["e_LR"])
+    h = hashlib.sha256(np.ascontiguousarray(run.x).tobytes())
+    h.update(np.ascontiguousarray(run.tyre).tobytes())
+    return {"values": values, "digest": h.hexdigest()}
 
 
 def effects(values: dict) -> dict:
@@ -78,6 +102,50 @@ def effects(values: dict) -> dict:
         out["F1"][s], out["F2"][s], out["F1|F2"][s] = f1 - o, of2 - o, f1f2 - of2
         out["I"][s] = (f1f2 - f1) - (of2 - o)
     return out
+
+
+# --- population (Codex review of P2: bound to the registry and the grid) ---
+
+def expected_cusp(registry: dict, dt: str) -> dict:
+    """trial id -> path hash (None: synthetic) for the registered population at a dt (240 Hz: the every-8 subset)."""
+    import f1v2_probe_judge as PJ
+
+    want = PJ.expected_trials(registry)
+    if dt == "120":
+        return want
+    running, keep = {}, set()
+    for v in registry["versions"]:
+        for leg in range(v["cusp_legs"]):
+            if len(running) % 8 == 0:
+                keep.add(f"{v['id']}/leg{leg}")
+            running[(v["id"], leg)] = len(running)
+    return {i: h for i, h in want.items() if h is None or i.rsplit("/", 2)[0] in keep}
+
+
+def cusp_population(rec: dict, want: dict) -> list:
+    got = {t["id"]: t for t in rec["trials"]}
+    why = []
+    if sorted(got) != sorted(want):
+        why.append(f"{len(got)} trials, not the {len(want)} registered")
+    for i, h in want.items():
+        if i in got and h is not None and got[i]["path_sha256"] != h:
+            why.append(f"{i}: path not the registered one")
+    return why
+
+
+def delivery_population(rec: dict) -> list:
+    import f1v2_probe_core as core
+
+    labels = [p["label"] for p in core.f2_grid((0.0, 0.0, 0.0), 0.4, (0.0, 0.0), 0.0)]
+    got = {p["label"]: p for p in rec["points"]}
+    why = []
+    if sorted(got) != sorted(labels):
+        why.append(f"{sorted(set(got) ^ set(labels))[:5]} not the registered 22-point grid")
+    for lab, p in got.items():
+        missing = [f"{c}/{e}" for c in ALL_CASTS for e in ESTIMATES if f"{c}/{e}" not in p["evals"]]
+        if missing:
+            why.append(f"{lab}: casts {missing[:3]} missing")
+    return why
 
 
 # --- validity ---
@@ -122,36 +190,79 @@ def delivery_order_sensitive(fwd: dict, rev: dict) -> list:
     return bad
 
 
-def validity(manifest: dict, load) -> dict:
-    """Per measure and arm: determinism (two fresh processes equal) and, for M3/M4, the order-sensitive tag."""
+def static_order_sensitive(fwd: dict, rev: dict) -> list:
+    vf, vr = m1_values(fwd), m1_values(rev)
+    return [s for s in vf if vr.get(s) is None or abs(vf[s] - vr[s]) > REV_N]
+
+
+def _trial_valid(t: dict) -> bool:
+    return t["settle"]["converged"] and t["wheel_load_ok"] and t["foreign_contacts"] == 0
+
+
+def _point_valid(p: dict) -> bool:
+    return p["pose_ok"] and p["settle"]["converged"]
+
+
+def validity(manifest: dict, load, steer_load) -> dict:
+    """Per measure, dt and arm: determinism, physical validity of every record, population, and the reversed run
+    (required where amendment 1 registers one: M1, M3 and M4 at 120 Hz) -- a missing reversed run is not a pass."""
     out = {}
-    for m, key, field in (("M1", "static", None), ("M2", "steer", "steering_probe")):
-        for dt, arms in manifest.get(key, {}).items():
-            for arm in ARMS:
-                a, b = arms.get(arm), arms.get(f"{arm}#b")
-                # the physics record only (a result.json also holds wall-clock times)
-                pick = (lambda r: r) if field is None else (lambda r: r[field])  # noqa: E731
-                ok = a is not None and b is not None and pick(load(a)) == pick(load(b))
-                out.setdefault(m, {}).setdefault(dt, {})[arm] = {"deterministic": ok, "order_sensitive": None}
-    for m, key, rec, sens in (("M3", "cusp", "trials", cusp_order_sensitive),
-                              ("M4", "delivery", "points", delivery_order_sensitive)):
+    registry = load(manifest["registry"]) if manifest.get("registry") else None
+    for dt, arms in manifest.get("static", {}).items():
+        for arm in ARMS:
+            recs = {k: arms.get(f"{arm}{k}") for k in ("", "#b", "#r")}
+            a, b = (None if recs[k] is None else load(recs[k]) for k in ("", "#b"))
+            r = None if recs["#r"] is None else load(recs["#r"])
+            row = {"deterministic": a is not None and b is not None and a == b,
+                   "physically_valid": all(x is not None and m1_valid(x) for x in (a, b))
+                   and (r is None or m1_valid(r)),
+                   "reverse_required": dt == "120"}
+            tag = None if (a is None or r is None) else static_order_sensitive(a, r)
+            row["order_sensitive"] = None if tag is None else bool(tag)
+            out.setdefault("M1", {}).setdefault(dt, {})[arm] = row
+    for dt, arms in manifest.get("steer", {}).items():
+        for arm in ARMS:
+            a, b = (None if arms.get(k) is None else steer_load(arms[k]) for k in (arm, f"{arm}#b"))
+            full = a is not None and len(a["values"]) == M2_SEGMENTS and all(v is not None for v in a["values"].values())
+            out.setdefault("M2", {}).setdefault(dt, {})[arm] = {
+                "deterministic": a is not None and b is not None and a["digest"] == b["digest"],
+                "physically_valid": full, "reverse_required": False, "order_sensitive": None}
+    for m, key, rec, sens, valid_one in (("M3", "cusp", "trials", cusp_order_sensitive, _trial_valid),
+                                         ("M4", "delivery", "points", delivery_order_sensitive, _point_valid)):
         for dt, arms in manifest.get(key, {}).items():
             for arm in ARMS:
                 runs = arms.get(arm) or {}
-                a, b = runs.get("a"), runs.get("b")
-                det = a is not None and b is not None and load(a)[rec] == load(b)[rec]
-                tag = None
-                if runs.get("r") is not None and a is not None:
-                    tag = sens(load(a), load(runs["r"]))
-                out.setdefault(m, {}).setdefault(dt, {})[arm] = {
-                    "deterministic": det, "order_sensitive": None if tag is None else bool(tag),
-                    "order_sensitive_states": None if tag is None else tag[:20]}
+                loaded = {k: load(runs[k]) for k in ("a", "b", "r") if runs.get(k) is not None}
+                a, b = loaded.get("a"), loaded.get("b")
+                pop = []
+                for k, x in loaded.items():
+                    pop += [f"{k}: {w}" for w in (cusp_population(x, expected_cusp(registry, dt)) if m == "M3" and
+                                                  registry else ([] if m == "M3" else delivery_population(x)))]
+                if m == "M3" and registry is None:
+                    pop.append("no registry")
+                shares = [sum(valid_one(e) for e in x[rec]) / max(len(x[rec]), 1) for x in loaded.values()]
+                row = {"deterministic": a is not None and b is not None and a[rec] == b[rec],
+                       "physically_valid": bool(shares) and min(shares) >= (M3_MIN_SHARE if m == "M3" else
+                                                                             M4_MIN_POINTS / 22),
+                       "population": pop[:10], "reverse_required": dt == "120"}
+                tag = sens(a, loaded["r"]) if (a is not None and "r" in loaded) else None
+                row["order_sensitive"] = None if tag is None else bool(tag)
+                row["order_sensitive_states"] = None if tag is None else tag[:20]
+                out.setdefault(m, {}).setdefault(dt, {})[arm] = row
     return out
 
 
 def usable(valid: dict, m: str, dt: str, arms) -> bool:
     rows = valid.get(m, {}).get(dt, {})
-    return all(a in rows and rows[a]["deterministic"] and rows[a]["order_sensitive"] is not True for a in arms)
+    for a in arms:
+        r = rows.get(a)
+        if r is None or not r["deterministic"] or not r["physically_valid"] or r.get("population"):
+            return False
+        if r["reverse_required"] and r["order_sensitive"] is not False:
+            return False  # not run, or order-sensitive
+        if not r["reverse_required"] and r["order_sensitive"] is True:
+            return False
+    return True
 
 
 # --- dt condition (plan 4.4) ---
@@ -159,6 +270,7 @@ def usable(valid: dict, m: str, dt: str, arms) -> bool:
 def dt_check(v120: dict, v240: dict, pair, floor: float, minimum: int) -> dict:
     a, b = pair
     states = sorted(set(v120[a]) & set(v120[b]) & set(v240[a]) & set(v240[b]))
+    states = [s for s in states if None not in (v120[a][s], v120[b][s], v240[a][s], v240[b][s])]
     c120 = {s: v120[a][s] - v120[b][s] for s in states}
     c240 = {s: v240[a][s] - v240[b][s] for s in states}
     both = [s for s in states if abs(c120[s]) >= floor and abs(c240[s]) >= floor]
@@ -213,23 +325,22 @@ def cusp_worse(a: dict, b: dict) -> int:
     return 0
 
 
-def m3_counts(x: dict, y: dict) -> dict:
+def m3_counts(x: dict, y: dict, want: dict) -> dict:
     xs = {t["id"]: t for t in x["trials"]}
     ys = {t["id"]: t for t in y["trials"]}
-    ids = sorted(set(xs) & set(ys))
-    valid = [i for i in ids if xs[i]["settle"]["converged"] and ys[i]["settle"]["converged"]
-             and xs[i]["wheel_load_ok"] and ys[i]["wheel_load_ok"]
-             and xs[i]["foreign_contacts"] == 0 and ys[i]["foreign_contacts"] == 0]
+    valid = [i for i in want if i in xs and i in ys and _trial_valid(xs[i]) and _trial_valid(ys[i])]
     w = [cusp_worse(xs[i], ys[i]) for i in valid]
-    return {"trials": len(ids), "valid": len(valid), "worse": w.count(1), "better": w.count(-1)}
+    return {"registered": len(want), "valid": len(valid), "worse": w.count(1), "better": w.count(-1)}
 
 
 def m4_counts(x: dict, y: dict) -> dict:
+    """Plan 6 M4 (cast a/b, both estimates): accept lost/gained, and when both accept, a correction error larger or
+    smaller by more than 1 mm / 0.001 rad on any axis -- counted apart, so a state larger on one axis and smaller on
+    another counts in both (amendment 1)."""
     xs = {p["label"]: p for p in x["points"]}
     ys = {p["label"]: p for p in y["points"]}
     labels = sorted(set(xs) & set(ys))
-    valid = [lab for lab in labels if xs[lab]["pose_ok"] and ys[lab]["pose_ok"]
-             and xs[lab]["settle"]["converged"] and ys[lab]["settle"]["converged"]]
+    valid = [lab for lab in labels if _point_valid(xs[lab]) and _point_valid(ys[lab])]
     worse = better = 0
     for lab in valid:
         for key, ex in xs[lab]["evals"].items():
@@ -241,15 +352,14 @@ def m4_counts(x: dict, y: dict) -> dict:
                 better += not ey["accepted"]
             elif ex["accepted"]:
                 d = [abs(ex["goal_error_vs_truth"][i]) - abs(ey["goal_error_vs_truth"][i]) for i in range(3)]
-                if d[0] > GE_M or d[1] > GE_M or d[2] > GE_RAD:
-                    worse += 1
-                elif d[0] < -GE_M or d[1] < -GE_M or d[2] < -GE_RAD:
-                    better += 1
+                lim = (GE_M, GE_M, GE_RAD)
+                worse += any(d[i] > lim[i] for i in range(3))
+                better += any(d[i] < -lim[i] for i in range(3))
     return {"points": len(labels), "valid": len(valid), "worse": worse, "better": better}
 
 
 def m2_counts(vx: dict, vy: dict) -> dict:
-    states = sorted(set(vx) & set(vy))
+    states = sorted(s for s in set(vx) & set(vy) if vx[s] is not None and vy[s] is not None)
     d = [(vx[s] - vy[s]) * 1e3 for s in states]
     return {"segments": len(states), "worse": sum(x > LR_MRAD for x in d), "better": sum(x < -LR_MRAD for x in d)}
 
@@ -258,22 +368,24 @@ def candidate(manifest: dict, load, calib: dict, valid: dict, dt: dict, m2: dict
     out = {"preconditions": [], "self_degradation": {}, "f1_under_f2": {}}
     if calib.get("chosen_k_mat") is None:
         out["preconditions"].append("stage C chose no material value")
-    cusp = manifest["cusp"]["120"]
-    dlv = manifest["delivery"]["120"]
     for m, dts in (("M1", ("120", "240")), ("M2", ("120", "240")), ("M3", ("120",)), ("M4", ("120",))):
         for d in dts:
             if not usable(valid, m, d, ARMS):
-                out["preconditions"].append(f"{m} at {d} Hz not usable (determinism or order-sensitive)")
+                out["preconditions"].append(f"{m} at {d} Hz not usable (determinism, validity, population or the "
+                                            "reversed run)")
+    registry = load(manifest["registry"]) if manifest.get("registry") else {"versions": []}
+    want = expected_cusp(registry, "120") if manifest.get("registry") else {}
+    cusp, dlv = manifest["cusp"]["120"], manifest["delivery"]["120"]
     pairs = {"f1_under_f2": ("F1+F2", "O+F2"), "self_degradation": ("O+F2", "O")}
     for name, (x, y) in pairs.items():
-        c3 = m3_counts(load(cusp[x]["a"]), load(cusp[y]["a"]))
+        c3 = m3_counts(load(cusp[x]["a"]), load(cusp[y]["a"]), want)
         c4 = m4_counts(load(dlv[x]["a"]), load(dlv[y]["a"]))
         c2 = m2_counts(m2["120"][x], m2["120"][y])
         out[name] = {"M3": c3, "M4": c4, "M2": c2,
                      "worse_any": c3["worse"] > c3["better"] or c4["worse"] > c4["better"] or c2["worse"] > c2["better"]}
         if name == "f1_under_f2":
-            if c3["valid"] < M3_MIN_SHARE * c3["trials"]:
-                out["preconditions"].append(f"M3 valid {c3['valid']} of {c3['trials']}")
+            if not want or c3["valid"] < M3_MIN_SHARE * c3["registered"]:
+                out["preconditions"].append(f"M3 valid {c3['valid']} of {c3['registered']} registered")
             if c4["valid"] < M4_MIN_POINTS:
                 out["preconditions"].append(f"M4 valid {c4['valid']} of {c4['points']}")
             if c2["segments"] != M2_SEGMENTS:
@@ -281,33 +393,46 @@ def candidate(manifest: dict, load, calib: dict, valid: dict, dt: dict, m2: dict
     pick = "F2" if out["f1_under_f2"]["worse_any"] else "F1+F2"
     if not candidate_dt_ok(dt, pick):
         out["preconditions"].append(f"dt condition not passed for {pick}")
+    v4 = (manifest.get("plant_gates") or {}).get(pick)
+    v4rec = None if v4 is None else load(v4)
+    if v4rec is None or "v4_v2_preserved" not in v4rec:
+        out["preconditions"].append(f"October V2/V4 not reported for {pick} (plan 4.4)")
+    out["escalate_v4"] = bool(v4rec is not None and v4rec.get("v4_v2_preserved") is False)
     out["escalate_self_degradation"] = out["self_degradation"]["worse_any"]
     out["candidate"] = None if out["preconditions"] else pick
+    notes = [n for n, f in (("F2 itself worsens a measure", out["escalate_self_degradation"]),
+                            ("the candidate's V4 is broken", out["escalate_v4"])) if f]
     out["verdict"] = ("no selection (to the lead)" if out["preconditions"] else
-                      f"{pick}" + (" -- F2 itself worsens a measure: to the lead before (나)"
-                                   if out["escalate_self_degradation"] else ""))
+                      pick + (f" -- {', '.join(notes)}: to the lead before (나)" if notes else ""))
     return out
 
 
-def run(manifest: dict, load=lambda p: json.loads(Path(p).read_text())) -> dict:
-    valid = validity(manifest, load)
-    m1 = {dt: {a: m1_values(load(p)) for a, p in arms.items() if a in ARMS} for dt, arms in manifest["static"].items()}
-    m2 = {dt: {a: m2_values(load(p)) for a, p in arms.items() if a in ARMS} for dt, arms in manifest["steer"].items()}
-    desc = {"M1": {dt: {k: _q(list(v.values())) for k, v in effects(m1[dt]).items()} for dt in m1},
-            "M2": {dt: {k: _q(list(v.values())) for k, v in effects(m2[dt]).items()} for dt in m2}}
-    for m, key, getter in (("M3", "cusp", lambda r: {t["id"]: t["e_stop_rad"] for t in r["trials"]}),
-                           ("M4", "delivery", lambda r: {f"{p['label']}/{k}": e["min_information"]
-                                                         for p in r["points"] for k, e in p["evals"].items()})):
-        desc[m] = {}
+def run(manifest: dict, load=lambda p: json.loads(Path(p).read_text()), steer_load=read_steer) -> dict:
+    valid = validity(manifest, load, steer_load)
+    m1 = {dt: {a: m1_values(load(arms[a])) for a in ARMS if a in arms} for dt, arms in manifest["static"].items()}
+    m2 = {dt: {a: steer_load(arms[a])["values"] for a in ARMS if a in arms} for dt, arms in manifest["steer"].items()}
+    per_state, desc = {}, {}
+    for m, vals in (("M1", m1), ("M2", m2)):
+        for dt, v in vals.items():
+            if len(v) == len(ARMS):
+                e = effects(v)
+                per_state.setdefault(m, {})[dt] = e
+                desc.setdefault(m, {})[dt] = {k: _summary(x) for k, x in e.items()}
+    getters = {"M3 e_stop (signed)": ("cusp", lambda r: {t["id"]: t["e_stop_rad"] for t in r["trials"]}),
+               "M3 |e_stop|": ("cusp", lambda r: {t["id"]: None if t["e_stop_rad"] is None else abs(t["e_stop_rad"])
+                                                  for t in r["trials"]}),
+               "M4 information": ("delivery", lambda r: {f"{p['label']}/{k}": e["min_information"]
+                                                         for p in r["points"] for k, e in p["evals"].items()})}
+    for name, (key, getter) in getters.items():
         for dt, arms in manifest.get(key, {}).items():
-            vals = {a: getter(load(arms[a]["a"])) for a in ARMS if a in arms}
-            if len(vals) == len(ARMS):
-                abs_vals = {a: {s: (None if x is None else abs(x)) for s, x in v.items()} for a, v in vals.items()}
-                desc[m][dt] = {k: _q(list(v.values())) for k, v in effects(abs_vals).items()}
+            if all(a in arms for a in ARMS):
+                e = effects({a: getter(load(arms[a]["a"])) for a in ARMS})
+                per_state.setdefault(name, {})[dt] = e
+                desc.setdefault(name, {})[dt] = {k: _summary(x) for k, x in e.items()}
     dt = dt_condition(m1, m2)
     calib = load(manifest["calibration"]) if manifest.get("calibration") else {}
     cand = candidate(manifest, load, calib, valid, dt, m2)
-    return {"validity": valid, "effects": desc, "dt_condition": dt, "candidate": cand}
+    return {"validity": valid, "effects": desc, "effects_per_state": per_state, "dt_condition": dt, "candidate": cand}
 
 
 def main() -> None:
