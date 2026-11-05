@@ -1,0 +1,122 @@
+{
+ "static": {
+  "120": {
+   "O": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_O_a/run/f1v2_static_probe.json",
+   "O#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_O_b/run/f1v2_static_probe.json",
+   "O#r": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_O_r/run/f1v2_static_probe.json",
+   "F1": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_F1_a/run/f1v2_static_probe.json",
+   "F1#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_F1_b/run/f1v2_static_probe.json",
+   "F1#r": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_F1_r/run/f1v2_static_probe.json",
+   "O+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_OpF2_a/run/f1v2_static_probe.json",
+   "O+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_OpF2_b/run/f1v2_static_probe.json",
+   "O+F2#r": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_OpF2_r/run/f1v2_static_probe.json",
+   "F1+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_F1pF2_a/run/f1v2_static_probe.json",
+   "F1+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_F1pF2_b/run/f1v2_static_probe.json",
+   "F1+F2#r": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_120_F1pF2_r/run/f1v2_static_probe.json"
+  },
+  "240": {
+   "O": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_O_a/run/f1v2_static_probe.json",
+   "O#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_O_b/run/f1v2_static_probe.json",
+   "F1": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_F1_a/run/f1v2_static_probe.json",
+   "F1#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_F1_b/run/f1v2_static_probe.json",
+   "O+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_OpF2_a/run/f1v2_static_probe.json",
+   "O+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_OpF2_b/run/f1v2_static_probe.json",
+   "F1+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_F1pF2_a/run/f1v2_static_probe.json",
+   "F1+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m1_240_F1pF2_b/run/f1v2_static_probe.json"
+  }
+ },
+ "steer": {
+  "120": {
+   "O": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_O_a/run",
+   "O#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_O_b/run",
+   "F1": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_F1_a/run",
+   "F1#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_F1_b/run",
+   "O+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_OpF2_a/run",
+   "O+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_OpF2_b/run",
+   "F1+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_F1pF2_a/run",
+   "F1+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_120_F1pF2_b/run"
+  },
+  "240": {
+   "O": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_O_a/run",
+   "O#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_O_b/run",
+   "F1": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_F1_a/run",
+   "F1#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_F1_b/run",
+   "O+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_OpF2_a/run",
+   "O+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_OpF2_b/run",
+   "F1+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_F1pF2_a/run",
+   "F1+F2#b": "/home/projects/forklift/test_runs/simphys/f2/x2/m2_240_F1pF2_b/run"
+  }
+ },
+ "cusp": {
+  "120": {
+   "O": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_O_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_O_b/run/f1v2_cusp_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_O_r/run/f1v2_cusp_probe.json"
+   },
+   "F1": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_F1_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_F1_b/run/f1v2_cusp_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_F1_r/run/f1v2_cusp_probe.json"
+   },
+   "O+F2": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_OpF2_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_OpF2_b/run/f1v2_cusp_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_OpF2_r/run/f1v2_cusp_probe.json"
+   },
+   "F1+F2": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_F1pF2_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_F1pF2_b/run/f1v2_cusp_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_120_F1pF2_r/run/f1v2_cusp_probe.json"
+   }
+  },
+  "240": {
+   "O": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_O_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_O_b/run/f1v2_cusp_probe.json"
+   },
+   "F1": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_F1_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_F1_b/run/f1v2_cusp_probe.json"
+   },
+   "O+F2": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_OpF2_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_OpF2_b/run/f1v2_cusp_probe.json"
+   },
+   "F1+F2": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_F1pF2_a/run/f1v2_cusp_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m3_240_F1pF2_b/run/f1v2_cusp_probe.json"
+   }
+  }
+ },
+ "delivery": {
+  "120": {
+   "O": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_O_a/run/f1v2_delivery_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_O_b/run/f1v2_delivery_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_O_r/run/f1v2_delivery_probe.json"
+   },
+   "F1": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_F1_a/run/f1v2_delivery_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_F1_b/run/f1v2_delivery_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_F1_r/run/f1v2_delivery_probe.json"
+   },
+   "O+F2": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_OpF2_a/run/f1v2_delivery_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_OpF2_b/run/f1v2_delivery_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_OpF2_r/run/f1v2_delivery_probe.json"
+   },
+   "F1+F2": {
+    "a": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_F1pF2_a/run/f1v2_delivery_probe.json",
+    "b": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_F1pF2_b/run/f1v2_delivery_probe.json",
+    "r": "/home/projects/forklift/test_runs/simphys/f2/x2/m4_120_F1pF2_r/run/f1v2_delivery_probe.json"
+   }
+  }
+ },
+ "registry": "/home/projects/forklift/test_runs/simphys/f1v2/cusp_registry.json",
+ "calibration": "/home/projects/forklift/test_runs/simphys/f2/c/verdict_c.json",
+ "plant_gates": {
+  "F2": "/home/projects/forklift/test_runs/simphys/f2/x2/v4_F2.json",
+  "F1+F2": "/home/projects/forklift/test_runs/simphys/f2/x2/v4_F1pF2.json"
+ }
+}
