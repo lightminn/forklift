@@ -636,6 +636,74 @@ def test_sensor_capture_fails_closed(defect, reason):
     assert error.value.reason == reason
 
 
+def _frame_sync_module():
+    spec = importlib.util.spec_from_file_location("frame_sync", ROOT / "sim/isaac/frame_sync.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("rgb_wait", [False, True])
+def test_a_deterministic_capture_of_a_cold_camera_waits_for_rgb_without_extra_physics(rgb_wait):
+    # The runner's perception capture steps physics, then syncs the frame (plan D1). A cold camera (video off: first
+    # rendered here) carries the step's rendering_time with empty RGB for its first renders. Without the RGB wait the
+    # deterministic capture ends the run (frame_sync:no_rgba, 2026-11-05); with it the frame is read after renders
+    # alone: one physics step, one attempt, the same acquisition time and pose bracket.
+    from forklift_core import determinism
+
+    fs = _frame_sync_module()
+    camera = SensorCamera()
+    camera.frame["rendering_time"] = 0.0
+    camera.frame["rgb"] = np.zeros((0,), dtype=np.uint8)
+    camera.renders = 0
+    rgba = camera.rgba.copy()
+
+    def render():
+        camera.renders += 1
+        camera.frame["rendering_time"] = now[0]
+        camera.frame["rendering_frame"] = {"referenceTimeNumerator": 60 * int(now[0]), "referenceTimeDenominator": 60}
+        if camera.renders >= 3:
+            camera.frame["rgb"] = rgba
+
+    now, steps = [0.0], [0]
+    sync = fs.FrameSync(cap=20)
+
+    def step():
+        steps[0] += 1
+        now[0] += 1.0
+        sync.sync(camera, render, now[0], rgb=rgb_wait)
+
+    sensor = MODULE.SensorCapture(camera, MODULE.default_base_from_optical(), step_fn=step,
+                                  physics_time_fn=lambda: now[0], pose_fn=lambda: ([0, 0, 0], [1, 0, 0, 0]))
+    determinism.configure(True)
+    try:
+        if not rgb_wait:
+            with pytest.raises(determinism.DeterministicBroken, match="holds no rgb"):
+                sensor.capture(max_attempts=1)
+            assert determinism.broken() == ["frame_sync:no_rgba"]
+            return
+        scene, _, count = sensor.capture(max_attempts=1)
+    finally:
+        determinism.configure(False)
+    diag = asdict(sensor.state.diagnostics)
+    assert count == 1 and diag["attempts"] == 1 and steps[0] == 1
+    assert camera.renders == 3 and sync.renders == 3
+    assert diag["acquisition_time_s"] == 1.0 and scene.stamp_ns == 1_000_000_000
+    assert diag["physics_time_before_s"] == 0.0 and diag["physics_time_after_s"] == 1.0
+    assert diag["pose_before"] == diag["pose_after"]
+
+
+def test_the_runner_waits_for_rgb_where_it_reads_the_perception_cameras_rgb():
+    # the two perception-camera syncs that precede an RGB read in a deterministic run pass rgb=True; the depth-only
+    # pocket camera and the video cameras (rendered every tick when video is on) keep the time-only sync
+    src = (ROOT / "sim/isaac/run_transport.py").read_text()
+    assert src.count("frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time, rgb=True)") == 1
+    assert src.count("frame_sync.sync(perception_camera, world.render, world.current_time, rgb=True)") == 1
+    assert "frame_sync.sync(pocket_camera, world.render, world.current_time)" in src
+    assert "frame_sync.sync(camera, world.render, world.current_time)" in src
+    assert src.count("rgb=True") == 2
+
+
 def test_sensor_capture_mutable_id_is_copied_across_calls():
     camera = SensorCamera()
 
