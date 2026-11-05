@@ -343,6 +343,7 @@ def test_indicators_count_the_recoveries_a_mission_needed(tmp_path):
     _write(base / "result.json", {"success": True, "transitions": [], "obstacle_layer": {"grid_plans": [], "live_plans": []}})
     res = C.survey(tmp_path, 1)
     o = res["summary"]["D|line_m"]
-    assert o["missions_with_recovery"] == 1 and o["recoveries"]["observation_retry"] == 1
+    assert o["missions_with_recovery"] == 1 and "observation_retry" not in o["recoveries"]
+    assert o["observation_attempts"] == {2: 1}  # the normal flow observes twice: a count, not a recovery
     assert o["delivery_error_m"] == {"n": 1, "median": 0.02, "max": 0.02}
     assert res["sessions"][0]["rows"][0]["plans"] is None  # no plan list kept: not recorded, not zero

@@ -444,7 +444,7 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
                                  "forbidden_contacts": 0, "first_block": Counter(), "unexposed_after_block": 0,
                                  "infra": 0, "recoveries": Counter(), "recovery_phases": Counter(),
                                  "d7_triggers": Counter(), "docking_status": Counter(), "delivery_error_m": [],
-                                 "missions_with_recovery": 0, "done_missions": 0})
+                                 "missions_with_recovery": 0, "done_missions": 0, "observation_attempts": Counter()})
         o["sessions"] += 1
         rows = s["rows"]
         o["all_done"] += all(r["outcome"] == "done" for r in rows)
@@ -473,9 +473,7 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
                     if ind.get(k):
                         o["recoveries"][k] += 1
                         hit = True
-                if ind.get("observation_attempts", 0) > 1:
-                    o["recoveries"]["observation_retry"] += 1
-                    hit = True
+                o["observation_attempts"][ind.get("observation_attempts")] += 1  # 2 is the normal flow
                 o["missions_with_recovery"] += hit
                 for ph in ind.get("recovery_phases") or []:
                     o["recovery_phases"][ph] += 1
