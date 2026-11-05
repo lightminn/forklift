@@ -1,0 +1,5 @@
+recorded seed 20260913 iterations 200 inlier 0.0078
+seeds 200: valid 196, rescued by the lower waiver 0, outcomes {'no_expected_candidate': 1, 'valid': 196, 'no_front_plane': 3}
+valid seeds' face-centre error (m, m, rad): along p50/p95/max [0.     0.0001 0.0001] lateral [0.0015 0.002  0.0026] yaw [0.0001 0.0002 0.0004]
+recorded seed with 400 iterations: valid None [0.0001 0.0017 0.0001]
+recorded seed with 800 iterations: valid None [0.0001 0.0017 0.0001]
