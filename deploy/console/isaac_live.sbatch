@@ -269,6 +269,14 @@ SUP_LOC=()
 # B-P2: the runner first, the bridge at its estimate
 BRIDGE=(bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_bundle}')
 [ -n "${START_POSE:-}" ] && SUP_LOC+=(--relocalize --reloc-wait-s "$RELOC_WAIT_S") && BRIDGE+=('{map_start_pose}')
+# Slurm's TERM (or reloc_session.sh ending the launch when its probe fails) ends the supervisor, which ends the runner
+# and the bridge. The trap is set before the supervisor starts: a TERM between its start and a later trap killed the
+# launcher alone and left the supervisor starting sessions (found in #322's review). A TERM before SUP=$! is latched
+# and passed on once the pid is known.
+SUP=""
+TERMED=0
+on_term() { TERMED=1; [ -n "$SUP" ] && kill -TERM "$SUP" 2>/dev/null; }
+trap on_term TERM INT
 # Between runners the supervisor serves the console's port itself (contract 6): the page and /api/v1/session, so a
 # start check that fails before the runner's server opens is shown; after a failed end it stays up STANDBY_LINGER_S
 # (300 s: the job holds its slot that long; 0 turns it off).
@@ -280,19 +288,23 @@ BRIDGE=(bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}' '{expected_map_id}' '{map_
   --bridge-stop "$(json bash "$OUT/stop.sh" '{epoch}')" \
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
   --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}' '{expected_map_id}' '{map_bundle}')" &
+if [ -n "${LIVE_TEST_HOLD_FILE:-}" ]; then  # tests only (test_isaac_live_term.py): hold between the start and SUP=$!
+  touch "$LIVE_TEST_HOLD_FILE.at"
+  for _ in $(seq 1 600); do [ -e "$LIVE_TEST_HOLD_FILE" ] && break; sleep 0.05; done
+fi
 SUP=$!
+[ "$TERMED" = 1 ] && kill -TERM "$SUP" 2>/dev/null  # a TERM that came before its pid was known
 # Progress watchdog (tools/stall_watch.py): when no epoch's run/live_log.jsonl has changed for STALL_MIN minutes
 # (default 10, 0 off) the runner gets SIGUSR1 -- its stack goes to run.stall_stack.txt -- and the supervisor TERM, as
 # on Slurm's TERM; $OUT/stall.jsonl says so. A live session never went 3.3 s without a record in 30 runs (first record
 # 38-50 s after its start); 11119 (2026-10-26) sat silent for 34 min mid-transport until its time limit.
 "$VENV_PY" "$ROOT/tools/stall_watch.py" --glob "$OUT/epoch_*/run/live_log.jsonl" --stall-min "${STALL_MIN:-10}" \
   --term-pid "$SUP" --marker "$OUT/stall.jsonl" &
-trap 'kill -TERM "$SUP" 2>/dev/null' TERM INT  # Slurm's TERM: the supervisor ends the runner and the bridge
+# A trapped TERM cuts a wait short: wait again until the supervisor has ended (a second TERM too), then take its own code
+while kill -0 "$SUP" 2>/dev/null; do
+  wait "$SUP"
+done
 wait "$SUP"
 rc=$?
-if kill -0 "$SUP" 2>/dev/null; then  # the wait was cut by the trap: wait for the supervisor's own end
-  wait "$SUP"
-  rc=$?
-fi
 echo "supervisor exit $rc $(date -Is)"
 exit "$rc"

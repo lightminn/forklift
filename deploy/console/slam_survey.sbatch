@@ -28,6 +28,7 @@
 set -u
 OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
+source "$ROOT/deploy/lib/term_relay.sh" || { echo "no $ROOT/deploy/lib/term_relay.sh" >&2; exit 2; }
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
 # The SLAM odometry's encoders (plan 2026-10-25-team-spec-default, lead decision): the joint-angle model by default,
@@ -133,28 +134,33 @@ chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 json() { "$VENV_PY" -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@"; }
 trap 'for c in $(docker ps -aq --filter "name=slam_(survey|readback)_${JOB}"); do docker rm -f "$c" >/dev/null; done' EXIT
 echo "host=$(hostname) job=$JOB out=$OUT start $(date -Is)"
+# Slurm's TERM ends the supervisor (which ends the runner and the bridge) and the probe: armed before the start, so a
+# TERM however early reaches them (deploy/lib/term_relay.sh); the probe runs in the background, since bash holds a
+# trapped TERM until a foreground command ends -- the probe waits for the session's end
+term_relay_arm
 # one epoch: a survey that failed is made again, not continued in a new scene
 "$VENV_PY" "$ROOT/tools/live_supervisor.py" --out "$OUT" --port-file "$OUT/live_port.json" --max-epochs 1 \
   --bridge "$(json bash "$OUT/bridge.sh" '{epoch}' '{epoch_dir}')" \
   --bridge-stop "$(json bash "$OUT/stop.sh" '{epoch}')" \
   --bridge-ready "{epoch_dir}/bridge/bridge_ready" --exit-file "{epoch_dir}/run/exit_code" \
   --runner "$(json bash "$OUT/runner.sh" '{epoch}' '{epoch_dir}' '{port_file}')" > "$OUT/supervisor.log" 2>&1 &
+term_relay_hold sup
 SUP=$!
-trap 'kill -TERM "$SUP" 2>/dev/null' TERM INT
+term_relay_add "$SUP"
 if [ -n "${TOUR:-}" ]; then
-  "$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
-    --scenario tour --tour-path "$TOUR" --end-session > "$OUT/probe.log" 2>&1
+  PROBE_SCENARIO=(--scenario tour --tour-path "$TOUR")
 else
-  "$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
-    --scenario cycle --cycle "${CYCLE:-P-1:D-1,P-1:D-0}" --end-session > "$OUT/probe.log" 2>&1
+  PROBE_SCENARIO=(--scenario cycle --cycle "${CYCLE:-P-1:D-1,P-1:D-0}")
 fi
-echo "probe exit $? $(date -Is)"
-wait "$SUP"
-rc=$?
-if kill -0 "$SUP" 2>/dev/null; then
-  wait "$SUP"
-  rc=$?
-fi
+"$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
+  "${PROBE_SCENARIO[@]}" --end-session > "$OUT/probe.log" 2>&1 &
+term_relay_hold probe
+PROBE=$!
+term_relay_add "$PROBE"
+term_relay_wait "$PROBE"
+echo "probe exit $TERM_RELAY_RC $(date -Is)"
+term_relay_wait "$SUP"
+rc=$TERM_RELAY_RC
 echo "supervisor exit $rc $(date -Is)"
 
 # Read the saved graph back in a fresh container: no scan, the /map it makes from the graph alone is the grid.
