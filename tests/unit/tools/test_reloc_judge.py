@@ -182,6 +182,7 @@ def test_the_fingerprint_covers_the_verdict_path_and_refuses_a_mismatch(tmp_path
     assert J.fingerprint_mismatches(fp, other) == ["sim/isaac/run_transport.py"]
     assert J.fingerprint_mismatches(fp, fp) == []
     # the wrapper's TERM helper decides its end policy: a change to it alone is a different frozen condition (Codex)
+    assert "deploy/lib/term_relay.sh" in fp["files"]
     helper = json.loads(json.dumps(fp))
     helper["files"]["deploy/lib/term_relay.sh"] = "0" * 64
     assert J.fingerprint_mismatches(fp, helper) == ["deploy/lib/term_relay.sh"]
