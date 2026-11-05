@@ -1200,7 +1200,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "reloc_unattended": False, "reloc_operator_timeout_s": None,
                               # 2026-11-03 the unconfirmed position check (plan 2026-11-02-unconfirmed-runner): off
                               # in every earlier run
-                              "pose_check": "off", "pose_check_bounds": None}
+                              "pose_check": "off", "pose_check_bounds": None,
+                              # 2026-11-06 the wrong-estimate injection (plan 2026-11-06-unconfirmed-validation 1.2)
+                              "reloc_inject": None}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

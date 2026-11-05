@@ -187,3 +187,21 @@ def test_the_ticks_permission_is_the_final_output_after_tick_end():
     end = src.index("live_safety_ = core.safety_state(t)\n                    out_ = live.tick_end(")
     note = src.index("pose_box[\"rt\"].note_tick(")
     assert note > end and "open_=pose_open(out_)" in src[note:note + 500]
+
+
+def test_the_injection_is_for_unattended_relocalization_batches_only(tmp_path):
+    # plan 1.2 (the lead, 2026-11-06): test-only, off by default, recorded only when given; not in an attended session
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path, *_reloc(tmp_path)))
+    assert off.reloc_inject is None and "reloc_inject" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--reloc-unattended", "--reloc-inject", "shift x+1"))
+    assert run_transport.recorded_arguments(on)["reloc_inject"] == "shift x+1"
+    for extra in (["--reloc-inject", "shift x+1"], ["--reloc-unattended", "--reloc-inject", "shift x+9"]):
+        with pytest.raises(SystemExit):
+            _runner_args(_live(tmp_path, *_reloc(tmp_path), *extra))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, "--reloc-inject", "turn"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["reloc_inject"] is None
+    assert "inject=getattr(args, \"reloc_inject\", None)" in _source()

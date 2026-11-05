@@ -275,6 +275,15 @@ def _pose_bounds(value: str):
         raise argparse.ArgumentTypeError(f"--pose-check-bounds: {exc}") from exc
 
 
+def _reloc_inject(value: str) -> str:
+    """A wrong-estimate injection's kind (plan 2026-11-06-unconfirmed-validation 1.2)."""
+    import reloc_phase
+
+    if value not in reloc_phase.INJECT_KINDS:
+        raise argparse.ArgumentTypeError(f"--reloc-inject takes one of {', '.join(reloc_phase.INJECT_KINDS)}")
+    return value
+
+
 def quarter_focal(value: str) -> float:
     """Parse a positive finite focal length for Camera.set_focal_length."""
     try:
@@ -1112,6 +1121,11 @@ def arguments() -> argparse.Namespace:
                         "re-match confirms it; then a monitor. Needs --start-relocalize and --pose-check-bounds. "
                         "shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.1): the same computation on the "
                         "operating path, recorded, gating and ending nothing (no development values).")
+    parser.add_argument("--reloc-inject", type=_reloc_inject, default=None,
+                        help="Test only (docs/plans/2026-11-06-unconfirmed-validation.md 1.2): once the start "
+                        "relocalization chose, its estimate is replaced by the named map-frame hypothesis (a "
+                        "synthetic twin such as 'shift x+1' or 'turn', or 'slide': 0.35 m along the hall's axis). "
+                        "Unattended relocalization batches only (--reloc-unattended).")
     parser.add_argument("--pose-check-bounds", type=_pose_bounds, default=None,
                         help="The check's development values (plan 0), JSON inline or a file: {\"odom\": [a, b, c, e] "
                         "(dp = a + b d, dth = c + e d), \"e_still\": [m, rad], \"e_slam\": [m, rad]}.")
@@ -1564,6 +1578,8 @@ def arguments() -> argparse.Namespace:
                      "--start-relocalize")
     if args.pose_check == "on" and (not args.start_relocalize or args.pose_check_bounds is None):
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
+    if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
+        parser.error("--reloc-inject is for unattended relocalization batches (--start-relocalize --reloc-unattended)")
     if args.pose_check == "shadow" and not args.start_relocalize:
         parser.error("--pose-check shadow needs --start-relocalize")
     if args.pose_check != "on" and args.pose_check_bounds is not None:
@@ -3390,7 +3406,8 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
-        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg, sink=sink))
+        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg, sink=sink,
+        inject=getattr(args, "reloc_inject", None)))
     record = {**out, "map_id": bundle.map_id, "settings": settings_record, "place_settings": place_record,
               "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
@@ -10748,6 +10765,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
              or v not in (None, False))
         # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 3.1): only when on
         and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
+        # plan 2026-11-06 1.2: the injection only when given
+        and (k != "reloc_inject" or v is not None)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
