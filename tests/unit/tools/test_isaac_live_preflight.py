@@ -280,3 +280,36 @@ def test_a_map_folder_given_by_hand_keeps_the_known_start(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
     assert "--start-relocalize" not in _preflight(tmp_path)
     assert "start: known (a map folder given by hand: START_POSE relocalizes on it)" in p.stdout
+
+
+def test_the_unconfirmed_position_check_reaches_the_runner(tmp_path):
+    # docs/plans/2026-11-06-unconfirmed-validation.md 2: POSE_CHECK (off|shadow|on), its bounds, the contact record and
+    # the test-only injection -- unset, the arguments as before
+    import json
+
+    bounds = tmp_path / "bounds.json"
+    bounds.write_text(json.dumps({"odom": [0.02, 0.02, 0.005, 0.01], "e_still": [0.03, 0.01], "e_slam": [0.05, 0.02]}))
+    reloc = {"START_POSE": "4.0,3.0,-2.0", "RELOC_UNATTENDED": "1"}
+    p = _relocalizing(tmp_path, **reloc, POSE_CHECK="on", POSE_CHECK_BOUNDS=str(bounds), POSE_CHECK_CONTACTS="1",
+                      RELOC_INJECT="shift x+1")
+    assert p.returncode == 0, p.stdout + p.stderr
+    pre = (tmp_path / "out" / "preflight.log").read_text().splitlines()
+    i = pre.index("--pose-check")
+    assert pre[i:i + 4] == ["--pose-check", "on", "--pose-check-bounds", str(bounds.resolve())]
+    assert "--pose-check-contacts" in pre and "--reloc-inject=shift x+1" in pre
+    p = _relocalizing(tmp_path, **reloc, POSE_CHECK="shadow")
+    pre = (tmp_path / "out" / "preflight.log").read_text().splitlines()
+    assert p.returncode == 0 and pre[pre.index("--pose-check") + 1] == "shadow"
+    assert "--pose-check-bounds" not in pre and "--pose-check-contacts" not in pre
+    assert not [w for w in pre if w.startswith("--reloc-inject")]
+    p = _relocalizing(tmp_path, **reloc)
+    assert p.returncode == 0 and "--pose-check" not in (tmp_path / "out" / "preflight.log").read_text().splitlines()
+    for bad in ({**reloc, "POSE_CHECK": "x"},
+                {**reloc, "POSE_CHECK": "on"},  # no development values
+                {**reloc, "POSE_CHECK": "shadow", "POSE_CHECK_BOUNDS": str(bounds)},
+                {"POSE_CHECK": "shadow"},  # no relocalization
+                {**reloc, "POSE_CHECK_CONTACTS": "1"},  # with the check off
+                {**reloc, "RELOC_INJECT": "turn"},  # with the check off
+                {"START_POSE": "4.0,3.0,-2.0", "POSE_CHECK": "shadow", "RELOC_INJECT": "turn"}):  # attended
+        q = _relocalizing(tmp_path, **bad)
+        assert q.returncode == 2 and ("POSE_CHECK" in q.stderr or "RELOC_INJECT" in q.stderr), (bad, q.stderr)
