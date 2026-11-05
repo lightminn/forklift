@@ -522,3 +522,165 @@ def test_a_new_correction_redraws_the_zones_at_once():
     first = rt.display(view, I, z, t=0.0)
     moved = rt.display(view, (5.0, 0.0, 0.0), z, t=0.05)
     assert moved is not first and moved["zones"][0][0][0] == pytest.approx(first["zones"][0][0][0] + 5.0)
+
+
+# --- piece 2d: the shadow mode (docs/plans/2026-11-06-unconfirmed-validation.md 1.1) ---
+def _shadow(confirmed, b=(2.42, 1.7, 0.6), hyps=(), base=None, **kw):
+    """A shadow runtime past its start check (``base``: the start check's evidence, b by default)."""
+    grid = TG._grid(*TG.ROOM)
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)), shadow=True, **kw)
+    _tick(rt, b)
+    _feed(rt, grid, b, b)
+    _tick(rt, b)
+    w.answer({"confirmed": confirmed, "base": list(base or b), "reasons": [] if confirmed else ["competitor"],
+              "hyps": [[list(p), s] for p, s in hyps], "statuses": {}, "wall_s": 1.0})
+    return grid, w, rt
+
+
+def _reverse(rt, o, metres, C=I, **kw):
+    """Back straight up ``metres`` with the deadman held, then let go and stand."""
+    steps = round(metres / 0.01)
+    for _ in range(steps):
+        _tick(rt, o, C, standing=False, deadman=True, **kw)
+        o = compose(o, (-0.01, 0.0, 0.0))
+    _tick(rt, o, C, standing=False, **kw)
+    return o
+
+
+def test_the_shadow_never_gates_zones_or_ends():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(False, b, hyps=[((8.42, 1.7, 0.6), "shift x+1")])
+    view = _tick(rt, b)
+    assert rt.zones([Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)]) == (None, None)  # the permit's zones untouched
+    shown = rt.display(view, I, [Zone("p", 4.0, 1.7, 1.2, 1.0, 0.0)], t=0.0)
+    assert shown["status"] == "shadow:unconfirmed" and shown["zones"] == [] and shown["stroke"]["state"] == "ready"
+    assert not rt.ends()  # the runner ends nothing on a shadow
+    rt.rear_checked(0.0, blocked=True)  # design 3's verdict only recorded
+    assert rt.pc.status == "unconfirmed" and rt.rear == {"t": 0.0, "blocked": True}
+
+
+def test_the_shadow_keeps_the_start_evidence_and_its_agreement_without_a_threshold():
+    # plan 1.1: the start check's local r and the correction then, whatever the provisional verdict
+    b = (2.42, 1.7, 0.6)
+    r = (2.72, 1.7, 0.6)  # 0.30 m from where the correction puts the truck: over any E_SLAM
+    grid, w, rt = _shadow(True, b, base=r)
+    _tick(rt, b, I)  # C o O = b
+    raw = rt.raw["start"]
+    assert raw["r"] == pytest.approx(r) and raw["agree_m"] == pytest.approx(0.30, abs=1e-6)
+    assert raw["confirmed"] is True and raw["C"] == pytest.approx(I)
+    assert rt.pc.status == "ended:pose_slam_disagree" and not rt.ends()  # the provisional verdict: recorded only
+
+
+def test_the_shadow_meters_strokes_whatever_the_provisional_status():
+    # Codex draft 2 P2-1: PoseCheck counts no stroke once confirmed; the shadow's meter does
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    assert _tick(rt, b, I).status == "confirmed"
+    o = b
+    seen = []
+    for _ in range(120):
+        view = _tick(rt, o, I, standing=False, deadman=True)
+        seen.append(rt.display(view, I, [], t=len(seen))["stroke"]["state"])
+        o = compose(o, (-0.01, 0.0, 0.0))
+    assert seen[0] == "active" and seen[-1] == "closed"  # closed at D_STROKE less the stop, as when on
+    assert rt.display(_tick(rt, o, I, standing=False), I, [], t=999.0)["status"] == "shadow:confirmed"
+
+
+def test_the_shadow_runs_a_generation_at_every_stand_past_d_min_and_keeps_its_raw_values():
+    # plan 1.1: confirmed or not, below the 0.10 m gate or not; g against b' and every h', and the agreement at the
+    # result's tick
+    b = (2.42, 1.7, 0.6)
+    h = (8.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b, hyps=[(h, "shift x+1")])
+    _tick(rt, b, I)
+    o = _reverse(rt, b, 0.3)
+    _tick(rt, o, I)
+    assert rt.rm is None  # under D_MIN: no generation
+    o = _reverse(rt, o, 0.3)
+    _tick(rt, o, I)
+    assert rt.rm is not None and rt.rm.phase == "confirmed"
+    _feed(rt, grid, o, o, t0=5.0)
+    _tick(rt, o, I)
+    top = G.Candidate(R.laser_from_base(o), 0.95, 0.97)
+    w.answer({"match": G.GlobalMatch("ok", (top,)), "decision": G.Decision(True, "confirmed", 0.0)})
+    _tick(rt, o, I)
+    g = (o[0] + 0.04, o[1], o[2])
+    w.answer({"outcome": "confirm", "g": list(g), "residual": []})
+    _tick(rt, o, I)
+    [gen] = rt.raw["rematches"]
+    assert gen["g"] == pytest.approx(g) and gen["outcome"] == "confirm" and gen["phase"] == "confirmed"
+    assert gen["agree_m"] == pytest.approx(0.04, abs=1e-6)
+    assert gen["to_b"][0] == pytest.approx(0.04, abs=1e-6)  # b' is where the odometry carried the start
+    assert gen["to_h"][0][0] == pytest.approx(6.0, abs=0.05) and gen["to_h"][0][2] == "shift x+1"
+    assert gen["scan_t"] == pytest.approx(5.4)
+    _tick(rt, o, I)
+    assert rt.rm is None  # one generation a stand
+
+
+def test_the_shadow_runs_no_generation_in_a_mission_or_near_the_pallet():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    _tick(rt, b, I)
+    o = _reverse(rt, b, 0.6, mission_active=True)
+    _tick(rt, o, I, mission_active=True)
+    assert rt.rm is None
+    o = _reverse(rt, o, 0.1, near=True)
+    _tick(rt, o, I, near=True)
+    assert rt.rm is None
+
+
+def test_the_shadow_keeps_each_stands_largest_correction_move():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    _tick(rt, b, I)
+    _tick(rt, b, I, standing=False)
+    _tick(rt, b, I)  # a stand: C_still = I
+    _tick(rt, b, (0.03, 0.0, 0.0))
+    _tick(rt, b, (0.01, 0.0, 0.0))
+    _tick(rt, b, (0.01, 0.0, 0.0), standing=False)
+    stand = rt.raw["stands"][-1]
+    assert stand["max_m"] == pytest.approx(0.03) and stand["mission"] is False
+
+
+def test_the_shadow_goes_on_after_its_worker_is_lost():
+    b = (2.42, 1.7, 0.6)
+
+    class Dead(Scripted):
+        def alive(self):
+            return False
+
+    rt = _rt(Dead(), b=b, gen_points=np.zeros((40, 2)), shadow=True)
+    view = _tick(rt, b)
+    assert view.status == "ended:pose_worker_dead" and not rt.ends()
+    _tick(rt, b, standing=False)
+    _tick(rt, b)  # no poll on the lost worker, the stands still kept
+    assert rt.raw["stands"]
+
+
+def test_the_samples_carry_the_odometry_and_the_diagnostic_delta():
+    # plan 1.1: before the confirmation the delta is against the start evidence's own correction (a diagnostic)
+    b = (2.42, 1.7, 0.6)
+    r = (2.47, 1.7, 0.6)
+    grid, w, rt = _shadow(False, b, base=r)
+    _tick(rt, b, I)
+    rt.note_tick(0.0, applied=b, truth=b, open_=False)
+    [sample] = rt.samples
+    assert sample["o"] == pytest.approx(b) and sample["delta"][0] == pytest.approx(0.05, abs=1e-6)
+    assert sample["ref"] == "start"
+
+
+def test_every_ticks_truth_is_kept_and_the_confirmation_ticks_are_classed_apart():
+    # plan 1.3 (agy 8.2): the truth every control tick; the confirming tick and the first open one recorded
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    for k in range(3):
+        rt.note_tick(0.001 * k, applied=b, truth=b, open_=False)
+    assert len(rt._truths) == 3
+    _tick(rt, b, compose(b, invert(b)))
+    rt.note_tick(0.01, applied=b, truth=b, open_=False)
+    rt.note_tick(0.02, applied=b, truth=(b[0] + 0.2, b[1], b[2]), open_=True)
+    rt.note_tick(0.03, applied=b, truth=b, open_=True)
+    rec = rt.record()
+    assert rec["confirm_tick"]["t"] == 0.01 and rec["confirm_tick"]["class"] == "success"
+    assert rec["first_open_tick"]["t"] == 0.02 and rec["first_open_tick"]["class"] == "imprecise"

@@ -23,7 +23,7 @@ from forklift_core.localization import global_match as G
 from forklift_core.localization import pose_check as P
 from forklift_core.localization import start_reloc as R
 from forklift_core.localization import twin_check as T
-from forklift_core.localization.slam_pose import compose
+from forklift_core.localization.slam_pose import compose, invert
 
 SCANS = 5  # scan_capture.SCANS: one set, as the start relocalization takes it
 DEADLINE_S = 30.0  # the start check's and a re-match generation's deadline (the matcher's, plan 3.2)
@@ -31,6 +31,10 @@ ZONE_BIN_M = 0.05  # the net displacement's bin: zones grown at its upper end, f
 DISPLAY_ZONES = 64  # the console is sent the nearest ones, and the count left out (Codex 2c P2)
 DISPLAY_PERIOD_S = 0.1  # the state's publish period
 RESULT_GRACE_S = 5.0  # past a job's own deadline, the time its result may take to come back before it counts as lost
+TRUTH_KEEP = 120 * 90  # every control tick's truth for 90 s (plan 2026-11-06 1.3): a result's scan is looked up in it
+# the shadow's provisional verdicts (plan 2026-11-06 1.1): it takes no development values, and what these say is only
+# recorded -- neither the development values nor the samples' selection read it
+SHADOW_BOUNDS = P.Bounds(odom=(0.0, 0.0, 0.0, 0.0), e_still=(P.INT_M, P.INT_RAD), e_slam=(P.REMATCH_M, P.INT_RAD))
 
 
 # --- the worker's jobs ------------------------------------------------------------------------------------------------
@@ -195,12 +199,14 @@ class _Rematch:
     o_scan: tuple | None = None
     attempts: list = field(default_factory=list)
     stamps: list = field(default_factory=list)  # each attempt's scan stamps
+    g: tuple | None = None  # the generation's unattended confirmation, once chosen
 
 
 class PoseRuntime:
     def __init__(self, *, bounds: P.Bounds, worker, estimate, o0, pool, gen_points, reloc_cfg: R.RelocConfig, angles,
                  range_min_m: float, range_max_m: float, match_range_m: float, rear_offset_m: float, stop_m: float,
-                 tick_m: float, clock=time.monotonic, worker_factory=None, deadline_s: float = DEADLINE_S):
+                 tick_m: float, clock=time.monotonic, worker_factory=None, deadline_s: float = DEADLINE_S,
+                 shadow: bool = False):
         self.pc = P.PoseCheck(bounds, rear_offset_m=rear_offset_m, stop_m=stop_m, tick_m=tick_m)
         self.bounds, self.worker, self.worker_factory, self.restarts = bounds, worker, worker_factory, 0
         self.b, self.o0 = tuple(float(v) for v in estimate), tuple(float(v) for v in o0)
@@ -224,8 +230,21 @@ class PoseRuntime:
         self.evidence: list = []  # every C_int's evidence against the truth (design 4)
         self._seen_events = 0
         self._display = None  # (t, the last view sent to the console)
-        self._truths: deque = deque(maxlen=1800)  # (t, truth) at 20 Hz: the evidence's scan time looked up (90 s)
+        self._truths: deque = deque(maxlen=TRUTH_KEEP)  # (t, truth) every tick: the evidence's scan time looked up
         self._evidence_t = None  # the last scan time of the evidence the next agreement uses
+        self.worker_lost = False  # no worker any more (pose_worker_dead): nothing more is asked
+        self._c0 = None  # the start evidence's own correction r o O_scan^-1: the samples' delta before C_int
+        self._last = None  # this tick's (o, delta, its reference) for the samples
+        self.confirm_tick = self.first_open_tick = None  # plan 2026-11-06 1.3: the applied pose's class at each
+        # the shadow (plan 2026-11-06 1.1): the same computation on the operating path, nothing gated or ended; its
+        # measurements do not lean on the provisional verdicts -- a stroke meter of its own, a generation at every
+        # stand past D_MIN, the raw start and re-match agreements and every stand's largest correction move
+        self.shadow = bool(shadow)
+        self.meter = None  # a PoseCheck held unconfirmed from the start check's scan: its strokes and stands only
+        self._meter_view = None
+        self.raw = {"start": None, "rematches": [], "stands": []} if self.shadow else None
+        self._stand = None
+        self._raw_pending: list = []  # (raw record, its scan time, its evidence): judged against the truth there
 
     # --- inputs --------------------------------------------------------------------------------------------------------
     def on_scan(self, stamp: float, ranges, o_base, standing: bool) -> None:
@@ -252,9 +271,25 @@ class PoseRuntime:
              near: bool = False) -> P.View:
         o = tuple(float(v) for v in o)
         self.o_last = o
-        if not self.pc.status.startswith("ended:"):
+        view = self._tick(t, o, C, standing=standing, deadman=deadman, epoch=epoch, control_gen=control_gen,
+                          mission_active=mission_active, near=near)
+        if self.shadow:
+            self._shadow_stand(t, o, C, standing, mission_active, near)
+        self._last = None
+        if C is not None:
+            ref, kind = (self.pc.c_int, "int") if self.pc.c_int is not None else (self._c0, "start")
+            if ref is not None:
+                self._last = (o, P.gap(compose(C, o), compose(ref, o), self.rear_offset_m), kind)
+        return view
+
+    def _stopped(self) -> bool:
+        """Nothing more to ask the worker: it is lost, or (on) the check ended (Codex 2b re-review P2)."""
+        return self.worker_lost or (not self.shadow and self.pc.status.startswith("ended:"))
+
+    def _tick(self, t, o, C, *, standing, deadman, epoch, control_gen, mission_active, near) -> P.View:
+        if not self._stopped():
             self._check_worker(t)
-        if self.pc.status.startswith("ended:"):  # Codex 2b re-review P2: nothing more to ask a closed worker
+        if self._stopped():  # Codex 2b re-review P2: nothing more to ask a closed worker
             return self.pc.update(t, o, C if C is not None else (0.0, 0.0, 0.0), standing=standing, deadman=deadman)
         for job, result in self.worker.poll():
             self._result(t, job, result, o, C, epoch, control_gen)
@@ -282,9 +317,18 @@ class PoseRuntime:
                 self.stage = "start_running"
                 self.start["submitted_t"] = t
         view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active, near=near)
-        if view.want_rematch and self.rm is None:
-            phase = self.pc.status
-            self.pc.begin_rematch(t, epoch=epoch, control_gen=control_gen)
+        want = view.want_rematch
+        if self.shadow:  # its own trigger: every stand past D_MIN outside a mission and the near field
+            self._meter_view = None if self.meter is None else self.meter.update(t, o, C, standing=standing,
+                                                                                 deadman=deadman)
+            want = self._meter_view is not None and self._meter_view.want_rematch and not mission_active and not near
+        if want and self.rm is None:
+            if self.shadow:
+                phase = "confirmed" if self.pc.c_int is not None else "unconfirmed"
+                self.meter.rematched_at = self.meter.stand_id
+            else:
+                phase = self.pc.status
+            self.pc.begin_rematch(t, epoch=epoch, control_gen=control_gen)  # unconfirmed or confirmed only
             self.rm = _Rematch(phase, o, epoch, control_gen, R.StartRelocalizer(self.reloc_cfg, self.clock))
             self.rm.relocalizer.start()  # its 30 s from now: the scans' wait counts (Codex 2b re-review P2)
             self.buf.clear()
@@ -322,6 +366,10 @@ class PoseRuntime:
             self.start["result_t"] = t
             o_scan = tuple(self.start["o_scan"])
             self.o_s = o_scan
+            if result.get("base") is not None:
+                self._c0 = compose(tuple(result["base"]), invert(o_scan))
+            if self.shadow:
+                self._shadow_start(t, result, o_scan, o, C)
             statuses = result.get("statuses") or {}
             if "error" in result or any(v != "ok" for v in statuses.values()):
                 # Codex 2b P1: without every hypothesis the union zones miss pallets -- no reverse can be opened
@@ -349,6 +397,7 @@ class PoseRuntime:
             rm.attempts.append({"reason": result["decision"].reason, "state": state})
             if state == "chosen":
                 g = rm.relocalizer.estimate.base
+                rm.g = tuple(g)
                 rm.job = self.worker.submit("rematch", {
                     "phase": rm.phase, "points": rm.points, "b": T.moved(self.b, self.o0, self.o_s), "hyps":
                     self.hyps_s, "o0": self.o_s, "ot": rm.o_scan, "decision": "confirmed", "g": g,
@@ -373,8 +422,65 @@ class PoseRuntime:
                                "attempts": rm.attempts, "why": why, "o_begin": list(rm.o_begin),
                                "o_scan": None if o_scan is None else list(o_scan), "scan_stamps": rm.stamps})
         self.buf.clear()
+        if self.shadow:
+            self._shadow_rematch(t, rm, outcome, g, o_scan, o, C)
         self.pc.rematch_result(t, outcome, g, tuple(o_scan), o_now=o, C=C if C is not None else (0.0, 0.0, 0.0),
                                epoch=epoch, control_gen=control_gen)
+
+    # --- the shadow's measurements (plan 2026-11-06 1.1) ---------------------------------------------------------------
+    def _shadow_start(self, t, result, o_scan, o, C) -> None:
+        """The start check's local r and its agreement with the correction then, with no threshold; the stroke meter
+        from the start's scan."""
+        r = result.get("base")
+        raw = {"t": t, "scan_t": self.start["scan_t"], "o_scan": list(o_scan), "confirmed": bool(result.get("confirmed")),
+               "r": None if r is None else list(r), "C": None if C is None else list(C), "error": result.get("error"),
+               "statuses": result.get("statuses")}
+        if r is not None and C is not None:
+            raw["agree_m"], raw["agree_rad"] = P.agreement(tuple(r), o_scan, C, o, self.rear_offset_m)
+            self._raw_pending.append((raw, raw["scan_t"], tuple(r)))
+        self.raw["start"] = raw
+        self.meter = P.PoseCheck(self.bounds, rear_offset_m=self.rear_offset_m, stop_m=self.pc.stop_m,
+                                 tick_m=self.pc.tick_m)
+        self.meter.status, self.meter.origin = "unconfirmed", tuple(o_scan)
+
+    def _shadow_rematch(self, t, rm, outcome, g, o_scan, o, C) -> None:
+        """A generation's raw values: its g (the decision's, else the relocalizer's) against b' and every h' carried to
+        its scan, the conservative outcome, and its agreement with the correction at the result's tick."""
+        g = g if g is not None else rm.g
+        raw = {"t": t, "phase": rm.phase, "outcome": outcome, "g": None if g is None else list(g),
+               "o_begin": list(rm.o_begin), "o_scan": None if o_scan is None else list(o_scan),
+               "scan_t": rm.stamps[-1][-1] if rm.stamps else None, "attempts": len(rm.attempts)}
+        if g is not None and o_scan is not None:
+            g, o_scan = tuple(g), tuple(o_scan)
+            raw["to_b"] = list(P.gap(g, T.moved(self.b, self.o0, o_scan), self.rear_offset_m))
+            raw["to_h"] = [[*P.gap(g, T.moved(q, self.o_s, o_scan), self.rear_offset_m), src]
+                           for q, src in self.hyps_s]
+            raw["moved"] = list(P.gap(o, o_scan, self.rear_offset_m))
+            if C is not None:
+                raw["agree_m"], raw["agree_rad"] = P.agreement(g, o_scan, C, o, self.rear_offset_m)
+                raw["C"] = list(C)
+            if raw["scan_t"] is not None:
+                self._raw_pending.append((raw, raw["scan_t"], g))
+        self.raw["rematches"].append(raw)
+
+    def _shadow_stand(self, t, o, C, standing, mission_active, near) -> None:
+        """Each stand's largest move of the applied pose by the correction against the stand's first (Delta_still)."""
+        if standing and C is not None:
+            if self._stand is None:
+                self._stand = {"t0": t, "c_still": tuple(C), "max_m": 0.0, "max_rad": 0.0, "mission":
+                               bool(mission_active), "near": bool(near), "status": self.pc.status, "t1": t}
+                return
+            m, rad = P.gap(compose(C, o), compose(self._stand["c_still"], o), self.rear_offset_m)
+            st = self._stand
+            st["max_m"], st["max_rad"], st["t1"] = max(st["max_m"], m), max(st["max_rad"], rad), t
+            st["mission"] = st["mission"] or bool(mission_active)
+            st["near"] = st["near"] or bool(near)
+        elif self._stand is not None:
+            self._close_stand()
+
+    def _close_stand(self) -> None:
+        st, self._stand = self._stand, None
+        self.raw["stands"].append({**st, "c_still": list(st["c_still"])})
 
     def _check_worker(self, t) -> None:
         if self.worker.alive():
@@ -389,6 +495,7 @@ class PoseRuntime:
                 self.worker = self.worker_factory()
             except Exception as exc:  # noqa: BLE001 -- Codex 2b P2-6: a failed restart ends the check too
                 self.pc.events.append({"t": t, "kind": "worker_restart_failed", "error": repr(exc)})
+                self.worker_lost = True
                 self.pc.end(t, "pose_worker_dead")
                 return
             if self.stage == "start_running":  # its job went with the worker: the start check runs again
@@ -396,6 +503,7 @@ class PoseRuntime:
             if self.rm is not None:
                 self.rm.stage, self.rm.job = "scans", None
             return
+        self.worker_lost = True
         self.pc.end(t, "pose_worker_dead")
 
     # --- outputs -------------------------------------------------------------------------------------------------------
@@ -408,6 +516,8 @@ class PoseRuntime:
         the believed start and every hypothesis at O_s, grown at the net displacement's bin (plan 3.3) -- or
         (None, None): the normal zones."""
         status = self.pc.status
+        if self.shadow:
+            return None, None  # the shadow gates nothing (plan 2026-11-06 1.1)
         if self.o_s is None or status == "confirmed" or status.startswith("ended:") or self.o_last is None:
             return None, None
         if status == "checking" and self.pc.c_int is not None:
@@ -430,6 +540,14 @@ class PoseRuntime:
         key = (view.status, None if C is None else tuple(round(float(v), 9) for v in C))
         if last is not None and t - last[0] < DISPLAY_PERIOD_S and last[2] == key:
             return last[1]  # the same status and correction (Codex 2c re-review P2: a new C redraws at once)
+        if self.shadow:  # the meter's stroke, for the probe's same pressing rule (plan 2026-11-06 1.1, 2.1)
+            mv = self._meter_view
+            out = {"status": f"shadow:{view.status}", "reason": None, "zones": [], "zones_omitted": 0,
+                   "stroke": None if mv is None or mv.stroke is None else {
+                       "state": mv.stroke, "left_m": mv.stroke_left_m, "total_left_m": mv.total_left_m},
+                   "rematch": None if self.rm is None else self.rm.stage, "generations": len(self.raw["rematches"])}
+            self._display = (t, out, key)
+            return out
         stroke = None if view.stroke is None else {
             "state": view.stroke, "left_m": view.stroke_left_m, "total_left_m": view.total_left_m}
         odom, _ = self.zones(map_zones) if C is not None else (None, None)
@@ -457,7 +575,7 @@ class PoseRuntime:
     def rear_checked(self, t: float, blocked: bool) -> None:
         """The runner's verdict on the straight reverse to D_MIN and its stop (design 3): blocked ends the session."""
         self.rear = {"t": t, "blocked": bool(blocked)}
-        if blocked:
+        if blocked and not self.shadow:
             self.pc.end(t, "pose_rear_blocked")
 
     def rear_zones(self, map_zones) -> list:
@@ -466,42 +584,77 @@ class PoseRuntime:
         hyps = [T.moved(self.b, self.o0, self.o_s)] + [q for q, _ in self.hyps_s]
         return T.grown_zones(T.odom_zones(list(map_zones), hyps, self.o_s), upper, self.bounds)
 
+    def ends(self) -> bool:
+        """Whether the runner ends the session on this check's end: never in the shadow."""
+        return not self.shadow and self.pc.status.startswith("ended:")
+
+    def _truth_at(self, at):
+        """(truth time, truth) nearest ``at``, or None when no truth is within 0.1 s of it."""
+        if not self._truths:
+            return None
+        truth_t, truth = min(self._truths, key=lambda r: abs(r[0] - at))
+        return None if abs(truth_t - at) > 0.1 else (truth_t, truth)
+
     def note_tick(self, t: float, *, applied, truth, open_: bool) -> None:
         """Plan 3.4: this control tick's applied pose against the simulation's truth (base link, B-P2 4.0 classes),
-        counted for every tick and for the ticks with forward or mission permission open; 10 Hz samples; and each
-        new C_int's evidence against the truth (design 4). The judgement only -- nothing decides on it."""
-        if not self._truths or t - self._truths[-1][0] >= 0.05:
-            self._truths.append((t, tuple(truth)))
+        counted for every tick and for the ticks with forward or mission permission open (the tick's final output,
+        plan 2026-11-06 1.3); the confirming tick and the first open one after it apart; 10 Hz samples; and each new
+        C_int's evidence (and the shadow's raw evidence) against the truth at its scan (design 4). The truth is kept
+        every tick. The judgement only -- nothing decides on it."""
+        self._truths.append((t, tuple(truth)))
         cls, m, rad = _classify(applied, truth)
+        if self.confirm_tick is None and self.pc.status == "confirmed":
+            self.confirm_tick = {"t": t, "class": cls, "m": m, "rad": rad, "open": bool(open_)}
+        if self.confirm_tick is not None and self.first_open_tick is None and open_:
+            self.first_open_tick = {"t": t, "class": cls, "m": m, "rad": rad}
         for key in ("all", "open") if open_ else ("all",):
             tally = self.ticks[key]
             tally[cls] += 1
             tally["max_m"], tally["max_rad"] = max(tally["max_m"], m), max(tally["max_rad"], rad)
-        if not self.samples or t - self.samples[-1][0] >= 0.1:
-            self.samples.append([t, self.pc.status, bool(open_), list(applied), list(truth)])
+        if not self.samples or t - self.samples[-1]["t"] >= 0.1:
+            o, delta, ref = self._last or (None, None, None)
+            self.samples.append({"t": t, "status": self.pc.status, "open": bool(open_), "applied": list(applied),
+                                 "truth": list(truth), "o": None if o is None else list(o),
+                                 "delta": None if delta is None else list(delta), "ref": ref})
+        for raw, at, pose in self._raw_pending:
+            near_ = self._truth_at(at)
+            if near_ is None:
+                raw["truth"] = {"class": "unknown"}
+                continue
+            rcls, rm_, rrad = _classify(pose, near_[1])
+            raw["truth"] = {"class": rcls, "m": rm_, "rad": rrad, "truth_t": near_[0]}
+        self._raw_pending = []
         for e in self.pc.events[self._seen_events:]:
             if e["kind"] in ("slam_agreement", "rematch_agreement") and e.get("ok"):
                 # the evidence is the scan's: judged against the truth at that scan (Codex 2b re-review P3)
                 at = self._evidence_t if self._evidence_t is not None else t
-                truth_t, truth_at = min(self._truths, key=lambda r: abs(r[0] - at))
-                if abs(truth_t - at) > 0.1:  # no truth near the scan: not judged (Codex 2b re-review 3 P3)
-                    self.evidence.append({"t": t, "kind": e["kind"], "class": "unknown", "scan_t": at,
-                                          "truth_t": truth_t})
+                near_ = self._truth_at(at)
+                if near_ is None:  # no truth near the scan: not judged (Codex 2b re-review 3 P3)
+                    self.evidence.append({"t": t, "kind": e["kind"], "class": "unknown", "scan_t": at})
                     continue
+                truth_t, truth_at = near_
                 ecls, em, erad = _classify(e["evidence"], truth_at)
                 self.evidence.append({"t": t, "kind": e["kind"], "class": ecls, "m": em, "rad": erad,
                                       "truth_t": truth_t, "scan_t": at})
         self._seen_events = len(self.pc.events)
 
     def record(self) -> dict:
-        return {"start": self.start, "events": self.pc.events, "rematches": self.rematches, "rear": self.rear,
-                "hyps": [[list(q), src] for q, src in self.hyps_s], "status": self.pc.status,
-                "worker_restarts": self.restarts, "ticks": self.ticks, "samples": self.samples,
-                "evidence": self.evidence}
+        if self.shadow and self._stand is not None:
+            self._close_stand()
+        out = {"mode": "shadow" if self.shadow else "on", "start": self.start, "events": self.pc.events,
+               "rematches": self.rematches, "rear": self.rear, "hyps": [[list(q), src] for q, src in self.hyps_s],
+               "status": self.pc.status, "worker_restarts": self.restarts, "ticks": self.ticks, "samples": self.samples,
+               "evidence": self.evidence, "confirm_tick": self.confirm_tick, "first_open_tick": self.first_open_tick,
+               "bounds": {"odom": list(self.bounds.odom), "e_still": list(self.bounds.e_still),
+                          "e_slam": list(self.bounds.e_slam)}}
+        if self.shadow:
+            out["raw"] = self.raw
+            out["meter_events"] = None if self.meter is None else self.meter.events
+        return out
 
     def close(self) -> None:
         self.worker.close()
 
 
-__all__ = ["DEADLINE_S", "InlineWorker", "JobContext", "PoseRuntime", "ProcessWorker", "SCANS", "ZONE_BIN_M",
-           "run_job"]
+__all__ = ["DEADLINE_S", "InlineWorker", "JobContext", "PoseRuntime", "ProcessWorker", "SCANS", "SHADOW_BOUNDS",
+           "ZONE_BIN_M", "run_job"]

@@ -136,3 +136,54 @@ def test_the_state_carries_the_checks_view_for_the_console():
     assert 'msg["pose_check"] = dict(self.pose_info)' in live
     src = _source()
     assert "live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)" in src
+
+
+# --- piece 2d (docs/plans/2026-11-06-unconfirmed-validation.md 1.1, 1.3) ---
+def test_the_shadow_needs_the_relocalization_takes_no_development_values_and_is_recorded(tmp_path):
+    import run_transport
+
+    shadow = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow"))
+    assert shadow.pose_check == "shadow" and shadow.pose_check_bounds is None
+    assert run_transport.recorded_arguments(shadow)["pose_check"] == "shadow"
+    with pytest.raises(SystemExit):  # the provisional verdicts take no development values (plan 1.1)
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow", "--pose-check-bounds",
+                           json.dumps(BOUNDS)))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, "--pose-check", "shadow"))
+
+
+def test_the_shadow_gates_nothing_in_the_runner():
+    # plan 1.1: no arbiter.pose, no pose_ok, no zones (the runtime's), no ending
+    src = _source()
+    assert "pose_box[\"sink\"] = {}" in src and 'if getattr(args, "pose_check", "off") != "off":' in src
+    at = src.index('pose_box["rt"] = make_pose_runtime(args')
+    assert 'if not pose_box["rt"].shadow:' in src[at:at + 400]
+    assert '**({} if pose_box["rt"] is None or pose_box["rt"].shadow' in src
+    at = src.index("def pose_checkpoint(t_):")
+    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    assert "if not rt_.shadow:\n                a_.pose = rt_.view_dict(view_)" in body
+    assert "if rt_.ends() and pose_box[\"end\"] is None:" in body
+    at = src.index("def make_pose_runtime(")
+    assert "shadow=args.pose_check == \"shadow\"" in src[at:at + 3000]
+    assert "pose_runtime.SHADOW_BOUNDS if args.pose_check == \"shadow\"" in src[at:at + 3000]
+
+
+def test_the_ticks_permission_is_the_final_output_after_tick_end():
+    # plan 1.3: AUTO is the output's source (a zero candidate too); TELEOP armed with drive allowed in normal mode
+    import run_transport
+    from forklift_core.safety.arbiter import Output
+    from forklift_core.safety.teleop_policy import Policy
+
+    def out(source, armed=True, allowed=True, mode="normal"):
+        return Output("X", "none", source, 0.0, 0.0, Policy(allowed, False, None, drive_mode=mode), 1, armed)
+
+    assert run_transport.pose_open(out("auto", armed=False, allowed=False))
+    assert run_transport.pose_open(out("teleop"))
+    assert not run_transport.pose_open(out("teleop", armed=False))
+    assert not run_transport.pose_open(out("teleop", allowed=False))
+    assert not run_transport.pose_open(out("teleop", mode="reverse_straight"))
+    assert not run_transport.pose_open(out("zero")) and not run_transport.pose_open(out("core_stop"))
+    src = _source()
+    end = src.index("live_safety_ = core.safety_state(t)\n                    out_ = live.tick_end(")
+    note = src.index("pose_box[\"rt\"].note_tick(")
+    assert note > end and "open_=pose_open(out_)" in src[note:note + 500]
