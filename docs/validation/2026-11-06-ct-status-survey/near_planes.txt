@@ -1,0 +1,48 @@
+prior band z: 0.0259 0.09609999999999999 cell 0.01 inlier 0.0078 min_band 15
+named boxes: ['bottom_board_0', 'bottom_board_1', 'bottom_board_2', 'block_x0_y0', 'block_x0_y1', 'block_x0_y2', 'block_x1_y0', 'block_x1_y1', 'block_x1_y2', 'block_x2_y0', 'block_x2_y1', 'block_x2_y2', 'stringer_0', 'stringer_1', 'stringer_2', 'top_board_0', 'top_board_1', 'top_board_2', 'top_board_3', 'top_board_4', 'top_board_5', 'top_board_6']
+== plane 0: normal [-0.9987 -0.0502  0.    ] point [ 3.18  -0.089  0.111] inliers 1616 residual_p95 0.0066
+  bottom_board_0               ws  122 | in-band   36 | inlier   84 | inlier&band   27 | dist median +0.0035 p05 -0.5157 p95 +0.0050 | lateral -0.450..-0.351
+  bottom_board_1               ws  104 | in-band   26 | inlier  104 | inlier&band   26 | dist median -0.0033 p05 -0.0046 p95 -0.0019 | lateral -0.118..+0.020
+  bottom_board_2               ws  124 | in-band   31 | inlier    0 | inlier&band    0 | dist median -0.0110 p05 -0.5092 p95 -0.0094 | lateral +0.237..+0.348
+  block_x0_y0                  ws  373 | in-band  272 | inlier  341 | inlier&band  245 | dist median +0.0038 p05 -0.0609 p95 +0.0050 | lateral -0.450..-0.344
+  block_x0_y1                  ws  446 | in-band  338 | inlier  446 | inlier&band  338 | dist median -0.0032 p05 -0.0047 p95 -0.0018 | lateral -0.129..+0.030
+  block_x0_y2                  ws  373 | in-band  284 | inlier    0 | inlier&band    0 | dist median -0.0105 p05 -0.0965 p95 -0.0093 | lateral +0.243..+0.348
+  block_x1_y0                  ws   35 | in-band   29 | inlier    0 | inlier&band    0 | dist median -0.2387 p05 -0.3052 p95 -0.2241 | lateral -0.361..-0.356
+  block_x1_y2                  ws   47 | in-band   39 | inlier    0 | inlier&band    0 | dist median -0.2419 p05 -0.3434 p95 -0.2365 | lateral +0.242..+0.251
+  block_x2_y0                  ws   30 | in-band   24 | inlier    0 | inlier&band    0 | dist median -0.4524 p05 -0.5957 p95 -0.4515 | lateral -0.368..-0.361
+  block_x2_y2                  ws   33 | in-band   27 | inlier    0 | inlier&band    0 | dist median -0.5093 p05 -0.5764 p95 -0.4640 | lateral +0.237..+0.247
+  stringer_0                   ws  915 | in-band   69 | inlier  682 | inlier&band   44 | dist median -0.0032 p05 -0.0113 p95 +0.0043 | lateral -0.449..+0.347
+  stringer_1                   ws   11 | in-band    0 | inlier    0 | inlier&band    0 | dist median -0.2315 p05 -0.3073 p95 -0.2268 | lateral -0.240..+0.011
+  stringer_2                   ws    5 | in-band    0 | inlier    0 | inlier&band    0 | dist median -0.5623 p05 -0.5675 p95 -0.4567 | lateral -0.124..+0.003
+  top_board_0                  ws  200 | in-band    0 | inlier  112 | inlier&band    0 | dist median +0.0030 p05 -0.5004 p95 +0.0048 | lateral -0.458..-0.344
+  top_board_1                  ws  201 | in-band    0 | inlier  116 | inlier&band    0 | dist median +0.0008 p05 -0.5063 p95 +0.0026 | lateral -0.344..-0.228
+  top_board_2                  ws  198 | in-band    0 | inlier  118 | inlier&band    0 | dist median -0.0016 p05 -0.5120 p95 +0.0002 | lateral -0.229..-0.110
+  top_board_3                  ws  190 | in-band    0 | inlier  116 | inlier&band    0 | dist median -0.0039 p05 -0.5178 p95 -0.0022 | lateral -0.117..+0.008
+  top_board_4                  ws  199 | in-band    0 | inlier  116 | inlier&band    0 | dist median -0.0064 p05 -0.5236 p95 -0.0046 | lateral +0.003..+0.123
+  top_board_5                  ws  206 | in-band    0 | inlier   53 | inlier&band    0 | dist median -0.0088 p05 -0.5297 p95 -0.0069 | lateral +0.121..+0.237
+  top_board_6                  ws  200 | in-band    0 | inlier    0 | inlier&band    0 | dist median -0.0112 p05 -0.5355 p95 -0.0094 | lateral +0.237..+0.346
+  columns (lateral m, count) nonzero: [(-0.46, 3), (-0.45, 23), (-0.44, 26), (-0.43, 26), (-0.42, 26), (-0.41, 18), (-0.4, 21), (-0.39, 26), (-0.38, 26), (-0.37, 26), (-0.36, 24), (-0.12, 26)] ... [(-0.1, 26), (-0.09, 13), (-0.08, 26), (-0.07, 26), (-0.06, 26), (-0.05, 26), (-0.04, 26), (-0.03, 13), (-0.02, 26), (-0.01, 26), (0.0, 26), (0.01, 26)]
+  columns lateral range -0.46 0.01
+== plane 5: normal [-0.999  -0.0453  0.    ] point [3.164 0.431 0.086] inliers 1568 residual_p95 0.0070
+  bottom_board_0               ws  122 | in-band   36 | inlier    5 | inlier&band    2 | dist median +0.0104 p05 -0.5087 p95 +0.0115 | lateral -0.435..-0.335
+  bottom_board_1               ws  104 | in-band   26 | inlier  104 | inlier&band   26 | dist median +0.0053 p05 +0.0042 p95 +0.0064 | lateral -0.103..+0.035
+  bottom_board_2               ws  124 | in-band   31 | inlier   76 | inlier&band   19 | dist median -0.0007 p05 -0.4993 p95 +0.0006 | lateral +0.256..+0.364
+  block_x0_y0                  ws  373 | in-band  272 | inlier   16 | inlier&band   13 | dist median +0.0106 p05 -0.0539 p95 +0.0116 | lateral -0.435..-0.329
+  block_x0_y1                  ws  446 | in-band  338 | inlier  446 | inlier&band  338 | dist median +0.0053 p05 +0.0041 p95 +0.0064 | lateral -0.114..+0.045
+  block_x0_y2                  ws  373 | in-band  284 | inlier  328 | inlier&band  247 | dist median -0.0003 p05 -0.0866 p95 +0.0007 | lateral +0.259..+0.364
+  block_x1_y0                  ws   35 | in-band   29 | inlier    0 | inlier&band    0 | dist median -0.2317 p05 -0.2982 p95 -0.2172 | lateral -0.344..-0.339
+  block_x1_y2                  ws   47 | in-band   39 | inlier    0 | inlier&band    0 | dist median -0.2320 p05 -0.3334 p95 -0.2265 | lateral +0.259..+0.267
+  block_x2_y0                  ws   30 | in-band   24 | inlier    0 | inlier&band    0 | dist median -0.4455 p05 -0.5888 p95 -0.4445 | lateral -0.350..-0.343
+  block_x2_y2                  ws   33 | in-band   27 | inlier    0 | inlier&band    0 | dist median -0.4994 p05 -0.5665 p95 -0.4541 | lateral +0.256..+0.265
+  stringer_0                   ws  915 | in-band   69 | inlier  602 | inlier&band   46 | dist median +0.0052 p05 -0.0011 p95 +0.0110 | lateral -0.434..+0.362
+  stringer_1                   ws   11 | in-band    0 | inlier    0 | inlier&band    0 | dist median -0.2227 p05 -0.2988 p95 -0.2186 | lateral -0.223..+0.028
+  stringer_2                   ws    5 | in-band    0 | inlier    0 | inlier&band    0 | dist median -0.5542 p05 -0.5588 p95 -0.4486 | lateral -0.106..+0.021
+  top_board_0                  ws  200 | in-band    0 | inlier    4 | inlier&band    0 | dist median +0.0099 p05 -0.4937 p95 +0.0114 | lateral -0.440..-0.329
+  top_board_1                  ws  201 | in-band    0 | inlier    6 | inlier&band    0 | dist median +0.0082 p05 -0.4991 p95 +0.0097 | lateral -0.329..-0.213
+  top_board_2                  ws  198 | in-band    0 | inlier  104 | inlier&band    0 | dist median +0.0065 p05 -0.5042 p95 +0.0079 | lateral -0.213..-0.094
+  top_board_3                  ws  190 | in-band    0 | inlier  116 | inlier&band    0 | dist median +0.0047 p05 -0.5094 p95 +0.0061 | lateral -0.099..+0.023
+  top_board_4                  ws  199 | in-band    0 | inlier  116 | inlier&band    0 | dist median +0.0029 p05 -0.5146 p95 +0.0043 | lateral +0.021..+0.138
+  top_board_5                  ws  206 | in-band    0 | inlier  120 | inlier&band    0 | dist median +0.0010 p05 -0.5202 p95 +0.0025 | lateral +0.138..+0.253
+  top_board_6                  ws  200 | in-band    0 | inlier  116 | inlier&band    0 | dist median -0.0008 p05 -0.5253 p95 +0.0006 | lateral +0.256..+0.362
+  columns (lateral m, count) nonzero: [(-0.34, 13), (-0.11, 13), (-0.1, 26), (-0.09, 26), (-0.08, 13), (-0.07, 26), (-0.06, 26), (-0.05, 26), (-0.04, 26), (-0.03, 23), (-0.02, 16), (-0.01, 26)] ... [(0.03, 13), (0.26, 17), (0.27, 22), (0.28, 26), (0.29, 26), (0.3, 26), (0.31, 26), (0.32, 17), (0.33, 22), (0.34, 26), (0.35, 26), (0.36, 13)]
+  columns lateral range -0.34 0.36
