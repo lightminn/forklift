@@ -12,12 +12,18 @@ WRAPPER = ROOT / "deploy/console/reloc_session.sh"
 
 
 def _fakes(tmp_path, probe_rc: int, launcher_s: float):
+    # The fake launcher marks itself ready only after its TERM trap is in place, and the fake probe waits for that mark
+    # before it ends: a probe failing in milliseconds could otherwise deliver the wrapper's TERM to a bash that had not
+    # yet run its trap line, which ends it without the record the tests look for (seen on ws1 under xdist load).
     launcher = tmp_path / "launcher.sh"
     launcher.write_text("#!/bin/bash\ntrap 'echo terminated >> \"$1/launcher_term\"; exit 143' TERM\n"
+                        "touch \"$1/launcher_ready\"\n"
                         f"echo \"$RELOC_UNATTENDED $MAX_EPOCHS $START_POSE\" > \"$1/launcher_env\"\n"
                         f"for i in $(seq 1 {int(launcher_s * 10)}); do sleep 0.1; done\nexit 0\n")
     python = tmp_path / "python"
-    python.write_text(f"#!/bin/bash\necho \"$@\" > {tmp_path}/probe_args\nexit {probe_rc}\n")
+    python.write_text(f"#!/bin/bash\necho \"$@\" > {tmp_path}/probe_args\n"
+                      f"for i in $(seq 1 400); do [ -e {tmp_path}/out/launcher_ready ] && break; sleep 0.05; done\n"
+                      f"exit {probe_rc}\n")
     python.chmod(0o755)
     return launcher, python
 
