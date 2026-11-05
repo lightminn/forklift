@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from scipy import ndimage, optimize
+from scipy import ndimage, optimize, spatial
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mass_along_judge as J  # noqa: E402
@@ -89,6 +89,9 @@ class MapGrid:
         occ = self.data >= OCCUPIED
         self.dist = (ndimage.distance_transform_edt(~occ) * self.res if occ.any()
                      else np.full(self.data.shape, np.inf))
+        rows, cols = np.nonzero(occ)
+        centres = np.column_stack([cols + 0.5, rows + 0.5]) * self.res  # occupied cell centres, grid frame
+        self._tree = spatial.cKDTree(se2_apply(self.origin, centres)) if len(centres) else None
         known = np.pad(self.data >= 0, 1, constant_values=False)
         self.dist_unknown = ndimage.distance_transform_edt(known)[1:-1, 1:-1] * self.res
 
@@ -97,8 +100,15 @@ class MapGrid:
         return loc[:, 1] / self.res - 0.5, loc[:, 0] / self.res - 0.5  # row, col
 
     def distance(self, pts: np.ndarray) -> np.ndarray:
+        """Distance to the nearest occupied cell centre: the interpolated transform inside the outermost cell centres,
+        the exact nearest-centre distance outside them (the transform clamped at the edge would read an off-map point
+        as near a wall -- Codex review P2)."""
         r, c = self.cells(pts)
-        return ndimage.map_coordinates(self.dist, [r, c], order=1, mode="nearest")
+        out = ndimage.map_coordinates(self.dist, [r, c], order=1, mode="nearest")
+        off = (r < 0) | (c < 0) | (r > self.data.shape[0] - 1) | (c > self.data.shape[1] - 1)
+        if np.any(off):
+            out[off] = self._tree.query(pts[off])[0] if self._tree is not None else np.inf
+        return out
 
     def clearance_to_unknown(self, pts: np.ndarray) -> np.ndarray:
         """Distance from the point's nearest cell centre to the nearest unknown or off-map cell centre, less the
@@ -441,11 +451,29 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
 
     th, local = supported(np.concatenate([pa, pb]))
     known_reach = int(np.count_nonzero(support(th, q, grids))) if len(th) else 0
+    # what the support leaves out: the result is conditional on surfaces both maps hold within c at the identity
+    # (Codex review P2), so the excluded points' distances and bearings are reported
+    excluded = {}
+    if len(th):
+        ok = occupied_both(th, grids)
+        ex = th[~ok]
+        excluded["points"] = int(len(ex))
+        if len(ex):
+            for arm, g in (("A", grids[0]), ("B", grids[1])):
+                dd = g.distance(ex)
+                excluded[f"distance_{arm}_m"] = {"median": float(np.median(dd)), "p90": float(np.percentile(dd, 90)),
+                                                 "far_share": float(np.mean(dd > CUT_M))}
+            loc = se2_inv_apply(q, ex)
+            sector = np.floor((np.arctan2(loc[:, 1], loc[:, 0]) + math.pi) / (math.pi / 4)).astype(int) % 8
+            excluded["per_bearing_sector"] = np.bincount(sector, minlength=8).tolist()
+            loc_all = se2_inv_apply(q, th)
+            sec_all = np.floor((np.arctan2(loc_all[:, 1], loc_all[:, 0]) + math.pi) / (math.pi / 4)).astype(int) % 8
+            excluded["region_per_bearing_sector"] = np.bincount(sec_all, minlength=8).tolist()
     out = {"maps": {"A": {k: ga[1][k] for k in ("index", "after_scan_id", "stamp_ns")},
                     "B": {k: gb[1][k] for k in ("index", "after_scan_id", "stamp_ns")}},
            "scans_used": {"A": na, "B": nb},
            "region_m": region_m, "points_region": int(len(th)), "points_support": int(len(local)),
-           "points_known_reach_rule": known_reach,
+           "points_known_reach_rule": known_reach, "excluded": excluded,
            "support_share": float(len(local) / len(th)) if len(th) else None}
     why = support_problem(local)
     if why:

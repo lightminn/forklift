@@ -219,3 +219,15 @@ def test_no_sign_outside_the_calibrated_distances():
     assert S.floor_for(prec, "event", 16.0) is None
     d = S.pair_difference({"opt": 0.0, "lo": -0.001, "hi": 0.001}, {"opt": 0.1, "lo": 0.09, "hi": 0.11}, None)
     assert d["sign"] is None
+
+
+def test_off_map_points_read_their_real_distance():
+    # Codex review: the edge-clamped transform read a point 1 m past the last occupied cell as on the wall
+    data = np.zeros((100, 100), np.int8)
+    data[:, 99] = 100  # last column: centre x = 4.95 (origin -5, 0.1 m cells)
+    g = S.MapGrid(data, (-5.0, -5.0, 0.0), 0.1)
+    d = g.distance(np.array([[6.0, 0.05], [4.95, 0.05], [4.0, 0.05]]))  # y on a cell-centre row
+    assert d[0] == pytest.approx(6.0 - 4.95, abs=1e-9)
+    assert d[1] == pytest.approx(0.0, abs=1e-9)
+    assert d[2] == pytest.approx(0.95, abs=1e-6)
+    assert not S.occupied_both(np.array([[6.0, 0.0]]), [g])[0]
