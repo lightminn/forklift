@@ -234,7 +234,7 @@ def _write_run(folder, arm, kg, scene, seed=0, **over):
                 "lift_m": 0.2, "pallet_yaw_rad": 0.0} for t in ts[::12]]
     r = dict(result, pallet_mass={"kg": kg, "shape": "epal6"}, deterministic={"enabled": True, "broken": []},
              seed=seed, samples=samples, initial_pallet_m=[1.0, 0.0, 0.07],
-             arguments={"settings": f"/s/mae_0108c3ff_{arm}/config/x.yaml", "output": str(run)},
+             arguments={"settings": f"/s/mae_0108c3ff_{arm}/config/x.yaml", "output": str(run), "rear_axle_offset_m": -0.34},
              settings_synthetic={"pallet_mass_kg": kg, "wheel_torque_nm": 3.0}, scene_layout={"sha256": "L"},
              **{k: "h" for k in ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256",
                                  "pallet_urdf_sha256", "encoder_model", "chassis_model")},
@@ -278,7 +278,8 @@ def test_judge_reads_real_format_records(tmp_path):
 
 @pytest.mark.parametrize("over, why", [
     ({"pallet_mass": {"kg": 10.0, "shape": "epal6"}}, "not arm B"),
-    ({"arguments": {"settings": "/s/mae_0108c3ff_B/config/x.yaml", "output": "o", "approach_speed": 0.3}}, "arguments"),
+    ({"arguments": {"settings": "/s/mae_0108c3ff_B/config/x.yaml", "output": "o", "rear_axle_offset_m": -0.34,
+                    "approach_speed": 0.3}}, "arguments"),
     ({"settings_synthetic": {"pallet_mass_kg": 4.93, "wheel_torque_nm": 2.0}}, "settings_synthetic"),
     ({"scene_layout": {"sha256": "other"}}, "scene_layout"),
     ({"encoder_model": None}, "encoder_model"),
@@ -384,8 +385,9 @@ def test_the_post_event_error_belongs_to_its_own_event():
             _odom_rec(3, 0.108, "processed", (0.9, 0.0, 0.0), (0.4, 0.0, 0.0), truth)]
     events, bad = J.correction_events(recs, [])
     assert bad is None
-    errs = [J.post_event_error(e, events, recs, np.zeros((0, 7))) for e in events[1:]]
+    errs = [J.post_event_error(e, events, recs, np.zeros((0, 7)), -0.34) for e in events[1:]]
     assert errs == [pytest.approx(0.1), pytest.approx(0.3)]
+    assert J.post_event_error(events[1], events, recs, np.zeros((0, 7)), None) is None  # no offset, no rear axle
 
 
 def test_a_batch_whose_pairs_each_agree_but_differ_from_each_other_is_caught(tmp_path):
@@ -408,3 +410,39 @@ def test_adoption_differences_keep_position_and_yaw_apart():
 def test_the_static_weight_is_compared_with_the_given_truck_mass(tmp_path):
     out = J.judge(tmp_path, _batch(tmp_path), truck_mass_kg=240.0 / 9.81)
     assert out["pairs"][0]["mech"]["A"]["static_weight_ratio"] == pytest.approx(1.0)
+
+
+def test_the_post_event_error_is_a_rear_axle_error():
+    # Codex tool review 3 P2: base_link and rear-axle errors differ when the yaw is off
+    truth = (1.0, 0.0, 0.0)
+    rec = _odom_rec(2, 0.2, "processed", (1.0, 0.0, 0.2), (0.0, 0.0, 0.0), truth)
+    ev = (0.2, "processed", (0.0, 0.0, 0.1), (0.0, 0.0, 0.0), None)
+    got = J.post_event_error(ev, [ev], [rec], np.zeros((0, 7)), -0.4)
+    expected = J.along(J.rear_of(truth, 0.4), J.rear_of((1.0, 0.0, 0.2), 0.4))
+    assert got == pytest.approx(expected) and abs(got) > 1e-3
+
+
+def test_the_hausdorff_distance_is_exact():
+    # Codex tool review 3 P2: subsampling turned 0.095 m into 0.102 m and flipped the same-path call
+    x = np.linspace(0.0, 10.0, 5001)
+    a = np.column_stack([x, 0 * x])
+    b = np.column_stack([x[::-1], 0 * x + 0.095])
+    assert J.hausdorff(a, b) == pytest.approx(0.095, abs=1e-12)
+
+
+def test_the_batch_checks_the_scene_hashes_and_refuses_a_tied_reference(tmp_path):
+    compare = {f"{s}/{a}": True for s in J.SCENES for a in J.ARMS}
+    for seed, over in ((0, {}), (1, {}), (2, {"pallet_urdf_sha256": "x"}), (3, {"scene_layout": {"sha256": "M"}})):
+        for arm, kg in (("A", 10.0), ("B", 4.93)):
+            for scene in J.SCENES:
+                _write_run(tmp_path / f"mae_{arm}_{scene}_s{seed}", arm, kg, scene, seed=seed, **over)
+    out = J.judge(tmp_path, compare)
+    by = {(p["scene"], p["seed"]): p for p in out["pairs"]}
+    assert by[("line_2", 2)]["why"].startswith("A: batch snapshot differs") and "pallet_urdf_sha256" in by[("line_2", 2)]["why"]
+    assert "scene_layout:line_2" in by[("line_2", 3)]["why"]
+    assert by[("line_2", 0)]["valid"] and by[("random_1", 1)]["valid"]
+    assert J._mode(["a", "b"]) == J.TIED and J._mode(["a", "a", "b"]) == "a"
+
+
+def test_the_gate_distance_is_the_gates_own():
+    assert J.GATE_DISTANCE_M == pytest.approx(0.4472136, abs=1e-7)

@@ -38,7 +38,7 @@ REPORT_THRESHOLD_M = -0.010  # plan J1
 SAME_PATH_HAUSDORFF_M = 0.10  # plan 3.4
 CUSP_MIN_SEGMENT_M = 0.05  # a direction change counts once the truck has gone this far each way
 K_MIN_TRAVEL_M = 0.3  # plan 3.3
-GATE_DISTANCE_M, GATE_TURN_RAD, GATE_INTERVAL_S = 0.447, 0.5, 0.5  # forklift_core.localization.slam_link.KeyframeGate
+GATE_DISTANCE_M, GATE_TURN_RAD, GATE_INTERVAL_S = math.sqrt(0.8) * 0.5, 0.5, 0.5  # slam_link.KeyframeGate's defaults
 # plan 4.1 -> docs/plans/2026-10-31-riib-default-batch2.md section 4: the only infrastructure invalidity
 INFRA_BUNDLE_STATUSES = {"infra_failed", "stalled"}
 INFRA_FAILURE_PREFIXES = ("slam_link_failed", "slam_prewarm_timeout", "plan_worker_dead", "Camera did not produce RGB",
@@ -49,8 +49,8 @@ IDENTITY_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pa
                    "scene_sha256", "seed", "arguments", "plant", "plant_tyre_contact", "encoder_model", "chassis_model")
 SNAP_ARM = re.compile(r"(mae_[0-9a-f]+)_[AB]\b")
 # the same across the whole batch (plan 2.2 one snapshot, amendment 2): everything but the seed and the scene
-BATCH_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256", "plant",
-                "plant_tyre_contact", "encoder_model", "chassis_model")
+BATCH_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256", "pallet_urdf_sha256",
+                "scene_sha256", "plant", "plant_tyre_contact", "encoder_model", "chassis_model")
 RUN_ARM = re.compile(r"\bmae_[AB]_")
 
 
@@ -286,17 +286,27 @@ def odometry_yaw_error(control: np.ndarray, events: list[tuple], window) -> floa
     return wrap(float(control[i1, 3] - control[i0, 3]) - corr - float(control[i1, 6] - control[i0, 6]))
 
 
-def post_event_error(event: tuple, events: list[tuple], records: list[dict], control: np.ndarray) -> float | None:
-    """The along-track error right after one correction event, from that event alone: a processed scan's own record
-    (its ``odom_base`` under the event's applied transform, against its ``truth_base``, both base_link poses); a release
-    from the first control row after it, only when no later event comes before that row."""
+def rear_of(base, rear_axle_offset_m: float) -> tuple[float, float, float]:
+    """The rear-axle pose of a base_link pose, as the runner makes it (core.py: back by |rear_axle_offset_m| along yaw)."""
+    off = abs(float(rear_axle_offset_m))
+    x, y, yaw = (float(v) for v in base)
+    return (x - off * math.cos(yaw), y - off * math.sin(yaw), yaw)
+
+
+def post_event_error(event: tuple, events: list[tuple], records: list[dict], control: np.ndarray,
+                     rear_axle_offset_m: float | None = None) -> float | None:
+    """The along-track rear-axle error right after one correction event, from that event alone: a processed scan's own
+    record (its ``odom_base`` under the event's applied transform against its ``truth_base``, both moved to the rear
+    axle, plan 3 coordinates); a release from the first control row after it (rear-axle poses already), only when no
+    later event comes before that row."""
     t, kind, _, applied = event[0], event[1], event[2], event[3]
     if kind == "processed":
         rec = next((r for r in records if r.get("status") == "processed" and abs(float(r["stamp_s"]) - t) < 1e-9
                     and r.get("odom_base") is not None and r.get("truth_base") is not None), None)
-        if rec is None:
+        if rec is None or rear_axle_offset_m is None:
             return None
-        return along(rec["truth_base"], compose(tuple(applied), tuple(float(v) for v in rec["odom_base"])))
+        est = compose(tuple(applied), tuple(float(v) for v in rec["odom_base"]))
+        return along(rear_of(rec["truth_base"], rear_axle_offset_m), rear_of(est, rear_axle_offset_m))
     i = control_row_at_or_after(control, t)
     if i is None:
         return None
@@ -373,7 +383,8 @@ def mechanisms(result: dict, control: np.ndarray, records: list[dict], log: dict
             out[f"{wname}.correction_events"] = len(ev)
             jumps = [e[4] for e in ev if e[4] is not None]
             out[f"{wname}.release_jump_max_m"] = max(jumps) if jumps else None
-            post = [x for x in (post_event_error(e, events, records, control) for e in ev) if x is not None]
+            offset = (result.get("arguments") or {}).get("rear_axle_offset_m")
+            post = [x for x in (post_event_error(e, events, records, control, offset) for e in ev) if x is not None]
             out[f"{wname}.post_event_err_mean_m"] = float(np.mean(post)) if post else None
             out[f"{wname}.post_event_err_last3_m"] = float(np.mean(post[-3:])) if post else None
     for k in ("t_m_minus_t_c", "d_c", "dyaw_c"):
@@ -401,11 +412,12 @@ def truth_path(control: np.ndarray, window) -> np.ndarray:
 
 
 def hausdorff(a: np.ndarray, b: np.ndarray) -> float:
+    """The exact symmetric Hausdorff distance of two point sets (every point; no subsampling)."""
     if not len(a) or not len(b):
         return math.inf
-    a, b = a[:: max(1, len(a) // 400)], b[:: max(1, len(b) // 400)]
-    d = np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1])
-    return float(max(d.min(axis=1).max(), d.min(axis=0).max()))
+    from scipy.spatial.distance import directed_hausdorff
+
+    return float(max(directed_hausdorff(a, b)[0], directed_hausdorff(b, a)[0]))
 
 
 def cusps(control: np.ndarray, window) -> int:
@@ -606,30 +618,43 @@ def identity_differences(ra: dict, rb: dict) -> list[str]:
 # ---------------------------------------------------------------- the verdict
 
 
-def batch_reference(loaded_runs: list[dict]) -> dict:
-    """The batch's common value of each BATCH_FIELDS entry and of the synthetic settings without the pallet mass: the
-    most common one (a run that differs is outside the allowed difference)."""
-    ref = {}
-    for k in BATCH_FIELDS:
-        vals = [_normal(r["result"].get(k)) for r in loaded_runs if "result" in r]
-        ref[k] = max(set(vals), key=vals.count) if vals else None
-    sets = []
-    for r in loaded_runs:
-        if "result" in r:
-            st = dict(r["result"].get("settings_synthetic") or {})
-            st.pop("pallet_mass_kg", None)
-            sets.append(_normal(st))
-    ref["settings_synthetic"] = max(set(sets), key=sets.count) if sets else None
+TIED = "<tied>"
+
+
+def _mode(values: list[str]) -> str | None:
+    """The single most common value; TIED when two values share the top count (no reference then)."""
+    if not values:
+        return None
+    counts = {v: values.count(v) for v in set(values)}
+    top = max(counts.values())
+    winners = [v for v, c in counts.items() if c == top]
+    return winners[0] if len(winners) == 1 else TIED
+
+
+def _settings_without_mass(result: dict) -> str:
+    st = dict(result.get("settings_synthetic") or {})
+    st.pop("pallet_mass_kg", None)
+    return _normal(st)
+
+
+def batch_reference(loaded: dict) -> dict:
+    """The batch's common value of each BATCH_FIELDS entry, of the synthetic settings without the pallet mass, and of
+    each scene's layout hash (the same scene across seeds and arms): the single most common one (plan 2.2, amendment
+    2). A run that differs is outside the allowed difference."""
+    runs = [(key, r) for key, r in loaded.items() if "result" in r]
+    ref = {k: _mode([_normal(r["result"].get(k)) for _, r in runs]) for k in BATCH_FIELDS}
+    ref["settings_synthetic"] = _mode([_settings_without_mass(r["result"]) for _, r in runs])
+    for scene in SCENES:
+        ref[f"scene_layout:{scene}"] = _mode([_normal((r["result"].get("scene_layout") or {}).get("sha256"))
+                                             for key, r in runs if key[0] == scene])
     return ref
 
 
-def batch_differences(result: dict, ref: dict) -> list[str]:
-    bad = [k for k in BATCH_FIELDS if _normal(result.get(k)) != ref.get(k)]
-    st = dict(result.get("settings_synthetic") or {})
-    st.pop("pallet_mass_kg", None)
-    if _normal(st) != ref.get("settings_synthetic"):
-        bad.append("settings_synthetic")
-    return bad
+def batch_differences(result: dict, ref: dict, scene: str) -> list[str]:
+    checks = {k: _normal(result.get(k)) for k in BATCH_FIELDS}
+    checks["settings_synthetic"] = _settings_without_mass(result)
+    checks[f"scene_layout:{scene}"] = _normal((result.get("scene_layout") or {}).get("sha256"))
+    return [k for k, v in checks.items() if ref.get(k) in (None, TIED) or v != ref[k]]
 
 
 def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | None = None) -> dict:
@@ -645,7 +670,7 @@ def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | Non
     pairs = []
     infra = {a: 0 for a in ARMS}
     cache = {(sc, sd, a): load_run(f) for (sc, sd), arms in runs.items() for a, f in arms.items()}
-    ref = batch_reference(list(cache.values()))
+    ref = batch_reference(cache)
     for (scene, seed), arms in sorted(runs.items()):
         row = {"scene": scene, "seed": seed}
         if set(arms) != set(ARMS):
@@ -660,7 +685,7 @@ def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | Non
         why = why or next((f"{a}: {p}" for a in ARMS if (p := identity_problem(loaded[a], a, seed))), None)
         why = why or (lambda b: f"fields differ: {b}" if b else None)(identity_differences(loaded["A"]["result"], loaded["B"]["result"]))
         why = why or next((f"{a}: batch snapshot differs: {b}" for a in ARMS
-                           if (b := batch_differences(loaded[a]["result"], ref))), None)
+                           if (b := batch_differences(loaded[a]["result"], ref, scene))), None)
         if why:
             pairs.append({**row, "valid": False, "why": why})
             continue
