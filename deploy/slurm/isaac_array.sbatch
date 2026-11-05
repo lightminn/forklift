@@ -37,6 +37,7 @@ KIND_ARGS=()
 I=${SLURM_ARRAY_TASK_ID:?an array task: submit with --array}
 TASK="$OUT/task_$I"
 ROOT=$(pwd)
+source "$ROOT/deploy/lib/term_relay.sh" || { echo "no $ROOT/deploy/lib/term_relay.sh" >&2; exit 2; }
 mkdir -p "$TASK"
 # the I-th non-empty line, as load_runs counts them (it skips blank lines)
 grep -v '^[[:space:]]*$' "$LIST" | sed -n "$((I + 1))p" > "$TASK/run.jsonl"
@@ -64,15 +65,15 @@ fi
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design
 # a GPU that stays full while this task runs nothing is held by someone else: give up after GPU_FULL_GIVE_UP_MIN
 # (status gpu_full, resubmit the task) instead of holding the shard, CPUs and memory until time_left
+# Slurm's TERM ends the runner, which ends its run (deploy/lib/term_relay.sh: armed before the start, so a TERM
+# however early reaches it; the batch shell waits for its own end)
+term_relay_arm
 "${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" --list "$TASK/run.jsonl" --out "$TASK/bundle" --slots 1 \
   --gpu-full-give-up-min "${GPU_FULL_GIVE_UP_MIN:-10}" "${KIND_ARGS[@]}" "${PF[@]}" ${BUNDLE_ARGS:-} &
+term_relay_hold runner
 RUNNER=$!
-trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # Slurm's TERM: the runner ends its run
-wait "$RUNNER"
-rc=$?
-if kill -0 "$RUNNER" 2>/dev/null; then  # the wait was cut by the trap: wait for the runner's own end
-  wait "$RUNNER"
-  rc=$?
-fi
+term_relay_add "$RUNNER"
+term_relay_wait "$RUNNER"
+rc=$TERM_RELAY_RC
 echo "task exit $rc $(date -Is)"
 exit "$rc"

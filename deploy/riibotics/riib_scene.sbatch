@@ -114,6 +114,7 @@ OUT=${1:?the run directory}
 : "${SNAP:?the code checkout to run}" "${SCENE_DIR:?the scene files}" "${SCENE:?the scene name}"
 # Every path absolute before the cd into SNAP below (a relative one would name another directory there).
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
+source "$SNAP/deploy/lib/term_relay.sh" || { echo "no $SNAP/deploy/lib/term_relay.sh" >&2; exit 2; }
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
 MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; START_BAND_M=${START_BAND_M:-0.03}; ESCAPE_PRESTEER=${ESCAPE_PRESTEER:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
@@ -394,14 +395,17 @@ if [ "$MODE" != truth ]; then
   for i in $(seq 1 120); do [ -f "$OUT/bridge/bridge_ready" ] && break; sleep 1; done
   [ -f "$OUT/bridge/bridge_ready" ] || { echo "bridge not ready"; exit 1; }
 fi
+# timeout passes a TERM on to the runner: armed before the start, so a TERM however early reaches it
+# (deploy/lib/term_relay.sh); before this, a TERM ends the launcher and its EXIT trap stops the bridge, as it did
+term_relay_arm
 # shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
 timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \
   --output "$OUT/run" > "$OUT/run.log" 2>&1 &
+term_relay_hold runner
 RUNNER=$!
-trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # timeout passes the TERM on to the runner
-wait "$RUNNER"
-rc=$?
-while kill -0 "$RUNNER" 2>/dev/null; do wait "$RUNNER"; rc=$?; done  # a trapped TERM cut the wait
+term_relay_add "$RUNNER"
+term_relay_wait "$RUNNER"
+rc=$TERM_RELAY_RC
 echo "runner exit $rc $(date -Is)"
 echo "OUT_OF_DEVICE lines: $(grep -c OUT_OF_DEVICE "$OUT/run.log")"
 # The runner also records its own result code as JSON {"code": .., "reason": ..} (Isaac can leave the process with 0

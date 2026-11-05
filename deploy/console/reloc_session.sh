@@ -8,7 +8,8 @@
 # launcher still up RELOC_END_GRACE_S after the probe's normal end is ended too (Codex B-P2d tooling review P2).
 #
 #   START_POSE=x,y,yaw <isaac_live.sbatch's environment> bash deploy/console/reloc_session.sh OUT
-#   optional: HOLD_SIM_S (10), WAIT_PORT_S (1500), RELOC_END_GRACE_S (300); RELOC_LAUNCHER (tests only)
+#   optional: HOLD_SIM_S (10), WAIT_PORT_S (1500), RELOC_END_GRACE_S (300), RELOC_END_KILL_S (120); RELOC_LAUNCHER
+#   (tests only)
 #   RELOC_PROBE (hold): place -- F1 (docs/plans/2026-10-31-operator-placed-start.md 4.2 b): the session is attended
 #   (no RELOC_UNATTENDED: the console waits for the operator) and the probe is the operator, placing the click model's
 #   draws around START_POSE (CLICK_SEED, CLICK_INDEX: the start's index in its list) and confirming the first preview;
@@ -18,6 +19,7 @@
 set -u
 OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
+source "$ROOT/deploy/lib/term_relay.sh" || { echo "no $ROOT/deploy/lib/term_relay.sh" >&2; exit 2; }
 : "${START_POSE:?the placed start x,y,yaw (world base_link)}" "${VENV_PY:?the Isaac Python}"
 LAUNCHER=${RELOC_LAUNCHER:-$ROOT/deploy/console/isaac_live.sbatch}
 PROBE_MODE=${RELOC_PROBE:-hold}
@@ -35,18 +37,40 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
   RELOC_UNATTENDED=$UNATTENDED MAX_EPOCHS=1 STANDBY_LINGER_S=0 exec bash "$LAUNCHER" "$OUT"
 fi
 mkdir -p "$OUT"
+# The wrapper's own TERM (Slurm's, or whoever runs it), at any step from the launcher's start on: the launcher and the
+# probe get it at once, the launcher is killed if still up RELOC_END_KILL_S after the first TERM (a repeated TERM does
+# not restart that time), and the wrapper exits 143 (deploy/lib/term_relay.sh; before, the trap came after the
+# launcher's start and the probe ran in the foreground, which held the TERM until the probe ended).
+L=""
+reloc_cancel() {
+  [ -n "$L" ] || return 0  # latched: acted on once the launcher's pid is known
+  kill -TERM $(jobs -p) 2>/dev/null  # the probe too, if its pid is not known yet
+  while kill -0 "$L" 2>/dev/null && [ "$(term_relay_since_us)" -lt $(( ${RELOC_END_KILL_S:-120} * 1000000 )) ]; do
+    sleep 0.1
+  done
+  kill -KILL $(jobs -p) 2>/dev/null
+  echo "terminated: launcher ended $(date -Is)"
+  exit 143
+}
+term_relay_arm reloc_cancel
 RELOC_UNATTENDED=$UNATTENDED MAX_EPOCHS=1 STANDBY_LINGER_S=0 bash "$LAUNCHER" "$OUT" > "$OUT/launcher.log" 2>&1 &
+term_relay_hold launcher
 L=$!
+term_relay_add "$L"
+[ "$TERM_RELAY_GOT" = 1 ] && reloc_cancel  # a TERM that came before its pid was known
 end_launcher() {
   kill -TERM "$L" 2>/dev/null
   for _ in $(seq 1 1200); do kill -0 "$L" 2>/dev/null || return 0; sleep 0.1; done  # its own TERM handling
   kill -KILL "$L" 2>/dev/null
 }
-trap 'end_launcher; exit 143' TERM INT
 "$VENV_PY" "$ROOT/tools/live_console_probe.py" --port-file "$OUT/live_port.json" --report "$OUT/probe.json" \
   "${PROBE_ARGS[@]}" --hold-sim-s "${HOLD_SIM_S:-10}" --live-factor "${FACTOR:-0.4}" --launcher-pid "$L" \
-  --wait-port-s "${WAIT_PORT_S:-1500}" > "$OUT/probe.log" 2>&1
-prc=$?
+  --wait-port-s "${WAIT_PORT_S:-1500}" > "$OUT/probe.log" 2>&1 &
+term_relay_hold probe
+PROBE=$!
+term_relay_add "$PROBE"
+term_relay_wait "$PROBE"
+prc=$TERM_RELAY_RC
 echo "probe exit $prc $(date -Is)"
 # 3: the launcher ended before its session ran (a relocalization ending) -- it is already gone
 if [ "$prc" -ne 0 ] && [ "$prc" -ne 3 ]; then
@@ -59,8 +83,8 @@ else
     end_launcher
   fi
 fi
-wait "$L"
-rc=$?
+term_relay_wait "$L"
+rc=$TERM_RELAY_RC
 echo "launcher exit $rc $(date -Is)"
 [ "$prc" -ne 0 ] && [ "$prc" -ne 3 ] && exit 4
 exit "$rc"
