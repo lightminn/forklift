@@ -500,13 +500,17 @@ def test_a_cleanup_that_fails_is_recorded_and_the_others_go_on(tmp_path):
 
 
 def test_a_move_that_cannot_happen_stops_the_retry_and_is_recorded(tmp_path):
-    out = tmp_path / "m"
-    out.mkdir()
-    (tmp_path / "m.attempt1").mkdir()  # the destination is taken
-    code = "import sys; print('CUDA out of memory'); sys.exit(1)"
-    summary = bundle(tmp_path, [ib.Run(name="m", argv=py(code), retry_move=[str(out)])])
+    parent = tmp_path / "ro"
+    out = parent / "m"
+    out.mkdir(parents=True)
+    parent.chmod(0o555)  # the output cannot be renamed in its folder (a name taken goes to the next free one)
+    try:
+        code = "import sys; print('CUDA out of memory'); sys.exit(1)"
+        summary = bundle(tmp_path, [ib.Run(name="m", argv=py(code), retry_move=[str(out)])])
+    finally:
+        parent.chmod(0o755)
     r = results(tmp_path)["m"]
-    assert r["retried"] is False and "attempt1" in r["move_error"] and summary["failed"] == 1
+    assert r["retried"] is False and "PermissionError" in r["move_error"] and summary["failed"] == 1
 
 
 def test_an_oom_is_blamed_only_on_a_killed_run(tmp_path):
@@ -1955,3 +1959,68 @@ def test_only_the_runner_with_the_record_s_folder_is_timed(tmp_path):
                  first_record=str(e1 / "scenario.json"))
     bundle(tmp_path, [run], startup_silence_s=0.6, stall_check_s=0.1, grace_s=1.0, retries=1)
     assert results(tmp_path)["lv_s3"]["startup_silent"] is False  # epoch_10 is not epoch_1's runner
+
+
+# --- a retry's name taken already; a crash before the first record (F1, 2026-11-04) --------------------------------
+
+def test_a_retry_takes_the_next_free_attempt_name(tmp_path):
+    # F1: an .attempt1 moved aside by hand made the retry fail with FileExistsError and the run stay infra_failed
+    out, side = tmp_path / "r_s0", tmp_path / "r_s0_side"
+    (tmp_path / "r_s0.attempt1").mkdir()
+    (tmp_path / "r_s0_side.attempt2").mkdir()  # the next number must be free for every output of the run
+    cmd = f"mkdir -p {out} {side} && echo 'CUDA_ERROR_OUT_OF_MEMORY' && exit 1"
+    run = ib.Run(name="r_s0", argv=["bash", "-c", cmd], retry_move=[str(out), str(side)])
+    bundle(tmp_path, [run], retries=1)
+    first = json.loads((tmp_path / "out" / "results.jsonl").read_text().splitlines()[0])
+    assert first["status"] == "infra_failed" and first["retried"] is True and first["move_error"] is None
+    assert first["moved"] == [f"{out}.attempt3", f"{side}.attempt3"]
+    assert (tmp_path / "r_s0.attempt1").is_dir() and not any((tmp_path / "r_s0.attempt1").iterdir())  # untouched
+    assert ib.attempt_slot([str(tmp_path / "fresh")], 1) == 1 and ib.attempt_slot([str(out)], 1) == 2
+
+
+def crash_run(tmp_path, name, body):
+    out = tmp_path / name
+    return ib.Run(name=name, argv=["bash", "-c", f"mkdir -p {out} && {body}"], retry_move=[str(out)]), out
+
+
+def test_a_crash_before_the_first_record_is_infra_and_retried(tmp_path):
+    run, out = crash_run(tmp_path, "c_s0", f"mkdir -p {tmp_path}/c_s0/run && exit 139")  # the launcher passes 128+11 on
+    bundle(tmp_path, [run], retries=1, first_rel="run/scenario.json")
+    first, second = [json.loads(x) for x in (tmp_path / "out" / "results.jsonl").read_text().splitlines()]
+    assert first["status"] == "infra_failed" and first["retried"] is True and first["startup_crash"] is True
+    assert first["infra"][0].startswith("startup_crash: the run ended on SIGSEGV")
+    assert second["retried"] is False and (tmp_path / "c_s0.attempt1").exists()
+    d = tmp_path / "own"
+    d.mkdir()
+    run2, _ = crash_run(d, "c_s1", f"mkdir -p {d}/c_s1/run && {sys.executable} -c 'import os,signal; os.kill(os.getpid(), signal.SIGABRT)'")
+    bundle(d, [run2], retries=0, first_rel="run/scenario.json")
+    assert results(d)["c_s1"]["startup_crash"] is True  # bash passes its child's 128+6 on
+
+
+def test_a_crash_with_any_record_or_another_end_is_left_as_it_ended(tmp_path):
+    cases = {
+        "a_file": f"mkdir -p {{o}}/run && echo x > {{o}}/run/scenario.json.tmp && exit 139",
+        "no_run_dir": "exit 139",
+        "plain_failure": "mkdir -p {o}/run && exit 1",
+        "killed": "mkdir -p {o}/run && exit 137",
+        "terminated": "mkdir -p {o}/run && exit 143",
+    }
+    for name, body in cases.items():
+        d = tmp_path / name
+        d.mkdir()
+        run, out = crash_run(d, name, body.format(o=d / name))
+        bundle(d, [run], retries=1, first_rel="run/scenario.json")
+        r = results(d)[name]
+        assert r["startup_crash"] is False and r["retried"] is False, name
+    d = tmp_path / "no_kind"
+    d.mkdir()
+    run, out = crash_run(d, "nk", f"mkdir -p {d}/nk/run && exit 139")
+    bundle(d, [run], retries=1)  # no kind's first-record file: a live run's own first_record does not count either
+    assert results(d)["nk"]["startup_crash"] is False
+    assert ib.startup_crash(tmp_path / "missing", 139, None) is None
+
+
+def test_a_run_the_bundle_ended_is_not_a_crash(tmp_path):
+    run, out = crash_run(tmp_path, "t_s0", f"mkdir -p {tmp_path}/t_s0/run && trap 'exit 139' TERM && sleep 30 & wait")
+    bundle(tmp_path, [run], retries=1, first_rel="run/scenario.json", run_timeout_s=0.5)
+    assert results(tmp_path)["t_s0"]["startup_crash"] is False

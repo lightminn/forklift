@@ -1,0 +1,4512 @@
+{
+ "runs": {
+  "m1_120_F1_a": {
+   "job": "15936",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999892706923424,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000012289020468,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_F1_b": {
+   "job": "15937",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999892706923424,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000012289020468,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_F1_r": {
+   "job": "15938",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "loaded": {
+      "ratio": 0.9999905245564642,
+      "converged": true,
+      "foreign": 0
+     },
+     "empty": {
+      "ratio": 1.00000298230311,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_F1pF2_a": {
+   "job": "15960",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 1.0000004327276018,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 0.9999966973425181,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_F1pF2_b": {
+   "job": "15961",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 1.0000004327276018,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 0.9999966973425181,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_F1pF2_r": {
+   "job": "15962",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "loaded": {
+      "ratio": 0.9999995625336461,
+      "converged": true,
+      "foreign": 0
+     },
+     "empty": {
+      "ratio": 0.9999989624971032,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_O_a": {
+   "job": "15924",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999914831000192,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000425301791196,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_O_b": {
+   "job": "15925",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999914831000192,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000425301791196,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_O_r": {
+   "job": "15926",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "loaded": {
+      "ratio": 1.000046969456315,
+      "converged": true,
+      "foreign": 0
+     },
+     "empty": {
+      "ratio": 1.0000065354133048,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_OpF2_a": {
+   "job": "15948",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999974106587454,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 0.9999978578489002,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_OpF2_b": {
+   "job": "15949",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999974106587454,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 0.9999978578489002,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_120_OpF2_r": {
+   "job": "15950",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "loaded": {
+      "ratio": 1.0000024026484626,
+      "converged": true,
+      "foreign": 0
+     },
+     "empty": {
+      "ratio": 1.0000000355671281,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_F1_a": {
+   "job": "15939",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999905520470891,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000011942019282,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_F1_b": {
+   "job": "15940",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999905520470891,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000011942019282,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_F1pF2_a": {
+   "job": "15963",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999976351757939,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 0.999998996111035,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_F1pF2_b": {
+   "job": "15964",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999976351757939,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 0.999998996111035,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_O_a": {
+   "job": "15927",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 1.000003067342479,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000782041810652,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_O_b": {
+   "job": "15928",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 1.000003067342479,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.0000782041810652,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_OpF2_a": {
+   "job": "15951",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999744391174327,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.000006080015646,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m1_240_OpF2_b": {
+   "job": "15952",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "loads": {
+     "empty": {
+      "ratio": 0.9999744391174327,
+      "converged": true,
+      "foreign": 0
+     },
+     "loaded": {
+      "ratio": 1.000006080015646,
+      "converged": true,
+      "foreign": 0
+     }
+    }
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_F1_a": {
+   "job": "15941",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_120.yaml",
+   "settings_sha256": "30d493dbb14b042063c89ece982cde0a465bb152943820c32961233c99267931",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_F1_b": {
+   "job": "15942",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_120.yaml",
+   "settings_sha256": "30d493dbb14b042063c89ece982cde0a465bb152943820c32961233c99267931",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_F1pF2_a": {
+   "job": "15965",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_120.yaml",
+   "settings_sha256": "68b5667abaf836fdde2c44063f578646179bfda534c261ed4d9f656151e70aab",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_F1pF2_b": {
+   "job": "15966",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_120.yaml",
+   "settings_sha256": "68b5667abaf836fdde2c44063f578646179bfda534c261ed4d9f656151e70aab",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_O_a": {
+   "job": "15929",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_120.yaml",
+   "settings_sha256": "30d493dbb14b042063c89ece982cde0a465bb152943820c32961233c99267931",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_O_b": {
+   "job": "15930",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_120.yaml",
+   "settings_sha256": "30d493dbb14b042063c89ece982cde0a465bb152943820c32961233c99267931",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_OpF2_a": {
+   "job": "15953",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_120.yaml",
+   "settings_sha256": "68b5667abaf836fdde2c44063f578646179bfda534c261ed4d9f656151e70aab",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_120_OpF2_b": {
+   "job": "15954",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_120.yaml",
+   "settings_sha256": "68b5667abaf836fdde2c44063f578646179bfda534c261ed4d9f656151e70aab",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_F1_a": {
+   "job": "15943",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_240.yaml",
+   "settings_sha256": "9ec4c5d9cd4546c6b3a81973ccacc42b34477ee38c67cc961e35e6913d58a865",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_F1_b": {
+   "job": "15944",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_240.yaml",
+   "settings_sha256": "9ec4c5d9cd4546c6b3a81973ccacc42b34477ee38c67cc961e35e6913d58a865",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_F1pF2_a": {
+   "job": "15967",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_240.yaml",
+   "settings_sha256": "ce649f5d631f404ce5378a810b9e2e89885e6b55f31f7e495428c8e921fc88c9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_F1pF2_b": {
+   "job": "15968",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_240.yaml",
+   "settings_sha256": "ce649f5d631f404ce5378a810b9e2e89885e6b55f31f7e495428c8e921fc88c9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_O_a": {
+   "job": "15931",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_240.yaml",
+   "settings_sha256": "9ec4c5d9cd4546c6b3a81973ccacc42b34477ee38c67cc961e35e6913d58a865",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_O_b": {
+   "job": "15932",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_rigid_240.yaml",
+   "settings_sha256": "9ec4c5d9cd4546c6b3a81973ccacc42b34477ee38c67cc961e35e6913d58a865",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_OpF2_a": {
+   "job": "15955",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_240.yaml",
+   "settings_sha256": "ce649f5d631f404ce5378a810b9e2e89885e6b55f31f7e495428c8e921fc88c9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m2_240_OpF2_b": {
+   "job": "15956",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/m2_k140_240.yaml",
+   "settings_sha256": "ce649f5d631f404ce5378a810b9e2e89885e6b55f31f7e495428c8e921fc88c9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": null,
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5,
+    "probe_clear_area": 1
+   },
+   "probe_summary": null,
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_F1_a": {
+   "job": "15909",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_F1_b": {
+   "job": "15910",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_F1_r": {
+   "job": "15911",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_F1pF2_a": {
+   "job": "15919",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 59,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_F1pF2_b": {
+   "job": "15920",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 59,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_F1pF2_r": {
+   "job": "15921",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 62,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_O_a": {
+   "job": "15904",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_O_b": {
+   "job": "15905",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_O_r": {
+   "job": "15906",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_OpF2_a": {
+   "job": "15914",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 102,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_OpF2_b": {
+   "job": "15915",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 102,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_120_OpF2_r": {
+   "job": "15916",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 668,
+    "settle_failures": 94,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_F1_a": {
+   "job": "15912",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_F1_b": {
+   "job": "15913",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_F1pF2_a": {
+   "job": "15922",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 2,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_F1pF2_b": {
+   "job": "15923",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 2,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_O_a": {
+   "job": "15907",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_O_b": {
+   "job": "15908",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid240.yaml",
+   "settings_sha256": "981972d9eee9d8d3e31af9fea10d7cf25b4d2880bdecbb12b83a00dab2e685a9",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 0,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_OpF2_a": {
+   "job": "15917",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 11,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m3_240_OpF2_b": {
+   "job": "15918",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_240.yaml",
+   "settings_sha256": "8f84562d0c363dcc1d2e6b206a5d7623726440d84d1defe88cf5dfbff58eb119",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "73a8404dac932596ef2ffaa6c65fa5ee1c6eb0248072c7e5d1c78701824fdf90",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.004166666666666667,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 240,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "trials": 100,
+    "settle_failures": 11,
+    "load_failures": 0,
+    "contact_trials": 0,
+    "timeouts": 0
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_F1_a": {
+   "job": "15945",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_F1_b": {
+   "job": "15946",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_F1_r": {
+   "job": "15947",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_F1pF2_a": {
+   "job": "15969",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 22
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_F1pF2_b": {
+   "job": "15970",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 22
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_F1pF2_r": {
+   "job": "15971",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "f5a348d38efae07cd7fcc6ffe523c94c3049b2fc90dc0d937639ee5ed25fbcdb",
+   "scene_usd_digest": "113ba78e3757041972bc06103fac53c6f8ff273ad918bd4330c483e9b9be5ab9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/f1_scenes/epal6/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 19
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_O_a": {
+   "job": "15933",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 1
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_O_b": {
+   "job": "15934",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 1
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_O_r": {
+   "job": "15935",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/rigid120.yaml",
+   "settings_sha256": "cca6421fadb1b0aa08395ba94de216c59ededeee47e5e553a068d5bf8aded912",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 0,
+    "pose_failures": 0
+   },
+   "tyres": [
+    [
+     null,
+     null,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_OpF2_a": {
+   "job": "15957",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 2,
+    "pose_failures": 22
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_OpF2_b": {
+   "job": "15958",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 2,
+    "pose_failures": 22
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  },
+  "m4_120_OpF2_r": {
+   "job": "15959",
+   "slurm_state": "COMPLETED",
+   "runner_exit": 0,
+   "settings": "/home/projects/forklift/test_runs/simphys/f2/settings/c_k140000_120.yaml",
+   "settings_sha256": "3afbbf965ce8cd08a88998a84e32b1a5baf023770f443a2bda589438d1251b6b",
+   "script_sha256": "aad43a52ebd1aec38e8810e31c416a50766c94a3715f4f8594ad7b8a40240b40",
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_usd_digest": "2eada433170726d5a23be90778f8a57159046da95629c3d2a13ff012571706a9",
+   "scene_layout_sha256": "d910a9fca481f8ef6006408271ea8ddd13b3b7cd8227a49b90bd2a03522349ce",
+   "base_scene": "/home/projects/forklift/artifacts/20261013_fork_spacing/base_scene/scene.usda",
+   "physics_dt_s": 0.008333333333333333,
+   "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 13.3.0]",
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0,
+    "tyre_contact_stiffness_n_per_m": 140000.0,
+    "tyre_contact_damping_n_s_per_m": 108.5
+   },
+   "probe_summary": {
+    "points": 22,
+    "settle_failures": 5,
+    "pose_failures": 22
+   },
+   "tyres": [
+    [
+     140000.0,
+     108.5,
+     0.800000011920929,
+     0.699999988079071
+    ]
+   ],
+   "n_tyres": 4
+  }
+ },
+ "m1": {
+  "O": {
+   "loads_n": {
+    "empty/front_left_wheel": 119.6075094868429,
+    "empty/front_right_wheel": 28.744892528280616,
+    "empty/rear_left_wheel": 26.281391197120684,
+    "empty/rear_right_wheel": 80.42404983565211,
+    "loaded/front_left_wheel": 172.4289674284164,
+    "loaded/front_right_wheel": 68.91631906852126,
+    "loaded/rear_left_wheel": 0.00309258745983243,
+    "loaded/rear_right_wheel": 62.087843000888824
+   },
+   "reverse_max_abs_n": 2.428556432700134
+  },
+  "F1": {
+   "loads_n": {
+    "empty/front_left_wheel": 86.77303202619078,
+    "empty/front_right_wheel": 23.236640751361847,
+    "empty/rear_left_wheel": 47.90554577873263,
+    "empty/rear_right_wheel": 77.52423184365034,
+    "loaded/front_left_wheel": 153.7601330568432,
+    "loaded/front_right_wheel": 49.238147002179176,
+    "loaded/rear_left_wheel": 6.749953583814204,
+    "loaded/rear_right_wheel": 74.0573937240988
+   },
+   "reverse_max_abs_n": 0.571653475984931
+  },
+  "O+F2": {
+   "loads_n": {
+    "empty/front_left_wheel": 74.42726975679398,
+    "empty/front_right_wheel": 73.93282562494278,
+    "empty/rear_left_wheel": 53.16661700606346,
+    "empty/rear_right_wheel": 53.53264254331589,
+    "loaded/front_left_wheel": 120.50207889080048,
+    "loaded/front_right_wheel": 120.76589703559875,
+    "loaded/rear_left_wheel": 30.234782949090004,
+    "loaded/rear_right_wheel": 31.919908583164215
+   },
+   "reverse_max_abs_n": 0.03098827600479126
+  },
+  "F1+F2": {
+   "loads_n": {
+    "empty/front_left_wheel": 55.18249449133873,
+    "empty/front_right_wheel": 54.82447549700737,
+    "empty/rear_left_wheel": 62.58388751745224,
+    "empty/rear_right_wheel": 62.85122090578079,
+    "loaded/front_left_wheel": 101.26789337396622,
+    "loaded/front_right_wheel": 101.65055614709854,
+    "loaded/rear_left_wheel": 39.63667207956314,
+    "loaded/rear_right_wheel": 41.24921968579292
+   },
+   "reverse_max_abs_n": 0.019785195589065552
+  }
+ },
+ "m3": {
+  "O": {
+   "valid": {
+    "120/a": [
+     668,
+     668
+    ],
+    "120/b": [
+     668,
+     668
+    ],
+    "120/r": [
+     668,
+     668
+    ],
+    "240/a": [
+     100,
+     100
+    ],
+    "240/b": [
+     100,
+     100
+    ]
+   },
+   "unsettled": 0,
+   "unsettled_by_state": {},
+   "unsettled_above_tolerance": {},
+   "unsettled_last_roll_rad": null,
+   "order_sensitive": 20
+  },
+  "F1": {
+   "valid": {
+    "120/a": [
+     668,
+     668
+    ],
+    "120/b": [
+     668,
+     668
+    ],
+    "120/r": [
+     668,
+     668
+    ],
+    "240/a": [
+     100,
+     100
+    ],
+    "240/b": [
+     100,
+     100
+    ]
+   },
+   "unsettled": 0,
+   "unsettled_by_state": {},
+   "unsettled_above_tolerance": {},
+   "unsettled_last_roll_rad": null,
+   "order_sensitive": 35
+  },
+  "O+F2": {
+   "valid": {
+    "120/a": [
+     566,
+     668
+    ],
+    "120/b": [
+     566,
+     668
+    ],
+    "120/r": [
+     574,
+     668
+    ],
+    "240/a": [
+     89,
+     100
+    ],
+    "240/b": [
+     89,
+     100
+    ]
+   },
+   "unsettled": 102,
+   "unsettled_by_state": {
+    "transport/loaded": 1,
+    "observe/loaded": 2,
+    "transport/empty": 48,
+    "observe/empty": 51
+   },
+   "unsettled_above_tolerance": {
+    "roll_rad": 100,
+    "pitch_rad": 54
+   },
+   "unsettled_last_roll_rad": [
+    4.5078495223393825e-07,
+    2.8452803062739284e-05,
+    5.790228656972325e-05
+   ],
+   "order_sensitive": 15
+  },
+  "F1+F2": {
+   "valid": {
+    "120/a": [
+     609,
+     668
+    ],
+    "120/b": [
+     609,
+     668
+    ],
+    "120/r": [
+     606,
+     668
+    ],
+    "240/a": [
+     98,
+     100
+    ],
+    "240/b": [
+     98,
+     100
+    ]
+   },
+   "unsettled": 59,
+   "unsettled_by_state": {
+    "transport/empty": 30,
+    "observe/empty": 29
+   },
+   "unsettled_above_tolerance": {
+    "pitch_rad": 36,
+    "roll_rad": 57
+   },
+   "unsettled_last_roll_rad": [
+    2.388669076347748e-07,
+    2.9473858889087677e-05,
+    5.569036201863382e-05
+   ],
+   "order_sensitive": 16
+  }
+ },
+ "m4": {
+  "O": {
+   "a": {
+    "points": 22,
+    "within_tolerance": 21,
+    "all_settles": 22,
+    "pose_ok": 21,
+    "shifts": {
+     "2": 19,
+     "4": 1,
+     "3": 1,
+     "5": 1
+    },
+    "residual_xy_m": [
+     8.823738356547737e-06,
+     2.4592561106878853e-05
+    ],
+    "residual_yaw_rad": [
+     3.6201522587309826e-06,
+     1.4172429193701208e-05
+    ],
+    "unmatched": [
+     "r2_d0.62_l+0.00"
+    ]
+   },
+   "b": {
+    "points": 22,
+    "within_tolerance": 21,
+    "all_settles": 22,
+    "pose_ok": 21,
+    "shifts": {
+     "2": 19,
+     "4": 1,
+     "3": 1,
+     "5": 1
+    },
+    "residual_xy_m": [
+     8.823738356547737e-06,
+     2.4592561106878853e-05
+    ],
+    "residual_yaw_rad": [
+     3.6201522587309826e-06,
+     1.4172429193701208e-05
+    ],
+    "unmatched": [
+     "r2_d0.62_l+0.00"
+    ]
+   },
+   "r": {
+    "points": 22,
+    "within_tolerance": 22,
+    "all_settles": 22,
+    "pose_ok": 22,
+    "shifts": {
+     "2": 17,
+     "5": 2,
+     "3": 2,
+     "4": 1
+    },
+    "residual_xy_m": [
+     9.432675867642913e-06,
+     2.824604403438255e-05
+    ],
+    "residual_yaw_rad": [
+     5.88986544398408e-06,
+     8.538945507102075e-06
+    ],
+    "unmatched": []
+   },
+   "order_sensitive": 4
+  },
+  "F1": {
+   "a": {
+    "points": 22,
+    "within_tolerance": 22,
+    "all_settles": 22,
+    "pose_ok": 22,
+    "shifts": {
+     "2": 21,
+     "3": 1
+    },
+    "residual_xy_m": [
+     4.8466549641675e-06,
+     1.0918442087484868e-05
+    ],
+    "residual_yaw_rad": [
+     4.0820862220840304e-07,
+     7.5583741391029025e-06
+    ],
+    "unmatched": []
+   },
+   "b": {
+    "points": 22,
+    "within_tolerance": 22,
+    "all_settles": 22,
+    "pose_ok": 22,
+    "shifts": {
+     "2": 21,
+     "3": 1
+    },
+    "residual_xy_m": [
+     4.8466549641675e-06,
+     1.0918442087484868e-05
+    ],
+    "residual_yaw_rad": [
+     4.0820862220840304e-07,
+     7.5583741391029025e-06
+    ],
+    "unmatched": []
+   },
+   "r": {
+    "points": 22,
+    "within_tolerance": 22,
+    "all_settles": 22,
+    "pose_ok": 22,
+    "shifts": {
+     "2": 21,
+     "3": 1
+    },
+    "residual_xy_m": [
+     5.102382702283768e-06,
+     1.2585120964456353e-05
+    ],
+    "residual_yaw_rad": [
+     5.090213433898289e-07,
+     7.97282812414757e-06
+    ],
+    "unmatched": []
+   },
+   "order_sensitive": 0
+  },
+  "O+F2": {
+   "a": {
+    "points": 22,
+    "within_tolerance": 0,
+    "all_settles": 10,
+    "pose_ok": 0,
+    "shifts": {
+     "5": 22
+    },
+    "residual_xy_m": [
+     0.0034125306611074895,
+     0.009252104711509505
+    ],
+    "residual_yaw_rad": [
+     0.00035604626581549337,
+     0.0012267066417238279
+    ],
+    "unmatched": [
+     "r1_d1.38_y-8.955_w0.02",
+     "r1_d1.40_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.04",
+     "r1_d1.44_y-8.955_w0.02",
+     "r1_d1.46_y-8.955_w0.02",
+     "r1_d1.48_y-8.955_w0.02",
+     "r1_d1.50_y-8.955_w0.02",
+     "r1_d1.52_y-8.955_w0.02",
+     "r1_d1.54_y-8.955_w0.02",
+     "r1_d1.56_y-8.955_w0.02",
+     "r1_d1.58_y-8.955_w0.02",
+     "r1_d1.60_y-8.955_w0.02",
+     "r1_d1.60_y-8.910_w0.04",
+     "r2_d0.50_l+0.00",
+     "r2_d0.52_l+0.00",
+     "r2_d0.54_l+0.00",
+     "r2_d0.56_l+0.00",
+     "r2_d0.58_l+0.00",
+     "r2_d0.60_l+0.00",
+     "r2_d0.62_l+0.00",
+     "r2_d0.64_l+0.00"
+    ]
+   },
+   "b": {
+    "points": 22,
+    "within_tolerance": 0,
+    "all_settles": 10,
+    "pose_ok": 0,
+    "shifts": {
+     "5": 22
+    },
+    "residual_xy_m": [
+     0.0034125306611074895,
+     0.009252104711509505
+    ],
+    "residual_yaw_rad": [
+     0.00035604626581549337,
+     0.0012267066417238279
+    ],
+    "unmatched": [
+     "r1_d1.38_y-8.955_w0.02",
+     "r1_d1.40_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.04",
+     "r1_d1.44_y-8.955_w0.02",
+     "r1_d1.46_y-8.955_w0.02",
+     "r1_d1.48_y-8.955_w0.02",
+     "r1_d1.50_y-8.955_w0.02",
+     "r1_d1.52_y-8.955_w0.02",
+     "r1_d1.54_y-8.955_w0.02",
+     "r1_d1.56_y-8.955_w0.02",
+     "r1_d1.58_y-8.955_w0.02",
+     "r1_d1.60_y-8.955_w0.02",
+     "r1_d1.60_y-8.910_w0.04",
+     "r2_d0.50_l+0.00",
+     "r2_d0.52_l+0.00",
+     "r2_d0.54_l+0.00",
+     "r2_d0.56_l+0.00",
+     "r2_d0.58_l+0.00",
+     "r2_d0.60_l+0.00",
+     "r2_d0.62_l+0.00",
+     "r2_d0.64_l+0.00"
+    ]
+   },
+   "r": {
+    "points": 22,
+    "within_tolerance": 0,
+    "all_settles": 11,
+    "pose_ok": 0,
+    "shifts": {
+     "5": 22
+    },
+    "residual_xy_m": [
+     0.002022485410522275,
+     0.008597353074762398
+    ],
+    "residual_yaw_rad": [
+     0.0002963965744521759,
+     0.0011154686329190935
+    ],
+    "unmatched": [
+     "r2_d0.64_l+0.00",
+     "r2_d0.62_l+0.00",
+     "r2_d0.60_l+0.00",
+     "r2_d0.58_l+0.00",
+     "r2_d0.56_l+0.00",
+     "r2_d0.54_l+0.00",
+     "r2_d0.52_l+0.00",
+     "r2_d0.50_l+0.00",
+     "r1_d1.60_y-8.910_w0.04",
+     "r1_d1.60_y-8.955_w0.02",
+     "r1_d1.58_y-8.955_w0.02",
+     "r1_d1.56_y-8.955_w0.02",
+     "r1_d1.54_y-8.955_w0.02",
+     "r1_d1.52_y-8.955_w0.02",
+     "r1_d1.50_y-8.955_w0.02",
+     "r1_d1.48_y-8.955_w0.02",
+     "r1_d1.46_y-8.955_w0.02",
+     "r1_d1.44_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.04",
+     "r1_d1.42_y-8.955_w0.02",
+     "r1_d1.40_y-8.955_w0.02",
+     "r1_d1.38_y-8.955_w0.02"
+    ]
+   },
+   "order_sensitive": 22
+  },
+  "F1+F2": {
+   "a": {
+    "points": 22,
+    "within_tolerance": 0,
+    "all_settles": 22,
+    "pose_ok": 0,
+    "shifts": {
+     "5": 22
+    },
+    "residual_xy_m": [
+     0.0009167076258109101,
+     0.0035404595779914465
+    ],
+    "residual_yaw_rad": [
+     6.61857090940958e-05,
+     0.0005140404577133571
+    ],
+    "unmatched": [
+     "r1_d1.38_y-8.955_w0.02",
+     "r1_d1.40_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.04",
+     "r1_d1.44_y-8.955_w0.02",
+     "r1_d1.46_y-8.955_w0.02",
+     "r1_d1.48_y-8.955_w0.02",
+     "r1_d1.50_y-8.955_w0.02",
+     "r1_d1.52_y-8.955_w0.02",
+     "r1_d1.54_y-8.955_w0.02",
+     "r1_d1.56_y-8.955_w0.02",
+     "r1_d1.58_y-8.955_w0.02",
+     "r1_d1.60_y-8.955_w0.02",
+     "r1_d1.60_y-8.910_w0.04",
+     "r2_d0.50_l+0.00",
+     "r2_d0.52_l+0.00",
+     "r2_d0.54_l+0.00",
+     "r2_d0.56_l+0.00",
+     "r2_d0.58_l+0.00",
+     "r2_d0.60_l+0.00",
+     "r2_d0.62_l+0.00",
+     "r2_d0.64_l+0.00"
+    ]
+   },
+   "b": {
+    "points": 22,
+    "within_tolerance": 0,
+    "all_settles": 22,
+    "pose_ok": 0,
+    "shifts": {
+     "5": 22
+    },
+    "residual_xy_m": [
+     0.0009167076258109101,
+     0.0035404595779914465
+    ],
+    "residual_yaw_rad": [
+     6.61857090940958e-05,
+     0.0005140404577133571
+    ],
+    "unmatched": [
+     "r1_d1.38_y-8.955_w0.02",
+     "r1_d1.40_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.04",
+     "r1_d1.44_y-8.955_w0.02",
+     "r1_d1.46_y-8.955_w0.02",
+     "r1_d1.48_y-8.955_w0.02",
+     "r1_d1.50_y-8.955_w0.02",
+     "r1_d1.52_y-8.955_w0.02",
+     "r1_d1.54_y-8.955_w0.02",
+     "r1_d1.56_y-8.955_w0.02",
+     "r1_d1.58_y-8.955_w0.02",
+     "r1_d1.60_y-8.955_w0.02",
+     "r1_d1.60_y-8.910_w0.04",
+     "r2_d0.50_l+0.00",
+     "r2_d0.52_l+0.00",
+     "r2_d0.54_l+0.00",
+     "r2_d0.56_l+0.00",
+     "r2_d0.58_l+0.00",
+     "r2_d0.60_l+0.00",
+     "r2_d0.62_l+0.00",
+     "r2_d0.64_l+0.00"
+    ]
+   },
+   "r": {
+    "points": 22,
+    "within_tolerance": 3,
+    "all_settles": 22,
+    "pose_ok": 3,
+    "shifts": {
+     "5": 20,
+     "3": 1,
+     "4": 1
+    },
+    "residual_xy_m": [
+     0.0005892459700836605,
+     0.0018341445525457867
+    ],
+    "residual_yaw_rad": [
+     6.824750772500485e-05,
+     0.00020843811831154635
+    ],
+    "unmatched": [
+     "r2_d0.64_l+0.00",
+     "r2_d0.62_l+0.00",
+     "r2_d0.60_l+0.00",
+     "r2_d0.56_l+0.00",
+     "r2_d0.54_l+0.00",
+     "r2_d0.50_l+0.00",
+     "r1_d1.60_y-8.910_w0.04",
+     "r1_d1.60_y-8.955_w0.02",
+     "r1_d1.58_y-8.955_w0.02",
+     "r1_d1.56_y-8.955_w0.02",
+     "r1_d1.54_y-8.955_w0.02",
+     "r1_d1.52_y-8.955_w0.02",
+     "r1_d1.50_y-8.955_w0.02",
+     "r1_d1.48_y-8.955_w0.02",
+     "r1_d1.46_y-8.955_w0.02",
+     "r1_d1.44_y-8.955_w0.02",
+     "r1_d1.42_y-8.955_w0.04",
+     "r1_d1.42_y-8.955_w0.02",
+     "r1_d1.38_y-8.955_w0.02"
+    ]
+   },
+   "order_sensitive": 22
+  }
+ },
+ "settings_diff": {
+  "m1_120_F1_a vs O": [],
+  "m1_120_F1_b vs O": [],
+  "m1_120_F1_r vs O": [],
+  "m1_120_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_120_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_120_F1pF2_r vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_120_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_120_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_120_OpF2_r vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_240_F1_a vs O": [],
+  "m1_240_F1_b vs O": [],
+  "m1_240_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_240_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_240_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m1_240_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_120_F1_a vs O": [],
+  "m2_120_F1_b vs O": [],
+  "m2_120_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_120_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_120_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_120_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_240_F1_a vs O": [],
+  "m2_240_F1_b vs O": [],
+  "m2_240_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_240_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_240_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m2_240_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_120_F1_a vs O": [],
+  "m3_120_F1_b vs O": [],
+  "m3_120_F1_r vs O": [],
+  "m3_120_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_120_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_120_F1pF2_r vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_120_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_120_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_120_OpF2_r vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_240_F1_a vs O": [],
+  "m3_240_F1_b vs O": [],
+  "m3_240_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_240_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_240_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m3_240_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m4_120_F1_a vs O": [],
+  "m4_120_F1_b vs O": [],
+  "m4_120_F1_r vs O": [],
+  "m4_120_F1pF2_a vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m4_120_F1pF2_b vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m4_120_F1pF2_r vs F1": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m4_120_OpF2_a vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m4_120_OpF2_b vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ],
+  "m4_120_OpF2_r vs O": [
+   "tyre_contact_damping_n_s_per_m",
+   "tyre_contact_stiffness_n_per_m"
+  ]
+ }
+}

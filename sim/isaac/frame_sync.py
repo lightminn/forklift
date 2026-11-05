@@ -24,8 +24,14 @@ class FrameSync:
         self.renders = 0
         self.max_renders = 0
 
-    def sync(self, camera, render, sim_time: float) -> int:
-        """Renders (``render()``) until ``camera``'s frame is at ``sim_time``; the number of renders it took."""
+    def sync(self, camera, render, sim_time: float, rgb: bool = False) -> int:
+        """Renders (``render()``) until ``camera``'s frame is at ``sim_time``; the number of renders it took.
+
+        ``rgb``: the caller reads the frame's RGB (``rgba_of``), so the frame must also hold it. A camera's first
+        renders carry the step's rendering_time with an empty RGB array (Isaac 5.1 stores each annotator's get_data()
+        at every render) -- with video off the perception camera is first rendered at the first far frame, which then
+        held no RGB (2026-11-05 mass-probe batch). The extra renders do not step physics. A frame that already holds
+        RGB adds none, so a deterministic run that read RGB here before renders as it did."""
         if not determinism.enabled():
             return 0
         self.calls += 1
@@ -33,9 +39,15 @@ class FrameSync:
         while True:
             frame = camera.get_current_frame()
             rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
-            if rendered is not None and math.isfinite(float(rendered)) and abs(float(rendered) - sim_time) <= TOLERANCE_S:
+            at_time = (rendered is not None and math.isfinite(float(rendered))
+                       and abs(float(rendered) - sim_time) <= TOLERANCE_S)
+            if at_time and (not rgb or _holds_rgb(frame)):
                 break
             if done >= self.cap:
+                if at_time:
+                    determinism.mark("frame_sync:no_rgba")
+                    raise determinism.DeterministicBroken(
+                        f"frame_sync: no rgb in the frame at {sim_time:.6f} s after {done} renders")
                 determinism.mark(f"frame_sync:{self.cap}")
                 raise determinism.DeterministicBroken(f"frame_sync: no frame at {sim_time:.6f} s after {done} renders")
             render()
@@ -46,6 +58,12 @@ class FrameSync:
 
     def summary(self) -> dict:
         return {"calls": self.calls, "renders": self.renders, "max_renders": self.max_renders, "cap": self.cap}
+
+
+def _holds_rgb(frame) -> bool:
+    """The frame's RGB as ``rgba_of`` accepts it: present and not empty."""
+    rgba = frame.get("rgb") if isinstance(frame, dict) else None
+    return rgba is not None and hasattr(rgba, "__len__") and len(rgba) > 0
 
 
 def rgba_of(camera):

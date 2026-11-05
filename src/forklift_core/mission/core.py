@@ -58,6 +58,7 @@ import hashlib
 import json
 import math
 import time
+import dataclasses
 from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 
@@ -254,6 +255,28 @@ def _finite_or_none(value):
         return None
     value = float(value)
     return value if math.isfinite(value) else None
+
+
+def _finite(value):
+    """value with every non-finite float replaced by None (dicts, lists and tuples gone through), for a record that is
+    written without NaN."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(v) for v in value]
+    return value
+
+
+def _refused_degenerate(result):
+    """The docking result as refused by degenerate at every start (the sim-only round-1 injection, line2 robustness
+    V3b): no goal, no correction; the starts' poses and details kept."""
+    fields = dict(accepted=False, reason="start_rejected:degenerate", goal_estimate=None, relative_rear=None,
+                  correction=None, starts=tuple((False, "degenerate", q) for _ok, _why, q in result.starts))
+    if dataclasses.is_dataclass(result):
+        return replace(result, **fields)
+    return SimpleNamespace(**{**vars(result), **fields})
 
 
 class MissionCore:
@@ -6890,6 +6913,13 @@ class MissionCore:
                 **acceptance_kw,
             )
         result = self._precision_cumulative(result, delivery)
+        # docs/plans/2026-11-04-line2-delivery-robustness.md V3b (sim only): the mission's first non-retry round-1
+        # match is taken as refused by degenerate at every start; what the matcher said is kept beside it
+        if (getattr(options, "inject_round1_degenerate", False) and docking.get("round", 1) == 1
+                and not docking.get("await_retry_match", False) and "round1_injected" not in docking):
+            docking["round1_injected"] = {"accepted": bool(result.accepted), "reason": result.reason,
+                                          "start_reasons": [why for _ok, why, _q in result.starts]}
+            result = _refused_degenerate(result)
         # Evaluation only: where the delivery pose really is in the estimate frame.
         expected = compose(estimate, compose(invert(tuple(truth_rear)), reference))
         docking.update(
@@ -6959,6 +6989,19 @@ class MissionCore:
                           estimate_error_truck_frame=list(compose(invert(tuple(truth_rear)), estimate)))
             if result.goal_estimate is not None:
                 entry_["goal_error_line_frame"] = list(compose(invert(expected), tuple(result.goal_estimate)))
+        # docs/plans/2026-11-04-line2-delivery-robustness.md D1: a first non-retry round refused by degenerate at all
+        # of its starts goes on to the round-2 stop on the SLAM goal instead of the whole straight (off: as before)
+        degenerate_continue_ = getattr(options, "docking_degenerate_continue", "off") == "on"
+        continue_ = (degenerate_continue_ and options.d7_docking and round_number == 1 and not retry_match
+                     and not result.accepted and len(result.starts) > 0
+                     and all((not ok) and why == "degenerate" for ok, why, _q in result.starts)
+                     and not docking.get("degenerate_continued"))
+        if degenerate_continue_:
+            verdicts_ = {}
+            for _ok, why, _q in result.starts:
+                verdicts_[why] = verdicts_.get(why, 0) + 1
+            docking["rounds"][-1]["start_verdicts"] = verdicts_
+            docking["rounds"][-1]["degenerate_continue"] = {"eligible": bool(continue_)}
         if retry_match:
             # Plan D7c: the first match after a retry must be accepted -- no
             # falling back to the previous goal (Codex D7c review P1-4).
@@ -6997,6 +7040,7 @@ class MissionCore:
         )
         docking["offsets_to_new_line"] = offsets
         path = None
+        round_dry_, round_prefix_ = None, None  # this round's own checks (line2 robustness D6; top-level ones carry over)
         if straight is not None:
             config = slam.get("transport_config", trackers["transport"].config)
             dry = bicycle_rollout(
@@ -7039,6 +7083,7 @@ class MissionCore:
                 "trajectory_samples": len(dry.trajectory),
                 "swept_clear": swept_clear,
             }
+            round_dry_ = docking["dry_run"]
             # The tracker stops anywhere inside its own tolerance (Codex v3.8 P2:
             # a clean 0.7 m straight stops at 7.8 mm); require yaw margin only.
             if (
@@ -7056,8 +7101,19 @@ class MissionCore:
                     stop_ok, docking["prefix_dry_run"] = DOCKING_RETRY.round_two_stop_check(
                         straight, rear, docking_stop_config(), ROUND2_KEEP_M, clear=pose_clear
                     )
+                    round_prefix_ = docking["prefix_dry_run"]
                     if not stop_ok:
                         path = None
+                elif continue_:
+                    # line2 robustness D2: the SLAM-goal straight passed its checks; its cut at the round-2 stop is
+                    # judged too, and a refused stop drives the checked whole straight, as the fallback does
+                    stop_ok, docking["prefix_dry_run"] = DOCKING_RETRY.round_two_stop_check(
+                        straight, rear, docking_stop_config(), ROUND2_KEEP_M, clear=pose_clear
+                    )
+                    round_prefix_ = docking["prefix_dry_run"]
+                    docking["rounds"][-1]["degenerate_continue"]["stop_check"] = bool(stop_ok)
+                    if not stop_ok:
+                        continue_ = False
         corrected = replace(
             scenario,
             destination=replace(
@@ -7074,6 +7130,14 @@ class MissionCore:
         # No long held detour: a Hybrid A* re-alignment for a 9 cm correction
         # drove 13.3 m forward-only on held odometry and drifted 0.5 m (S2 v3.8
         # seed 0). A straight that cannot be accepted ends the run instead.
+        if degenerate_continue_:
+            # line2 robustness D6: each round's own checks and choice (the top-level ones are the last round's)
+            # finite only: a rollout that timed out reports NaN errors, which a later round overwrites at the top but
+            # this round's copy kept -- and result.json is written without NaN (ddc_on_v3a_line_2_s8 lost its record)
+            docking["rounds"][-1].update(offsets_to_new_line=_finite(offsets), straight_refused=straight is None,
+                                         dry_run=_finite(round_dry_), prefix_dry_run=_finite(round_prefix_), chosen=(
+                "retry_b" if path is None and options.d7_docking
+                else "round2_stop" if continue_ or (round_number == 1 and result.accepted) else "straight"))
         if path is None and options.d7_docking:
             # Plan D7c (b): back to the line's start and match again.
             start_docking_retry(t, "b", f"docking_unaligned:{offsets}:{docking.get('dry_run')}")
@@ -7097,7 +7161,9 @@ class MissionCore:
         add_path_display(stage, path, "Transport", (1.0, 0.65, 0.04))
         ms.phase_started = t
         docking["previous_goal"] = list(goal)
-        if round_number == 1 and result.accepted:
+        if continue_:
+            docking["degenerate_continued"] = True  # once per mission: a later refusal falls back as before
+        if round_number == 1 and (result.accepted or continue_):
             # Second round: loaded wheels slip (~5 % over the 1.5 m straight,
             # S2 v3.8c seed 3: 8 cm short), so stop again 0.6 m out and match
             # once more; the last 0.6 m then carries only that slip (~3 cm).

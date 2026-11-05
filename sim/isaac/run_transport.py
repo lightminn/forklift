@@ -169,8 +169,42 @@ ESTOP = load_perception_module(
 )
 
 
-def record_json(value: object, *, indent: int | None = None) -> str:
-    """Encode simulator numerical records without coercing numbers to strings."""
+def _finite_record(value: object, path: str, found: list[str], open_: set[int]) -> object:
+    """A copy of a record with each non-finite float value as None (its path in ``found``); anything else as it was.
+    Values only: a non-finite dict key stays and fails the encoding as before. A container met again inside itself
+    raises json's own circular-reference ValueError, as the strict encoding does (Codex P3)."""
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    elif isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        found.append(path or "$")
+        return None
+    if isinstance(value, (dict, list, tuple)):
+        if id(value) in open_:
+            raise ValueError("Circular reference detected")
+        open_.add(id(value))
+        try:
+            if isinstance(value, dict):
+                return {k: _finite_record(v, f"{path}.{k}", found, open_) for k, v in value.items()}
+            return [_finite_record(v, f"{path}[{i}]", found, open_) for i, v in enumerate(value)]
+        finally:
+            open_.discard(id(value))
+    return value
+
+
+def record_json(value: object, *, indent: int | None = None, strict: bool = False,
+                non_finite: list[str] | None = None) -> str:
+    """Encode simulator numerical records without coercing numbers to strings.
+
+    A record with a non-finite float (a timed-out rollout's NaN error, for one) is written with that value as null
+    instead of failing the write -- V3 ddc_on_v3a_line_2_s8 lost its result.json that way (#309; lead 2026-11-05).
+    The strict encoding is tried first, so a finite record's text is byte for byte what it always was; the paths
+    made null go to stderr as one RECORD_NON_FINITE line and, when given, into ``non_finite`` (a caller whose
+    verdict read the failed write keeps it that way). strict=True refuses NaN/inf as before, for a caller that reads
+    the refusal (verify_perception_camera's setting probe)."""
 
     def native(value: object) -> object:
         if isinstance(value, np.ndarray):
@@ -179,7 +213,18 @@ def record_json(value: object, *, indent: int | None = None) -> str:
             return value.item()
         raise TypeError(f"Unsupported record type: {type(value).__name__}")
 
-    return json.dumps(value, default=native, indent=indent, allow_nan=False)
+    try:
+        return json.dumps(value, default=native, indent=indent, allow_nan=False)
+    except ValueError as exc:
+        if strict or "Out of range float values" not in str(exc):
+            raise
+    found: list[str] = []
+    text = json.dumps(_finite_record(value, "", found, set()), default=native, indent=indent, allow_nan=False)
+    if non_finite is not None:
+        non_finite.extend(found)
+    print(f"RECORD_NON_FINITE {len(found)} {' '.join(found[:8])}{' ...' if len(found) > 8 else ''}",
+          file=sys.stderr, flush=True)
+    return text
 
 
 def camera_hz(value: str) -> int:
@@ -548,6 +593,21 @@ def arguments() -> argparse.Namespace:
         "must pass the information gate, as always. precision -- SIM ONLY: starts refused only as degenerate (a single "
         "far wall) are taken when the conditional precision, face-deletion, range and bound checks pass; it takes faces "
         "moved together after teaching and a repeated pattern beyond its range wrongly, so never on the real vehicle.",
+    )
+    parser.add_argument(
+        "--docking-degenerate-continue",
+        choices=("off", "on"),
+        default="off",
+        help="docs/plans/2026-11-04-line2-delivery-robustness.md D1-D4 (with --d7-docking): a first, non-retry round-1 "
+        "delivery match refused as degenerate at every start drives the SLAM-goal straight only to the round-2 stop "
+        "(0.6 m) and matches there, when the whole straight and its cut at the stop pass their checks. off: the "
+        "whole straight is driven uncorrected, as every earlier run.",
+    )
+    parser.add_argument(
+        "--inject-round1-degenerate",
+        action="store_true",
+        help="SIM ONLY, a stress tool (line2 robustness V3b): the mission's first non-retry round-1 delivery match is "
+        "taken as refused by degenerate at every start; what the matcher said is recorded. Batch runs only.",
     )
     parser.add_argument(
         "--exit-clearance-m",
@@ -933,6 +993,14 @@ def arguments() -> argparse.Namespace:
         help="Plan D7c δ runs: plan to (and seed docking from) a destination moved this "
         "far along its own lateral axis; the scene, the docking reference scan and the "
         "evaluation keep the true destination.",
+    )
+    parser.add_argument(
+        "--destination-prior-error-along-m",
+        type=float,
+        default=0.0,
+        help="SIM ONLY, a stress tool (line2 robustness V3a): as --destination-prior-error-m along the destination's "
+        "own heading (positive: deeper into the slot). Only the planning prior moves; the scene, the reference scan, "
+        "the evaluation, SLAM, its map and the obstacle layer keep the truth. Batch runs only.",
     )
     parser.add_argument(
         "--return-home",
@@ -1434,6 +1502,14 @@ def arguments() -> argparse.Namespace:
         first_ = session_as_scene(load_session(args.scene_file)) if args.session else load_scene(args.scene_file)
         if args.observation_waypoints is None:
             args.observation_waypoints = [list(w) for w in first_.observation_waypoints]
+    # docs/plans/2026-11-04-line2-delivery-robustness.md V3: the along prior error and the round-1 injection are
+    # batch-run stress tools -- a session's anchored neighbours and a live console would follow the moved prior
+    if ((args.destination_prior_error_along_m or args.inject_round1_degenerate)
+            and (getattr(args, "session", False) or args.live)):
+        parser.error("--destination-prior-error-along-m and --inject-round1-degenerate are batch-run tools "
+                     "(no session scene, no --live)")
+    if args.docking_degenerate_continue == "on" and not args.d7_docking:
+        parser.error("--docking-degenerate-continue on needs --d7-docking (the round-2 stop and its retry are D7's)")
     if args.observation_waypoints is None:
         # (-1.20, 0.30) moved ahead of (-0.10, -0.60): both plan equally well
         # for every seed that can reach either, but seed 3 only detects the
@@ -3775,15 +3851,17 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # match's prior, sees the moved one. The reference scan and the evaluation use
     # truth_destination.
     truth_destination = scenario.destination
-    if args.destination_prior_error_m:
+    along_prior_ = getattr(args, "destination_prior_error_along_m", 0.0)
+    if args.destination_prior_error_m or along_prior_:
         scenario = replace(
             scenario,
             destination=DOCKING_RETRY.destination_with_prior_error(
-                scenario.destination, args.destination_prior_error_m
+                scenario.destination, args.destination_prior_error_m, along_m=along_prior_
             ),
         )
         state["destination_prior"] = {
             "error_m": args.destination_prior_error_m,
+            **({"along_m": along_prior_} if along_prior_ else {}),  # line2 robustness V3a; absent before
             "planning_destination": asdict(scenario.destination),
             "truth_destination": asdict(truth_destination),
         }
@@ -4250,8 +4328,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_mount,
             # Every physics step, capture included, goes through step_world
             # (SLAM plan: odometry, scans and the lockstep must see them all).
-            step_fn=lambda: (cells.stepper["fn"](True),  # then, in a deterministic run, the frame at that step (D1)
-                             frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time)),
+            # then, in a deterministic run, the frame at that step holding its RGB (D1; a cold camera's first renders
+            # hold none -- frame_sync.sync)
+            step_fn=lambda: (cells.stepper["fn"](True),
+                             frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time, rgb=True)),
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
@@ -6711,6 +6791,9 @@ def drive(S, isaac) -> None:
                                 # docs/plans/2026-10-28-far-target-binding.md F1: off in a record from before the option
                                 far_capture_expected=getattr(args, "far_capture_expected", "off"),
                                 docking_acceptance=getattr(args, "docking_acceptance", "information"),
+                                # docs/plans/2026-11-04-line2-delivery-robustness.md: off in a record from before them
+                                docking_degenerate_continue=getattr(args, "docking_degenerate_continue", "off"),
+                                inject_round1_degenerate=getattr(args, "inject_round1_degenerate", False),
                                 # P6 (2026-10-23 plan): a record from before the option ran without the trigger.
                                 permit_stop_replan=getattr(args, "permit_stop_replan", "off"),
                                 start_band_release=getattr(args, "start_band_release", "off"),
@@ -7199,7 +7282,9 @@ def drive(S, isaac) -> None:
             """One driving frame for the far recognition: render-metadata time, pixels and instance ids. A live run
             hands its work to the far worker; a failure of its read is raised by the tick, after this step's other
             sensors (plan 2026-10-22-live-far-recognition task 9)."""
-            frame_sync.sync(perception_camera, world.render, world.current_time)  # deterministic run only (D1)
+            # deterministic run only (D1); the frame holding its RGB, which a cold camera's first renders lack (video
+            # off: first rendered at the first far frame -- frame_sync.sync)
+            frame_sync.sync(perception_camera, world.render, world.current_time, rgb=True)
             frame_ = perception_camera.get_current_frame()
             # the sensor's own contract (its metadata): a session failure, as before (task 9; Codex impl round 1 P2)
             rendering_s_ = float(frame_["rendering_time"]) - initial_time
@@ -8127,6 +8212,7 @@ def drive(S, isaac) -> None:
                        # Live (persistent console plan D2, Codex P2-8): the cast pose always goes with its scan -- a
                        # later mission's prior drifts from the truth the scan was cast at.
                        "reference": list(delivery_d) if (args.d7_docking or args.destination_prior_error_m
+                                                         or getattr(args, "destination_prior_error_along_m", 0.0)
                                                          or always_reference) else None,
                        "fields": dict(delivery_rear_prior=list(prior_d),
                                       reference_beams=int(np.isfinite(reference_ranges).sum()),
@@ -10330,11 +10416,20 @@ def drive(S, isaac) -> None:
                 # summary in result.json. Guarded: a failed write never replaces the run's own
                 # failure.
                 try:
+                    near_non_finite_: list[str] = []
                     (args.output / "near_tracking.json").write_text(
                         record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"],
                                      "stop_events": near.get("stop_events") or [], "protect": near.get("protect"),
-                                     "corrections": near["corrections"], "path_revisions": near["path_revisions"]}) + "\n"
+                                     "corrections": near["corrections"], "path_revisions": near["path_revisions"]},
+                                    non_finite=near_non_finite_) + "\n"
                     )
+                    if near_non_finite_:
+                        # the record is kept (its NaN/inf as null), but a tracking record with non-finite values
+                        # fails the run as its refused write did before record_json wrote them (Codex P2-a)
+                        state["near_tracking_write_error"] = f"non-finite values at {near_non_finite_[:8]}"
+                        state["success"] = False
+                        state.setdefault("failure_reason",
+                                         f"near_tracking_record_failed: non-finite values at {near_non_finite_[:8]}")
                     fed_ = [f for f in near["frames"] if "skipped" not in f]
                     state["near_tracking"].update(
                         frames_fed=len(fed_),
@@ -10614,6 +10709,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k not in ("slam_map_bundle", "expected_map_id") or v is not None)
         # P1c (plan 2026-10-23): not recorded off, so a run without the keepout records what it always did
         and (k != "lidar_keepout_m" or v != 0.0)
+        # line2 robustness plan (2026-11-04): not recorded at their defaults, so a run without them records what it did
+        and (k != "docking_degenerate_continue" or v != "off") and (k != "inject_round1_degenerate" or v)
+        and (k != "destination_prior_error_along_m" or v != 0.0)
         # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
         and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
         # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not

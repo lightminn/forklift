@@ -1028,6 +1028,8 @@ def test_the_session_end_waits_on_one_io_budget(tmp_path):
     rt.close()
     assert time.monotonic() - began < 0.6
     gate.set()
+    rt.io._thread.join(5.0)  # the writer ends once unblocked and closes the log it kept open
+    assert rt._log.closed
 
 
 def test_a_log_with_lost_lines_says_so_and_its_reader_refuses_it(tmp_path):
