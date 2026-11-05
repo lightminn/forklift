@@ -1,0 +1,44 @@
+FAIL near_capture {"status": "failed", "far_attempt": 1, "far_estimate_m": {"x_m": 0.9298307693921709, "y_m": -1.4838848141803225, "yaw_rad": -0.11861051288727091}, "far_error": {"position_m": 0.09827668933651316, "yaw_rad": -0.013890757767611214}, "waypoint": [-2.8335407511516912, -1.0354042701660024, -0.11861051288727076]}
+FAIL perception keys ['candidate_index', 'waypoint', 'arrived_pose', 'pocket_observation', 'frame_diagnostics', 'detection_diagnostics', 'capture_attempts', 'loop_step', 't_before_capture_s', 'depth_sha256', 'capture_diagnostics', 'accepted_pose', 'control_pose_source', 'slam_error', 'capture_control', 'base_from_optical', 'depth_quantize_mm', 'detector_site', 'detector_reference', 'observation_source', 'recognition', 'perception_pickup_estimate_m', 'perception_error', 'perception_error_actual']
+FAIL observation_attempts [{"candidate_index": 0, "waypoint": [-2.3574, -1.1566, -0.1047], "arrived_pose": [-2.3702877143895513, -1.1501516490155397, -0.1081730989647737], "pocket_observation": {"stamp_ns": 179141676009, "clock_domain": "synthetic", "frame_id": "base_link", "source_provenance": "synthetic", "status": "valid", "left": {"center_m": [2.685270690550416, 0.10909010694052591, 0.06290880857737244], "width_m": 0.22750000000000004, "height_m": 0.07800000000000001}, "right": {"center_m": [2.67342209956058, -0.2632214036142185, 0.06290880857737244], "width_m": 0.22750000000000004, "height_m": 0.07800000000000001}, "insertion_yaw_rad": -0.03181366417157072, "position_sigma_m": null, "yaw_sigma_rad": null, "reason": null}, "frame_diagnostics": {"nan_count": 0, "posinf_count": 102400, "neginf_count": 0, "zero_count": 0, "negative_count": 0, "finite_positive_count": 204800, "finite_positive_min": 1.0011725425720215, "finite_positive_max": 7.1786208152771}, "detection_diagnostics": {"plane_residual_p95_m": 0.0004739457748202438, "plane_inlier_count": 3273, "candidate_plane_count": 8, "rejected_plane_reasons": ["lower_pattern_score", "lower_pattern_score", "no_opening_pattern", "no_opening_pattern", "no_opening_pattern", "no_opening_pattern", "no_opening_pattern"], "opening_rays": {"right": {"front": 0, "behind": 745, "near_plane": 32, "unknown": 0, "total": 777}, "left": {"front": 0, "behind": 757, "near_plane": 23, "unknown": 0, "total": 780}}, "opening_width_raw_m": [0.229
+FAIL observe_replans [] cusp_stalls []
+P5 D_random_m_s0 done None {"position_m": 0.11518749565335884, "yaw_rad": -0.002973504125192594} attempts None
+P5 D_random_m_s1 done None {"position_m": 0.09753988412096795, "yaw_rad": -0.012824064740674448} attempts None
+P5 D_random_m_s2 done None {"position_m": 0.1189418799998387, "yaw_rad": -0.002436380473921862} attempts None
+P5 D_random_m_s3 done None {"position_m": 0.11382854262371574, "yaw_rad": -0.004186327251330363} attempts None
+P5 D_random_m_s4 done None {"position_m": 0.11787521251457528, "yaw_rad": -0.003158543410128861} attempts None
+P5 D_random_m_s5 done None {"position_m": 0.09837360713404047, "yaw_rad": -0.009412678577233893} attempts None
+P5 D_random_m_s6 done None {"position_m": 0.1009374101807639, "yaw_rad": -0.011103386747277427} attempts None
+P5 D_random_m_s7 done None {"position_m": 0.1109611440035682, "yaw_rad": -0.002910497731775999} attempts None
+P5 Dp_random_m_s0 done None {"position_m": 0.09742470077532948, "yaw_rad": -0.01497864184519794} attempts None
+P5 Dp_random_m_s1 done None {"position_m": 0.1102053576561148, "yaw_rad": -0.0037676261712219217} attempts None
+P5 O0_random_m_s0 done None {"position_m": 0.09612260208937369, "yaw_rad": -0.010299509821068089} attempts None
+P5 O0_random_m_s1 done None {"position_m": 0.11770595704278067, "yaw_rad": -0.0016542832104937952} attempts None
+P5 O6_random_m_s0 failed None {"position_m": 0.09827668933651316, "yaw_rad": -0.013890757767611214} attempts None
+P5 O6_random_m_s1 done None {"position_m": 0.10371941120101981, "yaw_rad": -0.013689273286597331} attempts None
+STALL D_line_m_s2 m1 return_home 0.0209 -0.0248 success
+STALL D_line_m_s2 m1 return_home 0.0085 0.0259 success
+SR D_line_m_s2 m3 [{"time_s": 451.94169023726135, "trigger": "cusp_pose", "phase": "return_home", "tracker_serial": 63376, "leg": 1, "rear": [-1.0091317904818218, -9.223820706140838, -0.4073682269949045], "truth_rear": [-1.0142104813390465, -9.20129576352015, -0.40154535325896357], "deviation": {"position_m": 0.04522802988291814, "yaw_rad": -0.008482091369304112, "far": null}, "correction_jump": {"slam": {"since_s": 442.0083563858643, "net_max_m": 0.011767337593924322, "net_at_s": 444.05835649278015, "reply_max_m
+STALL D_line_m_s2 m3 return_home 0.0143 -0.0373 success
+CUSP D_line_m_s2 m3 return_home 1 0 
+STALL D_line_m_s7 m1 return_home 0.0077 -0.0301 success
+STALL D_line_m_s7 m2 return_home 0.0241 -0.0287 success
+CUSP D_line_m_s7 m3 return_home 1 0 
+CUSP D_random_m_s0 m3 observe 0 0 
+STALL D_random_m_s4 m3 return_home 0.0099 -0.0409 success
+STALL D_random_m_s5 m3 return_home 0.01 -0.0341 success
+STALL D_random_m_s6 m1 return_home 0.0178 -0.0286 success
+STALL D_random_m_s6 m3 return_home 0.0169 -0.0346 success
+STALL D_random_m_s7 m3 return_home 0.0159 -0.0233 success
+D7 Dp_line_m_s1 m3 [('b', "docking_unaligned:{'along_m': -0.03167504065972048, 'lateral_m': 0.07461551318472322, 'yaw_rad': 0.027819322298680473, 'length_left_m': 1.5316750406597204}:{'st", 1.3493154190754815)] rounds 3
+D7 O0_line_m_s0 m3 [('b', "docking_unaligned:{'along_m': -0.006113734099286702, 'lateral_m': 0.0836372792391552, 'yaw_rad': 0.006466766615902387, 'length_left_m': 1.506113734099287}:{'sta", 1.4979088166787287)] rounds 3
+CUSP O0_line_m_s0 m3 return_home 1 0 
+SR O0_line_m_s1 m3 [{"time_s": 441.09168967138976, "trigger": "cusp_pose", "phase": "return_home", "tracker_serial": 409936, "leg": 1, "rear": [-1.004980155664263, -9.21997405506841, -0.40466933409349304], "truth_rear": [-1.0093218648085724, -9.196179337270543, -0.3994100363747351], "deviation": {"position_m": 0.05752382197999394, "yaw_rad": -0.010966408126577232, "far": null}, "correction_jump": {"slam": {"since_s": 431.2083558226004, "net_max_m": 0.018742210361093428, "net_at_s": 434.16668931022286, "reply_max_m
+CUSP O0_line_m_s1 m3 return_home 1 0 
+STALL O0_random_m_s0 m1 return_home 0.02 -0.029 success
+STALL O0_random_m_s0 m3 return_home 0.0075 -0.0333 success
+STALL O0_random_m_s1 m3 return_home 0.0242 -0.0266 success
+STALL O6_line_m_s1 m1 return_home 0.0086 -0.0275 success
+CUSP O6_random_m_s1 m3 observe 0 0 
+Q D_line_m_s1 상태 수신 끊김 [['상태 수신 끊김', 239520709.848116]] {'done': 3, 'failed': 0, 'cancelled': 0} [] None 1001 {"t": "ack", "of": "session_end", "request_id": "r2", "control_gen": 7}
+Q O6_random_m_s0 실패: near_capture_failed:perception_no_pallet:no_expected_candidate [['실패: near_capture_failed:perception_no_pallet:no_expected_candidate', 243466859.855795]] {'done': 1, 'failed': 1, 'cancelled': 0} ['P-3:D-3'] None 1001 {"t": "ack", "of": "session_end", "request_id": "r2", "control_gen": 5}
