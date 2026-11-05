@@ -379,17 +379,17 @@ def test_reloc_the_cancel_does_not_wait_for_a_probe_slow_to_end(tmp_path, launch
 
 
 def test_reloc_a_launcher_that_ignores_the_term_is_killed_after_the_cancel_time(tmp_path, launches):
-    launch = reloc(tmp_path, launches, FAKE_LAUNCHER_CLEANUP_S="60", RELOC_END_KILL_S="2")
+    launch = reloc(tmp_path, launches, FAKE_LAUNCHER_CLEANUP_S="60", RELOC_END_KILL_S="3")
     launch.release("launcher")
     launch.release("probe")
     launch.wait_for(launch.mark("launcher_ready"))
     launch.wait_for(launch.mark("probe_ready"))
     t0 = time.monotonic()
     launch.term()
-    time.sleep(0.5)
-    launch.term()  # a repeated TERM does not restart the time
+    time.sleep(2.0)
+    launch.term()  # late in the time: restarting it would end the wrapper about 5 s after the first TERM
     assert launch.end() == 143, launch.log()
-    assert 1.5 < time.monotonic() - t0 < 10, launch.log()
+    assert 2.8 < time.monotonic() - t0 < 4.5, launch.log()
     assert not launch.child_alive("launcher")
 
 

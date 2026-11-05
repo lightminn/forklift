@@ -385,13 +385,14 @@ def test_a_bundle_names_and_pins_each_run_s_bridge():
     text = LAUNCHER.read_text()
     assert "NAME_B=slam_bridge_${SESSION_ID:-${SLURM_JOB_ID:-$$}}_riib" in text
     assert "CPU0=${BRIDGE_CPU:-$(taskset -cp $$" in text
-    assert 'trap \'kill -TERM "$RUNNER" 2>/dev/null\' TERM INT' in text
+    # the runner's TERM: armed before its start and waited for to its end (deploy/lib/term_relay.sh)
+    assert text.index("term_relay_arm") < text.index('timeout "${RUN_TIMEOUT:-6600}"') < text.index('term_relay_add "$RUNNER"')
 
 
 def test_a_snapshot_whose_runner_has_no_check_is_refused(tmp_path):
     # Codex: an older runner takes --check-args for a Kit argument and would start Isaac on the login node
     snap = tmp_path / "snap"
-    for rel in ("config", "sim/models", "src"):
+    for rel in ("config", "sim/models", "src", "deploy/lib"):
         (snap / rel).parent.mkdir(parents=True, exist_ok=True)
         (snap / rel).symlink_to(ROOT / rel)
     (snap / "sim/isaac").mkdir(parents=True)
