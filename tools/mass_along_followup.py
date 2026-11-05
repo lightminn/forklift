@@ -33,8 +33,8 @@ MIN_MEAN_CURVATURE = 0.05  # 1/m
 MIN_PREDICTED_ROTATION = 0.002  # rad
 CURVATURE_BINS = (0.05, 0.15, 0.30, 0.60, 1.0)  # lower edges; the last bin is open
 SPEED_BINS = (0.08, 0.15, 0.30)  # m/s, lower edges; the last bin is open
-STEADY_CURVATURE_CHANGE = 0.05  # 1/m
-STEADY_SPEED_CHANGE = 0.05  # m/s
+STEADY_CURVATURE_RANGE = 0.05  # 1/m: max - min of the step curvatures inside the window
+STEADY_SPEED_RANGE = 0.05  # m/s: max - min of the four quarter-window mean speeds
 COMMON_CELL_TRAVEL_M = 0.3
 
 
@@ -96,10 +96,13 @@ def transport_windows(log: dict, control: np.ndarray, window, wheelbase: float, 
         res = float(np.sum(dpsi[m] - pred[m]))
         speed = np.abs(dsw) / np.where(dtw > 0, dtw, np.nan)
         q = max(1, n // 4)
+        quarters = [float(np.nanmean(part)) for part in np.array_split(speed, 4) if len(part)]
         row = {"t0": float(window[0] + w * WINDOW_S), "length_s": length, "fwd_m": fwd, "rev_m": rev, "travel_m": travel,
                "kappa_mean": float(np.mean(k_mid[m])), "kappa_change": float(k_mid[m][-1] - k_mid[m][0]),
                "speed_mean": travel / length if length > 0 else 0.0,
                "speed_change": float(np.nanmean(speed[-q:]) - np.nanmean(speed[:q])),
+               "kappa_range": float(np.max(k_mid[m]) - np.min(k_mid[m])),
+               "speed_range": float(max(quarters) - min(quarters)) if quarters else 0.0,
                "lr_mismatch": float(np.mean(lr[m])), "predicted_rad": p, "residual_rad": res}
         if pred_m is not None:
             row["predicted_measured_rad"] = float(np.sum(pred_m[m]))
@@ -120,7 +123,8 @@ def transport_windows(log: dict, control: np.ndarray, window, wheelbase: float, 
             if pred_m is not None and abs(row["predicted_measured_rad"]) >= MIN_PREDICTED_ROTATION:
                 row["over_measured_rad"] = row["residual_measured_rad"] * math.copysign(1.0, row["predicted_measured_rad"])
         row["turn"] = "left" if p > 0 else "right"
-        row["steady"] = abs(row["kappa_change"]) < STEADY_CURVATURE_CHANGE and abs(row["speed_change"]) < STEADY_SPEED_CHANGE
+        # small range inside the window, not only a small net change (an excursion and back has a net change of 0)
+        row["steady"] = row["kappa_range"] < STEADY_CURVATURE_RANGE and row["speed_range"] < STEADY_SPEED_RANGE
         row["cell"] = cell_key(row) if row["included"] else None
         out.append(row)
     return {"windows": out, "rolled_m": float(np.sum(np.abs(ds))), "steps": int(len(ds)),
@@ -187,6 +191,7 @@ def compare_arms(a: dict, b: dict, steady_only: bool = False) -> dict:
     else:
         out["standardized_d"] = None  # missing, not zero
     cs = set(common)
+    overlap = sum(min(ca[c]["travel_m"], cb[c]["travel_m"]) for c in common)
     for arm, ws, src in (("A", wa, a), ("B", wb, b)):
         signed_d, signed_i = per_metre(ws, lambda w: w.get("signed"))
         inc_d, inc_i = per_metre(ws, lambda w: w.get("included"))
@@ -195,13 +200,17 @@ def compare_arms(a: dict, b: dict, steady_only: bool = False) -> dict:
         out[arm] = {"rolled_m": src["rolled_m"], "signed_m": signed_d, "signed_index": signed_i,
                     "included_m": inc_d, "included_index": inc_i, "common_m": com_d, "common_index": com_i,
                     "outside_m": out_d, "outside_index": out_i,
-                    "common_share_of_rolled": com_d / src["rolled_m"] if src["rolled_m"] > 0 else None}
+                    "common_share_of_rolled": com_d / src["rolled_m"] if src["rolled_m"] > 0 else None,
+                    "overlap_share_of_rolled": overlap / src["rolled_m"] if src["rolled_m"] > 0 else None}
+    out["overlap_m"] = overlap
     ia, ib = out["A"]["included_index"], out["B"]["included_index"]
     out["whole_d"] = ib - ia if ia is not None and ib is not None else None
     ra, rb = out["A"]["common_index"], out["B"]["common_index"]
     out["common_aggregate_d"] = rb - ra if ra is not None and rb is not None else None
     sd, wd = out["standardized_d"], out["whole_d"]
-    shares = [out[x]["common_share_of_rolled"] for x in ("A", "B")]
+    # the overlap sum_c min(d_A, d_B), not the common-cell share: a cell common to both arms may hold most of one
+    # arm's distance and little of the other's (independent plan review P2)
+    shares = [out[x]["overlap_share_of_rolled"] for x in ("A", "B")]
     out["observed_in_cells"] = bool(sd is not None and wd is not None and sd * wd > 0
                                     and all(s is not None and s >= 0.5 for s in shares))
     return out

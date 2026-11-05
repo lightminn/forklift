@@ -334,13 +334,18 @@ def run_inputs(run: dict, split: dict) -> dict:
     holds = (result.get("slam_summary") or {}).get("holds") or []
     events, bad = J.correction_events(records, holds)
     ev = [] if bad else [e for e in event_poses(events, records, control, offset) if tw and tw[0] <= e["t"] <= tw[1]]
-    proc = lambda w: {float(r["stamp_s"]) for r in records  # noqa: E731
+    proc = lambda w: {float(r["stamp_s"]): int(r["scan_id"]) for r in records  # noqa: E731
                       if r.get("status") == "processed" and w and w[0] <= float(r["stamp_s"]) <= w[1]}
+    # the record contract the scan points rely on (independent plan review P3): scans and records joined by stamp
+    st = np.asarray(log["scan_stamps_s"], float)
+    proc_all = [float(r["stamp_s"]) for r in records if r.get("status") == "processed"]
+    contract = {"scan_stamps_unique": bool(len(np.unique(st)) == len(st)),
+                "processed_without_scan": int(sum(1 for t in proc_all if not np.any(st == t)))}
     before_tm = [r for r in records if t_m is not None and float(r["stamp_s"]) < t_m]
     insert_t = ew[1] if ew else None
     before_ins = [r for r in records if insert_t is not None and float(r["stamp_s"]) < insert_t]
     out = {"log": log, "laser": meta["laser"], "transport_stamps": proc(tw), "approach_stamps": proc(ew), "events": ev,
-           "replay_error": bad,
+           "replay_error": bad, "contract": contract,
            "scan_id_processed": max((int(r["scan_id"]) for r in before_tm if r.get("status") == "processed"), default=None),
            "scan_id_any": max((int(r["scan_id"]) for r in before_tm), default=None),
            "scan_id_insert": max((int(r["scan_id"]) for r in before_ins if r.get("status") == "processed"), default=None),
@@ -372,6 +377,13 @@ def floor_for(precision: dict | None, kind: str, distance: float) -> float | Non
     return float(bands[f"{max(float(k) for k in bands):g}"])
 
 
+def common_values(q, al: dict, poses: dict) -> dict:
+    """The same F evaluated at poses common to both arms (Q, both arms' D1 event poses pooled, both t_c poses):
+    differences between the arms here are alignment differences, not differences in where each arm's events were
+    (independent plan review P2)."""
+    return {"pooled_events": mean_interval(q, al, poses["events"]), "pooled_t_c": mean_interval(q, al, poses["t_c"])}
+
+
 def arm_values(q, al: dict, inp: dict) -> dict:
     ev = inp["events"]
     proc = [e for e in ev if e["kind"] == "processed"]
@@ -393,16 +405,25 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
     ga, gb = map_for(*a_inp["maps"], a_inp[key]), map_for(*b_inp["maps"], b_inp[key])
     if ga is None or gb is None:
         return {"missing": "no map at or before the scan id"}
-    pts = []
-    for inp in (a_inp, b_inp):
-        pts.append(scan_points(inp["log"], inp["laser"], inp[stamps_key]))
-    allp = np.concatenate(pts) if pts else np.zeros((0, 2))
-    allp = allp[np.hypot(allp[:, 0] - q[0], allp[:, 1] - q[1]) <= REGION_M]
-    th = thin(allp)
-    ok = support(th, q, [ga[0], gb[0]]) if len(th) else np.zeros(0, bool)
-    local = se2_inv_apply(q, th[ok]) if np.any(ok) else np.zeros((0, 2))
+    def region_points(inp, grid_meta):
+        # only scans the chosen map could hold: scan ids at most its after_scan_id (independent plan review P2)
+        stamps = {t for t, sid in inp[stamps_key].items() if sid <= int(grid_meta["after_scan_id"])}
+        p = scan_points(inp["log"], inp["laser"], stamps)
+        return p[np.hypot(p[:, 0] - q[0], p[:, 1] - q[1]) <= REGION_M], len(stamps)
+
+    pa, na = region_points(a_inp, ga[1])
+    pb, nb = region_points(b_inp, gb[1])
+    grids = [ga[0], gb[0]]
+
+    def supported(points):
+        th = thin(points)
+        ok = support(th, q, grids) if len(th) else np.zeros(0, bool)
+        return th, (se2_inv_apply(q, th[ok]) if np.any(ok) else np.zeros((0, 2)))
+
+    th, local = supported(np.concatenate([pa, pb]))
     out = {"maps": {"A": {k: ga[1][k] for k in ("index", "after_scan_id", "stamp_ns")},
                     "B": {k: gb[1][k] for k in ("index", "after_scan_id", "stamp_ns")}},
+           "scans_used": {"A": na, "B": nb},
            "points_region": int(len(th)), "points_support": int(len(local)),
            "support_share": float(len(local) / len(th)) if len(th) else None}
     why = support_problem(local)
@@ -414,7 +435,17 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
         res[arm] = al
         out[arm] = {k: v for k, v in al.items() if k != "S"}
     if res["A"]["touches_box"] or res["B"]["touches_box"]:
-        out["not_measurable"] = "candidate cells touch the search box"
+        out["not_measurable"] = "the near-optimal set reaches the search box"
+    # sensitivity: each arm's map aligned on that arm's own points only (still the common known support): a surface
+    # only one arm kept can pull the pooled alignment (independent plan review P2)
+    own = {}
+    for arm, pts, g in (("A", pa, ga[0]), ("B", pb, gb[0])):
+        _, loc = supported(pts)
+        why_own = support_problem(loc)
+        own[arm] = ({"not_measurable": why_own} if why_own else
+                    {k: v for k, v in align(g, q, loc, delta).items() if k in ("g_opt", "S_range", "touches_box", "S_size")})
+        own[arm]["points_support"] = int(len(loc))
+    out["own_points"] = own
     out["_aligned"] = res
     return out
 
@@ -432,7 +463,8 @@ def pair_alignment(a: dict, b: dict, split: dict, precision: dict | None = None)
     q = ai["reference_rear"]
     out = {"reference_gap_m": math.hypot(ai["reference_rear"][0] - bi["reference_rear"][0],
                                          ai["reference_rear"][1] - bi["reference_rear"][1]),
-           "replay_error": {"A": ai["replay_error"], "B": bi["replay_error"]}}
+           "replay_error": {"A": ai["replay_error"], "B": bi["replay_error"]},
+           "contract": {"A": ai["contract"], "B": bi["contract"]}}
     for name, key, stamps in (("last_processed", "scan_id_processed", "transport_stamps"),
                               ("last_any", "scan_id_any", "transport_stamps"),
                               ("before_insert", "scan_id_insert", "approach_stamps")):
@@ -440,9 +472,13 @@ def pair_alignment(a: dict, b: dict, split: dict, precision: dict | None = None)
         aligned = ch.pop("_aligned", None)
         if aligned is not None and name != "before_insert":
             va, vb = arm_values(q, aligned["A"], ai), arm_values(q, aligned["B"], bi)
+            poses = {"events": [e["truth"] for e in ai["events"]] + [e["truth"] for e in bi["events"]],
+                     "t_c": [x["truth_c"] for x in (ai, bi) if "truth_c" in x]}
+            va.update(common_values(q, aligned["A"], poses))
+            vb.update(common_values(q, aligned["B"], poses))
             ch["values"] = {"A": va, "B": vb}
             d = {}
-            for k in ("all", "last3", "processed", "at_q_a", "at_t_c"):
+            for k in ("pooled_events", "pooled_t_c", "at_q_a", "all", "last3", "processed", "at_t_c"):
                 kind = "at_q" if k == "at_q_a" else "event"
                 dist = max((v[k] or {}).get("distance_from_q_m", 0.0) for v in (va, vb) if v.get(k))\
                     if va.get(k) and vb.get(k) else 0.0
@@ -502,7 +538,8 @@ def sample_points(segs: list[tuple], rng: np.random.Generator, spacing: float = 
 
 
 def rasterize(segs: list[tuple], f, phase: tuple[float, float], res: float = 0.05, size: float = 12.0,
-              unknown: list[tuple] | None = None) -> MapGrid:
+              unknown: list[tuple] | None = None, noise_m: float = 0.0, dropout: float = 0.0,
+              rng: np.random.Generator | None = None) -> MapGrid:
     """Occupancy of the segments moved by F (truth -> map), on a grid whose cell lattice is offset by ``phase``;
     ``unknown`` boxes (x0, y0, x1, y1, in the map frame) are marked -1; everything else known free."""
     n = int(size / res)
@@ -512,6 +549,10 @@ def rasterize(segs: list[tuple], f, phase: tuple[float, float], res: float = 0.0
         m = max(2, int(math.hypot(x1 - x0, y1 - y0) / (res / 4)))
         u = np.linspace(0, 1, m)
         p = se2_apply(f, np.column_stack([x0 + u * (x1 - x0), y0 + u * (y1 - y0)]))
+        if noise_m > 0:  # range noise piled up over many scans: a thicker, ragged occupied band
+            p = p + rng.normal(0.0, noise_m, p.shape)
+        if dropout > 0:  # cells a scan sequence never marked
+            p = p[rng.random(len(p)) >= dropout]
         c = np.floor((p[:, 0] - origin[0]) / res).astype(int)
         r = np.floor((p[:, 1] - origin[1]) / res).astype(int)
         ok = (r >= 0) & (r < n) & (c >= 0) & (c < n)
@@ -527,6 +568,8 @@ TRUE_TRANSFORMS = [(0.0, 0.0, 0.0), (0.01, 0.0, 0.0), (-0.02, 0.0, 0.0), (0.03, 
                    (0.0, -0.03, 0.0), (0.0, 0.0, math.radians(0.5)), (0.0, 0.0, -math.radians(0.5)),
                    (0.013, -0.027, math.radians(0.33)), (-0.0255, 0.0175, -math.radians(0.21))]  # last two off-lattice
 PHASES = [(0.0, 0.0), (0.017, 0.031), (0.041, 0.009)]
+NOISE_M = 0.015  # per-sample raster noise in the noisy variant
+DROPOUT = 0.1
 
 
 def contains(s: np.ndarray, g) -> bool:
@@ -571,6 +614,11 @@ def precision(seed: int = 0) -> dict:
             pairs = [(als[i], als[j]) for i in range(len(als)) for j in range(len(als)) if i < j]
             if als_m:
                 pairs.append(tuple(als_m))
+            # noisy, thick, ragged rasters (the SLAM gets noisy, clipped ranges and accumulates them; the reference
+            # points are the clean ranges -- independent plan review P2): clean vs noisy and noisy vs noisy
+            noisy = [align(rasterize(segs, f, PHASES[k], noise_m=NOISE_M, dropout=DROPOUT, rng=rng), q, local, 0.0)
+                     for k in (1, 2)]
+            pairs += [(als[0], noisy[0]), (noisy[0], noisy[1])]
             for aa, bb in pairs:
                 for dist in FLOOR_DISTANCES_M:
                     for rot in FLOOR_ROTATIONS:

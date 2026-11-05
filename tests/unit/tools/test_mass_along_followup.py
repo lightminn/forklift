@@ -160,3 +160,31 @@ def test_scene_summary_counts():
     s = F.scene_summary(rows, "s2")
     assert s["with_common_cells"] == 2 and s["standardized_positive"] == 1 and s["sign_agree"] == 1
     assert s["whole_positive"] == 3 and s["observed_in_cells"] == 1
+
+
+def test_an_excursion_and_back_inside_a_window_is_not_steady():
+    # independent plan review: kappa 0.2 -> 0.8 -> 0.2 inside each window has a net change of 0
+    def kappa(t):
+        ph = np.mod(t, F.WINDOW_S) / F.WINDOW_S
+        return 0.2 + 0.6 * np.sin(np.pi * ph)
+
+    log, control = drive(kappa, 0.25)
+    ws = windows(log, control)["windows"]
+    assert all(abs(w["kappa_change"]) < 0.5 * w["kappa_range"] for w in ws)  # the net change hides most of it
+    assert not any(w["steady"] for w in ws)
+
+
+def test_the_observation_rule_uses_the_overlap_not_the_common_cell_share():
+    # every cell common, but each arm's distance mostly where the other has little: overlap is small
+    def arm_two_cells(t_left, t_right):
+        log1, c1 = drive(0.45, 0.2, t_end=t_left)
+        a1 = F.transport_windows(log1, c1, (0.0, t_left), L, W)
+        log2, c2 = drive(-0.45, 0.2, t_end=t_right)
+        a2 = F.transport_windows(log2, c2, (0.0, t_right), L, W)
+        return {"windows": a1["windows"] + a2["windows"], "rolled_m": a1["rolled_m"] + a2["rolled_m"]}
+
+    a, b = arm_two_cells(20.0, 2.0), arm_two_cells(2.0, 20.0)
+    cmp = F.compare_arms(a, b)
+    assert len(cmp["common_cells"]) == 2
+    assert cmp["A"]["common_share_of_rolled"] > 0.9
+    assert cmp["A"]["overlap_share_of_rolled"] < 0.2 and not cmp["observed_in_cells"]

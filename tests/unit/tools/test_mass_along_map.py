@@ -178,3 +178,15 @@ def test_s_covers_every_sampled_transform_within_min_plus_delta():
     near = samples[c <= al["cost_min"] + delta]
     assert len(near) > 50
     assert all(S.contains(al["S"], g) for g in near)
+
+
+def test_pooled_poses_separate_the_alignment_from_where_each_arm_had_its_events():
+    # independent plan review: the same world shift read on each arm's own event headings differs (+5 cm vs 0), the
+    # pooled poses give the same value for both
+    q = (0.0, 0.0, 0.0)
+    al = {"g_opt": [0.05, 0.0, 0.0], "S": np.array([[0.05, 0.0, 0.0]])}
+    a_events, b_events = [(1.0, 0.0, 0.0)], [(1.0, 0.0, math.pi / 2)]
+    own_a, own_b = S.mean_interval(q, al, a_events), S.mean_interval(q, al, b_events)
+    assert own_a["opt"] == pytest.approx(0.05) and own_b["opt"] == pytest.approx(0.0, abs=1e-12)
+    pooled = S.common_values(q, al, {"events": a_events + b_events, "t_c": []})
+    assert pooled["pooled_events"]["opt"] == pytest.approx(0.025) and pooled["pooled_t_c"] is None
