@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from scipy import ndimage, optimize, spatial
+from scipy import ndimage, optimize
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mass_along_judge as J  # noqa: E402
@@ -36,6 +36,7 @@ SUPPORT_MARGIN_M = 0.10
 MIN_SUPPORT_POINTS = 100
 MIN_SUPPORT_SPREAD_M = 0.10
 OCCUPIED = 100
+PAD_M = 1.5  # > hypot(0.30, 0.30) + 2 deg x the 8 m region + a margin: the farthest a support point moves
 FLOOR_DISTANCES_M = (0.0, 5.0, 10.0, 15.0)
 FLOOR_BEARINGS = (0.0, math.radians(45.0), math.radians(90.0))  # where the event is, seen from Q
 FLOOR_HEADINGS = (0.0, math.radians(45.0), math.radians(90.0), math.radians(135.0))  # its heading, independently
@@ -87,11 +88,13 @@ class MapGrid:
         self.origin = tuple(float(v) for v in (list(origin) + [0.0] * 3)[:3])
         self.res = float(resolution)
         occ = self.data >= OCCUPIED
-        self.dist = (ndimage.distance_transform_edt(~occ) * self.res if occ.any()
-                     else np.full(self.data.shape, np.inf))
-        rows, cols = np.nonzero(occ)
-        centres = np.column_stack([cols + 0.5, rows + 0.5]) * self.res  # occupied cell centres, grid frame
-        self._tree = spatial.cKDTree(se2_apply(self.origin, centres)) if len(centres) else None
+        # one distance field over the map padded by more than any search move (no occupancy outside the map): the
+        # interpolated transform is then the same function everywhere a point can go, so its sqrt(2) Lipschitz bound
+        # holds across the map edge (Codex review P2: an interpolated inside and an exact outside disagree there)
+        self.pad = int(math.ceil(PAD_M / self.res))
+        occ_p = np.pad(occ, self.pad, constant_values=False)
+        self.dist = (ndimage.distance_transform_edt(~occ_p) * self.res if occ.any()
+                     else np.full(occ_p.shape, np.inf))
         known = np.pad(self.data >= 0, 1, constant_values=False)
         self.dist_unknown = ndimage.distance_transform_edt(known)[1:-1, 1:-1] * self.res
 
@@ -100,15 +103,13 @@ class MapGrid:
         return loc[:, 1] / self.res - 0.5, loc[:, 0] / self.res - 0.5  # row, col
 
     def distance(self, pts: np.ndarray) -> np.ndarray:
-        """Distance to the nearest occupied cell centre: the interpolated transform inside the outermost cell centres,
-        the exact nearest-centre distance outside them (the transform clamped at the edge would read an off-map point
-        as near a wall -- Codex review P2)."""
+        """Distance to the nearest occupied cell centre, interpolated on the padded field. A point beyond the padding
+        is refused rather than read off a clamped edge."""
         r, c = self.cells(pts)
-        out = ndimage.map_coordinates(self.dist, [r, c], order=1, mode="nearest")
-        off = (r < 0) | (c < 0) | (r > self.data.shape[0] - 1) | (c > self.data.shape[1] - 1)
-        if np.any(off):
-            out[off] = self._tree.query(pts[off])[0] if self._tree is not None else np.inf
-        return out
+        r, c = r + self.pad, c + self.pad
+        if np.any((r < 0) | (c < 0) | (r > self.dist.shape[0] - 1) | (c > self.dist.shape[1] - 1)):
+            raise ValueError("a point left the padded distance field; increase PAD_M")
+        return ndimage.map_coordinates(self.dist, [r, c], order=1, mode="nearest")
 
     def clearance_to_unknown(self, pts: np.ndarray) -> np.ndarray:
         """Distance from the point's nearest cell centre to the nearest unknown or off-map cell centre, less the

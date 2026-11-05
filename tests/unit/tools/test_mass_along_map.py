@@ -230,4 +230,30 @@ def test_off_map_points_read_their_real_distance():
     assert d[0] == pytest.approx(6.0 - 4.95, abs=1e-9)
     assert d[1] == pytest.approx(0.0, abs=1e-9)
     assert d[2] == pytest.approx(0.95, abs=1e-6)
-    assert not S.occupied_both(np.array([[6.0, 0.0]]), [g])[0]
+    assert not S.occupied_both(np.array([[6.0, 0.05]]), [g])[0]
+
+
+def test_the_distance_field_is_lipschitz_across_the_map_edge_and_the_box_bound_holds_there():
+    # Codex review: the bound must hold when points cross the edge between cell centres
+    rng = np.random.default_rng(7)
+    data = np.zeros((60, 60), np.int8)
+    data[10:50, 57] = 100  # a wall two cells inside the right edge (x = 2.875 m; the edge is at 3.0 m)
+    g = S.MapGrid(data, (0.0, 0.0, 0.0), 0.05)
+    p = np.column_stack([rng.uniform(2.6, 3.4, 4000), rng.uniform(0.6, 2.4, 4000)])
+    step = rng.normal(0, 1e-3, p.shape)
+    dd = np.abs(g.distance(p + step) - g.distance(p))
+    assert np.all(dd <= math.sqrt(2) * np.hypot(step[:, 0], step[:, 1]) + 1e-12)
+    # the box lower bound on points that cross the edge
+    q = (2.9, 1.5, 0.0)
+    local = S.se2_inv_apply(q, np.column_stack([np.full(80, 2.9), np.linspace(0.8, 2.2, 80)]))
+    centres = S.lattice(S.FINE, lo=(-0.2, -0.02, -0.002), hi=(0.2, 0.02, 0.002)) * np.array(S.FINE)
+    cv, sv = S.costs(g, q, local, centres, S.half(S.FINE))
+    for _ in range(5):
+        jit = rng.uniform(-0.5, 0.5, centres.shape) * np.array(S.FINE)
+        assert np.all(S.costs(g, q, local, centres + jit) >= cv - sv - 1e-12)
+
+
+def test_points_beyond_the_padding_are_refused():
+    g = S.MapGrid(np.zeros((10, 10), np.int8), (0.0, 0.0, 0.0), 0.05)
+    with pytest.raises(ValueError):
+        g.distance(np.array([[S.PAD_M + 1.0, 0.0]]))
