@@ -216,6 +216,33 @@ def compare_arms(a: dict, b: dict, steady_only: bool = False) -> dict:
     return out
 
 
+def turn_breakdown(windows: list[dict], measured: bool = False) -> dict:
+    """The index per direction and turn (included windows), and per steering measure (actual or measured)."""
+    key = "over_measured_rad" if measured else "over_rad"
+    out = {}
+    for d in ("fwd", "rev"):
+        for t in ("left", "right"):
+            sel = [w for w in windows if w.get("included") and w["direction"] == d and w["turn"] == t and key in w]
+            dist = sum(w["travel_m"] for w in sel)
+            out[f"{d}|{t}"] = {"travel_m": dist, "index": sum(w[key] for w in sel) / dist if dist > 0 else None}
+    return out
+
+
+def pair_turns(a: dict, b: dict, measured: bool = False) -> dict:
+    """B - A of the index per direction and turn, where both arms rolled at least COMMON_CELL_TRAVEL_M in it."""
+    ta, tb = turn_breakdown(a["windows"], measured), turn_breakdown(b["windows"], measured)
+    return {k: (tb[k]["index"] - ta[k]["index"]
+                if min(ta[k]["travel_m"], tb[k]["travel_m"]) >= COMMON_CELL_TRAVEL_M else None) for k in ta}
+
+
+def turn_summary(rows: list[dict], key: str = "turns") -> dict:
+    out = {}
+    for k in ("fwd|left", "fwd|right", "rev|left", "rev|right"):
+        v = [r[key][k] for r in rows if r.get(key) and r[key].get(k) is not None]
+        out[k] = {"pairs": len(v), "median": float(np.median(v)) if v else None, "negative": sum(x < 0 for x in v)}
+    return out
+
+
 def scene_summary(rows: list[dict], key: str) -> dict:
     vals = [r[key]["standardized_d"] for r in rows if r.get(key) and r[key]["standardized_d"] is not None]
     whole = [r[key]["whole_d"] for r in rows if r.get(key) and r[key]["whole_d"] is not None]
@@ -254,8 +281,15 @@ def load_run(folder: Path, t_m: float | None) -> dict:
             "transport": windows["transport"], "s2": s2, "_folder": folder, "_t_m": t_m}
 
 
-def followup(out_dir: Path, verdict: dict, with_map: bool = True, precision: dict | None = None) -> dict:
-    rows, runs = [], {}
+def _pair_s1(job):
+    import mass_along_map as MAP  # noqa: PLC0415 -- S1, kept apart so S2 runs without the map stack
+
+    a, b, sp, precision = job
+    return MAP.pair_alignment(a, b, sp, precision)
+
+
+def followup(out_dir: Path, verdict: dict, with_map: bool = True, precision: dict | None = None, jobs: int = 1) -> dict:
+    rows, runs, s1_jobs = [], {}, []
     for p in verdict["pairs"]:
         sp = p.get("split") or {}
         got = {}
@@ -270,17 +304,30 @@ def followup(out_dir: Path, verdict: dict, with_map: bool = True, precision: dic
         a, b = got["A"], got["B"]
         row = {"scene": p["scene"], "seed": p["seed"], "primary": bool(p.get("primary")),
                "reached": {"A": a["reached"], "B": b["reached"]},
-               "s2": compare_arms(a["s2"], b["s2"]), "s2_steady": compare_arms(a["s2"], b["s2"], steady_only=True)}
+               "s2": compare_arms(a["s2"], b["s2"]), "s2_steady": compare_arms(a["s2"], b["s2"], steady_only=True),
+               "turns": pair_turns(a["s2"], b["s2"]), "turns_measured": pair_turns(a["s2"], b["s2"], measured=True)}
         if with_map:
-            import mass_along_map as MAP  # noqa: PLC0415 -- S1, kept apart so S2 runs without the map stack
-
-            row["s1"] = MAP.pair_alignment(a, b, sp, precision)
+            s1_jobs.append((len(rows), (a, b, sp, precision)))
         rows.append(row)
+    if s1_jobs:
+        if jobs > 1:
+            from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
+
+            with ProcessPoolExecutor(max_workers=jobs) as pool:
+                results = list(pool.map(_pair_s1, [j for _, j in s1_jobs]))
+        else:
+            results = [_pair_s1(j) for _, j in s1_jobs]
+        for (i, _), r in zip(s1_jobs, results):
+            rows[i]["s1"] = r
     summary = {}
     for scene in J.SCENES:
         both = [r for r in rows if r["scene"] == scene and r["reached"]["A"] and r["reached"]["B"]]
         partial = [r for r in rows if r["scene"] == scene and not (r["reached"]["A"] and r["reached"]["B"])]
+        arm_turns = {arm: turn_breakdown([w for r in runs.values() if r["run"].startswith(f"mae_{arm}_{scene}_s")
+                                          and r["reached"] for w in r["s2"]["windows"]]) for arm in J.ARMS}
         summary[scene] = {"s2": scene_summary(both, "s2"), "s2_steady": scene_summary(both, "s2_steady"),
+                          "turns": turn_summary(both), "turns_measured": turn_summary(both, "turns_measured"),
+                          "arm_turns_reached_runs": arm_turns,
                           "partial_pairs": [{"seed": r["seed"], "reached": r["reached"], "standardized_d": r["s2"]["standardized_d"],
                                              "whole_d": r["s2"]["whole_d"]} for r in partial]}
     return {"pairs": rows, "summary": summary,
@@ -298,11 +345,13 @@ def main(argv=None) -> int:
     ap.add_argument("--csv-windows", type=Path)
     ap.add_argument("--no-map", action="store_true", help="S2 only")
     ap.add_argument("--precision", type=Path, help="tools/mass_along_map.py precision output (delta, method floor)")
+    ap.add_argument("--jobs", type=int, default=1, help="pairs aligned in parallel (S1)")
     args = ap.parse_args(argv)
     if not args.no_map and args.precision is None:
         ap.error("S1 needs --precision (run tools/mass_along_map.py precision first)")
     prec = json.loads(args.precision.read_text()) if args.precision else None
-    res = followup(args.out, json.loads(args.verdict.read_text()), with_map=not args.no_map, precision=prec)
+    res = followup(args.out, json.loads(args.verdict.read_text()), with_map=not args.no_map, precision=prec,
+                   jobs=args.jobs)
     windows = res.pop("_windows")
     args.json.write_text(json.dumps(res, indent=1, default=str) + "\n")
     if args.csv_windows:

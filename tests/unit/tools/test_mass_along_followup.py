@@ -188,3 +188,14 @@ def test_the_observation_rule_uses_the_overlap_not_the_common_cell_share():
     assert len(cmp["common_cells"]) == 2
     assert cmp["A"]["common_share_of_rolled"] > 0.9
     assert cmp["A"]["overlap_share_of_rolled"] < 0.2 and not cmp["observed_in_cells"]
+
+
+def test_turn_breakdown_separates_the_turns():
+    left, right = arm(1.0, kappa=0.45), arm(0.9, kappa=-0.45)
+    both = {"windows": left["windows"] + right["windows"], "rolled_m": left["rolled_m"] + right["rolled_m"]}
+    tb = F.turn_breakdown(both["windows"])
+    assert tb["fwd|left"]["index"] == pytest.approx(0.0, abs=1e-9)
+    assert tb["fwd|right"]["index"] == pytest.approx(-0.1 * 0.45, rel=0.02)  # 10 % under-rotation in right turns
+    assert tb["rev|left"]["index"] is None
+    d = F.pair_turns({"windows": left["windows"] + arm(1.0, kappa=-0.45)["windows"]}, both)
+    assert d["fwd|right"] == pytest.approx(-0.1 * 0.45, rel=0.02) and d["fwd|left"] == pytest.approx(0.0, abs=1e-9)
