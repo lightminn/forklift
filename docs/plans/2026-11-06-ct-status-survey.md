@@ -137,3 +137,14 @@
 - 옵션: 스냅숏 러너 파서에 여섯 옵션이 있고 `--live` 와의 거부 규칙이 없다.
 - DRY_RUN(ws1 잡 16087): 여섯 팔·장면 조합 모두 `ARGS_OK`. D·O6 의 러너 인자에 `--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-scans 3 --return-start-backoff boxed --near-end-stand on --return-cusp-replans 2` 가 그대로 있고, O0 에는 없으며, `--deterministic` 은 D 에만 있다. 등록 지도 묶음이 `--slam-map-bundle` 로 들어간다. 런처는 `MAX_EPOCHS` 를 감독의 `--max-epochs` 로 넘긴다.
 - 세 번째 단계(첫 회전 세션 기록의 적용값)는 첫 회전에서 확인한다.
+
+### Codex 3 회차 (같은 스레드, 3 판 d3de5886 대상 — P1 0·P2 8, 모두 집계 도구가 계획·실제 기록과 어긋난 곳)
+
+- P2 임무 폴더가 있어도 ack 없으면 시작 확인이 안 됨 → 폴더가 미확인·미제출 항목을 시작 확인으로 채우고(근거 `mission_folder`), 탐침이 없으면 폴더로 행을 만든다.
+- P2 확정 결과를 세션 종료 사유로 덮음(`probe_result` 미사용) → 임무 결과 → 탐침의 콘솔 결과 → (마지막 시작 임무만) 실행 기록 사유 순서로 정하고 출처를 적는다.
+- P2 앞 임무의 `complete` 가 다음 임무 노출에 섞임 → 전이의 `to` 만 센다.
+- P2 계획 이력·spool 손실을 다른 경로·키로 읽음 → `run/result.json` 의 `obstacle_layer.grid_plans`(임무 구간의 `stamp_s`), manifest 의 `dropped_items`·`unsettled_items`.
+- P2 결정성 쌍이 느슨함 → 단계 순서·하위 상태·하역 오차(임무 `result.json` 최상위)를 비교 키에 넣고, 시작 임무의 필수값(결과·종료 시각·도킹 라운드, 완료면 하역 오차)이 빠지면 '판정 불가'.
+- P2 누적 재시도를 현재 재접근으로 해석 → 끝 시각 이전의 셈한 재시도만 보고, 그 뒤 도킹 라운드가 있으면 맞춤 뒤, 계획 거절이면 `reapproach_refused`.
+- P2 마지막 임무의 확정 거부가 대기열 차단에서 빠짐 → 시작 임무가 모두 완료되고 뒤 임무가 미제출·확정 거부·무응답이면 대기열 차단(유형 `queue`, 첫 차단에 포함).
+- P2 기동·탐침 전 실패가 사라짐 → 탐침 `error`, 탐침 없음, 실행 목록에 있으나 폴더 없음을 기반 실패(`infra`)로 남긴다(`--runs RUNS.jsonl`).

@@ -73,7 +73,8 @@ def _json(path) -> dict | None:
 def start_states(probe: dict | None, scheduled: int) -> list[dict]:
     """The scheduled missions' start states from the probe's submissions, one per queue item (a resubmitted item keeps
     its last answer): confirmed (ack), unknown (no answer, or a busy/stale reject the queue holds unsure), rejected (a
-    settled reject), not_submitted (the queue stopped before sending it)."""
+    settled reject), not_submitted (the queue stopped before sending it). A mission folder found later can still
+    confirm an unknown or unlisted one (session_rows)."""
     items: dict = {}
     order: list = []
     for entry in (probe or {}).get("missions_run") or []:
@@ -96,39 +97,53 @@ def start_states(probe: dict | None, scheduled: int) -> list[dict]:
     return out
 
 
+def _mission_key(name: str):
+    m = re.search(r"(\d+)$", name)
+    return (int(m.group(1)) if m else 0, name)
+
+
 def epoch_runs(session: Path) -> list[dict]:
-    """Each epoch's run: its mission folders (result, phase at the end, safety records) and its run record."""
+    """Each epoch's run: its mission folders in order (result, delivery error, phase at the end, docking state, safety
+    records), its run record (transitions, the session's grid plans) and its spool manifest."""
     out = []
-    for run in sorted(glob.glob(str(session / "live" / "epoch_*" / "run")), key=lambda p: int(re.search(r"epoch_(\d+)", p).group(1))):
-        missions = {}
-        for md in sorted(glob.glob(f"{run}/missions/*")):
-            res = (_json(f"{md}/result.json") or {}).get("result")
+    for run in sorted(glob.glob(str(session / "live" / "epoch_*" / "run")),
+                      key=lambda p: int(re.search(r"epoch_(\d+)", p).group(1))):
+        missions = []
+        for md in sorted(glob.glob(f"{run}/missions/*"), key=lambda p: _mission_key(Path(p).name)):
+            rj = _json(f"{md}/result.json")
             rec = _json(f"{md}/records.json")
             st = (rec or {}).get("state") or {}
-            plans = ((rec or {}).get("obstacle") or {}).get("grid_plans") or []
-            retries = st.get("docking_retries") or []
-            missions[Path(md).name] = {"result": res, "records": rec is not None, "phase": st.get("phase"),
-                                       "plans": len(plans), "plans_slam_used": sum(bool(g.get("slam_used")) for g in plans),
-                                       # the static layer the plans used: on the survey map a localized run uses it
-                                       # in both modes; off_deterministic only without a survey map (plan D4)
-                                       "plans_static_off": sum((g.get("slam_map_note") or {}).get("slam_static_layer")
-                                                               == "off_deterministic" for g in plans),
-                                       "docking_retries": len(retries),
-                                       "forbidden_contacts": len(st.get("forbidden_pocket_contacts") or []),
-                                       "lift_tilt_peak": st.get("lift_tilt_peak"),
-                                       "docking_rounds": len(((st.get("delivery_docking") or {}).get("rounds")) or []),
-                                       "delivery_error": st.get("delivery_error_m"),
-                                       "folder": md}
+            dock = st.get("delivery_docking") or {}
+            missions.append({"mission_id": Path(md).name, "result": (rj or {}).get("result"), "result_file": rj is not None,
+                             "records": rec is not None, "phase": st.get("phase"),
+                             "delivery_error": (rj or {}).get("delivery_error_m"),
+                             "docking_status": dock.get("status") if rec is not None else None,
+                             "docking_round_times": [float(r["time_s"]) for r in dock.get("rounds") or []
+                                                     if r.get("time_s") is not None],
+                             "docking_retries": [{"time_s": e.get("time_s"), "counted": e.get("counted"),
+                                                  "refused": bool((e.get("plan") or {}).get("refused")
+                                                                  or (e.get("plan") or {}).get("length_m") is None)}
+                                                 for e in st.get("docking_retries") or []],
+                             "forbidden_contacts": len(st.get("forbidden_pocket_contacts") or []) if rec is not None else None,
+                             "lift_tilt_peak": st.get("lift_tilt_peak"), "folder": md})
+        top = _json(f"{run}/result.json")
         manifest = _json(f"{run}/spool/manifest.json")
         spool = None if manifest is None else {
             "complete": manifest.get("complete"), "error_count": manifest.get("error_count"),
-            "dropped": {k: v.get("dropped") for k, v in manifest.items() if isinstance(v, dict) and v.get("dropped")}}
-        out.append({"run": run, "missions": missions, "result": _json(f"{run}/result.json"), "spool": spool})
+            "dropped_items": {k: v["dropped_items"] for k, v in manifest.items()
+                              if isinstance(v, dict) and v.get("dropped_items")},
+            "unsettled_items": {k: v["unsettled_items"] for k, v in manifest.items()
+                                if isinstance(v, dict) and v.get("unsettled_items")}}
+        out.append({"run": run, "missions": missions, "result": top, "spool": spool,
+                    "transitions": (top or {}).get("transitions") or [],
+                    "grid_plans": ((top or {}).get("obstacle_layer") or {}).get("grid_plans") or []})
     return out
 
 
 def mission_phases(transitions: list, started: float | None, ended: float | None) -> list[str] | None:
-    """The phases the session's transitions show inside a mission's interval, in order (None without the interval)."""
+    """The phases a mission entered: the transitions' targets inside its interval, in order (a transition's 'from' at
+    the boundary is the previous mission's last phase -- the adoption writes previous -> observe -- and is not counted).
+    None without the interval or with no transition inside it."""
     if started is None or not transitions:
         return None
     seq = []
@@ -136,20 +151,29 @@ def mission_phases(transitions: list, started: float | None, ended: float | None
         ts = t.get("time_s")
         if ts is None or ts < started - 1e-6 or (ended is not None and ts > ended + 1e-6):
             continue
-        for ph in (t.get("from"), t.get("to")):
-            if ph and (not seq or seq[-1] != ph):
-                seq.append(ph)
+        ph = t.get("to")
+        if ph and (not seq or seq[-1] != ph):
+            seq.append(ph)
     return seq or None
 
 
-def substage(stage: str | None, m: dict) -> str | None:
-    """Within the loaded legs, where the delivery docking stood: before its match, after a match, or in a D7
-    re-approach (the same stage can need different fixes)."""
+def substage(stage: str | None, m: dict, ended: float | None) -> str | None:
+    """Within the loaded legs, where the delivery docking stood when the mission ended: before its first match, after a
+    match, in a D7 re-approach (a counted retry with no docking round after it), or after a refused re-approach plan.
+    The retries recorded before the end only (a retry is logged before its plan is judged, and stays after it ends)."""
     if stage not in ("transport", "lower", "withdraw"):
         return None
-    if m.get("docking_retries"):
-        return "reapproach"
-    return "after_delivery_match" if m.get("docking_rounds") else "before_delivery_match"
+    end = float("inf") if ended is None else float(ended)
+    retries = [e for e in m.get("docking_retries") or [] if e.get("counted") and e.get("time_s") is not None
+               and e["time_s"] <= end + 1e-9]
+    rounds = [t for t in m.get("docking_round_times") or [] if t <= end + 1e-9]
+    if retries:
+        last = retries[-1]
+        if last["refused"]:
+            return "reapproach_refused"
+        if not any(t > last["time_s"] + 1e-9 for t in rounds):
+            return "reapproach"
+    return "after_delivery_match" if rounds else "before_delivery_match"
 
 
 def exposure_from(phases: list[str] | None, end_phase: str | None, done: bool) -> tuple[list[str], str]:
@@ -164,91 +188,157 @@ def exposure_from(phases: list[str] | None, end_phase: str | None, done: bool) -
     return [], "none"
 
 
+def _blank(session: str, order: int, s: dict) -> dict:
+    return {"session": session, "order": order, "start": s["start"], "start_evidence": "probe" if s.get("item") else None,
+            "pallet_id": s.get("pallet_id"), "destination_id": s.get("destination_id"), "mission_id": s.get("mission_id"),
+            "reject_reason": s.get("reject_reason"), "outcome": None, "reason": None, "stage": None, "substage": None,
+            "class": None, "exposure": [], "exposure_from": "none", "evidence": None, "epoch": None,
+            "forbidden_contacts": None, "lift_tilt_peak": None, "docking_rounds": None, "docking_status": None,
+            "delivery_error": None, "started_s": None, "ended_s": None, "outcome_from": None,
+            "plans": None, "plans_slam_used": None, "plans_static_off": None}
+
+
 def session_rows(session: Path, scheduled: int = 3) -> dict:
-    """One session attempt: its missions (start state, outcome, stage, class, evidence), the queue's stop and the run
-    records' session end."""
+    """One session attempt: its missions (start state, outcome, stage, class, evidence), the queue's stop, the probe's
+    own error and the run records' session end."""
     probe = _json(session / "probe.json")
     starts = start_states(probe, scheduled)
     runs = epoch_runs(session)
-    by_id: dict = {}
-    for k, r in enumerate(runs):
-        for mid, m in r["missions"].items():
-            by_id[(k, mid)] = (r, m)
-    rows = []
-    used = set()
-    for idx, s in enumerate(starts):
-        row = {"session": session.name, "order": idx + 1, "start": s["start"], "pallet_id": s.get("pallet_id"),
-               "destination_id": s.get("destination_id"), "mission_id": s.get("mission_id"),
-               "reject_reason": s.get("reject_reason"), "outcome": None, "reason": None, "stage": None,
-               "class": None, "exposure": [], "exposure_from": "none", "evidence": None, "epoch": None,
-               "forbidden_contacts": None, "lift_tilt_peak": None, "docking_rounds": None, "delivery_error": None,
-               "ended_s": None, "substage": None, "plans": None, "plans_slam_used": None, "plans_static_off": None}
-        if s["start"] != "confirmed" and s["start"] != "unknown":
-            rows.append(row)
-            continue
-        found = None
-        for k, r in enumerate(runs):  # the mission's folder in the epoch that ran it (ids restart per epoch: newest first)
-            if s.get("mission_id") and (k, s["mission_id"]) in by_id and (k, s["mission_id"]) not in used:
-                found = (k, *by_id[(k, s["mission_id"])])
-        if found is not None:
-            k, r, m = found
-            used.add((k, s["mission_id"]))
+    folders = [(k, m) for k, r in enumerate(runs) for m in r["missions"]]  # chronological: epochs, then mission order
+    used: set = set()
+
+    def take(mid=None, pallet=None, dest=None):
+        """The next unused folder: by mission id when acked, else the next one in order whose pallet and destination
+        do not contradict the item."""
+        for i, (k, m) in enumerate(folders):
+            if i in used:
+                continue
             res = m["result"] or {}
-            transitions = (r["result"] or {}).get("transitions") or []
-            phases = mission_phases(transitions, res.get("started_s"), res.get("ended_s"))
-            done = res.get("outcome") == "done"
-            row.update(outcome=res.get("outcome"), reason=res.get("reason"), epoch=k + 1, evidence=m["folder"],
-                       forbidden_contacts=m["forbidden_contacts"], lift_tilt_peak=m["lift_tilt_peak"],
-                       docking_rounds=m["docking_rounds"], delivery_error=m["delivery_error"], ended_s=res.get("ended_s"))
-            row["stage"] = None if done else stage_of(res.get("reason"), m["phase"])
-            row["substage"] = substage(row["stage"], m)
-            row.update(plans=m["plans"], plans_slam_used=m["plans_slam_used"], plans_static_off=m["plans_static_off"])
-            row["exposure"], row["exposure_from"] = exposure_from(phases, row["stage"] or m["phase"], done)
-            if res.get("outcome") is None:
-                row["outcome"] = "no_record"
+            if mid is not None:
+                if m["mission_id"] == mid:
+                    used.add(i)
+                    return k, m
+                continue
+            if (pallet and res.get("pallet_id") and res["pallet_id"] != pallet) or \
+                    (dest and res.get("destination_id") and res["destination_id"] != dest):
+                return None
+            used.add(i)
+            return k, m
+        return None
+
+    rows = []
+    for idx, s in enumerate(starts):
+        row = _blank(session.name, idx + 1, s)
+        found = None
+        if s["start"] == "confirmed" and s.get("mission_id"):
+            found = take(mid=s["mission_id"])
+        elif s["start"] in ("unknown", "not_submitted"):
+            found = take(pallet=s.get("pallet_id"), dest=s.get("destination_id"))  # a folder confirms it started
+            if found is not None:
+                row["start"], row["start_evidence"] = "confirmed", "mission_folder"
+                row["mission_id"] = found[1]["mission_id"]
+        rows.append((row, s, found))
+    # folders no probe entry claimed (no probe, or more folders than items): appended as confirmed rows
+    for i, (k, m) in enumerate(folders):
+        if i not in used:
+            row = _blank(session.name, len(rows) + 1, {"start": "confirmed", "mission_id": m["mission_id"]})
+            row["start_evidence"] = "mission_folder"
+            rows.append((row, {}, (k, m)))
+            used.add(i)
+    last_started = max((j for j, (r, _, _) in enumerate(rows) if r["start"] in ("confirmed", "unknown")), default=None)
+    for j, (row, s, found) in enumerate(rows):
+        if row["start"] not in ("confirmed", "unknown"):
+            continue
+        probe_res = s.get("probe_result") or {}
+        k, m = found if found is not None else (None, None)
+        r = runs[k] if k is not None else (runs[-1] if runs else None)
+        res = (m or {}).get("result") or {}
+        if res.get("outcome"):
+            row.update(outcome=res["outcome"], reason=res.get("reason"), outcome_from="mission_result")
+        elif probe_res.get("outcome"):  # settled by the console's result even when the file is missing
+            row.update(outcome=probe_res["outcome"], reason=probe_res.get("reason"), outcome_from="probe_result")
+        elif j == last_started and r is not None and (r["result"] or {}).get("success") is False:
+            # the mission running when the session ended: the run record's reason, only for that mission
+            row.update(outcome="session_failed", reason=r["result"].get("failure_reason"), outcome_from="run_result")
         else:
-            # no folder: the mission the session ended in, read from that epoch's run record -- only for the mission
-            # running then (the last started one with no result of its own), never over a settled result
-            last_run = runs[-1] if runs else None
-            top = (last_run or {}).get("result") or {}
-            later_started = any(t["start"] in ("confirmed", "unknown") for t in starts[idx + 1:])
-            if s["start"] == "confirmed" and not later_started and top.get("success") is False:
-                transitions = top.get("transitions") or []
-                end_phase = transitions[-1].get("to") if transitions else None
-                row.update(outcome="session_failed", reason=top.get("failure_reason"), epoch=len(runs),
-                           evidence=last_run["run"] if last_run else None)
-                row["stage"] = stage_of(top.get("failure_reason"), end_phase)
-                row["exposure"], row["exposure_from"] = exposure_from(None, row["stage"], False)
-            else:
-                row["outcome"] = "no_record" if s["start"] == "confirmed" else "not_started_or_unknown"
-        if row["outcome"] not in (None, "done"):
+            row.update(outcome="no_record", outcome_from=None)
+        started, ended = res.get("started_s"), res.get("ended_s")
+        row.update(started_s=started, ended_s=ended, epoch=(k + 1) if k is not None else (len(runs) or None),
+                   evidence=(m or {}).get("folder") or (r or {}).get("run"))
+        if m is not None:
+            row.update(forbidden_contacts=m["forbidden_contacts"], lift_tilt_peak=m["lift_tilt_peak"],
+                       docking_rounds=len(m["docking_round_times"]) if m["records"] else None,
+                       docking_status=m["docking_status"], delivery_error=m["delivery_error"])
+        transitions = (r or {}).get("transitions") or []
+        phases = mission_phases(transitions, started, ended)
+        done = row["outcome"] == "done"
+        end_phase = (m or {}).get("phase") or (phases[-1] if phases else None)
+        if row["outcome_from"] == "run_result" and end_phase is None and transitions:
+            end_phase = transitions[-1].get("to")
+        if not done and row["outcome"] != "no_record":
+            row["stage"] = stage_of(row["reason"], end_phase)
+            row["substage"] = substage(row["stage"], m or {}, ended)
             row["class"] = classify(row["reason"])
-        rows.append(row)
+        elif row["outcome"] == "no_record":
+            row["class"] = "unknown"
+        row["exposure"], row["exposure_from"] = exposure_from(phases, row["stage"] or end_phase, done)
+        if started is not None and r is not None:
+            plans = [g for g in r["grid_plans"] if g.get("stamp_s") is not None
+                     and started - 1e-6 <= g["stamp_s"] <= (ended if ended is not None else float("inf")) + 1e-6]
+            row.update(plans=len(plans), plans_slam_used=sum(bool(g.get("slam_used")) for g in plans),
+                       plans_static_off=sum((g.get("slam_map_note") or {}).get("slam_static_layer") == "off_deterministic"
+                                            for g in plans))
+    rows = [r for r, _, _ in rows]
     queue = (probe or {}).get("queue") or {}
     started_ok = [r for r in rows if r["start"] == "confirmed"]
-    blocked = bool(starts and any(r["start"] == "not_submitted" for r in rows)
-                   and started_ok and all(r["outcome"] == "done" for r in started_ok))
-    return {"session": session.name, "rows": rows, "probe_found": probe is not None,
+    # the queue's own block: every started mission done, and a later one not started (not submitted, a settled reject,
+    # or an answer that never came)
+    block_row = next((r for r in rows if r["start"] in ("not_submitted", "rejected", "unknown")
+                      and r["outcome"] in (None, "no_record")), None)
+    blocked = bool(started_ok and all(r["outcome"] == "done" for r in started_ok) and block_row is not None)
+    if blocked:
+        block_row["class"] = "queue"
+        block_row["reason"] = block_row.get("reject_reason") or queue.get("stop_reason")
+    infra = None
+    if probe is None and not runs:
+        infra = "no_records"
+    elif (probe or {}).get("error"):
+        infra = f"probe_error: {probe['error']}"
+    elif probe is None:
+        infra = "no_probe_report"
+    if infra is not None and rows and not any(r["class"] for r in rows):
+        first_open = next((r for r in rows if r["outcome"] != "done"), None)
+        if first_open is not None:
+            first_open["class"], first_open["reason"] = "infra", infra
+    return {"session": session.name, "rows": rows, "probe_found": probe is not None, "infra": infra,
             "queue": {"stop_reason": queue.get("stop_reason"), "stops": queue.get("stops"),
                       "items_left": queue.get("items_left"), "counts": queue.get("counts")},
-            "queue_blocked": blocked,
-            "spool": [r["spool"] for r in runs], "epochs": len(runs), "run_success": [((r["result"] or {}).get("success")) for r in runs],
+            "queue_blocked": blocked, "spool": [r["spool"] for r in runs], "epochs": len(runs),
+            "run_success": [((r["result"] or {}).get("success")) for r in runs],
             "run_failure": [((r["result"] or {}).get("failure_reason")) for r in runs]}
+
+
+PAIR_KEYS = ("start", "outcome", "reason", "stage", "substage", "exposure", "ended_s", "docking_rounds", "delivery_error")
 
 
 def compare_pair(a: dict, b: dict) -> dict:
     """Mission-level agreement of two same-seed sessions (not the D8 determinism verdict): per scheduled mission, the
-    outcome, reason, stage, end time and docking rounds; a value missing on either side makes that mission
-    undecidable, not equal."""
-    keys = ("start", "outcome", "reason", "stage", "ended_s", "docking_rounds")
+    start, outcome, reason, stage and substage, the stages entered, the end time, the docking rounds and the delivery
+    error. A value required for a started mission (outcome, end time, docking rounds; the delivery error of a done
+    one) missing on either side makes that mission undecidable, never equal."""
     out = []
     for ra, rb in zip(a["rows"], b["rows"]):
-        missing = [k for k in keys if (ra.get(k) is None) != (rb.get(k) is None)]
-        both_none = [k for k in ("outcome", "ended_s") if ra.get(k) is None and rb.get(k) is None]
-        if missing or (both_none and ra.get("start") in ("confirmed", "unknown")):
-            out.append({"order": ra["order"], "verdict": "undecidable", "missing": missing + both_none})
+        required = []
+        if ra.get("start") == "confirmed" or rb.get("start") == "confirmed":
+            required = ["outcome", "ended_s", "docking_rounds"]
+            if ra.get("outcome") == "done" or rb.get("outcome") == "done":
+                required.append("delivery_error")
+        missing = [k for k in required if ra.get(k) is None or rb.get(k) is None]
+        missing += [k for k in PAIR_KEYS if k not in required and (ra.get(k) is None) != (rb.get(k) is None)]
+        if missing:
+            out.append({"order": ra["order"], "verdict": "undecidable", "missing": missing})
             continue
-        diff = next((k for k in keys if ra.get(k) != rb.get(k)), None)
+        diff = next((k for k in PAIR_KEYS if ra.get(k) != rb.get(k)), None)
         out.append({"order": ra["order"], "verdict": "same" if diff is None else "different", "first_difference": diff,
                     "a": ra.get(diff) if diff else None, "b": rb.get(diff) if diff else None})
     return {"a": a["session"], "b": b["session"], "missions": out}
@@ -258,7 +348,7 @@ def arm_of(session: Path) -> str:
     f = session / "survey_arm.txt"
     if f.exists():
         return f.read_text().strip()
-    return session.name.split("_")[0]
+    return session.name.split(".attempt")[0].split("_")[0]
 
 
 def summarize(sessions: list[dict], arms: dict) -> dict:
@@ -270,11 +360,13 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
         o = out.setdefault(key, {"sessions": 0, "all_done": 0, "start": Counter(), "outcome": Counter(),
                                  "class": Counter(), "stage_fail": Counter(), "stage_exposure": Counter(),
                                  "queue_blocked": 0, "queue_stop": Counter(), "transport_tracking": [],
-                                 "forbidden_contacts": 0, "first_block": Counter(), "unexposed_after_block": 0})
+                                 "forbidden_contacts": 0, "first_block": Counter(), "unexposed_after_block": 0,
+                                 "infra": 0})
         o["sessions"] += 1
         rows = s["rows"]
         o["all_done"] += all(r["outcome"] == "done" for r in rows)
         o["queue_blocked"] += s["queue_blocked"]
+        o["infra"] += s.get("infra") is not None
         if s["queue"].get("stop_reason"):
             o["queue_stop"][s["queue"]["stop_reason"]] += 1
         first_block = None
@@ -316,9 +408,17 @@ def scene_of(session: Path) -> str | None:
     return m.group(1) if m else None
 
 
-def survey(out_dir: Path, scheduled: int = 3, pairs: list[tuple[str, str]] | None = None) -> dict:
+def survey(out_dir: Path, scheduled: int = 3, pairs: list[tuple[str, str]] | None = None,
+           runs_list: Path | None = None) -> dict:
     sessions, arms = [], {}
-    for d in sorted(p for p in out_dir.iterdir() if p.is_dir() and ((p / "probe.json").exists() or (p / "live").exists())):
+    names = set()
+    if runs_list is not None:  # every planned attempt is listed, even one that left no folder at all
+        names = {json.loads(line)["name"] for line in Path(runs_list).read_text().splitlines() if line.strip()}
+    found = [p for p in out_dir.iterdir() if p.is_dir() and ((p / "probe.json").exists() or (p / "live").exists()
+                                                             or p.name.split(".attempt")[0] in names)]
+    for name in sorted(names - {p.name for p in found}):
+        found.append(out_dir / name)  # missing: session_rows reports no_records
+    for d in sorted(found, key=lambda p: p.name):
         s = session_rows(d, scheduled)
         s["scene"] = scene_of(d)
         arms[d.name] = arm_of(d)
@@ -337,8 +437,9 @@ def main(argv=None) -> int:
     ap.add_argument("--csv", type=Path)
     ap.add_argument("--scheduled", type=int, default=3)
     ap.add_argument("--pairs", nargs="*", default=[], help="A:B session folder names compared mission by mission")
+    ap.add_argument("--runs", type=Path, help="the bundle's run list: attempts that left no folder are reported")
     args = ap.parse_args(argv)
-    res = survey(args.out, args.scheduled, [tuple(p.split(":", 1)) for p in args.pairs])
+    res = survey(args.out, args.scheduled, [tuple(p.split(":", 1)) for p in args.pairs], args.runs)
     args.json.write_text(json.dumps(res, indent=1, default=str, allow_nan=False) + "\n")
     if args.csv:
         rows = [{"arm": s["arm"], "scene": s["scene"], **r, "exposure": "|".join(r["exposure"])}
