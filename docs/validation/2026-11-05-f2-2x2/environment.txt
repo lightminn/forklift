@@ -1,0 +1,3 @@
+NVIDIA GeForce RTX 5070 Ti, 580.178.04
+isaacsim 5.1.0.0
+/usr/bin/python3.11
