@@ -38,7 +38,7 @@ REPORT_THRESHOLD_M = -0.010  # plan J1
 SAME_PATH_HAUSDORFF_M = 0.10  # plan 3.4
 CUSP_MIN_SEGMENT_M = 0.05  # a direction change counts once the truck has gone this far each way
 K_MIN_TRAVEL_M = 0.3  # plan 3.3
-GATE_DISTANCE_M, GATE_TURN_RAD = 0.447, 0.5  # forklift_core.localization.slam_link.KeyframeGate
+GATE_DISTANCE_M, GATE_TURN_RAD, GATE_INTERVAL_S = 0.447, 0.5, 0.5  # forklift_core.localization.slam_link.KeyframeGate
 # plan 4.1 -> docs/plans/2026-10-31-riib-default-batch2.md section 4: the only infrastructure invalidity
 INFRA_BUNDLE_STATUSES = {"infra_failed", "stalled"}
 INFRA_FAILURE_PREFIXES = ("slam_link_failed", "slam_prewarm_timeout", "plan_worker_dead", "Camera did not produce RGB",
@@ -48,6 +48,9 @@ INFRA_FAILURE_PREFIXES = ("slam_link_failed", "slam_prewarm_timeout", "plan_work
 IDENTITY_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256", "pallet_urdf_sha256",
                    "scene_sha256", "seed", "arguments", "plant", "plant_tyre_contact", "encoder_model", "chassis_model")
 SNAP_ARM = re.compile(r"(mae_[0-9a-f]+)_[AB]\b")
+# the same across the whole batch (plan 2.2 one snapshot, amendment 2): everything but the seed and the scene
+BATCH_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256", "plant",
+                "plant_tyre_contact", "encoder_model", "chassis_model")
 RUN_ARM = re.compile(r"\bmae_[AB]_")
 
 
@@ -139,15 +142,25 @@ def correction_events(records: list[dict], holds: list[dict]) -> tuple[list[tupl
 
 
 def gate_condition(records: list[dict], t_event: float) -> str | None:
-    """Which KeyframeGate condition the processed scan at ``t_event`` met: the odometry travel and turn since the
-    previous processed scan (``odom_base``), checked as the gate checks them (distance, turn, both)."""
-    proc = [r for r in records if r.get("status") == "processed" and r.get("odom_base") is not None]
-    idx = next((i for i, r in enumerate(proc) if abs(float(r["stamp_s"]) - t_event) < 1e-9), None)
-    if idx is None or idx == 0:
+    """Which KeyframeGate condition the processed scan at ``t_event`` met, as the gate reckons it: travel and absolute
+    turn summed scan to scan (every record's ``odom_base``) since the previous processed scan, and the interval since
+    it (``KeyframeGate.classify`` / ``processed``). 'distance', 'turn', 'both', or 'neither' (a reply the gate did not
+    ask for, a start-up scan); 'short' when the interval was under GATE_INTERVAL_S."""
+    recs = [r for r in records if r.get("odom_base") is not None]
+    idx = next((i for i, r in enumerate(recs) if r.get("status") == "processed"
+                and abs(float(r["stamp_s"]) - t_event) < 1e-9), None)
+    if idx is None:
         return None
-    a, b = proc[idx - 1]["odom_base"], proc[idx]["odom_base"]
-    travel = math.hypot(b[0] - a[0], b[1] - a[1])
-    turn = abs(wrap(b[2] - a[2]))
+    start = next((i for i in range(idx - 1, -1, -1) if recs[i].get("status") == "processed"), None)
+    if start is None:
+        return None
+    travel = turn = 0.0
+    for a, b in zip(recs[start:idx], recs[start + 1:idx + 1]):
+        pa, pb = a["odom_base"], b["odom_base"]
+        travel += math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+        turn += abs(wrap(pb[2] - pa[2]))
+    if float(recs[idx]["stamp_s"]) - float(recs[start]["stamp_s"]) < GATE_INTERVAL_S - 1e-9:
+        return "short"
     dist, rot = travel >= GATE_DISTANCE_M, turn >= GATE_TURN_RAD
     return "both" if dist and rot else "distance" if dist else "turn" if rot else "neither"
 
@@ -273,11 +286,31 @@ def odometry_yaw_error(control: np.ndarray, events: list[tuple], window) -> floa
     return wrap(float(control[i1, 3] - control[i0, 3]) - corr - float(control[i1, 6] - control[i0, 6]))
 
 
+def post_event_error(event: tuple, events: list[tuple], records: list[dict], control: np.ndarray) -> float | None:
+    """The along-track error right after one correction event, from that event alone: a processed scan's own record
+    (its ``odom_base`` under the event's applied transform, against its ``truth_base``, both base_link poses); a release
+    from the first control row after it, only when no later event comes before that row."""
+    t, kind, _, applied = event[0], event[1], event[2], event[3]
+    if kind == "processed":
+        rec = next((r for r in records if r.get("status") == "processed" and abs(float(r["stamp_s"]) - t) < 1e-9
+                    and r.get("odom_base") is not None and r.get("truth_base") is not None), None)
+        if rec is None:
+            return None
+        return along(rec["truth_base"], compose(tuple(applied), tuple(float(v) for v in rec["odom_base"])))
+    i = control_row_at_or_after(control, t)
+    if i is None:
+        return None
+    nxt = next((e[0] for e in events if e[0] > t), math.inf)
+    if control[i, 0] >= nxt:
+        return None
+    return along(control[i, 4:7], control[i, 1:4])
+
+
 def mechanisms(result: dict, control: np.ndarray, records: list[dict], log: dict | None, tyres: np.ndarray | None,
-               sp: dict) -> dict:
+               sp: dict, truck_mass_kg: float | None = None) -> dict:
     out: dict = {}
     t_m = sp.get("t_m")
-    events = sp.get("_events") or []
+    events = sp.get("_events")  # None when the replay failed: every value that needs the events is then missing
     windows = {"extract": phase_window(result, "extract", "transport"),
                "transport": phase_window(result, "transport", None, t_end=t_m) if t_m is not None else None,
                "tc_tm": (sp["t_c"], t_m) if "t_c" in sp else None,
@@ -328,18 +361,19 @@ def mechanisms(result: dict, control: np.ndarray, records: list[dict], log: dict
                     out[f"{wname}.tyre_fz_{name}_n"] = float(m[i])
                 out[f"{wname}.rear_load_share"] = float((m[2] + m[3]) / m.sum()) if m.sum() > 0 else None
         if w is not None:
-            out[f"{wname}.odom_yaw_err_rad"] = odometry_yaw_error(control, events, w)
             inw = (rec_t >= w[0]) & (rec_t <= w[1])
             out[f"{wname}.processed_scans"] = int((inw & rec_proc).sum())
+            if events is None:
+                for k in ("odom_yaw_err_rad", "correction_events", "release_jump_max_m", "post_event_err_mean_m",
+                          "post_event_err_last3_m"):
+                    out[f"{wname}.{k}"] = None
+                continue
+            out[f"{wname}.odom_yaw_err_rad"] = odometry_yaw_error(control, events, w)
             ev = [e for e in events if w[0] <= e[0] <= w[1] and e[2] is not None]
             out[f"{wname}.correction_events"] = len(ev)
             jumps = [e[4] for e in ev if e[4] is not None]
             out[f"{wname}.release_jump_max_m"] = max(jumps) if jumps else None
-            post = []
-            for e in ev:
-                i = control_row_at_or_after(control, e[0])
-                if i is not None:
-                    post.append(along(control[i, 4:7], control[i, 1:4]))
+            post = [x for x in (post_event_error(e, events, records, control) for e in ev) if x is not None]
             out[f"{wname}.post_event_err_mean_m"] = float(np.mean(post)) if post else None
             out[f"{wname}.post_event_err_last3_m"] = float(np.mean(post[-3:])) if post else None
     for k in ("t_m_minus_t_c", "d_c", "dyaw_c"):
@@ -351,6 +385,8 @@ def mechanisms(result: dict, control: np.ndarray, records: list[dict], log: dict
         fz = np.stack([-tyres[:, 1 + 10 * i + 2] / dt for i in range(4)], axis=1)
         sel = (tyres[:, 0] <= 0.5) & np.all(np.isfinite(fz), axis=1)
         out["static_fz_sum_n"] = float(fz[sel].sum(axis=1).mean()) if sel.any() else None
+        if out["static_fz_sum_n"] is not None and truck_mass_kg:
+            out["static_weight_ratio"] = out["static_fz_sum_n"] / (truck_mass_kg * 9.81)
     out["initial_pallet_m"] = result.get("initial_pallet_m")
     out["initial_pallet_yaw_rad"] = samples[0].get("pallet_yaw_rad") if samples else None
     return out
@@ -429,17 +465,22 @@ def phase_at(result: dict, t: float) -> str | None:
 
 
 def adoption(result: dict) -> dict:
-    """The adopted far observation's pocket centres and the near capture's estimate (plan 3.4 diagnostic)."""
-    out = {}
-    attempts = result.get("observation_attempts") or []
-    obs = (attempts[-1] or {}).get("pocket_observation") if attempts else None
-    if isinstance(obs, dict) and obs.get("left") and obs.get("right"):
-        out["far_left"] = obs["left"].get("center_m")
-        out["far_right"] = obs["right"].get("center_m")
+    """The near capture's far and near pallet estimates (x, y, yaw) for the plan 3.4 diagnostic."""
     nc = result.get("near_capture")
-    if isinstance(nc, dict):
-        out["near_estimate_m"] = nc.get("near_estimate_m")
-    return out
+    if not isinstance(nc, dict):
+        return {}
+    return {k: nc.get(k) for k in ("far_estimate_m", "near_estimate_m") if nc.get(k) is not None}
+
+
+def pose_diff(a, b) -> dict | None:
+    """Position (m) and yaw (rad) differences of two x, y, yaw poses."""
+    try:
+        x, y = [float(v) for v in a][:3], [float(v) for v in b][:3]
+    except (TypeError, ValueError):
+        return None
+    if len(x) < 3 or len(y) < 3:
+        return None
+    return {"position_m": math.hypot(x[0] - y[0], x[1] - y[1]), "yaw_rad": abs(wrap(x[2] - y[2]))}
 
 
 def max_abs_diff(a, b) -> float | None:
@@ -565,7 +606,33 @@ def identity_differences(ra: dict, rb: dict) -> list[str]:
 # ---------------------------------------------------------------- the verdict
 
 
-def judge(out_dir: Path, compare: dict | None = None) -> dict:
+def batch_reference(loaded_runs: list[dict]) -> dict:
+    """The batch's common value of each BATCH_FIELDS entry and of the synthetic settings without the pallet mass: the
+    most common one (a run that differs is outside the allowed difference)."""
+    ref = {}
+    for k in BATCH_FIELDS:
+        vals = [_normal(r["result"].get(k)) for r in loaded_runs if "result" in r]
+        ref[k] = max(set(vals), key=vals.count) if vals else None
+    sets = []
+    for r in loaded_runs:
+        if "result" in r:
+            st = dict(r["result"].get("settings_synthetic") or {})
+            st.pop("pallet_mass_kg", None)
+            sets.append(_normal(st))
+    ref["settings_synthetic"] = max(set(sets), key=sets.count) if sets else None
+    return ref
+
+
+def batch_differences(result: dict, ref: dict) -> list[str]:
+    bad = [k for k in BATCH_FIELDS if _normal(result.get(k)) != ref.get(k)]
+    st = dict(result.get("settings_synthetic") or {})
+    st.pop("pallet_mass_kg", None)
+    if _normal(st) != ref.get("settings_synthetic"):
+        bad.append("settings_synthetic")
+    return bad
+
+
+def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | None = None) -> dict:
     runs: dict = defaultdict(dict)  # (scene, seed) -> arm -> folder
     for folder in sorted(out_dir.iterdir()):
         m = NAME.match(folder.name)
@@ -577,12 +644,14 @@ def judge(out_dir: Path, compare: dict | None = None) -> dict:
     unconfirmed = {f"{s}/{a}" for s in SCENES for a in ARMS if compare.get(f"{s}/{a}") is not True}
     pairs = []
     infra = {a: 0 for a in ARMS}
+    cache = {(sc, sd, a): load_run(f) for (sc, sd), arms in runs.items() for a, f in arms.items()}
+    ref = batch_reference(list(cache.values()))
     for (scene, seed), arms in sorted(runs.items()):
         row = {"scene": scene, "seed": seed}
         if set(arms) != set(ARMS):
             pairs.append({**row, "valid": False, "why": "an arm is missing"})
             continue
-        loaded = {a: load_run(arms[a]) for a in ARMS}
+        loaded = {a: cache[(scene, seed, a)] for a in ARMS}
         inf = {a: infra_reason(loaded[a], status.get(arms[a].name)) for a in ARMS}
         for a in ARMS:
             infra[a] += inf[a] is not None
@@ -590,6 +659,8 @@ def judge(out_dir: Path, compare: dict | None = None) -> dict:
         why = why or next((f"{a}: {loaded[a]['invalid']}" for a in ARMS if "invalid" in loaded[a]), None)
         why = why or next((f"{a}: {p}" for a in ARMS if (p := identity_problem(loaded[a], a, seed))), None)
         why = why or (lambda b: f"fields differ: {b}" if b else None)(identity_differences(loaded["A"]["result"], loaded["B"]["result"]))
+        why = why or next((f"{a}: batch snapshot differs: {b}" for a in ARMS
+                           if (b := batch_differences(loaded[a]["result"], ref))), None)
         if why:
             pairs.append({**row, "valid": False, "why": why})
             continue
@@ -603,7 +674,7 @@ def judge(out_dir: Path, compare: dict | None = None) -> dict:
                    initial_pallet_diff_m=max_abs_diff(loaded["A"]["result"].get("initial_pallet_m"),
                                                       loaded["B"]["result"].get("initial_pallet_m")))
         ad = {a: adoption(loaded[a]["result"]) for a in ARMS}
-        row["adoption_diff_m"] = {k: max_abs_diff(ad["A"].get(k), ad["B"].get(k)) for k in set(ad["A"]) | set(ad["B"])}
+        row["adoption_diff"] = {k: pose_diff(ad["A"].get(k), ad["B"].get(k)) for k in set(ad["A"]) | set(ad["B"])}
         if any("e_m" not in sp[a] for a in ARMS):
             pairs.append({**row, "valid": True, "primary": False, "why": "a run did not reach round 1",
                           "split": _public(sp)})
@@ -614,7 +685,7 @@ def judge(out_dir: Path, compare: dict | None = None) -> dict:
                           "split": _public(sp)})
             continue
         mech = {a: mechanisms(loaded[a]["result"], loaded[a]["control"], loaded[a]["records"], loaded[a]["log"],
-                              loaded[a]["tyres"], sp[a]) for a in ARMS}
+                              loaded[a]["tyres"], sp[a], truck_mass_kg) for a in ARMS}
         row.update(valid=True, primary=True, split=_public(sp), mech=mech, delta_e_m=sp["B"]["e_m"] - sp["A"]["e_m"])
         if all("e_inh" in sp[a] for a in ARMS):
             row["delta"] = {k: sp["B"][k] - sp["A"][k] for k in ("e_inh", "e_new", "e_phase")}
@@ -735,9 +806,11 @@ def main(argv=None) -> int:
     ap.add_argument("--json", type=Path)
     ap.add_argument("--csv", type=Path)
     ap.add_argument("--compare", type=Path)
+    ap.add_argument("--truck-mass-kg", type=float, default=26.0,
+                    help="the static weight check's truck mass (the operating scene, F2 plan section 2)")
     args = ap.parse_args(argv)
     compare = json.loads(args.compare.read_text()) if args.compare else None
-    res = judge(args.out, compare)
+    res = judge(args.out, compare, args.truck_mass_kg)
     summary = {k: v for k, v in res.items() if k != "pairs"}
     print(json.dumps(summary, indent=1, default=str))
     if args.json:

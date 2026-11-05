@@ -343,3 +343,68 @@ def test_replans_count_the_obstacle_layer_too():
 def test_phase_before_the_first_transition_is_its_from():
     r = {"transitions": [{"from": "observe", "to": "approach", "time_s": 5.0}]}
     assert J.phase_at(r, 1.0) == "observe" and J.phase_at(r, 6.0) == "approach"
+
+
+def _odom_rec(i, t, status, odom, applied=C0, truth=None):
+    r = _rec(i, t, status, "tracking", applied, applied)
+    r["odom_base"] = list(odom)
+    if truth is not None:
+        r["truth_base"] = list(truth)
+    return r
+
+
+@pytest.mark.parametrize("path, expected", [
+    ([(0.0, 0, 0), (0.3, 0, 0), (0.0, 0, 0)], "distance"),  # forward 0.3 then back 0.3: 0.6 m summed
+    ([(0.0, 0, 0), (0.0, 0, 0.3), (0.0, 0, 0.0)], "turn"),  # +0.3 then -0.3 rad: 0.6 rad summed
+    ([(0.0, 0, 0), (0.1, 0, 0), (0.2, 0, 0)], "neither")])
+def test_the_gate_condition_sums_motion_scan_to_scan(path, expected):
+    # Codex tool review 2 P2: the net displacement between two processed scans hid back-and-forth motion
+    recs = [_odom_rec(1, 0.0, "processed", path[0]), _odom_rec(2, 0.3, "skipped", path[1]),
+            _odom_rec(3, 0.6, "processed", path[2])]
+    assert J.gate_condition(recs, 0.6) == expected
+    recs[2]["stamp_s"] = 0.4
+    assert J.gate_condition(recs, 0.4) == "short"
+
+
+def test_a_failed_replay_leaves_the_event_measures_missing():
+    # Codex tool review 2 P2: a replay inconsistency read as zero events and an uncorrected yaw error
+    result, control, records, match = run_records()
+    records[1]["applied_map_from_odom"] = list(C2)  # the replay cannot reach this
+    sp = J.split(result, control, records, match)
+    assert "replay" in sp["missing"]
+    mech = J.mechanisms(result, control, records, None, None, sp)
+    assert mech["transport.correction_events"] is None and mech["transport.odom_yaw_err_rad"] is None
+
+
+def test_the_post_event_error_belongs_to_its_own_event():
+    # Codex tool review 2 P2: two processed corrections before the next control row gave both the second's error
+    truth = (1.0, 0.0, 0.0)
+    recs = [_odom_rec(1, 0.10, "processed", (0.9, 0.0, 0.0), C0, truth),
+            _odom_rec(2, 0.105, "processed", (0.9, 0.0, 0.0), (0.2, 0.0, 0.0), truth),
+            _odom_rec(3, 0.108, "processed", (0.9, 0.0, 0.0), (0.4, 0.0, 0.0), truth)]
+    events, bad = J.correction_events(recs, [])
+    assert bad is None
+    errs = [J.post_event_error(e, events, recs, np.zeros((0, 7))) for e in events[1:]]
+    assert errs == [pytest.approx(0.1), pytest.approx(0.3)]
+
+
+def test_a_batch_whose_pairs_each_agree_but_differ_from_each_other_is_caught(tmp_path):
+    # Codex tool review 2 P2: seed 1's pair on other code is consistent inside the pair, not with the batch
+    compare = {f"{s}/{a}": True for s in J.SCENES for a in J.ARMS}
+    for seed, src in ((0, "h"), (1, "h"), (2, "other")):
+        for arm, kg in (("A", 10.0), ("B", 4.93)):
+            for scene in J.SCENES:
+                _write_run(tmp_path / f"mae_{arm}_{scene}_s{seed}", arm, kg, scene, seed=seed, source_sha256=src)
+    out = J.judge(tmp_path, compare)
+    odd = [p for p in out["pairs"] if p["seed"] == 2]
+    assert odd and all(not p["valid"] and "batch snapshot" in p["why"] for p in odd)
+    assert all(p["valid"] for p in out["pairs"] if p["seed"] != 2)
+
+
+def test_adoption_differences_keep_position_and_yaw_apart():
+    assert J.pose_diff([1.0, 2.0, 0.0], [1.0, 2.0, 0.1]) == {"position_m": 0.0, "yaw_rad": pytest.approx(0.1)}
+
+
+def test_the_static_weight_is_compared_with_the_given_truck_mass(tmp_path):
+    out = J.judge(tmp_path, _batch(tmp_path), truck_mass_kg=240.0 / 9.81)
+    assert out["pairs"][0]["mech"]["A"]["static_weight_ratio"] == pytest.approx(1.0)
