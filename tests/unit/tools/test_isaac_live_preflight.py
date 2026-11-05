@@ -2,12 +2,26 @@
 the runner's arguments and ends with the runner's own check, starting no container, supervisor or Isaac; a real launch
 makes the same check first and ends at once when it fails (lvram, d7oor 2026-10-27)."""
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "deploy/console/isaac_live.sbatch"
+
+
+@pytest.fixture
+def tmp_path():
+    """A short root under /tmp instead of pytest's basetemp: the launcher refuses an OUT whose SLAM socket path
+    (OUT/epoch_999/sock/slam.sock) passes 107 bytes, and on ws1 pytest's basetemp
+    (/tmp/pytest-of-<user>/pytest-<n>/popen-gw<k>/<test name>) reached 108 once its counter had three digits."""
+    root = Path(tempfile.mkdtemp(dir="/tmp", prefix="ilp"))
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def _launch(tmp_path, venv_py=sys.executable, out=None, **env):
