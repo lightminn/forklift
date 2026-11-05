@@ -119,6 +119,10 @@ def test_the_rear_check_walks_the_straight_reverses_own_bundle():
     src = _source()
     at = src.index("def pose_rear_blocked(rt_)")
     assert "for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):" in src[at:at + 2500]
+    # a check only: the start-band release's state is put back (plan 2026-11-06 1.1)
+    body = src[at:at + 3000]
+    assert "kept_ = copy.deepcopy((perm_.release_anchor, perm_.release_stats))" in body
+    assert "finally:\n                perm_.release_anchor, perm_.release_stats = kept_" in body
 
 
 def test_the_base_link_from_the_rear_axle():

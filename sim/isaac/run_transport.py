@@ -11,6 +11,7 @@ import importlib.util
 import itertools
 import json
 import collections
+import copy
 import math
 import random
 import os
@@ -9022,16 +9023,24 @@ def drive(S, isaac) -> None:
             snap_ = layer_.snapshot
             if snap_ is None:
                 return True
-            # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
-            for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
-                if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_, zones_)[0] < length_:
-                    return True
-                path_ = arc_poses(map_rear_, kappa_, -1, length_ + step_, step_)[0]
-                check_ = layer_.permission.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
-                                                      lookahead_m=length_ + step_)
-                if check_.verified_m < length_:
-                    return True
-            return False
+            # a check only: the start-band release's anchor and counts the walk may change are put back (plan
+            # 2026-11-06 1.1 -- the shadow writes nothing the control path reads)
+            perm_ = layer_.permission
+            kept_ = copy.deepcopy((perm_.release_anchor, perm_.release_stats))
+            try:
+                # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
+                for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
+                    if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_,
+                                                zones_)[0] < length_:
+                        return True
+                    path_ = arc_poses(map_rear_, kappa_, -1, length_ + step_, step_)[0]
+                    check_ = perm_.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
+                                              lookahead_m=length_ + step_)
+                    if check_.verified_m < length_:
+                        return True
+                return False
+            finally:
+                perm_.release_anchor, perm_.release_stats = kept_
 
         def live_failed(t_, reason_, ticked_, stepped__, applied_):
             """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
