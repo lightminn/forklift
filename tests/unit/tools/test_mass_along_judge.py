@@ -54,14 +54,15 @@ def run_records(*, err_at_c=(0.0, 0.10, 0.02), odo_scale=1.0, move_after_scan=0.
                {"scan_id": 3, "stamp_s": t_c + 0.2, "status": "skipped", "mode": "tracking", "map_from_odom": list(C1),
                 "applied_map_from_odom": list(C1)}]
     result = {"delivery_docking": {"rounds": [round1]}, "slam_summary": {"holds": []},
-              "transitions": [{"to": "transport", "time_s": 0.0}]}
-    return result, control, records
+              "transitions": [{"from": "lift", "to": "transport", "time_s": 0.0}]}
+    match = {"estimate": np.asarray(E_s), "truth_rear": np.asarray(T_m)}
+    return result, control, records, match
 
 
 def test_perfect_odometry_through_a_turn_puts_nothing_in_e_new():
     # Codex round 1: the plain difference read about 5 mm here although nothing new accumulated
-    result, control, records = run_records()
-    sp = J.split(result, control, records)
+    result, control, records, match = run_records()
+    sp = J.split(result, control, records, match)
     assert abs(sp["e_new"]) < 1e-12 and abs(sp["e_phase"]) < 1e-3
     assert sp["e_m"] == pytest.approx(sp["e_inh"] + sp["e_new"] + sp["e_phase"], abs=1e-15)
     plain = sp["e_m"] - J.along(control[np.searchsorted(control[:, 0], 0.3), 4:7],
@@ -79,8 +80,7 @@ def test_motion_after_the_matched_scan_goes_to_e_phase():
 
 
 def test_odometry_scale_error_shows_in_e_new():
-    result, control, records = run_records(err_at_c=(0.0, 0.0, 0.0), odo_scale=0.98)
-    sp = J.split(result, control, records)
+    sp = J.split(*run_records(err_at_c=(0.0, 0.0, 0.0), odo_scale=0.98))
     assert sp["e_new"] < -1e-3 and abs(sp["e_inh"]) < 1e-12
 
 
@@ -98,7 +98,7 @@ def test_after_a_release_the_next_reply_counts_only_when_it_changes_the_applied_
     holds = [{"event": "release", "time_s": 0.3, "jump_m": 0.02, "jump_rad": 0.003}]
     events, bad = J.correction_events(records, holds)
     assert bad is None
-    assert [round(t, 3) for t, _ in events] == [0.1, 0.3] + ([0.4] if event else [])
+    assert [round(e[0], 3) for e in events] == [0.1, 0.3] + ([0.4] if event else [])
 
 
 def test_a_release_then_a_new_processed_correction_keeps_both():
@@ -106,7 +106,7 @@ def test_a_release_then_a_new_processed_correction_keeps_both():
                _rec(3, 0.5, "processed", "tracking", C2, C2)]
     holds = [{"event": "release_docking_retry", "time_s": 0.3, "jump_m": 0.02, "jump_rad": 0.0}]
     events, bad = J.correction_events(records, holds)
-    assert bad is None and [k for _, k in events] == ["first", "release", "processed"]
+    assert bad is None and [e[1] for e in events] == ["first", "release", "processed"]
 
 
 def test_a_zero_jump_release_is_no_event_and_a_disagreeing_one_is_an_inconsistency():
@@ -127,7 +127,7 @@ def test_a_record_whose_applied_value_the_replay_cannot_reach_is_an_inconsistenc
 def test_records_come_before_releases_at_the_same_time():
     records = [_rec(1, 0.1, "processed", "tracking", C0, C0), _rec(2, 0.3, "processed", "holding", C1, C0)]
     events, bad = J.correction_events(records, [{"event": "release", "time_s": 0.3, "jump_m": 0.02, "jump_rad": 0.0}])
-    assert bad is None and events[-1] == (0.3, "release")
+    assert bad is None and events[-1][:2] == (0.3, "release")
 
 
 def test_the_scale_error_is_signed_per_direction():
@@ -214,30 +214,132 @@ def test_cusps_and_divergence():
     x = np.where(ts <= 1.0, ts, 2.0 - ts)
     control = np.column_stack([ts, x, 0 * ts, 0 * ts, x, 0 * ts, 0 * ts])
     assert J.cusps(control, (0.0, 2.0)) == 1
+    # Codex tool review P2: a 1 mm reversal after a long run is no cusp (both sides must run 5 cm)
+    x2 = np.where(ts <= 1.0, ts, np.maximum(1.0 - (ts - 1.0) * 0.001, 0.999))
+    c2 = np.column_stack([ts, x2, 0 * ts, 0 * ts, x2, 0 * ts, 0 * ts])
+    assert J.cusps(c2, (0.0, 2.0)) == 0
     other = control.copy()
     other[150:, 1] += 1e-9
     assert J.first_divergence(control, other) == pytest.approx(1.5)
     assert J.first_divergence(control, control) is None
+    assert J.first_divergence(control, control[:150]) == pytest.approx(1.5)  # the first extra row, not the last common
 
 
-def test_judge_reads_run_folders_and_checks_the_arm_identity(tmp_path):
-    result, control, records = run_records()
+def _write_run(folder, arm, kg, scene, seed=0, **over):
+    result, control, records, match = run_records()
+    run = folder / "run"
+    run.mkdir(parents=True)
+    ts = control[:, 0]
+    samples = [{"time_s": float(t), "steering_command_rad": [0.01, 0.012], "steering_actual_rad": [0.011, 0.0115],
+                "lift_m": 0.2, "pallet_yaw_rad": 0.0} for t in ts[::12]]
+    r = dict(result, pallet_mass={"kg": kg, "shape": "epal6"}, deterministic={"enabled": True, "broken": []},
+             seed=seed, samples=samples, initial_pallet_m=[1.0, 0.0, 0.07],
+             arguments={"settings": f"/s/mae_0108c3ff_{arm}/config/x.yaml", "output": str(run)},
+             settings_synthetic={"pallet_mass_kg": kg, "wheel_torque_nm": 3.0}, scene_layout={"sha256": "L"},
+             **{k: "h" for k in ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256",
+                                 "pallet_urdf_sha256", "encoder_model", "chassis_model")},
+             scene_sha256={"scene.usda": "s"}, plant={"m": 1}, plant_tyre_contact=[{"k": None}])
+    r.update(over)
+    (run / "result.json").write_text(json.dumps(r))
+    np.save(run / "slam_control.npy", control)
+    (run / "slam_records.json").write_text(json.dumps(records))
+    np.savez(run / "delivery_match_1.npz", estimate=match["estimate"], truth_rear=match["truth_rear"])
+    q = np.tile([1.0, 0.0, 0.0, 0.0], (len(ts), 1))
+    np.savez(run / "slam_log.npz", joint_stamps_s=ts, base_pose_world=np.column_stack([control[:, 4:6], 0 * ts, q]),
+             wheel_increments_rad=np.zeros((len(ts), 2)), steering_rad=np.zeros((len(ts), 2)),
+             steering_measured_rad=np.full((len(ts), 2), 0.001))
+    tyres = np.zeros((len(ts[::12]), 41))
+    tyres[:, 0] = ts[::12]
+    for i in range(4):
+        tyres[:, 1 + 10 * i + 2] = -60.0 / 120.0  # 60 N each, the floor's push
+    np.save(run / "tyre_contacts.npy", tyres)
+
+
+def _batch(tmp_path, **over_b):
     for arm, kg in (("A", 10.0), ("B", 4.93)):
         for scene in J.SCENES:
-            run = tmp_path / f"mae_{arm}_{scene}_s0" / "run"
-            run.mkdir(parents=True)
-            r = dict(result, pallet_mass={"kg": kg, "shape": "epal6"}, deterministic={"enabled": True, "broken": []},
-                     source_sha256="x", script_sha256="y", seed=0)
-            (run / "result.json").write_text(json.dumps(r))
-            np.save(run / "slam_control.npy", control)
-            (run / "slam_records.json").write_text(json.dumps(records))
-    compare = {f"{s}/{a}": True for s in J.SCENES for a in J.ARMS}
-    out = J.judge(tmp_path, compare)
+            _write_run(tmp_path / f"mae_{arm}_{scene}_s0", arm, kg, scene, **(over_b if arm == "B" else {}))
+    return {f"{s}/{a}": True for s in J.SCENES for a in J.ARMS}
+
+
+def test_judge_reads_real_format_records(tmp_path):
+    # Codex tool review P1: samples carry [FL, FR] steering arrays; the log, tyres and match file in their real shapes
+    out = J.judge(tmp_path, _batch(tmp_path))
     assert all(p["valid"] and p["primary"] for p in out["pairs"]) and len(out["pairs"]) == 2
-    assert out["pairs"][0]["delta_e_m"] == pytest.approx(0.0)
-    bad = tmp_path / "mae_B_line_2_s0" / "run" / "result.json"
-    r = json.loads(bad.read_text())
-    r["pallet_mass"]["kg"] = 10.0
-    bad.write_text(json.dumps(r))
+    p = out["pairs"][0]
+    assert p["delta_e_m"] == pytest.approx(0.0)
+    mech = p["mech"]["A"]
+    assert mech["transport.steer_track_err_rad"] == pytest.approx(0.00075)
+    assert mech["transport.steer_read_err_rad"] == pytest.approx(0.001)
+    assert mech["transport.tyre_fz_rl_n"] == pytest.approx(60.0) and mech["transport.rear_load_share"] == pytest.approx(0.5)
+    assert mech["static_fz_sum_n"] == pytest.approx(240.0)
+    assert "transport.tyre_fz_fl_n" in out["J3"]  # per-tyre values reach J3, which runs whatever J1 says
+
+
+@pytest.mark.parametrize("over, why", [
+    ({"pallet_mass": {"kg": 10.0, "shape": "epal6"}}, "not arm B"),
+    ({"arguments": {"settings": "/s/mae_0108c3ff_B/config/x.yaml", "output": "o", "approach_speed": 0.3}}, "arguments"),
+    ({"settings_synthetic": {"pallet_mass_kg": 4.93, "wheel_torque_nm": 2.0}}, "settings_synthetic"),
+    ({"scene_layout": {"sha256": "other"}}, "scene_layout"),
+    ({"encoder_model": None}, "encoder_model"),
+    ({"seed": 3}, "seed"),
+    ({"deterministic": {"enabled": True, "broken": ["frame_sync:no_rgba"]}}, "broken"),
+    ({"failure_reason": "slam_link_failed: no reply"}, "infrastructure")])
+def test_a_pair_outside_the_allowed_difference_or_with_an_infra_end_is_invalid(tmp_path, over, why):
+    # Codex tool review P2: identity beyond five hashes, a missing field, the infra allowlist
+    out = J.judge(tmp_path, _batch(tmp_path, **over))
+    assert all(not p["valid"] and why in p["why"] for p in out["pairs"]), [p.get("why") for p in out["pairs"]]
+
+
+def test_a_match_file_that_disagrees_with_the_round_drops_the_primary(tmp_path):
+    # Codex tool review P2: e_m is checked against delivery_match_1.npz
+    compare = _batch(tmp_path)
+    f = tmp_path / "mae_B_line_2_s0" / "run" / "delivery_match_1.npz"
+    z = dict(np.load(f))
+    z["estimate"] = z["estimate"] + np.array([0.001, 0.0, 0.0])
+    np.savez(f, **z)
     out = J.judge(tmp_path, compare)
-    assert any(not p["valid"] and "not arm B" in p["why"] for p in out["pairs"])
+    bad = [p for p in out["pairs"] if p["scene"] == "line_2"][0]
+    assert not bad["valid"] and "delivery_match_1" in bad["why"]
+
+
+def test_the_odometry_yaw_error_leaves_out_the_correction():
+    # Codex tool review P2: a 0.1 rad correction with no motion is no odometry yaw error
+    ts = np.arange(0.0, 1.0001, 0.01)
+    est_yaw = np.where(ts >= 0.5, 0.1, 0.0)
+    control = np.column_stack([ts, 0 * ts, 0 * ts, est_yaw, 0 * ts, 0 * ts, 0 * ts])
+    events = [(0.5, "processed", (0.0, 0.0, 0.0), (0.0, 0.0, 0.1), None)]
+    assert J.odometry_yaw_error(control, events, (0.0, 1.0)) == pytest.approx(0.0, abs=1e-12)
+    assert J.odometry_yaw_error(control, [], (0.0, 1.0)) == pytest.approx(0.1)
+
+
+def test_the_pre_match_row_is_strictly_before_the_match():
+    # Codex tool review: t_p <= t_m passed every test; the overwritten row at t_m must not be read
+    result, control, records, match = run_records()
+    t_m = result["delivery_docking"]["rounds"][0]["time_s"]
+    over = np.vstack([control, [[t_m, 5.0, 5.0, 0.0, *control[-1, 4:7]]]])
+    sp = J.split(result, over, records, match)
+    assert sp["t_p"] < t_m and abs(sp["e_new"]) < 1e-12
+
+
+def test_j2_refuses_a_subset_mean_out_of_the_ratio_band():
+    # the ratio bound alone: 8 blocks decomposed near -0.045 against a J1 mean of about -0.03 (ratio 1.5)
+    pairs = []
+    for s in range(10):
+        for scene in J.SCENES:
+            d = -0.045 - 0.0005 * s if s < 8 else +0.03
+            pairs.append(_pair(scene, s, d, comps=(0.0, d, 0.0) if s < 8 else None))
+    out = J.verdict(pairs, set())
+    assert out["J1"] == "confirmed (this condition)", out["J1_stats"]
+    j2 = out["J2"]
+    assert j2["blocks"] == 8 and j2["m_dec"]["upper"] < 0 and not j2["representative"]
+
+
+def test_replans_count_the_obstacle_layer_too():
+    r = {"stall_replans": [{"time_s": 1.0}], "obstacle_layer": {"replans": [{"time_s": 2.0}, {"time_s": 9.0}]}}
+    assert J.replans_before(r, 5.0) == 2
+
+
+def test_phase_before_the_first_transition_is_its_from():
+    r = {"transitions": [{"from": "observe", "to": "approach", "time_s": 5.0}]}
+    assert J.phase_at(r, 1.0) == "observe" and J.phase_at(r, 6.0) == "approach"
