@@ -445,7 +445,7 @@ def m2_counts(vx: dict, vy: dict) -> dict:
     return {"segments": len(states), "worse": sum(x > LR_MRAD for x in d), "better": sum(x < -LR_MRAD for x in d)}
 
 
-def candidate(manifest: dict, load, calib: dict, valid: dict, dt: dict, m2: dict) -> dict:
+def candidate(manifest: dict, load, calib: dict, valid: dict, dt: dict, m2: dict, steer_load_=None) -> dict:
     out = {"preconditions": [], "self_degradation": {}, "f1_under_f2": {}}
     if calib.get("chosen_k_mat") is None:
         out["preconditions"].append("stage C chose no material value")
@@ -479,6 +479,16 @@ def candidate(manifest: dict, load, calib: dict, valid: dict, dt: dict, m2: dict
     if v4rec is None or not isinstance(v4rec.get("v4_v2_preserved"), bool):
         out["preconditions"].append(f"October V2/V4 not reported for {pick} (plan 4.4; a missing or unverified "
                                     "value is not a report)")
+    else:
+        # the report must be of the candidate arm's own first M2 runs at 120 and 240 Hz (Codex review 7)
+        arm = {"F2": "O+F2", "F1+F2": "F1+F2"}[pick]
+        for dt in ("120", "240"):
+            run_ = (manifest.get("steer", {}).get(dt) or {}).get(arm)
+            own = None if run_ is None else steer_load_(run_)
+            # the report went through JSON: compare the arm identity in the same form (tuples become lists)
+            own_arm = None if own is None else json.loads(json.dumps(own.get("arm")))
+            if own is None or v4rec.get(f"digest_{dt}") != own["digest"] or v4rec.get(f"arm_{dt}") != own_arm:
+                out["preconditions"].append(f"the V4 report's {dt} Hz input is not {arm}'s first M2 run")
     out["escalate_v4"] = bool(v4rec is not None and v4rec.get("v4_v2_preserved") is False)
     out["escalate_self_degradation"] = out["self_degradation"]["worse_any"]
     out["candidate"] = None if out["preconditions"] else pick
@@ -513,7 +523,7 @@ def run(manifest: dict, load=lambda p: json.loads(Path(p).read_text()), steer_lo
                 desc.setdefault(name, {})[dt] = {k: _summary(x) for k, x in e.items()}
     dt = dt_condition(m1, m2)
     calib = load(manifest["calibration"]) if manifest.get("calibration") else {}
-    cand = candidate(manifest, load, calib, valid, dt, m2)
+    cand = candidate(manifest, load, calib, valid, dt, m2, steer_load_=steer_load)
     return {"validity": valid, "effects": desc, "effects_per_state": per_state, "dt_condition": dt, "candidate": cand}
 
 

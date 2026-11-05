@@ -45,8 +45,13 @@ def main() -> None:
     p.add_argument("--run240", type=Path, required=True)
     p.add_argument("--json", type=Path, required=True)
     args = p.parse_args()
+    import f2_2x2
+
     v120, v240 = plant_gates.v16_probe(args.run120), plant_gates.v16_probe(args.run240)
+    # the two inputs' identity, for the 2x2 tool to bind the report to the candidate's own first M2 runs
+    s120, s240 = f2_2x2.read_steer(args.run120), f2_2x2.read_steer(args.run240)
     out = {"run120": str(args.run120), "run240": str(args.run240), "dt_120": v120["dt_s"], "dt_240": v240["dt_s"],
+           "digest_120": s120["digest"], "digest_240": s240["digest"], "arm_120": s120["arm"], "arm_240": s240["arm"],
            **compare(v120, v240), "v2_120": v120["v2"], "v2_240": v240["v2"]}
     if abs(1 / v120["dt_s"] - 120) > 1e-6 or abs(1 / v240["dt_s"] - 240) > 1e-6:
         out["v4_v2_preserved"] = None

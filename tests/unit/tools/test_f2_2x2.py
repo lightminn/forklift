@@ -3,6 +3,7 @@ validity, population, the required reversed runs), the dt condition on three con
 its preconditions and escalations."""
 
 import copy
+import json
 import sys
 from pathlib import Path
 
@@ -86,7 +87,13 @@ def _manifest(files, static=None, lr=None, cusp=None, delivery=None, v4=True):
     static, lr = static or ST, lr or LR
     man = {"static": {}, "steer": {}, "cusp": {"120": {}, "240": {}}, "delivery": {"120": {}},
            "calibration": "calib", "registry": "reg", "plant_gates": {"F2": "v4", "F1+F2": "v4"}}
-    files["calib"], files["reg"], files["v4"] = {"chosen_k_mat": K_MAT}, REGISTRY, {"v4_v2_preserved": v4}
+    files["calib"], files["reg"] = {"chosen_k_mat": K_MAT}, REGISTRY
+    # one V4 report per candidate, of that arm's first M2 runs (digest and arm identity)
+    for cand, arm in (("F2", "O+F2"), ("F1+F2", "F1+F2")):
+        files[f"v4{cand}"] = json.loads(json.dumps({"v4_v2_preserved": v4, "digest_120": f"120{arm}",
+                                                    "digest_240": f"240{arm}", "arm_120": _ident(arm),
+                                                    "arm_240": _ident(arm)}))  # as read back from the report file
+    man["plant_gates"] = {"F2": "v4F2", "F1+F2": "v4F1+F2"}
     for dt in ("120", "240"):
         man["static"][dt], man["steer"][dt] = {}, {}
         for a in ARMS:
@@ -254,5 +261,11 @@ def test_records_bound_to_dt_order_arm_and_v4_value():
     assert _run(man, files)["candidate"]["candidate"] is None
     files = {}
     man = _manifest(files)
-    files["v4"] = {"v4_v2_preserved": None}
+    files["v4F1+F2"] = dict(files["v4F1+F2"], v4_v2_preserved=None)
     assert _run(man, files)["candidate"]["candidate"] is None
+    # a report made of another arm's runs is not the candidate's
+    files = {}
+    man = _manifest(files)
+    files["v4F1+F2"] = dict(files["v4F1+F2"], digest_240="240O+F2", arm_240=json.loads(json.dumps(_ident("O+F2"))))
+    out = _run(man, files)
+    assert out["candidate"]["candidate"] is None and any("V4 report" in p for p in out["candidate"]["preconditions"])
