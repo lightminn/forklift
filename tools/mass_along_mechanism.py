@@ -39,11 +39,14 @@ def err3(truth, est) -> tuple[float, float, float]:
     return float(x), float(y), J.wrap(float(yaw))
 
 
-def phase_windows(result: dict, t_m: float | None) -> dict[str, tuple[float, float] | None]:
-    insert = next((float(x["time_s"]) for x in result.get("transitions") or [] if x.get("to") == "insert"), None)
-    return {"approach_empty": (0.0, insert) if insert is not None else None,
-            "extract": J.phase_window(result, "extract", "transport"),
-            "transport": J.phase_window(result, "transport", None, t_end=t_m) if t_m is not None else None}
+def phase_windows(result: dict, t_m: float | None, t_end: float) -> dict[str, tuple[float, float] | None]:
+    """The plan's segments; a run that ended inside one keeps it up to its last control row (Codex code review P2)."""
+    tr = result.get("transitions") or []
+    first = lambda to: next((float(x["time_s"]) for x in tr if x.get("to") == to), None)  # noqa: E731
+    insert, extract, transport = first("insert"), first("extract"), first("transport")
+    return {"approach_empty": (0.0, insert if insert is not None else t_end),
+            "extract": (extract, transport if transport is not None else t_end) if extract is not None else None,
+            "transport": (transport, t_m if t_m is not None else t_end) if transport is not None else None}
 
 
 def window_of(t: float, windows: dict) -> str | None:
@@ -90,12 +93,26 @@ def correction_effects(events: list[tuple], records: list[dict], control: np.nda
     return out
 
 
+# ---------------------------------------------------------------- signed truth steps
+
+
+def signed_steps(control: np.ndarray, ts: np.ndarray) -> np.ndarray:
+    """The truth rear's signed along steps between consecutive times ts, each projected on the mid heading (the
+    distance the truck rolled, not the chord)."""
+    x = np.interp(ts, control[:, 0], control[:, 4])
+    y = np.interp(ts, control[:, 0], control[:, 5])
+    yaw = np.interp(ts, control[:, 0], np.unwrap(control[:, 6]))
+    mid = 0.5 * (yaw[1:] + yaw[:-1])
+    return np.diff(x) * np.cos(mid) + np.diff(y) * np.sin(mid)
+
+
 # ---------------------------------------------------------------- D2 and D8
 
 
-def keyframe_intervals(records: list[dict], control: np.ndarray, offset: float) -> list[dict]:
+def keyframe_intervals(records: list[dict], control: np.ndarray, offset: float, log: dict | None = None) -> list[dict]:
     """D2: consecutive processed scans i, j: dO = Oi^-1 o Oj, dT = Ti^-1 o Tj (rear axle); the x, y, yaw differences, the
-    truth rear path length between them (control rows), direction and turn."""
+    truth rear path length between them (control rows), the direction (fwd / rev from the signed control-row steps, mixed
+    when both signs carry 5 mm or more -- Codex code review P2), the turn, the mean actual steering angle and speed."""
     proc = [r for r in records if r.get("status") == "processed" and r.get("odom_base") is not None
             and r.get("truth_base") is not None]
     out = []
@@ -107,16 +124,28 @@ def keyframe_intervals(records: list[dict], control: np.ndarray, offset: float) 
         sel = (control[:, 0] >= t0) & (control[:, 0] <= t1)
         seg = control[sel, 4:6]
         path = float(np.sum(np.hypot(*np.diff(seg, axis=0).T))) if len(seg) > 1 else 0.0
+        steps = signed_steps(control, control[sel, 0]) if sel.sum() > 1 else np.zeros(0)
+        fwd, rev = float(steps[steps > 0].sum()), float(-steps[steps < 0].sum())
+        direction = "mixed" if fwd >= 0.005 and rev >= 0.005 else "fwd" if fwd >= rev else "rev"
+        steer = None
+        if log is not None and "steering_rad" in log:
+            jt = np.asarray(log["joint_stamps_s"], float)
+            js = (jt >= t0) & (jt <= t1)
+            if js.any():
+                steer = float(np.mean(np.asarray(log["steering_rad"], float)[js]))
         out.append({"t0": t0, "t1": t1, "dx": float(do[0] - dt[0]), "dy": float(do[1] - dt[1]),
                     "dyaw": J.wrap(float(do[2] - dt[2])), "path_m": path, "along_true_m": float(dt[0]),
-                    "turn_rad": J.wrap(float(dt[2])), "speed_mps": path / (t1 - t0) if t1 > t0 else None})
+                    "rolled_true_m": float(steps.sum()), "fwd_m": fwd, "rev_m": rev, "direction": direction,
+                    "turn_rad": J.wrap(float(dt[2])), "steer_mean_rad": steer,
+                    "speed_mps": path / (t1 - t0) if t1 > t0 else None})
     return out
 
 
-def encoder_split(log: dict, intervals: list[dict], radius_m: float) -> list[dict]:
+def encoder_split(log: dict, intervals: list[dict], radius_m: float, control: np.ndarray | None = None) -> list[dict]:
     """D8: per keyframe interval a -> b (joint samples at or before the stamps): the encoder model's error (summed
-    increments minus the rear joints' rotation, mean of the two wheels, rad) and the joint rotation against the truth
-    rear's signed along motion (joint rotation x wheel_radius_m - along, m)."""
+    increments minus the rear joints' rotation, mean of the two wheels, rad) and the joint rotation against the distance
+    the truth rear rolled (signed steps projected on the instantaneous heading over the same joint samples -- not the
+    chord, Codex code review P2; joint rotation x wheel_radius_m - rolled, m)."""
     t = np.asarray(log["joint_stamps_s"], float)
     angles = np.asarray(log["wheel_angles_rad"], float)
     inc = np.asarray(log["wheel_increments_rad"], float)
@@ -128,8 +157,9 @@ def encoder_split(log: dict, intervals: list[dict], radius_m: float) -> list[dic
             continue
         rot = angles[b, 2:4] - angles[a, 2:4]
         model = inc[a + 1:b + 1].sum(axis=0) - rot
+        rolled = float(signed_steps(control, t[a:b + 1]).sum()) if control is not None else iv["along_true_m"]
         out.append({"t0": iv["t0"], "t1": iv["t1"], "model_err_rad": float(model.mean()),
-                    "joint_vs_truth_m": float(rot.mean() * radius_m - iv["along_true_m"])})
+                    "joint_vs_truth_m": float(rot.mean() * radius_m - rolled)})
     return out
 
 
@@ -174,6 +204,12 @@ def steering_residuals(log: dict, control: np.ndarray, window, wheelbase: float,
         out[f"{name}.residual_rad"] = float(np.sum(dpsi[mask] - pred[mask]))
         out[f"{name}.windows"] = int(len(turning))
         out[f"{name}.abs_ds_m"] = float(np.sum(np.abs(ds[mask])))
+        if name == "actual":
+            # per counted window: start time, residual, signed distance, mean kinematic curvature (for like-for-like
+            # comparisons by curvature, direction and speed -- Codex code review P2)
+            out["_windows"] = [{"t0": float(window[0] + w * WINDOW_S), "residual_rad": float(np.sum((dpsi - pred)[win == w])),
+                                "ds_m": float(np.sum(ds[win == w])), "kappa_mean": float(np.mean(k_mid[win == w]))}
+                               for w in sorted(turning)]
     return out
 
 
@@ -216,7 +252,7 @@ def inherited_parts(e_c, t_c, t_p) -> dict:
 
 def map_publications(maps: list[dict], windows: dict) -> dict:
     """D7: map publications per window (a count of what the bridge received, not of content changes) and the extent
-    change across it."""
+    change across it: width, height and origin."""
     out = {}
     for name, w in windows.items():
         if w is None:
@@ -224,7 +260,10 @@ def map_publications(maps: list[dict], windows: dict) -> dict:
         ms = [m for m in maps if w[0] <= float(m["stamp_ns"]) * 1e-9 <= w[1]]
         out[f"{name}.publications"] = len(ms)
         if ms:
-            out[f"{name}.area_change_cells"] = int(ms[-1]["width"] * ms[-1]["height"] - ms[0]["width"] * ms[0]["height"])
+            out[f"{name}.width_change_cells"] = int(ms[-1]["width"] - ms[0]["width"])
+            out[f"{name}.height_change_cells"] = int(ms[-1]["height"] - ms[0]["height"])
+            o0, o1 = ms[0]["origin"], ms[-1]["origin"]
+            out[f"{name}.origin_shift_m"] = float(math.hypot(o1[0] - o0[0], o1[1] - o0[1]))
     return out
 
 
@@ -245,17 +284,16 @@ def diagnose_run(folder: Path, t_m: float | None, split: dict | None) -> dict:
     if t_m is None:
         r1 = J.first_round1(result)
         t_m = float(r1["time_s"]) if r1 else None
-    windows = phase_windows(result, t_m)
-    if t_m is None:
-        # a run that never reached round 1: its transport up to its end
-        tr = J.phase_window(result, "transport", None, t_end=float(control[-1, 0]))
-        windows["transport"] = tr
+    windows = phase_windows(result, t_m, float(control[-1, 0]))
     holds = (result.get("slam_summary") or {}).get("holds") or []
     events, bad = J.correction_events(records, holds)
     out = {"run": folder.name, "failure": result.get("failure_reason"), "windows": windows, "replay_error": bad}
     d1 = [] if bad else correction_effects(events, records, control, offset)
-    d2 = keyframe_intervals(records, control, offset)
-    d8 = encoder_split(log, d2, float(geom["wheel_radius_m"]))
+    d2 = keyframe_intervals(records, control, offset, log)
+    d8 = encoder_split(log, d2, float(geom["wheel_radius_m"]), control)
+    out["_intervals"] = [{**iv, **next((e for e in d8 if e["t0"] == iv["t0"] and e["t1"] == iv["t1"]), {}),
+                          "window": window_of(iv["t0"], windows)} for iv in d2]
+    out["_d3_windows"] = {}
     for name, w in windows.items():
         if w is None:
             continue
@@ -277,8 +315,8 @@ def diagnose_run(folder: Path, t_m: float | None, split: dict | None) -> dict:
             s["d2_dx_per_m"] = sum(x["dx"] for x in iv) / path
             s["d2_dy_per_m"] = sum(x["dy"] for x in iv) / path
             s["d2_dyaw_per_m"] = sum(x["dyaw"] for x in iv) / path
-            for direction, sign in (("fwd", 1), ("rev", -1)):
-                ivd = [x for x in iv if math.copysign(1, x["along_true_m"]) == sign]
+            for direction in ("fwd", "rev", "mixed"):
+                ivd = [x for x in iv if x["direction"] == direction]
                 pd = sum(x["path_m"] for x in ivd)
                 if pd > 0:
                     s[f"d2_{direction}_dyaw_per_m"] = sum(x["dyaw"] for x in ivd) / pd
@@ -289,7 +327,10 @@ def diagnose_run(folder: Path, t_m: float | None, split: dict | None) -> dict:
             s["d8_model_err_rad"] = float(sum(x["model_err_rad"] for x in d8w))
             s["d8_joint_vs_truth_m"] = float(sum(x["joint_vs_truth_m"] for x in d8w))
         for k, v in steering_residuals(log, control, w, float(geom["wheelbase_m"]), float(geom["track_m"])).items():
-            s[f"d3_{k}"] = v
+            if k == "_windows":
+                out["_d3_windows"][name] = v
+            else:
+                s[f"d3_{k}"] = v
         stamps = [float(r["stamp_s"]) for r in records if r.get("status") == "processed" and w[0] <= float(r["stamp_s"]) <= w[1]]
         for k, v in attitude(log, stamps, laser_h).items():
             s[f"d4_{k}"] = v
@@ -303,6 +344,12 @@ def diagnose_run(folder: Path, t_m: float | None, split: dict | None) -> dict:
         ip = J.control_row_before(control, split["t_m"])
         if ic is not None and ip is not None:
             out["d5"] = inherited_parts(control[ic, 1:4], control[ic, 4:7], control[ip, 4:7])
+            if split.get("e_inh") is not None:
+                # the registered tool's own e_inh (Codex code review P3): the same rows give the same value
+                out["d5"]["vs_registered"] = out["d5"]["e_inh"] - float(split["e_inh"])
+        tw = windows.get("transport")
+        if tw is not None:
+            out["d6_cusps"] = J.cusps(control, tw)
     out["_events"] = d1
     return out
 
@@ -354,6 +401,8 @@ def diagnose(out_dir: Path, verdict: dict) -> dict:
             for k in ("d_c", "t_m_minus_t_c"):
                 va, vb = spl.get("A", {}).get(k), spl.get("B", {}).get(k)
                 row[f"d6.{k}.d"] = vb - va if va is not None and vb is not None else None
+            if a.get("d6_cusps") is not None and b.get("d6_cusps") is not None:
+                row["d6.cusps.d"] = b["d6_cusps"] - a["d6_cusps"]
         rows.append(row)
     summary = {}
     for scene in J.SCENES:
@@ -364,9 +413,11 @@ def diagnose(out_dir: Path, verdict: dict) -> dict:
         d6 = [r for r in prim if r.get("d6.delta_e_inh") is not None]
         summary[scene]["d6_spearman"] = {k: spearman([r["d6.delta_e_inh"] for r in d6 if r.get(k) is not None],
                                                      [r[k] for r in d6 if r.get(k) is not None])
-                                         for k in ("d6.path_hausdorff_m", "d6.d_c.d", "d6.t_m_minus_t_c.d")}
+                                         for k in ("d6.path_hausdorff_m", "d6.cusps.d", "d6.d_c.d", "d6.t_m_minus_t_c.d")}
     return {"runs": {k: {kk: vv for kk, vv in v.items() if kk != "_events"} for k, v in runs.items()},
             "pairs": rows, "summary": summary, "_events": {k: v["_events"] for k, v in runs.items()}}
+    # the per-run "_intervals" (D2/D8 per keyframe interval with its conditions) and "_d3_windows" (D3 per counted
+    # window) stay in the runs block for like-for-like comparisons
 
 
 def main(argv=None) -> int:

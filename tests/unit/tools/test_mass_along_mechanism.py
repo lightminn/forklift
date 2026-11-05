@@ -103,7 +103,8 @@ def test_the_encoder_split_separates_quantisation_from_slip():
     inc = np.array([[0.0, 0.0], [4.01, 4.01], [4.0, 4.0]])  # 0.01 rad over-read
     log = {"joint_stamps_s": t, "wheel_angles_rad": angles, "wheel_increments_rad": inc}
     iv = [{"t0": 0.0, "t1": 1.0, "along_true_m": 0.95}]
-    out = M.encoder_split(log, iv, 0.125)
+    control = np.column_stack([t, 0.95 * t, 0 * t, 0 * t, 0.95 * t, 0 * t, 0 * t])
+    out = M.encoder_split(log, iv, 0.125, control)
     assert out[0]["model_err_rad"] == pytest.approx(0.01)
     assert out[0]["joint_vs_truth_m"] == pytest.approx(8.0 * 0.125 - 0.95)
 
@@ -115,3 +116,48 @@ def test_attitude_scales():
     log = {"joint_stamps_s": t, "base_pose_world": np.column_stack([np.zeros((2, 3)), q])}
     out = M.attitude(log, [0.0, 1.0], 1.05)
     assert out["pitch_maxabs_rad"] == pytest.approx(a) and out["origin_shift_max_m"] == pytest.approx(1.05 * a)
+
+
+
+def test_the_encoder_split_uses_the_rolled_distance_on_a_curve():
+    # Codex code review P2: the chord of a 0.35 /m arc is shorter than the distance rolled; no slip must read 0
+    k, length, r_w = 0.35, 0.45, 0.125
+    t = np.linspace(0.0, 1.0, 241)
+    s_ = length * t
+    yaw = k * s_
+    x, y = np.sin(yaw) / k, (1 - np.cos(yaw)) / k
+    control = np.column_stack([t, x, y, yaw, x, y, yaw])
+    angles = np.zeros((len(t), 4))
+    angles[:, 2] = angles[:, 3] = s_ / r_w
+    inc = np.vstack([[0.0, 0.0], np.diff(angles[:, 2:4], axis=0)])
+    log = {"joint_stamps_s": t, "wheel_angles_rad": angles, "wheel_increments_rad": inc}
+    iv = [{"t0": 0.0, "t1": 1.0, "along_true_m": float(np.sin(k * length) / k)}]
+    out = M.encoder_split(log, iv, r_w, control)
+    assert abs(out[0]["model_err_rad"]) < 1e-12 and abs(out[0]["joint_vs_truth_m"]) < 1e-5
+
+
+def test_a_back_and_forth_interval_is_mixed():
+    # Codex code review P2: 0.30 m forward then 0.15 m back is neither forward nor reverse
+    t = np.linspace(0.0, 1.0, 101)
+    x = np.where(t <= 0.5, 0.6 * t, 0.3 - 0.3 * (t - 0.5))
+    control = np.column_stack([t, x, 0 * t, 0 * t, x, 0 * t, 0 * t])
+    recs = [{"status": "processed", "stamp_s": 0.0, "odom_base": [0.0, 0.0, 0.0], "truth_base": [0.0, 0.0, 0.0]},
+            {"status": "processed", "stamp_s": 1.0, "odom_base": [0.15, 0.0, 0.0], "truth_base": [0.15, 0.0, 0.0]}]
+    iv = M.keyframe_intervals(recs, control, 0.0)
+    assert iv[0]["direction"] == "mixed" and iv[0]["fwd_m"] == pytest.approx(0.3) and iv[0]["rev_m"] == pytest.approx(0.15)
+
+
+def test_a_run_that_ended_before_insertion_keeps_its_approach():
+    # Codex code review P2: no insert transition still leaves the approach up to the last control row
+    w = M.phase_windows({"transitions": [{"from": "observe", "to": "approach", "time_s": 5.0}]}, None, 9.0)
+    assert w["approach_empty"] == (0.0, 9.0) and w["extract"] is None and w["transport"] is None
+    w = M.phase_windows({"transitions": [{"to": "insert", "time_s": 3.0}, {"to": "extract", "time_s": 6.0}]}, None, 8.0)
+    assert w["extract"] == (6.0, 8.0)
+
+
+def test_map_publications_report_width_height_and_origin():
+    maps = [{"stamp_ns": 1e9, "width": 10, "height": 20, "origin": [0.0, 0.0, 0]},
+            {"stamp_ns": 2e9, "width": 20, "height": 10, "origin": [0.3, 0.4, 0]}]
+    out = M.map_publications(maps, {"transport": (0.5, 2.5)})
+    assert out["transport.publications"] == 2 and out["transport.width_change_cells"] == 10
+    assert out["transport.height_change_cells"] == -10 and out["transport.origin_shift_m"] == pytest.approx(0.5)
