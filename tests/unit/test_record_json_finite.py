@@ -90,3 +90,30 @@ def test_other_encoding_errors_still_raise():
         record_json({"path": Path("x")})
     with pytest.raises(TypeError, match="Unsupported record type"):
         record_json({"e": math.nan, "path": Path("x")})  # NaN first: the second pass keeps the type check
+
+
+def test_a_cycle_behind_a_nan_raises_the_same_circular_reference_error():
+    # Codex P3: the copy keeps json's own refusal whichever the encoder met first
+    loop = []
+    loop.append(loop)
+    with pytest.raises(ValueError, match="Circular"):
+        record_json([math.nan, loop])
+    shared = [1.0]
+    assert json.loads(record_json({"a": shared, "b": shared, "c": math.nan})) == {"a": [1.0], "b": [1.0], "c": None}
+
+
+def test_strict_refuses_non_finite_values_as_before():
+    # Codex P2: verify_perception_camera's setting probe reads the refusal and keeps the value's repr
+    with pytest.raises(ValueError, match="Out of range"):
+        record_json({"x": math.nan}, strict=True)
+    assert record_json(FINITE, strict=True) == strict(FINITE)
+
+
+def test_the_paths_made_null_are_handed_back_when_asked(capsys):
+    # the near tracking record keeps failing its run on them (Codex P2-a), so the caller gets the paths
+    found = []
+    record_json({"frames": [{"read_s": 1.0}, {"read_s": math.nan}]}, non_finite=found)
+    assert found == [".frames[1].read_s"]
+    found = []
+    record_json(FINITE, non_finite=found)
+    assert found == []

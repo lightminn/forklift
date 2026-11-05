@@ -169,8 +169,10 @@ ESTOP = load_perception_module(
 )
 
 
-def _finite_record(value: object, path: str, found: list[str]) -> object:
-    """A copy of a record with each non-finite float as None (its path in ``found``); anything else as it was."""
+def _finite_record(value: object, path: str, found: list[str], open_: set[int]) -> object:
+    """A copy of a record with each non-finite float value as None (its path in ``found``); anything else as it was.
+    Values only: a non-finite dict key stays and fails the encoding as before. A container met again inside itself
+    raises json's own circular-reference ValueError, as the strict encoding does (Codex P3)."""
     if isinstance(value, np.ndarray):
         value = value.tolist()
     elif isinstance(value, np.generic):
@@ -180,20 +182,29 @@ def _finite_record(value: object, path: str, found: list[str]) -> object:
             return value
         found.append(path or "$")
         return None
-    if isinstance(value, dict):
-        return {k: _finite_record(v, f"{path}.{k}", found) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_finite_record(v, f"{path}[{i}]", found) for i, v in enumerate(value)]
+    if isinstance(value, (dict, list, tuple)):
+        if id(value) in open_:
+            raise ValueError("Circular reference detected")
+        open_.add(id(value))
+        try:
+            if isinstance(value, dict):
+                return {k: _finite_record(v, f"{path}.{k}", found, open_) for k, v in value.items()}
+            return [_finite_record(v, f"{path}[{i}]", found, open_) for i, v in enumerate(value)]
+        finally:
+            open_.discard(id(value))
     return value
 
 
-def record_json(value: object, *, indent: int | None = None) -> str:
+def record_json(value: object, *, indent: int | None = None, strict: bool = False,
+                non_finite: list[str] | None = None) -> str:
     """Encode simulator numerical records without coercing numbers to strings.
 
     A record with a non-finite float (a timed-out rollout's NaN error, for one) is written with that value as null
     instead of failing the write -- V3 ddc_on_v3a_line_2_s8 lost its result.json that way (#309; lead 2026-11-05).
     The strict encoding is tried first, so a finite record's text is byte for byte what it always was; the paths
-    made null go to stderr as one RECORD_NON_FINITE line."""
+    made null go to stderr as one RECORD_NON_FINITE line and, when given, into ``non_finite`` (a caller whose
+    verdict read the failed write keeps it that way). strict=True refuses NaN/inf as before, for a caller that reads
+    the refusal (verify_perception_camera's setting probe)."""
 
     def native(value: object) -> object:
         if isinstance(value, np.ndarray):
@@ -205,10 +216,12 @@ def record_json(value: object, *, indent: int | None = None) -> str:
     try:
         return json.dumps(value, default=native, indent=indent, allow_nan=False)
     except ValueError as exc:
-        if "Out of range float values" not in str(exc):
+        if strict or "Out of range float values" not in str(exc):
             raise
     found: list[str] = []
-    text = json.dumps(_finite_record(value, "", found), default=native, indent=indent, allow_nan=False)
+    text = json.dumps(_finite_record(value, "", found, set()), default=native, indent=indent, allow_nan=False)
+    if non_finite is not None:
+        non_finite.extend(found)
     print(f"RECORD_NON_FINITE {len(found)} {' '.join(found[:8])}{' ...' if len(found) > 8 else ''}",
           file=sys.stderr, flush=True)
     return text
@@ -10214,11 +10227,20 @@ def drive(S, isaac) -> None:
                 # summary in result.json. Guarded: a failed write never replaces the run's own
                 # failure.
                 try:
+                    near_non_finite_: list[str] = []
                     (args.output / "near_tracking.json").write_text(
                         record_json({"frames": near["frames"], "ticks": near["ticks"], "events": near["events"],
                                      "stop_events": near.get("stop_events") or [], "protect": near.get("protect"),
-                                     "corrections": near["corrections"], "path_revisions": near["path_revisions"]}) + "\n"
+                                     "corrections": near["corrections"], "path_revisions": near["path_revisions"]},
+                                    non_finite=near_non_finite_) + "\n"
                     )
+                    if near_non_finite_:
+                        # the record is kept (its NaN/inf as null), but a tracking record with non-finite values
+                        # fails the run as its refused write did before record_json wrote them (Codex P2-a)
+                        state["near_tracking_write_error"] = f"non-finite values at {near_non_finite_[:8]}"
+                        state["success"] = False
+                        state.setdefault("failure_reason",
+                                         f"near_tracking_record_failed: non-finite values at {near_non_finite_[:8]}")
                     fed_ = [f for f in near["frames"] if "skipped" not in f]
                     state["near_tracking"].update(
                         frames_fed=len(fed_),
