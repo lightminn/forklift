@@ -1126,6 +1126,10 @@ def arguments() -> argparse.Namespace:
                         "relocalization chose, its estimate is replaced by the named map-frame hypothesis (a "
                         "synthetic twin such as 'shift x+1' or 'turn', or 'slide': 0.35 m along the hall's axis). "
                         "Unattended relocalization batches only (--reloc-unattended).")
+    parser.add_argument("--pose-check-contacts", action="store_true",
+                        help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
+                        "every forklift rigid body reports its contacts, and each contact with anything but the floor "
+                        "is recorded by pair with the check's status, the mission phase and the cargo relation.")
     parser.add_argument("--pose-check-bounds", type=_pose_bounds, default=None,
                         help="The check's development values (plan 0), JSON inline or a file: {\"odom\": [a, b, c, e] "
                         "(dp = a + b d, dth = c + e d), \"e_still\": [m, rad], \"e_slam\": [m, rad]}.")
@@ -1580,6 +1584,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
     if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
         parser.error("--reloc-inject is for unattended relocalization batches (--start-relocalize --reloc-unattended)")
+    if args.pose_check_contacts and args.pose_check == "off":
+        parser.error("--pose-check-contacts goes with --pose-check on or shadow")
     if args.pose_check == "shadow" and not args.start_relocalize:
         parser.error("--pose-check shadow needs --start-relocalize")
     if args.pose_check != "on" and args.pose_check_bounds is not None:
@@ -3429,6 +3435,7 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
     """The unconfirmed position check's runtime (docs/plans/2026-11-02-unconfirmed-runner.md 3.3): its worker process on
     the survey grid with B-P1b's frozen settings, the start relocalization's estimate and chosen search group, the
     shared LiDAR's pattern, the stopping distance and one tick's travel at the straight reverse's speed."""
+    import pose_contacts
     import pose_runtime
     import reloc_phase
 
@@ -3452,7 +3459,8 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
         angles=(scan_pattern.angle_min_rad, scan_pattern.angle_increment_rad), range_min_m=scan_pattern.range_min_m,
         range_max_m=scan_pattern.range_max_m, match_range_m=cfg.match_range_m,
         rear_offset_m=abs(args.rear_axle_offset_m), stop_m=stopping.distance_m(speed),
-        tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts), shadow=args.pose_check == "shadow")
+        tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts), shadow=args.pose_check == "shadow",
+        contacts=pose_contacts.ContactLog() if getattr(args, "pose_check_contacts", False) else None)
 
 
 def pose_open(out) -> bool:
@@ -3968,6 +3976,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for wheel_ in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"):
             report_ = PS.PhysxContactReportAPI.Apply(stage.GetPrimAtPath(f"/World/Forklift/{wheel_}"))
             report_.CreateThresholdAttr(0.0)
+    if getattr(args, "pose_check_contacts", False):
+        # plan 2026-11-06-unconfirmed-validation 1.4: every forklift body reports, the floor left out when read
+        from pxr import PhysxSchema as PS, Usd as U_, UsdPhysics as UP_
+
+        for body_ in U_.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
+            if body_.HasAPI(UP_.RigidBodyAPI) and not body_.HasAPI(PS.PhysxContactReportAPI):
+                PS.PhysxContactReportAPI.Apply(body_).CreateThresholdAttr(0.0)
     if args.steering_probe and any(k in settings for k in PROBE_ARM_SETTINGS):
         # The steering left-asymmetry plan's stage-side arms (A3 base fixed, A6 front tyres frictionless, A7 shim),
         # after configure_drives bound the materials and before the world reset.
@@ -7437,6 +7452,12 @@ def drive(S, isaac) -> None:
                 tick, observing=far_observing(ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
                 and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
+            if pose_box["rt"] is not None and pose_box["rt"].contacts is not None:
+                import pose_contacts  # plan 2026-11-06 1.4: this step's contacts, the check's status then
+
+                pose_box["rt"].contacts.update(float(world.current_time - initial_time), pose_contacts.read_pairs(),
+                                               status=pose_box["rt"].pc.status, phase=ms.phase,
+                                               relation=core.cargo.relation)
             if near_end_detour_ is not None:
                 # C2 injection plan 4 0 and 4: every physics step's pallet shift, a capture's steps included (Codex
                 # implementation review 1 P2-1), kept as the largest since the last control tick; the tick gives it
@@ -10434,6 +10455,8 @@ def drive(S, isaac) -> None:
                 # plan 3.4: the unconfirmed position check's record, then its worker process goes
                 try:
                     state["pose_check"] = pose_box["rt"].record()
+                    if pose_box["rt"].stand_sets:  # plan 2026-11-06 1.5: the mission stands' scan sets
+                        pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
                     state.setdefault("record_errors", []).append(f"pose check: {exc_!r}")
                 try:
@@ -10766,7 +10789,7 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 3.1): only when on
         and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
         # plan 2026-11-06 1.2: the injection only when given
-        and (k != "reloc_inject" or v is not None)
+        and (k != "reloc_inject" or v is not None) and (k != "pose_check_contacts" or v)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))

@@ -31,6 +31,8 @@ ZONE_BIN_M = 0.05  # the net displacement's bin: zones grown at its upper end, f
 DISPLAY_ZONES = 64  # the console is sent the nearest ones, and the count left out (Codex 2c P2)
 DISPLAY_PERIOD_S = 0.1  # the state's publish period
 RESULT_GRACE_S = 5.0  # past a job's own deadline, the time its result may take to come back before it counts as lost
+STAND_SETS_MAX = 20  # plan 2026-11-06 1.5: the mission stands whose scan sets are kept, a session
+STAND_SET_COUNT = 3  # and the scan sets kept at each
 TRUTH_KEEP = 120 * 90  # every control tick's truth for 90 s (plan 2026-11-06 1.3): a result's scan is looked up in it
 # the shadow's provisional verdicts (plan 2026-11-06 1.1): it takes no development values, and what these say is only
 # recorded -- neither the development values nor the samples' selection read it
@@ -206,7 +208,7 @@ class PoseRuntime:
     def __init__(self, *, bounds: P.Bounds, worker, estimate, o0, pool, gen_points, reloc_cfg: R.RelocConfig, angles,
                  range_min_m: float, range_max_m: float, match_range_m: float, rear_offset_m: float, stop_m: float,
                  tick_m: float, clock=time.monotonic, worker_factory=None, deadline_s: float = DEADLINE_S,
-                 shadow: bool = False):
+                 shadow: bool = False, contacts=None):
         self.pc = P.PoseCheck(bounds, rear_offset_m=rear_offset_m, stop_m=stop_m, tick_m=tick_m)
         self.bounds, self.worker, self.worker_factory, self.restarts = bounds, worker, worker_factory, 0
         self.b, self.o0 = tuple(float(v) for v in estimate), tuple(float(v) for v in o0)
@@ -240,17 +242,33 @@ class PoseRuntime:
         # measurements do not lean on the provisional verdicts -- a stroke meter of its own, a generation at every
         # stand past D_MIN, the raw start and re-match agreements and every stand's largest correction move
         self.shadow = bool(shadow)
+        self.contacts = contacts  # pose_contacts.ContactLog (plan 2026-11-06 1.4), the runner feeding it; None: not kept
         self.meter = None  # a PoseCheck held unconfirmed from the start check's scan: its strokes and stands only
         self._meter_view = None
         self.raw = {"start": None, "rematches": [], "stands": []} if self.shadow else None
         self._stand = None
         self._raw_pending: list = []  # (raw record, its scan time, its evidence): judged against the truth there
+        # plan 2026-11-06 1.5: at a mission stand (the near field left out) where the applied pose has moved over 0.10 m
+        # from C_int's, the inputs of one generation -- up to STAND_SET_COUNT sets of SCANS scans in a row while it
+        # stands -- for the offline re-match (a snapshot approximation); past STAND_SETS_MAX stands only counted
+        self.stand_sets: list = []
+        self.stand_sets_skipped = 0
+        self._capture = None
+        self._was_standing = False
+        self._stand_considered = False
 
     # --- inputs --------------------------------------------------------------------------------------------------------
     def on_scan(self, stamp: float, ranges, o_base, standing: bool) -> None:
         """A scan the SLAM link was sent (its ranges as sent), the odometry at its stamp and the stand then."""
         self.buf.append(_Scan(float(stamp), np.asarray(ranges, float), tuple(float(v) for v in o_base),
                               bool(standing)))
+        cap = self._capture
+        if cap is not None and standing and len(cap["sets"]) < STAND_SET_COUNT:
+            cap["cur"].append(self.buf[-1])
+            if len(cap["cur"]) == SCANS:
+                cap["sets"].append({"stamps": [s.stamp for s in cap["cur"]], "o": list(cap["cur"][-1].o),
+                                    "ranges": np.stack([s.ranges for s in cap["cur"]])})
+                cap["cur"] = []
 
     def _still_set(self):
         """(points, the last scan's odometry) of the last SCANS scans when all stood and the odometry did not move
@@ -280,7 +298,32 @@ class PoseRuntime:
             ref, kind = (self.pc.c_int, "int") if self.pc.c_int is not None else (self._c0, "start")
             if ref is not None:
                 self._last = (o, P.gap(compose(C, o), compose(ref, o), self.rear_offset_m), kind)
+        self._stand_capture(t, standing, mission_active, near)
         return view
+
+    def _stand_capture(self, t, standing, mission_active, near) -> None:
+        if standing and not self._was_standing:
+            self._stand_considered = False
+        self._was_standing = standing
+        if self._capture is not None and not standing:
+            self._capture["t1"], self._capture = t, None
+            return
+        if (standing and self._capture is None and not self._stand_considered and mission_active and not near
+                and self._last is not None and self._last[1][0] > P.REMATCH_M):
+            self._stand_considered = True
+            if len(self.stand_sets) >= STAND_SETS_MAX:
+                self.stand_sets_skipped += 1
+                return
+            self._capture = {"t0": t, "t1": None, "delta": list(self._last[1]), "ref": self._last[2], "sets": [],
+                             "cur": []}
+            self.stand_sets.append(self._capture)
+
+    def save_stand_scans(self, path) -> None:
+        """The kept stands' scan sets (s<stand>_<set>: SCANS x beams ranges as sent) with the scan pattern."""
+        arrays = {f"s{i}_{k}": s["ranges"].astype(np.float32) for i, cap in enumerate(self.stand_sets)
+                  for k, s in enumerate(cap["sets"])}
+        np.savez_compressed(path, angles=np.asarray(self.angles, float),
+                            ranges_m=np.asarray([self.rmin, self.rmax, self.mrange], float), **arrays)
 
     def _stopped(self) -> bool:
         """Nothing more to ask the worker: it is lost, or (on) the check ended (Codex 2b re-review P2)."""
@@ -645,8 +688,14 @@ class PoseRuntime:
                "rematches": self.rematches, "rear": self.rear, "hyps": [[list(q), src] for q, src in self.hyps_s],
                "status": self.pc.status, "worker_restarts": self.restarts, "ticks": self.ticks, "samples": self.samples,
                "evidence": self.evidence, "confirm_tick": self.confirm_tick, "first_open_tick": self.first_open_tick,
+               "stand_sets": [{**{k: v for k, v in cap.items() if k not in ("sets", "cur")},
+                               "sets": [{k: v for k, v in s.items() if k != "ranges"} for s in cap["sets"]]}
+                              for cap in self.stand_sets],
+               "stand_sets_skipped": self.stand_sets_skipped,
                "bounds": {"odom": list(self.bounds.odom), "e_still": list(self.bounds.e_still),
                           "e_slam": list(self.bounds.e_slam)}}
+        if self.contacts is not None:
+            out["contacts"] = self.contacts.record()
         if self.shadow:
             out["raw"] = self.raw
             out["meter_events"] = None if self.meter is None else self.meter.events
@@ -657,4 +706,4 @@ class PoseRuntime:
 
 
 __all__ = ["DEADLINE_S", "InlineWorker", "JobContext", "PoseRuntime", "ProcessWorker", "SCANS", "SHADOW_BOUNDS",
-           "ZONE_BIN_M", "run_job"]
+           "STAND_SETS_MAX", "STAND_SET_COUNT", "ZONE_BIN_M", "run_job"]

@@ -205,3 +205,32 @@ def test_the_injection_is_for_unattended_relocalization_batches_only(tmp_path):
         _runner_args(_live(tmp_path, "--reloc-inject", "turn"))
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["reloc_inject"] is None
     assert "inject=getattr(args, \"reloc_inject\", None)" in _source()
+
+
+def test_the_contact_record_goes_with_the_check_and_reads_every_physics_step():
+    # plan 1.4: every forklift rigid body reports; read after each physics step while the check's runtime exists
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path_ := Path(__import__("tempfile").mkdtemp()), *_reloc(tmp_path_)))
+    assert off.pose_check_contacts is False and "pose_check_contacts" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path_, *_reloc(tmp_path_), "--pose-check", "shadow", "--pose-check-contacts"))
+    assert run_transport.recorded_arguments(on)["pose_check_contacts"] is True
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path_, *_reloc(tmp_path_), "--pose-check-contacts"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_check_contacts"] is False
+    src = _source()
+    at = src.index("def step_world(render: bool)")
+    body = src[at:src.index("if near_end_detour_ is not None:", at)]
+    assert 'pose_box["rt"] is not None and pose_box["rt"].contacts is not None' in body
+    assert body.index("world.step(render=") < body.index("pose_box[\"rt\"].contacts.update(")
+    assert 'if getattr(args, "pose_check_contacts", False):' in src
+    at = src.index("def make_pose_runtime(")
+    assert 'contacts=pose_contacts.ContactLog() if getattr(args, "pose_check_contacts", False) else None' in \
+        src[at:at + 3500]
+
+
+def test_the_mission_stands_scan_sets_are_saved_with_the_record():
+    src = _source()
+    at = src.index('state["pose_check"] = pose_box["rt"].record()')
+    assert 'pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")' in src[at:at + 300]

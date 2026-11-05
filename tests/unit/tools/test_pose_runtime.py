@@ -684,3 +684,60 @@ def test_every_ticks_truth_is_kept_and_the_confirmation_ticks_are_classed_apart(
     rec = rt.record()
     assert rec["confirm_tick"]["t"] == 0.01 and rec["confirm_tick"]["class"] == "success"
     assert rec["first_open_tick"]["t"] == 0.02 and rec["first_open_tick"]["class"] == "imprecise"
+
+
+def test_the_record_carries_the_contacts_when_kept():
+    import pose_contacts
+
+    b = (2.42, 1.7, 0.6)
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)), contacts=pose_contacts.ContactLog())
+    rt.contacts.update(1.0, [("/World/Forklift/body", "/World/Box")], status="checking", phase="idle", relation="free")
+    assert rt.record()["contacts"]["intervals"][0]["other"] == "/World/Box"
+    assert "contacts" not in _rt(Scripted(), b=b, gen_points=np.zeros((40, 2))).record()
+
+
+# --- plan 2026-11-06 1.5: the mission stands' scan sets ---
+def _mission_stand(rt, grid, b, C, scans, t0, near=False):
+    _tick(rt, b, C, standing=False, mission_active=True, near=near)
+    _tick(rt, b, C, mission_active=True, near=near)  # a new stand
+    for k in range(scans):
+        rt.on_scan(t0 + 0.1 * k, _ranges(grid, b), b, True)
+        _tick(rt, b, C, mission_active=True, near=near)
+
+
+def test_a_mission_stand_whose_correction_moved_keeps_up_to_three_scan_sets(tmp_path):
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    _tick(rt, b, I)  # confirmed: C_int = I
+    C = (0.15, 0.0, 0.0)  # Delta_int 0.15 m: over 0.10
+    _mission_stand(rt, grid, b, C, 17, 10.0)
+    _tick(rt, b, C, standing=False, mission_active=True)  # the stand ends
+    [cap] = rt.record()["stand_sets"]
+    assert len(cap["sets"]) == 3 and cap["sets"][0]["o"] == pytest.approx(b) and cap["delta"][0] == pytest.approx(0.15)
+    assert cap["sets"][1]["stamps"] == pytest.approx([10.5, 10.6, 10.7, 10.8, 10.9]) and cap["ref"] == "int"
+    rt.save_stand_scans(tmp_path / "s.npz")
+    data = np.load(tmp_path / "s.npz")
+    assert data["s0_2"].shape == (5, 360) and data["angles"] == pytest.approx(ANGLES)
+
+
+def test_a_stand_that_ends_early_keeps_what_it_got_and_quiet_or_near_stands_keep_none():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    _tick(rt, b, I)
+    _mission_stand(rt, grid, b, (0.05, 0.0, 0.0), 6, 1.0)  # Delta 0.05: not kept
+    _mission_stand(rt, grid, b, (0.15, 0.0, 0.0), 6, 2.0, near=True)  # the near field: not kept
+    _mission_stand(rt, grid, b, (0.15, 0.0, 0.0), 7, 3.0)  # one whole set before it drove on
+    _tick(rt, b, (0.15, 0.0, 0.0), standing=False, mission_active=True)
+    [cap] = rt.record()["stand_sets"]
+    assert len(cap["sets"]) == 1
+
+
+def test_stands_past_twenty_are_counted_not_kept():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    _tick(rt, b, I)
+    for k in range(PR.STAND_SETS_MAX + 2):
+        _mission_stand(rt, grid, b, (0.15, 0.0, 0.0), 5, 10.0 * k)
+    rec = rt.record()
+    assert len(rec["stand_sets"]) == PR.STAND_SETS_MAX and rec["stand_sets_skipped"] == 2
