@@ -50,7 +50,11 @@ IDENTITY_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pa
 SNAP_ARM = re.compile(r"(mae_[0-9a-f]+)_[AB]\b")
 # the same across the whole batch (plan 2.2 one snapshot, amendment 2): everything but the seed and the scene
 BATCH_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256", "pallet_urdf_sha256",
-                "scene_sha256", "plant", "plant_tyre_contact", "encoder_model", "chassis_model")
+                "scene_sha256", "plant_tyre_contact", "chassis_model")
+# the same within a scene across seeds and arms (plan amendment 3): the plant record lists the scene's own prop materials
+PER_SCENE_FIELDS = ("plant",)
+# the same within a seed across scenes and arms (plan amendment 3): the encoder model carries the seed's encoder phases
+PER_SEED_FIELDS = ("encoder_model",)
 RUN_ARM = re.compile(r"\bmae_[AB]_")
 
 
@@ -647,13 +651,22 @@ def batch_reference(loaded: dict) -> dict:
     for scene in SCENES:
         ref[f"scene_layout:{scene}"] = _mode([_normal((r["result"].get("scene_layout") or {}).get("sha256"))
                                              for key, r in runs if key[0] == scene])
+        for k in PER_SCENE_FIELDS:
+            ref[f"{k}:{scene}"] = _mode([_normal(r["result"].get(k)) for key, r in runs if key[0] == scene])
+    for seed in sorted({key[1] for key, _ in runs}):
+        for k in PER_SEED_FIELDS:
+            ref[f"{k}:s{seed}"] = _mode([_normal(r["result"].get(k)) for key, r in runs if key[1] == seed])
     return ref
 
 
-def batch_differences(result: dict, ref: dict, scene: str) -> list[str]:
+def batch_differences(result: dict, ref: dict, scene: str, seed: int | None = None) -> list[str]:
     checks = {k: _normal(result.get(k)) for k in BATCH_FIELDS}
     checks["settings_synthetic"] = _settings_without_mass(result)
     checks[f"scene_layout:{scene}"] = _normal((result.get("scene_layout") or {}).get("sha256"))
+    for k in PER_SCENE_FIELDS:
+        checks[f"{k}:{scene}"] = _normal(result.get(k))
+    for k in PER_SEED_FIELDS:
+        checks[f"{k}:s{seed}"] = _normal(result.get(k))
     return [k for k, v in checks.items() if ref.get(k) in (None, TIED) or v != ref[k]]
 
 
@@ -685,7 +698,7 @@ def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | Non
         why = why or next((f"{a}: {p}" for a in ARMS if (p := identity_problem(loaded[a], a, seed))), None)
         why = why or (lambda b: f"fields differ: {b}" if b else None)(identity_differences(loaded["A"]["result"], loaded["B"]["result"]))
         why = why or next((f"{a}: batch snapshot differs: {b}" for a in ARMS
-                           if (b := batch_differences(loaded[a]["result"], ref, scene))), None)
+                           if (b := batch_differences(loaded[a]["result"], ref, scene, seed))), None)
         if why:
             pairs.append({**row, "valid": False, "why": why})
             continue

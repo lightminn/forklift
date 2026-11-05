@@ -446,3 +446,23 @@ def test_the_batch_checks_the_scene_hashes_and_refuses_a_tied_reference(tmp_path
 
 def test_the_gate_distance_is_the_gates_own():
     assert J.GATE_DISTANCE_M == pytest.approx(0.4472136, abs=1e-7)
+
+
+def test_the_plant_may_differ_between_scenes_and_the_encoder_between_seeds(tmp_path):
+    # plan amendment 3 (the real batch, validity only): the plant record lists the scene's props and the encoder model
+    # carries the seed's phases, so neither is one value across the batch; each is still checked within its group
+    compare = {f"{s}/{a}": True for s in J.SCENES for a in J.ARMS}
+    for seed in (0, 1, 2):
+        for arm, kg in (("A", 10.0), ("B", 4.93)):
+            for scene in J.SCENES:
+                _write_run(tmp_path / f"mae_{arm}_{scene}_s{seed}", arm, kg, scene, seed=seed,
+                           plant={"materials": [scene]}, encoder_model={"phases_rad": [seed]})
+    out = J.judge(tmp_path, compare)
+    assert all(p["valid"] for p in out["pairs"]), [p.get("why") for p in out["pairs"]]
+    _write_run(tmp_path / "mae_A_line_2_s3", "A", 10.0, "line_2", seed=3, plant={"materials": ["other"]},
+               encoder_model={"phases_rad": [3]})
+    _write_run(tmp_path / "mae_B_line_2_s3", "B", 4.93, "line_2", seed=3, plant={"materials": ["other"]},
+               encoder_model={"phases_rad": [3]})
+    out = J.judge(tmp_path, compare)
+    bad = [p for p in out["pairs"] if p["seed"] == 3][0]
+    assert not bad["valid"] and "plant:line_2" in bad["why"]

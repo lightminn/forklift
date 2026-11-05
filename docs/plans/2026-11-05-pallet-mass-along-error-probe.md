@@ -318,3 +318,12 @@
 - **인프라 무효:** riib 배치 2 등록 §4 의 허용 목록(결과 없음·읽기 실패, 묶음 `infra_failed`·`stalled`, 실패 사유 접두 `slam_link_failed`·`slam_prewarm_timeout`·`plan_worker_dead`·`Camera did not produce RGB`·`Perception camera did not produce depth`·`Cannot open base scene`·`Invalid pallet spawn after settling`·`Truck spawn displaced`). 1 라운드 기록이 있어도 이 사유로 끝났으면 무효다. 팔별 무효 수를 보고한다.
 - **e_m 대조:** `delivery_match_1.npz` 가 없거나 다시 계산한 값이 1e-9 m 넘게 다르면 그 짝의 주 측정은 쓰지 않는다.
 - **정지 빈차 중량:** 출발 전 0.5 s 의 네 바퀴 법선력 합을 차 질량(운영 장면 26.0 kg, F2 계획 2 장) × 9.81 과 견준다. 서술용이다.
+
+## 12. 개정 3 (2026-11-06, 배치 뒤·측정값을 읽기 전)
+
+- 등록한 판정 도구(#316)를 배치에 처음 돌렸을 때 20 짝이 모두 '배치 스냅숏 차이'(`plant`, `encoder_model`)로 무효가 됐다. 측정값은 아직 읽지 않았고, 그 두 필드의 값만 짝을 지어 비교했다.
+- 두 필드는 정당하게 실행마다 다르다.
+  - `encoder_model` 은 seed 마다 정해지는 엔코더 위상(`phases_rad`)을 담는다. seed 0–9 가 10 가지 값을 가졌다(같은 seed 의 두 팔·두 장면은 같다).
+  - `plant.materials` 는 그 장면의 소품 재질 목록을 담아 line_2 와 random_1 이 다르다.
+- 그래서 11 장의 배치 전체 검사에서 이 둘을 빼고, `plant` 는 같은 장면의 seed·팔 사이, `encoder_model` 은 같은 seed 의 장면·팔 사이에서 같아야 한다고 고친다. 짝 안 일치 검사는 그대로다. 다른 규칙은 바꾸지 않는다.
+- 이 개정의 도구 수정은 같은 PR 에서 시험·Codex 검토 뒤 머지하고, 그 머지 뒤에 판정을 다시 돌린다.
