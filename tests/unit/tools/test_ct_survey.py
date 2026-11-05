@@ -323,3 +323,26 @@ def test_pairs_need_the_phase_history_past_the_preparation():
     prep = dict(row, stage="preparing", reason="prepare:timeout", substage=None, phase_history=[])
     out = C.compare_pair({"session": "A", "rows": [dict(prep)]}, {"session": "B", "rows": [dict(prep)]})["missions"][0]
     assert out["verdict"] == "same"
+
+
+def test_indicators_count_the_recoveries_a_mission_needed(tmp_path):
+    st = {"stall_replans": [{"phase": "return_home"}], "cusp_stalls": [], "observe_replans": [{"phase": "observe"}],
+          "docking_retries": [{"counted": True, "replaces": "docking_unaligned:{...}"}, {"counted": False}],
+          "observation_attempts": [1, 2], "delivery_docking": {"status": "done"},
+          "insertion_error": {"position_m": 0.01}, "lateral_clearance_min_m": {"insert": {"left": 0.07, "right": 0.05}},
+          "return_home_error": {"position_m": 0.03}}
+    ind = C.indicators(st)
+    assert ind["stall_replans"] == 1 and ind["observe_replans"] == 1 and ind["d7_reapproaches"] == 1
+    assert ind["d7_triggers"] == ["docking_unaligned"] and ind["recovery_phases"] == ["observe", "return_home"]
+    assert ind["lateral_clearance_insert_m"] == 0.05 and ind["docking_status"] == "done"
+    d = tmp_path / "D_line_m_s20"
+    base = d / "live" / "epoch_1" / "run"
+    _write(base / "missions" / "m1" / "result.json", {"result": {"mission_id": "m1", "outcome": "done", "started_s": 0,
+                                                                  "ended_s": 5}, "delivery_error_m": 0.02})
+    _write(base / "missions" / "m1" / "records.json", {"state": dict(st, phase="complete")})
+    _write(base / "result.json", {"success": True, "transitions": [], "obstacle_layer": {"grid_plans": [], "live_plans": []}})
+    res = C.survey(tmp_path, 1)
+    o = res["summary"]["D|line_m"]
+    assert o["missions_with_recovery"] == 1 and o["recoveries"]["observation_retry"] == 1
+    assert o["delivery_error_m"] == {"n": 1, "median": 0.02, "max": 0.02}
+    assert res["sessions"][0]["rows"][0]["plans"] is None  # no plan list kept: not recorded, not zero

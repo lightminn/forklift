@@ -125,7 +125,8 @@ def epoch_runs(session: Path) -> list[dict]:
                                                                   or (e.get("plan") or {}).get("length_m") is None)}
                                                  for e in st.get("docking_retries") or []],
                              "forbidden_contacts": len(st.get("forbidden_pocket_contacts") or []) if rec is not None else None,
-                             "lift_tilt_peak": st.get("lift_tilt_peak"), "folder": md})
+                             "lift_tilt_peak": st.get("lift_tilt_peak"), "folder": md,
+                             "indicators": indicators(st) if rec is not None else None})
         top = _json(f"{run}/result.json")
         # the run record's results book (written when the session ends normally): a mission whose folder is missing
         # keeps its place and result; a gap in the mission numbers keeps its place as a mission with no record
@@ -157,7 +158,32 @@ def epoch_runs(session: Path) -> list[dict]:
                                 if isinstance(v, dict) and v.get("unsettled_items")}}
         out.append({"run": run, "missions": missions, "result": top, "spool": spool,
                     "transitions": (top or {}).get("transitions") or [],
-                    "grid_plans": ((top or {}).get("obstacle_layer") or {}).get("grid_plans") or []})
+                    "grid_plans": (((top or {}).get("obstacle_layer") or {}).get("grid_plans")
+                                   or ((top or {}).get("obstacle_layer") or {}).get("live_plans") or [])})
+    return out
+
+
+RECOVERY_LISTS = ("stall_replans", "cusp_stalls", "observe_replans", "scene_replans", "cusp_replans", "cusp_heading_holds")
+
+
+def indicators(st: dict) -> dict:
+    """What a mission needed on its way, finished or not (the near misses of a survey with few failures): the recovery
+    lists' lengths and phases, the counted D7 re-approaches and their triggers, extra observation attempts, the
+    delivery docking's status, and the precision a done mission reached."""
+    out = {k: len(st.get(k) or []) for k in RECOVERY_LISTS}
+    out["recovery_phases"] = sorted({e.get("phase") for k in RECOVERY_LISTS for e in st.get(k) or []
+                                     if isinstance(e, dict) and e.get("phase")})
+    retries = [e for e in st.get("docking_retries") or [] if e.get("counted")]
+    out["d7_reapproaches"] = len(retries)
+    out["d7_triggers"] = sorted({str(e.get("replaces") or e.get("trigger") or "").split(":", 1)[0] for e in retries})
+    out["observation_attempts"] = len(st.get("observation_attempts") or [])
+    out["docking_status"] = (st.get("delivery_docking") or {}).get("status")
+    out["near_capture_status"] = (st.get("near_capture") or {}).get("status")
+    ins = st.get("insertion_error") or {}
+    out["insertion_error_m"] = ins.get("position_m")
+    lat = st.get("lateral_clearance_min_m") or {}
+    out["lateral_clearance_insert_m"] = min(((lat.get("insert") or {}).values()), default=None)
+    out["return_home_error_m"] = (st.get("return_home_error") or {}).get("position_m")
     return out
 
 
@@ -219,7 +245,8 @@ def _blank(session: str, order: int, s: dict) -> dict:
             "class": None, "exposure": [], "exposure_from": "none", "evidence": None, "epoch": None,
             "forbidden_contacts": None, "lift_tilt_peak": None, "docking_rounds": None, "docking_status": None,
             "delivery_error": None, "started_s": None, "ended_s": None, "outcome_from": None,
-            "plans": None, "plans_slam_used": None, "plans_static_off": None, "phase_history": None}
+            "plans": None, "plans_slam_used": None, "plans_static_off": None, "phase_history": None,
+            "indicators": None}
 
 
 def session_rows(session: Path, scheduled: int = 3) -> dict:
@@ -305,7 +332,8 @@ def session_rows(session: Path, scheduled: int = 3) -> dict:
         if m is not None:
             row.update(forbidden_contacts=m["forbidden_contacts"], lift_tilt_peak=m["lift_tilt_peak"],
                        docking_rounds=len(m["docking_round_times"]) if m["records"] else None,
-                       docking_status=m["docking_status"], delivery_error=m["delivery_error"])
+                       docking_status=m["docking_status"], delivery_error=m["delivery_error"],
+                       indicators=m.get("indicators"))
         transitions = (r or {}).get("transitions") or []
         phases = mission_phases(transitions, started, ended)
         done = row["outcome"] == "done"
@@ -328,7 +356,7 @@ def session_rows(session: Path, scheduled: int = 3) -> dict:
             row["class"] = "unknown"
         row["phase_history"] = phases
         row["exposure"], row["exposure_from"] = exposure_from(phases, row["stage"] or end_phase, done)
-        if started is not None and r is not None:
+        if started is not None and r is not None and r["grid_plans"]:  # a live run may keep no plan list: not recorded
             plans = [g for g in r["grid_plans"] if g.get("stamp_s") is not None
                      and started - 1e-6 <= g["stamp_s"] <= (ended if ended is not None else float("inf")) + 1e-6]
             row.update(plans=len(plans), plans_slam_used=sum(bool(g.get("slam_used")) for g in plans),
@@ -414,7 +442,9 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
                                  "class": Counter(), "stage_fail": Counter(), "stage_exposure": Counter(),
                                  "queue_blocked": 0, "queue_stop": Counter(), "transport_tracking": [],
                                  "forbidden_contacts": 0, "first_block": Counter(), "unexposed_after_block": 0,
-                                 "infra": 0})
+                                 "infra": 0, "recoveries": Counter(), "recovery_phases": Counter(),
+                                 "d7_triggers": Counter(), "docking_status": Counter(), "delivery_error_m": [],
+                                 "missions_with_recovery": 0, "done_missions": 0})
         o["sessions"] += 1
         rows = s["rows"]
         o["all_done"] += all(r["outcome"] == "done" for r in rows)
@@ -436,6 +466,27 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
             if r["class"] and first_block is None:
                 first_block = r
             o["forbidden_contacts"] += int(r.get("forbidden_contacts") or 0)
+            ind = r.get("indicators") or {}
+            if ind:
+                hit = False
+                for k in RECOVERY_LISTS + ("d7_reapproaches",):
+                    if ind.get(k):
+                        o["recoveries"][k] += 1
+                        hit = True
+                if ind.get("observation_attempts", 0) > 1:
+                    o["recoveries"]["observation_retry"] += 1
+                    hit = True
+                o["missions_with_recovery"] += hit
+                for ph in ind.get("recovery_phases") or []:
+                    o["recovery_phases"][ph] += 1
+                for t in ind.get("d7_triggers") or []:
+                    o["d7_triggers"][t] += 1
+                if ind.get("docking_status"):
+                    o["docking_status"][ind["docking_status"]] += 1
+            if r["outcome"] == "done":
+                o["done_missions"] += 1
+                if r.get("delivery_error") is not None:
+                    o["delivery_error_m"].append(r["delivery_error"])
             if r["reason"] and re.match(r"^Tracking (failed|timeout) in transport", r["reason"]):
                 o["transport_tracking"].append({"session": s["session"], "order": r["order"], "reason": r["reason"],
                                                 "evidence": r["evidence"]})
@@ -447,6 +498,8 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
         for k, v in list(o.items()):
             if isinstance(v, Counter):
                 o[k] = dict(v)
+        de = sorted(o.pop("delivery_error_m"))
+        o["delivery_error_m"] = ({"n": len(de), "median": de[len(de) // 2], "max": de[-1]} if de else None)
     return out
 
 
