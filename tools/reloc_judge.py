@@ -92,7 +92,8 @@ FINGERPRINT_FILES = (
     "ros2/src/forklift_ros/forklift_ros/isaac_slam_bridge.py", "tools/slam_bridge_container.sh",
     "tools/slam_localization_params.py", "ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml",
     # the launch, the probe and this judgement (its definitions above)
-    "deploy/console/isaac_live.sbatch", "deploy/console/reloc_session.sh", "tools/live_console_probe.py",
+    "deploy/console/isaac_live.sbatch", "deploy/console/reloc_session.sh", "deploy/lib/term_relay.sh",
+    "tools/live_console_probe.py",
     "tools/reloc_judge.py",
 )
 

@@ -58,19 +58,20 @@ OUT=$(realpath -m "${2:?the output directory}")
 KIND_ARGS=()
 [ -n "${3:-}" ] && KIND_ARGS=(--kind "$3")
 ROOT=$(pwd)
+source "$ROOT/deploy/lib/term_relay.sh" || { echo "no $ROOT/deploy/lib/term_relay.sh" >&2; exit 2; }
 mkdir -p "$OUT"
 echo "host=$(hostname) job=${SLURM_JOB_ID:-} shards=${SLURM_SHARDS_ON_NODE:-?} gpus=${CUDA_VISIBLE_DEVICES:-unset} node_gpu=${SLURM_JOB_GPUS:-?}" \
   "cpus=$(taskset -cp $$ | awk -F': ' '{print $2}') list=$LIST out=$OUT $(date -Is)"
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv 2>/dev/null
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design
+# Slurm's TERM ends the runner, which ends its runs (deploy/lib/term_relay.sh: armed before the start, so a TERM
+# however early reaches it; the batch shell waits for its own end)
+term_relay_arm
 "${BUNDLE_PY:-python3}" "$ROOT/tools/isaac_bundle.py" --list "$LIST" --out "$OUT" "${KIND_ARGS[@]}" ${BUNDLE_ARGS:-} &
+term_relay_hold runner
 RUNNER=$!
-trap 'kill -TERM "$RUNNER" 2>/dev/null' TERM INT  # Slurm's TERM: the runner ends its runs
-wait "$RUNNER"
-rc=$?
-if kill -0 "$RUNNER" 2>/dev/null; then  # the wait was cut by the trap: wait for the runner's own end
-  wait "$RUNNER"
-  rc=$?
-fi
+term_relay_add "$RUNNER"
+term_relay_wait "$RUNNER"
+rc=$TERM_RELAY_RC
 echo "bundle exit $rc $(date -Is)"
 exit "$rc"

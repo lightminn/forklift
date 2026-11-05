@@ -459,9 +459,10 @@ INHERIT_OK = re.compile(r"^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_\w+|TZ
 # unseen (LAG in the ct1 wrapper, NEAR in riib, EXTRA_ARGS read plainly); names the launcher only sets itself are not
 # in the environment, so they never match (Codex)
 _ENV_READ = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
-# the snapshot's launchers a run's wrapper may call (each checked when there)
+# the snapshot's launchers a run's wrapper may call (each checked when there), and the shell helper they source
+# (deploy/lib/term_relay.sh: its hash is part of the proof and the settings it reads are checked; Codex)
 SNAPSHOT_LAUNCHERS = ("deploy/console/isaac_live.sbatch", "deploy/console/slam_choice.sh",
-                      "deploy/riibotics/riib_scene.sbatch")
+                      "deploy/riibotics/riib_scene.sbatch", "deploy/lib/term_relay.sh")
 SNAPSHOT_INPUTS = SNAPSHOT_LAUNCHERS + ("sim/isaac/run_transport.py", "config/slam_map_bundles.yaml",
                                         "tools/slam_bundle_registry.py", "config/scene_requirements.yaml",
                                         "sim/isaac/scene_requirements.py")
