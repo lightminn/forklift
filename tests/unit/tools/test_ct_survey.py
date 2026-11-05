@@ -241,3 +241,51 @@ def test_probe_errors_and_missing_attempts_are_infrastructure(tmp_path):
     names = {x["session"]: x for x in res["sessions"]}
     assert names["D_line_m_s1"]["infra"] == "no_records"
     assert res["summary"]["D|line_m"]["infra"] == 1
+
+
+# --- Codex round 4 counterexamples ---
+
+def test_unknown_starts_and_repeated_phases_are_not_same():
+    base = {"order": 1, "start": "unknown", "outcome": None, "reason": None, "stage": None, "substage": None,
+            "phase_history": None, "ended_s": None, "docking_rounds": None, "delivery_error": None}
+    assert C.compare_pair({"session": "A", "rows": [dict(base)]},
+                          {"session": "B", "rows": [dict(base)]})["missions"][0]["verdict"] == "undecidable"
+    done = dict(base, start="confirmed", outcome="failed", reason="x", stage="insert", ended_s=5.0, docking_rounds=0)
+    a = dict(done, phase_history=["observe", "approach", "insert"])
+    b = dict(done, phase_history=["observe", "approach", "observe", "approach", "insert"])
+    out = C.compare_pair({"session": "A", "rows": [a]}, {"session": "B", "rows": [b]})["missions"][0]
+    assert out["verdict"] == "different" and out["first_difference"] == "phase_history"
+
+
+def test_a_missing_middle_folder_keeps_its_place(tmp_path):
+    d = tmp_path / "D_line_m_s11"
+    base = d / "live" / "epoch_1" / "run"
+    for mid, pal in (("m1", "P-1"), ("m3", "P-3")):
+        _write(base / "missions" / mid / "result.json",
+               {"result": {"mission_id": mid, "outcome": "done", "started_s": 0, "ended_s": 5, "pallet_id": pal}})
+    _write(base / "result.json", {"success": True, "transitions": [], "mission_results": [
+        {"mission_id": "m2", "outcome": "done", "started_s": 6, "ended_s": 9, "pallet_id": "P-2"}]})
+    rows = C.session_rows(d, 3)["rows"]
+    assert [r["mission_id"] for r in rows] == ["m1", "m2", "m3"]
+    assert [r["pallet_id"] for r in rows] == ["P-1", "P-2", "P-3"]
+    assert rows[1]["start_evidence"] == "results_book" and rows[1]["outcome"] == "done"
+    # without the book the gap still keeps its place, as a mission with no record
+    _write(base / "result.json", {"success": True, "transitions": []})
+    rows = C.session_rows(d, 3)["rows"]
+    assert [r["mission_id"] for r in rows] == ["m1", "m2", "m3"]
+    assert rows[1]["start_evidence"] == "mission_numbering" and rows[1]["outcome"] == "no_record"
+
+
+def test_a_mission_cut_while_preparing_does_not_borrow_the_previous_complete(tmp_path):
+    run = {"success": False, "failure_reason": "slam_link_failed: timeout",
+           "transitions": [{"from": "observe", "to": "approach", "time_s": 2}, {"from": "approach", "to": "complete", "time_s": 4}]}
+    d = session(tmp_path, "D_line_m_s12", [("a", "ack", "m1"), ("b", "ack", "m2")],
+                [("m1", "done", None, 0, 5, "complete")], run=run)
+    cut = C.session_rows(d, 2)["rows"][1]
+    assert cut["outcome"] == "session_failed" and cut["stage"] == "preparing" and cut["exposure"] == ["preparing"]
+
+
+def test_a_first_submission_rejected_is_a_queue_block(tmp_path):
+    d = session(tmp_path, "D_line_m_s13", [("a", "reject", "localization_lost")], [], run=None)
+    s = C.session_rows(d, 3)
+    assert s["queue_blocked"] and s["rows"][0]["class"] == "queue" and s["rows"][0]["reason"] == "localization_lost"
