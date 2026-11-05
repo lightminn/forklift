@@ -136,7 +136,8 @@
 
 - 옵션: 스냅숏 러너 파서에 여섯 옵션이 있고 `--live` 와의 거부 규칙이 없다.
 - DRY_RUN(ws1 잡 16087): 여섯 팔·장면 조합 모두 `ARGS_OK`. D·O6 의 러너 인자에 `--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-scans 3 --return-start-backoff boxed --near-end-stand on --return-cusp-replans 2` 가 그대로 있고, O0 에는 없으며, `--deterministic` 은 D 에만 있다. 등록 지도 묶음이 `--slam-map-bundle` 로 들어간다. 런처는 `MAX_EPOCHS` 를 감독의 `--max-epochs` 로 넘긴다.
-- 세 번째 단계(첫 회전 세션 기록의 적용값)는 첫 회전에서 확인한다.
+- 세 번째 단계: 첫 회전(ws1 묶음 16089·16090, D 4·O6 1·O0 1)의 실행 중 러너 명령줄에서 D·O6 은 여섯 인자와 값, D 는 `--deterministic`, O0 은 없음을 확인했고 감독은 `--max-epochs 1` 이다. 첫 완료 세션 D_line_m_s0 의 실행 기록(`arguments`)에 여섯 값이 적용값으로 남았고(`exit_prefix_exempt on`, `low_clearance_guard on`, `restart_confirm_scans 3`, `return_start_backoff boxed`, `near_end_stand on`, `return_cusp_replans 2`), 기능 요약(`restart_confirm`·저상 감시·exempt 집계)과 결정 모드 덮어쓰기(학습 → oracle, 픽셀 지연 12 → 0)도 기록됐다. spool 완전. 뺀 인자는 없다.
+- 제출: 나머지 22 시도는 묶음 16091·16092(공유 claim, `--retries 0`, `--run-timeout-s 4500`). 첫 세션이 24 분 안에 끝나 시간 한도를 3 h 30 min 으로 줄였다.
 
 ### Codex 3 회차 (같은 스레드, 3 판 d3de5886 대상 — P1 0·P2 8, 모두 집계 도구가 계획·실제 기록과 어긋난 곳)
 
