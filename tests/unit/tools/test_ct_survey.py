@@ -2,6 +2,8 @@
 
 import json
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
@@ -347,3 +349,14 @@ def test_indicators_count_the_recoveries_a_mission_needed(tmp_path):
     assert o["observation_attempts"] == {2: 1}  # the normal flow observes twice: a count, not a recovery
     assert o["delivery_error_m"] == {"n": 1, "median": 0.02, "max": 0.02}
     assert res["sessions"][0]["rows"][0]["plans"] is None  # no plan list kept: not recorded, not zero
+
+
+def test_the_delivery_error_median_of_an_even_sample_is_the_mean_of_the_middle_two(tmp_path):
+    for k, err in enumerate((0.01, 0.02, 0.03, 0.10)):
+        d = tmp_path / f"D_line_m_s{30 + k}"
+        base = d / "live" / "epoch_1" / "run"
+        _write(base / "missions" / "m1" / "result.json",
+               {"result": {"mission_id": "m1", "outcome": "done", "started_s": 0, "ended_s": 5}, "delivery_error_m": err})
+        _write(base / "result.json", {"success": True, "transitions": []})
+    o = C.survey(tmp_path, 1)["summary"]["D|line_m"]
+    assert o["delivery_error_m"]["median"] == pytest.approx(0.025) and o["delivery_error_m"]["max"] == 0.10

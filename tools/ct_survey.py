@@ -15,6 +15,7 @@ import csv
 import glob
 import json
 import re
+import statistics
 import sys
 from collections import Counter
 from pathlib import Path
@@ -497,7 +498,7 @@ def summarize(sessions: list[dict], arms: dict) -> dict:
             if isinstance(v, Counter):
                 o[k] = dict(v)
         de = sorted(o.pop("delivery_error_m"))
-        o["delivery_error_m"] = ({"n": len(de), "median": de[len(de) // 2], "max": de[-1]} if de else None)
+        o["delivery_error_m"] = ({"n": len(de), "median": float(statistics.median(de)), "max": de[-1]} if de else None)
     return out
 
 
