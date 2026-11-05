@@ -190,6 +190,7 @@ def steering_residuals(log: dict, control: np.ndarray, window, wheelbase: float,
     ds = np.diff(x) * np.cos(mid) + np.diff(y) * np.sin(mid)
     dpsi = np.diff(yaw)
     out = {}
+    per_window: dict[str, dict] = {}
     for name, key in (("actual", "steering_rad"), ("measured", "steering_measured_rad")):
         if key not in log:
             continue
@@ -204,12 +205,14 @@ def steering_residuals(log: dict, control: np.ndarray, window, wheelbase: float,
         out[f"{name}.residual_rad"] = float(np.sum(dpsi[mask] - pred[mask]))
         out[f"{name}.windows"] = int(len(turning))
         out[f"{name}.abs_ds_m"] = float(np.sum(np.abs(ds[mask])))
-        if name == "actual":
-            # per counted window: start time, residual, signed distance, mean kinematic curvature (for like-for-like
-            # comparisons by curvature, direction and speed -- Codex code review P2)
-            out["_windows"] = [{"t0": float(window[0] + w * WINDOW_S), "residual_rad": float(np.sum((dpsi - pred)[win == w])),
-                                "ds_m": float(np.sum(ds[win == w])), "kappa_mean": float(np.mean(k_mid[win == w]))}
-                               for w in sorted(turning)]
+        # per counted window: start time, both residuals, signed distance, mean kinematic curvature (for like-for-like
+        # comparisons by curvature, direction and speed -- Codex code review P2/P3)
+        for w in sorted(turning):
+            row = per_window.setdefault(int(w), {"t0": float(window[0] + w * WINDOW_S), "ds_m": float(np.sum(ds[win == w]))})
+            row[f"{name}_residual_rad"] = float(np.sum((dpsi - pred)[win == w]))
+            if name == "actual":
+                row["kappa_mean"] = float(np.mean(k_mid[win == w]))
+    out["_windows"] = [per_window[w] for w in sorted(per_window)]
     return out
 
 
@@ -292,7 +295,8 @@ def diagnose_run(folder: Path, t_m: float | None, split: dict | None) -> dict:
     d2 = keyframe_intervals(records, control, offset, log)
     d8 = encoder_split(log, d2, float(geom["wheel_radius_m"]), control)
     out["_intervals"] = [{**iv, **next((e for e in d8 if e["t0"] == iv["t0"] and e["t1"] == iv["t1"]), {}),
-                          "window": window_of(iv["t0"], windows)} for iv in d2]
+                          "window": (window_of(iv["t0"], windows) if window_of(iv["t0"], windows) == window_of(iv["t1"], windows)
+                                     else "crossing")} for iv in d2]
     out["_d3_windows"] = {}
     for name, w in windows.items():
         if w is None:
