@@ -4262,8 +4262,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             perception_mount,
             # Every physics step, capture included, goes through step_world
             # (SLAM plan: odometry, scans and the lockstep must see them all).
-            step_fn=lambda: (cells.stepper["fn"](True),  # then, in a deterministic run, the frame at that step (D1)
-                             frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time)),
+            # then, in a deterministic run, the frame at that step holding its RGB (D1; a cold camera's first renders
+            # hold none -- frame_sync.sync)
+            step_fn=lambda: (cells.stepper["fn"](True),
+                             frame_sync.sync(perception_camera, cells.world.render, cells.world.current_time, rgb=True)),
             physics_time_fn=lambda: cells.world.current_time,
             pose_fn=robot.get_world_pose,
             guard_fn=lift_guard,
@@ -7210,7 +7212,9 @@ def drive(S, isaac) -> None:
             """One driving frame for the far recognition: render-metadata time, pixels and instance ids. A live run
             hands its work to the far worker; a failure of its read is raised by the tick, after this step's other
             sensors (plan 2026-10-22-live-far-recognition task 9)."""
-            frame_sync.sync(perception_camera, world.render, world.current_time)  # deterministic run only (D1)
+            # deterministic run only (D1); the frame holding its RGB, which a cold camera's first renders lack (video
+            # off: first rendered at the first far frame -- frame_sync.sync)
+            frame_sync.sync(perception_camera, world.render, world.current_time, rgb=True)
             frame_ = perception_camera.get_current_frame()
             # the sensor's own contract (its metadata): a session failure, as before (task 9; Codex impl round 1 P2)
             rendering_s_ = float(frame_["rendering_time"]) - initial_time
