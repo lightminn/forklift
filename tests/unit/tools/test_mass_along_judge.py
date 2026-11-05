@@ -237,8 +237,9 @@ def _write_run(folder, arm, kg, scene, seed=0, **over):
              arguments={"settings": f"/s/mae_0108c3ff_{arm}/config/x.yaml", "output": str(run), "rear_axle_offset_m": -0.34},
              settings_synthetic={"pallet_mass_kg": kg, "wheel_torque_nm": 3.0}, scene_layout={"sha256": "L"},
              **{k: "h" for k in ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256",
-                                 "pallet_urdf_sha256", "encoder_model", "chassis_model")},
-             scene_sha256={"scene.usda": "s"}, plant={"m": 1}, plant_tyre_contact=[{"k": None}])
+                                 "pallet_urdf_sha256", "chassis_model")},
+             encoder_model={"name": "team_spec_quantized", "phases_rad": [float(seed)]},
+             scene_sha256={"scene.usda": "s"}, plant={"materials": []}, plant_tyre_contact=[{"k": None}])
     r.update(over)
     (run / "result.json").write_text(json.dumps(r))
     np.save(run / "slam_control.npy", control)
@@ -282,7 +283,7 @@ def test_judge_reads_real_format_records(tmp_path):
                     "approach_speed": 0.3}}, "arguments"),
     ({"settings_synthetic": {"pallet_mass_kg": 4.93, "wheel_torque_nm": 2.0}}, "settings_synthetic"),
     ({"scene_layout": {"sha256": "other"}}, "scene_layout"),
-    ({"encoder_model": None}, "encoder_model"),
+    ({"encoder_model": None}, "encoder_model"),  # caught in the pair check (missing)
     ({"seed": 3}, "seed"),
     ({"deterministic": {"enabled": True, "broken": ["frame_sync:no_rgba"]}}, "broken"),
     ({"failure_reason": "slam_link_failed: no reply"}, "infrastructure")])
@@ -446,3 +447,58 @@ def test_the_batch_checks_the_scene_hashes_and_refuses_a_tied_reference(tmp_path
 
 def test_the_gate_distance_is_the_gates_own():
     assert J.GATE_DISTANCE_M == pytest.approx(0.4472136, abs=1e-7)
+
+
+def _plant(scene, solver=(32, 8)):
+    return {"articulation_solver_iterations": list(solver), "materials": [
+        {"root": "Forklift", "material": "/World/ContactMaterial"}, {"root": "Pallet", "material": "/World/P"},
+        {"root": "Scene", "material": f"/World/Scene/Looks/{scene}"}]}
+
+
+def _encoder(seed, name="team_spec_quantized"):
+    return {"name": name, "wheel_counts_per_rev": 4096, "phases_rad": [float(seed)]}
+
+
+def _scene_seed_batch(tmp_path, seeds=(0, 1, 2), over=None):
+    compare = {f"{s}/{a}": True for s in J.SCENES for a in J.ARMS}
+    for seed in seeds:
+        for arm, kg in (("A", 10.0), ("B", 4.93)):
+            for scene in J.SCENES:
+                kw = dict(plant=_plant(scene), encoder_model=_encoder(seed))
+                kw.update((over or {}).get((scene, seed), {}))
+                _write_run(tmp_path / f"mae_{arm}_{scene}_s{seed}", arm, kg, scene, seed=seed, **kw)
+    return J.judge(tmp_path, compare)
+
+
+def test_scene_props_may_differ_between_scenes_and_encoder_phases_between_seeds(tmp_path):
+    # plan amendment 3 (the real batch, validity only)
+    out = _scene_seed_batch(tmp_path)
+    assert all(p["valid"] for p in out["pairs"]), [p.get("why") for p in out["pairs"]]
+
+
+@pytest.mark.parametrize("over, part", [
+    ({"plant": _plant("random_1", solver=(16, 8))}, "plant(common)"),  # the truck's solver changed for one scene
+    ({"encoder_model": _encoder(1, name="team_spec_typical_inl")}, "encoder_model(spec)"),  # one seed's encoder spec
+    ({"plant": _plant("other")}, "plant(props)")])
+def test_the_common_parts_of_plant_and_encoder_still_hold_across_the_batch(tmp_path, over, part):
+    # Codex tool review 5 P2: whole-field grouping let the truck's physics vary by scene and the encoder spec by seed
+    out = _scene_seed_batch(tmp_path, seeds=(0, 1, 2, 3), over={("random_1", 1): over})
+    bad = [p for p in out["pairs"] if p["scene"] == "random_1" and p["seed"] == 1][0]
+    assert not bad["valid"] and part in bad["why"], bad.get("why")
+
+
+def test_a_part_missing_from_every_run_of_a_seed_is_still_outside(tmp_path):
+    # Codex new-thread review P2: phases dropped from all four runs of a seed matched the "null" reference
+    enc = {"name": "team_spec_quantized", "wheel_counts_per_rev": 4096}  # no phases_rad
+    out = _scene_seed_batch(tmp_path, seeds=(0, 1, 2), over={(sc, 1): {"encoder_model": enc} for sc in J.SCENES})
+    bad = [p for p in out["pairs"] if p["seed"] == 1]
+    assert bad and all(not p["valid"] and "encoder_model(phases):s1 missing" in p["why"] for p in bad), [p.get("why") for p in bad]
+
+
+
+@pytest.mark.parametrize("plant", [{"articulation_solver_iterations": [32, 8]},
+                                   {"articulation_solver_iterations": [32, 8], "materials": None}])
+def test_a_missing_materials_list_is_outside_even_in_every_run(tmp_path, plant):
+    # Codex new-thread review 2 P2: a missing or null materials list read as an empty one and passed
+    out = _scene_seed_batch(tmp_path, seeds=(0, 1), over={(sc, sd): {"plant": plant} for sc in J.SCENES for sd in (0, 1)})
+    assert out["pairs"] and all(not p["valid"] and "plant(common) missing" in p["why"] for p in out["pairs"])

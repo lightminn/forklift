@@ -50,7 +50,42 @@ IDENTITY_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pa
 SNAP_ARM = re.compile(r"(mae_[0-9a-f]+)_[AB]\b")
 # the same across the whole batch (plan 2.2 one snapshot, amendment 2): everything but the seed and the scene
 BATCH_FIELDS = ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256", "pallet_urdf_sha256",
-                "scene_sha256", "plant", "plant_tyre_contact", "encoder_model", "chassis_model")
+                "scene_sha256", "plant_tyre_contact", "chassis_model")
+# plan amendment 3: the plant record lists the scene's own prop materials (roots below) beside the truck's, the pallet's
+# and the environment's; the encoder model carries the seed's encoder phases beside its fixed specification. Only those
+# parts may differ -- the props within a scene, the phases within a seed; the rest of both is one value across the batch.
+SCENE_PROP_ROOTS = ("Scene", "ScenePallets")
+
+
+def plant_common(result: dict):
+    """The plant record without the scene's props; None when the record or its materials list is missing (an empty list
+    that was recorded stays an empty list)."""
+    plant = result.get("plant")
+    if not isinstance(plant, dict) or not isinstance(plant.get("materials"), list):
+        return None
+    return {**plant, "materials": [m for m in plant["materials"] if m.get("root") not in SCENE_PROP_ROOTS]}
+
+
+def plant_props(result: dict):
+    plant = result.get("plant")
+    if not isinstance(plant, dict) or not isinstance(plant.get("materials"), list):
+        return None
+    return [m for m in plant["materials"] if m.get("root") in SCENE_PROP_ROOTS]
+
+
+def encoder_common(result: dict):
+    enc = result.get("encoder_model")
+    return {k: v for k, v in enc.items() if k != "phases_rad"} if isinstance(enc, dict) else enc
+
+
+def encoder_phases(result: dict):
+    enc = result.get("encoder_model")
+    return enc.get("phases_rad") if isinstance(enc, dict) else None
+
+
+BATCH_PARTS = {"plant(common)": plant_common, "encoder_model(spec)": encoder_common}
+PER_SCENE_PARTS = {"plant(props)": plant_props}
+PER_SEED_PARTS = {"encoder_model(phases)": encoder_phases}
 RUN_ARM = re.compile(r"\bmae_[AB]_")
 
 
@@ -644,17 +679,32 @@ def batch_reference(loaded: dict) -> dict:
     runs = [(key, r) for key, r in loaded.items() if "result" in r]
     ref = {k: _mode([_normal(r["result"].get(k)) for _, r in runs]) for k in BATCH_FIELDS}
     ref["settings_synthetic"] = _mode([_settings_without_mass(r["result"]) for _, r in runs])
+    for k, part in BATCH_PARTS.items():
+        ref[k] = _mode([_normal(part(r["result"])) for _, r in runs])
     for scene in SCENES:
         ref[f"scene_layout:{scene}"] = _mode([_normal((r["result"].get("scene_layout") or {}).get("sha256"))
                                              for key, r in runs if key[0] == scene])
+        for k, part in PER_SCENE_PARTS.items():
+            ref[f"{k}:{scene}"] = _mode([_normal(part(r["result"])) for key, r in runs if key[0] == scene])
+    for seed in sorted({key[1] for key, _ in runs}):
+        for k, part in PER_SEED_PARTS.items():
+            ref[f"{k}:s{seed}"] = _mode([_normal(part(r["result"])) for key, r in runs if key[1] == seed])
     return ref
 
 
-def batch_differences(result: dict, ref: dict, scene: str) -> list[str]:
+def batch_differences(result: dict, ref: dict, scene: str, seed: int | None = None) -> list[str]:
     checks = {k: _normal(result.get(k)) for k in BATCH_FIELDS}
     checks["settings_synthetic"] = _settings_without_mass(result)
     checks[f"scene_layout:{scene}"] = _normal((result.get("scene_layout") or {}).get("sha256"))
-    return [k for k, v in checks.items() if ref.get(k) in (None, TIED) or v != ref[k]]
+    missing = []
+    for name, parts, key in ((None, BATCH_PARTS, lambda k: k), (scene, PER_SCENE_PARTS, lambda k: f"{k}:{scene}"),
+                             (seed, PER_SEED_PARTS, lambda k: f"{k}:s{seed}")):
+        for k, part in parts.items():
+            value = part(result)
+            if value is None:  # a missing part is outside the allowed difference, even when every run lacks it
+                missing.append(f"{key(k)} missing")
+            checks[key(k)] = _normal(value)
+    return missing + [k for k, v in checks.items() if ref.get(k) in (None, TIED) or v != ref[k]]
 
 
 def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | None = None) -> dict:
@@ -685,7 +735,7 @@ def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | Non
         why = why or next((f"{a}: {p}" for a in ARMS if (p := identity_problem(loaded[a], a, seed))), None)
         why = why or (lambda b: f"fields differ: {b}" if b else None)(identity_differences(loaded["A"]["result"], loaded["B"]["result"]))
         why = why or next((f"{a}: batch snapshot differs: {b}" for a in ARMS
-                           if (b := batch_differences(loaded[a]["result"], ref, scene))), None)
+                           if (b := batch_differences(loaded[a]["result"], ref, scene, seed))), None)
         if why:
             pairs.append({**row, "valid": False, "why": why})
             continue
