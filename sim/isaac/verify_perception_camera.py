@@ -740,7 +740,7 @@ def recordable_setting_value(value):
     setting type must not cost the whole result.json.
     """
     try:
-        RUNNER.record_json(value)
+        RUNNER.record_json(value, strict=True)  # the refusal is the probe: non-finite values are not made null
     except (TypeError, ValueError, RecursionError):
         try:
             text = repr(value)
