@@ -209,6 +209,7 @@ set -f
 NES_NEXT=0
 RCR_NEXT=0
 DDC_NEXT=0
+EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs or newlines around it)
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
   # C2: an explicit --near-end-stand in EXTRA_ARGS is the value applied (the runner's parser takes a unique prefix and
@@ -232,6 +233,12 @@ for w in ${EXTRA_ARGS:-}; do
     continue
   fi
   case "$w" in --lidar-keepout-m|--lidar-keepout-m=*|--exit-clearance-m|--exit-clearance-m=*) EXTRA_SETS_EXIT=1;; esac
+  # SCENE (its final NAME) is the scene: the degenerate-continue allow list and riib_defaults.txt read it, so a scene
+  # file given past it would run another scene under line_2_m's defaults (Codex promotion review P2); --scene-f... can
+  # only be --scene-file
+  if [[ "$k" == --scene-f* && "--scene-file" == "$k"* ]]; then
+    echo "SCENE= sets the scene, not EXTRA_ARGS's --scene-file (the defaults and riib_defaults.txt follow SCENE)"; exit 2
+  fi
   # the runner's parser takes a unique prefix too: --exit-p... can only be --exit-prefix-exempt
   k=${w%%=*}
   if [[ "$k" == --exit-p* && "--exit-prefix-exempt" == "$k"* ]]; then
@@ -241,6 +248,7 @@ for w in ${EXTRA_ARGS:-}; do
     echo "RETURN_START=on|boxed|off sets the return-start backoff, not EXTRA_ARGS (riib_defaults.txt records the switch)"; exit 2
   fi
   case "$w" in --near-tracking)
+    EXTRA_NEAR_TRACKING=1
     [ "$EXIT_EXEMPT" = off ] || { echo "--near-tracking needs EXIT_EXEMPT=off (the runner refuses the exemption with it)"; exit 2; };; esac
 done
 set +f
@@ -252,8 +260,8 @@ case "$DOCKING_DEGENERATE_CONTINUE" in on|off) ;; *) echo "--docking-degenerate-
 if [ "$DOCKING_DEGENERATE_CONTINUE" = on ]; then
   # the round-2 stop and its retry are D7 docking's, which only the slam mode builds (the runner refuses it otherwise)
   [ "$MODE" = slam ] || { echo "DOCKING_DEGENERATE_CONTINUE=on needs MODE=slam (--d7-docking)"; exit 2; }
-  case " ${EXTRA_ARGS:-} " in *" --near-tracking "*)
-    echo "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off (its contract was measured off)"; exit 2;; esac
+  [ "$EXTRA_NEAR_TRACKING" = 0 ] \
+    || { echo "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off (its contract was measured off)"; exit 2; }
 fi
 if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
     && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then

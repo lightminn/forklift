@@ -650,6 +650,11 @@ def test_degenerate_continue_named_in_extra_args_wins_and_is_recorded(tmp_path, 
     ({"MODE": "truth", "DOCKING_DEGENERATE_CONTINUE": "on"}, "needs MODE=slam"),
     ({"MODE": "truth", "EXTRA_ARGS": "--docking-degenerate-continue on"}, "needs MODE=slam"),
     ({"EXTRA_ARGS": "--near-tracking", "EXIT_EXEMPT": "off", "RETURN_CUSP_REPLANS": "0"},
+     "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off"),
+    # Codex promotion review P3: the words as the runner gets them, a tab or a newline around the flag included
+    ({"EXTRA_ARGS": "--record-boundary\t--near-tracking\t--seed=0", "EXIT_EXEMPT": "off", "RETURN_CUSP_REPLANS": "0"},
+     "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off"),
+    ({"EXTRA_ARGS": "--near-tracking\n", "EXIT_EXEMPT": "off", "RETURN_CUSP_REPLANS": "0"},
      "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off")])
 def test_degenerate_continue_is_refused_where_it_is_not_defined(tmp_path, env, said):
     out = dry_run(tmp_path, **env)
@@ -667,3 +672,14 @@ def test_the_runner_s_check_takes_the_line_2_m_default(tmp_path):
     out = dry_run(tmp_path, out=tmp_path / "o", SCENE_DIR=str(scenes), DRY_RUN_CHECK="1", PYTHONPATH=str(ROOT / "src"))
     assert out.returncode == 0 and out.stdout.splitlines()[-1] == "ARGS_OK", out.stdout[-800:] + out.stderr
     assert contains(args_of(out), ["--docking-degenerate-continue", "on"])
+
+
+@pytest.mark.parametrize("extra", ["--scene-file /x/random_1_m.json", "--scene-file=/x/aisle_rack.json",
+                                   "--scene-f=/x/random_1_m.json"])
+def test_a_scene_file_past_scene_is_refused(tmp_path, extra):
+    # Codex promotion review P2: SCENE=line_2 with another scene file in EXTRA_ARGS ran that scene with line_2_m's
+    # degenerate-continue default; SCENE is the scene the defaults and the record follow
+    out = dry_run(tmp_path, EXTRA_ARGS=extra)
+    assert out.returncode == 2 and "SCENE= sets the scene" in out.stdout, out.stdout
+    out = dry_run(tmp_path, out=tmp_path / "o2", EXTRA_ARGS="--scene-requirements-override {}")
+    assert "SCENE= sets the scene" not in out.stdout  # the other --scene-... option is not a scene file
