@@ -1,0 +1,1221 @@
+{
+ "determinism_unconfirmed": [],
+ "per_scene": {
+  "line_2": {
+   "n": 10,
+   "mean": -0.0420766602984625,
+   "upper": -0.028466566562663706,
+   "lower": -0.05568675403426129,
+   "sd": 0.02347858367417144
+  },
+  "random_1": {
+   "n": 6,
+   "mean": -0.04179898085419861,
+   "upper": -0.02966330258319305,
+   "lower": -0.05393465912520416,
+   "sd": 0.014752112078270195
+  }
+ },
+ "sign_negative": {
+  "line_2": 10,
+  "random_1": 6
+ },
+ "J1_blocks": {
+  "1": -0.047492326304065524,
+  "3": -0.047595484268579014,
+  "4": -0.05533379986701708,
+  "5": -0.053209011830781486,
+  "6": -0.041924277143585965,
+  "8": -0.047978055804269955
+ },
+ "J1_stats": {
+  "n": 6,
+  "mean": -0.04892215920304984,
+  "upper": -0.04500873648594876,
+  "lower": -0.05283558192015092,
+  "sd": 0.00475715071239609
+ },
+ "J1_same_path": {
+  "n": 0,
+  "mean": null,
+  "upper": null,
+  "lower": null
+ },
+ "J3": {
+  "approach_empty.correction_events": {
+   "n": 6,
+   "mean": -1.0,
+   "upper": 0.44840727670680836,
+   "lower": -2.448407276706808,
+   "sd": 1.760681686165901
+  },
+  "approach_empty.k_fwd": {
+   "n": 6,
+   "mean": -8.504798142223977e-06,
+   "upper": 6.559067065915271e-05,
+   "lower": -8.260026694360068e-05,
+   "sd": 9.007033936137059e-05
+  },
+  "approach_empty.k_rev": {
+   "n": 6,
+   "mean": 0.00017190245650450744,
+   "upper": 0.0003285380746504129,
+   "lower": 1.5266838358601967e-05,
+   "sd": 0.00019040601956779346
+  },
+  "approach_empty.lift_m": {
+   "n": 6,
+   "mean": -1.0172500259614495e-08,
+   "upper": -5.622468104797282e-09,
+   "lower": -1.472253241443171e-08,
+   "sd": 5.531012178195708e-09
+  },
+  "approach_empty.odom_yaw_err_rad": {
+   "n": 6,
+   "mean": -0.0008622535381329365,
+   "upper": 0.0031046060710610206,
+   "lower": -0.004829113147326893,
+   "sd": 0.004822108517280547
+  },
+  "approach_empty.pitch_rad": {
+   "n": 6,
+   "mean": -5.053654024705915e-09,
+   "upper": 2.203372520785336e-08,
+   "lower": -3.214103325726519e-08,
+   "sd": 3.292737706305497e-08
+  },
+  "approach_empty.post_event_err_last3_m": {
+   "n": 6,
+   "mean": 0.0014283537371273657,
+   "upper": 0.0036945502051237795,
+   "lower": -0.0008378427308690483,
+   "sd": 0.0027547849852889235
+  },
+  "approach_empty.post_event_err_mean_m": {
+   "n": 6,
+   "mean": 0.00030937469877006027,
+   "upper": 0.0013049142227715314,
+   "lower": -0.0006861648252314107,
+   "sd": 0.0012101763336546134
+  },
+  "approach_empty.processed_scans": {
+   "n": 6,
+   "mean": -1.0,
+   "upper": 0.2744284910299306,
+   "lower": -2.274428491029931,
+   "sd": 1.5491933384829668
+  },
+  "approach_empty.rear_load_share": {
+   "n": 6,
+   "mean": -0.0004981050288061182,
+   "upper": -0.00028765074677523196,
+   "lower": -0.0007085593108370045,
+   "sd": 0.0002558279056630157
+  },
+  "approach_empty.release_jump_max_m": {
+   "n": 3,
+   "mean": 0.0,
+   "upper": 0.0,
+   "lower": 0.0,
+   "sd": 0.0
+  },
+  "approach_empty.roll_rad": {
+   "n": 6,
+   "mean": 4.56423679182737e-08,
+   "upper": 9.39723470025884e-08,
+   "lower": -2.687611166040999e-09,
+   "sd": 5.874984918607178e-08
+  },
+  "approach_empty.steer_read_err_rad": {
+   "n": 6,
+   "mean": 2.395045112791136e-06,
+   "upper": 5.8107811090185275e-06,
+   "lower": -1.0206908834362549e-06,
+   "sd": 4.152163490236721e-06
+  },
+  "approach_empty.steer_track_err_max_rad": {
+   "n": 6,
+   "mean": 0.00021756728311401788,
+   "upper": 0.005044948341315314,
+   "lower": -0.004609813775087279,
+   "sd": 0.005868157083996537
+  },
+  "approach_empty.steer_track_err_rad": {
+   "n": 6,
+   "mean": 0.00034064283006783803,
+   "upper": 0.000611338213183641,
+   "lower": 6.994744695203506e-05,
+   "sd": 0.0003290568966660427
+  },
+  "approach_empty.travel_fwd_m": {
+   "n": 6,
+   "mean": -0.2651501630090949,
+   "upper": 0.07030653149922161,
+   "lower": -0.6006068575174114,
+   "sd": 0.4077806484550685
+  },
+  "approach_empty.travel_rev_m": {
+   "n": 6,
+   "mean": -0.23714224637146208,
+   "upper": 0.046095193368358045,
+   "lower": -0.5203796861112822,
+   "sd": 0.3443030016531503
+  },
+  "approach_empty.tyre_fz_fl_n": {
+   "n": 6,
+   "mean": -0.09661564821441242,
+   "upper": 0.18561555133502788,
+   "lower": -0.37884684776385275,
+   "sd": 0.3430798176056951
+  },
+  "approach_empty.tyre_fz_fr_n": {
+   "n": 6,
+   "mean": 0.19417289262538548,
+   "upper": 0.4946351844501654,
+   "lower": -0.10628939919939448,
+   "sd": 0.3652415056917795
+  },
+  "approach_empty.tyre_fz_rl_n": {
+   "n": 6,
+   "mean": -0.3048453024399076,
+   "upper": -0.06786679986287425,
+   "lower": -0.5418238050169409,
+   "sd": 0.28807070788202155
+  },
+  "approach_empty.tyre_fz_rr_n": {
+   "n": 6,
+   "mean": 0.1565889317091719,
+   "upper": 0.4285235251560491,
+   "lower": -0.11534566173770525,
+   "sd": 0.330563278862762
+  },
+  "d_c": {
+   "n": 6,
+   "mean": -0.042866215097370756,
+   "upper": 0.14097086693928995,
+   "lower": -0.22670329713403148,
+   "sd": 0.2234720777681145
+  },
+  "dyaw_c": {
+   "n": 6,
+   "mean": -0.045893331941285774,
+   "upper": 0.04264722572271757,
+   "lower": -0.13443388960528913,
+   "sd": 0.10762976744798745
+  },
+  "extract.correction_events": {
+   "n": 6,
+   "mean": 0.0,
+   "upper": 0.0,
+   "lower": 0.0,
+   "sd": 0.0
+  },
+  "extract.k_rev": {
+   "n": 6,
+   "mean": -6.674979205736085e-05,
+   "upper": -3.6986470886954254e-05,
+   "lower": -9.651311322776746e-05,
+   "sd": 3.61802480192983e-05
+  },
+  "extract.lift_m": {
+   "n": 6,
+   "mean": 0.012959481549485763,
+   "upper": 0.012959653342259821,
+   "lower": 0.012959309756711704,
+   "sd": 2.088310352790584e-07
+  },
+  "extract.odom_yaw_err_rad": {
+   "n": 6,
+   "mean": -6.888740108095617e-05,
+   "upper": 5.9943270588819775e-05,
+   "lower": -0.00019771807275073214,
+   "sd": 0.00015660636885307663
+  },
+  "extract.pitch_rad": {
+   "n": 6,
+   "mean": -4.3179916066861855e-07,
+   "upper": -3.746165586810088e-07,
+   "lower": -4.889817626562283e-07,
+   "sd": 6.951108414465557e-08
+  },
+  "extract.processed_scans": {
+   "n": 6,
+   "mean": -0.08333333333333333,
+   "upper": 0.08458736444441863,
+   "lower": -0.2512540311110853,
+   "sd": 0.2041241452319315
+  },
+  "extract.rear_load_share": {
+   "n": 6,
+   "mean": 0.15878612751651927,
+   "upper": 0.15912610195368745,
+   "lower": 0.1584461530793511,
+   "sd": 0.00041327240957223177
+  },
+  "extract.roll_rad": {
+   "n": 6,
+   "mean": -4.235857645285264e-07,
+   "upper": -3.1703789984526237e-07,
+   "lower": -5.301336292117905e-07,
+   "sd": 1.2951942251659897e-07
+  },
+  "extract.steer_read_err_rad": {
+   "n": 6,
+   "mean": -7.770197551049207e-05,
+   "upper": -5.4283034043516495e-05,
+   "lower": -0.00010112091697746764,
+   "sd": 2.8468029685715033e-05
+  },
+  "extract.steer_track_err_max_rad": {
+   "n": 6,
+   "mean": 0.0005590387829605717,
+   "upper": 0.0021164449801870816,
+   "lower": -0.000998367414265938,
+   "sd": 0.0018931806084353576
+  },
+  "extract.steer_track_err_rad": {
+   "n": 6,
+   "mean": -5.3358991318444765e-05,
+   "upper": 0.0002538190562567869,
+   "lower": -0.0003605370388936764,
+   "sd": 0.00037340516818418847
+  },
+  "extract.travel_fwd_m": {
+   "n": 6,
+   "mean": -9.174190686533002e-05,
+   "upper": -8.992452554779993e-05,
+   "lower": -9.355928818286012e-05,
+   "sd": 2.2092059699055328e-06
+  },
+  "extract.travel_rev_m": {
+   "n": 6,
+   "mean": -0.001480523623730708,
+   "upper": -0.0014461105384404632,
+   "lower": -0.0015149367090209528,
+   "sd": 4.1832494222730925e-05
+  },
+  "extract.tyre_fz_fl_n": {
+   "n": 6,
+   "mean": -31.266940985180195,
+   "upper": -29.432852777096812,
+   "lower": -33.10102919326358,
+   "sd": 2.229514840692781
+  },
+  "extract.tyre_fz_fr_n": {
+   "n": 6,
+   "mean": -64.5722789945593,
+   "upper": -62.685209218549325,
+   "lower": -66.45934877056926,
+   "sd": 2.293919154212108
+  },
+  "extract.tyre_fz_rl_n": {
+   "n": 6,
+   "mean": 0.017155589425301983,
+   "upper": 0.05913274461498924,
+   "lower": -0.02482156576438527,
+   "sd": 0.05102736610649261
+  },
+  "extract.tyre_fz_rr_n": {
+   "n": 6,
+   "mean": 45.87444065478703,
+   "upper": 45.98972251930482,
+   "lower": 45.75915879026924,
+   "sd": 0.14013645945291284
+  },
+  "initial_pallet_yaw_rad": {
+   "n": 6,
+   "mean": 0.0,
+   "upper": 0.0,
+   "lower": 0.0,
+   "sd": 0.0
+  },
+  "pitch_at_t_c_rad": {
+   "n": 6,
+   "mean": -4.399768665498579e-07,
+   "upper": 1.1205749608666398e-06,
+   "lower": -2.0005286939663557e-06,
+   "sd": 1.897004431717684e-06
+  },
+  "pitch_at_t_m_rad": {
+   "n": 6,
+   "mean": -3.1829410169967963e-07,
+   "upper": 3.1547465113628124e-07,
+   "lower": -9.520628545356404e-07,
+   "sd": 7.704083335728484e-07
+  },
+  "roll_at_t_c_rad": {
+   "n": 6,
+   "mean": 6.887776876947634e-08,
+   "upper": 2.0409857375553286e-06,
+   "lower": -1.903230200016376e-06,
+   "sd": 2.3972914522204173e-06
+  },
+  "roll_at_t_m_rad": {
+   "n": 6,
+   "mean": 1.512144306024756e-06,
+   "upper": 4.613898175925791e-06,
+   "lower": -1.5896095638762787e-06,
+   "sd": 3.7704872942546236e-06
+  },
+  "static_fz_sum_n": {
+   "n": 6,
+   "mean": 0.0,
+   "upper": 0.0,
+   "lower": 0.0,
+   "sd": 0.0
+  },
+  "static_weight_ratio": {
+   "n": 6,
+   "mean": 0.0,
+   "upper": 0.0,
+   "lower": 0.0,
+   "sd": 0.0
+  },
+  "t_m_minus_t_c": {
+   "n": 6,
+   "mean": -0.9402778268170854,
+   "upper": 0.8425528326682598,
+   "lower": -2.7231084863024306,
+   "sd": 2.1672062424513276
+  },
+  "tc_tm.correction_events": {
+   "n": 6,
+   "mean": -0.4166666666666667,
+   "upper": -0.24874596888891473,
+   "lower": -0.5845873644444186,
+   "sd": 0.2041241452319315
+  },
+  "tc_tm.k_fwd": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.k_rev": {
+   "n": 6,
+   "mean": -0.002063615919986092,
+   "upper": -0.00015379816175799667,
+   "lower": -0.003973433678214187,
+   "sd": 0.0023215715668537676
+  },
+  "tc_tm.lift_m": {
+   "n": 6,
+   "mean": 0.012878059305166147,
+   "upper": 0.01289975718356283,
+   "lower": 0.012856361426769464,
+   "sd": 2.637590803089247e-05
+  },
+  "tc_tm.odom_yaw_err_rad": {
+   "n": 6,
+   "mean": -0.009485797451928213,
+   "upper": -0.006994268097570023,
+   "lower": -0.011977326806286402,
+   "sd": 0.003028699299783486
+  },
+  "tc_tm.pitch_rad": {
+   "n": 6,
+   "mean": -4.0847745884380295e-07,
+   "upper": -2.6908070585996575e-07,
+   "lower": -5.478742118276402e-07,
+   "sd": 1.6945048125391009e-07
+  },
+  "tc_tm.post_event_err_last3_m": {
+   "n": 6,
+   "mean": -0.05869088115954913,
+   "upper": -0.05009923764318926,
+   "lower": -0.067282524675909,
+   "sd": 0.010443988812121198
+  },
+  "tc_tm.post_event_err_mean_m": {
+   "n": 6,
+   "mean": -0.05869088115954913,
+   "upper": -0.05009923764318926,
+   "lower": -0.067282524675909,
+   "sd": 0.010443988812121198
+  },
+  "tc_tm.processed_scans": {
+   "n": 6,
+   "mean": 0.0,
+   "upper": 0.5202832527814097,
+   "lower": -0.5202832527814097,
+   "sd": 0.6324555320336759
+  },
+  "tc_tm.rear_load_share": {
+   "n": 6,
+   "mean": 0.159654224033158,
+   "upper": 0.16153831733858873,
+   "lower": 0.15777013072772725,
+   "sd": 0.00229030096109576
+  },
+  "tc_tm.release_jump_max_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.roll_rad": {
+   "n": 6,
+   "mean": 8.634061922678153e-07,
+   "upper": 1.769202563755275e-06,
+   "lower": -4.239017921964439e-08,
+   "sd": 1.10108469373309e-06
+  },
+  "tc_tm.steer_read_err_rad": {
+   "n": 6,
+   "mean": 1.1761516675336782e-05,
+   "upper": 2.7553786969583275e-05,
+   "lower": -4.0307536189097105e-06,
+   "sd": 1.919705978920596e-05
+  },
+  "tc_tm.steer_track_err_max_rad": {
+   "n": 6,
+   "mean": -0.021427970664569116,
+   "upper": -0.009523528040937142,
+   "lower": -0.03333241328820109,
+   "sd": 0.01447102237645299
+  },
+  "tc_tm.steer_track_err_rad": {
+   "n": 6,
+   "mean": -0.0006059258303144112,
+   "upper": 0.0020288774686842825,
+   "lower": -0.003240729129313105,
+   "sd": 0.0032028628893277446
+  },
+  "tc_tm.travel_fwd_m": {
+   "n": 6,
+   "mean": 0.007723824909513424,
+   "upper": 0.08093814786717024,
+   "lower": -0.06549049804814339,
+   "sd": 0.08899921981176007
+  },
+  "tc_tm.travel_rev_m": {
+   "n": 6,
+   "mean": -0.05058905304085825,
+   "upper": 0.10418176473379734,
+   "lower": -0.20535987081551385,
+   "sd": 0.18813917106819178
+  },
+  "tc_tm.tyre_fz_fl_n": {
+   "n": 6,
+   "mean": -29.15200138454105,
+   "upper": -27.3304498945101,
+   "lower": -30.973552874572004,
+   "sd": 2.2142752252651894
+  },
+  "tc_tm.tyre_fz_fr_n": {
+   "n": 6,
+   "mean": -66.70289092787823,
+   "upper": -64.51686525229988,
+   "lower": -68.88891660345658,
+   "sd": 2.657329491764452
+  },
+  "tc_tm.tyre_fz_rl_n": {
+   "n": 6,
+   "mean": -0.43531991446373414,
+   "upper": -0.054923039704234844,
+   "lower": -0.8157167892232334,
+   "sd": 0.462409863326977
+  },
+  "tc_tm.tyre_fz_rr_n": {
+   "n": 6,
+   "mean": 46.95347024928711,
+   "upper": 47.74991146364009,
+   "lower": 46.157029034934126,
+   "sd": 0.9681527307756541
+  },
+  "transport.correction_events": {
+   "n": 6,
+   "mean": 1.5,
+   "upper": 2.6921186943443267,
+   "lower": 0.30788130565567307,
+   "sd": 1.449137674618944
+  },
+  "transport.k_fwd": {
+   "n": 6,
+   "mean": 0.0006239667895743978,
+   "upper": 0.0009851783519798111,
+   "lower": 0.00026275522716898446,
+   "sd": 0.0004390882267621469
+  },
+  "transport.k_rev": {
+   "n": 6,
+   "mean": -0.00028575916406325757,
+   "upper": 0.0006730297828696758,
+   "lower": -0.0012445481109961908,
+   "sd": 0.0011655023879756584
+  },
+  "transport.lift_m": {
+   "n": 6,
+   "mean": 0.012932857671906701,
+   "upper": 0.012941610831021808,
+   "lower": 0.012924104512791594,
+   "sd": 1.0640326928697892e-05
+  },
+  "transport.odom_yaw_err_rad": {
+   "n": 6,
+   "mean": -0.09183286291965372,
+   "upper": -0.08224892516242363,
+   "lower": -0.1014168006768838,
+   "sd": 0.011650220184529388
+  },
+  "transport.pitch_rad": {
+   "n": 6,
+   "mean": -1.009458298345249e-06,
+   "upper": -9.117532419121375e-07,
+   "lower": -1.1071633547783608e-06,
+   "sd": 1.1877011823547193e-07
+  },
+  "transport.post_event_err_last3_m": {
+   "n": 6,
+   "mean": -0.062705313711233,
+   "upper": -0.05150019365937716,
+   "lower": -0.07391043376308884,
+   "sd": 0.013620926920119606
+  },
+  "transport.post_event_err_mean_m": {
+   "n": 6,
+   "mean": -0.04122856898003755,
+   "upper": -0.03676168592407474,
+   "lower": -0.04569545203600036,
+   "sd": 0.005429936259889768
+  },
+  "transport.processed_scans": {
+   "n": 6,
+   "mean": 1.0,
+   "upper": 1.735791632359059,
+   "lower": 0.264208367640941,
+   "sd": 0.8944271909999159
+  },
+  "transport.rear_load_share": {
+   "n": 6,
+   "mean": 0.1581589119205591,
+   "upper": 0.1586029905707122,
+   "lower": 0.15771483327040597,
+   "sd": 0.0005398213327949946
+  },
+  "transport.release_jump_max_m": {
+   "n": 6,
+   "mean": -0.00589266938114004,
+   "upper": 0.00258663859970562,
+   "lower": -0.0143719773619857,
+   "sd": 0.01030743390573104
+  },
+  "transport.roll_rad": {
+   "n": 6,
+   "mean": -6.868686481080404e-07,
+   "upper": -3.650166713555679e-07,
+   "lower": -1.0087206248605129e-06,
+   "sd": 3.9124277420975744e-07
+  },
+  "transport.steer_read_err_rad": {
+   "n": 6,
+   "mean": 2.8777922205909786e-06,
+   "upper": 8.864275583367467e-06,
+   "lower": -3.1086911421855098e-06,
+   "sd": 7.277160085347336e-06
+  },
+  "transport.steer_track_err_max_rad": {
+   "n": 6,
+   "mean": -0.004402498595837182,
+   "upper": 0.002502431657187807,
+   "lower": -0.011307428848862171,
+   "sd": 0.008393622730476601
+  },
+  "transport.steer_track_err_rad": {
+   "n": 6,
+   "mean": 0.001309766079294156,
+   "upper": 0.002153494133542255,
+   "lower": 0.00046603802504605724,
+   "sd": 0.001025634541547339
+  },
+  "transport.travel_fwd_m": {
+   "n": 6,
+   "mean": 0.3399671872125179,
+   "upper": 0.5356039841523,
+   "lower": 0.14433039027273573,
+   "sd": 0.2378157932865434
+  },
+  "transport.travel_rev_m": {
+   "n": 6,
+   "mean": 0.09104929027471043,
+   "upper": 0.2621616545252865,
+   "lower": -0.08006307397586562,
+   "sd": 0.20800393014976756
+  },
+  "transport.tyre_fz_fl_n": {
+   "n": 6,
+   "mean": -29.724602597833023,
+   "upper": -28.24684126535236,
+   "lower": -31.202363930313687,
+   "sd": 1.7963644317906193
+  },
+  "transport.tyre_fz_fr_n": {
+   "n": 6,
+   "mean": -65.81828004779898,
+   "upper": -64.22202477041021,
+   "lower": -67.41453532518774,
+   "sd": 1.9404054912884694
+  },
+  "transport.tyre_fz_rl_n": {
+   "n": 6,
+   "mean": -0.01940404279314002,
+   "upper": 0.11160061481452659,
+   "lower": -0.15040870040080662,
+   "sd": 0.1592490628579902
+  },
+  "transport.tyre_fz_rr_n": {
+   "n": 6,
+   "mean": 45.890004627565226,
+   "upper": 46.05508997373185,
+   "lower": 45.7249192813986,
+   "sd": 0.20067749611891594
+  }
+ },
+ "J3_same_path": {
+  "approach_empty.correction_events": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.k_fwd": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.k_rev": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.lift_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.odom_yaw_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.pitch_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.post_event_err_last3_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.post_event_err_mean_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.processed_scans": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.rear_load_share": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.release_jump_max_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.roll_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.steer_read_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.steer_track_err_max_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.steer_track_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.travel_fwd_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.travel_rev_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.tyre_fz_fl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.tyre_fz_fr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.tyre_fz_rl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "approach_empty.tyre_fz_rr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "d_c": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "dyaw_c": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.correction_events": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.k_rev": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.lift_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.odom_yaw_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.pitch_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.processed_scans": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.rear_load_share": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.roll_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.steer_read_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.steer_track_err_max_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.steer_track_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.travel_fwd_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.travel_rev_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.tyre_fz_fl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.tyre_fz_fr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.tyre_fz_rl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "extract.tyre_fz_rr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "initial_pallet_yaw_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "pitch_at_t_c_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "pitch_at_t_m_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "roll_at_t_c_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "roll_at_t_m_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "static_fz_sum_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "static_weight_ratio": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "t_m_minus_t_c": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.correction_events": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.k_fwd": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.k_rev": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.lift_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.odom_yaw_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.pitch_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.post_event_err_last3_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.post_event_err_mean_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.processed_scans": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.rear_load_share": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.release_jump_max_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.roll_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.steer_read_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.steer_track_err_max_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.steer_track_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.travel_fwd_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.travel_rev_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.tyre_fz_fl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.tyre_fz_fr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.tyre_fz_rl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "tc_tm.tyre_fz_rr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.correction_events": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.k_fwd": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.k_rev": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.lift_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.odom_yaw_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.pitch_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.post_event_err_last3_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.post_event_err_mean_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.processed_scans": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.rear_load_share": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.release_jump_max_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.roll_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.steer_read_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.steer_track_err_max_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.steer_track_err_rad": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.travel_fwd_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.travel_rev_m": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.tyre_fz_fl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.tyre_fz_fr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.tyre_fz_rl_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  },
+  "transport.tyre_fz_rr_n": {
+   "n": 0,
+   "mean": null,
+   "upper": null,
+   "lower": null
+  }
+ },
+ "J1": "undecidable: too few valid pairs or blocks",
+ "infra_invalid_by_arm": {
+  "A": 0,
+  "B": 0
+ }
+}
