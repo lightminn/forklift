@@ -570,3 +570,71 @@ def test_a_preview_is_never_made_after_t_loc_even_when_the_console_takes_the_tim
                                operator_deadline_at=clock["t"] + 1e6)
     out = P.run(box["inputs"])
     assert out["places"][0]["reason"] == "timeout" and out["status"] != "chosen"
+
+
+# --- the unconfirmed position check's inputs (docs/plans/2026-11-02-unconfirmed-runner.md 3.2) ---
+def test_a_matcher_start_hands_on_its_search_groups_pool_and_last_scan_set(tmp_path):
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    sink = {}
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, sink=sink))
+    assert out["status"] == "chosen"
+    assert out["pose_pool"] == [c["base"] for c in out["attempts"][0]["candidates"]]
+    assert sink["gen_points"].shape[1] == 2 and len(sink["gen_points"]) > 30
+    assert out["pose_gen_points"]["attempt"] == 0 and len(out["pose_gen_points"]["sha256"]) == 64
+    assert json.dumps(out)
+
+
+def test_an_operator_pick_hands_on_every_attempt_of_its_search_group(tmp_path):
+    def pick_when_shown(console, stage):
+        r = console.reloc
+        if r.state == "awaiting_pick" and stage == "awaiting_pick":
+            assert r.pick(r.generation, 0) == (True, "")
+
+    _go_later(tmp_path)
+    sink = {}
+    out = P.run(_symmetric(tmp_path, FakeConsole(pick_when_shown), sink=sink))
+    assert out["status"] == "chosen" and len(out["attempts"]) == 3
+    assert out["pose_pool"] == [c["base"] for a in out["attempts"] for c in a["candidates"]]
+    assert out["pose_gen_points"]["attempt"] == 2 and "gen_points" in sink
+
+
+def test_a_retry_starts_a_new_search_group(tmp_path):
+    # Codex piece 2 draft 5 P3: the generation number is not the search group; an interrupted attempt and anything
+    # before a retry are not the chosen start's
+    seen = {"n": 0}
+
+    def script(console, stage):
+        r = console.reloc
+        if stage == "matching" and seen["n"] == 0:
+            seen["n"] = 1
+            assert r.interrupt()
+            assert r.retry(r.generation) == (True, "")
+
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, console=FakeConsole(script), unattended=False,
+                        sink={}))
+    assert [a["reason"] for a in out["attempts"]] == ["interrupted", "confirmed"]
+    assert out["attempts"][0]["search"] != out["attempts"][1]["search"] == out["pose_search"]
+    assert out["pose_pool"] == [c["base"] for c in out["attempts"][1]["candidates"]]
+    assert out["pose_gen_points"]["attempt"] == 1
+
+
+def test_a_placed_start_hands_on_its_search_groups_attempts(tmp_path):
+    _go_later(tmp_path)
+    console = FakeConsole(_place_then(lambda r: r.confirm_place(r.generation, r.preview_id)))
+    out = P.run(_symmetric(tmp_path, console, sink={}))
+    assert out["status"] == "chosen" and out["pose_pool"] and out["pose_gen_points"]["attempt"] == 2
+
+
+def test_without_the_check_the_record_is_as_before(tmp_path):
+    # Codex 2b P2-5: --start-relocalize with --pose-check off records exactly what it did
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base))
+    assert not {"pose_search", "pose_pool", "pose_gen_points"} & set(out)
+    assert all("search" not in a for a in out["attempts"])

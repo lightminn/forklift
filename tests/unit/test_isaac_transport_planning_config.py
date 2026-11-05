@@ -1516,9 +1516,12 @@ def test_the_odometry_wheel_radius_is_the_odometrys_own_and_part_of_the_contract
     assert '"geometric_wheel_radius_m": args.drive_geometry.wheel_radius_m' in meta
     assert 'slam["odom_speed"] = float(np.mean(rates)) * odometry_wheel_radius(args)' in source
     assert '"odometry_wheel_radius_m": odometry_wheel_radius(args)' in source  # the feedback record
-    # Nothing else reads it: the drive and the plant stay on the geometric radius. Four uses above and
-    # one in age_table_problem (the obstacle layer's table must match).
-    assert source.count("odometry_wheel_radius(args)") - source.count("def odometry_wheel_radius(args)") == 5
+    # Nothing else reads it: the drive and the plant stay on the geometric radius. Four uses above, one in
+    # age_table_problem (the obstacle layer's table must match) and one in make_pose_runtime (the unconfirmed position
+    # check's one-tick bound counts one encoder count of the odometry's own wheel).
+    assert source.count("odometry_wheel_radius(args)") - source.count("def odometry_wheel_radius(args)") == 6
+    maker = source[source.index("def make_pose_runtime("): source.index("def run(app, args")]
+    assert maker.count("odometry_wheel_radius(args)") == 1
     checker = source[source.index("def age_table_problem("): source.index("def probe_segments()")]
     assert checker.count("odometry_wheel_radius(args)") == 1
     assert 'parser.error("--odometry-wheel-radius-m is the SLAM odometry\'s radius; it needs --record-slam")' in source

@@ -166,6 +166,9 @@ export function liftControls(st) {
 // Plan D14: the straight reverse of a manual recovery is said wherever the drive is shown.
 export function recoveryNote(st) {
   if (st?.drive_mode !== "reverse_straight") return "";
+  if (st.pose_check && st.pose_check.status !== "confirmed" && !st.recovery) {
+    return "확인 전 위치 · 곧은 후진만(한 번 누름 1 m) · 전진·조향·포크 없음";
+  }
   return st.recovery?.stage === "manual_clear"
     ? "복구 후진(곧게) · 팔레트 구역을 벗어날 때까지"
     : "복구 후진(곧게, 인증 없음) · 전진·조향 없음";

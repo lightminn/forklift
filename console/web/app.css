@@ -291,6 +291,10 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 /* anchored on both sides (a left: 50% box shrinks to half the map, stacking the candidate buttons) */
 .reloc-banner { position: absolute; top: 12px; left: 12px; right: 12px; margin: 0 auto; width: fit-content; max-width: calc(100% - 24px); flex-wrap: wrap; display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--accent); color: var(--fg); font-size: 12.5px; padding: 6px 10px 6px 14px; border-radius: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / 0.4); }
 .reloc-banner b { color: var(--accent); font-weight: 600; }
+/* the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 4): below the relocalization's banner */
+.pose-banner { position: absolute; top: 52px; left: 12px; right: 12px; margin: 0 auto; width: fit-content; max-width: calc(100% - 24px); display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--warn, #d9a400); color: var(--fg); font-size: 12.5px; padding: 6px 12px; border-radius: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / 0.4); }
+.pose-banner.bad { border-color: var(--bad, #d14b4b); }
+.pose-banner b { font-weight: 600; }
 .reloc-bay { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--warn); cursor: pointer; }
 .reloc-bay[hidden] { display: none; }
 .reloc-bay input { width: 18px; height: 18px; }
@@ -336,7 +340,7 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
   #pane-tele { order: 2; }
   .maptool { order: 3; }
   #map { order: 4; height: 60vh; background: var(--map-bg); }
-  .stale-banner, .reloc-banner { order: 4; position: static; transform: none; border-radius: 0; }
+  .stale-banner, .reloc-banner, .pose-banner { order: 4; position: static; transform: none; border-radius: 0; }
   .map-legend { order: 5; position: static; max-width: none; justify-content: flex-start; border-radius: 0; background: transparent; }
   #pane-detail { order: 6; }
   .page { order: 7; }
