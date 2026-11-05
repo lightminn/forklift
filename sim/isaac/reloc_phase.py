@@ -48,6 +48,9 @@ class RelocInputs:
     operator_deadline_at: float | None = None  # the operator's whole budget (clock time); None: none
     # F1 (plan 2026-10-31-operator-placed-start 1.3): the local re-match's window, R_AMB and deadline
     place_cfg: LM.PlaceConfig = field(default_factory=LM.PlaceConfig)
+    # the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 3.2): the chosen search group's last
+    # scan set goes here as "gen_points" (not JSON: the runner keeps it in memory); None: not kept
+    sink: dict | None = None
 
 
 def _points(inputs: RelocInputs, sent) -> object:
@@ -175,6 +178,7 @@ def _run(inputs: RelocInputs) -> dict:
             console.service(stage)
 
     engine = replace(inputs.engine, step=lambda: step("scan"))
+    scan_sets = {}  # attempt index -> its scan set (the unconfirmed position check's generation leaves)
     relocalizer = R.StartRelocalizer(inputs.reloc_cfg, inputs.clock)
     if console is not None:
         console.attach(relocalizer)
@@ -202,6 +206,7 @@ def _run(inputs: RelocInputs) -> dict:
         if state == "relocalizing":
             relocalizer.start()  # the generation's first scan: its session deadline (plan 1.2 step 6)
             generation = relocalizer.generation  # the scans and the match belong to it (Codex impl round 2 P2)
+            search = relocalizer.searches
             got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
                                         settle_steps=0)
             scan_key += 1
@@ -215,7 +220,8 @@ def _run(inputs: RelocInputs) -> dict:
                 return out
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 continue  # a STOP (and maybe a retry) during the scans: they go, the new generation scans anew
-            match, decision, wall_s = _attempt(inputs, relocalizer, _points(inputs, got["sent"]), step)
+            points = _points(inputs, got["sent"])
+            match, decision, wall_s = _attempt(inputs, relocalizer, points, step)
             if console is not None:
                 console.service("matched")  # the STOPs queued meanwhile, before the result counts
             # from the generation's first scan to this return: the shared session deadline's own time axis (B-P2d)
@@ -226,12 +232,15 @@ def _run(inputs: RelocInputs) -> dict:
                       "stage_s": None if stage_s is None else round(stage_s, 3),
                       "top": _candidate(match.candidates[0]) if match.candidates else None,
                       # plan 7 F1: every candidate of the matcher (not only those shown), for B-P2d's record
-                      "candidates": [_candidate(c) for c in match.candidates]}
+                      "candidates": [_candidate(c) for c in match.candidates],
+                      # the unconfirmed position check's search group, only with the check (Codex 2b P2-5)
+                      **({} if inputs.sink is None else {"search": search})}
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 # a STOP (and maybe a retry since) came while it matched: the result is its old generation's
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
                 continue
             relocalizer.record(match, decision)
+            scan_sets[len(out["attempts"])] = points
             if decision.confirmed and relocalizer.state != "chosen":
                 record["reason"] = "deadline"  # confirmed too late: the session deadline refused it (no confirmation)
             out["attempts"].append(record)
@@ -298,6 +307,8 @@ def _run(inputs: RelocInputs) -> dict:
     est = relocalizer.estimate
     out["estimate"] = list(est.base)
     out["source"] = est.source
+    if inputs.sink is not None:  # only with the check: a run without it records what it did (Codex 2b P2-5)
+        _hand_on(inputs, out, relocalizer.searches, scan_sets)
     R.write_reloc_pose(inputs.epoch_dir, est, {"attempts": out["attempts"]})
     if console is not None:
         console.localizing()
@@ -307,6 +318,21 @@ def _run(inputs: RelocInputs) -> dict:
         return out
     out["status"], out["bridge_go"] = "chosen", go
     return out
+
+
+def _hand_on(inputs: RelocInputs, out: dict, search: int, scan_sets: dict) -> None:
+    """The chosen start's search group for the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 3.2):
+    every candidate of its attempts (interrupted ones belong to no group) and its last attempt's scan set."""
+    mine = [k for k, a in enumerate(out["attempts"]) if a.get("search") == search and a["reason"] != "interrupted"]
+    out["pose_search"] = search
+    out["pose_pool"] = [c["base"] for k in mine for c in out["attempts"][k]["candidates"]]
+    last = mine[-1] if mine else None
+    points = scan_sets.get(last) if last is not None else None
+    out["pose_gen_points"] = None if points is None else {
+        "attempt": last, "count": int(len(points)),
+        "sha256": hashlib.sha256(points.astype("<f8").tobytes()).hexdigest()}
+    if inputs.sink is not None and points is not None:
+        inputs.sink["gen_points"] = points
 
 
 def failure_reason(out: dict) -> str | None:

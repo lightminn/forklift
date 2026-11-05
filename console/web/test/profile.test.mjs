@@ -239,6 +239,9 @@ test("plan D14: the recovery reasons and the straight reverse are said in Korean
   assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "in_pocket" } }), /곧게.*인증 없음/);
   assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: { stage: "manual_clear" } }), /구역/);
   assert.equal(recoveryNote({ drive_mode: "normal", recovery: null }), "");
+  // the unconfirmed position check's straight reverse is not a recovery (plan 2026-11-02-unconfirmed-runner 4)
+  assert.match(recoveryNote({ drive_mode: "reverse_straight", recovery: null, pose_check: { status: "unconfirmed" } }),
+               /확인 전 위치.*곧은 후진/);
 });
 
 test("a blocked re-pick names what blocks it in the operator's words", () => {

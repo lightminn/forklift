@@ -47,6 +47,8 @@ SETUP_NAMES_ADDED = {
     # B-P2b start relocalization (2026-10-29): every earlier record started at the scene's start
     "start_reloc": ("start_relocalize", False, None),
     "reloc_console": ("start_relocalize", False, None),  # B-P2c: the early console of a relocalizing run
+    # the unconfirmed position check (2026-11-04): every earlier record ran without it
+    "pose_box": ("pose_check", "off", {"rt": None, "sink": None, "end": None}),
 }
 
 

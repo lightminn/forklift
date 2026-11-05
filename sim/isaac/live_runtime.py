@@ -132,6 +132,7 @@ class LiveRuntime:
         self.scene = {"damaged": None}  # the runner latches the scene's damage here (plan D6); in every state
         self.started_wall: float | None = None  # when start() opened the server (None: it never did)
         self.slam_info: dict | None = None  # SLAM localization plan L6: set by the runner for a localization session
+        self.pose_info: dict | None = None  # the unconfirmed position check's view; None: no check (no field)
         self.dt = dt
         self.parts = parts
         self.port_extra: dict = {}  # what the runner adds to every port-file write (B-P2c: localized_wall)
@@ -369,7 +370,7 @@ class LiveRuntime:
     # --- per control tick ------------------------------------------------------------------------------------------
     def tick_start(self, t: float, near_active: bool, clear_for_submit: bool = True,
                    submit_refusal: str | None = None, localization_ok: bool = True,
-                   loaded_pallet: str | None = None, repick_blockers=None) -> tuple[str, list]:
+                   loaded_pallet: str | None = None, repick_blockers=None, pose_ok: bool = True) -> tuple[str, list]:
         """The arbiter's cycle start, then the mission's commands with the stop kind it gives (M-b B3). ``clear_for_submit``:
         outside a SLAM hold (else a submit is refused recovery_required); ``submit_refusal``: what the forks are in
         refuses it (persistent console plan D5a: recovery_required, cargo_held); ``loaded_pallet``: the carried pallet a
@@ -386,7 +387,7 @@ class LiveRuntime:
                                                       scene_damaged=self.scene["damaged"] is not None,
                                                       localization_ok=localization_ok,
                                                       loaded_pallet=loaded_pallet,
-                                                      repick_blockers=repick_blockers))
+                                                      repick_blockers=repick_blockers, pose_ok=pose_ok))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._note_archive_errors()
         self._flush(t)
@@ -552,6 +553,8 @@ class LiveRuntime:
             msg["scene"] = self.scene  # a latched damage: automatic work refused until the scene is reset (D6)
             if self.slam_info is not None:  # SLAM localization plan L6: absent = online mapping (or not known)
                 msg["slam"] = dict(self.slam_info)
+            if self.pose_info is not None:  # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 4)
+                msg["pose_check"] = dict(self.pose_info)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:
