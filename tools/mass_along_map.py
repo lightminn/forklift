@@ -30,13 +30,15 @@ COARSE = (0.02, 0.02, math.radians(0.1))
 FINE = (0.005, 0.005, math.radians(0.025))  # the final box size (three levels from COARSE)
 ANGLE_SCALE_M = 2.0
 REGION_M = 4.0
+SENSITIVITY_REGION_M = 8.0  # amendment 1: covers the median D1 event distance from Q (about 6 m)
 THIN_M = 0.05
 SUPPORT_MARGIN_M = 0.10
 MIN_SUPPORT_POINTS = 100
 MIN_SUPPORT_SPREAD_M = 0.10
 OCCUPIED = 100
-FLOOR_DISTANCES_M = (0.0, 5.0, 10.0)
-FLOOR_ROTATIONS = (0.0, math.radians(45.0), math.radians(90.0))
+FLOOR_DISTANCES_M = (0.0, 5.0, 10.0, 15.0)
+FLOOR_BEARINGS = (0.0, math.radians(45.0), math.radians(90.0))  # where the event is, seen from Q
+FLOOR_HEADINGS = (0.0, math.radians(45.0), math.radians(90.0), math.radians(135.0))  # its heading, independently
 CHUNK = 4_000_000  # transform x point products per batch
 
 
@@ -262,6 +264,16 @@ def support(points: np.ndarray, q, grids: list[MapGrid]) -> np.ndarray:
     return ok
 
 
+def occupied_both(points: np.ndarray, grids: list[MapGrid]) -> np.ndarray:
+    """Amendment 1: points within CUT_M of an occupied cell in every grid at the identity -- a surface both maps hold
+    near the point. (The edition-6 rule, every cell within the search reach known, removed every wall point: the far
+    side of a wall is never observed.)"""
+    ok = np.ones(len(points), bool)
+    for g in grids:
+        ok &= g.distance(points) <= CUT_M
+    return ok
+
+
 def support_problem(local: np.ndarray) -> str | None:
     if len(local) < MIN_SUPPORT_POINTS:
         return f"{len(local)} support points (< {MIN_SUPPORT_POINTS})"
@@ -366,15 +378,21 @@ def run_inputs(run: dict, split: dict) -> dict:
 
 
 def floor_for(precision: dict | None, kind: str, distance: float) -> float | None:
-    """The method floor for a value kind at a distance from Q: the smallest tested band at least that far (the
-    farthest band, flagged by the caller, beyond it)."""
+    """The method floor for a value kind at a distance from Q: the smallest tested band at least that far; None beyond
+    the farthest tested band (outside the calibration, so no sign -- Codex review P2)."""
     if precision is None:
         return None
     bands = precision["floor"][kind]
     for d in sorted(float(k) for k in bands):
         if distance <= d + 1e-9:
             return float(bands[f"{d:g}"])
-    return float(bands[f"{max(float(k) for k in bands):g}"])
+    return None
+
+
+def upper_order(values, share: float = 0.95) -> float:
+    """The smallest value with at least ``share`` of the values at or below it (an order statistic, no interpolation)."""
+    v = np.sort(np.asarray(values, float))
+    return float(v[max(0, math.ceil(share * len(v)) - 1)])
 
 
 def common_values(q, al: dict, poses: dict) -> dict:
@@ -400,7 +418,8 @@ def arm_values(q, al: dict, inp: dict) -> dict:
     return out
 
 
-def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precision: dict | None) -> dict:
+def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precision: dict | None,
+                 region_m: float = REGION_M) -> dict:
     delta = precision["delta"] if precision else 0.0
     ga, gb = map_for(*a_inp["maps"], a_inp[key]), map_for(*b_inp["maps"], b_inp[key])
     if ga is None or gb is None:
@@ -409,7 +428,7 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
         # only scans the chosen map could hold: scan ids at most its after_scan_id (independent plan review P2)
         stamps = {t for t, sid in inp[stamps_key].items() if sid <= int(grid_meta["after_scan_id"])}
         p = scan_points(inp["log"], inp["laser"], stamps)
-        return p[np.hypot(p[:, 0] - q[0], p[:, 1] - q[1]) <= REGION_M], len(stamps)
+        return p[np.hypot(p[:, 0] - q[0], p[:, 1] - q[1]) <= region_m], len(stamps)
 
     pa, na = region_points(a_inp, ga[1])
     pb, nb = region_points(b_inp, gb[1])
@@ -417,14 +436,16 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
 
     def supported(points):
         th = thin(points)
-        ok = support(th, q, grids) if len(th) else np.zeros(0, bool)
+        ok = occupied_both(th, grids) if len(th) else np.zeros(0, bool)
         return th, (se2_inv_apply(q, th[ok]) if np.any(ok) else np.zeros((0, 2)))
 
     th, local = supported(np.concatenate([pa, pb]))
+    known_reach = int(np.count_nonzero(support(th, q, grids))) if len(th) else 0
     out = {"maps": {"A": {k: ga[1][k] for k in ("index", "after_scan_id", "stamp_ns")},
                     "B": {k: gb[1][k] for k in ("index", "after_scan_id", "stamp_ns")}},
            "scans_used": {"A": na, "B": nb},
-           "points_region": int(len(th)), "points_support": int(len(local)),
+           "region_m": region_m, "points_region": int(len(th)), "points_support": int(len(local)),
+           "points_known_reach_rule": known_reach,
            "support_share": float(len(local) / len(th)) if len(th) else None}
     why = support_problem(local)
     if why:
@@ -465,10 +486,11 @@ def pair_alignment(a: dict, b: dict, split: dict, precision: dict | None = None)
                                          ai["reference_rear"][1] - bi["reference_rear"][1]),
            "replay_error": {"A": ai["replay_error"], "B": bi["replay_error"]},
            "contract": {"A": ai["contract"], "B": bi["contract"]}}
-    for name, key, stamps in (("last_processed", "scan_id_processed", "transport_stamps"),
-                              ("last_any", "scan_id_any", "transport_stamps"),
-                              ("before_insert", "scan_id_insert", "approach_stamps")):
-        ch = align_choice(ai, bi, q, key, stamps, precision)
+    for name, key, stamps, region in (("last_processed", "scan_id_processed", "transport_stamps", REGION_M),
+                                      ("last_any", "scan_id_any", "transport_stamps", REGION_M),
+                                      ("last_processed_8m", "scan_id_processed", "transport_stamps", SENSITIVITY_REGION_M),
+                                      ("before_insert", "scan_id_insert", "approach_stamps", REGION_M)):
+        ch = align_choice(ai, bi, q, key, stamps, precision, region)
         aligned = ch.pop("_aligned", None)
         if aligned is not None and name != "before_insert":
             va, vb = arm_values(q, aligned["A"], ai), arm_values(q, aligned["B"], bi)
@@ -478,11 +500,19 @@ def pair_alignment(a: dict, b: dict, split: dict, precision: dict | None = None)
             vb.update(common_values(q, aligned["B"], poses))
             ch["values"] = {"A": va, "B": vb}
             d = {}
+            blocked = ch.get("not_measurable")
             for k in ("pooled_events", "pooled_t_c", "at_q_a", "all", "last3", "processed", "at_t_c"):
                 kind = "at_q" if k == "at_q_a" else "event"
-                dist = max((v[k] or {}).get("distance_from_q_m", 0.0) for v in (va, vb) if v.get(k))\
-                    if va.get(k) and vb.get(k) else 0.0
-                d[k] = pair_difference(va.get(k), vb.get(k), floor_for(precision, kind, dist))
+                dist = max(va[k]["distance_from_q_m"], vb[k]["distance_from_q_m"]) if va.get(k) and vb.get(k) else 0.0
+                fl = floor_for(precision, kind, dist)
+                d[k] = pair_difference(va.get(k), vb.get(k), fl)
+                if d[k] is not None:
+                    # no sign when the alignment is not measurable or the value lies outside the calibrated distances
+                    # (Codex review P2)
+                    if blocked:
+                        d[k]["sign"], d[k]["blocked"] = None, blocked
+                    elif fl is None:
+                        d[k]["sign"], d[k]["blocked"] = None, f"distance {dist:.1f} m outside the calibrated bands"
             for k in ("d1_all_post_along", "d1_last3_post_along", "d1_processed_post_along", "e_c_along"):
                 d[k] = vb[k] - va[k] if va.get(k) is not None and vb.get(k) is not None else None
             ch["differences"] = d
@@ -585,7 +615,7 @@ def precision(seed: int = 0) -> dict:
     competing-minimum geometries, and the support refusal."""
     rng = np.random.default_rng(seed)
     q = (0.0, 0.0, 0.0)
-    rec = []
+    rec, cases = [], []
     floor_rows = {"event": {d: [] for d in FLOOR_DISTANCES_M}, "at_q": {d: [] for d in FLOOR_DISTANCES_M}}
     for geo in ("room", "angled", "racks"):
         segs = segments_for(geo)
@@ -603,10 +633,11 @@ def precision(seed: int = 0) -> dict:
                 excess = max(0.0, float(costs(grid, q, local, np.array([g]))[0]) - al["cost_min"])
                 rec.append({"geometry": geo, "true": list(g), "phase": list(ph), "found": al["g_opt"],
                             "error": [al["g_opt"][k] - g[k] for k in range(3)], "cost_excess_of_truth": excess})
+                cases.append((grid, local, g))
                 als.append(al)
             # mask variant: B has the far wall unknown (one arm saw it, the other not)
             grid_m = rasterize(segs, f, PHASES[1], unknown=[(2.5, -3.0, 6.0, 3.0)])
-            ok = support(se2_apply(q, local), q, [rasterize(segs, f, PHASES[0]), grid_m])
+            ok = occupied_both(se2_apply(q, local), [rasterize(segs, f, PHASES[0]), grid_m])  # amendment 1
             if np.count_nonzero(ok) >= MIN_SUPPORT_POINTS:
                 als_m = [align(rasterize(segs, f, PHASES[0]), q, local[ok], 0.0), align(grid_m, q, local[ok], 0.0)]
             else:
@@ -621,15 +652,20 @@ def precision(seed: int = 0) -> dict:
             pairs += [(als[0], noisy[0]), (noisy[0], noisy[1])]
             for aa, bb in pairs:
                 for dist in FLOOR_DISTANCES_M:
-                    for rot in FLOOR_ROTATIONS:
-                        t = (dist * math.cos(rot), dist * math.sin(rot), rot)
-                        va = along_at(world_transform(q, aa["g_opt"]), t)
-                        vb = along_at(world_transform(q, bb["g_opt"]), t)
-                        floor_rows["event"][dist].append(abs(vb - va))
+                    for bearing in FLOOR_BEARINGS:
+                        for heading in FLOOR_HEADINGS:  # independent of the bearing: a yaw error reaches the along
+                            # value when the event faces across the line to Q (Codex review P2)
+                            t = (dist * math.cos(bearing), dist * math.sin(bearing), bearing + heading)
+                            va = along_at(world_transform(q, aa["g_opt"]), t)
+                            vb = along_at(world_transform(q, bb["g_opt"]), t)
+                            floor_rows["event"][dist].append(abs(vb - va))
                     floor_rows["at_q"][dist].append(abs(bb["g_opt"][0] - aa["g_opt"][0]))
     excess = np.array([r["cost_excess_of_truth"] for r in rec])
-    delta = float(np.percentile(excess, 95))
-    floor = {k: {f"{d:g}": float(np.percentile(v, 95)) for d, v in rows.items()} for k, rows in floor_rows.items()}
+    # delta: the order statistic with at least 95 % of the cases' truth cost within min + delta (the cost condition);
+    # S covers every such transform, so the share of truths actually inside S (checked below) is at least that
+    delta = upper_order(excess, 0.95)
+    in_s = [contains(align(grid, q, local, delta)["S"], g) for grid, local, g in cases]
+    floor = {k: {f"{d:g}": upper_order(v, 0.95) for d, v in rows.items()} for k, rows in floor_rows.items()}
     # degenerate and competing minima
     extra = {}
     for geo in ("parallel", "repeat"):
@@ -643,7 +679,7 @@ def precision(seed: int = 0) -> dict:
     few = thin(sample_points([(0.0, 1.0, 0.5, 1.0)], rng))
     extra["support"] = {"few": support_problem(few), "line": support_problem(thin(sample_points([(-3, 1, 3, 1)], rng)))}
     err = np.array([r["error"] for r in rec])
-    return {"delta": delta, "containment_share": float(np.mean(excess <= delta)),
+    return {"delta": delta, "cost_condition_share": float(np.mean(excess <= delta)), "S_containment_share": float(np.mean(in_s)),
             "cost_excess_of_truth": {"median": float(np.median(excess)), "max": float(np.max(excess))},
             "recovery_abs_max": {"a": float(np.max(np.abs(err[:, 0]))), "l": float(np.max(np.abs(err[:, 1]))),
                                  "psi": float(np.max(np.abs(err[:, 2])))},

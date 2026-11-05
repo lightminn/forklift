@@ -160,7 +160,7 @@ def test_floor_band_is_the_smallest_tested_distance_at_least_as_far():
     prec = {"floor": {"event": {"0": 0.001, "5": 0.004, "10": 0.009}}}
     assert S.floor_for(prec, "event", 0.0) == 0.001
     assert S.floor_for(prec, "event", 3.2) == 0.004
-    assert S.floor_for(prec, "event", 12.0) == 0.009
+    assert S.floor_for(prec, "event", 12.0) is None  # beyond the farthest band: outside the calibration
     assert S.floor_for(None, "event", 1.0) is None
 
 
@@ -190,3 +190,32 @@ def test_pooled_poses_separate_the_alignment_from_where_each_arm_had_its_events(
     assert own_a["opt"] == pytest.approx(0.05) and own_b["opt"] == pytest.approx(0.0, abs=1e-12)
     pooled = S.common_values(q, al, {"events": a_events + b_events, "t_c": []})
     assert pooled["pooled_events"]["opt"] == pytest.approx(0.025) and pooled["pooled_t_c"] is None
+
+
+def test_occupied_both_keeps_wall_points_with_an_unobserved_far_side():
+    # amendment 1: a wall whose far side is unknown keeps its points when both maps hold it
+    data = np.zeros((200, 200), np.int8)
+    data[:, 120] = 100
+    data[:, 121:] = -1
+    a = S.MapGrid(data, (-5.0, -5.0, 0.0), 0.05)
+    data_b = data.copy()
+    data_b[100:, 120] = 0  # map B lost the wall's upper half
+    b = S.MapGrid(data_b, (-5.0, -5.0, 0.0), 0.05)
+    pts = np.array([[1.02, -2.0], [1.02, 2.0]])
+    assert not S.support(pts, (0.0, 0.0, 0.0), [a, b]).any()
+    assert S.occupied_both(pts, [a, b]).tolist() == [True, False]
+
+
+def test_upper_order_holds_at_least_the_share():
+    v = np.arange(90, dtype=float)  # distinct values: interpolation would leave 85/90 at or below
+    d = S.upper_order(v, 0.95)
+    assert np.mean(v <= d) >= 0.95
+    assert d == 85.0
+
+
+def test_no_sign_outside_the_calibrated_distances():
+    prec = {"floor": {"event": {"0": 0.001, "5": 0.004, "10": 0.009, "15": 0.012}}}
+    assert S.floor_for(prec, "event", 14.0) == 0.012
+    assert S.floor_for(prec, "event", 16.0) is None
+    d = S.pair_difference({"opt": 0.0, "lo": -0.001, "hi": 0.001}, {"opt": 0.1, "lo": 0.09, "hi": 0.11}, None)
+    assert d["sign"] is None
