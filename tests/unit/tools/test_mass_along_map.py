@@ -257,3 +257,16 @@ def test_points_beyond_the_padding_are_refused():
     g = S.MapGrid(np.zeros((10, 10), np.int8), (0.0, 0.0, 0.0), 0.05)
     with pytest.raises(ValueError):
         g.distance(np.array([[S.PAD_M + 1.0, 0.0]]))
+
+
+def test_candidates_beyond_one_maps_padding_are_excluded_not_fatal():
+    # Codex review: maps of different extents; a candidate 3 m out lies beyond the small map's padding
+    big = np.zeros((160, 160), np.int8)
+    big[:, 140] = 100  # wall at x = 3.025 (origin -4)
+    a = S.MapGrid(big, (-4.0, -4.0, 0.0), 0.05)
+    small = np.zeros((20, 20), np.int8)
+    small[:, 10] = 100
+    b = S.MapGrid(small, (-0.5, -0.5, 0.0), 0.05)
+    pts = np.array([[3.02, 0.0], [0.02, 0.0]])
+    assert S.occupied_both(pts, [a, b]).tolist() == [False, False]
+    assert np.isinf(b.distance_or_inf(pts[:1]))[0]

@@ -111,6 +111,16 @@ class MapGrid:
             raise ValueError("a point left the padded distance field; increase PAD_M")
         return ndimage.map_coordinates(self.dist, [r, c], order=1, mode="nearest")
 
+    def distance_or_inf(self, pts: np.ndarray) -> np.ndarray:
+        """For choosing and describing candidates (not for the search): inf beyond the padding, where a point is
+        farther than PAD_M from anything this map holds (Codex review P2: raw candidates may lie there)."""
+        r, c = self.cells(pts)
+        r, c = r + self.pad, c + self.pad
+        out = np.full(len(pts), np.inf)
+        inside = (r >= 0) & (c >= 0) & (r <= self.dist.shape[0] - 1) & (c <= self.dist.shape[1] - 1)
+        out[inside] = ndimage.map_coordinates(self.dist, [r[inside], c[inside]], order=1, mode="nearest")
+        return out
+
     def clearance_to_unknown(self, pts: np.ndarray) -> np.ndarray:
         """Distance from the point's nearest cell centre to the nearest unknown or off-map cell centre, less the
         point's offset from that centre (so every cell centre within the returned radius of the point is known)."""
@@ -281,7 +291,7 @@ def occupied_both(points: np.ndarray, grids: list[MapGrid]) -> np.ndarray:
     side of a wall is never observed.)"""
     ok = np.ones(len(points), bool)
     for g in grids:
-        ok &= g.distance(points) <= CUT_M
+        ok &= g.distance_or_inf(points) <= CUT_M
     return ok
 
 
@@ -461,9 +471,10 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
         excluded["points"] = int(len(ex))
         if len(ex):
             for arm, g in (("A", grids[0]), ("B", grids[1])):
-                dd = g.distance(ex)
+                dd = g.distance_or_inf(ex)
                 excluded[f"distance_{arm}_m"] = {"median": float(np.median(dd)), "p90": float(np.percentile(dd, 90)),
-                                                 "far_share": float(np.mean(dd > CUT_M))}
+                                                 "far_share": float(np.mean(dd > CUT_M)),
+                                                 "beyond_padding": int(np.count_nonzero(np.isinf(dd)))}
             loc = se2_inv_apply(q, ex)
             sector = np.floor((np.arctan2(loc[:, 1], loc[:, 0]) + math.pi) / (math.pi / 4)).astype(int) % 8
             excluded["per_bearing_sector"] = np.bincount(sector, minlength=8).tolist()
