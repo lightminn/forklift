@@ -314,7 +314,7 @@
 ### 판정 도구의 규칙 (3·4 장을 구체화)
 
 - **같은 경로:** 적재 운반의 계획 경로(`paths.json` `transport`)는 재계획·하역 직선 교체 때 덮어써져 t_m 이전 경로가 다 남지 않는다. 그래서 실행 궤적으로 정한다(3.4). 재계획 수는 `stall_replans`·`scene_replans`·`observe_replans`·`cusp_replans`·`obstacle_layer.replans` 의 `time_s < t_m` 항목이다.
-- **팔 식별·허용 밖 차이:** 다음이 짝 안에서, 그리고 배치 전체에서 같아야 한다(실행 자신의 스냅숏·폴더 이름은 정규화). 소스·스크립트·차체 URDF·형상·팔레트 URDF 해시, 장면 해시(`scene_sha256`, `scene_layout.sha256`), `plant`·`plant_tyre_contact`·`encoder_model`·`chassis_model`, `settings_synthetic`(`pallet_mass_kg` 만 뺌), 실행 인자(짝 안), 폴더 이름의 seed 와 기록의 seed. 필드가 없으면 허용 밖으로 본다.
+- **팔 식별·허용 밖 차이:** 다음이 짝 안에서, 그리고 배치 전체에서 같아야 한다(실행 자신의 스냅숏·폴더 이름은 정규화). 소스·스크립트·차체 URDF·형상·팔레트 URDF 해시, 장면 USD 해시(`scene_sha256`), `plant`·`plant_tyre_contact`·`encoder_model`·`chassis_model`, `settings_synthetic`(`pallet_mass_kg` 만 뺌). 장면 배치 해시(`scene_layout.sha256`)는 같은 장면의 seed·팔 사이에서 같아야 한다(두 장면끼리는 다르다). 실행 인자는 짝 안에서, 폴더 이름의 seed 와 기록의 seed 는 실행마다 같아야 한다. 필드가 없거나 배치 기준값이 동률이면 허용 밖으로 본다(판정 도구 검토 반영, 측정값을 읽기 전).
 - **인프라 무효:** riib 배치 2 등록 §4 의 허용 목록(결과 없음·읽기 실패, 묶음 `infra_failed`·`stalled`, 실패 사유 접두 `slam_link_failed`·`slam_prewarm_timeout`·`plan_worker_dead`·`Camera did not produce RGB`·`Perception camera did not produce depth`·`Cannot open base scene`·`Invalid pallet spawn after settling`·`Truck spawn displaced`). 1 라운드 기록이 있어도 이 사유로 끝났으면 무효다. 팔별 무효 수를 보고한다.
 - **e_m 대조:** `delivery_match_1.npz` 가 없거나 다시 계산한 값이 1e-9 m 넘게 다르면 그 짝의 주 측정은 쓰지 않는다.
 - **정지 빈차 중량:** 출발 전 0.5 s 의 네 바퀴 법선력 합을 차 질량(운영 장면 26.0 kg, F2 계획 2 장) × 9.81 과 견준다. 서술용이다.
