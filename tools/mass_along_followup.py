@@ -353,7 +353,7 @@ def main(argv=None) -> int:
     res = followup(args.out, json.loads(args.verdict.read_text()), with_map=not args.no_map, precision=prec,
                    jobs=args.jobs)
     windows = res.pop("_windows")
-    args.json.write_text(json.dumps(res, indent=1, default=str) + "\n")
+    args.json.write_text(json.dumps(res, indent=1, default=str, allow_nan=False) + "\n")  # strict JSON
     if args.csv_windows:
         keys = sorted({k for ws in windows.values() for w in ws for k in w})
         with args.csv_windows.open("w", newline="") as f:

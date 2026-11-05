@@ -270,3 +270,16 @@ def test_candidates_beyond_one_maps_padding_are_excluded_not_fatal():
     pts = np.array([[3.02, 0.0], [0.02, 0.0]])
     assert S.occupied_both(pts, [a, b]).tolist() == [False, False]
     assert np.isinf(b.distance_or_inf(pts[:1]))[0]
+
+
+def test_excluded_distance_stats_are_strict_json_with_points_beyond_the_padding():
+    import json
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        st = S.distance_stats(np.array([0.2, 0.4, np.inf, np.inf]))
+        none = S.distance_stats(np.array([np.inf]))
+    assert st["beyond_padding"] == 2 and st["median"] == pytest.approx(0.3) and st["far_share"] == 1.0
+    assert none["median"] is None and none["p90"] is None
+    json.dumps([st, none], allow_nan=False)

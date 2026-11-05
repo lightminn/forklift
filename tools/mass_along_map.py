@@ -285,6 +285,15 @@ def support(points: np.ndarray, q, grids: list[MapGrid]) -> np.ndarray:
     return ok
 
 
+def distance_stats(dd: np.ndarray) -> dict:
+    """Excluded points' distances: quantiles over the finite ones only, the points beyond the padding counted apart
+    (censored at PAD_M), null quantiles when none is finite -- strict JSON (Codex review P2)."""
+    fin = dd[np.isfinite(dd)]
+    return {"median": float(np.median(fin)) if len(fin) else None, "p90": float(np.percentile(fin, 90)) if len(fin) else None,
+            "far_share": float(np.mean(dd > CUT_M)) if len(dd) else None,
+            "beyond_padding": int(len(dd) - len(fin)), "quantiles_over": "finite (within the padding)"}
+
+
 def occupied_both(points: np.ndarray, grids: list[MapGrid]) -> np.ndarray:
     """Amendment 1: points within CUT_M of an occupied cell in every grid at the identity -- a surface both maps hold
     near the point. (The edition-6 rule, every cell within the search reach known, removed every wall point: the far
@@ -471,10 +480,7 @@ def align_choice(a_inp: dict, b_inp: dict, q, key: str, stamps_key: str, precisi
         excluded["points"] = int(len(ex))
         if len(ex):
             for arm, g in (("A", grids[0]), ("B", grids[1])):
-                dd = g.distance_or_inf(ex)
-                excluded[f"distance_{arm}_m"] = {"median": float(np.median(dd)), "p90": float(np.percentile(dd, 90)),
-                                                 "far_share": float(np.mean(dd > CUT_M)),
-                                                 "beyond_padding": int(np.count_nonzero(np.isinf(dd)))}
+                excluded[f"distance_{arm}_m"] = distance_stats(g.distance_or_inf(ex))
             loc = se2_inv_apply(q, ex)
             sector = np.floor((np.arctan2(loc[:, 1], loc[:, 0]) + math.pi) / (math.pi / 4)).astype(int) % 8
             excluded["per_bearing_sector"] = np.bincount(sector, minlength=8).tolist()
