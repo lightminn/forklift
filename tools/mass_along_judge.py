@@ -58,17 +58,19 @@ SCENE_PROP_ROOTS = ("Scene", "ScenePallets")
 
 
 def plant_common(result: dict):
+    """The plant record without the scene's props; None when the record or its materials list is missing (an empty list
+    that was recorded stays an empty list)."""
     plant = result.get("plant")
-    if not isinstance(plant, dict):
-        return plant
-    return {**plant, "materials": [m for m in plant.get("materials") or [] if m.get("root") not in SCENE_PROP_ROOTS]}
+    if not isinstance(plant, dict) or not isinstance(plant.get("materials"), list):
+        return None
+    return {**plant, "materials": [m for m in plant["materials"] if m.get("root") not in SCENE_PROP_ROOTS]}
 
 
 def plant_props(result: dict):
     plant = result.get("plant")
-    if not isinstance(plant, dict):
+    if not isinstance(plant, dict) or not isinstance(plant.get("materials"), list):
         return None
-    return [m for m in plant.get("materials") or [] if m.get("root") in SCENE_PROP_ROOTS]
+    return [m for m in plant["materials"] if m.get("root") in SCENE_PROP_ROOTS]
 
 
 def encoder_common(result: dict):

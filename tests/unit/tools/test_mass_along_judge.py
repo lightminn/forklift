@@ -493,3 +493,12 @@ def test_a_part_missing_from_every_run_of_a_seed_is_still_outside(tmp_path):
     out = _scene_seed_batch(tmp_path, seeds=(0, 1, 2), over={(sc, 1): {"encoder_model": enc} for sc in J.SCENES})
     bad = [p for p in out["pairs"] if p["seed"] == 1]
     assert bad and all(not p["valid"] and "encoder_model(phases):s1 missing" in p["why"] for p in bad), [p.get("why") for p in bad]
+
+
+
+@pytest.mark.parametrize("plant", [{"articulation_solver_iterations": [32, 8]},
+                                   {"articulation_solver_iterations": [32, 8], "materials": None}])
+def test_a_missing_materials_list_is_outside_even_in_every_run(tmp_path, plant):
+    # Codex new-thread review 2 P2: a missing or null materials list read as an empty one and passed
+    out = _scene_seed_batch(tmp_path, seeds=(0, 1), over={(sc, sd): {"plant": plant} for sc in J.SCENES for sd in (0, 1)})
+    assert out["pairs"] and all(not p["valid"] and "plant(common) missing" in p["why"] for p in out["pairs"])
