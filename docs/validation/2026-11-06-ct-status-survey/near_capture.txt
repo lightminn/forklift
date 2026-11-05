@@ -1,0 +1,31 @@
+session | near_capture | attempt | arrived_xy_yaw | pocket_status | reason | plane_inliers | candidate_planes | rejected_plane_reasons | far_error_m
+D_random_m_s0 | done | 1 | (-2.815, -1.038, -0.127) | valid | None | 2203 | 5 | {'outside_expected': 1, 'no_opening_pattern': 3} | 0.1152
+D_random_m_s1 | done | 1 | (-2.815, -1.045, -0.133) | valid | None | 2220 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.0975
+D_random_m_s2 | done | 1 | (-2.865, -1.032, -0.118) | valid | None | 2143 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.1189
+D_random_m_s3 | done | 1 | (-2.864, -1.034, -0.115) | valid | None | 2163 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.1138
+D_random_m_s4 | done | 1 | (-2.816, -1.033, -0.126) | valid | None | 2203 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.1179
+D_random_m_s5 | done | 1 | (-2.812, -1.046, -0.133) | valid | None | 2206 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.0984
+D_random_m_s6 | done | 1 | (-2.823, -1.056, -0.111) | valid | None | 2194 | 6 | {'outside_expected': 1, 'no_opening_pattern': 4} | 0.1009
+D_random_m_s7 | done | 1 | (-2.815, -1.043, -0.126) | valid | None | 2216 | 7 | {'outside_expected': 1, 'no_opening_pattern': 5} | 0.1110
+Dp_random_m_s0 | done | 1 | (-2.809, -1.043, -0.136) | valid | None | 2208 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.0974
+Dp_random_m_s1 | done | 1 | (-2.811, -1.045, -0.128) | valid | None | 2204 | 8 | {'outside_expected': 1, 'no_opening_pattern': 6} | 0.1102
+O0_random_m_s0 | done | 1 | (-2.811, -1.049, -0.131) | valid | None | 2205 | 5 | {'outside_expected': 1, 'no_opening_pattern': 3} | 0.0961
+O0_random_m_s1 | done | 1 | (-2.822, -1.038, -0.124) | valid | None | 2217 | 5 | {'outside_expected': 1, 'no_opening_pattern': 3} | 0.1177
+O6_random_m_s0 | failed | 1 | (-2.862, -1.036, -0.129) | no_pallet | no_expected_candidate | 0 | 8 | {'no_opening_pattern': 7, 'outside_expected': 1} | 0.0983
+O6_random_m_s1 | done | 1 | (-2.865, -1.032, -0.141) | valid | None | 2166 | 4 | {'outside_expected': 1, 'no_opening_pattern': 2} | 0.1037
+
+session | mission | phase | position_error_m | yaw_error_rad | status
+D_line_m_s2 | m1 | return_home | 0.0209 | -0.0248 | success
+D_line_m_s2 | m1 | return_home | 0.0085 | 0.0259 | success
+D_line_m_s2 | m3 | return_home | 0.0143 | -0.0373 | success
+D_line_m_s7 | m1 | return_home | 0.0077 | -0.0301 | success
+D_line_m_s7 | m2 | return_home | 0.0241 | -0.0287 | success
+D_random_m_s4 | m3 | return_home | 0.0099 | -0.0409 | success
+D_random_m_s5 | m3 | return_home | 0.0100 | -0.0341 | success
+D_random_m_s6 | m1 | return_home | 0.0178 | -0.0286 | success
+D_random_m_s6 | m3 | return_home | 0.0169 | -0.0346 | success
+D_random_m_s7 | m3 | return_home | 0.0159 | -0.0233 | success
+O0_random_m_s0 | m1 | return_home | 0.0200 | -0.0290 | success
+O0_random_m_s0 | m3 | return_home | 0.0075 | -0.0333 | success
+O0_random_m_s1 | m3 | return_home | 0.0242 | -0.0266 | success
+O6_line_m_s1 | m1 | return_home | 0.0086 | -0.0275 | success
