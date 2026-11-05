@@ -103,9 +103,10 @@ def test_classes_and_stage_parsing():
 
 def test_pair_comparison_is_undecidable_when_a_value_is_missing():
     a = {"session": "A", "rows": [{"order": 1, "start": "confirmed", "outcome": "done", "reason": None, "stage": None,
-                                   "ended_s": 10.0, "docking_rounds": 2, "delivery_error": 0.02},
+                                   "ended_s": 10.0, "docking_rounds": 2, "delivery_error": 0.02,
+                                   "phase_history": ["observe", "complete"]},
                                   {"order": 2, "start": "confirmed", "outcome": "failed", "reason": "x", "stage": "lift",
-                                   "ended_s": 20.0, "docking_rounds": 0},
+                                   "ended_s": 20.0, "docking_rounds": 0, "phase_history": ["observe", "lift"]},
                                   {"order": 3, "start": "confirmed", "outcome": None, "reason": None, "stage": None,
                                    "ended_s": None, "docking_rounds": None}]}
     b = json.loads(json.dumps(a))
@@ -209,7 +210,8 @@ def test_grid_plans_come_from_the_run_record_within_the_mission(tmp_path):
 
 def test_pairs_compare_the_delivery_error_and_need_the_docking_rounds(tmp_path):
     base = {"order": 1, "start": "confirmed", "outcome": "done", "reason": None, "stage": None, "substage": None,
-            "exposure": ["preparing"], "ended_s": 10.0, "docking_rounds": 2, "delivery_error": 0.01}
+            "exposure": ["preparing"], "phase_history": ["observe", "complete"], "ended_s": 10.0, "docking_rounds": 2,
+            "delivery_error": 0.01}
     a = {"session": "A", "rows": [dict(base)]}
     b = {"session": "B", "rows": [dict(base, delivery_error=0.20)]}
     assert C.compare_pair(a, b)["missions"][0]["first_difference"] == "delivery_error"
@@ -289,3 +291,35 @@ def test_a_first_submission_rejected_is_a_queue_block(tmp_path):
     d = session(tmp_path, "D_line_m_s13", [("a", "reject", "localization_lost")], [], run=None)
     s = C.session_rows(d, 3)
     assert s["queue_blocked"] and s["rows"][0]["class"] == "queue" and s["rows"][0]["reason"] == "localization_lost"
+
+
+# --- Codex round 5 counterexamples ---
+
+def test_the_previous_complete_at_the_same_time_is_not_the_cut_missions(tmp_path):
+    run = {"success": False, "failure_reason": "slam_link_failed: timeout",
+           "transitions": [{"from": "approach", "to": "complete", "time_s": 5.0}]}
+    d = session(tmp_path, "D_line_m_s14", [("a", "ack", "m1"), ("b", "ack", "m2")],
+                [("m1", "done", None, 0, 5.0, "complete")], run=run)
+    cut = C.session_rows(d, 2)["rows"][1]
+    assert cut["stage"] == "preparing" and cut["exposure"] == ["preparing"] and cut["phase_history"] == []
+
+
+def test_the_book_fills_a_folder_without_its_result(tmp_path):
+    d = tmp_path / "D_line_m_s15"
+    base = d / "live" / "epoch_1" / "run"
+    _write(base / "missions" / "m1" / "records.json", {"state": {"phase": "complete"}})
+    _write(base / "result.json", {"success": True, "transitions": [], "mission_results": [
+        {"mission_id": "m1", "outcome": "done", "started_s": 1.0, "ended_s": 9.0}]})
+    r = C.session_rows(d, 1)["rows"][0]
+    assert r["outcome"] == "done" and r["ended_s"] == 9.0
+
+
+def test_pairs_need_the_phase_history_past_the_preparation():
+    row = {"order": 1, "start": "confirmed", "outcome": "failed", "reason": "Tracking failed in transport",
+           "stage": "transport", "substage": "before_delivery_match", "phase_history": None, "ended_s": 9.0,
+           "docking_rounds": 0, "delivery_error": None}
+    out = C.compare_pair({"session": "A", "rows": [dict(row)]}, {"session": "B", "rows": [dict(row)]})["missions"][0]
+    assert out["verdict"] == "undecidable" and "phase_history" in out["missing"]
+    prep = dict(row, stage="preparing", reason="prepare:timeout", substage=None, phase_history=[])
+    out = C.compare_pair({"session": "A", "rows": [dict(prep)]}, {"session": "B", "rows": [dict(prep)]})["missions"][0]
+    assert out["verdict"] == "same"

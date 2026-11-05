@@ -130,6 +130,9 @@ def epoch_runs(session: Path) -> list[dict]:
         # the run record's results book (written when the session ends normally): a mission whose folder is missing
         # keeps its place and result; a gap in the mission numbers keeps its place as a mission with no record
         book = {e.get("mission_id"): e for e in (top or {}).get("mission_results") or [] if e.get("mission_id")}
+        for m in missions:  # a folder without its result file: the book's settled result and times
+            if m["result"] is None and m["mission_id"] in book:
+                m["result"], m["result_from_book"] = book[m["mission_id"]], True
         have = {m["mission_id"] for m in missions}
         for mid, e in book.items():
             if mid not in have:
@@ -158,7 +161,8 @@ def epoch_runs(session: Path) -> list[dict]:
     return out
 
 
-def mission_phases(transitions: list, started: float | None, ended: float | None) -> list[str] | None:
+def mission_phases(transitions: list, started: float | None, ended: float | None,
+                   after: bool = False) -> list[str] | None:
     """The phases a mission entered: the transitions' targets inside its interval, in order (a transition's 'from' at
     the boundary is the previous mission's last phase -- the adoption writes previous -> observe -- and is not counted).
     None without the interval or with no transition inside it."""
@@ -168,6 +172,8 @@ def mission_phases(transitions: list, started: float | None, ended: float | None
     for t in transitions:
         ts = t.get("time_s")
         if ts is None or ts < started - 1e-6 or (ended is not None and ts > ended + 1e-6):
+            continue
+        if after and ts <= started + 1e-9:  # strictly after: the previous mission's complete shares its end time
             continue
         ph = t.get("to")
         if ph and (not seq or seq[-1] != ph):
@@ -197,7 +203,7 @@ def substage(stage: str | None, m: dict, ended: float | None) -> str | None:
 def exposure_from(phases: list[str] | None, end_phase: str | None, done: bool) -> tuple[list[str], str]:
     """The stages a mission entered and where that came from: the session's transitions (with preparing, which every
     started mission entered), else the phase order up to its end phase (all for a done mission)."""
-    if phases:
+    if phases is not None and (phases or end_phase == "preparing"):
         return [p for p in PHASE_ORDER if p in phases or p == "preparing"], "transitions"
     if done:
         return list(PHASE_ORDER), "order"
@@ -310,7 +316,9 @@ def session_rows(session: Path, scheduled: int = 3) -> dict:
             # before its first transition); with no previous end known the stage stays unknown
             prev_end = 0.0 if j == 0 else rows[j - 1][0].get("ended_s")
             if prev_end is not None:
-                phases = mission_phases(transitions, float(prev_end) + 1e-6, None)
+                phases = mission_phases(transitions, float(prev_end), None, after=True)
+                if phases is None:
+                    phases = []  # observed: no transition of its own, it never left the preparation
                 end_phase = phases[-1] if phases else "preparing"
         if not done and row["outcome"] != "no_record":
             row["stage"] = stage_of(row["reason"], end_phase)
@@ -374,6 +382,10 @@ def compare_pair(a: dict, b: dict) -> dict:
             required = ["outcome", "ended_s", "docking_rounds"]
             if ra.get("outcome") == "done" or rb.get("outcome") == "done":
                 required.append("delivery_error")
+            # a mission past the preparation went through transitions: its history is evidence, not optional
+            # (an observed preparation-only mission has [] , not None)
+            if any(r.get("outcome") == "done" or r.get("stage") not in (None, "preparing") for r in (ra, rb)):
+                required.append("phase_history")
         missing = [k for k in required if ra.get(k) is None or rb.get(k) is None]
         missing += [k for k in PAIR_KEYS if k not in required and (ra.get(k) is None) != (rb.get(k) is None)]
         if missing:
