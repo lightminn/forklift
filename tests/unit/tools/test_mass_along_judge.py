@@ -237,8 +237,9 @@ def _write_run(folder, arm, kg, scene, seed=0, **over):
              arguments={"settings": f"/s/mae_0108c3ff_{arm}/config/x.yaml", "output": str(run), "rear_axle_offset_m": -0.34},
              settings_synthetic={"pallet_mass_kg": kg, "wheel_torque_nm": 3.0}, scene_layout={"sha256": "L"},
              **{k: "h" for k in ("source_sha256", "script_sha256", "forklift_urdf_sha256", "pallet_geometry_sha256",
-                                 "pallet_urdf_sha256", "encoder_model", "chassis_model")},
-             scene_sha256={"scene.usda": "s"}, plant={"m": 1}, plant_tyre_contact=[{"k": None}])
+                                 "pallet_urdf_sha256", "chassis_model")},
+             encoder_model={"name": "team_spec_quantized", "phases_rad": [float(seed)]},
+             scene_sha256={"scene.usda": "s"}, plant={"materials": []}, plant_tyre_contact=[{"k": None}])
     r.update(over)
     (run / "result.json").write_text(json.dumps(r))
     np.save(run / "slam_control.npy", control)
@@ -282,7 +283,7 @@ def test_judge_reads_real_format_records(tmp_path):
                     "approach_speed": 0.3}}, "arguments"),
     ({"settings_synthetic": {"pallet_mass_kg": 4.93, "wheel_torque_nm": 2.0}}, "settings_synthetic"),
     ({"scene_layout": {"sha256": "other"}}, "scene_layout"),
-    ({"encoder_model": None}, "encoder_model"),
+    ({"encoder_model": None}, "encoder_model"),  # caught in the pair check (missing)
     ({"seed": 3}, "seed"),
     ({"deterministic": {"enabled": True, "broken": ["frame_sync:no_rgba"]}}, "broken"),
     ({"failure_reason": "slam_link_failed: no reply"}, "infrastructure")])
@@ -484,3 +485,11 @@ def test_the_common_parts_of_plant_and_encoder_still_hold_across_the_batch(tmp_p
     out = _scene_seed_batch(tmp_path, seeds=(0, 1, 2, 3), over={("random_1", 1): over})
     bad = [p for p in out["pairs"] if p["scene"] == "random_1" and p["seed"] == 1][0]
     assert not bad["valid"] and part in bad["why"], bad.get("why")
+
+
+def test_a_part_missing_from_every_run_of_a_seed_is_still_outside(tmp_path):
+    # Codex new-thread review P2: phases dropped from all four runs of a seed matched the "null" reference
+    enc = {"name": "team_spec_quantized", "wheel_counts_per_rev": 4096}  # no phases_rad
+    out = _scene_seed_batch(tmp_path, seeds=(0, 1, 2), over={(sc, 1): {"encoder_model": enc} for sc in J.SCENES})
+    bad = [p for p in out["pairs"] if p["seed"] == 1]
+    assert bad and all(not p["valid"] and "encoder_model(phases):s1 missing" in p["why"] for p in bad), [p.get("why") for p in bad]

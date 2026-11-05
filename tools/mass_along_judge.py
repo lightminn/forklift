@@ -694,13 +694,15 @@ def batch_differences(result: dict, ref: dict, scene: str, seed: int | None = No
     checks = {k: _normal(result.get(k)) for k in BATCH_FIELDS}
     checks["settings_synthetic"] = _settings_without_mass(result)
     checks[f"scene_layout:{scene}"] = _normal((result.get("scene_layout") or {}).get("sha256"))
-    for k, part in BATCH_PARTS.items():
-        checks[k] = _normal(part(result))
-    for k, part in PER_SCENE_PARTS.items():
-        checks[f"{k}:{scene}"] = _normal(part(result))
-    for k, part in PER_SEED_PARTS.items():
-        checks[f"{k}:s{seed}"] = _normal(part(result))
-    return [k for k, v in checks.items() if ref.get(k) in (None, TIED) or v != ref[k]]
+    missing = []
+    for name, parts, key in ((None, BATCH_PARTS, lambda k: k), (scene, PER_SCENE_PARTS, lambda k: f"{k}:{scene}"),
+                             (seed, PER_SEED_PARTS, lambda k: f"{k}:s{seed}")):
+        for k, part in parts.items():
+            value = part(result)
+            if value is None:  # a missing part is outside the allowed difference, even when every run lacks it
+                missing.append(f"{key(k)} missing")
+            checks[key(k)] = _normal(value)
+    return missing + [k for k, v in checks.items() if ref.get(k) in (None, TIED) or v != ref[k]]
 
 
 def judge(out_dir: Path, compare: dict | None = None, truck_mass_kg: float | None = None) -> dict:
