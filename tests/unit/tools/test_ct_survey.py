@@ -360,3 +360,300 @@ def test_the_delivery_error_median_of_an_even_sample_is_the_mean_of_the_middle_t
         _write(base / "result.json", {"success": True, "transitions": []})
     o = C.survey(tmp_path, 1)["summary"]["D|line_m"]
     assert o["delivery_error_m"]["median"] == pytest.approx(0.025) and o["delivery_error_m"]["max"] == 0.10
+
+
+# --- near_capture_tally (docs/plans/2026-11-07-near-capture-frequency.md) -------------------------------------------
+
+
+NEAR_FAIL = "near_capture_failed:perception_no_pallet:no_expected_candidate"
+ARGS = {"output": "/x/run", "seed": 100, "slam_noise_seed": 100, "live_port": 9100, "live_port_file": "/x/p.json",
+        "slam_feedback": "/x/s", "slam_map_dir": "/x/b", "scene_file": "/nowhere/line_m_session.json",
+        "slam_map_bundle": "/m/a", "expected_map_id": "aa", "slam_choice": "localization (registry: a)",
+        "pallet_prior_loaded": {"catalogue_version": "epal6"}, "recognition_proposals": "learned"}
+
+
+def near_attempt(status="valid", reason=None, sha="d1", t=10.0, first=None, applied=None, far=False):
+    """An observation attempt: far, or near (its expected record), with the waiver's record when ``first`` is given."""
+    a = {"pocket_observation": {"status": status, "reason": reason}, "depth_sha256": sha, "t_before_capture_s": t,
+         "loop_step": int(t * 10), "accepted_pose": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]}
+    if not far:
+        a["expected"] = {"candidates": []}
+    if first is not None:
+        a["lower_waiver"] = {"first": first, "second": {"candidates": []}, "applied": bool(applied)}
+    return a
+
+
+def mission_state(attempts, near=True):
+    state = {"phase": "approach", "observation_attempts": attempts}
+    if near:
+        state["near_capture"] = {"status": "done", "far_attempt": 1}
+    return state
+
+
+def tally_session(tmp_path, name, rows, submits=None, run=None, args=ARGS, samples=()):
+    """rows: [(mid, outcome, reason, attempts or None)]; attempts None leaves the mission folder without its records."""
+    submits = submits if submits is not None else [(r[0], "ack", r[0]) for r in rows]
+    top = dict(run or {})
+    if args is not None:
+        top.setdefault("arguments", args)
+    d = session(tmp_path, name, submits, [(r[0], r[1], r[2], float(i), float(i) + 0.5, "approach")
+                                          for i, r in enumerate(rows)], run=top)
+    base = d / "live" / "epoch_1" / "run"
+    for mid, _, _, attempts in rows:
+        if attempts is None:
+            (base / "missions" / mid / "records.json").unlink()
+        else:
+            _write(base / "missions" / mid / "records.json", {"state": mission_state(attempts)})
+    if samples:
+        spool = base / "spool" / "state.samples"
+        spool.mkdir(parents=True)
+        (spool / "0.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples))
+    return d
+
+
+def tally(tmp_path, scheduled=3):
+    res = C.survey(tmp_path, scheduled)
+    return C.near_capture_tally(tmp_path, res["sessions"])
+
+
+def only(out, key="populations"):
+    assert len(out[key]) == 1
+    return out[key][0]
+
+
+def test_config_hashes_ignore_the_run_and_the_scene_but_not_a_setting():
+    a = dict(ARGS)
+    b = dict(ARGS, output="/y", seed=7, slam_noise_seed=7, live_port=1, live_port_file="/y", slam_feedback="/y",
+             slam_map_dir="/y")
+    assert C.config_hashes(a) == C.config_hashes(b)
+    c = dict(ARGS, scene_file="/nowhere/random_m_session.json", slam_map_bundle="/m/b", expected_map_id="bb",
+             slam_choice="localization (registry: b)")
+    assert C.config_hashes(a)[0] != C.config_hashes(c)[0]
+    assert C.config_hashes(a)[1] == C.config_hashes(c)[1]
+    d = dict(ARGS, recognition_proposals="oracle")
+    assert C.config_hashes(a)[0] != C.config_hashes(d)[0] and C.config_hashes(a)[1] != C.config_hashes(d)[1]
+    assert C.config_hashes(None) == (None, None)
+
+
+def test_observation_waypoints_leave_the_hash_only_as_the_scene_own_value(tmp_path):
+    scene = tmp_path / "s.json"
+    scene.write_text(json.dumps({"pallets": [{"observation_waypoints": [[1.0, 0.0, 0.0]]},
+                                             {"observation_waypoints": [[2.0, 0.0, 0.0]]}]}))
+    base = dict(ARGS, scene_file=str(scene))
+    one = dict(base, observation_waypoints=[[1.0, 0.0, 0.0]])
+    two = dict(base, observation_waypoints=[[2.0, 0.0, 0.0]])
+    assert C.config_hashes(one) == C.config_hashes(two)  # the queue stopped at another mission: the same condition
+    named = dict(base, observation_waypoints=[[9.0, 0.0, 0.0]])
+    assert C.config_hashes(one)[0] != C.config_hashes(named)[0]  # set by hand: a setting
+    gone = dict(one, scene_file="/nowhere.json")
+    assert C.config_hashes(gone)[1] != C.config_hashes(dict(two, scene_file="/nowhere.json"))[1]  # unreadable: it stays
+
+
+def test_a_rescued_capture_counts_as_a_first_call_invalid_and_never_in_the_numerator(tmp_path):
+    bad = {"status": "no_pallet", "reason": "no_expected_candidate"}
+    tally_session(tmp_path, "O0_line_m_s100", [
+        ("m1", "done", None, [near_attempt(far=True), near_attempt(first=bad, applied=True)])])
+    out = tally(tmp_path)
+    cell = only(out, "cells")
+    assert cell["first_call_invalid_by_reason"] == {"no_pallet:no_expected_candidate": 1}
+    assert cell["final_invalid_by_reason"] == {}
+    assert (cell["waiver_second_calls"], cell["waiver_rescues"]) == (1, 1)
+    assert cell["missions_recovered_same_capture"] == 1 and cell["missions_recovered_new_capture"] == 0
+    assert cell["missions_ended_near"] == 0 and cell["capture_attempts"] == 1 and cell["missions_reached_near"] == 1
+
+
+def test_a_later_valid_capture_is_a_new_capture_recovery(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [
+        ("m1", "done", None, [near_attempt(far=True), near_attempt("no_pallet", "x", sha="d2", t=11.0),
+                              near_attempt(sha="d3", t=12.0)])])
+    cell = only(tally(tmp_path), "cells")
+    assert cell["missions_recovered_new_capture"] == 1 and cell["missions_recovered_same_capture"] == 0
+    assert cell["final_invalid_by_reason"] == {"no_pallet:x": 1}
+
+
+def test_a_near_end_counts_once_with_its_reason_and_stops_the_session(tmp_path):
+    tally_session(tmp_path, "O0_random_m_s100", [
+        ("m1", "done", None, [near_attempt(far=True), near_attempt()]),
+        ("m2", "failed", NEAR_FAIL, [near_attempt(far=True), near_attempt("no_pallet", "no_expected_candidate", sha="d2"),
+                                     near_attempt("no_pallet", "no_expected_candidate", sha="d3", t=12.0)])],
+                  submits=[("m1", "ack", "m1"), ("m2", "ack", "m2")])
+    out = tally(tmp_path)
+    pop = only(out)
+    assert (pop["rates"]["N"], pop["rates"]["k"], pop["rates"]["R"]) == (2, 1, 2)
+    ended = [c for c in out["cells"] if c["missions_ended_near"]]
+    assert len(ended) == 1 and ended[0]["mission_seq"] == 2
+    assert ended[0]["ended_by_reason"] == {"no_pallet:no_expected_candidate": 1}
+    assert ended[0]["ended_session_ids"] == ["O0_random_m_s100"]
+    cell = only(out, "session_cells")
+    assert cell["stopped_near_session_ids"] == ["O0_random_m_s100"] and cell["unsubmitted_after_stop"] == 1
+    assert cell["started_session_ids"] == ["O0_random_m_s100"]
+
+
+def test_a_misaligned_end_is_in_the_numerator_and_a_frameless_one_is_marked(tmp_path):
+    reason = "near_capture_misaligned:{'lateral': 0.1}"
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "failed", reason, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    tally_session(tmp_path, "O0_line_m_s101", [
+        ("m1", "failed", "near_capture_no_final_straight", [near_attempt(far=True)])], submits=[("m1", "ack", "m1")])
+    out = tally(tmp_path, 1)
+    pop = only(out)
+    assert pop["rates"]["k"] == 2 and pop["rates"]["R"] == 2  # k is inside R
+    assert pop["rates"]["ended_without_capture"] == 1
+    assert pop["ended_by_reason"] == {"near_capture_misaligned": 1, "near_capture_no_final_straight": 1}
+
+
+def test_the_attempts_of_the_mission_a_run_ended_in_come_from_the_top_and_count_once(tmp_path):
+    shared = near_attempt(far=True, sha="d0", t=1.0)
+    near = near_attempt("no_pallet", "no_expected_candidate", sha="d9", t=30.0)
+    run = {"success": False, "failure_reason": NEAR_FAIL, "observation_attempts": [shared, near],
+           "near_capture": {"status": "failed", "far_attempt": 1}}
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [shared, near_attempt(sha="d1")])],
+                  submits=[("m1", "ack", "m1"), ("m2", "ack", "m2")], run=run)
+    out = tally(tmp_path)
+    second = next(c for c in out["cells"] if c["mission_seq"] == 2)
+    assert second["missions_ended_near"] == 1 and second["capture_attempts"] == 1
+    first = next(c for c in out["cells"] if c["mission_seq"] == 1)
+    assert first["capture_attempts"] == 1
+
+
+def test_top_attempts_nobody_can_place_stay_in_an_unknown_cell(tmp_path):
+    run = {"success": True, "observation_attempts": [near_attempt(sha="d9", t=30.0)]}
+    samples = [{"time_s": 1.0, "pallet_id": "P-9", "pallet_position_m": [3.0, 0.0, 0.0], "pallet_yaw_rad": 0.0}]
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")], run=run, samples=samples)
+    out = tally(tmp_path, 1)
+    unknown = [c for c in out["cells"] if c["mission_seq"] == "unknown"]
+    assert len(unknown) == 1 and unknown[0]["capture_attempts"] == 1 and unknown[0]["missions_started"] == 0
+
+
+def test_rates_give_a_range_for_missing_results(tmp_path):
+    r = C.near_rates(k=2, N=100, S=0, R=20, U=80, m_R=0, m_U=80)
+    assert r["conditional"]["low"] == pytest.approx(2 / 100) and r["conditional"]["high"] == pytest.approx(82 / 100)
+    assert r["near_end"]["low"] == pytest.approx(0.02) and r["near_end"]["high"] == pytest.approx(0.82)
+    r = C.near_rates(k=0, N=0, S=0, R=0, U=0, m_R=0, m_U=0)
+    assert r["near_end"] is None and r["conditional"] is None
+    r = C.near_rates(k=1, N=4, S=1, R=2, U=0, m_R=0, m_U=0)
+    assert r["near_end"]["low"] == pytest.approx(1 / 5) and r["near_end"]["high"] == pytest.approx(2 / 5)
+    assert r["conditional"]["low"] == pytest.approx(1 / 3) and r["conditional"]["high"] == pytest.approx(2 / 3)
+    assert C.wilson(0, 60)[1] == pytest.approx(0.0602, abs=2e-4) and C.wilson(1, 60)[1] == pytest.approx(0.0886, abs=2e-4)
+
+
+def mission(session, near=False, cause=None, start="confirmed", missing=False):
+    return {"session": session, "start": start, "ended_near": near, "cause": cause, "result_missing": missing}
+
+
+def missions_of(n, near_sessions=(), other=()):
+    out = [mission(f"s{i}") for i in range(n - len(near_sessions) - len(other))]
+    out += [mission(s, near=True, cause="near_capture_") for s in near_sessions]
+    out += [mission(s, cause=c) for s, c in other]
+    return out
+
+
+@pytest.mark.parametrize("n,sessions,want", [(49, ("a", "b"), "denominator_short"), (50, ("a", "b"), "met"),
+                                             (50, ("a",), "not_met"), (60, ("a", "b"), "met"), (100, ("a",), "not_met")])
+def test_trigger_a_boundaries(n, sessions, want):
+    assert C.review_triggers(missions_of(n, sessions))["a"] == want
+
+
+def test_trigger_a_needs_the_rate():
+    assert C.review_triggers(missions_of(101, ("a", "b")))["a"] == "not_met"  # 1.98 %
+    assert C.review_triggers(missions_of(100, ("a", "b")))["a"] == "met"  # 2 % exactly
+
+
+def test_trigger_b_needs_two_sessions_and_the_top_cause_with_ties():
+    assert C.review_triggers(missions_of(10, ("a", "b"), [("c", "Tracking failed"), ("d", "Tracking failed")]))["b"] == "met"
+    assert C.review_triggers(missions_of(10, ("a", "b"), [("c", "T"), ("d", "T"), ("e", "T")]))["b"] == "not_met"
+    assert C.review_triggers(missions_of(10, ("a",)))["b"] == "not_met"
+
+
+def test_trigger_undecidable_when_the_assignments_differ():
+    ms = missions_of(100, ("a", "b"), [("c", "T")])
+    ms[0], ms[1] = mission("x", missing=True), mission("y", missing=True)  # two others could beat the near count
+    out = C.review_triggers(ms)
+    assert out["b"] == "undecidable" and out["a"] == "met"
+    ms = missions_of(49, ("a", "b")) + [mission("z", start="unknown", missing=True)]
+    assert C.review_triggers(ms)["a"] == "undecidable"  # 49 or 50 started
+    assert C.review_triggers(missions_of(47, ("a", "b")))["a"] == "denominator_short"
+
+
+def test_too_many_unknown_missions_are_undecidable_not_a_long_wait():
+    ms = missions_of(60, ("a", "b")) + [mission(f"u{i}", missing=True) for i in range(C.MAX_ASSIGNED + 1)]
+    assert C.review_triggers(ms) == {"a": "undecidable", "b": "undecidable", "assigned": None}
+
+
+def test_two_scenes_pool_by_the_operating_configuration_and_arms_do_not(tmp_path):
+    random_args = dict(ARGS, scene_file="/nowhere/random_m_session.json", slam_map_bundle="/m/b", expected_map_id="bb",
+                       slam_choice="localization (registry: b)", seed=101, slam_noise_seed=101)
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    tally_session(tmp_path, "O0_random_m_s101", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")], args=random_args)
+    out = tally(tmp_path, 1)
+    pop = only(out)
+    assert pop["rates"]["N"] == 2 and set(pop["by_scene"]) == {"line_m", "random_m"}
+    assert len(out["cells"]) == 2 and out["cells"][0]["operating_config_sha256"] == out["cells"][1]["operating_config_sha256"]
+    tally_session(tmp_path, "O6_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")], args=dict(ARGS, near_end_stand="on"))
+    assert len(tally(tmp_path, 1)["populations"]) == 2
+
+
+def test_a_session_with_no_arguments_joins_its_arm_and_is_named(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    tally_session(tmp_path, "O0_line_m_s101", [("m1", "failed", "Tracking failed in approach", None)],
+                  submits=[("m1", "ack", "m1")], args=None)
+    out = tally(tmp_path, 1)
+    pop = only(out)
+    assert pop["rates"]["N"] == 2 and pop["config_assumed_sessions"] == ["O0_line_m_s101"]
+
+
+def test_start_unknown_stays_apart_from_a_missing_result(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1"), ("b", "none", None), ("c", "ack", "m9")])
+    r = only(tally(tmp_path))["rates"]
+    assert (r["N"], r["S"], r["result_missing"]) == (2, 1, 1)
+    assert r["U"] == 1  # the acked m9 with no record may have reached it; the unknown start is S, not U
+
+
+def test_an_unexposed_shape_is_named_unverified(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    assert tally(tmp_path, 1)["unverified_shapes"] == ["t11"]
+
+
+def test_attempt_folders_are_left_out_and_named(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    tally_session(tmp_path, "O0_line_m_s100.attempt1", [("m1", "failed", NEAR_FAIL, [near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    out = tally(tmp_path, 1)
+    assert only(out)["rates"]["k"] == 0 and out["excluded_attempts"] == ["O0_line_m_s100.attempt1"]
+
+
+def test_a_refused_submission_of_the_reverse_scenario_starts_nothing_and_no_samples_leave_the_face_unknown(tmp_path):
+    d = tmp_path / "C3_line_m_s0"
+    _write(d / "probe.json", {"reverse": {"mission": {"pallet_id": "P-1", "destination_id": "D-1",
+                                                      "submit": {"t": "reject", "reason": "pose_unconfirmed"}}}})
+    (d / "live" / "epoch_1" / "run").mkdir(parents=True)
+    out = tally(tmp_path, 1)
+    assert only(out)["rates"]["N"] == 0
+    e = tmp_path / "C3_line_m_s1"
+    _write(e / "probe.json", {"reverse": {"mission": {"pallet_id": "P-1", "destination_id": "D-1",
+                                                      "submit": {"t": "ack", "mission_id": "m1"},
+                                                      "result": {"outcome": "done"}}}})
+    _write(e / "live" / "epoch_1" / "run" / "result.json", {"success": True, "arguments": ARGS})
+    _write(e / "live" / "epoch_1" / "run" / "missions" / "m1" / "records.json",
+           {"state": mission_state([near_attempt(far=True), near_attempt()])})
+    _write(e / "live" / "epoch_1" / "run" / "missions" / "m1" / "result.json",
+           {"result": {"mission_id": "m1", "outcome": "done", "started_s": 0.0, "ended_s": 1.0}})
+    res = C.survey(tmp_path, 1)
+    out = C.near_capture_tally(tmp_path, res["sessions"])
+    started = [c for c in out["cells"] if c["missions_started"]]
+    assert len(started) == 1 and started[0]["entry_face"] == "unknown"
+
+
+def test_the_entry_face_comes_from_the_spooled_samples(tmp_path):
+    samples = [{"time_s": 1.0, "pallet_id": "P", "pallet_position_m": [3.0, 0.0, 0.0], "pallet_yaw_rad": 0.0}]
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")], samples=samples)
+    assert only(tally(tmp_path, 1), "cells")["entry_face"] == "-x"  # the truck at the origin looks at the -x face
