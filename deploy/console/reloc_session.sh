@@ -16,8 +16,8 @@
 #   CLICK_KIND (development only) places that record click (tools/f1_place_eval.py STRESS_KINDS) instead
 #   reverse / reverse_place (docs/plans/2026-11-06-unconfirmed-validation.md 2.1): with POSE_CHECK on or shadow, the
 #   probe backs the truck up by the pressing rule REVERSE_KIND (full | half | chatter) and, with MISSION_AFTER_CONFIRM=1,
-#   runs the first pallet mission once confirmed (the shadow: after the strokes) -- unattended, or after the
-#   placement as place does (reverse_place)
+#   runs the first pallet mission once confirmed (the shadow: after the strokes) and stands POST_MISSION_SIM_S (20)
+#   after it -- unattended, or after the placement as place does (reverse_place)
 #
 # Run from the repository root.
 set -u
@@ -44,7 +44,8 @@ case "$PROBE_MODE" in
   reverse|reverse_place)
     case "${REVERSE_KIND:-full}" in full|half|chatter) ;; *) echo "REVERSE_KIND must be full, half or chatter" >&2; exit 2;; esac
     PROBE_ARGS+=(--reverse-kind "${REVERSE_KIND:-full}" --mission-timeout-s "${MISSION_TIMEOUT_S:-2400}")
-    [ "${MISSION_AFTER_CONFIRM:-}" = 1 ] && PROBE_ARGS+=(--mission-after-confirm)
+    [ "${MISSION_AFTER_CONFIRM:-}" = 1 ] && PROBE_ARGS+=(--mission-after-confirm \
+      --post-mission-sim-s "${POST_MISSION_SIM_S:-20}")
     [ -n "${POSE_CHECK:-}" ] && [ "$POSE_CHECK" != off ] \
       || { echo "RELOC_PROBE=$PROBE_MODE needs POSE_CHECK on or shadow" >&2; exit 2; } ;;
 esac

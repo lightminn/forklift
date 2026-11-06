@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT / "tests/unit/localization"))
 from test_riibotics_isaac_scenes import _runner_args  # noqa: E402
 from test_start_reloc_runner import _live, _reloc  # noqa: E402
 
-BOUNDS = {"odom": [0.02, 0.02, 0.005, 0.01], "e_still": [0.03, 0.01], "e_slam": [0.05, 0.025]}
+BOUNDS = {"odom": [0.02, 0.02, 0.005, 0.01], "e_still": [0.03, 0.01], "e_slam": [0.05, 0.025],
+          "e_window": [0.153, 0.103]}
 
 
 def test_the_check_is_off_by_default_and_not_recorded_off(tmp_path):
@@ -49,6 +50,13 @@ def test_the_bounds_may_come_from_a_file(tmp_path):
     f.write_text(json.dumps(BOUNDS))
     on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "on", "--pose-check-bounds", str(f)))
     assert on.pose_check_bounds.odom == (0.02, 0.02, 0.005, 0.01)
+
+
+def test_a_bounds_file_without_the_window_limit_is_refused(tmp_path):
+    no_window = {k: v for k, v in BOUNDS.items() if k != "e_window"}
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "on", "--pose-check-bounds",
+                           json.dumps(no_window)))
 
 
 def test_the_arguments_are_in_the_near_field_contract():
@@ -317,3 +325,40 @@ def test_the_shadows_places_in_the_tick_write_only_their_own():
     block = src[at:at + 1100]
     for name in ("arbiter", "layer", "commands", "cargo", "tracker"):
         assert f'"{name}": lambda:' in block, name
+
+
+def test_the_check_is_told_the_trackers_hold():
+    src = _source()
+    at = src.index("def pose_checkpoint(t_):")
+    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    assert body.count('holding=slam["tracker"].mode == "holding"') == 2
+
+
+def test_the_correction_injection_is_a_test_of_a_confirmed_session(tmp_path):
+    # the revision plan 2 D: test only, unattended, with the check, recorded only when given
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path, *_reloc(tmp_path)))
+    assert off.correction_inject is None and "correction_inject" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--reloc-unattended", "--pose-check", "shadow",
+                            "--correction-inject", "0.35,0,0,200"))
+    assert on.correction_inject == (0.35, 0.0, 0.0, 200.0)
+    assert run_transport.recorded_arguments(on)["correction_inject"] == [0.35, 0.0, 0.0, 200.0]
+    held = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--reloc-unattended", "--pose-check", "shadow",
+                              "--correction-inject", "0,0,0.12,0,hold"))
+    assert held.correction_inject == (0.0, 0.0, 0.12, 0.0, "hold")
+    assert run_transport.recorded_arguments(held)["correction_inject"] == [0.0, 0.0, 0.12, 0.0, "hold"]
+    for extra in (["--pose-check", "shadow", "--correction-inject", "0.35,0,0,200"],  # attended
+                  ["--reloc-unattended", "--correction-inject", "0.35,0,0,200"],  # no check
+                  ["--reloc-unattended", "--pose-check", "shadow", "--correction-inject", "0.35,0,0"],
+                  ["--reloc-unattended", "--pose-check", "shadow", "--correction-inject", "0,0,0.12,0,soon"]):
+        with pytest.raises(SystemExit):
+            _runner_args(_live(tmp_path, *_reloc(tmp_path), *extra))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["correction_inject"] is None
+    src = _source()
+    assert "def correction_injection(t_):" in src
+    assert 'wait_ and slam["tracker"].mode != "holding"' in src  # a hold's jump waits for the hold
+    at = src.index("correction_injection(t)\n")
+    assert 'if args.correction_inject is not None:' in src[at - 120:at]
+    assert 'pose_box["rt"] is not None' in src[at - 200:at]

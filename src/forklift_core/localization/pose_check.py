@@ -9,13 +9,17 @@ odom frame), the applied correction C (map <- odom), the stand and the deadman; 
   a stand with the deadman let go. After D_MIN of net displacement from the start, every new stand asks for a re-match.
 - ``confirmed`` only through the SLAM agreement: the applied pose against the evidence carried by the odometry, both
   on the base link and on the rear axle. C_int is the evidence's own correction (evidence o O_scan^-1). The monitor
-  then revokes when the correction moves C_int's pose by 0.20 m / 0.05 rad, or a stand's C_still by E_STILL.
+  then revokes when the correction jumps: the applied pose moved past the window's limit against the correction 2 m of
+  path, at most 10 s, ago (revision plan 2026-11-07 9.5) -- or a stand's C_still by E_STILL, taken again at a hold's
+  release. Delta_int against C_int goes on, for the re-match's condition and the record; a correction's slow move
+  passes both gates by design: there is no cumulative bound on the true error.
 - ``ended:<reason>`` cannot be left.
 """
 
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 
 from forklift_core.localization.start_reloc import rear_from_base
@@ -25,8 +29,9 @@ D_STROKE = 1.0  # design 3: one press, odometry
 D_TOTAL = 3.0  # design 3: three strokes
 D_MIN = 0.5  # design 3: the net displacement before a re-match
 STILL_M, STILL_RAD = 0.002, 0.002  # a scan set's own stillness (scan_capture's), and a re-match result's
-INT_M, INT_RAD = 0.20, 0.05  # design 1.5: the integrity budget
-REMATCH_M = 0.10  # design 1.5: half the revocation gate
+INT_M, INT_RAD = 0.20, 0.05  # design 1.5: the budget E_STILL stays within
+REMATCH_M = 0.10  # design 1.5: past this Delta_int a stand re-matches
+WINDOW_M, WINDOW_S = 2.0, 10.0  # the revision plan 9.5: the monitor's window of path, and its cap in time (9.7)
 
 
 def _wrap(a: float) -> float:
@@ -36,16 +41,17 @@ def _wrap(a: float) -> float:
 @dataclass(frozen=True)
 class Bounds:
     """The development values (plan 0): the odometry bound dp(d) = a + b d, dth(d) = c + e d of a straight reverse,
-    E_STILL and E_SLAM (metres, radians)."""
+    E_STILL, E_SLAM and the window's limit (metres, radians)."""
 
     odom: tuple
     e_still: tuple
     e_slam: tuple
+    e_window: tuple = (0.153, 0.103)  # the revision plan 9.5; a bounds file must give it
 
     def __post_init__(self):
-        values = [*self.odom, *self.e_still, *self.e_slam]
-        if len(self.odom) != 4 or len(self.e_still) != 2 or len(self.e_slam) != 2:
-            raise ValueError("odom takes (a, b, c, e), e_still and e_slam (metres, radians)")
+        values = [*self.odom, *self.e_still, *self.e_slam, *self.e_window]
+        if len(self.odom) != 4 or len(self.e_still) != 2 or len(self.e_slam) != 2 or len(self.e_window) != 2:
+            raise ValueError("odom takes (a, b, c, e), e_still, e_slam and e_window (metres, radians)")
         if not all(math.isfinite(v) and v >= 0 for v in values):
             raise ValueError("the bounds must be finite and non-negative")
         if self.e_still[0] > INT_M or self.e_still[1] > INT_RAD:
@@ -117,6 +123,9 @@ class PoseCheck:
         self.stand_id = 0
         self.rematched_at = None  # the stand a re-match was last started at
         self._rm = None  # the re-match in progress: (phase, epoch, control_gen)
+        self._window: deque = deque()  # (path, t, C) since the confirmation, cut to the window
+        self._path, self._o_last = 0.0, None
+        self._holding = False
 
     # --- transitions -------------------------------------------------------------------------------------------
     def _event(self, t, kind, **kw):
@@ -132,6 +141,9 @@ class PoseCheck:
         c_now = compose(C, o_now)
         m, rad = agreement(r_scan, o_scan, C, o_now, self.rear_offset_m)
         ok = m <= self.bounds.e_slam[0] and rad <= self.bounds.e_slam[1]
+        if ok and not self._window:  # the window starts at the confirmation
+            self._window.append((self._path, t, tuple(C)))
+            self._o_last = tuple(o_now)
         self._event(t, kind, agree_m=m, agree_rad=rad, ok=ok, evidence=list(r_scan), applied=list(c_now))
         if ok:
             self.c_int = compose(r_scan, invert(o_scan))
@@ -189,10 +201,14 @@ class PoseCheck:
 
     # --- every tick ------------------------------------------------------------------------------------------------
     def update(self, t: float, o, C, *, standing: bool, deadman: bool, mission_active: bool = False,
-               near: bool = False) -> View:
+               near: bool = False, holding: bool = False) -> View:
         """This tick's view; called again in the same tick with a newer C (after the SLAM replies, before the output)
-        it only re-judges the monitor."""
+        it only re-judges the monitor. ``holding``: the SLAM correction is held: at its release the stand's reference
+        is taken again (the release's own move is the window's to judge, not the stand's)."""
         o = tuple(float(v) for v in o)
+        if self._holding and not holding:
+            self.c_still = None
+        self._holding = holding
         new_stand = standing and not self.standing
         if new_stand:
             self.stand_id += 1
@@ -211,12 +227,24 @@ class PoseCheck:
             return view
         return self._strokes(t, o, standing, deadman)
 
+    def _window_change(self, t, o, C, now) -> tuple:
+        """The move of the applied pose at this odometry against the correction the window's start held."""
+        if self._o_last is not None:
+            self._path += _net(o, self._o_last)
+        self._o_last = o
+        self._window.append((self._path, t, tuple(C)))
+        while len(self._window) > 1 and (self._path - self._window[0][0] > WINDOW_M
+                                         or t - self._window[0][1] > WINDOW_S):
+            self._window.popleft()
+        return gap(now, compose(self._window[0][2], o), self.rear_offset_m)
+
     def _monitor(self, t, o, C, standing, new_stand, mission_active, near) -> View:
         now = compose(C, o)
         m, rad = gap(now, compose(self.c_int, o), self.rear_offset_m)
-        if m > INT_M or rad > INT_RAD:
-            self._event(t, "revoke", gate="int", delta_m=m, delta_rad=rad)
-            self.end(t, "pose_revoked:int")
+        wm, wrad = self._window_change(t, o, C, now)
+        if wm > self.bounds.e_window[0] or wrad > self.bounds.e_window[1]:
+            self._event(t, "revoke", gate="window", delta_m=wm, delta_rad=wrad, delta_int=[m, rad])
+            self.end(t, "pose_revoked:window")
             return View(self.status, reason="pose_ended", delta_int=(m, rad))
         if standing:
             if new_stand or self.c_still is None:
