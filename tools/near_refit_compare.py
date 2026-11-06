@@ -67,6 +67,7 @@ FRAME_SEEDS = tuple(range(100))
 UNIFORM_FRAMES, RESIDUAL_FRAMES = 10, 10
 TOY_STD_WORSENING_M = 0.002
 E3_LEVELS = ("isaac_clean", "isaac_high", "isaac_low", "isaac_mid")
+E3_PRIORS = ("epal6", "t11_06")
 E3_SCENES_PER_LEVEL = 48  # the dev negatives without the grounded kind (positive since 2026-10-27)
 NEGATIVE_KINDS = ("grounded", "shelf", "blocks", "crates")  # tools/recognition_scenes.py: the kind by rank % 4
 # The freeze gate's checks of the truth (A0 only)
@@ -74,6 +75,7 @@ GATE_MAX_TILT_RAD = 0.02
 GATE_YAW_RAD = 0.1
 OBSERVATION_ATOL = 1e-6
 EVIDENCE_GATE_RUNS = 29
+EVIDENCE_STORED_COMPARED = 100  # the two v1 runs still found; the plan's 330 is not available (plan 4-1)
 # Only the checks the plan says report, never judge
 DETECTION_DELTA_M, DETECTION_DELTA_RAD = 0.002, 0.002
 SUPPORT_LOSS_REPORT = 0.5
@@ -238,19 +240,25 @@ def arm_call(params: DetectorParams, arm: str) -> tuple[DetectorParams, dict]:
 def detect_path(scene, prior, params, path: dict, arm: str, *, log=None, detector=det.detect_pockets_expected):
     """The attempt's detection under one arm: (DetectionResult, whether the waiver's second call ran). Mirrors the
     mission core: the second call runs only in the near branch after an invalid first call with the waiver allowed;
-    it stands only if valid."""
+    it stands only if valid. ``log``, a dict, receives each call's rounds and which call was adopted."""
     params_a, kw = arm_call(params, arm)
     if log is not None:
-        kw = {**kw, "refit_log": log}
+        log.update(first=[], second=[], adopted="first")
     site = None
     if path["kind"] != "plain":
         site = ExpectedSite(*path["site"], path["radius_m"], path["axis_rad"])
-    first, _ = detector(scene, prior, params_a, site, lower_evidence=path["lower_evidence"], **kw)
+    extra = {} if log is None else {"refit_log": log["first"]}
+    first, _ = detector(scene, prior, params_a, site, lower_evidence=path["lower_evidence"], **kw, **extra)
     if path["waiver"] != "allowed" or first.observation.status == "valid":
         return first, False
     narrow = ExpectedSite(site.x_m, site.y_m, site.yaw_rad, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
-    second, _ = detector(scene, prior, params_a, narrow, lower_evidence=False, **kw)
-    return (second, True) if second.observation.status == "valid" else (first, True)
+    extra = {} if log is None else {"refit_log": log["second"]}
+    second, _ = detector(scene, prior, params_a, narrow, lower_evidence=False, **kw, **extra)
+    if second.observation.status != "valid":
+        return first, True
+    if log is not None:
+        log["adopted"] = "second"
+    return second, True
 
 
 def canonical(observation) -> str:
@@ -268,7 +276,7 @@ def detection_record(detection, second_called: bool, wall_s: float | None = None
     if wall_s is not None:
         record["wall_s"] = wall_s
     if log is not None:
-        record["refit_rounds"] = log  # the plan's whole round record, kept as the detector wrote it
+        record["refit_rounds"] = log  # per call, as the detector wrote them, and which call was adopted
     return record
 
 
@@ -488,10 +496,13 @@ def sweep(manifest: dict, root: Path, names=tuple(ARMS)) -> dict:
         arms = {}
         for k in range(len(names)):
             arm = names[(number + k) % len(names)]
-            log = [] if ARMS[arm][0] else None  # K = 0 stays on the frozen code path, timed as it runs
-            start = time.perf_counter()
-            detection, second = detect_path(scene, prior, params, entry["path"], arm, log=log)
+            start = time.perf_counter()  # the mission's call: no diagnostic log, so the time is what would run
+            detection, second = detect_path(scene, prior, params, entry["path"], arm)
             wall = time.perf_counter() - start
+            log = None
+            if ARMS[arm][0]:  # the round records come from a call of their own, untimed
+                log = {}
+                detect_path(scene, prior, params, entry["path"], arm, log=log)
             arms[arm] = detection_record(detection, second, wall, log)
         out.append({"id": entry["id"], "arms": arms})
     return {"frames": out}
@@ -546,7 +557,7 @@ def negative_kind(meta: dict) -> str:
 def negative_sweep(dataset: Path, config: Path) -> dict:
     """E3: dev-split negatives without the grounded kind, every noise level, both priors, both lower-evidence modes. A
     scene that cannot be read is an error: the judge turns it into undecidable, never into a smaller denominator."""
-    priors = {name: load_pallet_prior(config / f"pallet_prior_{name}.yaml") for name in ("epal6", "t11_06")}
+    priors = {name: load_pallet_prior(config / f"pallet_prior_{name}.yaml") for name in E3_PRIORS}
     rows, errors, left_out = [], [], Counter()
     for level in sorted(p.name for p in dataset.glob("isaac_*")):
         for scene_dir in sorted((dataset / level).glob("n_negative_*")):
@@ -777,7 +788,7 @@ def negative_rule(e3: dict, arm: str) -> dict:
     if e3["errors"] or not e3["rows"]:
         return {"undecidable": e3["errors"][:20] or ["no rows"]}
     keys = Counter((r["level"], r["scene"], r["prior"], r["lower"], r["arm"]) for r in e3["rows"])
-    levels, priors = sorted({k[0] for k in keys}), sorted({k[2] for k in keys})
+    levels, priors = sorted({k[0] for k in keys}), sorted(E3_PRIORS)
     scenes = {level: sorted({k[1] for k in keys if k[0] == level}) for level in levels}
     wanted = {(level, scene, prior, lower, a) for level in levels for scene in scenes[level] for prior in priors
               for lower in (True, False) for a in ARMS}
@@ -827,10 +838,13 @@ def reports(rows: list, arm: str) -> dict:
             shift = max(np.linalg.norm(np.subtract(a0[s], cand[s])) for s in ("left", "right"))
             if shift > DETECTION_DELTA_M or abs(wrap(a0["yaw"] - cand["yaw"])) > DETECTION_DELTA_RAD:
                 moved[entry["role"]] += 1
-        rounds = [r for r in cand.get("refit_rounds", []) if "stop" in r]
-        for r in rounds:
-            stops[r["stop"]] += 1
-        chosen = [r["selected_plane_index"] for r in cand.get("refit_rounds", []) if "selected_plane_index" in r]
+        calls = cand.get("refit_rounds") or {"first": [], "second": [], "adopted": "first"}
+        for r in calls["first"] + calls["second"]:
+            if "stop" in r:
+                stops[r["stop"]] += 1
+        adopted = calls[calls["adopted"]]  # a plane index means its own call
+        rounds = [r for r in adopted if "stop" in r]
+        chosen = [r["selected_plane_index"] for r in adopted if "selected_plane_index" in r]
         if chosen and (rounds[chosen[-1]]["support_loss"] or 0.0) > SUPPORT_LOSS_REPORT:
             lost.append(entry["id"])
     return {"detection_moved_by_role": dict(moved), "selected_support_loss": lost, "refit_stops": dict(stops)}
@@ -848,8 +862,11 @@ def evidence_problems(evidence: dict) -> list:
         problems.append("replay_gate")
     if evidence.get("full_pytest_failed") != 0:
         problems.append("full_pytest")
-    if evidence.get("stored_eval_changes") != 0:
+    stored = evidence.get("stored_eval") or {}
+    if stored.get("compared") != EVIDENCE_STORED_COMPARED or stored.get("changes") != 0:
         problems.append("stored_eval")
+    if stored.get("e2_records_reproduced") != stored.get("e2_entries") or not stored.get("e2_entries"):
+        problems.append("e2_reproduction")
     if evidence.get("near_contract_default_match") is not True:
         problems.append("near_contract")
     if not evidence.get("v1_guard_baseline"):
@@ -1000,9 +1017,10 @@ def main(argv=None) -> int:
     else:
         inputs = {k: load(getattr(args, k)) for k in ("replay", "again", "seeds", "negatives", "toy")}
         stamps = {k: v["stamp"] for k, v in inputs.items()}
-        stamps["manifest"] = {**stamps["replay"], "manifest_sha256": stamp_of(args.manifest)["manifest_sha256"]}
+        stamps["manifest"] = stamp_of(args.manifest)  # the judging source too, not a copy of the replay's
         result = judge(load(args.manifest), inputs["replay"], inputs["again"], inputs["seeds"], inputs["negatives"],
                        inputs["toy"], load(args.evidence), stamps)
+        result["stamp"] = stamps["manifest"]
         args.out.write_text(json.dumps(result, indent=1))
         print({a: (v["verdict"], v["failed"], v["undecided"], v["unproven"]) for a, v in result["verdicts"].items()})
     return 0

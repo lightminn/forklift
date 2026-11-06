@@ -388,6 +388,41 @@ def test_a_negative_set_that_is_not_complete_is_undecidable(e3):
     assert "undecidable" in C.negative_rule(e3, "A1")
 
 
+def test_a_whole_missing_prior_is_undecidable():
+    rows = [r for r in neg_rows()["rows"] if r["prior"] != "t11_06"]
+    assert "undecidable" in C.negative_rule({"rows": rows, "errors": []}, "A1")
+
+
+def test_the_support_report_reads_the_adopted_call_of_a_waiver():
+    def rounds(loss):
+        return [{"stop": "converged", "support_loss": loss, "sizes": [10]}, {"selected_plane_index": 0}]
+
+    record = valid()
+    record["refit_rounds"] = {"first": rounds(0.9), "second": rounds(0.1), "adopted": "second"}
+    report = C.reports([(entry(), {"A0": valid(), "A1": record})], "A1")
+    assert report["selected_support_loss"] == [] and report["refit_stops"] == {"converged": 2}
+    record["refit_rounds"]["adopted"] = "first"
+    assert C.reports([(entry(), {"A0": valid(), "A1": record})], "A1")["selected_support_loss"] == ["f"]
+
+
+def test_detect_path_keeps_each_calls_log_and_names_the_adopted_one():
+    def run(*statuses):
+        calls = []
+
+        def fake(scene, prior, params, site, **kw):
+            calls.append(kw)
+            kw["refit_log"].append({"call": len(calls)})
+            return SimpleNamespace(observation=SimpleNamespace(status=statuses[len(calls) - 1])), ()
+
+        log = {}
+        C.detect_path(None, None, DetectorParams(), {**NEAR, "waiver": "allowed"}, "A1", log=log, detector=fake)
+        return log
+
+    assert run("no_pallet", "valid") == {"first": [{"call": 1}], "second": [{"call": 2}], "adopted": "second"}
+    assert run("no_pallet", "invalid")["adopted"] == "first"
+    assert run("valid") == {"first": [{"call": 1}], "second": [], "adopted": "first"}
+
+
 def test_grounded_is_read_off_the_rank_as_the_scene_builder_did():
     assert C.negative_kind({"rank": 0}) == "grounded" and C.negative_kind({"rank": 4}) == "grounded"
     assert [C.negative_kind({"rank": r}) for r in (1, 2, 3)] == ["shelf", "blocks", "crates"]
@@ -469,8 +504,9 @@ def test_the_freeze_gate_refuses_duplicates_and_a_missing_e1():
     assert "duplicate_id:f" in problems and "e1_not_exactly_one" in problems
 
 
-EVIDENCE = {"replay_gate": [29, 29], "full_pytest_failed": 0, "stored_eval_changes": 0,
-            "near_contract_default_match": True, "v1_guard_baseline": "skipped: artifacts absent"}
+EVIDENCE = {"replay_gate": [29, 29], "full_pytest_failed": 0, "near_contract_default_match": True,
+            "stored_eval": {"compared": 100, "changes": 0, "e2_records_reproduced": 999, "e2_entries": 999},
+            "v1_guard_baseline": "repo assertion stale on main and HEAD"}
 
 
 def judged(arm_record, negatives=None, evidence=EVIDENCE, seed_frames=None, stamps=None, far_arm=None):
@@ -507,12 +543,20 @@ def test_an_unread_negative_set_leaves_a_passing_arm_undecidable():
     assert result["verdicts"]["A1"]["verdict"] == "undecidable" and result["recommended_order"] == []
 
 
-@pytest.mark.parametrize("gap", ["replay_gate", "full_pytest_failed", "stored_eval_changes",
+@pytest.mark.parametrize("gap", ["replay_gate", "full_pytest_failed", "stored_eval",
                                  "near_contract_default_match", "v1_guard_baseline"])
 def test_without_the_outside_evidence_no_arm_reads_adoptable(gap):
     evidence = {k: v for k, v in EVIDENCE.items() if k != gap}
     result = judged(valid(), evidence=evidence)
     assert result["verdicts"]["A1"]["verdict"] == "unverified" and result["recommended_order"] == []
+
+
+@pytest.mark.parametrize("stored", [{"compared": 99, "changes": 0, "e2_records_reproduced": 999, "e2_entries": 999},
+                                    {"compared": 100, "changes": 1, "e2_records_reproduced": 999, "e2_entries": 999},
+                                    {"compared": 100, "changes": 0, "e2_records_reproduced": 998, "e2_entries": 999}])
+def test_the_narrowed_stored_evaluation_evidence_is_checked_by_its_numbers(stored):
+    result = judged(valid(), evidence={**EVIDENCE, "stored_eval": stored})
+    assert result["verdicts"]["A1"]["verdict"] == "unverified"
 
 
 def test_a_seed_set_that_is_not_the_registered_twenty_is_undecidable():
