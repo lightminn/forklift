@@ -150,12 +150,15 @@ class Series:
         self.ref = np.tile(np.array(renewals[0][1], float), (len(t), 1))
         self.since = self.path - self.path[0]
         self.renewals_taken = []
-        for at, C in renewals[1:]:
-            i = int(np.searchsorted(t, at))
-            if i >= len(t):
+        for at, C, *tick in renewals[1:]:
+            i = int(np.searchsorted(t, at, side="right")) - 1  # the last sample at or before the generation's result
+            if i >= len(t) - 1:
                 break
-            m, _ = _gaps(applied[i:i + 1], _compose(self.ref[i:i + 1], o[i:i + 1]))
+            # Delta_int at the result's own tick: its C and O when recorded (Codex revision review, draft 3)
+            c_at, o_at = (np.array([tick[0]], float), np.array([tick[1]], float)) if tick else (self.C[i:i + 1], o[i:i + 1])
+            m, _ = _gaps(_compose(c_at, o_at), _compose(self.ref[i:i + 1], o_at))
             if float(m[0]) > REMATCH_M:
+                i += 1  # from the next sample: the result was applied after this one
                 self.ref[i:] = C
                 self.since[i:] = self.path[i:] - self.path[i]
                 self.renewals_taken.append(at)
@@ -320,7 +323,8 @@ def onsets(ser, name: str, start: int) -> list:
     the longest stand, the sharpest turn."""
     rng = random.Random(f"{ONSET_SEED}:{name}")
     n = len(ser.t)
-    start = min(start, n - 2)
+    if start >= n - 1:
+        return []  # no path past the last renewal: nothing to judge here
     low, high = float(ser.path[start]), float(ser.path[-1])
     out = [("draw", max(start, int(np.searchsorted(ser.path, rng.uniform(low, high))))) for _ in range(ONSET_DRAWS)]
     out.append(("first", start))
@@ -337,8 +341,7 @@ def onsets(ser, name: str, start: int) -> list:
         out.append(("stand", first + length // 2))
     step = np.diff(ser.applied[:, 2], append=ser.applied[-1, 2])
     rate = np.abs(np.arctan2(np.sin(step), np.cos(step)))
-    rate[:start] = 0.0
-    out.append(("turn", int(np.argmax(rate))))
+    out.append(("turn", start + int(np.argmax(rate[start:]))))
     return [(label, min(i, n - 2)) for label, i in out]
 
 
@@ -368,11 +371,16 @@ def renewals_of(rec, *, e_slam) -> list:
     out = []
     ok = lambda r: r["agree_m"] <= e_slam[0] and r["agree_rad"] <= e_slam[1]  # noqa: E731
     if start.get("confirmed") and start.get("agree_m") is not None and ok(start):
-        out.append((start["t"], compose(tuple(start["r"]), invert(tuple(rec["start"]["o_scan"])))))
+        o_scan = tuple(rec["start"]["o_scan"])
+        out.append((start["t"], compose(tuple(start["r"]), invert(o_scan)), tuple(start["C"]), o_scan))
     for g in raw.get("rematches") or []:
-        if g.get("g") is not None and g.get("residual_confirmed") and g.get("applicable") and g.get("agree_m") is not None \
-                and ok(g):
-            out.append((g["t"], compose(tuple(g["g"]), invert(tuple(g["o_scan"])))))
+        if g.get("g") is None or not g.get("residual_confirmed") or not g.get("applicable") or g.get("agree_m") is None:
+            continue
+        # the first reference is a confirmation: without a confirmed start only a generation that confirmed the start
+        # (Codex revision review, draft 3); a session that never confirms has no monitor
+        if ok(g) and (out or g.get("outcome") == "confirm"):
+            o_scan = tuple(g["o_scan"])
+            out.append((g["t"], compose(tuple(g["g"]), invert(o_scan)), tuple(g["C"]), o_scan))
     return out
 
 

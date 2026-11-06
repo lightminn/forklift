@@ -229,25 +229,24 @@ def test_a_shadow_generation_renews_the_reference_only_where_the_operating_rule_
     near, far = (compose((0.0, 0.05 * 0.9, 0.0), (0.0, 0.0, 0.0))), (0.0, 0.05 * 2.2, 0.0)
     ser = S.series(rows, renewals=[(0.0, I), (0.9, near), (2.2, far)])
     assert ser.renewals_taken == [2.2]
-    at = int(np.searchsorted(ser.t, 2.25))
+    at = int(np.searchsorted(ser.t, 2.35))
     assert ser.ref[at] == pytest.approx(far) and ser.since[at] == pytest.approx(0.1, abs=0.02)
 
 
 def test_the_available_renewals_are_the_generations_that_passed_not_the_provisional_events():
     # after the provisional check ended no agreement is written; the raw generations go on
     rec = {"start": {"o_scan": [1.0, 0.0, 0.0]}, "events": [],
-           "raw": {"start": {"confirmed": True, "r": [1.0, 0.0, 0.0], "agree_m": 0.01, "agree_rad": 0.0, "t": 1.0},
+           "raw": {"start": {"confirmed": True, "r": [1.0, 0.0, 0.0], "agree_m": 0.01, "agree_rad": 0.0, "t": 1.0,
+                             "C": [0.0, 0.0, 0.0]},
                    "rematches": [{"t": 9.0, "g": [2.0, 0.0, 0.0], "o_scan": [2.0, 0.0, 0.0], "residual_confirmed": True,
-                                  "applicable": True, "agree_m": 0.05, "agree_rad": 0.01},
+                                  "applicable": True, "agree_m": 0.05, "agree_rad": 0.01, "C": [0.0, 0.0, 0.0]},
                                  {"t": 12.0, "g": [3.0, 0.0, 0.0], "o_scan": [3.0, 0.0, 0.0],
-                                  "residual_confirmed": False, "applicable": True, "agree_m": 0.05, "agree_rad": 0.01},
+                                  "residual_confirmed": False, "applicable": True, "agree_m": 0.05, "agree_rad": 0.01, "C": [0.0, 0.0, 0.0]},
                                  {"t": 13.0, "g": [3.0, 0.0, 0.0], "o_scan": [3.0, 0.0, 0.0],
-                                  "residual_confirmed": True, "applicable": True, "agree_m": 0.5, "agree_rad": 0.01}]}}
+                                  "residual_confirmed": True, "applicable": True, "agree_m": 0.5, "agree_rad": 0.01,
+                                  "C": [0.0, 0.0, 0.0]}]}}
     got = S.renewals_of(rec, e_slam=(0.109, 0.0137))
-    assert [t for t, _ in got] == [1.0, 9.0]
-    with pytest.raises(KeyError):
-        S.renewals_of({"raw": {"rematches": [{"t": 1.0, "g": [0, 0, 0], "residual_confirmed": True, "applicable": True,
-                                              "agree_m": 0.0, "agree_rad": 0.0}], "start": {}}}, e_slam=(1.0, 1.0))
+    assert [r[0] for r in got] == [1.0, 9.0]
 
 
 def test_every_direction_and_sign_keeps_its_own_key():
@@ -291,3 +290,33 @@ def test_the_onsets_lie_after_the_last_renewal_and_a_turn_through_pi_is_no_turn(
     got = S.onsets(ser, "a", 100)
     assert min(i for _, i in got) >= 100 and dict(got)["first"] == 100
     assert dict(got)["turn"] == 169  # the real turn, not the wrap at 149
+
+
+# --- Codex revision review, draft 3 ---
+def test_a_suffix_without_a_turn_keeps_its_onsets_inside_and_no_suffix_gives_none():
+    ser = S.series(_samples(n=200), renewals=[(0.0, I)])
+    assert min(i for _, i in S.onsets(ser, "a", 100)) >= 100
+    assert S.onsets(ser, "a", 199) == []
+
+
+def test_a_renewals_eligibility_reads_the_correction_of_its_own_tick_not_the_next_sample():
+    # a Delta of 0.09 m at the result, 0.21 m at the next sample: not eligible
+    rows = _samples(n=100, c_per_m=0.0)
+    for r in rows[51:]:
+        r["applied"][1] = 0.21
+    at = (0.0, 0.09, 0.0)
+    ser = S.series(rows, renewals=[(0.0, I), (5.05, (0.0, 0.05, 0.0), at, (5.0, 0.0, 0.0))])
+    assert ser.renewals_taken == []
+
+
+def test_without_a_confirmed_start_the_first_reference_is_a_confirming_generation():
+    def gen(t, outcome):
+        return {"t": t, "phase": "unconfirmed", "outcome": outcome, "g": [t, 0.0, 0.0], "o_scan": [t, 0.0, 0.0],
+                "residual_confirmed": True, "applicable": True, "agree_m": 0.01, "agree_rad": 0.0, "C": [0.0, 0.0, 0.0]}
+
+    rec = {"start": {"o_scan": [0.0, 0.0, 0.0]},
+           "raw": {"start": {"confirmed": False}, "rematches": [gen(1.0, "out_of_set"), gen(2.0, "confirm"),
+                                                                gen(3.0, "confirm")]}}
+    assert [r[0] for r in S.renewals_of(rec, e_slam=(0.1, 0.1))] == [2.0, 3.0]
+    rec["raw"]["rematches"] = [gen(1.0, "out_of_set")]
+    assert S.renewals_of(rec, e_slam=(0.1, 0.1)) == []  # never confirmed: no monitor
