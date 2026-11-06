@@ -117,6 +117,15 @@ def test_the_samples_eligibility_is_the_conservative_check_and_the_operating_pat
     assert r["n"] == 1 and r["max"] == pytest.approx([0.05, 0.02]) and r["all_g_n"] == 3 and r["not_applicable"] == 1
 
 
+def test_the_strokes_cut_short_are_counted_beside_the_bins():
+    # Codex 2d round 3: many cuts mean fewer long samples and more stops and starts: said with the distance bins
+    rec = _session()
+    rec["meter_events"] += [{"t": 1.0, "kind": "stroke_close", "s_m": 0.01, "released": True},
+                            {"t": 2.0, "kind": "stroke_close", "s_m": 0.93, "released": False}]
+    odom = D.dev_values([("s", rec)], min_samples=1)["basis"]["odom"]
+    assert odom["strokes"] == {"closed": 2, "under_0_05_m": 1, "under_0_5_m": 1}
+
+
 def test_wrong_evidence_among_the_samples_is_flagged():
     rec = _session()
     rec["raw"]["rematches"][0]["truth"] = {"class": "wrong"}

@@ -1610,6 +1610,8 @@ REVERSE_RATIO = -0.4  # direct_reverse_mps 0.25 x 0.4 = 0.10 m/s: V_REV_U (plan 
 REVERSE_MAX_STROKES = 15  # chatter can reach D_TOTAL
 REVERSE_TRIES = 4  # presses a stroke may take: a stalled tick disarms and closes it (no_feedback)
 REVERSE_COUNTS_M = 0.05  # a press that moved less takes no stroke of the count
+REVERSE_MOVES_M = 0.005  # a press moving less than this for --stroke-stuck-s is held by the permit
+REVERSE_BLOCKED_MAX = 2  # such presses in a row end the strokes (the session goes on to its end and record)
 REVERSE_STEP_M = {"half": 0.5, "chatter": 0.2}
 
 
@@ -1699,7 +1701,7 @@ async def _reverse_strokes(p, args, rev, shadow):
     rev["teleop_entry"] = teleop
     if not teleop or teleop.get("t") != "ack":
         return
-    n = 0
+    n, blocked = 0, 0
     for _ in range(REVERSE_MAX_STROKES * REVERSE_TRIES):
         if n >= REVERSE_MAX_STROKES:
             break
@@ -1728,11 +1730,18 @@ async def _reverse_strokes(p, args, rev, shadow):
                "start_mono": time.monotonic()}
         seen_active, released, stk = False, "timeout", None
         end = time.monotonic() + args.stroke_wall_s
+        moved_mono, moved_left = time.monotonic(), rec["start_total_left_m"]
         while time.monotonic() < end and p.closed_code is None:
             stk = (_pose_check(p.state) or {}).get("stroke")
             seen_active = seen_active or (stk or {}).get("state") == "active"
             if seen_active and release_due(args.reverse_kind, rec["start_left_m"], stk):
                 released = (stk or {}).get("state") or "none"
+                break
+            left = (stk or {}).get("total_left_m")
+            if left is not None and moved_left is not None and moved_left - left >= REVERSE_MOVES_M:
+                moved_mono, moved_left = time.monotonic(), left
+            if seen_active and time.monotonic() - moved_mono > args.stroke_stuck_s:
+                released = "blocked"  # held by the permit, the deadman down: no use pressing on
                 break
             await p.teleop(REVERSE_RATIO, 0.0, True)
             await asyncio.sleep(0.05)
@@ -1750,6 +1759,10 @@ async def _reverse_strokes(p, args, rev, shadow):
         rev["strokes"].append(rec)
         moved = (rec["start_total_left_m"] or 0.0) - (rec["end_total_left_m"] or rec["start_total_left_m"] or 0.0)
         n += moved >= REVERSE_COUNTS_M  # a press cut at once takes no stroke of the count
+        blocked = blocked + 1 if released == "blocked" else 0
+        if blocked >= REVERSE_BLOCKED_MAX:
+            rev["blocked"] = True
+            break
 
 
 async def _arm(p, args):
@@ -1933,6 +1946,8 @@ def main():
     ap.add_argument("--reverse-wait-s", type=float, default=300.0,
                     help="reverse scenario: the start check's and each re-match's wait at most (wall s)")
     ap.add_argument("--stroke-wall-s", type=float, default=120.0, help="reverse scenario: one stroke at most (wall s)")
+    ap.add_argument("--stroke-stuck-s", type=float, default=20.0,
+                    help="reverse scenario: let go of a press that has not moved for this long (wall s)")
     ap.add_argument("--hold-sim-s", type=float, default=10.0,
                     help="hold scenario (B-P2d): the stand after the relocalized session runs (simulated s)")
     ap.add_argument("--live-factor", type=float, default=0.4,

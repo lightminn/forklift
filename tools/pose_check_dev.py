@@ -128,9 +128,11 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
     errs, bins = [], {f"{k * BIN_M:.2f}": 0 for k in range(int(D_TOTAL / BIN_M) + 1)}
     stands, starts, gens, all_g, passed = [], [], [], 0, 0
     missing: list = []
+    closes: list = []
     for _, rec in records:
         a_, b_ = odometry_errors(rec, missing)
         errs += a_ + b_
+        closes += [e.get("s_m", 0.0) for e in rec.get("meter_events") or [] if e["kind"] == "stroke_close"]
         reach = max((d for d, _, _ in a_), default=0.0)
         for key in bins:
             if reach >= float(key) - 1e-9:
@@ -170,6 +172,8 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
             "factor": FACTOR, "sessions": len(records),
             "odom": {"samples": len(in_reach), "beyond_d_total": len(errs) - len(in_reach), "bins": bins,
                      "windows_without_origin": len(missing),
+                     "strokes": {"closed": len(closes), "under_0_05_m": sum(s < 0.05 for s in closes),
+                                 "under_0_5_m": sum(s < 0.5 for s in closes)},
                      "max_e_p": max((e for _, e, _ in in_reach), default=0.0),
                      "max_e_theta": max((e for _, _, e in in_reach), default=0.0)},
             "e_still": {"stands": len(stands), "max": list(still)},

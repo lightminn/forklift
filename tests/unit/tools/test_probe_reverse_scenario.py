@@ -25,7 +25,8 @@ class FakeVehicle:
     advances, which confirms (on) when ``confirm_at`` re-matches have run."""
 
     def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None, cut_after=None,
-                 pacing_refusals=0):
+                 pacing_refusals=0, wall_at=None):
+        self.wall_at, self.held = wall_at, False
         self.shadow, self.confirm_at = shadow, confirm_at
         self.cut_after, self.pacing_refusals, self.arms, self.leases, self.ended_with = cut_after, pacing_refusals, 0, 0, None
         self.expire, self.since_command, self.armed, self.disarmed = expire, 0, False, 0
@@ -87,6 +88,11 @@ class FakeVehicle:
             return
         if deadman and not self.armed:
             return  # not_armed: nothing moves
+        if deadman and speed < 0 and self.wall_at is not None and self.d >= self.wall_at:
+            self.stroke, self.moving = "active", False  # the permit holds it: pressed, not moving
+            self.stood_at, self.held = self.d, True
+            self._publish()
+            return
         if deadman and speed < 0 and self.stroke in ("ready", "active"):
             self.stroke = "active"
             self.s += STEP_M
@@ -97,6 +103,8 @@ class FakeVehicle:
         elif not deadman:
             if self.stroke == "active":
                 self.stroke = "closed"
+            if self.held:  # let go: this stand is the one that ends the stroke
+                self.stood_at, self.held = None, False
             self.moving = False
         self._publish()
 
@@ -149,8 +157,9 @@ class FakeVehicle:
         return s.get("rear_axle_speed_mps") == 0.0
 
 
-def _run(v, kind="full", mission=False):
+def _run(v, kind="full", mission=False, stuck=30.0):
     args = SimpleNamespace(reverse_kind=kind, mission_after_confirm=mission, reverse_wait_s=30.0, stroke_wall_s=30.0,
+                           stroke_stuck_s=stuck,
                            hold_sim_s=0.05, live_factor=1.0, cycle="P-1:D-1,P-1:D-0", mission_timeout_s=30.0)
     orig = asyncio.sleep
 
@@ -253,3 +262,11 @@ def test_the_teleop_entry_waits_out_the_pacing():
     v = FakeVehicle(shadow=True, pacing_refusals=60)
     rep = _run(v, "full")["reverse"]
     assert rep["teleop_entry"]["t"] == "ack" and rep["strokes"]
+
+
+def test_a_press_that_stops_moving_lets_go_and_two_in_a_row_end_the_strokes():
+    # the second Isaac shadow session: the rear blocked at 1.9 m, each press held 120 s, the job ran out with no record
+    v = FakeVehicle(shadow=True, wall_at=0.30)
+    rep = _run(v, "full", stuck=0.02)["reverse"]
+    assert [s["released"] for s in rep["strokes"]][-2:] == ["blocked", "blocked"] and rep["blocked"] is True
+    assert v.calls[-1] == "session_end"  # the session still ends, with its record
