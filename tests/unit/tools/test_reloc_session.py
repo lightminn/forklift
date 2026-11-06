@@ -129,7 +129,7 @@ def test_a_reverse_session_is_unattended_and_presses_by_its_rule(tmp_path):
     assert (tmp_path / "out" / "launcher_env").read_text().split() == ["1", "1", "1,2,3"]  # RELOC_UNATTENDED=1
     args = (tmp_path / "probe_args").read_text().split()
     assert args[args.index("--scenario") + 1] == "reverse" and args[args.index("--reverse-kind") + 1] == "chatter"
-    assert "--mission-after-confirm" in args
+    assert "--mission-after-confirm" in args and args[args.index("--post-mission-sim-s") + 1] == "20"
 
 
 def test_a_reverse_place_session_places_then_reverses(tmp_path):

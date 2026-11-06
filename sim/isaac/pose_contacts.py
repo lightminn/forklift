@@ -11,7 +11,8 @@ truth checks; a fork carrying its pallet is the normal support). Isaac-free but 
 from __future__ import annotations
 
 ROBOT_ROOT = "/World/Forklift"
-FLOOR_TOKENS = ("/GroundPlane/",)  # the warehouse scene's floor collider (steering_probe_arms.FLOOR_TOKEN)
+# the warehouse scene's floor collider (steering_probe_arms.FLOOR_TOKEN) and the decals lying on it
+FLOOR_TOKENS = ("/GroundPlane/", "SM_FloorDecal")
 
 
 def _robot(path: str) -> bool:
