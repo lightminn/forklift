@@ -70,6 +70,7 @@ def test_the_development_values_and_their_basis(tmp_path):
                                                  rematch_agree=((0.08, 0.03, "confirm"), (2.0, 1.0, "twin_preferred"))))]
     out = D.dev_values(recs, min_samples=2)
     assert out["e_still"] == pytest.approx([0.015, 0.006])
+    assert out["e_window"] == [0.153, 0.103]  # the bounds the runner refuses to start without
     assert out["e_slam"] == pytest.approx([0.12, 0.045])  # the re-match's 0.08 m, 0.03 rad: the larger of the two kinds
     assert out["basis"]["e_slam"]["start"]["n"] == 2 and out["basis"]["e_slam"]["rematch"]["n"] == 2  # not the twin
     assert out["basis"]["e_slam"]["rematch"]["all_g_n"] == 3
@@ -86,6 +87,14 @@ def test_too_few_samples_or_a_still_bound_over_the_budget_is_flagged_not_cut():
     assert out["e_still"][0] == pytest.approx(0.3)  # 1.5 x 0.2: not cut to 0.20 (plan 3.2: reported to the lead)
     assert "e_still_over_budget" in out["flags"] and "start_samples_under_20" in out["flags"]
     assert "rematch_samples_under_20" in out["flags"]
+
+
+def test_e_still_reads_the_stand_rebased_at_a_release_and_keeps_the_plain_largest():
+    rec = _session(stands=((0.01, 0.05),))
+    rec["raw"]["stands"][0].update(rebased_m=0.005, rebased_rad=0.004)
+    out = D.dev_values([("s", rec)], min_samples=1)
+    assert out["e_still"] == pytest.approx([0.0075, 0.006])
+    assert out["basis"]["e_still"]["plain_max"] == pytest.approx([0.01, 0.05])
 
 
 def test_evidence_outside_the_success_tolerance_is_kept_and_counted():

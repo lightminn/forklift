@@ -1607,6 +1607,8 @@ async def place_scenario(p, args):
 
 
 REVERSE_RATIO = -0.4  # direct_reverse_mps 0.25 x 0.4 = 0.10 m/s: V_REV_U (plan 2026-11-06 2.1)
+GENERATION_WAIT_S = 45.0  # wall s: a generation's own 30 s deadline, its 5 s grace and the state's lag
+WATCH_WALL_FACTOR = 3.0  # the watch gives up at this many times its wall time at the declared factor
 REVERSE_MAX_STROKES = 15  # chatter can reach D_TOTAL
 REVERSE_TRIES = 4  # presses a stroke may take: a stalled tick disarms and closes it (no_feedback)
 REVERSE_COUNTS_M = 0.05  # a press that moved less takes no stroke of the count
@@ -1686,6 +1688,7 @@ async def _reverse_localized(p, args):
         await asyncio.sleep(0.2)
     if args.mission_after_confirm and p.closed_code is None and (shadow or _pc_status(p.state) == "confirmed"):
         rev["mission"] = await _one_mission(p, args)
+        rev["post_mission"] = await _post_mission_watch(p, args, shadow)
     await _end_session(p)
 
 
@@ -1786,6 +1789,47 @@ async def _arm(p, args):
     return reply
 
 
+async def _post_mission_watch(p, args, shadow) -> dict:
+    """The revision plan 9.10: the truck stands after its mission (not paused: a paused mission stays active and no
+    re-match runs; no SLAM hold) for --post-mission-sim-s of simulated time, an estimate summed at the factor the run
+    reports (these sessions carry no frames to read a stamp from). A generation that started is waited for to its result or its
+    deadline, whatever the watch has left: ended first, the late and failing ones would be cut off the sample. Its
+    deadline is the check's own, on the wall clock (pose_runtime.DEADLINE_S + RESULT_GRACE_S)."""
+    start = last = time.monotonic()
+    wall_end = start + WATCH_WALL_FACTOR * args.post_mission_sim_s / args.live_factor
+    out = {"sim_s": args.post_mission_sim_s, "elapsed_sim_s": 0.0, "started": False, "ended": "wall_limit"}
+    seen = None
+    while p.closed_code is None:
+        now = time.monotonic()
+        if p.state is not seen:  # no state, no simulated time counted: a stalled run does not finish the watch
+            seen = p.state
+            achieved = ((p.state or {}).get("pacing") or {}).get("realtime_factor") or args.live_factor
+            out["elapsed_sim_s"] += (now - last) * achieved
+        last = now
+        if _rematching(p.state, shadow):
+            out["started"] = True
+            at = time.monotonic()
+            done = await p.until(lambda s: not _rematching(s, shadow), GENERATION_WAIT_S, label="post_mission_rematch")
+            out.update(done=bool(done), wall_s=time.monotonic() - at, status=_pc_status(p.state),
+                       ended="result" if done else ("closed" if p.closed_code is not None else "timeout"))
+            return out
+        if out["elapsed_sim_s"] >= args.post_mission_sim_s:
+            out["ended"] = "watch"
+            break
+        if now >= wall_end:
+            break
+        await asyncio.sleep(0.2)
+    if p.closed_code is not None:
+        out["ended"] = "closed"
+    out["wall_s"] = time.monotonic() - start
+    return out
+
+
+def _rematching(s, shadow) -> bool:
+    """On: the status checking. The shadow: its generation running."""
+    return (_pose_check(s) or {}).get("rematch") is not None if shadow else _pc_status(s) == "checking"
+
+
 async def _keep_released(p):
     while True:
         await p.teleop(0.0, 0.0, False)
@@ -1794,13 +1838,10 @@ async def _keep_released(p):
 
 async def _await_rematch(p, shadow, args) -> dict:
     """The re-match a stand may start (on: the status checking; the shadow: its generation running), to its end."""
-    def running(s):
-        return (_pose_check(s) or {}).get("rematch") is not None if shadow else _pc_status(s) == "checking"
-
-    if not await p.until(running, max(3.0, 2.0 / args.live_factor), label="rematch_started"):
+    if not await p.until(lambda s: _rematching(s, shadow), max(3.0, 2.0 / args.live_factor), label="rematch_started"):
         return {"started": False}
     t0 = time.monotonic()
-    done = await p.until(lambda s: not running(s), args.reverse_wait_s, label="rematch_done")
+    done = await p.until(lambda s: not _rematching(s, shadow), args.reverse_wait_s, label="rematch_done")
     return {"started": True, "done": bool(done), "wall_s": time.monotonic() - t0, "status": _pc_status(p.state)}
 
 
@@ -1948,6 +1989,9 @@ def main():
     ap.add_argument("--reverse-wait-s", type=float, default=300.0,
                     help="reverse scenario: the start check's and each re-match's wait at most (wall s)")
     ap.add_argument("--stroke-wall-s", type=float, default=120.0, help="reverse scenario: one stroke at most (wall s)")
+    ap.add_argument("--post-mission-sim-s", type=float, default=0.0,
+                    help="reverse scenario: stand this long after the mission (simulated s), or to the end of a "
+                    "re-match that started")
     ap.add_argument("--stroke-stuck-s", type=float, default=20.0,
                     help="reverse scenario: let go of a press that has not moved for this long (wall s)")
     ap.add_argument("--hold-sim-s", type=float, default=10.0,

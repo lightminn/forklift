@@ -189,11 +189,81 @@ def _confirmed(C=I, o=I):
 
 
 def test_the_monitor_revokes_on_the_rear_axle_too():
-    # Codex draft 2 P1: base 0.199 m (inside 0.20 m) is 0.216 m at the rear axle
+    # Codex draft 2 P1: the base inside the limit, the rear axle past it
     pc = _confirmed()
-    C = compose((0.0, -0.199, 0.049), I)
+    C = compose((0.0, -0.150, 0.049), I)
     view = _tick(pc, I, C, standing=False)
-    assert pc.status == "ended:pose_revoked:int", view
+    assert pc.status == "ended:pose_revoked:window", view
+
+
+def _walk(pc, metres, per_m, step=0.1, t0=0.0, dt=0.1):
+    """Drive forward with the correction moving ``per_m`` sideways per metre; returns (o, C, t)."""
+    o, C, t = I, I, t0
+    for k in range(round(metres / step)):
+        o, C, t = (o[0] + step, 0.0, 0.0), (0.0, C[1] + per_m * step, 0.0), t + dt
+        pc.update(t, o, C, standing=False, deadman=False)
+    return o, C, t
+
+
+def test_a_correction_drifting_over_many_metres_is_not_revoked():
+    # the revision plan 9: the drift a correction absorbs passed the cumulative gate in every correct mission
+    pc = _confirmed()
+    _walk(pc, 40.0, 0.05)  # 2 m of 0.05 m/m: 0.10 m in the window, 2.0 m in all
+    assert pc.status == "confirmed"
+
+
+def test_a_jump_inside_the_window_is_revoked_whatever_the_path_before():
+    pc = _confirmed()
+    o, C, t = _walk(pc, 40.0, 0.0)
+    pc.update(t + 0.1, o, (0.0, 0.16, 0.0), standing=False, deadman=False)
+    assert pc.status == "ended:pose_revoked:window"
+    assert [e for e in pc.events if e["kind"] == "revoke"][0]["gate"] == "window"
+
+
+def test_a_jump_right_after_the_confirmation_is_seen_with_less_than_the_window_behind():
+    pc = _confirmed()
+    pc.update(0.1, (0.3, 0.0, 0.0), I, standing=False, deadman=False)
+    pc.update(0.2, (0.6, 0.0, 0.0), (0.0, 0.2, 0.0), standing=False, deadman=False)
+    assert pc.status == "ended:pose_revoked:window"
+
+
+def test_the_time_cap_lets_a_long_stand_go_on():
+    # a stand does not grow the path: without the cap a correction turning 0.002 rad/s ends a correct session at 51 s
+    bounds = P.Bounds(odom=(0.02, 0.02, 0.005, 0.01), e_still=(0.20, 0.05), e_slam=(0.05, 0.025))
+    pc = P.PoseCheck(bounds, rear_offset_m=0.34, stop_m=0.068)
+    pc.start(0.0, confirmed=True, r_scan=I, o_scan=I, C=I, o_now=I)
+    for k in range(1, 12000):  # 120 s at 0.002 rad/s: 0.24 rad in all, 0.02 rad in the cap; a new stand each 10 s
+        C = (0.0, 0.0, 0.00002 * k)
+        pc.update(k * 0.01, I, C, standing=k % 1000 != 0, deadman=False)
+    assert pc.status == "confirmed"
+
+
+def test_the_stand_reference_is_taken_again_at_a_hold_release():
+    # the revision plan 9.4: the release's own move is not the stand's
+    pc = _confirmed()
+    _tick(pc, I, I, standing=False)
+    _tick(pc, I, I, standing=True, holding=True)
+    pc.update(1.0, I, (0.0, 0.0, 0.04), standing=True, deadman=False, holding=False)  # released: 0.04 rad, over 0.01
+    pc.update(1.1, I, (0.0, 0.0, 0.041), standing=True, deadman=False, holding=False)
+    assert pc.status == "confirmed"
+    pc.update(1.5, I, (0.0, 0.0, 0.041), standing=True, deadman=False, holding=False)
+    pc.update(1.6, I, (0.0, 0.0, 0.056), standing=True, deadman=False, holding=False)  # past the release: the stand's
+    assert pc.status == "ended:pose_revoked:still"
+
+
+def test_the_stand_gate_is_not_taken_again_without_a_release():
+    pc = _confirmed()
+    _tick(pc, I, I, standing=False)
+    pc.update(1.0, I, I, standing=True, deadman=False)
+    pc.update(1.1, I, (0.0, 0.0, 0.04), standing=True, deadman=False)
+    assert pc.status == "ended:pose_revoked:still"
+
+
+def test_the_window_limit_is_a_development_value():
+    with pytest.raises(ValueError):
+        P.Bounds(odom=(0.0, 0.0, 0.0, 0.0), e_still=(0.03, 0.01), e_slam=(0.05, 0.025), e_window=(0.1,))
+    assert P.Bounds(odom=(0.0, 0.0, 0.0, 0.0), e_still=(0.03, 0.01), e_slam=(0.05, 0.025),
+                    e_window=(0.2, 0.2)).e_window == (0.2, 0.2)
 
 
 def test_the_still_monitor_and_its_reference_per_stand():
@@ -263,8 +333,8 @@ def test_a_confirmed_rematch_locks_the_controls_while_the_monitor_goes_on():
     pc.begin_rematch(0.0, epoch=1, control_gen=4)
     view = _tick(pc, I, C, standing=True)
     assert view.status == "checking" and view.reason == "pose_checking" and not view.drive_ready
-    _tick(pc, I, (0.25, 0.0, 0.0), standing=True)  # the monitor still runs: past 0.20 m it ends
-    assert pc.status == "ended:pose_revoked:int"
+    _tick(pc, I, (0.29, 0.0, 0.0), standing=True)  # the monitor still runs: past the window's limit it ends
+    assert pc.status == "ended:pose_revoked:window"
 
 
 def test_a_stroke_never_passes_d_stroke_with_its_stopping_distance():
