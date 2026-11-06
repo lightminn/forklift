@@ -66,16 +66,18 @@ def test_saved_v1_observations_have_only_expected_deltas(run_name, expected_coun
     prior = load_pallet_prior(ROOT / "config/pallet_prior_v1.yaml")
     params_data = yaml.safe_load((ROOT / "config/detector_params_v1.yaml").read_text())
     # The frozen file is a SUBSET of the parameter set, not the whole of it:
-    # deck_evidence_tol_m and upper_band_points are absent and come from the
-    # code's defaults. Asserting containment rather than equality says that
+    # deck_evidence_tol_m, upper_band_points and median_plane_offset are absent
+    # and come from the code's defaults (the last an opt-in that must stay off
+    # here: it moves the plane). Asserting containment rather than equality says that
     # plainly and keeps working if a later run records more keys than the file
     # carries. It does not make the gap safe -- changing a default still moves
     # this "frozen" set silently.
     assert params_data.items() <= run["params"].items()
     missing = {f.name for f in dataclasses.fields(DetectorParams)} - set(params_data)
-    assert missing == {"deck_evidence_tol_m", "upper_band_points"}, (
+    assert missing == {"deck_evidence_tol_m", "upper_band_points", "median_plane_offset"}, (
         "a parameter left the frozen file without anyone recording it"
     )
+    assert DetectorParams.median_plane_offset is False
     params = DetectorParams(**params_data)
     dataset = Path(run["dataset_dir"])
     if not dataset.is_dir():
