@@ -4,6 +4,7 @@ queue's own stops, the loaded-transport tracking failures flagged apart, and a m
 pairs. A description, not a verdict: no thresholds.
 
     python tools/ct_survey.py OUT --json SURVEY [--csv MISSIONS] [--scheduled 3] [--pairs A_DIR:B_DIR ...]
+        [--near-tally NEAR_JSON]
 
 OUT holds one folder per session attempt (``probe.json`` and ``live/epoch_*/run``); a folder's ``survey_arm.txt``
 (one line: the arm name) groups it, else the folder name's first ``_`` field."""
@@ -13,7 +14,10 @@ from __future__ import annotations
 import argparse
 import csv
 import glob
+import hashlib
+import itertools
 import json
+import math
 import re
 import statistics
 import sys
@@ -22,6 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mission_queue import UNSURE_REJECTS  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from forklift_core.mission.failures import PREFIXES  # noqa: E402
 
 # The mission phases in the order a mission runs them (forklift_core/mission/core.py transitions), with the lifecycle's
 # "preparing" first: an accepted mission prepares before its first transition (observe) is added, and can end there
@@ -71,6 +78,13 @@ def _json(path) -> dict | None:
         return None
 
 
+def probe_entries(probe: dict | None) -> list:
+    """The probe's submissions: the queue's, or the reverse scenario's one mission (the console's ③)."""
+    runs = list((probe or {}).get("missions_run") or [])
+    mission = ((probe or {}).get("reverse") or {}).get("mission")
+    return runs + ([mission] if mission else [])
+
+
 def start_states(probe: dict | None, scheduled: int) -> list[dict]:
     """The scheduled missions' start states from the probe's submissions, one per queue item (a resubmitted item keeps
     its last answer): confirmed (ack), unknown (no answer, or a busy/stale reject the queue holds unsure), rejected (a
@@ -78,7 +92,7 @@ def start_states(probe: dict | None, scheduled: int) -> list[dict]:
     confirm an unknown or unlisted one (session_rows)."""
     items: dict = {}
     order: list = []
-    for entry in (probe or {}).get("missions_run") or []:
+    for entry in probe_entries(probe):
         key = entry.get("item_id") or f"{entry.get('pallet_id')}:{entry.get('destination_id')}:{len(order)}"
         if key not in items:
             order.append(key)
@@ -301,7 +315,7 @@ def session_rows(session: Path, scheduled: int = 3) -> dict:
                                      "results_book" if m.get("from_book") else "mission_folder")
             rows.append((row, {}, (k, m)))
             used.add(i)
-    if not (probe or {}).get("missions_run"):
+    if not probe_entries(probe):
         # no probe submissions: the rows are the epochs' missions in order, padded to the schedule
         rows = [x for x in rows if x[0]["start"] != "not_submitted"]
         for j, x in enumerate(rows):
@@ -535,6 +549,418 @@ def survey(out_dir: Path, scheduled: int = 3, pairs: list[tuple[str, str]] | Non
             "other_reasons": sorted({r["reason"] for s in sessions for r in s["rows"] if r["class"] == "other"})}
 
 
+# --- near capture tally (docs/plans/2026-11-07-near-capture-frequency.md sections 3, 4; the console's ③ calls it too) ---
+
+NEAR_END_PREFIX = "near_capture_"
+# A run's own values, kept out of the condition; the scene's arguments are kept out of the operating configuration
+RUN_ARGUMENTS = ("output", "seed", "slam_noise_seed", "live_port", "live_port_file", "slam_feedback", "slam_map_dir")
+SCENE_ARGUMENTS = ("scene_file", "slam_map_bundle", "expected_map_id", "slam_choice")
+# The review triggers of #338: priority values, not an accepted failure rate
+TRIGGER_MIN_MISSIONS = 50
+TRIGGER_RATE = 0.02
+TRIGGER_SESSIONS = 2
+MAX_ASSIGNED = 12  # unknown missions a trigger enumerates (three to four ways each); above it: undecidable
+WILSON_Z = 1.959964
+SHAPES = ("epal6", "t11")
+
+
+def _digest(data) -> str:
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _scene_waypoints(arguments: dict) -> bool:
+    """The recorded observation points are the scene's own: a session's first mission writes its pallet's, and each
+    adoption overwrites them, so the record depends on how far the queue went. Others were set by hand."""
+    points = arguments.get("observation_waypoints")
+    scene = _json(arguments["scene_file"]) if points is not None and arguments.get("scene_file") else None
+    return any(p.get("observation_waypoints") == points for p in [scene or {}, *(scene or {}).get("pallets", [])])
+
+
+def config_hashes(arguments: dict | None) -> tuple[str | None, str | None]:
+    """(condition_sha256, operating_config_sha256) of a run's recorded arguments; (None, None) without them."""
+    if not isinstance(arguments, dict):
+        return None, None
+    drop = set(RUN_ARGUMENTS) | ({"observation_waypoints"} if _scene_waypoints(arguments) else set())
+    kept = {k: v for k, v in arguments.items() if k not in drop}
+    return _digest(kept), _digest({k: v for k, v in kept.items() if k not in SCENE_ARGUMENTS})
+
+
+def _capture_time(attempt: dict) -> float | None:
+    control = attempt.get("capture_control")
+    t = control["time_s"] if control is not None else attempt.get("t_before_capture_s")
+    return None if t is None else float(t)
+
+
+def _run_samples(run: Path) -> list:
+    out = []
+    for name in sorted(glob.glob(str(run / "spool" / "state.samples" / "*.jsonl"))):
+        with open(name) as handle:
+            out += [json.loads(line) for line in handle if line.strip()]
+    return out
+
+
+def _sample_at(samples: list, t: float | None, pallet_id=None) -> dict | None:
+    """The last sample with a pallet at or before ``t``, of that pallet when both name one."""
+    best = None
+    for s in samples if t is not None else []:
+        if s.get("pallet_position_m") is None or float(s["time_s"]) > t:
+            continue
+        if pallet_id and s.get("pallet_id") and s["pallet_id"] != pallet_id:
+            continue
+        best = s
+    return best
+
+
+def entry_face(attempt: dict, samples: list, pallet_id=None) -> str:
+    """The pallet's x face that looks at the truck when it captured; unknown without its sample or pose."""
+    sample = _sample_at(samples, _capture_time(attempt), pallet_id)
+    pose = attempt.get("accepted_pose")
+    if sample is None or not pose or sample.get("pallet_yaw_rad") is None:
+        return "unknown"
+    px, py = sample["pallet_position_m"][:2]
+    yaw = float(sample["pallet_yaw_rad"])
+    toward = (float(pose[0][0]) - px) * math.cos(yaw) + (float(pose[0][1]) - py) * math.sin(yaw)
+    return "+x" if toward >= 0 else "-x"
+
+
+def _is_near(index: int, attempt: dict, state: dict) -> bool:
+    """A near capture: its expected site, or an attempt after the far one (near_refit_compare.attempt_role)."""
+    if attempt.get("expected") is not None:
+        return True
+    far = (state.get("near_capture") or {}).get("far_attempt")
+    return isinstance(far, int) and index + 1 > far
+
+
+def _reason_key(record: dict | None) -> str:
+    record = record or {}
+    return f"{record.get('status') or 'no_observation'}:{record.get('reason')}"
+
+
+def _end_key(reason: str) -> str:
+    """status:reason for a failed detection, else the reason's name (a refusal's numbers stay out of the key)."""
+    head, _, rest = reason.partition(":")
+    if head == "near_capture_failed":
+        return ":".join(rest.removeprefix("perception_").split(":")[:2])
+    return head
+
+
+def cause_of(reason: str | None) -> str | None:
+    """The longest known prefix (forklift_core.mission.failures), else the reason's first field."""
+    if not reason:
+        return None
+    known = [p for p in PREFIXES if reason.startswith(p)]
+    return max(known, key=len) if known else reason.split(":")[0][:60]
+
+
+def _attempt_id(attempt: dict) -> tuple:
+    return attempt.get("depth_sha256"), attempt.get("t_before_capture_s"), attempt.get("loop_step")
+
+
+def _blank_near(row: dict) -> dict:
+    return {"order": row["order"], "pallet_id": row["pallet_id"], "near": [], "state": None, "moved": False}
+
+
+def _session_near(session: Path, rows: list) -> tuple[list, list, dict | None]:
+    """Each started row's near attempts and mission state, the attempts nobody can place, and the run's arguments. A
+    mission's records hold its own; the run's result keeps those of the mission the run ended in, whose records may
+    never have been written. Those go to the last started row unless the samples name another pallet."""
+    entries = {r["order"]: _blank_near(r) for r in rows}
+    unplaced, arguments, seen = [], None, set()
+    for run_dir in sorted(glob.glob(str(session / "live" / "epoch_*" / "run"))):
+        run = Path(run_dir)
+        top = _json(run / "result.json") or {}
+        arguments = top.get("arguments") or arguments
+        samples = _run_samples(run)
+        for i, r in enumerate(rows):  # an unacknowledged mission's own transition: after the previous mission's end
+            before = 0.0 if i == 0 else rows[i - 1].get("ended_s")
+            if r["start"] == "unknown" and before is not None and any(
+                    t.get("to") in PHASE_ORDER[1:-1] and float(t.get("time_s") or 0.0) > before
+                    for t in top.get("transitions") or []):
+                entries[r["order"]]["moved"] = True
+        for r in rows:
+            mid = r["mission_id"]
+            records = _json(run / "missions" / mid / "records.json") if mid else None
+            if records is None:
+                continue
+            state = records.get("state") or {}
+            attempts = state.get("observation_attempts") or []
+            seen |= {_attempt_id(a) for a in attempts}
+            e = entries[r["order"]]
+            e["state"], e["samples"] = state, samples
+            e["near"] = [a for i, a in enumerate(attempts) if _is_near(i, a, state)]
+        extra = [(i, a) for i, a in enumerate(top.get("observation_attempts") or []) if _attempt_id(a) not in seen]
+        near = [a for i, a in extra if _is_near(i, a, top)]
+        started = [r for r in rows if r["start"] in ("confirmed", "unknown")]
+        if not extra or not started:
+            unplaced += near
+            continue
+        last = next((r for r in reversed(started) if entries[r["order"]]["state"] is None), None)
+        named = _sample_at(samples, _capture_time(near[0]) if near else None)
+        if last is None or (named and named.get("pallet_id") and last["pallet_id"]
+                            and named["pallet_id"] != last["pallet_id"]):
+            unplaced += near
+            continue
+        e = entries[last["order"]]
+        e["state"], e["samples"] = top, samples
+        e["near"] = near
+    return [entries[r["order"]] for r in rows], unplaced, arguments
+
+
+def _near_mission(common: dict, row: dict, e: dict) -> dict:
+    near, state = e["near"], e["state"]
+    reason = row["reason"] or ""
+    done = row["outcome"] == "done"
+    # a run's end reason alone does not say an unacknowledged mission started: its own result or records do
+    seen = (row["start"] == "confirmed" or row.get("outcome_from") in ("mission_result", "probe_result")
+            or bool(near) or state is not None or e.get("moved", False))
+    started = "confirmed" if seen else "unknown"
+    missing = not seen or row["outcome"] in (None, "no_record") or (row["outcome"] == "session_failed" and not reason)
+    ended = seen and not done and reason.startswith(NEAR_END_PREFIX)
+    touched = bool(near) or ended or bool(state and (state.get("near_capture") or state.get("near_capture_history")))
+    first, final, seconds, rescues = Counter(), Counter(), 0, 0
+    verdicts = []
+    for a in near:
+        obs = a.get("pocket_observation") or {}
+        waiver = a.get("lower_waiver") or {}
+        head = waiver.get("first") or obs
+        if head.get("status") != "valid":
+            first[_reason_key(head)] += 1
+        if obs.get("status") != "valid":
+            final[_reason_key(obs)] += 1
+        seconds += "second" in waiver
+        rescues += bool(waiver.get("applied"))
+        verdicts.append(obs.get("status") == "valid")
+    again = any(not v and any(verdicts[i + 1:]) for i, v in enumerate(verdicts))
+    return {**common, "start": started, "mission_seq": row["order"], "pallet_id": row["pallet_id"],
+            "entry_face": entry_face(near[0], e.get("samples") or [], row["pallet_id"]) if near else "unknown",
+            "reached": touched,
+            "reached_unknown": (started == "confirmed" and not touched and state is None
+                                and row["stage"] != "preparing"),  # a near leg's phase is observe too
+            "result_missing": missing, "ended_near": ended, "ended_key": _end_key(reason) if ended else None,
+            "ended_without_capture": ended and not near, "cause": None if done or missing else cause_of(reason),
+            "class": None if done or missing else classify(reason), "capture_attempts": len(near),
+            "first_invalid": first, "final_invalid": final, "waiver_second_calls": seconds, "waiver_rescues": rescues,
+            "recovered_same": not ended and rescues > 0, "recovered_new": not ended and again}
+
+
+CELL_KEYS = ("condition_sha256", "operating_config_sha256", "shape", "entry_face", "arm", "pose_check", "scene", "seed",
+             "mission_seq", "reloc_inject")
+SESSION_CELL_KEYS = tuple(k for k in CELL_KEYS if k not in ("mission_seq", "entry_face"))
+
+
+def _tally_cell(key: tuple, members: list) -> dict:
+    cell = {"schema": "near_capture_tally/1", **dict(zip(CELL_KEYS, key)),
+            "run_config_sha256s": sorted({m["run_config_sha256"] for m in members if m["run_config_sha256"]})}
+    real = [m for m in members if not m.get("unplaced")]
+    ended = [m for m in real if m["ended_near"]]
+    first, final = Counter(), Counter()
+    for m in members:
+        first.update(m["first_invalid"])
+        final.update(m["final_invalid"])
+    cell.update(missions_started=sum(m["start"] == "confirmed" for m in real),
+                start_unknown=sum(m["start"] == "unknown" for m in real),
+                missions_reached_near=sum(m["reached"] for m in real), missions_ended_near=len(ended),
+                ended_without_capture=sum(m["ended_without_capture"] for m in real),
+                ended_by_reason=dict(Counter(m["ended_key"] for m in ended)),
+                ended_session_ids=sorted({m["session"] for m in ended}),
+                capture_attempts=sum(m["capture_attempts"] for m in members),
+                first_call_invalid_by_reason=dict(first), final_invalid_by_reason=dict(final),
+                waiver_second_calls=sum(m["waiver_second_calls"] for m in members),
+                waiver_rescues=sum(m["waiver_rescues"] for m in members),
+                missions_recovered_same_capture=sum(m["recovered_same"] for m in real),
+                missions_recovered_new_capture=sum(m["recovered_new"] for m in real),
+                reached_unknown=sum(m["reached_unknown"] for m in real),
+                result_missing=sum(m["result_missing"] for m in real))
+    return cell
+
+
+def wilson(k: int, n: int) -> list:
+    """The two-sided 95 % Wilson interval (a reference: a session's missions are not independent)."""
+    p, z2 = k / n, WILSON_Z * WILSON_Z
+    d = 1 + z2 / n
+    c, h = (p + z2 / (2 * n)) / d, WILSON_Z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / d
+    return [max(0.0, c - h), min(1.0, c + h)]
+
+
+def _bounds(low_n: int, low_d: int, high_n: int, high_d: int) -> dict | None:
+    if low_d <= 0 or high_d <= 0:
+        return None
+    return {"low": low_n / low_d, "high": high_n / high_d}
+
+
+def near_rates(*, k: int, N: int, S: int, R: int, U: int, m_R: int, m_U: int) -> dict:
+    """The rates over N confirmed started, S start unknown, R reached, U reached unknown; m_R and m_U of them with no
+    result (plan section 3): a range, since a result-missing mission may have ended at near capture."""
+    near_end = _bounds(k, N + S, k + m_R + m_U + S, N + S)
+    if near_end is not None and N:
+        near_end["wilson_observed"] = wilson(k, N)
+    return {"near_end": near_end, "conditional": _bounds(k, R + U + S, k + m_R + m_U + S, R + m_U + S)}
+
+
+def review_triggers(missions: list) -> dict:
+    """(a) and (b) of #338 over every assignment of the unknown missions: met, not_met, denominator_short (a: no
+    assignment reaches the count) or undecidable (the assignments differ). A mission with no result ended at near
+    capture, at the top other cause or well; one with an unknown start also may never have started."""
+    unknown = [m for m in missions if m["result_missing"]]
+    fixed = [m for m in missions if not m["result_missing"]]
+    base = Counter(m["cause"] for m in fixed if m["cause"])
+    near_cause = NEAR_END_PREFIX
+    if len(unknown) > MAX_ASSIGNED:  # only what holds in every assignment
+        k = sum(m["ended_near"] for m in fixed)
+        sessions = len({m["session"] for m in fixed if m["ended_near"]}) >= TRIGGER_SESSIONS
+        least = sum(m["start"] == "confirmed" for m in missions)
+        top = max((n for c, n in base.items() if c != near_cause), default=0)
+        a = ("denominator_short" if len(missions) < TRIGGER_MIN_MISSIONS else
+             "met" if least >= TRIGGER_MIN_MISSIONS and k >= TRIGGER_RATE * len(missions) and sessions else "undecidable")
+        return {"a": a, "b": "met" if sessions and k >= top + len(unknown) else "undecidable", "assigned": None}
+    other_top = max((c for c in base if c != near_cause), key=lambda c: base[c], default="(unknown)")
+    choices = [("near", "other", "fine") + (("absent",) if m["start"] == "unknown" else ()) for m in unknown]
+    verdicts_a, verdicts_b = set(), set()
+    for picks in itertools.product(*choices):
+        started = len(fixed) + sum(p != "absent" for p in picks)
+        sessions = {m["session"] for m in fixed if m["ended_near"]}
+        sessions |= {m["session"] for m, p in zip(unknown, picks) if p == "near"}
+        k = sum(m["ended_near"] for m in fixed) + picks.count("near")
+        causes = Counter(base)
+        causes[near_cause] = k
+        causes[other_top] += picks.count("other")
+        if started < TRIGGER_MIN_MISSIONS:
+            verdicts_a.add("denominator_short")
+        else:
+            verdicts_a.add("met" if k >= TRIGGER_RATE * started and len(sessions) >= TRIGGER_SESSIONS else "not_met")
+        verdicts_b.add("met" if len(sessions) >= TRIGGER_SESSIONS and k >= max(causes.values()) else "not_met")
+    one = lambda found: found.pop() if len(found) == 1 else "undecidable"  # noqa: E731
+    return {"a": one(verdicts_a), "b": one(verdicts_b), "assigned": len(unknown)}
+
+
+def _population(key: tuple, missions: list, assumed: list) -> dict:
+    real = [m for m in missions if not m.get("unplaced")]
+    started = [m for m in real if m["start"] == "confirmed"]
+    unknown = [m for m in real if m["start"] == "unknown"]
+    near_end = [m for m in real if m["ended_near"]]
+    reached = [m for m in real if m["reached"]]
+    wide = [m for m in real if m["reached_unknown"]]
+    rates = near_rates(k=len(near_end), N=len(started), S=len(unknown), R=len(reached), U=len(wide),
+                       m_R=sum(m["result_missing"] and m["start"] == "confirmed" for m in reached),
+                       m_U=sum(m["result_missing"] and m["start"] == "confirmed" for m in wide))
+    sessions = {m["session"] for m in started}
+    stopped = {m["session"] for m in near_end}
+    start_open = {m["session"] for m in unknown} - sessions
+    by_scene: dict = {}
+    for m in real:
+        s = by_scene.setdefault(m["scene"], {"started": 0, "ended_near": 0, "reached": 0})
+        s["started"] += m["start"] == "confirmed"
+        s["ended_near"] += m["ended_near"]
+        s["reached"] += m["reached"]
+    seq = Counter((m["mission_seq"], m["pallet_id"]) for m in reached)
+    return {"schema": "near_capture_population/1", "operating_config_sha256": key[0], "shape": key[1], "arm": key[2],
+            "pose_check": key[3], "reloc_inject": key[4], "config_assumed_sessions": sorted(assumed),
+            "rates": {"N": len(started), "S": len(unknown), "k": len(near_end), "R": len(reached), "U": len(wide),
+                      "result_missing": sum(m["result_missing"] and m["start"] == "confirmed" for m in real),
+                      "ended_without_capture": sum(m["ended_without_capture"] for m in real), **rates},
+            "sessions": {"stopped_near": len(stopped), "started": len(sessions), "start_unknown": len(start_open),
+                         "wilson_observed": wilson(len(stopped), len(sessions)) if sessions else None},
+            "ended_by_reason": dict(Counter(m["ended_key"] for m in near_end)),
+            "causes": dict(Counter(m["cause"] for m in real if m["cause"])),
+            "classes": dict(Counter(m["class"] for m in real if m["class"])),
+            "by_scene": by_scene, "reached_by_order_pallet": {f"{o}:{p}": n for (o, p), n in sorted(seq.items(), key=str)},
+            "triggers": review_triggers([m for m in real if m["start"] == "unknown" or m["start"] == "confirmed"])}
+
+
+def _attempt_order(name: str) -> tuple:
+    """(base, turn): a retry moves the earlier attempt to ``name.attemptN``, and the bare name is the last."""
+    base, _, number = name.partition(".attempt")
+    return base, int(number) if number.isdigit() else math.inf
+
+
+def _took_submission(out_dir: Path, s: dict) -> bool:
+    """An acknowledged or refused submission, or a mission's own records or transition (what makes it started)."""
+    if any(r["start"] in ("confirmed", "rejected") or r.get("outcome_from") in ("mission_result", "probe_result")
+           for r in s["rows"]):
+        return True
+    entries, unplaced, _ = _session_near(Path(out_dir) / s["session"], s["rows"])
+    return bool(unplaced) or any(e["near"] or e["state"] is not None or e["moved"] for e in entries)
+
+
+def valid_attempts(out_dir: Path, sessions: list) -> tuple[list, list]:
+    """Each run's first attempt that took a submission, else its last one (start unknown, plan section 2), and the
+    attempts left out. Evidence, not the folder's name, keeps an attempt."""
+    runs: dict = {}
+    for s in sessions:
+        runs.setdefault(_attempt_order(s["session"])[0], []).append(s)
+    kept, left = [], []
+    for attempts in runs.values():
+        attempts.sort(key=lambda s: _attempt_order(s["session"])[1])
+        took = [s for s in attempts if _took_submission(out_dir, s)]
+        chosen = took[0] if took else attempts[-1]
+        kept.append(chosen)
+        left += [s["session"] for s in attempts if s is not chosen]
+    return kept, sorted(left)
+
+
+def near_capture_tally(out_dir: Path, sessions: list) -> dict:
+    """Plan section 3's cells, session cells and, per operating configuration, the three rates and the triggers.
+    Attempts that took no submission and were retried are left out and named (valid_attempts). A session whose run
+    left no arguments joins its arm's only configuration and is named; with several it stays apart."""
+    chosen, excluded = valid_attempts(out_dir, sessions)
+    missions, open_sessions = [], []
+    for s in chosen:
+        path = Path(out_dir) / s["session"]
+        started = [r for r in s["rows"] if r["start"] in ("confirmed", "unknown")]
+        entries, unplaced, arguments = _session_near(path, s["rows"])
+        condition, operating = config_hashes(arguments)
+        a = arguments or {}
+        shape = str((a.get("pallet_prior_loaded") or {}).get("catalogue_version") or "unknown")
+        common = {"session": s["session"], "arm": s.get("arm"), "scene": s.get("scene"), "seed": a.get("seed"),
+                  "shape": shape, "pose_check": a.get("pose_check") or "off", "reloc_inject": a.get("reloc_inject") or "none",
+                  "condition_sha256": condition, "operating_config_sha256": operating,
+                  "run_config_sha256": _digest(arguments) if arguments else None}
+        ms = [_near_mission(common, r, e) for r, e in zip(s["rows"], entries) if r in started]
+        stop = next((m["mission_seq"] for m in ms if m["ended_near"]), None)
+        session_row = {**common, "started": any(m["start"] == "confirmed" for m in ms), "start_open": bool(ms),
+                       "stopped_near": stop is not None,
+                       "unsubmitted_after_stop": 0 if stop is None else sum(
+                           r["order"] > stop and r["start"] == "not_submitted" for r in s["rows"])}
+        if unplaced:
+            blank = {"order": "unknown", "pallet_id": None, "reason": None, "outcome": "done", "start": "confirmed", "stage": None}
+            extra = _near_mission(common, blank, {"near": unplaced, "state": None, "samples": []})
+            ms.append({**extra, "unplaced": True, "reached": False, "ended_near": False})
+        open_sessions.append((session_row, ms))
+    known = {(r["arm"], r["reloc_inject"]): set() for r, _ in open_sessions}
+    for r, _ in open_sessions:
+        if r["operating_config_sha256"]:
+            known[(r["arm"], r["reloc_inject"])].add((r["operating_config_sha256"], r["shape"], r["pose_check"]))
+    assumed: dict = {}
+    for r, ms in open_sessions:
+        fits = known[(r["arm"], r["reloc_inject"])]
+        if r["operating_config_sha256"] is None and len(fits) == 1:
+            op, shape, pose = next(iter(fits))
+            for x in [r, *ms]:
+                x.update(operating_config_sha256=op, shape=shape, pose_check=pose)
+            assumed.setdefault((op, shape, r["arm"], pose, r["reloc_inject"]), []).append(r["session"])
+        missions += ms
+    grouped: dict = {}
+    for m in missions:
+        grouped.setdefault(tuple(str(m[k]) for k in CELL_KEYS), []).append(m)
+    cells = [_tally_cell(tuple(members[0][k] for k in CELL_KEYS), members) for _, members in sorted(grouped.items())]
+    session_groups: dict = {}
+    for r, _ in open_sessions:
+        session_groups.setdefault(tuple(str(r[k]) for k in SESSION_CELL_KEYS), []).append(r)
+    session_cells = [{"schema": "near_capture_session_tally/1", **{k: rs[0][k] for k in SESSION_CELL_KEYS},
+                      "started_session_ids": sorted(r["session"] for r in rs if r["started"]),
+                      "start_unknown_session_ids": sorted(r["session"] for r in rs if r["start_open"] and not r["started"]),
+                      "stopped_near_session_ids": sorted(r["session"] for r in rs if r["stopped_near"]),
+                      "unsubmitted_after_stop": sum(r["unsubmitted_after_stop"] for r in rs)}
+                     for _, rs in sorted(session_groups.items())]
+    pools: dict = {}
+    for r, ms in open_sessions:
+        key = (r["operating_config_sha256"], r["shape"], r["arm"], r["pose_check"], r["reloc_inject"])
+        pools.setdefault(key, []).extend(ms)
+    populations = [_population(k, v, assumed.get(k, [])) for k, v in sorted(pools.items(), key=str)]
+    seen_shapes = {p["shape"].split("_")[0] for p in populations if p["rates"]["N"]}
+    return {"cells": cells, "session_cells": session_cells, "populations": populations, "excluded_attempts": excluded,
+            "unverified_shapes": [s for s in SHAPES if s not in seen_shapes]}
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out", type=Path)
@@ -543,6 +969,7 @@ def main(argv=None) -> int:
     ap.add_argument("--scheduled", type=int, default=3)
     ap.add_argument("--pairs", nargs="*", default=[], help="A:B session folder names compared mission by mission")
     ap.add_argument("--runs", type=Path, help="the bundle's run list: attempts that left no folder are reported")
+    ap.add_argument("--near-tally", type=Path, help="write the near capture tally (near_capture_tally/1) here")
     args = ap.parse_args(argv)
     res = survey(args.out, args.scheduled, [tuple(p.split(":", 1)) for p in args.pairs], args.runs)
     args.json.write_text(json.dumps(res, indent=1, default=str, allow_nan=False) + "\n")
@@ -554,6 +981,9 @@ def main(argv=None) -> int:
             w = csv.DictWriter(f, fieldnames=keys)
             w.writeheader()
             w.writerows(rows)
+    if args.near_tally:
+        args.near_tally.write_text(json.dumps(near_capture_tally(args.out, res["sessions"]), indent=1, default=str,
+                                              allow_nan=False) + "\n")
     print(json.dumps(res["summary"], indent=1, default=str))
     return 0
 
