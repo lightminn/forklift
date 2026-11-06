@@ -6,6 +6,9 @@ before any of them runs, from seed 4's starts outside the D list (dev_starts.jso
 - inject_starts.jsonl (2 C): 24 starts, 3 each of the eight wrong estimates of V1b. May overlap the tail list: they measure
   the start check, not the window.
 - loop_starts.jsonl (2 D): the tail list's first 3 starts under each of 4 correction jumps, the check on.
+- topup_starts.jsonl, loop2_starts.jsonl (9.14): the rest of the tail's draw, and the jumps on the first three tail starts
+  whose mission finished, less the one the first list already has. TAIL_DONE is the tail's mission outcomes; no window or
+  release value goes into them.
 
     python docs/validation/assets/unconfirmed/make_rev_lists.py
 """
@@ -19,6 +22,7 @@ SEED = 20261108
 KINDS = ("full", "half")
 WRONG = ("shift x+1", "shift x-1", "shift y+1", "shift y-1", "shift x+2", "shift y-2", "turn", "slide")
 # x, y, yaw, sim_s: the transport is under way by 200 s in D's missions; the last one waits for the first hold (plan 9.13)
+TAIL_DONE = {"val3_006", "val3_034", "val3_036", "val3_044", "val3_062"}  # job 16376's tail
 JUMPS = {"step_0.35": "0.35,0,0,200", "step_6": "6,0,0,200", "yaw_0.12": "0,0,0.12,200", "hold_yaw_0.12": "0,0,0.12,0,hold"}
 
 
@@ -33,7 +37,12 @@ def lists(pool) -> dict:
     clear = [r for r in pool if r["confirmed"] and r["rear_clear"]]
     tail = rng.sample(clear, 20)
     inject = rng.sample(pool, 24)
+    rest = random.Random(SEED).sample(clear, len(clear))[20:]  # sample's first 20 are the tail's
+    picked = [r for r in tail if r["id"] in TAIL_DONE][:3]
     return {
+        "topup_starts.jsonl": [{"id": r["id"], "start_pose": r["truth"], "kind": KINDS[k % 2]} for k, r in enumerate(rest)],
+        "loop2_starts.jsonl": [{"id": r["id"], "start_pose": r["truth"], "jump": name, "correction_inject": value}
+                               for name, value in JUMPS.items() for r in picked if r not in tail[:3]],
         "tail_starts.jsonl": [{"id": r["id"], "start_pose": r["truth"], "kind": KINDS[k % 2]} for k, r in enumerate(tail)],
         "inject_starts.jsonl": [{"id": r["id"], "start_pose": r["truth"], "inject": WRONG[k % 8], "kind": KINDS[k % 2]}
                                 for k, r in enumerate(inject)],
