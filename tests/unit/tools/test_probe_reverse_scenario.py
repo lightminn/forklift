@@ -330,7 +330,7 @@ def test_a_generation_found_at_the_watch_s_last_look_is_still_waited_for():
 def test_a_generation_found_at_the_wall_limit_is_still_waited_for(monkeypatch):
     # Codex: it starts during the last sleep, and the limit is reached before anyone looks
     class Probe:
-        closed_code, state, waited = None, {"pose_check": {"status": "confirmed"}}, False
+        closed_code, state, waited = None, {"pose_check": {"status": "confirmed"}, "pacing": {"realtime_factor": 1e-9}}, False
 
         async def until(self, pred, wall_s, label=""):
             self.waited = True

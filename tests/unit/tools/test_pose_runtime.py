@@ -926,7 +926,7 @@ def test_a_release_and_a_new_hold_between_two_ticks_counts_as_a_release():
     rt.tick(1.2, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
     row, = rt.record()["releases"]
     assert row["t"] == 1.1 and row["rad"] == pytest.approx(0.04)
-    assert rt.pc.c_still == pytest.approx(after) and rt._stand["rebased_rad"] == 0.0
+    assert rt.pc.c_still == pytest.approx(after) and rt.raw["stands"][-1]["rebased_rad"] == 0.0
 
 
 def test_the_shadow_keeps_the_stand_rebased_at_a_release_beside_the_plain_value():
