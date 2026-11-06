@@ -39,6 +39,8 @@ REAR_OFFSET_M = 0.34  # the measured chassis's: main checks it against each reco
 FACTOR = 1.5  # the development values' margin
 RAMP_M = 20.0  # a slow injection's path
 WRONG = (0.30, 0.10)  # B-P2 4.0's wrong boundary
+REMATCH_M = 0.10  # design 1.5: an on run re-matches past this; the shadow matched at every stand
+ELIMINATE_RATE = 0.95  # the revision plan 3: each kind's floor
 ONSET_SEED, ONSET_DRAWS = 20261107, 20
 
 
@@ -97,7 +99,9 @@ def rematch_stands(rec, scans, ctx, *, b, o0, e_slam) -> list:
                                          "deadline_at": relocalizer.deadline_at}, ctx)  # the generation's own
             row["agree_m"], row["agree_rad"] = _gap(tuple(last["applied"]),
                                                     compose(g, compose(invert(o_scan), tuple(last["o"]))))
-            row["truth_class"] = _classify(g, last["truth"])
+            scan_t = st["stamps"][-1]  # g is the scan's pose: judged against the truth at the scan
+            near = min(samples, key=lambda s: abs(s["t"] - scan_t))
+            row["truth_class"] = _classify(g, near["truth"]) if abs(near["t"] - scan_t) <= 0.2 else "unknown"
             if res["outcome"] == "confirm":
                 ok = row["agree_m"] <= e_slam[0] and row["agree_rad"] <= e_slam[1]
                 row["outcome"] = "renew" if ok else "revoke"
@@ -136,11 +140,26 @@ class Series:
     """A session's stream from its first reference: arrays of the odometry, the applied pose, the truth, the path, the
     reference C_int in force and the path since it."""
 
-    def __init__(self, t, o, applied, truth, ref, since):
-        self.t, self.o, self.applied, self.truth, self.ref, self.since = t, o, applied, truth, ref, since
+    def __init__(self, t, o, applied, truth, renewals):
+        self.t, self.o, self.applied, self.truth = t, o, applied, truth
         d = np.hypot(np.diff(o[:, 0], prepend=o[0, 0]), np.diff(o[:, 1], prepend=o[0, 1]))
         self.path = np.cumsum(d)
         self.C = _compose(applied, _invert(o))
+        # the reference an on run would hold: a generation renews it only past REMATCH_M of Delta_int at its stand, the
+        # shadow having matched at every stand (Codex revision re-review)
+        self.ref = np.tile(np.array(renewals[0][1], float), (len(t), 1))
+        self.since = self.path - self.path[0]
+        self.renewals_taken = []
+        for at, C in renewals[1:]:
+            i = int(np.searchsorted(t, at))
+            if i >= len(t):
+                break
+            m, _ = _gaps(applied[i:i + 1], _compose(self.ref[i:i + 1], o[i:i + 1]))
+            if float(m[0]) > REMATCH_M:
+                self.ref[i:] = C
+                self.since[i:] = self.path[i:] - self.path[i]
+                self.renewals_taken.append(at)
+        self.last_renewal_index = max(0, int(np.searchsorted(t, renewals[-1][0])))
 
 
 def _compose(a, b):
@@ -163,24 +182,12 @@ def _gaps(a, b) -> tuple:
 
 
 def series(samples, renewals) -> Series:
-    """``renewals``: (t, C_int) in time order, each set from that time on. Samples before the first are not the
-    monitor's."""
+    """``renewals``: (t, C_int) in time order, the first the reference from then on, the rest the generations an on run
+    could have used at those stands. Samples before the first are not the monitor's."""
     rows = [s for s in samples if s.get("o") is not None and s.get("applied") is not None and s.get("truth") is not None
             and s["t"] >= renewals[0][0] - 1e-9]
-    times = [t for t, _ in renewals]
-    ref, since = [], []
-    arr_t = np.array([s["t"] for s in rows])
-    idx = np.searchsorted(times, arr_t, side="right") - 1
-    ref = np.array([renewals[k][1] for k in idx], float)
-    o = np.array([s["o"] for s in rows], float)
-    step = np.hypot(np.diff(o[:, 0], prepend=o[0, 0]), np.diff(o[:, 1], prepend=o[0, 1]))
-    total = 0.0
-    since = np.zeros(len(rows))
-    for i in range(len(rows)):
-        total = 0.0 if i and idx[i] != idx[i - 1] else total + step[i]
-        since[i] = total
-    return Series(arr_t, o, np.array([s["applied"] for s in rows], float), np.array([s["truth"] for s in rows], float),
-                  ref, since)
+    return Series(np.array([s["t"] for s in rows]), np.array([s["o"] for s in rows], float),
+                  np.array([s["applied"] for s in rows], float), np.array([s["truth"] for s in rows], float), renewals)
 
 
 def _pairs(ser, mon) -> tuple:
@@ -299,25 +306,38 @@ def kinds() -> list:
     return out
 
 
-def onsets(ser, name: str) -> list:
-    """(label, index): ONSET_DRAWS uniform on the path, and the boundaries: right after the reference, the middle of the
-    longest stand, the sharpest turn."""
+def case_key(case) -> str:
+    """Every direction and sign apart: the elimination is by kind (Codex revision re-review)."""
+    if case.kind.endswith("yaw"):
+        return f"{case.kind}:{abs(case.size):g}:{'+' if case.size > 0 else '-'}"
+    x, y = case.direction
+    return f"{case.kind}:{case.size:g}:{'+' if x + y > 0 else '-'}{'x' if x else 'y'}"
+
+
+def onsets(ser, name: str, start: int) -> list:
+    """(label, index), from ``start`` on (past the last generation an on run could use, where only the monitor stands
+    guard: the revision plan 2 B): ONSET_DRAWS uniform on the path, and the boundaries: the first sample, the middle of
+    the longest stand, the sharpest turn."""
     rng = random.Random(f"{ONSET_SEED}:{name}")
     n = len(ser.t)
-    out = [("draw", int(np.searchsorted(ser.path, rng.uniform(0.0, float(ser.path[-1]))))) for _ in range(ONSET_DRAWS)]
-    out.append(("first", min(10, n - 1)))
+    start = min(start, n - 2)
+    low, high = float(ser.path[start]), float(ser.path[-1])
+    out = [("draw", max(start, int(np.searchsorted(ser.path, rng.uniform(low, high))))) for _ in range(ONSET_DRAWS)]
+    out.append(("first", start))
     moving = np.diff(ser.path, append=ser.path[-1]) > 1e-4
-    runs, start = [], None
-    for i in range(n):
-        if not moving[i] and start is None:
-            start = i
-        if (moving[i] or i == n - 1) and start is not None:
-            runs.append((i - start, start))
-            start = None
+    runs, begun = [], None
+    for i in range(start, n):
+        if not moving[i] and begun is None:
+            begun = i
+        if (moving[i] or i == n - 1) and begun is not None:
+            runs.append((i - begun, begun))
+            begun = None
     if runs:
         length, first = max(runs)
         out.append(("stand", first + length // 2))
-    rate = np.abs(np.diff(ser.applied[:, 2], append=ser.applied[-1, 2]))
+    step = np.diff(ser.applied[:, 2], append=ser.applied[-1, 2])
+    rate = np.abs(np.arctan2(np.sin(step), np.cos(step)))
+    rate[:start] = 0.0
     out.append(("turn", int(np.argmax(rate))))
     return [(label, min(i, n - 2)) for label, i in out]
 
@@ -340,14 +360,50 @@ def _tally(rows) -> dict:
             "miss_exposure_m_max": max((r["exposure_m"] for r in wrong if not r["detected"]), default=None)}
 
 
-def renewals_of(rec) -> list:
-    """(t, C_int) of each agreement that held: the evidence's own correction at its scan."""
-    scans = {r["t"]: r.get("o_scan") for r in rec.get("rematches") or []}
+def renewals_of(rec, *, e_slam) -> list:
+    """(t, C_int) a run could set: the confirmed start's evidence, then each raw generation that passed the conservative
+    check, applied, within E_SLAM -- not the provisional agreements, which stop when the provisional check ends."""
+    raw = rec.get("raw") or {}
+    start = raw.get("start") or {}
     out = []
-    for e in rec.get("events") or []:
-        if e["kind"] in ("slam_agreement", "rematch_agreement") and e.get("ok"):
-            o_scan = scans.get(e["t"]) or (rec.get("start") or {}).get("o_scan")
-            out.append((e["t"], compose(tuple(e["evidence"]), invert(tuple(o_scan)))))
+    ok = lambda r: r["agree_m"] <= e_slam[0] and r["agree_rad"] <= e_slam[1]  # noqa: E731
+    if start.get("confirmed") and start.get("agree_m") is not None and ok(start):
+        out.append((start["t"], compose(tuple(start["r"]), invert(tuple(rec["start"]["o_scan"])))))
+    for g in raw.get("rematches") or []:
+        if g.get("g") is not None and g.get("residual_confirmed") and g.get("applicable") and g.get("agree_m") is not None \
+                and ok(g):
+            out.append((g["t"], compose(tuple(g["g"]), invert(tuple(g["o_scan"])))))
+    return out
+
+
+def choose(candidates, missions) -> dict:
+    """The revision plan 3's order: elimination, then the small kinds' minimum, then the exposure, then the window."""
+    allowed = max(1, int(0.1 * len(missions)))
+    out = {"eliminated": {}, "ranked": [], "winner": None, "scores": {}}
+    for name, c in candidates.items():
+        why = []
+        by = c["by_key"]
+        for key, row in by.items():
+            kind, size, _ = key.split(":")
+            big = (kind == "step_xy" and float(size) >= 1.0) or (kind == "step_yaw" and float(size) >= 0.30)
+            if big and row["wrong_reached"] and row["detected"] / row["wrong_reached"] < ELIMINATE_RATE:
+                why.append(f"rate {key}")
+        if len(c["loo_false_in_missions"]) > allowed:
+            why.append("leave-one-out")
+        if any(a.get("observed") and a.get("alarm_t") is None for a in c["positive_a"].values()):
+            why.append("positive A")
+        if why:
+            out["eliminated"][name] = why
+            continue
+        small = [row["detected"] / row["wrong_reached"] for key, row in by.items() if row["wrong_reached"]
+                 and key.split(":")[0] + ":" + key.split(":")[1] in ("step_xy:0.35", "step_xy:0.5", "step_yaw:0.12")]
+        exposure = max((row["exposure_m_max"] or 0.0 for row in by.values()), default=0.0)
+        out["scores"][name] = {"small_min": min(small, default=0.0), "exposure_m_max": exposure,
+                               "window_m": c["window_m"] or math.inf}
+    out["ranked"] = sorted(out["scores"], key=lambda n: (-out["scores"][n]["small_min"],
+                                                         out["scores"][n]["exposure_m_max"],
+                                                         out["scores"][n]["window_m"]))
+    out["winner"] = out["ranked"][0] if out["ranked"] else None
     return out
 
 
@@ -364,14 +420,16 @@ def evaluate(correct, missions, positives) -> dict:
         false = [k for k, ser in correct.items() if first_alarm(ser, mon) is not None]
         loo = leave_one_out(correct, mon)
         by: dict = {}
+        by_size: dict = {}
         for name in missions:
             ser = correct[name]
-            for tag, onset in onsets(ser, name):
+            for tag, onset in onsets(ser, name, ser.last_renewal_index + 1):
                 for case in cases:
-                    key = f"{case.kind}:{abs(case.size):g}"
                     row = run_case(ser, onset, case, mon)
-                    by.setdefault(key, []).append(row)
-                    by.setdefault(f"{key}@{tag}" if tag != "draw" else f"{key}@draw", []).append(row)
+                    by.setdefault(case_key(case), []).append(row)
+                    size = f"{case.kind}:{abs(case.size):g}"
+                    by_size.setdefault(size, []).append(row)
+                    by_size.setdefault(f"{size}@{tag}", []).append(row)
         a = {}
         for name, (ser, t0) in positives.items():
             if ser is None:
@@ -387,12 +445,18 @@ def evaluate(correct, missions, positives) -> dict:
             "false_revocations": false, "false_in_missions": [k for k in false if k in missions],
             "loo_false": sorted(k for k, v in loo.items() if v), "loo_false_in_missions":
             sorted(k for k, v in loo.items() if v and k in missions), "positive_a": a,
-            "by_kind": {k: _tally(v) for k, v in sorted(by.items())}}
+            "by_key": {k: _tally(v) for k, v in sorted(by.items())},
+            "by_size": {k: _tally(v) for k, v in sorted(by_size.items())}}
+    out["choice"] = choose(out["candidates"], missions)
     return out
 
 
 def _record(folder):
-    return json.loads((folder / "epoch_1" / "run" / "result.json").read_text())
+    result = json.loads((folder / "epoch_1" / "run" / "result.json").read_text())
+    rear = abs(float(result["arguments"]["rear_axle_offset_m"]))
+    if not math.isclose(rear, REAR_OFFSET_M, abs_tol=1e-6):
+        raise SystemExit(f"{folder}: rear offset {rear}, this tool's {REAR_OFFSET_M}")
+    return result
 
 
 def _monitors_main(args) -> dict:
@@ -400,15 +464,12 @@ def _monitors_main(args) -> dict:
     for folder in args.sessions:
         result = _record(folder)
         rec = result["pose_check"]
-        rear = abs(float(result["arguments"]["rear_axle_offset_m"]))
-        if not math.isclose(rear, REAR_OFFSET_M, abs_tol=1e-6):
-            raise SystemExit(f"{folder}: rear offset {rear}, this tool's {REAR_OFFSET_M}")
         samples = [s for s in rec["samples"] if s.get("o") is not None]
         err = [(s["t"], math.hypot(s["applied"][0] - s["truth"][0], s["applied"][1] - s["truth"][1]),
                 abs(math.atan2(math.sin(s["applied"][2] - s["truth"][2]), math.cos(s["applied"][2] - s["truth"][2]))))
                for s in samples]
         wrong = next((t for t, m, rad in err if m > WRONG[0] or rad > WRONG[1]), None)
-        ren = renewals_of(rec)
+        ren = renewals_of(rec, e_slam=tuple(float(v) for v in args.e_slam.split(",")))
         ser = series(samples, ren) if ren else None
         if wrong is not None:  # a positive by the truth, not by the contact rule
             positives[folder.name] = (ser, wrong)

@@ -23,6 +23,7 @@ from forklift_core.localization import start_reloc as R  # noqa: E402
 from forklift_core.localization.slam_pose import compose, invert  # noqa: E402
 
 CFG = G.MatchConfig(yaw_step_rad=math.radians(2.0))
+I = (0.0, 0.0, 0.0)
 RELOC = R.RelocConfig(e_min=0.8, r_max=0.9, r_struct=0.8)
 ANGLES = (0.0, 2 * math.pi / 360)
 
@@ -219,3 +220,74 @@ def test_a_threshold_is_the_clean_sessions_largest_times_1_5_and_leave_one_out_c
     limit = S.fit_limit({"a": quiet, "b": loud}, mon)
     assert limit[0] == pytest.approx(1.5 * 0.10, abs=0.006)
     assert S.leave_one_out({"a": quiet, "b": loud}, mon) == {"b": True, "a": False}
+
+
+# --- Codex revision re-review ---
+def test_a_shadow_generation_renews_the_reference_only_where_the_operating_rule_would():
+    # the shadow matches at every stand; an on run only past 0.10 m of Delta_int (design 1.5)
+    rows = _samples(n=300, c_per_m=0.05)  # Delta_int 0.044 m at 0.9 m of path, 0.11 m at 2.2 m
+    near, far = (compose((0.0, 0.05 * 0.9, 0.0), (0.0, 0.0, 0.0))), (0.0, 0.05 * 2.2, 0.0)
+    ser = S.series(rows, renewals=[(0.0, I), (0.9, near), (2.2, far)])
+    assert ser.renewals_taken == [2.2]
+    at = int(np.searchsorted(ser.t, 2.25))
+    assert ser.ref[at] == pytest.approx(far) and ser.since[at] == pytest.approx(0.1, abs=0.02)
+
+
+def test_the_available_renewals_are_the_generations_that_passed_not_the_provisional_events():
+    # after the provisional check ended no agreement is written; the raw generations go on
+    rec = {"start": {"o_scan": [1.0, 0.0, 0.0]}, "events": [],
+           "raw": {"start": {"confirmed": True, "r": [1.0, 0.0, 0.0], "agree_m": 0.01, "agree_rad": 0.0, "t": 1.0},
+                   "rematches": [{"t": 9.0, "g": [2.0, 0.0, 0.0], "o_scan": [2.0, 0.0, 0.0], "residual_confirmed": True,
+                                  "applicable": True, "agree_m": 0.05, "agree_rad": 0.01},
+                                 {"t": 12.0, "g": [3.0, 0.0, 0.0], "o_scan": [3.0, 0.0, 0.0],
+                                  "residual_confirmed": False, "applicable": True, "agree_m": 0.05, "agree_rad": 0.01},
+                                 {"t": 13.0, "g": [3.0, 0.0, 0.0], "o_scan": [3.0, 0.0, 0.0],
+                                  "residual_confirmed": True, "applicable": True, "agree_m": 0.5, "agree_rad": 0.01}]}}
+    got = S.renewals_of(rec, e_slam=(0.109, 0.0137))
+    assert [t for t, _ in got] == [1.0, 9.0]
+    with pytest.raises(KeyError):
+        S.renewals_of({"raw": {"rematches": [{"t": 1.0, "g": [0, 0, 0], "residual_confirmed": True, "applicable": True,
+                                              "agree_m": 0.0, "agree_rad": 0.0}], "start": {}}}, e_slam=(1.0, 1.0))
+
+
+def test_every_direction_and_sign_keeps_its_own_key():
+    keys = {S.case_key(c) for c in S.kinds()}
+    assert len(keys) == len(S.kinds()) == 50
+    assert "step_xy:0.35:+y" in keys and "step_yaw:0.12:-" in keys
+
+
+def _tally(rate, n=20):
+    return {"cases": n, "wrong_reached": n, "detected": int(rate * n), "rate": rate, "exposure_m_max": 1.0}
+
+
+def _candidate(rates, loo=(), positive=True, name="W5", window=5.0):
+    by = {f"step_xy:{s:g}:{d}": _tally(rates.get(s, 1.0)) for s in (0.35, 0.5, 1.0, 3.0, 6.0, 12.0)
+          for d in ("+x", "-x", "+y", "-y")}
+    by.update({f"step_yaw:{s:g}:{d}": _tally(rates.get(s, 1.0)) for s in (0.12, 0.3, 3.14159) for d in ("+", "-")})
+    return {"window_m": window, "loo_false_in_missions": list(loo), "by_key": by,
+            "positive_a": {"val3_055": {"observed": True, "alarm_t": None if not positive else 5.0},
+                           "val3_016": {"observed": False}}}
+
+
+def test_the_choice_eliminates_by_kind_and_compares_the_small_kinds_minimum():
+    missions = [f"m{k}" for k in range(10)]
+    one_axis = _candidate({})
+    one_axis["by_key"]["step_xy:1:+x"] = _tally(0.80)  # the sum over four axes would pass at 0.95
+    out = S.choose({"a": one_axis, "b": _candidate({}, loo=["m1", "m2"]), "c": _candidate({}, positive=False),
+                    "d": _candidate({0.35: 0.5}), "e": _candidate({0.35: 0.9}, window=10.0)}, missions)
+    assert set(out["eliminated"]) == {"a", "b", "c"} and out["ranked"] == ["e", "d"]
+
+
+def test_no_candidate_left_means_no_winner():
+    out = S.choose({"a": _candidate({}, positive=False)}, [f"m{k}" for k in range(10)])
+    assert out["ranked"] == [] and out["winner"] is None
+
+
+def test_the_onsets_lie_after_the_last_renewal_and_a_turn_through_pi_is_no_turn():
+    rows = _samples(n=200)
+    for k, r in enumerate(rows):
+        r["applied"][2] = r["o"][2] = 3.13 if k < 150 else (-3.13 if k < 170 else -2.9)
+    ser = S.series(rows, renewals=[(0.0, I)])
+    got = S.onsets(ser, "a", 100)
+    assert min(i for _, i in got) >= 100 and dict(got)["first"] == 100
+    assert dict(got)["turn"] == 169  # the real turn, not the wrap at 149
