@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -22,7 +23,27 @@ import scan_capture
 from forklift_core.localization import global_match as G
 from forklift_core.localization import local_match as LM
 from forklift_core.localization import start_reloc as R
+from forklift_core.localization import twin_check as T
 from forklift_core.localization.twins import twin_count
+
+SLIDE_M = 0.35  # plan 2026-11-06 1.2: just past the wrong boundary of 0.30 m (B-P2 4.0)
+# the wrong-estimate injection's kinds (plan 2026-11-06 1.2): twin_check.synthetic_twins' hypotheses by name, and slide
+INJECT_KINDS = tuple(name for _, name in T.synthetic_twins((0.0, 0.0, 0.0))) + ("slide",)
+
+
+def injected(b, kind: str) -> tuple:
+    """The map-frame hypothesis h an injection writes in place of the estimate b (plan 2026-11-06 1.2): a named
+    synthetic twin of b (shifts along the map's axes, never composed in the body frame -- Codex draft 2 P2-3), or
+    ``slide``: b moved SLIDE_M forward along the map axis nearest its heading (the hall's axis at that start)."""
+    b = tuple(float(v) for v in b)
+    if kind == "slide":
+        c, s = math.cos(b[2]), math.sin(b[2])
+        dx, dy = (math.copysign(SLIDE_M, c), 0.0) if abs(c) >= abs(s) else (0.0, math.copysign(SLIDE_M, s))
+        return (b[0] + dx, b[1] + dy, b[2])
+    for pose, name in T.synthetic_twins(b):
+        if name == kind:
+            return tuple(pose)
+    raise ValueError(f"unknown injection {kind!r}")
 
 
 @dataclass
@@ -48,6 +69,8 @@ class RelocInputs:
     operator_deadline_at: float | None = None  # the operator's whole budget (clock time); None: none
     # F1 (plan 2026-10-31-operator-placed-start 1.3): the local re-match's window, R_AMB and deadline
     place_cfg: LM.PlaceConfig = field(default_factory=LM.PlaceConfig)
+    # plan 2026-11-06 1.2 (test only): once chosen, the estimate is replaced by injected(b, inject); None: not
+    inject: str | None = None
     # the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 3.2): the chosen search group's last
     # scan set goes here as "gen_points" (not JSON: the runner keeps it in memory); None: not kept
     sink: dict | None = None
@@ -305,6 +328,10 @@ def _run(inputs: RelocInputs) -> dict:
         out["shown"] = [_candidate(c) for c in relocalizer.shown]
         return out
     est = relocalizer.estimate
+    if inputs.inject is not None:  # the estimate moved, never the truth (plan 2026-11-06 1.2)
+        h = injected(est.base, inputs.inject)
+        out["inject"] = {"kind": inputs.inject, "b": list(est.base), "h": list(h)}
+        est = replace(est, base=h)
     out["estimate"] = list(est.base)
     out["source"] = est.source
     if inputs.sink is not None:  # only with the check: a run without it records what it did (Codex 2b P2-5)

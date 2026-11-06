@@ -86,6 +86,13 @@ def gap(a, b, rear_offset_m: float) -> tuple:
             abs(_wrap(a[2] - b[2])))
 
 
+def agreement(r_scan, o_scan, C, o_now, rear_offset_m: float) -> tuple:
+    """The SLAM agreement's (metres, radians): the applied pose C o O(now) against the evidence r_scan carried by the
+    odometry from its scan to now, the metres the larger of the base and the rear axle."""
+    r_now = compose(r_scan, compose(invert(o_scan), o_now))
+    return gap(compose(C, o_now), r_now, rear_offset_m)
+
+
 def _net(a, b) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
@@ -122,9 +129,8 @@ class PoseCheck:
 
     def _agree(self, t, r_scan, o_scan, C, o_now, kind) -> bool:
         """The SLAM agreement: the applied pose against the evidence carried to now; on success C_int."""
-        r_now = compose(r_scan, compose(invert(o_scan), o_now))
         c_now = compose(C, o_now)
-        m, rad = gap(c_now, r_now, self.rear_offset_m)
+        m, rad = agreement(r_scan, o_scan, C, o_now, self.rear_offset_m)
         ok = m <= self.bounds.e_slam[0] and rad <= self.bounds.e_slam[1]
         self._event(t, kind, agree_m=m, agree_rad=rad, ok=ok, evidence=list(r_scan), applied=list(c_now))
         if ok:
@@ -254,5 +260,5 @@ class PoseCheck:
                     want_rematch=want, reason=reason, d=d)
 
 
-__all__ = ["Bounds", "tick_bound", "D_MIN", "D_STROKE", "D_TOTAL", "INT_M", "INT_RAD", "PoseCheck", "REMATCH_M", "STILL_M",
+__all__ = ["Bounds", "agreement", "tick_bound", "D_MIN", "D_STROKE", "D_TOTAL", "INT_M", "INT_RAD", "PoseCheck", "REMATCH_M", "STILL_M",
            "STILL_RAD", "View", "gap"]

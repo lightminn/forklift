@@ -101,6 +101,11 @@ RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the 
 [ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
                                   --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
 [ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
+POSE=()  # the unconfirmed position check (plan 2026-11-06-unconfirmed-validation 2); off: as before
+[ "${POSE_CHECK:-off}" != off ] && POSE=(--pose-check "$POSE_CHECK")
+[ "${POSE_CHECK:-off}" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")
+[ -n "${POSE_CHECK_CONTACTS:-}" ] && POSE+=(--pose-check-contacts)
+[ -n "${RELOC_INJECT:-}" ] && POSE+=("--reloc-inject=$RELOC_INJECT")  # one word: the kinds hold a space
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
@@ -118,7 +123,7 @@ ARGS=(
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${REQ[@]}" \
+  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac

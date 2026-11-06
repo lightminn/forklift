@@ -111,3 +111,38 @@ def test_an_unknown_probe_mode_is_refused(tmp_path):
     p = subprocess.run(["bash", str(WRAPPER), str(tmp_path / "out")], cwd=ROOT, env=env, capture_output=True,
                        text=True, timeout=60)
     assert p.returncode == 2 and "RELOC_PROBE" in p.stdout + p.stderr
+
+
+def _session(tmp_path, **extra):
+    launcher, python = _fakes(tmp_path, probe_rc=0, launcher_s=1)
+    env = {**os.environ, "START_POSE": "1,2,3", "VENV_PY": str(python), "RELOC_LAUNCHER": str(launcher),
+           "RELOC_END_GRACE_S": "10", "FACTOR": "0.3", **extra}
+    return subprocess.run(["bash", str(WRAPPER), str(tmp_path / "out")], cwd=ROOT, env=env, capture_output=True,
+                          text=True, timeout=60)
+
+
+def test_a_reverse_session_is_unattended_and_presses_by_its_rule(tmp_path):
+    # plan 2026-11-06-unconfirmed-validation 2.1
+    p = _session(tmp_path, RELOC_PROBE="reverse", POSE_CHECK="shadow", REVERSE_KIND="chatter",
+                 MISSION_AFTER_CONFIRM="1")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (tmp_path / "out" / "launcher_env").read_text().split() == ["1", "1", "1,2,3"]  # RELOC_UNATTENDED=1
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--scenario") + 1] == "reverse" and args[args.index("--reverse-kind") + 1] == "chatter"
+    assert "--mission-after-confirm" in args
+
+
+def test_a_reverse_place_session_places_then_reverses(tmp_path):
+    p = _session(tmp_path, RELOC_PROBE="reverse_place", POSE_CHECK="on", CLICK_SEED="5")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (tmp_path / "out" / "launcher_env").read_text().split() == ["1", "1,2,3"]  # attended
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--scenario") + 1] == "place" and args[args.index("--after-place") + 1] == "reverse"
+    assert args[args.index("--reverse-kind") + 1] == "full" and "--mission-after-confirm" not in args
+
+
+def test_a_reverse_session_needs_the_check_and_a_known_rule(tmp_path):
+    for extra in ({"RELOC_PROBE": "reverse"}, {"RELOC_PROBE": "reverse", "POSE_CHECK": "off"},
+                  {"RELOC_PROBE": "reverse", "POSE_CHECK": "on", "REVERSE_KIND": "long"}):
+        p = _session(tmp_path, **extra)
+        assert p.returncode == 2, (extra, p.stdout + p.stderr)

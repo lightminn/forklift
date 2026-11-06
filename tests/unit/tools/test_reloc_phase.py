@@ -638,3 +638,42 @@ def test_without_the_check_the_record_is_as_before(tmp_path):
     out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base))
     assert not {"pose_search", "pose_pool", "pose_gen_points"} & set(out)
     assert all("search" not in a for a in out["attempts"])
+
+
+# --- piece 2d: the wrong-estimate injection (docs/plans/2026-11-06-unconfirmed-validation.md 1.2) ---
+@pytest.mark.parametrize("kind,want", [("shift x+1", (8.42, 1.7, 0.6)), ("shift y-2", (2.42, -10.3, 0.6)),
+                                       ("turn x-1", (-3.58, 1.7, 0.6 - math.pi)), ("turn", (2.42, 1.7, 0.6 - math.pi))])
+def test_an_injected_estimate_is_the_twin_hypothesis_in_the_map(kind, want):
+    # Codex draft 2 P2-3: the map frame, never b o k (at 45 degrees (6, 0, 0) would be (4.24, 4.24))
+    got = P.injected((2.42, 1.7, 0.6), kind)
+    assert got[:2] == pytest.approx(want[:2]) and math.cos(got[2] - want[2]) == pytest.approx(1.0)
+
+
+def test_a_slide_moves_the_estimate_0_35_m_along_the_map_axis_nearest_its_heading():
+    assert P.injected((1.0, 2.0, 0.3), "slide") == pytest.approx((1.35, 2.0, 0.3))
+    assert P.injected((1.0, 2.0, -1.4), "slide") == pytest.approx((1.0, 1.65, -1.4))
+    assert P.injected((1.0, 2.0, math.pi), "slide") == pytest.approx((0.65, 2.0, math.pi))
+    assert "slide" in P.INJECT_KINDS and "shift x+3" in P.INJECT_KINDS and "turn" in P.INJECT_KINDS
+    with pytest.raises(ValueError):
+        P.injected((0.0, 0.0, 0.0), "shift x+4")
+
+
+def test_an_injection_moves_the_written_estimate_and_records_what_it_replaced(tmp_path):
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base, inject="shift x+1"))
+    assert out["status"] == "chosen"
+    h = P.injected(tuple(out["inject"]["b"]), "shift x+1")
+    assert out["estimate"] == pytest.approx(h) and R.read_reloc_pose(tmp_path)["base"] == pytest.approx(h)
+    assert out["inject"]["kind"] == "shift x+1" and out["inject"]["h"] == pytest.approx(h)
+    assert math.hypot(out["inject"]["b"][0] - base[0], out["inject"]["b"][1] - base[1]) <= 0.10
+    assert json.dumps(out)
+
+
+def test_no_injection_records_nothing(tmp_path):
+    grid = TG._grid(*TG.ROOM)
+    base = (2.42, 1.7, 0.6)
+    _go_later(tmp_path)
+    out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base))
+    assert "inject" not in out

@@ -49,6 +49,10 @@
 #   for the learned proposals, the model and interpreter of that host -- then submit with --gres=shard:2: the
 #   session's Isaac (3.4 GB) and the learned worker (0.5 GB) peaked at 3.9 GB of a 4 GB shard (2026-10-22), too
 #   close for a GPU shared with other jobs (a worker's warm-up ran out of GPU memory once).
+#   POSE_CHECK (off|shadow|on; docs/plans/2026-11-06-unconfirmed-validation.md 2): the unconfirmed position check,
+#   with START_POSE; on needs POSE_CHECK_BOUNDS (the development values' JSON file), shadow takes none.
+#   POSE_CHECK_CONTACTS=1 records every forklift body's contacts. RELOC_INJECT (test only: a wrong-estimate injection,
+#   reloc_phase.INJECT_KINDS) only in an unattended relocalization (RELOC_UNATTENDED=1) with the check on or shadow.
 #
 # Run from the repository root. Open the console through   ssh -N -L 8798:127.0.0.1:$PORT <host>.
 set -u
@@ -78,6 +82,24 @@ fi
 RELOC_WAIT_S=${RELOC_WAIT_S:-600}
 case "$RELOC_WAIT_S" in ''|*[!0-9]*) echo "RELOC_WAIT_S must be whole seconds"; exit 2;; esac
 [ "$RELOC_WAIT_S" -gt 60 ] || { echo "RELOC_WAIT_S must be over 60 s (the operator's time is 60 s less)"; exit 2; }
+POSE_CHECK=${POSE_CHECK:-off}
+case "$POSE_CHECK" in off|shadow|on) ;; *) echo "POSE_CHECK must be off, shadow or on" >&2; exit 2;; esac
+if [ "$POSE_CHECK" != off ] && [ -z "${START_POSE:-}" ]; then
+  echo "POSE_CHECK=$POSE_CHECK needs START_POSE (the check follows the start relocalization)" >&2; exit 2
+fi
+if [ "$POSE_CHECK" = on ]; then
+  [ -f "${POSE_CHECK_BOUNDS:-}" ] || { echo "POSE_CHECK=on needs POSE_CHECK_BOUNDS (a JSON file)" >&2; exit 2; }
+  POSE_CHECK_BOUNDS=$(realpath "$POSE_CHECK_BOUNDS")
+elif [ -n "${POSE_CHECK_BOUNDS:-}" ]; then
+  echo "POSE_CHECK_BOUNDS goes with POSE_CHECK=on" >&2; exit 2
+fi
+case "${POSE_CHECK_CONTACTS:-}" in ''|0) POSE_CHECK_CONTACTS= ;; 1) ;; *) echo "POSE_CHECK_CONTACTS must be 1" >&2; exit 2;; esac
+if [ -n "$POSE_CHECK_CONTACTS" ] && [ "$POSE_CHECK" = off ]; then
+  echo "POSE_CHECK_CONTACTS goes with POSE_CHECK on or shadow" >&2; exit 2
+fi
+if [ -n "${RELOC_INJECT:-}" ] && { [ "$POSE_CHECK" = off ] || [ "${RELOC_UNATTENDED:-}" != 1 ]; }; then
+  echo "RELOC_INJECT is for unattended relocalization batches with POSE_CHECK on or shadow" >&2; exit 2
+fi
 if [ -n "${START_POSE:-}" ] && [ -z "${MAP_BUNDLE:-}" ]; then
   echo "START_POSE relocalizes on a survey map: it needs one (slam: $SLAM_CHOICE)" >&2
   exit 2
@@ -145,6 +167,8 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
   printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
+  printf 'POSE_CHECK=%q\nPOSE_CHECK_BOUNDS=%q\nPOSE_CHECK_CONTACTS=%q\nRELOC_INJECT=%q\n' "$POSE_CHECK" \
+    "${POSE_CHECK_BOUNDS:-}" "$POSE_CHECK_CONTACTS" "${RELOC_INJECT:-}"  # plan 2026-11-06-unconfirmed-validation 2
   # the SLAM bridge's image: the tag by default; a judged batch names it by digest (B-P2d, Codex freeze review P2)
   printf 'BRIDGE_IMAGE=%q\n' "${BRIDGE_IMAGE:-forklift/ros2-dev:jazzy}"
   printf 'REQUIREMENTS_PROFILE=%q\nSCENE_REQUIREMENTS_OVERRIDE=%q\n' "${REQUIREMENTS_PROFILE:-}" \
@@ -198,6 +222,11 @@ RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the 
 [ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
                                   --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
 [ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
+POSE=()  # the unconfirmed position check (plan 2026-11-06-unconfirmed-validation 2); off: as before
+[ "${POSE_CHECK:-off}" != off ] && POSE=(--pose-check "$POSE_CHECK")
+[ "${POSE_CHECK:-off}" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")
+[ -n "${POSE_CHECK_CONTACTS:-}" ] && POSE+=(--pose-check-contacts)
+[ -n "${RELOC_INJECT:-}" ] && POSE+=("--reloc-inject=$RELOC_INJECT")  # one word: the kinds hold a space
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")
@@ -215,7 +244,7 @@ ARGS=(
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${REQ[@]}" \
+  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac

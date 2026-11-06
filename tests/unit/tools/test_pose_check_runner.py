@@ -119,6 +119,7 @@ def test_the_rear_check_walks_the_straight_reverses_own_bundle():
     src = _source()
     at = src.index("def pose_rear_blocked(rt_)")
     assert "for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):" in src[at:at + 2500]
+    assert "with permission_kept(perm_):" in src[at:at + 3000]  # a check only (plan 2026-11-06 1.1)
 
 
 def test_the_base_link_from_the_rear_axle():
@@ -136,3 +137,183 @@ def test_the_state_carries_the_checks_view_for_the_console():
     assert 'msg["pose_check"] = dict(self.pose_info)' in live
     src = _source()
     assert "live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)" in src
+
+
+# --- piece 2d (docs/plans/2026-11-06-unconfirmed-validation.md 1.1, 1.3) ---
+def test_the_shadow_needs_the_relocalization_takes_no_development_values_and_is_recorded(tmp_path):
+    import run_transport
+
+    shadow = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow"))
+    assert shadow.pose_check == "shadow" and shadow.pose_check_bounds is None
+    assert run_transport.recorded_arguments(shadow)["pose_check"] == "shadow"
+    with pytest.raises(SystemExit):  # the provisional verdicts take no development values (plan 1.1)
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow", "--pose-check-bounds",
+                           json.dumps(BOUNDS)))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, "--pose-check", "shadow"))
+
+
+def test_the_shadow_gates_nothing_in_the_runner():
+    # plan 1.1: no arbiter.pose, no pose_ok, no zones (the runtime's), no ending
+    src = _source()
+    assert "pose_box[\"sink\"] = {}" in src and 'if getattr(args, "pose_check", "off") != "off":' in src
+    at = src.index('pose_box["rt"] = make_pose_runtime(args')
+    assert 'if not pose_box["rt"].shadow:' in src[at:at + 400]
+    assert '**({} if pose_box["rt"] is None or pose_box["rt"].shadow' in src
+    at = src.index("def pose_checkpoint(t_):")
+    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    assert "if not rt_.shadow:\n                a_.pose = rt_.view_dict(view_)" in body
+    assert "if rt_.ends() and pose_box[\"end\"] is None:" in body
+    at = src.index("def make_pose_runtime(")
+    assert "shadow=args.pose_check == \"shadow\"" in src[at:at + 3000]
+    assert "pose_runtime.SHADOW_BOUNDS if args.pose_check == \"shadow\"" in src[at:at + 3000]
+
+
+def test_the_ticks_permission_is_the_final_output_after_tick_end():
+    # plan 1.3: AUTO is the output's source (a zero candidate too); TELEOP armed with drive allowed in normal mode
+    import run_transport
+    from forklift_core.safety.arbiter import Output
+    from forklift_core.safety.teleop_policy import Policy
+
+    def out(source, armed=True, allowed=True, mode="normal"):
+        return Output("X", "none", source, 0.0, 0.0, Policy(allowed, False, None, drive_mode=mode), 1, armed)
+
+    assert run_transport.pose_open(out("auto", armed=False, allowed=False))
+    assert run_transport.pose_open(out("teleop"))
+    assert not run_transport.pose_open(out("teleop", armed=False))
+    assert not run_transport.pose_open(out("teleop", allowed=False))
+    assert not run_transport.pose_open(out("teleop", mode="reverse_straight"))
+    assert not run_transport.pose_open(out("zero")) and not run_transport.pose_open(out("core_stop"))
+    src = _source()
+    end = src.index("live_safety_ = core.safety_state(t)\n                    out_ = live.tick_end(")
+    note = src.index("pose_box[\"rt\"].note_tick(")
+    assert note > end and "open_=pose_open(out_)" in src[note:note + 500]
+
+
+def test_the_injection_is_for_unattended_relocalization_batches_only(tmp_path):
+    # plan 1.2 (the lead, 2026-11-06): test-only, off by default, recorded only when given; not in an attended session
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path, *_reloc(tmp_path)))
+    assert off.reloc_inject is None and "reloc_inject" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--reloc-unattended", "--reloc-inject", "shift x+1"))
+    assert run_transport.recorded_arguments(on)["reloc_inject"] == "shift x+1"
+    for extra in (["--reloc-inject", "shift x+1"], ["--reloc-unattended", "--reloc-inject", "shift x+9"]):
+        with pytest.raises(SystemExit):
+            _runner_args(_live(tmp_path, *_reloc(tmp_path), *extra))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, "--reloc-inject", "turn"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["reloc_inject"] is None
+    assert "inject=getattr(args, \"reloc_inject\", None)" in _source()
+
+
+def test_the_contact_record_goes_with_the_check_and_reads_every_physics_step():
+    # plan 1.4: every forklift rigid body reports; read after each physics step while the check's runtime exists
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path_ := Path(__import__("tempfile").mkdtemp()), *_reloc(tmp_path_)))
+    assert off.pose_check_contacts is False and "pose_check_contacts" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path_, *_reloc(tmp_path_), "--pose-check", "shadow", "--pose-check-contacts"))
+    assert run_transport.recorded_arguments(on)["pose_check_contacts"] is True
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path_, *_reloc(tmp_path_), "--pose-check-contacts"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_check_contacts"] is False
+    src = _source()
+    at = src.index("def step_world(render: bool)")
+    body = src[at:src.index("if args.tyre_contact_log and tick % 12 == 0:", at)]
+    assert 'pose_box["rt"] is not None and pose_box["rt"].contacts is not None' in body
+    assert body.index("world.step(render=") < body.index("pose_box[\"rt\"].contacts.update(")
+    assert 'if getattr(args, "pose_check_contacts", False):' in src
+    at = src.index("def make_pose_runtime(")
+    assert 'contacts=pose_contacts.ContactLog() if getattr(args, "pose_check_contacts", False) else None' in \
+        src[at:at + 3500]
+
+
+def test_the_mission_stands_scan_sets_are_saved_with_the_record():
+    src = _source()
+    at = src.index('state["pose_check"] = pose_box["rt"].record()')
+    assert 'pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")' in src[at:at + 300]
+
+
+def test_the_rear_checks_walk_leaves_the_permit_as_it_was_with_the_start_band_on():
+    # the lead, 2026-11-06: the shadow writes nothing the control path reads -- a walk raises the start-band cells'
+    # best distances and the counts; the whole permit is compared, not only those two
+    import run_transport
+    import shadow_audit
+
+    sys.path.insert(0, str(ROOT / "tests/unit/control"))
+    from test_start_release import FOOT, P0, SIDE, grid, path, perm
+
+    snap, away = grid(SIDE), (0.0, -0.018, 0.0)
+    plain = perm(True)
+    before = shadow_audit.fingerprint(plain)
+    plain.check_path(snap, path(-1, start=away), FOOT, FOOT, current_pose=away, direction=-1)
+    assert shadow_audit.fingerprint(plain) != before  # without the guard the walk does change it
+    kept = perm(True)
+    before = shadow_audit.fingerprint(kept)
+    with run_transport.permission_kept(kept):
+        kept.check_path(snap, path(-1, start=away), FOOT, FOOT, current_pose=away, direction=-1)
+    assert shadow_audit.fingerprint(kept) == before
+    with pytest.raises(ValueError), run_transport.permission_kept(kept):  # put back on the way out of an error too
+        kept.release_anchor = None
+        raise ValueError
+    assert shadow_audit.fingerprint(kept) == before and P0 == kept.release_anchor["pose"]
+
+
+def test_the_shadow_audit_is_a_shadow_option_recorded_only_when_given(tmp_path):
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow"))
+    assert off.pose_shadow_audit is False and "pose_shadow_audit" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow", "--pose-shadow-audit"))
+    assert run_transport.recorded_arguments(on)["pose_shadow_audit"] is True
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-shadow-audit"))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "on", "--pose-check-bounds", json.dumps(BOUNDS),
+                           "--pose-shadow-audit"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_shadow_audit"] is False
+
+
+def test_the_audit_brackets_each_place_the_shadow_computes():
+    src = _source()
+    at = src.index("def pose_checkpoint(t_):")
+    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    assert "if audit_on_:\n                rt_.audit.before()" in body
+    assert 'rt_.audit.after("checkpoint", t_)' in body
+    note = src.index('pose_box["rt"].note_tick(')
+    assert 'pose_box["rt"].audit.before()' in src[note - 200:note]
+    assert 'pose_box["rt"].audit.after("note_tick", t)' in src[note:note + 700]
+    at = src.index('pose_box["rt"] = make_pose_runtime(args')
+    block = src[at:at + 900]
+    assert 'quiet_ = bool(a_.stop_confirmed) and a_.mode != "TELEOP"' in body
+    assert "audit_on_ = rt_.audit is not None and rt_.audit.due(quiet=quiet_)" in body
+    assert "if rt_.rear_pending():\n                if rt_.audit is not None and not audit_on_:" in body  # every rear check
+    assert 'pose_box["rt"].audit.due(quiet=bool(live.arbiter.stop_confirmed) and live.arbiter.mode != "TELEOP")' in \
+        src[note - 400:note]
+
+
+def test_the_shadows_places_in_the_tick_write_only_their_own():
+    # the lead, 2026-11-06 (Codex 2d P2-7): the writes listed -- the arbiter only when on, the published view, the end
+    # only when on; nothing into state, the spool or the core
+    src = _source()
+    body = src[src.index("def pose_checkpoint(t_):"):src.index("def pose_rear_blocked(rt_)")]
+    shadow_part = body[:body.index("if rt_.ends() and pose_box[\"end\"] is None:")]
+    assert "state[" not in shadow_part and "core." in shadow_part  # core read only:
+    assert "core.commands.status in ACTIVE" in shadow_part and "core.near_active()" in shadow_part
+    assert "core.commands.status =" not in shadow_part
+    assert shadow_part.count("a_.pose = ") == 1 and "if not rt_.shadow:\n                a_.pose = " in shadow_part
+    assert "live.pose_info = " in shadow_part  # the published view
+    rear = src[src.index("def pose_rear_blocked(rt_)"):src.index("def live_failed(t_, reason_")]
+    assert "state[" not in rear and "with permission_kept(perm_):" in rear
+    # Codex 2d re-review: slam_rear() writes the tracker's hold record; the check reads C o O itself
+    assert "slam_rear(" not in rear and "compose(applied_[0], slam_odom_base())" in rear
+    at = src.index('pose_box["rt"].on_scan(')
+    assert "sent" in src[at:at + 120]
+    at = src.index('pose_box["rt"] = make_pose_runtime(args')
+    block = src[at:at + 1100]
+    for name in ("arbiter", "layer", "commands", "cargo", "tracker"):
+        assert f'"{name}": lambda:' in block, name
