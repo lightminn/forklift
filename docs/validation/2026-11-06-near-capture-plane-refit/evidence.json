@@ -1,0 +1,3 @@
+{"replay_gate": [29, 29], "full_pytest_failed": 0, "near_contract_default_match": true,
+ "stored_eval": {"compared": 100, "changes": 0, "missing_runs": 5, "e2_records_reproduced": 1003, "e2_entries": 1003},
+ "v1_guard_baseline": "repository test fails on main and HEAD at the stale field-set assertion; with it corrected in throwaway exports both pass; main and HEAD observations byte-identical on the 100 scenes"}

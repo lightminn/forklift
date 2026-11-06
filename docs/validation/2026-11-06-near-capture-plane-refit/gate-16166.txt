@@ -1,0 +1,12 @@
+entries 1003 files 1040 excluded {'attempt_without_depth': 186, 'no_attempt_match': 0, 'no_result': 37} e1 1 no truth 0 roles {'far': 530, 'first_near': 410, 'near_no_site': 63} paths {('plain', 'off'): 573, ('near_expected', 'allowed'): 49, ('near_expected', 'refused'): 1, ('near_expected', 'off'): 360, ('far_expected', 'off'): 20} recorded {'valid': 971, 'no_pallet': 7, 'invalid': 25}
+{
+"problems": [],
+"far_on_another_pallet": 12,
+"mismatch": {
+"None": 1003
+},
+"entries": 1003,
+"max_tilt_rad": 1.429424518650945e-06,
+"max_sample_age_s": 0.1916666766628623
+}
+ce2e30782c60c8ab29eebc0fe86a9f5ee85d9b9944ea6de7a1c85c55b6f1e586  /home/projects/forklift/test_runs/near_refit/manifest.json

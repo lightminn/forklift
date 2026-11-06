@@ -1146,6 +1146,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "far_capture_expected": "off",
                               # 2026-10-22 task C: the check-off near lower waiver; gate in every earlier run.
                               "near_capture_lower": "gate",
+                              # 2026-11-06 near-capture plane refit arms: the frozen near detections in every earlier
+                              # run; a set value changes what the near capture adopts -- a condition
+                              "near_capture_refit": 0, "near_capture_ransac_iterations": 200,
                               # 2026-10-27 C3 (insertion lateral drift T2): the second near capture's gap; unset in
                               # every earlier run (and refused with near tracking).
                               "near_recapture_gap_m": None,
