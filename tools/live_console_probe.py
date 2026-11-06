@@ -1791,21 +1791,21 @@ async def _arm(p, args):
 
 async def _post_mission_watch(p, args, shadow) -> dict:
     """The revision plan 9.10: the truck stands after its mission (not paused: a paused mission stays active and no
-    re-match runs; no SLAM hold) for --post-mission-sim-s of simulated time, summed at the factor the run reports (these
-    sessions carry no frames to read a stamp from). A generation that started is waited for to its result or its
+    re-match runs; no SLAM hold) for --post-mission-sim-s of simulated time, an estimate summed at the factor the run
+    reports (these sessions carry no frames to read a stamp from). A generation that started is waited for to its result or its
     deadline, whatever the watch has left: ended first, the late and failing ones would be cut off the sample. Its
     deadline is the check's own, on the wall clock (pose_runtime.DEADLINE_S + RESULT_GRACE_S)."""
     start = last = time.monotonic()
     wall_end = start + WATCH_WALL_FACTOR * args.post_mission_sim_s / args.live_factor
     out = {"sim_s": args.post_mission_sim_s, "elapsed_sim_s": 0.0, "started": False, "ended": "wall_limit"}
+    seen = None
     while time.monotonic() < wall_end and p.closed_code is None:
         now = time.monotonic()
-        achieved = ((p.state or {}).get("pacing") or {}).get("realtime_factor") or args.live_factor
-        out["elapsed_sim_s"] += (now - last) * achieved
+        if p.state is not seen:  # no state, no simulated time counted: a stalled run does not finish the watch
+            seen = p.state
+            achieved = ((p.state or {}).get("pacing") or {}).get("realtime_factor") or args.live_factor
+            out["elapsed_sim_s"] += (now - last) * achieved
         last = now
-        if out["elapsed_sim_s"] >= args.post_mission_sim_s:
-            out["ended"] = "watch"
-            break
         if _rematching(p.state, shadow):
             out["started"] = True
             at = time.monotonic()
@@ -1813,6 +1813,9 @@ async def _post_mission_watch(p, args, shadow) -> dict:
             out.update(done=bool(done), wall_s=time.monotonic() - at, status=_pc_status(p.state),
                        ended="result" if done else ("closed" if p.closed_code is not None else "timeout"))
             return out
+        if out["elapsed_sim_s"] >= args.post_mission_sim_s:
+            out["ended"] = "watch"
+            break
         await asyncio.sleep(0.2)
     if p.closed_code is not None:
         out["ended"] = "closed"

@@ -219,14 +219,11 @@ class SlamPoseTracker:
         self.offset = None  # test only (unconfirmed position revision plan 2 D): composed onto every correction received
 
     def inject_offset(self, offset) -> None:
-        """Test only: the correction held now and every one after it is offset, as a wrong SLAM jump would be. In force at
-        once: under a hold it comes out at the release, whatever the replies before it."""
+        """Test only: the correction received and every one after it is offset, as a wrong SLAM jump would be. It reaches
+        the applied pose the ordinary way, by the next reply of any status or, under a hold, by the release."""
         self.offset = tuple(float(v) for v in offset)
         if self.received is not None:
             self.received = (compose(self.offset, self.received[0]), *self.received[1:])
-            self.version += 1
-            if self.mode == "tracking":
-                self.applied = self.received
 
     def receive(self, scan_id: int, stamp_s: float, status: str, map_from_odom) -> None:
         stamp = _finite_scalar(stamp_s, "stamp_s")

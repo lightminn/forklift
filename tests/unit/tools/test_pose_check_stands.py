@@ -391,7 +391,13 @@ def _stand_samples(c_of_t, o_of_t=lambda t: (0.0, 0.0, 0.0)):
 def test_the_stand_change_is_rebased_at_a_hold_release():
     samples = _stand_samples(lambda t: (0.0, 0.0, 0.0 if t < 5.0 else 0.04))  # the release's step at 5 s, nothing else
     assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[])[1] == pytest.approx(0.04)
-    assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[5.0]) == pytest.approx((0.0, 0.0))
+    assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[(5.0, (0.0, 0.0, 0.04))]) == pytest.approx((0.0, 0.0))
+
+
+def test_the_rebased_reference_is_what_the_release_applied():
+    # Codex: +0.07 m released at 2.45 s and gone at 2.49 s, no sample between: the first sample after it is no reference
+    samples = _stand_samples(lambda t: (0.0, 0.0, 0.0))
+    assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[(2.49, (0.07, 0.0, 0.0))])[0] == pytest.approx(0.07)
 
 
 def test_the_stand_change_is_the_correction_at_this_odometry_as_the_check_reads_it():

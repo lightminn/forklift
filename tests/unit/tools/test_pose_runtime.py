@@ -898,6 +898,23 @@ def test_the_runtime_hands_the_hold_to_the_stand_gate():
     assert rt.pc.c_still == pytest.approx(C2)
 
 
+def test_each_hold_release_is_recorded_with_the_correction_either_side_and_the_status_it_met():
+    # the revision plan 9.13: the replies alone miss a correction injected after the last of them
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    held, after = I, (0.0, 0.0, 0.12)
+    _tick(rt, b, held)
+    rt.tick(1.0, b, held, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
+    rt.tick(1.1, b, held, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
+    status = rt.pc.status
+    rt.tick(1.2, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=False)
+    rt.tick(1.3, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=False)
+    row, = rt.record()["releases"]
+    assert row["t"] == 1.2 and row["before"] == list(held) and row["after"] == list(after) and row["o"] == list(b)
+    assert row["rad"] == pytest.approx(0.12) and row["status"] == status
+    assert rt.record()["bounds"]["e_window"] == [0.153, 0.103]
+
+
 def test_the_shadow_keeps_the_stand_rebased_at_a_release_beside_the_plain_value():
     b = (2.42, 1.7, 0.6)
     grid, w, rt = _shadow(True, b)

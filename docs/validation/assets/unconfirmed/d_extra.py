@@ -33,7 +33,7 @@ def stands():
         steps += [{"session": s, **{k: r[k] for k in ("t0", "t1", "m", "rad")}} for r in found]
         if s in POSITIVE:
             continue
-        rel = [S.release_mark(smp, r) for r in found]
+        rel = [(S.release_mark(smp, r), r["applied"]) for r in found]
         for st in pc["raw"]["stands"]:
             total += 1
             if sum(st["t0"] <= x["t"] <= st["t1"] for x in smp) < 2:

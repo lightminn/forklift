@@ -26,10 +26,10 @@ class FakeVehicle:
 
     def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None, cut_after=None,
                  pacing_refusals=0, wall_at=None, flash=False, deaf=False, rematch_after_mission=0,
-                 close_after_mission=None, achieved=None):
+                 close_after_mission=None, achieved=None, frozen_after_mission=False):
         self.rematch_after_mission, self.close_after_mission = rematch_after_mission, close_after_mission
         self.wall_at, self.held, self.flash, self.deaf = wall_at, False, flash, deaf
-        self.achieved = achieved
+        self.achieved, self.frozen_after_mission, self.frozen = achieved, frozen_after_mission, False
         self.shadow, self.confirm_at = shadow, confirm_at
         self.cut_after, self.pacing_refusals, self.arms, self.leases, self.ended_with = cut_after, pacing_refusals, 0, 0, None
         self.expire, self.since_command, self.armed, self.disarmed = expire, 0, False, 0
@@ -66,6 +66,7 @@ class FakeVehicle:
             if self.mission_at <= 0:
                 self.state["last_result"] = {"seq": 1, "mission_id": "m1", "outcome": "done"}
                 self.mission_at = None
+                self.frozen = self.frozen_after_mission
                 if self.rematch_after_mission:
                     self.rematch, self.status = self.rematch_after_mission, "checking"
                 if self.close_after_mission:
@@ -86,7 +87,8 @@ class FakeVehicle:
                 self.rematch = 3
                 if not self.shadow:
                     self.status = "checking"
-        self._publish()
+        if not self.frozen:
+            self._publish()
 
     def teleop_(self, speed, deadman):
         self.since_command = 0
@@ -317,6 +319,18 @@ def test_the_watch_counts_simulated_time_at_the_factor_achieved():
     watch = _run(v, "full", mission=True, watch=0.1)["reverse"]["post_mission"]
     assert watch["ended"] == "watch" and watch["sim_s"] == 0.1 and watch["elapsed_sim_s"] >= 0.1
     assert watch["wall_s"] >= 0.19
+
+
+def test_a_generation_found_at_the_watch_s_last_look_is_still_waited_for():
+    v = FakeVehicle(start="confirmed", rematch_after_mission=40)
+    watch = _run(v, "full", mission=True, watch=0.0001)["reverse"]["post_mission"]
+    assert watch["started"] is True and watch["ended"] == "result"
+
+
+def test_the_watch_stops_counting_while_no_state_comes():
+    v = FakeVehicle(start="confirmed", frozen_after_mission=True)
+    watch = _run(v, "full", mission=True, watch=0.05)["reverse"]["post_mission"]
+    assert watch["ended"] == "wall_limit" and watch["elapsed_sim_s"] < 0.05
 
 
 def test_the_watch_stops_at_its_wall_limit_and_says_so():

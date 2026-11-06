@@ -269,16 +269,16 @@ def _correction(sample) -> tuple:
 
 def stand_change(samples, *, t0, t1, releases) -> tuple:
     """A stand's largest (metres, radians) change of the correction from its reference, read as the check reads it:
-    both corrections at this sample's odometry. The reference is taken again at the first sample at or after each hold
-    release inside the stand."""
+    both corrections at this sample's odometry. ``releases``: (time, the correction applied) of each hold release, the
+    reference from the first sample at or after it."""
     best_m = best_rad = 0.0
-    marks = sorted(r for r in releases if t0 <= r <= t1)
+    marks = sorted((at, tuple(c)) for at, c in releases if t0 <= at <= t1)
     ref, next_mark = None, 0
     for x in samples:
         if not t0 <= x["t"] <= t1:
             continue
-        while next_mark < len(marks) and x["t"] >= marks[next_mark]:
-            ref = None
+        while next_mark < len(marks) and x["t"] >= marks[next_mark][0]:
+            ref = marks[next_mark][1]
             next_mark += 1
         c = _correction(x)
         if ref is None:
