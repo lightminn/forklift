@@ -17,6 +17,18 @@ from tools import diagnose_detection as diag
 from tools import scene_rig
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _runner_in_git_history() -> bool:
+    """The mount gate looks the run's runner hash up in git history; a tree shipped without it (ws1's test copy holds
+    the tracked files only) cannot pass the gate, so the tests of a passing or a specifically failing gate need it."""
+    log = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", "sim/isaac/run_transport.py"],
+                         capture_output=True, text=True)
+    return log.returncode == 0 and bool(log.stdout.strip())
+
+
+needs_git_history = pytest.mark.skipif(not _runner_in_git_history(),
+                                       reason="no git history here: the mount gate fails closed whatever the run")
 GEOMETRY = load_pallet_geometry(ROOT / "config/pallet_geometry_epal6.yaml")
 PRIOR = load_pallet_prior(ROOT / "config/pallet_prior_epal6.yaml")
 PARAMS = DetectorParams.derived_for(PRIOR)
@@ -215,6 +227,7 @@ def write_run(tmp_path, s, x, *, tamper_depth=False, mount="legacy", recorded=No
     return tmp_path
 
 
+@needs_git_history
 def test_a_run_record_passes_its_gates(tmp_path):
     # The adapter's nominal mount is the rig's default camera.
     out = diag.diagnose_attempt(write_run(tmp_path, scene(2.5), 2.5), 1, URDF)
@@ -307,6 +320,7 @@ def test_lower_stages_account_for_every_point():
     assert out["preprocessing"]["removed_by"]["nonfinite"]["points"] >= 0
 
 
+@needs_git_history
 @pytest.mark.parametrize("core_sha256", [None, "0" * 64])
 def test_the_mount_gate_needs_the_core_the_run_recorded(tmp_path, core_sha256):
     # The attempt's mount record lives in the mission core: without its recorded hash, or with one no committed
@@ -329,6 +343,7 @@ def test_the_core_blob_search_walks_the_full_history(monkeypatch):
     assert "--full-history" in calls[0] and "--all" in calls[0]
 
 
+@needs_git_history
 def test_an_unverified_truth_chain_makes_the_configuration_undecidable(tmp_path):
     record = diag.diagnose_attempt(write_run(tmp_path, scene(2.5), 2.5), 1, URDF)
     record["visibility"]["agreement"] = 0.5
@@ -376,6 +391,19 @@ def test_a_front_partly_out_of_view_is_not_occlusion():
     assert out["family"] == {"family": "A", "why": "partial_view"}
 
 
+def test_without_git_history_the_mount_gate_fails_closed(tmp_path, monkeypatch):
+    # what a tree without history does (ws1's test copy): the runner cannot be vouched for, so the run is undecidable
+    def no_git(args, **kwargs):
+        raise subprocess.CalledProcessError(128, args)
+
+    monkeypatch.setattr(diag, "_RUNNER_CACHE", {})
+    monkeypatch.setattr(subprocess, "run", no_git)
+    out = diag.diagnose_attempt(write_run(tmp_path, scene(2.5), 2.5), 1, URDF)
+    assert out["gates"]["runner_mount"] is False and out["runner_commit"] is None
+    assert out["family"] == {"family": "undecidable", "why": "gate_failed"}
+
+
+@needs_git_history
 def test_a_recorded_mount_that_is_not_the_named_one_fails_the_mount_gate(tmp_path):
     """The run asked for carriage_low but recorded the legacy transform."""
     out = diag.diagnose_attempt(

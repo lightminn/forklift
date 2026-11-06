@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from tools import preview_docking
+# every test here drives the MuJoCo model: it is an optional extra, absent from ws1's shared venv (a teammate's, not
+# to be installed into); it runs where the extra is installed (the local conda environment)
+pytest.importorskip("mujoco", reason="the MuJoCo model extra is not installed")
+
+from tools import preview_docking  # noqa: E402
 
 pytestmark = pytest.mark.simulation
 REPO_ROOT = Path(__file__).resolve().parents[2]
