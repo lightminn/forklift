@@ -6,6 +6,7 @@ Raw depth rays, including unknown samples, decide opening visibility. This
 module owns neither catalogue labels nor ground truth; RGB is not inspected.
 """
 
+import hashlib
 import math
 import time
 import traceback
@@ -354,8 +355,78 @@ def _refit_vertical(points, camera, *, median_offset=False):
     return _Plane(centre, normal, points, float(np.percentile(residual, 95)))
 
 
-def _vertical_plane_candidates(points, camera, params):
-    """Extract up to the configured number of RANSAC vertical-plane candidates."""
+def _band(points, plane, params):
+    return np.abs((points - plane.point) @ plane.normal) <= params.plane_inlier_m
+
+
+def _plane_yaw_deg(a, b):
+    return math.degrees(math.acos(min(1.0, abs(float(np.dot(a.normal, b.normal))))))
+
+
+def _mask_hash(mask):
+    return hashlib.sha256(np.packbits(mask).tobytes()).hexdigest()[:16]
+
+
+def _refine_vertical_plane(points, camera, initial, params, iterations):
+    """The vertical model of one RANSAC round (plan 2026-11-06 near-capture plane refit, arm (a)).
+
+    Π0 is the least-squares refit of the hypothesis inliers ``initial`` and S0 its band over all ``points`` -- the
+    frozen extraction. Each of up to ``iterations`` further steps refits on the band it collected and collects again:
+    it stops when the band stops changing (converged), when it comes back to an earlier band (cycle, keeping the pair
+    just made), when the new band holds fewer than min_plane_points (too_few, keeping the previous pair) or at the
+    cap. Returns (plane, band mask, record); the plane's points and residual are those of the returned band, the
+    same pairing as the frozen code (the plane fitted to the previous set, the band of that plane). A band too small
+    at S0 is returned as such for the caller's existing check."""
+    median = params.median_plane_offset
+    plane = _refit_vertical(initial, camera, median_offset=median)
+    mask = _band(points, plane, params)
+    first_plane, first_mask = plane, mask
+    record = {"iterations": 0, "stop": "frozen", "sizes": [int(mask.sum())], "band_hashes": [_mask_hash(mask)],
+              "added": [], "removed": []}
+    if iterations and mask.sum() < params.min_plane_points:
+        record["stop"] = "too_few"
+    elif iterations:
+        seen = [mask]
+        for step in range(1, iterations + 1):
+            refit = _refit_vertical(points[mask], camera, median_offset=median)
+            new_mask = _band(points, refit, params)
+            if new_mask.sum() < params.min_plane_points:
+                record["stop"] = "too_few"
+                break
+            record["sizes"].append(int(new_mask.sum()))
+            record["band_hashes"].append(_mask_hash(new_mask))
+            record["added"].append(int((new_mask & ~mask).sum()))
+            record["removed"].append(int((mask & ~new_mask).sum()))
+            if np.array_equal(new_mask, mask):
+                plane, record["iterations"], record["stop"] = refit, step, "converged"
+                break
+            plane, mask, record["iterations"] = refit, new_mask, step
+            if any(np.array_equal(new_mask, old) for old in seen[:-1]):
+                record["stop"] = "cycle"
+                break
+            seen.append(new_mask)
+            if step == iterations:
+                record["stop"] = "cap"
+    count = int(mask.sum())
+    residual = np.abs((points[mask] - plane.point) @ plane.normal)
+    plane = _Plane(plane.point, plane.normal, points[mask], float(np.percentile(residual, 95)) if count else math.inf)
+    record.update(
+        normal_change_deg=_plane_yaw_deg(first_plane, plane),
+        offset_change_m=float(abs(np.dot(plane.normal, plane.point) - np.dot(first_plane.normal, first_plane.point))),
+        support_loss=float((first_mask & ~mask).sum() / max(1, int(first_mask.sum()))),
+        inflow=float((mask & ~first_mask).sum() / max(1, count)),
+    )
+    return plane, mask, record
+
+
+def _vertical_plane_candidates(points, camera, params, *, refit_iterations=0, refit_log=None):
+    """Extract up to the configured number of RANSAC vertical-plane candidates.
+
+    ``refit_iterations`` > 0 refits each round's vertical model on its own band (``_refine_vertical_plane``); 0 is the
+    frozen extraction. ``refit_log``, when given, receives one record per extracted round."""
+    if (isinstance(refit_iterations, bool) or not isinstance(refit_iterations, Integral)
+            or refit_iterations < 0):
+        raise ValueError("refit_iterations must be a non-negative integer")
     rng = np.random.default_rng(params.seed)
     remaining = points
     planes = []
@@ -377,27 +448,47 @@ def _vertical_plane_candidates(points, camera, params):
             count = int(mask.sum())
             if count > best_count:
                 best_mask, best_count = mask, count
+                hypothesis = (sample[0], normal)
         if best_count < params.min_plane_points:
             break
-        plane = _refit_vertical(
-            remaining[best_mask], camera, median_offset=params.median_plane_offset
-        )
-        # The grid and residual must use inliers of the vertical model, not
-        # the slightly tilted hypothesis that RANSAC used to find that model.
-        # Recover shared evidence consumed by earlier candidate planes.
-        residual = np.abs((points - plane.point) @ plane.normal)
-        full_mask = residual <= params.plane_inlier_m
-        if np.count_nonzero(full_mask) < params.min_plane_points:
-            break
-        plane = _Plane(
-            plane.point,
-            plane.normal,
-            points[full_mask],
-            float(np.percentile(residual[full_mask], 95)),
-        )
+        if refit_iterations == 0 and refit_log is None:
+            plane = _refit_vertical(
+                remaining[best_mask], camera, median_offset=params.median_plane_offset
+            )
+            # The grid and residual must use inliers of the vertical model, not
+            # the slightly tilted hypothesis that RANSAC used to find that model.
+            # Recover shared evidence consumed by earlier candidate planes.
+            residual = np.abs((points - plane.point) @ plane.normal)
+            full_mask = residual <= params.plane_inlier_m
+            if np.count_nonzero(full_mask) < params.min_plane_points:
+                break
+            plane = _Plane(
+                plane.point,
+                plane.normal,
+                points[full_mask],
+                float(np.percentile(residual[full_mask], 95)),
+            )
+        else:
+            plane, full_mask, record = _refine_vertical_plane(
+                points, camera, remaining[best_mask], params, refit_iterations
+            )
+            if refit_log is not None:
+                record.update(
+                    remaining_count=int(len(remaining)),
+                    remaining_hash=hashlib.sha256(remaining.tobytes()).hexdigest()[:16],
+                    hypothesis_inliers=int(best_count),
+                    hypothesis_point=[float(v) for v in hypothesis[0]],
+                    hypothesis_normal=[float(v) for v in hypothesis[1]],
+                )
+                refit_log.append(record)
+            if np.count_nonzero(full_mask) < params.min_plane_points:
+                break
         planes.append(plane)
         remaining_residual = np.abs((remaining - plane.point) @ plane.normal)
+        before = len(remaining)
         remaining = remaining[remaining_residual > params.plane_inlier_m]
+        if refit_log is not None:
+            refit_log[-1]["removed_from_remaining"] = int(before - len(remaining))
     return planes
 
 
@@ -814,6 +905,8 @@ def detect_pockets_expected(
     expected: ExpectedSite | None,
     *,
     lower_evidence: bool = True,
+    plane_refit_iterations: int = 0,
+    refit_log: list | None = None,
 ) -> tuple[DetectionResult, tuple[ExpectedCandidate, ...]]:
     """detect_pockets with the candidates restricted to an expected site (plan 2026-10-22 task A).
 
@@ -821,13 +914,19 @@ def detect_pockets_expected(
     differs by more than ``axis_tolerance_rad``, is dropped before the detector's own selection (the highest score,
     then the nearest plane); the rest is unchanged. No candidate inside the site is ``no_pallet:no_expected_candidate``.
     Returns the result and every candidate's record. ``expected`` None is detect_pockets exactly, with no records.
+    ``plane_refit_iterations`` > 0 refits each plane on its own band (plan 2026-11-06 near-capture plane refit, arm
+    (a)); 0 is the frozen extraction. ``refit_log`` (comparison tools only, never across the mission boundary)
+    receives one record per extracted plane round.
     """
     if expected is not None and not isinstance(expected, ExpectedSite):
         raise ValueError("expected must be an ExpectedSite or None")
-    return _detect(scene_input, prior, params, lower_evidence, expected)
+    refit = {}
+    if plane_refit_iterations != 0 or refit_log is not None:
+        refit = {"refit_iterations": plane_refit_iterations, "refit_log": refit_log}
+    return _detect(scene_input, prior, params, lower_evidence, expected, refit)
 
 
-def _detect(scene_input, prior, params, lower_evidence, expected):
+def _detect(scene_input, prior, params, lower_evidence, expected, refit=None):
     if 2 * params.band_margin_m >= prior.opening_height_m:
         raise ValueError("band_margin_m must leave a nonempty opening height band")
     if type(lower_evidence) is not bool:
@@ -846,7 +945,7 @@ def _detect(scene_input, prior, params, lower_evidence, expected):
             )
         else:
             workspace = _filter_workspace(points, camera, prior, params)
-            planes = _vertical_plane_candidates(workspace, camera, params)
+            planes = _vertical_plane_candidates(workspace, camera, params, **(refit or {}))
             for index, plane in enumerate(planes):
                 if plane.residual_p95_m > params.max_plane_residual_m:
                     rejected[index] = "vertical_refit_residual"
@@ -891,6 +990,8 @@ def _detect(scene_input, prior, params, lower_evidence, expected):
                     selected_pattern,
                     selected_rays,
                 ) = max(candidates, key=lambda candidate: candidate[:2])
+                if refit and refit["refit_log"] is not None:
+                    refit["refit_log"].append({"selected_plane_index": int(selected_index)})
                 for index in range(len(planes)):
                     if index != selected_index and index not in rejected:
                         rejected[index] = "lower_pattern_score"

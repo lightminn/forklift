@@ -466,6 +466,60 @@ def test_waive_leaves_the_far_capture_alone():
     assert "lower_evidence" not in out.attempt and "detector_site" not in out.attempt
 
 
+# --- docs/plans/2026-11-06-near-capture-plane-refit.md: the comparison arms reach the near expected-site calls only ---
+
+def refit_world(*, refit=None, ransac=None, first="valid", **kw):
+    w = waiver_c_world(first=first, **kw)
+    w.params_seen = []
+    inner = w.hooks.detect_pockets_expected
+
+    def detect_expected(inp, prior, params, expected, **kw_):
+        w.params_seen.append(params)
+        return inner(inp, prior, params, expected, **kw_)
+
+    w.hooks.detect_pockets_expected = detect_expected
+    if refit is not None:
+        w.core.options.near_capture_refit = refit
+    if ransac is not None:
+        w.core.options.near_capture_ransac_iterations = ransac
+    return w
+
+
+@pytest.mark.parametrize("opts", [dict(), dict(refit=0, ransac=200)])
+def test_unset_or_default_arms_call_the_near_detector_as_before(opts):
+    w = refit_world(**opts)
+    out = w.run()
+    assert [(c[0], c[2]) for c in w.calls_c] == [("restricted", {})]
+    assert w.params_seen[0].ransac_iterations == 200 and "near_plane_options" not in out.attempt
+
+
+def test_the_refit_arm_reaches_the_first_call_and_the_waiver_and_is_recorded():
+    w = refit_world(refit=5, first="no_pallet")
+    out = w.run()
+    assert [(c[0], c[2]) for c in w.calls_c] == [
+        ("restricted", {"plane_refit_iterations": 5}),
+        ("restricted", {"lower_evidence": False, "plane_refit_iterations": 5}),
+    ]
+    assert out.attempt["near_plane_options"] == {"refit": 5, "ransac_iterations": 200}
+
+
+def test_the_ransac_arm_changes_only_the_near_parameters():
+    w = refit_world(ransac=400, first="no_pallet")
+    out = w.run()
+    assert [p.ransac_iterations for p in w.params_seen] == [400, 400]
+    assert [c[2] for c in w.calls_c] == [{}, {"lower_evidence": False}]
+    assert out.attempt["near_plane_options"] == {"refit": 0, "ransac_iterations": 400}
+    assert w.state["detector_params"]["ransac_iterations"] == 200  # the shared derived parameters are untouched
+
+
+@pytest.mark.parametrize("case", [dict(near_capture=None), dict(near_capture="done")])
+def test_far_and_other_captures_never_see_the_arms(case):
+    w = refit_world(refit=5, ransac=400, **case)
+    out = w.run()
+    assert [c[0] for c in w.calls_c] == ["plain"] and w.calls_c[0][2] == {}
+    assert "near_plane_options" not in out.attempt
+
+
 # --- docs/plans/2026-10-28-far-target-binding.md F1: the far capture bound to the mission's adoption rectangle ---
 
 @dataclass

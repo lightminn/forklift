@@ -284,6 +284,19 @@ def test_a_far_run_is_refused_by_the_committed_terms_and_taken_by_terms_measured
     ]
 
 
+def test_the_near_plane_refit_arms_are_measurement_conditions_and_their_defaults_match():
+    """docs/plans/2026-11-06-near-capture-plane-refit.md: the arms change what the near capture adopts, so a set value
+    differs from the committed terms (recorded before the arguments: the frozen detections) and the defaults match."""
+    committed = json.loads((ROOT / "config/near_field_drive_terms.json").read_text())["condition"]
+    assert "near_capture_refit" not in committed["arguments"]
+    defaults = {**committed, "arguments": {**committed["arguments"], "near_capture_refit": 0,
+                                           "near_capture_ransac_iterations": 200}}
+    assert NT.condition_problems(committed, defaults) == []
+    for key, value in (("near_capture_refit", 5), ("near_capture_ransac_iterations", 400)):
+        armed = {**committed, "arguments": {**committed["arguments"], key: value}}
+        assert NT.condition_problems(committed, armed) == [f"arguments {key} differs from the measurement runs"]
+
+
 def test_the_far_capture_expected_site_is_a_measurement_condition():
     """docs/plans/2026-10-28-far-target-binding.md F1 (Codex plan round 1 P2): it changes what is adopted, so a run
     with it on differs from the committed terms (recorded before the argument: off), and off matches them."""
