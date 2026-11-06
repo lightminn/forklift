@@ -695,12 +695,15 @@ def test_prepare_core_environment_installs_snapshot_wheel_into_run_venv(
         runtime.mkdir(parents=True)
         commands: list[dict] = []
 
+        # as execute_job hands it: without PYTHONPATH, which would put another core ahead of the run venv's
+        # (ws1's test job sets PYTHONPATH to the repository's src)
+        clean_env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         env = remote_model_job.prepare_core_environment(
             python=sys.executable,
             source=source,
             output=output,
             runtime=runtime,
-            environment=dict(os.environ),
+            environment=clean_env,
             command_runner=subprocess.run,
             commands=commands,
         )
@@ -723,6 +726,7 @@ def test_prepare_core_environment_installs_snapshot_wheel_into_run_venv(
             text=True,
             check=True,
             cwd=tmp_path,
+            env=clean_env,
         )
         assert probe.stdout.strip() == "1"
         shutil.rmtree(
