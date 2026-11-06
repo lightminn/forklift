@@ -243,6 +243,7 @@ class PoseRuntime:
         # stand past D_MIN, the raw start and re-match agreements and every stand's largest correction move
         self.shadow = bool(shadow)
         self.contacts = contacts  # pose_contacts.ContactLog (plan 2026-11-06 1.4), the runner feeding it; None: not kept
+        self.audit = None  # shadow_audit.ShadowAudit, set by the runner with --pose-shadow-audit
         self.meter = None  # a PoseCheck held unconfirmed from the start check's scan: its strokes and stands only
         self._meter_view = None
         self.raw = {"start": None, "rematches": [], "stands": []} if self.shadow else None
@@ -696,6 +697,8 @@ class PoseRuntime:
                           "e_slam": list(self.bounds.e_slam)}}
         if self.contacts is not None:
             out["contacts"] = self.contacts.record()
+        if self.audit is not None:
+            out["audit"] = self.audit.record()
         if self.shadow:
             out["raw"] = self.raw
             out["meter_events"] = None if self.meter is None else self.meter.events

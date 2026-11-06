@@ -119,10 +119,7 @@ def test_the_rear_check_walks_the_straight_reverses_own_bundle():
     src = _source()
     at = src.index("def pose_rear_blocked(rt_)")
     assert "for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):" in src[at:at + 2500]
-    # a check only: the start-band release's state is put back (plan 2026-11-06 1.1)
-    body = src[at:at + 3000]
-    assert "kept_ = copy.deepcopy((perm_.release_anchor, perm_.release_stats))" in body
-    assert "finally:\n                perm_.release_anchor, perm_.release_stats = kept_" in body
+    assert "with permission_kept(perm_):" in src[at:at + 3000]  # a check only (plan 2026-11-06 1.1)
 
 
 def test_the_base_link_from_the_rear_axle():
@@ -238,3 +235,59 @@ def test_the_mission_stands_scan_sets_are_saved_with_the_record():
     src = _source()
     at = src.index('state["pose_check"] = pose_box["rt"].record()')
     assert 'pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")' in src[at:at + 300]
+
+
+def test_the_rear_checks_walk_leaves_the_permit_as_it_was_with_the_start_band_on():
+    # the lead, 2026-11-06: the shadow writes nothing the control path reads -- a walk raises the start-band cells'
+    # best distances and the counts; the whole permit is compared, not only those two
+    import run_transport
+    import shadow_audit
+
+    sys.path.insert(0, str(ROOT / "tests/unit/control"))
+    from test_start_release import FOOT, P0, SIDE, grid, path, perm
+
+    snap, away = grid(SIDE), (0.0, -0.018, 0.0)
+    plain = perm(True)
+    before = shadow_audit.fingerprint(plain)
+    plain.check_path(snap, path(-1, start=away), FOOT, FOOT, current_pose=away, direction=-1)
+    assert shadow_audit.fingerprint(plain) != before  # without the guard the walk does change it
+    kept = perm(True)
+    before = shadow_audit.fingerprint(kept)
+    with run_transport.permission_kept(kept):
+        kept.check_path(snap, path(-1, start=away), FOOT, FOOT, current_pose=away, direction=-1)
+    assert shadow_audit.fingerprint(kept) == before
+    with pytest.raises(ValueError), run_transport.permission_kept(kept):  # put back on the way out of an error too
+        kept.release_anchor = None
+        raise ValueError
+    assert shadow_audit.fingerprint(kept) == before and P0 == kept.release_anchor["pose"]
+
+
+def test_the_shadow_audit_is_a_shadow_option_recorded_only_when_given(tmp_path):
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow"))
+    assert off.pose_shadow_audit is False and "pose_shadow_audit" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "shadow", "--pose-shadow-audit"))
+    assert run_transport.recorded_arguments(on)["pose_shadow_audit"] is True
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-shadow-audit"))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "on", "--pose-check-bounds", json.dumps(BOUNDS),
+                           "--pose-shadow-audit"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_shadow_audit"] is False
+
+
+def test_the_audit_brackets_each_place_the_shadow_computes():
+    src = _source()
+    at = src.index("def pose_checkpoint(t_):")
+    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    assert "if rt_.audit is not None:\n                rt_.audit.before()" in body
+    assert 'rt_.audit.after("checkpoint", t_)' in body
+    note = src.index('pose_box["rt"].note_tick(')
+    assert 'pose_box["rt"].audit.before()' in src[note - 300:note]
+    assert 'pose_box["rt"].audit.after("note_tick", t)' in src[note:note + 700]
+    at = src.index('pose_box["rt"] = make_pose_runtime(args')
+    block = src[at:at + 900]
+    for name in ("arbiter", "permission", "commands", "cargo"):
+        assert f'"{name}": lambda:' in block, name

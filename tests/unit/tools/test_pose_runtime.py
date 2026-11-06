@@ -741,3 +741,15 @@ def test_stands_past_twenty_are_counted_not_kept():
         _mission_stand(rt, grid, b, (0.15, 0.0, 0.0), 5, 10.0 * k)
     rec = rt.record()
     assert len(rec["stand_sets"]) == PR.STAND_SETS_MAX and rec["stand_sets_skipped"] == 2
+
+
+def test_the_record_carries_the_shadow_audit_when_kept():
+    import shadow_audit
+
+    b = (2.42, 1.7, 0.6)
+    rt = _rt(Scripted(), b=b, gen_points=np.zeros((40, 2)), shadow=True)
+    assert rt.audit is None and "audit" not in rt.record()
+    rt.audit = shadow_audit.ShadowAudit({"x": lambda: {"a": 1}})
+    rt.audit.before()
+    rt.audit.after("checkpoint", 0.0)
+    assert rt.record()["audit"]["checks"] == 1

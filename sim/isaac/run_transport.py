@@ -11,6 +11,7 @@ import importlib.util
 import itertools
 import json
 import collections
+import contextlib
 import copy
 import math
 import random
@@ -1131,6 +1132,10 @@ def arguments() -> argparse.Namespace:
                         help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
                         "every forklift rigid body reports its contacts, and each contact with anything but the floor "
                         "is recorded by pair with the check's status, the mission phase and the cargo relation.")
+    parser.add_argument("--pose-shadow-audit", action="store_true",
+                        help="With --pose-check shadow (test only, docs/plans/2026-11-06-unconfirmed-validation.md "
+                        "1.1): the arbiter, the permit, the mission commands and the cargo fingerprinted before and "
+                        "after each place the shadow computes, every change recorded (sim/isaac/shadow_audit.py).")
     parser.add_argument("--pose-check-bounds", type=_pose_bounds, default=None,
                         help="The check's development values (plan 0), JSON inline or a file: {\"odom\": [a, b, c, e] "
                         "(dp = a + b d, dth = c + e d), \"e_still\": [m, rad], \"e_slam\": [m, rad]}.")
@@ -1587,6 +1592,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--reloc-inject is for unattended relocalization batches (--start-relocalize --reloc-unattended)")
     if args.pose_check_contacts and args.pose_check == "off":
         parser.error("--pose-check-contacts goes with --pose-check on or shadow")
+    if args.pose_shadow_audit and args.pose_check != "shadow":
+        parser.error("--pose-shadow-audit goes with --pose-check shadow")
     if args.pose_check == "shadow" and not args.start_relocalize:
         parser.error("--pose-check shadow needs --start-relocalize")
     if args.pose_check != "on" and args.pose_check_bounds is not None:
@@ -3462,6 +3469,17 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
         rear_offset_m=abs(args.rear_axle_offset_m), stop_m=stopping.distance_m(speed),
         tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts), shadow=args.pose_check == "shadow",
         contacts=pose_contacts.ContactLog() if getattr(args, "pose_check_contacts", False) else None)
+
+
+@contextlib.contextmanager
+def permission_kept(permission):
+    """A check that leaves the permit as it found it: the start-band release's anchor and counts a walk may change are
+    put back (plan 2026-11-06-unconfirmed-validation 1.1: the check writes nothing the control path reads)."""
+    kept = copy.deepcopy((permission.release_anchor, permission.release_stats))
+    try:
+        yield permission
+    finally:
+        permission.release_anchor, permission.release_stats = kept
 
 
 def pose_open(out) -> bool:
@@ -8951,6 +8969,12 @@ def drive(S, isaac) -> None:
                                                    scan_pattern)
                 if not pose_box["rt"].shadow:  # the shadow gates nothing (plan 2026-11-06 1.1)
                     live.arbiter.pose = pose_box["rt"].view_dict()
+                if getattr(args, "pose_shadow_audit", False):
+                    import shadow_audit
+
+                    pose_box["rt"].audit = shadow_audit.ShadowAudit({
+                        "arbiter": lambda: live.arbiter, "permission": lambda: obstacle["layer"].permission,
+                        "commands": lambda: core.commands, "cargo": lambda: core.cargo})
 
         def scene_require(t_, ok_, reason_, cargo=False):
             """A truth check on the scene (simulation only). A batch run aborts as require does; a live one latches
@@ -8981,6 +9005,8 @@ def drive(S, isaac) -> None:
             from forklift_core.mission.commands import ACTIVE
 
             rt_, a_ = pose_box["rt"], live.arbiter
+            if rt_.audit is not None:
+                rt_.audit.before()
             tel_ = a_.teleop or {}
             applied_ = slam["tracker"].applied
             view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
@@ -8997,6 +9023,8 @@ def drive(S, isaac) -> None:
             if not rt_.shadow:
                 a_.pose = rt_.view_dict(view_)
             live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)
+            if rt_.audit is not None:
+                rt_.audit.after("checkpoint", t_)
             if rt_.ends() and pose_box["end"] is None:
                 reason_ = view_.status.split(":", 1)[1]
                 pose_box["end"] = {"reason": reason_, "t": float(t_)}
@@ -9023,11 +9051,8 @@ def drive(S, isaac) -> None:
             snap_ = layer_.snapshot
             if snap_ is None:
                 return True
-            # a check only: the start-band release's anchor and counts the walk may change are put back (plan
-            # 2026-11-06 1.1 -- the shadow writes nothing the control path reads)
             perm_ = layer_.permission
-            kept_ = copy.deepcopy((perm_.release_anchor, perm_.release_stats))
-            try:
+            with permission_kept(perm_):
                 # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
                 for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
                     if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_,
@@ -9039,8 +9064,6 @@ def drive(S, isaac) -> None:
                     if check_.verified_m < length_:
                         return True
                 return False
-            finally:
-                perm_.release_anchor, perm_.release_stats = kept_
 
         def live_failed(t_, reason_, ticked_, stepped__, applied_):
             """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
@@ -10124,10 +10147,14 @@ def drive(S, isaac) -> None:
                     live_tick_out_ = True  # persistent console plan D6: this tick's output is given
                     if pose_box["rt"] is not None:
                         off_ = abs(args.rear_axle_offset_m)
+                        if pose_box["rt"].audit is not None:
+                            pose_box["rt"].audit.before()
                         pose_box["rt"].note_tick(  # plan 3.4: the judgement's record (simulation truth, decides nothing)
                             t, applied=tuple(float(v) for v in base_from_rear_axle(rear, off_)),
                             truth=tuple(float(v) for v in base_from_rear_axle(truth_rear, off_)),
                             open_=pose_open(out_))  # plan 2026-11-06 1.3: the tick's final output
+                        if pose_box["rt"].audit is not None:
+                            pose_box["rt"].audit.after("note_tick", t)
                     if out_.source == "teleop":
                         if args.live_test_permit_compare:
                             # The bundle's inputs each teleop cycle, for the offline coverage check (teleop bundle margin
@@ -10799,6 +10826,7 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
         # plan 2026-11-06 1.2: the injection only when given
         and (k != "reloc_inject" or v is not None) and (k != "pose_check_contacts" or v)
+        and (k != "pose_shadow_audit" or v)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
