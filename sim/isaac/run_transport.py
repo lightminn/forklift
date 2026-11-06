@@ -278,14 +278,17 @@ def _pose_bounds(value: str):
 
 
 def _correction_inject(value: str) -> tuple:
-    """A correction offset and when (plan 2026-11-07-unconfirmed-monitor-revision 2 D): "x,y,yaw,sim_s"."""
+    """A correction offset and when (plan 2026-11-07-unconfirmed-monitor-revision 2 D): "x,y,yaw,sim_s", and with
+    ",hold" not before the tracker is holding."""
+    fields = value.split(",")
+    wait = ("hold",) if fields[-1] == "hold" else ()
     try:
-        parts = tuple(float(v) for v in value.split(","))
+        parts = tuple(float(v) for v in fields[: len(fields) - len(wait)])
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("--correction-inject takes x,y,yaw,sim_s") from exc
+        raise argparse.ArgumentTypeError("--correction-inject takes x,y,yaw,sim_s[,hold]") from exc
     if len(parts) != 4 or not all(math.isfinite(v) for v in parts):
-        raise argparse.ArgumentTypeError("--correction-inject takes four finite numbers: x,y,yaw,sim_s")
-    return parts
+        raise argparse.ArgumentTypeError("--correction-inject takes four finite numbers: x,y,yaw,sim_s[,hold]")
+    return parts + wait
 
 
 def _reloc_inject(value: str) -> str:
@@ -1170,7 +1173,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--correction-inject", type=_correction_inject, default=None,
                         help="Test only (docs/plans/2026-11-07-unconfirmed-monitor-revision.md 2 D): at that simulated "
                         "second every SLAM correction from then on is offset by x,y,yaw (the yaw about the truck), as "
-                        "a wrong jump would be. Unattended relocalization batches with the check on or shadow.")
+                        "a wrong jump would be; with ,hold not before the tracker is holding, so the jump comes out "
+                        "at the release. Unattended relocalization batches with the check on or shadow.")
     parser.add_argument("--pose-check-contacts", action="store_true",
                         help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
                         "every forklift rigid body reports its contacts, and each contact with anything but the floor "
@@ -9085,8 +9089,8 @@ def drive(S, isaac) -> None:
         def correction_injection(t_):
             """Test only (the revision plan 2 D): once, the offset every later SLAM correction carries; a yaw about the
             truck's applied pose, so the jump starts at the truck."""
-            x_, y_, yaw_, at_ = args.correction_inject
-            if t_ < at_ or "correction_inject" in state:
+            x_, y_, yaw_, at_, *wait_ = args.correction_inject
+            if t_ < at_ or "correction_inject" in state or (wait_ and slam["tracker"].mode != "holding"):
                 return
             from forklift_core.localization.slam_pose import compose, invert
 

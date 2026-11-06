@@ -18,8 +18,8 @@ HERE = Path(__file__).resolve().parent
 SEED = 20261108
 KINDS = ("full", "half")
 WRONG = ("shift x+1", "shift x-1", "shift y+1", "shift y-1", "shift x+2", "shift y-2", "turn", "slide")
-# x, y, yaw, sim_s: the transport is under way by 200 s in D's missions, and 125 s is usually inside a hold
-JUMPS = {"step_0.35": "0.35,0,0,200", "step_6": "6,0,0,200", "yaw_0.12": "0,0,0.12,200", "hold_yaw_0.12": "0,0,0.12,125"}
+# x, y, yaw, sim_s: the transport is under way by 200 s in D's missions; the last one waits for the first hold (plan 9.13)
+JUMPS = {"step_0.35": "0.35,0,0,200", "step_6": "6,0,0,200", "yaw_0.12": "0,0,0.12,200", "hold_yaw_0.12": "0,0,0.12,0,hold"}
 
 
 def rows() -> list:

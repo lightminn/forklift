@@ -345,14 +345,20 @@ def test_the_correction_injection_is_a_test_of_a_confirmed_session(tmp_path):
                             "--correction-inject", "0.35,0,0,200"))
     assert on.correction_inject == (0.35, 0.0, 0.0, 200.0)
     assert run_transport.recorded_arguments(on)["correction_inject"] == [0.35, 0.0, 0.0, 200.0]
+    held = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--reloc-unattended", "--pose-check", "shadow",
+                              "--correction-inject", "0,0,0.12,0,hold"))
+    assert held.correction_inject == (0.0, 0.0, 0.12, 0.0, "hold")
+    assert run_transport.recorded_arguments(held)["correction_inject"] == [0.0, 0.0, 0.12, 0.0, "hold"]
     for extra in (["--pose-check", "shadow", "--correction-inject", "0.35,0,0,200"],  # attended
                   ["--reloc-unattended", "--correction-inject", "0.35,0,0,200"],  # no check
-                  ["--reloc-unattended", "--pose-check", "shadow", "--correction-inject", "0.35,0,0"]):
+                  ["--reloc-unattended", "--pose-check", "shadow", "--correction-inject", "0.35,0,0"],
+                  ["--reloc-unattended", "--pose-check", "shadow", "--correction-inject", "0,0,0.12,0,soon"]):
         with pytest.raises(SystemExit):
             _runner_args(_live(tmp_path, *_reloc(tmp_path), *extra))
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["correction_inject"] is None
     src = _source()
     assert "def correction_injection(t_):" in src
+    assert 'wait_ and slam["tracker"].mode != "holding"' in src  # a hold's jump waits for the hold
     at = src.index("correction_injection(t)\n")
     assert 'if args.correction_inject is not None:' in src[at - 120:at]
     assert 'pose_box["rt"] is not None' in src[at - 200:at]

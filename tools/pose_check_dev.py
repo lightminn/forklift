@@ -32,6 +32,7 @@ FACTOR = 1.5
 E_STILL_MAX = (0.20, 0.05)  # design 3: the integrity budget E_STILL stays within
 ORIGIN_MAX_S = 0.25  # the 10 Hz samples' gap, with room: an older one is no origin
 INT_GATE = (0.20, 0.05)  # design 1.5: the monitor's gate, as written today
+E_WINDOW = (0.153, 0.103)  # the revision plan 9.5: W2's limit, from the registered evaluation; only 9.11's rule moves it
 STILL = (0.002, 0.002)  # pose_check.STILL_M, STILL_RAD: a re-match result is discarded past these
 DISTANCE_BINS = ((0, 1), (1, 2), (2, 5), (5, 10), (10, 20), (20, 50), (50, 10000))
 STAND_SKIP_S = 0.5  # a stand's start left out (the truck still settling)
@@ -198,7 +199,7 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
     if len(gens) < min_samples:
         flags.append(f"rematch_samples_under_{min_samples}")
     return {
-        "odom": [a_p, b_p, a_t, b_t], "e_still": e_still, "e_slam": e_slam, "flags": flags,
+        "odom": [a_p, b_p, a_t, b_t], "e_still": e_still, "e_slam": e_slam, "e_window": list(E_WINDOW), "flags": flags,
         "basis": {
             "factor": FACTOR, "sessions": len(records),
             "odom": {"samples": len(in_reach), "beyond_d_total": len(errs) - len(in_reach), "bins": bins,
@@ -313,7 +314,7 @@ def main(argv=None) -> int:
     out["inputs"] = inputs
     out["design"] = design_evidence(records)
     args.out.write_text(json.dumps(out, indent=2) + "\n")
-    print(json.dumps({k: out[k] for k in ("odom", "e_still", "e_slam", "flags")}))
+    print(json.dumps({k: out[k] for k in ("odom", "e_still", "e_slam", "e_window", "flags")}))
     return 0
 
 
