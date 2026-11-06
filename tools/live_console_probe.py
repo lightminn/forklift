@@ -1511,7 +1511,7 @@ async def _end_session(p):
     """End the session (unless it closed already) and wait for its close."""
     if p.closed_code is None:
         lease = await p.request("lease_request")
-        p.lease_id = (lease or {}).get("lease_id")
+        p.lease_id = (lease or {}).get("lease_id") or p.lease_id  # refused: the one it holds
         p.report["session_end"] = await p.request_until_standing("session_end")
         close_by = time.monotonic() + 120
         while p.closed_code is None and time.monotonic() < close_by:
@@ -1608,6 +1608,8 @@ async def place_scenario(p, args):
 
 REVERSE_RATIO = -0.4  # direct_reverse_mps 0.25 x 0.4 = 0.10 m/s: V_REV_U (plan 2026-11-06 2.1)
 REVERSE_MAX_STROKES = 15  # chatter can reach D_TOTAL
+REVERSE_TRIES = 4  # presses a stroke may take: a stalled tick disarms and closes it (no_feedback)
+REVERSE_COUNTS_M = 0.05  # a press that moved less takes no stroke of the count
 REVERSE_STEP_M = {"half": 0.5, "chatter": 0.2}
 
 
@@ -1687,7 +1689,8 @@ async def _reverse_localized(p, args):
 
 async def _reverse_strokes(p, args, rev, shadow):
     teleop = None
-    for _ in range(40):  # standing is the vehicle's call (as the main scenario's entry)
+    end = time.monotonic() + args.reverse_wait_s
+    while time.monotonic() < end and p.closed_code is None:  # standing and the pacing are the vehicle's call
         teleop = await p.request("mode_request", to="TELEOP")
         if teleop is None or (teleop.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
                               and teleop.get("detail") != "pacing"):
@@ -1696,9 +1699,10 @@ async def _reverse_strokes(p, args, rev, shadow):
     rev["teleop_entry"] = teleop
     if not teleop or teleop.get("t") != "ack":
         return
-    arm = await p.request("arm")
-    p.arm_gen = (arm or {}).get("arm_gen", 0)
-    for n in range(REVERSE_MAX_STROKES):
+    n = 0
+    for _ in range(REVERSE_MAX_STROKES * REVERSE_TRIES):
+        if n >= REVERSE_MAX_STROKES:
+            break
         status = _pc_status(p.state) or ""
         if p.closed_code is not None or (not shadow and (status.startswith("ended:") or status == "confirmed")):
             break  # a shadow's provisional verdict selects nothing (plan 1.1)
@@ -1715,6 +1719,11 @@ async def _reverse_strokes(p, args, rev, shadow):
             if not ready:
                 break
             continue
+        if not (p.state or {}).get("armed"):  # first, or disarmed by a stalled tick (no_feedback)
+            arm = await _arm(p, args)
+            rev.setdefault("arms", []).append(arm)
+            if not arm or arm.get("t") != "ack":
+                break
         rec = {"n": n, "start_left_m": stroke.get("left_m"), "start_total_left_m": stroke.get("total_left_m"),
                "start_mono": time.monotonic()}
         seen_active, released, stk = False, "timeout", None
@@ -1728,7 +1737,8 @@ async def _reverse_strokes(p, args, rev, shadow):
             await p.teleop(REVERSE_RATIO, 0.0, True)
             await asyncio.sleep(0.05)
         # the stroke as seen at the release (the stand after it starts the next one)
-        rec.update(released=released, end_left_m=(stk or {}).get("left_m"), release_mono=time.monotonic())
+        rec.update(released=released, end_left_m=(stk or {}).get("left_m"),
+                   end_total_left_m=(stk or {}).get("total_left_m"), release_mono=time.monotonic())
         # the deadman let go, the command sent on: one older than 0.30 s disarms (the arbiter's command age)
         released_ = asyncio.ensure_future(_keep_released(p))
         try:
@@ -1738,6 +1748,27 @@ async def _reverse_strokes(p, args, rev, shadow):
             released_.cancel()
         rec["status_after"] = _pc_status(p.state)
         rev["strokes"].append(rec)
+        moved = (rec["start_total_left_m"] or 0.0) - (rec["end_total_left_m"] or rec["start_total_left_m"] or 0.0)
+        n += moved >= REVERSE_COUNTS_M  # a press cut at once takes no stroke of the count
+
+
+async def _arm(p, args):
+    """Arm once the vehicle lets it (the latch of a no_feedback, the pacing): its reply."""
+    reply = None
+    end = time.monotonic() + args.reverse_wait_s
+    released_ = asyncio.ensure_future(_keep_released(p))
+    try:
+        while time.monotonic() < end and p.closed_code is None:
+            reply = await p.request("arm")
+            if reply is not None and reply.get("t") == "ack":
+                p.arm_gen = reply.get("arm_gen", 0)
+                # the state says so before the press: its first command needs the new generation
+                await p.until(lambda s: bool(s.get("armed")), 5, label="armed")
+                return reply
+            await asyncio.sleep(0.5)
+    finally:
+        released_.cancel()
+    return reply
 
 
 async def _keep_released(p):

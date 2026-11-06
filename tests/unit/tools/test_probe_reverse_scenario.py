@@ -24,8 +24,10 @@ class FakeVehicle:
     the next advance; a stroke closes STOP_M before its end; a stand past 0.5 m starts a re-match lasting three
     advances, which confirms (on) when ``confirm_at`` re-matches have run."""
 
-    def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None):
+    def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None, cut_after=None,
+                 pacing_refusals=0):
         self.shadow, self.confirm_at = shadow, confirm_at
+        self.cut_after, self.pacing_refusals, self.arms, self.leases, self.ended_with = cut_after, pacing_refusals, 0, 0, None
         self.expire, self.since_command, self.armed, self.disarmed = expire, 0, False, 0
         self.report, self.calls, self.closed_code, self.lease_id, self.arm_gen = {}, [], None, None, 0
         self.targets = {"targets_revision": 3}
@@ -41,7 +43,7 @@ class FakeVehicle:
               "stroke": {"state": self.stroke, "left_m": min(1.0, 3.0 - self.used) - self.s,
                          "total_left_m": 3.0 - self.used - self.s},
               "rematch": "scans" if self.shadow and self.rematch else None}
-        self.state = {"pose": {"x_m": 0.0}, "rear_axle_speed_mps": -0.1 if self.moving else 0.0,
+        self.state = {"pose": {"x_m": 0.0}, "rear_axle_speed_mps": -0.1 if self.moving else 0.0, "armed": self.armed,
                       "last_result": self.state.get("last_result") if self.state else None,
                       **({} if self.off else {"pose_check": pc})}
 
@@ -79,7 +81,11 @@ class FakeVehicle:
 
     def teleop_(self, speed, deadman):
         self.since_command = 0
-        if deadman and self.expire is not None and not self.armed:
+        if self.cut_after is not None and deadman and self.s >= self.cut_after * STEP_M:
+            self.cut_after, self.armed, self.moving, self.stroke = None, False, False, "closed"  # no_feedback
+            self._publish()
+            return
+        if deadman and not self.armed:
             return  # not_armed: nothing moves
         if deadman and speed < 0 and self.stroke in ("ready", "active"):
             self.stroke = "active"
@@ -113,10 +119,16 @@ class FakeVehicle:
         if kind == "mode_request" and fields["to"] != "TELEOP":
             self.armed = False  # a mode change disarms; nothing to expire
         if kind == "lease_request":
-            return {"t": "ack", "lease_id": "L"}
+            self.leases += 1
+            return {"t": "ack", "lease_id": "L"} if self.leases == 1 else {"t": "reject", "reason": "lease_held"}
         if kind == "arm":
             self.armed, self.since_command = True, 0
-            return {"t": "ack", "arm_gen": 1}
+            self.arms += 1
+            self._publish()
+            return {"t": "ack", "arm_gen": self.arms}
+        if kind == "mode_request" and fields["to"] == "TELEOP" and self.pacing_refusals:
+            self.pacing_refusals -= 1
+            return {"t": "reject", "reason": "state_forbids_teleop", "detail": "pacing"}
         if kind == "mission_submit":
             assert fields["targets_revision"] == 3 and fields["pallet_id"] == "P-1"
             self.mission_at = 5
@@ -125,6 +137,7 @@ class FakeVehicle:
 
     async def request_until_standing(self, kind, tries=20, **fields):
         self.calls.append(kind)
+        self.ended_with = self.lease_id
         self.closed_code = 1000
         return {"t": "ack"}
 
@@ -216,3 +229,27 @@ def test_the_released_command_keeps_the_arm_while_it_stands_and_rematches():
     v = FakeVehicle(shadow=True, expire=4)
     rep = _run(v, "half")["reverse"]
     assert v.disarmed == 0 and len(rep["strokes"]) >= 5
+
+
+def test_a_press_the_vehicle_cut_is_armed_again_and_goes_on():
+    # the first Isaac shadow session: a stalled tick disarms (no_feedback) and closes the stroke; the arm is lost, the
+    # strokes are not
+    v = FakeVehicle(shadow=True, cut_after=20)
+    rep = _run(v, "full")["reverse"]
+    assert v.arms >= 2 and rep["strokes"][0]["released"] != "timeout"
+    assert rep["strokes"][0]["start_total_left_m"] - rep["strokes"][0]["end_total_left_m"] < 0.3
+    assert any(s["start_total_left_m"] - s["end_total_left_m"] > 0.8 for s in rep["strokes"][1:])
+
+
+def test_a_refused_lease_request_keeps_the_lease_held():
+    # the first Isaac shadow session: the second request was refused and the session_end sent no lease
+    v = FakeVehicle(shadow=True)
+    _run(v, "full")
+    assert v.ended_with == "L" and v.calls.count("lease_request") == 2
+
+
+def test_the_teleop_entry_waits_out_the_pacing():
+    # the first Isaac shadow session: 20 s of refusals ended the strokes before they began
+    v = FakeVehicle(shadow=True, pacing_refusals=60)
+    rep = _run(v, "full")["reverse"]
+    assert rep["teleop_entry"]["t"] == "ack" and rep["strokes"]

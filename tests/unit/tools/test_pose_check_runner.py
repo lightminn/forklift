@@ -285,12 +285,15 @@ def test_the_audit_brackets_each_place_the_shadow_computes():
     assert "if audit_on_:\n                rt_.audit.before()" in body
     assert 'rt_.audit.after("checkpoint", t_)' in body
     note = src.index('pose_box["rt"].note_tick(')
-    assert 'pose_box["rt"].audit.before()' in src[note - 300:note]
+    assert 'pose_box["rt"].audit.before()' in src[note - 200:note]
     assert 'pose_box["rt"].audit.after("note_tick", t)' in src[note:note + 700]
     at = src.index('pose_box["rt"] = make_pose_runtime(args')
     block = src[at:at + 900]
-    assert "audit_on_ = rt_.audit is not None and rt_.audit.due(rt_.rear_pending())" in body
-    assert 'audit_on_ = pose_box["rt"].audit is not None and pose_box["rt"].audit.due()' in src[note - 300:note]
+    assert 'quiet_ = bool(a_.stop_confirmed) and a_.mode != "TELEOP"' in body
+    assert "audit_on_ = rt_.audit is not None and rt_.audit.due(quiet=quiet_)" in body
+    assert "if rt_.rear_pending():\n                if rt_.audit is not None and not audit_on_:" in body  # every rear check
+    assert 'pose_box["rt"].audit.due(quiet=bool(live.arbiter.stop_confirmed) and live.arbiter.mode != "TELEOP")' in \
+        src[note - 400:note]
 
 
 def test_the_shadows_places_in_the_tick_write_only_their_own():
@@ -306,6 +309,8 @@ def test_the_shadows_places_in_the_tick_write_only_their_own():
     assert "live.pose_info = " in shadow_part  # the published view
     rear = src[src.index("def pose_rear_blocked(rt_)"):src.index("def live_failed(t_, reason_")]
     assert "state[" not in rear and "with permission_kept(perm_):" in rear
+    # Codex 2d re-review: slam_rear() writes the tracker's hold record; the check reads C o O itself
+    assert "slam_rear(" not in rear and "compose(applied_[0], slam_odom_base())" in rear
     at = src.index('pose_box["rt"].on_scan(')
     assert "sent" in src[at:at + 120]
     at = src.index('pose_box["rt"] = make_pose_runtime(args')

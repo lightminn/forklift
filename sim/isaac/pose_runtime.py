@@ -84,7 +84,7 @@ def run_job(kind: str, p: dict, ctx: JobContext) -> dict:
         if p["phase"] == "unconfirmed":
             out = T.rematch_decision(ctx.grid, p["points"], b, hyps, o0, ot, decision=p["decision"], g=g,
                                      cfg=ctx.cfg, e_min=e_min, dp=bounds.dp, dth=bounds.dth, cons=ctx.cons,
-                                     deadline=p["deadline_at"], **kw)
+                                     deadline=p["deadline_at"], residual=res, **kw)
             return {"outcome": out.outcome, "matched": out.matched, "agree_m": out.agree_m,
                     "agree_rad": out.agree_rad, "g": list(g),
                     "residual": None if out.residual is None else list(out.residual.reasons), **shadow}
@@ -504,8 +504,9 @@ class PoseRuntime:
     def _shadow_rematch(self, t, rm, outcome, g, o_scan, o, C, epoch) -> None:
         """A generation's raw values: its g (the decision's, else the relocalizer's) against b' and every h' carried to
         its scan, the conservative check of g (the same in both phases, ``residual_confirmed``), the provisional
-        outcome, its agreement with the correction at the result's tick, and whether the operating path would have
-        applied the result at all (``applicable``: stood since its scan, the same epoch; Codex 2d P2-4)."""
+        outcome, its agreement with the correction at the result's tick, and ``applicable``: it stood since its scan in
+        the same epoch, the two conditions of the operating path's discarding that lean on no phase (Codex 2d P2-4; the
+        control generation counts in the confirmed phase only, so it stays out of a sample's eligibility)."""
         g = g if g is not None else rm.g
         raw = {"t": t, "phase": rm.phase, "outcome": outcome, "g": None if g is None else list(g),
                "o_begin": list(rm.o_begin), "o_scan": None if o_scan is None else list(o_scan),

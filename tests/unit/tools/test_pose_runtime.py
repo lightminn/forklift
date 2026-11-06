@@ -858,3 +858,29 @@ def test_the_runtime_holds_no_control_object():
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
         n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     assert not names & {"arbiter", "core", "live", "obstacle", "layer", "tracker", "spool", "slam", "publish"}
+
+
+def test_a_shadow_job_runs_the_conservative_check_once_in_either_phase(monkeypatch):
+    # Codex 2d re-review P2: the second run kept the result until the deadline in one phase only
+    from forklift_core.localization import twin_check as T
+
+    grid = TG._grid(*TG.ROOM)
+    ctx = PR.JobContext(grid, CFG, RELOC, PR.SHADOW_BOUNDS)
+    o = (2.42, 1.7, 0.6)
+    points = G.stack_scans([((0.0, 0.0, 0.0), _ranges(grid, o), *ANGLES)] * 5, range_min_m=0.2, range_max_m=12.0,
+                           match_range_m=8.0)
+    start = compose(o, (0.6, 0.0, 0.0))
+    real, calls = T.residual_ambiguity, []
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(T, "residual_ambiguity", counted)
+    for phase in ("unconfirmed", "confirmed"):
+        calls.clear()
+        out = PR.run_job("rematch", {"phase": phase, "shadow": True, "points": points, "b": start, "hyps": [],
+                                     "o0": start, "ot": o, "decision": "confirmed", "g": o, "deadline_at": None}, ctx)
+        assert len(calls) == 1, phase
+        assert out["outcome"] == ("confirm" if out["residual_confirmed"] else
+                                  ("unconfirmed" if phase == "unconfirmed" else "none"))

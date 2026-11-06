@@ -43,7 +43,7 @@ esac
 case "$PROBE_MODE" in
   reverse|reverse_place)
     case "${REVERSE_KIND:-full}" in full|half|chatter) ;; *) echo "REVERSE_KIND must be full, half or chatter" >&2; exit 2;; esac
-    PROBE_ARGS+=(--reverse-kind "${REVERSE_KIND:-full}")
+    PROBE_ARGS+=(--reverse-kind "${REVERSE_KIND:-full}" --mission-timeout-s "${MISSION_TIMEOUT_S:-2400}")
     [ "${MISSION_AFTER_CONFIRM:-}" = 1 ] && PROBE_ARGS+=(--mission-after-confirm)
     [ -n "${POSE_CHECK:-}" ] && [ "$POSE_CHECK" != off ] \
       || { echo "RELOC_PROBE=$PROBE_MODE needs POSE_CHECK on or shadow" >&2; exit 2; } ;;

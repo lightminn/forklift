@@ -92,3 +92,7 @@ def test_the_audit_is_due_on_its_period_or_when_forced():
     audit = SA.ShadowAudit({"x": lambda: {"a": 1}}, period=3)
     assert [audit.due() for _ in range(6)] == [False, False, True, False, False, True]
     assert audit.due(force=True)
+    # a whole walk longer than the feedback age would disarm a teleop: only a quiet truck is walked, the rear check
+    # (a stand) always
+    assert [audit.due(quiet=False) for _ in range(6)] == [False] * 6
+    assert audit.due(force=True, quiet=False)

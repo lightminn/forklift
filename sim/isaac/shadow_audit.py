@@ -2,8 +2,9 @@
 ``--pose-shadow-audit``, the control side's shared objects -- the arbiter, the obstacle layer with its permit, the
 mission commands, the cargo and the SLAM tracker -- are fingerprinted whole (every level, arrays by content) before and
 after a place the shadow computes in a tick, and every difference is counted with the attributes that changed. A whole
-walk is too dear for every call, so it runs every PERIOD-th call and at each rear check; the record says how long one
-took. Supporting evidence for what the source tests fix (the shadow's writes listed), in place of the deterministic
+walk is too dear for every call, and one longer than the feedback age (0.1 s) would disarm a teleop and a stall of the
+pacing (0.25 s) stop it, so it runs every PERIOD-th call on a truck standing outside TELEOP and at each rear check; the
+record says how long one took. Supporting evidence for what the source tests fix (the shadow's writes listed), in place of the deterministic
 shadow-vs-off byte comparison a live session cannot have. The arbiter runs on the control thread only; a change seen
 on an object another thread also writes is read from the attribute it names. Isaac-free.
 """
@@ -17,7 +18,7 @@ import types
 import numpy as np
 
 DEPTH = 256  # the object graph's guard: in practice the whole of it
-PERIOD = 121  # calls between audits (three a tick, so it walks through the sites)
+PERIOD = 601  # quiet calls between audits (three a tick, so it walks through the sites)
 KEEP = 20  # the first differences kept in full
 NAMED_ONLY = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType, type)
 
@@ -86,9 +87,13 @@ class ShadowAudit:
         self.by_site: dict = {}
         self._before = None
 
-    def due(self, force: bool = False) -> bool:
+    def due(self, force: bool = False, quiet: bool = True) -> bool:
+        if force:
+            return True
+        if not quiet:
+            return False
         self.calls += 1
-        return bool(force) or self.calls % self.period == 0
+        return self.calls % self.period == 0
 
     def before(self) -> None:
         t0 = self.clock()

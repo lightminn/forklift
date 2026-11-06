@@ -9006,7 +9006,8 @@ def drive(S, isaac) -> None:
             from forklift_core.mission.commands import ACTIVE
 
             rt_, a_ = pose_box["rt"], live.arbiter
-            audit_on_ = rt_.audit is not None and rt_.audit.due(rt_.rear_pending())
+            quiet_ = bool(a_.stop_confirmed) and a_.mode != "TELEOP"
+            audit_on_ = rt_.audit is not None and rt_.audit.due(quiet=quiet_)
             if audit_on_:
                 rt_.audit.before()
             tel_ = a_.teleop or {}
@@ -9016,6 +9017,9 @@ def drive(S, isaac) -> None:
                              epoch=live.session_epoch, control_gen=a_.control_gen,
                              mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
             if rt_.rear_pending():
+                if rt_.audit is not None and not audit_on_:
+                    audit_on_ = rt_.audit.due(force=True)  # every rear check (Codex 2d re-review P3)
+                    rt_.audit.before()
                 blocked_ = pose_rear_blocked(rt_)
                 rt_.rear_checked(t_, blocked_)
                 view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
@@ -9039,6 +9043,8 @@ def drive(S, isaac) -> None:
             and of the obstacle layer, on the permits' own outline and walk."""
             from forklift_core.control.drive_permission import arc_poses
             from forklift_core.localization import pose_check as P
+            from forklift_core.localization.slam_pose import compose
+            from forklift_core.localization.start_reloc import rear_from_base
             from forklift_core.safety.pallet_permit import first_contact
 
             from forklift_core.safety.teleop_drive import bundle
@@ -9049,10 +9055,12 @@ def drive(S, isaac) -> None:
             fp_, own_ = layer_.footprints(None, -1)
             odom_rear_ = tuple(float(v) for v in slam["odom_rear"])
             zones_ = rt_.rear_zones(live_pallet_zones())
-            map_rear_ = tuple(float(v) for v in slam_rear(world.current_time - initial_time))
+            applied_ = slam["tracker"].applied
             snap_ = layer_.snapshot
-            if snap_ is None:
+            if snap_ is None or applied_ is None:
                 return True
+            # C o O read here: the control pose's own call writes the tracker's hold record (Codex 2d re-review)
+            map_rear_ = rear_from_base(compose(applied_[0], slam_odom_base()), abs(args.rear_axle_offset_m))
             perm_ = layer_.permission
             with permission_kept(perm_):
                 # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
@@ -10149,7 +10157,8 @@ def drive(S, isaac) -> None:
                     live_tick_out_ = True  # persistent console plan D6: this tick's output is given
                     if pose_box["rt"] is not None:
                         off_ = abs(args.rear_axle_offset_m)
-                        audit_on_ = pose_box["rt"].audit is not None and pose_box["rt"].audit.due()
+                        audit_on_ = pose_box["rt"].audit is not None and \
+                            pose_box["rt"].audit.due(quiet=bool(live.arbiter.stop_confirmed) and live.arbiter.mode != "TELEOP")
                         if audit_on_:
                             pose_box["rt"].audit.before()
                         pose_box["rt"].note_tick(  # plan 3.4: the judgement's record (simulation truth, decides nothing)
