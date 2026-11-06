@@ -25,8 +25,8 @@ class FakeVehicle:
     advances, which confirms (on) when ``confirm_at`` re-matches have run."""
 
     def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None, cut_after=None,
-                 pacing_refusals=0, wall_at=None):
-        self.wall_at, self.held = wall_at, False
+                 pacing_refusals=0, wall_at=None, flash=False, deaf=False):
+        self.wall_at, self.held, self.flash, self.deaf = wall_at, False, flash, deaf
         self.shadow, self.confirm_at = shadow, confirm_at
         self.cut_after, self.pacing_refusals, self.arms, self.leases, self.ended_with = cut_after, pacing_refusals, 0, 0, None
         self.expire, self.since_command, self.armed, self.disarmed = expire, 0, False, 0
@@ -82,6 +82,13 @@ class FakeVehicle:
 
     def teleop_(self, speed, deadman):
         self.since_command = 0
+        if deadman and self.deaf:
+            return  # taken by nothing: the stroke stays ready
+        if deadman and self.flash:  # opened and closed between two published states
+            self.flash, self.stroke, self.armed, self.s = False, "closed", False, 0.01
+            self.moving, self.stood_at, self.held = False, self.d, True
+            self._publish()
+            return
         if self.cut_after is not None and deadman and self.s >= self.cut_after * STEP_M:
             self.cut_after, self.armed, self.moving, self.stroke = None, False, False, "closed"  # no_feedback
             self._publish()
@@ -270,3 +277,17 @@ def test_a_press_that_stops_moving_lets_go_and_two_in_a_row_end_the_strokes():
     rep = _run(v, "full", stuck=0.02)["reverse"]
     assert [s["released"] for s in rep["strokes"]][-2:] == ["blocked", "blocked"] and rep["blocked"] is True
     assert v.calls[-1] == "session_end"  # the session still ends, with its record
+
+
+def test_a_press_closed_between_two_states_lets_go_at_once():
+    # Codex 2d round 4 P2: "active" never published: the press went on to its 120 s
+    v = FakeVehicle(shadow=True, flash=True)
+    rep = _run(v, "full")["reverse"]
+    assert rep["strokes"][0]["released"] == "closed" and not v.flash
+
+
+def test_a_press_the_vehicle_never_takes_is_let_go_by_the_watch():
+    # the watch does not wait for "active"
+    v = FakeVehicle(shadow=True, deaf=True)
+    rep = _run(v, "full", stuck=0.02)["reverse"]
+    assert [s["released"] for s in rep["strokes"]] == ["blocked", "blocked"] and rep["blocked"] is True

@@ -1733,15 +1733,17 @@ async def _reverse_strokes(p, args, rev, shadow):
         moved_mono, moved_left = time.monotonic(), rec["start_total_left_m"]
         while time.monotonic() < end and p.closed_code is None:
             stk = (_pose_check(p.state) or {}).get("stroke")
-            seen_active = seen_active or (stk or {}).get("state") == "active"
-            if seen_active and release_due(args.reverse_kind, rec["start_left_m"], stk):
-                released = (stk or {}).get("state") or "none"
+            state = (stk or {}).get("state")
+            seen_active = seen_active or state == "active"
+            # "closed" unseen active: it opened and closed between two published states (Codex 2d round 4 P2)
+            if (seen_active or state == "closed") and release_due(args.reverse_kind, rec["start_left_m"], stk):
+                released = state or "none"
                 break
             left = (stk or {}).get("total_left_m")
             if left is not None and moved_left is not None and moved_left - left >= REVERSE_MOVES_M:
                 moved_mono, moved_left = time.monotonic(), left
-            if seen_active and time.monotonic() - moved_mono > args.stroke_stuck_s:
-                released = "blocked"  # held by the permit, the deadman down: no use pressing on
+            if time.monotonic() - moved_mono > args.stroke_stuck_s:
+                released = "blocked"  # the permit holds it, or nothing took the press: no use pressing on
                 break
             await p.teleop(REVERSE_RATIO, 0.0, True)
             await asyncio.sleep(0.05)
