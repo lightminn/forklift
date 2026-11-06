@@ -31,6 +31,11 @@ BIN_M = 0.25
 FACTOR = 1.5
 E_STILL_MAX = (0.20, 0.05)  # design 3: the integrity budget E_STILL stays within
 ORIGIN_MAX_S = 0.25  # the 10 Hz samples' gap, with room: an older one is no origin
+INT_GATE = (0.20, 0.05)  # design 1.5: the monitor's gate, as written today
+STILL = (0.002, 0.002)  # pose_check.STILL_M, STILL_RAD: a re-match result is discarded past these
+DISTANCE_BINS = ((0, 1), (1, 2), (2, 5), (5, 10), (10, 20), (20, 50), (50, 10000))
+STAND_SKIP_S = 0.5  # a stand's start left out (the truck still settling)
+STAND_MIN_S = 2.0  # the shortest stand a heading rate is read over
 
 
 def _compose(a, b):
@@ -184,6 +189,79 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
                        "unknown": sum(c == "unknown" for c in classes)}}}
 
 
+def delta_rows(rec) -> list:
+    """Each sample with the monitor's Delta_int: the odometry path since the reference C_int was last set (an agreement
+    that held) and the applied pose's error against the truth, which Delta_int is not."""
+    renewals = sorted(e["t"] for e in rec.get("events") or []
+                      if e["kind"] in ("slam_agreement", "rematch_agreement") and e.get("ok"))
+    rows, since, last, next_ = [], 0.0, None, 0
+    for s in rec.get("samples") or []:
+        o = s.get("o")
+        if o is None:
+            continue
+        if last is not None:
+            since += math.hypot(o[0] - last[0], o[1] - last[1])
+        last = o
+        while next_ < len(renewals) and renewals[next_] <= s["t"]:
+            since, next_ = 0.0, next_ + 1
+        if s.get("ref") != "int" or s.get("delta") is None:
+            continue
+        rows.append({"t": s["t"], "since_m": since, "delta_m": s["delta"][0], "delta_rad": s["delta"][1],
+                     "truth_m": math.hypot(s["applied"][0] - s["truth"][0], s["applied"][1] - s["truth"][1]),
+                     "truth_rad": abs(_wrap(s["applied"][2] - s["truth"][2]))})
+    return rows
+
+
+def _standing_rates(rec) -> list:
+    """The odometry's heading rate over each stand long enough to read (rad/s of simulated time)."""
+    out = []
+    samples = rec.get("samples") or []
+    for st in (rec.get("raw") or {}).get("stands") or []:
+        w = [s for s in samples if st["t0"] + STAND_SKIP_S <= s["t"] <= st["t1"] and s.get("o") is not None]
+        if len(w) < 2 or w[-1]["t"] - w[0]["t"] < STAND_MIN_S:
+            continue
+        out.append(_wrap(w[-1]["o"][2] - w[0]["o"][2]) / (w[-1]["t"] - w[0]["t"]))
+    return out
+
+
+def design_evidence(records) -> dict:
+    """What the design revision reads (plan 6 step 3; shadow sessions, the provisional verdicts not read): Delta_int
+    against the distance since its reference with the truth error beside it, where each session first crossed the
+    monitor's gate and how wrong it was then, and the standing heading drift with what it does to a re-match."""
+    bins = {f"{a}-{b}": {"sessions": 0, "samples": 0, "delta_m_max": 0.0, "delta_rad_max": 0.0, "truth_m_max": 0.0,
+                         "truth_rad_max": 0.0} for a, b in DISTANCE_BINS}
+    crossings, rates, generations, moved_over = [], [], 0, 0
+    for name, rec in records:
+        rows, seen = delta_rows(rec), set()
+        for r in rows:
+            for a, b in DISTANCE_BINS:
+                if a <= r["since_m"] < b:
+                    row = bins[f"{a}-{b}"]
+                    if (a, b) not in seen:
+                        seen.add((a, b))
+                        row["sessions"] += 1
+                    row["samples"] += 1
+                    row["delta_m_max"] = max(row["delta_m_max"], r["delta_m"])
+                    row["delta_rad_max"] = max(row["delta_rad_max"], r["delta_rad"])
+                    row["truth_m_max"] = max(row["truth_m_max"], r["truth_m"])
+                    row["truth_rad_max"] = max(row["truth_rad_max"], r["truth_rad"])
+        first = next((r for r in rows if r["delta_m"] > INT_GATE[0] or r["delta_rad"] > INT_GATE[1]), None)
+        if first is not None:
+            crossings.append({"session": name, **first, "gate": "m" if first["delta_m"] > INT_GATE[0] else "rad"})
+        rates += _standing_rates(rec)
+        for g in (rec.get("raw") or {}).get("rematches") or []:
+            if g.get("g") is not None and g.get("moved") is not None:
+                generations += 1
+                moved_over += g["moved"][0] > STILL[0] or g["moved"][1] > STILL[1]
+    mags = sorted(abs(r) for r in rates)
+    return {"delta_by_distance": bins, "sessions_crossing": len(crossings), "sessions": len(records),
+            "crossings": crossings,
+            "standing_drift": {"stands": len(mags), "rate_p50": mags[len(mags) // 2] if mags else 0.0,
+                               "rate_max": mags[-1] if mags else 0.0,
+                               "over_still_in_1_5_s": sum(r * 1.5 > STILL[1] for r in mags),
+                               "generations": generations, "moved_over_still": int(moved_over)}}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("sessions", nargs="+", type=Path, help="the D sessions' folders (each with epoch_1/run/result.json)")
@@ -202,6 +280,7 @@ def main(argv=None) -> int:
         inputs.append({"session": folder.name, "sha256": hashlib.sha256(data).hexdigest()})
     out = dev_values(records, min_samples=args.min_samples)
     out["inputs"] = inputs
+    out["design"] = design_evidence(records)
     args.out.write_text(json.dumps(out, indent=2) + "\n")
     print(json.dumps({k: out[k] for k in ("odom", "e_still", "e_slam", "flags")}))
     return 0
