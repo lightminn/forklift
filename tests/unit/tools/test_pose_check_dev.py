@@ -192,3 +192,14 @@ def test_the_standing_drift_is_the_odometrys_heading_rate_with_the_truth_still()
     out = D.design_evidence([("a", rec)])["standing_drift"]
     assert out["stands"] == 2 and out["rate_max"] == pytest.approx(0.002)  # the 1 s stand is too short to read
     assert out["over_still_in_1_5_s"] == 1 and out["generations"] == 2 and out["moved_over_still"] == 1
+
+
+def test_a_window_in_contact_is_left_out_of_the_odometry_bound_and_counted():
+    # D session val3_016: the forks on a scene pallet from the start, the wheels slipping -- not a straight reverse's
+    # odometry. The rule fixed after three sessions and before the rest were read.
+    rec = _session(drift=0.01)
+    clean = D.dev_values([("s", rec)], min_samples=1)["basis"]["odom"]
+    rec["contacts"] = {"intervals": [{"t0": 0.0, "t1": 2.5, "body": "b", "other": "o"}]}  # the first stroke's time
+    odom = D.dev_values([("s", rec)], min_samples=1)["basis"]["odom"]
+    assert odom["windows_in_contact"] == 2  # from the start and the first stroke; the second stroke is kept
+    assert 0 < odom["samples"] < clean["samples"] and odom["windows_without_origin"] == 0

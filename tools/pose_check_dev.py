@@ -100,9 +100,20 @@ def _errors(samples, t0, t1, missing=None) -> list:
     return out
 
 
-def odometry_errors(rec, missing=None) -> tuple:
+def odometry_errors(rec, missing=None, touched=None) -> tuple:
     """((d, e_p, e_theta) from the start check's scan to the last stroke's end, the same from each stroke's open to
-    its end) -- the meter's strokes in the shadow, the check's own when on. ``missing``: the windows without an origin."""
+    its end) -- the meter's strokes in the shadow, the check's own when on. ``missing``: the windows without an origin.
+    A window overlapping a recorded contact is left out and put in ``touched``: wheels slipping against something are
+    not a straight reverse's odometry (D session val3_016: the forks on a scene pallet from the start)."""
+    contacts = [(i["t0"], i["t1"]) for i in (rec.get("contacts") or {}).get("intervals") or []]
+
+    def clear(t0, t1) -> bool:
+        if any(a <= t1 and b >= t0 for a, b in contacts):
+            if touched is not None:
+                touched.append(t0)
+            return False
+        return True
+
     events = rec.get("meter_events") or rec.get("events") or []
     samples = rec.get("samples") or []
     opens = [e["t"] for e in events if e["kind"] == "stroke_open"]
@@ -110,11 +121,11 @@ def odometry_errors(rec, missing=None) -> tuple:
     start_t = (rec.get("start") or {}).get("scan_t")
     if not dones or start_t is None:
         return [], []
-    from_start = _errors(samples, start_t, dones[-1], missing)
+    from_start = _errors(samples, start_t, dones[-1], missing) if clear(start_t, dones[-1]) else []
     from_strokes = []
     for t0 in opens:
         t1 = next((t for t in dones if t > t0), None)
-        if t1 is not None:
+        if t1 is not None and clear(t0, t1):
             from_strokes += _errors(samples, t0, t1, missing)
     return from_start, from_strokes
 
@@ -133,9 +144,10 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
     errs, bins = [], {f"{k * BIN_M:.2f}": 0 for k in range(int(D_TOTAL / BIN_M) + 1)}
     stands, starts, gens, all_g, passed = [], [], [], 0, 0
     missing: list = []
+    touched: list = []
     closes: list = []
     for _, rec in records:
-        a_, b_ = odometry_errors(rec, missing)
+        a_, b_ = odometry_errors(rec, missing, touched)
         errs += a_ + b_
         closes += [e.get("s_m", 0.0) for e in rec.get("meter_events") or [] if e["kind"] == "stroke_close"]
         reach = max((d for d, _, _ in a_), default=0.0)
@@ -176,7 +188,7 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
         "basis": {
             "factor": FACTOR, "sessions": len(records),
             "odom": {"samples": len(in_reach), "beyond_d_total": len(errs) - len(in_reach), "bins": bins,
-                     "windows_without_origin": len(missing),
+                     "windows_without_origin": len(missing), "windows_in_contact": len(touched),
                      "strokes": {"closed": len(closes), "under_0_05_m": sum(s < 0.05 for s in closes),
                                  "under_0_5_m": sum(s < 0.5 for s in closes)},
                      "max_e_p": max((e for _, e, _ in in_reach), default=0.0),
