@@ -1,0 +1,78 @@
+coverage (session, hold events, last event, end): [('D_line_m_s0', 24, 465.8, 465.9), ('D_line_m_s1', 24, 454.5, 454.6), ('D_line_m_s2', 30, 490.1, 490.2), ('D_line_m_s3', 24, 465.7, 465.9)] ... all events end within 0.3 s of run end: True
+== HOME done 82, with a hold at arrival 82, missing 0
+hold-start row offset s (should be 0): n 82 med +0.0000 min +0.0000 max +0.0000 neg 0
+hold before arrival s: n 82 med +2.8250 min +2.5750 max +6.5917 neg 0 | row dt start/end: n 82 med +0.0000 min +0.0000 max +0.0000 neg 0 n 82 med +0.0083 min +0.0083 max +0.0083 neg 0
+ goal frame along: est(arrival) n 82 med -0.0033 min -0.0043 max +0.0076 neg 58 | truth(arrival) n 82 med +0.0109 min -0.0062 max +0.0338 neg 9
+   est-truth at hold start (truth body) n 82 med -0.0128 min -0.0302 max +0.0007 neg 81 | at arrival (truth body) n 82 med -0.0107 min -0.0283 max +0.0023 neg 81
+   per-mission change of est-truth in the goal frame n 82 med -0.0004 min -0.0030 max +0.0025 neg 61
+   relative-motion mismatch (end truth body) n 82 med -0.0007 min -0.0030 max +0.0022 neg 64 | propagated start error n 82 med -0.0097 min -0.0281 max +0.0022 neg 81
+   |propagated| > |mismatch|: 80/82
+ goal frame lateral: est(arrival) n 82 med -0.0007 min -0.0060 max +0.0007 neg 74 | truth(arrival) n 82 med -0.0257 min -0.0455 max -0.0051 neg 82
+   est-truth at hold start (truth body) n 82 med +0.0127 min -0.0021 max +0.0283 neg 2 | at arrival (truth body) n 82 med +0.0242 min +0.0001 max +0.0443 neg 0
+   per-mission change of est-truth in the goal frame n 82 med +0.0071 min -0.0121 max +0.0278 neg 2
+   relative-motion mismatch (end truth body) n 82 med +0.0044 min -0.0091 max +0.0174 neg 3 | propagated start error n 82 med +0.0184 min -0.0007 max +0.0384 neg 1
+   |propagated| > |mismatch|: 77/82
+ goal frame yaw: est(arrival) n 82 med -0.0016 min -0.0167 max +0.0297 neg 58 | truth(arrival) n 82 med -0.0106 min -0.0245 max +0.0383 neg 59
+   est-truth at hold start (truth body) n 82 med +0.0023 min -0.0097 max +0.0087 neg 21 | at arrival (truth body) n 82 med +0.0125 min -0.0401 max +0.0230 neg 19
+   per-mission change of est-truth in the goal frame n 82 med +0.0095 min -0.0308 max +0.0170 neg 20
+   relative-motion mismatch (end truth body) n 82 med +0.0095 min -0.0308 max +0.0170 neg 20 | propagated start error n 82 med +0.0023 min -0.0097 max +0.0087 neg 21
+   |propagated| > |mismatch|: 7/82
+ hold rotation direction +1: n 58 odom n 58 med +0.2598 min +0.2020 max +0.3376 neg 0 truth n 58 med +0.2488 min +0.1918 max +0.3257 neg 0 dist n 58 med +0.8690 min +0.7631 max +1.0392 neg 0
+   residual (truth-odom) x sign(odom) / m n 58 med -0.0139 min -0.0182 max -0.0045 neg 58 | ratio odom/truth (|truth|>0.05) n 58 med +1.0528 min +1.0155 max +1.0689 neg 0 | lead/tail s n 58 med +0.0583 min +0.0083 max +0.1000 neg 0 n 58 med +0.0500 min +0.0000 max +0.0917 neg 0
+   turn left: n 58 residual/m n 58 med -0.0139 min -0.0182 max -0.0045 neg 58
+ hold rotation direction -1: n 24 odom n 24 med -0.0218 min -0.3415 max +0.3061 neg 14 truth n 24 med -0.0210 min -0.3464 max +0.3362 neg 15 dist n 24 med +0.5749 min +0.4767 max +1.0808 neg 0
+   residual (truth-odom) x sign(odom) / m n 24 med +0.0024 min -0.0083 max +0.0282 neg 11 | ratio odom/truth (|truth|>0.05) n 15 med +0.9144 min +0.9036 max +1.0294 neg 0 | lead/tail s n 24 med +0.0583 min +0.0167 max +0.1000 neg 0 n 24 med +0.0417 min +0.0000 max +0.0833 neg 0
+   turn left: n 10 residual/m n 10 med +0.0274 min -0.0083 max +0.0282 neg 1
+   turn right: n 14 residual/m n 14 med -0.0014 min -0.0057 max +0.0156 neg 10
+hold event error minus start-row est-truth (truth body): along n 82 med +0.0000 min -0.0000 max +0.0000 neg 38 lateral n 82 med -0.0000 min -0.0000 max +0.0000 neg 41 yaw n 82 med +0.0000 min +0.0000 max +0.0000 neg 0
+== STALL events 14
+  D_line_m_s2 m1 t 148.5 leg dir +1 len 4.9s hold_from 3.64s odom +0.3959 truth +0.3782 dist 1.170 res/m -0.015167542471188924
+  D_line_m_s2 m1 t 159.0 leg dir -1 len 6.2s hold_from 8.9s odom -0.0511 truth -0.0538 dist 0.387 res/m 0.007003467598214561
+  D_line_m_s2 m3 t 481.6 leg dir +1 len 5.4s hold_from 3.83s odom +0.4932 truth +0.4726 dist 1.457 res/m -0.014165097440083135
+  D_line_m_s7 m1 t 145.9 leg dir +1 len 3.7s hold_from 2.49s odom +0.3910 truth +0.3745 dist 1.166 res/m -0.01418563945299463
+  D_line_m_s7 m2 t 313.9 leg dir +1 len 5.0s hold_from 3.7s odom +0.4302 truth +0.4112 dist 1.272 res/m -0.014938930578231473
+  D_random_m_s4 m3 t 480.3 leg dir +1 len 5.0s hold_from 3.69s odom +0.4235 truth +0.4058 dist 1.260 res/m -0.014093212316672751
+  D_random_m_s5 m3 t 479.3 leg dir +1 len 5.0s hold_from 3.68s odom +0.4281 truth +0.4100 dist 1.268 res/m -0.014253599203710091
+  D_random_m_s6 m1 t 157.4 leg dir +1 len 5.0s hold_from 3.7s odom +0.4291 truth +0.4103 dist 1.268 res/m -0.01481150079150821
+  D_random_m_s6 m3 t 476.0 leg dir +1 len 5.0s hold_from 3.68s odom +0.4199 truth +0.4014 dist 1.242 res/m -0.014925507302913636
+  D_random_m_s7 m3 t 467.5 leg dir +1 len 5.0s hold_from 3.66s odom +0.4219 truth +0.4042 dist 1.248 res/m -0.01423800358616005
+  O0_random_m_s0 m1 t 156.8 leg dir +1 len 5.3s hold_from 3.78s odom +0.4746 truth +0.4543 dist 1.401 res/m -0.014506650165662393
+  O0_random_m_s0 m3 t 471.6 leg dir +1 len 3.8s hold_from 2.48s odom +0.4127 truth +0.3975 dist 1.243 res/m -0.012240800650840003
+  O0_random_m_s1 m3 t 476.9 leg dir +1 len 5.0s hold_from 3.7s odom +0.4289 truth +0.4099 dist 1.267 res/m -0.014965928116344939
+  O6_line_m_s1 m1 t 147.6 leg dir +1 len 4.9s hold_from 3.65s odom +0.4021 truth +0.3845 dist 1.191 res/m -0.014785038590778905
+== DOCK line_m 42
+ D-1: n 14 release after transport s n 14 med +0.0083 min +0.0083 max +0.0083 neg 0 | hold before match s n 14 med +3.3333 min +3.1667 max +3.3917 neg 0
+   along: est-truth body after transport release n 14 med -0.0049 min -0.0087 max -0.0018 neg 14 | at hold start n 14 med +0.0134 min +0.0078 max +0.0220 neg 0 | at match n 14 med +0.0036 min -0.0019 max +0.0098 neg 3 | eetf n 14 med +0.0037 min -0.0017 max +0.0100 neg 3
+     hold split: relative-motion mismatch (end body) n 14 med -0.0028 min -0.0040 max -0.0014 neg 14 | propagated start n 14 med +0.0063 min +0.0007 max +0.0126 neg 0
+     |propagated| > |mismatch|: 11/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   lateral: est-truth body after transport release n 14 med +0.0074 min +0.0014 max +0.0139 neg 0 | at hold start n 14 med -0.0375 min -0.0531 max -0.0335 neg 14 | at match n 14 med -0.0340 min -0.0470 max -0.0297 neg 14 | eetf n 14 med -0.0340 min -0.0470 max -0.0297 neg 14
+     hold split: relative-motion mismatch (end body) n 14 med +0.0050 min +0.0027 max +0.0054 neg 0 | propagated start n 14 med -0.0390 min -0.0507 max -0.0346 neg 14
+     |propagated| > |mismatch|: 14/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   yaw: est-truth body after transport release n 14 med -0.0005 min -0.0011 max +0.0005 neg 11 | at hold start n 14 med -0.0004 min -0.0036 max +0.0080 neg 8 | at match n 14 med -0.0147 min -0.0178 max +0.0216 neg 13 | eetf n 14 med -0.0147 min -0.0178 max +0.0215 neg 13
+     hold split: relative-motion mismatch (end body) n 14 med -0.0140 min -0.0152 max +0.0137 neg 13 | propagated start n 14 med -0.0004 min -0.0036 max +0.0080 neg 8
+     |propagated| > |mismatch|: 0/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   hold rotation residual/m n 14 med +0.0226 min -0.0218 max +0.0243 neg 1 dir [-1, -1, -1, -1, -1, -1, -1, -1, 1, -1, -1, -1, -1, -1]
+ D-2: n 14 release after transport s n 14 med +0.0083 min +0.0083 max +0.0083 neg 0 | hold before match s n 14 med +3.2083 min +3.1833 max +3.2417 neg 0
+   along: est-truth body after transport release n 14 med -0.0055 min -0.0082 max -0.0026 neg 14 | at hold start n 14 med +0.0131 min +0.0093 max +0.0161 neg 0 | at match n 14 med +0.0012 min -0.0007 max +0.0084 neg 5 | eetf n 14 med +0.0013 min -0.0006 max +0.0083 neg 5
+     hold split: relative-motion mismatch (end body) n 14 med -0.0026 min -0.0037 max -0.0007 neg 14 | propagated start n 14 med +0.0039 min +0.0020 max +0.0091 neg 0
+     |propagated| > |mismatch|: 9/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   lateral: est-truth body after transport release n 14 med +0.0056 min +0.0002 max +0.0109 neg 0 | at hold start n 14 med -0.0439 min -0.0486 max -0.0398 neg 14 | at match n 14 med -0.0405 min -0.0478 max -0.0330 neg 14 | eetf n 14 med -0.0405 min -0.0478 max -0.0330 neg 14
+     hold split: relative-motion mismatch (end body) n 14 med +0.0049 min -0.0015 max +0.0052 neg 1 | propagated start n 14 med -0.0451 min -0.0515 max -0.0380 neg 14
+     |propagated| > |mismatch|: 14/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   yaw: est-truth body after transport release n 14 med -0.0002 min -0.0015 max +0.0006 neg 9 | at hold start n 14 med -0.0012 min -0.0065 max +0.0046 neg 9 | at match n 14 med -0.0156 min -0.0204 max +0.0013 neg 13 | eetf n 14 med -0.0156 min -0.0204 max +0.0012 neg 13
+     hold split: relative-motion mismatch (end body) n 14 med -0.0139 min -0.0148 max +0.0020 neg 13 | propagated start n 14 med -0.0012 min -0.0065 max +0.0046 neg 9
+     |propagated| > |mismatch|: 0/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   hold rotation residual/m n 14 med +0.0224 min -0.0035 max +0.0240 neg 1 dir [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]
+ D-3: n 14 release after transport s n 14 med +0.0083 min +0.0083 max +0.0083 neg 0 | hold before match s n 14 med +3.1333 min +3.1083 max +4.6500 neg 0
+   along: est-truth body after transport release n 14 med -0.0029 min -0.0053 max -0.0017 neg 14 | at hold start n 14 med -0.0047 min -0.0097 max +0.0008 neg 13 | at match n 14 med +0.0038 min +0.0000 max +0.0064 neg 0 | eetf n 14 med +0.0037 min -0.0001 max +0.0064 neg 1
+     hold split: relative-motion mismatch (end body) n 14 med -0.0013 min -0.0020 max -0.0006 neg 14 | propagated start n 14 med +0.0049 min +0.0007 max +0.0078 neg 0
+     |propagated| > |mismatch|: 14/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   lateral: est-truth body after transport release n 14 med +0.0047 min +0.0023 max +0.0096 neg 0 | at hold start n 14 med -0.0499 min -0.0657 max -0.0362 neg 14 | at match n 14 med -0.0583 min -0.0740 max -0.0429 neg 14 | eetf n 14 med -0.0583 min -0.0740 max -0.0429 neg 14
+     hold split: relative-motion mismatch (end body) n 14 med -0.0054 min -0.0060 max -0.0048 neg 14 | propagated start n 14 med -0.0534 min -0.0691 max -0.0375 neg 14
+     |propagated| > |mismatch|: 14/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   yaw: est-truth body after transport release n 14 med -0.0001 min -0.0010 max +0.0009 neg 8 | at hold start n 14 med -0.0040 min -0.0079 max +0.0017 neg 13 | at match n 14 med -0.0206 min -0.0249 max -0.0151 neg 14 | eetf n 14 med -0.0206 min -0.0249 max -0.0151 neg 14
+     hold split: relative-motion mismatch (end body) n 14 med -0.0170 min -0.0177 max -0.0143 neg 14 | propagated start n 14 med -0.0040 min -0.0079 max +0.0017 neg 13
+     |propagated| > |mismatch|: 0/14 | start row offset n 14 med +0.0000 min +0.0000 max +0.0000 neg 0
+   hold rotation residual/m n 14 med -0.0270 min -0.0277 max -0.0224 neg 14 dir [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+ D7 Dp_line_m_s1 m3 docking_unaligned:{'along_m': -0.03167504065972048, 'lateral_m': 0.07461551318472322, 'yaw_rad': 0.027819322298680473, 'length_left_m': 1.5316750406597204}:{'status': 'arrived', 'position_error_m': 0.007730371658464172, 'yaw_error_rad': -0.005278653454263988, 'time_s': 7.058333333333334, 'trajectory_samples': 849, 'swept_clear': True}
+ D7 O0_line_m_s0 m3 docking_unaligned:{'along_m': -0.006113734099286702, 'lateral_m': 0.0836372792391552, 'yaw_rad': 0.006466766615902387, 'length_left_m': 1.506113734099287}:{'status': 'arrived', 'position_error_m': 0.007736450080984692, 'yaw_error_rad': -0.0056173518233569066, 'time_s': 6.975, 'trajectory_samples': 839, 'swept_clear': True}
