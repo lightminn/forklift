@@ -264,7 +264,7 @@
   - 끝난 세션이 합 3 GB 에 이르면 보관 뒤 삭제한다(평균 세션이면 약 33 세션마다).
   - 최대 점유 = 끝난 세션 3 GB + 도는 세션 최악 1.6 GB(0.26 × 6) + 남기는 기록 누적이다. 누적은 세션당 약 12 MB 라 210 세션에서 2.5 GB, 300 세션에서 3.6 GB 다. 합은 7.1 GB, 8.2 GB 로 쓸 수 있는 9 GB 안에 든다.
   - 남기는 기록을 판정 전에 gdrive 로도 복사해 두면 ws1 사고에 대비할 수 있다. 여유가 25 GB 에 닿으면 디스크 세션의 기준대로 멈춘다.
-- 판정에 필요해 롤링 삭제에서 빼는 것(세션당 약 12 MB): `epoch_1/run/result.json`(접촉·그림자 필드·표본·감사), `epoch_1/run/pose_check_stand_scans.npz`, `probe.json`, `supervisor.jsonl`, `live_port.json`, `env.sh`, 묶음의 `RUNS.jsonl`·`results.jsonl`·`summary.json`, `epoch_1/run/spool/manifest.json`(스풀 완전성). 그 밖은 gdrive 보관 뒤 지운다. 판정이 끝날 때까지 스냅숏은 지우지 않는다.
+- 판정에 필요해 롤링 삭제에서 빼는 것(세션당 약 12 MB): `epoch_1/run/result.json`(접촉·그림자 필드·표본·감사), `epoch_1/run/pose_check_stand_scans.npz`, `probe.json`, `supervisor.jsonl`, `live_port.json`, `env.sh`, 묶음의 `RUNS.jsonl`·`results.jsonl`·`summary.json`, `epoch_1/run/spool/manifest.json`(스풀 완전성), `epoch_1/run/missions/*/records.json`·`missions/*/result.json`(임무당 약 170 KB, 근접 캡처 집계 near_capture_tally/1 의 분모와 회복). 그 밖은 gdrive 보관 뒤 지운다. 판정이 끝날 때까지 스냅숏은 지우지 않는다.
 
 ## 8. 자체 검토
 
