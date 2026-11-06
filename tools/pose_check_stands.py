@@ -151,18 +151,18 @@ class Series:
         self.since = self.path - self.path[0]
         self.renewals_taken = []
         for at, C, *tick in renewals[1:]:
-            i = int(np.searchsorted(t, at, side="right")) - 1  # the last sample at or before the generation's result
-            if i >= len(t) - 1:
-                break
+            i = max(0, int(np.searchsorted(t, at, side="right")) - 1)  # the last sample at or before the result
             # Delta_int at the result's own tick: its C and O when recorded (Codex revision review, draft 3)
             c_at, o_at = (np.array([tick[0]], float), np.array([tick[1]], float)) if tick else (self.C[i:i + 1], o[i:i + 1])
             m, _ = _gaps(_compose(c_at, o_at), _compose(self.ref[i:i + 1], o_at))
             if float(m[0]) > REMATCH_M:
-                i += 1  # from the next sample: the result was applied after this one
-                self.ref[i:] = C
-                self.since[i:] = self.path[i:] - self.path[i]
+                j = int(np.searchsorted(t, at, side="left"))  # from the result's tick: its sample comes after it
+                if j >= len(t):
+                    break
+                self.ref[j:] = C
+                self.since[j:] = self.path[j:] - self.path[j]
                 self.renewals_taken.append(at)
-        self.last_renewal_index = max(0, int(np.searchsorted(t, renewals[-1][0])))
+        self.last_renewal_index = int(np.searchsorted(t, renewals[-1][0], side="right")) - 1
 
 
 def _compose(a, b):
@@ -370,17 +370,26 @@ def renewals_of(rec, *, e_slam) -> list:
     start = raw.get("start") or {}
     out = []
     ok = lambda r: r["agree_m"] <= e_slam[0] and r["agree_rad"] <= e_slam[1]  # noqa: E731
-    if start.get("confirmed") and start.get("agree_m") is not None and ok(start):
+    if start.get("confirmed"):
+        if start.get("agree_m") is None or not ok(start):
+            return []  # pose_slam_disagree: an operating run ends there
         o_scan = tuple(rec["start"]["o_scan"])
         out.append((start["t"], compose(tuple(start["r"]), invert(o_scan)), tuple(start["C"]), o_scan))
     for g in raw.get("rematches") or []:
-        if g.get("g") is None or not g.get("residual_confirmed") or not g.get("applicable") or g.get("agree_m") is None:
+        if not out:
+            # before the confirmation: an operating run's life, stopping where it would end (Codex revision review,
+            # draft 4 -- the shadow goes on recording past that)
+            if g.get("outcome") in ("out_of_set", "twin_preferred"):
+                return []
+            if g.get("outcome") != "confirm" or not g.get("applicable"):
+                continue
+            if g.get("agree_m") is None or not ok(g):
+                return []
+        elif g.get("g") is None or not g.get("residual_confirmed") or not g.get("applicable") or g.get("agree_m") is None \
+                or not ok(g):
             continue
-        # the first reference is a confirmation: without a confirmed start only a generation that confirmed the start
-        # (Codex revision review, draft 3); a session that never confirms has no monitor
-        if ok(g) and (out or g.get("outcome") == "confirm"):
-            o_scan = tuple(g["o_scan"])
-            out.append((g["t"], compose(tuple(g["g"]), invert(o_scan)), tuple(g["C"]), o_scan))
+        o_scan = tuple(g["o_scan"])
+        out.append((g["t"], compose(tuple(g["g"]), invert(o_scan)), tuple(g["C"]), o_scan))
     return out
 
 
@@ -391,6 +400,9 @@ def choose(candidates, missions) -> dict:
     for name, c in candidates.items():
         why = []
         by = c["by_key"]
+        if not by or any(not row["wrong_reached"] for key, row in by.items() if key.split(":")[0].startswith("step")
+                         and float(key.split(":")[1]) >= 1.0):
+            why.append("no cases of a required kind")
         for key, row in by.items():
             kind, size, _ = key.split(":")
             big = (kind == "step_xy" and float(size) >= 1.0) or (kind == "step_yaw" and float(size) >= 0.30)
@@ -415,6 +427,11 @@ def choose(candidates, missions) -> dict:
     return out
 
 
+def _suffix(ser) -> int:
+    """The first sample past the last generation an on run could use: where only the monitor stands guard."""
+    return ser.last_renewal_index + 1
+
+
 def evaluate(correct, missions, positives) -> dict:
     """``correct``: name -> Series of every correct session; ``missions``: those that drove one; ``positives``: name ->
     (Series or None, the true-error onset's time) -- None: never confirmed, no monitor runs."""
@@ -422,7 +439,9 @@ def evaluate(correct, missions, positives) -> dict:
                   Monitor("P", limit=(0.20, 0.05), per_m=fit_per_m(correct))]
     candidates += [Monitor("W", window_m=w, limit=fit_limit(correct, Monitor("W", window_m=w))) for w in WINDOWS_M]
     cases = kinds()
-    out = {"kinds": len(cases), "onsets": ONSET_DRAWS + 3, "sessions": len(missions), "candidates": {}}
+    out = {"kinds": len(cases), "onsets": ONSET_DRAWS + 3, "sessions": len(missions), "candidates": {},
+           "sessions_without_suffix": sorted(n for n in missions if not onsets(correct[n], n, _suffix(correct[n])))}
+    out["sessions_with_cases"] = len(missions) - len(out["sessions_without_suffix"])
     for mon in candidates:
         label = mon.kind if mon.kind != "W" else f"W{mon.window_m:g}"
         false = [k for k, ser in correct.items() if first_alarm(ser, mon) is not None]
@@ -431,7 +450,7 @@ def evaluate(correct, missions, positives) -> dict:
         by_size: dict = {}
         for name in missions:
             ser = correct[name]
-            for tag, onset in onsets(ser, name, ser.last_renewal_index + 1):
+            for tag, onset in onsets(ser, name, _suffix(ser)):
                 for case in cases:
                     row = run_case(ser, onset, case, mon)
                     by.setdefault(case_key(case), []).append(row)

@@ -230,7 +230,7 @@ def test_a_shadow_generation_renews_the_reference_only_where_the_operating_rule_
     ser = S.series(rows, renewals=[(0.0, I), (0.9, near), (2.2, far)])
     assert ser.renewals_taken == [2.2]
     at = int(np.searchsorted(ser.t, 2.35))
-    assert ser.ref[at] == pytest.approx(far) and ser.since[at] == pytest.approx(0.1, abs=0.02)
+    assert ser.ref[at] == pytest.approx(far) and ser.since[at] == pytest.approx(0.2, abs=0.02)
 
 
 def test_the_available_renewals_are_the_generations_that_passed_not_the_provisional_events():
@@ -315,8 +315,40 @@ def test_without_a_confirmed_start_the_first_reference_is_a_confirming_generatio
                 "residual_confirmed": True, "applicable": True, "agree_m": 0.01, "agree_rad": 0.0, "C": [0.0, 0.0, 0.0]}
 
     rec = {"start": {"o_scan": [0.0, 0.0, 0.0]},
-           "raw": {"start": {"confirmed": False}, "rematches": [gen(1.0, "out_of_set"), gen(2.0, "confirm"),
+           "raw": {"start": {"confirmed": False}, "rematches": [gen(1.0, "unconfirmed"), gen(2.0, "confirm"),
                                                                 gen(3.0, "confirm")]}}
     assert [r[0] for r in S.renewals_of(rec, e_slam=(0.1, 0.1))] == [2.0, 3.0]
-    rec["raw"]["rematches"] = [gen(1.0, "out_of_set")]
-    assert S.renewals_of(rec, e_slam=(0.1, 0.1)) == []  # never confirmed: no monitor
+    # an operating run ends at out_of_set or twin_preferred: what the shadow went on to record is not its confirmation
+    rec["raw"]["rematches"] = [gen(1.0, "out_of_set"), gen(2.0, "confirm")]
+    assert S.renewals_of(rec, e_slam=(0.1, 0.1)) == []
+    rec["raw"]["rematches"] = [gen(1.0, "twin_preferred"), gen(2.0, "confirm")]
+    assert S.renewals_of(rec, e_slam=(0.1, 0.1)) == []
+    far = gen(2.0, "confirm")
+    far["agree_m"] = 0.5  # a confirming generation the correction disagrees with: pose_slam_disagree ends it
+    rec["raw"]["rematches"] = [far, gen(3.0, "confirm")]
+    assert S.renewals_of(rec, e_slam=(0.1, 0.1)) == []
+
+
+# --- Codex revision review, draft 4 ---
+def test_a_renewal_on_a_samples_own_tick_applies_to_that_sample():
+    # the runtime handles the result before the tick's sample: the same t is already under the new reference
+    rows = _samples(n=100, c_per_m=0.0)
+    for r in rows[50:]:
+        r["applied"][1] = 0.25
+    new = (0.0, 0.25, 0.0)
+    ser = S.series(rows, renewals=[(0.0, I), (rows[50]["t"], new, new, (5.0, 0.0, 0.0))])
+    assert ser.renewals_taken == [rows[50]["t"]] and ser.ref[50] == pytest.approx(new) and ser.ref[49] == pytest.approx(I)
+
+
+def test_a_kind_with_no_case_is_not_evaluated_and_no_winner_comes_of_nothing():
+    cand = _candidate({})
+    cand["by_key"] = {}
+    out = S.choose({"a": cand}, [f"m{k}" for k in range(10)])
+    assert out["winner"] is None and any("no cases" in w for w in out["eliminated"]["a"])
+
+
+def test_the_sessions_without_a_suffix_are_counted():
+    ser = S.series(_samples(n=100), renewals=[(0.0, I), (rows_end := 9.85, (0.0, 0.5, 0.0))])
+    out = S.evaluate({"a": ser}, ["a"], {})
+    assert out["sessions_with_cases"] == 0 and out["sessions_without_suffix"] == ["a"]
+    assert out["choice"]["winner"] is None and rows_end
