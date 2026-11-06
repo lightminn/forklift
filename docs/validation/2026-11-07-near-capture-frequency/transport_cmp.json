@@ -1,0 +1,432 @@
+{
+ "100": {
+  "outcome": "failed",
+  "reason": "Tracking failed in transport: pos=2.4632",
+  "path_m": 14.57,
+  "cusps": [
+   41,
+   207,
+   225
+  ],
+  "flip": 125,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 16.1,
+   "longest_s": 16.1,
+   "truth_curvature": -0.3025
+  },
+  "second_arc": {
+   "saturated_s": 7.7,
+   "longest_s": 7.7,
+   "truth_curvature": 0.3166
+  },
+  "flip_yaw_peak_rad": -0.229,
+  "back_within_0_05_s": null,
+  "cross_first_m": 0.146,
+  "cross_second_m": 0.32,
+  "cross_at_failure_progress_m": 0.32,
+  "index_reached": 167,
+  "end_leg": 207,
+  "start_yaw_peak_rad": 0.086,
+  "start_cross_m": 0.044,
+  "speed_at_flip_min": 0.074,
+  "speed_second_mean": 0.271,
+  "load": {
+   "along_m": 1.2696,
+   "lateral_m": -0.0336,
+   "yaw_rad": -0.0085,
+   "lift_m": 0.1779,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "101": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 14.19,
+  "cusps": [
+   34,
+   198,
+   218
+  ],
+  "flip": 117,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 12.6,
+   "longest_s": 10.4,
+   "truth_curvature": -0.3018
+  },
+  "second_arc": {
+   "saturated_s": 11.3,
+   "longest_s": 9.8,
+   "truth_curvature": 0.3159
+  },
+  "flip_yaw_peak_rad": -0.05,
+  "back_within_0_05_s": 0.01,
+  "cross_first_m": 0.048,
+  "cross_second_m": 0.048,
+  "cross_at_failure_progress_m": 0.048,
+  "index_reached": 196,
+  "end_leg": 198,
+  "start_yaw_peak_rad": 0.037,
+  "start_cross_m": 0.031,
+  "speed_at_flip_min": 0.09,
+  "speed_second_mean": 0.278,
+  "load": {
+   "along_m": 1.2692,
+   "lateral_m": -0.0276,
+   "yaw_rad": -0.0077,
+   "lift_m": 0.1778,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 1,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "102": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 13.82,
+  "cusps": [
+   27,
+   187,
+   209
+  ],
+  "flip": 108,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 10.7,
+   "longest_s": 6.8,
+   "truth_curvature": -0.3015
+  },
+  "second_arc": {
+   "saturated_s": 10.5,
+   "longest_s": 8.2,
+   "truth_curvature": 0.316
+  },
+  "flip_yaw_peak_rad": -0.046,
+  "back_within_0_05_s": 0.0,
+  "cross_first_m": 0.047,
+  "cross_second_m": 0.046,
+  "cross_at_failure_progress_m": 0.046,
+  "index_reached": 185,
+  "end_leg": 187,
+  "start_yaw_peak_rad": 0.029,
+  "start_cross_m": 0.031,
+  "speed_at_flip_min": 0.131,
+  "speed_second_mean": 0.281,
+  "load": {
+   "along_m": 1.2694,
+   "lateral_m": -0.0244,
+   "yaw_rad": -0.0063,
+   "lift_m": 0.1777,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "103": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 14.48,
+  "cusps": [
+   25,
+   30,
+   41,
+   203,
+   224
+  ],
+  "flip": 123,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 14.2,
+   "longest_s": 13.7,
+   "truth_curvature": -0.3017
+  },
+  "second_arc": {
+   "saturated_s": 10.3,
+   "longest_s": 9.4,
+   "truth_curvature": 0.316
+  },
+  "flip_yaw_peak_rad": -0.049,
+  "back_within_0_05_s": 0.0,
+  "cross_first_m": 0.064,
+  "cross_second_m": 0.045,
+  "cross_at_failure_progress_m": 0.045,
+  "index_reached": 201,
+  "end_leg": 203,
+  "start_yaw_peak_rad": 0.051,
+  "start_cross_m": 0.033,
+  "speed_at_flip_min": 0.113,
+  "speed_second_mean": 0.288,
+  "load": {
+   "along_m": 1.2691,
+   "lateral_m": -0.0289,
+   "yaw_rad": -0.0079,
+   "lift_m": 0.1779,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "104": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 14.38,
+  "cusps": [
+   39,
+   203,
+   222
+  ],
+  "flip": 122,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 12.0,
+   "longest_s": 5.4,
+   "truth_curvature": -0.3005
+  },
+  "second_arc": {
+   "saturated_s": 10.6,
+   "longest_s": 8.0,
+   "truth_curvature": 0.3164
+  },
+  "flip_yaw_peak_rad": -0.046,
+  "back_within_0_05_s": 0.0,
+  "cross_first_m": 0.046,
+  "cross_second_m": 0.046,
+  "cross_at_failure_progress_m": 0.046,
+  "index_reached": 201,
+  "end_leg": 203,
+  "start_yaw_peak_rad": 0.022,
+  "start_cross_m": 0.03,
+  "speed_at_flip_min": 0.106,
+  "speed_second_mean": 0.283,
+  "load": {
+   "along_m": 1.2704,
+   "lateral_m": -0.0241,
+   "yaw_rad": -0.0061,
+   "lift_m": 0.1778,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "105": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 14.38,
+  "cusps": [
+   38,
+   202,
+   221
+  ],
+  "flip": 121,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 12.1,
+   "longest_s": 8.2,
+   "truth_curvature": -0.3004
+  },
+  "second_arc": {
+   "saturated_s": 12.4,
+   "longest_s": 12.1,
+   "truth_curvature": 0.3151
+  },
+  "flip_yaw_peak_rad": -0.063,
+  "back_within_0_05_s": 0.22,
+  "cross_first_m": 0.05,
+  "cross_second_m": 0.049,
+  "cross_at_failure_progress_m": 0.049,
+  "index_reached": 200,
+  "end_leg": 202,
+  "start_yaw_peak_rad": 0.03,
+  "start_cross_m": 0.031,
+  "speed_at_flip_min": 0.089,
+  "speed_second_mean": 0.265,
+  "load": {
+   "along_m": 1.2689,
+   "lateral_m": -0.0119,
+   "yaw_rad": -0.0025,
+   "lift_m": 0.1777,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 1,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "106": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 13.81,
+  "cusps": [
+   27,
+   187,
+   209
+  ],
+  "flip": 108,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 10.7,
+   "longest_s": 8.3,
+   "truth_curvature": -0.3016
+  },
+  "second_arc": {
+   "saturated_s": 10.1,
+   "longest_s": 8.8,
+   "truth_curvature": 0.316
+  },
+  "flip_yaw_peak_rad": -0.05,
+  "back_within_0_05_s": 0.01,
+  "cross_first_m": 0.05,
+  "cross_second_m": 0.05,
+  "cross_at_failure_progress_m": 0.05,
+  "index_reached": 185,
+  "end_leg": 187,
+  "start_yaw_peak_rad": 0.031,
+  "start_cross_m": 0.033,
+  "speed_at_flip_min": 0.108,
+  "speed_second_mean": 0.281,
+  "load": {
+   "along_m": 1.2696,
+   "lateral_m": -0.0261,
+   "yaw_rad": -0.0064,
+   "lift_m": 0.1777,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "107": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 14.18,
+  "cusps": [
+   34,
+   198,
+   218
+  ],
+  "flip": 117,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 10.5,
+   "longest_s": 2.6,
+   "truth_curvature": -0.2997
+  },
+  "second_arc": {
+   "saturated_s": 10.7,
+   "longest_s": 9.3,
+   "truth_curvature": 0.316
+  },
+  "flip_yaw_peak_rad": -0.049,
+  "back_within_0_05_s": 0.0,
+  "cross_first_m": 0.047,
+  "cross_second_m": 0.047,
+  "cross_at_failure_progress_m": 0.047,
+  "index_reached": 196,
+  "end_leg": 198,
+  "start_yaw_peak_rad": 0.02,
+  "start_cross_m": 0.03,
+  "speed_at_flip_min": 0.087,
+  "speed_second_mean": 0.282,
+  "load": {
+   "along_m": 1.2696,
+   "lateral_m": -0.0246,
+   "yaw_rad": -0.0056,
+   "lift_m": 0.178,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 1,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "108": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 14.52,
+  "cusps": [
+   41,
+   205,
+   223
+  ],
+  "flip": 124,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 12.7,
+   "longest_s": 11.8,
+   "truth_curvature": -0.3004
+  },
+  "second_arc": {
+   "saturated_s": 11.4,
+   "longest_s": 10.4,
+   "truth_curvature": 0.3154
+  },
+  "flip_yaw_peak_rad": -0.053,
+  "back_within_0_05_s": 0.05,
+  "cross_first_m": 0.049,
+  "cross_second_m": 0.049,
+  "cross_at_failure_progress_m": 0.049,
+  "index_reached": 203,
+  "end_leg": 205,
+  "start_yaw_peak_rad": 0.04,
+  "start_cross_m": 0.031,
+  "speed_at_flip_min": 0.081,
+  "speed_second_mean": 0.273,
+  "load": {
+   "along_m": 1.2685,
+   "lateral_m": -0.0069,
+   "yaw_rad": -0.0037,
+   "lift_m": 0.1778,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 0,
+  "cusp_replans": 0
+ },
+ "109": {
+  "outcome": "done",
+  "reason": "",
+  "path_m": 2.69,
+  "cusps": [
+   19
+  ],
+  "flip": null,
+  "planned": 0.29,
+  "first_arc": {
+   "saturated_s": 19.1,
+   "longest_s": 19.1,
+   "truth_curvature": 0.3151
+  },
+  "second_arc": {
+   "saturated_s": 0.0,
+   "longest_s": 0.0,
+   "truth_curvature": null
+  },
+  "flip_yaw_peak_rad": null,
+  "back_within_0_05_s": null,
+  "cross_first_m": 8.405,
+  "cross_second_m": 0.0,
+  "cross_at_failure_progress_m": null,
+  "index_reached": 46,
+  "end_leg": 59,
+  "start_yaw_peak_rad": -0.427,
+  "start_cross_m": 8.405,
+  "speed_at_flip_min": null,
+  "speed_second_mean": null,
+  "load": {
+   "along_m": 1.2687,
+   "lateral_m": -0.0067,
+   "yaw_rad": -0.0036,
+   "lift_m": 0.1778,
+   "pallet_tilt_rad": 0.0
+  },
+  "stall_replans": 0,
+  "cusp_stalls": 1,
+  "cusp_replans": 0
+ }
+}
