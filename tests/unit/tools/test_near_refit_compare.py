@@ -1,6 +1,7 @@
 """The registered comparison tool (docs/plans/2026-11-06-near-capture-plane-refit.md): the replay path restored from the
 records, the waiver computed per arm, the truth and error geometry, and each judged rule on hand-made results."""
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -75,17 +76,16 @@ def test_a_last_mission_without_state_records_leaves_the_waiver_unknown_and_clos
     assert second is False and len(fake.calls) == 1
 
 
-def test_a_live_run_keeps_its_last_mission_attempts_that_have_no_records(tmp_path):
-    import json
-
+def test_a_live_run_keeps_its_last_mission_attempts_even_with_a_depth_seen_before(tmp_path):
     records = tmp_path / "missions/m1"
     records.mkdir(parents=True)
-    done = {"depth_sha256": "a"}
+    done = {"depth_sha256": "a", "t_before_capture_s": 1.0, "loop_step": 5}
     (records / "records.json").write_text(json.dumps({"state": {"observation_attempts": [done]}}))
-    result = {"observation_attempts": [done, {"depth_sha256": "b"}]}
+    result = {"observation_attempts": [done, {"depth_sha256": "b", "t_before_capture_s": 9.0, "loop_step": 90},
+                                       {"depth_sha256": "a", "t_before_capture_s": 9.5, "loop_step": 95}]}
     found = [(m, i, a["depth_sha256"]) for m, i, a, _ in C.run_attempts(tmp_path, result)]
-    assert found == [("m1", 0, "a"), ("last", 1, "b")]
-    assert [m for m, *_ in C.run_attempts(tmp_path / "none", result)] == [None, None]
+    assert found == [("m1", 0, "a"), ("last", 1, "b"), ("last", 2, "a")]
+    assert [m for m, *_ in C.run_attempts(tmp_path / "none", result)] == [None, None, None]
 
 
 @pytest.mark.parametrize("attempt, arguments", [
@@ -134,6 +134,13 @@ def test_a_pallet_straight_ahead_in_the_capture_base():
 def test_a_pallet_yawed_the_other_way_round_gives_the_face_toward_the_camera():
     truth = C.truth_in_base((3.0, 2.0), math.pi - 0.1, POSE, GEOMETRY)
     assert truth["yaw"] == pytest.approx(-0.1)
+
+
+def test_the_entry_face_is_the_one_that_looks_at_the_camera_not_the_positive_x_half():
+    # the reviewer's case: camera at (0.619, 0), pallet at (3, 1) of a base at the origin, pallet yaw -80 deg
+    pose = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+    truth = C.truth_in_base((3.0, 1.0), math.radians(-80.0), pose, GEOMETRY, camera_xy=(0.619, 0.0))
+    assert truth["yaw"] == pytest.approx(math.radians(100.0))
 
 
 def test_the_base_pose_is_taken_out_of_the_truth():
@@ -335,45 +342,133 @@ def test_the_seed_lists_are_the_registered_ones():
     assert C.FRAME_SEEDS == tuple(range(100))
 
 
-def neg(arm, scene, valid_, prior="epal6", level="isaac_clean", lower=True):
-    return {"level": level, "scene": scene, "prior": prior, "lower": lower, "arm": arm, "valid": valid_}
+def neg_rows(valid_scenes=(), arms=C.ARMS, skip=()):
+    """The whole registered population; ``valid_scenes`` holds (arm, scene, prior, lower) that came out valid."""
+    rows = []
+    for level in C.E3_LEVELS:
+        for number in range(C.E3_SCENES_PER_LEVEL):
+            for prior in ("epal6", "t11_06"):
+                for lower in (True, False):
+                    for arm in arms:
+                        key = (arm, f"n{number}", prior, lower)
+                        if (level, *key) not in skip:
+                            rows.append({"level": level, "scene": f"n{number}", "prior": prior, "lower": lower,
+                                         "arm": arm, "valid": (level, *key) in valid_scenes})
+    return {"rows": rows, "errors": []}
 
 
 def test_negatives_count_per_level_mode_prior_and_union_and_name_new_scenes():
-    rows = [neg("A0", "a", True), neg("A1", "a", False), neg("A1", "b", True), neg("A0", "b", False)]
-    result = C.negative_rule({"rows": rows, "errors": []}, "A1")
-    assert result["problems"] == []
-    assert result["counts"]["isaac_clean|lower=True|epal6"]["new"] == ["b"]
-    worse = C.negative_rule({"rows": rows + [neg("A1", "c", True, lower=True)], "errors": []}, "A1")
-    assert "isaac_clean|lower=True|epal6" in worse["problems"] and "isaac_clean|lower=True|any" in worse["problems"]
+    swapped = {("isaac_clean", "A0", "n0", "epal6", True), ("isaac_clean", "A1", "n1", "epal6", True)}
+    result = C.negative_rule(neg_rows(swapped), "A1")
+    assert result["problems"] == [] and result["counts"]["isaac_clean|lower=True|epal6"]["new"] == ["n1"]
+    worse = C.negative_rule(neg_rows(swapped | {("isaac_clean", "A1", "n2", "epal6", True)}), "A1")
+    assert worse["problems"] == ["isaac_clean|lower=True|epal6", "isaac_clean|lower=True|any"]
 
 
-def test_a_negative_set_that_could_not_be_read_is_undecidable_not_smaller():
-    assert "undecidable" in C.negative_rule({"rows": [neg("A0", "a", False)], "errors": ["bad scene"]}, "A1")
-    assert "undecidable" in C.negative_rule({"rows": [], "errors": []}, "A1")
+def test_the_lower_off_mode_is_judged_on_its_own():
+    assert C.negative_rule(neg_rows({("isaac_mid", "A1", "n3", "t11_06", False)}), "A1")["problems"] == [
+        "isaac_mid|lower=False|t11_06", "isaac_mid|lower=False|any"]
 
 
-def test_a_replay_that_differs_from_the_record_must_be_explained():
-    e = {"recorded_status": "valid", "recorded_reason": None, "recorded_left": [1.0, 2.0, 0.1], "path": {}}
-    assert C.classify_mismatch(e, {"status": "valid", "reason": None, "left": [1.0, 2.0]}) is None
-    assert C.classify_mismatch(e, {"status": "valid", "reason": None, "left": [1.0, 2.1]}) == "unexplained"
-    assert C.classify_mismatch(e, {"status": "no_pallet", "reason": "x"}) == "unexplained"
-    far = {**e, "recorded_status": "no_pallet", "recorded_reason": "no_expected_candidate:outside_zone",
+@pytest.mark.parametrize("e3", [
+    {"rows": [], "errors": []},
+    {"rows": neg_rows()["rows"], "errors": ["bad scene"]},
+    neg_rows(arms=("A0",)),  # a missing arm is not zero false positives
+    neg_rows(skip={("isaac_low", "A1", "n7", "epal6", True)}),
+    {"rows": neg_rows()["rows"] + neg_rows()["rows"][:1], "errors": []},
+    {"rows": [r for r in neg_rows()["rows"] if r["scene"] != "n40"], "errors": []},  # a smaller population
+])
+def test_a_negative_set_that_is_not_complete_is_undecidable(e3):
+    assert "undecidable" in C.negative_rule(e3, "A1")
+
+
+def test_grounded_is_read_off_the_rank_as_the_scene_builder_did():
+    assert C.negative_kind({"rank": 0}) == "grounded" and C.negative_kind({"rank": 4}) == "grounded"
+    assert [C.negative_kind({"rank": r}) for r in (1, 2, 3)] == ["shelf", "blocks", "crates"]
+
+
+def recorded(**over):
+    return {"status": "valid", "reason": None, "yaw": 0.1, "left": [1.0, 2.0], "right": [1.0, 1.5],
+            "widths": [0.22, 0.23], **over}
+
+
+def replayed(**over):
+    return {**recorded(), **over}
+
+
+@pytest.mark.parametrize("over", [dict(left=[1.0, 2.00002]), dict(right=[3.00002, 1.5]), dict(widths=[0.22, 0.2301]),
+                                  dict(yaw=0.10001), dict(status="no_pallet", reason="x")])
+def test_any_field_of_the_observation_counts_at_one_micrometre_absolute(over):
+    entry_ = {"recorded": recorded(right=[3.0, 1.5]) if "right" in over else recorded(), "path": {}}
+    assert C.classify_mismatch(entry_, replayed(**over)) == "unexplained"
+
+
+def test_an_equal_observation_and_a_recorded_zone_refusal():
+    assert C.classify_mismatch({"recorded": recorded(), "path": {}}, replayed()) is None
+    far = {"recorded": recorded(status="no_pallet", reason="no_expected_candidate:outside_zone"),
            "path": {"outside_zone_recorded": True}}
-    assert C.classify_mismatch(far, {"status": "valid", "reason": None, "left": [1.0, 2.0]}) == "far_outside_zone_not_replayed"
+    assert C.classify_mismatch(far, replayed()) == "far_outside_zone_not_replayed"
 
 
-def judged(arm_record, negatives=None, frames=None):
+def gate_entry(name="f", **over):
+    record = valid()
+    fields = {k: record[k] for k in ("left", "right", "widths", "yaw")}
+    return {**entry(name=name), "recorded": {"status": "valid", "reason": None, **fields}, "tilt_rad": 0.001,
+            "target_id": "P-1", "sample_pallet_id": "P-1", "sample_age_s": 0.05, **over}
+
+
+def gate_run(entries, record=None):
+    return {"frames": [{"id": e["id"], "arms": {"A0": record or valid()}} for e in entries]}
+
+
+def test_the_freeze_gate_passes_only_a_clean_set():
+    e1 = gate_entry("e1", e1=True)
+    assert C.freeze_gate({"entries": [e1, gate_entry()]}, gate_run([e1, gate_entry()]))["problems"] == []
+
+
+@pytest.mark.parametrize("over, word", [(dict(tilt_rad=0.03), "tilt"), (dict(sample_pallet_id="P-2"), "target"),
+                                        (dict(truth=None), "no_truth")])
+def test_the_freeze_gate_refuses_a_broken_truth_assumption(over, word):
+    e1, bad_entry = gate_entry("e1", e1=True), gate_entry(**over)
+    problems = C.freeze_gate({"entries": [e1, bad_entry]}, gate_run([e1, bad_entry]))["problems"]
+    assert len(problems) == 1 and problems[0].startswith(word)
+
+
+def test_the_freeze_gate_refuses_a_truth_that_disagrees_with_a_valid_a0():
+    e1 = gate_entry("e1", e1=True)
+    far = {**gate_entry(), "recorded": gate_entry()["recorded"]}
+    record = valid(shift=(0.0, 0.5))
+    far["recorded"] = {"status": "valid", "reason": None, **{k: record[k] for k in ("left", "right", "widths", "yaw")}}
+    run = {"frames": [{"id": "e1", "arms": {"A0": valid()}}, {"id": "f", "arms": {"A0": record}}]}
+    assert any(p.startswith("truth_disagrees:f") for p in C.freeze_gate({"entries": [e1, far]}, run)["problems"])
+
+
+def test_the_freeze_gate_refuses_duplicates_and_a_missing_e1():
+    problems = C.freeze_gate({"entries": [gate_entry(), gate_entry()]}, gate_run([gate_entry()]))["problems"]
+    assert "duplicate_id:f" in problems and "e1_not_exactly_one" in problems
+
+
+EVIDENCE = {"replay_gate": [29, 29], "full_pytest_failed": 0, "stored_eval_changes": 0,
+            "near_contract_default_match": True, "v1_guard_baseline": "skipped: artifacts absent"}
+
+
+def judged(arm_record, negatives=None, evidence=EVIDENCE, seed_frames=None, stamps=None, far_arm=None):
     e1 = entry(name="e1", sha="e1", e1=True)
-    others = many_entries(C.WARMUP_ATTEMPTS + 5)
-    manifest = {"entries": [e1, *others]}
+    others = many_entries(C.WARMUP_ATTEMPTS + 15)
+    far = entry(name="far", sha="far", kind="plain", role="far")
+    entries = [e1, *others, far]
+    manifest = {"entries": entries}
     arms = {"A0": bad(), **{a: arm_record for a in C.CANDIDATES}}
-    replay = {"frames": [{"id": "e1", "arms": arms}]
-              + [{"id": e["id"], "arms": {a: valid() for a in C.ARMS}} for e in others]}
-    seed = {"e1": {a: {"failures": 4, "seeds": 200} for a in C.ARMS}}
-    seed["frames"] = frames or {"f": {a: {"failures": 0, "seeds": 100} for a in C.ARMS}}
-    e3 = negatives or {"rows": [neg(a, "n", False) for a in C.ARMS], "errors": []}
-    return C.judge(manifest, replay, replay, seed, e3, {"rows": [], "skipped": {"x": "mount_unknown"}})
+    frames = [{"id": "e1", "arms": arms}] + [{"id": e["id"], "arms": {a: valid() for a in C.ARMS}} for e in others]
+    frames.append({"id": "far", "arms": {"A0": valid(), **{a: far_arm or valid() for a in C.CANDIDATES}}})
+    replay = {"frames": frames}
+    a0 = {f["id"]: f["arms"]["A0"] for f in frames}
+    picked = [e["id"] for e in C.seed_sample(entries, a0)]
+    seed = {"e1": {a: {"failures": 4, "seeds": 200} for a in C.ARMS}, "e1_seeds": list(C.E1_SEEDS),
+            "frame_seeds": list(C.FRAME_SEEDS),
+            "frames": seed_frames or {i: {a: {"failures": 0, "seeds": 100} for a in C.ARMS} for i in picked}}
+    e3 = negatives or neg_rows()
+    return C.judge(manifest, replay, replay, seed, e3, {"rows": [], "skipped": {"x": "mount_unknown"}}, evidence, stamps)
 
 
 def test_the_judge_passes_an_arm_that_rescues_and_breaks_nothing():
@@ -389,6 +484,29 @@ def test_the_judge_refuses_an_arm_that_does_not_rescue():
 def test_an_unread_negative_set_leaves_a_passing_arm_undecidable():
     result = judged(valid(), negatives={"rows": [], "errors": ["x"]})
     assert result["verdicts"]["A1"]["verdict"] == "undecidable" and result["recommended_order"] == []
+
+
+@pytest.mark.parametrize("gap", ["replay_gate", "full_pytest_failed", "stored_eval_changes",
+                                 "near_contract_default_match", "v1_guard_baseline"])
+def test_without_the_outside_evidence_no_arm_reads_adoptable(gap):
+    evidence = {k: v for k, v in EVIDENCE.items() if k != gap}
+    result = judged(valid(), evidence=evidence)
+    assert result["verdicts"]["A1"]["verdict"] == "unverified" and result["recommended_order"] == []
+
+
+def test_a_seed_set_that_is_not_the_registered_twenty_is_undecidable():
+    one = {"f00": {a: {"failures": 0, "seeds": 100} for a in C.ARMS}}
+    assert judged(valid(), seed_frames=one)["verdicts"]["A1"]["undecided"] == ["seed_frames"]
+
+
+def test_outputs_of_another_manifest_or_source_are_undecidable():
+    stamps = {"replay": {"m": 1}, "seeds": {"m": 2}}
+    assert judged(valid(), stamps=stamps)["verdicts"]["A1"]["undecided"] == ["stamp:seeds"]
+
+
+def test_an_arm_result_on_a_call_it_never_reaches_is_a_reference_not_a_failure():
+    result = judged(valid(), far_arm=bad())["verdicts"]["A1"]
+    assert result["verdict"] == "adoptable" and "flip:far" in result["reference"]["problems"]
 
 
 def toy_meta(coeffs=(0.0,) * 5, notes="camera lens height 0.27 m on a stand, level", post=()):
@@ -418,6 +536,13 @@ def test_a_level_camera_on_a_stand_sees_the_floor_below_and_the_axis_forward():
 ])
 def test_a_capture_that_does_not_state_its_grid_or_mount_is_not_run(meta, why):
     assert C.toy_input(meta, np.ones((3, 4), np.uint16))[1] == why
+
+
+def test_a_spread_that_cannot_be_compared_is_not_a_flag():
+    rows = [{"capture": "toy_1", "prior": "toy", "arm": "A0", "kind": "toy", "valid": 1},
+            {"capture": "toy_1", "prior": "toy", "arm": "A1", "kind": "toy", "valid": 3, "centre_std_m": 0.01}]
+    assert C.toy_flags({"rows": rows}, "A1") == []
+    assert "front_minus_tape_m" not in C.toy_row("c", "toy", "toy", "A1", 30, [valid()])
 
 
 def test_toy_flags_are_flags():

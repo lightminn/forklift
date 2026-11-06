@@ -6,6 +6,7 @@ Raw depth rays, including unknown samples, decide opening visibility. This
 module owns neither catalogue labels nor ground truth; RGB is not inspected.
 """
 
+import hashlib
 import math
 import time
 import traceback
@@ -362,6 +363,10 @@ def _plane_yaw_deg(a, b):
     return math.degrees(math.acos(min(1.0, abs(float(np.dot(a.normal, b.normal))))))
 
 
+def _mask_hash(mask):
+    return hashlib.sha256(np.packbits(mask).tobytes()).hexdigest()[:16]
+
+
 def _refine_vertical_plane(points, camera, initial, params, iterations):
     """The vertical model of one RANSAC round (plan 2026-11-06 near-capture plane refit, arm (a)).
 
@@ -376,7 +381,8 @@ def _refine_vertical_plane(points, camera, initial, params, iterations):
     plane = _refit_vertical(initial, camera, median_offset=median)
     mask = _band(points, plane, params)
     first_plane, first_mask = plane, mask
-    record = {"iterations": 0, "stop": "frozen", "sizes": [int(mask.sum())]}
+    record = {"iterations": 0, "stop": "frozen", "sizes": [int(mask.sum())], "band_hashes": [_mask_hash(mask)],
+              "added": [], "removed": []}
     if iterations and mask.sum() < params.min_plane_points:
         record["stop"] = "too_few"
     elif iterations:
@@ -388,6 +394,9 @@ def _refine_vertical_plane(points, camera, initial, params, iterations):
                 record["stop"] = "too_few"
                 break
             record["sizes"].append(int(new_mask.sum()))
+            record["band_hashes"].append(_mask_hash(new_mask))
+            record["added"].append(int((new_mask & ~mask).sum()))
+            record["removed"].append(int((mask & ~new_mask).sum()))
             if np.array_equal(new_mask, mask):
                 plane, record["iterations"], record["stop"] = refit, step, "converged"
                 break
@@ -439,6 +448,7 @@ def _vertical_plane_candidates(points, camera, params, *, refit_iterations=0, re
             count = int(mask.sum())
             if count > best_count:
                 best_mask, best_count = mask, count
+                hypothesis = (sample[0], normal)
         if best_count < params.min_plane_points:
             break
         if refit_iterations == 0 and refit_log is None:
@@ -463,7 +473,13 @@ def _vertical_plane_candidates(points, camera, params, *, refit_iterations=0, re
                 points, camera, remaining[best_mask], params, refit_iterations
             )
             if refit_log is not None:
-                record.update(remaining_count=int(len(remaining)), hypothesis_inliers=int(best_count))
+                record.update(
+                    remaining_count=int(len(remaining)),
+                    remaining_hash=hashlib.sha256(remaining.tobytes()).hexdigest()[:16],
+                    hypothesis_inliers=int(best_count),
+                    hypothesis_point=[float(v) for v in hypothesis[0]],
+                    hypothesis_normal=[float(v) for v in hypothesis[1]],
+                )
                 refit_log.append(record)
             if np.count_nonzero(full_mask) < params.min_plane_points:
                 break
@@ -974,6 +990,8 @@ def _detect(scene_input, prior, params, lower_evidence, expected, refit=None):
                     selected_pattern,
                     selected_rays,
                 ) = max(candidates, key=lambda candidate: candidate[:2])
+                if refit and refit["refit_log"] is not None:
+                    refit["refit_log"].append({"selected_plane_index": int(selected_index)})
                 for index in range(len(planes)):
                     if index != selected_index and index not in rejected:
                         rejected[index] = "lower_pattern_score"

@@ -1,6 +1,7 @@
 """Plane refit iterations (plan 2026-11-06 near-capture plane refit, arm (a)): K = 0 is the frozen extraction, K > 0
 refits on the band it collected until the band stops changing, and every round says why it stopped."""
 
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -167,6 +168,32 @@ def test_detect_pockets_expected_passes_the_refit_count_and_the_log(monkeypatch,
     seen.clear()
     det.detect_pockets_expected(scene, prior, DetectorParams(), None)
     assert seen and seen[-1] == {}
+
+
+def test_the_logged_path_at_zero_iterations_gives_the_same_observation(pallet_scene):
+    scene, _ = pallet_scene(centre_xy_m=(2.5, 0.0), yaw_rad=0.1, opening_width_m=0.24)
+    prior = load_pallet_prior(REPO_PRIOR)
+    log = []
+    plain = det.detect_pockets_expected(scene, prior, DetectorParams(), None)[0]
+    logged = det.detect_pockets_expected(scene, prior, DetectorParams(), None, refit_log=log)[0]
+    assert dataclasses.asdict(plain.observation) == dataclasses.asdict(logged.observation)
+    assert plain.diagnostics.plane_inlier_count == logged.diagnostics.plane_inlier_count
+    assert plain.diagnostics.plane_residual_p95_m == logged.diagnostics.plane_residual_p95_m
+
+
+def test_a_round_record_carries_what_the_plan_registered(pallet_scene):
+    scene, _ = pallet_scene(centre_xy_m=(2.5, 0.0), yaw_rad=0.1, opening_width_m=0.24)
+    log = []
+    det.detect_pockets_expected(scene, load_pallet_prior(REPO_PRIOR), DetectorParams(), None,
+                                plane_refit_iterations=5, refit_log=log)
+    rounds = [r for r in log if "stop" in r]
+    assert rounds and all(len(r["band_hashes"]) == len(r["sizes"]) == len(r["added"]) + 1 == len(r["removed"]) + 1
+                          for r in rounds)
+    first = rounds[0]
+    assert first["remaining_count"] > 0 and len(first["remaining_hash"]) == 16
+    assert len(first["hypothesis_normal"]) == 3 and first["removed_from_remaining"] > 0
+    selected = [r for r in log if "selected_plane_index" in r]
+    assert len(selected) == 1 and selected[0]["selected_plane_index"] < len(rounds)
 
 
 def test_refit_iterations_must_be_a_non_negative_integer():

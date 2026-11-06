@@ -5,15 +5,17 @@
     python -m tools.near_refit_compare gate --manifest manifest.json --replay gate.json   # before any arm is run
     python -m tools.near_refit_compare replay --manifest manifest.json --root test_runs --out replay_a.json
     python -m tools.near_refit_compare seeds --manifest manifest.json --root test_runs --replay replay_a.json --out seeds.json
-    python -m tools.near_refit_compare negatives --dataset <dir> --config config --out e3.json
-    python -m tools.near_refit_compare toy --data <d435i_noise/date> --out e4.json
-    python -m tools.near_refit_compare judge --replay replay_a.json --again replay_b.json --seeds seeds.json \\
-        --negatives e3.json --toy e4.json --out judge.json
+    python -m tools.near_refit_compare negatives --manifest manifest.json --dataset <dir> --config config --out e3.json
+    python -m tools.near_refit_compare toy --manifest manifest.json --data <d435i_noise/date> --out e4.json
+    python -m tools.near_refit_compare judge --manifest manifest.json --replay replay_a.json --again replay_b.json \\
+        --seeds seeds.json --negatives e3.json --toy e4.json --evidence evidence.json --out judge.json
 
 The saved depth of every observation attempt is replayed through the path the run took: the first call restored from
 the attempt record, the lower waiver's conditions restored from the records, and whether the first call succeeded and
-whether the waiver's second call ran computed again per arm (plan section 3). The judge only applies section 4's rules
-to these outputs; its thresholds are the constants below, registered before any result was read.
+whether the waiver's second call ran computed again per arm (plan section 3). Every arm runs on every attempt, but an
+arm reaches only the near expected-site calls, so the judged comparison keeps A0 elsewhere and the rest is a reference.
+The judge only applies section 4's rules to these outputs; its thresholds are the constants below, registered before
+any result was read. evidence.json carries section 4.7's checks, which come from outside this tool.
 """
 
 from __future__ import annotations
@@ -63,6 +65,14 @@ E1_SEEDS = tuple(20260913 + i for i in range(200))
 FRAME_SEEDS = tuple(range(100))
 UNIFORM_FRAMES, RESIDUAL_FRAMES = 10, 10
 TOY_STD_WORSENING_M = 0.002
+E3_LEVELS = ("isaac_clean", "isaac_high", "isaac_low", "isaac_mid")
+E3_SCENES_PER_LEVEL = 48  # the dev negatives without the grounded kind (positive since 2026-10-27)
+NEGATIVE_KINDS = ("grounded", "shelf", "blocks", "crates")  # tools/recognition_scenes.py: the kind by rank % 4
+# The freeze gate's checks of the truth (A0 only)
+GATE_MAX_TILT_RAD = 0.02
+GATE_YAW_RAD = 0.1
+OBSERVATION_ATOL = 1e-6
+EVIDENCE_GATE_RUNS = 29
 # Only the checks the plan says report, never judge
 DETECTION_DELTA_M, DETECTION_DELTA_RAD = 0.002, 0.002
 SUPPORT_LOSS_REPORT = 0.5
@@ -161,16 +171,22 @@ def yaw_of(q_wxyz) -> float:
     return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
-def truth_in_base(pallet_xy, pallet_yaw, accepted_pose, geometry: dict) -> dict:
-    """The target pallet in the capture's true base frame: the entry face (the insertion axis pointing away from the
-    camera), its pockets' centre and wall offsets across the face, and the pallet centre."""
+def tilt_of(q_wxyz) -> float:
+    _, x, y, _ = (float(v) for v in q_wxyz)
+    return math.acos(max(-1.0, min(1.0, 1.0 - 2.0 * (x * x + y * y))))
+
+
+def truth_in_base(pallet_xy, pallet_yaw, accepted_pose, geometry: dict, camera_xy=(0.0, 0.0)) -> dict:
+    """The target pallet in the capture's true base frame (yaw only: the freeze gate bounds the tilt): the entry face
+    is the pallet's x face that looks at the camera, with its pockets' centre and wall offsets and the pallet centre."""
     (bx, by, _), q = accepted_pose
     base_yaw = yaw_of(q)
     c, s = math.cos(base_yaw), math.sin(base_yaw)
     dx, dy = float(pallet_xy[0]) - float(bx), float(pallet_xy[1]) - float(by)
     centre = (c * dx + s * dy, -s * dx + c * dy)
     axis = wrap(float(pallet_yaw) - base_yaw)
-    if abs(axis) > math.pi / 2:
+    view = (centre[0] - float(camera_xy[0]), centre[1] - float(camera_xy[1]))
+    if view[0] * math.cos(axis) + view[1] * math.sin(axis) < 0:  # the insertion axis points away from the camera
         axis = wrap(axis + math.pi)
     depth, width = float(geometry["overall_depth_m"]), float(geometry["overall_width_m"])
     blocks = geometry["block_widths_m"]
@@ -251,13 +267,16 @@ def detection_record(detection, second_called: bool, wall_s: float | None = None
     if wall_s is not None:
         record["wall_s"] = wall_s
     if log is not None:
-        record["refit_rounds"] = [{k: r.get(k) for k in ("stop", "iterations", "support_loss", "inflow", "sizes",
-                                                         "normal_change_deg", "offset_change_m",
-                                                         "removed_from_remaining")} for r in log]
+        record["refit_rounds"] = log  # the plan's whole round record, kept as the detector wrote it
     return record
 
 
 # --- manifest ---------------------------------------------------------------------------------------------------------
+
+def attempt_identity(attempt: dict) -> tuple:
+    """The same attempt in a mission's records and in the run's result; equal depth alone does not make it the same."""
+    return attempt.get("depth_sha256"), attempt.get("t_before_capture_s"), attempt.get("loop_step")
+
 
 def run_attempts(run: Path, result: dict):
     """(mission, index, attempt, state) of every observation attempt: a live run's per mission, a batch run's own. A
@@ -271,12 +290,12 @@ def run_attempts(run: Path, result: dict):
         except (OSError, ValueError, KeyError):
             continue
         for index, attempt in enumerate(state.get("observation_attempts") or []):
-            seen.add(attempt.get("depth_sha256"))
+            seen.add(attempt_identity(attempt))
             yield records.parent.name, index, attempt, state
     for index, attempt in enumerate(result.get("observation_attempts") or []):
         if not missions:
             yield None, index, attempt, result
-        elif attempt.get("depth_sha256") not in seen:
+        elif attempt_identity(attempt) not in seen:
             yield "last", index, attempt, result
 
 
@@ -308,86 +327,150 @@ def pallet_at(samples: list, t: float | None):
     return best
 
 
+def mission_targets(run: Path, result: dict) -> dict:
+    """mission id -> the pallet the mission was told to fetch (live runs; the last one also under "last")."""
+    targets = {r.get("mission_id"): r.get("pallet_id") for r in result.get("mission_results") or []}
+    for path in sorted(run.glob("missions/m*/result.json")):
+        try:
+            record = json.loads(path.read_text())["result"]
+        except (OSError, ValueError, KeyError):
+            continue
+        targets[record.get("mission_id")] = record.get("pallet_id")
+        targets["last"] = record.get("pallet_id")
+    return targets
+
+
+def input_hash(attempt: dict, params: dict, prior: dict, path: dict) -> str:
+    """What a replay reads besides the depth: frozen with the manifest, checked at every load."""
+    frozen = {"mount": attempt.get("base_from_optical"), "quantize": attempt.get("depth_quantize_mm"), "params": params,
+              "intrinsics": (attempt.get("capture_diagnostics") or {}).get("intrinsics"), "prior": prior, "path": path}
+    return hashlib.sha256(json.dumps(frozen, sort_keys=True, default=list).encode()).hexdigest()
+
+
+def observation_fields(record: dict | None) -> dict:
+    record = record or {}
+    left, right = record.get("left") or {}, record.get("right") or {}
+    return {"status": record.get("status"), "reason": record.get("reason"), "yaw": record.get("insertion_yaw_rad"),
+            "left": (left.get("center_m") or [None, None])[:2], "right": (right.get("center_m") or [None, None])[:2],
+            "widths": [left.get("width_m"), right.get("width_m")]}
+
+
 def build_manifest(root: Path, e1: dict) -> dict:
-    files = sorted(root.glob("**/perception_capture_*_depth_m.npy"))
-    entries, excluded, runs = [], Counter(), {}
-    for path in files:
-        run = path.parent
-        if run not in runs:
-            try:
-                result = json.loads((run / "result.json").read_text())
-            except (OSError, ValueError):
-                runs[run] = None
-            else:
-                by_sha = {}
-                for mission, index, attempt, state in run_attempts(run, result):
-                    if attempt.get("depth_sha256"):
-                        by_sha.setdefault(attempt["depth_sha256"], []).append((mission, index, attempt, state))
-                runs[run] = (result, by_sha, run_samples(run, result))
-        if runs[run] is None:
-            excluded["no_result"] += 1
+    """One entry per recorded attempt whose depth was saved; several attempts may share a depth file."""
+    entries, excluded = [], Counter()
+    by_run = {}
+    paths = sorted(root.glob("**/perception_capture_*_depth_m.npy"))
+    for path in paths:
+        by_run.setdefault(path.parent, []).append(path)
+    for run, files in sorted(by_run.items()):
+        try:
+            result = json.loads((run / "result.json").read_text())
+        except (OSError, ValueError):
+            excluded["no_result"] += len(files)
             continue
-        result, by_sha, samples = runs[run]
-        depth = np.load(path)
-        sha = DD.depth_array_sha256(depth)
-        matches = by_sha.get(sha)
-        if not matches:
-            excluded["no_attempt_match"] += 1
-            continue
+        by_sha = {}
+        for path in files:
+            by_sha.setdefault(DD.depth_array_sha256(np.load(path)), path)
         arguments = result.get("arguments") or {}
         if not arguments.get("pallet_prior_loaded") or not arguments.get("pallet_geometry_loaded"):
-            excluded["no_prior_or_geometry"] += 1
+            excluded["no_prior_or_geometry"] += len(files)
             continue
-        for mission, index, attempt, state in matches:
+        samples, targets, used = run_samples(run, result), mission_targets(run, result), set()
+        for mission, index, attempt, state in run_attempts(run, result):
+            sha = attempt.get("depth_sha256")
+            if sha not in by_sha:
+                excluded["attempt_without_depth"] += 1
+                continue
+            used.add(sha)
             params = state.get("detector_params") or result.get("detector_params")
             if not params:
                 excluded["no_params"] += 1
                 continue
             sample = pallet_at(samples, capture_time(attempt))
-            truth = None
             pose = (attempt.get("capture_diagnostics") or {}).get("accepted_pose")
+            mount = attempt.get("base_from_optical")
+            camera = mount["translation_m"][:2] if mount else DD._adapter().default_base_from_optical().translation_m[:2]
+            truth = None
             if sample is not None and pose is not None:
                 truth = truth_in_base(sample["pallet_position_m"][:2], sample["pallet_yaw_rad"], pose,
-                                      arguments["pallet_geometry_loaded"])
-            is_e1 = (e1 and str(run.relative_to(root)) == e1["run"] and mission == e1["mission"]
-                     and index == e1["attempt"])
-            recorded = DD.recorded_observation(attempt)
-            entries.append({"id": f"{run.relative_to(root)}#{mission}#{index}", "file": str(path.relative_to(root)),
-                            "depth_sha256": sha, "run": str(run.relative_to(root)), "mission": mission, "attempt": index,
-                            "role": attempt_role(index, attempt, state, arguments), "path": replay_path(attempt, state, arguments),
-                            "truth": truth, "target_position_m": None if sample is None else sample["pallet_position_m"][:2],
-                            "shape": arguments["pallet_prior_loaded"]["catalogue_version"],
-                            "proposals": arguments.get("recognition_proposals"), "recognition": arguments.get("recognition"),
-                            "recorded_status": recorded.get("status"), "recorded_reason": recorded.get("reason"),
-                            "recorded_left": (recorded.get("left") or {}).get("center_m"), "params": params,
-                            "e1": bool(is_e1)})
-    return {"entries": entries, "files": len(files), "excluded": dict(excluded)}
+                                      arguments["pallet_geometry_loaded"], camera)
+            relative = str(run.relative_to(root))
+            path_record = replay_path(attempt, state, arguments)
+            prior = arguments["pallet_prior_loaded"]
+            entries.append({"id": f"{relative}#{mission}#{index}", "file": str(by_sha[sha].relative_to(root)),
+                            "depth_sha256": sha, "run": relative, "mission": mission, "attempt": index,
+                            "role": attempt_role(index, attempt, state, arguments), "path": path_record, "truth": truth,
+                            "shape": prior["catalogue_version"], "proposals": arguments.get("recognition_proposals"),
+                            "recognition": arguments.get("recognition"), "params": params,
+                            "input_sha256": input_hash(attempt, params, prior, path_record),
+                            "target_id": targets.get(mission), "sample_pallet_id": None if sample is None else sample.get("pallet_id"),
+                            "sample_age_s": None if sample is None else capture_time(attempt) - float(sample["time_s"]),
+                            "tilt_rad": None if pose is None else tilt_of(pose[1]),
+                            "recorded": observation_fields(DD.recorded_observation(attempt)),
+                            "e1": (relative, mission, index) == (e1["run"], e1["mission"], e1["attempt"])})
+        excluded["no_attempt_match"] += sum(1 for sha in by_sha if sha not in used)
+    return {"entries": entries, "files": len(paths), "excluded": dict(excluded)}
 
 
 def load_frame(root: Path, entry: dict, cache: dict):
-    """(scene, prior, params) of a manifest entry; the attempt record comes back through its identifiers."""
+    """(scene, prior, params) of a manifest entry, refusing a depth or a record that is not the frozen one."""
     run = root / entry["run"]
-    if run not in cache:
-        cache.clear()  # one run's records at a time: the sweep walks the manifest in run order
-        cache[run] = json.loads((run / "result.json").read_text())
-    result = cache[run]
-    attempts = {(m, i): a for m, i, a, _ in run_attempts(run, result)} if "_attempts" not in cache else cache["_attempts"]
-    cache["_attempts"] = attempts
-    attempt = attempts[(entry["mission"], entry["attempt"])]
+    if cache.get("run") != run:
+        result = json.loads((run / "result.json").read_text())
+        cache.update(run=run, result=result, attempts={(m, i): (a, s) for m, i, a, s in run_attempts(run, result)})
+    result = cache["result"]
+    attempt, _ = cache["attempts"][(entry["mission"], entry["attempt"])]
     depth = np.load(root / entry["file"])
-    scene = DD.attempt_scene(result, attempt, depth)
-    return scene, PalletPrior(**result["arguments"]["pallet_prior_loaded"]), DetectorParams(**entry["params"])
+    prior = result["arguments"]["pallet_prior_loaded"]
+    if DD.depth_array_sha256(depth) != entry["depth_sha256"] or input_hash(
+            attempt, entry["params"], prior, entry["path"]) != entry["input_sha256"]:
+        raise ValueError(f"not the frozen input: {entry['id']}")
+    return DD.attempt_scene(result, attempt, depth), PalletPrior(**prior), DetectorParams(**entry["params"])
 
 
 def classify_mismatch(entry: dict, replay: dict) -> str | None:
-    """Why a same-code A0 replay differs from the record; None when it does not. An unexplained one stops the freeze."""
-    same = entry["recorded_status"] == replay["status"] and entry["recorded_reason"] == replay["reason"]
-    if same and (replay["status"] != "valid" or entry["recorded_left"] is None
-                 or np.allclose(entry["recorded_left"][:2], replay["left"], atol=1e-6)):
+    """Why a same-code A0 replay differs from the whole recorded observation; None when it does not."""
+    recorded = entry["recorded"]
+    same = recorded["status"] == replay["status"] and recorded["reason"] == replay["reason"]
+    if same and replay["status"] == "valid":
+        same = all(np.allclose(recorded[k], replay[k], rtol=0.0, atol=OBSERVATION_ATOL) for k in ("left", "right", "widths"))
+        same = same and abs(recorded["yaw"] - replay["yaw"]) <= OBSERVATION_ATOL
+    if same:
         return None
-    if entry["path"].get("outside_zone_recorded"):
-        return "far_outside_zone_not_replayed"
-    return "unexplained"
+    return "far_outside_zone_not_replayed" if entry["path"].get("outside_zone_recorded") else "unexplained"
+
+
+def freeze_gate(manifest: dict, replay: dict) -> dict:
+    """The check before any arm runs: one entry per attempt, E1 exactly once, the records reproduced in full by A0,
+    the truth's target and pose assumptions held. ``problems`` empty is the only way to freeze."""
+    entries = manifest["entries"]
+    a0 = {f["id"]: f["arms"]["A0"] for f in replay["frames"]}
+    problems = []
+    ids = Counter(e["id"] for e in entries)
+    problems += [f"duplicate_id:{i}" for i, n in ids.items() if n > 1]
+    if sum(e["e1"] for e in entries) != 1:
+        problems.append("e1_not_exactly_one")
+    kinds = Counter()
+    for entry in entries:
+        record = a0[entry["id"]]
+        why = classify_mismatch(entry, record)
+        kinds[why] += 1
+        if why == "unexplained":
+            problems.append(f"unexplained:{entry['id']}:{entry['recorded']['status']}->{record['status']}")
+        if entry["truth"] is None:
+            problems.append(f"no_truth:{entry['id']}")
+            continue
+        if (entry["tilt_rad"] or 0.0) > GATE_MAX_TILT_RAD:
+            problems.append(f"tilt:{entry['id']}:{entry['tilt_rad']:.4f}")
+        if entry["target_id"] is not None and entry["sample_pallet_id"] not in (None, entry["target_id"]):
+            problems.append(f"target:{entry['id']}:{entry['target_id']}!={entry['sample_pallet_id']}")
+        if record["status"] == "valid":
+            errors = pose_errors(record, entry["truth"])
+            if errors["yaw"] > GATE_YAW_RAD or errors["match_m"] > MATCH_M:
+                problems.append(f"truth_disagrees:{entry['id']}:{errors['match_m']:.3f}:{errors['yaw']:.3f}")
+    return {"problems": problems, "mismatch": {str(k): v for k, v in kinds.items()}, "entries": len(entries),
+            "max_tilt_rad": max((e["tilt_rad"] or 0.0) for e in entries),
+            "max_sample_age_s": max((e["sample_age_s"] or 0.0) for e in entries)}
 
 
 # --- sweeps -----------------------------------------------------------------------------------------------------------
@@ -441,7 +524,7 @@ def seed_sweep(manifest: dict, replay: dict, root: Path) -> dict:
     a0 = {f["id"]: f["arms"]["A0"] for f in replay["frames"]}
     entries = [e for e in manifest["entries"] if e["truth"] is not None]
     sample = seed_sample(entries, a0)
-    out = {"e1": {}, "frames": {}}
+    out = {"e1": {}, "frames": {}, "e1_seeds": list(E1_SEEDS), "frame_seeds": list(FRAME_SEEDS)}
     e1 = next(e for e in entries if e["e1"])
     cache = {}
     scene, prior, params = load_frame(Path(root), e1, cache)
@@ -453,16 +536,25 @@ def seed_sweep(manifest: dict, replay: dict, root: Path) -> dict:
     return out
 
 
+def negative_kind(meta: dict) -> str:
+    return NEGATIVE_KINDS[int(meta["rank"]) % len(NEGATIVE_KINDS)]
+
+
 def negative_sweep(dataset: Path, config: Path) -> dict:
-    """E3: dev-split negatives, every noise level, both priors, both lower-evidence modes. A scene that cannot be read
-    is an error here: the judge turns any error into undecidable, never into a smaller denominator."""
+    """E3: dev-split negatives without the grounded kind, every noise level, both priors, both lower-evidence modes. A
+    scene that cannot be read is an error: the judge turns it into undecidable, never into a smaller denominator."""
     priors = {name: load_pallet_prior(config / f"pallet_prior_{name}.yaml") for name in ("epal6", "t11_06")}
-    rows, errors = [], []
+    rows, errors, left_out = [], [], Counter()
     for level in sorted(p.name for p in dataset.glob("isaac_*")):
         for scene_dir in sorted((dataset / level).glob("n_negative_*")):
             try:
-                if read_meta(scene_dir)["split"] != "dev":
-                    raise ValueError("a non-dev scene in the restored set")
+                meta = read_meta(scene_dir)
+                if meta["split"] != "dev":
+                    left_out["not_dev"] += 1
+                    continue
+                if negative_kind(meta) == "grounded":
+                    left_out["grounded"] += 1
+                    continue
                 scene = load_recognition_sample(scene_dir).input.scene
             except (OSError, ValueError, KeyError) as exc:
                 errors.append(f"{level}/{scene_dir.name}: {exc}")
@@ -473,9 +565,9 @@ def negative_sweep(dataset: Path, config: Path) -> dict:
                     for arm in ARMS:
                         params, kw = arm_call(base, arm)
                         obs = det.detect_pockets_expected(scene, prior, params, None, lower_evidence=lower, **kw)[0].observation
-                        rows.append({"level": level, "scene": scene_dir.name, "prior": name, "lower": lower, "arm": arm,
-                                     "valid": obs.status == "valid"})
-    return {"rows": rows, "errors": errors}
+                        rows.append({"level": level, "scene": scene_dir.name, "kind": negative_kind(meta), "prior": name,
+                                     "lower": lower, "arm": arm, "valid": obs.status == "valid"})
+    return {"rows": rows, "errors": errors, "left_out": dict(left_out)}
 
 
 # --- E4 -----------------------------------------------------------------------------------------------------------------
@@ -545,17 +637,16 @@ def toy_sweep(data: Path) -> dict:
                 detections = [det.detect_pockets_expected(s, prior, params, None, lower_evidence=False, **kw)[0]
                               for s in scenes]
                 seen = [detection_record(d, False) for d in detections if d.observation.status == "valid"]
-                rows.append(toy_row(capture.name, kind, name, arm, len(frames), seen, float(meta["setup"]["distance_m"])))
+                rows.append(toy_row(capture.name, kind, name, arm, len(frames), seen))
     return {"rows": rows, "skipped": skipped}
 
 
-def toy_row(capture, kind, prior, arm, frames, seen, tape_m) -> dict:
+def toy_row(capture, kind, prior, arm, frames, seen) -> dict:
+    """The tape distance is camera front to pallet front, not this base's lens origin: not compared (plan 3 E4)."""
     row = {"capture": capture, "kind": kind, "prior": prior, "arm": arm, "frames": frames, "valid": len(seen)}
     if len(seen) >= 2:
         points = np.array([r["left"] + r["right"] for r in seen])
         row.update(centre_std_m=float(points.std(axis=0).max()), yaw_std_rad=float(np.std([r["yaw"] for r in seen])))
-    if seen:
-        row["front_minus_tape_m"] = float(np.mean([(r["left"][0] + r["right"][0]) / 2 for r in seen]) - tape_m)
     return row
 
 
@@ -678,20 +769,28 @@ def seed_rule(seeds: dict, arm: str) -> dict:
 
 
 def negative_rule(e3: dict, arm: str) -> dict:
+    """Section 4.3. Every scene x level x prior x mode x arm exactly once, or undecidable: a missing arm is not zero."""
     if e3["errors"] or not e3["rows"]:
         return {"undecidable": e3["errors"][:20] or ["no rows"]}
+    keys = Counter((r["level"], r["scene"], r["prior"], r["lower"], r["arm"]) for r in e3["rows"])
+    levels, priors = sorted({k[0] for k in keys}), sorted({k[2] for k in keys})
+    scenes = {level: sorted({k[1] for k in keys if k[0] == level}) for level in levels}
+    wanted = {(level, scene, prior, lower, a) for level in levels for scene in scenes[level] for prior in priors
+              for lower in (True, False) for a in ARMS}
+    shape = [] if tuple(levels) == E3_LEVELS and all(len(v) == E3_SCENES_PER_LEVEL for v in scenes.values()) else ["population"]
+    if set(keys) != wanted or max(keys.values()) > 1 or shape:
+        return {"undecidable": shape + [f"keys {len(keys)} of {len(wanted)}"]}
     problems, counts = [], {}
-    keys = {(r["level"], r["lower"]) for r in e3["rows"]}
-    for level, lower in sorted(keys):
-        rows = [r for r in e3["rows"] if r["level"] == level and r["lower"] == lower]
-        scenes = lambda a, prior=None: {r["scene"] for r in rows if r["arm"] == a and r["valid"]  # noqa: E731
-                                        and (prior is None or r["prior"] == prior)}
-        for prior in sorted({r["prior"] for r in rows}) + [None]:
-            base, cand = scenes("A0", prior), scenes(arm, prior)
-            counts[f"{level}|lower={lower}|{prior or 'any'}"] = {"a0": len(base), "arm": len(cand),
-                                                                 "new": sorted(cand - base)}
-            if len(cand) > len(base):
-                problems.append(f"{level}|lower={lower}|{prior or 'any'}")
+    for level in levels:
+        for lower in (True, False):
+            rows = [r for r in e3["rows"] if r["level"] == level and r["lower"] == lower]
+            for prior in [*priors, None]:
+                base = {r["scene"] for r in rows if r["arm"] == "A0" and r["valid"] and prior in (None, r["prior"])}
+                cand = {r["scene"] for r in rows if r["arm"] == arm and r["valid"] and prior in (None, r["prior"])}
+                name = f"{level}|lower={lower}|{prior or 'any'}"
+                counts[name] = {"a0": len(base), "arm": len(cand), "new": sorted(cand - base)}
+                if len(cand) > len(base):
+                    problems.append(name)
     return {"counts": counts, "problems": problems}
 
 
@@ -708,7 +807,8 @@ def toy_flags(e4: dict, arm: str) -> list:
         if row["kind"] != "wall":
             if row["valid"] < base["valid"]:
                 flags.append(f"valid_fell:{capture}")
-            if row.get("centre_std_m", 0.0) > base.get("centre_std_m", 0.0) + TOY_STD_WORSENING_M:
+            if "centre_std_m" in row and "centre_std_m" in base and (
+                    row["centre_std_m"] > base["centre_std_m"] + TOY_STD_WORSENING_M):
                 flags.append(f"spread_grew:{capture}")
     return flags
 
@@ -723,26 +823,73 @@ def reports(rows: list, arm: str) -> dict:
             shift = max(np.linalg.norm(np.subtract(a0[s], cand[s])) for s in ("left", "right"))
             if shift > DETECTION_DELTA_M or abs(wrap(a0["yaw"] - cand["yaw"])) > DETECTION_DELTA_RAD:
                 moved[entry["role"]] += 1
-        for r in cand.get("refit_rounds", []):
+        rounds = [r for r in cand.get("refit_rounds", []) if "stop" in r]
+        for r in rounds:
             stops[r["stop"]] += 1
-            if r["sizes"][-1] == cand["plane_inlier_count"] and (r["support_loss"] or 0.0) > SUPPORT_LOSS_REPORT:
-                lost.append(entry["id"])
+        chosen = [r["selected_plane_index"] for r in cand.get("refit_rounds", []) if "selected_plane_index" in r]
+        if chosen and (rounds[chosen[-1]]["support_loss"] or 0.0) > SUPPORT_LOSS_REPORT:
+            lost.append(entry["id"])
     return {"detection_moved_by_role": dict(moved), "selected_support_loss": lost, "refit_stops": dict(stops)}
 
 
-def judge(manifest: dict, replay: dict, again: dict, seeds: dict, e3: dict, e4: dict) -> dict:
+def operational(rows: list, arm: str) -> list:
+    """What running the arm would change: only the near expected-site detections; every other call keeps A0."""
+    return [(e, {"A0": a["A0"], arm: a[arm] if e["path"]["kind"] == "near_expected" else a["A0"]}) for e, a in rows]
+
+
+def evidence_problems(evidence: dict) -> list:
+    """Section 4.7's evidence, which this tool cannot produce itself; without it no arm reads adoptable."""
+    problems = []
+    if evidence.get("replay_gate") != [EVIDENCE_GATE_RUNS, EVIDENCE_GATE_RUNS]:
+        problems.append("replay_gate")
+    if evidence.get("full_pytest_failed") != 0:
+        problems.append("full_pytest")
+    if evidence.get("stored_eval_changes") != 0:
+        problems.append("stored_eval")
+    if evidence.get("near_contract_default_match") is not True:
+        problems.append("near_contract")
+    if not evidence.get("v1_guard_baseline"):
+        problems.append("v1_guard_baseline")
+    return problems
+
+
+def input_problems(manifest: dict, replay: dict, again: dict, seeds: dict, stamps: dict, entries: list) -> list:
+    """Every output of the same manifest and source, for the exact registered frames and seed lists."""
+    problems = [f"stamp:{k}" for k, v in stamps.items() if v != stamps["replay"]]
+    ids = {e["id"] for e in entries}
+    for name, run in (("replay", replay), ("again", again)):
+        if {f["id"] for f in run["frames"]} != ids or any(set(f["arms"]) != set(ARMS) for f in run["frames"]):
+            problems.append(f"frames:{name}")
+    if seeds["e1_seeds"] != list(E1_SEEDS) or seeds["frame_seeds"] != list(FRAME_SEEDS):
+        problems.append("seed_lists")
+    a0 = {f["id"]: f["arms"]["A0"] for f in replay["frames"]}
+    wanted = {e["id"] for e in seed_sample([e for e in entries if e["truth"] is not None], a0)}
+    if set(seeds["frames"]) != wanted or len(wanted) != UNIFORM_FRAMES + RESIDUAL_FRAMES:
+        problems.append("seed_frames")
+    counts = [r["seeds"] for f in seeds["frames"].values() for r in f.values()]
+    if any(c != len(FRAME_SEEDS) for c in counts) or any(seeds["e1"][a]["seeds"] != len(E1_SEEDS) for a in ARMS):
+        problems.append("seed_counts")
+    return problems
+
+
+def judge(manifest: dict, replay: dict, again: dict, seeds: dict, e3: dict, e4: dict, evidence: dict,
+          stamps: dict | None = None) -> dict:
     frames = {f["id"]: f["arms"] for f in replay["frames"]}
     rows = [(e, frames[e["id"]]) for e in manifest["entries"]]
     applied = [(e, a) for e, a in rows if e["path"]["kind"] == "near_expected"]
+    others = [(e, a) for e, a in rows if e["path"]["kind"] != "near_expected"]
     repeated = {f["id"]: f["arms"] for f in again["frames"]}
     e1 = next(e for e in manifest["entries"] if e["e1"])
+    unusable = input_problems(manifest, replay, again, seeds, stamps or {"replay": None}, manifest["entries"])
+    unproven = evidence_problems(evidence)
     verdicts = {}
     for arm in CANDIDATES:
-        checks = {"rescue": rescue(e1, frames[e1["id"]][arm]), "all": degradation(rows, arm),
-                  "applied": degradation(applied, arm), "strata": stratum_rule(rows, arm),
+        whole = operational(rows, arm)
+        checks = {"rescue": rescue(e1, frames[e1["id"]][arm]), "all": degradation(whole, arm),
+                  "applied": degradation(applied, arm), "strata": stratum_rule(whole, arm),
                   "negatives": negative_rule(e3, arm), "time": timing(applied, arm), "seeds": seed_rule(seeds, arm),
-                  "determinism": [i for i, a in frames.items()
-                                  if a[arm]["canonical_sha256"] != repeated[i][arm]["canonical_sha256"]]}
+                  "determinism": [i for i, a in frames.items() for name in ("A0", arm)
+                                  if a[name]["canonical_sha256"] != repeated[i][name]["canonical_sha256"]]}
         failed = []
         if checks["rescue"]:
             failed.append("rescue")
@@ -759,14 +906,27 @@ def judge(manifest: dict, replay: dict, again: dict, seeds: dict, e3: dict, e4: 
             failed.append("seeds")
         if checks["determinism"]:
             failed.append("determinism")
-        verdict = "not_adoptable" if failed else "adoptable"
-        if not failed and "undecidable" in checks["negatives"]:
-            verdict = "undecidable"
-        verdicts[arm] = {"verdict": verdict, "failed": failed, "checks": checks, "reports": reports(rows, arm),
-                         "toy_flags": toy_flags(e4, arm)}
+        undecided = unusable + (["negatives"] if "undecidable" in checks["negatives"] else [])
+        verdict = "not_adoptable" if failed else "undecidable" if undecided else "unverified" if unproven else "adoptable"
+        verdicts[arm] = {"verdict": verdict, "failed": failed, "undecided": undecided, "unproven": unproven,
+                         "checks": checks, "reports": reports(rows, arm), "toy_flags": toy_flags(e4, arm),
+                         # the same arm on calls it would not reach: 'had it been applied', never judged; far_expected
+                         # here skips the core's zone check after the circle
+                         "reference": degradation(others, arm)}
     adoptable = [a for a in ("A1", "A3", "A2") if verdicts[a]["verdict"] == "adoptable"]
     return {"verdicts": verdicts, "recommended_order": adoptable, "toy_skipped": e4.get("skipped"),
-            "frames": len(rows), "applied_frames": len(applied)}
+            "negatives_left_out": e3.get("left_out"), "frames": len(rows), "applied_frames": len(applied)}
+
+
+def source_sha256() -> str:
+    digest = hashlib.sha256()
+    for path in (Path(__file__), Path(det.__file__)):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def stamp_of(manifest_path: Path) -> dict:
+    return {"manifest_sha256": hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest(), "source_sha256": source_sha256()}
 
 
 def main(argv=None) -> int:
@@ -792,14 +952,16 @@ def main(argv=None) -> int:
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("negatives")
+    p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--dataset", type=Path, required=True)
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("toy")
+    p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--data", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     p = sub.add_parser("judge")
-    for name in ("manifest", "replay", "again", "seeds", "negatives", "toy", "out"):
+    for name in ("manifest", "replay", "again", "seeds", "negatives", "toy", "evidence", "out"):
         p.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -815,33 +977,30 @@ def main(argv=None) -> int:
               "e1", sum(e["e1"] for e in result["entries"]), "no truth", sum(e["truth"] is None for e in result["entries"]),
               "roles", dict(Counter(e["role"] for e in result["entries"])),
               "paths", dict(Counter((e["path"]["kind"], e["path"]["waiver"].split(":")[0]) for e in result["entries"])),
-              "recorded", dict(Counter(e["recorded_status"] for e in result["entries"])))
+              "recorded", dict(Counter(e["recorded"]["status"] for e in result["entries"])))
     elif args.command == "gate":
-        manifest, replay = load(args.manifest), load(args.replay)
-        a0 = {f["id"]: f["arms"]["A0"] for f in replay["frames"]}
-        kinds = Counter()
-        unexplained = []
-        for entry in manifest["entries"]:
-            why = classify_mismatch(entry, a0[entry["id"]])
-            kinds[why] += 1
-            if why == "unexplained":
-                unexplained.append((entry["id"], entry["recorded_status"], entry["recorded_reason"],
-                                    a0[entry["id"]]["status"], a0[entry["id"]]["reason"]))
-        print("gate", dict(kinds))
-        print("unexplained", json.dumps(unexplained, indent=0))
+        result = freeze_gate(load(args.manifest), load(args.replay))
+        print(json.dumps(result, indent=0))
+        return 1 if result["problems"] else 0
     elif args.command == "replay":
-        args.out.write_text(json.dumps(sweep(load(args.manifest), args.root, args.arms.split(","))))
+        out = sweep(load(args.manifest), args.root, args.arms.split(","))
+        args.out.write_text(json.dumps({**out, "stamp": stamp_of(args.manifest)}))
     elif args.command == "seeds":
-        args.out.write_text(json.dumps(seed_sweep(load(args.manifest), load(args.replay), args.root)))
+        out = seed_sweep(load(args.manifest), load(args.replay), args.root)
+        args.out.write_text(json.dumps({**out, "stamp": stamp_of(args.manifest)}))
     elif args.command == "negatives":
-        args.out.write_text(json.dumps(negative_sweep(args.dataset, args.config)))
+        out = negative_sweep(args.dataset, args.config)
+        args.out.write_text(json.dumps({**out, "stamp": stamp_of(args.manifest)}))
     elif args.command == "toy":
-        args.out.write_text(json.dumps(toy_sweep(args.data)))
+        args.out.write_text(json.dumps({**toy_sweep(args.data), "stamp": stamp_of(args.manifest)}))
     else:
-        result = judge(load(args.manifest), load(args.replay), load(args.again), load(args.seeds),
-                       load(args.negatives), load(args.toy))
+        inputs = {k: load(getattr(args, k)) for k in ("replay", "again", "seeds", "negatives", "toy")}
+        stamps = {k: v["stamp"] for k, v in inputs.items()}
+        stamps["manifest"] = {**stamps["replay"], "manifest_sha256": stamp_of(args.manifest)["manifest_sha256"]}
+        result = judge(load(args.manifest), inputs["replay"], inputs["again"], inputs["seeds"], inputs["negatives"],
+                       inputs["toy"], load(args.evidence), stamps)
         args.out.write_text(json.dumps(result, indent=1))
-        print({a: (v["verdict"], v["failed"]) for a, v in result["verdicts"].items()})
+        print({a: (v["verdict"], v["failed"], v["undecided"], v["unproven"]) for a, v in result["verdicts"].items()})
     return 0
 
 
