@@ -23,7 +23,7 @@ Plan `docs/plans/2026-11-06-unconfirmed-validation.md` 3 and 6. This is the deve
 
 The stuck watch's first live use worked: no session ran out of time. No session lost its arm to a stalled tick in this batch.
 
-Two sessions touched a scene object and are left out of the table below. `val3_016`'s forks sat on a scene pallet from the start. `val3_055` backed into a low box at 28.7 s. In both the wheels slipped and the odometry moved without the truck, so the applied pose went wrong (up to 0.87 m and 0.44 m) while the re-match's g stayed within 2 cm of the truth. That is the check's intended case, but it is not a straight reverse's odometry. Both are outside the bounds by a rule fixed after the first three sessions were read and before the rest were: a window or a generation overlapping a contact is left out and counted. This is a post-hoc rule, marked as such; `pose_check_dev.py --ignore-contacts` gives the values without it, listed below.
+Two sessions touched a scene object and are left out of the table below. `val3_016`'s forks sat on a scene pallet from the start. `val3_055` backed into a low box at 28.7 s. In both the wheels slipped and the odometry moved without the truck, so the applied pose went wrong (up to 0.87 m and 0.44 m) while the re-match's g stayed within 2 cm of the truth. That is the check's intended case, but it is not a straight reverse's odometry. Both are outside the bounds by a rule fixed after the first three sessions were read and before the rest were: a window overlapping a contact, or a generation whose last scan falls inside one, is left out and counted. This is a post-hoc rule, marked as such; `pose_check_dev.py --ignore-contacts` gives the values without it, listed below.
 
 ## Delta_int against distance
 
@@ -48,7 +48,7 @@ So on the same C and O history, today's monitor would revoke every correct sessi
 ## Standing heading drift
 
 - 96 stands of at least 2 s, all 30 sessions: the odometry's heading rate p50 0.00007 rad/s, max 0.0018 rad/s (simulated time), the truth still. 6 of them would pass STILL_RAD in 1.5 s.
-- **No re-match of 139 was discarded for moving.** The first Isaac sessions' 7 of 8 came from one start (`val3_006`, plan appendix A), which is not in the D list; the largest rate in those sessions was 0.0048 rad/s.
+- **None of the 145 generations ended for moving** (139 had a g; 6 ended without one: 4 awaiting the operator, 2 failed). The first Isaac sessions' 7 of 8 came from one start (`val3_006`, plan appendix A), which is not in the D list; the largest rate in those sessions was 0.0048 rad/s.
 - So the drift is real but rare. D gives no reason to change STILL_RAD, and one start of the 32 seen so far shows that it can matter.
 
 ## The development values, not frozen
@@ -69,4 +69,4 @@ So on the same C and O history, today's monitor would revoke every correct sessi
 
 - 30 starts in one hall, on one map, and 10 missions: the distance figures come from those 10. Sessions are not independent.
 - Cut presses shorten the long-distance samples: 16 of 172 strokes closed under 0.05 m, 110 under 0.5 m (half and chatter by design).
-- 7 scene-damage starts are this list's: starts were drawn for matching, not for driving. V's mission populations will meet the same thing.
+- 6 of the 7 scene-damage sessions were damaged where the truck was placed, 1 while it drove. The starts were drawn for matching, not for driving, and V's mission populations will meet the same thing.

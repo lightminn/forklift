@@ -37,26 +37,39 @@ def _samples(n=300, step=0.1, c_per_m=0.01, jump_at=None, jump=0.0):
     return out
 
 
+def _window(samples, window_m, start_t=0.0):
+    ser = S.series(samples, renewals=[(start_t, (0.0, 0.0, 0.0))])
+    return S._gaps(*S._pairs(ser, S.Monitor("W", window_m=window_m))[:2])[0]
+
+
 def test_the_window_change_follows_the_correction_over_that_path():
-    rows = S.window_changes(_samples(), window_m=5.0)
-    assert max(r["m"] for r in rows) == pytest.approx(0.05, abs=0.002)  # 1 % over 5 m
-    assert S.window_changes(_samples(n=20), window_m=5.0) == []  # never that much path: nothing to judge
+    assert _window(_samples(), 5.0).max() == pytest.approx(0.05, abs=0.002)  # 1 % over 5 m
+
+
+def test_the_window_runs_from_the_first_sample_a_jump_on_a_short_path_shows():
+    # Codex revision review P2-2: under L of path there was no row at all (a 6 m jump over 1 m of path, no result)
+    assert _window(_samples(n=10, c_per_m=0.0, jump_at=5, jump=6.0), 5.0).max() > 5.9
+
+
+def test_the_window_starts_at_its_reference():
+    # a change before the confirmation is not the monitor's
+    assert _window(_samples(jump_at=5, jump=6.0), 5.0, start_t=1.0).max() < 0.1
 
 
 def test_a_jump_shows_in_the_window_whatever_the_path_before_it():
-    rows = S.window_changes(_samples(jump_at=200, jump=6.0), window_m=5.0)
-    assert max(r["m"] for r in rows) > 6.0
+    assert _window(_samples(jump_at=200, jump=6.0), 5.0).max() > 6.0
 
 
 def test_a_standing_correction_step_counts_in_the_window():
     samples = _samples(n=100) + [{"t": 10 + 0.1 * k, "o": [9.9, 0.0, 0.0], "applied": [9.9, 0.3 + 0.099, 0.0],
                                   "truth": [9.9, 0.0, 0.0]} for k in range(50)]
-    assert max(r["m"] for r in S.window_changes(samples, window_m=5.0)) > 0.3
+    assert _window(samples, 5.0).max() > 0.3
 
 
-def _record(o, C=(0.0, 0.0, 0.0), truth=None):
-    sample = {"t": 5.0, "o": list(o), "applied": list(compose(C, o)), "truth": list(truth or o)}
-    return {"mode": "shadow", "start": {"o_scan": list(o)}, "hyps": [], "samples": [sample],
+def _record(o, C=(0.0, 0.0, 0.0), truth=None, later=None):
+    sample = {"t": 5.0, "o": list(o), "applied": list(compose(later or C, o)), "truth": list(truth or o)}
+    early = {"t": 4.9, "o": list(o), "applied": list(compose(C, o)), "truth": list(truth or o)}
+    return {"mode": "shadow", "start": {"o_scan": list(o)}, "hyps": [], "samples": [early, sample],
             "stand_sets": [{"t0": 4.0, "t1": 6.0, "delta": [0.15, 0.01], "ref": "int",
                             "sets": [{"stamps": [4.6, 4.7, 4.8, 4.9, 5.0], "o": list(o)}]}]}
 
@@ -92,6 +105,41 @@ def test_a_stand_the_correction_disagrees_with_is_evidence_of_a_revocation(tmp_p
     assert out[0]["outcome"] == "revoke" and out[0]["agree_m"] == pytest.approx(0.5, abs=0.06)
 
 
+def test_the_comparison_is_with_the_last_correction_of_the_stand(tmp_path):
+    # Codex revision review P2-3: plan 1.5's snapshot compares with the C before the truck moves, not the set's
+    grid = TG._grid(*TG.ROOM)
+    o = (2.42, 1.7, 0.6)
+    rec = _record(o, later=(0.5, 0.0, 0.0))
+    out = S.rematch_stands(rec, np.load(_scans(grid, o, tmp_path)), _rematch_ctx(grid), b=o, o0=o, e_slam=(0.15, 0.05))
+    assert out[0]["outcome"] == "revoke"
+
+
+def test_the_conservative_check_shares_the_generations_deadline(tmp_path, monkeypatch):
+    # Codex revision review P2-4: a new 30 s gave renewals the operating path cannot have
+    import pose_runtime as PR
+
+    grid = TG._grid(*TG.ROOM)
+    o = (2.42, 1.7, 0.6)
+    seen, real = [], PR.run_job
+
+    def job(kind, payload, ctx):
+        seen.append((kind, payload["deadline_at"]))
+        return real(kind, payload, ctx)
+
+    monkeypatch.setattr(PR, "run_job", job)
+    S.rematch_stands(_record(o), np.load(_scans(grid, o, tmp_path)), _rematch_ctx(grid), b=o, o0=o, e_slam=(0.15, 0.05))
+    assert [k for k, _ in seen] == ["relocalize", "rematch"] and seen[0][1] == seen[1][1]
+
+
+def test_a_stand_with_no_sample_after_its_scans_is_not_estimable(tmp_path):
+    grid = TG._grid(*TG.ROOM)
+    o = (2.42, 1.7, 0.6)
+    rec = _record(o)
+    rec["samples"] = []
+    out = S.rematch_stands(rec, np.load(_scans(grid, o, tmp_path)), _rematch_ctx(grid), b=o, o0=o, e_slam=(0.15, 0.05))
+    assert out[0]["outcome"] == "not_estimable"
+
+
 def test_a_stand_with_no_scan_set_is_not_estimable_not_no_evidence(tmp_path):
     grid = TG._grid(*TG.ROOM)
     o = (2.42, 1.7, 0.6)
@@ -103,6 +151,71 @@ def test_a_stand_with_no_scan_set_is_not_estimable_not_no_evidence(tmp_path):
 
 def test_the_summary_counts_outcomes_and_the_path_between_renewals():
     rows = [{"t": 10.0, "outcome": "renew"}, {"t": 20.0, "outcome": "no_evidence"}, {"t": 30.0, "outcome": "renew"}]
-    out = S.summary({"a": rows})
-    assert out["outcomes"] == {"renew": 2, "no_evidence": 1} and out["stands"] == 3
+    out = S.summary({"a": rows}, skipped=2)
+    assert out["outcomes"] == {"renew": 2, "no_evidence": 1, "not_estimable": 2} and out["stands"] == 5
     assert json.dumps(out)
+
+
+# --- the offline injection (the revision plan's positive control B) ---
+def _series(n=400, step=0.1, c_per_m=0.0, yaw=0.0):
+    rows = _samples(n=n, step=step, c_per_m=c_per_m)
+    return S.series(rows, renewals=[(0.0, (0.0, 0.0, 0.0))])
+
+
+def test_a_fixed_translation_step_is_detected_by_a_window_and_measured_on_the_true_error():
+    ser = _series()
+    case = S.Injection("step_xy", 0.35, direction=(0.0, 1.0))
+    out = S.run_case(ser, 100, case, S.Monitor("W", window_m=5.0, limit=(0.20, 0.05)))
+    assert out["detected"] and out["delay_m"] == pytest.approx(0.0, abs=0.11) and out["wrong_reached"]
+    assert out["exposure_m"] == pytest.approx(0.0, abs=0.11)
+
+
+def test_the_true_error_is_computed_not_assumed():
+    # Codex revision review P2-6: an error of -0.10 m with +0.35 m injected is 0.25 m, not wrong
+    rows = _samples(n=400, c_per_m=0.0)
+    for r in rows:
+        r["applied"][1] = -0.10
+    ser = S.series(rows, renewals=[(0.0, (0.0, -0.10, 0.0))])
+    out = S.run_case(ser, 100, S.Injection("step_xy", 0.35, direction=(0.0, 1.0)),
+                     S.Monitor("W", window_m=5.0, limit=(0.20, 0.05)))
+    assert out["wrong_reached"] is False
+
+
+def test_a_heading_step_is_a_fixed_correction_about_the_truck():
+    # Codex revision review P2-6: no position change where it enters, none growing once the window has passed it
+    ser = _series()
+    case = S.Injection("step_yaw", 0.12)
+    out = S.run_case(ser, 100, case, S.Monitor("W", window_m=2.0, limit=(10.0, 0.05)))
+    assert out["detected"] and out["wrong_reached"]
+    applied = S.injected_applied(ser, 100, case)
+    assert applied[100][:2] == pytest.approx(ser.applied[100][:2], abs=1e-9)
+    assert applied[399][2] - ser.applied[399][2] == pytest.approx(0.12)
+
+
+def test_a_slow_creep_under_the_natural_rate_is_a_miss_and_counted_as_one():
+    ser = _series()
+    out = S.run_case(ser, 50, S.Injection("ramp_xy", 0.02, direction=(0.0, 1.0)),
+                     S.Monitor("W", window_m=5.0, limit=(0.20, 0.05)))
+    assert out["detected"] is False and out["wrong_reached"] is True and out["exposure_m"] > 10.0
+
+
+def test_a_late_onset_that_never_reaches_wrong_is_apart_from_a_miss():
+    ser = _series(n=120)
+    out = S.run_case(ser, 110, S.Injection("ramp_xy", 0.02, direction=(0.0, 1.0)),
+                     S.Monitor("W", window_m=5.0, limit=(0.20, 0.05)))
+    assert out["wrong_reached"] is False and out["detected"] is False
+
+
+def test_the_cumulative_monitors_read_the_reference_and_the_proportional_one_the_path():
+    ser = _series(c_per_m=0.05)
+    cum = S.first_alarm(ser, S.Monitor("M0", limit=(0.20, 0.05)))
+    assert ser.path[cum] == pytest.approx(4.0, abs=0.11)
+    assert S.first_alarm(ser, S.Monitor("P", limit=(0.20, 0.05), per_m=(0.06, 0.01))) is None
+
+
+def test_a_threshold_is_the_clean_sessions_largest_times_1_5_and_leave_one_out_counts_the_held_out():
+    quiet, loud = _series(c_per_m=0.01), _series(c_per_m=0.02)
+    mon = S.Monitor("W", window_m=5.0)
+    limit = S.fit_limit({"a": quiet, "b": loud}, mon)
+    assert limit[0] == pytest.approx(1.5 * 0.10, abs=0.006)
+    assert S.leave_one_out({"a": quiet, "b": loud}, mon) == {"b": True, "a": False}
