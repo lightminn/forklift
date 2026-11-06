@@ -100,12 +100,18 @@ def _errors(samples, t0, t1, missing=None) -> list:
     return out
 
 
+def _contacts(rec) -> list:
+    """(t0, t1) of the recorded contacts, a floor decal's left out (records made before pose_contacts knew them)."""
+    return [(i["t0"], i["t1"]) for i in (rec.get("contacts") or {}).get("intervals") or []
+            if "SM_FloorDecal" not in i.get("other", "")]
+
+
 def odometry_errors(rec, missing=None, touched=None) -> tuple:
     """((d, e_p, e_theta) from the start check's scan to the last stroke's end, the same from each stroke's open to
     its end) -- the meter's strokes in the shadow, the check's own when on. ``missing``: the windows without an origin.
     A window overlapping a recorded contact is left out and put in ``touched``: wheels slipping against something are
     not a straight reverse's odometry (D session val3_016: the forks on a scene pallet from the start)."""
-    contacts = [(i["t0"], i["t1"]) for i in (rec.get("contacts") or {}).get("intervals") or []]
+    contacts = _contacts(rec)
 
     def clear(t0, t1) -> bool:
         if any(a <= t1 and b >= t0 for a, b in contacts):
@@ -136,7 +142,10 @@ def _agreements(rec):
     starts = [start] if start.get("confirmed") and start.get("agree_m") is not None else []
     every = [g for g in raw.get("rematches") or [] if g.get("g") is not None and g.get("agree_m") is not None]
     passed = [g for g in every if g.get("residual_confirmed")]
-    return starts, [g for g in passed if g.get("applicable")], every, len(passed)
+    contacts = _contacts(rec)
+    # scanned in contact: the agreement is the wheels' slip (val3_016, 0.34 m with g 1 cm from the truth)
+    free = [g for g in passed if g.get("scan_t") is None or not any(a <= g["scan_t"] <= b for a, b in contacts)]
+    return starts, [g for g in free if g.get("applicable")], every, len(free), len(passed) - len(free)
 
 
 def dev_values(records, *, min_samples: int = 20) -> dict:
@@ -145,6 +154,7 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
     stands, starts, gens, all_g, passed = [], [], [], 0, 0
     missing: list = []
     touched: list = []
+    in_contact = 0
     closes: list = []
     for _, rec in records:
         a_, b_ = odometry_errors(rec, missing, touched)
@@ -155,7 +165,8 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
             if reach >= float(key) - 1e-9:
                 bins[key] += 1
         stands += (rec.get("raw") or {}).get("stands") or []
-        s_, g_, every, n_passed = _agreements(rec)
+        s_, g_, every, n_passed, n_contact = _agreements(rec)
+        in_contact += n_contact
         starts += s_
         gens += g_
         all_g += len(every)
@@ -196,7 +207,7 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
             "e_still": {"stands": len(stands), "max": list(still)},
             "e_slam": {"start": {"n": len(starts), "max": list(s_max)},
                        "rematch": {"n": len(gens), "max": list(g_max), "all_g_n": all_g,
-                                   "not_applicable": passed - len(gens)},
+                                   "not_applicable": passed - len(gens), "in_contact": in_contact},
                        "outside_success": sum(c != "success" for c in classes),
                        "unknown": sum(c == "unknown" for c in classes)}}}
 

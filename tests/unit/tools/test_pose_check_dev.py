@@ -203,3 +203,13 @@ def test_a_window_in_contact_is_left_out_of_the_odometry_bound_and_counted():
     odom = D.dev_values([("s", rec)], min_samples=1)["basis"]["odom"]
     assert odom["windows_in_contact"] == 2  # from the start and the first stroke; the second stroke is kept
     assert 0 < odom["samples"] < clean["samples"] and odom["windows_without_origin"] == 0
+
+
+def test_a_generation_scanned_in_contact_stays_out_of_e_slam_and_a_floor_decal_is_no_contact():
+    # val3_016: the agreement is the slip's, 0.34 m, the g itself right; val3_042: a floor decal's collider
+    rec = _session(rematch_agree=((0.05, 0.02, "confirm"), (0.34, 0.01, "confirm")))
+    rec["raw"]["rematches"][1]["scan_t"] = 3.0
+    rec["contacts"] = {"intervals": [{"t0": 2.9, "t1": 3.1, "body": "b", "other": "/World/Box"},
+                                     {"t0": 0.0, "t1": 9.0, "body": "b", "other": "/World/x/SM_FloorDecal_RecRed/m"}]}
+    r = D.dev_values([("s", rec)], min_samples=1)["basis"]["e_slam"]["rematch"]
+    assert r["n"] == 1 and r["max"] == pytest.approx([0.05, 0.02]) and r["in_contact"] == 1

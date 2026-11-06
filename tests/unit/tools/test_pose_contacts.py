@@ -22,6 +22,11 @@ def test_only_external_contacts_other_than_the_floor_count():
     assert PC.external_pairs(pairs) == {(FORK, PALLET)}
 
 
+def test_a_floor_decal_is_the_floor():
+    # D session val3_042: the decal's collider lies on the floor
+    assert PC.external_pairs([(TYRE, "/World/Environment/SM_FloorDecal_RecRed_12/mesh")]) == set()
+
+
 def test_a_contact_is_one_interval_until_it_ends_or_the_confirmation_changes():
     log = PC.ContactLog()
     log.update(1.0, [(FORK, PALLET)], status="unconfirmed", phase="idle", relation="free")
