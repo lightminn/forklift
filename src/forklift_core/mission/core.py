@@ -4419,6 +4419,17 @@ class MissionCore:
                     and (self.state.get("near_capture", {}).get("status") == "pending"
                          or getattr(self, "_second_capture_active", False)))  # C3: the second near capture too
 
+    def _near_plane_options(self, params):
+        """Plan 2026-11-06 near-capture plane refit: the parameters and keywords of the near expected-site detections.
+        Unset (--near-capture-refit 0, --near-capture-ransac-iterations equal to the derived value) they are the
+        frozen call -- the same parameters and no new keyword -- so a boundary record from before matches; set, the
+        attempt records what ran."""
+        refit_ = int(getattr(self.options, "near_capture_refit", 0))
+        ransac_ = getattr(self.options, "near_capture_ransac_iterations", None)
+        if ransac_ is not None and int(ransac_) != params.ransac_iterations:
+            params = replace(params, ransac_iterations=int(ransac_))
+        return params, ({"plane_refit_iterations": refit_} if refit_ else {})
+
     def _near_waiver_on(self) -> bool:
         """Plan 2026-10-22 task C: --near-capture-lower waive_far_confirmed (needs --near-capture-expected on)."""
         return getattr(self.options, "near_capture_lower", "gate") == "waive_far_confirmed"
@@ -4469,7 +4480,8 @@ class MissionCore:
             return "far_link", record_
         return None, record_
 
-    def _near_lower_waiver(self, attempt: dict, detection, site: ExpectedSite, detector_input, prior, params):
+    def _near_lower_waiver(self, attempt: dict, detection, site: ExpectedSite, detector_input, prior, params,
+                           **plane_kw):
         """Plan 2026-10-22 task C (user decision 2026-10-22, conditional): a near capture with the check off that found
         no valid pocket inside its expected site is detected once more with the lower band waived -- only after a far
         capture that passed in full (condition 1), only among candidates within 0.15 m and 15 deg of the expected site
@@ -4480,7 +4492,7 @@ class MissionCore:
         if refusal_ is None:
             narrow_ = ExpectedSite(site.x_m, site.y_m, site.yaw_rad, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
             second_, candidates_ = self.hooks.detect_pockets_expected(detector_input, prior, params, narrow_,
-                                                                      lower_evidence=False)
+                                                                      lower_evidence=False, **plane_kw)
             record_["second"] = self._expected_record(narrow_, candidates_)
             if second_.observation.status == "valid":
                 record_["applied"] = True
@@ -5330,10 +5342,16 @@ class MissionCore:
                 site = ExpectedSite(site.x_m, site.y_m, site.yaw_rad, NEAR_WAIVER_RADIUS_M, NEAR_WAIVER_AXIS_RAD)
                 attempt["lower_evidence"] = False
                 waive_kw = {"lower_evidence": False}
-            detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, params, site, **waive_kw)
+            near_params_, plane_kw_ = self._near_plane_options(params)
+            if plane_kw_ or near_params_ is not params:
+                attempt["near_plane_options"] = {"refit": plane_kw_.get("plane_refit_iterations", 0),
+                                                 "ransac_iterations": near_params_.ransac_iterations}
+            detection, candidates_ = hooks.detect_pockets_expected(detector_input, prior, near_params_, site,
+                                                                   **waive_kw, **plane_kw_)
             attempt["expected"] = self._expected_record(site, candidates_)
             if not waive_kw and detection.observation.status != "valid" and self._near_waiver_on():
-                detection = self._near_lower_waiver(attempt, detection, site, detector_input, prior, params)
+                detection = self._near_lower_waiver(attempt, detection, site, detector_input, prior, near_params_,
+                                                    **plane_kw_)
         elif self._far_expected_on(far_hook):
             detection = self._far_expected_detection(attempt, detector_input, prior, params, base, yaw, waive_kw)
         else:

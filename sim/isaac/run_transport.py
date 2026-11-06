@@ -469,6 +469,23 @@ def arguments() -> argparse.Namespace:
         "Needs --near-capture-expected on.",
     )
     parser.add_argument(
+        "--near-capture-refit",
+        type=int,
+        default=0,
+        help="docs/plans/2026-11-06-near-capture-plane-refit.md arm (a): the near expected-site detections (the first "
+        "call and the lower waiver's second) refit each RANSAC plane on its own band up to this many more times, until "
+        "the band stops changing. 0: the frozen extraction. A comparison arm, not a default; needs "
+        "--near-capture-expected on.",
+    )
+    parser.add_argument(
+        "--near-capture-ransac-iterations",
+        type=int,
+        default=200,
+        help="docs/plans/2026-11-06-near-capture-plane-refit.md arm (b): the RANSAC iterations of the near expected-site "
+        "detections only (the seed is unchanged; other detections keep the derived value). 200: the derived value, "
+        "the frozen call. A comparison arm, not a default; needs --near-capture-expected on.",
+    )
+    parser.add_argument(
         "--near-recapture-gap-m",
         type=float,
         default=None,
@@ -1598,6 +1615,10 @@ def arguments() -> argparse.Namespace:
         parser.error("--adoption-zone-margin-m must be a finite value >= 0")
     if args.near_capture_lower != "gate" and args.near_capture_expected != "on":
         parser.error(f"--near-capture-lower {args.near_capture_lower} needs --near-capture-expected on")
+    if args.near_capture_refit < 0 or args.near_capture_ransac_iterations < 1:
+        parser.error("--near-capture-refit must be >= 0 and --near-capture-ransac-iterations >= 1")
+    if (args.near_capture_refit != 0 or args.near_capture_ransac_iterations != 200) and args.near_capture_expected != "on":
+        parser.error("--near-capture-refit / --near-capture-ransac-iterations need --near-capture-expected on")
     if args.near_recapture_gap_m is not None:
         # C3 (plan 2026-10-27 T2): the second near capture is defined for a batch run of the near capture alone.
         if not (math.isfinite(args.near_recapture_gap_m) and args.near_recapture_gap_m > 0.0):
@@ -6782,6 +6803,10 @@ def drive(S, isaac) -> None:
                                 near_capture_redraw_lateral_m=getattr(args, "near_capture_redraw_lateral_m", 0.05),
                                 near_capture_expected=getattr(args, "near_capture_expected", "off"),
                                 near_capture_lower=getattr(args, "near_capture_lower", "gate"),
+                                # docs/plans/2026-11-06-near-capture-plane-refit.md: the frozen call in a record from
+                                # before the options
+                                near_capture_refit=int(getattr(args, "near_capture_refit", 0)),
+                                near_capture_ransac_iterations=int(getattr(args, "near_capture_ransac_iterations", 200)),
                                 near_recapture_gap_m=getattr(args, "near_recapture_gap_m", None),  # C3 (2026-10-27 T2)
                                 # docs/plans/2026-10-28-adoption-zone-check.md: off in a record from before the option;
                                 # a live mission replaces the rectangle with its own at each adoption
