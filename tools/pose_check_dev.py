@@ -174,7 +174,10 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
     in_reach = [e for e in errs if e[0] <= D_TOTAL + 1e-9]
     a_p, b_p = fit_bound([(d, e) for d, e, _ in in_reach])
     a_t, b_t = fit_bound([(d, e) for d, _, e in in_reach])
-    still = (max((s["max_m"] for s in stands), default=0.0), max((s["max_rad"] for s in stands), default=0.0))
+    plain = (max((s["max_m"] for s in stands), default=0.0), max((s["max_rad"] for s in stands), default=0.0))
+    # the reference taken again at a hold's release (the revision plan 9.4); records before it hold the plain value
+    still = (max((s.get("rebased_m", s["max_m"]) for s in stands), default=0.0),
+             max((s.get("rebased_rad", s["max_rad"]) for s in stands), default=0.0))
     e_still = [FACTOR * still[0], FACTOR * still[1]]
 
     def largest(rows):
@@ -204,7 +207,8 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
                                  "under_0_5_m": sum(s < 0.5 for s in closes)},
                      "max_e_p": max((e for _, e, _ in in_reach), default=0.0),
                      "max_e_theta": max((e for _, _, e in in_reach), default=0.0)},
-            "e_still": {"stands": len(stands), "max": list(still)},
+            "e_still": {"stands": len(stands), "max": list(still), "plain_max": list(plain),
+                        "plain_x_factor": [FACTOR * plain[0], FACTOR * plain[1]]},
             "e_slam": {"start": {"n": len(starts), "max": list(s_max)},
                        "rematch": {"n": len(gens), "max": list(g_max), "all_g_n": all_g,
                                    "not_applicable": passed - len(gens), "in_contact": in_contact},

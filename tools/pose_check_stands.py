@@ -263,9 +263,9 @@ def run_case(ser, onset, case, mon) -> dict:
             "exposure_m": float(dp[exposed].sum()), "exposure_s": float(dt[exposed].sum())}
 
 
-def stand_change(t, values, *, t0, t1, releases, step: float = 0.15) -> float:
-    """A stand's largest change of a recorded value from its reference, the reference taken again after each hold
-    release inside the stand (a release's own step, up to ``step`` s, is the release's)."""
+def stand_change(t, values, *, t0, t1, releases) -> float:
+    """A stand's largest change of a recorded value from its reference, the reference taken again at the first sample
+    at or after each hold release inside the stand."""
     i = [k for k, x in enumerate(t) if t0 <= x <= t1]
     best = 0.0
     if not i:
@@ -277,8 +277,6 @@ def stand_change(t, values, *, t0, t1, releases, step: float = 0.15) -> float:
             ref = None
             next_mark += 1
         if ref is None:
-            if marks and next_mark and t[k] < marks[next_mark - 1] + step:
-                continue
             ref = values[k]
         best = max(best, abs(values[k] - ref))
     return best

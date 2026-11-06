@@ -25,7 +25,9 @@ class FakeVehicle:
     advances, which confirms (on) when ``confirm_at`` re-matches have run."""
 
     def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None, cut_after=None,
-                 pacing_refusals=0, wall_at=None, flash=False, deaf=False):
+                 pacing_refusals=0, wall_at=None, flash=False, deaf=False, rematch_after_mission=0,
+                 close_after_mission=None):
+        self.rematch_after_mission, self.close_after_mission = rematch_after_mission, close_after_mission
         self.wall_at, self.held, self.flash, self.deaf = wall_at, False, flash, deaf
         self.shadow, self.confirm_at = shadow, confirm_at
         self.cut_after, self.pacing_refusals, self.arms, self.leases, self.ended_with = cut_after, pacing_refusals, 0, 0, None
@@ -62,6 +64,10 @@ class FakeVehicle:
             if self.mission_at <= 0:
                 self.state["last_result"] = {"seq": 1, "mission_id": "m1", "outcome": "done"}
                 self.mission_at = None
+                if self.rematch_after_mission:
+                    self.rematch, self.status = self.rematch_after_mission, "checking"
+                if self.close_after_mission:
+                    self.close_at = self.close_after_mission
         if self.rematch:
             self.rematch -= 1
             if not self.rematch:
@@ -164,9 +170,9 @@ class FakeVehicle:
         return s.get("rear_axle_speed_mps") == 0.0
 
 
-def _run(v, kind="full", mission=False, stuck=30.0):
+def _run(v, kind="full", mission=False, stuck=30.0, watch=0.0):
     args = SimpleNamespace(reverse_kind=kind, mission_after_confirm=mission, reverse_wait_s=30.0, stroke_wall_s=30.0,
-                           stroke_stuck_s=stuck,
+                           stroke_stuck_s=stuck, post_mission_sim_s=watch,
                            hold_sim_s=0.05, live_factor=1.0, cycle="P-1:D-1,P-1:D-0", mission_timeout_s=30.0)
     orig = asyncio.sleep
 
@@ -291,3 +297,31 @@ def test_a_press_the_vehicle_never_takes_is_let_go_by_the_watch():
     v = FakeVehicle(shadow=True, deaf=True)
     rep = _run(v, "full", stuck=0.02)["reverse"]
     assert [s["released"] for s in rep["strokes"]] == ["blocked", "blocked"] and rep["blocked"] is True
+
+
+# --- the post-mission watch (the revision plan 9.10) ---
+def test_after_a_mission_it_waits_for_a_generation_that_started_to_its_end():
+    # a watch that ended first would cut the failing and late generations off the sample
+    v = FakeVehicle(start="confirmed", rematch_after_mission=40)
+    rep = _run(v, "full", mission=True, watch=0.01)["reverse"]
+    watch = rep["post_mission"]
+    assert watch["started"] is True and watch["done"] is True and watch["ended"] == "result"
+    assert v.calls[-1] == "session_end"
+
+
+def test_after_a_mission_with_no_generation_it_stands_the_watch():
+    v = FakeVehicle(start="confirmed")
+    rep = _run(v, "full", mission=True, watch=0.2)["reverse"]
+    assert rep["post_mission"]["started"] is False and rep["post_mission"]["ended"] == "watch"
+    assert v.calls.index("mission_submit") < v.calls.index("session_end")
+
+
+def test_a_session_that_closes_in_the_watch_is_said_so():
+    v = FakeVehicle(start="confirmed", close_after_mission=3)
+    rep = _run(v, "full", mission=True, watch=5.0)
+    assert rep["reverse"]["post_mission"]["ended"] == "closed"
+
+
+def test_no_watch_without_a_mission():
+    v = FakeVehicle(start="confirmed")
+    assert "post_mission" not in _run(v, "full", mission=False)["reverse"]

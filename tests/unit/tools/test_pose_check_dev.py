@@ -88,6 +88,14 @@ def test_too_few_samples_or_a_still_bound_over_the_budget_is_flagged_not_cut():
     assert "rematch_samples_under_20" in out["flags"]
 
 
+def test_e_still_reads_the_stand_rebased_at_a_release_and_keeps_the_plain_largest():
+    rec = _session(stands=((0.01, 0.05),))
+    rec["raw"]["stands"][0].update(rebased_m=0.005, rebased_rad=0.004)
+    out = D.dev_values([("s", rec)], min_samples=1)
+    assert out["e_still"] == pytest.approx([0.0075, 0.006])
+    assert out["basis"]["e_still"]["plain_max"] == pytest.approx([0.01, 0.05])
+
+
 def test_evidence_outside_the_success_tolerance_is_kept_and_counted():
     rec = _session()
     rec["raw"]["rematches"][0]["truth"] = {"class": "imprecise"}

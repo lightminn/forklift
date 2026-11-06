@@ -216,6 +216,11 @@ class SlamPoseTracker:
         self._stand = None  # (odom at the stand's start, travel before it) -- plan D15
         self.hold_travel_m = 0.0
         self.skipped_replies = 0
+        self.offset = None  # test only (unconfirmed position revision plan 2 D): composed onto every correction received
+
+    def inject_offset(self, offset) -> None:
+        """Test only: from now on every processed correction is offset, as a wrong SLAM jump would be."""
+        self.offset = tuple(float(v) for v in offset)
 
     def receive(self, scan_id: int, stamp_s: float, status: str, map_from_odom) -> None:
         stamp = _finite_scalar(stamp_s, "stamp_s")
@@ -233,6 +238,8 @@ class SlamPoseTracker:
         if status != "processed":
             raise ValueError(f"unexpected reply status {status!r}")
         pose = tuple(_finite_scalar(v, "map_from_odom") for v in map_from_odom)
+        if self.offset is not None:
+            pose = compose(self.offset, pose)
         self.received = (pose, stamp, int(scan_id))
         self.version += 1
         if self.mode == "warming_up":

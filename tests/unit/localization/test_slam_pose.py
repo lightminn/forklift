@@ -341,3 +341,14 @@ def test_a_localization_tracker_warms_up_until_the_seventh_start_up_scan():
     default = SlamPoseTracker(max_age_s=0.5, hold_limit_m=15.0)
     default.receive(4, 0.4, "processed", (0.0, 0.0, 0.0))
     assert default.mode == "tracking"  # mapping keeps today's rule
+
+
+def test_an_injected_offset_moves_every_correction_from_then_on():
+    # the revision plan 2 D, test only: the applied pose follows it, as a real jump would
+    tracker = SlamPoseTracker(bootstrap_scan_id=0, max_age_s=1.0, hold_limit_m=1.0)
+    tracker.receive(0, 0.0, "processed", (1.0, 0.0, 0.0))
+    tracker.inject_offset((0.0, 0.35, 0.0))
+    tracker.receive(1, 0.1, "processed", (1.0, 0.0, 0.0))
+    assert tracker.applied[0] == pytest.approx((1.0, 0.35, 0.0))
+    tracker.receive(2, 0.2, "processed", (1.1, 0.0, 0.0))
+    assert tracker.applied[0] == pytest.approx((1.1, 0.35, 0.0))

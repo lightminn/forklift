@@ -884,3 +884,28 @@ def test_a_shadow_job_runs_the_conservative_check_once_in_either_phase(monkeypat
         assert len(calls) == 1, phase
         assert out["outcome"] == ("confirm" if out["residual_confirmed"] else
                                   ("unconfirmed" if phase == "unconfirmed" else "none"))
+
+
+# --- the monitor revision (docs/plans/2026-11-07-unconfirmed-monitor-revision.md 9.5) ---
+def test_the_runtime_hands_the_hold_to_the_stand_gate():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    C = compose(b, invert(b))
+    _tick(rt, b, C, holding=True)
+    C2 = compose((0.0, 0.0, 0.009), C)
+    rt.tick(1.0, b, C2, standing=True, deadman=False, epoch=1, control_gen=1, holding=False)
+    assert rt.pc.status == "confirmed"  # 0.009 rad at the release: over E_STILL 0.01? under; the reference taken again
+    assert rt.pc.c_still == pytest.approx(C2)
+
+
+def test_the_shadow_keeps_the_stand_rebased_at_a_release_beside_the_plain_value():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    _tick(rt, b, I)
+    _tick(rt, b, I, standing=False)
+    rt.tick(1.0, b, I, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
+    rt.tick(1.1, b, (0.0, 0.0, 0.04), standing=True, deadman=False, epoch=1, control_gen=1, holding=False)
+    rt.tick(1.5, b, (0.0, 0.0, 0.041), standing=True, deadman=False, epoch=1, control_gen=1, holding=False)
+    rt.tick(1.6, b, (0.0, 0.0, 0.041), standing=False, deadman=False, epoch=1, control_gen=1, holding=False)
+    stand = rt.raw["stands"][-1]
+    assert stand["max_rad"] == pytest.approx(0.041) and stand["rebased_rad"] == pytest.approx(0.001, abs=1e-6)

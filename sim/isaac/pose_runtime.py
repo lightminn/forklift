@@ -254,6 +254,7 @@ class PoseRuntime:
         self._meter_view = None
         self.raw = {"start": None, "rematches": [], "stands": []} if self.shadow else None
         self._stand = None
+        self._held = False
         self._raw_pending: list = []  # (raw record, its scan time, its evidence): judged against the truth there
         # plan 2026-11-06 1.5: at a mission stand (the near field left out) where the applied pose has moved over 0.10 m
         # from C_int's, the inputs of one generation -- up to STAND_SET_COUNT sets of SCANS scans in a row while it
@@ -300,13 +301,13 @@ class PoseRuntime:
 
     # --- every tick ----------------------------------------------------------------------------------------------------
     def tick(self, t: float, o, C, *, standing: bool, deadman: bool, epoch, control_gen, mission_active: bool = False,
-             near: bool = False) -> P.View:
+             near: bool = False, holding: bool = False) -> P.View:
         o = tuple(float(v) for v in o)
         self.o_last = o
         view = self._tick(t, o, C, standing=standing, deadman=deadman, epoch=epoch, control_gen=control_gen,
-                          mission_active=mission_active, near=near)
+                          mission_active=mission_active, near=near, holding=holding)
         if self.shadow:
-            self._shadow_stand(t, o, C, standing, mission_active, near)
+            self._shadow_stand(t, o, C, standing, mission_active, near, holding)
         self._last = (o, None, None)  # the odometry always (Codex 2d P2-5: the windows' origins read it)
         if C is not None:
             ref, kind = (self.pc.c_int, "int") if self.pc.c_int is not None else (self._c0, "start")
@@ -343,7 +344,7 @@ class PoseRuntime:
         """Nothing more to ask the worker: it is lost, or (on) the check ended (Codex 2b re-review P2)."""
         return self.worker_lost or (not self.shadow and self.pc.status.startswith("ended:"))
 
-    def _tick(self, t, o, C, *, standing, deadman, epoch, control_gen, mission_active, near) -> P.View:
+    def _tick(self, t, o, C, *, standing, deadman, epoch, control_gen, mission_active, near, holding) -> P.View:
         if not self._stopped():
             self._check_worker(t)
         if self._stopped():  # Codex 2b re-review P2: nothing more to ask a closed worker
@@ -373,7 +374,8 @@ class PoseRuntime:
                     "o0": self.o0, "o_scan": o_scan, "deadline_at": self.start_deadline})
                 self.stage = "start_running"
                 self.start["submitted_t"] = t
-        view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active, near=near)
+        view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active, near=near,
+                              holding=holding)
         want = view.want_rematch
         if self.shadow:  # its own trigger: every stand past D_MIN outside a mission and the near field
             self._meter_view = None if self.meter is None else self.meter.update(t, o, C, standing=standing,
@@ -390,20 +392,20 @@ class PoseRuntime:
             self.rm.relocalizer.start()  # its 30 s from now: the scans' wait counts (Codex 2b re-review P2)
             self.buf.clear()
             view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active,
-                                  near=near)
+                                  near=near, holding=holding)
         if self.rm is not None and self.clock() > self.rm.relocalizer.deadline_at + (
                 0.0 if self.rm.stage == "scans" else RESULT_GRACE_S):
             self._finish_rematch(t, "none" if self.rm.phase == "confirmed" else "unconfirmed", None,
                                  self.rm.o_scan or self.rm.o_begin, o, C, epoch, control_gen, why="deadline")
             view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active,
-                                  near=near)
+                                  near=near, holding=holding)
         if self.rm is not None and self.rm.stage == "scans":
             m, rad = P.gap(o, self.rm.o_begin, self.rear_offset_m)
             if not standing or m > P.STILL_M or rad > P.STILL_RAD:  # it moved before its scans: no evidence
                 self._finish_rematch(t, "none" if self.rm.phase == "confirmed" else "unconfirmed", None,
                                      self.rm.o_begin, o, C, epoch, control_gen, why="moved")
                 view = self.pc.update(t, o, C, standing=standing, deadman=deadman, mission_active=mission_active,
-                                      near=near)
+                                      near=near, holding=holding)
             else:
                 got = self._still_set()
                 if got is not None:
@@ -527,15 +529,23 @@ class PoseRuntime:
                 self._raw_pending.append((raw, raw["scan_t"], g))
         self.raw["rematches"].append(raw)
 
-    def _shadow_stand(self, t, o, C, standing, mission_active, near) -> None:
-        """Each stand's largest move of the applied pose by the correction against the stand's first (Delta_still)."""
+    def _shadow_stand(self, t, o, C, standing, mission_active, near, holding=False) -> None:
+        """Each stand's largest move of the applied pose by the correction against the stand's first (Delta_still), and
+        the same with the reference taken again at a hold's release (the revision plan 9.4)."""
+        released = self._held and not holding
+        self._held = holding
         if standing and C is not None:
             if self._stand is None:
-                self._stand = {"t0": t, "c_still": tuple(C), "max_m": 0.0, "max_rad": 0.0, "mission":
-                               bool(mission_active), "near": bool(near), "status": self.pc.status, "t1": t}
+                self._stand = {"t0": t, "c_still": tuple(C), "c_rebased": tuple(C), "max_m": 0.0, "max_rad": 0.0,
+                               "rebased_m": 0.0, "rebased_rad": 0.0, "mission": bool(mission_active), "near": bool(near),
+                               "status": self.pc.status, "t1": t}
                 return
-            m, rad = P.gap(compose(C, o), compose(self._stand["c_still"], o), self.rear_offset_m)
             st = self._stand
+            if released:
+                st["c_rebased"] = tuple(C)
+            m, rad = P.gap(compose(C, o), compose(st["c_still"], o), self.rear_offset_m)
+            rm_, rrad = P.gap(compose(C, o), compose(st["c_rebased"], o), self.rear_offset_m)
+            st["rebased_m"], st["rebased_rad"] = max(st["rebased_m"], rm_), max(st["rebased_rad"], rrad)
             st["max_m"], st["max_rad"], st["t1"] = max(st["max_m"], m), max(st["max_rad"], rad), t
             st["mission"] = st["mission"] or bool(mission_active)
             st["near"] = st["near"] or bool(near)
@@ -544,7 +554,7 @@ class PoseRuntime:
 
     def _close_stand(self) -> None:
         st, self._stand = self._stand, None
-        self.raw["stands"].append({**st, "c_still": list(st["c_still"])})
+        self.raw["stands"].append({**st, "c_still": list(st["c_still"]), "c_rebased": list(st["c_rebased"])})
 
     def _check_worker(self, t) -> None:
         if self.worker.alive():

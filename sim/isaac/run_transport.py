@@ -265,16 +265,27 @@ def _finite_triple(value: str) -> tuple[float, float, float]:
 
 def _pose_bounds(value: str):
     """Parse the unconfirmed position check's development values (docs/plans/2026-11-02-unconfirmed-runner.md 0):
-    JSON {"odom": [a, b, c, e], "e_still": [m, rad], "e_slam": [m, rad]} inline or in a file."""
+    JSON {"odom": [a, b, c, e], "e_still": [m, rad], "e_slam": [m, rad], "e_window": [m, rad]} inline or in a file."""
     from forklift_core.localization.pose_check import Bounds
 
     try:
         text = Path(value).read_text() if not value.lstrip().startswith("{") and Path(value).is_file() else value
         data = json.loads(text)
         return Bounds(odom=tuple(float(v) for v in data["odom"]), e_still=tuple(float(v) for v in data["e_still"]),
-                      e_slam=tuple(float(v) for v in data["e_slam"]))
+                      e_slam=tuple(float(v) for v in data["e_slam"]), e_window=tuple(float(v) for v in data["e_window"]))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise argparse.ArgumentTypeError(f"--pose-check-bounds: {exc}") from exc
+
+
+def _correction_inject(value: str) -> tuple:
+    """A correction offset and when (plan 2026-11-07-unconfirmed-monitor-revision 2 D): "x,y,yaw,sim_s"."""
+    try:
+        parts = tuple(float(v) for v in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--correction-inject takes x,y,yaw,sim_s") from exc
+    if len(parts) != 4 or not all(math.isfinite(v) for v in parts):
+        raise argparse.ArgumentTypeError("--correction-inject takes four finite numbers: x,y,yaw,sim_s")
+    return parts
 
 
 def _reloc_inject(value: str) -> str:
@@ -1156,6 +1167,10 @@ def arguments() -> argparse.Namespace:
                         "relocalization chose, its estimate is replaced by the named map-frame hypothesis (a "
                         "synthetic twin such as 'shift x+1' or 'turn', or 'slide': 0.35 m along the hall's axis). "
                         "Unattended relocalization batches only (--reloc-unattended).")
+    parser.add_argument("--correction-inject", type=_correction_inject, default=None,
+                        help="Test only (docs/plans/2026-11-07-unconfirmed-monitor-revision.md 2 D): at that simulated "
+                        "second every SLAM correction from then on is offset by x,y,yaw (the yaw about the truck), as "
+                        "a wrong jump would be. Unattended relocalization batches with the check on or shadow.")
     parser.add_argument("--pose-check-contacts", action="store_true",
                         help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
                         "every forklift rigid body reports its contacts, and each contact with anything but the floor "
@@ -1618,6 +1633,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
     if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
         parser.error("--reloc-inject is for unattended relocalization batches (--start-relocalize --reloc-unattended)")
+    if args.correction_inject is not None and (not args.reloc_unattended or args.pose_check == "off"):
+        parser.error("--correction-inject is for unattended relocalization batches with --pose-check on or shadow")
     if args.pose_check_contacts and args.pose_check == "off":
         parser.error("--pose-check-contacts goes with --pose-check on or shadow")
     if args.pose_shadow_audit and args.pose_check != "shadow":
@@ -9040,7 +9057,8 @@ def drive(S, isaac) -> None:
             view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
                              standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
                              epoch=live.session_epoch, control_gen=a_.control_gen,
-                             mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
+                             mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()),
+                             holding=slam["tracker"].mode == "holding")
             if rt_.rear_pending():
                 if rt_.audit is not None and not audit_on_:
                     audit_on_ = rt_.audit.due(force=True)  # every rear check (Codex 2d re-review P3)
@@ -9050,7 +9068,8 @@ def drive(S, isaac) -> None:
                 view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
                                  standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
                                  epoch=live.session_epoch, control_gen=a_.control_gen,
-                                 mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
+                                 mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()),
+                                 holding=slam["tracker"].mode == "holding")
             if not rt_.shadow:
                 a_.pose = rt_.view_dict(view_)
             live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)
@@ -9062,6 +9081,21 @@ def drive(S, isaac) -> None:
                 state["pose_check_end"] = dict(pose_box["end"])
                 a_.end_pose(live.clock(), reason_)
                 raise RuntimeError(f"pose_ending:{reason_}")
+
+        def correction_injection(t_):
+            """Test only (the revision plan 2 D): once, the offset every later SLAM correction carries; a yaw about the
+            truck's applied pose, so the jump starts at the truck."""
+            x_, y_, yaw_, at_ = args.correction_inject
+            if t_ < at_ or "correction_inject" in state:
+                return
+            from forklift_core.localization.slam_pose import compose, invert
+
+            pivot_ = compose(slam["tracker"].applied[0], slam_odom_base())
+            turned_ = compose((pivot_[0], pivot_[1], yaw_), (-pivot_[0], -pivot_[1], 0.0))
+            turned_ = (turned_[0] + x_, turned_[1] + y_, turned_[2])
+            slam["tracker"].inject_offset(turned_)
+            state["correction_inject"] = {"t": float(t_), "offset": list(turned_), "pivot": list(pivot_),
+                                          "holding": slam["tracker"].mode == "holding", "phase": ms.phase}
 
         def pose_rear_blocked(rt_) -> bool:
             """Design 3: the straight reverse to D_MIN and its stop is clear of the union zones (grown for that move)
@@ -9258,6 +9292,8 @@ def drive(S, isaac) -> None:
                 if slam is not None:
                     rear = slam_rear(t)
                     if live is not None and pose_box["rt"] is not None:
+                        if args.correction_inject is not None:
+                            correction_injection(t)
                         pose_checkpoint(t)  # plan 3.3 (2): the new correction, before any mission work this tick
                     signed_speed = slam["tracker_speed"]
                     slam["control"].append([t, *rear.tolist(), *truth_rear.tolist()])
@@ -10820,8 +10856,10 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         k: (
             asdict(v)
             if k in {"pallet_geometry_loaded", "drive_geometry"}
-            else {f: list(getattr(v, f)) for f in ("odom", "e_still", "e_slam")}
+            else {f: list(getattr(v, f)) for f in ("odom", "e_still", "e_slam", "e_window")}
             if k == "pose_check_bounds" and v is not None
+            else list(v)
+            if k == "correction_inject" and v is not None
             else str(v)
             if isinstance(v, Path)
             else v
@@ -10863,7 +10901,7 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
         # plan 2026-11-06 1.2: the injection only when given
         and (k != "reloc_inject" or v is not None) and (k != "pose_check_contacts" or v)
-        and (k != "pose_shadow_audit" or v)
+        and (k != "pose_shadow_audit" or v) and (k != "correction_inject" or v is not None)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))

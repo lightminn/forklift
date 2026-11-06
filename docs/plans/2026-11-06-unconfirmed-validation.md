@@ -17,6 +17,7 @@
 - **세계 나눔**: dev 는 seed 4 홀, 검증(eval)은 seed 5 홀이다(B-P2 와 같다). 개발 값은 seed 5 기록을 읽지 않는다.
   - 한계: 두 홀은 같은 생성기의 6 m 격자 홀이다. 설계 단계(가설 규칙, R_RESID, 비용 측정)는 이미 seed 5 의 F1 사례와 출발 분포를 보았다. 그래서 이 검증이 보이는 것은 "같은 종류 홀에서 미리 고정한 판정"이고, 다른 홀 구조로의 일반화는 아니다(agy 2).
 - **새 팔레트 질량**(PR #254 뒤)으로 돈다. 켬·그림자 두 팔은 같은 스냅숏으로 돌리고 옛 10 kg 결과와 섞지 않는다. `--near-tracking` 은 쓰지 않는다.
+- **방향 입력**: ③ 의 D·V 는 seed 4·5 홀 조사 지도에 맞춘 `--odometry-heading gyro`(`team_spec_quantized`, `config/gyro_model_spec_typical.yaml`)로 돈다. 운영 런처 `isaac_live.sbatch` 의 기본은 `--odometry-heading` 없음, 곧 steering 이다. 그래서 **V 합격의 적용 범위는 gyro 방향 입력으로 한정된다.** steering 운용에 옮겨 말하지 않는다. V 보고에 어떤 방향 입력에서 검증했는지 적는다.
 - ws1 조율: Isaac 잡은 그때 총괄이 알린 순서를 따른다. 묶음은 `tools/isaac_bundle.py` 로 내고, live 항목에는 `first_record`·`scan` 을 단다(#292).
 - 총괄 결정의 보고 의무: 미션 중 다시 정합 예외의 영향을 함께 보고한다(4.4).
 
