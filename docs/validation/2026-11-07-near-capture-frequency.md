@@ -94,7 +94,7 @@ s100 이 분포의 꼬리인지 별개 사건인지 보려고, 같은 임무의 
 - 운영 설정 해시 1 개(`1cfb429e…`), 장면별 `condition_sha256` 2 개. 조사 세션과 합치지 않았다.
 - 실행 2 시간 44 분(잡 16300 1:11, 16301 1:33). 묶음은 VM 가동으로 하나씩 돌았다. 디스크 4.0 GB.
 - 제출 전 종료 0, 묶음 재시도 없음. 결과 전 감시는 계획의 허용 범위(잡 상태, 디스크, `nf_monitor.py`)만 썼다.
-- `slam.control` 은 콘솔이 스트레스 결과로 읽을 때까지 지우지 않는다.
+- 콘솔이 스트레스 결과로 읽은 뒤 정리했다. 전체 사본은 `gdrive:forklift-archive/ws1-cleanup-20261107-e/`(묶음 `e_nf`)에 있고, ws1 에는 `tally/`, 목록·스크립트, `O0_random_m_s100/`(운반 실패), `O0_random_m_s105/`(구제된 P-5 캡처)만 남는다.
 - 일람은 [near.json](2026-11-07-near-capture-frequency/near.json) 이다. 재현은 ws1 `test_runs/near_freq/nf_46d8929d/` 에서 `tools/ct_survey.py <배치> --json survey.json --near-tally near.json` 이다.
 
 ## 보지 못한 것
