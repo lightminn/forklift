@@ -323,7 +323,10 @@ def test_run_metadata_records_effective_params_and_detector_inputs_have_no_label
     assert record["yaw_tolerance_rad"] == YAW_TOLERANCE_RAD
     assert record["started_at_utc"] <= record["ended_at_utc"]
     assert record["python_version"] and record["numpy_version"]
-    head = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True)
+    try:
+        head = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], capture_output=True, text=True)
+    except OSError:  # no git at all: the tool falls back the same way
+        head = subprocess.CompletedProcess([], 127, "", "")
     if head.returncode == 0:
         assert record["git_revision"] == head.stdout.strip() and len(record["git_revision"]) == 40
         assert isinstance(record["git_dirty"], bool)

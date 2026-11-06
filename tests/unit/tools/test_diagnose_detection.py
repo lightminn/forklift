@@ -22,8 +22,11 @@ ROOT = Path(__file__).resolve().parents[3]
 def _runner_in_git_history() -> bool:
     """The mount gate looks the run's runner hash up in git history; a tree shipped without it (ws1's test copy holds
     the tracked files only) cannot pass the gate, so the tests of a passing or a specifically failing gate need it."""
-    log = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", "sim/isaac/run_transport.py"],
-                         capture_output=True, text=True)
+    try:
+        log = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%H", "--", "sim/isaac/run_transport.py"],
+                             capture_output=True, text=True)
+    except OSError:  # no git at all, as the tool itself allows
+        return False
     return log.returncode == 0 and bool(log.stdout.strip())
 
 
