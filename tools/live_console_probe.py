@@ -1608,6 +1608,7 @@ async def place_scenario(p, args):
 
 REVERSE_RATIO = -0.4  # direct_reverse_mps 0.25 x 0.4 = 0.10 m/s: V_REV_U (plan 2026-11-06 2.1)
 GENERATION_WAIT_S = 45.0  # wall s: a generation's own 30 s deadline, its 5 s grace and the state's lag
+WATCH_WALL_FACTOR = 3.0  # the watch gives up at this many times its wall time at the declared factor
 REVERSE_MAX_STROKES = 15  # chatter can reach D_TOTAL
 REVERSE_TRIES = 4  # presses a stroke may take: a stalled tick disarms and closes it (no_feedback)
 REVERSE_COUNTS_M = 0.05  # a press that moved less takes no stroke of the count
@@ -1790,13 +1791,21 @@ async def _arm(p, args):
 
 async def _post_mission_watch(p, args, shadow) -> dict:
     """The revision plan 9.10: the truck stands after its mission (not paused: a paused mission stays active and no
-    re-match runs; no SLAM hold) for --post-mission-sim-s of simulated time. A generation that started is waited for to
-    its result or its deadline, whatever the watch has left: ended first, the late and failing ones would be cut off the
-    sample. Its deadline is the check's own, on the wall clock (pose_runtime.DEADLINE_S + RESULT_GRACE_S)."""
-    start = time.monotonic()
-    end = start + args.post_mission_sim_s / args.live_factor
-    out = {"sim_s": args.post_mission_sim_s, "started": False, "ended": "watch"}
-    while time.monotonic() < end and p.closed_code is None:
+    re-match runs; no SLAM hold) for --post-mission-sim-s of simulated time, summed at the factor the run reports (these
+    sessions carry no frames to read a stamp from). A generation that started is waited for to its result or its
+    deadline, whatever the watch has left: ended first, the late and failing ones would be cut off the sample. Its
+    deadline is the check's own, on the wall clock (pose_runtime.DEADLINE_S + RESULT_GRACE_S)."""
+    start = last = time.monotonic()
+    wall_end = start + WATCH_WALL_FACTOR * args.post_mission_sim_s / args.live_factor
+    out = {"sim_s": args.post_mission_sim_s, "elapsed_sim_s": 0.0, "started": False, "ended": "wall_limit"}
+    while time.monotonic() < wall_end and p.closed_code is None:
+        now = time.monotonic()
+        achieved = ((p.state or {}).get("pacing") or {}).get("realtime_factor") or args.live_factor
+        out["elapsed_sim_s"] += (now - last) * achieved
+        last = now
+        if out["elapsed_sim_s"] >= args.post_mission_sim_s:
+            out["ended"] = "watch"
+            break
         if _rematching(p.state, shadow):
             out["started"] = True
             at = time.monotonic()

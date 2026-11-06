@@ -367,8 +367,56 @@ def test_a_path_window_never_ends_on_a_stand_and_a_time_cap_does():
     assert S.first_alarm(ser, S.Monitor("W", window_m=2.0, window_s=10.0, limit=(10.0, 0.103))) is None
 
 
+def test_leave_one_out_keeps_the_time_cap():
+    # Codex: fitted with the 10 s cap and held out on an open window, a slow drift alarms for nothing
+    t = np.arange(0.0, 20.0, 0.1)
+
+    def session():
+        samples = [{"t": float(x), "o": [0.1 * x, 0.0, 0.0], "truth": [0.1 * x, 0.0, 0.0],
+                    "applied": list(S.compose((0.0, 0.0, 0.002 * float(x)), (0.1 * x, 0.0, 0.0)))} for x in t]
+        return S.series(samples, [(0.0, (0.0, 0.0, 0.0))])
+
+    streams = {"a": session(), "b": session()}
+    assert not any(S.leave_one_out(streams, S.Monitor("W", window_m=1000.0, window_s=10.0)).values())
+
+
+def _stand_samples(c_of_t, o_of_t=lambda t: (0.0, 0.0, 0.0)):
+    out = []
+    for k in range(100):
+        t, o = 0.1 * k, o_of_t(0.1 * k)
+        out.append({"t": t, "o": list(o), "applied": list(S.compose(c_of_t(t), o))})
+    return out
+
+
 def test_the_stand_change_is_rebased_at_a_hold_release():
-    t = [0.1 * k for k in range(100)]
-    yaw = [0.0 if x < 5.0 else 0.04 for x in t]  # the release's step at 5 s, nothing else
-    assert S.stand_change(t, yaw, t0=0.0, t1=9.9, releases=[]) == pytest.approx(0.04)
-    assert S.stand_change(t, yaw, t0=0.0, t1=9.9, releases=[5.0]) == pytest.approx(0.0)
+    samples = _stand_samples(lambda t: (0.0, 0.0, 0.0 if t < 5.0 else 0.04))  # the release's step at 5 s, nothing else
+    assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[])[1] == pytest.approx(0.04)
+    assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[5.0]) == pytest.approx((0.0, 0.0))
+
+
+def test_the_stand_change_is_the_correction_at_this_odometry_as_the_check_reads_it():
+    # Codex: O +0.04 m with C -0.04 m leaves the applied pose where it was, and the correction moved
+    samples = _stand_samples(lambda t: (-0.04 if t >= 5.0 else 0.0, 0.0, 0.0),
+                             lambda t: (0.04 if t >= 5.0 else 0.0, 0.0, 0.0))
+    assert S.stand_change(samples, t0=0.0, t1=9.9, releases=[])[0] == pytest.approx(0.04)
+
+
+def test_a_release_is_read_from_the_replies_either_side_of_it():
+    # Codex: +0.07 m at the release and back at the next reply: the replies' applied values alone would say 0
+    rows = [{"mode": "tracking", "hold": 0, "applied_after": [0.0, 0, 0], "received_after": [0.0, 0, 0],
+             "applied_tick_s": 1.0, "odom_base": [0.0, 0, 0]},
+            {"mode": "holding", "hold": 1, "applied_after": [0.0, 0, 0], "received_after": [0.07, 0, 0],
+             "applied_tick_s": 2.0, "odom_base": [0.0, 0, 0]},
+            {"mode": "tracking", "hold": 1, "applied_after": [0.0, 0, 0], "received_after": [0.0, 0, 0],
+             "applied_tick_s": 3.0, "odom_base": [0.0, 0, 0]}]
+    out = S.hold_releases(rows)
+    assert len(out) == 1 and out[0]["m"] == pytest.approx(0.07) and (out[0]["t0"], out[0]["t1"]) == (2.0, 3.0)
+    assert out[0]["applied"] == [0.07, 0, 0]
+
+
+def test_the_release_mark_is_the_first_sample_on_the_applied_correction():
+    held, after = (0.0, 0.0, 0.0), (0.0, 0.0, 0.03)
+    release = {"t0": 2.0, "t1": 3.0, "held": list(held), "applied": list(after)}
+    assert S.release_mark(_stand_samples(lambda t: held if t < 2.45 else after), release) == pytest.approx(2.5)
+    # no sample shows it: the span's end
+    assert S.release_mark(_stand_samples(lambda t: held), release) == 3.0

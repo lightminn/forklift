@@ -26,9 +26,10 @@ class FakeVehicle:
 
     def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None, cut_after=None,
                  pacing_refusals=0, wall_at=None, flash=False, deaf=False, rematch_after_mission=0,
-                 close_after_mission=None):
+                 close_after_mission=None, achieved=None):
         self.rematch_after_mission, self.close_after_mission = rematch_after_mission, close_after_mission
         self.wall_at, self.held, self.flash, self.deaf = wall_at, False, flash, deaf
+        self.achieved = achieved
         self.shadow, self.confirm_at = shadow, confirm_at
         self.cut_after, self.pacing_refusals, self.arms, self.leases, self.ended_with = cut_after, pacing_refusals, 0, 0, None
         self.expire, self.since_command, self.armed, self.disarmed = expire, 0, False, 0
@@ -47,6 +48,7 @@ class FakeVehicle:
                          "total_left_m": 3.0 - self.used - self.s},
               "rematch": "scans" if self.shadow and self.rematch else None}
         self.state = {"pose": {"x_m": 0.0}, "rear_axle_speed_mps": -0.1 if self.moving else 0.0, "armed": self.armed,
+                      "pacing": {"realtime_factor": self.achieved} if self.achieved else None,
                       "last_result": self.state.get("last_result") if self.state else None,
                       **({} if self.off else {"pose_check": pc})}
 
@@ -307,6 +309,20 @@ def test_after_a_mission_it_waits_for_a_generation_that_started_to_its_end():
     watch = rep["post_mission"]
     assert watch["started"] is True and watch["done"] is True and watch["ended"] == "result"
     assert v.calls[-1] == "session_end"
+
+
+def test_the_watch_counts_simulated_time_at_the_factor_achieved():
+    # Codex: at half the declared factor the wall clock's sum ends it after half the simulated time, and says it did not
+    v = FakeVehicle(start="confirmed", achieved=0.5)
+    watch = _run(v, "full", mission=True, watch=0.1)["reverse"]["post_mission"]
+    assert watch["ended"] == "watch" and watch["sim_s"] == 0.1 and watch["elapsed_sim_s"] >= 0.1
+    assert watch["wall_s"] >= 0.19
+
+
+def test_the_watch_stops_at_its_wall_limit_and_says_so():
+    v = FakeVehicle(start="confirmed", achieved=0.001)
+    watch = _run(v, "full", mission=True, watch=0.05)["reverse"]["post_mission"]
+    assert watch["ended"] == "wall_limit" and watch["elapsed_sim_s"] < 0.05
 
 
 def test_after_a_mission_with_no_generation_it_stands_the_watch():

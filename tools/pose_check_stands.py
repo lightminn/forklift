@@ -263,23 +263,57 @@ def run_case(ser, onset, case, mon) -> dict:
             "exposure_m": float(dp[exposed].sum()), "exposure_s": float(dt[exposed].sum())}
 
 
-def stand_change(t, values, *, t0, t1, releases) -> float:
-    """A stand's largest change of a recorded value from its reference, the reference taken again at the first sample
-    at or after each hold release inside the stand."""
-    i = [k for k, x in enumerate(t) if t0 <= x <= t1]
-    best = 0.0
-    if not i:
-        return best
+def _correction(sample) -> tuple:
+    return compose(tuple(sample["applied"]), invert(tuple(sample["o"])))
+
+
+def stand_change(samples, *, t0, t1, releases) -> tuple:
+    """A stand's largest (metres, radians) change of the correction from its reference, read as the check reads it:
+    both corrections at this sample's odometry. The reference is taken again at the first sample at or after each hold
+    release inside the stand."""
+    best_m = best_rad = 0.0
     marks = sorted(r for r in releases if t0 <= r <= t1)
     ref, next_mark = None, 0
-    for k in i:
-        while next_mark < len(marks) and t[k] >= marks[next_mark]:
+    for x in samples:
+        if not t0 <= x["t"] <= t1:
+            continue
+        while next_mark < len(marks) and x["t"] >= marks[next_mark]:
             ref = None
             next_mark += 1
+        c = _correction(x)
         if ref is None:
-            ref = values[k]
-        best = max(best, abs(values[k] - ref))
-    return best
+            ref = c
+        m, rad = _gap(compose(c, tuple(x["o"])), compose(ref, tuple(x["o"])))
+        best_m, best_rad = max(best_m, m), max(best_rad, rad)
+    return best_m, best_rad
+
+
+def hold_releases(rows) -> list:
+    """Each SLAM hold release between two async replies (slam.records). The release applies the correction the tracker
+    last received, not what the next reply brings, so the step is the held correction to the earlier reply's
+    ``received_after``, at that reply's odometry; t0, t1 are the two replies' ticks, the release between them."""
+    rows = [r for r in rows if r.get("applied_after") is not None and r.get("received_after") is not None and "mode" in r]
+    out = []
+    for a, b in zip(rows, rows[1:]):
+        if a["mode"] != "holding" or (b["mode"] == "holding" and b.get("hold") == a.get("hold")):
+            continue
+        o = tuple(a["odom_base"])
+        m, rad = _gap(compose(tuple(a["received_after"]), o), compose(tuple(a["applied_after"]), o))
+        out.append({"t0": a["applied_tick_s"], "t1": b["applied_tick_s"], "m": m, "rad": rad,
+                    "held": list(a["applied_after"]), "applied": list(a["received_after"])})
+    return out
+
+
+def release_mark(samples, release, tol: float = 1e-6) -> float:
+    """The time of the first sample inside the release's span that stands on the released correction; the span's end
+    when none does (a step under the samples' resolution, or the release between two samples)."""
+    want = tuple(release["applied"])
+    for x in samples:
+        if release["t0"] <= x["t"] <= release["t1"]:
+            c = _correction(x)
+            if max(abs(c[0] - want[0]), abs(c[1] - want[1]), abs(math.remainder(c[2] - want[2], math.tau))) < tol:
+                return x["t"]
+    return release["t1"]
 
 
 def fit_limit(streams, mon) -> tuple:
@@ -314,7 +348,7 @@ def leave_one_out(streams, mon) -> dict:
         if mon.kind == "P":
             fitted = Monitor("P", limit=(0.20, 0.05), per_m=fit_per_m(rest))
         elif mon.kind == "W":
-            fitted = Monitor("W", window_m=mon.window_m, limit=fit_limit(rest, mon))
+            fitted = Monitor("W", window_m=mon.window_m, window_s=mon.window_s, limit=fit_limit(rest, mon))
         else:
             fitted = mon
         out[name] = first_alarm(ser, fitted) is not None

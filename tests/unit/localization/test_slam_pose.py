@@ -352,3 +352,20 @@ def test_an_injected_offset_moves_every_correction_from_then_on():
     assert tracker.applied[0] == pytest.approx((1.0, 0.35, 0.0))
     tracker.receive(2, 0.2, "processed", (1.1, 0.0, 0.0))
     assert tracker.applied[0] == pytest.approx((1.1, 0.35, 0.0))
+
+
+def test_an_injected_offset_is_in_force_at_once_and_a_hold_keeps_it_for_the_release():
+    # a skipped reply before the release must not leave the jump for after it
+    tracker = SlamPoseTracker(bootstrap_scan_id=0, max_age_s=1.0, hold_limit_m=1.0)
+    tracker.receive(0, 0.0, "processed", (1.0, 0.0, 0.0))
+    tracker.inject_offset((0.0, 0.35, 0.0))
+    assert tracker.applied[0] == pytest.approx((1.0, 0.35, 0.0))
+    held = SlamPoseTracker(bootstrap_scan_id=0, max_age_s=1.0, hold_limit_m=1.0)
+    held.receive(0, 0.0, "processed", (1.0, 0.0, 0.0))
+    held.hold(odom_from_base=(0.0, 0.0, 0.0))
+    held.inject_offset((0.0, 0.35, 0.0))
+    assert held.applied[0] == pytest.approx((1.0, 0.0, 0.0))
+    held.receive(1, 0.1, "skipped", (9.0, 9.0, 0.0))
+    assert held.release(odom_from_base=(0.0, 0.0, 0.0))[0] == pytest.approx(0.35)
+    held.receive(2, 0.2, "processed", (1.0, 0.0, 0.0))
+    assert held.applied[0] == pytest.approx((1.0, 0.35, 0.0))  # once, not twice
