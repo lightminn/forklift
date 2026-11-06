@@ -267,9 +267,9 @@
 - D 30 세션: 합 2.7 GB(0.09 GB × 30), 최악 7.8 GB. 묶음 끝에 보관한다.
 - 검증 210 세션: 합 약 19 GB 라 롤링이 필요하다. 세션 수가 아니라 **바이트 기준**으로 굴린다(세션 크기가 0.09–0.26 GB 로 벌어지므로 세션 수 주기는 상한을 보장하지 못한다, Codex ②d 4 회차).
   - 끝난 세션이 합 3 GB 에 이르면 보관 뒤 삭제한다(평균 세션이면 약 33 세션마다).
-  - 최대 점유 = 끝난 세션 3 GB + 도는 세션 최악 0.8 GB(0.26 × 3) + 남기는 기록 누적이다. 누적은 세션당 약 13.7 MB 라 180 세션에서 2.5 GB, 270 세션에서 3.7 GB 다. 합은 6.3 GB, 7.5 GB 로 쓸 수 있는 몫 안에 든다.
+  - 최대 점유 = 끝난 세션 3 GB + 도는 세션 최악 0.8 GB(0.26 × 3) + 남기는 기록 누적이다. 누적은 세션당 약 15.1 MB 라 180 세션에서 2.7 GB, 270 세션에서 4.1 GB 다. 합은 6.5 GB, 7.9 GB 로 쓸 수 있는 몫 안에 든다.
   - 남기는 기록을 판정 전에 gdrive 로도 복사해 두면 ws1 사고에 대비할 수 있다. 여유가 25 GB 에 닿으면 디스크 세션의 기준대로 멈춘다.
-- 판정에 필요해 롤링 삭제에서 빼는 것(세션당 약 13.7 MB): `epoch_1/run/result.json`(접촉·그림자 필드·표본·감사), `epoch_1/run/pose_check_stand_scans.npz`, `probe.json`, `supervisor.jsonl`, `live_port.json`, `env.sh`, 묶음의 `RUNS.jsonl`·`results.jsonl`·`summary.json`, `epoch_1/run/spool/manifest.json`(스풀 완전성), `epoch_1/run/missions/*/records.json`·`missions/*/result.json`(임무당 약 170 KB, 근접 캡처 집계 near_capture_tally/1 의 분모와 회복). 그 밖은 gdrive 보관 뒤 지운다. 판정이 끝날 때까지 스냅숏은 지우지 않는다.
+- 판정에 필요해 롤링 삭제에서 빼는 것(세션당 약 15.1 MB): `epoch_1/run/result.json`(접촉·그림자 필드·표본·감사), `epoch_1/run/pose_check_stand_scans.npz`, `probe.json`, `supervisor.jsonl`, `live_port.json`, `env.sh`, 묶음의 `RUNS.jsonl`·`results.jsonl`·`summary.json`, `epoch_1/run/spool/manifest.json`(스풀 완전성), `epoch_1/run/missions/*/records.json`·`missions/*/result.json`(임무당 약 170 KB, 근접 캡처 집계 near_capture_tally/1 의 분모와 회복), `epoch_1/run/spool/state.samples`(세션당 약 1.4 MB, 같은 집계의 진입면. 없으면 `entry_face: unknown`). 그 밖은 gdrive 보관 뒤 지운다. 판정이 끝날 때까지 스냅숏은 지우지 않는다.
 
 ## 8. 자체 검토
 
