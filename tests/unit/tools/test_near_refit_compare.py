@@ -60,6 +60,34 @@ def test_a_refused_far_condition_keeps_the_second_call_closed_whatever_the_arm()
     assert path["waiver"] == "refused:far_lower_waived"
 
 
+def test_the_attempts_own_waiver_record_wins_over_the_state():
+    refused = {"expected": EXPECTED, "lower_waiver": {"applied": False, "why": "far_link"}}
+    assert C.replay_path(refused, {}, WAIVER_ARGS)["waiver"] == "refused:far_link"
+    second_failed = {"expected": EXPECTED, "lower_waiver": {"applied": False, "why": "second:no_pallet:x"}}
+    assert C.replay_path(second_failed, {}, WAIVER_ARGS)["waiver"] == "allowed"
+
+
+def test_a_last_mission_without_state_records_leaves_the_waiver_unknown_and_closed():
+    path = C.replay_path({"expected": EXPECTED}, {"observation_attempts": []}, WAIVER_ARGS)
+    assert path["waiver"] == "unknown"
+    fake = FakeDetector("no_pallet")
+    _, second = C.detect_path(None, None, DetectorParams(), {**path}, "A1", detector=fake)
+    assert second is False and len(fake.calls) == 1
+
+
+def test_a_live_run_keeps_its_last_mission_attempts_that_have_no_records(tmp_path):
+    import json
+
+    records = tmp_path / "missions/m1"
+    records.mkdir(parents=True)
+    done = {"depth_sha256": "a"}
+    (records / "records.json").write_text(json.dumps({"state": {"observation_attempts": [done]}}))
+    result = {"observation_attempts": [done, {"depth_sha256": "b"}]}
+    found = [(m, i, a["depth_sha256"]) for m, i, a, _ in C.run_attempts(tmp_path, result)]
+    assert found == [("m1", 0, "a"), ("last", 1, "b")]
+    assert [m for m, *_ in C.run_attempts(tmp_path / "none", result)] == [None, None]
+
+
 @pytest.mark.parametrize("attempt, arguments", [
     ({"expected": EXPECTED}, {}),  # the gate default
     ({"expected": EXPECTED, "lower_evidence": False}, WAIVER_ARGS),  # waived from the first call: nothing to fall to

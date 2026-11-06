@@ -123,8 +123,14 @@ def replay_path(attempt: dict, state: dict, arguments: dict) -> dict:
                 "radius_m": float(first_call["radius_m"]), "axis_rad": float(first_call["axis_tolerance_rad"]),
                 "lower_evidence": bool(lower), "waiver": "off"}
         if lower and arguments.get("near_capture_lower", "gate") == "waive_far_confirmed":
-            refusal = far_waiver_refusal(state)
-            path["waiver"] = "allowed" if refusal is None else f"refused:{refusal}"
+            why = None if waiver_record is None else waiver_record.get("why", "")
+            if why is not None:  # the run judged it: a far refusal, or the far condition held and the second call ran
+                path["waiver"] = f"refused:{why}" if why.startswith("far") else "allowed"
+            elif "near_capture" not in state:  # a live run's last mission: no state record and no waiver reached
+                path["waiver"] = "unknown"
+            else:
+                refusal = far_waiver_refusal(state)
+                path["waiver"] = "allowed" if refusal is None else f"refused:{refusal}"
         return path
     far = attempt.get("far_expected")
     if far is not None:
@@ -254,19 +260,24 @@ def detection_record(detection, second_called: bool, wall_s: float | None = None
 # --- manifest ---------------------------------------------------------------------------------------------------------
 
 def run_attempts(run: Path, result: dict):
-    """(mission, index, attempt, state) of every observation attempt: a live run's per mission, a batch run's own."""
+    """(mission, index, attempt, state) of every observation attempt: a live run's per mission, a batch run's own. A
+    live run's result keeps the attempts of its last mission, whose own records may never have been written (the run
+    ended inside it): those come with mission "last", failed captures among them."""
     missions = sorted(run.glob("missions/m*/records.json"))
-    if not missions:
-        for index, attempt in enumerate(result.get("observation_attempts") or []):
-            yield None, index, attempt, result
-        return
+    seen = set()
     for records in missions:
         try:
             state = json.loads(records.read_text())["state"]
         except (OSError, ValueError, KeyError):
             continue
         for index, attempt in enumerate(state.get("observation_attempts") or []):
+            seen.add(attempt.get("depth_sha256"))
             yield records.parent.name, index, attempt, state
+    for index, attempt in enumerate(result.get("observation_attempts") or []):
+        if not missions:
+            yield None, index, attempt, result
+        elif attempt.get("depth_sha256") not in seen:
+            yield "last", index, attempt, result
 
 
 def run_samples(run: Path, result: dict) -> list:
@@ -802,7 +813,9 @@ def main(argv=None) -> int:
         args.out.write_text(json.dumps(result))
         print("entries", len(result["entries"]), "files", result["files"], "excluded", result["excluded"],
               "e1", sum(e["e1"] for e in result["entries"]), "no truth", sum(e["truth"] is None for e in result["entries"]),
-              "roles", dict(Counter(e["role"] for e in result["entries"])))
+              "roles", dict(Counter(e["role"] for e in result["entries"])),
+              "paths", dict(Counter((e["path"]["kind"], e["path"]["waiver"].split(":")[0]) for e in result["entries"])),
+              "recorded", dict(Counter(e["recorded_status"] for e in result["entries"])))
     elif args.command == "gate":
         manifest, replay = load(args.manifest), load(args.replay)
         a0 = {f["id"]: f["arms"]["A0"] for f in replay["frames"]}
