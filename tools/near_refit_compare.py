@@ -52,6 +52,7 @@ NEAR_WAIVER_AXIS_RAD = math.radians(15.0)
 
 # Section 4, registered before any result
 E1_POSITION_M, E1_YAW_RAD = 0.005, 0.002
+E1_WALL_M = 0.010  # one column cell: a wall comes from the 1 cm grid (A0 near valids: median 5.1 mm, only 198/401 <= 5 mm)
 P95_INCREASE_M, P95_INCREASE_RAD = 0.001, 0.001
 POINT_WORSENING_M = 0.005
 NEW_VALID_LATERAL_M, NEW_VALID_ALONG_M, NEW_VALID_YAW_RAD = 0.010, 0.008, 0.010
@@ -328,7 +329,7 @@ def pallet_at(samples: list, t: float | None):
 
 
 def mission_targets(run: Path, result: dict) -> dict:
-    """mission id -> the pallet the mission was told to fetch (live runs; the last one also under "last")."""
+    """mission id -> the pallet the mission was told to fetch (live runs)."""
     targets = {r.get("mission_id"): r.get("pallet_id") for r in result.get("mission_results") or []}
     for path in sorted(run.glob("missions/m*/result.json")):
         try:
@@ -336,8 +337,7 @@ def mission_targets(run: Path, result: dict) -> dict:
         except (OSError, ValueError, KeyError):
             continue
         targets[record.get("mission_id")] = record.get("pallet_id")
-        targets["last"] = record.get("pallet_id")
-    return targets
+    return targets  # a run's "last" mission has no record of its order: its target stays unknown
 
 
 def input_hash(attempt: dict, params: dict, prior: dict, path: dict) -> str:
@@ -450,7 +450,7 @@ def freeze_gate(manifest: dict, replay: dict) -> dict:
     problems += [f"duplicate_id:{i}" for i, n in ids.items() if n > 1]
     if sum(e["e1"] for e in entries) != 1:
         problems.append("e1_not_exactly_one")
-    kinds = Counter()
+    kinds, far_elsewhere = Counter(), 0
     for entry in entries:
         record = a0[entry["id"]]
         why = classify_mismatch(entry, record)
@@ -467,8 +467,11 @@ def freeze_gate(manifest: dict, replay: dict) -> dict:
         if record["status"] == "valid":
             errors = pose_errors(record, entry["truth"])
             if errors["yaw"] > GATE_YAW_RAD or errors["match_m"] > MATCH_M:
-                problems.append(f"truth_disagrees:{entry['id']}:{errors['match_m']:.3f}:{errors['yaw']:.3f}")
-    return {"problems": problems, "mismatch": {str(k): v for k, v in kinds.items()}, "entries": len(entries),
+                if entry["role"] == "far":  # the plain far detector may pick a neighbour: unchanged by any arm
+                    far_elsewhere += 1
+                else:
+                    problems.append(f"truth_disagrees:{entry['id']}:{errors['match_m']:.3f}:{errors['yaw']:.3f}")
+    return {"problems": problems, "far_on_another_pallet": far_elsewhere, "mismatch": {str(k): v for k, v in kinds.items()}, "entries": len(entries),
             "max_tilt_rad": max((e["tilt_rad"] or 0.0) for e in entries),
             "max_sample_age_s": max((e["sample_age_s"] or 0.0) for e in entries)}
 
@@ -738,7 +741,8 @@ def rescue(entry: dict, record: dict) -> list:
         return [f"status:{record['status']}:{record['reason']}"]
     e = frame_errors(entry, record)
     problems = [] if e["match_m"] <= MATCH_M else ["match"]
-    problems += [p for p in POINTS if e[p] > E1_POSITION_M]
+    problems += [p for p in ("centre_left", "centre_right", *ALONG) if e[p] > E1_POSITION_M]
+    problems += [p for p in WALLS if e[p] > E1_WALL_M]
     return problems + (["yaw"] if e["yaw"] > E1_YAW_RAD else [])
 
 

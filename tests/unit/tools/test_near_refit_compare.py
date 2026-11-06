@@ -3,6 +3,7 @@ records, the waiver computed per arm, the truth and error geometry, and each jud
 
 import json
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -294,6 +295,11 @@ def test_the_e1_rescue_needs_position_walls_and_yaw():
     assert C.rescue(entry(), valid()) == []
     assert C.rescue(entry(), valid(shift=(0.006, 0.0))) == ["along_left", "along_right"]
     assert C.rescue(entry(), valid(yaw=0.003)) == ["yaw"]
+    wall = valid()
+    wall["widths"] = [wall["widths"][0] - 0.016, wall["widths"][1]]  # 8 mm at each left wall: within one cell
+    assert C.rescue(entry(), wall) == []
+    wall["widths"] = [wall["widths"][0] - 0.008, wall["widths"][1]]  # 12 mm: past it
+    assert C.rescue(entry(), wall) == ["wall_left_outer", "wall_left_inner"]
     assert C.rescue(entry(), bad()) == ["status:no_pallet:no_opening_pattern"]
 
 
@@ -441,6 +447,21 @@ def test_the_freeze_gate_refuses_a_truth_that_disagrees_with_a_valid_a0():
     far["recorded"] = {"status": "valid", "reason": None, **{k: record[k] for k in ("left", "right", "widths", "yaw")}}
     run = {"frames": [{"id": "e1", "arms": {"A0": valid()}}, {"id": "f", "arms": {"A0": record}}]}
     assert any(p.startswith("truth_disagrees:f") for p in C.freeze_gate({"entries": [e1, far]}, run)["problems"])
+
+
+def test_a_plain_far_detection_on_a_neighbour_is_counted_not_a_gate_failure():
+    e1 = gate_entry("e1", e1=True)
+    record = valid(shift=(0.0, 1.0))
+    far = {**gate_entry(), "role": "far",
+           "recorded": {"status": "valid", "reason": None, **{k: record[k] for k in ("left", "right", "widths", "yaw")}}}
+    run = {"frames": [{"id": "e1", "arms": {"A0": valid()}}, {"id": "f", "arms": {"A0": record}}]}
+    result = C.freeze_gate({"entries": [e1, far]}, run)
+    assert result["problems"] == [] and result["far_on_another_pallet"] == 1
+
+
+def test_a_last_mission_has_no_target_to_compare():
+    assert C.mission_targets(Path("/nonexistent"), {"mission_results": [{"mission_id": "m1", "pallet_id": "P-1"}]}) == {
+        "m1": "P-1"}
 
 
 def test_the_freeze_gate_refuses_duplicates_and_a_missing_e1():
