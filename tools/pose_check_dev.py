@@ -290,6 +290,8 @@ def main(argv=None) -> int:
     ap.add_argument("sessions", nargs="+", type=Path, help="the D sessions' folders (each with epoch_1/run/result.json)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--min-samples", type=int, default=20)
+    ap.add_argument("--ignore-contacts", action="store_true",
+                    help="the values without the post-hoc contact rule, for the record beside the rule's")
     args = ap.parse_args(argv)
     records, inputs = [], []
     for folder in args.sessions:
@@ -299,6 +301,8 @@ def main(argv=None) -> int:
         if rec is None or rec.get("mode") != "shadow":
             print(f"{folder}: no shadow record", file=sys.stderr)
             return 2
+        if args.ignore_contacts:
+            rec = {**rec, "contacts": None}
         records.append((folder.name, rec))
         inputs.append({"session": folder.name, "sha256": hashlib.sha256(data).hexdigest()})
     out = dev_values(records, min_samples=args.min_samples)

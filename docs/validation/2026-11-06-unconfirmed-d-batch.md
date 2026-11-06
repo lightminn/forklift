@@ -23,7 +23,7 @@ Plan `docs/plans/2026-11-06-unconfirmed-validation.md` 3 and 6. This is the deve
 
 The stuck watch's first live use worked: no session ran out of time. No session lost its arm to a stalled tick in this batch.
 
-Two sessions touched a scene object and are left out of the table below. `val3_016`'s forks sat on a scene pallet from the start. `val3_055` backed into a low box at 28.7 s. In both the wheels slipped and the odometry moved without the truck, so the applied pose went wrong (up to 0.87 m and 0.44 m) while the re-match's g stayed within 2 cm of the truth. That is the check's intended case, but it is not a straight reverse's odometry. Both are outside the bounds by a rule fixed after the first three sessions were read and before the rest were: a window or a generation overlapping a contact is left out and counted.
+Two sessions touched a scene object and are left out of the table below. `val3_016`'s forks sat on a scene pallet from the start. `val3_055` backed into a low box at 28.7 s. In both the wheels slipped and the odometry moved without the truck, so the applied pose went wrong (up to 0.87 m and 0.44 m) while the re-match's g stayed within 2 cm of the truth. That is the check's intended case, but it is not a straight reverse's odometry. Both are outside the bounds by a rule fixed after the first three sessions were read and before the rest were: a window or a generation overlapping a contact is left out and counted. This is a post-hoc rule, marked as such; `pose_check_dev.py --ignore-contacts` gives the values without it, listed below.
 
 ## Delta_int against distance
 
@@ -61,6 +61,7 @@ So on the same C and O history, today's monitor would revoke every correct sessi
 | E_SLAM | 0.073 m, 0.009 rad | 0.109 m, 0.014 rad | 28 starts, 130 re-matches |
 
 - `e_still_over_budget`: 0.076 rad is over the design's 0.05 rad. Every stand over 0.03 rad (7 of 696) was in a mission; outside a mission the largest is 0.0052 rad, 0.006 m. It is flagged and not cut (plan 3.2).
+- Without the post-hoc contact rule the odometry bound is 4.38 m, 0.45 rad and E_SLAM 0.51 m, 0.022 rad: the two slipping sessions set them. E_STILL does not change.
 - Both odometry bounds come out constant, because the rule takes the least at 3.0 m and the samples stop at 2.93 m.
 - Every evidence pose was within the success tolerance.
 

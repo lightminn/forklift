@@ -213,3 +213,15 @@ def test_a_generation_scanned_in_contact_stays_out_of_e_slam_and_a_floor_decal_i
                                      {"t0": 0.0, "t1": 9.0, "body": "b", "other": "/World/x/SM_FloorDecal_RecRed/m"}]}
     r = D.dev_values([("s", rec)], min_samples=1)["basis"]["e_slam"]["rematch"]
     assert r["n"] == 1 and r["max"] == pytest.approx([0.05, 0.02]) and r["in_contact"] == 1
+
+
+def test_the_values_without_the_contact_rule_can_be_had(tmp_path):
+    rec = _session(rematch_agree=((0.05, 0.02, "confirm"), (0.34, 0.01, "confirm")))
+    rec["raw"]["rematches"][1]["scan_t"] = 3.0
+    rec["contacts"] = {"intervals": [{"t0": 2.9, "t1": 3.1, "body": "b", "other": "/World/Box"}]}
+    run = tmp_path / "a" / "epoch_1" / "run"
+    run.mkdir(parents=True)
+    (run / "result.json").write_text(json.dumps({"pose_check": rec}))
+    out = tmp_path / "o.json"
+    assert D.main([str(tmp_path / "a"), "--out", str(out), "--min-samples", "1", "--ignore-contacts"]) == 0
+    assert json.loads(out.read_text())["basis"]["e_slam"]["rematch"]["max"][0] == pytest.approx(0.34)
