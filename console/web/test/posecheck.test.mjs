@@ -7,6 +7,7 @@ import { poseCheckOf, poseBand, poseZones } from "../js/posecheck.js";
 test("no field, or a confirmed start, shows nothing", () => {
   assert.equal(poseCheckOf({}), null);
   assert.equal(poseCheckOf({ pose_check: { status: "confirmed" } }), null);
+  assert.equal(poseCheckOf({ pose_check: { status: "shadow:unconfirmed" } }), null);  // the shadow locks nothing
   assert.equal(poseBand(null), null);
 });
 

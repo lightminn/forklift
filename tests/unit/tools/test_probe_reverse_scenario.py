@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import live_console_probe as lcp  # noqa: E402
 
 STEP_M, STOP_M = 0.01, 0.069
+REAL_SLEEP = asyncio.sleep
 
 
 class FakeVehicle:
@@ -23,8 +24,9 @@ class FakeVehicle:
     the next advance; a stroke closes STOP_M before its end; a stand past 0.5 m starts a re-match lasting three
     advances, which confirms (on) when ``confirm_at`` re-matches have run."""
 
-    def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False):
+    def __init__(self, shadow=False, start="unconfirmed", confirm_at=1, off=False, expire=None):
         self.shadow, self.confirm_at = shadow, confirm_at
+        self.expire, self.since_command, self.armed, self.disarmed = expire, 0, False, 0
         self.report, self.calls, self.closed_code, self.lease_id, self.arm_gen = {}, [], None, None, 0
         self.targets = {"targets_revision": 3}
         self.status, self.stroke, self.left, self.used, self.s = start, "ready", 1.0, 0.0, 0.0
@@ -44,6 +46,10 @@ class FakeVehicle:
                       **({} if self.off else {"pose_check": pc})}
 
     def advance(self):
+        self.since_command += 1
+        if self.expire is not None and self.armed and self.since_command > self.expire:
+            self.armed = False  # the arbiter's command age: no command, disarmed
+            self.disarmed += 1
         if self.close_at is not None:
             self.close_at -= 1
             if self.close_at <= 0:
@@ -72,6 +78,9 @@ class FakeVehicle:
         self._publish()
 
     def teleop_(self, speed, deadman):
+        self.since_command = 0
+        if deadman and self.expire is not None and not self.armed:
+            return  # not_armed: nothing moves
         if deadman and speed < 0 and self.stroke in ("ready", "active"):
             self.stroke = "active"
             self.s += STEP_M
@@ -96,13 +105,17 @@ class FakeVehicle:
             if self.closed_code is not None:
                 return False
             self.advance()
+            await REAL_SLEEP(0)  # the probe's own tasks run, as on the event loop
         return False
 
     async def request(self, kind, timeout=5.0, **fields):
         self.calls.append(kind if kind != "mode_request" else f"mode:{fields['to']}")
+        if kind == "mode_request" and fields["to"] != "TELEOP":
+            self.armed = False  # a mode change disarms; nothing to expire
         if kind == "lease_request":
             return {"t": "ack", "lease_id": "L"}
         if kind == "arm":
+            self.armed, self.since_command = True, 0
             return {"t": "ack", "arm_gen": 1}
         if kind == "mission_submit":
             assert fields["targets_revision"] == 3 and fields["pallet_id"] == "P-1"
@@ -189,3 +202,17 @@ def test_with_the_check_off_it_is_the_hold_scenario():
     v = FakeVehicle(off=True)
     rep = _run(v)
     assert rep["reverse"]["check"] == "off" and "hold" in rep and v.calls[-1] == "session_end"
+
+
+def test_the_shadow_presses_on_past_a_provisional_end():
+    # Codex 2d P2-2: the provisional verdict selects nothing
+    v = FakeVehicle(shadow=True, start="ended:pose_slam_disagree")
+    rep = _run(v, "full")["reverse"]
+    assert len(rep["strokes"]) >= 3 and v.calls[-1] == "session_end"
+
+
+def test_the_released_command_keeps_the_arm_while_it_stands_and_rematches():
+    # Codex 2d P2-1: a command older than 0.30 s disarms: the release is sent on while waiting
+    v = FakeVehicle(shadow=True, expire=4)
+    rep = _run(v, "half")["reverse"]
+    assert v.disarmed == 0 and len(rep["strokes"]) >= 5

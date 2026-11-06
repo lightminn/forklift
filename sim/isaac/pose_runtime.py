@@ -72,19 +72,24 @@ def run_job(kind: str, p: dict, ctx: JobContext) -> dict:
         b, o0, ot, g = tuple(p["b"]), tuple(p["o0"]), tuple(p["ot"]), tuple(p["g"])
         hyps = [(tuple(q), src) for q, src in p["hyps"]]
         bounds = ctx.bounds
+        res = None
+        if p["phase"] == "confirmed" or p.get("shadow"):
+            # confirmed (plan 1.5): the conservative check at this place with every hypothesis carried here; the
+            # shadow always runs it, so a sample's eligibility leans on neither phase nor delta (Codex 2d P2-3)
+            here = T.hypotheses(g, synthetic=[(T.moved(b, o0, ot), "believed-start")]
+                                + [(T.moved(q, o0, ot), src) for q, src in hyps])
+            res = T.residual_ambiguity(ctx.grid, p["points"], g, here, ctx.cfg, e_min=e_min, cons=ctx.cons,
+                                       deadline=p["deadline_at"], **kw)
+        shadow = {} if res is None or not p.get("shadow") else {"residual_confirmed": bool(res.confirmed)}
         if p["phase"] == "unconfirmed":
             out = T.rematch_decision(ctx.grid, p["points"], b, hyps, o0, ot, decision=p["decision"], g=g,
                                      cfg=ctx.cfg, e_min=e_min, dp=bounds.dp, dth=bounds.dth, cons=ctx.cons,
                                      deadline=p["deadline_at"], **kw)
             return {"outcome": out.outcome, "matched": out.matched, "agree_m": out.agree_m,
                     "agree_rad": out.agree_rad, "g": list(g),
-                    "residual": None if out.residual is None else list(out.residual.reasons)}
-        # confirmed (plan 1.5): the conservative check at this place with every hypothesis carried here
-        here = T.hypotheses(g, synthetic=[(T.moved(b, o0, ot), "believed-start")]
-                            + [(T.moved(q, o0, ot), src) for q, src in hyps])
-        res = T.residual_ambiguity(ctx.grid, p["points"], g, here, ctx.cfg, e_min=e_min, cons=ctx.cons,
-                                   deadline=p["deadline_at"], **kw)
-        return {"outcome": "confirm" if res.confirmed else "none", "g": list(g), "residual": list(res.reasons)}
+                    "residual": None if out.residual is None else list(out.residual.reasons), **shadow}
+        return {"outcome": "confirm" if res.confirmed else "none", "g": list(g), "residual": list(res.reasons),
+                **shadow}
     raise ValueError(f"unknown job {kind!r}")
 
 
@@ -202,6 +207,7 @@ class _Rematch:
     attempts: list = field(default_factory=list)
     stamps: list = field(default_factory=list)  # each attempt's scan stamps
     g: tuple | None = None  # the generation's unattended confirmation, once chosen
+    residual_confirmed: bool | None = None  # the shadow's conservative check of g
 
 
 class PoseRuntime:
@@ -261,26 +267,33 @@ class PoseRuntime:
     # --- inputs --------------------------------------------------------------------------------------------------------
     def on_scan(self, stamp: float, ranges, o_base, standing: bool) -> None:
         """A scan the SLAM link was sent (its ranges as sent), the odometry at its stamp and the stand then."""
-        self.buf.append(_Scan(float(stamp), np.asarray(ranges, float), tuple(float(v) for v in o_base),
+        self.buf.append(_Scan(float(stamp), np.array(ranges, float), tuple(float(v) for v in o_base),
                               bool(standing)))
         cap = self._capture
         if cap is not None and standing and len(cap["sets"]) < STAND_SET_COUNT:
             cap["cur"].append(self.buf[-1])
             if len(cap["cur"]) == SCANS:
-                cap["sets"].append({"stamps": [s.stamp for s in cap["cur"]], "o": list(cap["cur"][-1].o),
-                                    "ranges": np.stack([s.ranges for s in cap["cur"]])})
-                cap["cur"] = []
+                if self._still(cap["cur"]):
+                    cap["sets"].append({"stamps": [s.stamp for s in cap["cur"]], "o": list(cap["cur"][-1].o),
+                                        "ranges": np.stack([s.ranges for s in cap["cur"]])})
+                    cap["cur"] = []
+                else:  # the operating scan set's stillness (Codex 2d P2-6): the next five in a row may hold it
+                    cap["cur"].pop(0)
+
+    def _still(self, scans) -> bool:
+        """The odometry did not move across these scans (0.002 m / 0.002 rad on the base and the rear axle)."""
+        first = scans[0].o
+        for s in scans:
+            m, rad = P.gap(s.o, first, self.rear_offset_m)
+            if m > P.STILL_M or rad > P.STILL_RAD:
+                return False
+        return True
 
     def _still_set(self):
         """(points, the last scan's odometry) of the last SCANS scans when all stood and the odometry did not move
-        across them (0.002 m / 0.002 rad on the base and the rear axle), else None."""
-        if len(self.buf) < SCANS or not all(s.standing for s in self.buf):
+        across them, else None."""
+        if len(self.buf) < SCANS or not all(s.standing for s in self.buf) or not self._still(self.buf):
             return None
-        first = self.buf[0].o
-        for s in self.buf:
-            m, rad = P.gap(s.o, first, self.rear_offset_m)
-            if m > P.STILL_M or rad > P.STILL_RAD:
-                return None
         scans = [((0.0, 0.0, 0.0), s.ranges, *self.angles) for s in self.buf]
         pts = G.stack_scans(scans, range_min_m=self.rmin, range_max_m=self.rmax, match_range_m=self.mrange)
         return pts, self.buf[-1].o
@@ -294,7 +307,7 @@ class PoseRuntime:
                           mission_active=mission_active, near=near)
         if self.shadow:
             self._shadow_stand(t, o, C, standing, mission_active, near)
-        self._last = None
+        self._last = (o, None, None)  # the odometry always (Codex 2d P2-5: the windows' origins read it)
         if C is not None:
             ref, kind = (self.pc.c_int, "int") if self.pc.c_int is not None else (self._c0, "start")
             if ref is not None:
@@ -310,7 +323,7 @@ class PoseRuntime:
             self._capture["t1"], self._capture = t, None
             return
         if (standing and self._capture is None and not self._stand_considered and mission_active and not near
-                and self._last is not None and self._last[1][0] > P.REMATCH_M):
+                and self._last[1] is not None and self._last[1][0] > P.REMATCH_M):
             self._stand_considered = True
             if len(self.stand_sets) >= STAND_SETS_MAX:
                 self.stand_sets_skipped += 1
@@ -445,7 +458,7 @@ class PoseRuntime:
                 rm.job = self.worker.submit("rematch", {
                     "phase": rm.phase, "points": rm.points, "b": T.moved(self.b, self.o0, self.o_s), "hyps":
                     self.hyps_s, "o0": self.o_s, "ot": rm.o_scan, "decision": "confirmed", "g": g,
-                    "deadline_at": rm.relocalizer.deadline_at})
+                    "deadline_at": rm.relocalizer.deadline_at, **({"shadow": True} if self.shadow else {})})
                 rm.stage = "decide"
             elif state == "rescan":
                 rm.stage = "scans"
@@ -456,6 +469,7 @@ class PoseRuntime:
             return
         if rm.stage == "decide":
             g = result.get("g")
+            rm.residual_confirmed = result.get("residual_confirmed")
             self._evidence_t = rm.stamps[-1][-1] if rm.stamps else t
             self._finish_rematch(t, result["outcome"], None if g is None else tuple(g), rm.o_scan, o, C, epoch,
                                  control_gen, why=result.get("residual"))
@@ -467,7 +481,7 @@ class PoseRuntime:
                                "o_scan": None if o_scan is None else list(o_scan), "scan_stamps": rm.stamps})
         self.buf.clear()
         if self.shadow:
-            self._shadow_rematch(t, rm, outcome, g, o_scan, o, C)
+            self._shadow_rematch(t, rm, outcome, g, o_scan, o, C, epoch)
         self.pc.rematch_result(t, outcome, g, tuple(o_scan), o_now=o, C=C if C is not None else (0.0, 0.0, 0.0),
                                epoch=epoch, control_gen=control_gen)
 
@@ -487,19 +501,24 @@ class PoseRuntime:
                                  tick_m=self.pc.tick_m)
         self.meter.status, self.meter.origin = "unconfirmed", tuple(o_scan)
 
-    def _shadow_rematch(self, t, rm, outcome, g, o_scan, o, C) -> None:
+    def _shadow_rematch(self, t, rm, outcome, g, o_scan, o, C, epoch) -> None:
         """A generation's raw values: its g (the decision's, else the relocalizer's) against b' and every h' carried to
-        its scan, the conservative outcome, and its agreement with the correction at the result's tick."""
+        its scan, the conservative check of g (the same in both phases, ``residual_confirmed``), the provisional
+        outcome, its agreement with the correction at the result's tick, and whether the operating path would have
+        applied the result at all (``applicable``: stood since its scan, the same epoch; Codex 2d P2-4)."""
         g = g if g is not None else rm.g
         raw = {"t": t, "phase": rm.phase, "outcome": outcome, "g": None if g is None else list(g),
                "o_begin": list(rm.o_begin), "o_scan": None if o_scan is None else list(o_scan),
-               "scan_t": rm.stamps[-1][-1] if rm.stamps else None, "attempts": len(rm.attempts)}
+               "scan_t": rm.stamps[-1][-1] if rm.stamps else None, "attempts": len(rm.attempts),
+               "residual_confirmed": rm.residual_confirmed, "applicable": False}
         if g is not None and o_scan is not None:
             g, o_scan = tuple(g), tuple(o_scan)
             raw["to_b"] = list(P.gap(g, T.moved(self.b, self.o0, o_scan), self.rear_offset_m))
             raw["to_h"] = [[*P.gap(g, T.moved(q, self.o_s, o_scan), self.rear_offset_m), src]
                            for q, src in self.hyps_s]
             raw["moved"] = list(P.gap(o, o_scan, self.rear_offset_m))
+            raw["applicable"] = (raw["moved"][0] <= P.STILL_M and raw["moved"][1] <= P.STILL_RAD
+                                 and epoch == rm.epoch)
             if C is not None:
                 raw["agree_m"], raw["agree_rad"] = P.agreement(g, o_scan, C, o, self.rear_offset_m)
                 raw["C"] = list(C)

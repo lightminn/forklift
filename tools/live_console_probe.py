@@ -1700,14 +1700,18 @@ async def _reverse_strokes(p, args, rev, shadow):
     p.arm_gen = (arm or {}).get("arm_gen", 0)
     for n in range(REVERSE_MAX_STROKES):
         status = _pc_status(p.state) or ""
-        if p.closed_code is not None or status.startswith("ended:") or (not shadow and status == "confirmed"):
-            break
+        if p.closed_code is not None or (not shadow and (status.startswith("ended:") or status == "confirmed")):
+            break  # a shadow's provisional verdict selects nothing (plan 1.1)
         stroke = (_pose_check(p.state) or {}).get("stroke")
         if stroke is None or stroke.get("state") == "spent":
             break
         if stroke.get("state") != "ready":
-            ready = await p.until(lambda s: ((_pose_check(s) or {}).get("stroke") or {}).get("state")
-                                  in ("ready", "spent"), 30, label="stroke_ready")
+            released_ = asyncio.ensure_future(_keep_released(p))
+            try:
+                ready = await p.until(lambda s: ((_pose_check(s) or {}).get("stroke") or {}).get("state")
+                                      in ("ready", "spent"), 30, label="stroke_ready")
+            finally:
+                released_.cancel()
             if not ready:
                 break
             continue
@@ -1725,13 +1729,21 @@ async def _reverse_strokes(p, args, rev, shadow):
             await asyncio.sleep(0.05)
         # the stroke as seen at the release (the stand after it starts the next one)
         rec.update(released=released, end_left_m=(stk or {}).get("left_m"), release_mono=time.monotonic())
-        for _ in range(3):
-            await p.teleop(0.0, 0.0, False)
-            await asyncio.sleep(0.05)
-        rec["standing"] = bool(await p.until(p.standing, 30, label="standing_after_stroke"))
-        rec["rematch"] = await _await_rematch(p, shadow, args)
+        # the deadman let go, the command sent on: one older than 0.30 s disarms (the arbiter's command age)
+        released_ = asyncio.ensure_future(_keep_released(p))
+        try:
+            rec["standing"] = bool(await p.until(p.standing, 30, label="standing_after_stroke"))
+            rec["rematch"] = await _await_rematch(p, shadow, args)
+        finally:
+            released_.cancel()
         rec["status_after"] = _pc_status(p.state)
         rev["strokes"].append(rec)
+
+
+async def _keep_released(p):
+    while True:
+        await p.teleop(0.0, 0.0, False)
+        await asyncio.sleep(0.05)
 
 
 async def _await_rematch(p, shadow, args) -> dict:

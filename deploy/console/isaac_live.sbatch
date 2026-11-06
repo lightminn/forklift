@@ -223,10 +223,10 @@ RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the 
                                   --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
 [ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
 POSE=()  # the unconfirmed position check (plan 2026-11-06-unconfirmed-validation 2); off: as before
-[ "$POSE_CHECK" != off ] && POSE=(--pose-check "$POSE_CHECK")
-[ "$POSE_CHECK" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")
-[ -n "$POSE_CHECK_CONTACTS" ] && POSE+=(--pose-check-contacts)
-[ -n "$RELOC_INJECT" ] && POSE+=("--reloc-inject=$RELOC_INJECT")  # one word: the kinds hold a space
+[ "${POSE_CHECK:-off}" != off ] && POSE=(--pose-check "$POSE_CHECK")
+[ "${POSE_CHECK:-off}" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")
+[ -n "${POSE_CHECK_CONTACTS:-}" ] && POSE+=(--pose-check-contacts)
+[ -n "${RELOC_INJECT:-}" ] && POSE+=("--reloc-inject=$RELOC_INJECT")  # one word: the kinds hold a space
 REQ=()  # scene requirements plan: a profile to compare with and an override reason, both recorded by the runner
 [ -n "${REQUIREMENTS_PROFILE:-}" ] && REQ+=(--requirements-profile "$REQUIREMENTS_PROFILE")
 [ -n "${SCENE_REQUIREMENTS_OVERRIDE:-}" ] && REQ+=(--scene-requirements-override "$SCENE_REQUIREMENTS_OVERRIDE")

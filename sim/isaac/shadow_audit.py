@@ -1,20 +1,25 @@
-"""The shadow's same-process audit (docs/plans/2026-11-06-unconfirmed-validation.md 1.1, lead 2026-11-06): with
-``--pose-shadow-audit``, the control side's shared objects -- the arbiter, the permit, the mission commands and the
-cargo -- are fingerprinted before and after each place the shadow computes in a tick, and every difference is counted
-with the attributes that changed. It stands in for the deterministic shadow-vs-off byte comparison, which a live
-session cannot have (the deterministic mode has no live part). The arbiter and the core run on the control thread
-only, so nothing else moves them between the two fingerprints. Isaac-free.
+"""The shadow's same-process audit (docs/plans/2026-11-06-unconfirmed-validation.md 0, lead 2026-11-06): with
+``--pose-shadow-audit``, the control side's shared objects -- the arbiter, the obstacle layer with its permit, the
+mission commands, the cargo and the SLAM tracker -- are fingerprinted whole (every level, arrays by content) before and
+after a place the shadow computes in a tick, and every difference is counted with the attributes that changed. A whole
+walk is too dear for every call, so it runs every PERIOD-th call and at each rear check; the record says how long one
+took. Supporting evidence for what the source tests fix (the shadow's writes listed), in place of the deterministic
+shadow-vs-off byte comparison a live session cannot have. The arbiter runs on the control thread only; a change seen
+on an object another thread also writes is read from the attribute it names. Isaac-free.
 """
 
 from __future__ import annotations
 
 import hashlib
+import time
+import types
 
 import numpy as np
 
-DEPTH = 3
-ARRAY_HASH_MAX = 1 << 20  # larger arrays by shape and identity only (their content is not hashed every tick)
+DEPTH = 256  # the object graph's guard: in practice the whole of it
+PERIOD = 121  # calls between audits (three a tick, so it walks through the sites)
 KEEP = 20  # the first differences kept in full
+NAMED_ONLY = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType, type)
 
 
 def _walk(obj, depth: int, seen: set, out: list) -> None:
@@ -23,12 +28,15 @@ def _walk(obj, depth: int, seen: set, out: list) -> None:
         return
     if isinstance(obj, np.ndarray):
         out.append(f"nd{obj.dtype}{obj.shape}")
-        out.append(hashlib.sha1(obj.tobytes()).hexdigest() if obj.nbytes <= ARRAY_HASH_MAX else f"id{id(obj)}")
+        out.append(hashlib.blake2b(obj.tobytes(), digest_size=16).hexdigest())
         return
     if isinstance(obj, np.generic):
         out.append(repr(obj.item()))
         return
-    if id(obj) in seen or depth <= 0 or callable(obj) and not hasattr(obj, "__dict__"):
+    if isinstance(obj, NAMED_ONLY) or type(obj).__name__ in ("lock", "RLock"):
+        out.append(f"<{type(obj).__name__}>")
+        return
+    if id(obj) in seen or depth <= 0:
         out.append(f"<{type(obj).__name__}:{id(obj)}>")
         return
     seen.add(id(obj))
@@ -55,28 +63,37 @@ def _walk(obj, depth: int, seen: set, out: list) -> None:
 
 
 def fingerprint(obj, depth: int = DEPTH) -> dict:
-    """{attribute: sha1} of an object's attributes (a dict's keys), each walked ``depth`` levels down."""
+    """{attribute: sha1} of an object's attributes (a dict's keys), each walked down; what two attributes share is
+    walked once, under the first."""
     items = vars(obj) if hasattr(obj, "__dict__") and not isinstance(obj, dict) else obj
-    out = {}
+    out, seen = {}, {id(obj)}
     for k in sorted(items, key=repr):
         parts: list = []
-        _walk(items[k], depth, set(), parts)
+        _walk(items[k], depth, seen, parts)
         out[str(k)] = hashlib.sha1("\x1f".join(parts).encode()).hexdigest()
     return out
 
 
 class ShadowAudit:
-    def __init__(self, targets: dict):
+    def __init__(self, targets: dict, period: int = PERIOD, clock=time.monotonic):
         """``targets``: {name: a callable giving the object now}."""
-        self.targets = targets
+        self.targets, self.period, self.clock = targets, period, clock
+        self.calls = 0
+        self.wall_max_s = 0.0
         self.checks = 0
         self.changed = 0
         self.first: list = []
         self.by_site: dict = {}
         self._before = None
 
+    def due(self, force: bool = False) -> bool:
+        self.calls += 1
+        return bool(force) or self.calls % self.period == 0
+
     def before(self) -> None:
+        t0 = self.clock()
         self._before = {name: fingerprint(get()) for name, get in self.targets.items()}
+        self.wall_max_s = max(self.wall_max_s, self.clock() - t0)
 
     def after(self, site: str, t: float) -> None:
         if self._before is None:
@@ -96,8 +113,9 @@ class ShadowAudit:
                 self.first.append({"t": float(t), "site": site, "attributes": diff})
 
     def record(self) -> dict:
-        return {"targets": sorted(self.targets), "depth": DEPTH, "checks": self.checks, "changed": self.changed,
-                "by_site": self.by_site, "first": self.first}
+        return {"targets": sorted(self.targets), "depth": DEPTH, "period": self.period, "calls": self.calls,
+                "checks": self.checks, "changed": self.changed, "by_site": self.by_site, "first": self.first,
+                "wall_max_s": self.wall_max_s}
 
 
 __all__ = ["ShadowAudit", "fingerprint"]

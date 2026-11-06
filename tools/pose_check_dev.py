@@ -7,9 +7,11 @@ validation.md 3.2), read from each session's ``epoch_1/run/result.json`` (``pose
   d = D_TOTAL (3.0 m), then the smaller a. It is empirical: the distance bins say how many sessions reached each 0.25 m.
 - **E_STILL**: every stand's largest move of the applied pose by the correction (base or rear axle), 1.5 x the largest
   -- flagged, never cut, over 0.20 m / 0.05 rad.
-- **E_SLAM**: the raw agreements the operating path would check -- a confirmed start's local r, a generation whose
-  conservative outcome confirmed its g -- start and re-match apart, 1.5 x the larger's largest per component. Evidence
-  outside the success tolerance stays in and is counted (design 1.5's premise checked).
+- **E_SLAM**: the raw agreements of evidence that passed the conservative check: a confirmed start's local r, and a
+  generation's g with ``residual_confirmed`` that the operating path would have applied (stood since its scan, the same
+  epoch) -- never the provisional outcome, whose meaning changes with the phase and delta. Start and re-match apart,
+  1.5 x the larger's largest per component. Evidence outside the success tolerance stays in and is counted (design
+  1.5's premise checked); wrong evidence is flagged: a twin's g would give metres.
 - The sample check: at least --min-samples (20) of each kind, else flagged (plan 1.1: 10 more D sessions, at most 60).
 
 Writes the values with their basis and the inputs' sha256; --pose-check-bounds reads the same file.
@@ -28,6 +30,7 @@ D_TOTAL = 3.0
 BIN_M = 0.25
 FACTOR = 1.5
 E_STILL_MAX = (0.20, 0.05)  # design 3: the integrity budget E_STILL stays within
+ORIGIN_MAX_S = 0.25  # the 10 Hz samples' gap, with room: an older one is no origin
 
 
 def _compose(a, b):
@@ -70,16 +73,16 @@ def fit_bound(points) -> tuple:
 
 
 def _origin(samples, t0):
+    """The last sample at the boundary (the truck stands there), never one after it (Codex 2d P2-5)."""
     before = [s for s in samples if s["t"] <= t0 + 1e-9 and s.get("o") is not None]
-    if before:
-        return before[-1]
-    after = [s for s in samples if s.get("o") is not None]
-    return after[0] if after else None
+    return before[-1] if before and t0 - before[-1]["t"] <= ORIGIN_MAX_S else None
 
 
-def _errors(samples, t0, t1) -> list:
+def _errors(samples, t0, t1, missing=None) -> list:
     o0 = _origin(samples, t0)
     if o0 is None:
+        if missing is not None:
+            missing.append(t0)
         return []
     out = []
     inv_o, inv_t = _invert(o0["o"]), _invert(o0["truth"])
@@ -92,9 +95,9 @@ def _errors(samples, t0, t1) -> list:
     return out
 
 
-def odometry_errors(rec) -> tuple:
+def odometry_errors(rec, missing=None) -> tuple:
     """((d, e_p, e_theta) from the start check's scan to the last stroke's end, the same from each stroke's open to
-    its end) -- the meter's strokes in the shadow, the check's own when on."""
+    its end) -- the meter's strokes in the shadow, the check's own when on. ``missing``: the windows without an origin."""
     events = rec.get("meter_events") or rec.get("events") or []
     samples = rec.get("samples") or []
     opens = [e["t"] for e in events if e["kind"] == "stroke_open"]
@@ -102,12 +105,12 @@ def odometry_errors(rec) -> tuple:
     start_t = (rec.get("start") or {}).get("scan_t")
     if not dones or start_t is None:
         return [], []
-    from_start = _errors(samples, start_t, dones[-1])
+    from_start = _errors(samples, start_t, dones[-1], missing)
     from_strokes = []
     for t0 in opens:
         t1 = next((t for t in dones if t > t0), None)
         if t1 is not None:
-            from_strokes += _errors(samples, t0, t1)
+            from_strokes += _errors(samples, t0, t1, missing)
     return from_start, from_strokes
 
 
@@ -115,26 +118,29 @@ def _agreements(rec):
     raw = rec.get("raw") or {}
     start = raw.get("start") or {}
     starts = [start] if start.get("confirmed") and start.get("agree_m") is not None else []
-    gens = [g for g in raw.get("rematches") or [] if g.get("g") is not None and g.get("agree_m") is not None]
-    return starts, [g for g in gens if g.get("outcome") == "confirm"], gens
+    every = [g for g in raw.get("rematches") or [] if g.get("g") is not None and g.get("agree_m") is not None]
+    passed = [g for g in every if g.get("residual_confirmed")]
+    return starts, [g for g in passed if g.get("applicable")], every, len(passed)
 
 
 def dev_values(records, *, min_samples: int = 20) -> dict:
     """``records``: (name, the session's pose_check record) of every D session."""
     errs, bins = [], {f"{k * BIN_M:.2f}": 0 for k in range(int(D_TOTAL / BIN_M) + 1)}
-    stands, starts, gens, all_g = [], [], [], 0
+    stands, starts, gens, all_g, passed = [], [], [], 0, 0
+    missing: list = []
     for _, rec in records:
-        a_, b_ = odometry_errors(rec)
+        a_, b_ = odometry_errors(rec, missing)
         errs += a_ + b_
         reach = max((d for d, _, _ in a_), default=0.0)
         for key in bins:
             if reach >= float(key) - 1e-9:
                 bins[key] += 1
         stands += (rec.get("raw") or {}).get("stands") or []
-        s_, g_, every = _agreements(rec)
+        s_, g_, every, n_passed = _agreements(rec)
         starts += s_
         gens += g_
         all_g += len(every)
+        passed += n_passed
     in_reach = [e for e in errs if e[0] <= D_TOTAL + 1e-9]
     a_p, b_p = fit_bound([(d, e) for d, e, _ in in_reach])
     a_t, b_t = fit_bound([(d, e) for d, _, e in in_reach])
@@ -150,6 +156,10 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
     flags = []
     if e_still[0] > E_STILL_MAX[0] or e_still[1] > E_STILL_MAX[1]:
         flags.append("e_still_over_budget")
+    if "wrong" in classes:
+        flags.append("wrong_evidence_in_samples")
+    if missing:
+        flags.append("windows_without_origin")
     if len(starts) < min_samples:
         flags.append(f"start_samples_under_{min_samples}")
     if len(gens) < min_samples:
@@ -159,11 +169,13 @@ def dev_values(records, *, min_samples: int = 20) -> dict:
         "basis": {
             "factor": FACTOR, "sessions": len(records),
             "odom": {"samples": len(in_reach), "beyond_d_total": len(errs) - len(in_reach), "bins": bins,
+                     "windows_without_origin": len(missing),
                      "max_e_p": max((e for _, e, _ in in_reach), default=0.0),
                      "max_e_theta": max((e for _, _, e in in_reach), default=0.0)},
             "e_still": {"stands": len(stands), "max": list(still)},
             "e_slam": {"start": {"n": len(starts), "max": list(s_max)},
-                       "rematch": {"n": len(gens), "max": list(g_max), "all_g_n": all_g},
+                       "rematch": {"n": len(gens), "max": list(g_max), "all_g_n": all_g,
+                                   "not_applicable": passed - len(gens)},
                        "outside_success": sum(c != "success" for c in classes),
                        "unknown": sum(c == "unknown" for c in classes)}}}
 

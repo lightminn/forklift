@@ -37,6 +37,7 @@ def _session(drift=0.01, yaw=0.3, strokes=(1.0, 1.0), stands=((0.004, 0.001),), 
     samples.append({"t": t, "o": at(0, 1), "truth": at(0, 1)})
     for k, length in enumerate(strokes):
         t += 1.0
+        samples.append({"t": t - 0.05, "o": at(s_total, 1 + drift), "truth": at(s_total, 1)})  # stood before the press
         events.append({"t": t, "kind": "stroke_open"})
         for step in range(1, 11):
             t += 0.1
@@ -47,7 +48,8 @@ def _session(drift=0.01, yaw=0.3, strokes=(1.0, 1.0), stands=((0.004, 0.001),), 
         events.append({"t": t, "kind": "stroke_done"})
     raw = {"start": {"r": [0, 0, yaw], "confirmed": True, "agree_m": start_agree[0], "agree_rad": start_agree[1],
                      "truth": {"class": "success"}},
-           "rematches": [{"g": [0, 0, 0], "outcome": out, "agree_m": m, "agree_rad": r, "truth": {"class": "success"}}
+           "rematches": [{"g": [0, 0, 0], "outcome": out, "residual_confirmed": out == "confirm", "applicable": True,
+                          "agree_m": m, "agree_rad": r, "truth": {"class": "success"}}
                          for m, r, out in rematch_agree],
            "stands": [{"max_m": m, "max_rad": r} for m, r in stands]}
     rec = {"mode": "shadow" if shadow else "on", "start": {"scan_t": 0.0}, "samples": samples, "raw": raw,
@@ -103,3 +105,28 @@ def test_the_cli_reads_each_sessions_record_and_hashes_it(tmp_path):
     data = json.loads(out.read_text())
     assert [i["session"] for i in data["inputs"]] == ["a", "b"] and len(data["inputs"][0]["sha256"]) == 64
     assert set(data) >= {"odom", "e_still", "e_slam", "basis", "flags", "inputs"}
+
+
+def test_the_samples_eligibility_is_the_conservative_check_and_the_operating_paths_application():
+    # Codex 2d P2-3, P2-4: never the provisional outcome; a result the operating path discards is out
+    rec = _session(rematch_agree=((0.05, 0.02, "confirm"), (0.09, 0.03, "confirm"), (0.2, 0.05, "none")))
+    rec["raw"]["rematches"][0]["outcome"] = "out_of_set"  # the provisional outcome says nothing: still a sample
+    rec["raw"]["rematches"][1]["applicable"] = False  # moved after its scans: discarded when on
+    out = D.dev_values([("s", rec)], min_samples=1)
+    r = out["basis"]["e_slam"]["rematch"]
+    assert r["n"] == 1 and r["max"] == pytest.approx([0.05, 0.02]) and r["all_g_n"] == 3 and r["not_applicable"] == 1
+
+
+def test_wrong_evidence_among_the_samples_is_flagged():
+    rec = _session()
+    rec["raw"]["rematches"][0]["truth"] = {"class": "wrong"}
+    assert "wrong_evidence_in_samples" in D.dev_values([("s", rec)], min_samples=1)["flags"]
+
+
+def test_an_origin_is_the_sample_at_the_boundary_and_a_window_without_one_is_counted():
+    # Codex 2d P2-5: never a sample after the boundary
+    rec = _session(drift=0.0)
+    rec["samples"] = rec["samples"][1:]  # nothing at or before the start's scan
+    from_start, _ = D.odometry_errors(rec)
+    assert from_start == []
+    assert D.dev_values([("s", rec)], min_samples=1)["basis"]["odom"]["windows_without_origin"] >= 1

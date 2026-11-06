@@ -286,6 +286,17 @@ def _reloc_inject(value: str) -> str:
     return value
 
 
+@contextlib.contextmanager
+def permission_kept(permission):
+    """A check that leaves the permit as it found it: the start-band release's anchor and counts a walk may change are
+    put back (plan 2026-11-06-unconfirmed-validation 1.1: the check writes nothing the control path reads)."""
+    kept = copy.deepcopy((permission.release_anchor, permission.release_stats))
+    try:
+        yield permission
+    finally:
+        permission.release_anchor, permission.release_stats = kept
+
+
 def quarter_focal(value: str) -> float:
     """Parse a positive finite focal length for Camera.set_focal_length."""
     try:
@@ -3469,17 +3480,6 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
         rear_offset_m=abs(args.rear_axle_offset_m), stop_m=stopping.distance_m(speed),
         tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts), shadow=args.pose_check == "shadow",
         contacts=pose_contacts.ContactLog() if getattr(args, "pose_check_contacts", False) else None)
-
-
-@contextlib.contextmanager
-def permission_kept(permission):
-    """A check that leaves the permit as it found it: the start-band release's anchor and counts a walk may change are
-    put back (plan 2026-11-06-unconfirmed-validation 1.1: the check writes nothing the control path reads)."""
-    kept = copy.deepcopy((permission.release_anchor, permission.release_stats))
-    try:
-        yield permission
-    finally:
-        permission.release_anchor, permission.release_stats = kept
 
 
 def pose_open(out) -> bool:
@@ -7471,12 +7471,6 @@ def drive(S, isaac) -> None:
                 tick, observing=far_observing(ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
                 and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
-            if pose_box["rt"] is not None and pose_box["rt"].contacts is not None:
-                import pose_contacts  # plan 2026-11-06 1.4: this step's contacts, the check's status then
-
-                pose_box["rt"].contacts.update(float(world.current_time - initial_time), pose_contacts.read_pairs(),
-                                               status=pose_box["rt"].pc.status, phase=ms.phase,
-                                               relation=core.cargo.relation)
             if near_end_detour_ is not None:
                 # C2 injection plan 4 0 and 4: every physics step's pallet shift, a capture's steps included (Codex
                 # implementation review 1 P2-1), kept as the largest since the last control tick; the tick gives it
@@ -7487,6 +7481,12 @@ def drive(S, isaac) -> None:
                 phase_key_ = "observe" if ms.phase == "observe" else "other"
                 steps_shift_[phase_key_] = max(steps_shift_.get(phase_key_, 0.0), float(np.linalg.norm(
                     np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
+            if pose_box["rt"] is not None and pose_box["rt"].contacts is not None:
+                import pose_contacts  # plan 2026-11-06 1.4: this step's contacts, the check's status then
+
+                pose_box["rt"].contacts.update(float(world.current_time - initial_time), pose_contacts.read_pairs(),
+                                               status=pose_box["rt"].pc.status, phase=ms.phase,
+                                               relation=core.cargo.relation)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
@@ -8973,8 +8973,9 @@ def drive(S, isaac) -> None:
                     import shadow_audit
 
                     pose_box["rt"].audit = shadow_audit.ShadowAudit({
-                        "arbiter": lambda: live.arbiter, "permission": lambda: obstacle["layer"].permission,
-                        "commands": lambda: core.commands, "cargo": lambda: core.cargo})
+                        "arbiter": lambda: live.arbiter, "layer": lambda: obstacle["layer"],
+                        "commands": lambda: core.commands, "cargo": lambda: core.cargo,
+                        "tracker": lambda: slam["tracker"]})
 
         def scene_require(t_, ok_, reason_, cargo=False):
             """A truth check on the scene (simulation only). A batch run aborts as require does; a live one latches
@@ -9005,7 +9006,8 @@ def drive(S, isaac) -> None:
             from forklift_core.mission.commands import ACTIVE
 
             rt_, a_ = pose_box["rt"], live.arbiter
-            if rt_.audit is not None:
+            audit_on_ = rt_.audit is not None and rt_.audit.due(rt_.rear_pending())
+            if audit_on_:
                 rt_.audit.before()
             tel_ = a_.teleop or {}
             applied_ = slam["tracker"].applied
@@ -9023,7 +9025,7 @@ def drive(S, isaac) -> None:
             if not rt_.shadow:
                 a_.pose = rt_.view_dict(view_)
             live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)
-            if rt_.audit is not None:
+            if audit_on_:
                 rt_.audit.after("checkpoint", t_)
             if rt_.ends() and pose_box["end"] is None:
                 reason_ = view_.status.split(":", 1)[1]
@@ -10147,13 +10149,14 @@ def drive(S, isaac) -> None:
                     live_tick_out_ = True  # persistent console plan D6: this tick's output is given
                     if pose_box["rt"] is not None:
                         off_ = abs(args.rear_axle_offset_m)
-                        if pose_box["rt"].audit is not None:
+                        audit_on_ = pose_box["rt"].audit is not None and pose_box["rt"].audit.due()
+                        if audit_on_:
                             pose_box["rt"].audit.before()
                         pose_box["rt"].note_tick(  # plan 3.4: the judgement's record (simulation truth, decides nothing)
                             t, applied=tuple(float(v) for v in base_from_rear_axle(rear, off_)),
                             truth=tuple(float(v) for v in base_from_rear_axle(truth_rear, off_)),
                             open_=pose_open(out_))  # plan 2026-11-06 1.3: the tick's final output
-                        if pose_box["rt"].audit is not None:
+                        if audit_on_:
                             pose_box["rt"].audit.after("note_tick", t)
                     if out_.source == "teleop":
                         if args.live_test_permit_compare:

@@ -222,7 +222,7 @@ def test_the_contact_record_goes_with_the_check_and_reads_every_physics_step():
     assert near_tracking.POST_MEASUREMENT_ARGUMENTS["pose_check_contacts"] is False
     src = _source()
     at = src.index("def step_world(render: bool)")
-    body = src[at:src.index("if near_end_detour_ is not None:", at)]
+    body = src[at:src.index("if args.tyre_contact_log and tick % 12 == 0:", at)]
     assert 'pose_box["rt"] is not None and pose_box["rt"].contacts is not None' in body
     assert body.index("world.step(render=") < body.index("pose_box[\"rt\"].contacts.update(")
     assert 'if getattr(args, "pose_check_contacts", False):' in src
@@ -282,12 +282,33 @@ def test_the_audit_brackets_each_place_the_shadow_computes():
     src = _source()
     at = src.index("def pose_checkpoint(t_):")
     body = src[at:src.index("def pose_rear_blocked(rt_)")]
-    assert "if rt_.audit is not None:\n                rt_.audit.before()" in body
+    assert "if audit_on_:\n                rt_.audit.before()" in body
     assert 'rt_.audit.after("checkpoint", t_)' in body
     note = src.index('pose_box["rt"].note_tick(')
     assert 'pose_box["rt"].audit.before()' in src[note - 300:note]
     assert 'pose_box["rt"].audit.after("note_tick", t)' in src[note:note + 700]
     at = src.index('pose_box["rt"] = make_pose_runtime(args')
     block = src[at:at + 900]
-    for name in ("arbiter", "permission", "commands", "cargo"):
+    assert "audit_on_ = rt_.audit is not None and rt_.audit.due(rt_.rear_pending())" in body
+    assert 'audit_on_ = pose_box["rt"].audit is not None and pose_box["rt"].audit.due()' in src[note - 300:note]
+
+
+def test_the_shadows_places_in_the_tick_write_only_their_own():
+    # the lead, 2026-11-06 (Codex 2d P2-7): the writes listed -- the arbiter only when on, the published view, the end
+    # only when on; nothing into state, the spool or the core
+    src = _source()
+    body = src[src.index("def pose_checkpoint(t_):"):src.index("def pose_rear_blocked(rt_)")]
+    shadow_part = body[:body.index("if rt_.ends() and pose_box[\"end\"] is None:")]
+    assert "state[" not in shadow_part and "core." in shadow_part  # core read only:
+    assert "core.commands.status in ACTIVE" in shadow_part and "core.near_active()" in shadow_part
+    assert "core.commands.status =" not in shadow_part
+    assert shadow_part.count("a_.pose = ") == 1 and "if not rt_.shadow:\n                a_.pose = " in shadow_part
+    assert "live.pose_info = " in shadow_part  # the published view
+    rear = src[src.index("def pose_rear_blocked(rt_)"):src.index("def live_failed(t_, reason_")]
+    assert "state[" not in rear and "with permission_kept(perm_):" in rear
+    at = src.index('pose_box["rt"].on_scan(')
+    assert "sent" in src[at:at + 120]
+    at = src.index('pose_box["rt"] = make_pose_runtime(args')
+    block = src[at:at + 1100]
+    for name in ("arbiter", "layer", "commands", "cargo", "tracker"):
         assert f'"{name}": lambda:' in block, name

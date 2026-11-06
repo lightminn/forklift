@@ -753,3 +753,108 @@ def test_the_record_carries_the_shadow_audit_when_kept():
     rt.audit.before()
     rt.audit.after("checkpoint", 0.0)
     assert rt.record()["audit"]["checks"] == 1
+
+
+# --- Codex 2d review ---
+def test_the_samples_carry_the_odometry_before_any_evidence():
+    # P2-5: with no correction yet the sample's O was None, and the start's origin slid to after the check
+    b = (2.42, 1.7, 0.6)
+    w = Scripted()
+    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)), shadow=True)
+    _tick(rt, b, None)
+    rt.note_tick(0.0, applied=b, truth=b, open_=False)
+    assert rt.samples[0]["o"] == pytest.approx(b) and rt.samples[0]["delta"] is None
+
+
+def _shadow_generation(rt, grid, w, o, C, *, g=None, result=None, stamp=5.0):
+    """One shadow generation at the stand at ``o``, answered with ``result``."""
+    _tick(rt, o, C)
+    _feed(rt, grid, o, o, t0=stamp)
+    _tick(rt, o, C)
+    top = G.Candidate(R.laser_from_base(o), 0.95, 0.97)
+    w.answer({"match": G.GlobalMatch("ok", (top,)), "decision": G.Decision(True, "confirmed", 0.0)})
+    _tick(rt, o, C)
+    return w.jobs[-1]
+
+
+def test_a_shadow_generation_asks_the_same_conservative_check_whatever_the_provisional_state():
+    # P2-3: the sample's eligibility must not lean on the provisional state or delta
+    b = (2.42, 1.7, 0.6)
+    for confirmed in (True, False):
+        grid, w, rt = _shadow(confirmed, b)
+        _tick(rt, b, I)
+        o = _reverse(rt, b, 0.6)
+        _, kind, payload = _shadow_generation(rt, grid, w, o, I)
+        assert kind == "rematch" and payload["shadow"] is True
+        w.answer({"outcome": "confirm" if confirmed else "out_of_set", "g": list(o), "residual": [],
+                  "residual_confirmed": True})
+        _tick(rt, o, I)
+        assert rt.raw["rematches"][0]["residual_confirmed"] is True
+
+
+def test_a_shadow_generation_says_whether_the_operating_path_would_have_applied_it():
+    # P2-4: a result after the truck moved, or in another epoch, is discarded before the agreement when on
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    _tick(rt, b, I)
+    o = _reverse(rt, b, 0.6)
+    _shadow_generation(rt, grid, w, o, I)
+    w.answer({"outcome": "confirm", "g": list(o), "residual": [], "residual_confirmed": True})
+    _tick(rt, compose(o, (-0.003, 0.0, 0.0)), I, standing=False)
+    gen = rt.raw["rematches"][-1]
+    assert gen["applicable"] is False and gen["moved"][0] > P.STILL_M
+    grid, w, rt = _shadow(True, b)
+    _tick(rt, b, I)
+    o = _reverse(rt, b, 0.6)
+    _shadow_generation(rt, grid, w, o, I)
+    w.answer({"outcome": "confirm", "g": list(o), "residual": [], "residual_confirmed": True})
+    _tick(rt, o, I)
+    assert rt.raw["rematches"][-1]["applicable"] is True
+
+
+def test_the_shadow_job_returns_the_conservative_check_in_both_phases():
+    grid = TG._grid(*TG.ROOM)
+    ctx = PR.JobContext(grid, CFG, RELOC, PR.SHADOW_BOUNDS)
+    o = (2.42, 1.7, 0.6)
+    points = G.stack_scans([((0.0, 0.0, 0.0), _ranges(grid, o), *ANGLES)] * 5, range_min_m=0.2, range_max_m=12.0,
+                           match_range_m=8.0)
+    start = compose(o, (0.6, 0.0, 0.0))
+    for phase in ("unconfirmed", "confirmed"):
+        out = PR.run_job("rematch", {"phase": phase, "shadow": True, "points": points, "b": start, "hyps": [],
+                                     "o0": start, "ot": o, "decision": "confirmed", "g": o,
+                                     "deadline_at": None}, ctx)
+        assert isinstance(out["residual_confirmed"], bool)
+
+
+def test_a_mission_stands_scan_set_holds_only_still_scans():
+    # P2-6: the operating scan set's own stillness: a set that moved is not kept, the next five may be
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(True, b)
+    _tick(rt, b, I)
+    C = (0.15, 0.0, 0.0)
+    _mission_stand(rt, grid, b, C, 0, 0.0)
+    for k in range(5):
+        rt.on_scan(1.0 + 0.1 * k, _ranges(grid, b), compose(b, (0.003 * k, 0.0, 0.0)), True)
+    assert rt.stand_sets[0]["sets"] == []
+    end = compose(b, (0.012, 0.0, 0.0))
+    for k in range(4):
+        rt.on_scan(2.0 + 0.1 * k, _ranges(grid, b), end, True)
+    assert len(rt.stand_sets[0]["sets"]) == 1 and rt.stand_sets[0]["sets"][0]["stamps"][0] == pytest.approx(1.4)
+
+
+def test_the_runtime_keeps_its_own_copy_of_a_scan():
+    b = (2.42, 1.7, 0.6)
+    rt = _rt(Scripted(), b=b, gen_points=np.zeros((40, 2)))
+    r = np.ones(360)
+    rt.on_scan(0.0, r, b, True)
+    assert rt.buf[-1].ranges is not r and not np.shares_memory(rt.buf[-1].ranges, r)
+
+
+def test_the_runtime_holds_no_control_object():
+    # the lead, 2026-11-06 (Codex 2d P2-7): it is handed values only -- no name of the control side in its source
+    import ast
+
+    tree = ast.parse((ROOT / "sim/isaac/pose_runtime.py").read_text())
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+        n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert not names & {"arbiter", "core", "live", "obstacle", "layer", "tracker", "spool", "slam", "publish"}
