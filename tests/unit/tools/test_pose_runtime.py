@@ -915,6 +915,20 @@ def test_each_hold_release_is_recorded_with_the_correction_either_side_and_the_s
     assert rt.record()["bounds"]["e_window"] == [0.153, 0.103]
 
 
+def test_a_release_and_a_new_hold_between_two_ticks_counts_as_a_release():
+    # Codex: reapproach_hold_exit releases and holds again in one call; both ticks read holding
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    after = (0.0, 0.0, 0.04)
+    _tick(rt, b, I)
+    rt.tick(1.0, b, I, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
+    rt.tick(1.1, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
+    rt.tick(1.2, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
+    row, = rt.record()["releases"]
+    assert row["t"] == 1.1 and row["rad"] == pytest.approx(0.04)
+    assert rt.pc.c_still == pytest.approx(after) and rt._stand["rebased_rad"] == 0.0
+
+
 def test_the_shadow_keeps_the_stand_rebased_at_a_release_beside_the_plain_value():
     b = (2.42, 1.7, 0.6)
     grid, w, rt = _shadow(True, b)

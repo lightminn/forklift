@@ -237,6 +237,7 @@ class PoseRuntime:
         self.samples: list = []  # 10 Hz: (t, status, open, applied, truth)
         self.releases: list = []  # every SLAM hold release: C either side at its tick, the status it met (revision plan 9.13)
         self._was_holding = False
+        self._release_count = None
         self._c_before = None
         self.evidence: list = []  # every C_int's evidence against the truth (design 4)
         self._seen_events = 0
@@ -257,7 +258,6 @@ class PoseRuntime:
         self._meter_view = None
         self.raw = {"start": None, "rematches": [], "stands": []} if self.shadow else None
         self._stand = None
-        self._held = False
         self._raw_pending: list = []  # (raw record, its scan time, its evidence): judged against the truth there
         # plan 2026-11-06 1.5: at a mission stand (the near field left out) where the applied pose has moved over 0.10 m
         # from C_int's, the inputs of one generation -- up to STAND_SET_COUNT sets of SCANS scans in a row while it
@@ -304,19 +304,28 @@ class PoseRuntime:
 
     # --- every tick ----------------------------------------------------------------------------------------------------
     def tick(self, t: float, o, C, *, standing: bool, deadman: bool, epoch, control_gen, mission_active: bool = False,
-             near: bool = False, holding: bool = False) -> P.View:
+             near: bool = False, holding: bool = False, release_count: int = 0) -> P.View:
+        """``release_count``: the core's SLAM releases so far. A release and a new hold can both fall between two ticks
+        (reapproach_hold_exit), so ``holding`` alone does not show every release."""
         o = tuple(float(v) for v in o)
         self.o_last = o
         status = self.pc.status
+        released = ((self._release_count is not None and release_count != self._release_count)
+                    or (self._was_holding and not holding))
+        self._release_count = release_count
+        if released:
+            self.pc.c_still = None
+            if self.meter is not None:
+                self.meter.c_still = None
         view = self._tick(t, o, C, standing=standing, deadman=deadman, epoch=epoch, control_gen=control_gen,
                           mission_active=mission_active, near=near, holding=holding)
-        if self._was_holding and not holding and C is not None and self._c_before is not None:
+        if released and C is not None and self._c_before is not None:
             m, rad = P.gap(compose(C, o), compose(self._c_before, o), self.rear_offset_m)
             self.releases.append({"t": t, "o": list(o), "before": list(self._c_before), "after": list(C), "m": m, "rad": rad,
                                   "status": status})
         self._was_holding, self._c_before = holding, (tuple(C) if C is not None else self._c_before)
         if self.shadow:
-            self._shadow_stand(t, o, C, standing, mission_active, near, holding)
+            self._shadow_stand(t, o, C, standing, mission_active, near, released)
         self._last = (o, None, None)  # the odometry always (Codex 2d P2-5: the windows' origins read it)
         if C is not None:
             ref, kind = (self.pc.c_int, "int") if self.pc.c_int is not None else (self._c0, "start")
@@ -538,11 +547,9 @@ class PoseRuntime:
                 self._raw_pending.append((raw, raw["scan_t"], g))
         self.raw["rematches"].append(raw)
 
-    def _shadow_stand(self, t, o, C, standing, mission_active, near, holding=False) -> None:
+    def _shadow_stand(self, t, o, C, standing, mission_active, near, released=False) -> None:
         """Each stand's largest move of the applied pose by the correction against the stand's first (Delta_still), and
         the same with the reference taken again at a hold's release (the revision plan 9.4)."""
-        released = self._held and not holding
-        self._held = holding
         if standing and C is not None:
             if self._stand is None:
                 self._stand = {"t0": t, "c_still": tuple(C), "c_rebased": tuple(C), "max_m": 0.0, "max_rad": 0.0,

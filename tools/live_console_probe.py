@@ -1799,7 +1799,7 @@ async def _post_mission_watch(p, args, shadow) -> dict:
     wall_end = start + WATCH_WALL_FACTOR * args.post_mission_sim_s / args.live_factor
     out = {"sim_s": args.post_mission_sim_s, "elapsed_sim_s": 0.0, "started": False, "ended": "wall_limit"}
     seen = None
-    while time.monotonic() < wall_end and p.closed_code is None:
+    while p.closed_code is None:
         now = time.monotonic()
         if p.state is not seen:  # no state, no simulated time counted: a stalled run does not finish the watch
             seen = p.state
@@ -1815,6 +1815,8 @@ async def _post_mission_watch(p, args, shadow) -> dict:
             return out
         if out["elapsed_sim_s"] >= args.post_mission_sim_s:
             out["ended"] = "watch"
+            break
+        if now >= wall_end:
             break
         await asyncio.sleep(0.2)
     if p.closed_code is not None:

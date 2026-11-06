@@ -9062,7 +9062,7 @@ def drive(S, isaac) -> None:
                              standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
                              epoch=live.session_epoch, control_gen=a_.control_gen,
                              mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()),
-                             holding=slam["tracker"].mode == "holding")
+                             holding=slam["tracker"].mode == "holding", release_count=core.slam_releases)
             if rt_.rear_pending():
                 if rt_.audit is not None and not audit_on_:
                     audit_on_ = rt_.audit.due(force=True)  # every rear check (Codex 2d re-review P3)
@@ -9073,7 +9073,7 @@ def drive(S, isaac) -> None:
                                  standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
                                  epoch=live.session_epoch, control_gen=a_.control_gen,
                                  mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()),
-                                 holding=slam["tracker"].mode == "holding")
+                                 holding=slam["tracker"].mode == "holding", release_count=core.slam_releases)
             if not rt_.shadow:
                 a_.pose = rt_.view_dict(view_)
             live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)

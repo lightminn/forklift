@@ -327,6 +327,28 @@ def test_a_generation_found_at_the_watch_s_last_look_is_still_waited_for():
     assert watch["started"] is True and watch["ended"] == "result"
 
 
+def test_a_generation_found_at_the_wall_limit_is_still_waited_for(monkeypatch):
+    # Codex: it starts during the last sleep, and the limit is reached before anyone looks
+    class Probe:
+        closed_code, state, waited = None, {"pose_check": {"status": "confirmed"}}, False
+
+        async def until(self, pred, wall_s, label=""):
+            self.waited = True
+            return True
+
+    p = Probe()
+    clock = iter(range(0, 1000))
+    monkeypatch.setattr(lcp.time, "monotonic", lambda: float(next(clock)))
+
+    async def sleep(s):
+        p.state = {"pose_check": {"status": "checking"}, "pacing": {"realtime_factor": 1e-9}}
+
+    monkeypatch.setattr(lcp.asyncio, "sleep", sleep)
+    args = SimpleNamespace(post_mission_sim_s=0.5, live_factor=1.0)
+    watch = asyncio.run(lcp._post_mission_watch(p, args, False))
+    assert watch["started"] is True and p.waited
+
+
 def test_the_watch_stops_counting_while_no_state_comes():
     v = FakeVehicle(start="confirmed", frozen_after_mission=True)
     watch = _run(v, "full", mission=True, watch=0.05)["reverse"]["post_mission"]
