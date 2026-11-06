@@ -657,7 +657,7 @@ def _attempt_id(attempt: dict) -> tuple:
 
 
 def _blank_near(row: dict) -> dict:
-    return {"order": row["order"], "pallet_id": row["pallet_id"], "near": [], "state": None}
+    return {"order": row["order"], "pallet_id": row["pallet_id"], "near": [], "state": None, "moved": False}
 
 
 def _session_near(session: Path, rows: list) -> tuple[list, list, dict | None]:
@@ -671,6 +671,12 @@ def _session_near(session: Path, rows: list) -> tuple[list, list, dict | None]:
         top = _json(run / "result.json") or {}
         arguments = top.get("arguments") or arguments
         samples = _run_samples(run)
+        for i, r in enumerate(rows):  # an unacknowledged mission's own transition: after the previous mission's end
+            before = 0.0 if i == 0 else rows[i - 1].get("ended_s")
+            if r["start"] == "unknown" and before is not None and any(
+                    t.get("to") in PHASE_ORDER[1:-1] and float(t.get("time_s") or 0.0) > before
+                    for t in top.get("transitions") or []):
+                entries[r["order"]]["moved"] = True
         for r in rows:
             mid = r["mission_id"]
             records = _json(run / "missions" / mid / "records.json") if mid else None
@@ -704,9 +710,12 @@ def _near_mission(common: dict, row: dict, e: dict) -> dict:
     near, state = e["near"], e["state"]
     reason = row["reason"] or ""
     done = row["outcome"] == "done"
-    missing = row["outcome"] in (None, "no_record")
-    ended = not done and reason.startswith(NEAR_END_PREFIX)
-    started = "confirmed" if row["start"] == "confirmed" or not missing else "unknown"
+    # a run's end reason alone does not say an unacknowledged mission started: its own result or records do
+    seen = (row["start"] == "confirmed" or row.get("outcome_from") in ("mission_result", "probe_result")
+            or bool(near) or state is not None or e.get("moved", False))
+    started = "confirmed" if seen else "unknown"
+    missing = not seen or row["outcome"] in (None, "no_record") or (row["outcome"] == "session_failed" and not reason)
+    ended = seen and not done and reason.startswith(NEAR_END_PREFIX)
     touched = bool(near) or ended or bool(state and (state.get("near_capture") or state.get("near_capture_history")))
     first, final, seconds, rescues = Counter(), Counter(), 0, 0
     verdicts = []
@@ -726,7 +735,7 @@ def _near_mission(common: dict, row: dict, e: dict) -> dict:
             "entry_face": entry_face(near[0], e.get("samples") or [], row["pallet_id"]) if near else "unknown",
             "reached": touched,
             "reached_unknown": (started == "confirmed" and not touched and state is None
-                                and row["stage"] not in ("preparing", "observe")),
+                                and row["stage"] != "preparing"),  # a near leg's phase is observe too
             "result_missing": missing, "ended_near": ended, "ended_key": _end_key(reason) if ended else None,
             "ended_without_capture": ended and not near, "cause": None if done or missing else cause_of(reason),
             "class": None if done or missing else classify(reason), "capture_attempts": len(near),
@@ -793,11 +802,17 @@ def review_triggers(missions: list) -> dict:
     assignment reaches the count) or undecidable (the assignments differ). A mission with no result ended at near
     capture, at the top other cause or well; one with an unknown start also may never have started."""
     unknown = [m for m in missions if m["result_missing"]]
-    if len(unknown) > MAX_ASSIGNED:
-        return {"a": "undecidable", "b": "undecidable", "assigned": None}
     fixed = [m for m in missions if not m["result_missing"]]
     base = Counter(m["cause"] for m in fixed if m["cause"])
     near_cause = NEAR_END_PREFIX
+    if len(unknown) > MAX_ASSIGNED:  # only what holds in every assignment
+        k = sum(m["ended_near"] for m in fixed)
+        sessions = len({m["session"] for m in fixed if m["ended_near"]}) >= TRIGGER_SESSIONS
+        least = sum(m["start"] == "confirmed" for m in missions)
+        top = max((n for c, n in base.items() if c != near_cause), default=0)
+        a = ("denominator_short" if len(missions) < TRIGGER_MIN_MISSIONS else
+             "met" if least >= TRIGGER_MIN_MISSIONS and k >= TRIGGER_RATE * len(missions) and sessions else "undecidable")
+        return {"a": a, "b": "met" if sessions and k >= top + len(unknown) else "undecidable", "assigned": None}
     other_top = max((c for c in base if c != near_cause), key=lambda c: base[c], default="(unknown)")
     choices = [("near", "other", "fine") + (("absent",) if m["start"] == "unknown" else ()) for m in unknown]
     verdicts_a, verdicts_b = set(), set()
@@ -830,6 +845,7 @@ def _population(key: tuple, missions: list, assumed: list) -> dict:
                        m_U=sum(m["result_missing"] and m["start"] == "confirmed" for m in wide))
     sessions = {m["session"] for m in started}
     stopped = {m["session"] for m in near_end}
+    start_open = {m["session"] for m in unknown} - sessions
     by_scene: dict = {}
     for m in real:
         s = by_scene.setdefault(m["scene"], {"started": 0, "ended_near": 0, "reached": 0})
@@ -842,7 +858,7 @@ def _population(key: tuple, missions: list, assumed: list) -> dict:
             "rates": {"N": len(started), "S": len(unknown), "k": len(near_end), "R": len(reached), "U": len(wide),
                       "result_missing": sum(m["result_missing"] and m["start"] == "confirmed" for m in real),
                       "ended_without_capture": sum(m["ended_without_capture"] for m in real), **rates},
-            "sessions": {"stopped_near": len(stopped), "started": len(sessions),
+            "sessions": {"stopped_near": len(stopped), "started": len(sessions), "start_unknown": len(start_open),
                          "wilson_observed": wilson(len(stopped), len(sessions)) if sessions else None},
             "ended_by_reason": dict(Counter(m["ended_key"] for m in near_end)),
             "causes": dict(Counter(m["cause"] for m in real if m["cause"])),
@@ -851,15 +867,44 @@ def _population(key: tuple, missions: list, assumed: list) -> dict:
             "triggers": review_triggers([m for m in real if m["start"] == "unknown" or m["start"] == "confirmed"])}
 
 
-def near_capture_tally(out_dir: Path, sessions: list) -> dict:
-    """Plan section 3's cells, session cells and, per operating configuration, the three rates and the triggers. A
-    folder named ``.attempt`` was ended before any submission and retried: left out and named. A session whose run
-    left no arguments joins its arm's only configuration and is named; with several it stays apart."""
-    excluded = sorted(s["session"] for s in sessions if ".attempt" in s["session"])
-    missions, open_sessions = [], []
+def _attempt_order(name: str) -> tuple:
+    """(base, turn): a retry moves the earlier attempt to ``name.attemptN``, and the bare name is the last."""
+    base, _, number = name.partition(".attempt")
+    return base, int(number) if number.isdigit() else math.inf
+
+
+def _took_submission(out_dir: Path, s: dict) -> bool:
+    """An acknowledged or refused submission, or a mission's own records or transition (what makes it started)."""
+    if any(r["start"] in ("confirmed", "rejected") or r.get("outcome_from") in ("mission_result", "probe_result")
+           for r in s["rows"]):
+        return True
+    entries, unplaced, _ = _session_near(Path(out_dir) / s["session"], s["rows"])
+    return bool(unplaced) or any(e["near"] or e["state"] is not None or e["moved"] for e in entries)
+
+
+def valid_attempts(out_dir: Path, sessions: list) -> tuple[list, list]:
+    """Each run's first attempt that took a submission, else its last one (start unknown, plan section 2), and the
+    attempts left out. Evidence, not the folder's name, keeps an attempt."""
+    runs: dict = {}
     for s in sessions:
-        if ".attempt" in s["session"]:
-            continue
+        runs.setdefault(_attempt_order(s["session"])[0], []).append(s)
+    kept, left = [], []
+    for attempts in runs.values():
+        attempts.sort(key=lambda s: _attempt_order(s["session"])[1])
+        took = [s for s in attempts if _took_submission(out_dir, s)]
+        chosen = took[0] if took else attempts[-1]
+        kept.append(chosen)
+        left += [s["session"] for s in attempts if s is not chosen]
+    return kept, sorted(left)
+
+
+def near_capture_tally(out_dir: Path, sessions: list) -> dict:
+    """Plan section 3's cells, session cells and, per operating configuration, the three rates and the triggers.
+    Attempts that took no submission and were retried are left out and named (valid_attempts). A session whose run
+    left no arguments joins its arm's only configuration and is named; with several it stays apart."""
+    chosen, excluded = valid_attempts(out_dir, sessions)
+    missions, open_sessions = [], []
+    for s in chosen:
         path = Path(out_dir) / s["session"]
         started = [r for r in s["rows"] if r["start"] in ("confirmed", "unknown")]
         entries, unplaced, arguments = _session_near(path, s["rows"])
@@ -872,7 +917,8 @@ def near_capture_tally(out_dir: Path, sessions: list) -> dict:
                   "run_config_sha256": _digest(arguments) if arguments else None}
         ms = [_near_mission(common, r, e) for r, e in zip(s["rows"], entries) if r in started]
         stop = next((m["mission_seq"] for m in ms if m["ended_near"]), None)
-        session_row = {**common, "started": bool(ms), "stopped_near": stop is not None,
+        session_row = {**common, "started": any(m["start"] == "confirmed" for m in ms), "start_open": bool(ms),
+                       "stopped_near": stop is not None,
                        "unsubmitted_after_stop": 0 if stop is None else sum(
                            r["order"] > stop and r["start"] == "not_submitted" for r in s["rows"])}
         if unplaced:
@@ -902,6 +948,7 @@ def near_capture_tally(out_dir: Path, sessions: list) -> dict:
         session_groups.setdefault(tuple(str(r[k]) for k in SESSION_CELL_KEYS), []).append(r)
     session_cells = [{"schema": "near_capture_session_tally/1", **{k: rs[0][k] for k in SESSION_CELL_KEYS},
                       "started_session_ids": sorted(r["session"] for r in rs if r["started"]),
+                      "start_unknown_session_ids": sorted(r["session"] for r in rs if r["start_open"] and not r["started"]),
                       "stopped_near_session_ids": sorted(r["session"] for r in rs if r["stopped_near"]),
                       "unsubmitted_after_stop": sum(r["unsubmitted_after_stop"] for r in rs)}
                      for _, rs in sorted(session_groups.items())]

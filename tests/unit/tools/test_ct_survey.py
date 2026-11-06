@@ -577,8 +577,14 @@ def test_trigger_undecidable_when_the_assignments_differ():
 
 
 def test_too_many_unknown_missions_are_undecidable_not_a_long_wait():
-    ms = missions_of(60, ("a", "b")) + [mission(f"u{i}", missing=True) for i in range(C.MAX_ASSIGNED + 1)]
-    assert C.review_triggers(ms) == {"a": "undecidable", "b": "undecidable", "assigned": None}
+    ms = missions_of(100, ("a", "b")) + [mission(f"u{i}", missing=True) for i in range(C.MAX_ASSIGNED + 1)]
+    assert C.review_triggers(ms) == {"a": "undecidable", "b": "undecidable", "assigned": None}  # 2 of 113, or more
+    few = [mission(f"u{i}", start="unknown", missing=True) for i in range(C.MAX_ASSIGNED + 1)]
+    assert C.review_triggers(few)["a"] == "denominator_short"  # no assignment reaches the count
+    sure = missions_of(47, ("a", "b")) + [mission(f"u{i}", missing=True) for i in range(C.MAX_ASSIGNED + 1)]
+    assert C.review_triggers(sure)["a"] == "met"  # 60 started in every assignment, k at least 2 of them
+    many = missions_of(40, [f"n{i}" for i in range(16)]) + [mission(f"u{i}", missing=True) for i in range(C.MAX_ASSIGNED + 1)]
+    assert C.review_triggers(many)["b"] == "met"  # no assignment gives another cause more
 
 
 def test_two_scenes_pool_by_the_operating_configuration_and_arms_do_not(tmp_path):
@@ -621,13 +627,70 @@ def test_an_unexposed_shape_is_named_unverified(tmp_path):
     assert tally(tmp_path, 1)["unverified_shapes"] == ["t11"]
 
 
-def test_attempt_folders_are_left_out_and_named(tmp_path):
+def test_an_attempt_that_took_no_submission_is_left_out_and_named(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    (tmp_path / "O0_line_m_s100.attempt1" / "live" / "epoch_1" / "run").mkdir(parents=True)
+    out = tally(tmp_path, 1)
+    assert only(out)["rates"]["N"] == 1 and out["excluded_attempts"] == ["O0_line_m_s100.attempt1"]
+
+
+def test_the_first_attempt_that_took_a_submission_is_the_valid_one_whatever_its_name(tmp_path):
     tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
                   submits=[("m1", "ack", "m1")])
     tally_session(tmp_path, "O0_line_m_s100.attempt1", [("m1", "failed", NEAR_FAIL, [near_attempt()])],
                   submits=[("m1", "ack", "m1")])
     out = tally(tmp_path, 1)
-    assert only(out)["rates"]["k"] == 0 and out["excluded_attempts"] == ["O0_line_m_s100.attempt1"]
+    assert only(out)["rates"]["k"] == 1 and out["excluded_attempts"] == ["O0_line_m_s100"]
+
+
+def test_an_attempt_known_only_from_its_run_record_is_the_first_valid_one(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    run = {"success": False, "failure_reason": NEAR_FAIL, "near_capture": {"status": "failed", "far_attempt": 1},
+           "observation_attempts": [near_attempt(far=True, sha="d0", t=1.0),
+                                    near_attempt("no_pallet", "no_expected_candidate", sha="d9", t=30.0)]}
+    tally_session(tmp_path, "O0_line_m_s100.attempt1", [], submits=[("b", "none", None)], run=run)
+    out = tally(tmp_path, 1)
+    r = only(out)["rates"]
+    assert (r["N"], r["k"]) == (1, 1) and out["excluded_attempts"] == ["O0_line_m_s100"]
+
+
+def test_a_transition_of_its_own_starts_an_unacknowledged_mission(tmp_path):
+    run = {"success": False, "transitions": [{"from": "complete", "to": "observe", "time_s": 5.0}]}
+    tally_session(tmp_path, "O0_line_m_s100.attempt1", [], submits=[("b", "none", None)], run=run)
+    r = only(tally(tmp_path, 1))["rates"]
+    assert (r["N"], r["S"], r["result_missing"]) == (1, 0, 1)
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    assert tally(tmp_path, 1)["excluded_attempts"] == ["O0_line_m_s100"]  # the first attempt that took one
+
+
+def test_a_run_failure_alone_does_not_start_an_unacknowledged_mission(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1"), ("b", "none", None)],
+                  run={"success": False, "failure_reason": NEAR_FAIL})
+    r = only(tally(tmp_path, 2))["rates"]
+    assert (r["N"], r["S"], r["k"], r["result_missing"]) == (1, 1, 0, 0)
+
+
+def test_a_mission_with_no_records_that_ended_in_observe_may_have_reached_near(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "failed", NEAR_FAIL, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    tally_session(tmp_path, "O0_line_m_s101", [("m1", "failed", "observe:timeout", None)], submits=[("m1", "ack", "m1")])
+    r = only(tally(tmp_path, 1))["rates"]
+    assert (r["R"], r["U"]) == (1, 1) and r["conditional"]["low"] == pytest.approx(0.5)
+
+
+def test_session_counts_keep_a_start_unknown_session_apart(tmp_path):
+    tally_session(tmp_path, "O0_line_m_s100", [("m1", "done", None, [near_attempt(far=True), near_attempt()])],
+                  submits=[("m1", "ack", "m1")])
+    tally_session(tmp_path, "O0_line_m_s101", [], submits=[("b", "none", None)])
+    out = tally(tmp_path, 1)
+    assert only(out)["sessions"]["started"] == 1 and only(out)["sessions"]["start_unknown"] == 1
+    started = sorted(i for c in out["session_cells"] for i in c["started_session_ids"])
+    unknown = sorted(i for c in out["session_cells"] for i in c["start_unknown_session_ids"])
+    assert started == ["O0_line_m_s100"] and unknown == ["O0_line_m_s101"]
 
 
 def test_a_refused_submission_of_the_reverse_scenario_starts_nothing_and_no_samples_leave_the_face_unknown(tmp_path):
