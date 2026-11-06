@@ -1504,9 +1504,14 @@ async def _hold_and_end(p, args):
     while time.monotonic() < end and p.closed_code is None:
         await asyncio.sleep(0.2)
     hold["end_mono"], hold["closed_during"] = time.monotonic(), p.closed_code
+    await _end_session(p)
+
+
+async def _end_session(p):
+    """End the session (unless it closed already) and wait for its close."""
     if p.closed_code is None:
         lease = await p.request("lease_request")
-        p.lease_id = (lease or {}).get("lease_id")
+        p.lease_id = (lease or {}).get("lease_id") or p.lease_id  # refused: the one it holds
         p.report["session_end"] = await p.request_until_standing("session_end")
         close_by = time.monotonic() + 120
         while p.closed_code is None and time.monotonic() < close_by:
@@ -1591,11 +1596,240 @@ async def place_scenario(p, args):
         await p.until(lambda s: s is not None and s.get("pose") is not None, 30, label="localized_state")
     p.report["localized"] = bool((p.state or {}).get("pose") is not None)
     if p.report["localized"]:
-        await _hold_and_end(p, args)
+        if getattr(args, "after_place", "hold") == "reverse":  # plan 2026-11-06 2 (reverse_place): V2's placements
+            await _reverse_localized(p, args)
+        else:
+            await _hold_and_end(p, args)
         return
     while p.closed_code is None and time.monotonic() < end:  # the operator's time ends the session
         await asyncio.sleep(0.5)
     p.report["close_code"] = p.closed_code
+
+
+REVERSE_RATIO = -0.4  # direct_reverse_mps 0.25 x 0.4 = 0.10 m/s: V_REV_U (plan 2026-11-06 2.1)
+REVERSE_MAX_STROKES = 15  # chatter can reach D_TOTAL
+REVERSE_TRIES = 4  # presses a stroke may take: a stalled tick disarms and closes it (no_feedback)
+REVERSE_COUNTS_M = 0.05  # a press that moved less takes no stroke of the count
+REVERSE_MOVES_M = 0.005  # a press moving less than this for --stroke-stuck-s is held by the permit
+REVERSE_BLOCKED_MAX = 2  # such presses in a row end the strokes (the session goes on to its end and record)
+REVERSE_STEP_M = {"half": 0.5, "chatter": 0.2}
+
+
+def _pose_check(s):
+    return (s or {}).get("pose_check")
+
+
+def _pc_status(s):
+    """The check's status with the shadow's prefix taken off; None with the check off."""
+    pc = _pose_check(s)
+    if pc is None:
+        return None
+    st = pc.get("status") or ""
+    return st[len("shadow:"):] if st.startswith("shadow:") else st
+
+
+def release_due(kind: str, start_left_m, stroke) -> bool:
+    """Plan 2026-11-06 2.1, once the vehicle showed the stroke active: let go when it is no longer active (closed by
+    the vehicle), and for half / chatter once its distance left went down by 0.5 / 0.2 m."""
+    if stroke is None or stroke.get("state") != "active":
+        return True
+    if kind == "full":
+        return False
+    left = stroke.get("left_m")
+    return left is not None and start_left_m is not None and start_left_m - left >= REVERSE_STEP_M[kind] - 1e-9
+
+
+async def reverse_scenario(p, args):
+    """Plan 2026-11-06-unconfirmed-validation 2.1: a relocalized session with the unconfirmed position check (on or
+    shadow). Once the start check is over, a start that is not confirmed (always, in the shadow) is backed straight
+    up by hand -- TELEOP, armed, the deadman held at -0.10 m/s with the steering at 0 -- one stroke at a time by the
+    pressing rule (--reverse-kind: full lets go when the vehicle closes the stroke, half after 0.5 m, chatter every
+    0.2 m), each followed by a stand and the re-match it may start, at most REVERSE_MAX_STROKES. Then PAUSED and a
+    stand of --hold-sim-s; with --mission-after-confirm the first --cycle leg once confirmed (or after the strokes,
+    in the shadow); then the session is ended. A check that ended (on) ends the session by itself. Reads neither the
+    truth nor the scene."""
+    await p.open()
+    await p.until(lambda s: s is not None and s.get("pose") is not None, 30, label="localized_state")
+    await _reverse_localized(p, args)
+
+
+async def _reverse_localized(p, args):
+    """The reverse scenario from a localized session on (after the place scenario's placement too)."""
+    rev = p.report["reverse"] = {"kind": args.reverse_kind, "strokes": [], "mission": None}
+    if _pose_check(p.state) is None:  # the check off: stand as the hold scenario
+        rev["check"] = "off"
+        await _hold_and_end(p, args)
+        return
+    shadow = (_pose_check(p.state).get("status") or "").startswith("shadow:")
+    rev["check"] = "shadow" if shadow else "on"
+    lease = await p.request("lease_request")
+    p.lease_id = (lease or {}).get("lease_id")
+    await p.until(lambda s: _pc_status(s) not in (None, "checking"), args.reverse_wait_s, label="start_checked")
+    rev["start_status"] = _pc_status(p.state)
+    if shadow or rev["start_status"] == "unconfirmed":
+        await _reverse_strokes(p, args, rev, shadow)
+    status = _pc_status(p.state) or ""
+    rev["end_status"] = status
+    if not shadow and status.startswith("ended:"):  # the session ends with the check
+        close_by = time.monotonic() + 120
+        while p.closed_code is None and time.monotonic() < close_by:
+            await asyncio.sleep(0.2)
+        p.report["close_code"] = p.closed_code
+        return
+    if p.closed_code is not None:
+        p.report["close_code"] = p.closed_code
+        return
+    await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 30, label="standing_paused")
+    end = time.monotonic() + args.hold_sim_s / args.live_factor + 1.0
+    while time.monotonic() < end and p.closed_code is None:
+        await asyncio.sleep(0.2)
+    if args.mission_after_confirm and p.closed_code is None and (shadow or _pc_status(p.state) == "confirmed"):
+        rev["mission"] = await _one_mission(p, args)
+    await _end_session(p)
+
+
+async def _reverse_strokes(p, args, rev, shadow):
+    teleop = None
+    end = time.monotonic() + args.reverse_wait_s
+    while time.monotonic() < end and p.closed_code is None:  # standing and the pacing are the vehicle's call
+        teleop = await p.request("mode_request", to="TELEOP")
+        if teleop is None or (teleop.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed")
+                              and teleop.get("detail") != "pacing"):
+            break
+        await asyncio.sleep(0.5)
+    rev["teleop_entry"] = teleop
+    if not teleop or teleop.get("t") != "ack":
+        return
+    n, blocked = 0, 0
+    for _ in range(REVERSE_MAX_STROKES * REVERSE_TRIES):
+        if n >= REVERSE_MAX_STROKES:
+            break
+        status = _pc_status(p.state) or ""
+        if p.closed_code is not None or (not shadow and (status.startswith("ended:") or status == "confirmed")):
+            break  # a shadow's provisional verdict selects nothing (plan 1.1)
+        stroke = (_pose_check(p.state) or {}).get("stroke")
+        if stroke is None or stroke.get("state") == "spent":
+            break
+        if stroke.get("state") != "ready":
+            released_ = asyncio.ensure_future(_keep_released(p))
+            try:
+                ready = await p.until(lambda s: ((_pose_check(s) or {}).get("stroke") or {}).get("state")
+                                      in ("ready", "spent"), 30, label="stroke_ready")
+            finally:
+                released_.cancel()
+            if not ready:
+                break
+            continue
+        if not (p.state or {}).get("armed"):  # first, or disarmed by a stalled tick (no_feedback)
+            arm = await _arm(p, args)
+            rev.setdefault("arms", []).append(arm)
+            if not arm or arm.get("t") != "ack":
+                break
+        rec = {"n": n, "start_left_m": stroke.get("left_m"), "start_total_left_m": stroke.get("total_left_m"),
+               "start_mono": time.monotonic()}
+        seen_active, released, stk = False, "timeout", None
+        end = time.monotonic() + args.stroke_wall_s
+        moved_mono, moved_left = time.monotonic(), rec["start_total_left_m"]
+        while time.monotonic() < end and p.closed_code is None:
+            stk = (_pose_check(p.state) or {}).get("stroke")
+            state = (stk or {}).get("state")
+            seen_active = seen_active or state == "active"
+            # "closed" unseen active: it opened and closed between two published states (Codex 2d round 4 P2)
+            if (seen_active or state == "closed") and release_due(args.reverse_kind, rec["start_left_m"], stk):
+                released = state or "none"
+                break
+            left = (stk or {}).get("total_left_m")
+            if left is not None and moved_left is not None and moved_left - left >= REVERSE_MOVES_M:
+                moved_mono, moved_left = time.monotonic(), left
+            if time.monotonic() - moved_mono > args.stroke_stuck_s:
+                released = "blocked"  # the permit holds it, or nothing took the press: no use pressing on
+                break
+            await p.teleop(REVERSE_RATIO, 0.0, True)
+            await asyncio.sleep(0.05)
+        # the stroke as seen at the release (the stand after it starts the next one)
+        rec.update(released=released, end_left_m=(stk or {}).get("left_m"),
+                   end_total_left_m=(stk or {}).get("total_left_m"), release_mono=time.monotonic())
+        # the deadman let go, the command sent on: one older than 0.30 s disarms (the arbiter's command age)
+        released_ = asyncio.ensure_future(_keep_released(p))
+        try:
+            rec["standing"] = bool(await p.until(p.standing, 30, label="standing_after_stroke"))
+            rec["rematch"] = await _await_rematch(p, shadow, args)
+        finally:
+            released_.cancel()
+        rec["status_after"] = _pc_status(p.state)
+        rev["strokes"].append(rec)
+        moved = (rec["start_total_left_m"] or 0.0) - (rec["end_total_left_m"] or rec["start_total_left_m"] or 0.0)
+        n += moved >= REVERSE_COUNTS_M  # a press cut at once takes no stroke of the count
+        blocked = blocked + 1 if released == "blocked" else 0
+        if blocked >= REVERSE_BLOCKED_MAX:
+            rev["blocked"] = True
+            break
+
+
+async def _arm(p, args):
+    """Arm once the vehicle lets it (the latch of a no_feedback, the pacing): its reply."""
+    reply = None
+    end = time.monotonic() + args.reverse_wait_s
+    released_ = asyncio.ensure_future(_keep_released(p))
+    try:
+        while time.monotonic() < end and p.closed_code is None:
+            reply = await p.request("arm")
+            if reply is not None and reply.get("t") == "ack":
+                p.arm_gen = reply.get("arm_gen", 0)
+                # the state says so before the press: its first command needs the new generation
+                await p.until(lambda s: bool(s.get("armed")), 5, label="armed")
+                return reply
+            await asyncio.sleep(0.5)
+    finally:
+        released_.cancel()
+    return reply
+
+
+async def _keep_released(p):
+    while True:
+        await p.teleop(0.0, 0.0, False)
+        await asyncio.sleep(0.05)
+
+
+async def _await_rematch(p, shadow, args) -> dict:
+    """The re-match a stand may start (on: the status checking; the shadow: its generation running), to its end."""
+    def running(s):
+        return (_pose_check(s) or {}).get("rematch") is not None if shadow else _pc_status(s) == "checking"
+
+    if not await p.until(running, max(3.0, 2.0 / args.live_factor), label="rematch_started"):
+        return {"started": False}
+    t0 = time.monotonic()
+    done = await p.until(lambda s: not running(s), args.reverse_wait_s, label="rematch_done")
+    return {"started": True, "done": bool(done), "wall_s": time.monotonic() - t0, "status": _pc_status(p.state)}
+
+
+async def _one_mission(p, args) -> dict:
+    """The first --cycle leg, submitted standing, and its result."""
+    pallet_id, destination_id = args.cycle.split(",")[0].split(":")
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 30, label="standing_before_submit")
+    seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
+    submit = None
+    for _ in range(40):
+        submit = await p.request("mission_submit", pallet_id=pallet_id, destination_id=destination_id,
+                                 targets_revision=(p.targets or {}).get("targets_revision"))
+        if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed",
+                                                          "stale_targets"):
+            break
+        await asyncio.sleep(0.5)
+    out = {"pallet_id": pallet_id, "destination_id": destination_id, "submit": submit}
+    if not submit or submit.get("t") != "ack":
+        return out
+    mid = submit.get("mission_id")
+
+    def ended(s):
+        r = s.get("last_result") or {}
+        return r.get("seq", 0) > seen and r.get("mission_id") == mid
+
+    out["result"] = (p.state or {}).get("last_result") if await p.until(ended, args.mission_timeout_s,
+                                                                         label="mission_result") else None
+    return out
 
 
 def pid_alive(pid: int) -> bool:
@@ -1641,7 +1875,7 @@ def main():
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "queue", "lift", "reset",
-                                           "restart", "tour", "hold", "place"),
+                                           "restart", "tour", "hold", "place", "reverse"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -1705,6 +1939,17 @@ def main():
     ap.add_argument("--wait-port-s", type=float, default=900.0)
     ap.add_argument("--launcher-pid", type=int, default=None,
                     help="the session launcher's pid: its end before the session runs ends the probe at once (exit 3)")
+    ap.add_argument("--after-place", choices=("hold", "reverse"), default="hold",
+                    help="place scenario: once localized, the hold (as before) or the reverse scenario's strokes")
+    ap.add_argument("--reverse-kind", choices=("full", "half", "chatter"), default="full",
+                    help="reverse scenario (plan 2026-11-06 2.1): when a stroke lets go")
+    ap.add_argument("--mission-after-confirm", action="store_true",
+                    help="reverse scenario: once confirmed (the shadow: after the strokes), the first --cycle leg")
+    ap.add_argument("--reverse-wait-s", type=float, default=300.0,
+                    help="reverse scenario: the start check's and each re-match's wait at most (wall s)")
+    ap.add_argument("--stroke-wall-s", type=float, default=120.0, help="reverse scenario: one stroke at most (wall s)")
+    ap.add_argument("--stroke-stuck-s", type=float, default=20.0,
+                    help="reverse scenario: let go of a press that has not moved for this long (wall s)")
     ap.add_argument("--hold-sim-s", type=float, default=10.0,
                     help="hold scenario (B-P2d): the stand after the relocalized session runs (simulated s)")
     ap.add_argument("--live-factor", type=float, default=0.4,
@@ -1746,7 +1991,8 @@ def main():
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
                     "queue": queue_scenario,
                     "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
-                    "tour": tour_scenario, "hold": hold_scenario, "place": place_scenario}[args.scenario]
+                    "tour": tour_scenario, "hold": hold_scenario, "place": place_scenario,
+                    "reverse": reverse_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
         if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
                 or (args.scenario == "restart" and "killed" in report)):

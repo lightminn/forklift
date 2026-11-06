@@ -14,6 +14,10 @@
 #   (no RELOC_UNATTENDED: the console waits for the operator) and the probe is the operator, placing the click model's
 #   draws around START_POSE (CLICK_SEED, CLICK_INDEX: the start's index in its list) and confirming the first preview;
 #   CLICK_KIND (development only) places that record click (tools/f1_place_eval.py STRESS_KINDS) instead
+#   reverse / reverse_place (docs/plans/2026-11-06-unconfirmed-validation.md 2.1): with POSE_CHECK on or shadow, the
+#   probe backs the truck up by the pressing rule REVERSE_KIND (full | half | chatter) and, with MISSION_AFTER_CONFIRM=1,
+#   runs the first pallet mission once confirmed (the shadow: after the strokes) -- unattended, or after the
+#   placement as place does (reverse_place)
 #
 # Run from the repository root.
 set -u
@@ -28,7 +32,21 @@ case "$PROBE_MODE" in
   place) UNATTENDED=; PROBE_ARGS=(--scenario place "--truth=$START_POSE" --click-seed "${CLICK_SEED:-0}"
                                   --click-index "${CLICK_INDEX:-0}" --place-wait-s "${PLACE_WAIT_S:-600}"
                                   ${CLICK_KIND:+--click-kind "$CLICK_KIND"}) ;;
-  *) echo "RELOC_PROBE must be hold or place" >&2; exit 2 ;;
+  # plan 2026-11-06-unconfirmed-validation 2.1: the unconfirmed position check's strokes (REVERSE_KIND full|half|
+  # chatter, MISSION_AFTER_CONFIRM=1 for the first pallet mission after them), unattended or after the placement
+  reverse) UNATTENDED=1; PROBE_ARGS=(--scenario reverse) ;;
+  reverse_place) UNATTENDED=; PROBE_ARGS=(--scenario place --after-place reverse "--truth=$START_POSE"
+                                          --click-seed "${CLICK_SEED:-0}" --click-index "${CLICK_INDEX:-0}"
+                                          --place-wait-s "${PLACE_WAIT_S:-600}") ;;
+  *) echo "RELOC_PROBE must be hold, place, reverse or reverse_place" >&2; exit 2 ;;
+esac
+case "$PROBE_MODE" in
+  reverse|reverse_place)
+    case "${REVERSE_KIND:-full}" in full|half|chatter) ;; *) echo "REVERSE_KIND must be full, half or chatter" >&2; exit 2;; esac
+    PROBE_ARGS+=(--reverse-kind "${REVERSE_KIND:-full}" --mission-timeout-s "${MISSION_TIMEOUT_S:-2400}")
+    [ "${MISSION_AFTER_CONFIRM:-}" = 1 ] && PROBE_ARGS+=(--mission-after-confirm)
+    [ -n "${POSE_CHECK:-}" ] && [ "$POSE_CHECK" != off ] \
+      || { echo "RELOC_PROBE=$PROBE_MODE needs POSE_CHECK on or shadow" >&2; exit 2; } ;;
 esac
 GRACE=${RELOC_END_GRACE_S:-300}
 if [ "${DRY_RUN:-0}" = 1 ]; then

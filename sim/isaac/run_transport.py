@@ -11,6 +11,8 @@ import importlib.util
 import itertools
 import json
 import collections
+import contextlib
+import copy
 import math
 import random
 import os
@@ -273,6 +275,26 @@ def _pose_bounds(value: str):
                       e_slam=tuple(float(v) for v in data["e_slam"]))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise argparse.ArgumentTypeError(f"--pose-check-bounds: {exc}") from exc
+
+
+def _reloc_inject(value: str) -> str:
+    """A wrong-estimate injection's kind (plan 2026-11-06-unconfirmed-validation 1.2)."""
+    import reloc_phase
+
+    if value not in reloc_phase.INJECT_KINDS:
+        raise argparse.ArgumentTypeError(f"--reloc-inject takes one of {', '.join(reloc_phase.INJECT_KINDS)}")
+    return value
+
+
+@contextlib.contextmanager
+def permission_kept(permission):
+    """A check that leaves the permit as it found it: the start-band release's anchor and counts a walk may change are
+    put back (plan 2026-11-06-unconfirmed-validation 1.1: the check writes nothing the control path reads)."""
+    kept = copy.deepcopy((permission.release_anchor, permission.release_stats))
+    try:
+        yield permission
+    finally:
+        permission.release_anchor, permission.release_stats = kept
 
 
 def quarter_focal(value: str) -> float:
@@ -1123,10 +1145,25 @@ def arguments() -> argparse.Namespace:
                         help="B-P2c: with --start-relocalize, the operator's whole time from the runner's start "
                         f"(unset: {RELOC_OPERATOR_TIMEOUT_S:.0f} s, inside the supervisor's 600 s --reloc-wait-s); a "
                         "retry does not extend it. Past it the session ends reloc_operator_timeout.")
-    parser.add_argument("--pose-check", choices=("off", "on"), default="off",
+    parser.add_argument("--pose-check", choices=("off", "shadow", "on"), default="off",
                         help="The unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md): after the "
                         "start relocalization, a start with residual ambiguity opens only a straight reverse until a "
-                        "re-match confirms it; then a monitor. Needs --start-relocalize and --pose-check-bounds.")
+                        "re-match confirms it; then a monitor. Needs --start-relocalize and --pose-check-bounds. "
+                        "shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.1): the same computation on the "
+                        "operating path, recorded, gating and ending nothing (no development values).")
+    parser.add_argument("--reloc-inject", type=_reloc_inject, default=None,
+                        help="Test only (docs/plans/2026-11-06-unconfirmed-validation.md 1.2): once the start "
+                        "relocalization chose, its estimate is replaced by the named map-frame hypothesis (a "
+                        "synthetic twin such as 'shift x+1' or 'turn', or 'slide': 0.35 m along the hall's axis). "
+                        "Unattended relocalization batches only (--reloc-unattended).")
+    parser.add_argument("--pose-check-contacts", action="store_true",
+                        help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
+                        "every forklift rigid body reports its contacts, and each contact with anything but the floor "
+                        "is recorded by pair with the check's status, the mission phase and the cargo relation.")
+    parser.add_argument("--pose-shadow-audit", action="store_true",
+                        help="With --pose-check shadow (test only, docs/plans/2026-11-06-unconfirmed-validation.md "
+                        "1.1): the arbiter, the permit, the mission commands and the cargo fingerprinted before and "
+                        "after each place the shadow computes, every change recorded (sim/isaac/shadow_audit.py).")
     parser.add_argument("--pose-check-bounds", type=_pose_bounds, default=None,
                         help="The check's development values (plan 0), JSON inline or a file: {\"odom\": [a, b, c, e] "
                         "(dp = a + b d, dth = c + e d), \"e_still\": [m, rad], \"e_slam\": [m, rad]}.")
@@ -1579,7 +1616,15 @@ def arguments() -> argparse.Namespace:
                      "--start-relocalize")
     if args.pose_check == "on" and (not args.start_relocalize or args.pose_check_bounds is None):
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
-    if args.pose_check == "off" and args.pose_check_bounds is not None:
+    if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
+        parser.error("--reloc-inject is for unattended relocalization batches (--start-relocalize --reloc-unattended)")
+    if args.pose_check_contacts and args.pose_check == "off":
+        parser.error("--pose-check-contacts goes with --pose-check on or shadow")
+    if args.pose_shadow_audit and args.pose_check != "shadow":
+        parser.error("--pose-shadow-audit goes with --pose-check shadow")
+    if args.pose_check == "shadow" and not args.start_relocalize:
+        parser.error("--pose-check shadow needs --start-relocalize")
+    if args.pose_check != "on" and args.pose_check_bounds is not None:
         parser.error("--pose-check-bounds goes with --pose-check on")
     if args.slam_choice is not None and args.slam_feedback is None:
         parser.error("--slam-choice requires --slam-feedback")
@@ -3407,7 +3452,8 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         pace_s=pace_s, clock=clock or time.monotonic, noise_for=reloc_noise(args.seed),
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
-        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg, sink=sink))
+        operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg, sink=sink,
+        inject=getattr(args, "reloc_inject", None)))
     record = {**out, "map_id": bundle.map_id, "settings": settings_record, "place_settings": place_record,
               "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
@@ -3429,6 +3475,7 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
     """The unconfirmed position check's runtime (docs/plans/2026-11-02-unconfirmed-runner.md 3.3): its worker process on
     the survey grid with B-P1b's frozen settings, the start relocalization's estimate and chosen search group, the
     shared LiDAR's pattern, the stopping distance and one tick's travel at the straight reverse's speed."""
+    import pose_contacts
     import pose_runtime
     import reloc_phase
 
@@ -3436,7 +3483,7 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
     from forklift_core.localization.encoders import MT6701_COUNTS_PER_REV, encoder_model_spec
 
     cfg, reloc_cfg, _ = reloc_phase.frozen_settings(Path(__file__).resolve().parents[2])
-    bounds = args.pose_check_bounds
+    bounds = pose_runtime.SHADOW_BOUNDS if args.pose_check == "shadow" else args.pose_check_bounds
     grid_path = Path(bundle.folder) / "grid.npz"
     speed = 0.10  # V_REV_U: the straight reverse's limit (TeleopLimits.recovery_reverse_mps, design 3)
     counts = MT6701_COUNTS_PER_REV if encoder_model_spec(args.encoder_model) is not None else None
@@ -3452,7 +3499,15 @@ def make_pose_runtime(args, start_reloc: dict, bundle, obstacle: dict, sink: dic
         angles=(scan_pattern.angle_min_rad, scan_pattern.angle_increment_rad), range_min_m=scan_pattern.range_min_m,
         range_max_m=scan_pattern.range_max_m, match_range_m=cfg.match_range_m,
         rear_offset_m=abs(args.rear_axle_offset_m), stop_m=stopping.distance_m(speed),
-        tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts))
+        tick_m=P.tick_bound(speed, 1 / 120, odometry_wheel_radius(args), counts), shadow=args.pose_check == "shadow",
+        contacts=pose_contacts.ContactLog() if getattr(args, "pose_check_contacts", False) else None)
+
+
+def pose_open(out) -> bool:
+    """Plan 2026-11-06 1.3: the tick's final output opened driving -- AUTO by its source (a zero candidate too), TELEOP
+    armed with the policy's drive allowed in normal mode (forward possible, moved or not)."""
+    return out.source == "auto" or (out.source == "teleop" and bool(out.armed) and bool(out.policy.drive_allowed)
+                                    and out.policy.drive_mode == "normal")
 
 
 def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
@@ -3471,7 +3526,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md): its runtime, the relocalization's
     # hand-on and the end it reached -- all None unless --pose-check on
     pose_box = {"rt": None, "sink": None, "end": None}
-    if getattr(args, "pose_check", "off") == "on":
+    if getattr(args, "pose_check", "off") != "off":
         pose_box["sink"] = {}
     import omni.usd
     from insertion_geometry import InsertionGeometry, read_fork_blades_m
@@ -3961,6 +4016,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         for wheel_ in ("front_left_wheel", "front_right_wheel", "rear_left_wheel", "rear_right_wheel"):
             report_ = PS.PhysxContactReportAPI.Apply(stage.GetPrimAtPath(f"/World/Forklift/{wheel_}"))
             report_.CreateThresholdAttr(0.0)
+    if getattr(args, "pose_check_contacts", False):
+        # plan 2026-11-06-unconfirmed-validation 1.4: every forklift body reports, the floor left out when read
+        from pxr import PhysxSchema as PS, Usd as U_, UsdPhysics as UP_
+
+        for body_ in U_.PrimRange(stage.GetPrimAtPath("/World/Forklift")):
+            if body_.HasAPI(UP_.RigidBodyAPI) and not body_.HasAPI(PS.PhysxContactReportAPI):
+                PS.PhysxContactReportAPI.Apply(body_).CreateThresholdAttr(0.0)
     if args.steering_probe and any(k in settings for k in PROBE_ARM_SETTINGS):
         # The steering left-asymmetry plan's stage-side arms (A3 base fixed, A6 front tyres frictionless, A7 shim),
         # after configure_drives bound the materials and before the world reset.
@@ -7444,6 +7506,12 @@ def drive(S, isaac) -> None:
                 phase_key_ = "observe" if ms.phase == "observe" else "other"
                 steps_shift_[phase_key_] = max(steps_shift_.get(phase_key_, 0.0), float(np.linalg.norm(
                     np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
+            if pose_box["rt"] is not None and pose_box["rt"].contacts is not None:
+                import pose_contacts  # plan 2026-11-06 1.4: this step's contacts, the check's status then
+
+                pose_box["rt"].contacts.update(float(world.current_time - initial_time), pose_contacts.read_pairs(),
+                                               status=pose_box["rt"].pc.status, phase=ms.phase,
+                                               relation=core.cargo.relation)
             stamp_now = world.current_time - initial_time
             if args.tyre_contact_log and tick % 12 == 0:
                 # New plant candidate V1 (loaded) / V5: each tyre's floor contact every 0.1 s.
@@ -8924,7 +8992,15 @@ def drive(S, isaac) -> None:
                 # plan 3.3: checking from the first live tick -- nothing opens until the start check's result
                 pose_box["rt"] = make_pose_runtime(args, start_reloc, slam_bundle_, obstacle, pose_box["sink"],
                                                    scan_pattern)
-                live.arbiter.pose = pose_box["rt"].view_dict()
+                if not pose_box["rt"].shadow:  # the shadow gates nothing (plan 2026-11-06 1.1)
+                    live.arbiter.pose = pose_box["rt"].view_dict()
+                if getattr(args, "pose_shadow_audit", False):
+                    import shadow_audit
+
+                    pose_box["rt"].audit = shadow_audit.ShadowAudit({
+                        "arbiter": lambda: live.arbiter, "layer": lambda: obstacle["layer"],
+                        "commands": lambda: core.commands, "cargo": lambda: core.cargo,
+                        "tracker": lambda: slam["tracker"]})
 
         def scene_require(t_, ok_, reason_, cargo=False):
             """A truth check on the scene (simulation only). A batch run aborts as require does; a live one latches
@@ -8955,6 +9031,10 @@ def drive(S, isaac) -> None:
             from forklift_core.mission.commands import ACTIVE
 
             rt_, a_ = pose_box["rt"], live.arbiter
+            quiet_ = bool(a_.stop_confirmed) and a_.mode != "TELEOP"
+            audit_on_ = rt_.audit is not None and rt_.audit.due(quiet=quiet_)
+            if audit_on_:
+                rt_.audit.before()
             tel_ = a_.teleop or {}
             applied_ = slam["tracker"].applied
             view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
@@ -8962,15 +9042,21 @@ def drive(S, isaac) -> None:
                              epoch=live.session_epoch, control_gen=a_.control_gen,
                              mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
             if rt_.rear_pending():
+                if rt_.audit is not None and not audit_on_:
+                    audit_on_ = rt_.audit.due(force=True)  # every rear check (Codex 2d re-review P3)
+                    rt_.audit.before()
                 blocked_ = pose_rear_blocked(rt_)
                 rt_.rear_checked(t_, blocked_)
                 view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
                                  standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
                                  epoch=live.session_epoch, control_gen=a_.control_gen,
                                  mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()))
-            a_.pose = rt_.view_dict(view_)
+            if not rt_.shadow:
+                a_.pose = rt_.view_dict(view_)
             live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)
-            if view_.status.startswith("ended:") and pose_box["end"] is None:
+            if audit_on_:
+                rt_.audit.after("checkpoint", t_)
+            if rt_.ends() and pose_box["end"] is None:
                 reason_ = view_.status.split(":", 1)[1]
                 pose_box["end"] = {"reason": reason_, "t": float(t_)}
                 state["pose_check_end"] = dict(pose_box["end"])
@@ -8982,6 +9068,8 @@ def drive(S, isaac) -> None:
             and of the obstacle layer, on the permits' own outline and walk."""
             from forklift_core.control.drive_permission import arc_poses
             from forklift_core.localization import pose_check as P
+            from forklift_core.localization.slam_pose import compose
+            from forklift_core.localization.start_reloc import rear_from_base
             from forklift_core.safety.pallet_permit import first_contact
 
             from forklift_core.safety.teleop_drive import bundle
@@ -8992,20 +9080,25 @@ def drive(S, isaac) -> None:
             fp_, own_ = layer_.footprints(None, -1)
             odom_rear_ = tuple(float(v) for v in slam["odom_rear"])
             zones_ = rt_.rear_zones(live_pallet_zones())
-            map_rear_ = tuple(float(v) for v in slam_rear(world.current_time - initial_time))
+            applied_ = slam["tracker"].applied
             snap_ = layer_.snapshot
-            if snap_ is None:
+            if snap_ is None or applied_ is None:
                 return True
-            # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
-            for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
-                if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_, zones_)[0] < length_:
-                    return True
-                path_ = arc_poses(map_rear_, kappa_, -1, length_ + step_, step_)[0]
-                check_ = layer_.permission.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
-                                                      lookahead_m=length_ + step_)
-                if check_.verified_m < length_:
-                    return True
-            return False
+            # C o O read here: the control pose's own call writes the tracker's hold record (Codex 2d re-review)
+            map_rear_ = rear_from_base(compose(applied_[0], slam_odom_base()), abs(args.rear_axle_offset_m))
+            perm_ = layer_.permission
+            with permission_kept(perm_):
+                # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
+                for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
+                    if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_,
+                                                zones_)[0] < length_:
+                        return True
+                    path_ = arc_poses(map_rear_, kappa_, -1, length_ + step_, step_)[0]
+                    check_ = perm_.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
+                                              lookahead_m=length_ + step_)
+                    if check_.verified_m < length_:
+                        return True
+                return False
 
         def live_failed(t_, reason_, ticked_, stepped__, applied_):
             """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
@@ -9078,7 +9171,7 @@ def drive(S, isaac) -> None:
                         localization_ok=slam is None or slam["tracker"].mode in ("tracking", "holding"),
                         loaded_pallet=live_loaded_pallet(),  # plan D5 6c: the carried pallet a submit may deliver
                         repick_blockers=live_repick_blockers_,  # a re-pick's blockers (2026-10-28)
-                        **({} if pose_box["rt"] is None
+                        **({} if pose_box["rt"] is None or pose_box["rt"].shadow
                            else {"pose_ok": live.arbiter.pose is not None
                                  and live.arbiter.pose.get("status") == "confirmed"}))
                 elif mission_schedule is not None:
@@ -10072,13 +10165,6 @@ def drive(S, isaac) -> None:
                             live_state["rear"] = tuple(float(v) for v in rear)
                     if pose_box["rt"] is not None:
                         pose_checkpoint(t)  # plan 3.3 (3): the correction this tick ends with, before the output
-                        a_ = live.arbiter
-                        off_ = abs(args.rear_axle_offset_m)
-                        pose_box["rt"].note_tick(  # plan 3.4: the judgement's record (simulation truth, decides nothing)
-                            t, applied=tuple(float(v) for v in base_from_rear_axle(rear, off_)),
-                            truth=tuple(float(v) for v in base_from_rear_axle(truth_rear, off_)),
-                            open_=(a_.pose or {}).get("status") == "confirmed"
-                            and (a_.mode == "AUTO" or (a_.mode == "TELEOP" and a_.armed)))
                     live_safety_ = core.safety_state(t)
                     out_ = live.tick_end(
                         t, applied_commands_, live_safety_, (float(drive.speed_mps), float(drive.curvature_inv_m)),
@@ -10094,6 +10180,18 @@ def drive(S, isaac) -> None:
                         live.arbiter.lift.sync(float(live._lift_latch))
                     live_teleop_withdraw(t, out_, rear)
                     live_tick_out_ = True  # persistent console plan D6: this tick's output is given
+                    if pose_box["rt"] is not None:
+                        off_ = abs(args.rear_axle_offset_m)
+                        audit_on_ = pose_box["rt"].audit is not None and \
+                            pose_box["rt"].audit.due(quiet=bool(live.arbiter.stop_confirmed) and live.arbiter.mode != "TELEOP")
+                        if audit_on_:
+                            pose_box["rt"].audit.before()
+                        pose_box["rt"].note_tick(  # plan 3.4: the judgement's record (simulation truth, decides nothing)
+                            t, applied=tuple(float(v) for v in base_from_rear_axle(rear, off_)),
+                            truth=tuple(float(v) for v in base_from_rear_axle(truth_rear, off_)),
+                            open_=pose_open(out_))  # plan 2026-11-06 1.3: the tick's final output
+                        if audit_on_:
+                            pose_box["rt"].audit.after("note_tick", t)
                     if out_.source == "teleop":
                         if args.live_test_permit_compare:
                             # The bundle's inputs each teleop cycle, for the offline coverage check (teleop bundle margin
@@ -10430,6 +10528,8 @@ def drive(S, isaac) -> None:
                 # plan 3.4: the unconfirmed position check's record, then its worker process goes
                 try:
                     state["pose_check"] = pose_box["rt"].record()
+                    if pose_box["rt"].stand_sets:  # plan 2026-11-06 1.5: the mission stands' scan sets
+                        pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
                     state.setdefault("record_errors", []).append(f"pose check: {exc_!r}")
                 try:
@@ -10761,6 +10861,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
              or v not in (None, False))
         # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 3.1): only when on
         and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
+        # plan 2026-11-06 1.2: the injection only when given
+        and (k != "reloc_inject" or v is not None) and (k != "pose_check_contacts" or v)
+        and (k != "pose_shadow_audit" or v)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))

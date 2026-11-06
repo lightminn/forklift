@@ -10,7 +10,8 @@ const LOCKED = "확인 전 위치 · 전진·포크 잠김 · 뒤쪽 낮은 물�
 
 export function poseCheckOf(st) {
   const pc = st?.pose_check;
-  if (!pc || typeof pc.status !== "string" || pc.status === "confirmed") return null;
+  // the shadow gates nothing (plan 2026-11-06 1.1): no band, no lock on the screen
+  if (!pc || typeof pc.status !== "string" || pc.status === "confirmed" || pc.status.startsWith("shadow:")) return null;
   return pc;
 }
 

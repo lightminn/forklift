@@ -309,10 +309,11 @@ class Rematch:
 def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, cfg: G.MatchConfig | None = None,
                      e_min: float, d: float | None = None, dp=lambda d: 0.0, dth=lambda d: 0.0, d_min: float = D_MIN,
                      index: G.MapIndex | None = None, cons: ConservativeIndex | None = None, clock=None,
-                     deadline: float | None = None) -> Rematch:
+                     deadline: float | None = None, residual: Residual | None = None) -> Rematch:
     """Plan 1.5 after the truck stood: ``decision`` and ``g`` are the frozen relocalizer's on this place's scans
     (``points``); ``hyps`` the start's hypothesis set. ``confirm`` still needs the SLAM agreement (piece 2);
-    ``twin_preferred`` and ``out_of_set`` end the session; ``unconfirmed`` waits for another stroke."""
+    ``twin_preferred`` and ``out_of_set`` end the session; ``unconfirmed`` waits for another stroke. ``residual``: the
+    conservative check of g already made on the same hypotheses."""
     if d is None:
         d = math.hypot(ot[0] - o0[0], ot[1] - o0[1])
     if d < d_min:
@@ -328,8 +329,8 @@ def rematch_decision(grid: Grid, points, b, hyps, o0, ot, *, decision: str, g, c
         # the conservative check at this place too: an unattended confirmation alone misses a twin unknown hides
         # b' keeps its own region: g agrees with it only within E_AGREE (Codex piece 1 review)
         here = hypotheses(g, synthetic=[(b_now, "moved-start")] + [(moved(h, o0, ot), src) for h, src in hyps])
-        out.residual = residual_ambiguity(grid, points, g, here, cfg, e_min=e_min, index=index, cons=cons,
-                                          clock=clock, deadline=deadline)
+        out.residual = residual if residual is not None else residual_ambiguity(
+            grid, points, g, here, cfg, e_min=e_min, index=index, cons=cons, clock=clock, deadline=deadline)
         out.outcome = "confirm" if out.residual.confirmed else "unconfirmed"
         return out
     for h, src in hyps:

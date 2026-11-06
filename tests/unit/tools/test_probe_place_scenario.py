@@ -199,3 +199,20 @@ def test_a_reconnect_to_another_session_neither_holds_nor_ends_it():
     _run(p)
     assert p.report["handover"]["epoch_changed"] == [1, 2]
     assert "hold" not in p.report and "session_end" not in p.report and p.report["localized"] is False
+
+
+def test_after_the_placement_the_reverse_scenario_can_follow(monkeypatch):
+    # plan 2026-11-06-unconfirmed-validation 2 (reverse_place): V2's placements go on to the strokes, not the hold
+    seen = []
+
+    async def reverse(p, args):
+        seen.append("reverse")
+
+    async def hold(p, args):
+        seen.append("hold")
+
+    monkeypatch.setattr(lcp, "_reverse_localized", reverse)
+    monkeypatch.setattr(lcp, "_hold_and_end", hold)
+    _run(StubProbe(Vehicle(["preview"])), after_place="reverse")
+    _run(StubProbe(Vehicle(["preview"])))  # without the option: the hold, as before
+    assert seen == ["reverse", "hold"]
