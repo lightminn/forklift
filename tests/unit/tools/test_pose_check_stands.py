@@ -352,3 +352,23 @@ def test_the_sessions_without_a_suffix_are_counted():
     out = S.evaluate({"a": ser}, ["a"], {})
     assert out["sessions_with_cases"] == 0 and out["sessions_without_suffix"] == ["a"]
     assert out["choice"]["winner"] is None and rows_end
+
+
+# --- after the evaluation: the window's time cap, the stand's rebasing at a release (revision plan 9.7) ---
+def _standing_drift(seconds=120.0, rate=0.002):
+    """A truck standing, the correction turning at ``rate`` against a gyro's residual: the applied pose stays true."""
+    return [{"t": 0.1 * k, "o": [1.0, 2.0, -rate * 0.1 * k], "applied": [1.0, 2.0, 0.0], "truth": [1.0, 2.0, 0.0]}
+            for k in range(int(seconds * 10))]
+
+
+def test_a_path_window_never_ends_on_a_stand_and_a_time_cap_does():
+    ser = S.series(_standing_drift(), renewals=[(0.0, I)])
+    assert S.first_alarm(ser, S.Monitor("W", window_m=2.0, limit=(10.0, 0.103))) is not None
+    assert S.first_alarm(ser, S.Monitor("W", window_m=2.0, window_s=10.0, limit=(10.0, 0.103))) is None
+
+
+def test_the_stand_change_is_rebased_at_a_hold_release():
+    t = [0.1 * k for k in range(100)]
+    yaw = [0.0 if x < 5.0 else 0.04 for x in t]  # the release's step at 5 s, nothing else
+    assert S.stand_change(t, yaw, t0=0.0, t1=9.9, releases=[]) == pytest.approx(0.04)
+    assert S.stand_change(t, yaw, t0=0.0, t1=9.9, releases=[5.0]) == pytest.approx(0.0)

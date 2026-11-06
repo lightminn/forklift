@@ -127,6 +127,7 @@ class Monitor:
     limit: tuple = (math.inf, math.inf)
     per_m: tuple = (0.0, 0.0)  # P: the allowance per metre of path since the reference
     window_m: float = 0.0
+    window_s: float = math.inf  # W: at most this long ago as well: a stand does not hold the window open (plan 9.7)
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,8 @@ def _pairs(ser, mon) -> tuple:
     reference, which an injected error does not reach)."""
     if mon.kind == "W":
         j = np.searchsorted(ser.path, ser.path - mon.window_m, side="left")
+        if math.isfinite(mon.window_s):
+            j = np.maximum(j, np.searchsorted(ser.t, ser.t - mon.window_s, side="left"))
         return ser.applied, _compose(ser.C[j], ser.o), j
     return ser.applied, _compose(ser.ref, ser.o), None
 
@@ -258,6 +261,27 @@ def run_case(ser, onset, case, mon) -> dict:
             "delay_m": float(ser.path[end] - ser.path[onset]) if len(hits) else None,
             "delay_s": float(ser.t[end] - ser.t[onset]) if len(hits) else None,
             "exposure_m": float(dp[exposed].sum()), "exposure_s": float(dt[exposed].sum())}
+
+
+def stand_change(t, values, *, t0, t1, releases, step: float = 0.15) -> float:
+    """A stand's largest change of a recorded value from its reference, the reference taken again after each hold
+    release inside the stand (a release's own step, up to ``step`` s, is the release's)."""
+    i = [k for k, x in enumerate(t) if t0 <= x <= t1]
+    best = 0.0
+    if not i:
+        return best
+    marks = sorted(r for r in releases if t0 <= r <= t1)
+    ref, next_mark = None, 0
+    for k in i:
+        while next_mark < len(marks) and t[k] >= marks[next_mark]:
+            ref = None
+            next_mark += 1
+        if ref is None:
+            if marks and next_mark and t[k] < marks[next_mark - 1] + step:
+                continue
+            ref = values[k]
+        best = max(best, abs(values[k] - ref))
+    return best
 
 
 def fit_limit(streams, mon) -> tuple:
