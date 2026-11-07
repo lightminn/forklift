@@ -250,7 +250,8 @@ def test_the_contact_record_goes_with_the_check_and_reads_every_physics_step():
 def test_the_mission_stands_scan_sets_are_saved_with_the_record():
     src = _source()
     at = src.index('state["pose_check"] = pose_box["rt"].record()')
-    assert 'pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")' in src[at:at + 300]
+    assert 'pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")' in src[at:at + 400]
+    assert 'if pose_box["rt"].stand_sets or pose_box["rt"].gen_points:' in src[at:at + 400]  # a generation's points too
 
 
 def test_the_rear_checks_walk_leaves_the_permit_as_it_was_with_the_start_band_on():
