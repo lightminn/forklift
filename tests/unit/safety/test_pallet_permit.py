@@ -381,6 +381,17 @@ def test_a_skip_never_hides_a_contact_at_the_hall_s_scale():
         assert not PP._meets(boxes, zone, pad).any()
 
 
+def test_past_the_hall_s_scale_nothing_is_skipped():
+    # Codex: at 3e10 m the slack is lost to rounding and a zone the truck stands in looked far
+    fp, pose = Footprint(.58, .58, .23), (0.0, 0.0, 0.0)
+    zone = Zone("z", 28488636523.616806, 11297217931.77908, 56977273046.07361, 22594435863.09816, 0.0)
+    assert PP.inside(pose, fp, [zone]) == _old_inside(pose, fp, [zone]) == "z"
+    assert PP.first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone]) == _old_first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone])
+    far_truck = (3e10, 3e10, 0.0)  # the truck out there too: a small distance between two huge coordinates
+    boxes = PP._part_boxes(np.asarray([far_truck], dtype=float), fp)
+    assert not PP._far(PP._bounding_circle(boxes), Zone("z", 3e10 + 50.0, 3e10, 1.0, 1.0, 0.0), 0.0)
+
+
 def test_the_circle_holds_the_truck_along_the_whole_arc():
     # a turning arc: every corner of every part at every sample is inside the circle
     parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9)]

@@ -23,6 +23,7 @@ from forklift_core.control.drive_permission import arc_poses, parts_of
 
 REFRESH_M = 0.25
 FAR_SLACK_M = 1e-6  # past any rounding at the hall's scale: a float's step at 30 m is about 4e-15 m
+FAR_SCALE_M = 1e4  # where the slack was reckoned for (a float's step there is about 2e-12 m); past it nothing is skipped
 # The margins (plan D10 4th ed., 2026-10-19 measurements on two live U1 runs, sample maxima, not bounds): a recognised
 # or delivered pallet's outline is grown by its map-frame estimate error (0.026 m) + the control pose's position error
 # (0.130 m) + its heading error moving the outline's farthest point (2 x 1.66 m x sin(0.031/2) = 0.0515 m); the prior
@@ -202,12 +203,14 @@ def _far(circle, zone, grow_m: float) -> bool:
     """The zone cannot meet the boxes: the circles around them do not touch, by more than any rounding. Only a pass
     skipped: whatever is near is judged by ``_meets`` itself, so no answer changes. The unconfirmed check's union holds a
     pallet zone per hypothesis, and judging each one cost a control step (the revision plan 9.16). Anything not finite
-    is never far: the old code's result or exception stands."""
+    is never far, nor is anything past FAR_SCALE_M, where the slack would not survive the sum: the old code's result or
+    exception stands."""
     x, y, radius = circle
     reach = math.hypot(zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m)
-    distance = math.hypot(zone.x_m - x, zone.y_m - y)
-    return (math.isfinite(distance) and math.isfinite(reach) and math.isfinite(zone.yaw_rad)
-            and distance > radius + reach + FAR_SLACK_M)
+    # each comparison is False on NaN, so nothing not finite passes
+    in_scale = all(abs(v) < FAR_SCALE_M for v in (x, y, radius, zone.x_m, zone.y_m, reach))
+    return (in_scale and math.isfinite(zone.yaw_rad)
+            and math.hypot(zone.x_m - x, zone.y_m - y) > radius + reach + FAR_SLACK_M)
 
 
 def inside(pose, shape, zones) -> str | None:
