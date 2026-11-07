@@ -5,10 +5,12 @@ every arc is 0."""
 
 import math
 
+import numpy as np
 import pytest
 
 from forklift_core.control.drive_permission import StoppingModel
 from forklift_core.planning.geometry import Footprint
+from forklift_core.safety import pallet_permit as PP
 from forklift_core.safety.pallet_permit import PalletPermit, Zone, first_contact_m, obb_overlap
 
 STOP = StoppingModel(latency_s=0.15, decel_mps2=1.5, margin_m=0.05)
@@ -235,3 +237,55 @@ def test_an_anchored_delivered_pallet_is_a_search_prop_and_a_slot_prop():
     assert (slot.x_m, slot.y_m, slot.yaw_rad, slot.length_m, slot.width_m) == pytest.approx((8.0, 0.0, 0.0, 1.02, 1.22))
     plain = session_pallet_props(tb, exclude_id="P-1", nominal={}, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25)
     assert [p.asset.uri for p in plain] == ["session:pallet:P-2", "session:pallet:P-3", "session:pallet:P-4"]
+
+
+# --- the zones at once (the teleop permit's cost, the revision plan 9.16): the same answers as one zone at a time ---
+def _one_zone_at_a_time(pose, kappa, direction, length_m, step_m, shape, zones):
+    def meets(boxes, zone, grow_m):
+        hit = np.zeros(len(boxes[0][0]), dtype=bool)
+        for centres, half, yaws in boxes:
+            hit |= PP.obb_overlap(centres, half, yaws, (zone.x_m, zone.y_m),
+                                  (zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m), zone.yaw_rad)
+        return hit
+
+    def in_zone():
+        boxes = PP._part_boxes(np.asarray([pose], dtype=float), shape)
+        return next((z.zone_id for z in zones if meets(boxes, z, 0.0)[0]), None)
+
+    inside = in_zone()
+    if inside is not None:
+        return inside, (0.0, inside)
+    poses, s = PP.arc_poses(tuple(pose), kappa, direction, length_m, step_m)
+    pad = step_m + abs(kappa) * step_m * PP._reach_m(shape)
+    boxes = PP._part_boxes(poses[1:], shape)
+    best, which = math.inf, None
+    for zone in zones:
+        hit = np.flatnonzero(meets(boxes, zone, pad))
+        if len(hit) and s[hit[0]] < best:
+            best, which = float(s[hit[0]]), zone.zone_id
+    return None, (best, which)
+
+
+def test_the_zones_at_once_answer_as_one_zone_at_a_time():
+    rng = np.random.default_rng(20261107)
+    hull = Footprint(1.29, 0.17, 0.36)
+    parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9),
+             (Footprint(0.18, 0.18, 0.05), -0.2, 0.9)]
+    for k in range(400):
+        count = int(rng.integers(1, 30))
+        zones = [Zone(f"z{j}", *rng.uniform(-4, 4, 2), *rng.uniform(0.2, 3.0, 2), rng.uniform(-3.2, 3.2))
+                 for j in range(count)]
+        if k % 5 == 0:  # the same box twice: the first in the list answers, as the loop's strict comparison
+            zones.append(Zone("again", zones[0].x_m, zones[0].y_m, zones[0].length_m, zones[0].width_m, zones[0].yaw_rad))
+        pose = tuple(rng.uniform(-5, 5, 2)) + (rng.uniform(-3.2, 3.2),)
+        shape = hull if k % 2 else parts
+        kappa, direction = float(rng.uniform(-0.3, 0.3)), int(rng.choice((-1, 1)))
+        inside, contact = _one_zone_at_a_time(pose, kappa, direction, 1.2, 0.02, shape, zones)
+        assert PP.inside(pose, shape, zones) == inside
+        assert PP.first_contact(pose, kappa, direction, 1.2, 0.02, shape, zones) == contact
+
+
+def test_no_zones_meet_nothing():
+    assert PP.inside((0.0, 0.0, 0.0), Footprint(1.0, 0.2, 0.3), []) is None
+    assert PP.first_contact((0.0, 0.0, 0.0), 0.0, 1, 1.0, 0.02, Footprint(1.0, 0.2, 0.3), []) == (math.inf, None)
+
