@@ -5851,9 +5851,6 @@ def drive(S, isaac) -> None:
             )
         return out
 
-    # the diagnostics' own calls (--pose-diag-capture, scratch copies) are not the Planner port's
-    grid_kwargs_raw = grid_kwargs
-
     if boundary is not None:
         from forklift_core.mission.boundary_record import DictWatch as _GridWatch
 
@@ -9246,7 +9243,8 @@ def drive(S, isaac) -> None:
             the obstacle layer (grid_kwargs scratch: neither cached nor recorded); the grid's own state apart."""
             layers_ = {}
             mode_ = slam["tracker"].mode
-            grid_kwargs_raw("observe", scratch={"use_slam": mode_ != "holding", "layers": layers_})
+            # never the Planner port's recorded call: --pose-diag-capture refuses --record-boundary
+            grid_kwargs("observe", scratch={"use_slam": mode_ != "holding", "layers": layers_})
             info_ = {k: layers_.pop(k, None) for k in ("grid_applied", "grid_stamp_s", "tracker_mode", "loaded",
                                                        "own_pose")}
             return layers_, info_

@@ -114,7 +114,8 @@ def test_the_pre_move_state_and_the_failed_preparations_inputs_are_written(tmp_p
     kept = D.prune_captures(tmp_path, entries, results)
     assert [e["file"] for e in kept] == ["prepare_input_1"] and kept[0]["layers_match"] is True
     assert not (tmp_path / "prepare_input_2.pkl").exists() and not (tmp_path / "prepare_input_2.npz").exists()
-    got = pickle.load(open(tmp_path / "prepare_input_1.pkl", "rb"))
+    with open(tmp_path / "prepare_input_1.pkl", "rb") as fh:
+        got = pickle.load(fh)
     assert pickle.loads(got["payload"]) == payload and got["meta"]["mission_id"] == "m1"
     assert np.load(tmp_path / "prepare_input_1.npz")["live"].sum() == 3
     # a failure whose result has rotated out of the book stays on disk
