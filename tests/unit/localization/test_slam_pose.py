@@ -354,6 +354,15 @@ def test_an_injected_offset_moves_every_correction_from_then_on():
     assert tracker.applied[0] == pytest.approx((1.1, 0.35, 0.0))
 
 
+def test_each_release_is_logged_with_the_correction_either_side_and_its_odometry():
+    tracker = SlamPoseTracker(bootstrap_scan_id=0, max_age_s=1.0, hold_limit_m=1.0)
+    tracker.receive(0, 0.0, "processed", (1.0, 0.0, 0.0))
+    tracker.hold(odom_from_base=(0.0, 0.0, 0.0))
+    tracker.receive(1, 0.1, "processed", (1.1, 0.0, 0.0))
+    tracker.release(odom_from_base=(0.5, 0.0, 0.0))
+    assert tracker.release_log == [((1.0, 0.0, 0.0), (1.1, 0.0, 0.0), (0.5, 0.0, 0.0))]
+
+
 def test_an_injected_offset_comes_by_the_next_reply_or_the_release():
     # the ordinary way: one tick does not mix two corrections, and a skipped reply before a release leaves nothing for after it
     tracker = SlamPoseTracker(bootstrap_scan_id=0, max_age_s=1.0, hold_limit_m=1.0)

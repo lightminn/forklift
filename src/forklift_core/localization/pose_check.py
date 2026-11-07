@@ -126,7 +126,7 @@ class PoseCheck:
         self.rematched_at = None  # the stand a re-match was last started at
         self._rm = None  # the re-match in progress: (phase, epoch, control_gen)
         self._window: deque = deque()  # (path, t, C) since the confirmation, cut to the window
-        self.release_from = None  # the correction a hold release replaced, until this tick's update has judged it
+        self.release_from: list = []  # hold releases since the last tick: (C before, C after, O), each judged once
         self._path, self._o_last = 0.0, None
         self._holding = False
 
@@ -202,10 +202,11 @@ class PoseCheck:
         if outcome == "confirm" and not self._agree(t, g, o_scan, C, o_now, "rematch_agreement"):
             self.end(t, "pose_revoked:rematch")
 
-    def note_release(self, c_before) -> None:
-        """A SLAM hold was released since the last tick: the correction it replaced, read by this tick's first update.
-        One note is one judgement, and the caller counts releases, so a release followed by a new hold is not lost."""
-        self.release_from = tuple(float(v) for v in c_before)
+    def note_release(self, c_before, c_after, o) -> None:
+        """A SLAM hold was released since the last tick: what it replaced, what it applied, at its own odometry. This
+        tick's first update judges each one on these, not on the tick's correction, which a later reply may have moved."""
+        self.release_from.append((tuple(float(v) for v in c_before), tuple(float(v) for v in c_after),
+                                  tuple(float(v) for v in o)))
 
     # --- every tick ------------------------------------------------------------------------------------------------
     def update(self, t: float, o, C, *, standing: bool, deadman: bool, mission_active: bool = False,
@@ -214,8 +215,8 @@ class PoseCheck:
         it only re-judges the monitor. ``holding``: the SLAM correction is held: at its release the stand's reference
         is taken again (the release's own move is judged by the window and by note_release's gate, not by the stand)."""
         o = tuple(float(v) for v in o)
-        release, self.release_from = self.release_from, None
-        if self._holding and not holding and release is None:
+        releases, self.release_from = self.release_from, []
+        if self._holding and not holding and not releases:
             self.c_still = None
         self._holding = holding
         new_stand = standing and not self.standing
@@ -223,14 +224,14 @@ class PoseCheck:
             self.stand_id += 1
         self.standing = standing
         status = self.status
-        if release is not None and status != "confirmed":
+        if releases and status != "confirmed":
             self.c_still = None
         if status.startswith("ended:"):
             return View(status, reason="pose_ended")
         if status == "checking":
             return View(status, reason="pose_checking")
         if status == "confirmed":
-            view = self._monitor(t, o, C, standing, new_stand, mission_active, near, release)
+            view = self._monitor(t, o, C, standing, new_stand, mission_active, near, releases)
             if self._rm is not None and view.status == "confirmed":
                 # a confirmed re-match in progress: the controls locked as while checking, the monitor going on
                 # (Codex piece 2a P2: it left driving, the forks and a submit open)
@@ -249,7 +250,7 @@ class PoseCheck:
             self._window.popleft()
         return gap(now, compose(self._window[0][2], o), self.rear_offset_m)
 
-    def _monitor(self, t, o, C, standing, new_stand, mission_active, near, release=None) -> View:
+    def _monitor(self, t, o, C, standing, new_stand, mission_active, near, releases=()) -> View:
         now = compose(C, o)
         m, rad = gap(now, compose(self.c_int, o), self.rear_offset_m)
         wm, wrad = self._window_change(t, o, C, now)
@@ -257,13 +258,13 @@ class PoseCheck:
             self._event(t, "revoke", gate="window", delta_m=wm, delta_rad=wrad, delta_int=[m, rad])
             self.end(t, "pose_revoked:window")
             return View(self.status, reason="pose_ended", delta_int=(m, rad))
-        if release is not None:
-            rm, rrad = gap(now, compose(release, o), self.rear_offset_m)
+        for before, after, o_at in releases:
+            rm, rrad = gap(compose(after, o_at), compose(before, o_at), self.rear_offset_m)
             if rm > self.bounds.e_release[0] or rrad > self.bounds.e_release[1]:
                 self._event(t, "revoke", gate="release", delta_m=rm, delta_rad=rrad, delta_int=[m, rad])
                 self.end(t, "pose_revoked:release")
                 return View(self.status, reason="pose_ended", delta_int=(m, rad))
-            self.c_still = None  # passed: the stand starts again; the window and C_int stay what they were
+            self.c_still = after  # passed: the stand starts from what it applied; the window and C_int stay
         if standing:
             if new_stand or self.c_still is None:
                 self.c_still = tuple(C)

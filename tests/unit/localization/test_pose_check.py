@@ -256,7 +256,7 @@ def test_a_hold_release_is_judged_against_the_correction_it_replaced():
     pc = _confirmed()
     _tick(pc, I, I, standing=False)
     _tick(pc, I, (0.0, 0.0, -0.05), standing=True, holding=True)
-    pc.note_release((0.0, 0.0, -0.05))
+    pc.note_release((0.0, 0.0, -0.05), (0.0, 0.0, 0.03), I)
     pc.update(1.0, I, (0.0, 0.0, 0.03), standing=True, deadman=False, holding=False)  # 0.08 rad at the release; 0.03 to the window
     assert pc.status == "ended:pose_revoked:release"
     event = [e for e in pc.events if e.get("kind") == "revoke"][-1]
@@ -268,15 +268,35 @@ def test_a_release_within_the_limit_takes_the_stand_again_and_leaves_the_window_
     _tick(pc, I, I, standing=False)
     _tick(pc, I, I, standing=True, holding=True)
     window, c_int = list(pc._window), pc.c_int
-    pc.note_release(I)
     C = (0.0, 0.0, 0.04)
+    pc.note_release(I, C, I)
     pc.update(1.0, I, C, standing=True, deadman=False, holding=False)
     assert pc.status == "confirmed" and pc.c_still == pytest.approx(C) and pc.c_int == c_int
     assert list(pc._window)[:len(window)] == window
-    pc.note_release(C)  # one release is judged once: the later update of the same tick has no release to judge
-    pc.update(1.0, I, C, standing=True, deadman=False, holding=False)
-    pc.update(1.0, I, (0.0, 0.0, 0.045), standing=True, deadman=False, holding=False)
-    assert pc.release_from is None and pc.status == "confirmed"
+    pc.update(1.0, I, (0.0, 0.0, 0.045), standing=True, deadman=False, holding=False)  # the same tick again: judged once
+    assert pc.release_from == [] and pc.status == "confirmed"
+
+
+def test_each_release_is_judged_on_its_own_correction_not_this_tick_s():
+    # Codex: a release of 0.09 rad and a reply back to 0 before the tick; two releases out and back between two ticks
+    pc = _confirmed()
+    _tick(pc, I, I, standing=True, holding=True)
+    out = (0.0, 0.0, 0.09)
+    pc.note_release(I, out, I)
+    pc.update(1.0, I, I, standing=True, deadman=False, holding=False)
+    assert pc.status == "ended:pose_revoked:release"
+    pc = _confirmed()
+    _tick(pc, I, I, standing=True, holding=True)
+    small = (0.0, 0.0, 0.074)
+    pc.note_release(I, small, I)  # 0.074 at the release, 0.077 by the next reply: this one is within its limit
+    pc.update(1.0, I, (0.0, 0.0, 0.077), standing=True, deadman=False, holding=False)
+    assert pc.status == "confirmed" and pc.c_still == pytest.approx(small)
+    pc = _confirmed()
+    _tick(pc, I, I, standing=True, holding=True)
+    pc.note_release(I, (0.0, 0.0, 0.05), I)
+    pc.note_release((0.0, 0.0, 0.05), (0.0, 0.0, 0.14), I)
+    pc.update(1.0, I, (0.0, 0.0, 0.05), standing=True, deadman=False, holding=False)
+    assert pc.status == "ended:pose_revoked:release"
 
 
 def test_the_release_gate_reads_the_rear_axle_too():
@@ -284,23 +304,23 @@ def test_the_release_gate_reads_the_rear_axle_too():
     pc = _confirmed()
     _tick(pc, I, I, standing=False)
     _tick(pc, I, I, standing=True, holding=True)
-    pc.note_release(I)
+    pc.note_release(I, (0.0, 0.0, 0.074), I)
     pc.update(1.0, I, (0.0, 0.0, 0.074), standing=True, deadman=False, holding=False)
     assert pc.status == "confirmed"  # 0.074 rad, and 0.034 m at the rear axle of 0.46 m
     pc2 = _confirmed()
     pc2.bounds = P.Bounds(odom=BOUNDS.odom, e_still=BOUNDS.e_still, e_slam=BOUNDS.e_slam, e_release=(0.02, 0.076))
     _tick(pc2, I, I, standing=False)
     _tick(pc2, I, I, standing=True, holding=True)
-    pc2.note_release(I)
+    pc2.note_release(I, (0.0, 0.0, 0.074), I)
     pc2.update(1.0, I, (0.0, 0.0, 0.074), standing=True, deadman=False, holding=False)
     assert pc2.status == "ended:pose_revoked:release"
 
 
 def test_a_release_before_the_confirmation_judges_nothing_and_takes_the_stand_again():
     pc = _pc()
-    pc.note_release((0.0, 0.0, 0.5))
+    pc.note_release(I, (0.0, 0.0, 0.5), I)
     pc.update(0.0, I, I, standing=True, deadman=False)
-    assert pc.release_from is None and not pc.status.startswith("ended:")
+    assert pc.release_from == [] and not pc.status.startswith("ended:")
 
 
 def test_the_stand_gate_is_not_taken_again_without_a_release():

@@ -922,7 +922,8 @@ def test_a_release_and_a_new_hold_is_judged_against_the_held_correction():
     _tick(rt, b, I)
     rt.tick(1.0, b, I, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
     turned = compose((b[0], b[1], b[2] + 0.09), invert(b))  # about the truck: 0.09 rad, under the window's 0.103
-    rt.tick(1.1, b, turned, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
+    rt.tick(1.1, b, turned, standing=True, deadman=False, epoch=1, control_gen=1, holding=True,
+            release_log=[(I, turned, b)])
     gates = [e.get("gate") for e in rt.pc.events if e.get("kind") == "revoke"]
     assert gates == ["release"] and rt.pc.status == "ended:pose_revoked:release"
 
@@ -934,8 +935,9 @@ def test_a_release_and_a_new_hold_between_two_ticks_counts_as_a_release():
     after = compose((b[0], b[1], b[2] + 0.04), invert(b))  # about the truck, within the release's limit
     _tick(rt, b, I)
     rt.tick(1.0, b, I, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
-    rt.tick(1.1, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
-    rt.tick(1.2, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
+    log = [(I, after, b)]
+    rt.tick(1.1, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_log=log)
+    rt.tick(1.2, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_log=log)
     row, = rt.record()["releases"]
     assert row["t"] == 1.1 and row["rad"] == pytest.approx(0.04)
     assert rt.pc.c_still == pytest.approx(after) and rt.raw["stands"][-1]["rebased_rad"] == 0.0
