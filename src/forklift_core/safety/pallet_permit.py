@@ -22,6 +22,7 @@ import numpy as np
 from forklift_core.control.drive_permission import arc_poses, parts_of
 
 REFRESH_M = 0.25
+FAR_SLACK_M = 1e-6  # past any rounding of a separating-axis test at these scales
 # The margins (plan D10 4th ed., 2026-10-19 measurements on two live U1 runs, sample maxima, not bounds): a recognised
 # or delivered pallet's outline is grown by its map-frame estimate error (0.026 m) + the control pose's position error
 # (0.130 m) + its heading error moving the outline's farthest point (2 x 1.66 m x sin(0.031/2) = 0.0515 m); the prior
@@ -185,34 +186,33 @@ def _meets(boxes, zone, grow_m: float) -> np.ndarray:
     return hit
 
 
-def _meets_all(boxes, zones, grow_m: float) -> np.ndarray:
-    """``_meets`` for every zone at once, (zones, samples): obb_overlap's four axes, broadcast over the zones. The
-    unconfirmed check's union holds a pallet zone per hypothesis, and one Python pass per zone cost a control step."""
-    x = np.array([z.x_m for z in zones], dtype=float)[:, None]
-    y = np.array([z.y_m for z in zones], dtype=float)[:, None]
-    yaw = np.array([z.yaw_rad for z in zones], dtype=float)[:, None]
-    gx = np.array([z.length_m for z in zones], dtype=float)[:, None] / 2 + grow_m
-    gy = np.array([z.width_m for z in zones], dtype=float)[:, None] / 2 + grow_m
-    c2, s2 = np.cos(yaw), np.sin(yaw)
-    hit = np.zeros((len(zones), len(boxes[0][0])), dtype=bool)
-    for centres, (hx, hy), yaws in boxes:
-        dx, dy = centres[:, 0] - x, centres[:, 1] - y
-        c1, s1 = np.cos(yaws), np.sin(yaws)
-        out = np.ones_like(hit)
-        for ax, ay in ((c1, s1), (-s1, c1), (c2, s2), (-s2, c2)):
-            r1 = hx * np.abs(c1 * ax + s1 * ay) + hy * np.abs(-s1 * ax + c1 * ay)
-            r2 = gx * np.abs(ax * c2 + ay * s2) + gy * np.abs(-ax * s2 + ay * c2)
-            out &= np.abs(dx * ax + dy * ay) <= r1 + r2
-        hit |= out
-    return hit
+def _bounding_circle(boxes) -> tuple:
+    """(x, y, radius) of a circle holding every box of ``boxes`` at every sample."""
+    xs = np.concatenate([centres[:, 0] for centres, _, _ in boxes])
+    ys = np.concatenate([centres[:, 1] for centres, _, _ in boxes])
+    x, y = (float(xs.min()) + float(xs.max())) / 2, (float(ys.min()) + float(ys.max())) / 2
+    centre_reach = float(np.hypot(xs - x, ys - y).max())
+    return x, y, centre_reach + max(math.hypot(*half) for _, half, _ in boxes)
+
+
+def _far(circle, zone, grow_m: float) -> bool:
+    """The zone cannot meet the boxes: the circles around them do not touch, by more than any rounding. Only a pass
+    skipped: whatever is near is judged by ``_meets`` itself, so no answer changes. The unconfirmed check's union holds a
+    pallet zone per hypothesis, and judging each one cost a control step (the revision plan 9.16). NaN is never far."""
+    x, y, radius = circle
+    reach = math.hypot(zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m)
+    return math.hypot(zone.x_m - x, zone.y_m - y) > radius + reach + FAR_SLACK_M
 
 
 def inside(pose, shape, zones) -> str | None:
     """The zone the outline is in now (unpadded), or None."""
-    if not zones:
-        return None
-    hit = _meets_all(_part_boxes(np.asarray([pose], dtype=float), shape), zones, 0.0)[:, 0]
-    return zones[int(np.argmax(hit))].zone_id if hit.any() else None
+    boxes = _part_boxes(np.asarray([pose], dtype=float), shape)
+    circle = None
+    for zone in zones:
+        circle = circle or _bounding_circle(boxes)
+        if not _far(circle, zone, 0.0) and _meets(boxes, zone, 0.0)[0]:
+            return zone.zone_id
+    return None
 
 
 def first_contact(pose, kappa: float, direction: int, length_m: float, step_m: float, shape, zones, *,
@@ -220,21 +220,22 @@ def first_contact(pose, kappa: float, direction: int, length_m: float, step_m: f
     """(distance along the arc the truck may go, the zone that stops it): the last sample whose outline is clear
     of every zone grown by the pad (so the move to it cannot have met a zone); 0 when the outline is in a zone now;
     inf when the arc meets none."""
-    now = inside(pose, shape, zones)
-    if now is not None:
-        return 0.0, now
-    if not zones:
-        return math.inf, None
+    if inside(pose, shape, zones) is not None:
+        return 0.0, inside(pose, shape, zones)
     poses, s = arc_poses(tuple(pose), kappa, direction, length_m, step_m)
     pad = step_m + abs(kappa) * step_m * (_reach_m(shape) if r_max_m is None else r_max_m)
     boxes = _part_boxes(poses[1:], shape)
-    hit = _meets_all(boxes, zones, pad)
-    met = np.flatnonzero(hit.any(axis=1))
-    if not len(met):
-        return math.inf, None
-    first = s[np.argmax(hit[met], axis=1)]  # sample k + 1 is hit: the last clear one is s[k]
-    k = int(np.argmin(first))  # the first zone in the list among equals, as a strict comparison along it
-    return float(first[k]), zones[met[k]].zone_id
+    circle = None
+    best, which = math.inf, None
+    for zone in zones:
+        if len(poses) > 1:  # no sample past the start: nothing to bound, and _meets says no
+            circle = circle or _bounding_circle(boxes)
+            if _far(circle, zone, pad):
+                continue
+        hit = np.flatnonzero(_meets(boxes, zone, pad))
+        if len(hit) and s[hit[0]] < best:  # hit[0] is sample hit[0] + 1: the last clear one is s[hit[0]]
+            best, which = float(s[hit[0]]), zone.zone_id
+    return best, which
 
 
 def first_contact_m(*args, **kwargs) -> float:

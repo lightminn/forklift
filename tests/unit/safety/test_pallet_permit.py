@@ -285,6 +285,27 @@ def test_the_zones_at_once_answer_as_one_zone_at_a_time():
         assert PP.first_contact(pose, kappa, direction, 1.2, 0.02, shape, zones) == contact
 
 
+def test_a_boundary_sample_stays_where_the_axes_put_it():
+    # Codex: a reordered product lost this sample to rounding: 0.18 m became 0.20 m and the speed allowed rose
+    fp, pose = Footprint(.58, .58, .23), (0.0, 0.0, -.881597468266333)
+    zone = Zone("z", .6490127990189792, -1.0363032744430343, .5198631405858251, .6912781137201018, 2.8268665755783573)
+    assert PP.first_contact(pose, 0.0, 1, 1.0, 0.02, fp, [zone]) == (0.18, "z")
+
+
+def test_zones_given_as_anything_iterable_answer_as_before():
+    fp, zone = Footprint(.58, .58, .23), Zone("z", 0, 0, 2, 2, 0)
+    assert PP.inside((0.0, 0.0, 0.0), fp, (q for q in [zone])) == "z"
+    assert PP.inside((0.0, 0.0, 0.0), fp, np.array([zone, zone], dtype=object)) == "z"
+
+
+def test_a_far_zone_is_skipped_only_when_the_circles_do_not_touch():
+    boxes = PP._part_boxes(np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]), Footprint(1.0, 0.2, 0.3))
+    circle = PP._bounding_circle(boxes)
+    assert PP._far(circle, Zone("far", 50.0, 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert not PP._far(circle, Zone("near", 1.0, 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert not PP._far(circle, Zone("nan", float("nan"), 0.0, 1.0, 1.0, 0.0), 0.0)
+
+
 def test_no_zones_meet_nothing():
     assert PP.inside((0.0, 0.0, 0.0), Footprint(1.0, 0.2, 0.3), []) is None
     assert PP.first_contact((0.0, 0.0, 0.0), 0.0, 1, 1.0, 0.02, Footprint(1.0, 0.2, 0.3), []) == (math.inf, None)
