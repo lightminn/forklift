@@ -23,6 +23,7 @@ from forklift_core.control.drive_permission import arc_poses, parts_of
 
 REFRESH_M = 0.25
 FAR_SLACK_M = 1e-6  # past any rounding at the hall's scale: a float's step at 30 m is about 4e-15 m
+FAR_TYPES = (float, int, np.float64)  # exactly these: a narrower float or a subclass does its own arithmetic
 FAR_SCALE_M = 1e4  # where the slack was reckoned for (a float's step there is about 2e-12 m); past it nothing is skipped
 # The margins (plan D10 4th ed., 2026-10-19 measurements on two live U1 runs, sample maxima, not bounds): a recognised
 # or delivered pallet's outline is grown by its map-frame estimate error (0.026 m) + the control pose's position error
@@ -207,7 +208,7 @@ def _far(circle, zone, grow_m: float) -> bool:
     or integers, which ``_meets`` itself rounds wider than the slack: the old code's result or exception stands."""
     x, y, radius = circle
     fields = (zone.x_m, zone.y_m, zone.length_m, zone.width_m, zone.yaw_rad, grow_m)
-    if not all(isinstance(v, (float, int)) for v in fields):  # np.float64 is a float; float32 and float16 are not
+    if not all(type(v) in FAR_TYPES for v in fields):
         return False
     reach = math.hypot(zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m)
     # each comparison is False on NaN, so nothing not finite passes

@@ -404,6 +404,11 @@ def test_a_zone_not_in_doubles_is_never_skipped():
     assert not PP._far(circle, Zone("single", np.float32(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
     assert not PP._far(circle, Zone("half", 50.0, 0.0, np.float16(1.0), 1.0, 0.0), 0.0)
 
+    class Own(float):  # Codex: a subclass's arithmetic is its own
+        pass
+
+    assert not PP._far(circle, Zone("own", Own(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
+
 
 def test_the_circle_holds_the_truck_along_the_whole_arc():
     # a turning arc: every corner of every part at every sample is inside the circle
