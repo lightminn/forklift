@@ -1,0 +1,401 @@
+{
+ "job": 16726,
+ "snapshot": "ucd4_08909f49",
+ "bounds_sha256": "56828fc6c62f3ab99d74da1461b8ed57c4d67b8882d2f566322a66289f281f5d",
+ "sessions": {
+  "d_val3_032_full": {
+   "status": "confirmed",
+   "start_reasons": [
+    "competitor"
+   ],
+   "rematches": [
+    {
+     "t": 18.308334288187325,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 40.79166879411787,
+     "outcome": "confirm",
+     "why": []
+    }
+   ],
+   "rear": {
+    "t": 4.741666913963854,
+    "blocked": false,
+    "detail": {
+     "length_m": 0.5683333333333334,
+     "step_m": 0.02,
+     "odom_rear": [
+      -5.646017908762551,
+      -12.270866649283347,
+      4.61634630518232
+     ],
+     "zones": 24,
+     "snapshot_stamp_s": 4.708333578892052,
+     "correction_version": 4,
+     "grid_applied": [
+      0.05447621492225174,
+      -0.06389076822949818,
+      -6.291328639200926
+     ],
+     "branch": null,
+     "kappa": null,
+     "map_rear": [
+      -5.691279127172523,
+      -12.288373665241998,
+      -1.6749823340186056
+     ],
+     "applied": [
+      0.05447621492225174,
+      -0.06389076822949818,
+      -6.291328639200926
+     ],
+     "arcs": [
+      {
+       "kappa": -0.05,
+       "zone": {
+        "contact_m": "inf",
+        "zone_id": null
+       },
+       "obstacle": {
+        "verified_m": 0.5883333091063843,
+        "blocked": null,
+        "cells": []
+       }
+      },
+      {
+       "kappa": 0.0,
+       "zone": {
+        "contact_m": "inf",
+        "zone_id": null
+       },
+       "obstacle": {
+        "verified_m": 0.5883333333333328,
+        "blocked": null,
+        "cells": []
+       }
+      },
+      {
+       "kappa": 0.05,
+       "zone": {
+        "contact_m": "inf",
+        "zone_id": null
+       },
+       "obstacle": {
+        "verified_m": 0.5883333091063848,
+        "blocked": null,
+        "cells": []
+       }
+      }
+     ],
+     "zone_id": null
+    }
+   },
+   "mission_results": [
+    {
+     "outcome": "failed",
+     "reason": "prepare:all_candidates_failed:invalid_start;invalid_start;invalid_start;invalid_",
+     "advice": {
+      "backoff_m": null,
+      "blocked_at_m": 0.15,
+      "from_rear": [
+       -5.499028689000828,
+       -10.430557998668153,
+       -1.6783331557327124
+      ]
+     }
+    }
+   ],
+   "pose_diag_prepare": [
+    {
+     "file": "prepare_input_1",
+     "mission_id": "m1",
+     "t": 50.50000263378024,
+     "layers_match": true,
+     "layers_source": "submitted_build",
+     "removed": false
+    }
+   ]
+  },
+  "d_val3_032_half": {
+   "status": "unconfirmed",
+   "start_reasons": [
+    "competitor"
+   ],
+   "rematches": [
+    {
+     "t": 12.741667331196368,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 22.708334517665207,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 34.59166847076267,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 48.03333583846688,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 55.52500289585441,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    }
+   ],
+   "rear": {
+    "t": 3.6250001890584826,
+    "blocked": false,
+    "detail": {
+     "length_m": 0.5683333333333334,
+     "step_m": 0.02,
+     "odom_rear": [
+      -5.646008697198456,
+      -12.270771219030621,
+      4.616482405081815
+     ],
+     "zones": 24,
+     "snapshot_stamp_s": 3.6083335215225816,
+     "correction_version": 4,
+     "grid_applied": [
+      0.054461624386701324,
+      -0.0638906065376621,
+      -6.291328639200927
+     ],
+     "branch": null,
+     "kappa": null,
+     "map_rear": [
+      -5.691283729337771,
+      -12.288278151473586,
+      -1.6748462341191122
+     ],
+     "applied": [
+      0.054461624386701324,
+      -0.0638906065376621,
+      -6.291328639200927
+     ],
+     "arcs": [
+      {
+       "kappa": -0.05,
+       "zone": {
+        "contact_m": "inf",
+        "zone_id": null
+       },
+       "obstacle": {
+        "verified_m": 0.5883333091063856,
+        "blocked": null,
+        "cells": []
+       }
+      },
+      {
+       "kappa": 0.0,
+       "zone": {
+        "contact_m": "inf",
+        "zone_id": null
+       },
+       "obstacle": {
+        "verified_m": 0.5883333333333326,
+        "blocked": null,
+        "cells": []
+       }
+      },
+      {
+       "kappa": 0.05,
+       "zone": {
+        "contact_m": "inf",
+        "zone_id": null
+       },
+       "obstacle": {
+        "verified_m": 0.5883333091063847,
+        "blocked": null,
+        "cells": []
+       }
+      }
+     ],
+     "zone_id": null
+    }
+   },
+   "mission_results": [],
+   "pose_diag_prepare": null
+  },
+  "d_val3_000_full_place": {
+   "status": "ended:pose_rear_blocked",
+   "start_reasons": [
+    "believed:low_fit"
+   ],
+   "rematches": [],
+   "rear": {
+    "t": 2.3416667887941003,
+    "blocked": true,
+    "detail": {
+     "length_m": 0.5683333333333334,
+     "step_m": 0.02,
+     "odom_rear": [
+      3.345266195410696,
+      -2.441240163126393,
+      1.1606453543541275
+     ],
+     "zones": 88,
+     "snapshot_stamp_s": 2.308333453722298,
+     "correction_version": 4,
+     "grid_applied": [
+      0.03844637052450972,
+      -0.020222965889829636,
+      -0.006979999999999986
+     ],
+     "branch": "zone",
+     "kappa": -0.05,
+     "map_rear": [
+      3.3665913569382995,
+      -2.4847534286002593,
+      1.1536653543541275
+     ],
+     "applied": [
+      0.03844637052450972,
+      -0.020222965889829636,
+      -0.006979999999999986
+     ],
+     "arcs": [
+      {
+       "kappa": -0.05,
+       "zone": {
+        "contact_m": 0.0,
+        "zone_id": "P-1@h0"
+       },
+       "obstacle": "unchecked"
+      },
+      {
+       "kappa": 0.0,
+       "zone": "unchecked",
+       "obstacle": "unchecked"
+      },
+      {
+       "kappa": 0.05,
+       "zone": "unchecked",
+       "obstacle": "unchecked"
+      }
+     ],
+     "zone_id": "P-1@h0",
+     "zone_rect": [
+      3.1,
+      0.65,
+      5.2211523059927725,
+      5.921152305992772,
+      0.0
+     ]
+    },
+    "zone_origin": {
+     "zone": "P-1",
+     "h": 0,
+     "hyp": [
+      3.4806705104383964,
+      -2.1295747658238486,
+      1.1609451521812488
+     ],
+     "source": "believed"
+    }
+   },
+   "mission_results": [],
+   "pose_diag_prepare": null
+  },
+  "d_val3_078_half_place": {
+   "status": "ended:pose_rear_blocked",
+   "start_reasons": [
+    "competitor"
+   ],
+   "rematches": [],
+   "rear": {
+    "t": 2.9500001538544893,
+    "blocked": true,
+    "detail": {
+     "length_m": 0.5683333333333334,
+     "step_m": 0.02,
+     "odom_rear": [
+      1.7194955772977734,
+      -11.059061191522128,
+      1.5091740219517573
+     ],
+     "zones": 37,
+     "snapshot_stamp_s": 2.9083334850147367,
+     "correction_version": 4,
+     "grid_applied": [
+      -0.04506644105684421,
+      -0.03592545156399607,
+      0.0013959999999988426
+     ],
+     "branch": "zone",
+     "kappa": -0.05,
+     "map_rear": [
+      1.689865905159858,
+      -11.092575452003931,
+      1.5105700219517562
+     ],
+     "applied": [
+      -0.04506644105684421,
+      -0.03592545156399607,
+      0.0013959999999988426
+     ],
+     "arcs": [
+      {
+       "kappa": -0.05,
+       "zone": {
+        "contact_m": 0.0,
+        "zone_id": "P-1@h7"
+       },
+       "obstacle": "unchecked"
+      },
+      {
+       "kappa": 0.0,
+       "zone": "unchecked",
+       "obstacle": "unchecked"
+      },
+      {
+       "kappa": 0.05,
+       "zone": "unchecked",
+       "obstacle": "unchecked"
+      }
+     ],
+     "zone_id": "P-1@h7",
+     "zone_rect": [
+      3.0954944694017494,
+      -11.361910666730438,
+      4.771041982982154,
+      5.471041982982154,
+      -0.008726646259971549
+     ]
+    },
+    "zone_origin": {
+     "zone": "P-1",
+     "h": 7,
+     "hyp": [
+      1.73908652745857,
+      1.280178457861945,
+      1.5187554261931844
+     ],
+     "source": "pool"
+    }
+   },
+   "mission_results": [],
+   "pose_diag_prepare": null
+  }
+ }
+}

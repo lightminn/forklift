@@ -1,0 +1,213 @@
+{
+ "poses": {
+  "pre_move": [
+   -5.691279127172523,
+   -12.288373665241998,
+   -1.6749823340186056
+  ],
+  "post_reverse": [
+   -5.499028689000828,
+   -10.430557998668153,
+   -1.6783331557327124
+  ]
+ },
+ "submitted_layers": "layers_matched",
+ "grid_corrections": {
+  "pre_move": [
+   0.05447621492225174,
+   -0.06389076822949818,
+   -6.291328639200926
+  ],
+  "submitted": [
+   0.05460462035096558,
+   -0.05424541835715374,
+   -6.291328639200927
+  ]
+ },
+ "cells": {
+  "pre_move@pre_move": {
+   "pose": [
+    -5.691279127172523,
+    -12.288373665241998,
+    -1.6749823340186056
+   ],
+   "planner_clearance_m": 0.1,
+   "by_clearance": {
+    "0": {
+     "start_check_free": true,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": true,
+     "layers_refusing": [],
+     "permission_parts_live_free": true,
+     "permission_parts_full_grid_free": true
+    },
+    "0.1": {
+     "start_check_free": true,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": true,
+     "layers_refusing": [],
+     "permission_parts_live_free": true,
+     "permission_parts_full_grid_free": true
+    }
+   },
+   "rectangles": [
+    [
+     3.1,
+     0.65,
+     2.0,
+     2.7,
+     0.0
+    ]
+   ]
+  },
+  "pre_move@submitted": {
+   "pose": [
+    -5.691279127172523,
+    -12.288373665241998,
+    -1.6749823340186056
+   ],
+   "planner_clearance_m": 0.1,
+   "by_clearance": {
+    "0": {
+     "start_check_free": true,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": true,
+     "layers_refusing": [],
+     "permission_parts_live_free": true,
+     "permission_parts_full_grid_free": true
+    },
+    "0.1": {
+     "start_check_free": true,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": true,
+     "layers_refusing": [],
+     "permission_parts_live_free": true,
+     "permission_parts_full_grid_free": true
+    }
+   },
+   "rectangles": [
+    [
+     3.1,
+     0.65,
+     2.0,
+     2.7,
+     0.0
+    ]
+   ]
+  },
+  "post_reverse@pre_move": {
+   "pose": [
+    -5.499028689000828,
+    -10.430557998668153,
+    -1.6783331557327124
+   ],
+   "planner_clearance_m": 0.1,
+   "by_clearance": {
+    "0": {
+     "start_check_free": true,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": true,
+     "layers_refusing": [],
+     "permission_parts_live_free": true,
+     "permission_parts_full_grid_free": true
+    },
+    "0.1": {
+     "start_check_free": false,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": false,
+     "layers_refusing": [
+      "live"
+     ],
+     "permission_parts_live_free": false,
+     "permission_parts_full_grid_free": false
+    }
+   },
+   "rectangles": [
+    [
+     3.1,
+     0.65,
+     2.0,
+     2.7,
+     0.0
+    ]
+   ]
+  },
+  "post_reverse@submitted": {
+   "pose": [
+    -5.499028689000828,
+    -10.430557998668153,
+    -1.6783331557327124
+   ],
+   "planner_clearance_m": 0.1,
+   "by_clearance": {
+    "0": {
+     "start_check_free": true,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": true,
+     "layers_refusing": [],
+     "permission_parts_live_free": true,
+     "permission_parts_full_grid_free": true
+    },
+    "0.1": {
+     "start_check_free": false,
+     "bounds_free": true,
+     "rectangles_refusing": [],
+     "grid_free": false,
+     "layers_refusing": [
+      "live"
+     ],
+     "permission_parts_live_free": false,
+     "permission_parts_full_grid_free": false
+    }
+   },
+   "rectangles": [
+    [
+     3.1,
+     0.65,
+     2.0,
+     2.7,
+     0.0
+    ]
+   ]
+  }
+ },
+ "shapes": {
+  "planner_hull": {
+   "front_m": 1.29,
+   "rear_m": 0.17,
+   "half_width_m": 0.36
+  },
+  "permission_reversing_parts": [
+   {
+    "front_m": 0.9440000000000001,
+    "rear_m": 0.17,
+    "half_width_m": 0.36,
+    "lateral_m": 0.0,
+    "longitudinal_m": 0.0
+   },
+   {
+    "front_m": 0.17999999999999994,
+    "rear_m": 0.17999999999999994,
+    "half_width_m": 0.027499999999999997,
+    "lateral_m": 0.18625,
+    "longitudinal_m": 1.11
+   },
+   {
+    "front_m": 0.17999999999999994,
+    "rear_m": 0.17999999999999994,
+    "half_width_m": 0.027499999999999997,
+    "lateral_m": -0.18625,
+    "longitudinal_m": 1.11
+   }
+  ],
+  "planner_layers": "live | memory observed | SLAM survey layer (with use_slam), the cells under the truck left out; plus the props and the pallet zone as rectangles and the bounds",
+  "permission_layers": "the live snapshot only (occupied, unknown and edge block it), plus the union zones in the unconfirmed position check's rear check"
+ }
+}

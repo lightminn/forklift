@@ -1,0 +1,303 @@
+{
+"rows": [
+{
+"session": "b2_val3_018_full_place",
+"class": "confirmed",
+"agreement": 1,
+"kind": "slam_agreement",
+"ok": true,
+"qualified": true,
+"in_contact": false,
+"t": 2.4250001264736056,
+"scan_t": 1.1083333911374211,
+"stand": null,
+"generation": null,
+"source": "start",
+"attempts": null,
+"outcome": null,
+"why": null,
+"agree_m": 0.038130570596208224,
+"agree_rad": 0.001639603252203914,
+"delta_o": [
+0.00018993063280009015,
+0.0005586195154994034
+],
+"reverse_m": 0.00010789497203432175,
+"g_err": [
+0.004393847682182076,
+0.01756211192724905,
+-0.0007205542921102648
+],
+"c_err": [
+0.02551216316304266,
+-0.014319530605339359,
+-0.0029127968376601032
+],
+"wider": "c",
+"diag": null,
+"unrecorded": [
+"lattice_pose",
+"icp_pose",
+"refined",
+"icp_reason",
+"res_base"
+],
+"g_outside_success": false
+},
+{
+"session": "b2_val3_032_full",
+"class": "natural_unconfirmed",
+"agreement": 1,
+"kind": "slam_agreement",
+"ok": true,
+"qualified": true,
+"in_contact": false,
+"t": 38.408335336484015,
+"scan_t": 36.90833525825292,
+"stand": 3,
+"generation": 3,
+"source": "rematch",
+"attempts": [
+"confirmed"
+],
+"outcome": "confirm",
+"why": [],
+"agree_m": 0.058574033851466124,
+"agree_rad": 0.021223310745023483,
+"delta_o": [
+2.970537451640268e-05,
+8.736874860471033e-05
+],
+"reverse_m": 1.8671412167666266,
+"g_err": [
+-0.00717542576732535,
+0.031985624529227895,
+0.017718546446606087
+],
+"c_err": [
+0.03310844295986061,
+-0.010472776497570065,
+-0.0035928567265890443
+],
+"wider": "g",
+"diag": [
+{
+"stage": "relocalize",
+"reason": "confirmed",
+"state": "chosen",
+"lattice_laser": [
+-5.467085590139696,
+-10.589662920071788,
+4.625122517784973
+],
+"pose_laser": [
+-5.477721239676924,
+-10.612554337066028,
+-1.655145833541078
+],
+"icp_laser": [
+-5.477721239676924,
+-10.612554337066028,
+-1.655145833541078
+],
+"refined": true,
+"icp_reason": "ok",
+"endpoint_fraction": 1.0
+},
+{
+"stage": "decide",
+"res_base": [
+-5.487831182091903,
+-10.7321276997534,
+-1.655145833541078
+],
+"outcome": "confirm"
+}
+],
+"unrecorded": [],
+"g_outside_success": false
+},
+{
+"session": "b2_val3_032_half",
+"class": "natural_unconfirmed",
+"agreement": 1,
+"kind": "slam_agreement",
+"ok": true,
+"qualified": true,
+"in_contact": false,
+"t": 38.76666868850589,
+"scan_t": 37.50833528954536,
+"stand": 4,
+"generation": 4,
+"source": "rematch",
+"attempts": [
+"confirmed"
+],
+"outcome": "confirm",
+"why": [],
+"agree_m": 0.04935948765037882,
+"agree_rad": 0.01427993378917125,
+"delta_o": [
+2.5891353748646932e-05,
+7.615104045566312e-05
+],
+"reverse_m": 1.8543909584049676,
+"g_err": [
+-0.005576230828039742,
+0.03117493280065612,
+0.01152068852486976
+],
+"c_err": [
+0.019783029761075512,
+-0.01110414918157094,
+-0.002699098364677077
+],
+"wider": "g",
+"diag": [
+{
+"stage": "relocalize",
+"reason": "confirmed",
+"state": "chosen",
+"lattice_laser": [
+-5.467085590139696,
+-10.639662920816846,
+4.616395871525001
+],
+"pose_laser": [
+-5.47944731525787,
+-10.627130516529856,
+-1.6611769913578647
+],
+"icp_laser": [
+-5.47944731525787,
+-10.627130516529856,
+-1.6611769913578647
+],
+"refined": true,
+"icp_reason": "ok",
+"endpoint_fraction": 1.0
+},
+{
+"stage": "decide",
+"res_base": [
+-5.49027823524852,
+-10.746640730202815,
+-1.6611769913578647
+],
+"outcome": "confirm"
+}
+],
+"unrecorded": [],
+"g_outside_success": false
+},
+{
+"session": "b2_val3_038_half_place",
+"class": "confirmed",
+"agreement": 1,
+"kind": "slam_agreement",
+"ok": true,
+"qualified": true,
+"in_contact": false,
+"t": 2.1916667809709907,
+"scan_t": 1.1083333911374211,
+"stand": null,
+"generation": null,
+"source": "start",
+"attempts": null,
+"outcome": null,
+"why": null,
+"agree_m": 0.05388246182907739,
+"agree_rad": 0.0029158065715219057,
+"delta_o": [
+0.0001383353447663414,
+0.0004068686638825092
+],
+"reverse_m": 0.00012846718064681527,
+"g_err": [
+0.01271825221310516,
+0.030804820133788012,
+-0.005269001260257866
+],
+"c_err": [
+0.003048556465408749,
+-0.021348289744735467,
+-0.002728574058311728
+],
+"wider": "g",
+"diag": null,
+"unrecorded": [
+"lattice_pose",
+"icp_pose",
+"refined",
+"icp_reason",
+"res_base"
+],
+"g_outside_success": false
+}
+],
+"sessions": [
+{
+"session": "b2_val3_000_full_place",
+"class": "competitor",
+"generations": 0,
+"discarded": 0,
+"competitor": 0,
+"deadline": 0,
+"contacts": 0
+},
+{
+"session": "b2_val3_004_full_place",
+"class": "competitor",
+"generations": 0,
+"discarded": 0,
+"competitor": 0,
+"deadline": 0,
+"contacts": 0
+},
+{
+"session": "b2_val3_018_full_place",
+"class": "confirmed",
+"generations": 1,
+"discarded": 1,
+"competitor": 0,
+"deadline": 0,
+"contacts": 1
+},
+{
+"session": "b2_val3_032_full",
+"class": "natural_unconfirmed",
+"generations": 3,
+"discarded": 0,
+"competitor": 2,
+"deadline": 0,
+"contacts": 0
+},
+{
+"session": "b2_val3_032_half",
+"class": "natural_unconfirmed",
+"generations": 4,
+"discarded": 0,
+"competitor": 3,
+"deadline": 0,
+"contacts": 0
+},
+{
+"session": "b2_val3_038_half_place",
+"class": "confirmed",
+"generations": 1,
+"discarded": 1,
+"competitor": 0,
+"deadline": 0,
+"contacts": 1
+},
+{
+"session": "b2_val3_078_half_place",
+"class": "competitor",
+"generations": 0,
+"discarded": 0,
+"competitor": 0,
+"deadline": 0,
+"contacts": 0
+}
+]
+}
