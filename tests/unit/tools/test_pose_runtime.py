@@ -153,6 +153,37 @@ def test_an_unconfirmed_start_reverses_then_rematches_and_confirms():
     assert _tick(rt, o, compose(o, invert(o))).status == "confirmed"
 
 
+def test_each_generation_keeps_what_was_computed_for_it_and_its_points(tmp_path):
+    # the revision plan 9.19's diagnostics, a record only: the lattice pose, the ICP's, refined and its reason, the
+    # conservative check's local result, and the scan points once per generation
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b)
+    o = b
+    _tick(rt, o)
+    while _tick(rt, o, standing=False, deadman=True).drive_ready:
+        o = compose(o, (-0.01, 0.0, 0.0))
+    _tick(rt, o, standing=False)
+    _tick(rt, o)
+    _feed(rt, grid, o, o, t0=5.0)
+    _tick(rt, o)
+    lattice = R.laser_from_base(compose(o, (0.05, 0.0, 0.0)))
+    top = G.Candidate(R.laser_from_base(o), 0.95, 0.97, True, lattice, 0.9, "ok")
+    w.answer({"match": G.GlobalMatch("ok", (top,)), "decision": G.Decision(True, "confirmed", 0.0)})
+    _tick(rt, o)
+    points = w.jobs[-1][2]["points"]
+    w.answer({"outcome": "confirm", "g": list(o), "res_base": list(compose(o, (0.01, 0.0, 0.0)))})
+    _tick(rt, o, compose(o, invert(o)))
+    gen = rt.record()["rematches"][-1]
+    diag = gen["diag"]
+    assert diag[0]["stage"] == "relocalize" and diag[0]["refined"] is True and diag[0]["icp_reason"] == "ok"
+    assert diag[0]["lattice_base"] == pytest.approx(compose(o, (0.05, 0.0, 0.0)))
+    assert diag[0]["icp_base"] == pytest.approx(o) and diag[0]["endpoint_fraction"] == pytest.approx(0.97)
+    assert diag[1]["stage"] == "decide" and diag[1]["res_base"] == pytest.approx(compose(o, (0.01, 0.0, 0.0)))
+    rt.save_stand_scans(tmp_path / "s.npz")
+    data = np.load(tmp_path / "s.npz")
+    assert np.allclose(data[f"g{gen['points']}"], np.asarray(points, np.float32))
+
+
 def test_a_rematch_whose_scans_are_interrupted_by_a_move_is_dropped():
     b = (2.42, 1.7, 0.6)
     grid, w, rt = _started(False, b)

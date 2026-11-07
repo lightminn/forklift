@@ -63,6 +63,7 @@ class Candidate:
     refined: bool = False
     lattice_pose: tuple | None = None  # where the exact lattice search put it (None: the pose is the lattice pose)
     lattice_score: float | None = None
+    icp_reason: str | None = None  # the refinement's own verdict ("ok" or why not); None: never refined
 
     @property
     def search_score(self) -> float:
@@ -405,7 +406,8 @@ def refine(grid: Grid, match: GlobalMatch, points: np.ndarray, cfg: MatchConfig 
             budget.check()
             pose = tuple(float(v) for v in res.pose) if res.accepted else cand.pose
             out.append(_with_fraction(grid, pts, Candidate(pose, _field_score(grid, field, pts, pose), math.nan,
-                                                           res.accepted, cand.search_pose, cand.search_score), cfg))
+                                                           res.accepted, cand.search_pose, cand.search_score,
+                                                           res.reason), cfg))
     except _Stop as stop:
         return GlobalMatch(str(stop), work=match.work)
     return GlobalMatch("ok", tuple(out), work=match.work)
