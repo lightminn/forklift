@@ -5,10 +5,12 @@ every arc is 0."""
 
 import math
 
+import numpy as np
 import pytest
 
 from forklift_core.control.drive_permission import StoppingModel
 from forklift_core.planning.geometry import Footprint
+from forklift_core.safety import pallet_permit as PP
 from forklift_core.safety.pallet_permit import PalletPermit, Zone, first_contact_m, obb_overlap
 
 STOP = StoppingModel(latency_s=0.15, decel_mps2=1.5, margin_m=0.05)
@@ -235,3 +237,204 @@ def test_an_anchored_delivered_pallet_is_a_search_prop_and_a_slot_prop():
     assert (slot.x_m, slot.y_m, slot.yaw_rad, slot.length_m, slot.width_m) == pytest.approx((8.0, 0.0, 0.0, 1.02, 1.22))
     plain = session_pallet_props(tb, exclude_id="P-1", nominal={}, shape=(0.6, 0.8, 0.144), prior_grow_m=0.25)
     assert [p.asset.uri for p in plain] == ["session:pallet:P-2", "session:pallet:P-3", "session:pallet:P-4"]
+
+
+# --- the zones at once (the teleop permit's cost, the revision plan 9.16): the same answers as one zone at a time ---
+def _one_zone_at_a_time(pose, kappa, direction, length_m, step_m, shape, zones):
+    def meets(boxes, zone, grow_m):
+        hit = np.zeros(len(boxes[0][0]), dtype=bool)
+        for centres, half, yaws in boxes:
+            hit |= PP.obb_overlap(centres, half, yaws, (zone.x_m, zone.y_m),
+                                  (zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m), zone.yaw_rad)
+        return hit
+
+    def in_zone():
+        boxes = PP._part_boxes(np.asarray([pose], dtype=float), shape)
+        return next((z.zone_id for z in zones if meets(boxes, z, 0.0)[0]), None)
+
+    inside = in_zone()
+    if inside is not None:
+        return inside, (0.0, inside)
+    poses, s = PP.arc_poses(tuple(pose), kappa, direction, length_m, step_m)
+    pad = step_m + abs(kappa) * step_m * PP._reach_m(shape)
+    boxes = PP._part_boxes(poses[1:], shape)
+    best, which = math.inf, None
+    for zone in zones:
+        hit = np.flatnonzero(meets(boxes, zone, pad))
+        if len(hit) and s[hit[0]] < best:
+            best, which = float(s[hit[0]]), zone.zone_id
+    return None, (best, which)
+
+
+def test_the_zones_at_once_answer_as_one_zone_at_a_time():
+    rng = np.random.default_rng(20261107)
+    hull = Footprint(1.29, 0.17, 0.36)
+    parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9),
+             (Footprint(0.18, 0.18, 0.05), -0.2, 0.9)]
+    for k in range(400):
+        count = int(rng.integers(1, 30))
+        zones = [Zone(f"z{j}", *rng.uniform(-4, 4, 2), *rng.uniform(0.2, 3.0, 2), rng.uniform(-3.2, 3.2))
+                 for j in range(count)]
+        if k % 5 == 0:  # the same box twice: the first in the list answers, as the loop's strict comparison
+            zones.append(Zone("again", zones[0].x_m, zones[0].y_m, zones[0].length_m, zones[0].width_m, zones[0].yaw_rad))
+        pose = tuple(rng.uniform(-5, 5, 2)) + (rng.uniform(-3.2, 3.2),)
+        shape = hull if k % 2 else parts
+        kappa, direction = float(rng.uniform(-0.3, 0.3)), int(rng.choice((-1, 1)))
+        inside, contact = _one_zone_at_a_time(pose, kappa, direction, 1.2, 0.02, shape, zones)
+        assert PP.inside(pose, shape, zones) == inside
+        assert PP.first_contact(pose, kappa, direction, 1.2, 0.02, shape, zones) == contact
+
+
+def test_a_boundary_sample_stays_where_the_axes_put_it():
+    # Codex: a reordered product lost this sample to rounding: 0.18 m became 0.20 m and the speed allowed rose
+    fp, pose = Footprint(.58, .58, .23), (0.0, 0.0, -.881597468266333)
+    zone = Zone("z", .6490127990189792, -1.0363032744430343, .5198631405858251, .6912781137201018, 2.8268665755783573)
+    assert PP.first_contact(pose, 0.0, 1, 1.0, 0.02, fp, [zone]) == (0.18, "z")
+
+
+def test_zones_given_as_anything_iterable_answer_as_before():
+    fp, zone = Footprint(.58, .58, .23), Zone("z", 0, 0, 2, 2, 0)
+    assert PP.inside((0.0, 0.0, 0.0), fp, (q for q in [zone])) == "z"
+    assert PP.inside((0.0, 0.0, 0.0), fp, np.array([zone, zone], dtype=object)) == "z"
+
+
+def test_a_far_zone_is_skipped_only_when_the_circles_do_not_touch():
+    boxes = PP._part_boxes(np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]), Footprint(1.0, 0.2, 0.3))
+    circle = PP._bounding_circle(boxes)
+    assert PP._far(circle, Zone("far", 50.0, 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert not PP._far(circle, Zone("near", 1.0, 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert not PP._far(circle, Zone("nan", float("nan"), 0.0, 1.0, 1.0, 0.0), 0.0)
+
+
+def _old_inside(pose, shape, zones):
+    boxes = PP._part_boxes(np.asarray([pose], dtype=float), shape)
+    return next((z.zone_id for z in zones if PP._meets(boxes, z, 0.0)[0]), None)
+
+
+def _old_first_contact(pose, kappa, direction, length_m, step_m, shape, zones):
+    if _old_inside(pose, shape, zones) is not None:
+        return 0.0, _old_inside(pose, shape, zones)
+    poses, s = PP.arc_poses(tuple(pose), kappa, direction, length_m, step_m)
+    pad = step_m + abs(kappa) * step_m * PP._reach_m(shape)
+    boxes = PP._part_boxes(poses[1:], shape)
+    best, which = math.inf, None
+    for zone in zones:
+        hit = np.flatnonzero(PP._meets(boxes, zone, pad))
+        if len(hit) and s[hit[0]] < best:
+            best, which = float(s[hit[0]]), zone.zone_id
+    return best, which
+
+
+def _outcome(fn, *args):
+    """What a call gives, an exception by its type: the comparison includes them."""
+    try:
+        with np.errstate(all="ignore"):
+            return ("value", fn(*args))
+    except Exception as exc:  # noqa: BLE001
+        return ("raised", type(exc))
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("field", range(5))
+def test_a_non_finite_zone_answers_or_raises_as_the_old_code(bad, field):
+    fp = Footprint(1.29, 0.17, 0.36)
+    values = [40.0, 0.0, 1.0, 1.0, 0.3]  # far from the truck, so a skip would hide what the old code does
+    values[field] = bad
+    zones = [Zone("odd", *values), Zone("near", 2.0, 0.0, 1.0, 1.0, 0.0)]
+    assert _outcome(PP.inside, (0.0, 0.0, 0.0), fp, zones) == _outcome(_old_inside, (0.0, 0.0, 0.0), fp, zones)
+    arc = ((0.0, 0.0, 0.0), 0.0, 1, 3.0, 0.02, fp, zones)
+    assert _outcome(PP.first_contact, *arc) == _outcome(_old_first_contact, *arc)
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_a_non_finite_pose_or_arc_answers_or_raises_as_the_old_code(bad):
+    fp, zones = Footprint(1.29, 0.17, 0.36), [Zone("far", 40.0, 0.0, 1.0, 1.0, 0.0)]
+    for pose in ((bad, 0.0, 0.0), (0.0, bad, 0.0), (0.0, 0.0, bad)):
+        assert _outcome(PP.inside, pose, fp, zones) == _outcome(_old_inside, pose, fp, zones)
+    arc = ((0.0, 0.0, 0.0), bad, 1, 1.0, 0.02, fp, zones)
+    assert _outcome(PP.first_contact, *arc) == _outcome(_old_first_contact, *arc)
+
+
+def test_a_skip_never_hides_a_contact_at_the_hall_s_scale():
+    # the circle's radius rounds up and the distance down by construction of the slack: about 4e-15 m is one float's
+    # step at 30 m, some ten operations make about 1e-13 m, and FAR_SLACK_M is 1e-6 m. Zones placed just past the circle,
+    # at every rotation, against rotated parts along a whole arc: what is far must not meet by the old test either.
+    rng = np.random.default_rng(11)
+    parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9),
+             (Footprint(0.18, 0.18, 0.05), -0.2, 0.9)]
+    for k in range(3000):
+        pose = (float(rng.uniform(-30, 30)), float(rng.uniform(-30, 30)), float(rng.uniform(-math.pi, math.pi)))
+        kappa, direction = float(rng.uniform(-0.3, 0.3)), int(rng.choice((-1, 1)))
+        poses, _ = PP.arc_poses(pose, kappa, direction, float(rng.uniform(0.1, 1.5)), 0.02)
+        shape = parts if k % 2 else Footprint(1.29, 0.17, 0.36)
+        boxes = PP._part_boxes(poses[1:], shape)
+        x, y, radius = PP._bounding_circle(boxes)
+        length, width = float(rng.uniform(0.1, 3.0)), float(rng.uniform(0.1, 3.0))
+        pad = float(rng.uniform(0.0, 0.1))
+        reach = math.hypot(length / 2 + pad, width / 2 + pad)
+        angle = float(rng.uniform(-math.pi, math.pi))
+        gap = radius + reach + PP.FAR_SLACK_M * 1.001
+        zone = Zone("z", x + gap * math.cos(angle), y + gap * math.sin(angle), length, width, float(rng.uniform(-3.2, 3.2)))
+        assert PP._far((x, y, radius), zone, pad)
+        assert not PP._meets(boxes, zone, pad).any()
+
+
+def test_past_the_hall_s_scale_nothing_is_skipped():
+    # Codex: at 3e10 m the slack is lost to rounding and a zone the truck stands in looked far
+    fp, pose = Footprint(.58, .58, .23), (0.0, 0.0, 0.0)
+    zone = Zone("z", 28488636523.616806, 11297217931.77908, 56977273046.07361, 22594435863.09816, 0.0)
+    assert PP.inside(pose, fp, [zone]) == _old_inside(pose, fp, [zone]) == "z"
+    assert PP.first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone]) == _old_first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone])
+    far_truck = (3e10, 3e10, 0.0)  # the truck out there too: a small distance between two huge coordinates
+    boxes = PP._part_boxes(np.asarray([far_truck], dtype=float), fp)
+    assert not PP._far(PP._bounding_circle(boxes), Zone("z", 3e10 + 50.0, 3e10, 1.0, 1.0, 0.0), 0.0)
+
+
+def test_a_zone_not_in_doubles_is_never_skipped():
+    # Codex: float32 fields subtract in float32, and the old test rounds its half extents there too, past the slack
+    fp, pose = Footprint(.58, .58, .23), (-22.58210666556494, 18.614214887426925, 0.0)
+    zone = Zone("z", *map(np.float32, (-21.189041, 19.166637, 1.626131, .64484507, 0.0)))
+    assert PP.inside(pose, fp, [zone]) == _old_inside(pose, fp, [zone]) == "z"
+    assert PP.first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone]) == _old_first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone])
+    circle = (0.0, 0.0, 1.0)
+    assert PP._far(circle, Zone("double", np.float64(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert PP._far(circle, Zone("int", 50, 0, 1, 1, 0), 0.0)
+    assert not PP._far(circle, Zone("single", np.float32(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert not PP._far(circle, Zone("half", 50.0, 0.0, np.float16(1.0), 1.0, 0.0), 0.0)
+
+    class Own(float):  # Codex: a subclass's arithmetic is its own
+        pass
+
+    assert not PP._far(circle, Zone("own", Own(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
+
+
+def test_the_circle_holds_the_truck_along_the_whole_arc():
+    # a turning arc: every corner of every part at every sample is inside the circle
+    parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9)]
+    poses, _ = PP.arc_poses((1.0, -2.0, 0.7), 0.3, -1, 1.5, 0.02)
+    boxes = PP._part_boxes(poses[1:], parts)
+    x, y, radius = PP._bounding_circle(boxes)
+    for centres, (hx, hy), yaws in boxes:
+        c, s = np.cos(yaws), np.sin(yaws)
+        for ex, ey in ((hx, hy), (hx, -hy), (-hx, hy), (-hx, -hy)):
+            px, py = centres[:, 0] + ex * c - ey * s, centres[:, 1] + ex * s + ey * c
+            assert np.hypot(px - x, py - y).max() <= radius
+
+
+def test_input_shapes_answer_as_the_old_code():
+    fp, zone = Footprint(1.29, 0.17, 0.36), Zone("z", 2.0, 0.0, 1.0, 1.0, 0.0)
+    pose = (0.0, 0.0, 0.0)
+    for make in (lambda: [], lambda: [zone], lambda: (zone, zone), lambda: iter([zone]),
+                 lambda: (q for q in [zone]), lambda: np.array([zone, zone], dtype=object)):
+        assert _outcome(PP.inside, pose, fp, make()) == _outcome(_old_inside, pose, fp, make())
+        for length in (0.0, 0.01, 1.0, 3.0):  # 0: an arc with no sample past the start
+            new = _outcome(PP.first_contact, pose, 0.0, 1, length, 0.02, fp, make())
+            assert new == _outcome(_old_first_contact, pose, 0.0, 1, length, 0.02, fp, make())
+
+
+def test_no_zones_meet_nothing():
+    assert PP.inside((0.0, 0.0, 0.0), Footprint(1.0, 0.2, 0.3), []) is None
+    assert PP.first_contact((0.0, 0.0, 0.0), 0.0, 1, 1.0, 0.02, Footprint(1.0, 0.2, 0.3), []) == (math.inf, None)
+

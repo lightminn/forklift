@@ -22,6 +22,9 @@ import numpy as np
 from forklift_core.control.drive_permission import arc_poses, parts_of
 
 REFRESH_M = 0.25
+FAR_SLACK_M = 1e-6  # past any rounding at the hall's scale: a float's step at 30 m is about 4e-15 m
+FAR_TYPES = (float, int, np.float64)  # exactly these: a narrower float or a subclass does its own arithmetic
+FAR_SCALE_M = 1e4  # where the slack was reckoned for (a float's step there is about 2e-12 m); past it nothing is skipped
 # The margins (plan D10 4th ed., 2026-10-19 measurements on two live U1 runs, sample maxima, not bounds): a recognised
 # or delivered pallet's outline is grown by its map-frame estimate error (0.026 m) + the control pose's position error
 # (0.130 m) + its heading error moving the outline's farthest point (2 x 1.66 m x sin(0.031/2) = 0.0515 m); the prior
@@ -185,11 +188,42 @@ def _meets(boxes, zone, grow_m: float) -> np.ndarray:
     return hit
 
 
+def _bounding_circle(boxes) -> tuple:
+    """(x, y, radius) of a circle holding every part's box at every sample along the arc, whatever its rotation: the
+    largest distance of a box centre plus the largest half diagonal. NaN in a pose stays NaN here, and _far then skips
+    nothing."""
+    xs = np.concatenate([centres[:, 0] for centres, _, _ in boxes])
+    ys = np.concatenate([centres[:, 1] for centres, _, _ in boxes])
+    with np.errstate(invalid="ignore", over="ignore"):
+        x, y = (float(xs.min()) + float(xs.max())) / 2, (float(ys.min()) + float(ys.max())) / 2
+        centre_reach = float(np.hypot(xs - x, ys - y).max())
+    return x, y, centre_reach + max(math.hypot(*half) for _, half, _ in boxes)
+
+
+def _far(circle, zone, grow_m: float) -> bool:
+    """The zone cannot meet the boxes: the circles around them do not touch, by more than any rounding. Only a pass
+    skipped: whatever is near is judged by ``_meets`` itself, so no answer changes. The unconfirmed check's union holds a
+    pallet zone per hypothesis, and judging each one cost a control step (the revision plan 9.16). Anything not finite
+    is never far, nor is anything past FAR_SCALE_M, where the slack would not survive the sum, nor a zone not in doubles
+    or integers, which ``_meets`` itself rounds wider than the slack: the old code's result or exception stands."""
+    x, y, radius = circle
+    fields = (zone.x_m, zone.y_m, zone.length_m, zone.width_m, zone.yaw_rad, grow_m)
+    if not all(type(v) in FAR_TYPES for v in fields):
+        return False
+    reach = math.hypot(zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m)
+    # each comparison is False on NaN, so nothing not finite passes
+    in_scale = all(abs(v) < FAR_SCALE_M for v in (x, y, radius, zone.x_m, zone.y_m, reach))
+    return (in_scale and math.isfinite(zone.yaw_rad)
+            and math.hypot(zone.x_m - x, zone.y_m - y) > radius + reach + FAR_SLACK_M)
+
+
 def inside(pose, shape, zones) -> str | None:
     """The zone the outline is in now (unpadded), or None."""
     boxes = _part_boxes(np.asarray([pose], dtype=float), shape)
+    circle = None
     for zone in zones:
-        if _meets(boxes, zone, 0.0)[0]:
+        circle = circle or _bounding_circle(boxes)
+        if not _far(circle, zone, 0.0) and _meets(boxes, zone, 0.0)[0]:
             return zone.zone_id
     return None
 
@@ -204,8 +238,13 @@ def first_contact(pose, kappa: float, direction: int, length_m: float, step_m: f
     poses, s = arc_poses(tuple(pose), kappa, direction, length_m, step_m)
     pad = step_m + abs(kappa) * step_m * (_reach_m(shape) if r_max_m is None else r_max_m)
     boxes = _part_boxes(poses[1:], shape)
+    circle = None
     best, which = math.inf, None
     for zone in zones:
+        if len(poses) > 1:  # no sample past the start: nothing to bound, and _meets says no
+            circle = circle or _bounding_circle(boxes)
+            if _far(circle, zone, pad):
+                continue
         hit = np.flatnonzero(_meets(boxes, zone, pad))
         if len(hit) and s[hit[0]] < best:  # hit[0] is sample hit[0] + 1: the last clear one is s[hit[0]]
             best, which = float(s[hit[0]]), zone.zone_id
