@@ -306,6 +306,105 @@ def test_a_far_zone_is_skipped_only_when_the_circles_do_not_touch():
     assert not PP._far(circle, Zone("nan", float("nan"), 0.0, 1.0, 1.0, 0.0), 0.0)
 
 
+def _old_inside(pose, shape, zones):
+    boxes = PP._part_boxes(np.asarray([pose], dtype=float), shape)
+    return next((z.zone_id for z in zones if PP._meets(boxes, z, 0.0)[0]), None)
+
+
+def _old_first_contact(pose, kappa, direction, length_m, step_m, shape, zones):
+    if _old_inside(pose, shape, zones) is not None:
+        return 0.0, _old_inside(pose, shape, zones)
+    poses, s = PP.arc_poses(tuple(pose), kappa, direction, length_m, step_m)
+    pad = step_m + abs(kappa) * step_m * PP._reach_m(shape)
+    boxes = PP._part_boxes(poses[1:], shape)
+    best, which = math.inf, None
+    for zone in zones:
+        hit = np.flatnonzero(PP._meets(boxes, zone, pad))
+        if len(hit) and s[hit[0]] < best:
+            best, which = float(s[hit[0]]), zone.zone_id
+    return best, which
+
+
+def _outcome(fn, *args):
+    """What a call gives, an exception by its type: the comparison includes them."""
+    try:
+        with np.errstate(all="ignore"):
+            return ("value", fn(*args))
+    except Exception as exc:  # noqa: BLE001
+        return ("raised", type(exc))
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("field", range(5))
+def test_a_non_finite_zone_answers_or_raises_as_the_old_code(bad, field):
+    fp = Footprint(1.29, 0.17, 0.36)
+    values = [40.0, 0.0, 1.0, 1.0, 0.3]  # far from the truck, so a skip would hide what the old code does
+    values[field] = bad
+    zones = [Zone("odd", *values), Zone("near", 2.0, 0.0, 1.0, 1.0, 0.0)]
+    assert _outcome(PP.inside, (0.0, 0.0, 0.0), fp, zones) == _outcome(_old_inside, (0.0, 0.0, 0.0), fp, zones)
+    arc = ((0.0, 0.0, 0.0), 0.0, 1, 3.0, 0.02, fp, zones)
+    assert _outcome(PP.first_contact, *arc) == _outcome(_old_first_contact, *arc)
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_a_non_finite_pose_or_arc_answers_or_raises_as_the_old_code(bad):
+    fp, zones = Footprint(1.29, 0.17, 0.36), [Zone("far", 40.0, 0.0, 1.0, 1.0, 0.0)]
+    for pose in ((bad, 0.0, 0.0), (0.0, bad, 0.0), (0.0, 0.0, bad)):
+        assert _outcome(PP.inside, pose, fp, zones) == _outcome(_old_inside, pose, fp, zones)
+    arc = ((0.0, 0.0, 0.0), bad, 1, 1.0, 0.02, fp, zones)
+    assert _outcome(PP.first_contact, *arc) == _outcome(_old_first_contact, *arc)
+
+
+def test_a_skip_never_hides_a_contact_at_the_hall_s_scale():
+    # the circle's radius rounds up and the distance down by construction of the slack: about 4e-15 m is one float's
+    # step at 30 m, some ten operations make about 1e-13 m, and FAR_SLACK_M is 1e-6 m. Zones placed just past the circle,
+    # at every rotation, against rotated parts along a whole arc: what is far must not meet by the old test either.
+    rng = np.random.default_rng(11)
+    parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9),
+             (Footprint(0.18, 0.18, 0.05), -0.2, 0.9)]
+    for k in range(3000):
+        pose = (float(rng.uniform(-30, 30)), float(rng.uniform(-30, 30)), float(rng.uniform(-math.pi, math.pi)))
+        kappa, direction = float(rng.uniform(-0.3, 0.3)), int(rng.choice((-1, 1)))
+        poses, _ = PP.arc_poses(pose, kappa, direction, float(rng.uniform(0.1, 1.5)), 0.02)
+        shape = parts if k % 2 else Footprint(1.29, 0.17, 0.36)
+        boxes = PP._part_boxes(poses[1:], shape)
+        x, y, radius = PP._bounding_circle(boxes)
+        length, width = float(rng.uniform(0.1, 3.0)), float(rng.uniform(0.1, 3.0))
+        pad = float(rng.uniform(0.0, 0.1))
+        reach = math.hypot(length / 2 + pad, width / 2 + pad)
+        angle = float(rng.uniform(-math.pi, math.pi))
+        gap = radius + reach + PP.FAR_SLACK_M * 1.001
+        zone = Zone("z", x + gap * math.cos(angle), y + gap * math.sin(angle), length, width, float(rng.uniform(-3.2, 3.2)))
+        assert PP._far((x, y, radius), zone, pad)
+        assert not PP._meets(boxes, zone, pad).any()
+
+
+def test_the_circle_holds_the_truck_along_the_whole_arc():
+    # a turning arc: every corner of every part at every sample is inside the circle
+    parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9)]
+    poses, _ = PP.arc_poses((1.0, -2.0, 0.7), 0.3, -1, 1.5, 0.02)
+    boxes = PP._part_boxes(poses[1:], parts)
+    x, y, radius = PP._bounding_circle(boxes)
+    for centres, (hx, hy), yaws in boxes:
+        c, s = np.cos(yaws), np.sin(yaws)
+        for ex, ey in ((hx, hy), (hx, -hy), (-hx, hy), (-hx, -hy)):
+            px, py = centres[:, 0] + ex * c - ey * s, centres[:, 1] + ex * s + ey * c
+            assert np.hypot(px - x, py - y).max() <= radius
+
+
+def test_input_shapes_answer_as_the_old_code():
+    fp, zone = Footprint(1.29, 0.17, 0.36), Zone("z", 2.0, 0.0, 1.0, 1.0, 0.0)
+    pose = (0.0, 0.0, 0.0)
+    for make in (lambda: [], lambda: [zone], lambda: (zone, zone), lambda: iter([zone]),
+                 lambda: (q for q in [zone]), lambda: np.array([zone, zone], dtype=object)):
+        assert _outcome(PP.inside, pose, fp, make()) == _outcome(_old_inside, pose, fp, make())
+        for length in (0.0, 0.01, 1.0, 3.0):  # 0: an arc with no sample past the start
+            new = _outcome(PP.first_contact, pose, 0.0, 1, length, 0.02, fp, make())
+            assert new == _outcome(_old_first_contact, pose, 0.0, 1, length, 0.02, fp, make())
+
+
 def test_no_zones_meet_nothing():
     assert PP.inside((0.0, 0.0, 0.0), Footprint(1.0, 0.2, 0.3), []) is None
     assert PP.first_contact((0.0, 0.0, 0.0), 0.0, 1, 1.0, 0.02, Footprint(1.0, 0.2, 0.3), []) == (math.inf, None)
