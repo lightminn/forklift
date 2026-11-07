@@ -40,6 +40,12 @@ def test_the_revision_lists_are_the_drawn_ones_outside_the_d_list():
     assert len(out["tail_starts.jsonl"]) == 20 and len(out["inject_starts.jsonl"]) == 24
     assert Counter(r["inject"] for r in out["inject_starts.jsonl"]) == {k: 3 for k in mod.WRONG}
     assert Counter(r["jump"] for r in out["loop_starts.jsonl"]) == {k: 3 for k in mod.JUMPS}
+    # plan 9.14: the top-up is the rest of the same draw, and the closed loop takes the first three finished starts
+    tail, top = out["tail_starts.jsonl"], out["topup_starts.jsonl"]
+    assert len(top) == 8 and not {r["id"] for r in top} & {r["id"] for r in tail}
+    done = [r["id"] for r in tail if r["id"] in mod.TAIL_DONE][:3]
+    assert done == ["val3_036", "val3_034", "val3_006"]
+    assert Counter(r["id"] for r in out["loop2_starts.jsonl"]) == {"val3_034": 4, "val3_006": 4}
 
 
 def test_the_two_small_seed_4_lists_are_the_named_ones():
