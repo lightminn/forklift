@@ -10575,7 +10575,7 @@ def drive(S, isaac) -> None:
                 try:
                     state["pose_check"] = pose_box["rt"].record()
                     # plan 2026-11-06 1.5: the mission stands' scan sets; the revision plan 9.19: each generation's points
-                    if pose_box["rt"].stand_sets or pose_box["rt"].gen_points:
+                    if pose_box["rt"].stand_sets or pose_box["rt"].rematch_points:
                         pose_box["rt"].save_stand_scans(args.output / "pose_check_stand_scans.npz")
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
                     state.setdefault("record_errors", []).append(f"pose check: {exc_!r}")

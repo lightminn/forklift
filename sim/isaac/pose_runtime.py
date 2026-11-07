@@ -268,7 +268,8 @@ class PoseRuntime:
         # from C_int's, the inputs of one generation -- up to STAND_SET_COUNT sets of SCANS scans in a row while it
         # stands -- for the offline re-match (a snapshot approximation); past STAND_SETS_MAX stands only counted
         self.stand_sets: list = []
-        self.gen_points: list = []  # each re-match generation's scan points, once (the revision plan 9.19)
+        # each re-match generation's scan points, once (the revision plan 9.19); not gen_points, the start's scan set
+        self.rematch_points: list = []
         self.stand_sets_skipped = 0
         self._capture = None
         self._was_standing = False
@@ -363,10 +364,11 @@ class PoseRuntime:
 
     def save_stand_scans(self, path) -> None:
         """The kept stands' scan sets (s<stand>_<set>: SCANS x beams ranges as sent) with the scan pattern, and each
-        re-match generation's points (g<k>, the index its record names, as the worker got them)."""
+        re-match generation's points (g<k>, the index its record names, as the worker got them: G.stack_scans's
+        laser-local points, their dtype kept, compressed losslessly)."""
         arrays = {f"s{i}_{k}": s["ranges"].astype(np.float32) for i, cap in enumerate(self.stand_sets)
                   for k, s in enumerate(cap["sets"])}
-        arrays.update({f"g{i}": pts for i, pts in enumerate(self.gen_points)})  # each generation's points (map frame)
+        arrays.update({f"g{i}": np.asarray(pts) for i, pts in enumerate(self.rematch_points)})
         np.savez_compressed(path, angles=np.asarray(self.angles, float),
                             ranges_m=np.asarray([self.rmin, self.rmax, self.mrange], float), **arrays)
 
@@ -486,10 +488,12 @@ class PoseRuntime:
             rm.attempts.append({"reason": result["decision"].reason, "state": state})
             cands = getattr(result["match"], "candidates", ()) or ()
             top = cands[0] if cands else None
+            # as the worker returned them, laser poses (R.base_from_laser offline): no new computation in a tick
             rm.diag.append({"stage": "relocalize", "reason": result["decision"].reason, "state": state,
-                            "lattice_base": None if top is None else list(R.base_from_laser(top.search_pose)),
-                            "icp_base": None if top is None else list(R.base_from_laser(top.pose)),
-                            "refined": None if top is None else bool(top.refined),
+                            "lattice_laser": None if top is None else top.search_pose,
+                            "pose_laser": None if top is None else top.pose,
+                            "icp_laser": None if top is None else top.icp_pose,
+                            "refined": None if top is None else top.refined,
                             "icp_reason": None if top is None else top.icp_reason,
                             "endpoint_fraction": None if top is None else top.endpoint_fraction})
             if state == "chosen":
@@ -518,9 +522,9 @@ class PoseRuntime:
     def _finish_rematch(self, t, outcome, g, o_scan, o, C, epoch, control_gen, *, why=None) -> None:
         rm, self.rm = self.rm, None
         points = None
-        if rm.points is not None:  # once per generation, its last scan set (saved with the stand scans)
-            self.gen_points.append(np.asarray(rm.points, np.float32))
-            points = len(self.gen_points) - 1
+        if rm.points is not None:  # once per generation, its last scan set, the worker's own array (saved at the end)
+            self.rematch_points.append(rm.points)
+            points = len(self.rematch_points) - 1
         self.rematches.append({"t": t, "phase": rm.phase, "outcome": outcome, "g": None if g is None else list(g),
                                "attempts": rm.attempts, "why": why, "o_begin": list(rm.o_begin),
                                "o_scan": None if o_scan is None else list(o_scan), "scan_stamps": rm.stamps,
