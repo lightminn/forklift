@@ -62,10 +62,20 @@ def _agreements(record: dict) -> list:
     """Every agreement the check judged, passed or not: a shadow's raw generations, an on run's agreement events."""
     raw = (record.get("raw") or {}).get("rematches")
     if raw is not None:
-        return [{"t": g["t"], "g": g.get("g"), "agree_m": g.get("agree_m"), "agree_rad": g.get("agree_rad"), "ok": None,
-                 "kind": "raw", "scan_t": g.get("scan_t"), "o_scan": g.get("o_scan")} for g in raw]
+        start = (record.get("raw") or {}).get("start") or {}
+        rows = []
+        if start.get("agree_m") is not None:  # the start check's own agreement, judged when it confirmed
+            rows.append({"t": start["t"], "g": start.get("r"), "agree_m": start["agree_m"], "agree_rad": start["agree_rad"],
+                         "ok": None, "kind": "raw_start", "scan_t": start.get("scan_t"), "o_scan": start.get("o_scan"),
+                         "qualified": bool(start.get("confirmed"))})
+        rows += [{"t": g["t"], "g": g.get("g"), "agree_m": g.get("agree_m"), "agree_rad": g.get("agree_rad"), "ok": None,
+                  "kind": "raw", "scan_t": g.get("scan_t"), "o_scan": g.get("o_scan"),
+                  "qualified": bool(g.get("residual_confirmed") and g.get("applicable") and g.get("g") is not None
+                                    and g.get("agree_m") is not None)} for g in raw]
+        return rows
+    # an on run judges an agreement only past the conservative check and the discarding: every one qualifies
     return [{"t": e["t"], "g": e.get("evidence"), "agree_m": e["agree_m"], "agree_rad": e["agree_rad"], "ok": e.get("ok"),
-             "kind": e["kind"], "scan_t": None, "o_scan": None} for e in record.get("events", [])
+             "kind": e["kind"], "scan_t": None, "o_scan": None, "qualified": True} for e in record.get("events", [])
             if e.get("kind") in ("slam_agreement", "rematch_agreement")]
 
 
@@ -91,8 +101,9 @@ def session_rows(path: str) -> tuple:
         scan_t = ag["scan_t"] if ag["scan_t"] is not None else (stamps[-1][-1] if stamps and stamps[-1] else None)
         o_scan = ag["o_scan"] if ag["o_scan"] is not None else (gen or {}).get("o_scan")
         at, scanned = _sample_at(samples, ag["t"]), _sample_at(samples, scan_t) if scan_t is not None else None
+        contact = any(c["t0"] <= ag["t"] <= c["t1"] for c in ((record.get("contacts") or {}).get("intervals")) or [])
         row = {"session": os.path.basename(path.rstrip("/")), "class": cls, "agreement": k, "kind": ag["kind"],
-               "ok": ag["ok"], "t": ag["t"], "scan_t": scan_t, "stand": stand_of.get(tuple((gen or {}).get("o_begin") or ())),
+               "ok": ag["ok"], "qualified": ag["qualified"], "in_contact": contact, "t": ag["t"], "scan_t": scan_t, "stand": stand_of.get(tuple((gen or {}).get("o_begin") or ())),
                "generation": gens.index(gen) + 1 if gen in gens else None,
                "attempts": [a.get("reason") for a in (gen or {}).get("attempts") or []] if isinstance((gen or {}).get("attempts"), list) else (gen or {}).get("attempts"),
                "outcome": (gen or {}).get("outcome"), "why": (gen or {}).get("why"),
@@ -110,6 +121,7 @@ def session_rows(path: str) -> tuple:
             if ag["g"] is not None:
                 row["g_err"] = _signed(ag["g"], truth)
                 row["wider"] = "g" if abs(row["g_err"][2]) > abs(row["c_err"][2]) else "c"
+                row["g_outside_success"] = math.hypot(*row["g_err"][:2]) > 0.10 or abs(row["g_err"][2]) > 0.05
         rows.append(row)
     events = record.get("events", [])
     counts = {"session": os.path.basename(path.rstrip("/")), "class": cls, "generations": len(gens),
