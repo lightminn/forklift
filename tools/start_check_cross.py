@@ -30,9 +30,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "sim" / "isaac"))
 
-from forklift_core.planning.geometry import Bounds, FootprintCollisionChecker  # noqa: E402
-from forklift_core.planning.grid_collision import CompositeChecker, OccupancyGrid  # noqa: E402
-from forklift_core.planning.pallet_mission import leg_obstacles, observation_start_checker  # noqa: E402
+from forklift_core.planning.geometry import (  # noqa: E402
+    Bounds,
+    FootprintCollisionChecker,
+)
+from forklift_core.planning.grid_collision import (  # noqa: E402
+    CompositeChecker,
+    OccupancyGrid,
+)
+from forklift_core.planning.pallet_mission import (  # noqa: E402
+    leg_obstacles,
+    observation_start_checker,
+)
 
 FAR = Bounds(-1e4, 1e4, -1e4, 1e4)
 LAYERS = ("live", "memory_observed", "slam_layer")
@@ -58,7 +67,10 @@ def _layers(arrays) -> tuple:
 def _part_poses(pose, shape) -> list:
     x, y, yaw = pose
     c, s = math.cos(yaw), math.sin(yaw)
-    return [((x + lon * c - lat * s, y + lon * s + lat * c, yaw), fp) for fp, lat, lon in shape]
+    return [
+        ((x + lon * c - lat * s, y + lon * s + lat * c, yaw), fp)
+        for fp, lat, lon in shape
+    ]
 
 
 def cell(pose, grid_arrays, payload: dict, clearances, parts) -> dict:
@@ -67,27 +79,70 @@ def cell(pose, grid_arrays, payload: dict, clearances, parts) -> dict:
     gk = payload["grid_kwargs"]
     occ = _grid(grid_arrays)
     free, planner_clearance = observation_start_checker(
-        world, payload["config"], geometry=geometry, pickup_bounds=payload.get("pickup_bounds"), occupancy=occ,
-        pickup_obstacle=gk.get("pickup_obstacle"))
-    rects, footprint, bounds = leg_obstacles("observe", world, geometry, pickup_obstacle=gk.get("pickup_obstacle"),
-                                             pickup_bounds=payload.get("pickup_bounds"))
-    out = {"pose": [float(v) for v in pose], "planner_clearance_m": planner_clearance, "by_clearance": {}}
+        world,
+        payload["config"],
+        geometry=geometry,
+        pickup_bounds=payload.get("pickup_bounds"),
+        occupancy=occ,
+        pickup_obstacle=gk.get("pickup_obstacle"),
+    )
+    rects, footprint, bounds = leg_obstacles(
+        "observe",
+        world,
+        geometry,
+        pickup_obstacle=gk.get("pickup_obstacle"),
+        pickup_bounds=payload.get("pickup_bounds"),
+    )
+    out = {
+        "pose": [float(v) for v in pose],
+        "planner_clearance_m": planner_clearance,
+        "by_clearance": {},
+    }
     for cl in clearances:
-        row = {"start_check_free": bool(free(pose, cl)),
-               "bounds_free": bool(FootprintCollisionChecker([], footprint, bounds).free(pose, cl)),
-               "rectangles_refusing": [k for k, r in enumerate(rects)
-                                       if not FootprintCollisionChecker([r], footprint, FAR).free(pose, cl)],
-               "grid_free": None if occ is None else bool(CompositeChecker([], occ, footprint, FAR).free(pose, cl)),
-               "layers_refusing": [n for n in _layers(grid_arrays) if _grid(grid_arrays, n) is not None
-                                   and not CompositeChecker([], _grid(grid_arrays, n), footprint, FAR).free(pose, cl)]}
+        row = {
+            "start_check_free": bool(free(pose, cl)),
+            "bounds_free": bool(
+                FootprintCollisionChecker([], footprint, bounds).free(pose, cl)
+            ),
+            "rectangles_refusing": [
+                k
+                for k, r in enumerate(rects)
+                if not FootprintCollisionChecker([r], footprint, FAR).free(pose, cl)
+            ],
+            "grid_free": None
+            if occ is None
+            else bool(CompositeChecker([], occ, footprint, FAR).free(pose, cl)),
+            "layers_refusing": [
+                n
+                for n in _layers(grid_arrays)
+                if _grid(grid_arrays, n) is not None
+                and not CompositeChecker(
+                    [], _grid(grid_arrays, n), footprint, FAR
+                ).free(pose, cl)
+            ],
+        }
         if parts is not None:
             live = _grid(grid_arrays, "live")
-            row["permission_parts_live_free"] = None if live is None else all(
-                CompositeChecker([], live, fp, FAR).free(p, cl) for p, fp in _part_poses(pose, parts))
-            row["permission_parts_full_grid_free"] = None if occ is None else all(
-                CompositeChecker([], occ, fp, FAR).free(p, cl) for p, fp in _part_poses(pose, parts))
+            row["permission_parts_live_free"] = (
+                None
+                if live is None
+                else all(
+                    CompositeChecker([], live, fp, FAR).free(p, cl)
+                    for p, fp in _part_poses(pose, parts)
+                )
+            )
+            row["permission_parts_full_grid_free"] = (
+                None
+                if occ is None
+                else all(
+                    CompositeChecker([], occ, fp, FAR).free(p, cl)
+                    for p, fp in _part_poses(pose, parts)
+                )
+            )
         out["by_clearance"][f"{cl:g}"] = row
-    out["rectangles"] = [[r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad] for r in rects]
+    out["rectangles"] = [
+        [r.x_m, r.y_m, r.length_m, r.width_m, r.yaw_rad] for r in rects
+    ]
     return out
 
 
@@ -97,50 +152,116 @@ def permission_parts(geometry, blades_base_m, rear_axle_offset_m: float):
     from forklift_core.planning.geometry import Footprint
 
     un = geometry.unloaded_footprint
-    body = Footprint(geometry.axle_to_fork_tip_m - geometry.carriage_limit_m, un.rear_m, un.half_width_m)
+    body = Footprint(
+        geometry.axle_to_fork_tip_m - geometry.carriage_limit_m,
+        un.rear_m,
+        un.half_width_m,
+    )
     off = abs(rear_axle_offset_m)
     return [(body, 0.0, 0.0)] + [
-        (Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2), (y0 + y1) / 2, (x0 + off + x1 + off) / 2)
-        for x0, x1, y0, y1 in blades_base_m]
+        (
+            Footprint((x1 - x0) / 2, (x1 - x0) / 2, (y1 - y0) / 2),
+            (y0 + y1) / 2,
+            (x0 + off + x1 + off) / 2,
+        )
+        for x0, x1, y0, y1 in blades_base_m
+    ]
 
 
 def shapes_table(geometry, parts) -> dict:
     un = geometry.unloaded_footprint
-    return {"planner_hull": {"front_m": un.front_m, "rear_m": un.rear_m, "half_width_m": un.half_width_m},
-            "permission_reversing_parts": None if parts is None else [
-                {"front_m": fp.front_m, "rear_m": fp.rear_m, "half_width_m": fp.half_width_m, "lateral_m": lat,
-                 "longitudinal_m": lon} for fp, lat, lon in parts],
-            "planner_layers": "live | memory observed | SLAM survey layer (with use_slam), the cells under the truck "
-                              "left out; plus the props and the pallet zone as rectangles and the bounds",
-            "permission_layers": "the live snapshot only (occupied, unknown and edge block it), plus the union zones "
-                                 "in the unconfirmed position check's rear check"}
+    return {
+        "planner_hull": {
+            "front_m": un.front_m,
+            "rear_m": un.rear_m,
+            "half_width_m": un.half_width_m,
+        },
+        "permission_reversing_parts": None
+        if parts is None
+        else [
+            {
+                "front_m": fp.front_m,
+                "rear_m": fp.rear_m,
+                "half_width_m": fp.half_width_m,
+                "lateral_m": lat,
+                "longitudinal_m": lon,
+            }
+            for fp, lat, lon in parts
+        ],
+        "planner_layers": "live | memory observed | SLAM survey layer (with use_slam), the cells under the truck "
+        "left out; plus the props and the pallet zone as rectangles and the bounds",
+        "permission_layers": "the live snapshot only (occupied, unknown and edge block it), plus the union zones "
+        "in the unconfirmed position check's rear check",
+    }
+
+
+def _submitted_arrays(sent, arrays: dict) -> tuple:
+    """The submitted grid is the payload's own occupancy (Codex review P2); the capture's layers are attributed only
+    when their cells, origin and resolution are that grid's, else left out and said so."""
+    if sent is None:
+        return {}, "no_grid"
+    own = {
+        "occupied": np.asarray(sent.occupied, bool),
+        "origin": np.asarray([sent.origin_x_m, sent.origin_y_m]),
+        "resolution_m": np.asarray(sent.resolution_m),
+    }
+    same = (
+        "occupied" in arrays
+        and np.asarray(arrays["occupied"]).shape == own["occupied"].shape
+        and np.array_equal(np.asarray(arrays["occupied"], bool), own["occupied"])
+        and np.allclose(np.asarray(arrays["origin"], float), own["origin"])
+        and float(np.asarray(arrays["resolution_m"])) == float(own["resolution_m"])
+    )
+    if not same:
+        return own, "layers_unmatched"
+    return {
+        **{k: v for k, v in arrays.items() if k not in own},
+        **own,
+    }, "layers_matched"
 
 
 def cross(premove: dict, prepare: dict, parts=None) -> dict:
-    payload = pickle.loads(prepare["payload"]) if isinstance(prepare["payload"], bytes) else prepare["payload"]
+    payload = (
+        pickle.loads(prepare["payload"])
+        if isinstance(prepare["payload"], bytes)
+        else prepare["payload"]
+    )
     pre_meta = json.loads(str(premove["meta"]))
     sent = payload["grid_kwargs"]["occupancy"]
-    post_arrays = dict(prepare["arrays"])
-    if "occupied" not in post_arrays and sent is not None:
-        post_arrays.update(occupied=sent.occupied, origin=[sent.origin_x_m, sent.origin_y_m],
-                           resolution_m=sent.resolution_m)
+    post_arrays, layers_note = _submitted_arrays(sent, dict(prepare["arrays"]))
     pre_arrays = {k: premove[k] for k in premove if k != "meta"}
     start = payload["world"].start_rear
-    poses = {"pre_move": tuple(pre_meta["own_pose"]), "post_reverse": (start.x_m, start.y_m, start.yaw_rad)}
+    poses = {
+        "pre_move": tuple(pre_meta["own_pose"]),
+        "post_reverse": (start.x_m, start.y_m, start.yaw_rad),
+    }
     grids = {"pre_move": pre_arrays, "submitted": post_arrays}
     clearances = (0.0, float(payload["config"].clearance_m))
-    return {"poses": {k: list(v) for k, v in poses.items()},
-            "grid_corrections": {"pre_move": pre_meta.get("grid_applied"),
-                                 "submitted": prepare.get("meta", {}).get("grid_applied")},
-            "cells": {f"{p}@{g}": cell(poses[p], grids[g], payload, clearances, parts)
-                      for p in poses for g in grids},
-            "shapes": shapes_table(payload["geometry"], parts)}
+    return {
+        "poses": {k: list(v) for k, v in poses.items()},
+        "submitted_layers": layers_note,
+        "grid_corrections": {
+            "pre_move": pre_meta.get("grid_applied"),
+            "submitted": prepare.get("meta", {}).get("grid_applied"),
+        },
+        "cells": {
+            f"{p}@{g}": cell(poses[p], grids[g], payload, clearances, parts)
+            for p in poses
+            for g in grids
+        },
+        "shapes": shapes_table(payload["geometry"], parts),
+    }
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--premove", type=Path, required=True)
-    ap.add_argument("--prepare", type=Path, required=True, help="prepare_input_<k>.pkl (its .npz beside it)")
+    ap.add_argument(
+        "--prepare",
+        type=Path,
+        required=True,
+        help="prepare_input_<k>.pkl (its .npz beside it)",
+    )
     ap.add_argument("--forklift-urdf", type=Path, default=None)
     ap.add_argument("--rear-axle-offset-m", type=float, default=0.34)
     ap.add_argument("--out", type=Path, required=True)
@@ -156,7 +277,11 @@ def main() -> None:
         from insertion_geometry import read_fork_blades_m
 
         payload = pickle.loads(prep["payload"])
-        parts = permission_parts(payload["geometry"], read_fork_blades_m(a.forklift_urdf), a.rear_axle_offset_m)
+        parts = permission_parts(
+            payload["geometry"],
+            read_fork_blades_m(a.forklift_urdf),
+            a.rear_axle_offset_m,
+        )
     out = cross(pre, prep, parts)
     a.out.write_text(json.dumps(out, indent=1) + "\n")
     print(f"wrote {a.out}")
