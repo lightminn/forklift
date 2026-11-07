@@ -42,10 +42,17 @@ def _grid(arrays, name: str = "occupied") -> OccupancyGrid | None:
     if name not in arrays:
         return None
     cells = np.asarray(arrays[name], bool)
-    if name != "occupied" and "own_left_out" in arrays:
+    # as ObstacleLayer._planner: the cells under the truck are left out of the memory's layers only, never the live one
+    if name in ("memory_observed", "slam_layer") and "own_left_out" in arrays:
         cells = cells & ~np.asarray(arrays["own_left_out"], bool)
     ox, oy = (float(v) for v in arrays["origin"])
     return OccupancyGrid(ox, oy, float(arrays["resolution_m"]), cells)
+
+
+def _layers(arrays) -> tuple:
+    """The layers the grid was made of: the SLAM layer only when it was used."""
+    use_slam = bool(np.asarray(arrays["use_slam"])) if "use_slam" in arrays else True
+    return tuple(n for n in LAYERS if n != "slam_layer" or use_slam)
 
 
 def _part_poses(pose, shape) -> list:
@@ -71,7 +78,7 @@ def cell(pose, grid_arrays, payload: dict, clearances, parts) -> dict:
                "rectangles_refusing": [k for k, r in enumerate(rects)
                                        if not FootprintCollisionChecker([r], footprint, FAR).free(pose, cl)],
                "grid_free": None if occ is None else bool(CompositeChecker([], occ, footprint, FAR).free(pose, cl)),
-               "layers_refusing": [n for n in LAYERS if _grid(grid_arrays, n) is not None
+               "layers_refusing": [n for n in _layers(grid_arrays) if _grid(grid_arrays, n) is not None
                                    and not CompositeChecker([], _grid(grid_arrays, n), footprint, FAR).free(pose, cl)]}
         if parts is not None:
             live = _grid(grid_arrays, "live")

@@ -69,3 +69,15 @@ def test_the_permission_parts_are_the_body_and_each_blade():
     table = X.shapes_table(geometry, parts)
     assert table["planner_hull"]["front_m"] == geometry.unloaded_footprint.front_m
     assert len(table["permission_reversing_parts"]) == 3
+
+
+def test_the_layers_follow_the_planners_own_composition():
+    # Codex review: the cells under the truck leave the memory's layers only; the SLAM layer counts only when used
+    a = _arrays([(0.0, 0.0)])
+    a["own_left_out"] = a["live"].copy()
+    a["memory_observed"] = a["live"].copy()
+    assert X._grid(a, "live").occupied.any() and not X._grid(a, "memory_observed").occupied.any()
+    a["use_slam"] = np.array(False)
+    assert X._layers(a) == ("live", "memory_observed")
+    a["use_slam"] = np.array(True)
+    assert X._layers(a) == X.LAYERS
