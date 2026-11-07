@@ -4,7 +4,7 @@ shadow records, from the raw values only -- no status, outcome or renewals_of.
     python rev_audit.py OUT.json FOLDER...
 
 Each session whose start the check confirmed (raw.start.confirmed, its agreement within E_SLAM) and that was not damaged
-before its first drive command, from the confirmation to the end of the first mission (or of the session). Gates: the
+before the start check's result, and so before any drive command, from the confirmation to the end of the first mission (or of the session). Gates: the
 window, the stand with its reference taken again at each release, the release itself, and the re-match where an on run
 would have asked for one: a stand past 0.10 m of Delta_int outside the near field and a mission (the shadow's own trigger
 holds those two), once per stand, its generation applied by the check's own conditions.
@@ -38,15 +38,6 @@ def releases(pc, s, samples):
             for r in S.hold_releases(_replies(s))]
 
 
-def first_drive(pc):
-    """The first time the stroke or the mission moved the truck, from the samples' odometry."""
-    samples = [x for x in pc["samples"] if x.get("o")]
-    for a, b in zip(samples, samples[1:]):
-        if math.hypot(b["o"][0] - a["o"][0], b["o"][1] - a["o"][1]) > 1e-3:
-            return b["t"]
-    return math.inf
-
-
 def audit(s):
     r = json.load(open(s + "/epoch_1/run/result.json"))
     pc = r["pose_check"]
@@ -58,7 +49,7 @@ def audit(s):
     if start.get("agree_m") is None or start["agree_m"] > E_SLAM[0] or start["agree_rad"] > E_SLAM[1]:
         return {**out, "group": "start_disagrees"}
     damaged = r.get("scene_damaged")
-    early = damaged is not None and damaged.get("t", math.inf) <= first_drive(pc)
+    early = damaged is not None and damaged.get("t", math.inf) <= start["t"]  # no drive comes before the start's result
     probe = json.load(open(s + "/probe.json"))
     res = ((probe.get("reverse") or {}).get("mission") or {}).get("result") or {}
     end_t = res.get("ended_s") or math.inf
